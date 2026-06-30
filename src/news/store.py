@@ -55,6 +55,11 @@ SOURCE_FEED_EDGAR_8K = "edgar_8k"
 SOURCE_FEED_EDGAR_13D = "edgar_13d"
 SOURCE_FEED_EDGAR_13G = "edgar_13g"
 SOURCE_FEED_YF_GRADES = "yf_grades"
+# Competitor IPO S-1 watch (src/competitive/sec_watch.py): an EDGAR full-text
+# search flags when a watched private competitor (Cohesity) files its IPO S-1.
+# The row is attributed to the affected holding's ticker (RBRK) since it is
+# material to THAT thesis, not the filer's (the filer isn't in our book).
+SOURCE_FEED_EDGAR_S1_WATCH = "edgar_s1_watch"
 
 
 class NewsRow(BaseModel):

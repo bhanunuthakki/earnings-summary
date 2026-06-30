@@ -1,0 +1,13 @@
+{
+  "readme": "Watch list for competitor IPO S-1 filings via EDGAR full-text search. Each watch attributes the filing to the AFFECTED holding (attributed_ticker), not the filer (a private competitor not in our book). The watch filters on the FILER's display name / CIK so a holding's own S-1 that merely mentions the competitor (e.g. Rubrik's 2024 S-1 names Cohesity 38 times) is NOT a false positive. 'cik' may be null until the competitor first files; 'forms' are matched by prefix so 'S-1' also catches 'S-1/A'.",
+  "watches": [
+    {
+      "entity_name": "Cohesity",
+      "attributed_ticker": "RBRK",
+      "fulltext_query": "Cohesity",
+      "forms": ["S-1"],
+      "cik": null,
+      "min_file_date": "2026-01-01"
+    }
+  ]
+}

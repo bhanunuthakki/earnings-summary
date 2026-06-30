@@ -132,24 +132,24 @@
     },
     {
       "name": "Category share - Gartner MQ position / IDC data-protection market share (annual)",
-      "current": "WIRE NOW (3rd-party, no Cohesity disclosure needed): Cohesity post-Veritas is the ~19% data-resilience share leader; RBRK is the faster-growing specialist. Track RBRK's Leaders-quadrant position + share trend.",
-      "status": "Unknown",
+      "current": "WIRED (annual, manual seed -> kpi_facts): RBRK = Leader in the 2025 Gartner MQ for Backup & Data Protection Platforms (furthest in Completeness of Vision); Cohesity post-Veritas ~19% data-resilience share. RBRK numeric IDC share is an operator-fill slot. Refresh: execution/ingest_competitive_category_share.py; values mirrored via sync_competitive_kpis.py.",
+      "status": "Green",
       "break_condition": "RBRK exits the Leaders quadrant OR its category share declines YoY",
-      "source": "Gartner Magic Quadrant / IDC (annual; manual until wired)"
+      "source": "Gartner Magic Quadrant / IDC (annual) — seed micro_thesis/competitive/RBRK_category_share.json"
     },
     {
       "name": "Competitive-displacement + large-logo win mentions per earnings call",
-      "current": "WIRE from transcripts already fetched - count displacement-of-legacy/Cohesity mentions + named >$1M logo wins",
+      "current": "WIRED (deterministic, no-LLM): per-quarter counts of (a) displacement-of-legacy, (b) named >$1M / large-logo wins, (c) Cohesity/Veeam/Dell mentions, extracted from RBRK transcripts into kpi_facts. Re-run execution/extract_competitive_mentions.py after each transcript lands; mirrored via sync_competitive_kpis.py.",
       "status": "Unknown",
       "break_condition": "Displacement/large-logo win cadence falls for 2 consecutive Qs (share momentum fading)",
-      "source": "earnings transcript extraction (pipeline-wireable)"
+      "source": "earnings transcript extraction — src/competitive/transcript_mentions.py"
     },
     {
       "name": "RBRK net-new ARR / (RBRK + Cohesity net-new ARR) - 'who wins the incremental'",
-      "current": "EVENT-UNLOCK: activates when Cohesity files its 2026 IPO S-1 (currently private; ~$1.5B ARR, ~$1.7B revenue, ~28% margin, NVIDIA-backed, targeting ~$17B). Until then, proxy via category share above.",
+      "current": "EVENT-UNLOCK WATCH LIVE: an EDGAR full-text-search watch (execution/check_competitor_s1.py, also additive in fetch_news) flags when Cohesity files its 2026 IPO S-1 (currently private; ~$1.5B ARR, ~$1.7B revenue, ~28% margin, NVIDIA-backed, targeting ~$17B). Not yet filed. On filing -> a news row (source_feed=edgar_s1_watch) under RBRK + this metric activates. Until then, proxy via category share above.",
       "status": "Unknown",
       "break_condition": "Once disclosable: RBRK's share of combined net-new ARR trends down for 2 consecutive Qs (losing the incremental to the scaled rival)",
-      "source": "Cohesity S-1 / post-IPO disclosures (future)"
+      "source": "Cohesity S-1 / post-IPO disclosures (future) — watch micro_thesis/competitive/sec_watch.json"
     }
   ],
   "nuance": {
@@ -280,9 +280,15 @@
   "break_rules_soft": [],
   "competitive_tracking": {
     "rival": "Cohesity (post-Veritas)",
-    "wired_now": ["Gartner MQ / IDC category share (annual, manual)", "Identity+DSPM ARR as tracked numbers", "consumption/usage-revenue growth", "transcript displacement/large-logo mention counts"],
-    "needs_pipeline_plumbing": ["3rd-party share auto-ingest", "transcript competitive-mention extractor"],
-    "event_unlock": "Cohesity 2026 IPO S-1 -> activates RBRK-vs-Cohesity net-new-ARR share metric",
+    "wired_now": ["Gartner MQ / IDC category share (annual, manual)", "Identity+DSPM ARR as tracked numbers", "consumption/usage-revenue growth", "transcript displacement/large-logo mention counts", "3rd-party share auto-ingest (seed -> kpi_facts)", "transcript competitive-mention extractor (per-quarter counts)", "Cohesity IPO S-1 EDGAR watch"],
+    "needs_pipeline_plumbing": [],
+    "event_unlock": "Cohesity 2026 IPO S-1 -> activates RBRK-vs-Cohesity net-new-ARR share metric (watch live: src/competitive/sec_watch.py)",
+    "pipelines": {
+      "category_share": "execution/ingest_competitive_category_share.py (annual Gartner MQ / IDC share from micro_thesis/competitive/RBRK_category_share.json -> kpi_facts)",
+      "transcript_mentions": "execution/extract_competitive_mentions.py (per-quarter displacement / >$1M-logo-win / Cohesity-Veeam-Dell counts from RBRK transcripts -> kpi_facts)",
+      "s1_watch": "execution/check_competitor_s1.py + fetch_news additive stage (EDGAR full-text search; news source_feed=edgar_s1_watch; config micro_thesis/competitive/sec_watch.json)",
+      "sync": "execution/sync_competitive_kpis.py --apply (mirror stored values into the competitive tier-2 KPIs' current field)"
+    },
     "q1_fy27_actuals_2026_06_05": "sub-ARR +32% to $1.57B; revenue +39% to $387.1M; net-new sub-ARR $103M (Q1 record); FCF margin 19%; contribution margin 13.2% LTM; guidance raised. Verdict Intact strengthened; live yellow remains growth-endurance ~76% (<85%)."
   }
 }
