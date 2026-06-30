@@ -1,7 +1,7 @@
 {
   "ticker": "RBRK",
   "name": "Rubrik",
-  "last_updated": "2026-06-01",
+  "last_updated": "2026-06-29",
   "thesis": "Cyber-resilience platform displacing legacy backup/recovery vendors as enterprises consolidate ransomware recovery + cloud data protection onto a single subscription platform, then tack on adjacent modules (Identity, DSPM) to become multi-product. The bet: (1) subscription ARR keeps compounding above 25% YoY with growth endurance >=85% (deceleration is acceptable, a cliff is not), (2) NRR holds >120% as land-and-expand deepens, (3) multi-product attach widens the moat - customers >$1M ARR and Identity/DSPM ARR are the signals, (4) operating leverage inflects as the IPO-era CAC cycle normalizes. Not seat-exposed. Narrative kicker (NOT yet a tracked KPI): AI-agent proliferation drives a step-change in data/backup volumes. Competitive reality: Cohesity (post-Veritas) is now a scaled, profitable rival (~$1.5B ARR, targeting a 2026 IPO) - share gains must come against a funded peer, not just legacy incumbents.",
   "verdict": "Intact",
   "verdict_color": "green",
@@ -115,12 +115,48 @@
       "name": "Non-GAAP Gross Margin",
       "current": "79.7%",
       "source": "earnings release"
+    },
+    {
+      "name": "Consumption / usage-based subscription revenue growth (agentic-data catalyst tell #1)",
+      "current": "WIRE PENDING - extract from earnings commentary; the tell that 'more agents -> more data -> more backup' is converting to ARR",
+      "status": "Unknown",
+      "break_condition": "Consumption-revenue growth fails to outpace or at least track sub-ARR growth for 2 consecutive Qs (agentic catalyst is narrative, not yet real)",
+      "source": "earnings release commentary (manual until pipeline-wired)"
+    },
+    {
+      "name": "Identity + DSPM ARR (agentic-attach catalyst tell #2)",
+      "current": "Identity ARR ~$20M, customers >2x QoQ; DSPM >300% YoY (small base) - promote from commentary to a TRACKED number each Q",
+      "status": "Green",
+      "break_condition": "Identity/DSPM ARR stops compounding QoQ for 2 consecutive Qs (multi-product / agentic attach stalls)",
+      "source": "earnings release commentary"
+    },
+    {
+      "name": "Category share - Gartner MQ position / IDC data-protection market share (annual)",
+      "current": "WIRE NOW (3rd-party, no Cohesity disclosure needed): Cohesity post-Veritas is the ~19% data-resilience share leader; RBRK is the faster-growing specialist. Track RBRK's Leaders-quadrant position + share trend.",
+      "status": "Unknown",
+      "break_condition": "RBRK exits the Leaders quadrant OR its category share declines YoY",
+      "source": "Gartner Magic Quadrant / IDC (annual; manual until wired)"
+    },
+    {
+      "name": "Competitive-displacement + large-logo win mentions per earnings call",
+      "current": "WIRE from transcripts already fetched - count displacement-of-legacy/Cohesity mentions + named >$1M logo wins",
+      "status": "Unknown",
+      "break_condition": "Displacement/large-logo win cadence falls for 2 consecutive Qs (share momentum fading)",
+      "source": "earnings transcript extraction (pipeline-wireable)"
+    },
+    {
+      "name": "RBRK net-new ARR / (RBRK + Cohesity net-new ARR) - 'who wins the incremental'",
+      "current": "EVENT-UNLOCK: activates when Cohesity files its 2026 IPO S-1 (currently private; ~$1.5B ARR, ~$1.7B revenue, ~28% margin, NVIDIA-backed, targeting ~$17B). Until then, proxy via category share above.",
+      "status": "Unknown",
+      "break_condition": "Once disclosable: RBRK's share of combined net-new ARR trends down for 2 consecutive Qs (losing the incremental to the scaled rival)",
+      "source": "Cohesity S-1 / post-IPO disclosures (future)"
     }
   ],
   "nuance": {
     "bear_case": "Cohesity (post-Veritas merger) is now a SCALED, profitable rival - it claims ~$1.5B ARR (larger than Rubrik's $1.46B), ~28% profit margin, deep Global-500 penetration, and is targeting a 2026 IPO. Backup/recovery is historically price-competitive once the differentiation cycle ends, and RBRK must take share against a funded peer that can out-spend on R&D and price-compete - not just legacy incumbents.",
     "adversarial_take": "34% sub ARR growth at $1.5B base is excellent, but the law of large numbers will bend the trajectory by FY27. The thesis must accommodate growth deceleration to ~25% as the new normal without panicking — break threshold below 25% is calibrated for that.",
-    "stress_test": "If $100K+ customer growth slows below 15% AND a competitor M&A creates a >$3B scaled rival, the moat thesis weakens even before any single break trips."
+    "stress_test": "If $100K+ customer growth slows below 15% AND a competitor M&A creates a >$3B scaled rival, the moat thesis weakens even before any single break trips.",
+    "cohesity_competitive_update_2026_06": "Post-Veritas, Cohesity is the bigger horse: ~$1.5B ARR, ~$1.7B revenue, ~28% profit margin, ~19% data-resilience share leader, NVIDIA-backed, targeting a 2026 IPO at ~$17B (~RBRK's cap). Positioning: Cohesity = 'the platform' (broad), RBRK = 'the specialist' (faster-growing, +32% sub-ARR Q1 FY27). The thesis is therefore 'the specialist out-grows the scaled incumbent' - RBRK must keep winning the INCREMENTAL net-new ARR even though Cohesity owns the larger installed base. The Cohesity IPO S-1 is the data-unlock for a direct share-of-net-new metric."
   },
   "competitive_watchlist": [
     "Cohesity",
@@ -241,5 +277,12 @@
   },
   "segments": [],
   "operational_kpis": [],
-  "break_rules_soft": []
+  "break_rules_soft": [],
+  "competitive_tracking": {
+    "rival": "Cohesity (post-Veritas)",
+    "wired_now": ["Gartner MQ / IDC category share (annual, manual)", "Identity+DSPM ARR as tracked numbers", "consumption/usage-revenue growth", "transcript displacement/large-logo mention counts"],
+    "needs_pipeline_plumbing": ["3rd-party share auto-ingest", "transcript competitive-mention extractor"],
+    "event_unlock": "Cohesity 2026 IPO S-1 -> activates RBRK-vs-Cohesity net-new-ARR share metric",
+    "q1_fy27_actuals_2026_06_05": "sub-ARR +32% to $1.57B; revenue +39% to $387.1M; net-new sub-ARR $103M (Q1 record); FCF margin 19%; contribution margin 13.2% LTM; guidance raised. Verdict Intact strengthened; live yellow remains growth-endurance ~76% (<85%)."
+  }
 }
