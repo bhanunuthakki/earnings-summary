@@ -1,0 +1,42 @@
+{
+  "ticker": "RBRK",
+  "readme": "Manual-entry annual store of 3rd-party category position for the RBRK-vs-Cohesity thesis. Add one entry per metric per year when a new Gartner Magic Quadrant / IDC report lands. 'value: null' is an explicit 'awaiting source' slot — the loader (execution/ingest_competitive_category_share.py) SKIPS it rather than writing a fabricated fact, so the KPI simply has no datapoint for that year until you fill it in. Gartner MQ position is encoded as an ordinal: Niche=1, Visionary=2, Challenger=3, Leader=4 (the prose label travels in the fact's source_excerpt). 'unit' is one of: percent, count, ratio, actual.",
+  "entries": [
+    {
+      "metric": "Gartner MQ position — Rubrik (ordinal 1-4)",
+      "fiscal_year": 2024,
+      "value": 4,
+      "unit": "count",
+      "source": "Gartner Magic Quadrant for Enterprise Backup and Recovery Software Solutions, 2024",
+      "label": "Leader",
+      "note": "Rubrik named a Leader"
+    },
+    {
+      "metric": "Gartner MQ position — Rubrik (ordinal 1-4)",
+      "fiscal_year": 2025,
+      "value": 4,
+      "unit": "count",
+      "source": "Gartner Magic Quadrant for Backup and Data Protection Platforms, 2025",
+      "label": "Leader — positioned furthest in Completeness of Vision",
+      "note": "Renamed MQ (Backup and Data Protection Platforms); Rubrik #1 on Vision axis"
+    },
+    {
+      "metric": "Data-protection category share — Cohesity (%)",
+      "fiscal_year": 2025,
+      "value": 19,
+      "unit": "percent",
+      "source": "Owner competitive brief / Cohesity disclosure (post-Veritas)",
+      "label": "Data-resilience share",
+      "note": "Scaled incumbent; revisit when Cohesity discloses in its IPO S-1"
+    },
+    {
+      "metric": "Data-protection category share — Rubrik (%)",
+      "fiscal_year": 2025,
+      "value": null,
+      "unit": "percent",
+      "source": "IDC Worldwide Data Replication and Protection market share (operator to fill from the licensed report)",
+      "label": null,
+      "note": "Awaiting a citable IDC/Gartner share figure — fill 'value' to activate this KPI"
+    }
+  ]
+}

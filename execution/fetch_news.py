@@ -54,6 +54,7 @@ for _p in (str(PROJECT_ROOT), str(PROJECT_ROOT / "src")):
 import execution.fetch_edgar_news as edgarnews  # noqa: E402
 import execution.fetch_fmp_news as fmpnews  # noqa: E402
 import execution.fetch_yf_grades as yfgrades  # noqa: E402
+from competitive.sec_watch import check_s1_watch, load_watches  # noqa: E402
 from db import DB_PATH  # noqa: E402
 from execution.fetch_news_websearch import fetch_websearch_news_for_ticker  # noqa: E402
 from news.store import NewsRow, drop_duplicate_stories, upsert_news_rows  # noqa: E402
@@ -130,13 +131,30 @@ def _safe_grades(ticker: str, *, days: int) -> list[NewsRow]:
         return []
 
 
+def _safe_s1_watch() -> list[NewsRow]:
+    """Competitor IPO S-1 watch (src/competitive/sec_watch.py): book-agnostic —
+    reads its own watch config, queries EDGAR full-text search, and attributes any
+    hit to the affected holding's ticker. A no-op until a watched competitor files."""
+    try:
+        return check_s1_watch(load_watches(PROJECT_ROOT))
+    except Exception as exc:  # additive: must never block the primary feeds
+        _log("news_s1_watch_failed", error=str(exc)[:200])
+        return []
+
+
 def _collect_additive(
-    tickers: list[str], *, days: int, skip_edgar: bool, skip_grades: bool
+    tickers: list[str],
+    *,
+    days: int,
+    skip_edgar: bool,
+    skip_grades: bool,
+    skip_s1_watch: bool,
 ) -> list[NewsRow]:
     """The additive non-FMP feeds for the whole book: EDGAR sequentially (its
     module throttles to honor SEC's 10 req/s policy), grades threaded (plain
-    HTTP). Per-ticker failures are already degraded inside the _safe_* wrappers,
-    so this always returns whatever could be fetched."""
+    HTTP), plus the book-agnostic competitor S-1 watch. Per-ticker failures are
+    already degraded inside the _safe_* wrappers, so this always returns whatever
+    could be fetched."""
     rows: list[NewsRow] = []
     if not skip_edgar:
         for ticker in tickers:
@@ -148,6 +166,8 @@ def _collect_additive(
             ]
             for future in futures:
                 rows.extend(future.result())
+    if not skip_s1_watch:
+        rows.extend(_safe_s1_watch())
     return rows
 
 
@@ -160,6 +180,7 @@ def run(
     limit: int,
     skip_edgar: bool = False,
     skip_grades: bool = False,
+    skip_s1_watch: bool = False,
 ) -> int:
     """Collect every ticker under the source policy, add the additive feeds,
     and persist through one connection. Returns 0 normally; 1 only on a
@@ -177,7 +198,13 @@ def run(
             )
         )
 
-    additive = _collect_additive(tickers, days=days, skip_edgar=skip_edgar, skip_grades=skip_grades)
+    additive = _collect_additive(
+        tickers,
+        days=days,
+        skip_edgar=skip_edgar,
+        skip_grades=skip_grades,
+        skip_s1_watch=skip_s1_watch,
+    )
 
     conn = sqlite3.connect(db_path)
     try:
@@ -235,6 +262,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="Skip the additive yfinance rating-changes feed.",
     )
+    parser.add_argument(
+        "--skip-s1-watch",
+        action="store_true",
+        help="Skip the additive competitor IPO S-1 watch (EDGAR full-text search).",
+    )
     return parser.parse_args(argv)
 
 
@@ -261,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
         limit=cast("int", args.limit),
         skip_edgar=cast("bool", args.skip_edgar),
         skip_grades=cast("bool", args.skip_grades),
+        skip_s1_watch=cast("bool", args.skip_s1_watch),
     )
 
 
