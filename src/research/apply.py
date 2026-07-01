@@ -37,6 +37,21 @@ def register_mutating_applier(kind: str, applier: ApplierFn) -> None:
     _MUTATING_APPLIERS[kind] = applier
 
 
+def _load_applier(kind: str) -> ApplierFn | None:
+    """Lazy-import ``research.<kind>_artifact`` (it self-registers) then look up.
+
+    Keeps apply.py decoupled from the concrete artifact modules -- a mutating
+    kind's writer is discovered by convention only when first needed.
+    """
+    import importlib
+
+    try:
+        importlib.import_module(f"research.{kind}_artifact")
+    except Exception:
+        return None
+    return _MUTATING_APPLIERS.get(kind)
+
+
 def _json_field(raw: object, key: str) -> object:
     if not isinstance(raw, str) or not raw:
         return None
@@ -94,7 +109,7 @@ def apply_approved_proposal(
         )
         if not gate.clears:
             return "blocked (higher bar): " + "; ".join(gate.reasons)
-        applier = _MUTATING_APPLIERS.get(kind)
+        applier = _MUTATING_APPLIERS.get(kind) or _load_applier(kind)
         if applier is None:
             return f"{kind}: apply not yet wired"
         return applier(proposal_id, db_path=db_path)
