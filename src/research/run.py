@@ -196,6 +196,7 @@ def run_research_task(
     repo_root: Path | None = None,
     web: WebCall | None = None,
     struct: StructCall | None = None,
+    draft_view: Callable[..., object] | None = None,
 ) -> int | None:
     """Drive one proposed task through the three passes and persist an inert
     'pending' proposal. Returns the proposal id, or None if the task isn't
@@ -233,4 +234,35 @@ def run_research_task(
         db_path=db_path,
     )
     set_task_status(task_id, "drafted", db_path=db_path)
+    _draft_supplementary_view(task, tier, db_path=db_path, drafter=draft_view)
     return proposal_id
+
+
+def _draft_supplementary_view(
+    task: object,
+    tier: object,
+    *,
+    db_path: Path | str | None = None,
+    drafter: Callable[..., object] | None = None,
+) -> None:
+    """On a standard/deep tier, ALSO attempt a saved-view artifact (Wave 2).
+
+    Best-effort: a view-draft failure (or a wondering the compiler degrades
+    because it is not view-shaped) NEVER affects the already-persisted memo.
+    """
+    if getattr(tier, "name", "") not in ("standard", "deep"):
+        return
+    if drafter is None:
+        from research.view_artifact import draft_view_proposal
+
+        drafter = draft_view_proposal
+    try:
+        drafter(
+            claim=getattr(task, "claim", ""),
+            ticker=getattr(task, "ticker", None),
+            note_id=getattr(task, "note_id", None),
+            task_id=getattr(task, "id", None),
+            db_path=db_path,
+        )
+    except Exception:
+        return  # never let a view-draft failure disturb the memo
