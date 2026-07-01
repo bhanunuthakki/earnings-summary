@@ -75,7 +75,7 @@ def draft_view_proposal(
     ticker: str | None = None,
     note_id: int | None = None,
     task_id: int | None = None,
-    db_path: Path | None = None,
+    db_path: Path | str | None = None,
     compile_fn: Callable[..., Any] | None = None,
     create_fn: Callable[..., int] = create_proposal,
 ) -> ViewDraftResult:
@@ -118,7 +118,7 @@ def apply_view_proposal(
     proposal_id: int,
     *,
     name: str | None = None,
-    db_path: Path | None = None,
+    db_path: Path | str | None = None,
     get_fn: Callable[..., Any] = get_proposal,
     save_fn: Callable[..., Any] | None = None,
 ) -> Any:

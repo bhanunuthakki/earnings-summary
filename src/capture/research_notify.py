@@ -149,8 +149,17 @@ def dispatch_callback(
 
     if kind == "rp" and verb in PROPOSAL_VERBS:
         status = act_on_proposal(obj_id, verb, db_path=db_path)
+        applied = ""
+        if verb == "approve":
+            from research.apply import apply_approved_proposal
+
+            try:
+                applied = apply_approved_proposal(obj_id, db_path=db_path)
+            except Exception:  # never let a failed write break the callback ack
+                applied = ""
         if cqid:
-            answer(token, cqid, text=f"{verb.capitalize()}: {status}.")
+            suffix = f" {applied}" if applied else ""
+            answer(token, cqid, text=f"{verb.capitalize()}: {status}.{suffix}")
         return status
 
     if cqid:

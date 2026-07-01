@@ -529,7 +529,8 @@ def create_app(
     @app.route("/api/research/proposal/<int:proposal_id>/<verb>", methods=["POST", "OPTIONS"])
     def research_act(proposal_id: int, verb: str):
         """W1-7: the 4-action core (approve / further / steer / reject). 'approve'
-        is INERT — it flips status only, writing no live artifact. CSRF-guarded."""
+        flips status; a view artifact then writes its saved view via the separate
+        write-dispatch (no web fetch, so never a trifecta). CSRF-guarded."""
         if request.method == "OPTIONS":
             return ("", 204)
         from research.proposals import PROPOSAL_VERBS, act_on_proposal
@@ -539,7 +540,15 @@ def create_app(
         payload = cast("dict[str, object]", request.get_json(silent=True) or {})
         steer_text = str(payload.get("steer_text") or "").strip() or None
         status = act_on_proposal(proposal_id, verb, steer_text=steer_text, db_path=db_path)
-        return {"status": status}
+        applied = ""
+        if verb == "approve":
+            from research.apply import apply_approved_proposal
+
+            try:
+                applied = apply_approved_proposal(proposal_id, db_path=db_path)
+            except Exception as exc:  # a bad apply must not 500 the action
+                applied = f"apply failed: {exc}"
+        return {"status": status, "applied": applied}
 
     # ----- DASHBOARD (unified tabbed command-center shell) -----
 
