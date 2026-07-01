@@ -159,6 +159,7 @@ class ResearchProposal:
     budget_tier: str | None
     provenance: str
     tainted_by_proposal_id: int | None
+    artifact_json: str | None = None
 
 
 def create_proposal(
@@ -174,6 +175,7 @@ def create_proposal(
     adversarial_verdict: str | None = None,
     provenance: str = "derived",
     tainted_by_proposal_id: int | None = None,
+    artifact_json: str | None = None,
     db_path: Path | str | None = None,
 ) -> int:
     conn = open_conn(db_path)
@@ -183,8 +185,8 @@ def create_proposal(
             "INSERT INTO research_proposals "
             "(task_id, kind, ticker, title, body_md, evidence_json, source_note_ids, status, "
             " adversarial_verdict, budget_tier, provenance, tainted_by_proposal_id, "
-            " created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)",
+            " artifact_json, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)",
             (
                 task_id,
                 kind,
@@ -197,6 +199,7 @@ def create_proposal(
                 budget_tier,
                 provenance,
                 tainted_by_proposal_id,
+                artifact_json,
                 now,
                 now,
             ),
@@ -225,6 +228,7 @@ def _row_to_proposal(row: sqlite3.Row) -> ResearchProposal:
         tainted_by_proposal_id=(
             None if row["tainted_by_proposal_id"] is None else int(row["tainted_by_proposal_id"])
         ),
+        artifact_json=None if row["artifact_json"] is None else str(row["artifact_json"]),
     )
 
 
