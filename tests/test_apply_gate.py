@@ -36,8 +36,10 @@ def _patch(monkeypatch, prop: object) -> None:
 
 
 def test_cleared_gate_but_no_applier_registered_yet(monkeypatch) -> None:
-    _patch(monkeypatch, _dcf_prop())
-    assert apply_approved_proposal(1) == "dcf: apply not yet wired"
+    # 'code' has no artifact module yet (Wave 4): a cleared gate is still SAFE --
+    # it reports "not yet wired" rather than writing anything.
+    _patch(monkeypatch, _dcf_prop(kind="code"))
+    assert apply_approved_proposal(1) == "code: apply not yet wired"
 
 
 def test_blocked_without_evidence_doorway(monkeypatch) -> None:
