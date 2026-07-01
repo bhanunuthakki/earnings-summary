@@ -36,11 +36,13 @@ def test_apply_memo_is_a_noop(monkeypatch) -> None:
     assert apply_approved_proposal(1) == ""
 
 
-def test_apply_unknown_kind_is_benign_not_wired(monkeypatch) -> None:
+def test_apply_mutating_kind_without_a_cleared_gate_is_blocked(monkeypatch) -> None:
+    # dcf is a MUTATING kind: a bare proposal (no evidence/verdict/oracle) must be
+    # blocked by the higher-bar gate, never silently "not yet wired".
     monkeypatch.setattr(
         apply_mod, "get_proposal", lambda _pid, **_k: SimpleNamespace(kind="dcf", title="d")
     )
-    assert "not yet wired" in apply_approved_proposal(1)
+    assert "blocked (higher bar)" in apply_approved_proposal(1)
 
 
 def test_apply_missing_proposal_returns_empty(monkeypatch) -> None:
