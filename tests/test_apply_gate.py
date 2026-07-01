@@ -36,10 +36,13 @@ def _patch(monkeypatch, prop: object) -> None:
 
 
 def test_cleared_gate_but_no_applier_registered_yet(monkeypatch) -> None:
-    # 'code' has no artifact module yet (Wave 4): a cleared gate is still SAFE --
-    # it reports "not yet wired" rather than writing anything.
-    _patch(monkeypatch, _dcf_prop(kind="code"))
-    assert apply_approved_proposal(1) == "code: apply not yet wired"
+    # a cleared gate for a mutating kind with NO applier module is still SAFE --
+    # it reports "not yet wired" rather than writing. (All real kinds are wired now,
+    # so force the unwired path.)
+    _patch(monkeypatch, _dcf_prop())
+    monkeypatch.delitem(apply_mod._MUTATING_APPLIERS, "dcf", raising=False)
+    monkeypatch.setattr(apply_mod, "_load_applier", lambda _k: None)
+    assert apply_approved_proposal(1) == "dcf: apply not yet wired"
 
 
 def test_blocked_without_evidence_doorway(monkeypatch) -> None:
