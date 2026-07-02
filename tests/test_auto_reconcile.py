@@ -151,6 +151,74 @@ def test_derivables_never_reach_the_queue(db: Path) -> None:
     assert sum(auto_reconcile(db).values()) == 0
 
 
+def test_missing_falsifier_on_held_position_surfaces(db: Path) -> None:
+    """The gap class behind decision id=52 (VEEV): a live owner decision on a
+    HELD name with an empty/NULL falsifier has no tripwire coverage — an
+    irreducible owner-only ask that must survive the auto pass."""
+    from synthesis.reconcile import falsifier_action, list_missing_falsifiers
+
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("INSERT INTO tracked_companies VALUES ('NU','portfolio')")
+        # held + empty falsifier → the ask MUST surface
+        conn.execute(
+            "INSERT INTO decisions (ticker, recommendation_kind, decided_by, falsifier, "
+            "made_at, created_at) VALUES ('NU','initiate','owner','','2026-06-01','2026-06-01')"
+        )
+        # unheld/closed + empty falsifier → never re-ask (moot-drop behaviour)
+        conn.execute(
+            "INSERT INTO decisions (ticker, recommendation_kind, decided_by, falsifier, "
+            "made_at, created_at) VALUES ('MU','sell','owner',NULL,'2025-12-20','2025-12-20')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    auto_reconcile(db)
+    gaps = list_missing_falsifiers(db)
+    # NU asks. MU is unheld — silent. VEEV's '(inferred)' falsifier is already
+    # pending in the ratify queue — no double-ask for the same position.
+    assert [(g.kind, g.label) for g in gaps] == [("falsifier-missing", "NU")]
+
+    # held + owner-supplied falsifier (the existing edit action) → ask clears
+    assert falsifier_action(gaps[0].item_id, "edit", text="15-90d NPL >5% for 2Q", db_path=db)
+    assert list_missing_falsifiers(db) == []
+
+
+def test_missing_falsifier_ask_renders_on_reconcile_card(db: Path) -> None:
+    """The ask is one dense line inside #ledger-reconcile wired to the existing
+    falsifier edit action — and the empty state never paints over it."""
+    from pipeline.ledger_panel import render_reconcile_list
+    from synthesis.reconcile import falsifier_action
+
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute("INSERT INTO tracked_companies VALUES ('NU','portfolio')")
+        conn.execute(
+            "INSERT INTO decisions (ticker, recommendation_kind, decided_by, falsifier, "
+            "made_at, created_at) VALUES ('NU','initiate','owner','','2026-06-01','2026-06-01')"
+        )
+        nu_id = int(conn.execute("SELECT id FROM decisions WHERE ticker='NU'").fetchone()[0])
+        conn.commit()
+    finally:
+        conn.close()
+
+    auto_reconcile(db)
+    # Clear the seed residue (VEEV's inferred falsifier) so the ask stands alone.
+    for item in list_unreconciled(db):
+        assert item.kind == "falsifier"
+        falsifier_action(item.item_id, "ratify", db_path=db)
+
+    html = render_reconcile_list(db)
+    assert "Corpus reconciled" not in html  # the ask blocks the empty state
+    assert "1 live decision needs a falsifier" in html and "NU" in html
+    assert f'data-falsifier-action="edit" data-rec-id="{nu_id}"' in html
+
+    # Owner supplies the falsifier → the ask clears, the empty state returns.
+    falsifier_action(nu_id, "edit", text="15-90d NPL >5% for 2Q", db_path=db)
+    assert "Corpus reconciled" in render_reconcile_list(db)
+
+
 def test_owner_verdicts_are_never_overwritten(db: Path) -> None:
     from synthesis.reconcile import reconcile_note
 

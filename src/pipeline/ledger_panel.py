@@ -374,6 +374,32 @@ _RECONCILE_JS = """<script>(function(){
 })();</script>"""
 
 
+def _missing_falsifier_line(db_path: Path | str | None) -> str:
+    """One dense line for live held positions with no falsifier — no tripwire
+    coverage is an irreducible owner ask; 'add' routes to the same
+    /api/reconcile/falsifier/<id> edit action the ratify queue uses."""
+    from synthesis.reconcile import list_missing_falsifiers
+
+    try:
+        gaps = list_missing_falsifiers(db_path)
+    except Exception:
+        gaps = []
+    if not gaps:
+        return ""
+    asks = " · ".join(
+        f"{escape(gap.label)} — "
+        f'<button type="button" class="k-btn k-btn-sm k-btn-primary" '
+        f'data-falsifier-action="edit" data-rec-id="{gap.item_id}">add</button>'
+        for gap in gaps
+    )
+    lead = (
+        "1 live decision needs a falsifier"
+        if len(gaps) == 1
+        else f"{len(gaps)} live decisions need a falsifier"
+    )
+    return f'<div class="ledger-musing"><div class="ledger-body">{lead}: {asks}</div></div>'
+
+
 def render_reconcile_list(db_path: Path | str | None) -> str:
     """The seed-reconciliation fragment — one-tap verdicts until the list is empty.
     Degrades to the empty state on a pre-0130 DB (no decided_by column yet)."""
@@ -383,12 +409,13 @@ def render_reconcile_list(db_path: Path | str | None) -> str:
         items = list_unreconciled(db_path)
     except Exception:
         items = []
-    if not items:
+    missing_line = _missing_falsifier_line(db_path)
+    if not items and not missing_line:
         return (
             '<div id="ledger-reconcile"><p class="ledger-empty">Corpus reconciled — '
             "nothing awaiting a verdict.</p></div>"
         )
-    cards: list[str] = []
+    cards: list[str] = [missing_line] if missing_line else []
     for item in items:
         if item.kind == "falsifier":
             buttons = "".join(

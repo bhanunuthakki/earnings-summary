@@ -110,6 +110,49 @@ def list_unreconciled(db_path: Path | str | None = None) -> list[ReconcileItem]:
     return items
 
 
+def list_missing_falsifiers(db_path: Path | str | None = None) -> list[ReconcileItem]:
+    """Held positions whose owner decisions carry no falsifier at all — the
+    tripwire-coverage gap the auto-reconcile moot-drop must never hide.
+
+    A live held position with no falsifier has nothing for the break engine to
+    guard (the attach flow skips empty falsifiers), and only the owner's own
+    words are quotable — an irreducible owner-only ask. Position-level, not
+    row-level: one ask per held ticker with owner decisions and ZERO falsifier
+    text on any of them. An '(inferred)' falsifier is pending in the ratify
+    queue, not a gap — asking twice for the same position violates the density
+    standard. Routes to the newest owner decision on the name; closed positions
+    never ask (the moot-drop already handled those)."""
+    conn = open_conn(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT d.id, d.ticker, d.recommendation_kind FROM decisions d
+            WHERE d.decided_by = 'owner' AND d.ticker IS NOT NULL
+              AND d.id = (SELECT MAX(o.id) FROM decisions o
+                          WHERE o.decided_by = 'owner' AND o.ticker = d.ticker)
+              AND NOT EXISTS (
+                    SELECT 1 FROM decisions f
+                    WHERE f.decided_by = 'owner' AND f.ticker = d.ticker
+                      AND TRIM(coalesce(f.falsifier, '')) != '')
+              AND EXISTS (
+                    SELECT 1 FROM tracked_companies t
+                    WHERE t.ticker = d.ticker AND t.list_type = 'portfolio')
+            ORDER BY d.ticker
+            """
+        ).fetchall()
+        return [
+            ReconcileItem(
+                kind="falsifier-missing",
+                item_id=int(row[0]),
+                label=str(row[1]),
+                body=str(row[2] or ""),
+            )
+            for row in rows
+        ]
+    finally:
+        conn.close()
+
+
 def reconcile_note(note_id: int, verdict: str, *, db_path: Path | str | None = None) -> bool:
     """Stamp a verdict on a seed note (musing / decision note / intent)."""
     if verdict not in RECONCILE_VERDICTS:
