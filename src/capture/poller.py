@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 # gets no reply (silence = "already had it / nothing to say").
 _CONFIRM: dict[str, str] = {
     "landed": "Captured.",
-    "influence_landed": "Saved as an influence.",
+    "reading_landed": "Saved to On My Mind.",
     "needs_ticker": "Captured. (Which ticker? Set it from the Ledger.)",
     "transcription_failed": "Couldn't transcribe that one - I kept the audio, try again?",
     "no_audio": "That voice note came through empty - try again?",
@@ -138,22 +138,25 @@ def poll_once(
                             "and it lands in your Ledger.",
                         )
                 continue
-            # A bare URL → land as an influence (link the analyst flagged as reading),
-            # not a musing.  Anything else is stream-of-consciousness capture.
+            # A bare URL → land as an On My Mind reading (a link the analyst
+            # found), not a musing.  Anything else is stream-of-consciousness.
             url = ingest._extract_url(update.text)
             if url:
-                inf = ingest.ingest_influence(
+                rd = ingest.ingest_reading(
                     channel="telegram",
                     url=url,
                     external_ref=f"tg:{update.update_id}",
                     db_path=db_path,
                 )
-                # report as "influence_landed" so _confirm sends the right reply
+                # report as "reading_landed" so _confirm sends the right reply
                 _confirm(
-                    token, update, "influence_landed" if inf.status == "landed" else inf.status,
-                    None, enabled=confirm,
+                    token,
+                    update,
+                    "reading_landed" if rd.status == "landed" else rd.status,
+                    None,
+                    enabled=confirm,
                 )
-                bump(f"influence_{inf.status}")
+                bump(f"reading_{rd.status}")
             else:
                 result = ingest.ingest_capture(
                     channel="telegram",
@@ -195,7 +198,7 @@ def poll_once(
                 bump("wondering")
                 _notify_wondering(token, update, tid, db_path, enabled=confirm)
         elif update.kind == "document" and update.document_file_id:
-            # A PDF, deck, or any document file → land as an investor influence.
+            # A PDF, deck, or any document file → land as an On My Mind reading.
             # The file is downloaded and stored locally so future text extraction
             # can read it; the local path is indexed in context_json.
             docs_dir = Path(audio_dir).parent / "docs"
@@ -208,7 +211,7 @@ def poll_once(
             except telegram.TelegramError:
                 bump("download_failed")
                 continue
-            inf = ingest.ingest_influence(
+            rd = ingest.ingest_reading(
                 channel="telegram",
                 local_path=dest,
                 file_name=update.document_file_name,
@@ -218,10 +221,13 @@ def poll_once(
                 db_path=db_path,
             )
             _confirm(
-                token, update, "influence_landed" if inf.status == "landed" else inf.status,
-                None, enabled=confirm,
+                token,
+                update,
+                "reading_landed" if rd.status == "landed" else rd.status,
+                None,
+                enabled=confirm,
             )
-            bump(f"influence_{inf.status}")
+            bump(f"reading_{rd.status}")
         elif update.kind == "callback":
             # The Phase-1 research surface: an inline-button press (run a wondering,
             # or approve/further/steer/reject a proposal) → the one action core.

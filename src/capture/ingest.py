@@ -20,7 +20,6 @@ Stages:
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -147,7 +146,7 @@ def _extract_url(text: str) -> str | None:
     return None
 
 
-def ingest_influence(
+def ingest_reading(
     *,
     channel: str,
     local_path: Path | str | None = None,
@@ -158,20 +157,29 @@ def ingest_influence(
     external_ref: str | None = None,
     db_path: Path | str | None = None,
 ) -> IngestResult:
-    """Land a document or URL as a portfolio-level investor influence note.
+    """Land a document or URL as an On My Mind *reading* (kind='observation').
 
-    Influences are ticker=NULL — they shape the LLM's understanding of the
-    analyst's investing mental model across all companies, not just one ticker.
-    The pipeline is LLM-free: the file is indexed by reference (name + path)
-    without blocking on any extraction step.
+    A reading is something the analyst *found* (a deck, a link) vs a musing
+    (something they *said*). It is NOT classified into a belief at ingest time —
+    that is the Thought Partner's job downstream (explore → distil → Worldview).
+    Portfolio-level (ticker=NULL); LLM-free write path: the file is indexed by
+    reference (name + path) without blocking on any extraction step.
     """
+    redactions: dict[str, int] | None = None
+    name: str = ""
+    caption_clean: str | None = None
     if local_path:
         name = file_name or Path(local_path).name
-        body = name if not caption else f"{name}: {caption.strip()}"
-        media_kind = "document"
+        item_type, media_kind = "doc", "document"
+        if caption and caption.strip():
+            # Scrub the free-text caption (PII) but leave the filename intact.
+            scrubbed = scrub.scrub(caption.strip())
+            caption_clean = scrubbed.text
+            redactions = scrubbed.redactions or None
+        body = name if not caption_clean else f"{name}: {caption_clean}"
     elif url:
-        body = url
-        media_kind = "url"
+        item_type, media_kind = "link", "url"
+        body = url  # a bare URL is not free-text PII; keep it verbatim
     else:
         return IngestResult(status="empty")
 
@@ -186,26 +194,29 @@ def ingest_influence(
     if session_id is None:
         return IngestResult(status="duplicate")
 
-    # 2. Build context_json metadata.
+    # 2. Build context_json metadata — the On My Mind feed reads item_type/ledger.
     context: dict[str, object] = {
         "channel": channel,
         "media_kind": media_kind,
-        "ledger": "influence",
+        "item_type": item_type,
+        "ledger": "onmymind",
     }
     if local_path:
         context["file_name"] = name
         context["local_path"] = str(local_path)
         if mime_type:
             context["mime_type"] = mime_type
-        if caption:
-            context["caption"] = caption.strip()
+        if caption_clean:
+            context["caption"] = caption_clean
     if url:
         context["url"] = url
+    if redactions:
+        context["scrubbed"] = redactions
 
-    # 3. Land as a portfolio-level influence note (ticker=None).
+    # 3. Land as a portfolio-level reading (ticker=None, kind='observation').
     note = create_note(
         ticker=None,
-        kind="influence",
+        kind="observation",
         body=body,
         source="capture",
         context=context,
@@ -219,10 +230,10 @@ def ingest_influence(
     audit.write_audit(
         channel=channel,
         action="landed",
-        utterance_summary=f"influence ({media_kind}): {body[:100]}",
+        utterance_summary=f"reading ({item_type}): {body[:100]}",
         session_id=session_id,
         note_id=note.id,
-        detail=f"media_kind={media_kind}",
+        detail=f"item_type={item_type}",
         db_path=db_path,
     )
     return IngestResult(status="landed", note_id=note.id, session_id=session_id)
