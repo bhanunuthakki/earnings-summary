@@ -18,8 +18,11 @@ derivable. This pass encodes the derivations, deterministically:
 
 What survives is the irreducible owner-only residue: inferred falsifiers on
 HELD positions (words the coach would quote — only the owner can ratify
-those). Everything auto-resolved is stamped with its derivation so the panel
-can show one summary line instead of a backlog. Idempotent; zero LLM.
+those), and held positions with NO falsifier text at all (surfaced by
+``reconcile.list_missing_falsifiers`` — a live position with no tripwire must
+ask, never silently pass). Everything auto-resolved is stamped with its
+derivation so the panel can show one summary line instead of a backlog.
+Idempotent; zero LLM.
 """
 
 from __future__ import annotations
