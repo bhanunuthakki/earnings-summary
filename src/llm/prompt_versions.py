@@ -198,6 +198,8 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # Per-case checklist deriver (llm/query_criteria.py, §3). This version IS
     # the query_criteria cache key: bumping it forks checklist history cleanly.
     "query_criteria_derive": "v1",
+    # Prompt-variant proposer (llm/prompt_ab.py, §4).
+    "prompt_variant_propose": "v1",
     # SayDo commitment extraction (compute/say_do_extractor.build_extraction_prompt).
     # Bump when the extraction prompt is materially rewritten; commitment_scan_log
     # rows carry the version, so stale-version scans can be invalidated (DELETE

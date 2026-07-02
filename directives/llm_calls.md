@@ -117,3 +117,36 @@ This directive supersedes the inconsistent state where scripts called
 
 Any future script that goes around `call_llm` is a regression and should be
 caught in code review.
+
+## Prompt-A/B promotion workflow (meta_eval_governance.md §4 + §10 Q1)
+
+Prompt improvements are MEASURED, then AUTO-APPLIED (owner decision Q1) —
+never hand-tuned in place:
+
+1. **Propose** — `python execution/run_prompt_ab.py --purpose <p> --propose
+   --template-file <the checked-in constant's text>`. The Opus proposer emits
+   1-4 exact-match edits on the instruction scaffold; anchors are validated
+   against the template AND real captured renders BEFORE any spend
+   (`rejected_anchor` otherwise).
+2. **Run** — `--experiment <id>` (≥2 runs on fresh samples). Baseline reuses
+   captured incumbent outputs when the capture's model equals the frozen model;
+   the variant runs under the SAME frozen model, `scope="prompt_ab"`, capture
+   OFF. The brand-blind judge grades baseline (slot A) vs variant (slot B) with
+   §3 criteria derived from the BASELINE prompt; judges never see the edits.
+3. **Promote** — `--experiment <id> --promote`: if the pooled §4.4 bar holds
+   (≥60% strict variant wins AND ≤20% baseline wins per judge, agreement ≥0.6,
+   ≥2 promoting runs over ≥10 pooled cases, zero KEEP_BASELINE runs), an ACTIVE
+   `prompt_pin_overrides` row applies the edits to PRODUCTION traffic at
+   `call_llm`/`call_llm_with_web` time (production scopes only — replays stay
+   byte-identical; anchor drift fails OPEN to the original prompt).
+4. **Reconcile git** — the override's `reason_json.edits` carries the exact
+   diff. Catch the checked-in prompt constant up in a routine PR and bump its
+   `prompt_versions` entry (v2→v3 …); once the constant matches, the override
+   is redundant and can be deactivated.
+5. **Auto-demote** — a later experiment run concluding KEEP_BASELINE
+   deactivates the override automatically (mirrors the model loop's regression
+   revert). Manual revert: deactivate the row (history is kept).
+
+Rule-3 kinship: an override never bypasses `_model_for` or the ledger — the
+edited prompt is THE production prompt (its sha, capture, and cost accounting
+all follow it).

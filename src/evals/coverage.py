@@ -74,6 +74,7 @@ META_PURPOSES: frozenset[str] = frozenset(
         "optimizer_nominator",
         "model_frontier_research",
         "query_criteria_derive",
+        "prompt_variant_propose",
     }
 )
 
