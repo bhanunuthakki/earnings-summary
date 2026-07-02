@@ -15,8 +15,9 @@ Pipeline (runs on the ``--enable-llm`` build, NOT on render):
      with a one-line ``why`` (schema-validated; degrade to the FMP screen on
      parse failure — never crash the build).
   3. Best-effort fetch of each suggested peer's FMP fundamentals (profile +
-     key-metrics-ttm + ratios-ttm) so the panel's multiples resolve instead of
-     rendering a wall of em-dashes. Free-tier (stable) only, budget-capped.
+     key-metrics-ttm + ratios-ttm + quarterly income) so the panel's multiples
+     resolve instead of rendering a wall of em-dashes. Free-tier (stable)
+     only, budget-capped, per-file resumable across builds.
   4. Cache the set to ``data/peer_selection/{TICKER}.json`` keyed on an input
      sha256 — stable quarter-to-quarter, re-run only on ``--refresh`` or when
      the inputs change.
@@ -58,15 +59,27 @@ PURPOSE = "peer_selection"
 _TICKER_RX = re.compile(r"[A-Z][A-Z0-9.\-]{0,6}")
 
 _MAX_DESC_CHARS = 4000
-# Per-build FMP-fetch ceiling: 3 stable calls x peers. Free tier is 250
-# calls/day; cap so one build can't starve the daily budget on a long peer set.
-_MAX_FETCH_CALLS = 30
-_FETCH_ENDPOINTS: tuple[tuple[str, str], ...] = (
-    # (stable endpoint path, cache-file suffix p3_data reads)
-    ("profile", "profile"),
-    ("key-metrics-ttm", "key_metrics_ttm"),
-    ("ratios-ttm", "financial_ratios_ttm"),
+# Per-build FMP-fetch ceiling: 4 stable calls x up to 10 peers. Free tier is
+# 250 calls/day; cap so one build can't starve the daily budget on a long peer
+# set. The per-file skip in _fetch_peer_fundamentals makes re-runs resumable:
+# each run tops up only the files still missing, so a budget-capped (or 429'd)
+# fetch completes over successive builds instead of stalling forever.
+_MAX_FETCH_CALLS = 40
+_FETCH_ENDPOINTS: tuple[tuple[str, str, dict[str, str]], ...] = (
+    # (stable endpoint path, cache-file suffix p3_data reads, extra params)
+    ("profile", "profile", {}),
+    ("key-metrics-ttm", "key_metrics_ttm", {}),
+    ("ratios-ttm", "financial_ratios_ttm", {}),
+    # The panel's revenue column sums the 4 newest quarterly income rows; the
+    # stable key-metrics-ttm payload carries NO revenueTTM fallback, so without
+    # this file a fetched peer still renders revenue as an em-dash.
+    ("income-statement", "income_statement_quarterly", {"period": "quarter", "limit": "4"}),
 )
+
+# _stable_get sentinel: the FMP daily budget is exhausted (HTTP 429). Abort the
+# whole fetch run instead of burning the remaining call budget on more 429s —
+# the per-file skip resumes the top-up on the next build.
+_RATE_LIMITED = object()
 
 
 class PeerSuggestion(BaseModel):
@@ -136,8 +149,12 @@ def _build_prompt(
         '  {"ticker": "<exchange ticker>", "name": "<company name>", '
         '"why": "<one concise clause naming the shared business mechanic>"}\n'
         "Rules:\n"
-        "- Only real, currently-listed public companies addressable by an "
-        "exchange ticker (use the primary listing's symbol).\n"
+        "- Only real, CURRENTLY-listed public companies — never one that was "
+        "acquired, merged, or taken private (e.g. Squarespace is private now).\n"
+        "- Ticker must be the US-market symbol: the US primary listing or the "
+        "US ADR when one exists (SE not SEA for Sea Limited, SAP not SAPS, "
+        "ADYEY not ADYEN.AS). Use a foreign-exchange symbol ONLY when the "
+        "company has no US listing of any kind.\n"
         "- Rank closest business-model comparables first.\n"
         f"- Never include {ticker} itself.\n"
         "- `why` states the comparability basis, not a generic description.\n"
@@ -229,7 +246,21 @@ def extract_for_ticker(
         except (OSError, json.JSONDecodeError):
             cached = None
         if isinstance(cached, dict) and cached.get("inputs_sha256") == inputs_sha:
-            return PeerSelectionResult(**cast("dict[str, Any]", cached))
+            result = PeerSelectionResult(**cast("dict[str, Any]", cached))
+            # Self-heal: a cache hit skips the LLM but still tops up missing
+            # peer fundamentals (per-file skip → 0 calls once complete). Every
+            # pre-fix cache has fetched_peers=[] because the fetch never had an
+            # FMP key; without this, those panels stay em-dash forever.
+            if fetch_fundamentals and result.suggestions:
+                topped = _fetch_peer_fundamentals(
+                    [s["ticker"] for s in result.suggestions if s.get("ticker")],
+                    repo_root,
+                    self_ticker=ticker,
+                )
+                if topped:
+                    result.fetched_peers = sorted({*result.fetched_peers, *topped})
+                    _write_cache(cache_path, result)
+            return result
 
     start = datetime.now(UTC)
     try:
@@ -380,9 +411,32 @@ def _segment_names(conn: sqlite3.Connection, ticker: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_fmp_key(repo_root: Path) -> str | None:
+    """FMP_API_KEY from the environment, falling back to ``repo_root/.env``.
+
+    The LLM build (``build_artifacts.py`` / ``extract_peer_selection.py``)
+    never exports the key, so every pre-fix build silently skipped the whole
+    fetch (``fetched_peers=[]`` across prod caches) and thesis peers rendered
+    as em-dash walls. Reading .env directly (dotenv_values — no env mutation)
+    matches where the rest of the FMP fleet keeps the key."""
+    key = os.environ.get("FMP_API_KEY")
+    if key:
+        return key
+    try:
+        from dotenv import dotenv_values
+    except ImportError:
+        return None
+    val = dotenv_values(repo_root / ".env").get("FMP_API_KEY")
+    return val.strip() if isinstance(val, str) and val.strip() else None
+
+
 def _fetch_peer_fundamentals(peers: list[str], repo_root: Path, *, self_ticker: str) -> list[str]:
-    """Fetch profile + key-metrics-ttm + ratios-ttm for each suggested peer we
-    don't already cache, writing the JSON files ``load_peer_comp`` reads.
+    """Fetch profile + key-metrics-ttm + ratios-ttm + quarterly income for each
+    suggested peer, writing the JSON files ``load_peer_comp`` reads. Per-FILE
+    skip: only endpoints whose cache file is missing are called, so a peer left
+    half-fetched by an earlier budget hit completes here instead of being
+    skipped forever (the old profile-exists check did exactly that), and a
+    fully-cached peer costs zero calls.
 
     Self-contained (a focused stable-endpoint fetcher) rather than reusing
     ``execution/save_fmp_data.py``: that module ``sys.exit``s at import when
@@ -391,8 +445,10 @@ def _fetch_peer_fundamentals(peers: list[str], repo_root: Path, *, self_ticker: 
     Writing straight to ``repo_root`` keeps the fetched files where the renderer
     looks. Never raises — on a missing key or any HTTP error the peer simply
     renders metric-less and the existing all-dash filter drops it (unless it's
-    also an owner-pinned named rival, which survives by design)."""
-    api_key = os.environ.get("FMP_API_KEY")
+    also an owner-pinned named rival, which survives by design). A 429 (daily
+    budget exhausted) aborts the remaining fetch outright; the next build
+    resumes the top-up."""
+    api_key = _resolve_fmp_key(repo_root)
     if not api_key:
         log.info({"event": "peer_fetch_skipped_no_key", "ticker": self_ticker})
         return []
@@ -407,17 +463,27 @@ def _fetch_peer_fundamentals(peers: list[str], repo_root: Path, *, self_ticker: 
     fetched: list[str] = []
     calls = 0
     for peer in peers:
-        if (fmp_dir / f"{peer}_profile.json").exists():
-            continue  # already cached (tracked peer or a prior run)
+        todo = [
+            (endpoint, suffix, params)
+            for endpoint, suffix, params in _FETCH_ENDPOINTS
+            if not (fmp_dir / f"{peer}_{suffix}.json").exists()
+        ]
+        if not todo:
+            continue  # fully cached (tracked peer or a completed prior run)
         peer_ok = False
-        for endpoint, suffix in _FETCH_ENDPOINTS:
+        for endpoint, suffix, params in todo:
             if calls >= _MAX_FETCH_CALLS:
                 log.warning(
                     {"event": "peer_fetch_budget_hit", "ticker": self_ticker, "calls": calls}
                 )
                 return fetched
             calls += 1
-            body = _stable_get(requests, endpoint, peer, api_key)
+            body = _stable_get(requests, endpoint, peer, api_key, params)
+            if body is _RATE_LIMITED:
+                log.warning(
+                    {"event": "peer_fetch_rate_limited", "ticker": self_ticker, "calls": calls}
+                )
+                return fetched
             if body is not None:
                 (fmp_dir / f"{peer}_{suffix}.json").write_text(
                     json.dumps(body, indent=2), encoding="utf-8"
@@ -429,15 +495,22 @@ def _fetch_peer_fundamentals(peers: list[str], repo_root: Path, *, self_ticker: 
     return fetched
 
 
-def _stable_get(requests_mod: Any, endpoint: str, symbol: str, api_key: str) -> object | None:
-    """One FMP /stable GET. Returns the parsed JSON list, or None on any
+def _stable_get(
+    requests_mod: Any,
+    endpoint: str,
+    symbol: str,
+    api_key: str,
+    extra_params: dict[str, str] | None = None,
+) -> object | None:
+    """One FMP /stable GET. Returns the parsed JSON list; ``_RATE_LIMITED`` on
+    HTTP 429 (daily budget gone — the caller aborts the run); None on any other
     non-200 / empty / error. Mirrors save_fmp_data's stable URL shape.
 
     ``requests_mod`` is the dynamically-imported ``requests`` module typed as
     ``Any`` — the network boundary, kept off the import/render path on purpose.
     """
     url = f"https://financialmodelingprep.com/stable/{endpoint}"
-    params = {"symbol": symbol, "apikey": api_key}
+    params = {"symbol": symbol, "apikey": api_key, **(extra_params or {})}
     try:
         resp = requests_mod.get(url, params=params, timeout=20)
     except Exception as exc:  # network best-effort — any failure → skip this file
@@ -450,6 +523,8 @@ def _stable_get(requests_mod: Any, endpoint: str, symbol: str, api_key: str) -> 
             }
         )
         return None
+    if resp.status_code == 429:
+        return _RATE_LIMITED
     if resp.status_code != 200:
         return None
     try:
