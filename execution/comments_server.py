@@ -452,6 +452,13 @@ def create_app(
             response.headers["Vary"] = "Origin"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        # Security headers — the dashboard is network-reachable over Tailscale.
+        # SAMEORIGIN (not DENY) because the command center embeds /reports/<T> in
+        # a same-origin iframe. no-referrer so ticker-bearing report URLs (which
+        # reveal positions) never leak in a Referer to any external destination.
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
         return response
 
     @app.after_request
@@ -481,7 +488,9 @@ def create_app(
 
     @app.route("/healthz", methods=["GET"])
     def healthz():
-        return {"status": "ok", "repo_root": str(repo_root)}
+        # No repo_root — a network-reachable liveness endpoint must not leak the
+        # absolute server filesystem path.
+        return {"status": "ok"}
 
     @app.route("/api/capture/text", methods=["POST", "OPTIONS"])
     def capture_text():
@@ -2485,7 +2494,11 @@ def create_app(
         """The standalone per-ticker page is folded into the unified shell; its
         content is the shell's Holding drill-down tab. 302-redirect to that deep
         link (ticker uppercased) so existing bookmarks keep working."""
-        return redirect(f"/#holding={ticker.upper()}")
+        try:
+            t = ticker_validation.safe_ticker(ticker)
+        except ValueError:
+            abort(400)
+        return redirect(f"/#holding={t}")
 
     @app.route("/reports/<ticker>", methods=["GET"])
     def latest_report_for_ticker(ticker: str):
@@ -2494,7 +2507,11 @@ def create_app(
         Uses the latest filename (`<DATE>_workspace.html`) since YYYY-MM-DD
         sorts chronologically. Returns 404 if no build exists.
         """
-        research_dir = repo_root / "output" / "research" / ticker.upper()
+        try:
+            t = ticker_validation.safe_ticker(ticker)
+        except ValueError:
+            abort(400)
+        research_dir = repo_root / "output" / "research" / t
         if not research_dir.exists():
             abort(404)
         matches = sorted(research_dir.glob("*_workspace.html"))
@@ -2510,7 +2527,10 @@ def create_app(
         browser instead of downloading an ``.xlsx``. Otherwise stream the live
         workbook (``dcf/<TICKER>.xlsx``), falling back to the most recent dated
         workbook under ``output/research/<T>/``. 404 if neither exists."""
-        t = ticker.upper()
+        try:
+            t = ticker_validation.safe_ticker(ticker)
+        except ValueError:
+            abort(400)
         _sid, sheet_url = _linked_gsheet(repo_root, t)
         if sheet_url:
             return redirect(sheet_url, code=302)

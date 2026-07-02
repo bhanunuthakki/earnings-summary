@@ -132,6 +132,35 @@ def test_cors_methods_and_headers_always_set(client):
         assert "Content-Type" in resp.headers.get("Access-Control-Allow-Headers", "")
 
 
+# --- Security hardening (dashboard is network-reachable over Tailscale) ---
+
+
+def test_security_headers_present(client):
+    """Every response carries the baseline security headers. X-Frame-Options is
+    SAMEORIGIN (not DENY) because the command center embeds /reports/<T> in a
+    same-origin iframe."""
+    resp = client.get("/healthz")
+    assert resp.headers.get("X-Content-Type-Options") == "nosniff"
+    assert resp.headers.get("X-Frame-Options") == "SAMEORIGIN"
+    assert resp.headers.get("Referrer-Policy") == "no-referrer"
+
+
+def test_healthz_does_not_leak_repo_root(client):
+    """A network-reachable liveness endpoint must not disclose the server's
+    absolute filesystem path."""
+    resp = client.get("/healthz")
+    assert resp.get_json() == {"status": "ok"}
+
+
+def test_file_routes_reject_malformed_ticker(client):
+    """The file-serving routes validate the ticker BEFORE it reaches a
+    filesystem path — a malformed ticker is a 400, never a traversal. A
+    well-shaped ticker passes validation (404 here: no build in the tmp repo)."""
+    for route in ("/dcf/{}", "/reports/{}"):
+        assert client.get(route.format("TOOLONGTICKER123")).status_code == 400
+        assert client.get(route.format("NU")).status_code == 404
+
+
 # --- Concurrent chat ----------------------------------------------------
 
 
