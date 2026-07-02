@@ -60,6 +60,11 @@ NOTE_KINDS: tuple[str, ...] = (
     "assumption",
     "observation",
     "musing",
+    # 'intent' (0130): a standing intent (e.g. an options-sleeve plan) with a
+    # lifecycle — NOTE_STATUSES + closure provenance in context_json — so the
+    # coach can follow up on it, and STOP once it's resolved/rejected (the
+    # corpus-freshness rule: a nag about a settled topic destroys trust).
+    "intent",
 )
 NOTE_STATUSES: tuple[str, ...] = ("open", "resolved", "superseded", "archived")
 # 'advisor' (0077): notes written by advisor memo runs — honest provenance for
