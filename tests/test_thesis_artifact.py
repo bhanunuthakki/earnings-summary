@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
 
 import research.apply as apply_mod
-from research.thesis_artifact import apply_thesis_proposal, draft_thesis_proposal
+from research.thesis_artifact import (
+    apply_thesis_proposal,
+    draft_thesis_entry,
+    draft_thesis_proposal,
+)
 
 
 def test_thesis_registers_itself_behind_the_gate() -> None:
@@ -68,3 +73,84 @@ def test_apply_requires_an_artifact_payload() -> None:
     prop = SimpleNamespace(kind="thesis", ticker="NU", body_md="x", artifact_json=None)
     with pytest.raises(ValueError, match="no entry"):
         apply_thesis_proposal(1, get_fn=lambda _pid, **_k: prop, append_fn=lambda **_k: None)
+
+
+# --- the governed thesis_entry_draft generator ----------------------------------------
+
+
+def _struct(result: dict[str, object]) -> Callable[..., dict[str, object]]:
+    def caller(prompt: str, *, purpose: str, required_keys: tuple[str, ...]) -> dict[str, object]:
+        return result
+
+    return caller
+
+
+def test_thesis_entry_draft_returns_entry_kind_and_body() -> None:
+    out = draft_thesis_entry(
+        question="do NU margins hold?",
+        memo_md="Take-rate inflected up; NIMAL stable.",
+        ticker="NU",
+        struct=_struct(
+            {"entry_kind": "thesis_update", "body": "Take-rate firmed; I'm holding the overweight."}
+        ),
+    )
+    assert out == {
+        "entry_kind": "thesis_update",
+        "body": "Take-rate firmed; I'm holding the overweight.",
+    }
+
+
+def test_thesis_entry_draft_clamps_an_unknown_kind_to_revision() -> None:
+    out = draft_thesis_entry(
+        question="q",
+        memo_md="m",
+        struct=_struct({"entry_kind": "wild_guess", "body": "Something changed."}),
+    )
+    assert out is not None and out["entry_kind"] == "revision"
+
+
+def test_thesis_entry_draft_empty_body_degrades_to_none() -> None:
+    assert (
+        draft_thesis_entry(
+            question="q", memo_md="m", struct=_struct({"entry_kind": "revision", "body": "  "})
+        )
+        is None
+    )
+    assert draft_thesis_entry(question="q", memo_md="m", struct=_struct({})) is None
+
+
+def test_thesis_entry_draft_frames_evidence_and_verdict_in_the_prompt() -> None:
+    seen: dict[str, str] = {}
+
+    def caller(prompt: str, *, purpose: str, required_keys: tuple[str, ...]) -> dict[str, object]:
+        seen["prompt"] = prompt
+        seen["purpose"] = purpose
+        return {"entry_kind": "bear_append", "body": "Credit risk sharpened; trimming conviction."}
+
+    out = draft_thesis_entry(
+        question="do NU margins hold?",
+        memo_md="NIMAL stable",
+        ticker="NU",
+        quarantined_evidence="NPL formation ticked up to 4.5%",
+        adversarial_verdict=json.dumps(
+            {"refuted": True, "confidence": "high", "rationale": "credit softening"}
+        ),
+        struct=caller,
+    )
+    assert out is not None and out["entry_kind"] == "bear_append"
+    assert seen["purpose"] == "thesis_entry_draft"
+    assert "REFUTED" in seen["prompt"]  # the refuting verdict reached the prompt
+    assert "UNTRUSTED DATA" in seen["prompt"] and "NPL formation" in seen["prompt"]
+
+
+def test_thesis_entry_draft_default_degrades_on_a_parse_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from llm import structured as structured_mod
+
+    def boom(*_a: object, **_k: object) -> object:
+        raise structured_mod.StructuredParseError("unusable", raw_head="{...")
+
+    monkeypatch.setattr(structured_mod, "call_llm_structured", boom)
+    # default struct catches StructuredParseError -> {} -> empty body -> None
+    assert draft_thesis_entry(question="q", memo_md="m") is None
