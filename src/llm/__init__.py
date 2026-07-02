@@ -12,6 +12,10 @@ Layout:
                eval-gated via an empty-by-default purpose allowlist
                (call_gemini, gemini_allowed_purposes; see
                directives/gemini_backend.md).
+    openrouter_backend — OpenRouter (metered key) THIRD backend: an
+               OpenAI-compatible gateway to the cheap open-weight candidate
+               pool (DeepSeek/Qwen/...) with provider pinning for stable model
+               identity (call_openrouter; see directives/openrouter_backend.md).
     backend_judge — pairwise Claude-vs-Gemini judge over the compare corpus;
                grades a purpose for the gemini_backend allowlist
                (judge_pair, aggregate_by_purpose; CLI execution/grade_backends.py).
@@ -74,6 +78,12 @@ from llm.ledger import (
     fallback_call_logged,
     record_llm_call,
 )
+from llm.openrouter_backend import (
+    OPENROUTER_BACKEND_ALLOWED_PURPOSES,
+    OPENROUTER_BACKEND_DEFAULT_MODEL,
+    call_openrouter,
+    openrouter_model_for,
+)
 from llm.style import (
     NUMBER_FORMATTING_BLOCK,
     compose_brief_prompt,
@@ -99,6 +109,8 @@ __all__ = [
     "IR_ANCHOR_CHAR_CAP",
     "LLM_MODELS",
     "NUMBER_FORMATTING_BLOCK",
+    "OPENROUTER_BACKEND_ALLOWED_PURPOSES",
+    "OPENROUTER_BACKEND_DEFAULT_MODEL",
     "PRIORS_ANCHOR_CHAR_CAP",
     "WEB_CONTENT_NOTICE",
     "LLMBudgetExceeded",
@@ -106,6 +118,7 @@ __all__ = [
     "call_gemini",
     "call_llm",
     "call_llm_with_web",
+    "call_openrouter",
     "compose_anchor_block",
     "compose_brief_prompt",
     "cross_judge_agreement",
@@ -118,6 +131,7 @@ __all__ = [
     "load_ir_anchor",
     "load_priors_anchor",
     "load_thesis_anchor",
+    "openrouter_model_for",
     "record_llm_call",
     "spotlight",
     "style_block_cache_token",

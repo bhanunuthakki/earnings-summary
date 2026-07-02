@@ -872,12 +872,18 @@ def call_llm(
             entirely. Use sparingly — CLI tools that need to force a refresh
             past a hard cap should pass this. Soft caps log+proceed anyway,
             so this is only meaningful when the cap is hard-blocked.
-        backend: None (resolve from model family), "claude", or "gemini".
+        backend: None (resolve from model family), "claude", "gemini", or
+            "openrouter". An OpenRouter model id (provider/model slug) routes to
+            the OpenRouter backend; an operational failure there also degrades to
+            Claude, while a forced backend="openrouter" call raises.
     """
-    if backend not in (None, "claude", "gemini"):
-        raise ValueError(f"Unknown LLM backend {backend!r}: expected 'claude' or 'gemini'.")
+    if backend not in (None, "claude", "gemini", "openrouter"):
+        raise ValueError(
+            f"Unknown LLM backend {backend!r}: expected 'claude', 'gemini', or 'openrouter'."
+        )
 
     from llm.model_ladder import GEMINI as _GEMINI_FAMILY  # late — avoids import cycle
+    from llm.model_ladder import OPENROUTER as _OPENROUTER_FAMILY
     from llm.model_ladder import family_of
 
     # Model-first: resolve the intended model (DB pin → LLM_MODELS → DEFAULT).
@@ -891,9 +897,16 @@ def call_llm(
         resolved_model = model
 
     # Backend from the resolved model's family; explicit `backend` arg overrides.
-    resolved_backend = backend or (
-        "gemini" if family_of(resolved_model) == _GEMINI_FAMILY else "claude"
-    )
+    if backend is not None:
+        resolved_backend = backend
+    else:
+        _family = family_of(resolved_model)
+        if _family == _GEMINI_FAMILY:
+            resolved_backend = "gemini"
+        elif _family == _OPENROUTER_FAMILY:
+            resolved_backend = "openrouter"
+        else:
+            resolved_backend = "claude"
 
     if resolved_backend == "gemini":
         from llm.gemini_backend import call_gemini  # late — avoids import cycle
@@ -923,12 +936,45 @@ def call_llm(
             )
             # fall through to the Claude path below (its own ledger rows)
 
-    # Claude path. If resolved_model is a Gemini ID (purpose pinned to Gemini but
-    # backend fell back), re-resolve a Claude model. Guard against Gemini IDs in
-    # LLM_MODELS (post-promotion) by falling back to DEFAULT_MODEL.
-    if family_of(resolved_model) == _GEMINI_FAMILY:
+    if resolved_backend == "openrouter":
+        from llm.openrouter_backend import call_openrouter  # late — avoids import cycle
+
+        try:
+            return call_openrouter(
+                prompt,
+                model=resolved_model,
+                timeout_seconds=timeout_seconds,
+                purpose=purpose,
+                ticker=ticker,
+                scope=scope,
+                run_id=run_id,
+                force_budget_bypass=force_budget_bypass,
+            )
+        except (LLMBudgetExceeded, LLMSetupError):
+            raise  # hard stops — never paper over with a backend switch
+        except (OSError, RuntimeError, ValueError) as openrouter_error:
+            # requests.RequestException subclasses OSError, so network failures land here.
+            if backend == "openrouter":
+                raise  # explicitly forced: the caller wants OpenRouter's answer or its error
+            log.warning(
+                {
+                    "event": "openrouter_backend_failed_falling_back_to_claude",
+                    "purpose": purpose,
+                    "error": f"{type(openrouter_error).__name__}: {str(openrouter_error)[:200]}",
+                }
+            )
+            # fall through to the Claude path below (its own ledger rows)
+
+    # Claude path. If resolved_model is a non-Claude ID (purpose pinned to Gemini
+    # or OpenRouter but that backend fell back), re-resolve a Claude model. Guard
+    # against non-Claude IDs in LLM_MODELS (post-promotion) by falling back to
+    # DEFAULT_MODEL.
+    _non_claude_families = (_GEMINI_FAMILY, _OPENROUTER_FAMILY)
+    if family_of(resolved_model) in _non_claude_families:
         candidate = LLM_MODELS.get(purpose, DEFAULT_MODEL) if purpose is not None else DEFAULT_MODEL
-        resolved_model = candidate if family_of(candidate) != _GEMINI_FAMILY else DEFAULT_MODEL
+        resolved_model = (
+            candidate if family_of(candidate) not in _non_claude_families else DEFAULT_MODEL
+        )
 
     return _call_claude(
         prompt,

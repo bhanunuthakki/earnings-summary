@@ -21,6 +21,7 @@ from dataclasses import dataclass
 
 CLAUDE = "claude"
 GEMINI = "gemini"
+OPENROUTER = "openrouter"
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +60,17 @@ MODEL_LADDER: dict[str, ModelCost] = {
     "gemini-3-flash-preview": ModelCost("gemini-3-flash-preview", GEMINI, 0.30, 2.50),
     "gemini-2.5-flash": ModelCost("gemini-2.5-flash", GEMINI, 0.30, 2.50),
     "gemini-3.1-pro-preview": ModelCost("gemini-3.1-pro-preview", GEMINI, 1.25, 10.00),
+    # OpenRouter cheap-candidate pool (metered gateway; src/llm/openrouter_backend.py).
+    # The pareto optimizer's WIDE, cheap axis — open-weight models graded per purpose
+    # by the same brand-blind judge before any promotion. Ids are OpenRouter's
+    # provider/model slugs. PRICES ARE SEED APPROXIMATIONS for pre-call RANKING ONLY:
+    # the backend records OpenRouter's REAL charged cost per call (usage.cost), so the
+    # ledger stays accurate regardless of drift here. Curate/verify against
+    # https://openrouter.ai/models before trusting a rank. These are EXCLUDED from the
+    # automatic sweep by default (cheaper_candidates(..., include_openrouter=False)) —
+    # opt a purpose in deliberately once the meta-eval nominates it.
+    "deepseek/deepseek-chat": ModelCost("deepseek/deepseek-chat", OPENROUTER, 0.30, 1.10),
+    "qwen/qwen-2.5-72b-instruct": ModelCost("qwen/qwen-2.5-72b-instruct", OPENROUTER, 0.35, 0.40),
 }
 
 
@@ -94,11 +106,19 @@ def _secondary_key(model_id: str) -> float:
     return cost.input_usd_per_mtok if cost is not None else 0.0
 
 
-def cheaper_candidates(incumbent: str, *, include_gemini: bool = True) -> list[str]:
+def cheaper_candidates(
+    incumbent: str, *, include_gemini: bool = True, include_openrouter: bool = False
+) -> list[str]:
     """All registered models strictly cheaper than ``incumbent``, cheapest first.
 
     ``include_gemini=False`` restricts to same-family (Claude-tier) downgrades —
     useful when a cheaper Claude tier is desired without crossing to the Gemini backend.
+
+    ``include_openrouter`` defaults to **False**: the OpenRouter open-weight pool is
+    the widest, cheapest axis but is OPT-IN, so the automatic sweep doesn't flood
+    every purpose with untested third-backend models before the meta-eval (or the
+    owner) deliberately nominates them. Pass ``include_openrouter=True`` to fold
+    them into the candidate set once a purpose is opted in.
     """
     inc_rank = model_rank(incumbent)
     if inc_rank is None:
@@ -109,6 +129,7 @@ def cheaper_candidates(incumbent: str, *, include_gemini: bool = True) -> list[s
         if mid != incumbent
         and cost.blended_usd_per_mtok < inc_rank
         and (include_gemini or cost.family != GEMINI)
+        and (include_openrouter or cost.family != OPENROUTER)
     ]
     out.sort(key=lambda m: (MODEL_LADDER[m].blended_usd_per_mtok, _secondary_key(m)))
     return out
