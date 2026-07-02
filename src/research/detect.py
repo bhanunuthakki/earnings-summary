@@ -103,7 +103,9 @@ def detect_wondering(
 
     raw = (call or _default_call)(text)
     if not raw.get("is_wondering"):
-        return WonderingVerdict(is_wondering=False, claim=str(raw.get("claim") or ""), gate="llm_no")
+        return WonderingVerdict(
+            is_wondering=False, claim=str(raw.get("claim") or ""), gate="llm_no"
+        )
 
     arts = raw.get("suggested_artifacts")
     suggested = (
