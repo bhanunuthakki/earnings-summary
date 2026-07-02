@@ -33,6 +33,12 @@ def main() -> int:
     from collections.abc import Callable
 
     from research.governor import Moment, run_governor
+    from synthesis.auto_reconcile import auto_reconcile
+
+    # Housekeeping first — derive, don't ask: anything software can resolve
+    # (played-out history, moot falsifiers) never reaches the owner's queue.
+    auto_tally = auto_reconcile(db_path)
+    print(f"auto_reconcile: {auto_tally}", file=sys.stderr)
 
     send_fn: Callable[[int, Moment], bool] | None = None
     if not args.dry_run:
