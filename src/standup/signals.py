@@ -1,4 +1,4 @@
-"""Standup watchers — the four deterministic trip detectors.
+"""Standup watchers — the deterministic trip detectors.
 
 Each watcher is a pure read over the portfolio DB (the drift watcher also
 consults the live tracker, falling back to the materialized-weights cache when
@@ -21,6 +21,10 @@ The four sources mirror the four open loops the standup closes:
                         the gap it drives — trim ladder, next-dollar — is suspect).
   position_drift      — a held name's live weight has drifted off its stated
                         target weight (sizing no longer matches intent).
+  stale_valuation_basis — a still-open recommendation rests on a model-version
+                        (e.g. a DCF fair value) that a newer model has MATERIALLY
+                        superseded, so the call should be re-reviewed (reads the
+                        self-updating ``v_decision_freshness`` view).
 
 Each trip becomes a ``StandupSignal``: a stable ``signature`` (the dedup key
 body), a deterministic one-line ``headline`` (the persisted user turn / feed
@@ -40,6 +44,7 @@ from pathlib import Path
 from typing import cast
 
 from identity import DEFAULT_USER_ID
+from model_provenance import MATERIAL_DRIFT_PCT, stale_material_decisions
 from standup.config import StandupConfig
 from triggers.decision_condition import DecisionConditionTrigger
 
@@ -62,6 +67,7 @@ SIGNAL_KINDS: tuple[str, ...] = (
     "journal_open_item",
     "dcf_staleness",
     "position_drift",
+    "stale_valuation_basis",
 )
 
 
@@ -467,6 +473,58 @@ def _position_drift_signals(
 
 
 # ---------------------------------------------------------------------------
+# Watcher: stale_valuation_basis — a rec rests on a superseded model-version
+# ---------------------------------------------------------------------------
+
+
+def _stale_basis_signals(
+    conn: sqlite3.Connection, *, user_id: str, now: datetime, config: StandupConfig
+) -> list[StandupSignal]:
+    """A still-open recommendation whose recorded valuation basis has been
+    MATERIALLY superseded (a newer model moved the fair value >= 10%) is a
+    re-review trigger — the model the call stood on no longer holds. This is the
+    "flag + auto-queue re-review" behaviour: it reads the self-updating
+    ``v_decision_freshness`` view rather than recomputing, so it can never disagree
+    with the freshness surface. Degrades to no signals on a pre-0137 DB."""
+    _ = (user_id, now, config)
+    out: list[StandupSignal] = []
+    for d in stale_material_decisions(conn, pending_only=True):
+        if d.ticker is None or d.basis_value is None or d.current_value is None:
+            continue
+        drift_pct = (d.basis_drift_pct or 0.0) * 100.0
+        direction = "fell" if drift_pct < 0 else "rose"
+        headline = (
+            f"{d.ticker}: your {d.recommendation_kind or 'call'} rests on a "
+            f"{d.basis_kind} fair value of ${d.basis_value:,.2f}, but the current model {direction} "
+            f"to ${d.current_value:,.2f} ({drift_pct:+.0f}%) — re-review this position."
+        )
+        materiality = 0.4 + 0.6 * _ramp(
+            abs(d.basis_drift_pct or 0.0), MATERIAL_DRIFT_PCT, MATERIAL_DRIFT_PCT * 4
+        )
+        out.append(
+            StandupSignal(
+                kind="stale_valuation_basis",
+                ticker=d.ticker,
+                # re-surfaces when a NEWER model supersedes again (current as-of moves)
+                signature=f"stalebasis:{d.ticker}:{d.decision_id}:{d.current_as_of or ''}",
+                headline=" ".join(headline.split()),
+                materiality=min(1.0, materiality),
+                evidence={
+                    "decision_id": d.decision_id,
+                    "recommendation_kind": d.recommendation_kind,
+                    "basis_kind": d.basis_kind,
+                    "basis_value": round(d.basis_value, 4),
+                    "current_value": round(d.current_value, 4),
+                    "drift_pct": round(drift_pct, 1),
+                    "basis_as_of": d.basis_as_of,
+                    "current_as_of": d.current_as_of,
+                },
+            )
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
 
@@ -510,6 +568,10 @@ def collect_signals(
         lambda: _position_drift_signals(
             conn, user_id=user_id, now=now, config=cfg, repo_root=repo_root
         ),
+    )
+    _safe(
+        "stale_valuation_basis",
+        lambda: _stale_basis_signals(conn, user_id=user_id, now=now, config=cfg),
     )
 
     filtered = [s for s in signals if s.materiality >= cfg.min_materiality]

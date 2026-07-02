@@ -45,6 +45,8 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
+from model_provenance.basis import Basis, dcf_basis
+
 if TYPE_CHECKING:
     from integrations.portfolio_tracker_client import LivePortfolio
 
@@ -333,6 +335,11 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
         return None
 
 
+def _has_basis_columns(conn: sqlite3.Connection) -> bool:
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(decisions)")}
+    return "basis_kind" in cols
+
+
 def record_decision(
     *,
     ticker: str,
@@ -343,11 +350,20 @@ def record_decision(
     source_lens: str | None,
     rationale_excerpt: str | None,
     made_at: datetime,
+    basis: Basis | None = None,
+    resolve_dcf_basis: bool = True,
     db_path: Path | str | None = None,
 ) -> int | None:
     """Idempotent insert. Returns the row id (existing or new) or None on
     DB unavailability. Idempotency is by source_artifact_id via the UNIQUE
-    index — second insert on the same artifact returns the existing row."""
+    index — second insert on the same artifact returns the existing row.
+
+    Valuation basis (migration 0137): the recommendation records which model-version
+    it rests on so it can be flagged stale when a newer model supersedes it. Pass an
+    explicit ``basis``; otherwise, when ``resolve_dcf_basis`` is set, the current DCF
+    fair value for the ticker is captured automatically. No-ops cleanly on a pre-0137
+    schema (basis columns absent) — the row is written without a basis.
+    """
     conn = _open(db_path)
     if conn is None:
         return None
@@ -359,25 +375,40 @@ def record_decision(
         if existing is not None:
             return int(existing["id"])
 
+        if basis is None and resolve_dcf_basis:
+            basis = dcf_basis(conn, ticker)
+
+        cols = [
+            "ticker",
+            "recommendation_kind",
+            "recommendation_value",
+            "conviction",
+            "source_artifact_id",
+            "source_lens",
+            "rationale_excerpt",
+            "made_at",
+            "outcome_label",
+            "created_at",
+        ]
+        vals: list[object] = [
+            ticker.upper(),
+            recommendation_kind,
+            recommendation_value,
+            conviction,
+            source_artifact_id,
+            source_lens,
+            rationale_excerpt,
+            made_at.isoformat(),
+            "pending",
+            datetime.now(UTC).isoformat(),
+        ]
+        if basis is not None and _has_basis_columns(conn):
+            cols += ["basis_kind", "basis_ref_id", "basis_value", "basis_as_of", "basis_meta_json"]
+            vals += [basis.kind, basis.ref_id, basis.value, basis.as_of, basis.meta_json]
+
+        placeholders = ",".join("?" * len(vals))
         cur = conn.execute(
-            """
-            INSERT INTO decisions(
-                ticker, recommendation_kind, recommendation_value, conviction,
-                source_artifact_id, source_lens, rationale_excerpt,
-                made_at, outcome_label, created_at
-            ) VALUES (?,?,?,?,?,?,?,?, 'pending', ?)
-            """,
-            (
-                ticker.upper(),
-                recommendation_kind,
-                recommendation_value,
-                conviction,
-                source_artifact_id,
-                source_lens,
-                rationale_excerpt,
-                made_at.isoformat(),
-                datetime.now(UTC).isoformat(),
-            ),
+            f"INSERT INTO decisions({', '.join(cols)}) VALUES ({placeholders})", vals
         )
         conn.commit()
         return int(cur.lastrowid or 0)
