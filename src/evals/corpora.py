@@ -75,6 +75,24 @@ def _mtime_naive_utc(path: Path) -> datetime | None:
         return None
 
 
+def _parse_naive_utc(value: object) -> datetime | None:
+    """Parse a stored ISO-8601 timestamp to naive-UTC (the AuditItem.produced_at
+    contract). Older ``advisor_memos``/``ask_turns`` rows persisted an offset
+    (``…+00:00``) while newer ones are naive; a bare ``fromisoformat`` therefore
+    yields a mix of aware and naive datetimes that then crashes the newest-first
+    sort and ``filter_since`` ("can't compare offset-naive and offset-aware").
+    Coercing any aware stamp to naive-UTC here keeps the whole pipeline naive."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+    return parsed
+
+
 def load_bear_case_corpus(repo_root: Path) -> list[AuditItem]:
     """Every ``data/bear_case/<TICKER>.json`` sidecar, newest mtime first.
 
@@ -200,19 +218,13 @@ def load_advisor_next_dollar_corpus(repo_root: Path) -> list[AuditItem]:
     finally:
         conn.close()
     for memo_id, ticker, title, body_md, created_at in rows:
-        produced_at: datetime | None = None
-        if isinstance(created_at, str):
-            try:
-                produced_at = datetime.fromisoformat(created_at)
-            except ValueError:
-                produced_at = None
         out.append(
             AuditItem(
                 item_id=f"memo:{memo_id}",
                 label=f"advisor_next_dollar/memo:{memo_id} — {str(title)[:80]}",
                 ticker=str(ticker) if ticker else None,
                 content=_clip(str(body_md)),
-                produced_at=produced_at,
+                produced_at=_parse_naive_utc(created_at),
             )
         )
     return out
@@ -348,13 +360,6 @@ def load_ask_advisory_answer_corpus(repo_root: Path) -> list[AuditItem]:
             if len(text) < _MIN_ASK_ANSWER_CHARS or _is_data_view_turn(text):
                 continue
             prior = turns[max(0, idx - _ASK_CONTEXT_TURNS) : idx]
-            produced_at: datetime | None = None
-            created = turn["created_at"]
-            if isinstance(created, str):
-                try:
-                    produced_at = datetime.fromisoformat(created)
-                except ValueError:
-                    produced_at = None
             scope = scopes.get(sid)
             out.append(
                 AuditItem(
@@ -363,7 +368,7 @@ def load_ask_advisory_answer_corpus(repo_root: Path) -> list[AuditItem]:
                     + (f" ({scope})" if scope else ""),
                     ticker=None,
                     content=_clip(_format_ask_item_content(prior, turn, scope)),
-                    produced_at=produced_at,
+                    produced_at=_parse_naive_utc(turn["created_at"]),
                 )
             )
     out.sort(key=lambda i: i.produced_at or datetime.min, reverse=True)
@@ -439,13 +444,6 @@ def load_peer_selection_corpus(repo_root: Path) -> list[AuditItem]:
         suggestions = raw_dict.get("suggestions")
         if not isinstance(suggestions, list):
             continue
-        extracted_at = raw_dict.get("extracted_at")
-        produced_at: datetime | None = None
-        if isinstance(extracted_at, str):
-            try:
-                produced_at = datetime.fromisoformat(extracted_at)
-            except ValueError:
-                produced_at = None
         content = json.dumps(suggestions, indent=2, ensure_ascii=False)
         out.append(
             AuditItem(
@@ -453,7 +451,7 @@ def load_peer_selection_corpus(repo_root: Path) -> list[AuditItem]:
                 label=f"peer_selection/{ticker}",
                 ticker=ticker,
                 content=_clip(content),
-                produced_at=produced_at,
+                produced_at=_parse_naive_utc(raw_dict.get("extracted_at")),
             )
         )
     return out
@@ -580,19 +578,13 @@ def load_position_review_corpus(repo_root: Path) -> list[AuditItem]:
     finally:
         conn.close()
     for memo_id, ticker, title, body_md, created_at in rows:
-        produced_at: datetime | None = None
-        if isinstance(created_at, str):
-            try:
-                produced_at = datetime.fromisoformat(created_at)
-            except ValueError:
-                produced_at = None
         out.append(
             AuditItem(
                 item_id=f"memo:{memo_id}",
                 label=f"position_review/memo:{memo_id} — {str(title)[:80]}",
                 ticker=str(ticker) if ticker else None,
                 content=_clip(str(body_md)),
-                produced_at=produced_at,
+                produced_at=_parse_naive_utc(created_at),
             )
         )
     return out
