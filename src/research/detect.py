@@ -46,6 +46,11 @@ class WonderingVerdict:
     claim: str = ""
     ticker: str | None = None
     suggested_artifacts: tuple[str, ...] = field(default_factory=tuple)
+    # Which gate produced the verdict: trust_zone | regex | llm_no | llm_yes.
+    # Observability only — a negative verdict is otherwise indistinguishable
+    # from a broken tap (the 2026-07-02 audit found 0 detect calls ever, with
+    # no way to tell dormancy from breakage).
+    gate: str = ""
 
 
 def _build_prompt(text: str) -> str:
@@ -92,13 +97,15 @@ def detect_wondering(
     non-musing / fetched / non-matching note); only then the governed classifier."""
     # Trust zone: only owner-authored musings can ever burn tokens or be acted on.
     if kind != "musing" or provenance == "contains_fetched":
-        return WonderingVerdict(is_wondering=False)
+        return WonderingVerdict(is_wondering=False, gate="trust_zone")
     if not _WONDER_RE.search(text or ""):
-        return WonderingVerdict(is_wondering=False)
+        return WonderingVerdict(is_wondering=False, gate="regex")
 
     raw = (call or _default_call)(text)
     if not raw.get("is_wondering"):
-        return WonderingVerdict(is_wondering=False, claim=str(raw.get("claim") or ""))
+        return WonderingVerdict(
+            is_wondering=False, claim=str(raw.get("claim") or ""), gate="llm_no"
+        )
 
     arts = raw.get("suggested_artifacts")
     suggested = (
@@ -111,6 +118,7 @@ def detect_wondering(
         claim=(str(raw.get("claim") or text))[:500],
         ticker=_norm_ticker(raw.get("ticker")),
         suggested_artifacts=suggested,
+        gate="llm_yes",
     )
 
 

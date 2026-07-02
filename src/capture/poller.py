@@ -77,7 +77,7 @@ def _tap(result: ingest.IngestResult, db_path: Path | str | None) -> int | None:
     Returns the new 'proposed' task id (an inert chip), or None."""
     if not (tap_enabled() and result.status == "landed" and result.note_id is not None):
         return None
-    return detect_and_create_task(result.note_id, db_path=db_path)
+    return detect_and_create_task(result.note_id, db_path=db_path, channel="telegram")
 
 
 def _notify_wondering(
