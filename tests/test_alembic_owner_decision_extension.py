@@ -156,7 +156,7 @@ def test_intent_kind_and_fts_triggers_survive(tmp_path: Path) -> None:
         conn.execute(
             "INSERT INTO analyst_notes (kind, body, source, context_json) VALUES "
             "('intent','far-OTM long-dated LEAP sleeve on the next washout','capture',"
-            "'{\"status\": \"open\"}')"
+            '\'{"status": "open"}\')'
         )
         conn.commit()
         trigs = {

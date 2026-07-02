@@ -50,8 +50,7 @@ _KINDS_WITH_INTENT = (
 )
 
 _SOURCE_CHECK_PRIOR = (
-    "source_artifact_id IS NOT NULL OR source_memo_id IS NOT NULL "
-    "OR recommendation_kind = 'avoid'"
+    "source_artifact_id IS NOT NULL OR source_memo_id IS NOT NULL OR recommendation_kind = 'avoid'"
 )
 _SOURCE_CHECK_NEW = (
     "source_artifact_id IS NOT NULL OR source_memo_id IS NOT NULL "
