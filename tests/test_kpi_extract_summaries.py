@@ -14,6 +14,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -21,11 +22,13 @@ import compute.kpi_extract_summaries as kes
 from compute.kpi_extract_summaries import (
     _build_manifest,
     _canonical_units_from_holdings,
+    _ensure_summary_document_row,
     _fact_units_by_name,
     _llm_extract,
     parse_decimal_value,
 )
 from models.facts import FiscalPeriodType, Unit
+from models.validation import Severity, ValidationRule
 
 
 def test_parse_decimal_value_parses_clean_numbers() -> None:
@@ -296,3 +299,98 @@ def test_build_manifest_canonical_units_default_empty() -> None:
     }
     manifest = _build_manifest("YY", datetime(2026, 3, 31), FiscalPeriodType.Q1, 1, extracted)
     assert manifest.canonical_units == {}
+
+
+# --- _ensure_summary_document_row: parent_document_id resolution + guard -----
+
+
+def _documents_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT, source_type TEXT, doc_type TEXT, period_end TIMESTAMP,
+            file_path TEXT, sha256 TEXT, fetched_at TIMESTAMP, fetch_status TEXT,
+            raw_bytes_size INTEGER, parent_document_id INTEGER, source_quality_tier TEXT
+        );
+        CREATE TABLE validation_issues (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL, source_doc_id INTEGER, ticker TEXT,
+            severity TEXT NOT NULL, rule TEXT NOT NULL, raw_value TEXT, expected TEXT,
+            raised_at TIMESTAMP NOT NULL, resolved_at TIMESTAMP
+        );
+        """
+    )
+    return conn
+
+
+def test_ensure_summary_document_row_resolves_parent_from_transcript(tmp_path: Path) -> None:
+    conn = _documents_db()
+    transcript_id = conn.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, period_end, file_path, "
+        "sha256, fetched_at, fetch_status, raw_bytes_size) "
+        "VALUES ('NU', 'transcript_audio', 'earnings_call_transcript', "
+        "'2023-03-31 00:00:00', 'x', 'x', '2026-05-19 01:45:16', 'ok', 1)"
+    ).lastrowid
+    conn.commit()
+
+    summary_path = tmp_path / "NU_Q1_2023_summary.txt"
+    summary_path.write_text("summary text", encoding="utf-8")
+
+    doc_id = _ensure_summary_document_row(
+        conn, "NU", datetime(2023, 3, 31), summary_path, "llm_summary"
+    )
+
+    row = conn.execute(
+        "SELECT parent_document_id FROM documents WHERE id = ?", (doc_id,)
+    ).fetchone()
+    assert row["parent_document_id"] == transcript_id
+    # A resolvable row must not trip the guard.
+    assert conn.execute("SELECT COUNT(*) FROM validation_issues").fetchone()[0] == 0
+
+
+def test_ensure_summary_document_row_flags_unresolvable_parent(tmp_path: Path) -> None:
+    """No eligible primary document on file for this (ticker, period) — the row
+    is still inserted (kpi_facts needs the FK) but parent_document_id stays NULL
+    and the write-path guard logs a validation_issues row instead of silently
+    dropping the provenance gap."""
+    conn = _documents_db()
+    summary_path = tmp_path / "AMAT_Q4_2025_summary.txt"
+    summary_path.write_text("summary text", encoding="utf-8")
+
+    doc_id = _ensure_summary_document_row(
+        conn, "AMAT", datetime(2025, 12, 31), summary_path, "llm_summary"
+    )
+
+    row = conn.execute(
+        "SELECT parent_document_id FROM documents WHERE id = ?", (doc_id,)
+    ).fetchone()
+    assert row["parent_document_id"] is None
+
+    issue = conn.execute(
+        "SELECT source_doc_id, ticker, severity, rule FROM validation_issues"
+    ).fetchone()
+    assert issue is not None
+    assert issue["source_doc_id"] == doc_id
+    assert issue["ticker"] == "AMAT"
+    assert issue["severity"] == Severity.WARN.value
+    assert issue["rule"] == ValidationRule.MISSING_FIELD.value
+
+
+def test_ensure_summary_document_row_is_idempotent_on_sha256(tmp_path: Path) -> None:
+    """A second call for the same bytes returns the existing row and does not
+    re-resolve or re-guard (matches the pre-existing sha256-keyed idempotence)."""
+    conn = _documents_db()
+    summary_path = tmp_path / "NU_Q1_2023_summary.txt"
+    summary_path.write_text("summary text", encoding="utf-8")
+
+    first_id = _ensure_summary_document_row(
+        conn, "NU", datetime(2023, 3, 31), summary_path, "llm_summary"
+    )
+    second_id = _ensure_summary_document_row(
+        conn, "NU", datetime(2023, 3, 31), summary_path, "llm_summary"
+    )
+    assert first_id == second_id
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1

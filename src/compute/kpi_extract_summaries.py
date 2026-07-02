@@ -54,10 +54,12 @@ from pipeline.capture_coverage import CaptureCoverageRecord, record_coverage
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
     KpiValue,
+    guard_llm_extracted_parent,
     persist_manifest,
 )
 from pipeline.restatement_detector import _table_has_column
 from pipeline.run_accounting import start_run
+from provenance.llm_extracted_parent import resolve_parent
 
 # Named `logger` (not `log`) to avoid colliding with the `TickerExtractionLog`
 # locals named `log` throughout this module.
@@ -397,22 +399,37 @@ def _ensure_summary_document_row(
     path: Path,
     doc_type: str,
 ) -> int:
-    """Insert documents row for the summary file if not already present, return id."""
+    """Insert documents row for the summary file if not already present, return id.
+
+    Resolves ``parent_document_id`` via ``provenance.llm_extracted_parent`` (the
+    earnings-call transcript / IR document this summary was generated from) so
+    every fresh row satisfies data_provenance.md §2 at write time. A row whose
+    parent can't be derived (no eligible primary document on file for this
+    ticker/period yet) is still inserted — a summary file already exists and
+    kpi_facts needs the FK — but flagged via ``guard_llm_extracted_parent``
+    rather than silently left unlinked.
+    """
     raw = path.read_bytes()
     sha = hashlib.sha256(raw).hexdigest()
     existing = conn.execute("SELECT id FROM documents WHERE sha256 = ?", (sha,)).fetchone()
     if existing is not None:
         return int(existing["id"])
+    file_path_str = str(path).replace("\\", "/")
+    match = resolve_parent(
+        conn, ticker=ticker, doc_type=doc_type, file_path=file_path_str, period_end=period_end
+    )
+    parent_document_id = match.parent_document_id if match is not None else None
     common_args = (
         ticker,
         SourceType.LLM_EXTRACTED.value,
         doc_type,
         period_end,
-        str(path).replace("\\", "/"),
+        file_path_str,
         sha,
         datetime.now(UTC),
         "ok",
         len(raw),
+        parent_document_id,
     )
     if _table_has_column(conn, "documents", "source_quality_tier"):
         tier = tier_for_source_type(SourceType.LLM_EXTRACTED).value
@@ -420,8 +437,8 @@ def _ensure_summary_document_row(
             """
             INSERT INTO documents
               (ticker, source_type, doc_type, period_end, file_path, sha256,
-               fetched_at, fetch_status, raw_bytes_size, source_quality_tier)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               fetched_at, fetch_status, raw_bytes_size, parent_document_id, source_quality_tier)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (*common_args, tier),
         )
@@ -430,13 +447,21 @@ def _ensure_summary_document_row(
             """
             INSERT INTO documents
               (ticker, source_type, doc_type, period_end, file_path, sha256,
-               fetched_at, fetch_status, raw_bytes_size)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               fetched_at, fetch_status, raw_bytes_size, parent_document_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             common_args,
         )
+    doc_id = int(cur.lastrowid) if cur.lastrowid is not None else 0
+    guard_llm_extracted_parent(
+        conn,
+        source_type=SourceType.LLM_EXTRACTED,
+        parent_document_id=parent_document_id,
+        ticker=ticker,
+        doc_id=doc_id,
+    )
     conn.commit()
-    return int(cur.lastrowid) if cur.lastrowid is not None else 0
+    return doc_id
 
 
 def _llm_extract(
