@@ -171,7 +171,7 @@ def _make_capture_db(db_path: Path) -> None:
         CREATE TABLE documents (
             id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, source_type TEXT, doc_type TEXT,
             period_end TIMESTAMP, file_path TEXT, sha256 TEXT, fetched_at TIMESTAMP,
-            fetch_status TEXT, raw_bytes_size INTEGER
+            fetch_status TEXT, raw_bytes_size INTEGER, parent_document_id INTEGER
         );
         """
     )
