@@ -87,6 +87,9 @@ from llm.anchors import (
 from llm.anchors import (
     load_thesis_anchor as load_thesis_anchor,
 )
+from llm.anchors import (
+    load_worldview_anchor as load_worldview_anchor,
+)
 from llm.cli import (
     CLAUDE_WEB_TIMEOUT_SECONDS as CLAUDE_WEB_TIMEOUT_SECONDS,
 )

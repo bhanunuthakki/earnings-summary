@@ -175,13 +175,17 @@ def _anchors_block(repo_root: Path, ticker: str) -> str:
             load_bear_anchor,
             load_priors_anchor,
             load_thesis_anchor,
+            load_worldview_anchor,
         )
 
+        # The owner's Worldview belongs here above all — this flow is explicitly
+        # about the OWNER's read. Inert until LEDGER_WORLDVIEW_ANCHOR is on.
         return compose_anchor_block(
             load_thesis_anchor(repo_root, ticker),
             load_bear_anchor(repo_root, ticker),
             "",
             load_priors_anchor(repo_root, ticker),
+            load_worldview_anchor(repo_root),
         )
     except Exception as exc:  # anchors must never block the flow
         log.debug({"event": "socratic_anchor_load_failed", "ticker": ticker, "error": str(exc)})
