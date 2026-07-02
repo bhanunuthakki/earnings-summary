@@ -85,6 +85,16 @@ def test_search_musings_finds_by_content(db_path: Path) -> None:
     assert insights.search_musings("  ", db_path=db_path) == []
 
 
+def test_search_musings_falls_back_to_like_on_fts_miss(db_path: Path) -> None:
+    """FTS5 is token-based, so a mid-word substring never MATCHes -- search must
+    still find the note via the LIKE floor rather than silent-empty on the FTS
+    miss. Deterministic across every FTS5 build (no token ever equals 'fitab')."""
+    ingest.ingest_capture(
+        channel="tray", text="NU profitability keeps compounding", roster=ROSTER, db_path=db_path
+    )
+    assert len(insights.search_musings("fitab", db_path=db_path)) == 1  # inside 'profitability'
+
+
 def test_record_rejects_unknown_kind(db_path: Path) -> None:
     with pytest.raises(ValueError, match="unknown insight kind"):
         insights.record_insight(
