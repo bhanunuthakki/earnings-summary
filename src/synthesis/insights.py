@@ -196,7 +196,14 @@ def search_musings(
                     "AND n.user_id = ? ORDER BY bm25(analyst_notes_fts) LIMIT ?",
                     (q, user_id, int(limit)),
                 ).fetchall()
-                return [int(r[0]) for r in rows]
+                if rows:
+                    return [int(r[0]) for r in rows]
+                # FTS present but matched NOTHING → fall through to the LIKE scan
+                # rather than silently returning []. FTS5 is token-based, so a
+                # mid-word substring ("fitab" in "profitability") never matches,
+                # and tokenizer/build differences across environments can miss a
+                # token LIKE still finds. Never silent-empty a search on an FTS
+                # miss — the LIKE pass below is the floor.
             except sqlite3.Error:
                 pass  # malformed FTS query → fall back to LIKE
         rows = conn.execute(
