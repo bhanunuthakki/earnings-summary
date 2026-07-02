@@ -34,19 +34,22 @@ the evals panel it sits beside in the System → Provenance console.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from html import escape
 from pathlib import Path
+from typing import cast
 
+from llm.eval_scopes import EVAL_SCOPES
 from llm.model_ladder import estimated_call_usd, model_rank
 
 # The eval-machinery scopes — traffic these tables account for that is NOT real
-# production spend: the downgrade sweep re-running a purpose's prompt on a
-# candidate (model_eval), the brand-blind pairwise judge (backend_judge), and
-# the golden/rubric eval harness (eval). A NULL scope is production.
-_EVAL_SCOPES: tuple[str, ...] = ("model_eval", "backend_judge", "eval")
+# production spend. Unified onto the canonical llm.eval_scopes.EVAL_SCOPES
+# (meta_eval_governance.md §10.2 — this panel's local copy predated it); sorted
+# for stable SQL placeholder ordering. A NULL scope is production.
+_EVAL_SCOPES: tuple[str, ...] = tuple(sorted(EVAL_SCOPES))
 
 WINDOW_DAYS = 30
 # The anonymous-purpose alarm floor: a NULL/unregistered purpose only alarms
@@ -174,6 +177,54 @@ class AnonCostRow:
     @property
     def is_null(self) -> bool:
         return self.purpose is None
+
+
+# Freshness thresholds (meta_eval_governance.md PR6): a steering loop that
+# stops steering must be a red flag, not a silent decay.
+NOMINATION_STALE_DAYS = 45
+SWEEP_STALE_DAYS = 14
+
+
+@dataclass(slots=True)
+class NominationRow:
+    """One pending optimizer nomination (the sweep's steering feed)."""
+
+    purpose: str
+    kind: str
+    priority: int
+    risk_tier: str
+    source: str
+    candidates: list[str] = field(default_factory=list[str])
+    rationale: str = ""
+    expires_at: str | None = None
+
+
+@dataclass(slots=True)
+class SteeringHealth:
+    """The loop's freshness posture + meta-machinery cost."""
+
+    newest_nomination_at: str | None
+    newest_verdict_at: str | None
+    nomination_stale: bool
+    sweep_stale: bool
+    meta_cost_30d_usd: float
+    meta_calls_30d: int
+    active_candidate_models: int
+    insufficient_frame_purposes: list[str] = field(default_factory=list[str])
+
+
+@dataclass(slots=True)
+class ExperimentRow:
+    """One prompt-A/B experiment + its promotion posture (§4/§10 Q1)."""
+
+    experiment_id: str
+    purpose: str
+    status: str
+    hypothesis: str
+    n_edits: int
+    latest_recommendation: str | None
+    runs: int
+    override_active: bool
 
 
 def _has_table(conn: sqlite3.Connection, name: str) -> bool:
@@ -380,6 +431,166 @@ def load_anon_costs(
     return out
 
 
+def load_pending_nominations(conn: sqlite3.Connection) -> list[NominationRow]:
+    """The sweep's pending steering feed (priority order)."""
+    if not _has_table(conn, "optimizer_nominations"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT purpose, kind, priority, risk_tier, source, candidates_json,
+               rationale, expires_at
+        FROM optimizer_nominations
+        WHERE status = 'pending'
+        ORDER BY priority, id
+        """
+    ).fetchall()
+    out: list[NominationRow] = []
+    for r in rows:
+        try:
+            cands_obj: object = json.loads(str(r["candidates_json"] or "[]"))
+        except json.JSONDecodeError:
+            cands_obj = []
+        cands = (
+            [c for c in cast("list[object]", cands_obj) if isinstance(c, str)]
+            if isinstance(cands_obj, list)
+            else []
+        )
+        out.append(
+            NominationRow(
+                purpose=str(r["purpose"]),
+                kind=str(r["kind"]),
+                priority=int(r["priority"]),
+                risk_tier=str(r["risk_tier"]),
+                source=str(r["source"]),
+                candidates=cands,
+                rationale=str(r["rationale"] or ""),
+                expires_at=str(r["expires_at"]) if r["expires_at"] is not None else None,
+            )
+        )
+    return out
+
+
+def load_steering_health(
+    conn: sqlite3.Connection, *, window_days: int = WINDOW_DAYS
+) -> SteeringHealth:
+    """Freshness + meta-cost rollup: the loop watching itself (PR6)."""
+    newest_nom: str | None = None
+    if _has_table(conn, "optimizer_nominations"):
+        row = conn.execute("SELECT MAX(created_at) FROM optimizer_nominations").fetchone()
+        newest_nom = str(row[0]) if row and row[0] is not None else None
+    newest_verdict: str | None = None
+    insufficient: list[str] = []
+    if _has_table(conn, "model_eval_verdicts"):
+        row = conn.execute("SELECT MAX(recorded_at) FROM model_eval_verdicts").fetchone()
+        newest_verdict = str(row[0]) if row and row[0] is not None else None
+        # Purposes whose NEWEST verdict is the INSUFFICIENT_FRAME honesty label —
+        # they need harvest, not judgement.
+        rows = conn.execute(
+            """
+            SELECT purpose, verdict FROM model_eval_verdicts m
+            WHERE recorded_at = (
+                SELECT MAX(recorded_at) FROM model_eval_verdicts
+                WHERE purpose = m.purpose
+            )
+            GROUP BY purpose
+            """
+        ).fetchall()
+        insufficient = sorted(
+            {str(r["purpose"]) for r in rows if str(r["verdict"]) == "INSUFFICIENT_FRAME"}
+        )
+    meta_cost = 0.0
+    meta_calls = 0
+    if _has_table(conn, "llm_calls"):
+        scopes = _eval_scope_sql()
+        row = conn.execute(
+            f"""
+            SELECT COALESCE(SUM(cost_estimate_usd), 0.0), COUNT(*)
+            FROM llm_calls
+            WHERE called_at >= ? AND scope IN ({scopes})
+            """,
+            (_window_start(window_days), *_EVAL_SCOPES),
+        ).fetchone()
+        meta_cost = float(row[0] or 0.0)
+        meta_calls = int(row[1] or 0)
+    candidates = 0
+    if _has_table(conn, "candidate_models"):
+        row = conn.execute(
+            "SELECT COUNT(*) FROM candidate_models WHERE status = 'active'"
+        ).fetchone()
+        candidates = int(row[0] or 0)
+
+    def _stale(stamp: str | None, days: int) -> bool:
+        if stamp is None:
+            return True
+        try:
+            age = datetime.now(UTC).replace(tzinfo=None) - datetime.fromisoformat(stamp)
+        except ValueError:
+            return True
+        return age > timedelta(days=days)
+
+    return SteeringHealth(
+        newest_nomination_at=newest_nom,
+        newest_verdict_at=newest_verdict,
+        nomination_stale=_stale(newest_nom, NOMINATION_STALE_DAYS),
+        sweep_stale=_stale(newest_verdict, SWEEP_STALE_DAYS),
+        meta_cost_30d_usd=meta_cost,
+        meta_calls_30d=meta_calls,
+        active_candidate_models=candidates,
+        insufficient_frame_purposes=insufficient,
+    )
+
+
+def load_experiments(conn: sqlite3.Connection, *, limit: int = 12) -> list[ExperimentRow]:
+    """Prompt-A/B experiments + whether each drives an ACTIVE prompt override."""
+    if not _has_table(conn, "prompt_experiments"):
+        return []
+    has_verdicts = _has_table(conn, "prompt_ab_verdicts")
+    has_overrides = _has_table(conn, "prompt_pin_overrides")
+    rows = conn.execute(
+        "SELECT experiment_id, purpose, status, hypothesis, edits_json "
+        "FROM prompt_experiments ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    out: list[ExperimentRow] = []
+    for r in rows:
+        experiment_id = str(r["experiment_id"])
+        latest: str | None = None
+        runs = 0
+        if has_verdicts:
+            v = conn.execute(
+                "SELECT recommendation, COUNT(*) OVER () FROM prompt_ab_verdicts "
+                "WHERE experiment_id = ? ORDER BY recorded_at DESC, id DESC LIMIT 1",
+                (experiment_id,),
+            ).fetchone()
+            if v is not None:
+                latest = str(v[0])
+                runs = int(v[1] or 0)
+        override_active = False
+        if has_overrides:
+            o = conn.execute(
+                "SELECT 1 FROM prompt_pin_overrides WHERE experiment_id = ? AND active = 1",
+                (experiment_id,),
+            ).fetchone()
+            override_active = o is not None
+        try:
+            edits_obj: object = json.loads(str(r["edits_json"] or "[]"))
+        except json.JSONDecodeError:
+            edits_obj = []
+        out.append(
+            ExperimentRow(
+                experiment_id=experiment_id,
+                purpose=str(r["purpose"]),
+                status=str(r["status"]),
+                hypothesis=str(r["hypothesis"] or ""),
+                n_edits=len(cast("list[object]", edits_obj)) if isinstance(edits_obj, list) else 0,
+                latest_recommendation=latest,
+                runs=runs,
+                override_active=override_active,
+            )
+        )
+    return out
+
+
 def render_model_eval_panel(db_path: Path) -> str:
     """The Optimizer panel fragment (System → Provenance console). Pure DB reads
     — the loop's writes happen only through the sweep cron + apply_model_switches."""
@@ -387,6 +598,9 @@ def render_model_eval_panel(db_path: Path) -> str:
     histories: list[CandidateHistory] = []
     overrides: list[OverrideRow] = []
     anon: list[AnonCostRow] = []
+    nominations: list[NominationRow] = []
+    health: SteeringHealth | None = None
+    experiments: list[ExperimentRow] = []
     if db_path.exists():
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
@@ -395,9 +609,20 @@ def render_model_eval_panel(db_path: Path) -> str:
             histories = load_candidate_histories(conn)
             overrides = load_active_overrides(conn)
             anon = load_anon_costs(conn)
+            nominations = load_pending_nominations(conn)
+            health = load_steering_health(conn)
+            experiments = load_experiments(conn)
         finally:
             conn.close()
-    return compose_model_eval_page(anon, overrides, histories, costs)
+    return compose_model_eval_page(
+        anon,
+        overrides,
+        histories,
+        costs,
+        nominations=nominations,
+        health=health,
+        experiments=experiments,
+    )
 
 
 def compose_model_eval_page(
@@ -405,12 +630,18 @@ def compose_model_eval_page(
     overrides: list[OverrideRow],
     histories: list[CandidateHistory],
     costs: list[PurposeCostRow],
+    *,
+    nominations: list[NominationRow] | None = None,
+    health: SteeringHealth | None = None,
+    experiments: list[ExperimentRow] | None = None,
 ) -> str:
     """Pure page assembly (testable without a DB)."""
     return "".join(
         [
             _PANEL_CSS,
             _alarm_section(anon),
+            _steering_section(health, nominations or []),
+            _experiments_section(experiments or []),
             _overrides_section(overrides),
             _verdicts_section(histories),
             _costs_section(costs),
@@ -457,6 +688,109 @@ def _alarm_section(anon: list[AnonCostRow]) -> str:
         f"{_usd(total)}/30d ungoverned</span></div>"
         f'<div class="me-alarm-chips">{chips}</div>'
         "</section>"
+    )
+
+
+def _steering_section(health: SteeringHealth | None, nominations: list[NominationRow]) -> str:
+    """The self-steering loop's posture: freshness, meta-cost, pending feed."""
+    head = (
+        '<section class="panel"><h2>Optimizer steering</h2>'
+        '<p class="sub">The monthly nominator + frontier research feed the sweep '
+        "(meta_eval_governance.md §1/§10.1). A steering loop that stops steering is a "
+        "red flag, not a silent decay.</p>"
+    )
+    if health is None:
+        return f'{head}<p class="muted">No DB — steering state unavailable.</p></section>'
+    chips: list[str] = []
+    if health.nomination_stale:
+        chips.append(
+            f'<span class="k-chip k-chip-bad">no nomination run in {NOMINATION_STALE_DAYS}d</span>'
+        )
+    if health.sweep_stale:
+        chips.append(
+            f'<span class="k-chip k-chip-bad">no sweep verdict in {SWEEP_STALE_DAYS}d</span>'
+        )
+    if not chips:
+        chips.append('<span class="k-pill k-pill-ok">fresh</span>')
+    for purpose in health.insufficient_frame_purposes:
+        chips.append(
+            f'<span class="k-chip me-frame-chip" title="latest verdict INSUFFICIENT_FRAME — '
+            f'needs harvest, not judgement">{escape(purpose)}: thin frame</span>'
+        )
+    facts = (
+        f"meta-machinery {_usd(health.meta_cost_30d_usd)}/30d · {health.meta_calls_30d} calls · "
+        f"{health.active_candidate_models} discovered candidate model(s) · "
+        f"newest nomination {escape((health.newest_nomination_at or 'never')[:16])} · "
+        f"newest verdict {escape((health.newest_verdict_at or 'never')[:16])}"
+    )
+    if not nominations:
+        body = (
+            '<p class="muted">No pending nominations — the sweep runs on discovery. '
+            "The weekly step 0 re-nominates monthly or when the frontier changes.</p>"
+        )
+    else:
+        rows_html = "".join(
+            "<tr>"
+            f'<td class="num">{n.priority}</td>'
+            f'<td class="me-purpose">{escape(n.purpose)}</td>'
+            f"<td><span class='k-chip'>{escape(n.kind)}</span> "
+            f"<span class='k-chip{' k-chip-bad' if n.risk_tier == 'risky' else ''}'>"
+            f"{escape(n.risk_tier)}</span></td>"
+            f'<td class="me-loc">{escape(", ".join(n.candidates) or "—")}</td>'
+            f'<td class="muted" title="{escape(n.rationale)}">'
+            f"{escape(n.rationale[:80])}{'…' if len(n.rationale) > 80 else ''}</td>"
+            f'<td class="me-loc muted">{escape(n.source)}</td>'
+            "</tr>"
+            for n in nominations
+        )
+        body = (
+            '<table class="p-table"><thead><tr><th class="num">#</th><th>Purpose</th>'
+            "<th>Kind · tier</th><th>Candidates</th><th>Why</th><th>Source</th>"
+            f"</tr></thead><tbody>{rows_html}</tbody></table>"
+        )
+    return (
+        f"{head}"
+        f'<div class="me-alarm-chips">{"".join(chips)}</div>'
+        f'<p class="me-rollup muted">{facts}</p>'
+        f"{body}</section>"
+    )
+
+
+def _experiments_section(experiments: list[ExperimentRow]) -> str:
+    """Prompt-A/B experiments + the Q1 auto-apply posture."""
+    head = (
+        '<section class="panel"><h2>Prompt experiments (A/B)</h2>'
+        '<p class="sub">Deterministic edit-splice variants judged brand-blind against the '
+        "baseline (§4). A promoted experiment drives an ACTIVE <code>prompt_pin_overrides</code> "
+        "row applied to production traffic (owner decision Q1) — reversible, auto-demoted on a "
+        "KEEP_BASELINE run; <code>reason_json.edits</code> is the git-reconciliation diff.</p>"
+    )
+    if not experiments:
+        return (
+            f'{head}<p class="muted">No experiments yet — propose one with '
+            "<code>execution/run_prompt_ab.py --propose</code> or wait for a "
+            "<code>prompt_experiment</code> nomination.</p></section>"
+        )
+    live_pill = '<span class="k-pill k-pill-ok">override live</span>'
+    rows_html = "".join(
+        "<tr>"
+        f'<td class="me-loc">{escape(e.experiment_id[:8])}</td>'
+        f'<td class="me-purpose">{escape(e.purpose)}</td>'
+        f"<td><span class='k-chip'>{escape(e.status)}</span>"
+        f"{live_pill if e.override_active else ''}"
+        "</td>"
+        f'<td>{escape(e.latest_recommendation or "—")}<span class="muted"> · {e.runs} run(s)'
+        f" · {e.n_edits} edit(s)</span></td>"
+        f'<td class="muted" title="{escape(e.hypothesis)}">'
+        f"{escape(e.hypothesis[:70])}{'…' if len(e.hypothesis) > 70 else ''}</td>"
+        "</tr>"
+        for e in experiments
+    )
+    return (
+        f"{head}"
+        '<table class="p-table"><thead><tr><th>Id</th><th>Purpose</th><th>Status</th>'
+        "<th>Latest verdict</th><th>Hypothesis</th></tr></thead>"
+        f"<tbody>{rows_html}</tbody></table></section>"
     )
 
 
@@ -643,4 +977,6 @@ _PANEL_CSS = """<style>
   margin: 0 var(--sp-3) var(--sp-1) 0; }
 /* The infra flag: an outline red chip, deliberately NOT a filled quality pill. */
 .me-infra { cursor: help; }
+/* Thin-frame honesty chips (INSUFFICIENT_FRAME): informational, hover for why. */
+.me-frame-chip { cursor: help; }
 </style>"""

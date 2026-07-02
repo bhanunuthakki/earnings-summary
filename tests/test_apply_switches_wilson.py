@@ -231,6 +231,26 @@ def test_candidate_errored_latest_still_short_circuits(switches: Any, db: Path) 
     assert _active_override(db) is None
 
 
+def test_manual_lock_blocks_auto_switch(switches: Any, db: Path) -> None:
+    # A manual pin (revert_model_switch.py --lock) must never be overwritten by
+    # the auto loop, however strong the evidence (§10 Q3 remediation).
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO model_pin_overrides (purpose, model, set_by, set_at, active)"
+        " VALUES ('bear_case', 'claude-sonnet-4-6', 'manual:lock', '2026-07-01T00:00:00', 1)"
+    )
+    conn.commit()
+    conn.close()
+    summary = _summary_with_cases(per_judge_parity={"claude": (12, 12), "gemini": (12, 12)})
+    for days_ago in (3, 2, 1):
+        _insert_verdict(db, verdict="SWITCH_DOWN", days_ago=days_ago, summary_json=summary)
+    results = switches.evaluate_switches(
+        db, consecutive_switch=3, consecutive_keep=3, dry_run=False
+    )
+    assert {r.action for r in results} == {"MANUAL_LOCKED"}
+    assert _active_override(db) == "claude-sonnet-4-6"  # the human pin survives
+
+
 def test_dry_run_gate_writes_nothing(switches: Any, db: Path) -> None:
     summary = _summary_with_cases(per_judge_parity={"claude": (11, 12), "gemini": (11, 12)})
     for days_ago in (3, 2, 1):

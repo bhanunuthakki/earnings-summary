@@ -348,6 +348,25 @@ def _is_consecutive(verdicts: list[str], target: str, n: int) -> bool:
     return all(v == target for v in verdicts[:n])
 
 
+def _active_override_set_by(db_path: Path, purpose: str) -> str | None:
+    """``set_by`` of the purpose's active override row (None if no active row).
+    A ``manual``-prefixed setter is a HUMAN decision the auto loop must respect
+    (§10 Q3 remediation: one-command revert + lock via revert_model_switch.py)."""
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        try:
+            row = conn.execute(
+                "SELECT set_by FROM model_pin_overrides "
+                "WHERE purpose = ? AND active = 1 ORDER BY set_at DESC LIMIT 1",
+                (purpose,),
+            ).fetchone()
+        finally:
+            conn.close()
+        return str(row[0]) if row else None
+    except sqlite3.Error:
+        return None
+
+
 class SwitchResult:
     __slots__ = ("action", "candidate", "model", "purpose", "reason")
 
@@ -435,6 +454,21 @@ def evaluate_switches(
                         "ALREADY_ACTIVE",
                         candidate,
                         f"override already active for {purpose} → {candidate}",
+                    )
+                )
+                continue
+            # A manual lock (revert_model_switch.py --lock) is a HUMAN decision
+            # the auto loop must never overwrite (§10 Q3 remediation).
+            setter = _active_override_set_by(db_path, purpose)
+            if setter is not None and setter.startswith("manual"):
+                results.append(
+                    SwitchResult(
+                        purpose,
+                        candidate,
+                        "MANUAL_LOCKED",
+                        current_override,
+                        f"active override set_by={setter!r} — human pin wins; "
+                        "unlock by deactivating it",
                     )
                 )
                 continue
