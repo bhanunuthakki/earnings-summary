@@ -88,7 +88,16 @@ def _verdict(
         "INSERT INTO model_eval_verdicts (purpose, candidate, incumbent, verdict,"
         " run_id, parity_rate, judge_agreement, n_cases, recorded_at)"
         " VALUES (?, ?, ?, ?, 'rid', ?, ?, ?, ?)",
-        (purpose, candidate, incumbent, verdict, parity_rate, judge_agreement, n_cases, recorded_at),
+        (
+            purpose,
+            candidate,
+            incumbent,
+            verdict,
+            parity_rate,
+            judge_agreement,
+            n_cases,
+            recorded_at,
+        ),
     )
 
 
@@ -109,16 +118,31 @@ def _seed(db: Path) -> None:
     # --- company_description: the downgraded purpose. Prod token volume drives the
     #     realized-savings estimate; an eval-scope call must NOT enter that volume.
     _call(
-        conn, purpose="company_description", scope=None, cost=1.0, when=iso,
-        input_tokens=500_000, output_tokens=100_000,
+        conn,
+        purpose="company_description",
+        scope=None,
+        cost=1.0,
+        when=iso,
+        input_tokens=500_000,
+        output_tokens=100_000,
     )
     _call(
-        conn, purpose="company_description", scope=None, cost=1.0, when=iso,
-        input_tokens=500_000, output_tokens=100_000,
+        conn,
+        purpose="company_description",
+        scope=None,
+        cost=1.0,
+        when=iso,
+        input_tokens=500_000,
+        output_tokens=100_000,
     )
     _call(
-        conn, purpose="company_description", scope="model_eval", cost=9.0, when=iso,
-        input_tokens=9_000_000, output_tokens=9_000_000,  # would wreck savings if counted
+        conn,
+        purpose="company_description",
+        scope="model_eval",
+        cost=9.0,
+        when=iso,
+        input_tokens=9_000_000,
+        output_tokens=9_000_000,  # would wreck savings if counted
     )
 
     # --- anonymous-purpose alarm evidence.
@@ -131,28 +155,54 @@ def _seed(db: Path) -> None:
 
     # --- verdicts: a switch, a keep-history, and an errored candidate.
     _verdict(
-        conn, purpose="company_description", candidate=_SONNET, incumbent=_OPUS,
-        verdict="SWITCH_DOWN", recorded_at="2026-06-28T02:00:00",
-        parity_rate=1.0, judge_agreement=1.0, n_cases=4,
+        conn,
+        purpose="company_description",
+        candidate=_SONNET,
+        incumbent=_OPUS,
+        verdict="SWITCH_DOWN",
+        recorded_at="2026-06-28T02:00:00",
+        parity_rate=1.0,
+        judge_agreement=1.0,
+        n_cases=4,
     )
     _verdict(
-        conn, purpose="bear_case", candidate=_GEMINI_PRO, incumbent=_SONNET,
-        verdict="KEEP_INCUMBENT", recorded_at="2026-06-21T02:00:00",
-        parity_rate=0.0, n_cases=4,
+        conn,
+        purpose="bear_case",
+        candidate=_GEMINI_PRO,
+        incumbent=_SONNET,
+        verdict="KEEP_INCUMBENT",
+        recorded_at="2026-06-21T02:00:00",
+        parity_rate=0.0,
+        n_cases=4,
     )
     _verdict(
-        conn, purpose="bear_case", candidate=_GEMINI_PRO, incumbent=_SONNET,
-        verdict="KEEP_INCUMBENT", recorded_at="2026-06-28T02:00:00",
-        parity_rate=0.25, n_cases=4,
+        conn,
+        purpose="bear_case",
+        candidate=_GEMINI_PRO,
+        incumbent=_SONNET,
+        verdict="KEEP_INCUMBENT",
+        recorded_at="2026-06-28T02:00:00",
+        parity_rate=0.25,
+        n_cases=4,
     )
     # viewspec_compile / flash: older HOLD, latest CANDIDATE_ERRORED (infra).
     _verdict(
-        conn, purpose="viewspec_compile", candidate=_GEMINI_FLASH, incumbent=_SONNET,
-        verdict="HOLD", recorded_at="2026-06-21T02:00:00", n_cases=2,
+        conn,
+        purpose="viewspec_compile",
+        candidate=_GEMINI_FLASH,
+        incumbent=_SONNET,
+        verdict="HOLD",
+        recorded_at="2026-06-21T02:00:00",
+        n_cases=2,
     )
     _verdict(
-        conn, purpose="viewspec_compile", candidate=_GEMINI_FLASH, incumbent=_SONNET,
-        verdict=CANDIDATE_ERRORED, recorded_at="2026-06-28T02:00:00", n_cases=2,
+        conn,
+        purpose="viewspec_compile",
+        candidate=_GEMINI_FLASH,
+        incumbent=_SONNET,
+        verdict=CANDIDATE_ERRORED,
+        recorded_at="2026-06-28T02:00:00",
+        n_cases=2,
     )
 
     # --- overrides: one active (company_description→Sonnet) + one inactive (ignored).

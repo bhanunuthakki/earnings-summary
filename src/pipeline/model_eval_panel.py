@@ -250,18 +250,14 @@ def load_candidate_histories(conn: sqlite3.Connection) -> list[CandidateHistory]
         key = (str(r["purpose"]), str(r["candidate"]))
         hist = grouped.get(key)
         if hist is None:
-            hist = CandidateHistory(
-                purpose=key[0], candidate=key[1], incumbent=str(r["incumbent"])
-            )
+            hist = CandidateHistory(purpose=key[0], candidate=key[1], incumbent=str(r["incumbent"]))
             grouped[key] = hist
         if len(hist.rows) < _HISTORY_PER_CANDIDATE:
             hist.rows.append(
                 VerdictRow(
                     verdict=str(r["verdict"]),
                     recorded_at=str(r["recorded_at"])[:16].replace("T", " "),
-                    parity_rate=(
-                        float(r["parity_rate"]) if r["parity_rate"] is not None else None
-                    ),
+                    parity_rate=(float(r["parity_rate"]) if r["parity_rate"] is not None else None),
                     judge_agreement=(
                         float(r["judge_agreement"]) if r["judge_agreement"] is not None else None
                     ),
@@ -511,7 +507,7 @@ def _overrides_section(overrides: list[OverrideRow]) -> str:
     return (
         f"{head}{rollup}"
         '<table class="p-table"><thead><tr>'
-        '<th>Purpose</th><th>Incumbent → override</th><th>Est. savings</th>'
+        "<th>Purpose</th><th>Incumbent → override</th><th>Est. savings</th>"
         '<th class="num">30d prod tokens</th><th>Set by</th><th>Since</th>'
         "</tr></thead><tbody>"
         f"{''.join(rows_html)}</tbody></table></section>"
@@ -555,7 +551,7 @@ def _candidate_chip(hist: CandidateHistory) -> str:
 def _verdicts_section(histories: list[CandidateHistory]) -> str:
     head = (
         '<section class="panel"><h2>Downgrade verdicts</h2>'
-        '<p class="sub">The brand-blind pairwise judge’s recent verdict per (purpose, '
+        '<p class="sub">The brand-blind pairwise judge\'s recent verdict per (purpose, '
         "candidate) from the weekly sweep. <code>switch ↓</code> = a cheaper model held "
         "parity; <code>keep</code> = incumbent won; <code>hold</code> = judges split. "
         "<code>⚠ infra err</code> is an <em>infrastructure</em> flag (the candidate errored "
@@ -589,7 +585,7 @@ def _costs_section(costs: list[PurposeCostRow]) -> str:
         '<section class="panel"><h2>Per-purpose cost (30d)</h2>'
         '<p class="sub">Spend per purpose over the llm_calls ledger, split into production '
         "traffic and the eval machinery that measures it (the model-eval sweep, the pairwise "
-        "judge, the golden/rubric harness). The fat production lines are the optimizer’s "
+        "judge, the golden/rubric harness). The fat production lines are the optimizer's "
         "candidates for a downgrade sweep.</p>"
     )
     if not costs:
