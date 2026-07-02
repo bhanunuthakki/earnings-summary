@@ -5,6 +5,7 @@ REM Companion to run_daily_fetch_and_brief.bat (which handles P1 daily refresh +
 REM the brief_dirty queue) and run_monthly_p3_refresh.bat (P3 monthly).
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"

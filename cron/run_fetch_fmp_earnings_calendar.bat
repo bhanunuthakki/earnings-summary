@@ -12,6 +12,7 @@ REM      (06:15) and daily_fetch_and_brief (06:30).
 REM Output goes to .tmp/cron_logs/fetch_fmp_earnings_calendar_<TS>.log.
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"

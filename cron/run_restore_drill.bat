@@ -6,6 +6,7 @@ REM ingestion_runs for the cron_health panel. NEVER touches the live DB.
 REM Exit 0 = passed, 1 = a check failed, 2 = no snapshot found.
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"

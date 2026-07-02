@@ -14,6 +14,7 @@ REM   Companion runs: cron\run_weekly_p2_lens_refresh.bat (Sunday 02:00) and
 REM   cron\run_monthly_p3_refresh.bat (1st of month, 03:00).
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"

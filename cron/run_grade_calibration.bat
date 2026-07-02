@@ -12,6 +12,7 @@ REM This was the missing machinery: the three graders were manual CLIs that
 REM nothing ran, so prompt_calibration_scores stayed empty (v6 re-grade).
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"

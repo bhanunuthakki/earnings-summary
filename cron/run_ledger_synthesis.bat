@@ -3,6 +3,7 @@ REM The Ledger synthesis — daily per-holding stance consolidation from musings
 REM Incremental (only scopes with new musings call the LLM); budget-capped.
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"

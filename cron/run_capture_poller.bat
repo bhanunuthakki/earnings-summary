@@ -5,6 +5,7 @@ REM bot token from data\secrets\telegram_bot_token; exits cleanly if unconfigure
 REM One instance only (IgnoreNew) — a second getUpdates poller would 409.
 
 setlocal
+set PYTHONUTF8=1
 REM small.en transcribes proper nouns (ticker names: Nubank, MercadoLibre) far
 REM better than base.en, so the deterministic matcher auto-links them. ~480MB
 REM one-time model download on the first voice memo.

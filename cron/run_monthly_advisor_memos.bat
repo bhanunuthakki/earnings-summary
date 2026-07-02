@@ -6,6 +6,7 @@ REM (memos still generate from DB-side evidence). Each memo persists to
 REM advisor_memos + an analyst note (+ ledger entry when ticker-scoped).
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"

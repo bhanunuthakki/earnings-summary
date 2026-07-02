@@ -8,6 +8,7 @@ REM Runs BEFORE backfill_transcripts (04:30) so the broad sweep finds the file
 REM already on disk, and before daily_fetch_and_brief (06:30) so the brief sees it.
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
