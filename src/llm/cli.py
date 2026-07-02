@@ -131,6 +131,11 @@ LLM_MODELS: dict[str, str] = {
     # DEFAULT (Sonnet); the code spec is rare and never auto-applies.
     "thesis_entry_draft": DEFAULT_MODEL,
     "research_code_spec": DEFAULT_MODEL,
+    # The Ledger DCF assumption-tweak extractor: a short, closed extraction of ONE
+    # {param, new_value} edit from a what-if wondering (bounds-validated; the LLM emits
+    # NO valuation number — the deterministic engine recompute is the oracle) → the
+    # cheap FAST tier, like the sibling extractors.
+    "dcf_assumption_extract": FAST_CLASSIFIER_MODEL,
     # Position-review verdict (src/advisor/position_review.py, the /review service).
     # Judgment over the grounded pre-analysis + the owner's convictions, calibrated
     # to his behavioral patterns → Sonnet-tier reasoning (latency unimportant, one
