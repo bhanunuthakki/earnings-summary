@@ -98,6 +98,49 @@ def _notify_wondering(
         research_notify.notify_new_task(token, update.chat_id, task)
 
 
+def _pledge_and_annotate(
+    token: str,
+    update: telegram.Update,
+    result: ingest.IngestResult,
+    db_path: Path | str | None,
+    *,
+    enabled: bool,
+) -> None:
+    """The entry-coaching taps (W2): a pledge-shaped musing captures an owner
+    decision and gets the catalyst-test challenge back; an annotation-shaped
+    follow-up fills the newest pending stub's NULL conviction/falsifier.
+    Fire-and-forget — never affects the landing."""
+    if result.status != "landed" or result.note_id is None:
+        return
+    try:
+        from research.pledge import (
+            annotate_latest_pending,
+            build_challenge,
+            detect_and_capture_pledge,
+        )
+        from user_state.notes import get_note
+
+        pledge = detect_and_capture_pledge(result.note_id, channel="telegram", db_path=db_path)
+        if pledge is not None:
+            if enabled and update.chat_id is not None:
+                repo_root = Path(db_path).parent.parent if db_path else None
+                reply = build_challenge(pledge, repo_root=repo_root, db_path=db_path)
+                with contextlib.suppress(telegram.TelegramError):
+                    telegram.send_message(token, update.chat_id, reply)
+            return
+        note = get_note(result.note_id, db_path=db_path)
+        if note is None:
+            return
+        annotated = annotate_latest_pending(note.body, db_path=db_path)
+        if annotated is not None and enabled and update.chat_id is not None:
+            with contextlib.suppress(telegram.TelegramError):
+                telegram.send_message(
+                    token, update.chat_id, f"Noted — recorded on decision #{annotated}."
+                )
+    except Exception:  # entry coaching must never break capture
+        return
+
+
 def poll_once(
     token: str,
     *,
@@ -172,6 +215,7 @@ def poll_once(
                 if tid is not None:
                     bump("wondering")
                     _notify_wondering(token, update, tid, db_path, enabled=confirm)
+                _pledge_and_annotate(token, update, result, db_path, enabled=confirm)
         elif update.kind == "voice" and update.voice_file_id:
             dest = Path(audio_dir) / f"tg_{update.update_id}.oga"
             try:
@@ -197,6 +241,7 @@ def poll_once(
             if tid is not None:
                 bump("wondering")
                 _notify_wondering(token, update, tid, db_path, enabled=confirm)
+            _pledge_and_annotate(token, update, result, db_path, enabled=confirm)
         elif update.kind == "document" and update.document_file_id:
             # A PDF, deck, or any document file → land as an On My Mind reading.
             # The file is downloaded and stored locally so future text extraction
