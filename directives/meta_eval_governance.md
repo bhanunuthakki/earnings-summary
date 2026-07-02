@@ -1,6 +1,8 @@
 # Directive: meta-eval governance — the optimizer that steers itself
 
-**Status: DESIGN (2026-07-02), owner review pending. Nothing here is built.**
+**Status: APPROVED 2026-07-02 — owner reviewed §9; decisions LOCKED in §10 (which
+overrides any earlier recommendation it conflicts with). Build in progress: PR1
+(read-only workload inventory).**
 
 Extends — does NOT replace — the existing spine:
 `directives/model_eval_loop.md` (the downgrade loop), `directives/cheapest_model_routing.md`
@@ -860,3 +862,136 @@ per the backlog) plus whatever the widened OpenRouter pool unlocks.
    inventory can only govern named purposes. After the SayDo fix's trailing window clears,
    should `call_llm(purpose=None)` become a hard deprecation (raise in dev, warn in prod)
    so the workload universe is complete by construction?
+
+---
+
+## 10. Owner decisions — LOCKED 2026-07-02
+
+Owner (Bhanu) reviewed §9 and the surrounding design on 2026-07-02. The decisions
+below are authoritative; **where a decision conflicts with a recommendation earlier
+in this doc, §10 wins.** Several diverge from the recommendation on purpose.
+
+**Q1 — Prompt-variant auto-apply: BUILD NOW** (overrides §4.4's human-PR-only v1).
+PR5 ships a `prompt_pin_overrides` table (purpose → ordered edits, `active`, reversible)
+mirroring `model_pin_overrides`: a cleanly-promoted A/B variant auto-applies at render
+time and auto-demotes on a later regression. Because production prompt text now diverges
+from the checked-in constant, PR5 MUST also ship (a) a **git-reconciliation trail** — every
+auto-apply logs the exact edits + `experiment_id` + a ready-to-paste diff so the checked-in
+constant can be caught up in a routine PR; (b) full visibility of the active pin in the
+Optimizer panel; (c) the same reversibility/lock affordances `model_pin_overrides` has. The
+isolation contract is unchanged: the sent prompt is `apply_edits(baseline)` byte-for-byte
+(I1); no experiment metadata ever enters a generation prompt (I2).
+
+**Q2 — Nominator authority: EXCLUSIONS ALLOWED** (overrides §9-Q2 / §1.2 "rank-only").
+The nominator may emit negative nominations (`kind='exclude'` — a purpose it judges settled:
+"three KEEP streaks, no headroom"). Mandatory anti-starvation guards so a bad exclusion
+self-heals and never silently freezes measurement forever:
+- every exclusion carries a TTL (`expires_at`, default 60d) after which the purpose
+  re-enters the nominable universe automatically;
+- a deterministic rotation floor still sweeps every non-excluded purpose on cadence, and any
+  purpose not swept in `MAX_UNSWEPT_DAYS` (default 90d) is force-re-included regardless of an
+  active exclusion;
+- exclusions are visible + one-click-reversible in the Optimizer panel;
+- closed-vocabulary validation applies to exclusions too (unknown purpose → dropped+logged).
+`optimizer_nominations.kind` CHECK extends to include `'exclude'`; add `expires_at TEXT`
+(naive-UTC, nullable).
+
+**Q3 — RISKY floor: HIGHER BARS, NO frozenset — plus first-class auditability + remediation**
+(overrides §9-Q3's recommended `NEVER_AUTO_SWITCH`). `advisor_*` / `valuation_basis` /
+`kpi_registry_auto_proposal` / `material_news_classification` stay auto-switchable at the
+RISKY bar (min_n 16 + Wilson LB ≥0.70 + streak + 3-family judging per Q5a). NO
+`NEVER_AUTO_SWITCH` frozenset. In exchange, build a first-class audit + remediation path for
+every RISKY auto-switch:
+- a switch-audit record (new `model_switch_audit` table, or `model_pin_overrides` history)
+  capturing the full pooled evidence that justified the switch — per-judge tallies, Wilson
+  LB, the `sample_manifest`, the verdict ids, who/what/when, and the `ladder_sha`;
+- a loud RISKY-tagged switch alert (the existing `apply_model_switches` alert path);
+- fast remediation: auto-demote on the next regressing sweep (already designed) PLUS a
+  one-command manual revert + lock, surfaced in the panel;
+- dedicated tests for the RISKY-tier switch → demote → manual-revert path.
+
+**Q4 — OpenRouter data policy: DENY-DEFAULT SUFFICIENT** (confirms §6 / §9-Q4). No per-model
+owner-review gate. Any ladder OpenRouter model validated by `cheaper_candidates` is nominable
+for real-prompt replay; the backend's provider-pinned `data_collection:"deny"` + provider/
+quant pin is the guarantee. (Owner data-governance stance on file, 2026-07-02: research
+prompts may route through OpenRouter provided no SSN/bank/PII data is ever in a prompt — none
+is today.)
+
+**Q5 — Judge pool + a NEW frontier-research subsystem.**
+- (a) **3-family majority for RISKY-tier verdicts only.** SAFE/CANDIDATE stay 2 judges / 2
+  families. RISKY verdicts require **2-of-3** agreement across 3 distinct families (Claude +
+  Gemini + a third; an OpenRouter open-weight model may be the third only once
+  judge-agreement-certified per §6, else another certified family). ≈+50% judge cost on the
+  RISKY slice only. Wire via `JUDGE_POOL` (§6) + a per-tier judge-count.
+- (b) **NEW Subsystem 1.5 — monthly pareto-frontier research + candidate rotation** (§10.1).
+  This is the one substantive addition beyond the original design: the candidate pool is no
+  longer a hand-maintained static `MODEL_LADDER`; a monthly cron researches the cross-provider
+  frontier and the loop cycles through the most promising candidates over time.
+
+**Q6 — `purpose=None`: HARD-DEPRECATE** (confirms §9-Q6). After the SayDo-fix trailing 30d
+window clears, `call_llm(purpose=None)` raises `PurposeRequiredError` in dev/test and logs a
+loud warning + routes to `DEFAULT_MODEL` in prod (fail-safe — never breaks a live call). The
+anonymous-purpose alarm becomes a backstop for legacy paths only. Sequence as its own small
+PR AFTER PR1, gated behind a check that residual `purpose=None` spend has fallen to near-zero.
+
+### 10.1 Subsystem 1.5 — monthly pareto-frontier research + candidate rotation (Q5b)
+
+Problem: `MODEL_LADDER` is a hand-edited constant; OpenRouter exposes hundreds of open-weight
+models nobody curated; the sweep can't test every model×purpose weekly. The owner wants the
+optimizer to (a) discover which models even belong in the candidate pool and (b) cycle through
+the most promising over time.
+
+- **`model_frontier_research`** — new operational LLM purpose (Opus + web/`WebSearch`, MONTHLY
+  cron; operational recipe + the §1.5 hygiene touches: `LLM_MODELS` pin, `prompt_versions`,
+  `META_PURPOSES`, `CAPTURE_DENYLIST`, ~$3/mo warn budget, `scope="meta_eval"`). Automates +
+  extends the existing `model-frontier` reference / `/refresh-frontier` manual restamp:
+  re-verify current cross-provider list prices (Claude · Gemini · OpenRouter), surface
+  newly-released / newly-cheap models, and for OpenRouter filter its hundreds to a promising
+  shortlist. Output (structured, validated): candidate rows `{model_id/slug, family, input/
+  output $/MTok (verified), promise (cheap × plausibly-capable), source_url, rationale}`.
+  Prices are indicative for ranking; the backend still records real charged cost per call.
+- **`candidate_models` table** (new migration): the data-refreshed frontier the ladder
+  consults for TESTING. Cols ≈ `(model_id PK, family, input_usd_per_mtok, output_usd_per_mtok,
+  promise REAL, source TEXT('frontier_research'|'seed'|'manual'), status TEXT('active'|
+  'retired'), first_seen_at, verified_at, notes, research_run_id)`. `MODEL_LADDER` stays the
+  code seed + the type/price source of truth for seed rows; `candidate_models` OVERLAYS
+  discovered rows. A merged accessor unions seed + `active` discovered rows so the inventory /
+  `cheaper_candidates` / nominator see the live pool. **Discovered models AUTO-ENTER the TEST
+  pool** (owner decision): eligible for `scope="model_eval"` replay immediately. PRODUCTION
+  routing is unchanged and still gated by the full switch bar (Q3) — testing spends only
+  eval $, never touches a user-facing call.
+- **Coverage-tracked rotation:** the sweep cycles the highest-`leverage × promise` (purpose,
+  candidate) pairs that are *due*, tracking last-tested-at per (purpose, candidate) (from
+  `model_eval_verdicts.recorded_at`) so it fairly cycles the frontier over weeks instead of
+  re-testing the same few. Extends the nominator ranking + `_HARVEST_STEPS`; a per-sweep cap
+  bounds cost and whatever is deferred is `log()`ged (no silent truncation).
+- **Cadence:** frontier research + nominator both run monthly in `run_weekly_model_eval`
+  step 0, force-run when the candidate set changes materially (a new discovered model is
+  exactly when re-nomination + re-prioritization pays).
+- **Isolation:** `model_frontier_research` is meta machinery — `scope="meta_eval"`,
+  `CAPTURE_DENYLIST`, excluded from the workload inventory (`EVAL_SCOPES`) and from the
+  nominable universe. It reads *about* models; it never touches a production generation
+  prompt (I2/I5).
+
+### 10.2 Reconciliations discovered during build
+
+- **`EVAL_SCOPES` must include `'eval'`.** §0's literal set `{model_eval, backend_judge,
+  prompt_ab, meta_eval}` omits the rubric/golden harness scope `'eval'`, which
+  `model_eval_panel._EVAL_SCOPES` already treats as measurement. The canonical `EVAL_SCOPES`
+  constant (PR1, `src/llm/eval_scopes.py`) is the UNION
+  `{model_eval, backend_judge, eval, prompt_ab, meta_eval}`, so a purpose's production cost is
+  never inflated by its own grading traffic. PR6 unifies `model_eval_panel._EVAL_SCOPES` onto
+  it.
+- **Migration head** is past `0131` — pick number + `down_revision` at rebase time per the
+  parallel-session-collision memory (verify at build time, not from this doc).
+
+### 10.3 Revised build order
+
+PR1 (inventory) is unchanged and remains the right first step. Deltas from §7:
+- **PR3** absorbs Subsystem 1.5 → renamed "nominator + frontier research + rotation"; also
+  builds the RISKY switch-audit record (Q3).
+- **PR5** expands to build prompt auto-apply (`prompt_pin_overrides` + git-reconciliation
+  trail), not human-PR-only (Q1).
+- **PR6** adds the 3-family RISKY judging surface + the RISKY remediation/revert panel affordance
+  (Q3/Q5a) and the frontier/rotation views.
+- **New small PR (after PR1):** `purpose=None` hard-deprecation (Q6).
