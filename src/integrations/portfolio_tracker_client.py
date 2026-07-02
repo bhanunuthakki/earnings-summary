@@ -63,13 +63,19 @@ TAX_BUCKETS: tuple[str, ...] = ("taxable", "tax_deferred", "tax_free", "unknown"
 
 @dataclass(slots=True)
 class TaxLot:
-    """One account's slice of a position, tagged with its tax treatment."""
+    """One account's slice of a position, tagged with its tax treatment.
+
+    ``cost_basis`` is the account-level basis the tracker reports (None on
+    tracker builds that predate the field) — the honest position-level
+    fallback when per-lot reconstruction can't be validated.
+    """
 
     account_id: int
     account_name: str
     quantity: float
     market_value: float | None
     tax_treatment: str
+    cost_basis: float | None = None
 
 
 @dataclass(slots=True)
@@ -94,6 +100,11 @@ class LiveTransaction:
     quantity: float | None
     amount: float | None
     account_name: str
+    # Lot-reconstruction fields (tax-aware /review). Defaulted so older
+    # positional constructions and canned payloads stay valid.
+    account_id: int | None = None
+    price: float | None = None
+    fees: float | None = None
 
 
 @dataclass(slots=True)
@@ -238,6 +249,7 @@ def _build_positions(
                         quantity=_f(acct.get("quantity")) or 0.0,
                         market_value=_f(acct.get("institution_value")),
                         tax_treatment=acct_tax.get(aid_int, "unknown"),
+                        cost_basis=_f(acct.get("cost_basis")),
                     )
                 )
         positions.append(
@@ -266,9 +278,45 @@ def _build_transactions(txns: list[dict[str, object]]) -> list[LiveTransaction]:
             quantity=_f(t.get("quantity")),
             amount=_f(t.get("amount")),
             account_name=_s(t.get("account_name")) or "?",
+            account_id=_i(t.get("account_id")),
+            price=_f(t.get("price")),
+            fees=_f(t.get("fees")),
         )
         for t in txns
     ]
+
+
+# The tracker caps ``/api/portfolio/transactions`` at 5000 rows per call.
+TRANSACTION_HISTORY_LIMIT = 5000
+# Far enough back to cover any Plaid-ingested history; the endpoint's own
+# default window is only 24 months.
+_HISTORY_START_DATE = "2000-01-01"
+
+
+def fetch_transaction_history(
+    *,
+    api_url: str | None = None,
+    timeout: float = _ANALYTICS_TIMEOUT_SECONDS,
+    start_date: str = _HISTORY_START_DATE,
+    limit: int = TRANSACTION_HISTORY_LIMIT,
+) -> list[LiveTransaction] | None:
+    """Full transaction history for tax-lot reconstruction.
+
+    Unlike the ``fetch_live_portfolio`` transactions tail (limit 25, recency
+    feed), this pulls the deepest window the tracker allows so FIFO lots can be
+    rebuilt per account. Never raises — ``None`` on any tracker problem, so the
+    tax block degrades instead of breaking ``/review``. A result whose length
+    equals ``limit`` may be TRUNCATED — callers must treat lot math built on it
+    as approximate, not exact.
+    """
+    base = _resolve_base(api_url)
+    params = urlencode({"start_date": start_date, "limit": int(limit)})
+    try:
+        return _build_transactions(
+            _get(base, f"/api/portfolio/transactions?{params}", timeout=timeout)
+        )
+    except (requests.RequestException, ValueError):
+        return None
 
 
 def _f(v: object) -> float | None:
