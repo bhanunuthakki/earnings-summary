@@ -117,6 +117,29 @@ class PricedIn:
     def any_solved(self) -> bool:
         return self.growth.solved or self.terminal.solved
 
+    def to_snapshot_dict(self) -> dict[str, object]:
+        """The JSON-safe shape ``execution/refresh_dcf`` persists under
+        ``dcf_runs.assumption_snapshot_json["priced_in"]`` (and the valuation
+        card reads back). Producer-owned so the schema lives next to the solver;
+        an unsolved lever serializes ``implied_value: null`` with its note."""
+
+        def lever(inv: Inversion) -> dict[str, object]:
+            return {
+                "lever": inv.lever,
+                "label": inv.label,
+                "unit": inv.unit,
+                "base_value": inv.base_value,
+                "implied_value": inv.implied_value,
+                "note": inv.note,
+            }
+
+        return {
+            "price": self.price,
+            "base_value_per_share_usd": self.base_value_per_share,
+            "growth": lever(self.growth),
+            "terminal": lever(self.terminal),
+        }
+
 
 def _bisect(
     f: Callable[[float], float | None], target: float, lo: float, hi: float

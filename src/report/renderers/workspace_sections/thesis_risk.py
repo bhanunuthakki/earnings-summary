@@ -582,6 +582,7 @@ def _valuation_summary_panel(body: StringIO, snap: SnapshotSection) -> None:
         _val_row(body, "Margin-of-safety bar", f"{v.mos_bar * 100:.0f}%")
     if v.trigger_status and v.trigger_status != "unknown":
         _val_row(body, "Trigger status", v.trigger_status.upper())
+    _priced_in_block(body, v)
     _assumptions_sync_row(body, v)
     # (Valuation date rides in the header's as-of slot — P4.1 anatomy.)
     if v.sheet_url:
@@ -706,6 +707,35 @@ def _scenario_range_block(body: StringIO, v: ValuationSnapshot) -> None:
             "<span>bear → bull</span></div>"
         )
         body.write("</div>")
+
+
+def _priced_in_block(body: StringIO, v: ValuationSnapshot) -> None:
+    """Reverse-DCF "what's priced in": the market-implied assumption set at
+    today's price vs the analyst's base case, per lever (implied 5y revenue CAGR
+    + implied terminal lever).
+
+    Redesigned FCFF names only; a bespoke archetype renders a one-line n/a (no
+    honest single-lever inversion). A pure consumer of the persisted block —
+    never recomputed on render.
+    """
+    card = v.priced_in
+    if card is None:
+        # Honest n/a for a bespoke archetype ("FCFF DCF" is the only invertible
+        # label); stay silent for a pre-block / no-DCF row.
+        if v.valuation_model_label and v.valuation_model_label != "FCFF DCF":
+            _val_row(body, "Priced in", f"n/a for {v.valuation_model_label} model", muted=True)
+        return
+    _val_row(body, "Priced in vs your case", "what today's price implies", muted=True)
+    for lev in (card.growth, card.terminal):
+        gap = lev.gap_display
+        if gap is not None:
+            value = f"{lev.base_display} -> {lev.implied_display} ({gap})"
+        else:
+            # Unsolved lever: the price was unreachable inside model bounds.
+            value = f"{lev.base_display} -> n/a"
+            if lev.note:
+                value += f" - {lev.note}"
+        _val_row(body, lev.label, value)
 
 
 def _break_rules_panel(body: StringIO, thesis: ThesisSection) -> None:

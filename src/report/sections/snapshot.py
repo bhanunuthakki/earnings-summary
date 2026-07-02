@@ -16,6 +16,8 @@ from typing import Literal, cast
 from report.models import (
     DecisionBadge,
     KpiSnapshotRow,
+    PricedInCard,
+    PricedInLever,
     SectionStatus,
     SnapshotSection,
     ValuationSnapshot,
@@ -239,6 +241,7 @@ def _valuation_snapshot(
         bull_npv_per_share=bull_fv,
         bear_npv_per_share=bear_fv,
         valuation_model_label=_model_label(row["assumption_snapshot_json"]),
+        priced_in=_priced_in(row["assumption_snapshot_json"]),
         assumptions_sync_status=sync_status,
         assumptions_synced_at=synced_at,
     )
@@ -272,6 +275,83 @@ def _scenario_range(snapshot_json: object) -> tuple[float | None, float | None]:
         return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
     return fair_value("bull"), fair_value("bear")
+
+
+def _priced_in(snapshot_json: object) -> PricedInCard | None:
+    """The reverse-DCF "what's priced in" block from a dcf_runs assumption
+    snapshot, or None.
+
+    Written by execution/refresh_dcf.py (``dcf.reverse.PricedIn.to_snapshot_dict``)
+    for redesigned FCFF names only; bespoke archetypes and rows predating the
+    block carry none. Fully tolerant — a malformed/partial block returns None so
+    the card degrades to its single-point readout rather than raising. Never
+    recomputes: the card is a pure consumer of what refresh_dcf persisted.
+    """
+    if not isinstance(snapshot_json, str) or not snapshot_json:
+        return None
+    try:
+        data: object = json.loads(snapshot_json)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = cast("dict[str, object]", data).get("priced_in")
+    if not isinstance(block, dict):
+        return None
+    b = cast("dict[str, object]", block)
+
+    def _lever(key: str) -> PricedInLever | None:
+        raw = b.get(key)
+        if not isinstance(raw, dict):
+            return None
+        lv = cast("dict[str, object]", raw)
+        lever = lv.get("lever")
+        label = lv.get("label")
+        unit = lv.get("unit")
+        base = lv.get("base_value")
+        if (
+            not isinstance(lever, str)
+            or not isinstance(label, str)
+            or unit not in ("pct", "turns")
+            or not isinstance(base, (int, float))
+            or isinstance(base, bool)
+        ):
+            return None
+        implied = lv.get("implied_value")
+        implied_f = (
+            float(implied)
+            if isinstance(implied, (int, float)) and not isinstance(implied, bool)
+            else None
+        )
+        note = lv.get("note")
+        return PricedInLever(
+            lever=lever,
+            label=label,
+            unit=unit,
+            base_value=float(base),
+            implied_value=implied_f,
+            note=note if isinstance(note, str) else "",
+        )
+
+    price = b.get("price")
+    base_val = b.get("base_value_per_share_usd")
+    growth = _lever("growth")
+    terminal = _lever("terminal")
+    if (
+        not isinstance(price, (int, float))
+        or isinstance(price, bool)
+        or not isinstance(base_val, (int, float))
+        or isinstance(base_val, bool)
+        or growth is None
+        or terminal is None
+    ):
+        return None
+    return PricedInCard(
+        price=float(price),
+        base_value_per_share_usd=float(base_val),
+        growth=growth,
+        terminal=terminal,
+    )
 
 
 # Snapshot "model" tag (stamped by the bespoke builders) → card-facing label.
