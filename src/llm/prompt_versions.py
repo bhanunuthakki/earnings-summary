@@ -193,6 +193,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # The Ledger Phase-1 artifact drafters (thesis entry + code-change spec).
     "thesis_entry_draft": "v1",
     "research_code_spec": "v1",
+    # Position-review verdict (src/advisor/position_review.py). Bump when
+    # _build_verdict_prompt / _BEHAVIORAL_RULES is materially rewritten.
+    "position_review": "v1",
 }
 
 _DEFAULT_VERSION = "v1"

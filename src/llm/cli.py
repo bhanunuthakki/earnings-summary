@@ -131,6 +131,12 @@ LLM_MODELS: dict[str, str] = {
     # DEFAULT (Sonnet); the code spec is rare and never auto-applies.
     "thesis_entry_draft": DEFAULT_MODEL,
     "research_code_spec": DEFAULT_MODEL,
+    # Position-review verdict (src/advisor/position_review.py, the /review service).
+    # Judgment over the grounded pre-analysis + the owner's convictions, calibrated
+    # to his behavioral patterns → Sonnet-tier reasoning (latency unimportant, one
+    # call per on-demand review). A deterministic behavioral guardrail backstops the
+    # sell-winners-too-early rule regardless of the model's call.
+    "position_review": DEFAULT_MODEL,
     # Long-context analytical writing
     "transcript_summary": DEFAULT_MODEL,
     "press_release_summary": DEFAULT_MODEL,
