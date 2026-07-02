@@ -812,14 +812,31 @@ def record_decisions_from_artifacts(
     since_days: int = 30,
     source_lenses: tuple[str, ...] = ("lens:five_min_reread",),
     llm_fallback: bool = False,
+    allowed_list_types: tuple[str, ...] = ("portfolio", "evaluation"),
 ) -> dict[str, int]:
     """Walk recent lens artifacts of the named purposes, extract decisions,
     upsert into the decisions table.
 
-    Returns a tally: {inserted, skipped_existing, no_recommendation, db_unavailable}.
+    Only tickers whose ``tracked_companies.list_type`` is in
+    ``allowed_list_types`` are promoted: the decisions table is the
+    calibration ledger, and a P3-tier (index_member / etf) lens brief is
+    advisory reading, not a decision anyone will act on. Without this guard
+    the monthly P3 sweep floods the ledger with no-context recommendations
+    (2026-07-01: 40 index_member rows from an A→AIT alphabetical sweep).
+    If the DB has no tracked_companies table (synthetic test DBs), the
+    guard is skipped.
+
+    Returns a tally: {inserted, skipped_existing, skipped_untracked,
+    no_recommendation, db_unavailable}.
     """
     db_path = repo_root / "data" / "portfolio.db"
-    tally = {"inserted": 0, "skipped_existing": 0, "no_recommendation": 0, "db_unavailable": 0}
+    tally = {
+        "inserted": 0,
+        "skipped_existing": 0,
+        "skipped_untracked": 0,
+        "no_recommendation": 0,
+        "db_unavailable": 0,
+    }
     if not db_path.exists():
         tally["db_unavailable"] = 1
         return tally
@@ -850,6 +867,23 @@ def record_decisions_from_artifacts(
             """,
             (*source_lenses, cutoff),
         ).fetchall()
+
+        # Calibration-universe guard (see docstring). None = no table, skip guard.
+        allowed_tickers: set[str] | None = None
+        if (
+            conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='tracked_companies'"
+            ).fetchone()
+            is not None
+        ):
+            lt_placeholders = ",".join("?" * len(allowed_list_types))
+            allowed_tickers = {
+                str(r[0])
+                for r in conn.execute(
+                    f"SELECT ticker FROM tracked_companies WHERE list_type IN ({lt_placeholders})",
+                    allowed_list_types,
+                ).fetchall()
+            }
     finally:
         conn.close()
 
@@ -857,6 +891,9 @@ def record_decisions_from_artifacts(
         artifact_id = int(row["id"])
         ticker = row["ticker"]
         if not ticker:
+            continue
+        if allowed_tickers is not None and str(ticker) not in allowed_tickers:
+            tally["skipped_untracked"] += 1
             continue
         # purpose has shape 'lens:<name>'; pass the name only to the candidate
         purpose = str(row["purpose"])

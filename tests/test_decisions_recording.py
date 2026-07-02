@@ -524,6 +524,49 @@ def test_batch_recorder_respects_since_days_window(repo_root: Path) -> None:
     assert tally["inserted"] == 1
 
 
+def test_batch_recorder_skips_p3_tier_tickers(repo_root: Path) -> None:
+    """The calibration-universe guard: a P3-tier (index_member) lens brief
+    must NOT be promoted into the decisions ledger. Regression for the
+    2026-07-01 monthly_p3 sweep that inserted 40 no-context index_member
+    rows (A→AIT) before stage 0b's window closed."""
+    db_path = repo_root / "data" / "portfolio.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            """
+            CREATE TABLE tracked_companies (
+                ticker TEXT PRIMARY KEY,
+                list_type TEXT NOT NULL
+            )
+            """
+        )
+        conn.executemany(
+            "INSERT INTO tracked_companies(ticker, list_type) VALUES (?, ?)",
+            [("GOOG", "portfolio"), ("VEEV", "evaluation"), ("AIT", "index_member")],
+        )
+        for ticker in ("GOOG", "VEEV", "AIT"):
+            _seed_artifact(
+                conn,
+                ticker=ticker,
+                purpose="lens:five_min_reread",
+                content_md="## 2. Recommended Action\n\n**HOLD**\n\nSteady.",
+                generated_at=datetime.now(UTC) - timedelta(days=2),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    tally = record_decisions_from_artifacts(repo_root=repo_root, since_days=30)
+    assert tally["inserted"] == 2
+    assert tally["skipped_untracked"] == 1
+    conn = sqlite3.connect(str(db_path))
+    try:
+        tickers = {r[0] for r in conn.execute("SELECT ticker FROM decisions").fetchall()}
+        assert tickers == {"GOOG", "VEEV"}
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # reconcile_decision_actions — decision→fill matching (Track B seam 7)
 # ---------------------------------------------------------------------------
