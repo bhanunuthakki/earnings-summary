@@ -2,7 +2,8 @@
 
 The orchestrator runs an unconditional environment preflight, then chains
 the subprocess stages (news -> decisions -> lifecycle -> fundamentals ->
-reprice -> candidate_fit -> triggers -> standup -> feed -> validate). Its load-bearing contract is
+reprice -> candidate_fit -> factor_proxies -> triggers -> standup -> feed ->
+validate). Its load-bearing contract is
 resilience: it must attempt every non-skipped stage even when an earlier one
 fails or times out, and report the
 count of failed stages as the exit code only after all stages have run.
@@ -36,6 +37,7 @@ DECISION_ACTIONS_SCRIPT = "reconcile_decision_actions.py"
 FUNDAMENTALS_SCRIPT = "refresh_cockpit_fundamentals.py"
 REPRICE_SCRIPT = "reprice_dcf.py"
 CANDIDATE_FIT_SCRIPT = "refresh_candidate_fit.py"
+FACTOR_PROXIES_SCRIPT = "fetch_factor_proxies.py"
 TRIGGERS_SCRIPT = "run_triggers.py"
 STANDUP_SCRIPT = "run_standup.py"
 FEED_SCRIPT = "build_alert_feed.py"
@@ -151,6 +153,7 @@ def test_all_stages_succeed(
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
+        FACTOR_PROXIES_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -167,6 +170,7 @@ def test_all_stages_succeed(
     assert summary["stage_0d_fundamentals"] == "ok"
     assert summary["stage_0e_reprice"] == "ok"
     assert summary["stage_0f_candidate_fit"] == "ok"
+    assert summary["stage_0g_factor_proxies"] == "ok"
     assert summary["stage_1_triggers"] == "ok"
     assert summary["stage_1b_standup"] == "ok"
     assert summary["stage_2_feed"] == "ok"
@@ -201,6 +205,7 @@ def test_stage1_failure_still_runs_feed(
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
+        FACTOR_PROXIES_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -233,6 +238,7 @@ def test_feed_failure_still_runs_validation(
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
+        FACTOR_PROXIES_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -248,8 +254,8 @@ def test_feed_failure_still_runs_validation(
 def test_all_stages_fail_exit_code_counts_failures(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Every stage failing (preflight included) → all thirteen still attempted,
-    exit code == 13."""
+    """Every stage failing (preflight included) → all fourteen still attempted,
+    exit code == 14."""
     fake = _RecordingRun(
         returncodes={
             PREFLIGHT_SCRIPT: 1,
@@ -261,6 +267,7 @@ def test_all_stages_fail_exit_code_counts_failures(
             FUNDAMENTALS_SCRIPT: 1,
             REPRICE_SCRIPT: 1,
             CANDIDATE_FIT_SCRIPT: 1,
+            FACTOR_PROXIES_SCRIPT: 1,
             TRIGGERS_SCRIPT: 1,
             STANDUP_SCRIPT: 1,
             FEED_SCRIPT: 1,
@@ -271,7 +278,7 @@ def test_all_stages_fail_exit_code_counts_failures(
 
     rc = run_morning_pipeline.main([])
 
-    assert rc == 13
+    assert rc == 14
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
@@ -282,6 +289,7 @@ def test_all_stages_fail_exit_code_counts_failures(
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
+        FACTOR_PROXIES_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -298,6 +306,7 @@ def test_all_stages_fail_exit_code_counts_failures(
     assert summary["stage_0d_fundamentals"] == "failed"
     assert summary["stage_0e_reprice"] == "failed"
     assert summary["stage_0f_candidate_fit"] == "failed"
+    assert summary["stage_0g_factor_proxies"] == "failed"
     assert summary["stage_1_triggers"] == "failed"
     assert summary["stage_1b_standup"] == "failed"
     assert summary["stage_2_feed"] == "failed"
@@ -331,6 +340,7 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
+        FACTOR_PROXIES_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -438,6 +448,7 @@ def test_validation_halt_counts_as_failed_stage_after_renders(
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
+        FACTOR_PROXIES_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -468,6 +479,7 @@ def test_skip_validation_removes_only_stage3(
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
+        FACTOR_PROXIES_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -612,6 +624,9 @@ def test_db_path_passed_to_all_stages_when_set(
     for argv in fake.calls:
         if _script_of(argv) == PREFLIGHT_SCRIPT:
             continue  # the env preflight takes no --db-path
+        if _script_of(argv) == FACTOR_PROXIES_SCRIPT:
+            continue  # no DB at all — takes --repo-root derived from the db
+            # override instead (asserted in its own stage-0g test)
         assert _has_flag(argv, "--db-path", str(db_path))
 
 
@@ -667,6 +682,7 @@ def test_skip_news_removes_only_stage0(
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
+        FACTOR_PROXIES_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -713,6 +729,7 @@ def test_news_failure_does_not_stop_triggers(
         FUNDAMENTALS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
+        FACTOR_PROXIES_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -809,6 +826,52 @@ def test_stage0e_reprice_takes_db_path_but_not_user_or_cost(
     assert _has_flag(reprice_argv, "--db-path", str(db_path))
     assert "--user-id" not in reprice_argv
     assert "--max-cost-usd" not in reprice_argv
+
+
+def test_stage0g_factor_proxies_runs_between_candidate_fit_and_triggers(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Stage 0g refreshes the ETF style-proxy series after the derived-cache
+    stages and before triggers; a yfinance outage (stage failure) must not
+    block the sweep — the Risk panel degrades to the last-good files."""
+    fake = _RecordingRun(returncodes={FACTOR_PROXIES_SCRIPT: 1})
+    _install_fake(monkeypatch, fake)
+
+    rc = run_morning_pipeline.main([])
+    assert rc == 1  # exactly the proxies stage failed
+    assert fake.scripts.index(CANDIDATE_FIT_SCRIPT) < fake.scripts.index(FACTOR_PROXIES_SCRIPT)
+    assert fake.scripts.index(FACTOR_PROXIES_SCRIPT) < fake.scripts.index(TRIGGERS_SCRIPT)
+
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_0g_factor_proxies"] == "failed"
+    assert summary["stage_1_triggers"] == "ok"
+
+
+def test_stage0g_factor_proxies_takes_repo_root_from_db_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The proxy fetch writes data/factor_proxies/ under the db override's repo
+    root (never the real repo on a --db-path run); it is not user-scoped, runs
+    no LLM, and needs no DB at all. Without the override, no --repo-root is
+    passed (the script defaults to its own repo)."""
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+    db_path = tmp_path / "data" / "alt.db"
+
+    rc = run_morning_pipeline.main(["--db-path", str(db_path), "--user-id", "alice"])
+    assert rc == 0
+
+    proxies_argv = next(c for c in fake.calls if _script_of(c) == FACTOR_PROXIES_SCRIPT)
+    assert _has_flag(proxies_argv, "--repo-root", str(tmp_path))
+    assert "--db-path" not in proxies_argv
+    assert "--user-id" not in proxies_argv
+    assert "--max-cost-usd" not in proxies_argv
+
+    fake_default = _RecordingRun()
+    _install_fake(monkeypatch, fake_default)
+    assert run_morning_pipeline.main([]) == 0
+    default_argv = next(c for c in fake_default.calls if _script_of(c) == FACTOR_PROXIES_SCRIPT)
+    assert "--repo-root" not in default_argv
 
 
 def _has_flag(argv: list[str], flag: str, value: str) -> bool:

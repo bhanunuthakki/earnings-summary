@@ -14,7 +14,8 @@ payloads it DOES return (so the sibling repo stays out of scope):
   QQQ-minus-SPY gap), market co-movement / crowding (SPY correlation), and an
   optional rate-sensitivity leg fed from the local ``macro_sensitivities``
   10Y betas. Value / size / momentum loadings need a factor-return series the
-  tracker doesn't expose — deliberately omitted rather than faked.
+  tracker doesn't expose — they live in ``portfolio_style_factors`` (regressed
+  on local ETF-proxy spreads), not here.
 
 Both are pure and dependency-free (stdlib + the client's dataclasses) so they
 test without a network or a DB.

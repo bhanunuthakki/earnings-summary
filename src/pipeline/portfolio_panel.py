@@ -72,6 +72,8 @@ from portfolio_risk_snapshot_store import (
     read_latest_snapshot,
     write_snapshot,
 )
+from portfolio_style_factors import StyleFactorRollup, build_style_rollup_from_disk
+from portfolio_weights import read_materialized_weights
 from risk_reward import RiskRewardGap, RiskRewardGapRow, build_risk_reward_gap
 from ui import living_grid as lg
 from ui.controls import ticker_label
@@ -1347,6 +1349,7 @@ def render_portfolio_risk_panel(
         factor = factor_exposure_rollup(analytics.positioning.correlations, rate_betas)
         if db_path is not None:
             gap = _build_risk_reward_gap(analytics.positioning, db_path)
+    style = _build_style_rollup(analytics.positioning, db_path)
     scenarios = _scenario_options()
     digest = _cached_macro_digest_html(db_path) if db_path is not None else ""
     # On a successful read, refresh the last-known snapshot; when the tracker is
@@ -1362,6 +1365,7 @@ def render_portfolio_risk_panel(
         drawdown=drawdown,
         factor=factor,
         gap=gap,
+        style=style,
         scenarios=scenarios,
         digest=digest,
         snapshot=snapshot,
@@ -1382,6 +1386,29 @@ def _build_risk_reward_gap(pos: Positioning, db_path: Path) -> RiskRewardGap | N
     return build_risk_reward_gap(db_path, db_path.parent.parent, weights, weights_source="tracker")
 
 
+def _build_style_rollup(pos: Positioning | None, db_path: Path | None) -> StyleFactorRollup | None:
+    """The value/size/momentum loadings, computed entirely from local disk
+    (FMP price cache + factor_proxies store) — so the section renders with the
+    tracker DOWN. Weights prefer the live positioning rows; offline they fall
+    back to the materialized weights cache (stage 0c), whose keys double as
+    the holdings list."""
+    if db_path is None:
+        return None
+    repo_root = db_path.parent.parent
+    weights: dict[str, float] = {}
+    if pos is not None:
+        weights = {
+            r.ticker.upper(): (r.weight_pct or 0.0) / 100.0
+            for r in pos.correlations
+            if r.ticker and r.weight_pct is not None
+        }
+    if not weights:
+        weights = read_materialized_weights(repo_root)
+    if not weights:
+        return None
+    return build_style_rollup_from_disk(repo_root, list(weights), weights)
+
+
 def compose_risk_page(
     analytics: PortfolioAnalytics,
     *,
@@ -1391,13 +1418,16 @@ def compose_risk_page(
     digest: str,
     snapshot: RiskSnapshot | None = None,
     gap: RiskRewardGap | None = None,
+    style: StyleFactorRollup | None = None,
 ) -> str:
     """Pure assembly of the Risk page (testable without network or DB). The
     ``#pfr-root`` wrapper is the re-inject target the run-scenario script swaps
     after a digest regenerates. When the tracker is offline, ``snapshot`` (the
     last-known cached read) renders stamped values instead of a bare note.
     ``gap`` (L7) is the risk-budget allocator's risk-vs-reward-vs-conviction
-    ranking; None hides the section (tracker offline / no weighted book)."""
+    ranking; None hides the section (tracker offline / no weighted book).
+    ``style`` (the value/size/momentum ETF-proxy loadings) is computed from
+    local disk, so it renders in BOTH branches — tracker up or down."""
     parts: list[str] = [_RISK_CSS, '<div id="pfr-root">']
     if analytics.available:
         if analytics.beta is not None:
@@ -1405,12 +1435,15 @@ def compose_risk_page(
         parts.append(_drawdown_section(drawdown))
         if factor is not None:
             parts.append(_factor_exposure_section(factor))
+        parts.append(_style_factor_section(style))
         if gap is not None:
             parts.append(_risk_reward_gap_section(gap))
-    elif snapshot is not None:
-        parts.append(_cached_risk_section(snapshot))
     else:
-        parts.append(_risk_offline_note(analytics))
+        if snapshot is not None:
+            parts.append(_cached_risk_section(snapshot))
+        else:
+            parts.append(_risk_offline_note(analytics))
+        parts.append(_style_factor_section(style))
     parts.append(_macro_stress_section(scenarios, digest))
     parts.append("</div>")
     return "".join(parts)
@@ -1744,8 +1777,8 @@ def _factor_exposure_section(factor: FactorRollup) -> str:
         cards.append(_kpi_card("Rate β (10Y)", _ratio(factor.rate_beta_10y), sub="vs 10Y yield"))
     cov = f"{factor.names_priced} of {factor.names_total} names priced"
     note = (
-        f'<p class="muted pfr-top">{escape(cov)}. Value / size / momentum loadings need a '
-        "factor-return series the tracker doesn't expose — not shown.</p>"
+        f'<p class="muted pfr-top">{escape(cov)}. Value / size / momentum load from local '
+        "ETF-proxy spreads — the style-factor section below.</p>"
     )
     tops = (
         '<div class="pfr-tops">'
@@ -1766,6 +1799,56 @@ def _factor_top_line(label: str, names: list[CrowdedName]) -> str:
         for c in names
     )
     return f'<p class="pfr-top"><strong>{escape(label)}:</strong> {chips}</p>'
+
+
+def _style_factor_section(style: StyleFactorRollup | None) -> str:
+    """Value / size / momentum loadings from the local ETF-proxy spreads.
+
+    Renders in the offline branch too — the substrate is entirely on-disk
+    (FMP price cache + factor_proxies store). ``None`` (no proxy series
+    fetched yet / no weights cache) gets the empty-state with the refresh
+    command instead of a hidden section, mirroring ``_macro_stress_section``'s
+    always-render pattern so the surface is discoverable before its first
+    data arrives."""
+    head = (
+        '<section class="panel"><h2>Style factor loadings</h2>'
+        '<p class="sub">Value / size / momentum betas of the book — each holding\'s daily '
+        "returns regressed on a free ETF-proxy return spread (univariate OLS, the "
+        "macro-sensitivity idiom), value-weighted over the names with an estimate. "
+        "Local data only; renders with the tracker down.</p>"
+    )
+    if style is None:
+        return (
+            f"{head}"
+            '<p class="muted">No proxy series (or weights cache) on file yet — run '
+            "<code>python execution/fetch_factor_proxies.py</code> (morning-pipeline "
+            "stage 0g keeps it fresh).</p></section>"
+        )
+    cards: list[str] = []
+    for leg in style.legs:
+        if leg.book_beta is None:
+            continue
+        cards.append(_kpi_card(f"{leg.label} β", f"{leg.book_beta:+.2f}", sub=leg.spread_label))
+    bits = [
+        f"{max((leg.names_priced for leg in style.legs), default=0)}"
+        f" of {style.names_total} names priced"
+    ]
+    if style.proxies_through is not None:
+        bits.append(f"proxies through {style.proxies_through.isoformat()}")
+    bits.append(f"{style.lookback_obs}d window")
+    note = f'<p class="muted pfr-top">{escape(" · ".join(bits))}.</p>'
+    missing = (
+        '<p class="muted pfr-top">Missing proxy series: '
+        f"{escape(', '.join(style.missing_proxies))} — re-run "
+        "<code>execution/fetch_factor_proxies.py</code>.</p>"
+        if style.missing_proxies
+        else ""
+    )
+    tops = "".join(
+        _factor_top_line(f"Largest {leg.label.lower()} tilt", leg.top) for leg in style.legs
+    )
+    strip = f'<div class="kpi-strip">{"".join(cards)}</div>' if cards else ""
+    return f'{head}{strip}{note}{missing}<div class="pfr-tops">{tops}</div></section>'
 
 
 def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
