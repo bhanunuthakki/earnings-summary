@@ -1033,6 +1033,16 @@ def create_app(
 
             return Response(render_evals_panel(db_path), mimetype="text/html")
 
+        if name == "model_eval":
+            # Optimizer panel (model_eval_loop.md PR4): the model-downgrade
+            # loop's surface over model_eval_verdicts + model_pin_overrides +
+            # llm_calls — the anonymous-purpose alarm, active overrides with a
+            # realized-savings rollup, per-(purpose, candidate) verdict history
+            # (CANDIDATE_ERRORED as an infra flag), and per-purpose 30d cost.
+            from pipeline.model_eval_panel import render_model_eval_panel
+
+            return Response(render_model_eval_panel(db_path), mimetype="text/html")
+
         from pipeline.analytical_dashboard_html import (
             PANEL_TO_SECTION,
             render_panel_fragment,

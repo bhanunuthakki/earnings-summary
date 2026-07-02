@@ -71,6 +71,7 @@ def render_provenance_panel(
     from pipeline.evals_panel import render_evals_panel
     from pipeline.fact_overrides_panel import render_fact_overrides_panel
     from pipeline.ir_coverage_panel import render_ir_coverage_panel
+    from pipeline.model_eval_panel import render_model_eval_panel
     from pipeline.restatements_panel import render_restatements_panel
     from pipeline.section_coverage_panel import render_section_coverage_panel
     from pipeline.source_calls_panel import render_source_calls_panel
@@ -86,6 +87,10 @@ def render_provenance_panel(
         ),
         ("validation", "Validation", lambda: render_validation_panel(db_path)),
         ("evals", "Evals", lambda: render_evals_panel(db_path)),
+        # The model-downgrade loop's surface (model_eval_loop.md PR4): sits by
+        # Evals — Evals scores response QUALITY per purpose; Optimizer scores
+        # whether a cheaper MODEL holds that quality, and what the switch saves.
+        ("model_eval", "Optimizer", lambda: render_model_eval_panel(db_path)),
         ("ir_coverage", "IR Docs", lambda: render_ir_coverage_panel(db_path)),
         ("source_calls", "Data Cache", lambda: render_source_calls_panel(db_path)),
         ("cron_health", "Cron Health", lambda: render_cron_health_panel(db_path)),
