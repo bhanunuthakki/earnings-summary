@@ -12,8 +12,18 @@ Three modes:
   3. `--auto [--ticker X | --transcript-id N] [--max N] [--dry-run]`:
      AUTOMATED extraction. For every pending transcript, call the LLM to
      extract forward-looking commitments and persist them. Wires through
-     `compute.say_do_extractor.extract_for_transcript`. Idempotent —
-     transcripts already with at least one commitment row are skipped.
+     `compute.say_do_extractor.extract_for_transcript`. Idempotent at three
+     layers — a transcript is skipped when it already has a commitment row,
+     when a commitment_scan_log row records a prior scan (zero-commitment
+     scans included: they were re-scanned daily at full LLM cost before the
+     marker existed), or when its ticker has no kpi_definitions catalog
+     (the call's outcome is predetermined).
+
+LLM governance: calls go through the canonical `call_llm` entry point with
+purpose="saydo_commitment_extract" (LLM_MODELS pin, llm_budgets cap, ledger
+attribution). Never revert to the private `_call_claude` — that bypass made
+this extractor the repo's single largest ungoverned cost line (~$150/mo of
+purpose=NULL ledger rows).
 
 Manifest shape (for --apply):
     {
@@ -38,7 +48,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -50,32 +62,48 @@ from compute.say_do import (  # noqa: E402
 )
 from compute.say_do_extractor import (  # noqa: E402
     extract_for_transcript,
+    record_scan,
     transcripts_pending_extraction,
 )
-from llm_client import _call_claude  # noqa: E402
+from llm.prompt_versions import prompt_version_for  # noqa: E402
+from llm_client import call_llm  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 
 log = logging.getLogger("extract_commitments")
 
+# The governed purpose key: LLM_MODELS pin + llm_budgets row + ledger
+# attribution all key off this. Registered in src/llm/cli.py and
+# src/llm/prompt_versions.py; budget seeded by migration 0129.
+PURPOSE = "saydo_commitment_extract"
 
-def _list_pending(conn, ticker: str | None) -> list[dict[str, object]]:
-    """Return transcripts (one row per transcript) that have no commitments yet."""
+
+def _governed_llm_call(ticker: str) -> Callable[[str], str]:
+    """Per-ticker LLM callable for extract_for_transcript: routes through the
+    canonical entry point so purpose/ticker land on every ledger row."""
+
+    def _call(prompt: str) -> str:
+        return call_llm(prompt, purpose=PURPOSE, ticker=ticker)
+
+    return _call
+
+
+def _list_pending(conn: sqlite3.Connection, ticker: str | None) -> list[dict[str, object]]:
+    """Return transcripts (one row per transcript) that --auto would target.
+
+    Mirrors transcripts_pending_extraction's selection (no commitments, never
+    scanned, ticker has a KPI catalog) but carries segment counts for the
+    human-readable listing."""
+    pending = {tid for tid, _tk, _pe in transcripts_pending_extraction(conn, ticker=ticker)}
+    if not pending:
+        return []
     sql = (
         "SELECT t.id, t.ticker, t.period_end, t.fiscal_period_type, "
         "       (SELECT COUNT(*) FROM transcript_segments s WHERE s.transcript_id = t.id) AS segments "
         "FROM transcripts t "
-        "WHERE NOT EXISTS ("
-        "  SELECT 1 FROM management_commitments mc "
-        "  JOIN transcript_segments s ON s.id = mc.transcript_segment_id "
-        "  WHERE s.transcript_id = t.id"
-        ") "
+        f"WHERE t.id IN ({','.join('?' * len(pending))}) "
+        "ORDER BY t.ticker, t.period_end"
     )
-    params: tuple[str, ...] = ()
-    if ticker is not None:
-        sql += "AND t.ticker = ? "
-        params = (ticker.upper(),)
-    sql += "ORDER BY t.ticker, t.period_end"
-    cur = conn.execute(sql, params)
+    cur = conn.execute(sql, tuple(pending))
     return [
         {
             "transcript_id": int(row["id"]),
@@ -89,7 +117,7 @@ def _list_pending(conn, ticker: str | None) -> list[dict[str, object]]:
 
 
 def _resolve_auto_targets(
-    conn, *, ticker: str | None, transcript_id: int | None, max_n: int
+    conn: sqlite3.Connection, *, ticker: str | None, transcript_id: int | None, max_n: int
 ) -> list[tuple[int, str]]:
     """Pick which transcripts to auto-extract from.
 
@@ -110,7 +138,7 @@ def _resolve_auto_targets(
 
 
 def _run_auto(
-    conn,
+    conn: sqlite3.Connection,
     *,
     ticker: str | None,
     transcript_id: int | None,
@@ -121,10 +149,13 @@ def _run_auto(
     targets = _resolve_auto_targets(conn, ticker=ticker, transcript_id=transcript_id, max_n=max_n)
     results: list[dict[str, object]] = []
     total_inserted = 0
+    version = prompt_version_for(PURPOSE)
     for tid, tk in targets:
         try:
-            manifest = extract_for_transcript(conn, tid, llm_call=_call_claude)
-        except Exception as e:  # noqa: BLE001 — surface in report rather than abort
+            manifest = extract_for_transcript(conn, tid, llm_call=_governed_llm_call(tk))
+        except Exception as e:  # surface in report rather than abort the batch
+            # No scan marker on failure: a parse/call error is retryable
+            # tomorrow, unlike a real zero-commitment scan.
             log.warning("extract failed for transcript_id=%d ticker=%s: %s", tid, tk, e)
             results.append(
                 {
@@ -138,7 +169,7 @@ def _run_auto(
             continue
 
         n_extracted = len(manifest.commitments)
-        if dry_run or n_extracted == 0:
+        if dry_run:
             results.append(
                 {
                     "transcript_id": tid,
@@ -149,7 +180,20 @@ def _run_auto(
             )
             continue
 
+        if n_extracted == 0:
+            record_scan(conn, tid, n_extracted=0, prompt_version=version)
+            results.append(
+                {
+                    "transcript_id": tid,
+                    "ticker": tk,
+                    "extracted": 0,
+                    "inserted": 0,
+                }
+            )
+            continue
+
         ids = persist_manifest(conn, manifest)
+        record_scan(conn, tid, n_extracted=n_extracted, prompt_version=version)
         total_inserted += len(ids)
         results.append(
             {

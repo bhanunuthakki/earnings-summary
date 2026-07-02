@@ -185,6 +185,11 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # The Ledger Phase-2 generation seams (decision extraction + drift phrasing).
     "musing_decision_extract": "v1",
     "drift_narrate": "v1",
+    # SayDo commitment extraction (compute/say_do_extractor.build_extraction_prompt).
+    # Bump when the extraction prompt is materially rewritten; commitment_scan_log
+    # rows carry the version, so stale-version scans can be invalidated (DELETE
+    # WHERE prompt_version != current) to force a re-scan under the new prompt.
+    "saydo_commitment_extract": "v1",
 }
 
 _DEFAULT_VERSION = "v1"

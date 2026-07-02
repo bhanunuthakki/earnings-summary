@@ -5,17 +5,20 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 import pytest
 
 from compute.say_do_extractor import (
     MAX_TRANSCRIPT_CHARS,
+    CommitmentParseError,
     TranscriptContext,
     build_extraction_prompt,
     extract_for_transcript,
     fetch_kpi_catalog,
     fetch_transcript_text_and_segment,
     parse_llm_response,
+    record_scan,
     transcripts_pending_extraction,
 )
 
@@ -64,6 +67,13 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             target_value NUMERIC NOT NULL,
             unit TEXT NOT NULL,
             narrative TEXT NOT NULL
+        );
+        CREATE TABLE commitment_scan_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            transcript_id INTEGER NOT NULL UNIQUE,
+            scanned_at TEXT NOT NULL,
+            n_extracted INTEGER NOT NULL,
+            prompt_version TEXT
         );
         """
     )
@@ -144,6 +154,7 @@ def test_fetch_kpi_catalog_empty_for_unknown_ticker(conn: sqlite3.Connection) ->
 def test_transcripts_pending_extraction_includes_unprocessed(
     conn: sqlite3.Connection,
 ) -> None:
+    _seed_kpi_def(conn, "AMZN", "X")
     tid, _ = _seed_transcript(conn, "AMZN", "text", "2025-12-31")
     pending = transcripts_pending_extraction(conn)
     assert [(p[0], p[1]) for p in pending] == [(tid, "AMZN")]
@@ -152,6 +163,7 @@ def test_transcripts_pending_extraction_includes_unprocessed(
 def test_transcripts_pending_extraction_excludes_already_processed(
     conn: sqlite3.Connection,
 ) -> None:
+    _seed_kpi_def(conn, "AMZN", "X")
     _, sid = _seed_transcript(conn, "AMZN", "text", "2025-12-31")
     conn.execute(
         "INSERT INTO management_commitments "
@@ -167,10 +179,62 @@ def test_transcripts_pending_extraction_excludes_already_processed(
 def test_transcripts_pending_extraction_filters_by_ticker(
     conn: sqlite3.Connection,
 ) -> None:
+    _seed_kpi_def(conn, "AMZN", "X")
+    _seed_kpi_def(conn, "GOOG", "Y")
     _seed_transcript(conn, "AMZN", "text", "2025-12-31")
     tid_g, _ = _seed_transcript(conn, "GOOG", "text", "2025-12-31")
     pending = transcripts_pending_extraction(conn, ticker="GOOG")
     assert [p[0] for p in pending] == [tid_g]
+
+
+def test_transcripts_pending_extraction_excludes_scanned(
+    conn: sqlite3.Connection,
+) -> None:
+    """A recorded scan — even one that found ZERO commitments — removes the
+    transcript from the pending set (kills the daily re-scan loop)."""
+    _seed_kpi_def(conn, "AMZN", "X")
+    tid, _ = _seed_transcript(conn, "AMZN", "text", "2025-12-31")
+    record_scan(conn, tid, n_extracted=0, prompt_version="v1")
+    assert transcripts_pending_extraction(conn) == []
+
+
+def test_transcripts_pending_extraction_excludes_no_catalog_tickers(
+    conn: sqlite3.Connection,
+) -> None:
+    """No kpi_definitions catalog ⇒ the LLM call's outcome is predetermined,
+    so the transcript is not a target — until a catalog is seeded."""
+    tid, _ = _seed_transcript(conn, "ZZZ", "text", "2025-12-31")
+    assert transcripts_pending_extraction(conn) == []
+    _seed_kpi_def(conn, "ZZZ", "Some KPI")
+    assert [p[0] for p in transcripts_pending_extraction(conn)] == [tid]
+
+
+def test_transcripts_pending_degrades_without_scan_log_table(
+    conn: sqlite3.Connection,
+) -> None:
+    """Pre-0129 DB (no commitment_scan_log): selection still works, scans
+    are silently unfiltered, record_scan is a warning no-op."""
+    conn.execute("DROP TABLE commitment_scan_log")
+    conn.commit()
+    _seed_kpi_def(conn, "AMZN", "X")
+    tid, _ = _seed_transcript(conn, "AMZN", "text", "2025-12-31")
+    assert [p[0] for p in transcripts_pending_extraction(conn)] == [tid]
+    record_scan(conn, tid, n_extracted=0)  # must not raise
+    assert [p[0] for p in transcripts_pending_extraction(conn)] == [tid]
+
+
+def test_record_scan_upserts_on_repeat(conn: sqlite3.Connection) -> None:
+    _seed_kpi_def(conn, "AMZN", "X")
+    tid, _ = _seed_transcript(conn, "AMZN", "text", "2025-12-31")
+    record_scan(conn, tid, n_extracted=0, prompt_version="v1")
+    record_scan(conn, tid, n_extracted=2, prompt_version="v2")
+    row = conn.execute(
+        "SELECT n_extracted, prompt_version FROM commitment_scan_log WHERE transcript_id = ?",
+        (tid,),
+    ).fetchone()
+    assert (row["n_extracted"], row["prompt_version"]) == (2, "v2")
+    n = conn.execute("SELECT COUNT(*) FROM commitment_scan_log").fetchone()[0]
+    assert n == 1
 
 
 # ---------------------------------------------------------------------------
@@ -261,13 +325,16 @@ def test_parse_strips_markdown_fences() -> None:
     assert manifest.commitments == []
 
 
-def test_parse_invalid_json_returns_empty_manifest() -> None:
-    manifest = parse_llm_response("not json at all", context=_CTX)
-    assert manifest.commitments == []
+def test_parse_invalid_json_raises() -> None:
+    """Unusable response must NOT degrade to an empty manifest — an empty
+    manifest reads as a legitimate zero-commitment scan and would be recorded
+    in commitment_scan_log (the silent-empty pathology)."""
+    with pytest.raises(CommitmentParseError, match="not valid JSON"):
+        parse_llm_response("not json at all", context=_CTX)
 
 
-def test_parse_drops_invalid_response_returns_empty() -> None:
-    """A response with a bad enum value fails top-level Pydantic; whole batch dropped."""
+def test_parse_invalid_shape_raises() -> None:
+    """A response with a bad enum value fails top-level Pydantic → raises."""
     response = """{
       "commitments": [
         {
@@ -280,8 +347,8 @@ def test_parse_drops_invalid_response_returns_empty() -> None:
         }
       ]
     }"""
-    manifest = parse_llm_response(response, context=_CTX)
-    assert manifest.commitments == []
+    with pytest.raises(CommitmentParseError, match="schema validation"):
+        parse_llm_response(response, context=_CTX)
 
 
 def test_parse_empty_commitments_array() -> None:
@@ -332,6 +399,48 @@ def test_extract_raises_for_unknown_transcript(conn: sqlite3.Connection) -> None
         extract_for_transcript(conn, 9999, llm_call=lambda p: '{"commitments": []}')
 
 
+def test_extract_skips_llm_when_catalog_empty(conn: sqlite3.Connection) -> None:
+    """Empty KPI catalog ⇒ zero commitments WITHOUT spending an LLM call."""
+    transcript_id, _ = _seed_transcript(conn, "ZZZ", "some transcript text", "2025-12-31")
+    calls: list[str] = []
+
+    def stub_llm(prompt: str) -> str:
+        calls.append(prompt)
+        return '{"commitments": []}'
+
+    manifest = extract_for_transcript(conn, transcript_id, llm_call=stub_llm)
+    assert manifest.commitments == []
+    assert calls == []
+
+
+def test_extract_retries_once_with_feedback_then_succeeds(
+    conn: sqlite3.Connection,
+) -> None:
+    _seed_kpi_def(conn, "AMZN", "AWS Revenue Growth", "percent")
+    transcript_id, _ = _seed_transcript(conn, "AMZN", "text", "2025-12-31")
+    prompts: list[str] = []
+
+    def flaky_llm(prompt: str) -> str:
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return "Sure! Here are the commitments you asked for:"
+        return '{"commitments": []}'
+
+    manifest = extract_for_transcript(conn, transcript_id, llm_call=flaky_llm)
+    assert manifest.commitments == []
+    assert len(prompts) == 2
+    assert prompts[1].startswith("IMPORTANT: your previous response was not the valid JSON")
+
+
+def test_extract_raises_after_two_unusable_responses(
+    conn: sqlite3.Connection,
+) -> None:
+    _seed_kpi_def(conn, "AMZN", "AWS Revenue Growth", "percent")
+    transcript_id, _ = _seed_transcript(conn, "AMZN", "text", "2025-12-31")
+    with pytest.raises(CommitmentParseError):
+        extract_for_transcript(conn, transcript_id, llm_call=lambda p: "still not json")
+
+
 # ---------------------------------------------------------------------------
 # fetch_transcript_text_and_segment
 # ---------------------------------------------------------------------------
@@ -363,3 +472,89 @@ def test_fetch_returns_none_when_no_segments(conn: sqlite3.Connection) -> None:
     transcript_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
     conn.commit()
     assert fetch_transcript_text_and_segment(conn, transcript_id) is None
+
+
+# ---------------------------------------------------------------------------
+# execution/extract_commitments_from_transcript.py — LLM governance wiring
+# ---------------------------------------------------------------------------
+
+
+def _load_script() -> Any:
+    import importlib.util
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[1] / "execution" / "extract_commitments_from_transcript.py"
+    )
+    spec = importlib.util.spec_from_file_location("extract_commitments_from_transcript", src)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    import sys
+
+    sys.modules["extract_commitments_from_transcript"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_run_auto_routes_through_governed_call_llm(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The script must pass purpose= and ticker= on every LLM call (the
+    _call_claude bypass made this the repo's largest anonymous cost line)."""
+    mod = _load_script()
+    _seed_kpi_def(conn, "AMZN", "AWS Revenue Growth", "percent")
+    tid, _ = _seed_transcript(conn, "AMZN", "text", "2025-12-31")
+
+    seen: list[dict[str, object]] = []
+
+    def stub_call_llm(prompt: str, **kwargs: object) -> str:
+        seen.append(dict(kwargs))
+        return '{"commitments": []}'
+
+    monkeypatch.setattr(mod, "call_llm", stub_call_llm)
+    report = mod._run_auto(conn, ticker=None, transcript_id=None, max_n=0, dry_run=False)
+
+    assert report["targets"] == 1
+    assert seen and all(k["purpose"] == "saydo_commitment_extract" for k in seen)
+    assert all(k["ticker"] == "AMZN" for k in seen)
+    # zero-commitment scan must be recorded so tomorrow's run skips it
+    row = conn.execute(
+        "SELECT n_extracted FROM commitment_scan_log WHERE transcript_id = ?", (tid,)
+    ).fetchone()
+    assert row is not None and row["n_extracted"] == 0
+
+
+def test_run_auto_dry_run_records_no_scan(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_script()
+    _seed_kpi_def(conn, "AMZN", "AWS Revenue Growth", "percent")
+    _seed_transcript(conn, "AMZN", "text", "2025-12-31")
+
+    def stub_call_llm(prompt: str, **kwargs: object) -> str:
+        return '{"commitments": []}'
+
+    monkeypatch.setattr(mod, "call_llm", stub_call_llm)
+    mod._run_auto(conn, ticker=None, transcript_id=None, max_n=0, dry_run=True)
+    n = conn.execute("SELECT COUNT(*) FROM commitment_scan_log").fetchone()[0]
+    assert n == 0
+
+
+def test_run_auto_parse_failure_records_no_scan(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transcript whose extraction failed must stay pending (retryable),
+    and the failure must be visible in the run report."""
+    mod = _load_script()
+    _seed_kpi_def(conn, "AMZN", "AWS Revenue Growth", "percent")
+    _seed_transcript(conn, "AMZN", "text", "2025-12-31")
+
+    def stub_call_llm(prompt: str, **kwargs: object) -> str:
+        return "never json"
+
+    monkeypatch.setattr(mod, "call_llm", stub_call_llm)
+    report = mod._run_auto(conn, ticker=None, transcript_id=None, max_n=0, dry_run=False)
+    results = report["results"]
+    assert len(results) == 1 and "CommitmentParseError" in str(results[0]["error"])
+    n = conn.execute("SELECT COUNT(*) FROM commitment_scan_log").fetchone()[0]
+    assert n == 0

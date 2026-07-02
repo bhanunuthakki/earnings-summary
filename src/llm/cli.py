@@ -193,6 +193,14 @@ LLM_MODELS: dict[str, str] = {
     "platform_diagram": FAST_CLASSIFIER_MODEL,
     "qa_topics": DEFAULT_MODEL,
     "saydo_filter": DEFAULT_MODEL,
+    # SayDo commitment extraction — full-transcript (25-50K chars) scan for
+    # quantitative forward-looking guidance, constrained to the ticker's KPI
+    # catalog (src/compute/say_do_extractor.py). Ran UNGOVERNED via the private
+    # _call_claude helper until 2026-07 (~$150/mo of purpose=NULL ledger rows —
+    # the repo's largest anonymous cost line). Sonnet is the measured incumbent;
+    # a long-context extraction with a closed output schema is a natural
+    # downgrade-loop candidate once ledger history accumulates under this key.
+    "saydo_commitment_extract": DEFAULT_MODEL,
     # Cross-quarter theme rollup over 4 transcripts, split into prepared /
     # Q&A buckets. Long-context analytical writing → Sonnet matches
     # transcript_summary and pairwise_analysis (the other prompts that

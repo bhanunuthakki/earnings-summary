@@ -3,8 +3,9 @@
 Closes the manifest-handoff loop in compute/say_do.py: instead of a human (or
 in-session LLM) hand-authoring the manifest JSON, this module assembles a
 prompt from the transcript text + the ticker's canonical KPI catalog, calls
-the LLM via llm_client._call_claude, validates the JSON response against
-the existing CommitmentInput schema, and returns a manifest ready for
+the LLM through the governed ``call_llm`` entry point (purpose
+``saydo_commitment_extract``), validates the JSON response against the
+existing CommitmentInput schema, and returns a manifest ready for
 persist_manifest.
 
 Design choices:
@@ -17,6 +18,20 @@ Design choices:
   - injects ticker, period_made, transcript_segment_id from caller context
     (LLM doesn't need to know them).
   - LLM call is injected as a parameter so tests can stub it out.
+  - A transcript that yields ZERO commitments is a normal, common outcome —
+    it is recorded in ``commitment_scan_log`` (0129) so the daily backfill
+    doesn't re-scan the same transcript forever (this exact loop was burning
+    ~$25/day of anonymous Sonnet calls before the marker existed).
+  - Tickers with an EMPTY kpi_definitions catalog are excluded from the
+    pending set entirely: the prompt would instruct the model to return
+    ``{"commitments": []}``, so the call's outcome is predetermined and the
+    LLM spend is pure waste. They become eligible again the moment a KPI
+    catalog is seeded (no scan marker is written for the skip).
+  - An unusable LLM response raises ``CommitmentParseError`` (after one
+    retry-with-feedback) instead of degrading to an empty manifest — an
+    empty manifest is indistinguishable from a legitimate "no commitments
+    in this call" and would poison the scan log (the silent-empty
+    pathology, directives/llm_calls.md).
 """
 
 from __future__ import annotations
@@ -27,7 +42,7 @@ import re
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
 from pydantic import BaseModel, Field, ValidationError
@@ -45,6 +60,24 @@ MAX_TRANSCRIPT_CHARS = 60_000
 
 # Strip ``` fences the LLM sometimes adds despite explicit instructions.
 _FENCE_RX = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
+# Re-ask preamble when the first response is unusable (mirrors
+# llm.structured._RETRY_PREAMBLE; local copy because our llm_call boundary is
+# an injected plain-text callable, not call_llm itself).
+_RETRY_PREAMBLE = (
+    "IMPORTANT: your previous response was not the valid JSON requested. "
+    "Return ONLY the JSON specified in the prompt — no markdown fences, "
+    "no commentary, no prefatory prose.\n\n"
+)
+
+
+class CommitmentParseError(ValueError):
+    """The LLM returned unusable JSON (bad syntax or top-level shape).
+
+    Raised instead of returning an empty manifest: an empty manifest means
+    "the model read the transcript and found no commitments", which is a
+    persistable outcome — a parse failure is not, and must never be recorded
+    as a clean scan."""
 
 
 @dataclass(frozen=True)
@@ -72,7 +105,7 @@ class _LLMCommitment(BaseModel):
 class _LLMResponse(BaseModel):
     """Top-level shape we expect the model to return."""
 
-    commitments: list[_LLMCommitment] = Field(default_factory=list)
+    commitments: list[_LLMCommitment] = Field(default_factory=list[_LLMCommitment])
 
 
 def fetch_kpi_catalog(conn: sqlite3.Connection, ticker: str) -> list[tuple[str, str]]:
@@ -109,19 +142,52 @@ def fetch_transcript_text_and_segment(
     return (row["text"], int(row["segment_id"]), period_end)
 
 
+def scan_log_available(conn: sqlite3.Connection) -> bool:
+    """True when the commitment_scan_log table (migration 0129) exists.
+
+    Selection degrades gracefully on a pre-0129 DB (hand-built test fixtures,
+    a prod DB awaiting migration) — with a WARNING, because without the log
+    every zero-commitment transcript is re-scanned daily at full LLM cost."""
+    cur = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'commitment_scan_log'"
+    )
+    available = cur.fetchone() is not None
+    if not available:
+        log.warning(
+            "commitment_scan_log table missing (migration 0129 not applied) — "
+            "zero-commitment transcripts WILL be re-scanned on every run"
+        )
+    return available
+
+
 def transcripts_pending_extraction(
     conn: sqlite3.Connection, ticker: str | None = None
 ) -> list[tuple[int, str, datetime]]:
-    """Return [(transcript_id, ticker, period_end), ...] for transcripts that have
-    NO management_commitments rows yet. Optional --ticker filter."""
+    """Return [(transcript_id, ticker, period_end), ...] for transcripts worth
+    an extraction LLM call. Optional --ticker filter.
+
+    A transcript is pending iff ALL of:
+      - it has no management_commitments rows yet;
+      - it has no commitment_scan_log row (i.e. never scanned — a recorded
+        zero-commitment scan is a real outcome, not a retry candidate);
+      - its ticker has at least one kpi_definitions row (an empty catalog
+        makes the call's outcome predetermined: the prompt tells the model
+        to return no commitments)."""
     sql = (
         "SELECT t.id, t.ticker, t.period_end FROM transcripts t "
         "WHERE NOT EXISTS ("
         "  SELECT 1 FROM management_commitments mc "
         "  JOIN transcript_segments ts ON ts.id = mc.transcript_segment_id "
         "  WHERE ts.transcript_id = t.id"
+        ") "
+        "AND EXISTS ("
+        "  SELECT 1 FROM kpi_definitions k WHERE UPPER(k.ticker) = UPPER(t.ticker)"
         ")"
     )
+    if scan_log_available(conn):
+        sql += (
+            " AND NOT EXISTS (  SELECT 1 FROM commitment_scan_log l WHERE l.transcript_id = t.id)"
+        )
     params: tuple[str, ...] = ()
     if ticker is not None:
         sql += " AND UPPER(t.ticker) = ?"
@@ -135,6 +201,32 @@ def transcripts_pending_extraction(
             period_end = datetime.fromisoformat(period_end)
         out.append((int(row["id"]), row["ticker"], period_end))
     return out
+
+
+def record_scan(
+    conn: sqlite3.Connection,
+    transcript_id: int,
+    *,
+    n_extracted: int,
+    prompt_version: str | None = None,
+) -> None:
+    """Persist "this transcript was scanned" so zero-commitment transcripts
+    are never re-scanned. No-op (with the scan_log_available warning) on a
+    pre-0129 DB. ``prompt_version`` is recorded so a future prompt bump can
+    invalidate old scans by deleting rows with a stale version."""
+    if not scan_log_available(conn):
+        return
+    scanned_at = datetime.now(UTC).replace(tzinfo=None).isoformat()
+    conn.execute(
+        "INSERT INTO commitment_scan_log (transcript_id, scanned_at, n_extracted, prompt_version) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(transcript_id) DO UPDATE SET "
+        "  scanned_at = excluded.scanned_at, "
+        "  n_extracted = excluded.n_extracted, "
+        "  prompt_version = excluded.prompt_version",
+        (transcript_id, scanned_at, n_extracted, prompt_version),
+    )
+    conn.commit()
 
 
 def build_extraction_prompt(
@@ -207,9 +299,9 @@ def parse_llm_response(
     """Parse the LLM's JSON output into a typed manifest.
 
     - Strips markdown fences if present.
-    - Pydantic-validates the response shape; if the top-level shape fails,
-      the whole batch is dropped (with a warn log) — a malformed response
-      is more likely a model failure than a few-bad-rows scenario.
+    - Raises CommitmentParseError when the text isn't JSON or the top-level
+      shape fails Pydantic — a malformed response is a model failure, not a
+      "no commitments" result, and must stay distinguishable from one.
     - Drops individual commitments whose downstream CommitmentInput
       construction fails (e.g. unparseable target_value).
     """
@@ -217,14 +309,12 @@ def parse_llm_response(
     try:
         payload = json.loads(cleaned)
     except json.JSONDecodeError as e:
-        log.warning("LLM response is not valid JSON: %s", e)
-        return CommitmentExtractionManifest(commitments=[])
+        raise CommitmentParseError(f"LLM response is not valid JSON: {e}") from e
 
     try:
         response = _LLMResponse.model_validate(payload)
     except ValidationError as e:
-        log.warning("LLM response failed schema validation: %s", e)
-        return CommitmentExtractionManifest(commitments=[])
+        raise CommitmentParseError(f"LLM response failed schema validation: {e}") from e
 
     commitments: list[CommitmentInput] = []
     for raw in response.commitments:
@@ -259,9 +349,19 @@ def extract_for_transcript(
 ) -> CommitmentExtractionManifest:
     """Orchestrator: pull transcript, build prompt, call LLM, parse, return manifest.
 
-    `llm_call` is injected so tests can stub the LLM. In production callers
-    pass `llm_client._call_claude` (or any function that takes a prompt string
-    and returns the model's response text)."""
+    `llm_call` is injected so tests can stub the LLM. Production callers pass
+    a governed wrapper around ``call_llm(..., purpose="saydo_commitment_extract",
+    ticker=...)`` — never the raw private CLI helper, which bypasses the
+    purpose ledger, budgets and model routing.
+
+    Behavior notes:
+      - Empty KPI catalog ⇒ returns an empty manifest WITHOUT calling the LLM
+        (the prompt would instruct the model to return nothing). Normal
+        selection excludes these tickers already; this guard covers direct
+        --transcript-id invocations.
+      - Unusable LLM response ⇒ ONE retry with explicit feedback, then
+        CommitmentParseError. Callers must not record a scan for a transcript
+        that raised."""
     cur = conn.execute("SELECT t.ticker FROM transcripts t WHERE t.id = ?", (transcript_id,))
     row = cur.fetchone()
     if row is None:
@@ -273,6 +373,14 @@ def extract_for_transcript(
         raise ValueError(f"transcript_id={transcript_id} has no transcript_segments rows")
     text, segment_id, period_end = transcript_data
     catalog = fetch_kpi_catalog(conn, ticker)
+    if not catalog:
+        log.info(
+            "transcript_id=%d ticker=%s has no KPI catalog — skipping LLM call "
+            "(outcome is predetermined: zero commitments)",
+            transcript_id,
+            ticker,
+        )
+        return CommitmentExtractionManifest(commitments=[])
 
     prompt = build_extraction_prompt(
         ticker=ticker,
@@ -280,12 +388,20 @@ def extract_for_transcript(
         kpi_catalog=catalog,
         period_made=period_end,
     )
-    response_text = llm_call(prompt)
-    return parse_llm_response(
-        response_text,
-        context=TranscriptContext(
-            ticker=ticker,
-            period_made=period_end,
-            transcript_segment_id=segment_id,
-        ),
+    context = TranscriptContext(
+        ticker=ticker,
+        period_made=period_end,
+        transcript_segment_id=segment_id,
     )
+    response_text = llm_call(prompt)
+    try:
+        return parse_llm_response(response_text, context=context)
+    except CommitmentParseError as first_exc:
+        log.warning(
+            "transcript_id=%d ticker=%s: unusable LLM response, retrying with feedback: %s",
+            transcript_id,
+            ticker,
+            first_exc,
+        )
+    retry_text = llm_call(_RETRY_PREAMBLE + prompt)
+    return parse_llm_response(retry_text, context=context)
