@@ -1,8 +1,11 @@
 # Directive: meta-eval governance — the optimizer that steers itself
 
-**Status: APPROVED 2026-07-02 — owner reviewed §9; decisions LOCKED in §10 (which
-overrides any earlier recommendation it conflicts with). Build in progress: PR1
-(read-only workload inventory).**
+**Status: BUILT 2026-07-02 — owner reviewed §9 same day; decisions LOCKED in §10
+(which overrides any earlier recommendation it conflicts with); all six build
+phases merged same day (#749 #750 #751 #752 #753 #754). Residual open items:
+3-family RISKY judging (§10 Q5a, deferred past PR6), the Q6 purpose=None
+deprecation PR (after the SayDo trailing window clears), and wiring nominator
+`prompt_experiment` rows into `run_prompt_ab` automatically.**
 
 Extends — does NOT replace — the existing spine:
 `directives/model_eval_loop.md` (the downgrade loop), `directives/cheapest_model_routing.md`
