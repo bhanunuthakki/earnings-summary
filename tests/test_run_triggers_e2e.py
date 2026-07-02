@@ -633,9 +633,9 @@ def test_no_candidates_exits_cleanly(
 ) -> None:
     """A ticker with only stale transcripts → every default trigger scans to
     []; driver moves on. earnings_tone finds no fresh transcript,
-    kpi_inflection finds no registered KPIs, saydo_due finds no due
-    commitments, and material_news finds no news table, so each records a
-    no-candidate skip (four total for the one ticker)."""
+    kpi_inflection finds no registered KPIs, and material_news finds no news
+    table, so each ENABLED trigger records a no-candidate skip (one per trigger
+    for the one ticker; saydo_due is not in the enabled set)."""
     now = datetime.now(UTC).replace(tzinfo=None)
     conn = sqlite3.connect(str(db_path))
     try:
@@ -669,8 +669,8 @@ def test_no_candidates_exits_cleanly(
 
     summary = json.loads(capsys.readouterr().out)
     assert summary["alerts_fired"] == 0
-    # All default triggers (earnings_tone + kpi_inflection + saydo_due +
-    # material_news + decision_condition) no-candidate on MELI.
+    # Every enabled trigger no-candidates on MELI (count tracks the registry,
+    # so this holds regardless of which sensors are in the enabled set).
     assert summary["no_candidate_skips"] == len(run_triggers.ENABLED_TRIGGERS)
     assert summary["tickers_processed"] == 1
 
