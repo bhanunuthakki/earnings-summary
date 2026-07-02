@@ -627,6 +627,33 @@ def create_app(
             return ({"error": str(exc)}, 400)
         return ({"ok": ok}, 200 if ok else 404)
 
+    @app.route("/api/onmymind/<int:note_id>/<verb>", methods=["POST", "OPTIONS"])
+    def onmymind_act(note_id: int, verb: str):
+        """The On My Mind action ladder: dismiss / save / discuss / incorporate on
+        one captured item. Delegates to the ONE action core the Telegram callback
+        also calls. Safe by construction — it archives / patches context / stages an
+        inert research task; it never fetches the web or writes a live artifact.
+        CSRF-guarded by the global Origin check."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from onmymind.feed import LADDER_LABELS, LADDER_VERBS, act_on_feed_item
+
+        if verb not in LADDER_VERBS:
+            return ({"error": f"unknown verb {verb!r}"}, 400)
+        result = act_on_feed_item(note_id, verb, db_path=db_path)
+        return (
+            {
+                "ok": result.ok,
+                "removed": result.removed,
+                "ladder": result.ladder,
+                "ladder_label": LADDER_LABELS.get(result.ladder or "", ""),
+                "task_id": result.task_id,
+                "thread_url": result.thread_url,
+                "message": result.message,
+            },
+            200 if result.ok else 404,
+        )
+
     # ----- DASHBOARD (unified tabbed command-center shell) -----
 
     @app.route("/", methods=["GET"])
@@ -909,6 +936,7 @@ def create_app(
                 render_ledger_list,
                 render_ledger_panel,
                 render_ledger_research_list,
+                render_onmymind_list,
                 render_reconcile_list,
             )
 
@@ -920,6 +948,15 @@ def create_app(
             if fragment == "reconcile":
                 # Seed-corpus freshness pass — re-fetched after each verdict.
                 return Response(render_reconcile_list(db_path), mimetype="text/html")
+            if fragment == "onmymind":
+                # On My Mind keyset page — the next page of feed cards + a fresh
+                # 'Load more', which replaces the current one in place.
+                return Response(
+                    render_onmymind_list(
+                        db_path, cursor=request.args.get("cursor"), user_id=user_id
+                    ),
+                    mimetype="text/html",
+                )
             l_renderer = render_ledger_list if fragment == "list" else render_ledger_panel
             return Response(l_renderer(db_path, user_id=user_id), mimetype="text/html")
 

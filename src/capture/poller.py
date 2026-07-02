@@ -56,10 +56,28 @@ def save_offset(path: Path | str, offset: int) -> None:
     out.write_text(json.dumps({"offset": offset}), encoding="utf-8")
 
 
+def _ladder_markup(result: ingest.IngestResult) -> dict[str, object] | None:
+    """The On My Mind action-ladder keyboard for a landed capture — only when the
+    feed flag is on (default off ⇒ None ⇒ the plain confirm, behavior unchanged).
+    Lets the owner triage a thought/reading from the thread the moment it lands."""
+    from onmymind.feed import onmymind_enabled
+
+    if not (onmymind_enabled() and result.status == "landed" and result.note_id is not None):
+        return None
+    return research_notify.onmymind_keyboard(result.note_id)
+
+
 def _confirm(
-    token: str, update: telegram.Update, status: str, ticker: str | None, *, enabled: bool
+    token: str,
+    update: telegram.Update,
+    status: str,
+    ticker: str | None,
+    *,
+    enabled: bool,
+    reply_markup: dict[str, object] | None = None,
 ) -> None:
-    """Best-effort capture confirmation back into the thread."""
+    """Best-effort capture confirmation back into the thread. ``reply_markup``
+    carries the On My Mind ladder buttons when the feed flag is on."""
     if not enabled or update.chat_id is None:
         return
     text = _CONFIRM.get(status)
@@ -69,7 +87,7 @@ def _confirm(
         return
     # a failed confirmation never blocks capture
     with contextlib.suppress(telegram.TelegramError):
-        telegram.send_message(token, update.chat_id, text)
+        telegram.send_message(token, update.chat_id, text, reply_markup=reply_markup)
 
 
 def _tap(result: ingest.IngestResult, db_path: Path | str | None) -> int | None:
@@ -204,6 +222,7 @@ def poll_once(
                     "reading_landed" if rd.status == "landed" else rd.status,
                     None,
                     enabled=confirm,
+                    reply_markup=_ladder_markup(rd),
                 )
                 bump(f"reading_{rd.status}")
             else:
@@ -216,7 +235,14 @@ def poll_once(
                     db_path=db_path,
                 )
                 bump(result.status)
-                _confirm(token, update, result.status, result.ticker, enabled=confirm)
+                _confirm(
+                    token,
+                    update,
+                    result.status,
+                    result.ticker,
+                    enabled=confirm,
+                    reply_markup=_ladder_markup(result),
+                )
                 tid = _tap(result, db_path)
                 if tid is not None:
                     bump("wondering")
@@ -242,7 +268,14 @@ def poll_once(
             bump(result.status)
             if result.status == "landed":
                 dest.unlink(missing_ok=True)  # raw audio is transient — purge once landed
-            _confirm(token, update, result.status, result.ticker, enabled=confirm)
+            _confirm(
+                token,
+                update,
+                result.status,
+                result.ticker,
+                enabled=confirm,
+                reply_markup=_ladder_markup(result),
+            )
             tid = _tap(result, db_path)
             if tid is not None:
                 bump("wondering")
@@ -277,6 +310,7 @@ def poll_once(
                 "reading_landed" if rd.status == "landed" else rd.status,
                 None,
                 enabled=confirm,
+                reply_markup=_ladder_markup(rd),
             )
             bump(f"reading_{rd.status}")
         elif update.kind == "callback":
