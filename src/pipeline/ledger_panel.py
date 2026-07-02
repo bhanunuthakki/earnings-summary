@@ -22,6 +22,7 @@ from onmymind.feed import (
     load_feed,
     onmymind_enabled,
 )
+from pipeline.worldview_panel import render_worldview_section
 from research.proposals import (
     ResearchProposal,
     ResearchTask,
@@ -642,6 +643,7 @@ def render_ledger_panel(db_path: Path | str | None, *, user_id: str = DEFAULT_US
         "and you read it back below.</p>"
         + _capture_box()
         + onmymind
+        + render_worldview_section(db_path)
         + _stance_section(db_path)
         + _research_section(db_path)
         + _reconcile_section(db_path)

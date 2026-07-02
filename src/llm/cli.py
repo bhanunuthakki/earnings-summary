@@ -109,6 +109,12 @@ LLM_MODELS: dict[str, str] = {
     # insight is recorded (no hallucinated "you said X").
     "theme_synthesis": DEFAULT_MODEL,
     "theme_seed_cluster": DEFAULT_MODEL,
+    # The Worldview distiller (P2). Distils owner-flagged (incorporated/saved)
+    # musings into candidate Tenets — beliefs about HOW the owner invests — each
+    # cited to the musings it rests on (deterministically validated before any
+    # Tenet is proposed). Analytical synthesis-with-citations, batch/optional +
+    # owner-tapped (never automatic), budget-capped skip-mode (0132) → Sonnet.
+    "tenet_distill": DEFAULT_MODEL,
     # The Ledger Phase-1 wondering classifier (the research-loop gate). A short
     # closed binary+extraction behind a deterministic regex pre-gate → the cheap
     # FAST tier; the golden set (evals/golden/wondering_detect.json) is its bar.

@@ -654,6 +654,67 @@ def create_app(
             200 if result.ok else 404,
         )
 
+    @app.route("/api/tenets", methods=["POST", "OPTIONS"])
+    def tenets_create():
+        """Add an owner-stated Tenet — a durable belief about how the owner invests
+        (Worldview P2). Lands ``current`` immediately (the owner's own belief needs
+        no approval); reusing a scope_key revises the standing Tenet via the
+        supersede chain. CSRF-guarded by the global Origin check."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from synthesis.tenets import record_tenet
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        body_md = str(payload.get("body_md") or "").strip()
+        if not body_md:
+            return ({"error": "body_md required"}, 400)
+        scope_key = str(payload.get("scope_key") or "").strip() or None
+        tenet = record_tenet(
+            body_md=body_md,
+            scope_key=scope_key,
+            status="current",
+            provenance="owner",
+            db_path=db_path,
+        )
+        return {"ok": True, "id": tenet.id, "scope_key": tenet.scope_key}
+
+    @app.route("/api/tenets/<int:tenet_id>/<action>", methods=["POST", "OPTIONS"])
+    def tenets_act(tenet_id: int, action: str):
+        """Approve or reject a machine-distilled ``proposed`` Tenet. Approve promotes
+        it to ``current`` (superseding the prior belief on that topic); reject retires
+        it. CSRF-guarded."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from synthesis.tenets import approve_tenet, reject_tenet
+
+        if action == "approve":
+            row = approve_tenet(tenet_id, db_path=db_path)
+            return (
+                {"ok": row is not None, "status": row.status if row else None},
+                200 if row else 404,
+            )
+        if action == "reject":
+            ok = reject_tenet(tenet_id, db_path=db_path)
+            return ({"ok": ok}, 200 if ok else 404)
+        return ({"error": f"unknown action {action!r}"}, 400)
+
+    @app.route("/api/tenets/distill", methods=["POST", "OPTIONS"])
+    def tenets_distill():
+        """Owner-tapped Worldview distillation: distil the owner's flagged
+        (saved/incorporated) musings into ``proposed`` Tenets. Never automatic; the
+        deterministic $0 triage means nothing-flagged ⇒ zero LLM. CSRF-guarded."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from synthesis.tenet_distill import run_tenet_distill
+
+        try:
+            counts = run_tenet_distill(
+                db_path, user_id=request.args.get("user_id", DEFAULT_USER_ID)
+            )
+        except Exception as exc:  # a distill failure must not 500 the tap
+            return ({"error": f"distill failed: {exc}"}, 500)
+        return {"ok": True, **counts}
+
     # ----- DASHBOARD (unified tabbed command-center shell) -----
 
     @app.route("/", methods=["GET"])
@@ -957,6 +1018,12 @@ def create_app(
                     ),
                     mimetype="text/html",
                 )
+            if fragment == "worldview":
+                # The Worldview review body — re-fetched after add / approve /
+                # reject / distill.
+                from pipeline.worldview_panel import render_worldview_body
+
+                return Response(render_worldview_body(db_path), mimetype="text/html")
             l_renderer = render_ledger_list if fragment == "list" else render_ledger_panel
             return Response(l_renderer(db_path, user_id=user_id), mimetype="text/html")
 
