@@ -253,9 +253,11 @@ def _evaluate_candidate(
 
     tally: dict[str, list[int]] = {jb: [0, 0, 0] for jb in judges}
     judged: list[tuple[str, object]] = []
+    error_audit: list[dict[str, object]] = []
     cand_chars_total = 0
     inc_chars_total = 0
     n_ok = 0  # cases where the candidate succeeded (used for char mean denominator)
+    n_errors = 0  # operational failures — decide_switch separates these from quality
 
     for case in cases:
         cand = run_model(
@@ -268,6 +270,10 @@ def _evaluate_candidate(
         )
         if not cand.ok:
             log.info("    case %s: candidate FAILED -> incumbent win (%s)", case.label, cand.error)
+            n_errors += 1
+            error_audit.append(
+                {"label": case.label, "candidate_error": cand.error, "winner_model": incumbent}
+            )
             for jb in judges:
                 tally[jb][1] += 1
             continue
@@ -291,7 +297,7 @@ def _evaluate_candidate(
             else:
                 tally[jb][2] += 1
 
-    case_audit: list[dict[str, object]] = []
+    case_audit: list[dict[str, object]] = list(error_audit)
     for jb, jp in judged:
         if not isinstance(jp, JudgedPair):
             continue
@@ -322,6 +328,8 @@ def _evaluate_candidate(
         parity_threshold=parity_threshold,
         candidate_output_chars_mean=cand_chars_mean,
         incumbent_output_chars_mean=inc_chars_mean,
+        n_cases_attempted=len(cases),
+        n_candidate_errors=n_errors,
     )
     return verdict, case_audit
 
