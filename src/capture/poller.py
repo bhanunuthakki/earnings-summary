@@ -162,6 +162,12 @@ def poll_once(
 
     for update in updates:
         bump(f"kind_{update.kind}")
+        if update.chat_id is not None:
+            # Persist the owner's chat id so the coach can INITIATE (governed
+            # pings) without waiting for an inbound message. Best-effort.
+            from capture.token_store import save_chat_id
+
+            save_chat_id(update.chat_id)
         if update.kind == "text" and update.text:
             if update.text.lstrip().startswith("/"):
                 # Telegram bot commands (/start, /help, ...) are chrome, not

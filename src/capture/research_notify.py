@@ -162,6 +162,23 @@ def dispatch_callback(
             answer(token, cqid, text=f"{verb.capitalize()}: {status}.{suffix}")
         return status
 
+    if kind == "cp" and verb == "dismiss":
+        # A coach-ping dismissal — the governor's training signal. Three
+        # consecutive dismissals of a class auto-mute it (never argues).
+        from research.governor import record_dismissal
+
+        recorded, muted = record_dismissal(obj_id, db_path=db_path)
+        if cqid:
+            if muted:
+                answer(
+                    token,
+                    cqid,
+                    text=f"Dismissed — and {muted.replace('_', ' ')} pings are now muted.",
+                )
+            else:
+                answer(token, cqid, text="Dismissed." if recorded else "Already handled.")
+        return "cp_dismissed" if recorded else "cp_stale"
+
     if cqid:
         answer(token, cqid, text="Unrecognized action.")
     return None

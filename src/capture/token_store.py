@@ -86,3 +86,41 @@ def load_token(path: Path | str | None = None) -> str:
     if not token:
         raise CaptureSetupError(f"Telegram bot token file is empty/unreadable: {resolved}")
     return token
+
+
+def default_chat_id_path() -> Path:
+    """``data/capture/telegram_chat_id.json`` beside the resolved DB — the
+    owner's chat id, persisted by the poller from landed captures so the coach
+    can INITIATE (governed pings) without waiting for an inbound message."""
+    try:
+        db = resolve_db_path(None)
+    except Exception:
+        db = None
+    base = db.parent if db is not None else Path(__file__).resolve().parents[2] / "data"
+    return base / "capture" / "telegram_chat_id.json"
+
+
+def save_chat_id(chat_id: int, path: Path | str | None = None) -> None:
+    """Best-effort persist (the poller calls this on every landed capture)."""
+    import json
+
+    target = Path(path) if path else default_chat_id_path()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({"chat_id": int(chat_id)}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def load_chat_id(path: Path | str | None = None) -> int | None:
+    import json
+
+    target = Path(path) if path else default_chat_id_path()
+    try:
+        raw = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    value = cast("dict[str, object]", raw).get("chat_id")
+    return int(value) if isinstance(value, int) else None
