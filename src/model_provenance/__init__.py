@@ -19,6 +19,7 @@ versions* superseding each other over time.
 
 from __future__ import annotations
 
+from model_provenance.basis import Basis, dcf_basis
 from model_provenance.freshness import (
     BASIS_STATUSES,
     MATERIAL_DRIFT_PCT,
@@ -34,7 +35,9 @@ __all__ = [
     "BASIS_KINDS",
     "BASIS_STATUSES",
     "MATERIAL_DRIFT_PCT",
+    "Basis",
     "DecisionFreshness",
+    "dcf_basis",
     "decision_freshness",
     "mark_superseded_by",
     "stale_material_decisions",
