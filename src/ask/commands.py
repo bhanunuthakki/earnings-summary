@@ -10,6 +10,7 @@ endpoint behavior.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from dispatch_registry import Registry, RegistryConflict
 
 _HELP_TEXT = (
     "Commands handled instantly (no LLM):\n"
+    "- /review <TICKER> [at $PRICE] — grounded should-I-trim read: weight, break-rules, "
+    "valuation ladder, sizing\n"
     "- /discovery list — top live new-name candidates with why-surfaced\n"
     "- /discovery queue <TICKER> | /discovery dismiss <TICKER> [why...]\n"
     "- /discovery build <TICKER> — start the eval build (~25 min + LLM spend)\n"
@@ -26,7 +29,10 @@ _HELP_TEXT = (
     "live data views automatically."
 )
 
-COMMAND_PREFIXES: tuple[str, ...] = ("/discovery", "/help")
+COMMAND_PREFIXES: tuple[str, ...] = ("/discovery", "/help", "/review")
+
+# "at $70" / "above 70" / "over $12.50" -> the price level to review at.
+_AT_PRICE_RX = re.compile(r"(?:at|above|over)\s*\$?\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 
 
 def run_chat_command(repo_root: Path, message: str, registry: Registry) -> str | None:
@@ -37,9 +43,39 @@ def run_chat_command(repo_root: Path, message: str, registry: Registry) -> str |
     low = text.lower()
     if low.startswith("/help"):
         return _HELP_TEXT
+    if low.startswith("/review"):
+        return _review_command(repo_root, text)
     if low.startswith("/discovery"):
         return _discovery_command(repo_root, text, registry)
     return None
+
+
+def _parse_at_price(text: str) -> float | None:
+    match = _AT_PRICE_RX.search(text)
+    return float(match.group(1)) if match else None
+
+
+def _review_command(repo_root: Path, text: str) -> str:
+    """``/review <TICKER> [at $PRICE]`` — the instant, no-LLM position read.
+
+    Returns the deterministic pre-analysis (weight, break-rule status, DCF ladder
+    verdict, sizing) plus a mechanical trim/hold read. The full LLM-calibrated
+    verdict (with the behavioral guard) is a separate, slower path — pointed to in
+    the reply — so this command stays instant and budget-free.
+    """
+    from advisor.position_review import build_pre_analysis, render_pre_analysis_chat
+
+    parts = text.split()
+    if len(parts) < 2:
+        return "Usage: /review <TICKER> [at $PRICE] — e.g. `/review RBRK` or `/review FLKR at $70`."
+    ticker = parts[1].upper().lstrip("$")
+    at_price = _parse_at_price(text)
+    db_path = repo_root / "data" / "portfolio.db"
+    try:
+        pre = build_pre_analysis(repo_root, ticker, at_price=at_price, db_path=db_path)
+    except Exception as exc:
+        return f"Couldn't build a review for {ticker}: {type(exc).__name__}: {exc}"
+    return render_pre_analysis_chat(pre)
 
 
 def _discovery_command(repo_root: Path, text: str, registry: Registry) -> str:
