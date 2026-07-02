@@ -55,7 +55,7 @@ def _musing(db_path: Path, text: str) -> int:
 
 
 def _yes(_text: str) -> dict[str, object]:
-    return {"is_wondering": True, "claim": "do NU margins hold?", "ticker": "NU"}
+    return {"intent": "wondering", "claim": "do NU margins hold?", "ticker": "NU"}
 
 
 def _ids(page_items: list[FeedItem]) -> list[int]:

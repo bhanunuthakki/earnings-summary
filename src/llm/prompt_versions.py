@@ -184,6 +184,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # The Ledger Phase-1 wondering classifier (research-loop gate). Bump when the
     # detect prompt is materially rewritten, then re-run the golden set.
     "wondering_detect": "v1",
+    # The Ledger intent tap (research.intent._build_prompt). Supersedes
+    # wondering_detect on the live tap. Bump when the intent prompt is materially
+    # rewritten, then re-run `run_llm_evals.py --purpose capture_intent`.
+    "capture_intent": "v1",
     # The Ledger Phase-1 research loop (two-pass): fetch / adversarial assess / narrate.
     "research_fetch": "v1",
     "research_adversarial_assess": "v1",

@@ -119,6 +119,11 @@ LLM_MODELS: dict[str, str] = {
     # closed binary+extraction behind a deterministic regex pre-gate → the cheap
     # FAST tier; the golden set (evals/golden/wondering_detect.json) is its bar.
     "wondering_detect": FAST_CLASSIFIER_MODEL,
+    # The Ledger intent tap (research.intent). A closed enum classification —
+    # observation/wondering/brief_artifact/stress_artifact — over one short musing,
+    # run on EVERY owner musing (no lexical pre-gate) → the cheap FAST tier; the
+    # golden set (evals/golden/capture_intent.json) is its bar.
+    "capture_intent": FAST_CLASSIFIER_MODEL,
     # The Ledger Phase-1 research loop (the two-pass trifecta firebreak): fetch
     # (web on, no writer) / adversarial assess / narrate (no web). Sonnet-tier
     # reasoning + web orchestration; monthly budgets seeded warn/warn/skip (0124),

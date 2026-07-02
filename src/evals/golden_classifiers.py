@@ -57,6 +57,7 @@ CLASSIFIER_PURPOSES: tuple[str, ...] = (
     "news_structuring",
     "decision_conditions_extract",
     "wondering_detect",
+    "capture_intent",
 )
 
 _METADATA_RX = re.compile(r"^(?:[A-Z][A-Z0-9.]*_Q[1-4]_\d{4}|UNKNOWN)$")
@@ -253,6 +254,37 @@ def load_wondering_detect_golden(path: Path) -> list[ClassifierCase]:
         exp = cast("dict[str, object]", expected)
         if not isinstance(exp.get("is_wondering"), bool):
             errors.append(f"{label} ({case_id}): expected.is_wondering must be a bool")
+        cases.append(ClassifierCase(case_id, {"text": text}, exp))
+    if errors:
+        raise ValueError(f"golden file invalid at {path}: " + "; ".join(errors))
+    return cases
+
+
+def load_capture_intent_golden(path: Path) -> list[ClassifierCase]:
+    """Cases for research.intent.classify_intent_for_eval: a musing ``text``;
+    ``expected`` is ``{intent: <one of INTENTS>, ticker: str|None}`` (the fields the
+    intent gate routes on). A wrong intent routes the musing to the wrong action —
+    the whole failure mode — so it is what's pinned."""
+    from research.intent import INTENTS
+
+    errors: list[str] = []
+    seen: set[str] = set()
+    cases: list[ClassifierCase] = []
+    for i, c in enumerate(_load_doc(path, "capture_intent")):
+        label = f"cases[{i}]"
+        case_id = _require_str(c, "id", label, errors)
+        if case_id in seen:
+            errors.append(f"{label}: duplicate id {case_id!r}")
+        seen.add(case_id)
+        text = _require_str(c, "text", label, errors)
+        expected = c.get("expected")
+        if not isinstance(expected, dict):
+            errors.append(f"{label} ({case_id}): `expected` must be an object")
+            expected = {}
+        exp = cast("dict[str, object]", expected)
+        intent = exp.get("intent")
+        if not isinstance(intent, str) or intent not in INTENTS:
+            errors.append(f"{label} ({case_id}): expected.intent must be one of {list(INTENTS)}")
         cases.append(ClassifierCase(case_id, {"text": text}, exp))
     if errors:
         raise ValueError(f"golden file invalid at {path}: " + "; ".join(errors))
@@ -572,6 +604,49 @@ def grade_wondering_detect_case(
     )
 
 
+def grade_capture_intent_case(
+    case: ClassifierCase, *, fn: Callable[..., dict[str, object]]
+) -> CaseResult:
+    """The intent gate: the returned ``intent`` enum must match (a wrong intent
+    routes the musing to the wrong action — observation/wondering/brief/stress each
+    fire a different downstream). When the golden pins a ticker, a ticker mismatch
+    drops a full pass to partial credit 0.5 (right intent, wrong name)."""
+    expected = cast("dict[str, object]", case.expected)
+    exp_intent = str(expected.get("intent") or "")
+    t0 = time.monotonic()
+    try:
+        actual = fn(cast("str", case.inputs["text"]))
+    except Exception as exc:
+        _abort_on_hard_stop(exc, "capture_intent", case.case_id)
+        raise
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    act = actual  # fn is typed dict[str, object]; classify_intent_for_eval returns one
+    act_intent = str(act.get("intent") or "")
+    intent_ok = act_intent == exp_intent
+    exp_ticker = expected.get("ticker")
+    ticker_ok = True
+    if intent_ok and isinstance(exp_ticker, str) and exp_ticker.strip():
+        act_ticker = act.get("ticker")
+        ticker_ok = (
+            isinstance(act_ticker, str) and act_ticker.strip().upper() == exp_ticker.strip().upper()
+        )
+    passed = intent_ok and ticker_ok
+    score = 1.0 if passed else (0.5 if intent_ok else 0.0)
+    return CaseResult(
+        case_id=case.case_id,
+        question=f"capture_intent/{case.case_id}",
+        passed=passed,
+        score=score,
+        expected_json=dumps_compact({"intent": exp_intent, "ticker": exp_ticker}),
+        actual_json=dumps_compact(act),
+        failure_stage=None if passed else ("ticker" if intent_ok else "intent"),
+        judge_rationale=None
+        if passed
+        else f"expected intent={exp_intent!r} ticker={exp_ticker!r}, got {act_intent!r}",
+        latency_ms=latency_ms,
+    )
+
+
 # ---------------------------------------------------------------------------
 # run orchestration
 # ---------------------------------------------------------------------------
@@ -595,6 +670,10 @@ def _production_fn(purpose: str) -> Callable[..., object]:
         import research.detect as detect
 
         return cast("Callable[..., object]", detect.detect_for_eval)
+    if purpose == "capture_intent":
+        import research.intent as intent
+
+        return cast("Callable[..., object]", intent.classify_intent_for_eval)
     return llm_client.structure_recent_news_json
 
 
@@ -625,6 +704,9 @@ def run_classifier_eval(
     elif purpose == "wondering_detect":
         cases = load_wondering_detect_golden(golden_path)
         grade = grade_wondering_detect_case
+    elif purpose == "capture_intent":
+        cases = load_capture_intent_golden(golden_path)
+        grade = grade_capture_intent_case
     else:
         raise ValueError(
             f"no classifier eval for purpose {purpose!r} — known: {list(CLASSIFIER_PURPOSES)}"

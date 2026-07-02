@@ -7,9 +7,12 @@ both the inbox HTMX route and the Telegram callback dispatch call (no logic
 duplication).
 
 The detection tap (``detect_and_create_task``) is fire-and-forget: it classifies
-a freshly-landed musing and, on a wondering, writes a ``proposed`` task (the inert
-chip). It NEVER auto-runs the research pass, and a detection failure NEVER affects
-capture (it swallows errors and returns None).
+a freshly-landed musing by INTENT (``research.intent.classify_intent``) and routes
+— a ``wondering`` writes a ``proposed`` task (the inert chip); a
+``brief_artifact``/``stress_artifact`` records an engage-intent on the note for the
+artifact pipeline; an ``observation`` is inert. It NEVER auto-runs the research
+pass, and a detection failure NEVER affects capture (it swallows errors, returns
+None).
 """
 
 from __future__ import annotations
@@ -19,9 +22,9 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from research.detect import DetectCall, detect_wondering
+from research.intent import IntentCall, classify_intent
 from user_state._db import now_iso, open_conn
-from user_state.notes import get_note
+from user_state.notes import get_note, patch_note_context
 
 TASK_STATUSES: tuple[str, ...] = (
     "proposed",
@@ -390,10 +393,10 @@ def _audit_tap(
         write_audit(
             channel=channel,
             action="tapped",
-            utterance_summary=f"wondering tap: {detail}",
+            utterance_summary=f"capture tap: {detail}",
             note_id=note_id,
             detail=detail,
-            purpose="wondering_detect" if llm_ran else None,
+            purpose="capture_intent" if llm_ran else None,
             db_path=db_path,
         )
     except Exception:  # observability must never affect capture
@@ -404,23 +407,25 @@ def detect_and_create_task(
     note_id: int,
     *,
     db_path: Path | str | None = None,
-    call: DetectCall | None = None,
+    call: IntentCall | None = None,
     channel: str = "capture",
 ) -> int | None:
-    """The fire-and-forget tap: classify a freshly-landed musing; on a wondering,
-    create a ``proposed`` task (the inert chip). Returns the task id or None.
+    """The fire-and-forget tap: classify a freshly-landed musing by INTENT and route.
+    A ``wondering`` creates a ``proposed`` task (the inert chip) and returns its id;
+    a ``brief_artifact``/``stress_artifact`` records an engage-intent on the note (the
+    artifact pipeline picks it up) and returns None; an ``observation`` is inert.
     NEVER raises — a detection failure must not affect capture.
 
     Every invocation on a real musing leaves one ``tapped`` audit row whose
-    ``detail`` names the outcome (task:<id> | trust_zone | regex | llm_no |
-    error:<Type>) — the tap's liveness signal."""
+    ``detail`` names the outcome (task:<id> | engage:<mode> | observation |
+    trust_zone | error:<Type>) — the tap's liveness signal."""
     note = get_note(note_id, db_path=db_path)
     if note is None or note.kind != "musing":
         return None
     try:
         # Captured musings are owner-authored — provenance 'derived'; the
         # 'contains_fetched' inert marker is only ever on research proposals.
-        verdict = detect_wondering(note.body, kind=note.kind, provenance="derived", call=call)
+        verdict = classify_intent(note.body, kind=note.kind, provenance="derived", call=call)
     except Exception as exc:
         _audit_tap(
             note_id=note_id,
@@ -430,23 +435,63 @@ def detect_and_create_task(
             db_path=db_path,
         )
         return None
-    llm_ran = verdict.gate in ("llm_no", "llm_yes")
-    if not verdict.is_wondering:
+
+    llm_ran = verdict.gate == "llm"
+
+    if verdict.is_wondering:
+        claim = verdict.claim.strip() or note.body[:200]
+        task_id = create_task(note_id=note_id, claim=claim, ticker=verdict.ticker, db_path=db_path)
         _audit_tap(
             note_id=note_id,
             channel=channel,
-            detail=verdict.gate or "llm_no",
+            detail=f"task:{task_id}",
+            llm_ran=llm_ran,
+            db_path=db_path,
+        )
+        return task_id
+
+    if verdict.is_artifact:
+        mode = "stress" if verdict.intent == "stress_artifact" else "brief"
+        _record_engage_intent(note_id, verdict, mode, db_path=db_path)
+        _audit_tap(
+            note_id=note_id,
+            channel=channel,
+            detail=f"engage:{mode}",
             llm_ran=llm_ran,
             db_path=db_path,
         )
         return None
-    claim = verdict.claim.strip() or note.body[:200]
-    task_id = create_task(note_id=note_id, claim=claim, ticker=verdict.ticker, db_path=db_path)
+
+    # observation — inert. 'trust_zone' distinguishes a pre-gate-filtered non-musing
+    # (no LLM) from a model-classified flat observation, for the tap-health line.
     _audit_tap(
         note_id=note_id,
         channel=channel,
-        detail=f"task:{task_id}",
+        detail="trust_zone" if verdict.gate == "trust_zone" else "observation",
         llm_ran=llm_ran,
         db_path=db_path,
     )
-    return task_id
+    return None
+
+
+def _record_engage_intent(
+    note_id: int, verdict: object, mode: str, *, db_path: Path | str | None
+) -> None:
+    """Stamp the artifact-engage intent onto the note's context so the artifact
+    pipeline (Phase 2/3) can bind and brief it. Best-effort — never blocks the tap."""
+    from research.intent import IntentVerdict
+
+    if not isinstance(verdict, IntentVerdict):
+        return
+    patch_note_context(
+        note_id,
+        {
+            "engage_intent": {
+                "intent": verdict.intent,
+                "mode": mode,
+                "claim": verdict.claim,
+                "ticker": verdict.ticker,
+            }
+        },
+        db_path=db_path,
+    )

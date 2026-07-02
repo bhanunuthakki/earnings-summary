@@ -141,13 +141,14 @@ def audit_cost_in_window(
 
 
 def recent_tap_counts(*, days: int = 7, db_path: Path | str | None = None) -> dict[str, int]:
-    """Outcome counts for the wondering-detection tap over the last ``days``.
+    """Outcome counts for the intent tap over the last ``days``.
 
     Keys are the ``detail`` outcome families written by
-    ``research.proposals.detect_and_create_task``: ``chip`` (a task was
-    created), ``regex`` / ``trust_zone`` (pre-gate filtered, zero tokens),
-    ``llm_no`` (classifier said not a wondering), ``error``. This is the tap's
-    liveness signal — without it a dormant tap and a broken tap look identical.
+    ``research.proposals.detect_and_create_task``: ``chip`` (a wondering became a
+    research task), ``engage`` (an artifact brief/stress intent, routed to the
+    artifact pipeline), ``trust_zone`` (pre-gate filtered, zero tokens),
+    ``observation`` (the classifier said flat observation), ``error``. This is the
+    tap's liveness signal — without it a dormant tap and a broken tap look identical.
     """
     from datetime import timedelta
 
@@ -166,11 +167,13 @@ def recent_tap_counts(*, days: int = 7, db_path: Path | str | None = None) -> di
         ).fetchall()
     finally:
         conn.close()
-    counts = {"chip": 0, "regex": 0, "trust_zone": 0, "llm_no": 0, "error": 0}
+    counts = {"chip": 0, "engage": 0, "trust_zone": 0, "observation": 0, "error": 0}
     for detail, n in rows:
         key = str(detail or "")
         if key.startswith("task:"):
             counts["chip"] += int(n)
+        elif key.startswith("engage:"):
+            counts["engage"] += int(n)
         elif key.startswith("error:"):
             counts["error"] += int(n)
         elif key in counts:
