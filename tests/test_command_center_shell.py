@@ -206,6 +206,7 @@ def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
         "evals",
         "validation",
         "restatements",
+        "model_eval",
     }
     # The collapsed diagnostics ids alias to the one console.
     for collapsed in (

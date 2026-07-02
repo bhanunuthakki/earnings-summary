@@ -221,6 +221,11 @@ _LEGACY_PANEL_REDIRECTS: dict[str, str] = {
     "evals": "provenance",
     "validation": "provenance",
     "restatements": "provenance",
+    # model_eval_loop.md PR4 — the Optimizer panel is born inside the console
+    # (composed by provenance_panel), so its shareable #model_eval anchor lands
+    # on the console like the other diagnostics ids rather than falling back to
+    # Overview through the shell's unknown-hash router.
+    "model_eval": "provenance",
 }
 
 
@@ -1250,7 +1255,9 @@ SHELL_JS = r"""
     dcf_coverage: 'provenance',
     evals: 'provenance',
     validation: 'provenance',
-    restatements: 'provenance'
+    restatements: 'provenance',
+    // model_eval_loop.md PR4 — Optimizer panel's shareable anchor.
+    model_eval: 'provenance'
   };
   // Legacy panels that became settings-drawer sections (P3.4): their old
   // deep-links also auto-open the drawer after landing on Governance.
