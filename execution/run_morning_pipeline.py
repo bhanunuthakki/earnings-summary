@@ -124,6 +124,11 @@ _REPRICE_TIMEOUT_S = 300
 # covariance-grade read each plus a loopback HTTP group — 3 min is generous and
 # covers a tracker that is slow to answer.
 _CANDIDATE_FIT_TIMEOUT_S = 180
+# Stage 0g (factor proxies) refreshes the 5 ETF style-proxy close series from
+# yfinance into data/factor_proxies/ so the Risk panel's value/size/momentum
+# loadings read a fresh local store (never the network). 5 small downloads;
+# 5 min covers a throttled morning. A failure keeps the last-good files.
+_FACTOR_PROXIES_TIMEOUT_S = 300
 # Stage 1b (proactive standup, L9) composes a grounded brief through the Ask
 # engine + an eval-judge pass per surviving trip. Rate limits cap it at a few
 # deliveries/day, but each is a streamed `claude -p` answer plus ≤2 follow-ups
@@ -141,6 +146,7 @@ STAGE_DECISION_ACTIONS = "stage_0c2_decision_actions"
 STAGE_FUNDAMENTALS = "stage_0d_fundamentals"
 STAGE_REPRICE = "stage_0e_reprice"
 STAGE_CANDIDATE_FIT = "stage_0f_candidate_fit"
+STAGE_FACTOR_PROXIES = "stage_0g_factor_proxies"
 STAGE_TRIGGERS = "stage_1_triggers"
 STAGE_STANDUP = "stage_1b_standup"
 STAGE_FEED = "stage_2_feed"
@@ -155,6 +161,7 @@ _ALL_STAGE_KEYS = (
     STAGE_FUNDAMENTALS,
     STAGE_REPRICE,
     STAGE_CANDIDATE_FIT,
+    STAGE_FACTOR_PROXIES,
     STAGE_TRIGGERS,
     STAGE_STANDUP,
     STAGE_FEED,
@@ -404,6 +411,27 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
                     *candidate_fit_db_args,
                 ],
                 timeout_s=_CANDIDATE_FIT_TIMEOUT_S,
+            )
+        )
+        # Stage 0g -- factor proxies: refresh the ETF style-proxy close series
+        # (SPY/VTV/VUG/IWM/MTUM) from yfinance into data/factor_proxies/ so the
+        # Risk panel's value/size/momentum loadings read a fresh LOCAL store —
+        # the render path never touches the network. Not user-scoped, no LLM;
+        # --repo-root follows the db override so tests/dev runs never write the
+        # real repo's data/. Skipped on the re-render-only path.
+        proxies_root_args = (
+            ["--repo-root", str(args.db_path.parent.parent)] if args.db_path is not None else []
+        )
+        stages.append(
+            _Stage(
+                key=STAGE_FACTOR_PROXIES,
+                label="Stage 0g - factor proxies (fetch_factor_proxies.py)",
+                argv=[
+                    py,
+                    str(exec_dir / "fetch_factor_proxies.py"),
+                    *proxies_root_args,
+                ],
+                timeout_s=_FACTOR_PROXIES_TIMEOUT_S,
             )
         )
 
