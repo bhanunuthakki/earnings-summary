@@ -61,7 +61,9 @@ __all__ = [
     "classify_valuation",
     "classify_weight_band",
     "encode_first_output",
+    "mechanical_read",
     "parse_verdict_output",
+    "render_pre_analysis_chat",
     "review_position",
     "summarize_verdict",
 ]
@@ -771,3 +773,59 @@ def review_position(
 
     memo_id = _persist_review(pre, out, user_id=user_id, db_path=db_path) if persist else None
     return PositionReview(pre=pre, output=out, memo_id=memo_id)
+
+
+# --------------------------------------------------------------------------- #
+# Slice 3 — deterministic chat rendering (the instant, no-LLM /review surface)
+# --------------------------------------------------------------------------- #
+
+
+def mechanical_read(pre: PreAnalysis) -> str:
+    """A one-line deterministic trim/hold read mirroring the behavioral guard —
+    no LLM. This is what the instant ``/review`` command shows; the LLM-calibrated
+    narrative comes from :func:`review_position`."""
+    if not pre.thesis_present:
+        kind = "an index / macro sleeve" if pre.is_index_instrument else "unencoded"
+        return f"No encoded thesis ({kind}) — encode one first; don't trim on price alone."
+    if pre.break_rule_status == "breach":
+        return "Thesis BREACHED — reassess; a legitimate trim/exit candidate."
+    if pre.valuation_verdict in ("trim", "sell"):
+        return f"Over-valued (ladder: {pre.valuation_verdict}) — valuation supports trimming."
+    sizing_oversized = pre.weight_vs_band == "above_band" or (
+        pre.weight_vs_band == "no_band" and pre.concentration_flag
+    )
+    if sizing_oversized:
+        return (
+            "Framework intact but the position is OVERSIZED — trim-to-target is the sizing "
+            "case (keep the core; a LEAP keeps the upside)."
+        )
+    return (
+        "HOLD — framework intact, not over-valued, not oversized. Trimming here would be "
+        "price-only (your sell-winners-too-early trap)."
+    )
+
+
+def render_pre_analysis_chat(pre: PreAnalysis) -> str:
+    """Compact Markdown reply for the ``/review`` chat command — the grounded
+    facts plus the mechanical read, and a pointer to the full calibrated verdict."""
+    wt = f"{pre.weight_pct:.1f}%" if pre.weight_pct is not None else "—"
+    conc = f"FLAGGED (>= {CONCENTRATION_PCT:.0f}% single name)" if pre.concentration_flag else "no"
+    fv = f"${pre.npv_per_share:,.2f}" if pre.npv_per_share is not None else "—"
+    asked = f"${pre.at_price:,.2f}" if pre.at_price is not None else "—"
+    gap = f"{pre.dcf_gap_pct:+.1f}%" if pre.dcf_gap_pct is not None else "—"
+    watch = f" · watch: {'; '.join(pre.tripped_rules)}" if pre.tripped_rules else ""
+    at_flag = f" --at-price {pre.at_price:g}" if pre.at_price is not None else ""
+    return "\n".join(
+        [
+            f"**{pre.ticker}** — position review (deterministic read; weight source: "
+            f"{pre.weight_source})",
+            f"- Sizing: {wt} of book · concentration: {conc} · band: {pre.weight_vs_band}",
+            f"- Fundamentals: thesis {pre.verdict_label or '—'} · "
+            f"break-rules {pre.break_rule_status}{watch}",
+            f"- Valuation: fair {fv} vs asked {asked} → {gap} (+ = over-valued) · "
+            f"ladder: {pre.valuation_verdict}",
+            f"- Mechanical read: {mechanical_read(pre)}",
+            f"- Full calibrated verdict (LLM + behavioral guard): "
+            f"`python execution/review_position.py {pre.ticker}{at_flag}`",
+        ]
+    )
