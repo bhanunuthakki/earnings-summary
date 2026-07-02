@@ -147,6 +147,11 @@ LLM_MODELS: dict[str, str] = {
     # bad answer steers nothing.
     "optimizer_nominator": "claude-opus-4-8",
     "model_frontier_research": "claude-opus-4-8",
+    # Meta-eval per-case checklist deriver (§3): real reading comprehension over
+    # long task prompts (latency irrelevant, cached forever per distinct prompt)
+    # → Sonnet. Reads the TASK PROMPT ONLY — never any model's response — so a
+    # checklist can't encode outcome knowledge; judge-side only (I1).
+    "query_criteria_derive": DEFAULT_MODEL,
     # The Ledger Phase-1 artifact drafters (web-less, feed the gated mutating kinds).
     # thesis_entry_draft distills a memo + evidence into an append-only ledger entry;
     # research_code_spec drafts an inert, human-reviewed code-change spec. Both are

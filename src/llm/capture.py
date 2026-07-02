@@ -51,6 +51,7 @@ CAPTURE_DENYLIST: frozenset[str] = frozenset(
         "case_difficulty_classify",
         "optimizer_nominator",
         "model_frontier_research",
+        "query_criteria_derive",
     }
 )
 

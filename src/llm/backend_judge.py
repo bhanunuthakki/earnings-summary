@@ -71,12 +71,15 @@ DEFAULT_MAX_PROMPT_CHARS = 8000
 @dataclass(frozen=True, slots=True)
 class PairVerdict:
     """One judge pass, in POSITION space ("A"/"B"/"tie") — not yet mapped to a
-    backend. ``facets`` maps each facet name to "A"/"B"/"tie"."""
+    backend. ``facets`` maps each facet name to "A"/"B"/"tie". ``checklist``
+    maps per-case criteria ids the same way (meta_eval_governance.md §3) —
+    ``None`` when the judge prompt carried no checklist (legacy passes)."""
 
     winner: str  # "A" | "B" | "tie"
     margin: float  # 0.0..1.0 (clamped); how decisive the call is
     facets: dict[str, str]
     rationale: str
+    checklist: dict[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +109,10 @@ class JudgedPair:
     position_consistent: bool
     rationales: list[str]
     error: str | None = None
+    # Per-case checklist items (§3), consolidated across the position-swapped
+    # passes with the same agree-or-tie rule as facets. None when the pair was
+    # judged without a checklist (legacy / deriver-missing cases).
+    checklist_winners: dict[str, str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,7 +155,7 @@ you. Do not reward length; a tighter answer that fully does the task is better.
 
 === RESPONSE B ===
 {response_b}
-
+{criteria_block}
 Judge on four facets, each independently — pick "A", "B", or "tie":
 - faithfulness: which answer better does what the task actually asked?
 - accuracy: which answer is more factually correct / better grounded, with fewer
@@ -179,13 +186,21 @@ def build_judge_prompt(
     response_b: str,
     *,
     max_prompt_chars: int = DEFAULT_MAX_PROMPT_CHARS,
+    criteria_block: str | None = None,
 ) -> str:
-    """Assemble the brand-blind A/B judge prompt for one pass."""
+    """Assemble the brand-blind A/B judge prompt for one pass.
+
+    ``criteria_block`` (§3.3) is the optional per-case checklist rendered by
+    ``query_criteria.render_criteria_block`` — it lands between the responses
+    and the facet instructions and adds the per-item output contract. Absent ⇒
+    the legacy 4-facet prompt, byte-identical to before."""
+    block = f"\n{criteria_block}\n" if criteria_block else ""
     return _PROMPT_TEMPLATE.format(
         purpose=purpose or "(unspecified)",
         prompt=_truncate(task_prompt, max_prompt_chars),
         response_a=response_a,
         response_b=response_b,
+        criteria_block=block,
     )
 
 
@@ -223,11 +238,26 @@ def parse_pair_verdict(raw: str) -> PairVerdict | None:
     if not isinstance(rationale, str) or not rationale.strip():
         return None
 
+    # Per-case checklist (§3): TOLERANT on absence (legacy verdicts), fail-closed
+    # on malformation — a present-but-broken checklist fails the pass exactly
+    # like a bad facet would.
+    checklist: dict[str, str] | None = None
+    if "checklist" in obj:
+        raw_checklist = obj.get("checklist")
+        if not isinstance(raw_checklist, dict):
+            return None
+        checklist = {}
+        for cid, side in cast("dict[str, object]", raw_checklist).items():
+            if side not in _VALID_SIDES:
+                return None
+            checklist[str(cid)] = cast("str", side)
+
     return PairVerdict(
         winner=cast("str", winner),
         margin=max(0.0, min(1.0, float(margin))),
         facets=facets,
         rationale=rationale.strip(),
+        checklist=checklist,
     )
 
 
@@ -240,11 +270,17 @@ def _judge_once(
     judge_backend: str,
     run_id: str | None,
     max_prompt_chars: int,
+    criteria_block: str | None = None,
 ) -> JudgeOnce:
     """One judge pass over a fixed A/B assignment. Never raises — every failure
     mode returns a fail-closed JudgeOnce with the error recorded."""
     prompt = build_judge_prompt(
-        purpose, task_prompt, response_a, response_b, max_prompt_chars=max_prompt_chars
+        purpose,
+        task_prompt,
+        response_a,
+        response_b,
+        max_prompt_chars=max_prompt_chars,
+        criteria_block=criteria_block,
     )
     try:
         raw = call_llm(
@@ -299,14 +335,16 @@ def judge_pair(
     judge_model: str | None = None,
     run_id: str | None = None,
     max_prompt_chars: int = DEFAULT_MAX_PROMPT_CHARS,
+    criteria_block: str | None = None,
 ) -> JudgedPair:
     """Judge one Claude-vs-Gemini pair under one judge, with position-swap.
 
     Pass 1 puts Claude in A, Gemini in B; pass 2 swaps. Each pass's winner is
     mapped to backend space; a real backend wins ONLY if both passes agree on it
-    (consistency filter against position bias). Facets are consolidated the same
-    way. If either pass fails to produce a verdict, the pair fails closed to a tie
-    with the error recorded.
+    (consistency filter against position bias). Facets — and the optional
+    per-case checklist items (§3, ``criteria_block``) — are consolidated the
+    same way. If either pass fails to produce a verdict, the pair fails closed
+    to a tie with the error recorded.
     """
     pass1 = _judge_once(
         purpose,
@@ -316,6 +354,7 @@ def judge_pair(
         judge_backend=judge_backend,
         run_id=run_id,
         max_prompt_chars=max_prompt_chars,
+        criteria_block=criteria_block,
     )
     pass2 = _judge_once(
         purpose,
@@ -325,6 +364,7 @@ def judge_pair(
         judge_backend=judge_backend,
         run_id=run_id,
         max_prompt_chars=max_prompt_chars,
+        criteria_block=criteria_block,
     )
 
     if pass1.verdict is None or pass2.verdict is None:
@@ -363,6 +403,17 @@ def judge_pair(
         f2 = _side_to_backend(pass2.verdict.facets[facet], a_is=GEMINI, b_is=CLAUDE)
         facet_winners[facet] = f1 if (f1 == f2 and f1 != "tie") else "tie"
 
+    # Checklist items (§3): same agree-or-tie consolidation, over the ids BOTH
+    # passes returned (an id one pass dropped can't be robustly scored).
+    checklist_winners: dict[str, str] | None = None
+    c1, c2 = pass1.verdict.checklist, pass2.verdict.checklist
+    if c1 is not None and c2 is not None:
+        checklist_winners = {}
+        for cid in sorted(set(c1) & set(c2)):
+            s1 = _side_to_backend(c1[cid], a_is=CLAUDE, b_is=GEMINI)
+            s2 = _side_to_backend(c2[cid], a_is=GEMINI, b_is=CLAUDE)
+            checklist_winners[cid] = s1 if (s1 == s2 and s1 != "tie") else "tie"
+
     return JudgedPair(
         purpose=purpose,
         label=label,
@@ -374,6 +425,7 @@ def judge_pair(
         facet_winners=facet_winners,
         position_consistent=consistent,
         rationales=[pass1.verdict.rationale, pass2.verdict.rationale],
+        checklist_winners=checklist_winners,
     )
 
 
