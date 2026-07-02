@@ -74,6 +74,16 @@ MODEL_LADDER: dict[str, ModelCost] = {
 }
 
 
+# Judge pool by family (meta_eval_governance.md §6): the pairwise judge for a
+# verdict comes from >=2 DISTINCT families. OpenRouter open-weight models are
+# candidates, NOT judges, until a judge-agreement spot-check certifies one —
+# judging needs the discriminating model to out-class both contestants.
+JUDGE_POOL: dict[str, str] = {
+    CLAUDE: "claude-opus-4-8",
+    GEMINI: "gemini-3.1-pro-preview",
+}
+
+
 def model_cost(model_id: str) -> ModelCost | None:
     return MODEL_LADDER.get(model_id)
 
@@ -81,6 +91,30 @@ def model_cost(model_id: str) -> ModelCost | None:
 def family_of(model_id: str) -> str | None:
     cost = MODEL_LADDER.get(model_id)
     return cost.family if cost is not None else None
+
+
+def backend_for(model_id: str) -> str:
+    """The backend a model id dispatches to — ladder family when registered,
+    else the ``provider/model`` slash-slug convention marks OpenRouter (the
+    frontier-research overlay discovers models the static ladder hasn't seen;
+    they must still route to the right transport), else Claude."""
+    fam = family_of(model_id)
+    if fam is not None:
+        return fam
+    return OPENROUTER if "/" in model_id else CLAUDE
+
+
+def ladder_sha() -> str:
+    """Deterministic fingerprint of the STATIC ladder (ids + prices). A change
+    (new model, price restamp) is exactly when re-nomination pays — the weekly
+    orchestrator compares this against the newest nomination run's stamp."""
+    import hashlib
+
+    payload = "|".join(
+        f"{mid}:{c.family}:{c.input_usd_per_mtok}:{c.output_usd_per_mtok}"
+        for mid, c in sorted(MODEL_LADDER.items())
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def model_rank(model_id: str) -> float | None:

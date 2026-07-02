@@ -1,21 +1,31 @@
-"""Weekly model-eval loop orchestrator — harvest → sweep → AUTO-SWITCH.
+"""Weekly model-eval loop orchestrator — steer → harvest → sweep → AUTO-SWITCH.
 
 This is the activated, closed-loop version of the model-downgrade eval
-(directives/model_eval_loop.md). One run does three things in order:
+(directives/model_eval_loop.md + meta_eval_governance.md §1.4/§10.1). One run
+does four things in order:
 
+  0. STEER (monthly / on frontier change): refresh the pareto frontier
+     (``model_frontier_research`` — discovered models auto-enter the TEST pool)
+     and re-run the Opus nominator (``optimizer_nominator``) so the sweep tests
+     the highest leverage×promise (purpose, candidate) pairs next. Both degrade
+     deterministically — steering never stalls the loop.
   1. HARVEST a bounded, rotating sample of tickers: force the incumbent model to
      re-run on real prompts (with LLM_CAPTURE_DIR set, in a SUBPROCESS) so fresh
      prompt cases land in the capture dir. Rotating by ISO week keeps weekly cost
-     bounded while covering the universe over time.
-  2. SWEEP: evaluate every cheaper candidate per active purpose against the
-     captured prompts and INSERT verdicts into model_eval_verdicts (run in THIS
-     process with capture OFF, so eval traffic never re-enters the corpus).
+     bounded while covering the universe over time; pending nominations pull
+     their busiest tickers to the front of the sample.
+  2. SWEEP: evaluate cheaper candidates — the pending nominations when any exist
+     (priority order, merged frontier incl. nominated OpenRouter candidates),
+     else every active purpose — against the captured prompts and INSERT
+     verdicts into model_eval_verdicts (run in THIS process with capture OFF,
+     so eval traffic never re-enters the corpus).
   3. APPLY: turn accumulated verdicts into action — write a model_pin_override
-     after N consecutive SWITCH_DOWN, revert after N consecutive KEEP_INCUMBENT.
-     This is the auto-switch. It is conservative (a streak, not one run) and
-     reversible; every decision is logged to model_pin_overrides + alerts, and
-     every verdict carries its full per-case judge rationale in summary_json — so
-     the whole loop is auditable from the DB alone.
+     after N consecutive SWITCH_DOWN + the pooled Wilson gate, revert after N
+     consecutive KEEP_INCUMBENT. This is the auto-switch. It is conservative
+     (a streak, not one run) and reversible; every decision is logged to
+     model_pin_overrides + alerts, and every verdict carries its full per-case
+     judge rationale + sample manifest in summary_json — so the whole loop is
+     auditable from the DB alone.
 
 Capture isolation: the harvest sets LLM_CAPTURE_DIR only in the harvest
 subprocess env; this orchestrator's own process never has it set, so the sweep's
@@ -96,6 +106,39 @@ def _rotating_sample(tickers: list[str], size: int, week: int) -> list[str]:
     return rotated[:size]
 
 
+def _nominated_harvest_tickers(db_path: Path, purposes: list[str], cap: int) -> list[str]:
+    """The busiest tickers (30d production calls) on the NOMINATED purposes —
+    pulled to the front of the harvest sample so the frame the nominations need
+    fills fastest (extends the rotation, never replaces it). Best-effort."""
+    if not purposes or cap <= 0 or not db_path.exists():
+        return []
+    try:
+        import sqlite3
+        from datetime import timedelta
+
+        cutoff = (datetime.now(UTC) - timedelta(days=30)).replace(tzinfo=None).isoformat()
+        placeholders = ",".join("?" * len(purposes))
+        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT ticker, COUNT(*) AS n FROM llm_calls
+                WHERE purpose IN ({placeholders}) AND ticker IS NOT NULL
+                  AND called_at >= ?
+                  AND (scope IS NULL OR scope NOT IN
+                       ('model_eval','backend_judge','eval','prompt_ab','meta_eval'))
+                GROUP BY ticker ORDER BY n DESC LIMIT ?
+                """,
+                (*purposes, cutoff, cap),
+            ).fetchall()
+        finally:
+            conn.close()
+        return [str(r[0]) for r in rows]
+    except Exception as exc:
+        log.warning("nominated-harvest ticker lookup failed: %s", exc)
+        return []
+
+
 def _harvest(ticker: str, capture_dir: Path, repo_root: Path, timeout_s: int) -> None:
     """Run the harvest steps for one ticker in subprocesses with LLM_CAPTURE_DIR
     set. Failures are logged and skipped — a thin capture is better than aborting
@@ -140,6 +183,16 @@ def main() -> int:
     )
     parser.add_argument("--skip-apply", action="store_true", help="sweep only; do not auto-switch")
     parser.add_argument(
+        "--nominate",
+        action="store_true",
+        help="force step 0 (frontier research + nominator) even if not due",
+    )
+    parser.add_argument(
+        "--skip-nominate",
+        action="store_true",
+        help="skip step 0 entirely (sweep runs on discovery or prior nominations)",
+    )
+    parser.add_argument(
         "--dry-run-switches", action="store_true", help="evaluate switches but write no overrides"
     )
     parser.add_argument("--consecutive-switch", type=int, default=3)
@@ -176,15 +229,41 @@ def main() -> int:
         "=== weekly model-eval loop %s ===", datetime.now(UTC).replace(tzinfo=None).isoformat()
     )
 
+    # ---- 0. Steer (monthly / on frontier change) ----
+    from llm.frontier import run_frontier_research
+    from llm.nominator import nomination_run_due, pending_nominations, run_nominator
+
+    if not args.skip_nominate and (args.nominate or nomination_run_due(db_path)):
+        log.info("--- step 0: frontier research + nomination ---")
+        upserted = run_frontier_research(db_path)
+        log.info("frontier research: %d candidate(s) refreshed", upserted)
+        run_nominator(db_path)
+    nominations = pending_nominations(db_path)
+    if nominations:
+        log.info(
+            "pending nominations (%d): %s",
+            len(nominations),
+            ", ".join(f"{n.purpose}(p{n.priority})" for n in nominations),
+        )
+
     # ---- 1. Harvest ----
     if not args.skip_harvest:
         if args.tickers:
             sample = [t.strip() for t in str(args.tickers).split(",") if t.strip()]
         else:
             tracked = _tracked_tickers(repo_root)
-            # ISO week number for deterministic rotation.
+            # ISO week number for deterministic rotation; pending nominations
+            # pull their busiest tickers to the front (extends, not replaces).
             week = datetime.now(UTC).isocalendar().week
             sample = _rotating_sample(tracked, args.sample_size, week)
+            if nominations:
+                priority_tickers = _nominated_harvest_tickers(
+                    db_path, [n.purpose for n in nominations], args.sample_size
+                )
+                merged = [t for t in priority_tickers if t in set(tracked)] + [
+                    t for t in sample if t not in set(priority_tickers)
+                ]
+                sample = merged[: max(args.sample_size, 1)]
         if not sample:
             log.warning(
                 "no harvest tickers (pass --tickers or populate tracked_companies); skipping harvest"
@@ -198,7 +277,7 @@ def main() -> int:
     # ---- 2. Sweep (capture OFF) ----
     from run_model_eval_sweep import run_sweep
 
-    log.info("--- sweep ---")
+    log.info("--- sweep (%s) ---", "nominated" if nominations else "discovery")
     verdicts = run_sweep(
         capture_dir=capture_dir,
         db_path=db_path,
@@ -210,6 +289,7 @@ def main() -> int:
         parity_threshold=0.8,
         timeout_seconds=None,
         persist=True,
+        nominations=nominations or None,
     )
     log.info("sweep wrote %d verdict(s)", len(verdicts))
 

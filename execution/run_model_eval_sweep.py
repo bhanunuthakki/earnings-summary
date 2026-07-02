@@ -70,6 +70,7 @@ from evals.sampler import (  # noqa: E402
 )
 from llm.backend_judge import CLAUDE, GEMINI  # noqa: E402
 from llm.cli import DEFAULT_MODEL, LLM_MODELS  # noqa: E402
+from llm.frontier import merged_cheaper_candidates  # noqa: E402
 from llm.model_eval import (  # noqa: E402
     INSUFFICIENT_FRAME,
     SWITCH_DOWN,
@@ -81,6 +82,13 @@ from llm.model_eval import (  # noqa: E402
 )
 from llm.model_ladder import cheaper_candidates  # noqa: E402
 from llm.model_overrides import record_verdict  # noqa: E402
+from llm.nominator import (  # noqa: E402
+    KIND_MODEL_DOWNGRADE,
+    Nomination,
+    excluded_purposes,
+    mark_nomination,
+    pending_nominations,
+)
 from llm.prompt_versions import prompt_version_for  # noqa: E402
 from llm.workload_inventory import risk_note_for  # noqa: E402
 
@@ -383,6 +391,64 @@ def _evaluate_candidate(
 # ---------------------------------------------------------------------------
 
 
+def _work_items(
+    db_path: Path,
+    *,
+    purposes: list[str] | None,
+    lookback_days: int,
+    nominations: list[Nomination] | None,
+) -> list[tuple[str, list[str], int | None, int | None]]:
+    """(purpose, candidates, suggested_min_n, nomination_row_id) work list.
+
+    Nominated mode: pending model_downgrade nominations in priority order; the
+    candidate list is re-checked at sweep time against the CURRENT merged
+    frontier (the incumbent may have moved) with ``include_openrouter=True`` —
+    a validated nomination IS the OpenRouter opt-in (§1.4/§6). An empty
+    intersection marks the nomination ``skipped``.
+
+    Default mode: today's discovery (static ladder, OpenRouter opt-out) MINUS
+    live exclusions (Q2 — TTL'd + rotation-floored in ``excluded_purposes``).
+    """
+    if nominations:
+        work: list[tuple[str, list[str], int | None, int | None]] = []
+        for nom in nominations:
+            if nom.kind != KIND_MODEL_DOWNGRADE:
+                continue
+            incumbent = LLM_MODELS.get(nom.purpose, DEFAULT_MODEL)
+            allowed = set(merged_cheaper_candidates(db_path, incumbent, include_openrouter=True))
+            cands = [c for c in nom.candidates if c in allowed]
+            if not cands:
+                log.info(
+                    "[%s] nomination has no valid candidates at sweep time; skipped",
+                    nom.purpose,
+                )
+                if nom.row_id is not None:
+                    mark_nomination(db_path, nom.row_id, "skipped")
+                continue
+            work.append((nom.purpose, cands, nom.suggested_min_n, nom.row_id))
+        return work
+
+    active = _discover_active_purposes(
+        db_path, lookback_days=lookback_days, explicit_purposes=purposes
+    )
+    excluded = excluded_purposes(db_path)
+    if excluded & set(active):
+        log.info(
+            "excluded by live nominator exclusions (TTL'd, rotation-floored): %s",
+            ", ".join(sorted(excluded & set(active))),
+        )
+        active = [p for p in active if p not in excluded]
+    out: list[tuple[str, list[str], int | None, int | None]] = []
+    for purpose in active:
+        incumbent = LLM_MODELS.get(purpose, DEFAULT_MODEL)
+        candidates = cheaper_candidates(incumbent)
+        if not candidates:
+            log.info("[%s] incumbent=%s is already cheapest; skip", purpose, incumbent)
+            continue
+        out.append((purpose, candidates, None, None))
+    return out
+
+
 def run_sweep(
     *,
     capture_dir: Path,
@@ -395,6 +461,7 @@ def run_sweep(
     parity_threshold: float,
     timeout_seconds: int | None,
     persist: bool,
+    nominations: list[Nomination] | None = None,
 ) -> list[CandidateVerdict]:
     """Run one full sweep across all active purposes. Returns all verdicts made."""
     capture_files = _find_capture_files(capture_dir)
@@ -404,28 +471,32 @@ def run_sweep(
 
     log.info("capture files: %d file(s) in %s", len(capture_files), capture_dir)
 
-    active_purposes = _discover_active_purposes(
-        db_path,
-        lookback_days=lookback_days,
-        explicit_purposes=purposes,
+    work = _work_items(
+        db_path, purposes=purposes, lookback_days=lookback_days, nominations=nominations
     )
-    if not active_purposes:
+    if not work:
         log.info("no active purposes found; nothing to evaluate")
         return []
 
-    log.info("active purposes (%d): %s", len(active_purposes), ", ".join(active_purposes))
+    log.info(
+        "work items (%d, %s): %s",
+        len(work),
+        "nominated" if nominations else "discovered",
+        ", ".join(p for p, _c, _m, _r in work),
+    )
 
     run_id = uuid.uuid4().hex
     all_verdicts: list[CandidateVerdict] = []
 
-    for purpose in active_purposes:
+    for purpose, candidates, suggested_min_n, nomination_row_id in work:
         incumbent = LLM_MODELS.get(purpose, DEFAULT_MODEL)
-        candidates = cheaper_candidates(incumbent)
-        if not candidates:
-            log.info("[%s] incumbent=%s is already cheapest; skip", purpose, incumbent)
-            continue
 
         n_target, eff_min_n = _tier_params(purpose, limit, min_n)
+        if suggested_min_n is not None:
+            # A nomination's suggested_min_n can only RAISE the bar; n follows
+            # so the bar stays achievable (nomination authority > --limit cap).
+            eff_min_n = max(eff_min_n, suggested_min_n)
+            n_target = max(n_target, eff_min_n)
 
         # Census-grounded stratified sampling (§2). No census (fixture DBs,
         # bootstrap) → the legacy newest-N loader, visible in the manifest.
@@ -578,6 +649,12 @@ def run_sweep(
                 )
                 log.info("  persisted to model_eval_verdicts")
 
+        # This purpose's candidates all ran (or were honestly labeled) — the
+        # nomination is consumed. A purpose skipped BEFORE the candidate loop
+        # (no frame yet) stays pending for the next harvest to unblock.
+        if nomination_row_id is not None and persist:
+            mark_nomination(db_path, nomination_row_id, "swept")
+
     return all_verdicts
 
 
@@ -649,6 +726,12 @@ def main() -> int:
     )
     parser.add_argument("--timeout", type=int, default=None, help="per-LLM-call timeout seconds")
     parser.add_argument(
+        "--from-nominations",
+        action="store_true",
+        help="evaluate the PENDING optimizer nominations (priority order, merged "
+        "frontier incl. OpenRouter) instead of discovering active purposes",
+    )
+    parser.add_argument(
         "--no-persist",
         action="store_true",
         help="evaluate but write no DB rows",
@@ -684,6 +767,13 @@ def main() -> int:
     if not capture_dir.is_absolute():
         capture_dir = repo_root / capture_dir
 
+    nominations: list[Nomination] | None = None
+    if args.from_nominations:
+        nominations = pending_nominations(db_path)
+        if not nominations:
+            log.info("--from-nominations: no pending nominations; falling back to discovery")
+            nominations = None
+
     verdicts = run_sweep(
         capture_dir=capture_dir,
         db_path=db_path,
@@ -695,6 +785,7 @@ def main() -> int:
         parity_threshold=args.parity_threshold,
         timeout_seconds=args.timeout,
         persist=not args.no_persist,
+        nominations=nominations,
     )
 
     _emit_summary(verdicts)
