@@ -69,6 +69,7 @@ AUDIT_PURPOSES = (
     "peer_selection",
     "earnings_themes_split",
     "qa_topics",
+    "position_review",
 )
 PURPOSES = GOLDEN_PURPOSES + AUDIT_PURPOSES
 

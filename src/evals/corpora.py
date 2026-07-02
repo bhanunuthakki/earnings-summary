@@ -542,6 +542,62 @@ def load_qa_topics_corpus(repo_root: Path) -> list[AuditItem]:
     return out
 
 
+def load_position_review_corpus(repo_root: Path) -> list[AuditItem]:
+    """Every ``advisor_memos`` row with kind='position_review', newest first.
+
+    The graded text is the memo body the /review service wrote (verdict + reason
+    + behavioral-check + grounded facts). Missing DB / missing table ⇒ empty
+    corpus (nothing generated to audit yet), so the weekly cron never fails on a
+    repo that hasn't produced a review — mirrors load_advisor_next_dollar_corpus.
+    """
+    out: list[AuditItem] = []
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
+        return out
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5.0)
+    except sqlite3.Error as exc:
+        log.warning({"event": "eval_corpus_db_open_failed", "error": str(exc)})
+        return out
+    try:
+        present = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='advisor_memos'"
+        ).fetchone()
+        if present is None:
+            log.info({"event": "eval_corpus_no_advisor_memos_table"})
+            return out
+        rows = conn.execute(
+            """
+            SELECT id, ticker, title, body_md, created_at
+            FROM advisor_memos
+            WHERE kind = 'position_review' AND body_md IS NOT NULL AND body_md != ''
+            ORDER BY id DESC
+            """
+        ).fetchall()
+    except sqlite3.Error as exc:
+        log.warning({"event": "eval_corpus_position_review_read_failed", "error": str(exc)})
+        return out
+    finally:
+        conn.close()
+    for memo_id, ticker, title, body_md, created_at in rows:
+        produced_at: datetime | None = None
+        if isinstance(created_at, str):
+            try:
+                produced_at = datetime.fromisoformat(created_at)
+            except ValueError:
+                produced_at = None
+        out.append(
+            AuditItem(
+                item_id=f"memo:{memo_id}",
+                label=f"position_review/memo:{memo_id} — {str(title)[:80]}",
+                ticker=str(ticker) if ticker else None,
+                content=_clip(str(body_md)),
+                produced_at=produced_at,
+            )
+        )
+    return out
+
+
 # purpose -> loader. The rubric runner resolves its corpus here; adding an
 # audit purpose = one rubric file + one loader + one entry (+ registry/model
 # wiring asserted by tests).
@@ -554,6 +610,7 @@ CORPUS_LOADERS: dict[str, CorpusLoader] = {
     "peer_selection": load_peer_selection_corpus,
     "earnings_themes_split": load_earnings_themes_corpus,
     "qa_topics": load_qa_topics_corpus,
+    "position_review": load_position_review_corpus,
 }
 
 
