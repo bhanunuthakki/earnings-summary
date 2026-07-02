@@ -124,6 +124,13 @@ LLM_MODELS: dict[str, str] = {
     # tier, like the sibling wondering_detect classifier.
     "musing_decision_extract": FAST_CLASSIFIER_MODEL,
     "drift_narrate": FAST_CLASSIFIER_MODEL,
+    # The Ledger Phase-1 artifact drafters (web-less, feed the gated mutating kinds).
+    # thesis_entry_draft distills a memo + evidence into an append-only ledger entry;
+    # research_code_spec drafts an inert, human-reviewed code-change spec. Both are
+    # open-ended drafting where structure/quality matters (like research_narrate) →
+    # DEFAULT (Sonnet); the code spec is rare and never auto-applies.
+    "thesis_entry_draft": DEFAULT_MODEL,
+    "research_code_spec": DEFAULT_MODEL,
     # Long-context analytical writing
     "transcript_summary": DEFAULT_MODEL,
     "press_release_summary": DEFAULT_MODEL,

@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import inspect
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,7 @@ from research.run import (
     Evidence,
     _parse_findings,
     _stance_for,
+    draft_code_spec,
     quarantine,
     run_research_task,
 )
@@ -205,3 +207,66 @@ def test_unknown_verb_raises(db_path: Path) -> None:
     pid = _seed_proposal(db_path)
     with pytest.raises(ValueError, match="unknown verb"):
         act_on_proposal(pid, "delete", db_path=db_path)
+
+
+# --- the governed research_code_spec generator (web-less, K1-covered) ------------------
+
+
+def _cs(result: dict[str, object]) -> Callable[..., dict[str, object]]:
+    def caller(prompt: str, *, purpose: str, required_keys: tuple[str, ...]) -> dict[str, object]:
+        return result
+
+    return caller
+
+
+def test_code_spec_draft_composes_the_reviewable_fields() -> None:
+    out = draft_code_spec(
+        "Wire the RBRK category-share KPI into the competitive tracker",
+        ticker="RBRK",
+        struct=_cs(
+            {
+                "title": "Wire RBRK category-share KPI",
+                "description": "Add the KPI to the tracker.",
+                "change_plan": ["add the deriver", "compose into holdings_sync"],
+                "files_touched": ["src/competitive/holdings_sync.py"],
+            }
+        ),
+    )
+    assert out["title"] == "Wire RBRK category-share KPI"
+    assert out["change_plan"] == ["add the deriver", "compose into holdings_sync"]
+    assert out["files_touched"] == ["src/competitive/holdings_sync.py"]
+
+
+def test_code_spec_empty_title_is_the_not_a_code_change_sentinel() -> None:
+    out = draft_code_spec(
+        "what's NU's NIMAL trend?",
+        struct=_cs({"title": "", "description": "", "change_plan": [], "files_touched": []}),
+    )
+    assert out == {}
+
+
+def test_code_spec_coerces_non_list_plan_and_files() -> None:
+    out = draft_code_spec(
+        "do X",
+        struct=_cs(
+            {"title": "Do X", "description": "d", "change_plan": "oops", "files_touched": None}
+        ),
+    )
+    assert out["change_plan"] == [] and out["files_touched"] == []
+
+
+def test_code_spec_default_degrades_on_a_parse_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from llm import structured as structured_mod
+
+    def boom(*_a: object, **_k: object) -> object:
+        raise structured_mod.StructuredParseError("unusable", raw_head="{...")
+
+    monkeypatch.setattr(structured_mod, "call_llm_structured", boom)
+    assert draft_code_spec("add a feature") == {}  # _call_struct raises -> caught -> {}
+
+
+def test_code_spec_generator_is_k1_safe() -> None:
+    # the drafter must name NEITHER the web primitive NOR the write primitive.
+    src = inspect.getsource(draft_code_spec)
+    assert "call_llm_with_web" not in src
+    assert "create_proposal" not in src
