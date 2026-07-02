@@ -152,6 +152,11 @@ LLM_MODELS: dict[str, str] = {
     # → Sonnet. Reads the TASK PROMPT ONLY — never any model's response — so a
     # checklist can't encode outcome knowledge; judge-side only (I1).
     "query_criteria_derive": DEFAULT_MODEL,
+    # Meta-eval prompt-variant proposer (§4): prompt engineering is judgment-tier
+    # (~2-4 experiments/mo) → Opus. Its edits are validated pre-spend (anchors
+    # exactly-once) and only ever reach production through the A/B promotion bar
+    # + prompt_pin_overrides (§10 Q1) — a bad proposal steers nothing.
+    "prompt_variant_propose": "claude-opus-4-8",
     # The Ledger Phase-1 artifact drafters (web-less, feed the gated mutating kinds).
     # thesis_entry_draft distills a memo + evidence into an append-only ledger entry;
     # research_code_spec drafts an inert, human-reviewed code-change spec. Both are
@@ -924,6 +929,19 @@ def call_llm(
     else:
         resolved_model = model
 
+    # Prompt-override auto-apply (meta_eval_governance.md §10 Q1): a cleanly
+    # promoted prompt-A/B variant applies its edits to PRODUCTION traffic here
+    # (the prompt-side twin of the model_pin_overrides read above). Eval/meta
+    # scopes are exempt inside the hook (replays stay byte-identical — I1) and
+    # anchor failures fail OPEN to the original prompt. Best-effort, always.
+    if purpose is not None:
+        try:
+            from llm.prompt_ab import apply_prompt_override
+
+            prompt = apply_prompt_override(purpose, scope, prompt)
+        except Exception as hook_exc:
+            log.debug({"event": "prompt_override_hook_failed", "error": str(hook_exc)[:120]})
+
     # Backend from the resolved model's family; explicit `backend` arg overrides.
     if backend is not None:
         resolved_backend = backend
@@ -1064,6 +1082,16 @@ def call_llm_with_web(
             resolved_model = _model_for(purpose)
     else:
         resolved_model = model
+    # Prompt-override auto-apply (§10 Q1) — web purposes are A/B-eligible even
+    # though downgrade-ineligible. Same fail-open, production-scopes-only hook
+    # as call_llm.
+    if purpose is not None:
+        try:
+            from llm.prompt_ab import apply_prompt_override
+
+            prompt = apply_prompt_override(purpose, scope, prompt)
+        except Exception as hook_exc:
+            log.debug({"event": "prompt_override_hook_failed", "error": str(hook_exc)[:120]})
     _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
     _verify_setup_once()
     import llm_client  # late import — state lives on llm_client for test compat

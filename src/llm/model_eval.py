@@ -59,6 +59,7 @@ def run_model(
     ticker: str | None = None,
     run_id: str | None = None,
     timeout_seconds: int | None = None,
+    scope: str = "model_eval",
 ) -> ModelRunResult:
     """Run one model on a prompt via the canonical client. Never raises — a
     failed run is recorded as data (the eval records how each model behaved).
@@ -78,7 +79,7 @@ def run_model(
             model=model_id,
             backend=backend,
             ticker=ticker,
-            scope="model_eval",
+            scope=scope,  # "model_eval" (default) or "prompt_ab" — both EVAL_SCOPES
             run_id=run_id,
             timeout_seconds=timeout_seconds,
             force_budget_bypass=True,
