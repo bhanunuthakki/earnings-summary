@@ -1,13 +1,13 @@
 # pyright: reportPrivateUsage=false
 #
-# These tests deliberately reach module-private surface (_gemini_subprocess_env,
-# _NULL_CONTEXT_FILENAME, compare_backends._smoke_prompts) — that IS the unit
-# under test. Module-scoped directive per the repo's cli.py precedent.
+# These tests deliberately reach module-private surface (_gemini_setup_verified,
+# _gemini_api_key, compare_backends._smoke_prompts) — that IS the unit under
+# test. Module-scoped directive per the repo's cli.py precedent.
 """Tests for the Gemini second backend (src/llm/gemini_backend.py) and
 call_llm's model-family-based backend-selection logic.
 
-Every test monkeypatches subprocess.run (or the backend entry points) — the
-suite never spawns a real CLI and never spends. Coverage:
+Every test monkeypatches genai.GenerativeModel (or the backend entry points) —
+the suite never spends real API $. Coverage:
 
   * legacy allowlist symbols (GEMINI_BACKEND_ALLOWED_PURPOSES, env-var merge)
     retained for backward-compat; call_llm no longer consults them;
@@ -15,22 +15,22 @@ suite never spawns a real CLI and never spends. Coverage:
     Gemini backend, Claude model id → Claude backend; explicit backend= force);
   * failure policy (Gemini operational failure degrades to Claude;
     forced-gemini failures raise; hard stops always propagate);
-  * the no-silent-API-key guard (subprocess env strips keys, forces consumer
-    OAuth, trusts the neutral workspace, suppresses context files);
-  * the subprocess contract (stdin prompt, UTF-8, absolute path, JSON parse,
-    token/usage mapping, real API-price cost, ledger rows, auth-failure →
-    LLMSetupError classification).
+  * the API-key contract (genai.configure + GenerativeModel called with the
+    resolved model, prompt, and timeout; missing/rejected key → LLMSetupError);
+  * usage/cost mapping from usage_metadata into the ledger row;
+  * the NotFound self-anneal retry (preview alias 404s → live catalog lookup
+    → stable-fallback retry).
 """
 
 from __future__ import annotations
 
-import json
-import subprocess
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from types import SimpleNamespace
+from typing import ClassVar, cast
 
 import pytest
+from google.api_core import exceptions as google_exceptions
 
 from llm import cli as llm_cli
 from llm import gemini_backend
@@ -52,26 +52,21 @@ def _no_budget(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _gemini_ready(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pretend setup verification already ran (binary resolved)."""
+    """Pretend setup verification already ran (API key resolved)."""
     monkeypatch.setattr(gemini_backend, "_gemini_setup_verified", True)
-    monkeypatch.setattr(gemini_backend, "_gemini_cli_path", r"C:\fake\npm\gemini.cmd")
+    monkeypatch.setattr(gemini_backend, "_gemini_api_key", "AIza-fake-test-key")
 
 
-def _success_envelope(text: str, *, models: dict[str, dict[str, int]] | None = None) -> str:
-    """A faithful `gemini -o json` success envelope (see parse_gemini_json_output)."""
-    payload: dict[str, object] = {"session_id": "abc123", "response": text}
-    if models is not None:
-        payload["stats"] = {
-            "models": {
-                name: {"api": {"totalRequests": 1}, "tokens": tokens}
-                for name, tokens in models.items()
-            }
-        }
-    return json.dumps(payload)
-
-
-def _completed(stdout: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.CompletedProcess(args=["gemini"], returncode=0, stdout=stdout, stderr="")
+def _fake_response(
+    text: str, *, prompt_tokens: int = 0, candidate_tokens: int = 0, cached_tokens: int = 0
+) -> SimpleNamespace:
+    """A faithful stand-in for genai's GenerateContentResponse."""
+    usage = SimpleNamespace(
+        prompt_token_count=prompt_tokens,
+        candidates_token_count=candidate_tokens,
+        cached_content_token_count=cached_tokens,
+    )
+    return SimpleNamespace(text=text, usage_metadata=usage)
 
 
 def _record_to(rows: list[dict[str, object]]) -> Callable[..., None]:
@@ -87,13 +82,54 @@ def _record_discard(**kw: object) -> None:
     return None
 
 
-def _run_returning(stdout: str) -> Callable[..., subprocess.CompletedProcess[str]]:
-    """A typed subprocess.run stand-in returning a fixed success envelope."""
+def _noop_configure(**kw: object) -> None:
+    """A typed genai.configure stand-in for tests that don't care about the
+    resolved key — a bare lambda **kw: ... infers as Unknown under strict
+    pyright (the parameter can't be annotated on a lambda)."""
 
-    def _run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        return _completed(stdout)
 
-    return _run
+def _capture_configure(sink: dict[str, object]) -> Callable[..., None]:
+    def _configure(**kw: object) -> None:
+        sink.update(kw)
+
+    return _configure
+
+
+class _FakeModel:
+    """Stand-in for genai.GenerativeModel: records constructor + call args,
+    returns (or raises) a fixed outcome regardless of which model id or
+    prompt is passed."""
+
+    last_instances: ClassVar[list[_FakeModel]] = []
+
+    def __init__(self, model_id: str) -> None:
+        self.model_id = model_id
+        self.calls: list[dict[str, object]] = []
+        _FakeModel.last_instances.append(self)
+
+    def generate_content(self, prompt: str, **kwargs: object) -> SimpleNamespace:
+        self.calls.append({"prompt": prompt, **kwargs})
+        outcome = _FakeModel._outcome
+        if isinstance(outcome, BaseException):
+            raise outcome
+        assert outcome is not None
+        return outcome
+
+    _outcome: SimpleNamespace | BaseException | None = None
+
+    @classmethod
+    def returning(cls, response: SimpleNamespace) -> None:
+        cls._outcome = response
+
+    @classmethod
+    def raising(cls, exc: BaseException) -> None:
+        cls._outcome = exc
+
+
+@pytest.fixture(autouse=True)
+def _reset_fake_model() -> None:
+    _FakeModel.last_instances = []
+    _FakeModel._outcome = None
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +341,7 @@ def test_forced_gemini_operational_failure_raises(monkeypatch: pytest.MonkeyPatc
 @pytest.mark.parametrize(
     "exc",
     [
-        llm_cli.LLMSetupError("gemini login missing"),
+        llm_cli.LLMSetupError("gemini API key missing"),
         llm_cli.LLMBudgetExceeded("hard cap"),
     ],
 )
@@ -331,85 +367,61 @@ def test_gemini_hard_stops_propagate_without_claude_fallback(
 
 
 # ---------------------------------------------------------------------------
-# The no-silent-API-key guard
+# The Gemini Developer API call contract
 
 
-def test_subprocess_env_strips_api_keys_and_forces_consumer_oauth(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """THE BILLING GUARD. Even with every Google credential variable set in
-    the parent environment (the repo's .env keeps GEMINI_API_KEY for the
-    fallback path), the backend subprocess must see none of them and must be
-    forced onto the consumer OAuth (GCA) auth path."""
-    monkeypatch.setenv("GEMINI_API_KEY", "AIza-test-key")
-    monkeypatch.setenv("GOOGLE_API_KEY", "AIza-test-key-2")
-    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", r"C:\creds.json")
-    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
-    env = gemini_backend._gemini_subprocess_env()
-    assert "GEMINI_API_KEY" not in env
-    assert "GOOGLE_API_KEY" not in env
-    assert "GOOGLE_APPLICATION_CREDENTIALS" not in env
-    assert "GOOGLE_GENAI_USE_VERTEXAI" not in env
-    assert env["GOOGLE_GENAI_USE_GCA"] == "true"
-    assert env["GEMINI_CLI_TRUST_WORKSPACE"] == "true"
-    assert env["NO_BROWSER"] == "true"
-
-
-def test_call_gemini_subprocess_contract(monkeypatch: pytest.MonkeyPatch) -> None:
-    """End-to-end through call_gemini with subprocess.run captured: guarded
-    env, stdin prompt, UTF-8, absolute binary path, JSON output flags, the
-    purpose-resolved model, the backend default timeout, and a neutral cwd
-    whose workspace settings suppress context-file injection."""
+def test_call_gemini_api_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """End-to-end through call_gemini with genai.GenerativeModel captured: the
+    configured API key, the purpose-resolved model, the prompt, and the
+    backend default timeout."""
     _no_budget(monkeypatch)
     _gemini_ready(monkeypatch)
-    monkeypatch.setattr(gemini_backend, "_gemini_neutral_cwd_cache", None)
-    monkeypatch.setenv("GEMINI_API_KEY", "AIza-test-key")
-    captured: dict[str, object] = {}
+    configured: dict[str, object] = {}
+    monkeypatch.setattr(gemini_backend.genai, "configure", _capture_configure(configured))
+    monkeypatch.setattr(gemini_backend.genai, "GenerativeModel", _FakeModel)
+    _FakeModel.returning(_fake_response("PONG"))
 
-    def _fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        captured["cmd"] = cmd
-        captured.update(kwargs)
-        return _completed(_success_envelope("PONG"))
-
-    monkeypatch.setattr(subprocess, "run", _fake_run)
     out = gemini_backend.call_gemini("ping prompt", purpose="viewspec_compile")
     assert out == "PONG"
-    cmd = cast("list[str]", captured["cmd"])
-    assert cmd[0] == r"C:\fake\npm\gemini.cmd"  # absolute path, never bare "gemini"
-    assert cmd[cmd.index("-m") + 1] == gemini_backend.GEMINI_BACKEND_FAST_MODEL
-    assert cmd[cmd.index("-o") + 1] == "json"
-    assert "-p" not in cmd  # prompt rides stdin only
-    assert captured["input"] == "ping prompt"
-    assert captured["encoding"] == "utf-8"
-    assert captured["errors"] == "replace"
-    assert captured["timeout"] == gemini_backend.GEMINI_BACKEND_TIMEOUT_SECONDS
-    env = cast("dict[str, str]", captured["env"])
-    assert "GEMINI_API_KEY" not in env
-    assert env["GOOGLE_GENAI_USE_GCA"] == "true"
-    # The neutral cwd carries the context-suppression workspace settings.
-    cwd = cast("str", captured["cwd"])
-    settings = json.loads((Path(cwd) / ".gemini" / "settings.json").read_text(encoding="utf-8"))
-    assert settings["context"]["fileName"] == gemini_backend._NULL_CONTEXT_FILENAME
+    assert configured["api_key"] == "AIza-fake-test-key"
+    assert len(_FakeModel.last_instances) == 1
+    inst = _FakeModel.last_instances[0]
+    assert inst.model_id == gemini_backend.GEMINI_BACKEND_FAST_MODEL
+    assert len(inst.calls) == 1
+    assert inst.calls[0]["prompt"] == "ping prompt"
+    opts = cast("dict[str, object]", inst.calls[0]["request_options"])
+    assert opts["timeout"] == gemini_backend.GEMINI_BACKEND_TIMEOUT_SECONDS
+
+
+def test_call_gemini_explicit_model_and_timeout_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    _no_budget(monkeypatch)
+    _gemini_ready(monkeypatch)
+    monkeypatch.setattr(gemini_backend.genai, "configure", _noop_configure)
+    monkeypatch.setattr(gemini_backend.genai, "GenerativeModel", _FakeModel)
+    _FakeModel.returning(_fake_response("hi"))
+
+    gemini_backend.call_gemini("p", model="gemini-2.5-pro", timeout_seconds=42, purpose="bear_case")
+    inst = _FakeModel.last_instances[0]
+    assert inst.model_id == "gemini-2.5-pro"
+    opts = cast("dict[str, object]", inst.calls[0]["request_options"])
+    assert opts["timeout"] == 42
 
 
 # ---------------------------------------------------------------------------
-# Subprocess outcomes: parsing, ledger, failure classification
+# Outcomes: usage/cost mapping, ledger, failure classification
 
 
 def test_call_gemini_records_usage_and_real_cost(monkeypatch: pytest.MonkeyPatch) -> None:
     _no_budget(monkeypatch)
     _gemini_ready(monkeypatch)
+    monkeypatch.setattr(gemini_backend.genai, "configure", _noop_configure)
+    monkeypatch.setattr(gemini_backend.genai, "GenerativeModel", _FakeModel)
+    _FakeModel.returning(
+        _fake_response("answer text", prompt_tokens=1010, candidate_tokens=205, cached_tokens=50)
+    )
     rows: list[dict[str, object]] = []
     monkeypatch.setattr(gemini_backend, "record_llm_call", _record_to(rows))
-    envelope = _success_envelope(
-        "answer text",
-        models={
-            "gemini-2.5-pro": {"prompt": 1000, "candidates": 200, "cached": 50},
-            # Consumer tier can transparently reroute to flash mid-session.
-            "gemini-2.5-flash": {"prompt": 10, "candidates": 5, "cached": 0},
-        },
-    )
-    monkeypatch.setattr(subprocess, "run", _run_returning(envelope))
+
     out = gemini_backend.call_gemini("p", purpose="bear_case", ticker="NU", scope="s", run_id="r9")
     assert out == "answer text"
     assert len(rows) == 1
@@ -421,7 +433,6 @@ def test_call_gemini_records_usage_and_real_cost(monkeypatch: pytest.MonkeyPatch
     assert row["response_text"] == "answer text"
     meta = cast("dict[str, object]", row["meta"])
     # Real API pricing: gemini-3.1-pro-preview $1.25/$10.00 per MTok.
-    # 1010 input + 205 output tokens → non-zero cost.
     from llm.model_ladder import estimated_call_usd
 
     expected = estimated_call_usd(gemini_backend.GEMINI_BACKEND_DEFAULT_MODEL, 1010, 205)
@@ -433,57 +444,62 @@ def test_call_gemini_records_usage_and_real_cost(monkeypatch: pytest.MonkeyPatch
     assert usage["cache_read_input_tokens"] == 50
 
 
-def test_call_gemini_auth_failure_classifies_as_setup_error(
+def test_call_gemini_unauthenticated_classifies_as_setup_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A missing/expired consumer login is deterministic and operator-
-    actionable — it must classify as LLMSetupError (hard stop with the
-    login hint), exactly like a missing binary on the Claude path."""
+    """A rejected API key is deterministic and operator-actionable — it must
+    classify as LLMSetupError (hard stop with the key-setup hint), exactly
+    like a missing binary on the Claude path."""
     _no_budget(monkeypatch)
     _gemini_ready(monkeypatch)
+    monkeypatch.setattr(gemini_backend.genai, "configure", _noop_configure)
+    monkeypatch.setattr(gemini_backend.genai, "GenerativeModel", _FakeModel)
     monkeypatch.setattr(gemini_backend, "record_llm_call", _record_discard)
+    _FakeModel.raising(google_exceptions.Unauthenticated("credentials invalid"))
 
-    def _fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        raise subprocess.CalledProcessError(
-            41,
-            ["gemini"],
-            output="",
-            stderr=(
-                "Error authenticating: FatalAuthenticationError: Manual authorization "
-                "is required but the current session is non-interactive."
-            ),
-        )
-
-    monkeypatch.setattr(subprocess, "run", _fake_run)
-    with pytest.raises(llm_cli.LLMSetupError, match="one-time interactive login"):
+    with pytest.raises(llm_cli.LLMSetupError, match="rejected"):
         gemini_backend.call_gemini("p", purpose="bear_case")
 
 
-def test_call_gemini_json_error_envelope_classifies_auth(
+def test_call_gemini_invalid_argument_api_key_marker_classifies_as_setup_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The other observed auth shape: exit 41 with the JSON error envelope on
-    stdout ('Please set an Auth method...')."""
+    """The exact shape observed live: InvalidArgument (400) with an
+    API_KEY_INVALID reason — the marker string is what promotes this
+    otherwise-ambiguous status code to a setup error."""
     _no_budget(monkeypatch)
     _gemini_ready(monkeypatch)
+    monkeypatch.setattr(gemini_backend.genai, "configure", _noop_configure)
+    monkeypatch.setattr(gemini_backend.genai, "GenerativeModel", _FakeModel)
     monkeypatch.setattr(gemini_backend, "record_llm_call", _record_discard)
-    envelope = json.dumps(
-        {
-            "session_id": "x",
-            "error": {
-                "type": "Error",
-                "message": "Please set an Auth method in your settings.json",
-                "code": 41,
-            },
-        }
+    _FakeModel.raising(
+        google_exceptions.InvalidArgument(
+            'API key not valid. Please pass a valid API key. [reason: "API_KEY_INVALID"'
+        )
     )
 
-    def _fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        raise subprocess.CalledProcessError(41, ["gemini"], output=envelope, stderr="")
-
-    monkeypatch.setattr(subprocess, "run", _fake_run)
-    with pytest.raises(llm_cli.LLMSetupError):
+    with pytest.raises(llm_cli.LLMSetupError, match="API key"):
         gemini_backend.call_gemini("p", purpose="bear_case")
+
+
+def test_call_gemini_invalid_argument_without_auth_marker_stays_operational(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """InvalidArgument (400) WITHOUT an auth-shaped marker is a genuinely bad
+    request (e.g. a malformed param), not a key problem — must NOT be
+    misclassified as a setup error the operator can't actually fix by
+    rotating a key."""
+    _no_budget(monkeypatch)
+    _gemini_ready(monkeypatch)
+    monkeypatch.setattr(gemini_backend.genai, "configure", _noop_configure)
+    monkeypatch.setattr(gemini_backend.genai, "GenerativeModel", _FakeModel)
+    rows: list[dict[str, object]] = []
+    monkeypatch.setattr(gemini_backend, "record_llm_call", _record_to(rows))
+    _FakeModel.raising(google_exceptions.InvalidArgument("request payload size exceeds the limit"))
+
+    with pytest.raises(google_exceptions.InvalidArgument):
+        gemini_backend.call_gemini("p", purpose="bear_case")
+    assert len(rows) == 1
 
 
 def test_call_gemini_non_auth_failure_stays_operational(
@@ -491,101 +507,141 @@ def test_call_gemini_non_auth_failure_stays_operational(
 ) -> None:
     _no_budget(monkeypatch)
     _gemini_ready(monkeypatch)
+    monkeypatch.setattr(gemini_backend.genai, "configure", _noop_configure)
+    monkeypatch.setattr(gemini_backend.genai, "GenerativeModel", _FakeModel)
     rows: list[dict[str, object]] = []
     monkeypatch.setattr(gemini_backend, "record_llm_call", _record_to(rows))
+    _FakeModel.raising(google_exceptions.ServiceUnavailable("overloaded, try again"))
 
-    def _fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        raise subprocess.CalledProcessError(1, ["gemini"], output="", stderr="quota exceeded")
-
-    monkeypatch.setattr(subprocess, "run", _fake_run)
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(google_exceptions.ServiceUnavailable):
         gemini_backend.call_gemini("p", purpose="bear_case")
     assert len(rows) == 1  # the failed attempt still gets its ledger row
-    assert "CalledProcessError" in cast("str", rows[0]["error"])
+    assert "ServiceUnavailable" in cast("str", rows[0]["error"])
 
 
 def test_call_gemini_empty_response_is_operational(monkeypatch: pytest.MonkeyPatch) -> None:
     _no_budget(monkeypatch)
     _gemini_ready(monkeypatch)
+    monkeypatch.setattr(gemini_backend.genai, "configure", _noop_configure)
+    monkeypatch.setattr(gemini_backend.genai, "GenerativeModel", _FakeModel)
     monkeypatch.setattr(gemini_backend, "record_llm_call", _record_discard)
-    monkeypatch.setattr(subprocess, "run", _run_returning(_success_envelope("   ")))
-    with pytest.raises(RuntimeError, match="empty `response`"):
+    _FakeModel.returning(_fake_response("   "))
+
+    with pytest.raises(RuntimeError, match="empty response"):
         gemini_backend.call_gemini("p", purpose="bear_case")
 
 
-def test_call_gemini_missing_binary_raises_setup_error(
+def test_call_gemini_missing_api_key_raises_setup_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _no_budget(monkeypatch)
     monkeypatch.setattr(gemini_backend, "_gemini_setup_verified", False)
-    monkeypatch.setattr(gemini_backend, "_gemini_cli_path", None)
-
-    def _which_none(name: str) -> None:
-        return None
-
-    monkeypatch.setattr(gemini_backend.shutil, "which", _which_none)
-    with pytest.raises(llm_cli.LLMSetupError, match="npm install -g @google/gemini-cli"):
+    monkeypatch.setattr(gemini_backend, "_gemini_api_key", None)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    with pytest.raises(llm_cli.LLMSetupError, match="aistudio"):
         gemini_backend.call_gemini("p", purpose="bear_case")
 
 
 def test_call_gemini_budget_hard_block_short_circuits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The shared budget gate runs BEFORE any subprocess work, and a hard
-    block must prevent the call entirely."""
+    """The shared budget gate runs BEFORE any API work, and a hard block must
+    prevent the call entirely."""
 
     def _block(purpose: str | None, *, force_budget_bypass: bool) -> None:
         raise llm_cli.LLMBudgetExceeded(f"{purpose}: monthly cap exceeded")
 
     monkeypatch.setattr(llm_cli, "_enforce_budget_pre_call", _block)
+    monkeypatch.setattr(gemini_backend.genai, "GenerativeModel", _FakeModel)
 
-    def _fail(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        raise AssertionError("subprocess must not run past a hard budget block")
-
-    monkeypatch.setattr(subprocess, "run", _fail)
     with pytest.raises(llm_cli.LLMBudgetExceeded):
         gemini_backend.call_gemini("p", purpose="bear_case")
+    assert _FakeModel.last_instances == []  # never constructed past the hard block
 
 
 # ---------------------------------------------------------------------------
-# Envelope parsing + usage mapping
+# NotFound self-anneal (preview alias 404s -> live catalog -> stable fallback)
 
 
-def test_parse_gemini_json_output_success() -> None:
-    text, meta = gemini_backend.parse_gemini_json_output(
-        _success_envelope("hello", models={"gemini-2.5-pro": {"prompt": 1, "candidates": 2}})
-    )
-    assert text == "hello"
-    assert meta["session_id"] == "abc123"
+def test_call_gemini_anneals_on_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A NotFound on the resolved model queries the live catalog for a Flash
+    replacement, then retries in order until one succeeds."""
+    _no_budget(monkeypatch)
+    _gemini_ready(monkeypatch)
+    monkeypatch.setattr(gemini_backend, "_effective_fast_model", None)
+    monkeypatch.setattr(gemini_backend.genai, "configure", _noop_configure)
+    monkeypatch.setattr(gemini_backend, "_discover_api_flash_model", lambda: "gemini-3.2-flash")
+    monkeypatch.setattr(gemini_backend, "record_llm_call", _record_discard)
+
+    attempted_models: list[str] = []
+
+    class _AnnealModel:
+        def __init__(self, model_id: str) -> None:
+            attempted_models.append(model_id)
+            self.model_id = model_id
+
+        def generate_content(self, prompt: str, **kwargs: object) -> SimpleNamespace:
+            if self.model_id == gemini_backend.GEMINI_BACKEND_FAST_MODEL:
+                raise google_exceptions.NotFound(f"{self.model_id} is not found")
+            return _fake_response("recovered")
+
+    monkeypatch.setattr(gemini_backend.genai, "GenerativeModel", _AnnealModel)
+
+    out = gemini_backend.call_gemini("p", purpose="viewspec_compile")
+    assert out == "recovered"
+    assert attempted_models == [
+        gemini_backend.GEMINI_BACKEND_FAST_MODEL,
+        "gemini-3.2-flash",
+    ]
+    assert gemini_backend._effective_fast_model == "gemini-3.2-flash"
 
 
-@pytest.mark.parametrize(
-    "stdout, match",
-    [
-        ("not json at all", "did not return JSON"),
-        ("[1, 2]", "non-object JSON"),
-        (
-            json.dumps({"session_id": "x", "error": {"message": "boom", "code": 41}}),
-            "reported error",
-        ),
-        (json.dumps({"session_id": "x"}), "missing string `response`"),
-        (json.dumps({"session_id": "x", "response": 7}), "missing string `response`"),
-    ],
-)
-def test_parse_gemini_json_output_failures(stdout: str, match: str) -> None:
-    with pytest.raises(ValueError, match=match):
-        gemini_backend.parse_gemini_json_output(stdout)
+def test_call_gemini_anneals_to_stable_fallback_when_catalog_lookup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the live catalog lookup itself fails (network, etc.), the sequence
+    still ends with the hardcoded stable GA fallback."""
+    _no_budget(monkeypatch)
+    _gemini_ready(monkeypatch)
+    monkeypatch.setattr(gemini_backend, "_effective_fast_model", None)
+    monkeypatch.setattr(gemini_backend.genai, "configure", _noop_configure)
+    monkeypatch.setattr(gemini_backend, "_discover_api_flash_model", lambda: None)
+    monkeypatch.setattr(gemini_backend, "record_llm_call", _record_discard)
+
+    attempted_models: list[str] = []
+
+    class _AnnealModel:
+        def __init__(self, model_id: str) -> None:
+            attempted_models.append(model_id)
+            self.model_id = model_id
+
+        def generate_content(self, prompt: str, **kwargs: object) -> SimpleNamespace:
+            if self.model_id != gemini_backend._GEMINI_FAST_MODEL_FALLBACK:
+                raise google_exceptions.NotFound(f"{self.model_id} is not found")
+            return _fake_response("recovered via stable GA")
+
+    monkeypatch.setattr(gemini_backend.genai, "GenerativeModel", _AnnealModel)
+
+    out = gemini_backend.call_gemini("p", purpose="viewspec_compile")
+    assert out == "recovered via stable GA"
+    assert attempted_models == [
+        gemini_backend.GEMINI_BACKEND_FAST_MODEL,
+        gemini_backend._GEMINI_FAST_MODEL_FALLBACK,
+    ]
 
 
-def test_usage_meta_tolerates_junk_stats() -> None:
+# ---------------------------------------------------------------------------
+# Usage mapping edge cases
+
+
+def test_usage_meta_tolerates_junk_or_missing_usage() -> None:
     for payload in (
+        None,
         {},
-        {"stats": "nope"},
-        {"stats": {"models": "nope"}},
-        {"stats": {"models": {"m": "nope"}}},
-        {"stats": {"models": {"m": {"tokens": {"prompt": "NaN", "candidates": True}}}}},
+        {"prompt_token_count": "NaN", "candidates_token_count": True},
     ):
-        meta = gemini_backend.usage_meta_from_gemini_stats(cast("dict[str, object]", payload))
+        meta = gemini_backend.usage_meta_from_response(cast("dict[str, object] | None", payload))
         usage = cast("dict[str, object]", meta["usage"])
         assert usage["input_tokens"] == 0
         assert usage["output_tokens"] == 0
@@ -622,7 +678,7 @@ def test_compare_backends_smoke_prompts_are_real_purposes(
         assert item["expected"]
 
     def _boom(prompt: str, **kw: object) -> str:
-        raise llm_cli.LLMSetupError("login missing")
+        raise llm_cli.LLMSetupError("no api key configured")
 
     monkeypatch.setattr(compare_backends, "call_llm", _boom)
     result = compare_backends._run_one_backend(

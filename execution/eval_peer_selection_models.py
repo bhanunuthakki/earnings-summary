@@ -211,7 +211,7 @@ def pick_winner(results: list[ModelResult]) -> tuple[ModelResult, str]:
             f"(recall={winner.avg_recall:.3f} vs Sonnet={baseline.avg_recall:.3f}). "
             "DO NOT silently route production — recommend adding 'peer_selection' to "
             "GEMINI_BACKEND_ALLOWED_PURPOSES + GEMINI_MODELS pin for owner sign-off "
-            "(directives/gemini_backend.md). $0-marginal-cost subscription model at "
+            "(directives/gemini_backend.md). Sub-cent metered API cost at "
             "superior recall is a strong cost win."
         )
     else:
