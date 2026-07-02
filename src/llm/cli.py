@@ -300,10 +300,12 @@ LLM_MODELS: dict[str, str] = {
     # before it ever reaches the owner, so a cheaper model can only be promoted
     # in once that gate confirms parity.
     "calibration_coach": "claude-opus-4-8",
-    # Short, structured, batch — Gemini Flash at parity with Haiku, lower cost
-    # (Chip 2 PR D first promotions; model-eval cron watches for regression).
-    "intake_classifier": "gemini-3-flash-preview",
-    "transcript_metadata": "gemini-3-flash-preview",
+    # Short, structured, batch classifiers — Haiku tier. Promoted to Gemini Flash
+    # (#538), reverted 2026-07-02: the metered Gemini backend is off the active
+    # pareto (owner opted out of paying for it). A cheaper open-weight candidate
+    # (OpenRouter DeepSeek/Qwen) can re-take these via the eval-gated sweep.
+    "intake_classifier": FAST_CLASSIFIER_MODEL,
+    "transcript_metadata": FAST_CLASSIFIER_MODEL,
     "market_signals": FAST_CLASSIFIER_MODEL,
     "patent_timeline": FAST_CLASSIFIER_MODEL,
     # Decision extraction (src/decision_extractor.py): per-paragraph
@@ -340,31 +342,31 @@ LLM_MODELS: dict[str, str] = {
     # "What would change my mind" memo section into structured
     # {metric, op, threshold, unit, for_periods} conditions against a supplied
     # metric vocabulary — a narrow copy-the-token JSON task over ~1-2KB of
-    # prose, run once per new decision. Gemini Flash (Chip 2 PR D): same
-    # closed-schema pick-from-list shape Flash excels at; golden set at
+    # prose, run once per new decision — Haiku tier (Gemini un-pinned 2026-07-02,
+    # off the active pareto); golden set at
     # evals/golden/decision_conditions_extract.json guards quality.
-    "decision_conditions_extract": "gemini-3-flash-preview",
+    "decision_conditions_extract": FAST_CLASSIFIER_MODEL,
     # Qualitative "what would change my mind" extraction (L9 PR2): the
     # non-numeric twin of the above — pull event-shaped conditions ("CEO
     # departs", "competitor enters") + a news/earnings routing tag from the same
     # prose. Same narrow, closed-vocab JSON shape, run once per new decision →
-    # the same cheap Gemini Flash pick.
-    "qualitative_conditions_extract": "gemini-3-flash-preview",
+    # the same cheap Haiku tier (Gemini un-pinned 2026-07-02, off the active pareto).
+    "qualitative_conditions_extract": FAST_CLASSIFIER_MODEL,
     # NL → ViewSpec compile (master build P5.2): the Explore panel's query
     # box. Narrowly-scoped JSON-output against a supplied metric vocabulary,
     # interactive (the owner is waiting at the input) — latency dominates.
-    # Gemini Flash (Chip 2 PR D): copy-the-token task, golden set at
-    # evals/golden/viewspec_compile.json guards quality; repair retry in
-    # viewspec.nl_compile covers the degraded case.
-    "viewspec_compile": "gemini-3-flash-preview",
+    # Haiku tier (Gemini un-pinned 2026-07-02, off the active pareto): copy-the-token
+    # task, golden set at evals/golden/viewspec_compile.json guards quality; repair
+    # retry in viewspec.nl_compile covers the degraded case.
+    "viewspec_compile": FAST_CLASSIFIER_MODEL,
     # Ask pack router (src/ask/router.py, fund-grade build S4): selects which
     # portfolio evidence packs (holdings / conviction / dcf / decisions /
     # journal / performance) a narrative ask turn needs. Closed-enum JSON
     # selection on the interactive ask path — latency dominates.
-    # Gemini Flash (Chip 2 PR D): pick-from-a-list task, mis-selection fails
-    # closed to document-only evidence. Scored by evals/golden/ask_pack_router.json;
-    # budget row seeded by alembic 0089 (skip mode).
-    "ask_pack_router": "gemini-3-flash-preview",
+    # Haiku tier (Gemini un-pinned 2026-07-02, off the active pareto): pick-from-a-list
+    # task, mis-selection fails closed to document-only evidence. Scored by
+    # evals/golden/ask_pack_router.json; budget row seeded by alembic 0089 (skip mode).
+    "ask_pack_router": FAST_CLASSIFIER_MODEL,
     # Ask claim-grounding audit (src/ask/claims.py, fund-grade build S8):
     # after a grounded narrative answer streams, one short call re-reads the
     # answer against its numbered evidence and emits the claims→cites map
