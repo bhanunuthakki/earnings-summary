@@ -199,3 +199,42 @@ def falsifier_action(
         return True
     finally:
         conn.close()
+
+
+def close_intent(
+    source_ref: str,
+    verdict: str,
+    *,
+    reason: str,
+    closed_by: str,
+    db_path: Path | str | None = None,
+) -> bool:
+    """Close a standing intent with provenance — the freshness rule's write path.
+
+    Called by the claude_session landing channel when a chat resolves a topic
+    the corpus still carries as live (the NVDA-LEAP failure mode). ``verdict``
+    is ``resolved-rejected`` or ``done``; the closure stamps who/why so the
+    coach's freshness gate can verify the intent is settled."""
+    if verdict not in ("resolved-rejected", "done"):
+        raise ValueError(f"intent closure verdict must be resolved-rejected|done, got {verdict!r}")
+    stamp = now_iso()
+    conn = open_conn(db_path)
+    try:
+        cur = conn.execute(
+            """
+            UPDATE analyst_notes
+            SET context_json = json_set(coalesce(context_json,'{}'),
+                                        '$.status', ?, '$.closed_by', ?,
+                                        '$.closed_at', ?, '$.reason', ?,
+                                        '$.reconcile', ?, '$.reconciled_at', ?),
+                status = 'resolved',
+                resolved_at = ?,
+                updated_at = ?
+            WHERE kind = 'intent' AND source_ref = ? AND status != 'resolved'
+            """,
+            (verdict, closed_by, stamp, reason, verdict, stamp, stamp, stamp, source_ref),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()

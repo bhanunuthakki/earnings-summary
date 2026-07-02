@@ -675,6 +675,7 @@ def attach_conditions(
         "no_conditions": 0,
         "no_section": 0,
         "parse_failed": 0,
+        "awaiting_ratification": 0,
         "db_unavailable": 0,
     }
     conn = _open(db_path)
@@ -682,11 +683,17 @@ def attach_conditions(
         tally["db_unavailable"] = 1
         return tally
     try:
-        prose_col = (
-            "d.source_prose AS owner_prose"
-            if "source_prose" in _decision_columns(conn)
-            else "NULL AS owner_prose"
-        )
+        cols = _decision_columns(conn)
+        # Owner rows (0130) carry their falsifiability text ON the row: the
+        # falsifier column IS the condition prose (the rationale in source_prose
+        # is the WHY, not the tripwire — feeding it would extract spurious
+        # conditions). Falsifier-first, source_prose as the L11 fallback.
+        if "falsifier" in cols and "source_prose" in cols:
+            prose_col = "COALESCE(NULLIF(TRIM(d.falsifier), ''), d.source_prose) AS owner_prose"
+        elif "source_prose" in cols:
+            prose_col = "d.source_prose AS owner_prose"
+        else:
+            prose_col = "NULL AS owner_prose"
         rows = conn.execute(
             f"""
             SELECT d.id, d.ticker, d.source_artifact_id, d.source_memo_id,
@@ -703,10 +710,22 @@ def attach_conditions(
 
         for row in rows:
             decision_id = int(row["id"])
+            if row["ticker"] is None:
+                # Portfolio-scope owner decision (0130): no per-ticker metric
+                # vocabulary to resolve against — displayed, never evaluated.
+                _stamp(conn, decision_id, [])
+                tally["no_section"] += 1
+                continue
             ticker = str(row["ticker"]).upper()
-            section = resolve_extraction_section(
-                row["artifact_md"], row["memo_md"], row["owner_prose"]
-            )
+            owner_prose = row["owner_prose"]
+            if isinstance(owner_prose, str) and "(inferred)" in owner_prose.lower():
+                # An unratified falsifier (the interview wrote it, the owner
+                # hasn't). Leave UNSTAMPED — zero LLM spend, retried after the
+                # reconcile pass strips the marker. Coaching on words the owner
+                # never said is the trust-destroying failure mode.
+                tally["awaiting_ratification"] += 1
+                continue
+            section = resolve_extraction_section(row["artifact_md"], row["memo_md"], owner_prose)
             if section is None:
                 _stamp(conn, decision_id, [])
                 tally["no_section"] += 1
@@ -855,17 +874,36 @@ def _stamp_qualitative(
 
 
 def load_open_decisions(conn: sqlite3.Connection, ticker: str) -> list[OpenDecision]:
-    """Not-yet-graded decisions carrying at least one condition — the
-    evaluator rung's scan input. Tolerant of the pre-0086 schema (returns [])."""
+    """Decisions carrying at least one condition that the evaluator rung should
+    still check. Two lifetimes (0130):
+
+    - an ADVISOR recommendation's conditions retire once the decision is
+      graded (``outcome_at`` set) — the call has been scored, the window closed;
+    - an OWNER decision's falsifier guards the POSITION, not the past trade —
+      it stays evaluable after grading for as long as the name is still a
+      portfolio holding (the daily list_type reconciler keeps that current).
+
+    Tolerant of the pre-0086/pre-0130 schema (returns [] / falls back)."""
+    owner_alive = ""
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)").fetchall()}
+        if "decided_by" in cols:
+            owner_alive = (
+                " OR (d.decided_by = 'owner' AND EXISTS ("
+                "SELECT 1 FROM tracked_companies t WHERE t.ticker = d.ticker"
+                " AND t.list_type = 'portfolio'))"
+            )
+    except sqlite3.Error:
+        owner_alive = ""
     try:
         rows = conn.execute(
-            """
-            SELECT id, ticker, recommendation_kind, recommendation_value,
-                   made_at, source_lens, decision_conditions
-            FROM decisions
-            WHERE ticker = ? AND outcome_at IS NULL
-              AND decision_conditions IS NOT NULL AND decision_conditions != '[]'
-            ORDER BY made_at DESC
+            f"""
+            SELECT d.id, d.ticker, d.recommendation_kind, d.recommendation_value,
+                   d.made_at, d.source_lens, d.decision_conditions
+            FROM decisions d
+            WHERE d.ticker = ? AND (d.outcome_at IS NULL{owner_alive})
+              AND d.decision_conditions IS NOT NULL AND d.decision_conditions != '[]'
+            ORDER BY d.made_at DESC
             """,
             (ticker.upper(),),
         ).fetchall()
