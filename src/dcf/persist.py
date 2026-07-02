@@ -5,8 +5,12 @@ with the legacy columns: only the fields that map to the new flow are
 populated. Legacy columns (base_revenue, revenue_growths_json, fcf_margin,
 breakdown_json, segment_name) stay NULL on a Phase 3 write.
 
-UNIQUE(ticker) is enforced (migration 0018) — we use INSERT OR REPLACE
-to upsert.
+Versioning (migration 0137): dcf_runs no longer overwrites. A new run supersedes
+the prior current run for the same ticker (+segment) — the old row is kept with
+is_latest=0 / superseded_at, and the new row lands as is_latest=1 — so valuation
+history survives (a superseded model can be diffed, and any decision resting on it
+flagged stale). On a pre-0137 schema this falls back to the legacy INSERT OR REPLACE
+keyed on the old UNIQUE(ticker) index (migration 0018).
 
 Audit columns from migration 0024 (live_price, live_price_at,
 over_under_pct, mos_bar_used, assumption_snapshot_json) are populated;
@@ -28,6 +32,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 
 from dcf import valuation
+from model_provenance.versioning import mark_superseded_by, supersede_current
 
 
 @dataclass(frozen=True)
@@ -77,8 +82,19 @@ def _has_sync_columns(conn: sqlite3.Connection) -> bool:
     return "assumptions_sync_status" in cols and "assumptions_synced_at" in cols
 
 
+def _has_versioning_columns(conn: sqlite3.Connection) -> bool:
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
+    return "is_latest" in cols
+
+
 def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
-    """INSERT-OR-REPLACE the dcf_runs row keyed by ticker.
+    """Persist a new dcf_runs version for ``row.ticker``.
+
+    On the versioned schema (migration 0137+) the prior current run for the ticker
+    (unsegmented) is superseded — flipped to is_latest=0 with a superseded_at stamp
+    and a back-link to the new row — and the new run is inserted as is_latest=1, so
+    valuation history is preserved. On a pre-0137 schema it falls back to the legacy
+    INSERT-OR-REPLACE keyed on ticker.
 
     A row carrying sync fields against a pre-0091 schema raises (loud, with
     the fix) rather than dropping them — a silently-unpersisted sync status
@@ -115,28 +131,43 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
         params["assumptions_synced_at"] = (
             row.assumptions_synced_at.isoformat() if row.assumptions_synced_at else None
         )
-    conn.execute(
-        f"""
-        INSERT OR REPLACE INTO dcf_runs (
-            ticker, valuation_date, horizon_years,
-            wacc, terminal_growth,
-            npv, npv_per_share, shares_outstanding,
-            currency, notes, run_id,
-            live_price, live_price_at, over_under_pct,
-            mos_bar_used, assumption_snapshot_json,
-            revenue_growths_json, fcf_margin{sync_cols}
-        ) VALUES (
-            :ticker, :valuation_date, :horizon_years,
-            :wacc, 0,
-            :npv, :npv_per_share, :shares_outstanding,
-            :currency, :notes, :run_id,
-            :live_price, :live_price_at, :over_under_pct,
-            :mos_bar_used, :assumption_snapshot_json,
-            '[]', 0{sync_vals}
-        )
-        """,
-        params,
+
+    base_cols = (
+        "ticker, valuation_date, horizon_years, wacc, terminal_growth, "
+        "npv, npv_per_share, shares_outstanding, currency, notes, run_id, "
+        "live_price, live_price_at, over_under_pct, mos_bar_used, "
+        "assumption_snapshot_json, revenue_growths_json, fcf_margin"
     )
+    base_vals = (
+        ":ticker, :valuation_date, :horizon_years, :wacc, 0, "
+        ":npv, :npv_per_share, :shares_outstanding, :currency, :notes, :run_id, "
+        ":live_price, :live_price_at, :over_under_pct, :mos_bar_used, "
+        ":assumption_snapshot_json, '[]', 0"
+    )
+
+    if _has_versioning_columns(conn):
+        # Supersede the prior current run for this ticker (unsegmented — the Phase 3
+        # write leaves segment_name NULL), then insert the new run as is_latest=1.
+        superseded = supersede_current(
+            conn,
+            table="dcf_runs",
+            entity_where="ticker = :ticker AND COALESCE(segment_name, '') = ''",
+            entity_params={"ticker": params["ticker"]},
+        )
+        cur = conn.execute(
+            f"INSERT INTO dcf_runs ({base_cols}, is_latest{sync_cols}) "
+            f"VALUES ({base_vals}, 1{sync_vals})",
+            params,
+        )
+        mark_superseded_by(
+            conn, table="dcf_runs", superseded_ids=superseded, new_id=int(cur.lastrowid or 0)
+        )
+    else:
+        conn.execute(
+            f"INSERT OR REPLACE INTO dcf_runs ({base_cols}{sync_cols}) "
+            f"VALUES ({base_vals}{sync_vals})",
+            params,
+        )
     conn.commit()
 
 
