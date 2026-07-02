@@ -45,7 +45,13 @@ LLM_CAPTURE_PURPOSES_ENV = "LLM_CAPTURE_PURPOSES"
 # the sweep sampler's difficulty classifier (its prompts EMBED captured
 # production prompts — recapturing them would nest corpora).
 CAPTURE_DENYLIST: frozenset[str] = frozenset(
-    {"backend_compare_judge", "eval_judge", "case_difficulty_classify"}
+    {
+        "backend_compare_judge",
+        "eval_judge",
+        "case_difficulty_classify",
+        "optimizer_nominator",
+        "model_frontier_research",
+    }
 )
 
 

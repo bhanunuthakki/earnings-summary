@@ -192,6 +192,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # IS the eval_case_features cache key: bumping it invalidates every cached
     # classification by key and forks stratification history cleanly.
     "case_difficulty_classify": "v1",
+    # Meta-eval steering (llm/nominator.py + llm/frontier.py, §1.2/§10.1).
+    "optimizer_nominator": "v1",
+    "model_frontier_research": "v1",
     # SayDo commitment extraction (compute/say_do_extractor.build_extraction_prompt).
     # Bump when the extraction prompt is materially rewritten; commitment_scan_log
     # rows carry the version, so stale-version scans can be invalidated (DELETE

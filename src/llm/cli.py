@@ -139,6 +139,14 @@ LLM_MODELS: dict[str, str] = {
     # prompt. Short + closed classification → FAST tier; traffic rides
     # scope="meta_eval" + CAPTURE_DENYLIST (never enters a harvest corpus).
     "case_difficulty_classify": FAST_CLASSIFIER_MODEL,
+    # Meta-eval steering (§1.2/§10.1): the monthly nominator ranks what the
+    # sweep tests next (risk tiering, family grouping, exclusions-with-TTL) and
+    # the frontier researcher web-verifies the cross-provider candidate pool.
+    # Both are judgment-tier calls, ~1-2/month each → Opus; scope="meta_eval" +
+    # CAPTURE_DENYLIST; fail-closed validation + deterministic fallbacks mean a
+    # bad answer steers nothing.
+    "optimizer_nominator": "claude-opus-4-8",
+    "model_frontier_research": "claude-opus-4-8",
     # The Ledger Phase-1 artifact drafters (web-less, feed the gated mutating kinds).
     # thesis_entry_draft distills a memo + evidence into an append-only ledger entry;
     # research_code_spec drafts an inert, human-reviewed code-change spec. Both are

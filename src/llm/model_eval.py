@@ -31,7 +31,7 @@ from dataclasses import dataclass
 
 from llm.backend_judge import CLAUDE, GEMINI, JudgedPair, judge_pair
 from llm.cli import call_llm
-from llm.model_ladder import family_of
+from llm.model_ladder import backend_for
 
 log = logging.getLogger(__name__)
 
@@ -62,8 +62,14 @@ def run_model(
 ) -> ModelRunResult:
     """Run one model on a prompt via the canonical client. Never raises — a
     failed run is recorded as data (the eval records how each model behaved).
-    Budget is bypassed (measurement, not production) and scope tags it."""
-    backend = GEMINI if family_of(model_id) == GEMINI else CLAUDE
+    Budget is bypassed (measurement, not production) and scope tags it.
+
+    The backend is passed EXPLICITLY (``backend_for`` — family, else the
+    slash-slug OpenRouter convention for frontier-discovered models): an
+    explicit backend makes ``call_llm`` raise on that backend's failure instead
+    of silently falling back to Claude — an eval must record the CANDIDATE's
+    failure, never grade a stealth Claude answer as the candidate's."""
+    backend = backend_for(model_id)
     t0 = time.monotonic()
     try:
         response = call_llm(

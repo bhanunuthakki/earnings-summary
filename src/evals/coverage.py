@@ -66,7 +66,14 @@ OUTCOME_PURPOSES: frozenset[str] = frozenset(
 # mode. case_difficulty_classify is the sweep sampler's difficulty classifier
 # (meta_eval_governance.md §2) — it stratifies the corpus others are graded on.
 META_PURPOSES: frozenset[str] = frozenset(
-    {"eval_judge", "backend_compare_judge", "bear_case_grading", "case_difficulty_classify"}
+    {
+        "eval_judge",
+        "backend_compare_judge",
+        "bear_case_grading",
+        "case_difficulty_classify",
+        "optimizer_nominator",
+        "model_frontier_research",
+    }
 )
 
 # The fallback budget row's synthetic purpose — never an LLM call's own.
