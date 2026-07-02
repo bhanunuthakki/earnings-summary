@@ -19,7 +19,8 @@ Rate-limited per SEC fair-use policy: ~10 req/sec absolute max; we sleep 0.2s
 between tickers (~5 req/sec) to stay polite.
 
 Usage:
-    python execution/fetch_sec_xbrl.py                   # all 27 mapped tickers
+    python execution/fetch_sec_xbrl.py                   # tracked universe filtered to CIK_MAP
+    python execution/fetch_sec_xbrl.py --all-mapped      # every CIK_MAP ticker
     python execution/fetch_sec_xbrl.py --ticker NU       # single ticker
 """
 
@@ -37,9 +38,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from llm_artifact_store import mark_artifacts_dirty_for_fact_change  # noqa: E402
 from models.runs import StageStatus  # noqa: E402
-from pipeline.queries import open_db  # noqa: E402
+from pipeline.queries import open_db, tracked_companies_for_user  # noqa: E402
 from pipeline.run_accounting import end_run, start_run  # noqa: E402
-from pipeline.sec_xbrl import CIK_MAP, ingest_for_ticker  # noqa: E402
+from pipeline.sec_xbrl import CIK_MAP, NO_SEC_FILERS, ingest_for_ticker  # noqa: E402
 
 _PER_TICKER_DELAY_S = 0.2
 
@@ -62,21 +63,42 @@ def _flag_silent_staleness(conn: sqlite3.Connection, ticker: str) -> bool:
     return cur.rowcount > 0
 
 
-def _resolve_tickers(args: argparse.Namespace) -> list[str]:
+def _resolve_tickers(args: argparse.Namespace, conn: sqlite3.Connection) -> list[str]:
+    """Default scope: the live tracked universe (portfolio + evaluation +
+    watchlist) filtered to CIK_MAP, so list changes never need a script edit. Tracked
+    names without a CIK are reported on stderr — NO_SEC_FILERS silently
+    (documented, expected), unknown ones loudly (CIK_MAP is stale)."""
     if args.ticker:
         return [args.ticker.upper()]
-    return sorted(CIK_MAP.keys())
+    if args.all_mapped:
+        return sorted(CIK_MAP.keys())
+    try:
+        tracked = [c.ticker.upper() for c in tracked_companies_for_user(conn)]
+    except sqlite3.Error:
+        # Synthetic env without tracked_companies — fall back to the full map.
+        return sorted(CIK_MAP.keys())
+    uncovered = sorted(t for t in tracked if t not in CIK_MAP and t not in NO_SEC_FILERS)
+    if uncovered:
+        sys.stderr.write(
+            json.dumps({"event": "sec_cik_map_stale", "tickers_missing_cik": uncovered}) + "\n"
+        )
+    return sorted(t for t in tracked if t in CIK_MAP)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ticker", help="Single ticker (must be in CIK_MAP)")
+    parser.add_argument(
+        "--all-mapped",
+        action="store_true",
+        help="Fetch every CIK_MAP ticker instead of the tracked universe",
+    )
     parser.add_argument("--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"))
     args = parser.parse_args()
 
     conn = open_db(args.db)
     try:
-        tickers = _resolve_tickers(args)
+        tickers = _resolve_tickers(args, conn)
         unmapped = [t for t in tickers if t not in CIK_MAP]
         if unmapped:
             print(json.dumps({"error": "no CIK for", "tickers": unmapped}, indent=2))

@@ -10,6 +10,7 @@ import pytest
 from models.facts import FiscalPeriodType
 from pipeline.sec_xbrl import (
     CIK_MAP,
+    NO_SEC_FILERS,
     TAG_LADDERS,
     _AccessionRecord,
     _enumerate_accessions,
@@ -66,43 +67,42 @@ def conn() -> sqlite3.Connection:
     return c
 
 
+# Snapshot of the tracked universe (portfolio + evaluation + watchlist,
+# prod tracked_companies 2026-07-02). Refresh this set when the book changes;
+# the fetch script itself scopes from the live DB, this only guards CIK_MAP.
+_TRACKED_UNIVERSE_2026_07 = {
+    # portfolio
+    "BKNG", "BN", "MELI", "META", "NOW", "NU", "NVO", "RBRK", "UBER", "VEEV", "WIX",
+    # evaluation
+    "ABNB", "AMZN", "AVGO", "BHP", "CDNS", "CGEH", "CRWV", "DHR", "DLO", "FCX",
+    "FIGR", "FNV", "FRVO", "GOOG", "LLY", "MDB", "NBIS", "NSP", "NTDOY", "NTRA",
+    "NVDA", "ORCL", "RGEN", "SNOW", "SNPS", "SOFI", "TECH", "TEM", "TMO", "V", "WGS",
+    # watchlist
+    "AMAT", "AMD", "ASML", "AWK", "BAM", "BEPC", "BIPC", "BRK-B", "CFLT", "CIEN",
+    "COHR", "COST", "CRM", "CRWD", "DDOG", "ENB", "EPD", "ESTC", "FTNT", "GTLB",
+    "HASI", "HBM", "HDB", "HEI", "IBN", "ISRG", "IVN", "JPM", "KLAC", "KVYO",
+    "LITE", "LMND", "MA", "MRVL", "MSFT", "MU", "NEE", "NET", "NVS", "OKTA",
+    "PANW", "RIO", "ROP", "SCCO", "SE", "STNE", "TDG", "TECK", "TOL", "TRP",
+    "TSM", "TXN", "WMB", "WPM", "XEL", "ZS",
+}  # fmt: skip
+
+
 def test_cik_map_covers_all_tracked_tickers() -> None:
-    """Every portfolio + watchlist + ETF ticker should have a CIK except FLKR (ETF)."""
-    expected = {
-        "ABNB",
-        "AMAT",
-        "AMZN",
-        "ASML",
-        "BHP",
-        "BKNG",
-        "BN",
-        "CNQ",
-        "FCX",
-        "FNV",
-        "GOOG",
-        "HDB",
-        "JPM",
-        "LLY",
-        "LMND",
-        "MELI",
-        "META",
-        "MU",
-        "NOW",
-        "NU",
-        "NVO",
-        "RBRK",
-        "RIO",
-        "SOFI",
-        "TOL",
-        "TPL",
-        "TSM",
-        "VALE",
-        "VEEV",
-        "WIX",
-        "WPM",
-        "WY",
-    }
-    assert expected == set(CIK_MAP)
+    """Every tracked ticker has a CIK except the documented no-SEC filers."""
+    covered = _TRACKED_UNIVERSE_2026_07 - NO_SEC_FILERS
+    missing = sorted(covered - set(CIK_MAP))
+    assert not missing, f"tracked tickers missing from CIK_MAP: {missing}"
+
+
+def test_no_sec_filers_never_carry_a_cik() -> None:
+    """A NO_SEC_FILERS entry with a CIK is a contradiction — one list must win."""
+    overlap = NO_SEC_FILERS & set(CIK_MAP)
+    assert not overlap, f"tickers in both NO_SEC_FILERS and CIK_MAP: {sorted(overlap)}"
+
+
+def test_ciks_are_ten_digit_zero_padded() -> None:
+    for ticker, cik in CIK_MAP.items():
+        assert len(cik) == 10 and cik.isdigit(), (ticker, cik)
 
 
 def test_period_span_months_handles_quarterly() -> None:
