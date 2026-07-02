@@ -158,6 +158,29 @@ def tax_treatment(account_type: str | None, subtype: str | None) -> str:
     return "unknown"
 
 
+def tax_treatment_from_name(account_name: str | None) -> str:
+    """Fallback bucket classifier from the ACCOUNT NAME, for accounts absent
+    from ``/api/plaid/items`` (expired item, brokerage sub-accounts).
+
+    Live examples this recovers: "BrokerageLink Roth" -> tax_free, "Health
+    Savings Account" -> tax_free, "SoFi Self-directed" -> taxable. ``ira`` is
+    matched word-ish (surrounded by non-letters) so e.g. "Admiral" can't hit.
+    Anything unrecognized stays ``unknown`` — downstream tax math flags it
+    rather than guessing.
+    """
+    n = (account_name or "").strip().lower()
+    if not n:
+        return "unknown"
+    if "roth" in n or "hsa" in n or "health savings" in n:
+        return "tax_free"
+    padded = f" {n} "
+    if "401k" in n or "401(k)" in n or " ira " in padded or "retirement" in n:
+        return "tax_deferred"
+    if "brokerage" in n or "individual" in n or "self-directed" in n or "taxable" in n:
+        return "taxable"
+    return "unknown"
+
+
 def fetch_live_portfolio(
     *,
     api_url: str | None = None,
@@ -242,13 +265,19 @@ def _build_positions(
             for acct in cast("list[dict[str, object]]", raw_accounts):
                 aid = acct.get("account_id")
                 aid_int = aid if isinstance(aid, int) else -1
+                account_name = _s(acct.get("account_name")) or "?"
+                # Plaid type/subtype first; accounts missing from /plaid/items
+                # (or with an unmapped subtype) fall back to the account NAME.
+                treatment = acct_tax.get(aid_int, "unknown")
+                if treatment == "unknown":
+                    treatment = tax_treatment_from_name(account_name)
                 lots.append(
                     TaxLot(
                         account_id=aid_int,
-                        account_name=_s(acct.get("account_name")) or "?",
+                        account_name=account_name,
                         quantity=_f(acct.get("quantity")) or 0.0,
                         market_value=_f(acct.get("institution_value")),
-                        tax_treatment=acct_tax.get(aid_int, "unknown"),
+                        tax_treatment=treatment,
                         cost_basis=_f(acct.get("cost_basis")),
                     )
                 )

@@ -41,6 +41,7 @@ from advisor.store import STANCES
 from identity import DEFAULT_USER_ID
 
 if TYPE_CHECKING:
+    from advisor.position_tax import PositionTaxView
     from compute.thesis_evaluator import ThesisVerdict
 
 __all__ = [
@@ -64,6 +65,7 @@ __all__ = [
     "mechanical_read",
     "parse_verdict_output",
     "render_pre_analysis_chat",
+    "render_tax_lines",
     "review_position",
     "summarize_verdict",
 ]
@@ -127,6 +129,10 @@ class PreAnalysis:
     has_stance: bool
     has_decision_note: bool
     is_index_instrument: bool  # ETF — a macro/factor sleeve, not a single-name thesis
+    # --- tax (deterministic, advisor.position_tax) ---------------------------
+    # None only on PreAnalysis objects built before the tax stage (tests, old
+    # callers); build_pre_analysis always attaches a view, degraded or not.
+    tax: PositionTaxView | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -360,6 +366,7 @@ def build_pre_analysis(
     market_value_usd: float | None = None
     unrealized_pnl_usd: float | None = None
     live = fetch_live_portfolio(api_url=api_url)
+    pos = None
     if live.available:
         pos = next((p for p in live.positions if (p.ticker or "").upper() == ticker), None)
         if pos is not None:
@@ -420,7 +427,7 @@ def build_pre_analysis(
     break_rule_status, tripped_rules = summarize_verdict(verdict)
     is_index_instrument = instrument_kind is InstrumentType.ETF
 
-    return assemble_pre_analysis(
+    pre = assemble_pre_analysis(
         ticker,
         weight_pct=weight_pct,
         weight_source=weight_source,
@@ -437,6 +444,49 @@ def build_pre_analysis(
         is_index_instrument=is_index_instrument,
         at_price=at_price,
     )
+
+    # --- tax view: lots from the tracker feed, honest degrade otherwise ------
+    from advisor.position_tax import (
+        build_position_tax_view,
+        load_tax_profile,
+        propose_trim_fraction,
+        unavailable_tax_view,
+    )
+
+    if pos is None:
+        # live.error carries a full urllib3 pool dump — keep only the exception
+        # type so the chat line stays one line.
+        error_kind = (live.error or "unreachable").split(":", 1)[0]
+        reason = (
+            f"tracker offline ({error_kind})"
+            if not live.available
+            else "ticker not held in the live book"
+        )
+        tax_view = unavailable_tax_view(reason)
+    else:
+        from integrations.portfolio_tracker_client import (
+            TRANSACTION_HISTORY_LIMIT,
+            fetch_transaction_history,
+        )
+
+        trim_fraction, trim_rationale = propose_trim_fraction(
+            weight_pct=pre.weight_pct,
+            target_band=pre.target_band,
+            weight_vs_band=pre.weight_vs_band,
+            concentration_flag=pre.concentration_flag,
+            concentration_pct=CONCENTRATION_PCT,
+        )
+        history = fetch_transaction_history(api_url=api_url)
+        tax_view = build_position_tax_view(
+            pos,
+            history,
+            profile=load_tax_profile(repo_root),
+            at_price=at_price,
+            trim_fraction=trim_fraction,
+            trim_rationale=trim_rationale,
+            history_truncated=history is not None and len(history) >= TRANSACTION_HISTORY_LIMIT,
+        )
+    return replace(pre, tax=tax_view)
 
 
 # --------------------------------------------------------------------------- #
@@ -549,6 +599,20 @@ def parse_verdict_output(payload: dict[str, object]) -> VerdictOutput:
     )
 
 
+def _tax_cost_phrase(tax: PositionTaxView | None) -> str | None:
+    """Compact dollar phrase for the proposed trim's tax cost — ``~$6,200`` or
+    ``~$1,200-$2,000 (term unknown)`` — or None when there is nothing to say
+    (no view, no trim estimate, or a zero/negative bill)."""
+    if tax is None or not tax.available or tax.trim is None:
+        return None
+    trim = tax.trim
+    if trim.tax_high_usd <= 0:
+        return None
+    if abs(trim.tax_high_usd - trim.tax_low_usd) < 0.5:
+        return f"~${trim.tax_low_usd:,.0f}"
+    return f"~${trim.tax_low_usd:,.0f}-${trim.tax_high_usd:,.0f} (term unknown)"
+
+
 def apply_behavioral_guard(pre: PreAnalysis, out: VerdictOutput) -> VerdictOutput:
     """Enforce the sell-winners-too-early rule deterministically.
 
@@ -558,6 +622,10 @@ def apply_behavioral_guard(pre: PreAnalysis, out: VerdictOutput) -> VerdictOutpu
     mistake. Override it to ``hold`` and say why. Legitimate trims survive
     untouched: a breached thesis, an over-valued name (ladder trim/sell), an
     above-band weight, or an oversized concentration all justify trimming.
+
+    When a tax view is on the pre-analysis, an override cites the trim's tax
+    cost as supporting rationale — the tax never *drives* the verdict (that
+    stays framework-only), it corroborates the hold.
     """
     if out.verdict not in ("trim", "sell"):
         return out
@@ -567,11 +635,13 @@ def apply_behavioral_guard(pre: PreAnalysis, out: VerdictOutput) -> VerdictOutpu
         pre.weight_vs_band == "no_band" and pre.concentration_flag
     )
     if thesis_healthy and not_overvalued and not sizing_justified:
+        cost = _tax_cost_phrase(pre.tax)
+        tax_support = f" Trimming now would also cost {cost} in taxes." if cost else ""
         return replace(
             out,
             verdict="hold",
             reason=f"[behavioral guard] Overrode a price-only {out.verdict} on an intact, "
-            f"non-oversized, non-overvalued name. {out.reason}",
+            f"non-oversized, non-overvalued name.{tax_support} {out.reason}",
             behavioral_check=(
                 "This is the sell-winners-too-early pattern (MU/GOOGL/TSM): trimming a "
                 "healthy, non-oversized name that the framework says is not expensive. "
@@ -694,10 +764,40 @@ def _render_memo_body(pre: PreAnalysis, out: VerdictOutput) -> str:
         f"break-rules {pre.break_rule_status}; valuation {pre.valuation_verdict} "
         f"(over/under {pre.dcf_gap_pct}%); concentration_flag={pre.concentration_flag}.",
     ]
+    # The tax block persists with the memo whichever way the verdict went, so
+    # P2.5 grading sees the cost the decision was made against.
+    tax_lines = render_tax_lines(pre.tax)
+    if tax_lines:
+        lines.append("")
+        lines.extend(tax_lines)
     if out.verdict_source != "llm":
         lines.append(f"\n_verdict source: {out.verdict_source}_")
     lines.append(f"\nSTANCE: {out.verdict}")
     return "\n".join(lines)
+
+
+def _tax_context(tax: PositionTaxView | None) -> dict[str, object] | None:
+    """JSON-safe tax summary for the memo ``context`` (grading + audits)."""
+    if tax is None or not tax.available:
+        return None
+    trim = tax.trim
+    out: dict[str, object] = {
+        "approximate": tax.approximate,
+        "taxable_pct_of_position": tax.taxable_pct_of_position,
+        "st_unrealized_usd": tax.st_unrealized_usd,
+        "lt_unrealized_usd": tax.lt_unrealized_usd,
+    }
+    if trim is not None:
+        out.update(
+            trim_rationale=trim.trim_rationale,
+            trim_usd=trim.trim_usd,
+            est_tax_low_usd=trim.tax_low_usd,
+            est_tax_high_usd=trim.tax_high_usd,
+            days_until_lt=trim.days_until_lt,
+            wait_savings_usd=trim.wait_savings_usd,
+            wash_sale_risk=trim.wash_sale_risk,
+        )
+    return out
 
 
 def _persist_review(
@@ -719,6 +819,9 @@ def _persist_review(
         "verdict_source": out.verdict_source,
         "at_price": pre.at_price,
     }
+    tax_context = _tax_context(pre.tax)
+    if tax_context is not None:
+        context["tax"] = tax_context
     result = persist_memo(
         db_path=resolved,
         user_id=user_id,
@@ -805,9 +908,50 @@ def mechanical_read(pre: PreAnalysis) -> str:
     )
 
 
+def render_tax_lines(tax: PositionTaxView | None) -> list[str]:
+    """Markdown bullets for the tax block — shared by the chat reply, the CLI
+    summary, and the persisted memo body. Empty for a pre-tax-stage
+    :class:`PreAnalysis` (``tax=None``); a single honest line when the tracker
+    couldn't supply a view; the dense block otherwise."""
+    if tax is None:
+        return []
+    if not tax.available:
+        return [f"- Tax: unavailable ({tax.reason})"]
+    approx = " (approx)" if tax.approximate else ""
+    pct = f"{tax.taxable_pct_of_position:.0f}%" if tax.taxable_pct_of_position is not None else "—"
+    if tax.st_unrealized_usd is not None and tax.lt_unrealized_usd is not None:
+        embedded = (
+            f"embedded gain ST ${tax.st_unrealized_usd:,.0f} / LT ${tax.lt_unrealized_usd:,.0f}"
+        )
+    else:
+        embedded = "term split unknown"
+    lines = [f"- Tax{approx}: taxable {pct} of position · {embedded}"]
+    trim = tax.trim
+    if trim is not None:
+        cost = _tax_cost_phrase(tax) or "$0"
+        seg = f"- Proposed trim ({trim.trim_rationale}): ~${trim.trim_usd:,.0f} → est. tax {cost}"
+        if (
+            trim.days_until_lt is not None
+            and trim.wait_savings_usd is not None
+            and trim.wait_savings_usd > 0
+        ):
+            seg += f" · waiting {trim.days_until_lt}d (ST→LT) saves ~${trim.wait_savings_usd:,.0f}"
+        if trim.wash_sale_risk:
+            seg += " · wash-sale risk (buy within 30d of a loss lot)"
+        lines.append(seg)
+    if tax.sheltered_note:
+        lines.append(f"- Placement: {tax.sheltered_note}")
+    if tax.approximate and tax.approx_reasons:
+        lines.append(f"- Tax approx because: {'; '.join(tax.approx_reasons[:2])}")
+    if tax.footnote:
+        lines.append(f"- _{tax.footnote}_")
+    return lines
+
+
 def render_pre_analysis_chat(pre: PreAnalysis) -> str:
     """Compact Markdown reply for the ``/review`` chat command — the grounded
-    facts plus the mechanical read, and a pointer to the full calibrated verdict."""
+    facts plus the mechanical read, the tax block, and a pointer to the full
+    calibrated verdict."""
     wt = f"{pre.weight_pct:.1f}%" if pre.weight_pct is not None else "—"
     conc = f"FLAGGED (>= {CONCENTRATION_PCT:.0f}% single name)" if pre.concentration_flag else "no"
     fv = f"${pre.npv_per_share:,.2f}" if pre.npv_per_share is not None else "—"
@@ -824,6 +968,7 @@ def render_pre_analysis_chat(pre: PreAnalysis) -> str:
             f"break-rules {pre.break_rule_status}{watch}",
             f"- Valuation: fair {fv} vs asked {asked} → {gap} (+ = over-valued) · "
             f"ladder: {pre.valuation_verdict}",
+            *render_tax_lines(pre.tax),
             f"- Mechanical read: {mechanical_read(pre)}",
             f"- Full calibrated verdict (LLM + behavioral guard): "
             f"`python execution/review_position.py {pre.ticker}{at_flag}`",

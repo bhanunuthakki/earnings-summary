@@ -19,7 +19,7 @@ from dispatch_registry import Registry, RegistryConflict
 _HELP_TEXT = (
     "Commands handled instantly (no LLM):\n"
     "- /review <TICKER> [at $PRICE] — grounded should-I-trim read: weight, break-rules, "
-    "valuation ladder, sizing\n"
+    "valuation ladder, sizing, tax cost of the trim\n"
     "- /discovery list — top live new-name candidates with why-surfaced\n"
     "- /discovery queue <TICKER> | /discovery dismiss <TICKER> [why...]\n"
     "- /discovery build <TICKER> — start the eval build (~25 min + LLM spend)\n"

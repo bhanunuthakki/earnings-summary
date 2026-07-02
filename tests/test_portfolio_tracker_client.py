@@ -477,6 +477,61 @@ def test_tax_treatment(acct_type: str | None, subtype: str | None, expected: str
     assert tax_treatment(acct_type, subtype) == expected
 
 
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        # Live prod cases the /plaid/items map misses (brokerage sub-accounts).
+        ("BrokerageLink Roth", "tax_free"),
+        ("Health Savings Account", "tax_free"),
+        ("Fidelity HSA", "tax_free"),
+        ("SoFi Self-directed", "taxable"),
+        ("Robinhood Individual", "taxable"),
+        ("BrokerageLink", "taxable"),
+        ("Company 401k", "tax_deferred"),
+        ("Traditional IRA", "tax_deferred"),
+        # "ira" is word-ish: no false positive inside another word.
+        ("Admiral Shares", "unknown"),
+        ("", "unknown"),
+        (None, "unknown"),
+    ],
+)
+def test_tax_treatment_from_name(name: str | None, expected: str) -> None:
+    assert ptc.tax_treatment_from_name(name) == expected
+
+
+def test_positions_fall_back_to_name_when_items_map_misses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    holdings = [
+        {
+            "ticker": "NU",
+            "total_quantity": "100",
+            "total_value": "1000.00",
+            "accounts": [
+                {
+                    # account_id 99 is NOT in /plaid/items -> classify by name.
+                    "account_id": 99,
+                    "account_name": "BrokerageLink Roth",
+                    "quantity": "100",
+                    "institution_value": "1000.00",
+                }
+            ],
+        }
+    ]
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        if "/holdings" in url:
+            return _FakeResp(holdings)
+        if "/plaid/items" in url:
+            return _FakeResp(_ITEMS)
+        return _FakeResp([])
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    live = fetch_live_portfolio(api_url="http://tracker.test")
+    assert live.positions[0].accounts[0].tax_treatment == "tax_free"
+    assert live.by_tax_treatment["tax_free"] == pytest.approx(1000.0)
+
+
 # ----- client parsing + derivation -----
 
 

@@ -29,6 +29,7 @@ from advisor.position_review import (  # noqa: E402
     CONCENTRATION_PCT,
     PreAnalysis,
     build_pre_analysis,
+    render_tax_lines,
 )
 
 
@@ -76,7 +77,10 @@ def _render(pre: PreAnalysis) -> str:
         f"  conviction encoded?  {'yes' if pre.conviction_encoded else 'NO — degrade / encode-first'}",
         f"  has stance / note    {pre.has_stance} / {pre.has_decision_note}",
         f"  index instrument?    {pre.is_index_instrument}",
+        "TAX (deterministic, FIFO lots from the tracker)",
     ]
+    tax_lines = render_tax_lines(pre.tax) or ["- (no tax view on this pre-analysis)"]
+    lines.extend(f"  {ln[2:] if ln.startswith('- ') else ln}" for ln in tax_lines)
     return "\n".join(lines)
 
 
