@@ -34,7 +34,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
-
 from exec_comp_store import ExecCompPackage, PerformanceMetric, upsert_package  # noqa: E402
 from filing_text_fetcher import fetch_latest_def14a_text  # noqa: E402
 from llm_client import JSON_FENCE_RE, call_llm  # noqa: E402
@@ -135,9 +134,8 @@ def extract_for_ticker(
             prompt,
             purpose="exec_comp_extraction",
             ticker=ticker,
-            model="claude-opus-4-7",
         ).strip()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning({"event": "exec_comp_llm_failed", "ticker": ticker, "error": str(exc)})
         return {"ticker": ticker, "status": "llm_failed", "n": 0}
 

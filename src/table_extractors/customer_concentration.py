@@ -149,9 +149,8 @@ def extract(
             prompt,
             purpose="customer_concentration_extraction",
             ticker=ticker,
-            model="claude-haiku-4-5-20251001",
         ).strip()
-    except Exception as exc:  # noqa: BLE001 — defensive across provider errors
+    except Exception as exc:
         log.warning(
             {"event": "customer_concentration_llm_failed", "ticker": ticker, "error": str(exc)}
         )

@@ -42,7 +42,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
-
 from entity_store import (  # noqa: E402
     record_alias,
     upsert_entity,
@@ -189,9 +188,8 @@ def _canonicalize_one_ticker(
             prompt,
             purpose="canonicalize_segments",
             ticker=ticker,
-            model="claude-haiku-4-5-20251001",  # narrow JSON task — Haiku is plenty
         ).strip()
-    except Exception as exc:  # noqa: BLE001 — log + skip
+    except Exception as exc:
         log.warning({"event": "canon_llm_failed", "ticker": ticker, "error": str(exc)})
         return None
     if raw.startswith("```"):
