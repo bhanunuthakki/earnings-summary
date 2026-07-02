@@ -33,10 +33,11 @@ top-level ``db`` import triggers ``init_db``).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from advisor.store import STANCES
 from identity import DEFAULT_USER_ID
 
 if TYPE_CHECKING:
@@ -45,14 +46,23 @@ if TYPE_CHECKING:
 __all__ = [
     "BAND_TOLERANCE",
     "CONCENTRATION_PCT",
+    "CONFIDENCES",
     "DEFAULT_MOS_BAR",
+    "POSITION_REVIEW_PURPOSE",
     "SELL_OVER_UNDER",
+    "SUGGESTED_EXPRESSIONS",
     "TRIM_OVER_UNDER",
+    "PositionReview",
     "PreAnalysis",
+    "VerdictOutput",
+    "apply_behavioral_guard",
     "assemble_pre_analysis",
     "build_pre_analysis",
     "classify_valuation",
     "classify_weight_band",
+    "encode_first_output",
+    "parse_verdict_output",
+    "review_position",
     "summarize_verdict",
 ]
 
@@ -425,3 +435,339 @@ def build_pre_analysis(
         is_index_instrument=is_index_instrument,
         at_price=at_price,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Slice 2 — governed LLM verdict + deterministic behavioral guardrail
+# --------------------------------------------------------------------------- #
+
+POSITION_REVIEW_PURPOSE = "position_review"
+CONFIDENCES: tuple[str, ...] = ("high", "medium", "low")
+SUGGESTED_EXPRESSIONS: tuple[str, ...] = (
+    "trim-to-target",
+    "LEAP-overlay",
+    "do-nothing",
+    "add-tranche",
+    "encode-thesis-first",
+)
+_VERDICT_KEYS: tuple[str, ...] = (
+    "verdict",
+    "size",
+    "reason",
+    "confidence",
+    "behavioral_check",
+    "suggested_expression",
+)
+
+# The owner's documented decision-making, baked into the prompt as hard
+# constraints (from data/ledger_seed/seed.json). The deterministic guardrail
+# below is the backstop that ENFORCES rule 1 regardless of what the model does.
+_BEHAVIORAL_RULES = """\
+Calibrate the verdict to THIS owner's documented decision-making:
+1. SELL-WINNERS-TOO-EARLY is his dominant, self-diagnosed flaw — he sold MU, GOOGL and TSM
+   far too early and regretted each. On an INTACT, high-conviction name, "it has run" or
+   "it looks expensive on the tape" is NEVER a sufficient reason to trim. The ONLY
+   price-agnostic reason to trim a healthy name is SIZING: weight above its target band, or
+   an oversized single-name concentration.
+2. LEAP OVERLAY is his prescribed antidote — when he wants less capital at risk on a name he
+   still believes in, prefer keep-the-core + a far-OTM long-dated LEAP over an outright trim
+   (suggested_expression="LEAP-overlay").
+3. CATALYST TEST for adds — only add into weakness when there is a near-term catalyst AND a
+   priced-in floor; cheap-without-catalyst is a value trap.
+4. INSTRUMENT-SELECTION — express macro/sector themes via an index; hold dry powder in
+   T-bills/SGOV; express single-name conviction via LEAPs.
+5. KEEP THE VERDICT WITH THE FRAMEWORK, NOT THE FEELING — ground the call in the break-rule
+   status and the DCF valuation ladder. If the framework is intact, the name is not
+   overvalued, and it is not oversized, the answer is HOLD even if the position feels
+   uncomfortable after a big run.
+"""
+
+
+@dataclass(frozen=True)
+class VerdictOutput:
+    """The reasoned trim/hold/add recommendation. ``verdict`` is validated
+    against ``advisor.store.STANCES`` so it persists as a P2.5-scoreable stance.
+    ``verdict_source`` records whether the deterministic behavioral guard
+    overrode the model ("guard_override") or the name was unencoded
+    ("encode_first")."""
+
+    verdict: str  # in STANCES: buy | add | hold | trim | sell
+    size: str
+    reason: str
+    confidence: str  # in CONFIDENCES
+    behavioral_check: str
+    suggested_expression: str  # in SUGGESTED_EXPRESSIONS
+    verdict_source: str = "llm"  # "llm" | "guard_override" | "encode_first"
+
+
+@dataclass(frozen=True)
+class PositionReview:
+    """A full review: the grounded pre-analysis, the verdict, and the persisted
+    memo id (None when persistence was skipped or no DB was configured)."""
+
+    pre: PreAnalysis
+    output: VerdictOutput
+    memo_id: int | None
+
+
+def _req_str(payload: dict[str, object], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"position_review output field {key!r} must be a non-empty string")
+    return value.strip()
+
+
+def _coerce_choice(value: object, allowed: tuple[str, ...], default: str) -> str:
+    """Normalize a soft enum field to a member of ``allowed`` (default on miss).
+    Softer than ``verdict`` — a bad confidence/expression degrades to a safe
+    default rather than raising, because it never changes the stance itself."""
+    norm = value.strip() if isinstance(value, str) else ""
+    return norm if norm in allowed else default
+
+
+def parse_verdict_output(payload: dict[str, object]) -> VerdictOutput:
+    """Validate the LLM's JSON into a :class:`VerdictOutput`.
+
+    ``verdict`` MUST be in ``STANCES`` (raises otherwise — an out-of-vocabulary
+    stance isn't scoreable and must fail loudly, not silently degrade). The soft
+    fields coerce to safe defaults.
+    """
+    verdict = _req_str(payload, "verdict").lower()
+    if verdict not in STANCES:
+        raise ValueError(f"position_review verdict {verdict!r} not in {STANCES}")
+    return VerdictOutput(
+        verdict=verdict,
+        size=_req_str(payload, "size"),
+        reason=_req_str(payload, "reason"),
+        confidence=_coerce_choice(payload.get("confidence"), CONFIDENCES, "low"),
+        behavioral_check=_req_str(payload, "behavioral_check"),
+        suggested_expression=_coerce_choice(
+            payload.get("suggested_expression"), SUGGESTED_EXPRESSIONS, "do-nothing"
+        ),
+    )
+
+
+def apply_behavioral_guard(pre: PreAnalysis, out: VerdictOutput) -> VerdictOutput:
+    """Enforce the sell-winners-too-early rule deterministically.
+
+    A ``trim``/``sell`` on a thesis that is intact-or-warn, NOT over-valued, and
+    NOT oversized (not above its band, and not a flagged single-name
+    concentration) is a price-only trim on a healthy name — the owner's signature
+    mistake. Override it to ``hold`` and say why. Legitimate trims survive
+    untouched: a breached thesis, an over-valued name (ladder trim/sell), an
+    above-band weight, or an oversized concentration all justify trimming.
+    """
+    if out.verdict not in ("trim", "sell"):
+        return out
+    thesis_healthy = pre.break_rule_status in ("intact", "warn")
+    not_overvalued = pre.valuation_verdict in ("fair", "buy", "n/a")
+    sizing_justified = pre.weight_vs_band == "above_band" or (
+        pre.weight_vs_band == "no_band" and pre.concentration_flag
+    )
+    if thesis_healthy and not_overvalued and not sizing_justified:
+        return replace(
+            out,
+            verdict="hold",
+            reason=f"[behavioral guard] Overrode a price-only {out.verdict} on an intact, "
+            f"non-oversized, non-overvalued name. {out.reason}",
+            behavioral_check=(
+                "This is the sell-winners-too-early pattern (MU/GOOGL/TSM): trimming a "
+                "healthy, non-oversized name that the framework says is not expensive. "
+                "Hold the core; if you want less capital at risk, use a LEAP overlay. "
+                f"{out.behavioral_check}"
+            ),
+            suggested_expression="do-nothing",
+            verdict_source="guard_override",
+        )
+    return out
+
+
+def encode_first_output(pre: PreAnalysis) -> VerdictOutput:
+    """Deterministic degraded verdict for a name with no encoded thesis (FLKR):
+    there is no framework to ground a call, so recommend encoding one rather than
+    fabricating a fundamentals verdict."""
+    index_note = (
+        "This is an index instrument — a macro/factor sleeve, not a single-name thesis. "
+        if pre.is_index_instrument
+        else ""
+    )
+    return VerdictOutput(
+        verdict="hold",
+        size="none",
+        reason=(
+            f"No encoded thesis for {pre.ticker} (no holdings JSON, no DCF, no break-rules), "
+            f"so there is no framework to ground a trim/add call. {index_note}"
+            "Your own note tags it low-conviction."
+        ),
+        confidence="low",
+        behavioral_check=(
+            "Can't check this against your framework because the conviction isn't encoded. "
+            "If you hold it on a real single-name thesis, encode it so the next review is "
+            "grounded — and don't trim on price alone (the sell-winners-too-early reflex)."
+        ),
+        suggested_expression="encode-thesis-first",
+        verdict_source="encode_first",
+    )
+
+
+def _convictions_block(repo_root: Path, ticker: str, db_path: Path | str | None) -> str:
+    """Assemble the owner's captured convictions for ``ticker`` (synthesized
+    stance + recent decisions/musings), spotlighted as untrusted input before it
+    reaches the prompt (stance text chains LLM-synthesized content)."""
+    from llm.untrusted import spotlight
+    from synthesis.insights import list_insights
+    from user_state.notes import list_notes
+
+    parts: list[str] = []
+    stances = list_insights(kind="stance", scope_key=ticker, status="current", db_path=db_path)
+    if stances:
+        parts.append(f"STANCE (synthesized): {stances[0].body_md}")
+    for note in list_notes(ticker=ticker, kind="decision", db_path=db_path)[:3]:
+        tail = ""
+        if note.context:
+            conv = note.context.get("conviction")
+            fals = note.context.get("falsifier")
+            bits = [
+                b
+                for b in (
+                    f"conviction={conv}" if conv else "",
+                    f"falsifier: {fals}" if fals else "",
+                )
+                if b
+            ]
+            tail = f" [{'; '.join(bits)}]" if bits else ""
+        parts.append(f"DECISION: {note.body}{tail}")
+    for note in list_notes(ticker=ticker, kind="musing", db_path=db_path)[:5]:
+        parts.append(f"MUSING: {note.body}")
+    raw = "\n\n".join(parts)
+    return spotlight(raw, source="the owner's own captured convictions (the Ledger)")
+
+
+def _build_verdict_prompt(pre: PreAnalysis, convictions_block: str) -> str:
+    facts = (
+        f"Ticker: {pre.ticker}\n"
+        f"Weight: {pre.weight_pct}% of book (source: {pre.weight_source}); "
+        f"market value {pre.market_value_usd}; unrealized P&L {pre.unrealized_pnl_usd}\n"
+        f"Target band: {pre.target_band} -> {pre.weight_vs_band}; "
+        f"concentration_flag={pre.concentration_flag} (single name >= {CONCENTRATION_PCT}%)\n"
+        f"Break-rule status: {pre.break_rule_status}; "
+        f"tripped/watch: {list(pre.tripped_rules) or 'none'}\n"
+        f"Thesis verdict label: {pre.verdict_label}; key driver: {pre.key_driver}\n"
+        f"Valuation: DCF fair value {pre.npv_per_share}, asked-at price {pre.at_price}, "
+        f"over/under {pre.dcf_gap_pct}% (+ = over-valued), mos_bar {pre.mos_bar}; "
+        f"ladder verdict: {pre.valuation_verdict}\n"
+        f"Conviction encoded: {pre.conviction_encoded}\n"
+    )
+    return (
+        "You are the owner's position-review analyst. Using the GROUNDED FACTS "
+        "(deterministic, computed from the platform) and the owner's OWN convictions, "
+        "return a single trim/hold/add/sell verdict for this ONE position.\n\n"
+        f"{_BEHAVIORAL_RULES}\n"
+        f"## GROUNDED FACTS\n{facts}\n"
+        f"## THE OWNER'S CONVICTIONS ON THIS NAME\n{convictions_block or '(none on file)'}\n\n"
+        "## OUTPUT — return ONLY a JSON object with exactly these keys:\n"
+        f'  "verdict": one of {list(STANCES)} (his exact vocabulary)\n'
+        '  "size": short phrase, e.g. "trim ~2pp to top of band" or "none"\n'
+        '  "reason": the SPECIFIC driver — which break-rule/threshold, which sizing band, '
+        "or which DCF ladder step\n"
+        f'  "confidence": one of {list(CONFIDENCES)}\n'
+        '  "behavioral_check": one sentence naming which of HIS documented patterns this '
+        "decision risks repeating\n"
+        f'  "suggested_expression": one of {list(SUGGESTED_EXPRESSIONS)}\n'
+        "No markdown fences, no prose outside the JSON object.\n"
+    )
+
+
+def _render_memo_body(pre: PreAnalysis, out: VerdictOutput) -> str:
+    lines = [
+        f"**{pre.ticker}** — position-review verdict: **{out.verdict}** "
+        f"({out.confidence} confidence)",
+        "",
+        f"- Size: {out.size}",
+        f"- Reason: {out.reason}",
+        f"- Suggested expression: {out.suggested_expression}",
+        f"- Behavioral check: {out.behavioral_check}",
+        "",
+        f"Grounded facts — weight {pre.weight_pct}% ({pre.weight_source}); "
+        f"break-rules {pre.break_rule_status}; valuation {pre.valuation_verdict} "
+        f"(over/under {pre.dcf_gap_pct}%); concentration_flag={pre.concentration_flag}.",
+    ]
+    if out.verdict_source != "llm":
+        lines.append(f"\n_verdict source: {out.verdict_source}_")
+    lines.append(f"\nSTANCE: {out.verdict}")
+    return "\n".join(lines)
+
+
+def _persist_review(
+    pre: PreAnalysis, out: VerdictOutput, *, user_id: str, db_path: Path | str | None
+) -> int | None:
+    from advisor.memos import DEFAULT_HORIZON_DAYS, persist_memo
+    from db_paths import resolve_db_path
+
+    resolved = resolve_db_path(db_path)
+    if resolved is None:
+        return None
+    context: dict[str, object] = {
+        "weight_pct": pre.weight_pct,
+        "dcf_gap_pct": pre.dcf_gap_pct,
+        "break_rule_status": pre.break_rule_status,
+        "valuation_verdict": pre.valuation_verdict,
+        "confidence": out.confidence,
+        "suggested_expression": out.suggested_expression,
+        "verdict_source": out.verdict_source,
+        "at_price": pre.at_price,
+    }
+    result = persist_memo(
+        db_path=resolved,
+        user_id=user_id,
+        kind=POSITION_REVIEW_PURPOSE,
+        ticker=pre.ticker,
+        counter_ticker=None,
+        title=f"Position review: {pre.ticker} -> {out.verdict}",
+        body_md=_render_memo_body(pre, out),
+        context=context,
+        write_ledger=True,
+        stance=out.verdict,
+        horizon_days=DEFAULT_HORIZON_DAYS,
+    )
+    return result.memo_id
+
+
+def review_position(
+    repo_root: Path,
+    ticker: str,
+    *,
+    at_price: float | None = None,
+    user_id: str = DEFAULT_USER_ID,
+    api_url: str | None = None,
+    db_path: Path | str | None = None,
+    persist: bool = True,
+) -> PositionReview:
+    """End-to-end position review: grounded pre-analysis -> governed LLM verdict
+    -> deterministic behavioral guard -> persisted memo.
+
+    A name with no encoded thesis short-circuits to a deterministic low-confidence
+    "encode a thesis first" verdict WITHOUT an LLM call — there is nothing to
+    ground a fundamentals call on. Otherwise the verdict is produced by the
+    governed ``position_review`` LLM purpose (model-picked, cost-logged,
+    schema-validated) and then passed through the behavioral guard.
+    """
+    pre = build_pre_analysis(
+        repo_root, ticker, at_price=at_price, user_id=user_id, api_url=api_url, db_path=db_path
+    )
+    if not pre.thesis_present:
+        out = encode_first_output(pre)
+    else:
+        from llm.structured import call_llm_structured
+
+        prompt = _build_verdict_prompt(pre, _convictions_block(repo_root, pre.ticker, db_path))
+        payload = call_llm_structured(
+            prompt,
+            purpose=POSITION_REVIEW_PURPOSE,
+            ticker=pre.ticker,
+            required_keys=_VERDICT_KEYS,
+        )
+        out = apply_behavioral_guard(pre, parse_verdict_output(cast("dict[str, object]", payload)))
+
+    memo_id = _persist_review(pre, out, user_id=user_id, db_path=db_path) if persist else None
+    return PositionReview(pre=pre, output=out, memo_id=memo_id)

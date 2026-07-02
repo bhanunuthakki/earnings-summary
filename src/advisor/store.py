@@ -24,7 +24,7 @@ from typing import cast
 from identity import DEFAULT_USER_ID
 from user_state._db import now_iso, open_conn, parse_dt
 
-MEMO_KINDS: tuple[str, ...] = ("next_dollar", "swap_check", "socratic")
+MEMO_KINDS: tuple[str, ...] = ("next_dollar", "swap_check", "socratic", "position_review")
 SCORE_STATUSES: tuple[str, ...] = ("pending", "scored", "unscoreable")
 STANCES: tuple[str, ...] = ("buy", "add", "hold", "trim", "sell")
 
