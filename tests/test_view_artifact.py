@@ -89,7 +89,10 @@ def test_apply_writes_the_real_saved_view() -> None:
 
 def test_apply_name_override_wins() -> None:
     prop = SimpleNamespace(
-        kind="view", status="approved", title="auto", artifact_json=json.dumps(_real_spec().to_dict())
+        kind="view",
+        status="approved",
+        title="auto",
+        artifact_json=json.dumps(_real_spec().to_dict()),
     )
     saved: dict[str, object] = {}
     apply_view_proposal(
@@ -119,9 +122,35 @@ def test_apply_requires_a_spec_payload() -> None:
 def test_apply_oracle_rejects_a_now_invalid_spec() -> None:
     # A stored spec that no longer validates must NOT reach save_view.
     prop = SimpleNamespace(
-        kind="view", status="approved", title="x", artifact_json=json.dumps({"tickers": [], "metrics": []})
+        kind="view",
+        status="approved",
+        title="x",
+        artifact_json=json.dumps({"tickers": [], "metrics": []}),
     )
     saved: list[object] = []
     with pytest.raises(ViewSpecError):
-        apply_view_proposal(1, get_fn=lambda _pid, **_k: prop, save_fn=lambda **kw: saved.append(kw))
+        apply_view_proposal(
+            1, get_fn=lambda _pid, **_k: prop, save_fn=lambda **kw: saved.append(kw)
+        )
     assert not saved  # the oracle blocked the write
+
+
+def test_describe_view_spec_speaks_owner_language() -> None:
+    """No ref grammar, no function names on cards — the 2026-07-02 'so
+    confusing to read' correction."""
+    from research.view_artifact import describe_view_spec
+
+    title, body = describe_view_spec(
+        {
+            "tickers": ["NU"],
+            "metrics": [
+                {"domain": "fin", "key": "interest_expense"},
+                {"domain": "kpi", "key": "Net interest margin"},
+            ],
+            "periods": 12,
+        }
+    )
+    assert title == "Tracking table for NU — 2 series, last 12 quarters"
+    assert "Interest expense · Net interest margin" in body
+    for jargon in ("fin:", "kpi:", "execute_view", "["):
+        assert jargon not in title and jargon not in body
