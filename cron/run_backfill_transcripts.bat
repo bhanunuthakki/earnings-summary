@@ -5,6 +5,7 @@ REM Runs BEFORE fetch_fmp_earnings_calendar (05:45) and earnings_calendar_watche
 REM (06:00) so daily_fetch_and_brief (06:30) sees the freshest §5/§6 inputs.
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"

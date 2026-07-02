@@ -5,6 +5,7 @@ REM run is bounded even with 2k+ index constituents — the run_lens cache_input
 REM means stable tickers cost nothing.
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"

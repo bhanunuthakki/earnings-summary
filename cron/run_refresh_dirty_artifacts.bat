@@ -13,6 +13,7 @@ REM (large drift after a long outage) can't blow the subscription / API budget
 REM in one cron firing.
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"

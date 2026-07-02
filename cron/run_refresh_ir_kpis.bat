@@ -25,6 +25,7 @@ REM Without it each ticker's --discover child exits non-zero (ImportError) and i
 REM logged as a per-ticker failure — the batch itself still completes.
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"

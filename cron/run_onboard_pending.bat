@@ -28,6 +28,7 @@ set "LOGFILE=%LOGDIR%\onboard_pending_%TS%.log"
 
 echo [%TS%] PROJECT_ROOT=%PROJECT_ROOT% > "%LOGFILE%"
 
+set PYTHONUTF8=1
 python -u "execution\onboard_pending_tickers.py" >> "%LOGFILE%" 2>&1
 set RC=%ERRORLEVEL%
 

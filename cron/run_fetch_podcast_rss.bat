@@ -11,6 +11,7 @@ REM   replacing RSS marketing copy with a 2-4 sentence investment briefing.
 REM   Budget-capped at $5/month (migration 0103, on_exceed=skip).
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"

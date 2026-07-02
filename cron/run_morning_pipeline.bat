@@ -23,6 +23,7 @@ REM stages, so a non-zero log line flags partial failure for monitoring while
 REM still producing the best-effort feed.
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"

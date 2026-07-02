@@ -7,6 +7,7 @@ REM it is NOT repeated here - the backfill reads the issues the daily run alread
 REM inserted. Recorded in ingestion_runs under directive "weekly_validation".
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"

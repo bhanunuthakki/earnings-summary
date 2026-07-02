@@ -16,6 +16,7 @@ REM Runs in its own task (not folded into weekly_synthesis) because the batch
 REM poll can outlast that task's 2h cap — this one allows 6h.
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"

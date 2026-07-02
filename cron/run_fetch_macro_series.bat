@@ -9,6 +9,7 @@ REM recompute is local CPU only (reads the cached price charts + the rows
 REM the fetch just wrote). Output: .tmp/cron_logs/fetch_macro_series_<TS>.log.
 
 setlocal
+set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
