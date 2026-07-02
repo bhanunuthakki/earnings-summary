@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -49,7 +50,7 @@ def _cfg(db_file: Path) -> Config:
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
+def db_path(tmp_path: Path) -> Iterator[Path]:
     """A real ledger DB at head: ``research_proposals`` (with the 0126
     ``artifact_json`` column) AND ``dcf_runs`` (with the 0076 over_under CHECK
     and ``uq_dcf_runs_ticker``) in one file.
@@ -62,12 +63,21 @@ def db_path(tmp_path: Path) -> Path:
     db_file = tmp_path / "ledger.db"
     import db as dbmod
 
+    # init_db() writes to the module's global DB_PATH; set it, but SAVE + RESTORE
+    # the three data globals set_db_path mutates (DB_PATH/DATA_DIR/FMP_DIR) so a
+    # stale tmp path never leaks into a later test -- some writers resolve their
+    # DB from db.DB_PATH rather than an explicit db_path (see set_db_path's note),
+    # so a leaked path silently empties e.g. the ledger-insights FTS search.
+    saved = (dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR)
     dbmod.set_db_path(str(db_file))
     dbmod.init_db()
     cfg = _cfg(db_file)
     command.stamp(cfg, "0000_baseline")
     command.upgrade(cfg, "head")
-    return db_file
+    try:
+        yield db_file
+    finally:
+        dbmod.DB_PATH, dbmod.DATA_DIR, dbmod.FMP_DIR = saved
 
 
 def _proposed_row(
