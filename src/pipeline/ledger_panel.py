@@ -169,10 +169,13 @@ _RESEARCH_JS = """<script>(function(){
     }
     var act=e.target.closest('[data-verb]');
     if(act){
-      var verb=act.getAttribute('data-verb'); var pid=act.getAttribute('data-pid'); var body={};
+      var verb=act.getAttribute('data-verb'); var body={};
+      // One card per RUN: the button acts on every proposal the run drafted.
+      var pids=(act.getAttribute('data-pids')||act.getAttribute('data-pid')||'').split(',');
       if(verb==='steer'){ var dir=window.prompt('How should I steer this research?'); if(!dir){ return; } body.steer_text=dir; }
-      fetch('/api/research/proposal/'+pid+'/'+verb,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
-        .then(function(){ reload(); });
+      Promise.all(pids.filter(Boolean).map(function(pid){
+        return fetch('/api/research/proposal/'+pid+'/'+verb,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      })).then(function(){ reload(); });
     }
   });
 })();</script>"""
@@ -202,27 +205,43 @@ def _task_chip(task: ResearchTask) -> str:
     )
 
 
-def _proposal_card(prop: ResearchProposal) -> str:
-    ident = ticker_label(prop.ticker) if prop.ticker else ""
-    meta = " · ".join(p for p in (prop.budget_tier, prop.kind) if p)
+def _proposal_group_card(group: list[ResearchProposal]) -> str:
+    """ONE card per research run (task), however many artifacts it drafted.
+
+    The engine emits a memo plus companion artifacts (e.g. a saved-view draft)
+    as separate proposal rows; rendering each as its own card with its own
+    button row read as a duplicate ("Why is there this duplicate?" —
+    2026-07-02). The memo is the card; companions become one compact line
+    each; ONE action row acts on every proposal in the group."""
+    primary = next((p for p in group if p.kind == "memo"), group[0])
+    companions = [p for p in group if p.id != primary.id]
+    ident = ticker_label(primary.ticker) if primary.ticker else ""
+    meta = " · ".join(p for p in (primary.budget_tier, primary.kind) if p)
+    pids = ",".join(str(p.id) for p in group)
     footer = "".join(
         f'<button type="button" class="k-btn k-btn-sm {cls}" '
-        f'data-verb="{verb}" data-pid="{prop.id}">{escape(label)}</button>'
+        f'data-verb="{verb}" data-pids="{pids}">{escape(label)}</button>'
         for verb, label, cls in _RESEARCH_VERBS
+    )
+    rider = "".join(
+        f'<p class="ledger-sec-sub">Also drafted: {escape(c.kind)} — '
+        f"{escape(c.title)} (approve applies it too).</p>"
+        for c in companions
     )
     return (
         '<div class="ledger-stance">'
         '<div class="ledger-stance-head">'
         f'{ident}<span class="ledger-stance-meta">{escape(meta)}</span></div>'
-        f'<div class="ledger-body"><strong>{escape(prop.title)}</strong>'
-        f"{render_prose(prop.body_md)}</div>"
+        f'<div class="ledger-body"><strong>{escape(primary.title)}</strong>'
+        f"{render_prose(primary.body_md)}</div>"
+        f"{rider}"
         f'<div class="ledger-cap-row">{footer}</div></div>'
     )
 
 
 def render_ledger_research_list(db_path: Path | str | None) -> str:
-    """The research inbox fragment (re-fetched after a run / action): proposals to
-    review, then the open wonderings waiting to be researched."""
+    """The research inbox fragment (re-fetched after a run / action): one card
+    per RUN (proposals grouped by task), then the open wonderings."""
     proposals = list_proposals(status="pending", db_path=db_path)
     tasks = list_tasks(status="proposed", db_path=db_path)
     if not proposals and not tasks:
@@ -231,10 +250,13 @@ def render_ledger_research_list(db_path: Path | str | None) -> str:
             'proposals yet. Capture a wondering — "do NU\'s margins still hold?" — and it '
             "shows up here to research.</p></div>"
         )
+    groups: dict[int, list[ResearchProposal]] = {}
+    for p in proposals:
+        groups.setdefault(p.task_id if p.task_id is not None else -p.id, []).append(p)
     parts: list[str] = []
-    if proposals:
+    if groups:
         parts.append('<h4 class="ledger-sec-h">Proposals to review</h4>')
-        parts.append("".join(_proposal_card(p) for p in proposals))
+        parts.append("".join(_proposal_group_card(g) for g in groups.values()))
     if tasks:
         parts.append('<h4 class="ledger-sec-h">Open wonderings</h4>')
         parts.append("".join(_task_chip(t) for t in tasks))
@@ -362,12 +384,35 @@ def render_reconcile_list(db_path: Path | str | None) -> str:
     return f'<div id="ledger-reconcile">{"".join(cards)}</div>'
 
 
+def _auto_reconcile_line(db_path: Path | str | None) -> str:
+    """The 'derive, don't ask' receipt: what software already resolved, so the
+    queue only ever shows the irreducible owner-only residue."""
+    try:
+        from synthesis.auto_reconcile import auto_reconciled_summary
+
+        c = auto_reconciled_summary(db_path)
+    except Exception:
+        return ""
+    total = sum(c.values())
+    if total == 0:
+        return ""
+    return (
+        f'<p class="ledger-sec-sub">Auto-resolved {total} for you: '
+        f"{c['auto_done']} played out · {c['auto_live']} kept live · "
+        f"{c['auto_dropped']} moot falsifiers dropped (positions closed).</p>"
+    )
+
+
 def _reconcile_section(db_path: Path | str | None) -> str:
+    items = render_reconcile_list(db_path)
+    auto_line = _auto_reconcile_line(db_path)
+    if "ledger-empty" in items and auto_line:
+        # Nothing needs the owner — one receipt line, no section ceremony.
+        return f'<h3 class="ledger-sec-h">Reconcile</h3>{auto_line}'
     return (
         '<h3 class="ledger-sec-h">Reconcile</h3>'
-        '<p class="ledger-sec-sub">Seed-corpus freshness pass: give each item a verdict '
-        "and ratify (or rewrite) the falsifiers the interview inferred for you. I only "
-        "coach from what survives this list.</p>" + render_reconcile_list(db_path) + _RECONCILE_JS
+        '<p class="ledger-sec-sub">Only what genuinely needs you — falsifiers I would '
+        "quote back at you must be in your own words.</p>" + auto_line + items + _RECONCILE_JS
     )
 
 
