@@ -119,5 +119,12 @@ def test_holdings_sync_resolves_real_values_and_applies(tmp_path: Path) -> None:
     )
     by_name = {str(k["name"]): str(k["current"]) for k in _dicts(updated.get("tier_2_kpis"))}
     assert "Leader" in by_name[OWNER_KPI_CATEGORY_SHARE]
-    # A non-competitive tier-2 KPI is left exactly as the analyst wrote it.
-    assert by_name["Total Revenue Growth"] == "+46% Q4 FY26 ($377.7M)"
+    # A non-competitive tier-2 KPI is left exactly as the analyst wrote it. The
+    # analyst's Total Revenue Growth value evolves as new quarters print (Q1 FY27
+    # etc.), so assert it is UNCHANGED from the source spec rather than hardcoding
+    # a value that goes stale — the invariant is "sync leaves non-competitive
+    # KPIs byte-for-byte as the analyst wrote them", not any specific number.
+    src_by_name = {
+        str(k["name"]): str(k["current"]) for k in _dicts(_load_rbrk().get("tier_2_kpis"))
+    }
+    assert by_name["Total Revenue Growth"] == src_by_name["Total Revenue Growth"]
