@@ -44,6 +44,7 @@ class Currency(StrEnum):
     KRW = "KRW"
     JPY = "JPY"
     CHF = "CHF"
+    TWD = "TWD"
 
 
 class Unit(StrEnum):
