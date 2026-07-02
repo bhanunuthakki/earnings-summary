@@ -188,6 +188,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # The Ledger Phase-2 generation seams (decision extraction + drift phrasing).
     "musing_decision_extract": "v1",
     "drift_narrate": "v1",
+    # Meta-eval sampler difficulty classifier (evals/sampler.py, §2). This version
+    # IS the eval_case_features cache key: bumping it invalidates every cached
+    # classification by key and forks stratification history cleanly.
+    "case_difficulty_classify": "v1",
     # SayDo commitment extraction (compute/say_do_extractor.build_extraction_prompt).
     # Bump when the extraction prompt is materially rewritten; commitment_scan_log
     # rows carry the version, so stale-version scans can be invalidated (DELETE

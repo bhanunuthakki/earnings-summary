@@ -147,7 +147,14 @@ def main() -> int:
     parser.add_argument(
         "--harvest-timeout", type=int, default=2400, help="per harvest step seconds"
     )
-    parser.add_argument("--sweep-limit", type=int, default=8, help="max prompt cases per purpose")
+    parser.add_argument(
+        "--sweep-limit",
+        type=int,
+        default=16,
+        help="CAP on prompt cases per purpose (default 16 = the RISKY tier size, "
+        "so the sweep's per-tier n — RISKY 16 / default 12 — governs; lower it "
+        "only for quick manual runs)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")

@@ -243,9 +243,16 @@ def _seed_verdicts(
     candidate: str,
     incumbent: str,
     verdicts: list[str],
+    *,
+    n_parity: int = 0,
+    n_cases: int = 0,
 ) -> None:
     """Insert model_eval_verdicts rows (oldest first in the list → newest last
-    so the ORDER BY recorded_at DESC query sees list[-1] as the 'latest')."""
+    so the ORDER BY recorded_at DESC query sees list[-1] as the 'latest').
+
+    ``n_parity``/``n_cases`` seed each row's pooled-evidence columns — the PR2
+    Wilson switch gate pools them across the streak and fails CLOSED when the
+    pool is empty, so a switch-firing test must carry real evidence."""
     from datetime import datetime, timedelta
 
     conn = sqlite3.connect(str(db_path))
@@ -254,10 +261,10 @@ def _seed_verdicts(
         conn.execute(
             """
             INSERT INTO model_eval_verdicts
-                (purpose, candidate, incumbent, verdict, run_id, recorded_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (purpose, candidate, incumbent, verdict, run_id, n_parity, n_cases, recorded_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (purpose, candidate, incumbent, verdict, f"run{i:04d}", ts),
+            (purpose, candidate, incumbent, verdict, f"run{i:04d}", n_parity, n_cases, ts),
         )
     conn.commit()
     conn.close()
@@ -269,12 +276,16 @@ def test_evaluate_switches_triggers_switch_after_threshold(db_path: Path) -> Non
 
     from llm.model_overrides import active_override
 
+    # 11/12 parity per sweep -> pooled 33/36 -> Wilson LB ~0.78 >= 0.70 (the
+    # PR2 gate); the streak alone no longer suffices.
     _seed_verdicts(
         db_path,
         "bear_case",
         "claude-haiku-4-5-20251001",
         "claude-sonnet-4-6",
         ["HOLD", "SWITCH_DOWN", "SWITCH_DOWN", "SWITCH_DOWN"],
+        n_parity=11,
+        n_cases=12,
     )
     results = evaluate_switches(db_path, consecutive_switch=3, consecutive_keep=3, dry_run=False)
     assert any(r.action == "SWITCHED_DOWN" for r in results)
@@ -327,12 +338,16 @@ def test_evaluate_switches_dry_run_does_not_write(db_path: Path) -> None:
 
     from llm.model_overrides import active_override
 
+    # Strong pooled evidence (33/36 -> LB ~0.78) so the dry-run reaches the
+    # would-switch branch instead of being Wilson-held.
     _seed_verdicts(
         db_path,
         "bear_case",
         "claude-haiku-4-5-20251001",
         "claude-sonnet-4-6",
         ["SWITCH_DOWN", "SWITCH_DOWN", "SWITCH_DOWN"],
+        n_parity=11,
+        n_cases=12,
     )
     results = evaluate_switches(db_path, consecutive_switch=3, consecutive_keep=3, dry_run=True)
     assert any(r.action == "DRY_RUN_SWITCH" for r in results)
