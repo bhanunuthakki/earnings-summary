@@ -122,7 +122,7 @@ def build(
                 thesis_kpis=holdings_kpis,
                 repo_root=repo_root,
             )
-        except Exception as exc:  # noqa: BLE001 — defensive across LLM/cache
+        except Exception as exc:
             # Hard stops (monthly budget cap, CLI not installed) must propagate
             # — degrading would silently mask an over-budget / unconfigured run.
             # Everything else is transient: drop the alignment narrative and let
@@ -341,8 +341,12 @@ def _generate_alignment_narrative(
     Cached in llm_artifacts under purpose='exec_comp_alignment'."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
     try:
-        from llm_artifact_store import UpsertRequest, read_current, upsert  # type: ignore[import-not-found]
-        from llm_client import call_llm  # type: ignore[import-not-found]
+        from llm_artifact_store import (  # type: ignore[import-not-found]
+            UpsertRequest,
+            read_current,
+            upsert,
+        )
+        from llm_client import LLM_MODELS, call_llm  # type: ignore[import-not-found]
     except ImportError:
         return None
 
@@ -400,7 +404,6 @@ def _generate_alignment_narrative(
         prompt,
         purpose="exec_comp_alignment",
         ticker=ticker,
-        model="claude-opus-4-8",  # alignment judgment benefits from Opus
     )
     upsert(
         UpsertRequest(
@@ -408,7 +411,7 @@ def _generate_alignment_narrative(
             purpose="exec_comp_alignment",
             content_md=narrative,
             cache_inputs=cache_inputs,
-            model="claude-opus-4-8",
+            model=LLM_MODELS["exec_comp_alignment"],
         ),
         db_path=db_path,
     )

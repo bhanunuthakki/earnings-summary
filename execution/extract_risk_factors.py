@@ -146,7 +146,6 @@ Use "other" only when no category fits."""
         prompt,
         purpose="risk_factor_classify",
         ticker=ticker,
-        model="claude-haiku-4-5-20251001",
         expect="object",
     )
     out: dict[int, str] = {}
@@ -205,7 +204,6 @@ Return only the summary text, no JSON."""
             prompt,
             purpose="risk_factor_diff",
             ticker=ticker,
-            model="claude-haiku-4-5-20251001",
         ).strip()
         if "no material rewording" in out.lower():
             return None

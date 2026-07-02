@@ -305,6 +305,30 @@ LLM_MODELS: dict[str, str] = {
     # model= at the call site; moved here so the registry stays the single
     # reviewable surface (llm_evals_plan.md §5.5).
     "decision_extraction": FAST_CLASSIFIER_MODEL,
+    # --- Straggler registrations (2026-07): each of these had an ad-hoc
+    # model= at its call site (llm_calls.md rule 3 violation), which ALSO made
+    # model_pin_overrides a no-op for them — an explicit model bypasses
+    # _model_for, so the downgrade loop could never touch these purposes. The
+    # call sites now resolve via this table at the model they were already
+    # using; behavior unchanged, purposes now optimizer-eligible.
+    # Exec-comp alignment narrative: pay-vs-thesis judgment on the report page.
+    "exec_comp_alignment": "claude-opus-4-8",
+    # Exec-comp table extraction from proxy text. Was pinned claude-opus-4-7 at
+    # the call site — normalized to the repo's one current Opus id (same tier,
+    # same price; all Opus pins use claude-opus-4-8).
+    "exec_comp_extraction": "claude-opus-4-8",
+    # Footnote extraction from 10-K/10-Q text: structured JSON over long
+    # filings; Sonnet for recall on dense accounting prose.
+    "footnote_extraction": DEFAULT_MODEL,
+    # Risk-factor classify/diff (execution/extract_risk_factors.py): narrow
+    # closed-enum JSON tasks, batched — Haiku tier.
+    "risk_factor_classify": FAST_CLASSIFIER_MODEL,
+    "risk_factor_diff": FAST_CLASSIFIER_MODEL,
+    # Segment-name canonicalization: narrow JSON mapping task — Haiku tier.
+    "canonicalize_segments": FAST_CLASSIFIER_MODEL,
+    # Customer-concentration table extraction (src/table_extractors/): short
+    # copy-the-table JSON from filing excerpts — Haiku tier.
+    "customer_concentration_extraction": FAST_CLASSIFIER_MODEL,
     # Falsifiable-condition extraction (src/decision_conditions.py): turns the
     # "What would change my mind" memo section into structured
     # {metric, op, threshold, unit, for_periods} conditions against a supplied

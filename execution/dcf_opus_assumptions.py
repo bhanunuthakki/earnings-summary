@@ -228,7 +228,7 @@ def parse_json(text):
     raise ValueError("no JSON object found")
 
 
-resp = call_llm(PROMPT, model="claude-opus-4-8", ticker=T, scope="dcf_assumptions_redesign")
+resp = call_llm(PROMPT, purpose="dcf_assumptions", ticker=T, scope="dcf_assumptions_redesign")
 data = parse_json(resp)
 data["_segment_keys"] = SEG_KEYS
 
