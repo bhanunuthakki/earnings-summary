@@ -297,12 +297,47 @@ def act_on_proposal(
     return status
 
 
+def _audit_tap(
+    *,
+    note_id: int,
+    channel: str,
+    detail: str,
+    llm_ran: bool,
+    db_path: Path | str | None,
+) -> None:
+    """Best-effort tap-outcome audit row (action='tapped'). Without this trail a
+    dormant tap and a broken tap are indistinguishable (2026-07-02 audit: zero
+    detect calls ever, no way to tell which). Never raises."""
+    try:
+        from capture.audit import write_audit
+
+        write_audit(
+            channel=channel,
+            action="tapped",
+            utterance_summary=f"wondering tap: {detail}",
+            note_id=note_id,
+            detail=detail,
+            purpose="wondering_detect" if llm_ran else None,
+            db_path=db_path,
+        )
+    except Exception:  # observability must never affect capture
+        pass
+
+
 def detect_and_create_task(
-    note_id: int, *, db_path: Path | str | None = None, call: DetectCall | None = None
+    note_id: int,
+    *,
+    db_path: Path | str | None = None,
+    call: DetectCall | None = None,
+    channel: str = "capture",
 ) -> int | None:
     """The fire-and-forget tap: classify a freshly-landed musing; on a wondering,
     create a ``proposed`` task (the inert chip). Returns the task id or None.
-    NEVER raises — a detection failure must not affect capture."""
+    NEVER raises — a detection failure must not affect capture.
+
+    Every invocation on a real musing leaves one ``tapped`` audit row whose
+    ``detail`` names the outcome (task:<id> | trust_zone | regex | llm_no |
+    error:<Type>) — the tap's liveness signal."""
     note = get_note(note_id, db_path=db_path)
     if note is None or note.kind != "musing":
         return None
@@ -310,9 +345,32 @@ def detect_and_create_task(
         # Captured musings are owner-authored — provenance 'derived'; the
         # 'contains_fetched' inert marker is only ever on research proposals.
         verdict = detect_wondering(note.body, kind=note.kind, provenance="derived", call=call)
-    except Exception:
+    except Exception as exc:
+        _audit_tap(
+            note_id=note_id,
+            channel=channel,
+            detail=f"error:{type(exc).__name__}",
+            llm_ran=True,
+            db_path=db_path,
+        )
         return None
+    llm_ran = verdict.gate in ("llm_no", "llm_yes")
     if not verdict.is_wondering:
+        _audit_tap(
+            note_id=note_id,
+            channel=channel,
+            detail=verdict.gate or "llm_no",
+            llm_ran=llm_ran,
+            db_path=db_path,
+        )
         return None
     claim = verdict.claim.strip() or note.body[:200]
-    return create_task(note_id=note_id, claim=claim, ticker=verdict.ticker, db_path=db_path)
+    task_id = create_task(note_id=note_id, claim=claim, ticker=verdict.ticker, db_path=db_path)
+    _audit_tap(
+        note_id=note_id,
+        channel=channel,
+        detail=f"task:{task_id}",
+        llm_ran=llm_ran,
+        db_path=db_path,
+    )
+    return task_id

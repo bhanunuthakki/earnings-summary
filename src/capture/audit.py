@@ -27,6 +27,7 @@ AUDIT_ACTIONS: tuple[str, ...] = (
     "synthesized",
     "failed",
     "purged",
+    "tapped",
 )
 
 # Fallback-summary length; the hard cap below is a separate, looser safety net
@@ -137,3 +138,41 @@ def audit_cost_in_window(
         return float(row[0] or 0.0)
     finally:
         conn.close()
+
+
+def recent_tap_counts(*, days: int = 7, db_path: Path | str | None = None) -> dict[str, int]:
+    """Outcome counts for the wondering-detection tap over the last ``days``.
+
+    Keys are the ``detail`` outcome families written by
+    ``research.proposals.detect_and_create_task``: ``chip`` (a task was
+    created), ``regex`` / ``trust_zone`` (pre-gate filtered, zero tokens),
+    ``llm_no`` (classifier said not a wondering), ``error``. This is the tap's
+    liveness signal — without it a dormant tap and a broken tap look identical.
+    """
+    from datetime import timedelta
+
+    from user_state._db import now_naive_utc
+
+    cutoff = (now_naive_utc() - timedelta(days=days)).isoformat()
+    conn = open_conn(db_path)
+    try:
+        rows = conn.execute(
+            """
+            SELECT detail, COUNT(*) FROM capture_audit_log
+            WHERE action = 'tapped' AND created_at >= ?
+            GROUP BY detail
+            """,
+            (cutoff,),
+        ).fetchall()
+    finally:
+        conn.close()
+    counts = {"chip": 0, "regex": 0, "trust_zone": 0, "llm_no": 0, "error": 0}
+    for detail, n in rows:
+        key = str(detail or "")
+        if key.startswith("task:"):
+            counts["chip"] += int(n)
+        elif key.startswith("error:"):
+            counts["error"] += int(n)
+        elif key in counts:
+            counts[key] += int(n)
+    return counts

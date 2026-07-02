@@ -241,12 +241,41 @@ def render_ledger_research_list(db_path: Path | str | None) -> str:
     return f'<div id="ledger-research">{"".join(parts)}</div>'
 
 
+def _tap_health_line(db_path: Path | str | None) -> str:
+    """One muted line of tap liveness — distinguishes 'no wonderings lately'
+    from 'the tap is broken/dormant' (they were indistinguishable before)."""
+    try:
+        from capture.audit import recent_tap_counts
+
+        c = recent_tap_counts(days=7, db_path=db_path)
+    except Exception:
+        return ""
+    total = sum(c.values())
+    if total == 0:
+        return (
+            '<p class="ledger-sec-sub">Tap health (7d): no musings tapped — '
+            "capture something and this line should move.</p>"
+        )
+    bits = [f"{total} tapped", f"{c['chip']} chips"]
+    filtered = c["regex"] + c["trust_zone"]
+    if filtered:
+        bits.append(f"{filtered} pre-gate filtered")
+    if c["llm_no"]:
+        bits.append(f"{c['llm_no']} classifier-no")
+    if c["error"]:
+        bits.append(f"{c['error']} errors")
+    return f'<p class="ledger-sec-sub">Tap health (7d): {" · ".join(bits)}.</p>'
+
+
 def _research_section(db_path: Path | str | None) -> str:
     return (
         '<h3 class="ledger-sec-h">Research</h3>'
         '<p class="ledger-sec-sub">Wonderings I detected in your musings, and the inert '
         "proposals they produced — approve, dig further, steer, or reject. Nothing acts "
-        "until you say so.</p>" + render_ledger_research_list(db_path) + _RESEARCH_JS
+        "until you say so.</p>"
+        + _tap_health_line(db_path)
+        + render_ledger_research_list(db_path)
+        + _RESEARCH_JS
     )
 
 

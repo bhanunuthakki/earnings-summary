@@ -110,3 +110,20 @@ def test_grader_scores_the_binary_precision() -> None:
         case, fn=lambda t: {"is_wondering": True, "claim": "x", "ticker": "MELI"}
     )
     assert not half.passed and half.score == 0.5
+
+
+def test_gate_field_reports_the_deciding_stage() -> None:
+    """The gate field is the tap's observability signal — each verdict names
+    which stage decided it (trust_zone | regex | llm_no | llm_yes)."""
+    assert detect_wondering("do NU's margins hold?", kind="decision", call=_yes).gate == (
+        "trust_zone"
+    )
+    assert (
+        detect_wondering("do NU's margins hold?", provenance="contains_fetched", call=_yes).gate
+        == "trust_zone"
+    )
+    assert (
+        detect_wondering("NU's NPL formation ticked up this quarter", call=_yes).gate == "regex"
+    )
+    assert detect_wondering("do NU's margins still hold up?", call=_no).gate == "llm_no"
+    assert detect_wondering("do NU's margins still hold up?", call=_yes).gate == "llm_yes"

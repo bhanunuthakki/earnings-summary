@@ -497,11 +497,22 @@ def create_app(
         if not text:
             return ({"error": "text required"}, 400)
         result = ingest_capture(channel="tray", media_kind="text", text=text, db_path=db_path)
+        # Fire the wondering tap on a landed tray musing — previously only the
+        # Telegram poller tapped, so a TYPED wondering never became a chip.
+        wondering_task_id: int | None = None
+        if result.status == "landed" and result.note_id is not None:
+            from research.proposals import detect_and_create_task, tap_enabled
+
+            if tap_enabled():
+                wondering_task_id = detect_and_create_task(
+                    result.note_id, db_path=db_path, channel="tray"
+                )
         return {
             "status": result.status,
             "note_id": result.note_id,
             "ticker": result.ticker,
             "needs_ticker": result.needs_ticker,
+            "wondering_task_id": wondering_task_id,
         }
 
     @app.route("/api/research/task/<int:task_id>/run", methods=["POST", "OPTIONS"])
