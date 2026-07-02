@@ -59,6 +59,11 @@ from integrations.portfolio_tracker_client import (
     fetch_live_portfolio,
     fetch_portfolio_analytics,
 )
+from portfolio_correlation import (
+    CLUSTER_CORR,
+    CorrelationRead,
+    build_holdings_correlation_from_disk,
+)
 from portfolio_risk import (
     CrowdedName,
     DrawdownPoint,
@@ -1261,6 +1266,21 @@ _RISK_CSS = """<style>
 .pfr-run { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 12px; }
 .pfr-run select { font-size: var(--fs-body); }
 .pfr-log { display: none; max-height: 160px; overflow: auto; margin: 0 0 12px; }
+/* Pairwise correlation heat table: warm tint scales with co-movement (the
+   crowding signal); negative correlation (a true diversifier) reads cool.
+   color-mix over the shared tone tokens — the analytical-dashboard idiom. */
+.pfc-scroll { overflow-x: auto; margin-top: 8px; }
+.pfc-table { border-collapse: collapse; font-family: var(--mono); font-size: var(--fs-micro); }
+.pfc-table th { font-weight: 600; color: var(--muted); padding: 2px 5px; text-align: center; }
+.pfc-table th.pfc-row-h { text-align: right; }
+.pfc-cell { padding: 2px 5px; text-align: center; font-variant-numeric: tabular-nums;
+  min-width: 34px; }
+.pfc-diag { color: var(--muted); }
+.pfc-c1 { background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.pfc-c2 { background: color-mix(in srgb, var(--warn) 24%, transparent); }
+.pfc-c3 { background: color-mix(in srgb, var(--bad) 30%, transparent); }
+.pfc-neg { background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.pfc-clusters { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 0; }
 .rrg-table { margin-top: 4px; }
 .rrg-mismatch { max-width: 460px; }
 .rrg-chips { display: inline-flex; gap: 4px; flex-wrap: wrap; vertical-align: middle; }
@@ -1350,6 +1370,7 @@ def render_portfolio_risk_panel(
         if db_path is not None:
             gap = _build_risk_reward_gap(analytics.positioning, db_path)
     style = _build_style_rollup(analytics.positioning, db_path)
+    correlation = _build_correlation_read(analytics.positioning, db_path)
     scenarios = _scenario_options()
     digest = _cached_macro_digest_html(db_path) if db_path is not None else ""
     # On a successful read, refresh the last-known snapshot; when the tracker is
@@ -1366,6 +1387,7 @@ def render_portfolio_risk_panel(
         factor=factor,
         gap=gap,
         style=style,
+        correlation=correlation,
         scenarios=scenarios,
         digest=digest,
         snapshot=snapshot,
@@ -1386,15 +1408,12 @@ def _build_risk_reward_gap(pos: Positioning, db_path: Path) -> RiskRewardGap | N
     return build_risk_reward_gap(db_path, db_path.parent.parent, weights, weights_source="tracker")
 
 
-def _build_style_rollup(pos: Positioning | None, db_path: Path | None) -> StyleFactorRollup | None:
-    """The value/size/momentum loadings, computed entirely from local disk
-    (FMP price cache + factor_proxies store) — so the section renders with the
-    tracker DOWN. Weights prefer the live positioning rows; offline they fall
-    back to the materialized weights cache (stage 0c), whose keys double as
-    the holdings list."""
-    if db_path is None:
-        return None
-    repo_root = db_path.parent.parent
+def _local_book_weights(pos: Positioning | None, repo_root: Path) -> dict[str, float]:
+    """Ticker -> fraction-of-book for the local-substrate risk sections.
+
+    Prefers the live positioning rows; offline it falls back to the
+    materialized weights cache (stage 0c), whose keys double as the holdings
+    list. ``{}`` when neither source has weights."""
     weights: dict[str, float] = {}
     if pos is not None:
         weights = {
@@ -1404,9 +1423,35 @@ def _build_style_rollup(pos: Positioning | None, db_path: Path | None) -> StyleF
         }
     if not weights:
         weights = read_materialized_weights(repo_root)
+    return weights
+
+
+def _build_style_rollup(pos: Positioning | None, db_path: Path | None) -> StyleFactorRollup | None:
+    """The value/size/momentum loadings, computed entirely from local disk
+    (FMP price cache + factor_proxies store) — so the section renders with the
+    tracker DOWN."""
+    if db_path is None:
+        return None
+    repo_root = db_path.parent.parent
+    weights = _local_book_weights(pos, repo_root)
     if not weights:
         return None
     return build_style_rollup_from_disk(repo_root, list(weights), weights)
+
+
+def _build_correlation_read(
+    pos: Positioning | None, db_path: Path | None
+) -> CorrelationRead | None:
+    """The holdings pairwise correlation matrix + crowding clusters, computed
+    entirely from the local price cache — renders with the tracker DOWN (same
+    weights degrade as the style section)."""
+    if db_path is None:
+        return None
+    repo_root = db_path.parent.parent
+    weights = _local_book_weights(pos, repo_root)
+    if not weights:
+        return None
+    return build_holdings_correlation_from_disk(repo_root, list(weights), weights)
 
 
 def compose_risk_page(
@@ -1419,6 +1464,7 @@ def compose_risk_page(
     snapshot: RiskSnapshot | None = None,
     gap: RiskRewardGap | None = None,
     style: StyleFactorRollup | None = None,
+    correlation: CorrelationRead | None = None,
 ) -> str:
     """Pure assembly of the Risk page (testable without network or DB). The
     ``#pfr-root`` wrapper is the re-inject target the run-scenario script swaps
@@ -1426,8 +1472,9 @@ def compose_risk_page(
     last-known cached read) renders stamped values instead of a bare note.
     ``gap`` (L7) is the risk-budget allocator's risk-vs-reward-vs-conviction
     ranking; None hides the section (tracker offline / no weighted book).
-    ``style`` (the value/size/momentum ETF-proxy loadings) is computed from
-    local disk, so it renders in BOTH branches — tracker up or down."""
+    ``style`` (the value/size/momentum ETF-proxy loadings) and ``correlation``
+    (the holdings pairwise matrix + crowding clusters) are computed from local
+    disk, so they render in BOTH branches — tracker up or down."""
     parts: list[str] = [_RISK_CSS, '<div id="pfr-root">']
     if analytics.available:
         if analytics.beta is not None:
@@ -1436,6 +1483,7 @@ def compose_risk_page(
         if factor is not None:
             parts.append(_factor_exposure_section(factor))
         parts.append(_style_factor_section(style))
+        parts.append(_correlation_section(correlation))
         if gap is not None:
             parts.append(_risk_reward_gap_section(gap))
     else:
@@ -1444,6 +1492,7 @@ def compose_risk_page(
         else:
             parts.append(_risk_offline_note(analytics))
         parts.append(_style_factor_section(style))
+        parts.append(_correlation_section(correlation))
     parts.append(_macro_stress_section(scenarios, digest))
     parts.append("</div>")
     return "".join(parts)
@@ -1849,6 +1898,102 @@ def _style_factor_section(style: StyleFactorRollup | None) -> str:
     )
     strip = f'<div class="kpi-strip">{"".join(cards)}</div>' if cards else ""
     return f'{head}{strip}{note}{missing}<div class="pfr-tops">{tops}</div></section>'
+
+
+def _corr_cell_class(v: float, *, diagonal: bool) -> str:
+    """Heat tone for one pairwise correlation cell."""
+    if diagonal:
+        return "pfc-cell pfc-diag"
+    if v >= 0.8:
+        return "pfc-cell pfc-c3"
+    if v >= CLUSTER_CORR:
+        return "pfc-cell pfc-c2"
+    if v >= 0.5:
+        return "pfc-cell pfc-c1"
+    if v < 0.0:
+        return "pfc-cell pfc-neg"
+    return "pfc-cell"
+
+
+def _correlation_section(read: CorrelationRead | None) -> str:
+    """Holdings pairwise correlation + crowding clusters, from the local price
+    cache. Renders in the offline branch too (same always-render pattern as the
+    style-factor section); ``None`` gets the empty state, not a hidden section."""
+    head = (
+        '<section class="panel"><h2>Holdings correlation &amp; crowding</h2>'
+        '<p class="sub">Pairwise correlation of the holdings\' daily returns over their common '
+        "trading window (local price cache — renders with the tracker down), and the clusters "
+        "that trade as one bet: names linked at corr &ge; "
+        f"{CLUSTER_CORR:.2f} grouped, with their combined share of book.</p>"
+    )
+    if read is None:
+        return (
+            f"{head}"
+            '<p class="muted">Not enough daily price history across the holdings for a pairwise '
+            "read (needs two or more names with an overlapping window).</p></section>"
+        )
+    cards: list[str] = []
+    if read.avg_pairwise_corr is not None:
+        cards.append(
+            _kpi_card("Avg pairwise corr", _ratio(read.avg_pairwise_corr), sub="off-diagonal mean")
+        )
+    if read.clusters:
+        biggest = read.clusters[0]
+        cards.append(
+            _kpi_card(
+                "Largest cluster",
+                f"{biggest.combined_weight_pct:.0f}%",
+                sub=f"{len(biggest.tickers)} names as one bet",
+                tone="neg" if biggest.combined_weight_pct >= 25.0 else "",
+            )
+        )
+    else:
+        cards.append(_kpi_card("Clusters", "none", sub=f"no links at ≥{CLUSTER_CORR:.2f}"))
+    strip = f'<div class="kpi-strip">{"".join(cards)}</div>' if cards else ""
+
+    clusters_html = ""
+    if read.clusters:
+        lines = "".join(
+            '<p class="pfr-top"><strong>'
+            + " + ".join(ticker_label(t, href=f"../research/{escape(t)}/") for t in c.tickers)
+            + "</strong>"
+            f" — {c.combined_weight_pct:.0f}% of book moves as one bet "
+            f'<span class="muted">(avg corr {c.avg_corr:.2f}, weakest link '
+            f"{c.min_corr:.2f})</span></p>"
+            for c in read.clusters
+        )
+        clusters_html = f'<div class="pfc-clusters">{lines}</div>'
+
+    header_cells = "".join(f"<th>{escape(t)}</th>" for t in read.tickers)
+    body_rows: list[str] = []
+    for i, t in enumerate(read.tickers):
+        cells: list[str] = []
+        for j, u in enumerate(read.tickers):
+            v = read.matrix[i][j]
+            cls = _corr_cell_class(v, diagonal=i == j)
+            text = "—" if i == j else f"{v:+.2f}"
+            cells.append(
+                f'<td class="{cls}" title="{escape(t)} x {escape(u)} · {v:+.2f}">{text}</td>'
+            )
+        body_rows.append(f'<tr><th class="pfc-row-h">{escape(t)}</th>{"".join(cells)}</tr>')
+    table = (
+        '<div class="pfc-scroll"><table class="pfc-table">'
+        f"<thead><tr><th></th>{header_cells}</tr></thead>"
+        f"<tbody>{''.join(body_rows)}</tbody></table></div>"
+    )
+
+    bits = [f"{len(read.tickers)} names", f"{read.n_obs} common trading days"]
+    if read.prices_through is not None:
+        bits.append(f"prices through {read.prices_through.isoformat()}")
+    note = f'<p class="muted pfr-top">{escape(" · ".join(bits))}.</p>'
+    dropped = (
+        '<p class="muted pfr-top">Not modeled: '
+        + escape("; ".join(f"{t} — {reason}" for t, reason in sorted(read.dropped.items())))
+        + ".</p>"
+        if read.dropped
+        else ""
+    )
+    return f"{head}{strip}{clusters_html}{table}{note}{dropped}</section>"
 
 
 def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
