@@ -93,12 +93,18 @@ def run_model(
 @dataclass(frozen=True, slots=True)
 class PromptCase:
     """One real prompt to evaluate a candidate against, with the incumbent's
-    already-known response (reused from a capture/harvest — no re-run needed)."""
+    already-known response (reused from a capture/harvest — no re-run needed).
+
+    ``prompt_sha256`` (optional, additive) ties the case back to its
+    ``llm_calls`` census row: the stratified sampler records it in the
+    ``sample_manifest`` (dedup across sweeps) and the per-query criteria layer
+    keys its checklist cache on it (meta_eval_governance.md §2-§3)."""
 
     label: str
     prompt: str
     ticker: str | None
     incumbent_response: str
+    prompt_sha256: str | None = None
 
 
 def judge_case(
@@ -144,6 +150,14 @@ CANDIDATE_ERRORED = "CANDIDATE_ERRORED"
 # Above this fraction of operationally-failed cases the quality tallies are
 # noise: the surviving n is too small and error-as-incumbent-win dominates.
 CANDIDATE_ERROR_RATE_THRESHOLD = 0.5
+
+# The sample was not representative enough to grade (meta_eval_governance.md
+# §2.1): the replayable capture frame covers too little of the purpose's ledger
+# census (frame_share < MIN_FRAME_SHARE) or the eligible pool is below min_n.
+# An ADVISORY honesty label — like INSUFFICIENT_DATA it is streak-neutral in
+# apply_model_switches (never switch/keep evidence); the fix is more harvest,
+# not a different candidate.
+INSUFFICIENT_FRAME = "INSUFFICIENT_FRAME"
 
 
 @dataclass(frozen=True, slots=True)

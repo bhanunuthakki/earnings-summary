@@ -60,11 +60,13 @@ OUTCOME_PURPOSES: frozenset[str] = frozenset(
     {"bear_case", "decision_audit", "management_prediction", "decision_extraction"}
 )
 
-# The eval machinery itself: judges and graders that score OTHER purposes.
-# Their own quality signal is the judge-agreement spot check
-# (execution/spot_check_eval_judge.py), not an eval mode.
+# The eval machinery itself: judges, graders and steering calls that score or
+# route OTHER purposes. Their own quality signal is the judge-agreement /
+# classification spot check (execution/spot_check_eval_judge.py), not an eval
+# mode. case_difficulty_classify is the sweep sampler's difficulty classifier
+# (meta_eval_governance.md §2) — it stratifies the corpus others are graded on.
 META_PURPOSES: frozenset[str] = frozenset(
-    {"eval_judge", "backend_compare_judge", "bear_case_grading"}
+    {"eval_judge", "backend_compare_judge", "bear_case_grading", "case_difficulty_classify"}
 )
 
 # The fallback budget row's synthetic purpose — never an LLM call's own.

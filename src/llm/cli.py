@@ -132,6 +132,13 @@ LLM_MODELS: dict[str, str] = {
     # tier, like the sibling wondering_detect classifier.
     "musing_decision_extract": FAST_CLASSIFIER_MODEL,
     "drift_narrate": FAST_CLASSIFIER_MODEL,
+    # Meta-eval steering (meta_eval_governance.md §2): classifies a CAPTURED
+    # prompt's difficulty (easy/moderate/hard) so the sweep sampler oversamples
+    # hard cases. Reads the prompt only (never a response); cached forever per
+    # (purpose, sha, version) in eval_case_features — one call per new distinct
+    # prompt. Short + closed classification → FAST tier; traffic rides
+    # scope="meta_eval" + CAPTURE_DENYLIST (never enters a harvest corpus).
+    "case_difficulty_classify": FAST_CLASSIFIER_MODEL,
     # The Ledger Phase-1 artifact drafters (web-less, feed the gated mutating kinds).
     # thesis_entry_draft distills a memo + evidence into an append-only ledger entry;
     # research_code_spec drafts an inert, human-reviewed code-change spec. Both are

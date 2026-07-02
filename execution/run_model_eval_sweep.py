@@ -1,8 +1,13 @@
 """Weekly model-downgrade evaluation sweep — standing accumulating loop.
 
-Discovers which purposes are active (via recent llm_calls), loads prompt cases
-from capture JSONL files, evaluates every cheaper candidate per purpose, and
-INSERTs rows into model_eval_verdicts (rolling history — never upserts).
+Discovers which purposes are active (via recent llm_calls), draws a STRATIFIED
+sample of prompt cases per purpose (``evals.sampler`` — census-grounded, hard-
+case-oversampled, seeded; meta_eval_governance.md §2), evaluates every cheaper
+candidate, and INSERTs rows into model_eval_verdicts (rolling history — never
+upserts). When the ledger census can't vouch for the sample (thin capture
+frame), the verdict is the advisory ``INSUFFICIENT_FRAME`` instead of a graded
+result — never grade a bad sample and call it evidence. Fixture/bootstrap DBs
+with no census degrade to the legacy newest-N loader (visible in the manifest).
 
 Designed to run weekly (Sundays, off-peak) via Windows Task Scheduler so the
 evaluation history accumulates automatically. Each sweep is self-contained: if
@@ -55,9 +60,18 @@ from typing import cast
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from evals.sampler import (  # noqa: E402
+    CLASSIFY_PURPOSE,
+    ensure_difficulty_features,
+    load_census,
+    load_frame,
+    recent_sample_shas,
+    sample_cases,
+)
 from llm.backend_judge import CLAUDE, GEMINI  # noqa: E402
 from llm.cli import DEFAULT_MODEL, LLM_MODELS  # noqa: E402
 from llm.model_eval import (  # noqa: E402
+    INSUFFICIENT_FRAME,
     SWITCH_DOWN,
     CandidateVerdict,
     PromptCase,
@@ -67,17 +81,28 @@ from llm.model_eval import (  # noqa: E402
 )
 from llm.model_ladder import cheaper_candidates  # noqa: E402
 from llm.model_overrides import record_verdict  # noqa: E402
+from llm.prompt_versions import prompt_version_for  # noqa: E402
+from llm.workload_inventory import risk_note_for  # noqa: E402
 
 log = logging.getLogger("run_model_eval_sweep")
 
 # Lookback window for discovering active purposes from llm_calls.
 DEFAULT_LOOKBACK_DAYS = 30
 
-# Default cases sampled per purpose (keeps each sweep under ~1hr wall-clock
-# even if a purpose has hundreds of captures). Override via --limit.
-DEFAULT_CASES_PER_PURPOSE = 6
+# Per-tier sample sizes (meta_eval_governance.md §2.4): RISKY purposes
+# (RISK_NOTES / advisor_* — silent-portfolio-harm blast radius) need the larger
+# n AND min_n; everything else defaults to the CANDIDATE tier. SAFE-tier 8s
+# arrive with nominations (PR3). --limit still CAPS n for quick manual runs.
+RISKY_TIER_N = 16
+RISKY_TIER_MIN_N = 16
+DEFAULT_TIER_N = 12
+DEFAULT_TIER_MIN_N = 8
 
-# Minimum cases before a verdict is anything but INSUFFICIENT_DATA.
+# Default --limit: the max tier size, so default runs never clamp a risky tier.
+DEFAULT_CASES_PER_PURPOSE = RISKY_TIER_N
+
+# Minimum cases before a verdict is anything but INSUFFICIENT_DATA (CLI floor;
+# the per-tier minimum raises it — see _tier_params).
 DEFAULT_MIN_N = 4
 
 # Fraction of cases where candidate must win-or-tie (per judge) to SWITCH_DOWN.
@@ -148,6 +173,19 @@ def _load_cases_from_files(
                 return cases
 
     return cases
+
+
+def _tier_params(purpose: str, limit: int, min_n: int) -> tuple[int, int]:
+    """(n, effective_min_n) for a purpose by risk tier. RISKY (RISK_NOTES /
+    advisor_*) gets 16/16; the rest the CANDIDATE default 12/8. ``limit`` caps n
+    (quick manual runs); the effective minimum never exceeds the achievable n
+    and never drops below the CLI ``min_n`` floor."""
+    if risk_note_for(purpose):
+        tier_n, tier_min = RISKY_TIER_N, RISKY_TIER_MIN_N
+    else:
+        tier_n, tier_min = DEFAULT_TIER_N, DEFAULT_TIER_MIN_N
+    n = min(tier_n, limit) if limit > 0 else tier_n
+    return n, max(min_n, min(tier_min, n))
 
 
 # ---------------------------------------------------------------------------
@@ -387,21 +425,106 @@ def run_sweep(
             log.info("[%s] incumbent=%s is already cheapest; skip", purpose, incumbent)
             continue
 
-        cases = _load_cases_from_files(capture_files, purpose=purpose, limit=limit)
-        if not cases:
-            log.info("[%s] no capture cases found; skip this sweep", purpose)
-            continue
+        n_target, eff_min_n = _tier_params(purpose, limit, min_n)
+
+        # Census-grounded stratified sampling (§2). No census (fixture DBs,
+        # bootstrap) → the legacy newest-N loader, visible in the manifest.
+        census = load_census(db_path, purpose)
+        frame = load_frame(capture_files, purpose) if census else {}
+        legacy_cases: list[PromptCase] = []
+        features: dict[str, str] = {}
+        if census:
+            if not frame:
+                log.info("[%s] no capture cases found; skip this sweep", purpose)
+                continue
+            features, deferred = ensure_difficulty_features(
+                db_path,
+                purpose,
+                frame,
+                census,
+                classifier_version=prompt_version_for(CLASSIFY_PURPOSE),
+            )
+            if deferred:
+                log.info(
+                    "[%s] %d sha(s) deferred to next sweep's classifier budget", purpose, deferred
+                )
+        else:
+            legacy_cases = _load_cases_from_files(capture_files, purpose=purpose, limit=n_target)
+            if not legacy_cases:
+                log.info("[%s] no capture cases found; skip this sweep", purpose)
+                continue
 
         log.info(
-            "[%s] incumbent=%s  cases=%d  candidates=%s",
+            "[%s] incumbent=%s  n=%d min_n=%d  census=%d frame=%d  candidates=%s",
             purpose,
             incumbent,
-            len(cases),
+            n_target,
+            eff_min_n,
+            len(census),
+            len(frame) or len(legacy_cases),
             ", ".join(candidates),
         )
 
         for candidate in candidates:
-            log.info("  evaluating candidate %s ...", candidate)
+            manifest: dict[str, object]
+            if census:
+                # Per-candidate draw: dedup excludes shas this pair graded in the
+                # previous 2 sweeps (fresh evidence accumulates; a sha may still
+                # serve a DIFFERENT candidate). Seeded → reproducible.
+                sample = sample_cases(
+                    purpose=purpose,
+                    n=n_target,
+                    min_n=eff_min_n,
+                    census=census,
+                    frame=frame,
+                    features=features,
+                    rng_seed=f"{run_id}:{purpose}:{candidate}",
+                    exclude_shas=recent_sample_shas(db_path, purpose, candidate),
+                )
+                if sample.insufficient_frame:
+                    verdict = CandidateVerdict(
+                        purpose=purpose,
+                        incumbent=incumbent,
+                        candidate=candidate,
+                        n=0,
+                        candidate_wins=0,
+                        incumbent_wins=0,
+                        ties=0,
+                        parity_rate=0.0,
+                        judge_agreement=0.0,
+                        recommendation=INSUFFICIENT_FRAME,
+                        reason=sample.reason,
+                    )
+                    log.info("  %s -> INSUFFICIENT_FRAME: %s", candidate, sample.reason)
+                    all_verdicts.append(verdict)
+                    if persist and db_path.exists():
+                        record_verdict(
+                            purpose=purpose,
+                            candidate=candidate,
+                            incumbent=incumbent,
+                            verdict=INSUFFICIENT_FRAME,
+                            run_id=run_id,
+                            parity_rate=0.0,
+                            judge_agreement=0.0,
+                            n_cases=0,
+                            n_parity=0,
+                            summary_json=json.dumps(
+                                {
+                                    "verdict": dataclasses.asdict(verdict),
+                                    "sample_manifest": sample.manifest,
+                                },
+                                ensure_ascii=False,
+                            ),
+                            db_path=db_path,
+                        )
+                    continue
+                cases = sample.cases
+                manifest = sample.manifest
+            else:
+                cases = legacy_cases
+                manifest = {"mode": "legacy_no_census", "n_drawn": len(legacy_cases)}
+
+            log.info("  evaluating candidate %s on %d case(s) ...", candidate, len(cases))
             verdict, case_audit = _evaluate_candidate(
                 cases,
                 purpose=purpose,
@@ -409,7 +532,7 @@ def run_sweep(
                 candidate=candidate,
                 judges=judges,
                 run_id=run_id,
-                min_n=min_n,
+                min_n=eff_min_n,
                 parity_threshold=parity_threshold,
                 timeout_seconds=timeout_seconds,
             )
@@ -424,8 +547,9 @@ def run_sweep(
 
             if persist and db_path.exists():
                 # Single canonical writer (shared with the auto-switch reader).
-                # summary_json = full verdict + every per-case judge rationale,
-                # so the switch decision is auditable from the DB alone.
+                # summary_json = full verdict + every per-case judge rationale +
+                # the sample manifest, so the switch decision AND its sample's
+                # provenance are auditable from the DB alone.
                 summary_json = json.dumps(
                     {
                         "verdict": dataclasses.asdict(verdict),
@@ -435,6 +559,7 @@ def run_sweep(
                             "ratio": verdict.token_efficiency_ratio,
                         },
                         "cases": case_audit,
+                        "sample_manifest": manifest,
                     },
                     ensure_ascii=False,
                 )

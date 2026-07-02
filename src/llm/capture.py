@@ -38,10 +38,15 @@ log = logging.getLogger(__name__)
 LLM_CAPTURE_DIR_ENV = "LLM_CAPTURE_DIR"
 LLM_CAPTURE_PURPOSES_ENV = "LLM_CAPTURE_PURPOSES"
 
-# Never capture eval/judge traffic — it would pollute a comparison corpus with
-# the grading calls that consume it. (backend_compare_judge = this track's judge;
-# eval_judge = the general LLM-evals harness's judge.)
-CAPTURE_DENYLIST: frozenset[str] = frozenset({"backend_compare_judge", "eval_judge"})
+# Never capture eval/judge/steering traffic — it would pollute a comparison
+# corpus with the grading calls that consume it (isolation invariant I4,
+# meta_eval_governance.md §5). backend_compare_judge = the pairwise judge;
+# eval_judge = the general LLM-evals harness's judge; case_difficulty_classify =
+# the sweep sampler's difficulty classifier (its prompts EMBED captured
+# production prompts — recapturing them would nest corpora).
+CAPTURE_DENYLIST: frozenset[str] = frozenset(
+    {"backend_compare_judge", "eval_judge", "case_difficulty_classify"}
+)
 
 
 def capture_dir() -> Path | None:
