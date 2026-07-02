@@ -66,6 +66,65 @@ class BudgetSkip(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class PricedInLever(BaseModel):
+    """One reverse-DCF lever on the valuation card: the value today's price
+    implies vs the analyst's base case for the same lever.
+
+    ``implied_value`` is None when the price is unreachable inside the model's
+    bounds (``note`` then carries the direction). ``unit`` is "pct" (a rate — a
+    CAGR or terminal g) or "turns" (an EV multiple), so the renderer formats
+    without re-deciding. Parsed from
+    ``dcf_runs.assumption_snapshot_json["priced_in"]``; produced by
+    ``dcf.reverse.PricedIn.to_snapshot_dict``.
+    """
+
+    lever: str
+    label: str
+    unit: Literal["pct", "turns"]
+    base_value: float
+    implied_value: float | None = None
+    note: str = ""
+
+    def _fmt(self, x: float) -> str:
+        """A lever value in its own unit: a rate as a percent, a multiple in
+        turns. Shared by every renderer so pct/turns formatting can't drift."""
+        return f"{x * 100:.1f}%" if self.unit == "pct" else f"{x:.1f}x"
+
+    @property
+    def base_display(self) -> str:
+        return self._fmt(self.base_value)
+
+    @property
+    def implied_display(self) -> str:
+        """The market-implied value, or 'n/a' when the price was unreachable
+        inside the model's bounds (the honest-None case)."""
+        return "n/a" if self.implied_value is None else self._fmt(self.implied_value)
+
+    @property
+    def gap_display(self) -> str | None:
+        """implied − base in the lever's own unit (percentage *points* for a
+        rate, turns for a multiple), signed. None when the lever is unsolved."""
+        if self.implied_value is None:
+            return None
+        delta = self.implied_value - self.base_value
+        return f"{delta * 100:+.1f}pts" if self.unit == "pct" else f"{delta:+.1f}x"
+
+
+class PricedInCard(BaseModel):
+    """Reverse-DCF "what's priced in" block on the §1 valuation card: what
+    today's price implies about the analyst's own FCFF model, per lever.
+
+    Only redesigned FCFF names carry this (bespoke archetypes have no honest
+    single-lever inversion — the card shows an explicit n/a). None on the parent
+    ValuationSnapshot when the run predates the block or the archetype can't be
+    inverted."""
+
+    price: float
+    base_value_per_share_usd: float
+    growth: PricedInLever
+    terminal: PricedInLever
+
+
 class ValuationSnapshot(BaseModel):
     """Numbers shown on the §1 valuation card."""
 
@@ -98,6 +157,12 @@ class ValuationSnapshot(BaseModel):
     # "SOTP / NAV", "Excess return", "Platform DCF", ...), parsed from the
     # dcf_runs snapshot. None when the run predates model tagging.
     valuation_model_label: str | None = None
+
+    # Reverse-DCF — the market-implied assumption set at today's price
+    # ("what's priced in"), parsed from dcf_runs.assumption_snapshot_json
+    # ["priced_in"] (written by refresh_dcf). None for bespoke archetypes and
+    # runs predating the block; the card then shows an explicit n/a.
+    priced_in: PricedInCard | None = None
 
     # S11 — workbook→assumptions-JSON sync outcome from dcf_runs (migration
     # 0091): 'synced' / 'created' / 'failed: <detail>' + the naive-UTC stamp.

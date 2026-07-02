@@ -55,6 +55,7 @@ from dcf import assumptions_doc  # noqa: E402
 from dcf import live_price as live_price_mod  # noqa: E402
 from dcf import persist as persist_mod  # noqa: E402
 from dcf import redesign as redesign_mod  # noqa: E402
+from dcf import reverse as reverse_mod  # noqa: E402
 from dcf import universe as universe_mod  # noqa: E402
 from ticker_validation import safe_ticker  # noqa: E402
 
@@ -508,6 +509,14 @@ def _redesign_snapshot(
                 "deltas": dataclasses.asdict(inp.bear_deltas),
             },
         }
+    # Reverse-DCF: the market-implied assumption set at the workbook's current
+    # price, persisted alongside (never recomputed on render). Solved from the
+    # same injected inputs, so it tracks the user's preserved edits. Absent when
+    # there's no usable price / base value (solve_priced_in returns None).
+    if inp is not None:
+        priced_in = reverse_mod.solve_priced_in(inp)
+        if priced_in is not None:
+            payload["priced_in"] = priced_in.to_snapshot_dict()
     return json.dumps(payload, indent=2)
 
 

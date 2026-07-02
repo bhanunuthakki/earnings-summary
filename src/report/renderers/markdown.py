@@ -288,6 +288,7 @@ def _valuation_card_md(out: StringIO, v: ValuationSnapshot) -> None:
             f"{_TRIGGER_LABEL_MD.get(v.trigger_status, v.trigger_status)} |\n"
         )
     out.write("\n")
+    _priced_in_card_md(out, v)
     meta_parts: list[str] = []
     if v.valuation_model_label:
         # S12: say which archetype produced the number.
@@ -310,6 +311,32 @@ def _valuation_card_md(out: StringIO, v: ValuationSnapshot) -> None:
             meta_parts.append(f"assumptions {v.assumptions_sync_status}{when}")
     if meta_parts:
         out.write(f"_{' · '.join(meta_parts)}_\n\n")
+
+
+def _priced_in_card_md(out: StringIO, v: ValuationSnapshot) -> None:
+    """Reverse-DCF "what's priced in": the market-implied assumption set at
+    today's price vs the analyst's base case, per lever.
+
+    Redesigned FCFF names only; a bespoke archetype renders a one-line n/a (it
+    has no honest single-lever inversion). A pure consumer of the block
+    refresh_dcf persisted — never recomputed here.
+    """
+    card = v.priced_in
+    if card is None:
+        # Honest n/a for a bespoke archetype ("FCFF DCF" is the only invertible
+        # label); stay silent for a pre-block / no-DCF row.
+        if v.valuation_model_label and v.valuation_model_label != "FCFF DCF":
+            out.write(
+                f"_Priced in: n/a for {v.valuation_model_label} model "
+                "(no single-lever reverse-DCF)._\n\n"
+            )
+        return
+    out.write("**Priced in vs your case** — what today's price implies:\n\n")
+    out.write("| Lever | Your base | Market implies | Gap |\n|---|---|---|---|\n")
+    for lev in (card.growth, card.terminal):
+        gap = lev.gap_display or f"_{lev.note or 'n/a'}_"
+        out.write(f"| {lev.label} | {lev.base_display} | {lev.implied_display} | {gap} |\n")
+    out.write("\n")
 
 
 def _evaluation_snapshot(out: StringIO, s: EvaluationSnapshotSection) -> None:
