@@ -512,6 +512,51 @@ def test_fetch_degrades_when_unreachable(monkeypatch: pytest.MonkeyPatch) -> Non
     assert live.positions == []
 
 
+# ----- transaction history (tax-lot reconstruction feed) -----
+
+
+def test_fetch_transaction_history_parses_lot_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[str] = []
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        seen.append(url)
+        return _FakeResp(
+            [
+                {
+                    "plaid_investment_transaction_id": "t9",
+                    "account_id": 6,
+                    "account_name": "Fidelity Brokerage",
+                    "ticker": "NU",
+                    "date": "2025-01-10",
+                    "type": "buy",
+                    "subtype": "buy",
+                    "quantity": "100",
+                    "amount": "-5000.00",
+                    "price": "50.00",
+                    "fees": "1.25",
+                }
+            ]
+        )
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    txns = ptc.fetch_transaction_history(api_url="http://tracker.test")
+    assert txns is not None and len(txns) == 1
+    t = txns[0]
+    assert (t.account_id, t.price, t.fees) == (6, 50.0, 1.25)
+    assert t.quantity == 100.0 and t.type == "buy"
+    # The deep-history window + row cap ride the query string.
+    assert "start_date=2000-01-01" in seen[0]
+    assert f"limit={ptc.TRANSACTION_HISTORY_LIMIT}" in seen[0]
+
+
+def test_fetch_transaction_history_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _boom(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        raise requests.ConnectionError("connection refused")
+
+    monkeypatch.setattr(ptc.requests, "get", _boom)
+    assert ptc.fetch_transaction_history(api_url="http://tracker.test") is None
+
+
 # ----- renderer -----
 
 
