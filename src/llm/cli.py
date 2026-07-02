@@ -21,12 +21,14 @@ fallback in ``src/llm/fallback.py``. Setup-class errors (binary missing on
 first call) propagate without fallback — they need operator action, not
 papering over.
 
-Second backend: ``src/llm/gemini_backend.py`` wraps the consumer-subscription
-Gemini CLI with the same call contract. ``call_llm`` routes a purpose there
-only when it appears in the eval-gated allowlist (ships EMPTY — judges must
-grade per-purpose output quality first; see directives/gemini_backend.md) or
-when a caller forces ``backend="gemini"`` explicitly (the compare harness).
-Everything else runs Claude, exactly as before.
+Second backend: ``src/llm/gemini_backend.py`` calls the Gemini Developer API
+directly (metered key) with the same call contract. ``call_llm`` routes a
+purpose there when its resolved model is a Gemini model id — model-first
+dispatch, see directives/cheapest_model_routing.md — or when a caller forces
+``backend="gemini"`` explicitly (the compare harness). A purpose only
+resolves to a Gemini model after the LLM-evals judges grade its output
+quality first; see directives/gemini_backend.md. Everything else runs
+Claude, exactly as before.
 
 Public API:
     DEFAULT_MODEL, FAST_CLASSIFIER_MODEL — canonical model ids.

@@ -50,9 +50,11 @@ MODEL_LADDER: dict[str, ModelCost] = {
     "claude-opus-4-7": ModelCost("claude-opus-4-7", CLAUDE, 15.00, 75.00),
     "claude-opus-4-8": ModelCost("claude-opus-4-8", CLAUDE, 15.00, 75.00),
     # Gemini API tiers (public API prices, $/MTok in/out, 2026-06).
-    # CLI-verified model ids — Matches GEMINI_BACKEND_FAST_MODEL / _DEFAULT_MODEL in
-    # src/llm/gemini_backend.py. The fast tier (Flash) self-anneals on ModelNotFoundError:
-    # gemini-3-flash-preview → doc-discovered model → gemini-2.5-flash (stable GA fallback).
+    # Matches GEMINI_BACKEND_FAST_MODEL / _DEFAULT_MODEL in src/llm/gemini_backend.py
+    # (the Gemini Developer API backend — see directives/gemini_backend.md for the
+    # 2026-07 migration off gemini-cli). The fast tier (Flash) self-anneals on
+    # NotFound: gemini-3-flash-preview → API-catalog-discovered model → gemini-2.5-flash
+    # (stable GA fallback).
     # Both Flash ids live here so family_of() routes either to the Gemini backend.
     "gemini-3-flash-preview": ModelCost("gemini-3-flash-preview", GEMINI, 0.30, 2.50),
     "gemini-2.5-flash": ModelCost("gemini-2.5-flash", GEMINI, 0.30, 2.50),

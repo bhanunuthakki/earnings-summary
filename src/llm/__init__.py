@@ -8,7 +8,7 @@ Layout:
                (try_gemini_fallback, GEMINI_FALLBACK_MODEL).
     cli      — Claude CLI subprocess wiring + the public call_llm /
                call_llm_with_web entry points + LLMBudgetExceeded.
-    gemini_backend — consumer-subscription Gemini CLI second backend,
+    gemini_backend — Gemini Developer API (metered key) second backend,
                eval-gated via an empty-by-default purpose allowlist
                (call_gemini, gemini_allowed_purposes; see
                directives/gemini_backend.md).
