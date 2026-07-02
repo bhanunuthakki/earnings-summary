@@ -41,14 +41,22 @@ So the only genuinely new primitives are:
 A downgrade ships only when the cheaper model clearly holds up — the cost of a bad
 downgrade (worse production output, silently) outweighs the saving:
 
+- `CANDIDATE_ERRORED` (checked FIRST, #723) when the candidate failed
+  operationally on ≥ 50% of attempted cases — an infrastructure verdict, not a
+  quality one. Excluded from switch/keep streaks by `apply_model_switches`,
+  which fires a date-keyed infra alert instead. Added after the 2026-06-28
+  sweep recorded every Gemini candidate at parity=0.0 / KEEP_INCUMBENT while
+  the Gemini CLI was erroring 60-100% of its runs.
 - `KEEP_INCUMBENT` if ANY judge has the incumbent winning a majority.
 - `SWITCH_DOWN` only if EVERY judge has the candidate at parity-or-better on
   ≥ `parity_threshold` (default 0.8) of cases AND cross-judge agreement ≥ 0.6.
 - `HOLD` for mixed / judges-disagree.
 - `INSUFFICIENT_DATA` below `min_n` (default 4).
 
-A candidate that *fails* a case (errors/timeout) counts as an incumbent win — a
-model that can't reliably produce the output isn't switch-worthy. Gemini's
+A candidate that *fails* a case (errors/timeout) counts as an incumbent win
+within the tallies — a model that can't reliably produce the output isn't
+switch-worthy — but once failures cross the 50% rate the whole verdict flips
+to `CANDIDATE_ERRORED` (the tallies are noise at that point). Gemini's
 `rate_limited` flag is surfaced so a high-volume purpose isn't switched onto a
 quota it would blow.
 
