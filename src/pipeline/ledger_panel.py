@@ -205,6 +205,22 @@ def _task_chip(task: ResearchTask) -> str:
     )
 
 
+def _view_words(prop: ResearchProposal) -> tuple[str, str]:
+    """A view proposal in the owner's words, rebuilt from the structured spec
+    at render time (so pre-fix rows read clean too). Falls back to stored text."""
+    try:
+        import json as _json
+
+        from research.view_artifact import describe_view_spec
+
+        spec = _json.loads(prop.artifact_json or "{}")
+        if spec.get("metrics"):
+            return describe_view_spec(cast("dict[str, object]", spec))
+    except Exception:
+        pass
+    return prop.title, prop.body_md
+
+
 def _proposal_group_card(group: list[ResearchProposal]) -> str:
     """ONE card per research run (task), however many artifacts it drafted.
 
@@ -212,28 +228,41 @@ def _proposal_group_card(group: list[ResearchProposal]) -> str:
     as separate proposal rows; rendering each as its own card with its own
     button row read as a duplicate ("Why is there this duplicate?" —
     2026-07-02). The memo is the card; companions become one compact line
-    each; ONE action row acts on every proposal in the group."""
+    each; ONE action row acts on every proposal in the group. A view-only
+    group speaks the owner's language (no ref grammar) and gets view verbs —
+    Save / Discard — not memo verbs."""
     primary = next((p for p in group if p.kind == "memo"), group[0])
     companions = [p for p in group if p.id != primary.id]
     ident = ticker_label(primary.ticker) if primary.ticker else ""
-    meta = " · ".join(p for p in (primary.budget_tier, primary.kind) if p)
     pids = ",".join(str(p.id) for p in group)
+    if primary.kind == "view":
+        title, body_text = _view_words(primary)
+        body = f"<p>{escape(body_text)}</p>".replace("\n\n", "</p><p>")
+        meta = "saved view"
+        verbs: tuple[tuple[str, str, str], ...] = (
+            ("approve", "Save view", "k-btn-primary"),
+            ("reject", "Discard", "k-btn-danger"),
+        )
+    else:
+        title, body = primary.title, render_prose(primary.body_md)
+        meta = " · ".join(p for p in (primary.budget_tier, primary.kind) if p)
+        verbs = _RESEARCH_VERBS
     footer = "".join(
         f'<button type="button" class="k-btn k-btn-sm {cls}" '
         f'data-verb="{verb}" data-pids="{pids}">{escape(label)}</button>'
-        for verb, label, cls in _RESEARCH_VERBS
+        for verb, label, cls in verbs
     )
     rider = "".join(
-        f'<p class="ledger-sec-sub">Also drafted: {escape(c.kind)} — '
-        f"{escape(c.title)} (approve applies it too).</p>"
+        f'<p class="ledger-sec-sub">Also drafted: {escape(_view_words(c)[0]) if c.kind == "view" else escape(c.title)} '
+        "(approve applies it too).</p>"
         for c in companions
     )
     return (
         '<div class="ledger-stance">'
         '<div class="ledger-stance-head">'
         f'{ident}<span class="ledger-stance-meta">{escape(meta)}</span></div>'
-        f'<div class="ledger-body"><strong>{escape(primary.title)}</strong>'
-        f"{render_prose(primary.body_md)}</div>"
+        f'<div class="ledger-body"><strong>{escape(title)}</strong>'
+        f"{body}"
         f"{rider}"
         f'<div class="ledger-cap-row">{footer}</div></div>'
     )

@@ -39,29 +39,41 @@ class ViewDraftResult:
     message: str = ""
 
 
-def _preview_md(spec_dict: dict[str, object]) -> str:
+def describe_view_spec(spec_dict: dict[str, object]) -> tuple[str, str]:
+    """(title, body) in the OWNER's language — no ref grammar, no function
+    names. The first render leaked ``NU x [fin:interest_expense, kpi:...]
+    (execute_view)`` into the UI and the owner called it "so confusing to
+    read"; internal syntax never belongs on a card."""
     tickers_raw = spec_dict.get("tickers")
     tickers = (
         ", ".join(str(t) for t in cast("list[object]", tickers_raw))
         if isinstance(tickers_raw, list)
         else ""
     )
-    metrics_raw = spec_dict.get("metrics")
     labels: list[str] = []
+    metrics_raw = spec_dict.get("metrics")
     if isinstance(metrics_raw, list):
         for m in cast("list[object]", metrics_raw):
             if isinstance(m, dict):
-                md = cast("dict[str, object]", m)
-                labels.append(f"{md.get('domain')}:{md.get('key')}")
+                key = str(cast("dict[str, object]", m).get("key") or "")
             else:
-                labels.append(str(m))
-    metrics = ", ".join(labels)
-    periods = spec_dict.get("periods", "")
-    tail = f", {periods} periods" if periods else ""
-    return (
-        f"**Proposed saved view** - {tickers or '-'} x [{metrics or '-'}]{tail}. "
-        "Preview runs LLM-free (execute_view); approve saves it."
+                key = str(m).split(":", 1)[-1]
+            key = key.replace("_", " ").strip()
+            if key:
+                labels.append(key[:1].upper() + key[1:])
+    periods = spec_dict.get("periods")
+    span = f"last {periods} quarters" if periods else "full history"
+    title = f"Tracking table for {tickers or 'the portfolio'} — {len(labels)} series, {span}"
+    body = (
+        " · ".join(labels or ["(no series)"])
+        + "\n\nSave adds this table to your Views, watching these numbers each quarter."
     )
+    return title, body
+
+
+def _preview_md(spec_dict: dict[str, object]) -> str:
+    title, body = describe_view_spec(spec_dict)
+    return f"**{title}**\n\n{body}"
 
 
 def _view_name(claim: str, ticker: str | None) -> str:
