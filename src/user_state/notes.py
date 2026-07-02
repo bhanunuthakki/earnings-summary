@@ -12,8 +12,6 @@ section / KPI / fact / alert), classified by *semantics*:
   observation  — anything else worth remembering
   musing       — a captured stream-of-consciousness thought (The Ledger);
                  identity defaulted at write time so capture asks nothing
-  influence    — a document, deck, or link the analyst shared as investing
-                 reading; portfolio-level (ticker=NULL), shapes LLM context
 
 Lifecycle: ``open → resolved`` (answered/done), ``open → archived``
 (no longer relevant), and correction is a supersede chain — a new row with
@@ -62,7 +60,6 @@ NOTE_KINDS: tuple[str, ...] = (
     "assumption",
     "observation",
     "musing",
-    "influence",  # 0125: document/deck/link the analyst flagged as a reading influence
 )
 NOTE_STATUSES: tuple[str, ...] = ("open", "resolved", "superseded", "archived")
 # 'advisor' (0077): notes written by advisor memo runs — honest provenance for

@@ -17,11 +17,6 @@ Anchor block builders — shared context for analytical prompts. Five flavors:
                         assumptions, standing decisions. Framed as "engage,
                         don't re-litigate": answer a question when the data
                         permits, flag confirmation/contradiction of watch-items.
-  - INFLUENCES anchor:  portfolio-level documents, decks, and links the analyst
-                        has shared via Telegram (or any capture channel) as
-                        investing reading — kind='influence' notes (alembic 0125).
-                        No ticker filter; shapes how the LLM understands the
-                        analyst's mental model across all companies.
 
 The anchors compose into a single block via `compose_anchor_block`. The
 prompts that promise "thesis-anchored analysis" (per-quarter summary, pairwise
@@ -37,14 +32,12 @@ Public API:
     load_bear_anchor(repo_root, ticker) -> str
     load_ir_anchor(repo_root, ticker, char_cap=IR_ANCHOR_CHAR_CAP) -> str
     load_priors_anchor(repo_root, ticker, char_cap=PRIORS_ANCHOR_CHAR_CAP) -> str
-    load_investor_influences_anchor(repo_root, char_cap=INFLUENCES_ANCHOR_CHAR_CAP) -> str
     compose_anchor_block(thesis_anchor, bear_anchor, ir_anchor="",
-                         priors_anchor="", influences_anchor="") -> str
+                         priors_anchor="") -> str
     ANCHOR_BLOCK_CHAR_CAP        — hard cap on thesis / bear blocks (3500).
     IR_ANCHOR_CHAR_CAP            — hard cap on IR block (2000, deliberately
                                     downweighted vs analyst-authored anchors).
     PRIORS_ANCHOR_CHAR_CAP        — hard cap on the priors block (2000).
-    INFLUENCES_ANCHOR_CHAR_CAP    — hard cap on the influences block (1200).
 """
 
 from __future__ import annotations
@@ -71,10 +64,6 @@ IR_ANCHOR_CHAR_CAP = 2000
 # already carries thesis + bear + IR on most prompts, and the highest-value
 # priors are short (a question, a watch-item). Newest notes win under the cap.
 PRIORS_ANCHOR_CHAR_CAP = 2000
-
-# Influences anchor (documents, decks, links the analyst shared) — intentionally
-# compact: the content is portfolio-level context, not ticker-specific analysis.
-INFLUENCES_ANCHOR_CHAR_CAP = 1200
 
 _HOLDINGS_DIRNAME = ("micro_thesis", "holdings")
 _BEAR_CASE_CACHE_DIRNAME = ("data", "bear_case")
@@ -532,78 +521,23 @@ def load_priors_anchor(repo_root: Path, ticker: str, char_cap: int = PRIORS_ANCH
     return assembled
 
 
-_INFLUENCES_HEADER = """## INVESTOR INFLUENCES (reading, decks, and links the analyst follows)
-
-These are documents, reports, and links the analyst has flagged as shaping
-how they think about investing. They are portfolio-level — not specific to
-one ticker — and reflect the analyst's mental model, conviction framework,
-and research sources. When relevant, draw connections between the analyst's
-influences and the company at hand."""
-
-
-def load_investor_influences_anchor(
-    repo_root: Path, char_cap: int = INFLUENCES_ANCHOR_CHAR_CAP
-) -> str:
-    """Compose the investor-influences anchor from kind='influence' analyst_notes rows.
-
-    Portfolio-level (no ticker filter) — surfaces documents, decks, and links
-    the analyst has shared as investing influences via Telegram or any capture
-    channel. Returns "" when the DB is absent, the table predates 0125, or
-    there are no open influence notes. Never raises.
-    """
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
-        return ""
-    try:
-        from user_state.notes import list_notes
-
-        rows = list_notes(kind="influence", status="open", limit=20, db_path=db_path)
-    except Exception as exc:
-        log.debug({"event": "influences_anchor_load_failed", "error": str(exc)})
-        return ""
-    if not rows:
-        return ""
-
-    parts: list[str] = [_INFLUENCES_HEADER]
-    for r in rows:
-        ctx: dict[str, object] = r.context or {}
-        label = str(ctx.get("file_name") or ctx.get("url") or "")
-        body = " ".join(r.body.split())
-        if len(body) > 200:
-            body = body[:197].rstrip() + "..."
-        # Show [filename] or [url] as a prefix when it differs from body.
-        prefix = f"[{label}] " if label and label != body else ""
-        parts.append(f"- {prefix}{body} (since {r.created_at.date().isoformat()})")
-
-    if len(parts) == 1:
-        return ""
-
-    assembled = "\n".join(parts).strip()
-    if len(assembled) > char_cap:
-        assembled = assembled[:char_cap].rstrip() + "\n[...truncated]"
-    return assembled
-
-
 def compose_anchor_block(
     thesis_anchor: str,
     bear_anchor: str,
     ir_anchor: str = "",
     priors_anchor: str = "",
-    influences_anchor: str = "",
 ) -> str:
-    """Join thesis + bear + IR + priors + influences anchors with separators,
-    omitting empties. Returns "" when all are empty.
+    """Join thesis + bear + IR + priors anchors with separators, omitting
+    empties. Returns "" when all are empty.
 
-    `ir_anchor`, `priors_anchor`, and `influences_anchor` are keyword-defaulted
-    so legacy 2- and 3-arg call sites keep working unchanged. New callers
-    should pass all five; the conventional builder pattern is
+    `ir_anchor` and `priors_anchor` are keyword-defaulted so legacy 2- and
+    3-arg call sites keep working unchanged. The conventional builder pattern is
 
         compose_anchor_block(
             load_thesis_anchor(repo_root, ticker),
             load_bear_anchor(repo_root, ticker),
             load_ir_anchor(repo_root, ticker),
             load_priors_anchor(repo_root, ticker),
-            load_investor_influences_anchor(repo_root),
         )
 
     The composed block is spotlighted (``llm.untrusted.spotlight``) before it
@@ -615,11 +549,7 @@ def compose_anchor_block(
     """
     from llm.untrusted import spotlight
 
-    blocks = [
-        b
-        for b in (thesis_anchor, bear_anchor, ir_anchor, priors_anchor, influences_anchor)
-        if b.strip()
-    ]
+    blocks = [b for b in (thesis_anchor, bear_anchor, ir_anchor, priors_anchor) if b.strip()]
     if not blocks:
         return ""
     wrapped = spotlight(
