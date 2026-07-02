@@ -118,6 +118,12 @@ LLM_MODELS: dict[str, str] = {
     "research_fetch": DEFAULT_MODEL,
     "research_adversarial_assess": DEFAULT_MODEL,
     "research_narrate": DEFAULT_MODEL,
+    # The Ledger Phase-2 generation seams (opt-in, web-less). musing_decision_extract
+    # structures a free-text owner musing into a decision; drift_narrate rewords a
+    # PRE-COMPUTED drift signal (wording only). Both short + closed → the cheap FAST
+    # tier, like the sibling wondering_detect classifier.
+    "musing_decision_extract": FAST_CLASSIFIER_MODEL,
+    "drift_narrate": FAST_CLASSIFIER_MODEL,
     # Long-context analytical writing
     "transcript_summary": DEFAULT_MODEL,
     "press_release_summary": DEFAULT_MODEL,

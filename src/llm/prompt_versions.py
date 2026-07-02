@@ -182,6 +182,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "research_fetch": "v1",
     "research_adversarial_assess": "v1",
     "research_narrate": "v1",
+    # The Ledger Phase-2 generation seams (decision extraction + drift phrasing).
+    "musing_decision_extract": "v1",
+    "drift_narrate": "v1",
 }
 
 _DEFAULT_VERSION = "v1"
