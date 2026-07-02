@@ -122,9 +122,12 @@ def judge_case(
     judge_model: str | None = None,
     run_id: str | None = None,
     max_prompt_chars: int = 8000,
+    criteria_block: str | None = None,
 ) -> JudgedPair:
     """Judge incumbent vs candidate on one case. Thin wrapper over judge_pair with
-    the slot mapping fixed: incumbent -> CLAUDE slot, candidate -> GEMINI slot."""
+    the slot mapping fixed: incumbent -> CLAUDE slot, candidate -> GEMINI slot.
+    ``criteria_block`` is the optional per-case checklist (§3) — judge-side only;
+    the generation replay never sees it (isolation invariant I1)."""
     return judge_pair(
         purpose=purpose,
         label=case.label,
@@ -136,6 +139,7 @@ def judge_case(
         judge_model=judge_model,
         run_id=run_id,
         max_prompt_chars=max_prompt_chars,
+        criteria_block=criteria_block,
     )
 
 

@@ -195,6 +195,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # Meta-eval steering (llm/nominator.py + llm/frontier.py, §1.2/§10.1).
     "optimizer_nominator": "v1",
     "model_frontier_research": "v1",
+    # Per-case checklist deriver (llm/query_criteria.py, §3). This version IS
+    # the query_criteria cache key: bumping it forks checklist history cleanly.
+    "query_criteria_derive": "v1",
     # SayDo commitment extraction (compute/say_do_extractor.build_extraction_prompt).
     # Bump when the extraction prompt is materially rewritten; commitment_scan_log
     # rows carry the version, so stale-version scans can be invalidated (DELETE

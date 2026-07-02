@@ -90,6 +90,11 @@ from llm.nominator import (  # noqa: E402
     pending_nominations,
 )
 from llm.prompt_versions import prompt_version_for  # noqa: E402
+from llm.query_criteria import (  # noqa: E402
+    CRITERIA_PURPOSE,
+    derive_or_load,
+    render_criteria_block,
+)
 from llm.workload_inventory import risk_note_for  # noqa: E402
 
 log = logging.getLogger("run_model_eval_sweep")
@@ -267,6 +272,23 @@ def _judge_model_for(judge_backend: str) -> str | None:
     return "claude-opus-4-8" if judge_backend == CLAUDE else "gemini-3.1-pro-preview"
 
 
+def _checklist_discrimination(case_audit: list[dict[str, object]]) -> float | None:
+    """Fraction of checklist items that resolved non-tie across a candidate's
+    cases (§3.5). Persistently ~0 ⇒ the derived criteria are too generic —
+    tighten the deriver prompt. ``None`` when no case carried a checklist."""
+    total = 0
+    non_tie = 0
+    for row in case_audit:
+        checklist = row.get("checklist")
+        if not isinstance(checklist, dict):
+            continue
+        for side in cast("dict[str, object]", checklist).values():
+            total += 1
+            if side != "tie":
+                non_tie += 1
+    return (non_tie / total) if total else None
+
+
 def _agreement(judged: list[tuple[str, object]], judges: list[str]) -> float:
     from llm.backend_judge import JudgedPair  # local import avoids circular at module level
 
@@ -292,9 +314,12 @@ def _evaluate_candidate(
     min_n: int,
     parity_threshold: float,
     timeout_seconds: int | None,
+    criteria_blocks: dict[str, str] | None = None,
 ) -> tuple[CandidateVerdict, list[dict[str, object]]]:
     """Returns the verdict AND the per-case judge audit (label, judge, winner,
-    margin, rationales) so the full decision trail lands in summary_json."""
+    margin, rationales, checklist) so the full decision trail lands in
+    summary_json. ``criteria_blocks`` maps case label -> the rendered per-case
+    checklist (§3) — judge-side only; the generation replay never sees it."""
     from llm.backend_judge import JudgedPair
 
     tally: dict[str, list[int]] = {jb: [0, 0, 0] for jb in judges}
@@ -334,6 +359,7 @@ def _evaluate_candidate(
                 judge_backend=jb,
                 judge_model=_judge_model_for(jb),
                 run_id=run_id,
+                criteria_block=(criteria_blocks or {}).get(case.label),
             )
             judged.append((jb, jp))
             if jp.winner == GEMINI:  # GEMINI slot == candidate
@@ -358,6 +384,9 @@ def _evaluate_candidate(
                 "margin": jp.margin,
                 "position_consistent": jp.position_consistent,
                 "rationales": jp.rationales,
+                # Per-item checklist outcomes (§3) — None when the case ran
+                # facet-only (no criteria derived).
+                "checklist": jp.checklist_winners,
             }
         )
 
@@ -595,7 +624,35 @@ def run_sweep(
                 cases = legacy_cases
                 manifest = {"mode": "legacy_no_census", "n_drawn": len(legacy_cases)}
 
-            log.info("  evaluating candidate %s on %d case(s) ...", candidate, len(cases))
+            # Per-case checklists (§3): derive-or-load per sha (cached forever;
+            # the first candidate of a sweep pays derivation, the rest cache-hit).
+            # A deriver failure degrades that case to facet-only — visible in
+            # the criteria telemetry, never blocking.
+            criteria_blocks: dict[str, str] = {}
+            criteria_missing = 0
+            criteria_version = prompt_version_for(CRITERIA_PURPOSE)
+            for case in cases:
+                if case.prompt_sha256 is None:
+                    criteria_missing += 1
+                    continue
+                crits = derive_or_load(
+                    db_path,
+                    purpose,
+                    case.prompt_sha256,
+                    case.prompt,
+                    criteria_version=criteria_version,
+                )
+                if crits is None:
+                    criteria_missing += 1
+                else:
+                    criteria_blocks[case.label] = render_criteria_block(crits)
+
+            log.info(
+                "  evaluating candidate %s on %d case(s) (%d with checklists) ...",
+                candidate,
+                len(cases),
+                len(criteria_blocks),
+            )
             verdict, case_audit = _evaluate_candidate(
                 cases,
                 purpose=purpose,
@@ -606,6 +663,7 @@ def run_sweep(
                 min_n=eff_min_n,
                 parity_threshold=parity_threshold,
                 timeout_seconds=timeout_seconds,
+                criteria_blocks=criteria_blocks or None,
             )
             log.info(
                 "  -> %s  (parity %.0f%%  agree %.0f%%)  %s",
@@ -631,6 +689,14 @@ def run_sweep(
                         },
                         "cases": case_audit,
                         "sample_manifest": manifest,
+                        # §3.5 quality-of-criteria telemetry: ~0 discrimination
+                        # means the checklists are too generic; missing counts
+                        # the facet-only degradations (a freshness-alarm input).
+                        "criteria": {
+                            "with_checklist": len(criteria_blocks),
+                            "missing": criteria_missing,
+                            "discrimination": _checklist_discrimination(case_audit),
+                        },
                     },
                     ensure_ascii=False,
                 )
