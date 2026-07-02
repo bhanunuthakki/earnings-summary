@@ -279,6 +279,98 @@ def _research_section(db_path: Path | str | None) -> str:
     )
 
 
+_RECONCILE_VERDICTS: tuple[tuple[str, str, str], ...] = (
+    ("live", "Still live", "k-btn-primary"),
+    ("superseded", "Superseded", ""),
+    ("resolved-rejected", "Rejected", "k-btn-danger"),
+    ("done", "Played out", ""),
+)
+
+_RECONCILE_JS = """<script>(function(){
+  if(window.__ledgerReconcileWired){ return; }
+  window.__ledgerReconcileWired = true;
+  function reload(){
+    fetch('/api/panel/musings?fragment=reconcile').then(function(r){return r.text();})
+      .then(function(h){ var el=document.getElementById('ledger-reconcile'); if(el){ el.outerHTML=h; } });
+  }
+  document.addEventListener('click', function(e){
+    var v=e.target.closest('[data-rec-verdict]');
+    if(v){
+      fetch('/api/reconcile/'+v.getAttribute('data-rec-kind')+'/'+v.getAttribute('data-rec-id')
+            +'/'+v.getAttribute('data-rec-verdict'),{method:'POST'})
+        .then(function(){ reload(); });
+      return;
+    }
+    var f=e.target.closest('[data-falsifier-action]');
+    if(f){
+      var action=f.getAttribute('data-falsifier-action'); var body={action:action};
+      if(action==='edit'){
+        var txt=window.prompt('Your falsifier, in your own words:');
+        if(!txt){ return; } body.text=txt;
+      }
+      fetch('/api/reconcile/falsifier/'+f.getAttribute('data-rec-id'),
+            {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+        .then(function(){ reload(); });
+    }
+  });
+})();</script>"""
+
+
+def render_reconcile_list(db_path: Path | str | None) -> str:
+    """The seed-reconciliation fragment — one-tap verdicts until the list is empty.
+    Degrades to the empty state on a pre-0130 DB (no decided_by column yet)."""
+    from synthesis.reconcile import list_unreconciled
+
+    try:
+        items = list_unreconciled(db_path)
+    except Exception:
+        items = []
+    if not items:
+        return (
+            '<div id="ledger-reconcile"><p class="ledger-empty">Corpus reconciled — '
+            "nothing awaiting a verdict.</p></div>"
+        )
+    cards: list[str] = []
+    for item in items:
+        if item.kind == "falsifier":
+            buttons = "".join(
+                f'<button type="button" class="k-btn k-btn-sm {cls}" '
+                f'data-falsifier-action="{action}" data-rec-id="{item.item_id}">{label}</button>'
+                for action, label, cls in (
+                    ("ratify", "Ratify as mine", "k-btn-primary"),
+                    ("edit", "Rewrite", ""),
+                    ("drop", "Drop", "k-btn-danger"),
+                )
+            )
+            head = f"{escape(item.label)}<span class='ledger-chan'>inferred falsifier</span>"
+        else:
+            rec_kind = "note" if item.kind == "note" else "theme"
+            buttons = "".join(
+                f'<button type="button" class="k-btn k-btn-sm {cls}" '
+                f'data-rec-kind="{rec_kind}" data-rec-id="{item.item_id}" '
+                f'data-rec-verdict="{verdict}">{label}</button>'
+                for verdict, label, cls in _RECONCILE_VERDICTS
+            )
+            tag = item.label if item.kind == "theme" else (item.source_ref or item.label)
+            head = f"<span class='ledger-chan'>{escape(tag)}</span>"
+        cards.append(
+            '<div class="ledger-musing">'
+            f'<div class="ledger-musing-head">{head}</div>'
+            f'<div class="ledger-body">{escape(item.body[:400])}</div>'
+            f'<div class="ledger-cap-row">{buttons}</div></div>'
+        )
+    return f'<div id="ledger-reconcile">{"".join(cards)}</div>'
+
+
+def _reconcile_section(db_path: Path | str | None) -> str:
+    return (
+        '<h3 class="ledger-sec-h">Reconcile</h3>'
+        '<p class="ledger-sec-sub">Seed-corpus freshness pass: give each item a verdict '
+        "and ratify (or rewrite) the falsifiers the interview inferred for you. I only "
+        "coach from what survives this list.</p>" + render_reconcile_list(db_path) + _RECONCILE_JS
+    )
+
+
 def render_ledger_list(db_path: Path | str | None, *, user_id: str = DEFAULT_USER_ID) -> str:
     """The musings list fragment (re-fetched after a capture)."""
     rows = list_notes(user_id=user_id, kind="musing", db_path=db_path, limit=200)
@@ -301,6 +393,7 @@ def render_ledger_panel(db_path: Path | str | None, *, user_id: str = DEFAULT_US
         + _capture_box()
         + _stance_section(db_path)
         + _research_section(db_path)
+        + _reconcile_section(db_path)
         + '<h3 class="ledger-sec-h">Musings</h3>'
         + render_ledger_list(db_path, user_id=user_id)
         + "</section>"

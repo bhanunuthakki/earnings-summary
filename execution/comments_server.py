@@ -561,6 +561,42 @@ def create_app(
                 applied = f"apply failed: {exc}"
         return {"status": status, "applied": applied}
 
+    @app.route("/api/reconcile/<kind>/<int:item_id>/<verdict>", methods=["POST", "OPTIONS"])
+    def reconcile_verdict(kind: str, item_id: int, verdict: str):
+        """Seed-corpus freshness pass: stamp a one-tap verdict on a seed note or
+        theme. The coach only leans on items that survived this list. CSRF-guarded
+        by the global Origin check."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from synthesis.reconcile import RECONCILE_VERDICTS, reconcile_note, reconcile_theme
+
+        if kind not in ("note", "theme"):
+            return ({"error": f"unknown kind {kind!r}"}, 400)
+        if verdict not in RECONCILE_VERDICTS:
+            return ({"error": f"unknown verdict {verdict!r}"}, 400)
+        fn = reconcile_note if kind == "note" else reconcile_theme
+        ok = fn(item_id, verdict, db_path=db_path)
+        return ({"ok": ok}, 200 if ok else 404)
+
+    @app.route("/api/reconcile/falsifier/<int:decision_id>", methods=["POST", "OPTIONS"])
+    def reconcile_falsifier(decision_id: int):
+        """Ratify / rewrite / drop an '(inferred)' falsifier on an owner decision —
+        the coach may only quote falsifiers in the owner's own words."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from synthesis.reconcile import FALSIFIER_ACTIONS, falsifier_action
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        action = str(payload.get("action") or "")
+        if action not in FALSIFIER_ACTIONS:
+            return ({"error": f"unknown action {action!r}"}, 400)
+        text = str(payload.get("text") or "").strip() or None
+        try:
+            ok = falsifier_action(decision_id, action, text=text, db_path=db_path)
+        except ValueError as exc:
+            return ({"error": str(exc)}, 400)
+        return ({"ok": ok}, 200 if ok else 404)
+
     # ----- DASHBOARD (unified tabbed command-center shell) -----
 
     @app.route("/", methods=["GET"])
@@ -843,6 +879,7 @@ def create_app(
                 render_ledger_list,
                 render_ledger_panel,
                 render_ledger_research_list,
+                render_reconcile_list,
             )
 
             user_id = request.args.get("user_id", DEFAULT_USER_ID)
@@ -850,6 +887,9 @@ def create_app(
             if fragment == "research":
                 # The Ledger → Research inbox lane re-fetched after a run / action.
                 return Response(render_ledger_research_list(db_path), mimetype="text/html")
+            if fragment == "reconcile":
+                # Seed-corpus freshness pass — re-fetched after each verdict.
+                return Response(render_reconcile_list(db_path), mimetype="text/html")
             l_renderer = render_ledger_list if fragment == "list" else render_ledger_panel
             return Response(l_renderer(db_path, user_id=user_id), mimetype="text/html")
 
