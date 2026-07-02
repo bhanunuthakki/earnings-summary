@@ -834,9 +834,14 @@ def load_peer_comp(ticker: str, *, repo_root: Path, max_peers: int = 6) -> list[
             v is not None
             for v in (row.market_cap_usd, row.revenue_ttm_usd, row.net_margin_ttm, row.roic_ttm)
         )
-        thesis_peer = peer in llm_tickers
-        if not has_metrics and not named and not thesis_peer:
-            continue  # an all-dash row says nothing — hide-don't-stub
+        # An all-dash row says nothing — hide-don't-stub. This applies to LLM
+        # thesis peers too (directive acceptance criterion: suggested peers
+        # render WITH computed multiples, never as em-dash walls); a suggestion
+        # whose fundamentals never resolve — foreign-only listing, delisted
+        # symbol — yields its seat to the next-scored name with real numbers.
+        # Only an owner-pinned named rival is informative enough metric-less.
+        if not has_metrics and not named:
+            continue
         out.append(row)
 
     # The owner's "remove this section unless better peers" condition is

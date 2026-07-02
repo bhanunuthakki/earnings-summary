@@ -24,7 +24,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import compute.peer_selection as ps  # noqa: E402
-from compute.peer_selection import PeerSuggestion, extract_for_ticker, suggest_peers  # noqa: E402
+from compute.peer_selection import (  # noqa: E402
+    PeerSuggestion,
+    _fetch_peer_fundamentals,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
+    extract_for_ticker,
+    suggest_peers,
+)
 from evals.peer_selection import (  # noqa: E402
     PeerCase,
     grade_peer_selection_case,
@@ -235,6 +240,131 @@ def test_no_cache_is_unchanged_fmp_screen(tmp_path: Path) -> None:
     assert "thesis peer" not in rows[0].match_reasons
 
 
+def test_metricless_thesis_peer_dropped_not_rendered_as_dashes(tmp_path: Path) -> None:
+    """A suggested peer whose fundamentals never resolved (foreign-only
+    listing, delisted symbol, fetch never ran) must NOT render as an all-dash
+    row — hide-don't-stub applies to thesis peers too (the directive's
+    "suggested peers render WITH computed multiples" acceptance criterion)."""
+    repo = _seed_merge(
+        tmp_path,
+        suggestions=[
+            {"ticker": "INTR", "name": "Inter & Co", "why": "digital bank"},
+            {"ticker": "GHST", "name": "Ghost Listing", "why": "no data anywhere"},
+        ],
+    )
+    rows = load_peer_comp("NU", repo_root=repo)
+    tickers = [r.peer_ticker for r in rows]
+    assert "INTR" in tickers  # has a profile → metrics → renders
+    assert "GHST" not in tickers  # metric-less thesis peer → dropped
+
+
+# ---------------------------------------------------------------------------
+# _fetch_peer_fundamentals — key resolution, per-file top-up, 429 abort
+# ---------------------------------------------------------------------------
+
+
+class _StubResponse:
+    def __init__(self, status_code: int, body: object) -> None:
+        self.status_code = status_code
+        self._body = body
+
+    def json(self) -> object:
+        return self._body
+
+
+class _StubRequests:
+    """Stands in for the lazily-imported ``requests`` module: records every
+    (endpoint, params) and returns a fixed response."""
+
+    def __init__(self, response: _StubResponse) -> None:
+        self.response = response
+        self.calls: list[tuple[str, dict[str, str]]] = []
+
+    def get(self, url: str, params: dict[str, str], timeout: int) -> _StubResponse:
+        self.calls.append((url.rsplit("/", 1)[-1], dict(params)))
+        return self.response
+
+
+def _no_sleep(_seconds: float) -> None:
+    return None
+
+
+def _install_stub(
+    monkeypatch: pytest.MonkeyPatch, response: _StubResponse, *, api_key: str | None = "k-env"
+) -> _StubRequests:
+    stub = _StubRequests(response)
+    monkeypatch.setitem(sys.modules, "requests", stub)
+    monkeypatch.setattr(ps.time, "sleep", _no_sleep)
+    if api_key is None:
+        monkeypatch.delenv("FMP_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("FMP_API_KEY", api_key)
+    return stub
+
+
+def test_fetch_tops_up_only_missing_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A peer with a cached profile but nothing else gets the OTHER three files
+    fetched (the old profile-exists check skipped it forever), including the
+    quarterly income statement the revenue column needs."""
+    stub = _install_stub(monkeypatch, _StubResponse(200, [{"revenue": 1}]))
+    fmp = tmp_path / "data" / "historical" / "fmp"
+    _write_json(fmp / "INTR_profile.json", _profile("Inter & Co", None, None, 1e9))
+
+    fetched = _fetch_peer_fundamentals(["INTR"], tmp_path, self_ticker="NU")
+    assert fetched == ["INTR"]
+    endpoints = [c[0].split("?")[0] for c in stub.calls]
+    assert endpoints == ["key-metrics-ttm", "ratios-ttm", "income-statement"]
+    income_params = stub.calls[-1][1]
+    assert income_params["period"] == "quarter" and income_params["limit"] == "4"
+    for suffix in ("key_metrics_ttm", "financial_ratios_ttm", "income_statement_quarterly"):
+        assert (fmp / f"INTR_{suffix}.json").exists()
+
+
+def test_fetch_fully_cached_peer_costs_zero_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = _install_stub(monkeypatch, _StubResponse(200, [{"x": 1}]))
+    fmp = tmp_path / "data" / "historical" / "fmp"
+    for suffix in (
+        "profile",
+        "key_metrics_ttm",
+        "financial_ratios_ttm",
+        "income_statement_quarterly",
+    ):
+        _write_json(fmp / f"INTR_{suffix}.json", [{"x": 1}])
+    assert _fetch_peer_fundamentals(["INTR"], tmp_path, self_ticker="NU") == []
+    assert stub.calls == []
+
+
+def test_fetch_aborts_whole_run_on_429(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """429 = the FMP daily budget is exhausted — stop immediately instead of
+    burning the remaining per-build call budget on more 429s."""
+    stub = _install_stub(monkeypatch, _StubResponse(429, []))
+    fetched = _fetch_peer_fundamentals(["INTR", "STNE"], tmp_path, self_ticker="NU")
+    assert fetched == []
+    assert len(stub.calls) == 1  # first 429 aborts; STNE never attempted
+    assert not (tmp_path / "data" / "historical" / "fmp" / "INTR_profile.json").exists()
+
+
+def test_fetch_resolves_key_from_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No FMP_API_KEY in the environment → the key is read from repo_root/.env
+    (the LLM build never exports it; this was the root cause of the prod-wide
+    fetched_peers=[])."""
+    stub = _install_stub(monkeypatch, _StubResponse(200, [{"x": 1}]), api_key=None)
+    (tmp_path / ".env").write_text("FMP_API_KEY=k-dotenv\n", encoding="utf-8")
+    fetched = _fetch_peer_fundamentals(["INTR"], tmp_path, self_ticker="NU")
+    assert fetched == ["INTR"]
+    assert all(c[1]["apikey"] == "k-dotenv" for c in stub.calls)
+
+
+def test_fetch_skips_cleanly_without_any_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stub = _install_stub(monkeypatch, _StubResponse(200, [{"x": 1}]), api_key=None)
+    assert _fetch_peer_fundamentals(["INTR"], tmp_path, self_ticker="NU") == []
+    assert stub.calls == []
+
+
 # ---------------------------------------------------------------------------
 # extract_for_ticker — cache idempotency (no LLM/FMP on a cache hit)
 # ---------------------------------------------------------------------------
@@ -267,6 +397,52 @@ def test_extract_caches_and_is_idempotent(tmp_path: Path, monkeypatch: pytest.Mo
     # --refresh forces a regenerate.
     extract_for_ticker("NU", tmp_path, conn, refresh=True, fetch_fundamentals=False)
     assert calls["n"] == 2
+    conn.close()
+
+
+def test_cache_hit_still_tops_up_missing_fundamentals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cache hit skips the LLM but still runs the fundamentals top-up and
+    persists newly fetched peers — this is what heals the prod caches written
+    before the fetch had a key (fetched_peers=[] everywhere)."""
+    import sqlite3
+
+    llm_calls = {"n": 0}
+
+    def _fake_suggest(**_k: object) -> list[PeerSuggestion]:
+        llm_calls["n"] += 1
+        return [PeerSuggestion(ticker="INTR", name="Inter & Co", why="digital bank")]
+
+    monkeypatch.setattr(ps, "suggest_peers", _fake_suggest)
+    fmp = tmp_path / "data" / "historical" / "fmp"
+    _write_json(
+        fmp / "NU_profile.json", _profile("Nu", "Financial Services", "Banks - Diversified", 70e9)
+    )
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+
+    # First run without fetch — mirrors the pre-fix prod caches.
+    r1 = extract_for_ticker("NU", tmp_path, conn, fetch_fundamentals=False)
+    assert r1.fetched_peers == [] and llm_calls["n"] == 1
+
+    fetch_calls: list[list[str]] = []
+
+    def _fake_fetch(peers: list[str], _root: Path, *, self_ticker: str) -> list[str]:
+        fetch_calls.append(list(peers))
+        return ["INTR"]
+
+    monkeypatch.setattr(ps, "_fetch_peer_fundamentals", _fake_fetch)
+    # Second run: cache hit (no LLM call) but the top-up fetch runs and the
+    # cache is updated with what it fetched.
+    r2 = extract_for_ticker("NU", tmp_path, conn, fetch_fundamentals=True)
+    assert llm_calls["n"] == 1  # still one LLM call — cache hit
+    assert fetch_calls == [["INTR"]]
+    assert r2.fetched_peers == ["INTR"]
+    cached = json.loads(
+        (tmp_path / "data" / "peer_selection" / "NU.json").read_text(encoding="utf-8")
+    )
+    assert cached["fetched_peers"] == ["INTR"]
     conn.close()
 
 

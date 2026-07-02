@@ -128,7 +128,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # LLM peer selection (src/compute/peer_selection.py, mode-A overlap golden
     # set). Bump when _build_prompt is materially rewritten, then re-run
     # `run_llm_evals.py --purpose peer_selection --min-score ...`.
-    "peer_selection": "v1",
+    # v2 (2026-07-02): ticker-resolvability rules — US primary/ADR symbol only
+    # (SE not SEA, SAP not SAPS), never delisted/taken-private names. Fixes the
+    # ~15% of v1 suggestions that could never resolve FMP fundamentals.
+    "peer_selection": "v2",
     # LLM key-metrics preselect (src/compute/key_metrics.py, mode-A recall golden
     # set). Bump when _build_prompt is materially rewritten, then re-run
     # `run_llm_evals.py --purpose key_metrics --min-score ...`.
