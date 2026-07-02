@@ -42,7 +42,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from llm.model_eval import KEEP_INCUMBENT, SWITCH_DOWN  # noqa: E402
+from llm.model_eval import CANDIDATE_ERRORED, KEEP_INCUMBENT, SWITCH_DOWN  # noqa: E402
 from llm.model_overrides import (  # noqa: E402
     SET_BY_AUTO,
     active_override,
@@ -125,6 +125,30 @@ def _latest_incumbent(db_path: Path, purpose: str, candidate: str) -> str | None
         return None
 
 
+def _latest_verdict_with_time(
+    db_path: Path, purpose: str, candidate: str
+) -> tuple[str, str] | None:
+    """(verdict, recorded_at) of the newest verdict for (purpose, candidate),
+    or None."""
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        try:
+            row = conn.execute(
+                """
+                SELECT verdict, recorded_at FROM model_eval_verdicts
+                WHERE purpose = ? AND candidate = ?
+                ORDER BY recorded_at DESC
+                LIMIT 1
+                """,
+                (purpose, candidate),
+            ).fetchone()
+        finally:
+            conn.close()
+        return (row[0], row[1]) if row else None
+    except sqlite3.Error:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Alert helper
 # ---------------------------------------------------------------------------
@@ -137,11 +161,14 @@ def _fire_switch_alert(
     model: str,
     event: str,
     evidence: dict[str, object],
+    sig_extra: str = "",
 ) -> None:
     """Write a row to the ``alerts`` table (if it exists) so the dashboard
     surfaces the switch event.  Silently skips when the table is absent
-    (fixture DBs, early migrations)."""
-    sig = f"model_pin:{event}:{purpose}:{model}"
+    (fixture DBs, early migrations).  ``sig_extra`` differentiates repeatable
+    events (e.g. a CANDIDATE_ERRORED alert keyed by verdict date, so a NEW
+    breakage after recovery fires again while the same one dedupes)."""
+    sig = f"model_pin:{event}:{purpose}:{model}:{sig_extra}"
     import hashlib
 
     sig_sha = hashlib.sha256(sig.encode()).hexdigest()[:16]
@@ -230,6 +257,40 @@ def evaluate_switches(
         return results
 
     for purpose, candidate in pairs:
+        # ---- Infrastructure check first ----
+        # A newest verdict of CANDIDATE_ERRORED means the candidate backend is
+        # operationally broken (the 2026-06-28 sweep: Gemini CLI failing 60-100%
+        # of runs, recorded as quality losses). Surface it as an infra alert and
+        # skip streak evaluation — an errored week is neither switch nor keep
+        # evidence, and the streak checks would misread it.
+        latest = _latest_verdict_with_time(db_path, purpose, candidate)
+        if latest is not None and latest[0] == CANDIDATE_ERRORED:
+            verdict_date = latest[1][:10]
+            if not dry_run:
+                _fire_switch_alert(
+                    db_path,
+                    purpose=purpose,
+                    model=candidate,
+                    event="CANDIDATE_ERRORED",
+                    evidence={
+                        "latest_verdict_at": latest[1],
+                        "note": "candidate backend failing operationally in the eval sweep; "
+                        "fix infra before trusting tallies",
+                    },
+                    sig_extra=verdict_date,
+                )
+            results.append(
+                SwitchResult(
+                    purpose,
+                    candidate,
+                    "CANDIDATE_ERRORED",
+                    None,
+                    f"newest verdict {verdict_date}: candidate errored — infra alert fired, "
+                    "streaks skipped",
+                )
+            )
+            continue
+
         # ---- Forward switch check ----
         recent = _recent_verdicts(db_path, purpose, candidate, consecutive_switch)
         if _is_consecutive(recent, SWITCH_DOWN, consecutive_switch):
@@ -395,10 +456,11 @@ def main() -> int:
     switched = [r for r in results if r.action in ("SWITCHED_DOWN", "DRY_RUN_SWITCH")]
     reverted = [r for r in results if r.action in ("REVERTED", "DRY_RUN_REVERT")]
     log.info(
-        "\nswitched=%d  reverted=%d  already_active=%d  dry_run=%s",
+        "\nswitched=%d  reverted=%d  already_active=%d  candidate_errored=%d  dry_run=%s",
         len(switched),
         len(reverted),
         sum(1 for r in results if r.action == "ALREADY_ACTIVE"),
+        sum(1 for r in results if r.action == "CANDIDATE_ERRORED"),
         args.dry_run,
     )
     return 0

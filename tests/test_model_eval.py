@@ -17,6 +17,7 @@ import pytest
 
 from llm import model_eval, model_ladder
 from llm.model_eval import (
+    CANDIDATE_ERRORED,
     HOLD,
     INSUFFICIENT_DATA,
     KEEP_INCUMBENT,
@@ -230,3 +231,64 @@ def test_decide_insufficient_data() -> None:
         parity_threshold=0.8,
     )
     assert v.recommendation == INSUFFICIENT_DATA
+
+
+def test_decide_candidate_errored_overrides_quality_tallies() -> None:
+    """A candidate that failed operationally on most cases gets CANDIDATE_ERRORED,
+    not KEEP_INCUMBENT — errored cases were booked as incumbent wins, so the
+    tallies alone would (wrongly) read as a measured quality loss. This is the
+    2026-06-28 sweep failure mode: Gemini CLI erroring 60-100% of runs, every
+    Gemini candidate recorded at parity=0.0 across every purpose."""
+    v = decide_switch(
+        purpose="qa_topics",
+        incumbent=SONNET,
+        candidate="gemini-3-flash-preview",
+        # every "incumbent win" here is actually an errored case
+        per_judge={"claude": (0, 4, 0), "gemini": (0, 4, 0)},
+        judge_agreement=1.0,
+        min_n=4,
+        parity_threshold=0.8,
+        n_cases_attempted=4,
+        n_candidate_errors=4,
+    )
+    assert v.recommendation == CANDIDATE_ERRORED
+    assert v.candidate_error_rate == 1.0
+    assert v.n_candidate_errors == 4
+    assert "infrastructure" in v.reason
+
+
+def test_decide_errors_below_threshold_keep_normal_flow() -> None:
+    """One error out of four attempted cases stays below the 0.5 threshold —
+    the normal quality gate applies (and the error still counted as an
+    incumbent win inside the tallies)."""
+    v = decide_switch(
+        purpose="qa_topics",
+        incumbent=SONNET,
+        candidate=HAIKU,
+        per_judge={"claude": (3, 1, 0), "gemini": (3, 1, 0)},
+        judge_agreement=1.0,
+        min_n=4,
+        parity_threshold=0.8,
+        n_cases_attempted=4,
+        n_candidate_errors=1,
+    )
+    assert v.recommendation != CANDIDATE_ERRORED
+    assert v.n_candidate_errors == 1
+    assert v.candidate_error_rate == 0.25
+
+
+def test_decide_no_error_tracking_is_backward_compatible() -> None:
+    """Callers that don't pass the error params (older paths) get the
+    pre-existing behavior unchanged."""
+    v = decide_switch(
+        purpose="bear_case",
+        incumbent=SONNET,
+        candidate=HAIKU,
+        per_judge={"claude": (0, 4, 0), "gemini": (0, 4, 0)},
+        judge_agreement=1.0,
+        min_n=4,
+        parity_threshold=0.8,
+    )
+    assert v.recommendation == KEEP_INCUMBENT
+    assert v.n_candidate_errors == 0
+    assert v.candidate_error_rate == 0.0

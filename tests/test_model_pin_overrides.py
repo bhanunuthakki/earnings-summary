@@ -420,3 +420,73 @@ def test_evaluate_switches_already_active_override_no_duplicate(db_path: Path) -
     ).fetchone()[0]
     conn.close()
     assert count == 1
+
+
+def _create_alerts_table(db_path: Path) -> None:
+    """The alerts table lives in a pre-0083 migration outside this fixture's
+    range; create the minimal shape _fire_switch_alert writes to."""
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS alerts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            trigger_kind TEXT NOT NULL,
+            fired_at TEXT NOT NULL,
+            status TEXT NOT NULL,
+            evidence_json TEXT,
+            signature_sha TEXT UNIQUE
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_evaluate_switches_candidate_errored_skips_streaks_and_alerts(db_path: Path) -> None:
+    """A newest CANDIDATE_ERRORED verdict is an infra signal: no switch even
+    after a prior SWITCH_DOWN streak, and an alert row is fired so the broken
+    backend is visible instead of masquerading as a quality verdict."""
+    from apply_model_switches import evaluate_switches
+
+    from llm.model_overrides import active_override
+
+    _create_alerts_table(db_path)
+    _seed_verdicts(
+        db_path,
+        "qa_topics",
+        "gemini-3-flash-preview",
+        "claude-sonnet-4-6",
+        ["SWITCH_DOWN", "SWITCH_DOWN", "SWITCH_DOWN", "CANDIDATE_ERRORED"],
+    )
+    results = evaluate_switches(db_path, consecutive_switch=3, consecutive_keep=3, dry_run=False)
+    assert any(r.action == "CANDIDATE_ERRORED" for r in results)
+    assert all(r.action != "SWITCHED_DOWN" for r in results)
+    assert active_override("qa_topics", db_path=db_path) is None
+
+    conn = sqlite3.connect(str(db_path))
+    row = conn.execute(
+        "SELECT ticker, trigger_kind FROM alerts WHERE ticker = '__model__qa_topics'"
+    ).fetchone()
+    conn.close()
+    assert row is not None and row[1] == "model_pin_switch"
+
+
+def test_evaluate_switches_candidate_errored_does_not_revert(db_path: Path) -> None:
+    """With an active override, an errored week must not count toward the
+    KEEP_INCUMBENT revert streak — the candidate wasn't measured, it broke."""
+    from apply_model_switches import evaluate_switches
+
+    from llm.model_overrides import active_override, write_pin_override
+
+    write_pin_override("qa_topics", "gemini-3-flash-preview", db_path=db_path)
+    _seed_verdicts(
+        db_path,
+        "qa_topics",
+        "gemini-3-flash-preview",
+        "claude-sonnet-4-6",
+        ["KEEP_INCUMBENT", "KEEP_INCUMBENT", "CANDIDATE_ERRORED"],
+    )
+    results = evaluate_switches(db_path, consecutive_switch=3, consecutive_keep=3, dry_run=False)
+    assert all(r.action != "REVERTED" for r in results)
+    assert active_override("qa_topics", db_path=db_path) == "gemini-3-flash-preview"

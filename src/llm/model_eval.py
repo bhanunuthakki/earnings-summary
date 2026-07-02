@@ -133,6 +133,17 @@ SWITCH_DOWN = "SWITCH_DOWN"  # candidate at parity-or-better -> cheaper model wi
 KEEP_INCUMBENT = "KEEP_INCUMBENT"  # incumbent clearly better -> do not switch
 HOLD = "HOLD"  # mixed / not robust
 INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
+# The candidate failed OPERATIONALLY (timeout / CLI error / empty output) on
+# most cases — an infrastructure verdict, not a quality one. Without this
+# label, a broken backend scored parity=0.0 and was recorded KEEP_INCUMBENT:
+# the 2026-06-28 sweep recorded every Gemini candidate at 0.0 parity across
+# every purpose while the Gemini CLI was erroring 60-100% of its runs, so the
+# cost optimizer looked like it had measured a quality loss it never measured.
+CANDIDATE_ERRORED = "CANDIDATE_ERRORED"
+
+# Above this fraction of operationally-failed cases the quality tallies are
+# noise: the surviving n is too small and error-as-incumbent-win dominates.
+CANDIDATE_ERROR_RATE_THRESHOLD = 0.5
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +168,12 @@ class CandidateVerdict:
     candidate_output_chars_mean: float = 0.0
     incumbent_output_chars_mean: float = 0.0
     token_efficiency_ratio: float = 0.0  # candidate_chars / incumbent_chars
+    # Operational-failure accounting: how many cases the candidate errored on
+    # (timeout / CLI failure / empty output) out of the cases attempted. When
+    # the rate crosses CANDIDATE_ERROR_RATE_THRESHOLD the recommendation is
+    # CANDIDATE_ERRORED — infra breakage, excluded from switch/keep streaks.
+    n_candidate_errors: int = 0
+    candidate_error_rate: float = 0.0
 
 
 def decide_switch(
@@ -170,6 +187,8 @@ def decide_switch(
     parity_threshold: float,
     candidate_output_chars_mean: float = 0.0,
     incumbent_output_chars_mean: float = 0.0,
+    n_cases_attempted: int = 0,
+    n_candidate_errors: int = 0,
 ) -> CandidateVerdict:
     """Turn the per-judge tallies into a switch recommendation. Conservative:
     a downgrade ships only when EVERY judge says the cheaper model holds parity
@@ -179,7 +198,15 @@ def decide_switch(
     ``candidate_output_chars_mean`` / ``incumbent_output_chars_mean`` are token-
     efficiency signals (output character count as a ~4-chars/token proxy). They
     are advisory — the switch gate is quality-only — but are recorded in the
-    verdict so a verbose candidate that costs more than it saves can be spotted."""
+    verdict so a verbose candidate that costs more than it saves can be spotted.
+
+    ``n_cases_attempted`` / ``n_candidate_errors`` separate operational failure
+    from quality: when the candidate errored on >= CANDIDATE_ERROR_RATE_THRESHOLD
+    of attempted cases, the verdict is CANDIDATE_ERRORED — the quality tallies
+    (where each errored case was booked as an incumbent win) are noise, and
+    recording KEEP_INCUMBENT would let a broken backend masquerade as a
+    measured quality loss. Callers that don't track errors (older paths) pass
+    the defaults and get the pre-existing behavior."""
     # n is the case count (same across judges); take the max judge's total.
     totals = [cw + iw + ti for (cw, iw, ti) in per_judge.values()]
     n = max(totals) if totals else 0
@@ -187,7 +214,16 @@ def decide_switch(
     inc_wins = sum(iw for (_cw, iw, _ti) in per_judge.values())
     ties = sum(ti for (_cw, _iw, ti) in per_judge.values())
 
-    if n < min_n:
+    error_rate = n_candidate_errors / n_cases_attempted if n_cases_attempted > 0 else 0.0
+
+    if n_cases_attempted > 0 and error_rate >= CANDIDATE_ERROR_RATE_THRESHOLD:
+        rec, reason = (
+            CANDIDATE_ERRORED,
+            f"{candidate} failed operationally on {n_candidate_errors}/{n_cases_attempted} "
+            f"case(s) ({error_rate:.0%}) — infrastructure failure, not a quality verdict; "
+            "fix the backend before trusting any tally",
+        )
+    elif n < min_n:
         rec, reason = INSUFFICIENT_DATA, f"only {n} case(s); need >={min_n}"
     else:
         # Per-judge parity: candidate wins-or-ties / that judge's total.
@@ -235,4 +271,6 @@ def decide_switch(
         candidate_output_chars_mean=candidate_output_chars_mean,
         incumbent_output_chars_mean=incumbent_output_chars_mean,
         token_efficiency_ratio=token_efficiency_ratio,
+        n_candidate_errors=n_candidate_errors,
+        candidate_error_rate=error_rate,
     )
