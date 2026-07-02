@@ -16,6 +16,12 @@ from pathlib import Path
 from typing import cast
 
 from identity import DEFAULT_USER_ID
+from onmymind.feed import (
+    LADDER_LABELS,
+    FeedItem,
+    load_feed,
+    onmymind_enabled,
+)
 from research.proposals import (
     ResearchProposal,
     ResearchTask,
@@ -445,6 +451,163 @@ def _reconcile_section(db_path: Path | str | None) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# On My Mind — the reverse-chron capture feed (P1). Absorbs the Wondering flag as
+# an inline badge; carries the dismiss/save/discuss/incorporate ladder. Behind
+# LEDGER_ONMYMIND (default off). Additive: it does not touch the Research /
+# Reconcile / stance sections the parallel session owns.
+# ---------------------------------------------------------------------------
+
+_ONMYMIND_STYLE = """<style>
+.om-type { font-size: var(--fs-micro); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.om-wondering { font-size: var(--fs-micro); font-weight: 600; color: var(--warn); text-transform: uppercase; letter-spacing: 0.05em; }
+.om-ladder { font-size: var(--fs-micro); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
+.om-ladder:empty { display: none; }
+.om-actions { flex-wrap: wrap; }
+.om-body a { overflow-wrap: anywhere; }
+#onmymind-more { margin-top: var(--sp-2); }
+</style>"""
+
+_ONMYMIND_JS = """<script>(function(){
+  if(window.__onMyMindWired){ return; }
+  window.__onMyMindWired = true;
+  document.addEventListener('click', function(e){
+    var act=e.target.closest('[data-om-verb]');
+    if(act){
+      var card=act.closest('[data-om-id]'); if(!card){ return; }
+      var id=card.getAttribute('data-om-id'); var verb=act.getAttribute('data-om-verb');
+      act.disabled=true;
+      fetch('/api/onmymind/'+id+'/'+verb,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+        .then(function(r){ return r.json(); })
+        .then(function(res){
+          if(!res || res.ok===false){ act.disabled=false; return; }
+          if(res.removed){ if(card.parentNode){ card.parentNode.removeChild(card); } return; }
+          var badge=card.querySelector('.om-ladder');
+          if(badge){ badge.textContent=res.ladder_label||''; }
+          if(res.thread_url){ window.open(res.thread_url,'_blank','noopener'); }
+        })
+        .catch(function(){ act.disabled=false; });
+      return;
+    }
+    var more=e.target.closest('[data-om-more]');
+    if(more){
+      var cur=more.getAttribute('data-om-more'); if(!cur){ return; }
+      more.disabled=true;
+      fetch('/api/panel/musings?fragment=onmymind&cursor='+encodeURIComponent(cur))
+        .then(function(r){ return r.text(); })
+        .then(function(h){ var el=document.getElementById('onmymind-more'); if(el){ el.outerHTML=h; } })
+        .catch(function(){ more.disabled=false; });
+    }
+  });
+})();</script>"""
+
+# (verb, label, button-class) — the ladder rungs, incorporate-first (the payoff
+# action), dismiss last (destructive, danger-styled).
+_LADDER_BUTTONS: tuple[tuple[str, str, str], ...] = (
+    ("incorporate", "Incorporate", "k-btn-primary"),
+    ("discuss", "Discuss", ""),
+    ("save", "Save for later", ""),
+    ("dismiss", "Dismiss", "k-btn-danger"),
+)
+
+
+def _feed_body(item: FeedItem) -> str:
+    """A musing renders as prose; a reading renders by its shape — a link as an
+    anchor (owner-provided URL, opened in a new tab), a doc as its filename +
+    caption."""
+    note = item.note
+    ctx = note.context or {}
+    if item.item_type == "link":
+        url = str(ctx.get("url") or note.body)
+        return (
+            f'<a href="{escape(url, quote=True)}" target="_blank" '
+            f'rel="noopener noreferrer">{escape(url)}</a>'
+        )
+    if item.item_type == "doc":
+        name = str(ctx.get("file_name") or note.body)
+        caption = str(ctx.get("caption") or "")
+        head = f"<strong>{escape(name)}</strong>"
+        return head + (f"<div>{escape(caption)}</div>" if caption else "")
+    return render_prose(note.body)
+
+
+def _feed_card(item: FeedItem) -> str:
+    note = item.note
+    ctx = note.context or {}
+    if note.ticker:
+        ident = ticker_label(note.ticker)
+    elif item.item_type in ("doc", "link"):
+        ident = '<span class="ledger-unattr">reading</span>'
+    else:
+        ident = '<span class="ledger-unattr">unattributed</span>'
+    if item.item_type == "musing":
+        channel = str(ctx.get("channel") or "")
+        type_chip = f'<span class="ledger-chan">{escape(channel)}</span>' if channel else ""
+    else:
+        type_chip = f'<span class="om-type">{escape(item.item_type)}</span>'
+    wondering = '<span class="om-wondering">wondering</span>' if item.wondering else ""
+    ladder_label = LADDER_LABELS.get(item.ladder or "", "")
+    ladder_badge = f'<span class="om-ladder">{escape(ladder_label)}</span>'
+    when = stamp_html(note.created_at, css="ledger-when")
+    buttons = "".join(
+        f'<button type="button" class="k-btn k-btn-sm {cls}" data-om-verb="{verb}">{escape(label)}</button>'
+        for verb, label, cls in _LADDER_BUTTONS
+    )
+    return (
+        f'<div class="ledger-musing om-item" data-om-id="{note.id}">'
+        f'<div class="ledger-musing-head">{ident}{type_chip}{wondering}{ladder_badge}{when}</div>'
+        f'<div class="ledger-body om-body">{_feed_body(item)}</div>'
+        f'<div class="ledger-cap-row om-actions">{buttons}</div>'
+        "</div>"
+    )
+
+
+def _more_div(next_cursor: str | None) -> str:
+    """The keyset 'Load more' control (empty terminal div on the last page)."""
+    if not next_cursor:
+        return '<div id="onmymind-more"></div>'
+    return (
+        '<div id="onmymind-more">'
+        '<button type="button" class="k-btn k-btn-sm" '
+        f'data-om-more="{escape(next_cursor, quote=True)}">Load more</button></div>'
+    )
+
+
+def render_onmymind_list(
+    db_path: Path | str | None,
+    *,
+    cursor: str | None = None,
+    user_id: str = DEFAULT_USER_ID,
+) -> str:
+    """One keyset page of feed cards + the 'Load more' control. ``cursor=None`` is
+    the first page (rendered inside ``#onmymind-list``); a cursor is a subsequent
+    page whose HTML replaces the current ``#onmymind-more`` in place."""
+    page = load_feed(cursor=cursor, user_id=user_id, db_path=db_path)
+    if not page.items and cursor is None:
+        return (
+            '<p class="ledger-empty">Nothing on your mind yet — capture a thought, '
+            "or send a reading (a link, a deck) to your Telegram bot.</p>"
+        )
+    cards = "".join(_feed_card(i) for i in page.items)
+    return cards + _more_div(page.next_cursor)
+
+
+def _onmymind_section(db_path: Path | str | None, *, user_id: str = DEFAULT_USER_ID) -> str:
+    """The On My Mind feed section — empty string when the flag is off (the panel
+    then keeps its plain Musings list unchanged)."""
+    if not onmymind_enabled():
+        return ""
+    return (
+        _ONMYMIND_STYLE + '<h3 class="ledger-sec-h">On My Mind</h3>'
+        '<p class="ledger-sec-sub">What you\'re thinking about and reading, newest first. '
+        "Dismiss it, save it for later, talk it through, or send it into research.</p>"
+        '<div id="onmymind-list">'
+        + render_onmymind_list(db_path, user_id=user_id)
+        + "</div>"
+        + _ONMYMIND_JS
+    )
+
+
 def render_ledger_list(db_path: Path | str | None, *, user_id: str = DEFAULT_USER_ID) -> str:
     """The musings list fragment (re-fetched after a capture)."""
     rows = list_notes(user_id=user_id, kind="musing", db_path=db_path, limit=200)
@@ -458,17 +621,30 @@ def render_ledger_list(db_path: Path | str | None, *, user_id: str = DEFAULT_USE
 
 
 def render_ledger_panel(db_path: Path | str | None, *, user_id: str = DEFAULT_USER_ID) -> str:
-    """The Ledger tab: capture box + newest-first musings."""
+    """The Ledger tab: capture box + newest-first musings.
+
+    When ``LEDGER_ONMYMIND`` is on, the On My Mind feed (musings + readings, with
+    the action ladder) is the front-of-funnel section and the plain Musings list is
+    suppressed — On My Mind subsumes it. Off, the panel is unchanged.
+    """
+    onmymind = _onmymind_section(db_path, user_id=user_id)
+    # On My Mind is the broader feed (readings too, + the ladder); when it's live
+    # the plain musings list below would just duplicate it, so drop it.
+    musings_block = (
+        ""
+        if onmymind
+        else '<h3 class="ledger-sec-h">Musings</h3>' + render_ledger_list(db_path, user_id=user_id)
+    )
     return (
         _PANEL_STYLE + '<section class="panel"><h2>Ledger</h2>'
         '<p class="sub">Your captured stream of consciousness. Talk or type a musing - '
         "to your Telegram bot on the go, or here at the desk; it lands linked to a name "
         "and you read it back below.</p>"
         + _capture_box()
+        + onmymind
         + _stance_section(db_path)
         + _research_section(db_path)
         + _reconcile_section(db_path)
-        + '<h3 class="ledger-sec-h">Musings</h3>'
-        + render_ledger_list(db_path, user_id=user_id)
+        + musings_block
         + "</section>"
     )

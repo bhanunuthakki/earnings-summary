@@ -265,6 +265,72 @@ def list_notes(
         conn.close()
 
 
+# The On My Mind feed's default kinds: a captured *thought* (musing) or a saved
+# *reading* (observation). This is an ALLOW-LIST — source='capture' also carries
+# `intent` (standing intents) and, later, `decision` rows, which have their own
+# surfaces (Reconcile, decision capture) and must NOT leak into the reverse-chron
+# working-memory feed. Keeping it explicit makes the feed forward-safe as new
+# capture kinds land.
+FEED_KINDS: tuple[str, ...] = ("musing", "observation")
+
+
+def list_capture_feed(
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    kinds: tuple[str, ...] = FEED_KINDS,
+    limit: int = 30,
+    before_created_at: str | None = None,
+    before_id: int | None = None,
+    db_path: Path | str | None = None,
+) -> list[AnalystNoteRow]:
+    """The On My Mind feed read model: newest-first captured items
+    (``source='capture'``) across ``kinds``, KEYSET-paginated on
+    ``(created_at, id)``.
+
+    Pass the last row's ``(created_at, id)`` as ``before_created_at`` /
+    ``before_id`` to fetch the next page. Keyset (not OFFSET) so a capture landing
+    mid-scroll never shifts the window and duplicates or skips a row — the feed's
+    whole point is high-volume live capture. ``created_at`` is a naive-UTC ISO
+    stamp (``now_iso``) on every capture row, so its lexical order is its
+    chronological order and the cursor round-trips exactly.
+
+    Best-effort: a missing DB / pre-0074 schema degrades to ``[]`` (the feed shows
+    its empty state, never 500s the tab) — the ``list_triage_notes`` pattern.
+    """
+    for k in kinds:
+        _validate("kind", k, NOTE_KINDS)
+    if not kinds:
+        return []
+    clauses = [
+        "user_id = ?",
+        "source = 'capture'",
+        f"kind IN ({', '.join('?' * len(kinds))})",
+        "status NOT IN ('superseded', 'archived')",
+    ]
+    params: list[object] = [user_id, *kinds]
+    if before_created_at is not None and before_id is not None:
+        # Strict keyset: everything strictly older than the cursor row.
+        clauses.append("(created_at < ? OR (created_at = ? AND id < ?))")
+        params.extend([before_created_at, before_created_at, int(before_id)])
+    params.append(int(limit))
+    try:
+        conn = open_conn(db_path)
+    except (sqlite3.Error, OSError):
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT * FROM analyst_notes WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY created_at DESC, id DESC LIMIT ?",
+            params,
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+    return [_row_to_dc(r) for r in rows]
+
+
 def list_triage_notes(
     *,
     user_id: str = DEFAULT_USER_ID,
@@ -370,6 +436,37 @@ def reclassify_note(
         )
         if cur.rowcount == 0:
             return None
+        conn.commit()
+        return _fetch_one(conn, note_id)
+    finally:
+        conn.close()
+
+
+def patch_note_context(
+    note_id: int,
+    patch: dict[str, object],
+    *,
+    db_path: Path | str | None = None,
+) -> AnalystNoteRow | None:
+    """Shallow-merge ``patch`` into a note's ``context_json`` (read-merge-write).
+
+    The On My Mind action ladder records its state as ``context_json['ladder']``
+    (save-for-later / discuss / incorporated); dismiss is a status change
+    (``archive_note``), not a context patch. Returns the updated row, or None when
+    the note is missing. Follows the same read-decode-merge-write shape as
+    :func:`route_triage_note` so a manual context field is never clobbered
+    wholesale."""
+    conn = open_conn(db_path)
+    try:
+        row = conn.execute("SELECT * FROM analyst_notes WHERE id = ?", (note_id,)).fetchone()
+        if row is None:
+            return None
+        ctx = dict(_row_to_dc(row).context or {})
+        ctx.update(patch)
+        conn.execute(
+            "UPDATE analyst_notes SET context_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(ctx), now_iso(), note_id),
+        )
         conn.commit()
         return _fetch_one(conn, note_id)
     finally:

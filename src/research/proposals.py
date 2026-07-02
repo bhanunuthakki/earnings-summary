@@ -97,6 +97,82 @@ def get_task(task_id: int, *, db_path: Path | str | None = None) -> ResearchTask
         conn.close()
 
 
+def get_task_for_note(note_id: int, *, db_path: Path | str | None = None) -> ResearchTask | None:
+    """The newest research_task for a note, or None. The idempotency key for the
+    On My Mind 'incorporate' action — one note must never spawn two tasks."""
+    conn = open_conn(db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM research_tasks WHERE note_id = ? ORDER BY id DESC LIMIT 1",
+            (note_id,),
+        ).fetchone()
+        return None if row is None else _row_to_task(row)
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+
+
+def get_tasks_for_notes(
+    note_ids: list[int], *, db_path: Path | str | None = None
+) -> dict[int, ResearchTask]:
+    """BATCHED note_id → newest ResearchTask, in ONE query (no N+1 across a feed
+    page). The On My Mind feed calls this once per page to render the Wondering
+    badge inline. Best-effort ``{}`` on a missing table."""
+    ids = [int(n) for n in note_ids]
+    if not ids:
+        return {}
+    conn = open_conn(db_path)
+    try:
+        placeholders = ", ".join("?" * len(ids))
+        rows = conn.execute(
+            f"SELECT * FROM research_tasks WHERE note_id IN ({placeholders}) ORDER BY id ASC",
+            ids,
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+    # id ASC + last-write-wins → the newest task per note_id survives.
+    out: dict[int, ResearchTask] = {}
+    for r in rows:
+        task = _row_to_task(r)
+        if task.note_id is not None:
+            out[task.note_id] = task
+    return out
+
+
+def ensure_task_for_note(
+    note_id: int,
+    *,
+    claim: str | None = None,
+    ticker: str | None = None,
+    db_path: Path | str | None = None,
+) -> int | None:
+    """Find-or-create the research_task for a note (IDEMPOTENT per note_id).
+
+    The On My Mind 'incorporate-into-research' button and the capture-time auto-tap
+    (:func:`detect_and_create_task`) both converge here, so one wondering never
+    yields two tasks — ``create_task`` has no uniqueness guard, so idempotency is
+    enforced in code (single-user localhost; no cross-process race to guard).
+    Returns the task id, or None when the note is missing.
+    """
+    existing = get_task_for_note(note_id, db_path=db_path)
+    if existing is not None:
+        return existing.id
+    note = get_note(note_id, db_path=db_path)
+    if note is None:
+        return None
+    text = (claim or note.body).strip()
+    resolved_claim = text[:500] or note.body[:200]
+    return create_task(
+        note_id=note_id,
+        claim=resolved_claim,
+        ticker=ticker if ticker is not None else note.ticker,
+        db_path=db_path,
+    )
+
+
 def list_tasks(
     *, status: str | None = None, db_path: Path | str | None = None
 ) -> list[ResearchTask]:

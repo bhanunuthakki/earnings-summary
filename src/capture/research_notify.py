@@ -50,6 +50,22 @@ def task_keyboard(task_id: int) -> dict[str, object]:
     return telegram.inline_keyboard([[("Research it", f"rt:run:{task_id}")]])
 
 
+# The On My Mind action ladder on Telegram — one button per rung, callback data
+# ``om:<verb>:<note_id>`` (the compact ``kind:verb:id`` triple parse_callback reads).
+_LADDER_LABELS: tuple[tuple[str, str], ...] = (
+    ("Incorporate", "incorporate"),
+    ("Discuss", "discuss"),
+    ("Save for later", "save"),
+    ("Dismiss", "dismiss"),
+)
+
+
+def onmymind_keyboard(note_id: int) -> dict[str, object]:
+    return telegram.inline_keyboard(
+        [[(label, f"om:{verb}:{note_id}")] for label, verb in _LADDER_LABELS]
+    )
+
+
 def _excerpt(text: str, limit: int = 600) -> str:
     text = text.strip()
     return text if len(text) <= limit else text[:limit].rstrip() + "..."
@@ -161,6 +177,21 @@ def dispatch_callback(
             suffix = f" {applied}" if applied else ""
             answer(token, cqid, text=f"{verb.capitalize()}: {status}.{suffix}")
         return status
+
+    if kind == "om":
+        # The On My Mind action ladder — the SAME action core the web route calls,
+        # so a button press and a click behave identically. Safe by construction
+        # (archive / context patch / inert task); never a web fetch or live write.
+        from onmymind.feed import LADDER_VERBS, act_on_feed_item
+
+        if verb not in LADDER_VERBS:
+            if cqid:
+                answer(token, cqid, text="Unrecognized action.")
+            return None
+        result = act_on_feed_item(obj_id, verb, db_path=db_path)
+        if cqid:
+            answer(token, cqid, text=result.message or ("Done." if result.ok else "Not found."))
+        return f"om_{verb}" if result.ok else "om_noop"
 
     if kind == "cp" and verb == "dismiss":
         # A coach-ping dismissal — the governor's training signal. Three
