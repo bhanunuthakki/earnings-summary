@@ -247,6 +247,24 @@ def _system_prompt(repo_root: Path, ticker: str, report_date: date) -> str:
             "analyst can mark it resolved. When evidence touches a watch-item "
             "or assumption, call that out by name."
         )
+    # The owner's Worldview (standing Tenets) as soft priors — spotlight-wrapped
+    # (Tenets distil from captured musings, so treat as untrusted content) and inert
+    # until LEDGER_WORLDVIEW_ANCHOR is on. This site composes anchors by hand rather
+    # than via compose_anchor_block, so wrap it here.
+    try:
+        from llm.anchors import load_worldview_anchor
+        from llm.untrusted import spotlight
+
+        raw_worldview = load_worldview_anchor(repo_root)
+        worldview = (
+            spotlight(raw_worldview, source="the investor's Worldview tenets")
+            if raw_worldview
+            else ""
+        )
+    except Exception:
+        worldview = ""
+    if worldview:
+        memory_bits.append(worldview)
     prior_chat = _prior_threads_context(repo_root, ticker, report_date)
     if prior_chat:
         memory_bits.append(prior_chat)
