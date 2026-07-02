@@ -509,6 +509,8 @@ def create_app(
         # Fire the wondering tap on a landed tray musing — previously only the
         # Telegram poller tapped, so a TYPED wondering never became a chip.
         wondering_task_id: int | None = None
+        pledge_challenge: str | None = None
+        annotated_decision_id: int | None = None
         if result.status == "landed" and result.note_id is not None:
             from research.proposals import detect_and_create_task, tap_enabled
 
@@ -516,12 +518,31 @@ def create_app(
                 wondering_task_id = detect_and_create_task(
                     result.note_id, db_path=db_path, channel="tray"
                 )
+            # Entry-coaching taps (W2): a pledge gets the catalyst-test
+            # challenge back; an annotation-shaped follow-up fills the newest
+            # pending stub's NULL conviction/falsifier. Never breaks capture.
+            try:
+                from research.pledge import (
+                    annotate_latest_pending,
+                    build_challenge,
+                    detect_and_capture_pledge,
+                )
+
+                pledge = detect_and_capture_pledge(result.note_id, channel="tray", db_path=db_path)
+                if pledge is not None:
+                    pledge_challenge = build_challenge(pledge, repo_root=repo_root, db_path=db_path)
+                else:
+                    annotated_decision_id = annotate_latest_pending(text, db_path=db_path)
+            except Exception:
+                pass
         return {
             "status": result.status,
             "note_id": result.note_id,
             "ticker": result.ticker,
             "needs_ticker": result.needs_ticker,
             "wondering_task_id": wondering_task_id,
+            "pledge_challenge": pledge_challenge,
+            "annotated_decision_id": annotated_decision_id,
         }
 
     @app.route("/api/research/task/<int:task_id>/run", methods=["POST", "OPTIONS"])
