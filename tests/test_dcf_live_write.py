@@ -21,7 +21,9 @@ migration 0126's ``artifact_json`` column exists). It drives
   - the whole approve -> higher-bar gate -> registered applier -> live write
     chain works via ``apply_approved_proposal`` and, crucially, that an UNMET
     gate writes NOTHING;
-  - the write is an idempotent upsert (one survivor row per ticker).
+  - a repeat write VERSIONS instead of overwriting (migration 0137): the prior
+    row is superseded (is_latest=0, back-linked) and the new row is the single
+    is_latest=1 current — readers see the second value win, history survives.
 """
 
 from __future__ import annotations
@@ -211,13 +213,24 @@ def test_uncleared_gate_writes_nothing_to_dcf_runs(db_path: Path) -> None:
     assert _count(db_path, "NU") == 0
 
 
-def test_live_write_is_an_idempotent_upsert(db_path: Path) -> None:
-    """Two applies for the same ticker REPLACE (INSERT OR REPLACE on
-    ``uq_dcf_runs_ticker``) -- one survivor row, the second value wins."""
+def test_live_write_supersedes_the_prior_version(db_path: Path) -> None:
+    """Two applies for the same ticker version instead of overwriting (migration
+    0137 supersede-and-insert): the first row survives as is_latest=0 with a
+    superseded_at stamp and a back-link to its successor; the second row is the
+    single is_latest=1 current, so latest-first readers see the new value win."""
     pid1 = _make_dcf_proposal(db_path, gate_clearing=False, row=_proposed_row(npv_per_share=22.10))
     apply_dcf_proposal(pid1, db_path=db_path)
     pid2 = _make_dcf_proposal(db_path, gate_clearing=False, row=_proposed_row(npv_per_share=25.50))
     apply_dcf_proposal(pid2, db_path=db_path)
 
-    assert _count(db_path, "NU") == 1
-    assert _stored(db_path, "NU")["npv_per_share"] == pytest.approx(25.50)
+    assert _count(db_path, "NU") == 2  # history preserved, never overwritten
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        latest = conn.execute("SELECT * FROM dcf_runs WHERE ticker='NU' AND is_latest=1").fetchall()
+        assert len(latest) == 1  # the 0137 partial unique index holds
+        assert latest[0]["npv_per_share"] == pytest.approx(25.50)
+        old = conn.execute("SELECT * FROM dcf_runs WHERE ticker='NU' AND is_latest=0").fetchone()
+        assert old is not None
+        assert old["npv_per_share"] == pytest.approx(22.10)
+        assert old["superseded_at"] is not None
+        assert old["superseded_by_id"] == latest[0]["id"]
