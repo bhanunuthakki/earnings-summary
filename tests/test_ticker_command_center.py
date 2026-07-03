@@ -400,13 +400,34 @@ def test_notes_drawer_fragment_global(repo: Path) -> None:
     assert "Quick note" in frag
     for kind in ("question", "decision", "watch", "assumption", "observation"):
         assert f'value="{kind}"' in frag
-    assert "fetch('/api/notes'" in frag
+    # PR3: unchecked-by-default routing still targets /api/notes — the fetch
+    # URL is now a variable (musing toggle can redirect it), so pin the
+    # literal that supplies the default rather than the old fetch(' call.
+    assert "'/api/notes'" in frag
     assert "ccReloadNotesDrawer" in frag
     # Both names' open notes show (book-wide scope), no per-name alerts panel.
     assert "Watch FX drag on ARPAC" in frag
     assert "Ads take-rate trajectory?" in frag
     assert "Recent alerts" not in frag
     assert 'href="/#journal"' in frag
+
+
+def test_notes_drawer_quick_add_carries_musing_toggle(repo: Path) -> None:
+    """PR3: the quick-add fragment gains a 'musing' checkbox (default
+    unchecked — unchanged /api/notes journal-note behavior) plus the
+    data-musing-endpoint attribute the client JS reads to route the SAME text
+    to the Ledger capture spine (/api/capture/text) instead, when checked."""
+    frag = render_notes_drawer_fragment(repo, None)
+    assert 'class="qn-musing"' in frag
+    assert 'data-musing-endpoint="/api/capture/text"' in frag
+    # Unchecked by default — no "checked" attribute on the checkbox.
+    assert '<input type="checkbox" class="qn-musing">' in frag
+    # The routing itself is client-side; the JS reads the toggle + endpoint
+    # attribute (getAttribute) rather than hardcoding a second POST target.
+    assert "toCaptureSpine" in frag
+    assert "getAttribute('data-musing-endpoint')" in frag
+    # Existing /api/notes path is untouched (still the unchecked default).
+    assert "'/api/notes'" in frag
 
 
 def test_notes_drawer_fragment_ticker_scoped(repo: Path) -> None:

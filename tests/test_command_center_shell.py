@@ -358,6 +358,47 @@ def test_notes_drawer_chrome() -> None:
     assert "data-cc-notes-open" in SHELL_JS
 
 
+def test_capture_tray_chrome() -> None:
+    """PR3: the Ctrl/Cmd+. global capture tray — overlay markup in the DOM,
+    registered with CCOverlay (PALETTE priority, group 'cc-primary' so it
+    closes the palette/drawers), and the keybinding extends the ONE existing
+    global keydown listener rather than adding a second one."""
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    assert 'id="cc-capture-tray"' in html
+    assert 'id="cc-capture-tray-body"' in html
+    assert 'id="cc-capture-tray-save"' in html
+    assert 'id="cc-capture-tray-close"' in html
+    assert 'id="cc-capture-tray-ticker"' in html
+    # Registered like the palette: PALETTE priority, shared 'cc-primary' group,
+    # both inside the same register() call as the closeId (one contiguous
+    # options object, not just present somewhere in the file).
+    assert "closeId: 'cc-capture-tray-close'" in SHELL_JS
+    assert "window.CCOverlay.PRIORITY.PALETTE" in SHELL_JS
+    reg_start = SHELL_JS.index("window.CCOverlay.register(trayEl,")
+    tray_reg = SHELL_JS[reg_start : reg_start + 400]
+    assert "group: 'cc-primary'" in tray_reg
+    assert "closeId: 'cc-capture-tray-close'" in tray_reg
+    assert "priority: window.CCOverlay.PRIORITY.PALETTE" in tray_reg
+    # POSTs straight to the capture spine — never /api/notes.
+    assert "'/api/capture/text'" in SHELL_JS
+    # Exactly one document-level keydown listener carries both bindings.
+    assert SHELL_JS.count("document.addEventListener('keydown'") == 1
+    assert "ev.key === '.'" in SHELL_JS
+    # holdingTicker() idiom reused for the ticker prefill — no duplicate scope
+    # lookup, and no server-side ticker param on the capture POST body.
+    assert SHELL_JS.count("function holdingTicker()") == 1
+    assert "trayPrefillTicker" in SHELL_JS
+
+
+def test_capture_tray_never_handles_escape_itself() -> None:
+    """Constraint: Escape is CCOverlay's alone. The tray's own JS block must
+    not add a local Escape branch (dismissal happens via CCOverlay.register,
+    like every other modal surface)."""
+    tray_start = SHELL_JS.index("cc-capture-tray")
+    tray_block = SHELL_JS[tray_start : tray_start + 3000]
+    assert "Escape" not in tray_block
+
+
 def test_render_shell_overview_not_a_lazy_endpoint() -> None:
     """Overview must be inlined, never assigned a /api/panel/ endpoint."""
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))

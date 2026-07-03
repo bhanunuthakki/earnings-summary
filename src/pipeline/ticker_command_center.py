@@ -426,6 +426,8 @@ _QUICK_NOTE_STYLE = """<style>
   margin-bottom: 8px; }
 .cc-quicknote .qn-ticker { width: 120px; text-transform: uppercase; }
 .cc-quicknote .qn-msg { font-size: var(--fs-caption); }
+.cc-quicknote .qn-musing-label { display: flex; align-items: center; gap: 4px;
+  color: var(--muted); font-size: var(--fs-caption); cursor: pointer; }
 .cc-notes-foot { color: var(--muted); font-size: var(--fs-caption); }
 </style>"""
 
@@ -438,11 +440,22 @@ _QUICK_NOTE_SCRIPT = """<script>
   function save() {
     var body = root.querySelector('.qn-body').value.trim();
     if (!body) { msg.textContent = 'write the note first'; return; }
-    var payload = { kind: root.querySelector('.qn-kind').value, body: body };
+    // Default (unchecked): journal note, unchanged behavior. Checked: the
+    // SAME text routes to the Ledger capture spine instead (wondering/pledge
+    // taps run) — the endpoint the markup carries via data-musing-endpoint.
+    var musing = root.querySelector('.qn-musing');
+    var toCaptureSpine = !!(musing && musing.checked);
+    var url = toCaptureSpine ? root.getAttribute('data-musing-endpoint') : '/api/notes';
     var t = root.querySelector('.qn-ticker').value.trim().toUpperCase();
-    if (t) payload.ticker = t;
+    // The capture spine takes bare text; a typed ticker rides along as a
+    // $-mention so the roster matcher links it (the tray's prefill idiom) —
+    // silently dropping it would land a needs_ticker musing.
+    var payload = toCaptureSpine
+      ? { text: (t ? '$' + t + ' ' : '') + body }
+      : { kind: root.querySelector('.qn-kind').value, body: body };
+    if (!toCaptureSpine && t) payload.ticker = t;
     msg.textContent = 'saving\\u2026';
-    fetch('/api/notes', {
+    fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
@@ -465,17 +478,22 @@ _QUICK_NOTE_SCRIPT = """<script>
 
 
 def _quick_add_form(ticker: str | None) -> str:
-    """Kind · ticker · body → POST /api/notes (source="manual"). The ticker
-    input pre-fills with the Holding tab's selection when the drawer opens
-    ticker-scoped, and stays editable — a quick note about another name
-    shouldn't need a tab switch."""
+    """Kind · ticker · body → POST /api/notes (source="manual"), OR — when the
+    "musing" toggle is checked — POST /api/capture/text so the same write
+    feeds the Ledger capture spine (wondering/pledge taps run) instead of
+    landing as a plain journal note. The ticker input pre-fills with the
+    Holding tab's selection when the drawer opens ticker-scoped, and stays
+    editable — a quick note about another name shouldn't need a tab switch.
+    ``data-musing-endpoint`` is the alternate-endpoint contract the client JS
+    reads; routing itself is client-side (no server change needed)."""
     kind_opts = "".join(
         f'<option value="{escape(k)}"{" selected" if k == "observation" else ""}>{escape(k)}</option>'
         for k in NOTE_KINDS
     )
     tval = f' value="{escape(ticker, quote=True)}"' if ticker else ""
     return (
-        '<section class="panel cc-rail-panel cc-quicknote"><h2>Quick note</h2>'
+        '<section class="panel cc-rail-panel cc-quicknote" data-musing-endpoint="/api/capture/text">'
+        "<h2>Quick note</h2>"
         '<div class="qn-row">'
         f'<select class="qn-kind" aria-label="Note kind">{kind_opts}</select>'
         f'<input class="qn-ticker" type="text" placeholder="ticker (optional)" maxlength="8"'
@@ -483,7 +501,10 @@ def _quick_add_form(ticker: str | None) -> str:
         "</div>"
         '<textarea class="qn-body" rows="3" '
         'placeholder="What did you notice? Enter saves · Shift+Enter for a newline."></textarea>'
-        '<div class="qn-row"><button type="button" class="qn-save k-btn k-btn-primary">Add note</button>'
+        '<div class="qn-row"><label class="qn-musing-label" title="Route to the Ledger capture '
+        'spine — wondering/pledge taps run.">'
+        '<input type="checkbox" class="qn-musing">musing</label>'
+        '<button type="button" class="qn-save k-btn k-btn-primary">Add note</button>'
         '<span class="qn-msg muted"></span></div>'
         "</section>" + _QUICK_NOTE_STYLE + _QUICK_NOTE_SCRIPT
     )
