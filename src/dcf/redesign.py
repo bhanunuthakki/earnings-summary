@@ -124,6 +124,18 @@ _SCEN_DELTA_ROWS: tuple[int, ...] = (
     SCEN_ROW_TG,
 )
 
+# Scenario PROBABILITY WEIGHTS (Dashboard row 62, below the SCENARIOS block's
+# fair-value/upside rows 58-59). Three yellow cells the owner can edit — Base(B) /
+# Bull(C) / Bear(D), matching the row-51 column headers — seeded from the LLM
+# scenario_prior (or the symmetric default) and preserved across refresh like the
+# other yellow inputs (owner edit wins). ``dcf.scenario_reward`` consumes them
+# (PR E) with the global 25/50/25 as the fallback. A pre-weights workbook has no
+# row 62, so the weights read back as the symmetric default.
+SCEN_WEIGHTS_LABEL_ROW = 61
+SCEN_WEIGHTS_ROW = 62
+SCEN_COL_WEIGHT_BASE = 2  # column B (matches the "Base" header column)
+DEFAULT_SCENARIO_WEIGHTS: dict[str, float] = {"bull": 0.25, "base": 0.50, "bear": 0.25}
+
 SENSITIVITY_SHEET = "Sensitivity"
 
 # The numeric scalar inputs (Dashboard col B) preserved across a refresh, keyed by
@@ -271,6 +283,13 @@ class RedesignInputs:
     # workbook reads back as the seeds, giving every name a meaningful range.
     bull_deltas: ScenarioDeltas = BULL_SEED
     bear_deltas: ScenarioDeltas = BEAR_SEED
+    # Scenario PROBABILITY weights (Dashboard row 62, yellow — owner-editable,
+    # seeded from the LLM scenario_prior). Default to the symmetric global prior so
+    # a pre-weights workbook reads back as today's 25/50/25 behaviour. Normalized to
+    # sum 1 at read; ``dcf.scenario_reward`` consumes them (PR E).
+    weight_bull: float = 0.25
+    weight_base: float = 0.50
+    weight_bear: float = 0.25
 
     def to_dict(self) -> dict[str, object]:
         """A JSON-safe dict of every input — the inverse of :meth:`from_dict`.
@@ -371,6 +390,18 @@ class RedesignInputs:
             else BEAR_SEED
         )
 
+        def opt_weight(key: str, default: float) -> float:
+            v = data.get(key, default)
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                return default
+            return float(v)
+
+        w_bull, w_base, w_bear = normalize_scenario_weights(
+            opt_weight("weight_bull", DEFAULT_SCENARIO_WEIGHTS["bull"]),
+            opt_weight("weight_base", DEFAULT_SCENARIO_WEIGHTS["base"]),
+            opt_weight("weight_bear", DEFAULT_SCENARIO_WEIGHTS["bear"]),
+        )
+
         return cls(
             segments=segments,
             base_revenue_by_segment=base_rev,
@@ -401,7 +432,33 @@ class RedesignInputs:
             growth_fade_curvature=growth_fade_curvature,
             bull_deltas=bull,
             bear_deltas=bear,
+            weight_bull=w_bull,
+            weight_base=w_base,
+            weight_bear=w_bear,
         )
+
+
+def normalize_scenario_weights(bull: float, base: float, bear: float) -> tuple[float, float, float]:
+    """Normalize three raw scenario weights to a sum-1 simplex, or fall back to the
+    symmetric default when they are non-positive/negative (a degenerate cell edit).
+
+    Deliberately does NOT enforce the LLM's non-degenerate bounds (base>=0.30 etc.)
+    — those gate the *model's* proposals (dcf.scenario_prior); the owner editing the
+    workbook cells is trusted, so any positive simplex the owner types is honored."""
+    if bull < 0 or base < 0 or bear < 0:
+        return (
+            DEFAULT_SCENARIO_WEIGHTS["bull"],
+            DEFAULT_SCENARIO_WEIGHTS["base"],
+            DEFAULT_SCENARIO_WEIGHTS["bear"],
+        )
+    s = bull + base + bear
+    if s <= 0:
+        return (
+            DEFAULT_SCENARIO_WEIGHTS["bull"],
+            DEFAULT_SCENARIO_WEIGHTS["base"],
+            DEFAULT_SCENARIO_WEIGHTS["bear"],
+        )
+    return (bull / s, base / s, bear / s)
 
 
 @dataclass(frozen=True)
@@ -444,6 +501,11 @@ class CapturedDashboard:
     scenario_deltas: dict[tuple[int, int], float] = dataclasses.field(
         default_factory=dict[tuple[int, int], float]
     )
+    # Scenario probability weights keyed "bull"/"base"/"bear" (Dashboard row 62 —
+    # owner-editable yellow cells). Empty on a pre-weights workbook, so the rebuilt
+    # workbook keeps its freshly-seeded weights. Owner edits win: captured before a
+    # rebuild and re-injected after, exactly like the other yellow inputs.
+    scenario_weights: dict[str, float] = dataclasses.field(default_factory=dict[str, float])
 
 
 # --------------------------------------------------------------------------- #
@@ -654,6 +716,7 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
         basis = _text(dsh, _DB_BASIS, 2) or "EV/EBITDA"
         bull = _read_scenario_deltas(dsh, SCEN_COL_BULL, BULL_SEED)
         bear = _read_scenario_deltas(dsh, SCEN_COL_BEAR, BEAR_SEED)
+        w_bull, w_base, w_bear = _read_weights(dsh)
 
         required = {
             "near margin": near_margin,
@@ -767,7 +830,26 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
         growth_fade_curvature=curv,
         bull_deltas=bull,
         bear_deltas=bear,
+        weight_bull=w_bull,
+        weight_base=w_base,
+        weight_bear=w_bear,
     )
+
+
+def _read_weights(dsh: Worksheet) -> tuple[float, float, float]:
+    """Read the three scenario probability-weight cells (Base=B, Bull=C, Bear=D at
+    ``SCEN_WEIGHTS_ROW``), normalized to sum 1. A pre-weights workbook (no row 62)
+    reads back as the symmetric default — exactly the old global behaviour."""
+    base = _num(dsh, SCEN_WEIGHTS_ROW, SCEN_COL_WEIGHT_BASE)
+    bull = _num(dsh, SCEN_WEIGHTS_ROW, SCEN_COL_BULL)
+    bear = _num(dsh, SCEN_WEIGHTS_ROW, SCEN_COL_BEAR)
+    if base is None or bull is None or bear is None:
+        return (
+            DEFAULT_SCENARIO_WEIGHTS["bull"],
+            DEFAULT_SCENARIO_WEIGHTS["base"],
+            DEFAULT_SCENARIO_WEIGHTS["bear"],
+        )
+    return normalize_scenario_weights(bull, base, bear)
 
 
 def _read_scenario_deltas(dsh: Worksheet, col: int, seed: ScenarioDeltas) -> ScenarioDeltas:
@@ -1207,6 +1289,11 @@ def capture_from_inputs(inp: RedesignInputs) -> CapturedDashboard:
         terminal_method=inp.terminal_method,
         terminal_basis=inp.terminal_basis,
         scenario_deltas={},
+        scenario_weights={
+            "bull": inp.weight_bull,
+            "base": inp.weight_base,
+            "bear": inp.weight_bear,
+        },
     )
 
 
@@ -1243,6 +1330,12 @@ def capture_dashboard(workbook_path: Path) -> CapturedDashboard | None:
                 v = _num(dsh, r, c)
                 if v is not None:
                     scenario_deltas[(r, c)] = v
+        scenario_weights: dict[str, float] = {}
+        w_base = _num(dsh, SCEN_WEIGHTS_ROW, SCEN_COL_WEIGHT_BASE)
+        w_bull = _num(dsh, SCEN_WEIGHTS_ROW, SCEN_COL_BULL)
+        w_bear = _num(dsh, SCEN_WEIGHTS_ROW, SCEN_COL_BEAR)
+        if w_base is not None and w_bull is not None and w_bear is not None:
+            scenario_weights = {"bull": w_bull, "base": w_base, "bear": w_bear}
     finally:
         wb.close()
     return CapturedDashboard(
@@ -1251,6 +1344,7 @@ def capture_dashboard(workbook_path: Path) -> CapturedDashboard | None:
         terminal_method=method,
         terminal_basis=basis,
         scenario_deltas=scenario_deltas,
+        scenario_weights=scenario_weights,
     )
 
 
@@ -1284,6 +1378,14 @@ def inject_dashboard(
                 dsh.cell(row=_DB_BASIS, column=2, value=captured.terminal_basis)
             for (r, c), v in captured.scenario_deltas.items():
                 dsh.cell(row=r, column=c, value=v)
+            if captured.scenario_weights:
+                sw = captured.scenario_weights
+                if "base" in sw:
+                    dsh.cell(row=SCEN_WEIGHTS_ROW, column=SCEN_COL_WEIGHT_BASE, value=sw["base"])
+                if "bull" in sw:
+                    dsh.cell(row=SCEN_WEIGHTS_ROW, column=SCEN_COL_BULL, value=sw["bull"])
+                if "bear" in sw:
+                    dsh.cell(row=SCEN_WEIGHTS_ROW, column=SCEN_COL_BEAR, value=sw["bear"])
         if current_price is not None:
             dsh.cell(row=_DB_PRICE, column=2, value=current_price)
         wb.save(str(workbook_path))

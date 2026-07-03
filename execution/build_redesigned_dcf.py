@@ -534,6 +534,33 @@ BULL_D = _scen_deltas(_opus.get("scenario_bull"), redesign_mod.BULL_SEED)
 BEAR_D = _scen_deltas(_opus.get("scenario_bear"), redesign_mod.BEAR_SEED)
 
 
+def _weights(raw, default):
+    """Scenario probability weights (Bull/Base/Bear): the block's `scenario_prior`
+    override (LLM-set, mirrored back by refresh_dcf.sync_assumptions_json so owner
+    edits survive a from-scratch rebuild) over the symmetric default, normalized to
+    sum 1."""
+    d_bull, d_base, d_bear = default
+    if not isinstance(raw, dict):
+        return d_bull, d_base, d_bear
+    b = float(raw.get("bull_weight", d_bull))
+    m = float(raw.get("base_weight", d_base))
+    r = float(raw.get("bear_weight", d_bear))
+    s = b + m + r
+    if s <= 0 or b < 0 or m < 0 or r < 0:
+        return d_bull, d_base, d_bear
+    return b / s, m / s, r / s
+
+
+WEIGHTS = _weights(
+    _opus.get("scenario_prior"),
+    (
+        redesign_mod.DEFAULT_SCENARIO_WEIGHTS["bull"],
+        redesign_mod.DEFAULT_SCENARIO_WEIGHTS["base"],
+        redesign_mod.DEFAULT_SCENARIO_WEIGHTS["bear"],
+    ),
+)
+
+
 def _seg_g(s, j):  # convex near->terminal fade (curvature = consensus-fit CURV)
     frac = ((N_FC - 1 - j) / (N_FC - 1)) ** CURV
     return gT_def[s] + (g1_def[s] - gT_def[s]) * frac
@@ -1703,6 +1730,22 @@ put(
     "Bull/Bear = Base shifted by the Δ columns (uniform across segments). Row 58 + the "
     "Sensitivity sheet are Python-computed — run refresh_dcf after editing.",
 ).font = SUB
+
+# --- SCENARIO WEIGHTS: probability mass on Base/Bull/Bear (yellow, owner-editable) ---
+# Aligned under the row-51 Base/Bull/Bear column headers; seeded from the LLM
+# scenario_prior (or the symmetric default). dcf.scenario_reward consumes these;
+# refresh_dcf captures + re-injects them so an owner edit always wins.
+_w_bull, _w_base, _w_bear = WEIGHTS
+put(
+    dsh,
+    R.SCEN_WEIGHTS_LABEL_ROW,
+    1,
+    "Scenario probability weights (edit — must sum to 1.0; LLM-set, owner overrides):",
+).font = SUB
+put(dsh, R.SCEN_WEIGHTS_ROW, 1, "Probability weight")
+put(dsh, R.SCEN_WEIGHTS_ROW, R.SCEN_COL_WEIGHT_BASE, _w_base, fmt="0%", kind="in")
+put(dsh, R.SCEN_WEIGHTS_ROW, R.SCEN_COL_BULL, _w_bull, fmt="0%", kind="in")
+put(dsh, R.SCEN_WEIGHTS_ROW, R.SCEN_COL_BEAR, _w_bear, fmt="0%", kind="in")
 
 ddm = DataValidation(type="list", formula1='"Perpetuity,Exit multiple"', allow_blank=False)
 ddb = DataValidation(type="list", formula1='"EV/EBITDA,EV/Sales,EV/EBIT,EV/FCF"', allow_blank=False)
