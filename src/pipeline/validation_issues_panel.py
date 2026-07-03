@@ -49,6 +49,11 @@ class ValidationOverview:
     open_warn: int = 0
     tickers_affected: int = 0
     resolved_total: int = 0
+    # Open cross-source disagreements still awaiting a human call after the
+    # reconciler auto-resolved the near-agreements (pipeline.reader_tier_audit).
+    # Surfaced as its own KPI card because it's the residual data-quality debt the
+    # EDGAR backfill left — the number to watch trend down.
+    open_source_disagreements: int = 0
     last_raised_at: str | None = None
     # (rule, severity, count) for open issues, largest first.
     by_rule: list[tuple[str, str, int]] = field(default_factory=_new_rule_rows)
@@ -93,6 +98,11 @@ def load_validation_overview(db_path: Path) -> ValidationOverview | None:
                 "WHERE resolved_at IS NULL GROUP BY rule, severity ORDER BY n DESC"
             )
         ]
+        # Residual open cross-source disagreements — summed across severities from
+        # the per-rule breakdown we already loaded (no extra query).
+        ov.open_source_disagreements = sum(
+            n for rule, _sev, n in ov.by_rule if rule == "source_disagreement"
+        )
         ov.detail = [
             (
                 str(r["ticker"] or "—"),
@@ -170,6 +180,9 @@ def _kpi_strip(ov: ValidationOverview) -> str:
         f'<div class="kpi-card {warn_tone}"><div class="kpi-label">Open · warn</div>'
         f'<div class="kpi-value" data-vi-count="warn">{ov.open_warn:,}</div>'
         '<div class="kpi-sub">review when convenient</div></div>',
+        '<div class="kpi-card"><div class="kpi-label">Open · source disagreement</div>'
+        f'<div class="kpi-value">{ov.open_source_disagreements:,}</div>'
+        '<div class="kpi-sub">cross-source, awaiting review</div></div>',
         '<div class="kpi-card"><div class="kpi-label">Tickers affected</div>'
         f'<div class="kpi-value">{ov.tickers_affected:,}</div>'
         f'<div class="kpi-sub">last raised {escape(last)}</div></div>',

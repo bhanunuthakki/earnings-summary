@@ -46,6 +46,12 @@ class ValidationRule(StrEnum):
     SCHEMA_DRIFT = "schema_drift"
     DUPLICATE_FACT = "duplicate_fact"
     SOURCE_DISAGREEMENT = "source_disagreement"
+    # A fact-reader materialized a value that is NOT the tier-winner the
+    # canonical loader (timeseries.loaders.load_financial_series) picks for a
+    # duplicated (ticker, period_end, fiscal_period_type, line_item) key — i.e.
+    # a reader regressed off the (source_quality_tier, id) contract. Raised by
+    # the reader-tier audit (pipeline.reader_tier_audit), never at ingest.
+    READER_TIER_MISMATCH = "reader_tier_mismatch"
 
 
 class ValidationIssue(BaseModel):
