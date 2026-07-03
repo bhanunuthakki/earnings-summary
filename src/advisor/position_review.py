@@ -64,6 +64,7 @@ __all__ = [
     "classify_weight_band",
     "encode_first_output",
     "mechanical_read",
+    "parse_review_command",
     "parse_verdict_output",
     "render_pre_analysis_chat",
     "render_tax_lines",
@@ -983,22 +984,39 @@ def render_pre_analysis_chat(pre: PreAnalysis) -> str:
     )
 
 
+def parse_review_command(text: str) -> tuple[str, float | None] | None:
+    """Parse ``/review <TICKER> [at $PRICE]`` into ``(ticker, at_price)``.
+
+    Returns ``None`` when no ticker follows the command (the usage-message
+    case). The ONE parser for this command shape — shared by
+    ``review_reply_text`` (the instant Slice-1 reply), ``ask.commands``'s
+    background Slice-2 kickoff, and the Telegram poller — so the at-price
+    regex and the ticker-extraction rule (uppercase, strip a leading ``$``)
+    can never drift between callers.
+    """
+    parts = text.split()
+    if len(parts) < 2:
+        return None
+    ticker = parts[1].upper().lstrip("$")
+    match = _AT_PRICE_RX.search(text)
+    at_price = float(match.group(1)) if match else None
+    return ticker, at_price
+
+
 def review_reply_text(repo_root: Path, text: str) -> str:
     """``/review <TICKER> [at $PRICE]`` end-to-end: parse the ticker + at-price
     out of ``text`` and return the rendered instant pre-analysis reply.
 
-    The ONE place that parses this command shape — the Ask-tab chat command
+    The ONE place that renders this command shape — the Ask-tab chat command
     (``ask.commands._review_command``) and the Telegram poller both call this
     instead of each re-implementing the parsing, so the at-price regex and the
     usage/error copy can never drift between the two surfaces. LLM-free and
     fast: ``build_pre_analysis`` never imports a model client.
     """
-    parts = text.split()
-    if len(parts) < 2:
+    parsed = parse_review_command(text)
+    if parsed is None:
         return "Usage: /review <TICKER> [at $PRICE] — e.g. `/review RBRK` or `/review FLKR at $70`."
-    ticker = parts[1].upper().lstrip("$")
-    match = _AT_PRICE_RX.search(text)
-    at_price = float(match.group(1)) if match else None
+    ticker, at_price = parsed
     db_path = repo_root / "data" / "portfolio.db"
     try:
         pre = build_pre_analysis(repo_root, ticker, at_price=at_price, db_path=db_path)

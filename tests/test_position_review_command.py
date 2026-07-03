@@ -24,7 +24,7 @@ from advisor.position_review import (
 )
 from advisor.position_tax import PositionTaxView, TrimTaxEstimate, unavailable_tax_view
 from ask.commands import COMMAND_PREFIXES, run_chat_command
-from dispatch_registry import Registry
+from dispatch_registry import Job, Registry
 
 _PRE_DEFAULT = PreAnalysis(
     ticker="RBRK",
@@ -233,3 +233,137 @@ def test_review_command_parses_at_price_through_dispatch(
     assert seen["at_price"] == 70.0
     run_chat_command(Path("."), "/review RBRK", cast("Registry", None))
     assert seen["at_price"] is None
+
+
+# --------------------------------------------------------------------------- #
+# /review background full-verdict job (Bug 2: production caller wiring)
+# --------------------------------------------------------------------------- #
+
+
+class _NonSpawningRegistry(Registry):
+    """Records `start()` calls without forking a real subprocess."""
+
+    def start(
+        self,
+        *,
+        ticker: str,
+        kind: str,
+        argv: list[str],
+        spawn: bool = True,
+        cwd: str | None = None,
+    ) -> Job:
+        return super().start(ticker=ticker, kind=kind, argv=argv, spawn=False, cwd=cwd)
+
+
+def test_review_command_starts_background_verdict_job_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake(*_a: object, **_k: object) -> PreAnalysis:
+        return _pre(at_price=82.0)
+
+    monkeypatch.setattr(pr, "build_pre_analysis", _fake)
+    registry = _NonSpawningRegistry()
+    reply = run_chat_command(Path("."), "/review RBRK at $82", registry)
+    assert reply is not None
+    # The instant pre-analysis still renders...
+    assert "**RBRK**" in reply and "Mechanical read:" in reply
+    # ...and the full verdict was kicked off in the background.
+    assert "background" in reply.lower() and "job_" in reply
+    jobs = registry.list_jobs()
+    assert (
+        len(jobs) == 1
+        and jobs[0]["ticker"] == "RBRK"
+        and jobs[0]["kind"] == ("position-review-verdict")
+    )
+
+
+def test_review_command_background_job_argv_carries_verdict_and_at_price(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started: dict[str, object] = {}
+
+    def _fake(*_a: object, **_k: object) -> PreAnalysis:
+        return _pre()
+
+    class _Capturing(_NonSpawningRegistry):
+        def start(
+            self,
+            *,
+            ticker: str,
+            kind: str,
+            argv: list[str],
+            spawn: bool = True,
+            cwd: str | None = None,
+        ) -> Job:
+            started["ticker"] = ticker
+            started["argv"] = argv
+            return super().start(ticker=ticker, kind=kind, argv=argv, spawn=spawn, cwd=cwd)
+
+    monkeypatch.setattr(pr, "build_pre_analysis", _fake)
+    run_chat_command(Path("/repo"), "/review FLKR at $70", _Capturing())
+    argv = cast("list[str]", started["argv"])
+    assert started["ticker"] == "FLKR"
+    assert argv[1].endswith("review_position.py")
+    assert "FLKR" in argv and "--verdict" in argv
+    assert "--at-price" in argv and "70.0" in argv
+
+
+def test_review_command_skips_background_job_without_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A surface with no job registry (e.g. the Telegram poller, which is a
+    standalone loop with no Flask action/SSE plumbing to spawn against)
+    degrades to the instant reply only — no crash, no dangling reference."""
+
+    def _fake(*_a: object, **_k: object) -> PreAnalysis:
+        return _pre()
+
+    monkeypatch.setattr(pr, "build_pre_analysis", _fake)
+    reply = run_chat_command(Path("."), "/review RBRK", None)
+    assert reply is not None
+    assert "background" not in reply.lower()
+
+
+def test_review_command_respects_full_verdict_kill_switch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake(*_a: object, **_k: object) -> PreAnalysis:
+        return _pre()
+
+    monkeypatch.setattr(pr, "build_pre_analysis", _fake)
+    monkeypatch.setenv("REVIEW_FULL_VERDICT", "0")
+    registry = _NonSpawningRegistry()
+    reply = run_chat_command(Path("."), "/review RBRK", registry)
+    assert reply is not None
+    assert "background" not in reply.lower()
+    assert registry.list_jobs() == []
+
+
+def test_review_command_conflict_degrades_to_one_line_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ticker already under review (single-flight slot busy) must not break
+    the instant reply — the background-kickoff failure degrades to a short
+    note, same as every other RegistryConflict caller in this codebase."""
+    from dispatch_registry import RegistryConflict
+
+    def _fake(*_a: object, **_k: object) -> PreAnalysis:
+        return _pre()
+
+    class _Busy(_NonSpawningRegistry):
+        def start(
+            self,
+            *,
+            ticker: str,
+            kind: str,
+            argv: list[str],
+            spawn: bool = True,
+            cwd: str | None = None,
+        ) -> Job:
+            raise RegistryConflict("busy")
+
+    monkeypatch.setattr(pr, "build_pre_analysis", _fake)
+    reply = run_chat_command(Path("."), "/review RBRK", _Busy())
+    assert reply is not None
+    assert "already running" in reply.lower()
+    assert "**RBRK**" in reply  # the instant pre-analysis still rendered

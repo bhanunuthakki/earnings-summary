@@ -101,6 +101,31 @@ def test_store_roundtrip_and_validation(tmp_path: Path) -> None:
         )
 
 
+def test_position_review_kind_persists_against_real_check_constraint(tmp_path: Path) -> None:
+    """Regression for the prod IntegrityError (2026-07-02 adversarial review):
+    0077's ``ck_advisor_memos_kind`` CHECK predated the 'position_review' kind
+    that ``advisor.store.MEMO_KINDS`` has carried since P2's position-review
+    service landed. Every position-review unit test stubs persistence
+    (``persist=False`` or a monkeypatched ``persist_memo``), so nothing ever
+    exercised a real INSERT against the real CHECK — 0140 widens it; this
+    pins the widened constraint actually accepts the kind end-to-end."""
+    db = _build_db(tmp_path)
+    memo = insert_memo(
+        user_id="bhanu",
+        kind="position_review",
+        ticker="rbrk",
+        title="Position review: RBRK -> trim",
+        body_md="**RBRK** — position-review verdict: **trim**",
+        context={"valuation_verdict": "trim"},
+        stance="trim",
+        db_path=db,
+    )
+    assert memo.kind == "position_review" and memo.ticker == "RBRK" and memo.stance == "trim"
+    assert [m.id for m in list_memos(user_id="bhanu", kind="position_review", db_path=db)] == [
+        memo.id
+    ]
+
+
 def test_widened_note_source_accepts_advisor(tmp_path: Path) -> None:
     db = _build_db(tmp_path)
     note = create_note(

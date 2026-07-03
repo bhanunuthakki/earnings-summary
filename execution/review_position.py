@@ -1,17 +1,34 @@
-"""Print the deterministic position-review pre-analysis for one holding.
+"""Print the deterministic position-review pre-analysis for one holding, or
+(``--verdict``) run the full governed review end-to-end.
 
-Slice 1 of the position-review service: the LLM-free grounded facts (weight,
-dollars, break-rule status, DCF ladder verdict, conviction-encoded flag) that
-answer "should I trim <TICKER>?". Run from the MAIN checkout (data/ + the
-holdings JSON live there, not in a worktree):
+Slice 1 (default): the LLM-free grounded facts (weight, dollars, break-rule
+status, DCF ladder verdict, conviction-encoded flag) that answer "should I
+trim <TICKER>?". Slice 2 (``--verdict``): the governed LLM verdict + the
+deterministic behavioral guard + a persisted ``advisor_memos`` row (kind
+``position_review``) — the same path ``review_position()`` runs, so a CLI
+call and a chat ``/review`` full-verdict run land the exact same memo shape.
+
+Run from the MAIN checkout (data/ + the holdings JSON live there, not in a
+worktree):
 
     python execution/review_position.py RBRK
     python execution/review_position.py FLKR --at-price 70
     python execution/review_position.py RBRK --json
+    python execution/review_position.py RBRK --verdict
+    python execution/review_position.py RBRK --verdict --no-persist
 
 ``--at-price`` recomputes the valuation gap at that level (answers "above $70").
 Degrades gracefully when the portfolio tracker is offline (falls back to the
 materialized weight cache) and when a name has no encoded thesis (FLKR).
+
+``--verdict`` calls the ``position_review`` LLM purpose through
+``llm.structured.call_llm_structured`` -> ``llm.cli``, which already runs the
+nested ``claude -p`` subprocess from a neutral temp cwd
+(``llm.cli._neutral_subprocess_cwd``) specifically to dodge this project's
+``.mcp.json`` — a project-cwd invocation otherwise hangs ~5 minutes trying to
+boot every configured MCP server before being killed. That guard lives in the
+shared transport, so it applies here automatically; no extra handling needed
+in this script, and no reason to invoke ``claude`` directly from project cwd.
 """
 
 from __future__ import annotations
@@ -27,9 +44,11 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from advisor.position_review import (  # noqa: E402
     CONCENTRATION_PCT,
+    PositionReview,
     PreAnalysis,
     build_pre_analysis,
     render_tax_lines,
+    review_position,
 )
 
 
@@ -84,6 +103,27 @@ def _render(pre: PreAnalysis) -> str:
     return "\n".join(lines)
 
 
+def _render_verdict(review: PositionReview) -> str:
+    out = review.output
+    lines = [
+        _render(review.pre),
+        "-" * 48,
+        "GOVERNED VERDICT (LLM + deterministic behavioral guard)",
+        f"  verdict           {out.verdict}  ({out.confidence} confidence)",
+        f"  verdict source    {out.verdict_source}",
+        f"  size              {out.size}",
+        f"  reason            {out.reason}",
+        f"  behavioral check  {out.behavioral_check}",
+        f"  suggested expr.   {out.suggested_expression}",
+        (
+            f"  persisted memo    #{review.memo_id} (advisor_memos, kind=position_review)"
+            if review.memo_id is not None
+            else "  persisted memo    NOT persisted (--no-persist or no DB configured)"
+        ),
+    ]
+    return "\n".join(lines)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -102,7 +142,45 @@ def main() -> int:
         "--api-url", default=None, help="portfolio-tracker base URL (default: env / 127.0.0.1:8000)"
     )
     ap.add_argument("--json", action="store_true", help="emit JSON instead of the human summary")
+    ap.add_argument(
+        "--verdict",
+        action="store_true",
+        help=(
+            "run the full governed review (LLM verdict + behavioral guard) instead of just "
+            "the deterministic pre-analysis; persists an advisor_memos row by default"
+        ),
+    )
+    ap.add_argument(
+        "--no-persist",
+        action="store_true",
+        help="with --verdict, run the LLM verdict but skip persisting the advisor_memos row",
+    )
     args = ap.parse_args()
+
+    if args.verdict:
+        review = review_position(
+            PROJECT_ROOT,
+            args.ticker,
+            at_price=args.at_price,
+            api_url=args.api_url,
+            db_path=args.db,
+            persist=not args.no_persist,
+        )
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "pre": dataclasses.asdict(review.pre),
+                        "output": dataclasses.asdict(review.output),
+                        "memo_id": review.memo_id,
+                    },
+                    indent=2,
+                    default=str,
+                )
+            )
+        else:
+            print(_render_verdict(review))
+        return 0
 
     pre = build_pre_analysis(
         PROJECT_ROOT,
