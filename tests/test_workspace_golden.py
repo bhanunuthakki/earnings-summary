@@ -1711,6 +1711,20 @@ def test_p3_seam_reaches_document(portfolio_parts: dict[str, str]) -> None:
     )
 
 
+def test_portfolio_flavor_shows_peer_comp_panel(portfolio_parts: dict[str, str]) -> None:
+    """Owner decision 2026-07-02 (directives/peer_selection_llm.md): the peer
+    comparison panel is no longer gated to `--flavor evaluation`. Portfolio
+    builds (the owner's actual holdings) must render it, populated with
+    computed multiples, in the Company tab — same fixture peer rows
+    (`_p3_rich`) that `test_p3_seam_reaches_document` anchors on."""
+    html = portfolio_parts["pane_company"]
+    assert 'class="panel peer-comp-panel"' in html
+    assert "Peer comparison" in html
+    assert "RIVL" in html
+    assert "Rival Systems" in html
+    assert "$48.0B" in html
+
+
 def test_fixture_prose_carries_no_reltime_shapes(portfolio_parts: dict[str, str]) -> None:
     """[RELTIME] replacement must only ever hit wall-clock-derived strings;
     a fixture string that itself matches the pattern would golden as the

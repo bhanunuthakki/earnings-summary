@@ -33,7 +33,10 @@ from report.renderers.workspace_sections._shared import (
     _render_markdown,
     _xlink_html,
 )
-from report.renderers.workspace_sections.eval_screen import _eval_screen_panels
+from report.renderers.workspace_sections.eval_screen import (
+    _eval_screen_panels,
+    _peer_comp_panel,
+)
 from report.sections.p3_data import (
     CustomerConcentrationRow,
     LeaseLadderRow,
@@ -85,6 +88,13 @@ def _company_tab(
     # comps right under the pitch — description first, then the data.
     if eval_snap is not None:
         _eval_screen_panels(body, eval_snap, peer_comp)
+    elif peer_comp:
+        # Owner decision 2026-07-02: the peer-comp panel is no longer an
+        # eval-only scope gate (directives/peer_selection_llm.md). Portfolio
+        # (and any non-eval) flavor has no quick-categorization table, but
+        # still gets the comparable-company panel on its own —
+        # `_peer_comp_panel` already hides itself when empty.
+        _peer_comp_panel(body, peer_comp)
 
     if cd.business_overview or cd.revenue_model:
         body.write('<div class="grid-2col">')

@@ -408,7 +408,14 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
     eval_snap = spec.evaluation_snapshot
     is_eval = spec.flavor == ReportFlavor.EVALUATION
     company_eval_snap = eval_snap if is_eval else None
-    company_peers = p3.peer_comp if is_eval else None
+    # Peer-comp panel: shown for every flavor (owner decision 2026-07-02, lifting
+    # the earlier eval-only scope gate — see directives/peer_selection_llm.md).
+    # The quick-categorization "numbers at a glance" table above it stays
+    # eval-only (`company_eval_snap`); that's a different, still-scoped feature.
+    # `load_peer_comp` already runs unconditionally in `workspace_data.py` and
+    # owns its own hide-don't-stub + S5 quality gate, so passing it through here
+    # for every flavor is the entire fix.
+    company_peers = p3.peer_comp
     tabs: list[TabDef] = [
         (
             "thesis",
