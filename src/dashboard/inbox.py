@@ -762,10 +762,38 @@ def quick_actions_span(buttons: list[str]) -> str:
     return '<span class="ix-quick">' + "".join(buttons) + "</span>"
 
 
-def acted_span(label: str, status: str, *, undo_url: str | None = None) -> str:
+_DETAIL_MAX = 60
+
+
+def acted_span(
+    label: str,
+    status: str,
+    *,
+    undo_url: str | None = None,
+    detail: str | None = None,
+    detail_href: str | None = None,
+    dismiss_why_id: int | None = None,
+) -> str:
     """The ``.ix-quick`` replacement a quick-action endpoint returns to HTMX: a
     terminal done-chip, optionally with an Undo button (reversible actions
-    only) that POSTs ``undo_url`` and restores the buttons."""
+    only) that POSTs ``undo_url`` and restores the buttons.
+
+    ``detail`` (consequence receipts, REQ-11) is the specific outcome the
+    action produced — e.g. approve_and_apply's "Ledger entry id=42 written: …"
+    — rendered as a muted suffix, truncated to ``_DETAIL_MAX`` chars with the
+    full text on ``title=`` for hover. Absent ``detail`` renders byte-identical
+    to the pre-receipts chip (every existing caller keeps working unchanged).
+    ``detail_href``, given alongside ``detail``, makes the whole suffix a
+    doorway (the panel the consequence's row actually lives in) instead of
+    plain text — only ever passed when the caller has a REAL route for it
+    (never invented).
+
+    ``dismiss_why_id`` (alerts-lane dismiss reason, v1) renders a "· why?"
+    one-word inline input instead: submitting POSTs ``{reason}`` back to
+    ``/api/alerts/<id>/dismiss`` and the input then removes itself — the
+    reason is signal capture, not ceremony, so nothing further renders once
+    it lands. Mutually exclusive with ``detail`` (the two receipt shapes
+    apply to different action kinds and never co-occur on one chip)."""
     undo = ""
     if undo_url:
         undo = (
@@ -773,7 +801,41 @@ def acted_span(label: str, status: str, *, undo_url: str | None = None) -> str:
             f'hx-post="{_esc(undo_url)}" hx-target="closest .ix-quick" hx-swap="outerHTML">'
             "undo</button>"
         )
-    return f'<span class="ix-quick ix-acted ix-acted-{_esc(status)}">{_esc(label)}{undo}</span>'
+    suffix = ""
+    if detail:
+        clean = " ".join(detail.split())  # collapse newlines/repeated whitespace
+        short = clean if len(clean) <= _DETAIL_MAX else clean[: _DETAIL_MAX - 1] + "…"
+        if detail_href:
+            suffix = (
+                f' <a class="ix-acted-detail" href="{_esc(detail_href)}" title="{_esc(clean)}">'
+                f"{_esc(short)}</a>"
+            )
+        else:
+            suffix = f' <span class="ix-acted-detail" title="{_esc(clean)}">{_esc(short)}</span>'
+    elif dismiss_why_id is not None:
+        # HTMX-driven like every other quick action (Wave 3b): the Enter-key
+        # submit is a declarative hx-post attribute on the input itself (this
+        # string, not INBOX_JS) — no bespoke fetch() dispatcher re-acquires
+        # the "/api/alerts/" literal INBOX_JS's own guard test forbids. htmx
+        # auto-includes a named form element's own value as a urlencoded
+        # param when IT is the trigger (no hx-vals/hx-include needed — the
+        # server route reads request.values, which covers form-encoded
+        # posts). The ".ix-why-toggle" reveal is local, network-free
+        # show/hide, wired by INBOX_JS's existing delegated-click idiom
+        # (event-delegated, not inline onclick, matching the rest of this
+        # module).
+        why_url = f"/api/alerts/{dismiss_why_id}/dismiss"
+        suffix = (
+            ' <span class="ix-dismiss-why">'
+            '<button type="button" class="ix-why-toggle k-btn k-btn-quiet k-btn-sm">'
+            "why?</button>"
+            f'<input type="text" class="ix-why-input" name="reason" maxlength="40" hidden '
+            f'placeholder="one word" hx-post="{_esc(why_url)}" '
+            "hx-trigger=\"keyup[key=='Enter']\" "
+            'hx-target="closest .ix-dismiss-why" hx-swap="outerHTML" />'
+            "</span>"
+        )
+    return f'<span class="ix-quick ix-acted ix-acted-{_esc(status)}">{_esc(label)}{suffix}{undo}</span>'
 
 
 def restored_action_buttons(action_id: int) -> str:
@@ -932,6 +994,19 @@ INBOX_CSS = """
 /* "Why ranked here" — the factor breakdown rides the kind chip's title. */
 .ix-kind[title] { cursor: help; }
 .ix-kind-synthesis { color: var(--accent); }
+/* Consequence receipts (REQ-11): the muted, truncated outcome string a done
+   chip carries — approve_and_apply's ledger/sizing summary. Full text on
+   the native title= tooltip; no local color (inherits .ix-acted's muted). */
+.ix-acted-detail { font-weight: 400; opacity: 0.85; }
+/* Dismiss-with-reason (alerts lane, v1) — the "why?" toggle + one-word input
+   riding the dismissed chip. Quiet by default; only visible on hover/focus
+   like the rest of the quick-action row, so a settled card stays quiet. */
+.ix-dismiss-why { margin-left: 4px; }
+.ix-why-toggle { font-weight: 400; opacity: 0.7; }
+.ix-why-toggle:hover { opacity: 1; }
+.ix-why-input { margin-left: 4px; width: 7em; font-size: var(--fs-micro);
+  font-family: inherit; background: var(--surface); color: var(--fg);
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 1px 5px; }
 """.strip()
 
 # Behavior for the stream's two client-side features, embedded once per page
@@ -1038,6 +1113,25 @@ INBOX_JS = r"""
       chip.classList.add('ix-act-fail');
       chip.title = String((err && err.message) || err);
     });
+  });
+
+  // Dismiss-with-reason (alerts lane, v1): the "why?" toggle on a dismissed
+  // alert's acted chip reveals a one-word input — purely local show/hide,
+  // no network call (the Enter-key submit is HTMX's own declarative hx-post
+  // on the input, rendered server-side in acted_span() — see dashboard/
+  // inbox.py; INBOX_JS carries no fetch dispatcher for it, matching the
+  // Wave 3b quick-actions convention above). Skippable: the toggle without a
+  // submit leaves nothing behind (the dismiss already happened).
+  document.addEventListener('click', function (ev) {
+    if (!ev.target || !ev.target.closest) return;
+    var toggle = ev.target.closest('.ix-why-toggle');
+    if (!toggle) return;
+    var wrap = toggle.closest('.ix-dismiss-why');
+    var input = wrap && wrap.querySelector('.ix-why-input');
+    if (!input) return;
+    toggle.hidden = true;
+    input.hidden = false;
+    input.focus();
   });
 })();
 """.strip()

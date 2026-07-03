@@ -9,7 +9,7 @@ approve/dismiss / apply/cancel buttons.
 
 The store module exposes:
   * fire_alert, find_by_signature, list_pending_alerts, list_alerts,
-    approve_alert, dismiss_alert
+    approve_alert, dismiss_alert, set_alert_dismiss_reason
   * queue_action, list_queued_actions_for_alert,
     list_queued_actions_for_alerts, list_pending_actions,
     apply_action, cancel_action
@@ -47,6 +47,7 @@ from alerts.store import (
     list_queued_actions_for_alert,
     list_queued_actions_for_alerts,
     queue_action,
+    set_alert_dismiss_reason,
     uncancel_action,
 )
 
@@ -75,5 +76,6 @@ __all__ = [
     "list_queued_actions_for_alert",
     "list_queued_actions_for_alerts",
     "queue_action",
+    "set_alert_dismiss_reason",
     "uncancel_action",
 ]

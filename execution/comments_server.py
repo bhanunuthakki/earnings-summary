@@ -182,6 +182,28 @@ def _referer_back_path(referer: str) -> str | None:
     return path + (f"?{parsed.query}" if parsed.query else "")
 
 
+# The panel id is interpolated rather than written as one literal '#decis…'
+# string: a hex-color scan over CSS-emitting modules reads '#dec' as a raw
+# 3-digit color (open_loops.py's documented idiom) — this constant isn't
+# itself scanned (comments_server.py carries no CSS), but the value flows
+# into acted_span()'s rendered href, so the same discipline applies at the
+# source of truth.
+_DECISIONS_RECORD_PANEL = "decisions_record"
+_DECISIONS_RECORD_HASH = f"/#{_DECISIONS_RECORD_PANEL}"
+
+
+def _approve_consequence_href(consequence: str) -> str | None:
+    """The doorway an approve consequence string opens onto, or None when
+    none applies. Only ever a REAL registered panel hash — never invented:
+    a written thesis-ledger entry or a sizing intent both land in the
+    Portfolio > Decisions panel (P2.2 folded the standalone Thesis Ledger
+    tab into ``decisions_record`` — see command_center_shell.py's panel
+    registry)."""
+    if "Ledger entry id=" in consequence or "position_sizing_intent id=" in consequence:
+        return _DECISIONS_RECORD_HASH
+    return None
+
+
 def _linked_gsheet(repo_root: Path, ticker: str) -> tuple[str | None, str | None]:
     """The ``(sheet_id, edit_url)`` of the Google Sheet linked to a ticker's DCF,
     or ``(None, None)`` when no ``dcf_defaults.gsheet_id`` is set in the holdings
@@ -629,7 +651,18 @@ def create_app(
     @app.route("/api/reconcile/falsifier/<int:decision_id>", methods=["POST", "OPTIONS"])
     def reconcile_falsifier(decision_id: int):
         """Ratify / rewrite / drop an '(inferred)' falsifier on an owner decision —
-        the coach may only quote falsifiers in the owner's own words."""
+        the coach may only quote falsifiers in the owner's own words.
+
+        Consequence receipt (0142): a successful ``ratify`` gains a
+        ``receipt`` string reporting the tripwire-arming state. Arming itself
+        (``decision_conditions.attach_conditions``) always calls an LLM
+        purpose for an unstamped row — real spend that must never ride an
+        inline ratify click — so this NEVER runs extraction; it only READS
+        whether a prior batch pass already reached this decision
+        (``decision_conditions.arming_status``, zero-LLM). 'armed' when
+        conditions are already stamped, else "queued for arming" — honest
+        about the fact that the pass hasn't run yet, not a lie that it just
+        did."""
         if request.method == "OPTIONS":
             return ("", 204)
         from synthesis.reconcile import FALSIFIER_ACTIONS, falsifier_action
@@ -643,7 +676,19 @@ def create_app(
             ok = falsifier_action(decision_id, action, text=text, db_path=db_path)
         except ValueError as exc:
             return ({"error": str(exc)}, 400)
-        return ({"ok": ok}, 200 if ok else 404)
+        if not ok:
+            return ({"ok": False}, 404)
+        result: dict[str, object] = {"ok": True}
+        if action == "ratify":
+            from decision_conditions import arming_status
+
+            status = arming_status(decision_id, db_path=db_path)
+            result["receipt"] = (
+                "armed — now watched by the tripwire engine"
+                if status == "armed"
+                else "ratified — queued for arming (next extraction pass)"
+            )
+        return (result, 200)
 
     @app.route("/api/onmymind/<int:note_id>/<verb>", methods=["POST", "OPTIONS"])
     def onmymind_act(note_id: int, verb: str):
@@ -1443,11 +1488,16 @@ def create_app(
         if request.headers.get("Sec-Fetch-Site", "") == "cross-site" or (referer and back is None):
             return ({"error": "cross-site approve/dismiss rejected"}, 403)
         dismissed = request.values.get("dismiss") in ("1", "true", "True")
+        consequence = ""
         try:
             if dismissed:
                 dismiss_action(action_id, db_path=db_path)
             else:
-                approve_and_apply(action_id, db_path=db_path)
+                # approve_and_apply RETURNS the exact consequence string
+                # ("Ledger entry id=N written: ...") — captured so the
+                # HTMX quick-action path can show it instead of a bare chip
+                # (REQ-11: every ritual action states its specific outcome).
+                consequence = approve_and_apply(action_id, db_path=db_path)
         except LookupError as exc:
             return ({"error": str(exc)}, 404)
         except (ValueError, KeyError) as exc:
@@ -1468,7 +1518,15 @@ def create_app(
                     ),
                     mimetype="text/html",
                 )
-            return Response(acted_span("✓ applied", "applied"), mimetype="text/html")
+            return Response(
+                acted_span(
+                    "✓ applied",
+                    "applied",
+                    detail=consequence,
+                    detail_href=_approve_consequence_href(consequence),
+                ),
+                mimetype="text/html",
+            )
         if request.method == "POST":
             status = ACTION_STATUS_CANCELLED if dismissed else ACTION_STATUS_APPLIED
             return {"ok": True, "action_id": action_id, "status": status}
@@ -1485,16 +1543,57 @@ def create_app(
         unknown id, 409 if the alert is already terminal (a stale or
         double-clicked card). State-changing, so a cross-site fetch is rejected
         — the JSON content-type already blocks a simple cross-site form POST,
-        and Sec-Fetch-Site closes the gap for any preflighted one."""
+        and Sec-Fetch-Site closes the gap for any preflighted one.
+
+        Consequence receipts (0142): the same endpoint doubles as the
+        deferred "why?" affordance the acted-span chip renders after the
+        dismiss swap — a second POST, alert already dismissed, body carrying
+        only ``reason`` — so it must not re-attempt (or 409 on) a transition
+        that already happened. An optional ``reason`` on the FIRST call (an
+        alert not yet dismissed) is also honored in one round-trip."""
         if request.method == "OPTIONS":
             return ("", 204)
         if request.headers.get("Sec-Fetch-Site", "") == "cross-site":
             return ({"error": "cross-site dismiss rejected"}, 403)
         from alerts import (
+            ALERT_STATUS_DISMISSED,
             cancel_action,
             dismiss_alert,
+            get_alert,
             list_queued_actions_for_alert,
+            set_alert_dismiss_reason,
         )
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        reason = str(payload.get("reason") or request.values.get("reason") or "").strip() or None
+
+        try:
+            current = get_alert(alert_id, db_path=db_path)
+        except LookupError as exc:
+            return ({"error": str(exc)}, 404)
+
+        if current.status == ALERT_STATUS_DISMISSED and reason is not None:
+            # The deferred reason-only round-trip: the dismiss already
+            # happened, a reason came WITH this call — no re-cancel, no
+            # re-transition, just attach the signal. A bare re-POST with no
+            # reason on an already-dismissed alert is a stale/double-clicked
+            # card, not this round-trip — it falls through to the normal
+            # path below, which raises the same 409 conflict it always did.
+            try:
+                dismissed = set_alert_dismiss_reason(alert_id, reason, db_path=db_path)
+            except LookupError as exc:
+                return ({"error": str(exc)}, 404)
+            except ValueError as exc:
+                return ({"error": str(exc)}, 409)
+            if request.headers.get("HX-Request"):
+                return Response("", mimetype="text/html")
+            return {
+                "ok": True,
+                "alert_id": dismissed.id,
+                "status": dismissed.status,
+                "dismiss_reason": dismissed.dismiss_reason,
+                "cancelled_actions": 0,
+            }
 
         try:
             cancelled = 0
@@ -1502,7 +1601,7 @@ def create_app(
                 if qa.status == ACTION_STATUS_PENDING:
                     cancel_action(qa.id, db_path=db_path)
                     cancelled += 1
-            dismissed = dismiss_alert(alert_id, db_path=db_path)
+            dismissed = dismiss_alert(alert_id, db_path=db_path, reason=reason)
         except LookupError as exc:
             return ({"error": str(exc)}, 404)
         except (ValueError, KeyError) as exc:
@@ -1511,14 +1610,24 @@ def create_app(
         if request.headers.get("HX-Request"):
             # Wave 3b: alert-dismiss cascades (it cancels the alert's pending
             # actions too), so there's no clean single Undo — the chip is
-            # terminal, matching approve.
+            # terminal, matching approve. 0142: the chip grows a "why?" inline
+            # affordance unless the reason was already supplied in this call.
             from dashboard.inbox import acted_span
 
-            return Response(acted_span("✕ dismissed", "cancelled"), mimetype="text/html")
+            if dismissed.dismiss_reason:
+                return Response(
+                    acted_span("✕ dismissed", "cancelled", detail=dismissed.dismiss_reason),
+                    mimetype="text/html",
+                )
+            return Response(
+                acted_span("✕ dismissed", "cancelled", dismiss_why_id=alert_id),
+                mimetype="text/html",
+            )
         return {
             "ok": True,
             "alert_id": dismissed.id,
             "status": dismissed.status,
+            "dismiss_reason": dismissed.dismiss_reason,
             "cancelled_actions": cancelled,
         }
 

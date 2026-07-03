@@ -273,6 +273,45 @@ def test_approve_post_conflict_stays_json_409(client: FlaskClient, db_path: Path
 
 
 # ----------------------------------------------------------------------------
+# Consequence receipts (REQ-11): the HTMX quick-action path renders the exact
+# outcome approve_and_apply produced, instead of a bare "✓ applied" chip.
+# ----------------------------------------------------------------------------
+
+
+def test_approve_htmx_returns_consequence_detail(client: FlaskClient, db_path: Path) -> None:
+    action_id = _seed_pending_action(db_path, ticker="NU")
+    resp = client.post(
+        "/approve", data={"action_id": str(action_id)}, headers={"HX-Request": "true"}
+    )
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "ix-acted-detail" in body
+    # approve_and_apply's exact returned string (execution/approve_queued_action.py)
+    assert f"Approved queued_action id={action_id}" in body
+    assert "Ledger entry id=" in body
+    assert "NU" in body
+    # A written Ledger entry names a doorway to the Decisions panel.
+    assert 'href="/#decisions_record"' in body
+
+
+def test_approve_htmx_dismiss_carries_no_consequence_detail(
+    client: FlaskClient, db_path: Path
+) -> None:
+    """A dismiss (no downstream write) keeps its plain undo-carrying chip —
+    detail is only ever populated by approve_and_apply's return value."""
+    action_id = _seed_pending_action(db_path, ticker="GOOG")
+    resp = client.post(
+        "/approve",
+        data={"action_id": str(action_id), "dismiss": "1"},
+        headers={"HX-Request": "true"},
+    )
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "ix-acted-detail" not in body
+    assert "ix-undo" in body
+
+
+# ----------------------------------------------------------------------------
 # POST /api/alerts/<id>/dismiss — the inbox rail's hover ✕ on an alert card.
 # The alert-level counterpart to /approve's action-level dismiss: it clears
 # the whole alert AND cancels its still-pending drafts so none resurface.
@@ -290,6 +329,7 @@ def test_dismiss_alert_route_clears_alert_and_cancels_pending_actions(
         "ok": True,
         "alert_id": alert_id,
         "status": ALERT_STATUS_DISMISSED,
+        "dismiss_reason": None,  # 0142: no reason supplied on this dismiss
         "cancelled_actions": 1,
     }
     # The alert is dismissed and its pending draft cancelled — no orphan to
@@ -346,6 +386,121 @@ def test_dismiss_alert_route_rejects_cross_site(client: FlaskClient, db_path: Pa
     # Nothing mutated — the alert and its draft are both untouched.
     assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_PENDING
     assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_PENDING
+
+
+# ----------------------------------------------------------------------------
+# Dismiss-with-reason (alerts lane, v1, 0142): the "why?" affordance's
+# deferred round-trip — a second POST to the SAME endpoint, alert already
+# dismissed, body carrying only {reason}.
+# ----------------------------------------------------------------------------
+
+
+def test_dismiss_alert_htmx_chip_carries_why_affordance(client: FlaskClient, db_path: Path) -> None:
+    alert = fire_alert(
+        ticker="NU",
+        trigger_kind="earnings_tone",
+        fired_at=datetime.now(UTC),
+        evidence_json='{"summary": "tone test"}',
+        signature_sha="sig-dismiss-why",
+        db_path=db_path,
+    )
+    resp = client.post(f"/api/alerts/{alert.id}/dismiss", headers={"HX-Request": "true"})
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "ix-why-toggle" in body
+    assert f'hx-post="/api/alerts/{alert.id}/dismiss"' in body
+
+
+def test_dismiss_alert_reason_round_trip_attaches_without_retransition(
+    client: FlaskClient, db_path: Path
+) -> None:
+    from alerts import ALERT_STATUS_DISMISSED as _DISMISSED
+
+    alert = fire_alert(
+        ticker="NU",
+        trigger_kind="earnings_tone",
+        fired_at=datetime.now(UTC),
+        evidence_json='{"summary": "tone test"}',
+        signature_sha="sig-dismiss-reason",
+        db_path=db_path,
+    )
+    first = client.post(f"/api/alerts/{alert.id}/dismiss")
+    assert first.status_code == 200
+    assert first.get_json()["dismiss_reason"] is None
+
+    second = client.post(
+        f"/api/alerts/{alert.id}/dismiss",
+        json={"reason": "already knew"},
+    )
+    assert second.status_code == 200
+    payload = second.get_json()
+    assert payload == {
+        "ok": True,
+        "alert_id": alert.id,
+        "status": _DISMISSED,
+        "dismiss_reason": "already knew",
+        "cancelled_actions": 0,
+    }
+    assert get_alert(alert.id, db_path=db_path).dismiss_reason == "already knew"
+
+
+def test_dismiss_alert_reason_htmx_returns_empty_body(client: FlaskClient, db_path: Path) -> None:
+    """Once a reason lands, nothing further renders (signal capture, not
+    ceremony) — the response is empty so HTMX's outerHTML swap removes the
+    whole .ix-dismiss-why affordance."""
+    alert = fire_alert(
+        ticker="NU",
+        trigger_kind="earnings_tone",
+        fired_at=datetime.now(UTC),
+        evidence_json='{"summary": "tone test"}',
+        signature_sha="sig-dismiss-reason-htmx",
+        db_path=db_path,
+    )
+    client.post(f"/api/alerts/{alert.id}/dismiss")
+    resp = client.post(
+        f"/api/alerts/{alert.id}/dismiss",
+        data={"reason": "wrong ticker"},
+        headers={"HX-Request": "true"},
+    )
+    assert resp.status_code == 200
+    assert resp.data.decode() == ""
+    assert get_alert(alert.id, db_path=db_path).dismiss_reason == "wrong ticker"
+
+
+def test_dismiss_alert_double_click_without_reason_still_409s(
+    client: FlaskClient, db_path: Path
+) -> None:
+    """A bare re-POST on an already-dismissed alert (no reason attached) is
+    the stale/double-click case, not the reason round-trip — it must keep
+    raising the same 409 the pre-0142 behavior did."""
+    alert = fire_alert(
+        ticker="NU",
+        trigger_kind="earnings_tone",
+        fired_at=datetime.now(UTC),
+        evidence_json='{"summary": "tone test"}',
+        signature_sha="sig-dismiss-doubleclick",
+        db_path=db_path,
+    )
+    assert client.post(f"/api/alerts/{alert.id}/dismiss").status_code == 200
+    resp = client.post(f"/api/alerts/{alert.id}/dismiss")
+    assert resp.status_code == 409
+
+
+def test_dismiss_alert_reason_supplied_on_first_call(client: FlaskClient, db_path: Path) -> None:
+    """A reason supplied in the SAME call that performs the dismiss is
+    honored in one round-trip (not just the deferred second call)."""
+    alert = fire_alert(
+        ticker="NU",
+        trigger_kind="earnings_tone",
+        fired_at=datetime.now(UTC),
+        evidence_json='{"summary": "tone test"}',
+        signature_sha="sig-dismiss-firstcall-reason",
+        db_path=db_path,
+    )
+    resp = client.post(f"/api/alerts/{alert.id}/dismiss", json={"reason": "stale trigger"})
+    assert resp.status_code == 200
+    assert resp.get_json()["dismiss_reason"] == "stale trigger"
+    assert get_alert(alert.id, db_path=db_path).dismiss_reason == "stale trigger"
 
 
 # ----------------------------------------------------------------------------
