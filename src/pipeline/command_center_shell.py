@@ -332,6 +332,7 @@ def render_shell(
             _NOTES_DRAWER_HTML,
             _PALETTE_HTML,
             _PEEK_HTML,
+            _CAPTURE_TRAY_HTML,
             # The shared client state container (S14 PR2): one namespaced,
             # versioned window.CCState, inlined BEFORE the dock and shell
             # scripts (and therefore before any lazily-injected fragment
@@ -505,6 +506,35 @@ _PEEK_HTML = (
     '<div class="cc-peek-body" id="cc-peek-body"></div>'
     "</div>"
     '<div class="cc-hovercard" id="cc-hovercard" hidden></div>'
+)
+
+# Ctrl/Cmd+. global capture tray (journaling directive): a one-keystroke,
+# zero-permanent-chrome overlay reachable from ANY tab that POSTs straight to
+# the capture spine (/api/capture/text — the same LLM-free ingest the Ledger
+# and Telegram poller use), so a stray thought never has to detour through a
+# specific tab to reach the wondering/pledge taps. Ticker prefill is v1-minimal
+# (see SHELL_JS): the roster matcher already links a bare/`$`-prefixed symbol
+# in plain text (src/capture/matcher.py), so the tray just prepends the open
+# holding's ticker to the textarea — no server-side ticker param needed.
+_CAPTURE_TRAY_HTML = (
+    # No per-surface scrim div — CCOverlay (S4) shows the one shared .k-scrim.
+    '<div class="cc-capture-tray" id="cc-capture-tray" hidden role="dialog" '
+    'aria-modal="true" aria-label="Capture">'
+    '<div class="cc-capture-tray-head"><span>Capture</span>'
+    '<span class="cc-capture-tray-ticker muted" id="cc-capture-tray-ticker" hidden></span>'
+    # The triad's close control reuses the palette's corner-x class (same kind
+    # of small pop overlay) — only the id is unique, per the kit-button guard
+    # (design_language §3: close glyphs share styling, not a freehand class).
+    '<button class="cc-palette-close" id="cc-capture-tray-close" type="button" '
+    'aria-label="Close">&times;</button></div>'
+    '<textarea class="cc-capture-tray-body" id="cc-capture-tray-body" rows="3" '
+    'placeholder="Think out loud — lands in the Ledger. (Ctrl+Enter to capture)" '
+    'aria-label="Capture a musing"></textarea>'
+    '<div class="cc-capture-tray-row">'
+    '<button class="k-btn k-btn-primary k-btn-sm" id="cc-capture-tray-save" type="button">Capture</button>'
+    '<span class="cc-capture-tray-msg muted" id="cc-capture-tray-msg"></span>'
+    "</div>"
+    "</div>"
 )
 
 
@@ -1157,6 +1187,26 @@ td.ticker a:hover { color: var(--accent); }
 .cc-mini-open { margin-top: 7px; padding-top: 6px; border-top: 1px solid var(--border);
   font-size: var(--fs-caption); }
 .cc-mini-open a { color: var(--accent); text-decoration: none; }
+
+/* Ctrl/Cmd+. capture tray: a small pop overlay (same family as the palette),
+   never a full drawer — one textarea, a ticker chip, Capture. The close
+   control composes .cc-palette-close (corner-anchored, position: absolute)
+   rather than a freehand class — .cc-capture-tray is `position: fixed` too,
+   so it anchors the same way. */
+.cc-capture-tray { position: fixed; top: 14vh; left: 50%; transform: translateX(-50%);
+  width: min(440px, 92vw); background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); z-index: 49; box-shadow: var(--shadow-pop);
+  padding: 14px 16px; animation: cc-pop-in var(--transition); }
+.cc-capture-tray[hidden] { display: none; }
+.cc-capture-tray-head { display: flex; align-items: center; gap: 8px;
+  font-size: var(--fs-section); font-weight: 600; margin-bottom: 8px;
+  padding-right: 20px; /* keep the title clear of the corner close */ }
+.cc-capture-tray-ticker { font-family: var(--mono); font-size: var(--fs-caption);
+  font-weight: 400; }
+.cc-capture-tray-body { width: 100%; box-sizing: border-box; resize: vertical;
+  margin-bottom: 8px; }
+.cc-capture-tray-row { display: flex; align-items: center; gap: 10px; }
+.cc-capture-tray-msg { font-size: var(--fs-caption); }
 
 /* ============================================================
    Responsive + touch-aware overrides (S16 PR1)
@@ -1940,6 +1990,66 @@ SHELL_JS = r"""
   function openPalette() { if (palOv) palOv.open(); }
   function closePalette() { if (palOv) palOv.close(); }
 
+  // ----- Ctrl/Cmd+. global capture tray -----
+  // A one-keystroke overlay reachable from any tab: types straight into the
+  // capture spine (POST /api/capture/text), the same LLM-free ingest the
+  // Ledger panel and Telegram poller feed. Ticker prefill is v1-minimal: the
+  // roster matcher already links a bare/$-prefixed symbol in plain text
+  // (src/capture/matcher.py word-boundary lane), so onOpen just prepends the
+  // open holding's ticker to the textarea — no server-side ticker param.
+  var trayEl = document.getElementById('cc-capture-tray');
+  var trayBody = document.getElementById('cc-capture-tray-body');
+  var trayMsg = document.getElementById('cc-capture-tray-msg');
+  var trayTickerChip = document.getElementById('cc-capture-tray-ticker');
+
+  function trayPrefillTicker() {
+    var t = holdingTicker();
+    if (trayTickerChip) {
+      if (t) { trayTickerChip.textContent = '$' + t; trayTickerChip.hidden = false; }
+      else { trayTickerChip.textContent = ''; trayTickerChip.hidden = true; }
+    }
+    if (t && trayBody && !trayBody.value) trayBody.value = '$' + t + ' ';
+  }
+
+  function trayCapture() {
+    if (!trayBody) return;
+    var text = trayBody.value.trim();
+    if (!text) { if (trayMsg) trayMsg.textContent = 'write something first'; return; }
+    if (trayMsg) trayMsg.textContent = 'capturing…';
+    fetch('/api/capture/text', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text })
+    }).then(function (r) {
+      return r.json().then(function (j) { return { ok: r.ok, j: j }; });
+    }).then(function (res) {
+      if (!res.ok) { if (trayMsg) trayMsg.textContent = 'error: ' + (res.j.error || 'failed'); return; }
+      trayBody.value = '';
+      if (window.ccReloadNotesDrawer) window.ccReloadNotesDrawer();
+      closeTray();
+    }).catch(function () { if (trayMsg) trayMsg.textContent = 'network error'; });
+  }
+
+  var trayOv = trayEl && window.CCOverlay.register(trayEl, {
+    priority: window.CCOverlay.PRIORITY.PALETTE,
+    scrim: true, trapFocus: true, restoreFocus: true,
+    motion: 'pop', group: 'cc-primary', closeId: 'cc-capture-tray-close',
+    autofocus: false,  // onOpen focuses the textarea itself (like the palette's input)
+    onOpen: function () {
+      if (trayMsg) trayMsg.textContent = '';
+      trayPrefillTicker();
+      if (trayBody) setTimeout(function () { trayBody.focus(); }, 0);
+    }
+  });
+  function openTray() { if (trayOv) trayOv.open(); }
+  function closeTray() { if (trayOv) trayOv.close(); }
+
+  if (trayBody) trayBody.addEventListener('keydown', function (ev) {
+    if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') { ev.preventDefault(); trayCapture(); }
+  });
+  var trayBtn = document.getElementById('cc-capture-tray-save');
+  if (trayBtn) trayBtn.addEventListener('click', trayCapture);
+
   function runPalSelection() {
     if (!palMatches.length) return;
     var it = palMatches[palSel].it;
@@ -2237,12 +2347,17 @@ SHELL_JS = r"""
   });
 
   // Ctrl/Cmd+K, plus Ctrl+Space (UX9b) — ev.code so the spacebar binding is
-  // keyboard-layout independent. (Escape + Tab/focus-trap are CCOverlay's now;
-  // this listener never touches Escape, so the shell keeps exactly one.)
+  // keyboard-layout independent. Ctrl/Cmd+. (PR3) opens the capture tray — the
+  // same listener, never a second one. (Escape + Tab/focus-trap are
+  // CCOverlay's now; this listener never touches Escape, so the shell keeps
+  // exactly one.)
   document.addEventListener('keydown', function (ev) {
     if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'k' || ev.key === 'K' || ev.code === 'Space')) {
       ev.preventDefault();
       if (palOv && !palOv.isOpen()) openPalette(); else closePalette();
+    } else if ((ev.ctrlKey || ev.metaKey) && ev.key === '.') {
+      ev.preventDefault();
+      if (trayOv && !trayOv.isOpen()) openTray(); else closeTray();
     }
   });
   // Drawer sections ship collapsed; each remembers its own open/closed state
