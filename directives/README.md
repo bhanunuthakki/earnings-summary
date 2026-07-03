@@ -45,7 +45,8 @@ Shipped feature specs from those programs: `key_metrics_picker.md` (the DIY metr
 `ir_browser_assisted_fetch.md`, `intake_documents.md`, `onboard_pending_tickers.md`,
 `quarterly_refresh.md`, `micro_thesis_runbook.md`, `micro_thesis_skill.md`,
 `dcf_gsheets_setup.md`, `nvo_external_sources.md`, `design_conformance_audit.md`
-(the monthly semantic design-conformance audit, run as a scheduled task).
+(the monthly semantic design-conformance audit, run as a scheduled task),
+`edgar_pipeline.md` (EDGAR = weekly free statement freshness; FMP = ~6-monthly paid backpop).
 
 **Trackers / data-quality logs:** `platform_backlog.md` (canonical cross-workspace tracker —
 check FIRST when asked about open work), `data_fixes.md`.
