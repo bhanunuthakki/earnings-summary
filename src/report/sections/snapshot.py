@@ -180,6 +180,12 @@ def _valuation_snapshot(
     cols = {str(r[1]) for r in cursor.execute("PRAGMA table_info(dcf_runs)")}
     has_sync_cols = "assumptions_sync_status" in cols and "assumptions_synced_at" in cols
     sync_select = ", assumptions_sync_status, assumptions_synced_at" if has_sync_cols else ""
+    # ORDER BY matters: the versioned dcf_runs schema (migration 0137) keeps
+    # superseded history rows per ticker, so a bare LIMIT 1 reads an ARBITRARY
+    # (in practice the oldest) run — the card would render a stale valuation and
+    # miss the priced_in/scenario_prior blocks the newest refresh persisted.
+    # Same current-run selection every other dcf_runs reader already uses
+    # (build_per_metric below, synthesis lenses, standup signals).
     cursor.execute(
         f"""
         SELECT valuation_date, wacc, terminal_growth, npv, npv_per_share,
@@ -188,6 +194,7 @@ def _valuation_snapshot(
                assumption_snapshot_json{sync_select}
         FROM dcf_runs
         WHERE ticker = ?
+        ORDER BY valuation_date DESC, id DESC
         LIMIT 1
         """,
         (ticker.upper(),),

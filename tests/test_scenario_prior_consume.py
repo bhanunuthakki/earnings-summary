@@ -208,6 +208,57 @@ def test_valuation_snapshot_carries_scenario_prior(tmp_path: Path) -> None:
     assert v.scenario_skew == _approx(-0.10)
 
 
+def test_valuation_snapshot_reads_newest_run_not_superseded_history(tmp_path: Path) -> None:
+    """The versioned dcf_runs schema (migration 0137) keeps superseded history
+    rows per ticker. The card read MUST select the newest run — a bare LIMIT 1
+    (no ORDER BY) reads the OLDEST row in practice, rendering a stale valuation
+    with no priced_in/scenario_prior blocks (the bug the first prod hydration
+    surfaced: every refreshed name got a second row and the card went blank)."""
+    repo = tmp_path / "repo"
+    (repo / "data").mkdir(parents=True)
+    conn = sqlite3.connect(str(repo / "data" / "portfolio.db"))
+    # No UNIQUE(ticker): the 0137 schema keeps one row per (run), many per ticker.
+    conn.executescript(
+        """
+        CREATE TABLE dcf_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT,
+            valuation_date TEXT, horizon_years INTEGER, wacc REAL, terminal_growth REAL,
+            npv REAL, npv_per_share REAL, shares_outstanding REAL,
+            currency TEXT, notes TEXT, run_id TEXT,
+            live_price REAL, live_price_at TEXT, over_under_pct REAL,
+            mos_bar_used REAL, assumption_snapshot_json TEXT,
+            revenue_growths_json TEXT, fcf_margin REAL, breakdown_json TEXT
+        );
+        """
+    )
+    old_snap = _snap()  # pre-hydration: no scenario_prior block
+    new_snap = _snap(weights={"bull": 0.15, "base": 0.50, "bear": 0.35})
+    conn.execute(
+        "INSERT INTO dcf_runs (ticker, valuation_date, horizon_years, wacc, terminal_growth,"
+        " npv, npv_per_share, shares_outstanding, currency, live_price, over_under_pct,"
+        " mos_bar_used, assumption_snapshot_json) VALUES"
+        " ('TEST','2026-07-02',10,0.09,0,1500,90.0,100000000.0,'USD',95.0,0.0556,0.25,?)",
+        (old_snap,),
+    )
+    conn.execute(
+        "INSERT INTO dcf_runs (ticker, valuation_date, horizon_years, wacc, terminal_growth,"
+        " npv, npv_per_share, shares_outstanding, currency, live_price, over_under_pct,"
+        " mos_bar_used, assumption_snapshot_json) VALUES"
+        " ('TEST','2026-07-03',10,0.09,0,1500,100.0,100000000.0,'USD',100.0,0.0,0.25,?)",
+        (new_snap,),
+    )
+    conn.commit()
+    conn.close()
+
+    v = snapshot_mod._valuation_snapshot(  # pyright: ignore[reportPrivateUsage]
+        "TEST", repo, current_price=None, model_link=None, mos_bar=None
+    )
+    # The NEWEST run's values + blocks, not the superseded 07-02 row.
+    assert v.consolidated_npv_per_share == _approx(100.0)
+    assert str(v.valuation_date) == "2026-07-03"
+    assert v.scenario_weights == {"bull": 0.15, "base": 0.50, "bear": 0.35}
+
+
 # --------------------------------------------------------------------------- #
 # 5. rendering
 # --------------------------------------------------------------------------- #
