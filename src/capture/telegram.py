@@ -143,9 +143,7 @@ def _request(url: str, *, data: dict[str, object] | None = None, timeout: float 
     Returns the ``result`` payload; raises ``TelegramError`` on failure."""
     body = json.dumps(data).encode("utf-8") if data is not None else None
     headers = {"Content-Type": "application/json"} if body is not None else {}
-    req = urllib.request.Request(
-        url, data=body, headers=headers, method="POST" if body else "GET"
-    )
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST" if body else "GET")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             payload = cast("dict[str, object]", json.loads(resp.read().decode("utf-8")))

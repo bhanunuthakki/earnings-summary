@@ -129,7 +129,9 @@ def test_counts_and_ticker_list(db_path: Path) -> None:
         _insert_decision(db_path, ticker=t, outcome_label="wrong")
     _insert_decision(db_path, ticker="RBRK", recommendation_kind="trim", outcome_label="correct")
     _insert_decision(db_path, ticker="WIX", outcome_label="mixed")
-    _insert_decision(db_path, ticker="NOW", recommendation_kind="trim", outcome_label="unfalsifiable")
+    _insert_decision(
+        db_path, ticker="NOW", recommendation_kind="trim", outcome_label="unfalsifiable"
+    )
     line = graded_sell_record(db_path)
     assert line == "Graded record on sells/trims: 5 of 8 wrong (AMZN, GOOGL, MU, NVDA, TSM)"
 

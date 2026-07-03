@@ -1152,7 +1152,9 @@ def review_reply_text(repo_root: Path, text: str, *, plain: bool = False) -> str
     if plain:
         usage = "Usage: /review <TICKER> [at $PRICE] - e.g. /review RBRK or /review FLKR at $70."
     else:
-        usage = "Usage: /review <TICKER> [at $PRICE] — e.g. `/review RBRK` or `/review FLKR at $70`."
+        usage = (
+            "Usage: /review <TICKER> [at $PRICE] — e.g. `/review RBRK` or `/review FLKR at $70`."
+        )
     parsed = parse_review_command(text)
     if parsed is None:
         return usage
