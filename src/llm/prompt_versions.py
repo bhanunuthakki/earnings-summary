@@ -216,6 +216,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # Position-review verdict (src/advisor/position_review.py). Bump when
     # _build_verdict_prompt / _BEHAVIORAL_RULES is materially rewritten.
     "position_review": "v1",
+    # Per-name DCF scenario prior (src/dcf/scenario_prior.py, mode-A golden set).
+    # Bump when the weight-setting prompt (dcf.scenario_prior._PROMPT) is materially
+    # rewritten, then re-run `run_llm_evals.py --purpose scenario_prior`.
+    "scenario_prior": "v1",
 }
 
 _DEFAULT_VERSION = "v1"
