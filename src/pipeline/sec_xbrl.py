@@ -65,42 +65,123 @@ from pipeline.restatement_detector import (
     insert_with_restatement_detection,
 )
 
-# Reverse-lookup CIK from `https://www.sec.gov/files/company_tickers.json` (verified 2026-05).
-# Update by re-querying that endpoint when adding tickers.
+# Reverse-lookup CIK from `https://www.sec.gov/files/company_tickers.json`
+# (full portfolio + evaluation + watchlist sweep verified 2026-07-02). Update
+# by re-querying that endpoint when adding tickers. Legacy names no longer
+# tracked (CNQ/TPL/VALE/WY) stay — a map entry is just a lookup; the fetch
+# script scopes to the live tracked universe.
 CIK_MAP: dict[str, str] = {
     "ABNB": "0001559720",
     "AMAT": "0000006951",
+    "AMD": "0000002488",
     "AMZN": "0001018724",
     "ASML": "0000937966",
+    "AVGO": "0001730168",
+    "AWK": "0001410636",
+    "BAM": "0001937926",
+    "BEPC": "0001791863",
     "BHP": "0000811809",
+    "BIPC": "0001788348",
     "BKNG": "0001075531",
     "BN": "0001001085",
+    "BRK-B": "0001067983",
+    "CDNS": "0000813672",
+    # Not in company_tickers.json anymore (pending acquisition); the historical
+    # CIK still serves full companyfacts.
+    "CFLT": "0001699838",
+    "CGEH": "0001009759",  # Capstone (SEC title: Capstone Energy Plus, Inc.)
+    "CIEN": "0000936395",
     "CNQ": "0001017413",
+    "COHR": "0000820318",
+    "COST": "0000909832",
+    "CRM": "0001108524",
+    "CRWD": "0001535527",
+    "CRWV": "0001769628",
+    "DDOG": "0001561550",
+    "DHR": "0000313616",
+    "DLO": "0001846832",
+    "ENB": "0000895728",
+    "EPD": "0001061219",
+    "ESTC": "0001707753",
     "FCX": "0000831259",
+    "FIGR": "0002064124",
     "FNV": "0001456346",
+    "FRVO": "0001853868",
+    "FTNT": "0001262039",
     "GOOG": "0001652044",
+    "GTLB": "0001653482",
+    "HASI": "0001561894",
+    "HBM": "0001322422",
     "HDB": "0001144967",
+    "HEI": "0000046619",
+    "IBN": "0001103838",
+    "ISRG": "0001035267",
     "JPM": "0000019617",
+    "KLAC": "0000319201",
+    "KVYO": "0001835830",
+    "LITE": "0001633978",
     "LLY": "0000059478",
     "LMND": "0001691421",
+    "MA": "0001141391",
+    "MDB": "0001441816",
     "MELI": "0001099590",
     "META": "0001326801",
+    "MRVL": "0001835632",
+    "MSFT": "0000789019",
     "MU": "0000723125",
+    "NBIS": "0001513845",
+    "NEE": "0000753308",
+    "NET": "0001477333",
     "NOW": "0001373715",
+    "NSP": "0001000753",
+    "NTRA": "0001604821",
     "NU": "0001691493",
+    "NVDA": "0001045810",
     "NVO": "0000353278",
+    "NVS": "0001114448",
+    "OKTA": "0001660134",
+    "ORCL": "0001341439",
+    "PANW": "0001327567",
     "RBRK": "0001943896",
+    "RGEN": "0000730272",
     "RIO": "0000863064",
+    "ROP": "0000882835",
+    "SCCO": "0001001838",
+    "SE": "0001703399",
+    "SNOW": "0001640147",
+    "SNPS": "0000883241",
     "SOFI": "0001818874",
+    "STNE": "0001745431",
+    "TDG": "0001260221",
+    "TECH": "0000842023",
+    "TECK": "0000886986",
+    "TEM": "0001717115",
+    "TMO": "0000097745",
     "TOL": "0000794170",
     "TPL": "0001811074",
+    "TRP": "0001232384",
     "TSM": "0001046179",
+    "TXN": "0000097476",
+    "UBER": "0001543151",
+    "V": "0001403161",
     "VALE": "0000917851",
     "VEEV": "0001393052",
+    "WGS": "0001818331",
     "WIX": "0001576789",
+    "WMB": "0000107263",
     "WPM": "0001323404",
     "WY": "0000106535",
+    "XEL": "0000072903",
+    "ZS": "0001713683",
 }
+
+# Tracked names with NO SEC registration — EDGAR can never cover them; FMP /
+# yfinance remain their only statement sources (honest degradation, do not
+# approximate via a different entity's CIK):
+#   FLKR  — Franklin FTSE South Korea ETF (fund, no companyfacts)
+#   IVN   — Ivanhoe Mines: TSX-listed, no US registration
+#   NTDOY — Nintendo: unsponsored OTC ADR, no SEC filings
+NO_SEC_FILERS: frozenset[str] = frozenset({"FLKR", "IVN", "NTDOY"})
 
 
 # How a ladder's XBRL unit keys are parsed:
