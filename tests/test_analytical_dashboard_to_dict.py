@@ -92,10 +92,30 @@ def _seed_db(db_path: Path) -> None:
             cost_estimate_usd REAL,
             called_at TIMESTAMP
         );
+        -- Faithful mirror of migration 0035 (see tests/test_llm_artifact_store.py).
+        -- The Risk panel reads this table via llm_artifact_store.read_current,
+        -- whose query references fiscal_period/scope — a stale minimal schema here
+        -- 500s that panel (regression: test_panel_fragment_portfolio_risk_offline).
         CREATE TABLE llm_artifacts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT, purpose TEXT, scope TEXT, content_md TEXT,
-            generated_at TEXT, superseded_by_id INTEGER
+            ticker VARCHAR(16),
+            scope VARCHAR(64) NOT NULL DEFAULT 'ticker',
+            purpose VARCHAR(64) NOT NULL,
+            fiscal_period VARCHAR(10),
+            content_md TEXT,
+            content_json TEXT,
+            input_sha256 VARCHAR(64) NOT NULL DEFAULT '',
+            output_sha256 VARCHAR(64),
+            model VARCHAR(64),
+            prompt_version VARCHAR(32) NOT NULL DEFAULT 'v1',
+            generated_at DATETIME NOT NULL,
+            expires_at DATETIME,
+            superseded_by_id INTEGER REFERENCES llm_artifacts(id),
+            dirty BOOLEAN NOT NULL DEFAULT 0,
+            dirty_reason VARCHAR(128),
+            source_doc_ids TEXT,
+            parent_artifact_ids TEXT,
+            llm_call_id INTEGER
         );
         """
     )

@@ -184,6 +184,14 @@ def read_current(
             (ticker, scope, purpose, fiscal_period),
         ).fetchone()
         return _row_to_artifact(row) if row else None
+    except sqlite3.Error as exc:
+        # Best-effort read: _open() already guards a missing table, but a table
+        # that exists with a *drifted* schema (a legacy DB predating a column
+        # add, or a partial test fixture) would otherwise raise here and crash
+        # the render path. Degrade to "no cached artifact" instead — the caller
+        # recomputes or shows the empty state, same as a genuine cache miss.
+        log.warning({"event": "artifact_read_current_failed", "error": str(exc)})
+        return None
     finally:
         conn.close()
 
@@ -512,6 +520,11 @@ def drain_dirty(
             (now_iso, int(limit)),
         ).fetchall()
         return [_row_to_artifact(r) for r in rows]
+    except sqlite3.Error as exc:
+        # Best-effort: a drifted schema degrades to "nothing to drain" rather
+        # than crashing the drain cron (see read_current for rationale).
+        log.warning({"event": "artifact_drain_dirty_failed", "error": str(exc)})
+        return []
     finally:
         conn.close()
 
@@ -544,6 +557,11 @@ def history(
             (ticker, scope, purpose, fiscal_period, int(limit)),
         ).fetchall()
         return [_row_to_artifact(r) for r in rows]
+    except sqlite3.Error as exc:
+        # Best-effort: a drifted schema degrades to empty history rather than
+        # crashing the query surface (see read_current for rationale).
+        log.warning({"event": "artifact_history_failed", "error": str(exc)})
+        return []
     finally:
         conn.close()
 
