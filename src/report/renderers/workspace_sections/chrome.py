@@ -8,6 +8,7 @@ re-exports in ``workspace_html``."""
 
 from __future__ import annotations
 
+from datetime import datetime
 from io import StringIO
 
 from report.models import (
@@ -16,6 +17,7 @@ from report.models import (
     RecentDevelopmentsSection,
     ReportSpec,
     SnapshotSection,
+    SynthesisSection,
     ThesisSection,
 )
 from report.renderers.numfmt import fmt_date, fmt_reltime
@@ -29,10 +31,15 @@ from report.renderers.workspace_data import (
 from report.renderers.workspace_sections._shared import (
     _esc,
     _fmt_price,
+    _inline_md,
     _missing_panel,
     _panel_head,
     _render_markdown,
+    _xlink_html,
 )
+from report.renderers.workspace_sections.earnings import _ws_period_sort_key
+from report.renderers.workspace_sections.synthesis import _LENS_LABELS
+from ui.controls import fact_anchor_attrs
 from user_state.notes import AnalystNoteRow
 
 __all__ = [
@@ -44,6 +51,7 @@ __all__ = [
     "_news_tab",
     "_news_tile",
     "_open_items_strip",
+    "_reread_strip",
     "_thesis_strip",
     "_val_stat",
     "_verdict_badge",
@@ -58,7 +66,8 @@ def _identity(body: StringIO, spec: ReportSpec) -> None:
     body.write(f'<div class="ticker-large">{_esc(spec.ticker)}</div>')
     body.write('<div class="company-row">')
     body.write(f'<span class="company-name">{_esc(snap.company_name or spec.ticker)}</span>')
-    body.write(_verdict_badge(snap.verdict))
+    newest_quarter = spec.financials.quarter_labels[-1] if spec.financials.quarter_labels else None
+    body.write(_verdict_badge(snap.verdict, snap.verdict_as_of, newest_quarter))
     body.write("</div>")
     body.write('<div class="company-meta">')
     body.write(f"<span>USD · Report dated {fmt_date(spec.generation_date.isoformat())}</span>")
@@ -107,7 +116,36 @@ def _val_stat(
     body.write("</div>")
 
 
-def _verdict_badge(verdict: str) -> str:
+_QUARTER_END_MONTH_DAY = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}
+
+
+def _quarter_label_end_date(label: str) -> datetime | None:
+    """Approximate calendar quarter-end for a 'Qx YYYY' / 'YYYY Qx' label, or
+    None when the label doesn't parse (``_ws_period_sort_key`` returns its
+    (9999, 9) sentinel in that case)."""
+    year, q = _ws_period_sort_key(label)
+    month_day = _QUARTER_END_MONTH_DAY.get(q)
+    if year == 9999 or month_day is None:
+        return None
+    month, day = month_day
+    return datetime(year, month, day)
+
+
+def _verdict_badge(
+    verdict: str,
+    verdict_as_of: datetime | None = None,
+    newest_quarter_label: str | None = None,
+) -> str:
+    """Thesis-verdict badge, dated + honest-grey when stale.
+
+    ``verdict_as_of`` is ``thesis_state.last_updated`` (persist_verdict writes
+    ``verdict.evaluated_at`` there). When it predates the newest quarter this
+    build has data for, the evaluation is stale — the badge renders the
+    'pending' muted dot instead of the verdict's own tone so a stale read
+    never reads as fresh green (honest-grey, never fake-green), while the
+    label text stays the actual verdict (still informative, just not implied
+    current).
+    """
     mapping = {
         "intact": ("Thesis Intact", "var(--ok)"),
         "watch": ("Watch", "var(--warn)"),
@@ -115,9 +153,25 @@ def _verdict_badge(verdict: str) -> str:
         "pending": ("Pending", "var(--muted-2)"),
     }
     label, dot = mapping.get(verdict, mapping["pending"])
+    is_stale = False
+    if verdict_as_of is not None and newest_quarter_label is not None:
+        newest_end = _quarter_label_end_date(newest_quarter_label)
+        if newest_end is not None and verdict_as_of < newest_end:
+            is_stale = True
+    if is_stale:
+        dot = mapping["pending"][1]
+    as_of_html = ""
+    title_attr = ""
+    if verdict_as_of is not None:
+        as_of_display = verdict_as_of.strftime("%m-%d")
+        as_of_html = f' <span class="verdict-asof muted">as of {_esc(as_of_display)}</span>'
+        title_bits = [f"Evaluated {verdict_as_of.date().isoformat()}"]
+        if is_stale:
+            title_bits.append(f"predates the {newest_quarter_label} print")
+        title_attr = f' title="{_esc(" — ".join(title_bits))}"'
     return (
-        f'<span class="badge"><span class="dot" style="background:{dot}"></span>'
-        f"{_esc(label)}</span>"
+        f'<span class="badge"{title_attr}><span class="dot" style="background:{dot}"></span>'
+        f"{_esc(label)}{as_of_html}</span>"
     )
 
 
@@ -132,6 +186,41 @@ def _thesis_strip(body: StringIO, snap: SnapshotSection, thesis: ThesisSection) 
     )
     body.write('<span class="thesis-label">Thesis</span>')
     body.write(f"<p>{_esc(text)}</p>")
+    body.write("</div>")
+
+
+def _first_reread_line(content_md: str) -> str | None:
+    """The first substantive paragraph/line of a lens's markdown body.
+
+    Skips blank lines and pure markdown headings (``## 1. What changed``) so
+    the strip leads with real content rather than a section title; a bullet
+    marker is stripped so the line reads as prose. None when nothing
+    substantive is found (the caller hides the strip in that case)."""
+    for raw_line in content_md.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        return line.lstrip("-*").strip()
+    return None
+
+
+def _reread_strip(body: StringIO, synthesis: SynthesisSection | None) -> None:
+    """The "what changed" hoist — the first line of the cached
+    five_min_reread lens, with a doorway into the full Synthesis pane. Hidden
+    entirely (not stubbed) when no such lens is cached for this build."""
+    if synthesis is None:
+        return
+    lens = next((lens for lens in synthesis.lenses if lens.name == "five_min_reread"), None)
+    if lens is None:
+        return
+    line = _first_reread_line(lens.content_md)
+    if not line:
+        return
+    label, _sub = _LENS_LABELS.get("five_min_reread", ("5-min reread", ""))
+    body.write('<div class="l1-reread">')
+    body.write(f'<span class="reread-label">{_esc(label)}</span>')
+    body.write(f"<p>{_inline_md(line)}</p>")
+    body.write(_xlink_html("synthesis", "Full reread →"))
     body.write("</div>")
 
 
@@ -159,34 +248,45 @@ def _open_items_strip(body: StringIO, notes: list[AnalystNoteRow]) -> None:
     body.write("</ul></details>")
 
 
-def _kpi_strip(body: StringIO, rows: list[KpiLedgerRow]) -> None:
+def _kpi_strip(body: StringIO, rows: list[KpiLedgerRow], ticker: str) -> None:
     tiles = select_kpi_strip(rows, n=4)
     if not tiles:
         return
     body.write('<div class="kpi-strip">')
     for t in tiles:
-        _kpi_tile(body, t)
+        _kpi_tile(body, t, ticker)
     # Pad with empty cells to keep the 4-up grid when fewer tiles available.
     for _ in range(4 - len(tiles)):
         body.write('<div class="kpi-tile" aria-hidden="true"></div>')
     body.write("</div>")
 
 
-def _kpi_tile(body: StringIO, t: KpiStripTile) -> None:
-    body.write('<div class="kpi-tile">')
+def _kpi_tile(body: StringIO, t: KpiStripTile, ticker: str) -> None:
+    """One tier-1 KPI tile. When the row resolves to a definition id the tile
+    becomes a ``.fact-doorway`` button carrying the ``kpi:{ticker}:{def_id}``
+    fact_ref (Law 2 — every datum with depth is a doorway; the ledger-row
+    idiom, ``workspace_sections/thesis_risk.py``/``workspace_chat.py``'s
+    click delegate). Without a resolvable definition it stays today's inert
+    div — never a dead button."""
+    fact_ref = f"kpi:{ticker.upper()}:{t.kpi_definition_id}" if t.kpi_definition_id else None
+    tag = "button" if fact_ref else "div"
+    cls = "kpi-tile fact-doorway" if fact_ref else "kpi-tile"
+    type_attr = ' type="button"' if fact_ref else ""
+    attrs = f" {fact_anchor_attrs(fact_ref, t.name)}" if fact_ref else ""
+    body.write(f'<{tag} class="{cls}"{type_attr}{attrs}>')
     body.write(f'<div class="kpi-name">{_esc(t.name)}</div>')
     body.write('<div class="kpi-row">')
     body.write(f'<div class="kpi-value">{_esc(t.latest_display)}</div>')
     if t.delta_display:
-        cls = f"kpi-delta {t.delta_sign}"
-        body.write(f'<div class="{cls}">{_esc(t.delta_display)}</div>')
+        cls_delta = f"kpi-delta {t.delta_sign}"
+        body.write(f'<div class="{cls_delta}">{_esc(t.delta_display)}</div>')
     body.write("</div>")
     body.write(f'<div class="kpi-spark">{sparkline(t.values, width=230, height=36)}</div>')
     body.write('<div class="kpi-axis">')
     body.write(f"<span>{_esc(t.labels[0][2:7])}</span>")
     body.write(f'<span class="kpi-trail">{len(t.values)}q trailing</span>')
     body.write(f"<span>{_esc(t.labels[-1][2:7])}</span>")
-    body.write("</div></div>")
+    body.write(f"</div></{tag}>")
 
 
 def _news_tab(body: StringIO, section: RecentDevelopmentsSection) -> None:

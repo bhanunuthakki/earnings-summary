@@ -106,20 +106,35 @@ JS = r"""
   applyHash();
 
   // ---- Quarter selector ---------------------------------------------------
-  document.querySelectorAll('[data-quarter-group]').forEach(function (group) {
+  // Quarter labels ("Q1 2026") are shared across groups (earnings + saydo
+  // sit side by side; ir lives in another tab) — a click on one group's
+  // button broadcasts the same quarter to every sibling group that has a
+  // button for it, so switching the quarter in one place keeps every quarter
+  // card on the page in sync. A group with no matching button is a silent
+  // no-op (it may not cover that quarter).
+  var quarterGroups = document.querySelectorAll('[data-quarter-group]');
+  function swapQuarterGroup(group, q) {
     var groupId = group.getAttribute('data-quarter-group');
+    group.querySelectorAll('button[data-quarter]').forEach(function (b) {
+      b.classList.toggle('active', b.getAttribute('data-quarter') === q);
+    });
+    document
+      .querySelectorAll('[data-quarter-card][data-quarter-group="' + groupId + '"]')
+      .forEach(function (card) {
+        var match = card.getAttribute('data-quarter') === q;
+        card.style.display = match ? '' : 'none';
+      });
+  }
+  quarterGroups.forEach(function (group) {
     group.querySelectorAll('button[data-quarter]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var q = btn.getAttribute('data-quarter');
-        group.querySelectorAll('button[data-quarter]').forEach(function (b) {
-          b.classList.toggle('active', b === btn);
+        swapQuarterGroup(group, q);
+        quarterGroups.forEach(function (other) {
+          if (other === group) return;
+          var sibling = other.querySelector('button[data-quarter="' + q + '"]');
+          if (sibling) swapQuarterGroup(other, q);
         });
-        document
-          .querySelectorAll('[data-quarter-card][data-quarter-group="' + groupId + '"]')
-          .forEach(function (card) {
-            var match = card.getAttribute('data-quarter') === q;
-            card.style.display = match ? '' : 'none';
-          });
       });
     });
   });

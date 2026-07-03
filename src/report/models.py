@@ -216,6 +216,13 @@ class SnapshotSection(BaseModel):
     company_name: str | None = None
     thesis_one_liner: str | None = None
     verdict: Literal["intact", "watch", "broken", "pending"] = "pending"
+    # thesis_state.last_updated (persist_verdict writes verdict.evaluated_at
+    # there) — the timestamp the "Thesis Intact"/"Watch"/"Broken" badge is
+    # dated against. None when no thesis_state row exists (verdict stays
+    # "pending" in that case too). Threaded to the chrome badge so it can grey
+    # out a verdict that predates the newest reported quarter instead of
+    # rendering a stale read as fresh green (honest-grey, never fake-green).
+    verdict_as_of: datetime | None = None
     valuation: ValuationSnapshot
     tier_1_kpi_row: list[KpiSnapshotRow] = Field(default_factory=list)
     # Last 3 LLM recommendations from the decisions audit ledger (migration

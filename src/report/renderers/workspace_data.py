@@ -465,6 +465,10 @@ class KpiStripTile:
     latest_display: str
     delta_display: str | None
     delta_sign: str  # 'pos' / 'neg' / ''
+    # Stable PK handle (kpi_definitions.id), passed through from KpiLedgerRow so
+    # the tile can emit a fact_ref doorway (Law 2) — None degrades to the plain
+    # inert tile (never a dead button; see workspace_sections/chrome._kpi_tile).
+    kpi_definition_id: int | None = None
 
 
 _PCT_HINT_RX = re.compile(r"%|margin|growth|rate|share", re.IGNORECASE)
@@ -596,6 +600,7 @@ def select_kpi_strip(rows: list[KpiLedgerRow], n: int = 4) -> list[KpiStripTile]
                 latest_display=latest_display,
                 delta_display=delta_display,
                 delta_sign=delta_sign,
+                kpi_definition_id=row.kpi_definition_id,
             )
         )
         if len(tiles) >= n:
@@ -815,6 +820,11 @@ class WorkspaceP3Panels:
     # P4.4: the owner's open analyst notes for this name — new builds lead
     # with the standing watch-items (the strip under the thesis lede).
     open_notes: list[AnalystNoteRow] = field(default_factory=_new_open_notes)
+    # Position-tab coaching line (REQ-3/REQ-6): count of advisor_memos rows
+    # with kind='position_review' for this ticker — "Guard: never run on this
+    # name · N position reviews". 0 when the table/DB is absent (best-effort,
+    # same degrade contract as every other P3 accessor).
+    position_review_count: int = 0
 
     @classmethod
     def empty(cls) -> WorkspaceP3Panels:
@@ -833,6 +843,7 @@ class WorkspaceP3Panels:
             saydo_verdicts=[],
             peer_comp=[],
             open_notes=[],
+            position_review_count=0,
         )
 
 
@@ -848,6 +859,46 @@ def _load_open_notes_safe(ticker: str, db_path: Path) -> list[AnalystNoteRow]:
         return []
     kind_rank = {"watch": 0, "question": 1}
     return sorted(rows, key=lambda n: kind_rank.get(n.kind, 9))
+
+
+def _load_position_review_count_safe(ticker: str, db_path: Path) -> int:
+    """Count of ``advisor_memos`` rows with kind='position_review' for this
+    ticker — the Position-tab guard line's "N position reviews" figure.
+
+    Best-effort like ``_load_open_notes_safe``: missing DB / pre-0140 schema
+    (the kind predates migration 0140) both degrade to 0 rather than raising,
+    so the coaching line still renders (as "0 position reviews") instead of
+    crashing the build."""
+    if not db_path.exists():
+        return 0
+    try:
+        from advisor.store import list_memos
+
+        return len(list_memos(kind="position_review", ticker=ticker, limit=10_000, db_path=db_path))
+    except sqlite3.Error:
+        return 0
+
+
+def load_graded_sell_base_rate(ticker: str, db_path: Path) -> str | None:
+    """The graded-sells base-rate line for the Position-tab coaching block, or
+    None when unavailable.
+
+    ``advisor.position_review.graded_sell_record`` is being built on a
+    parallel branch (not yet merged as of this PR) — a guarded import so this
+    renderer never hard-depends on a module that may not exist yet. Any
+    failure (missing module, missing DB, missing table) degrades to None and
+    the caller skips the line silently (spec: "do not fail if it's missing")."""
+    if not db_path.exists():
+        return None
+    try:
+        from advisor.position_review import graded_sell_record  # type: ignore[attr-defined]
+    except ImportError:
+        return None
+    try:
+        result = cast("object", graded_sell_record(ticker, db_path=db_path))
+    except sqlite3.Error:
+        return None
+    return cast("str | None", result)
 
 
 def load_workspace_p3_panels(ticker: str, repo_root: Path) -> WorkspaceP3Panels:
@@ -866,6 +917,7 @@ def load_workspace_p3_panels(ticker: str, repo_root: Path) -> WorkspaceP3Panels:
         saydo_verdicts=load_saydo_verdicts(ticker, db_path=db_path),
         peer_comp=load_peer_comp(ticker, repo_root=repo_root),
         open_notes=_load_open_notes_safe(ticker, db_path),
+        position_review_count=_load_position_review_count_safe(ticker, db_path),
     )
 
 

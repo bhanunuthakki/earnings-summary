@@ -33,7 +33,11 @@ from report.renderers.workspace_chat import CSS as CHAT_CSS
 from report.renderers.workspace_chat import JS as CHAT_JS
 from report.renderers.workspace_comments import CSS as COMMENTS_CSS
 from report.renderers.workspace_comments import JS as COMMENTS_JS
-from report.renderers.workspace_data import WorkspaceP3Panels, load_workspace_p3_panels
+from report.renderers.workspace_data import (
+    WorkspaceP3Panels,
+    load_graded_sell_base_rate,
+    load_workspace_p3_panels,
+)
 from report.renderers.workspace_dcf import CSS as DCF_CSS
 from report.renderers.workspace_dcf import JS as DCF_JS
 from report.renderers.workspace_script import JS
@@ -75,6 +79,7 @@ from report.renderers.workspace_sections.chrome import (
     _news_tab,
     _news_tile,
     _open_items_strip,
+    _reread_strip,
     _thesis_strip,
     _val_stat,
     _verdict_badge,
@@ -133,7 +138,11 @@ from report.renderers.workspace_sections.financials import (
     _sum_segments_at,
     _validation_panel,
 )
-from report.renderers.workspace_sections.position import _position_stat, _position_tab
+from report.renderers.workspace_sections.position import (
+    _position_coaching,
+    _position_stat,
+    _position_tab,
+)
 from report.renderers.workspace_sections.saydo import (
     _fmt_made_period,
     _outcome_pill,
@@ -249,6 +258,7 @@ __all__ = [
     "_panel_head",
     "_peer_comp_panel",
     "_pos_of_card",
+    "_position_coaching",
     "_position_stat",
     "_position_tab",
     "_prompt_quality_panel",
@@ -258,6 +268,7 @@ __all__ = [
     "_rating_pill",
     "_render_filing_intelligence",
     "_render_markdown",
+    "_reread_strip",
     "_saydo_historical_ledger",
     "_saydo_print_vs_guide",
     "_saydo_summary_table",
@@ -310,6 +321,7 @@ def render(spec: ReportSpec) -> str:
     _identity(body, spec)
     _forgone_strip(body, spec.forgone_due_to_budget)
     _thesis_strip(body, spec.snapshot, spec.thesis)
+    _reread_strip(body, spec.synthesis)
 
     # P3 panel data (macro sensitivities, strategic targets, customer
     # concentrations, lease ladder, decision history, say-do verdicts,
@@ -319,7 +331,7 @@ def render(spec: ReportSpec) -> str:
     p3 = load_workspace_p3_panels(spec.ticker, Path(spec.repo_root))
 
     _open_items_strip(body, p3.open_notes)
-    _kpi_strip(body, spec.thesis.kpi_ledger)
+    _kpi_strip(body, spec.thesis.kpi_ledger, spec.ticker)
 
     body.write('<div class="l1-tabs-wrap">')
     groups = _tab_groups(spec, p3)
@@ -507,7 +519,22 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
         ),
     ]
     if pos is not None and pos.held:
-        tabs.append(("position", "Position", len(pos.accounts), lambda b: _position_tab(b, pos)))
+        db_path = Path(spec.repo_root) / "data" / "portfolio.db"
+        graded_sell_line = load_graded_sell_base_rate(spec.ticker, db_path)
+        tabs.append(
+            (
+                "position",
+                "Position",
+                len(pos.accounts),
+                lambda b: _position_tab(
+                    b,
+                    pos,
+                    ticker=spec.ticker,
+                    position_review_count=p3.position_review_count,
+                    graded_sell_line=graded_sell_line,
+                ),
+            )
+        )
     tabs.append(
         (
             "sources",
