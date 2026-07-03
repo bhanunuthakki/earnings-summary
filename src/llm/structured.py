@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from pathlib import Path
 from typing import Literal, cast
 
 from llm.cli import call_llm
@@ -97,8 +98,15 @@ def call_llm_structured(
     backend: str | None = None,
     expect: Literal["object", "array"] = "object",
     required_keys: tuple[str, ...] = (),
+    db_path: Path | str | None = None,
 ) -> object:
     """``call_llm`` + strict parse + one retry-with-feedback, loud on failure.
+
+    ``db_path`` scopes the call's DB-backed layers (model pins, prompt A/B,
+    budget, llm_calls ledger) to an explicit DB — pass it whenever the caller
+    itself took an explicit ``db_path`` instead of relying on a
+    ``db.set_db_path`` bootstrap, or the cost row lands in the wrong DB (see
+    ``call_llm``).
 
     Returns the parsed dict/list. Raises:
       * whatever ``call_llm`` raises for call failures (hard stops included —
@@ -113,6 +121,7 @@ def call_llm_structured(
         run_id=run_id,
         model=model,
         backend=backend,
+        db_path=db_path,
     )
     try:
         return parse_json_payload(raw, expect=expect, required_keys=required_keys)
@@ -134,6 +143,7 @@ def call_llm_structured(
         run_id=run_id,
         model=model,
         backend=backend,
+        db_path=db_path,
     )
     try:
         return parse_json_payload(raw_retry, expect=expect, required_keys=required_keys)

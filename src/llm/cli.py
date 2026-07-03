@@ -57,6 +57,7 @@ import subprocess
 import tempfile
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 
 from llm.capture import capture_exchange
 from llm.ledger import fallback_call_logged, record_llm_call
@@ -883,6 +884,7 @@ def call_llm(
     run_id: str | None = None,
     force_budget_bypass: bool = False,
     backend: str | None = None,
+    db_path: Path | str | None = None,
 ) -> str:
     """Public single-shot LLM call. CANONICAL entry point for ALL LLM calls in
     this repo — including from `execution/` scripts, `src/report/sections/`, and
@@ -933,11 +935,38 @@ def call_llm(
             "openrouter". An OpenRouter model id (provider/model slug) routes to
             the OpenRouter backend; an operational failure there also degrades to
             Claude, while a forced backend="openrouter" call raises.
+        db_path: Explicit portfolio.db for THIS call's DB-backed layers —
+            model-pin overrides, prompt A/B, budget check/alerts, and the
+            llm_calls cost ledger. Those layers resolve ``db.DB_PATH``
+            internally, so a caller holding an explicit db_path (library call
+            with no ``db.set_db_path`` bootstrap) would otherwise get its
+            ledger row silently written to the wrong DB ("no such table:
+            llm_calls"). None = current behavior (the process global).
     """
     if backend not in (None, "claude", "gemini", "openrouter"):
         raise ValueError(
             f"Unknown LLM backend {backend!r}: expected 'claude', 'gemini', or 'openrouter'."
         )
+
+    if db_path is not None:
+        # Re-enter with the ambient DB context active: every internal
+        # resolve_db_path(None) — pins, prompt A/B, budget, ledger, fallback —
+        # now targets the caller's DB. Scoped + thread-safe, unlike a
+        # db.set_db_path global mutation.
+        from db_paths import db_path_context
+
+        with db_path_context(db_path):
+            return call_llm(
+                prompt,
+                purpose=purpose,
+                model=model,
+                timeout_seconds=timeout_seconds,
+                ticker=ticker,
+                scope=scope,
+                run_id=run_id,
+                force_budget_bypass=force_budget_bypass,
+                backend=backend,
+            )
 
     from llm.model_ladder import GEMINI as _GEMINI_FAMILY  # late — avoids import cycle
     from llm.model_ladder import OPENROUTER as _OPENROUTER_FAMILY

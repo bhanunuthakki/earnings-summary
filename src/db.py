@@ -44,6 +44,13 @@ def set_db_path(db_path: str | os.PathLike[str]) -> None:
     writes to the *default* DB — the "no such table: llm_calls" symptom seen
     when running a trigger/news CLI from a worktree against the prod DB.
 
+    Library code that can't own the process global has a scoped alternative:
+    ``db_paths.db_path_context`` (and ``call_llm(...)`` /
+    ``call_llm_structured(..., db_path=...)`` which wrap it) re-points every
+    internal ``resolve_db_path(None)`` for one block/call without mutating
+    ``db.DB_PATH``. Note it covers only ``resolve_db_path`` consumers — not
+    ``DATA_DIR`` / ``FMP_DIR`` / ``get_connection``, which still need this sync.
+
     Re-derives ``DATA_DIR`` / ``FMP_DIR`` from the DB's parent so DB-adjacent
     data resolves consistently. ``PROJECT_ROOT`` is left untouched: code,
     templates, and holdings/micro_thesis files still resolve from the running
