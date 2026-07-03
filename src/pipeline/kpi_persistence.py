@@ -407,6 +407,44 @@ def record_validation_issue(
     return int(cur.lastrowid) if cur.lastrowid is not None else 0
 
 
+def guard_llm_extracted_parent(
+    conn: sqlite3.Connection,
+    *,
+    source_type: SourceType,
+    parent_document_id: int | None,
+    ticker: str,
+    doc_id: int,
+    run_id: str | None = None,
+    strict: bool = False,
+) -> None:
+    """Enforce data_provenance.md §2 at every ``llm_extracted`` documents insert.
+
+    A no-op unless ``source_type`` is ``LLM_EXTRACTED`` and ``parent_document_id``
+    is still unset. Default (``strict=False`` — every production write path)
+    degrades: logs a WARN ``validation_issues`` row and lets the caller continue,
+    matching this module's existing quarantine philosophy (a batch ingestion run
+    is never aborted over one row's provenance gap). Pass ``strict=True`` (tests,
+    or a deliberate direct/manual insert) to raise immediately instead.
+    """
+    if source_type is not SourceType.LLM_EXTRACTED or parent_document_id is not None:
+        return
+    if strict:
+        raise ValueError(
+            f"{ticker}: llm_extracted document {doc_id} inserted without "
+            "parent_document_id (directives/data_provenance.md §2)"
+        )
+    record_validation_issue(
+        conn,
+        run_id=run_id or "document_guard",
+        source_doc_id=doc_id,
+        ticker=ticker,
+        severity=Severity.WARN,
+        rule=ValidationRule.MISSING_FIELD,
+        raw_value="parent_document_id",
+        expected="non-null parent_document_id required for llm_extracted documents (data_provenance.md §2)",
+    )
+
+
 def _validate_value_range(value: Decimal, unit: Unit) -> tuple[bool, str | None]:
     """Sanity-check a (value, unit) pair. Returns (is_ok, reason_if_not)."""
     if unit is Unit.PERCENT and (value < Decimal("-1000") or value > Decimal("1000")):

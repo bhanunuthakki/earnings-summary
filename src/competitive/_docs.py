@@ -15,6 +15,7 @@ import hashlib
 import sqlite3
 
 from models.documents import SourceType, tier_for_source_type
+from pipeline.kpi_persistence import guard_llm_extracted_parent
 
 
 def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
@@ -72,5 +73,16 @@ def ensure_synthetic_document(
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             common,
         )
+    doc_id = int(cur.lastrowid) if cur.lastrowid is not None else 0
+    # A no-op today (no caller passes source_type=LLM_EXTRACTED here), but
+    # source_type is caller-supplied — guard defensively per
+    # directives/data_provenance.md §2 in case a future caller does.
+    guard_llm_extracted_parent(
+        conn,
+        source_type=source_type,
+        parent_document_id=None,
+        ticker=ticker,
+        doc_id=doc_id,
+    )
     conn.commit()
-    return int(cur.lastrowid) if cur.lastrowid is not None else 0
+    return doc_id

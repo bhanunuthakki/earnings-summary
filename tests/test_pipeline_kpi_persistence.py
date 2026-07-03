@@ -17,6 +17,7 @@ from pipeline.kpi_persistence import (
     PersistResult,
     _reconcile_unit,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
     find_or_create_kpi_definition,
+    guard_llm_extracted_parent,
     persist_manifest,
     purge_duplicate_kpi_facts,
     record_validation_issue,
@@ -596,3 +597,66 @@ def test_persist_manifest_falls_back_on_legacy_logical_unique(
 
     rows = legacy_conn.execute("SELECT COUNT(*) FROM kpi_facts WHERE ticker = 'RBRK'").fetchone()
     assert rows[0] == 1
+
+
+# --- guard_llm_extracted_parent (data_provenance.md §2 write-path check) -----
+
+
+def test_guard_noop_when_not_llm_extracted(conn: sqlite3.Connection) -> None:
+    guard_llm_extracted_parent(
+        conn,
+        source_type=SourceType.IR_DOC,
+        parent_document_id=None,
+        ticker="NU",
+        doc_id=1,
+    )
+    assert conn.execute("SELECT COUNT(*) FROM validation_issues").fetchone()[0] == 0
+
+
+def test_guard_noop_when_parent_already_set(conn: sqlite3.Connection) -> None:
+    guard_llm_extracted_parent(
+        conn,
+        source_type=SourceType.LLM_EXTRACTED,
+        parent_document_id=42,
+        ticker="NU",
+        doc_id=1,
+    )
+    assert conn.execute("SELECT COUNT(*) FROM validation_issues").fetchone()[0] == 0
+
+
+def test_guard_logs_validation_issue_by_default(conn: sqlite3.Connection) -> None:
+    """Production write paths (strict=False, the default) degrade: log + continue,
+    matching this module's existing quarantine philosophy — no batch run is ever
+    aborted over one row's provenance gap."""
+    guard_llm_extracted_parent(
+        conn,
+        source_type=SourceType.LLM_EXTRACTED,
+        parent_document_id=None,
+        ticker="NU",
+        doc_id=7,
+        run_id="test-run",
+    )
+    row = conn.execute(
+        "SELECT run_id, source_doc_id, ticker, severity, rule, raw_value FROM validation_issues"
+    ).fetchone()
+    assert row is not None
+    assert row["run_id"] == "test-run"
+    assert row["source_doc_id"] == 7
+    assert row["ticker"] == "NU"
+    assert row["severity"] == Severity.WARN.value
+    assert row["rule"] == ValidationRule.MISSING_FIELD.value
+    assert row["raw_value"] == "parent_document_id"
+
+
+def test_guard_raises_when_strict(conn: sqlite3.Connection) -> None:
+    with pytest.raises(ValueError, match="parent_document_id"):
+        guard_llm_extracted_parent(
+            conn,
+            source_type=SourceType.LLM_EXTRACTED,
+            parent_document_id=None,
+            ticker="NU",
+            doc_id=7,
+            strict=True,
+        )
+    # Strict mode raises instead of writing — no row logged.
+    assert conn.execute("SELECT COUNT(*) FROM validation_issues").fetchone()[0] == 0
