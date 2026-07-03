@@ -42,8 +42,16 @@ def _card(
     )
 
 
-def test_render_none_is_empty() -> None:
-    assert render_scorecard_section(None) == ""
+def test_render_none_is_a_starvation_stub_not_empty() -> None:
+    """REQ-6: an ungenerated scorecard must render an honest one-liner, not
+    vanish — the caption threads in how many decisions have graded so far."""
+    html = render_scorecard_section(None)
+    assert html != ""
+    assert "no scorecard yet" in html
+    assert "currently 0 graded" in html
+
+    html_with_n = render_scorecard_section(None, n_graded=7)
+    assert "currently 7 graded" in html_with_n
 
 
 def test_render_coached_card_shows_biases_and_experiment() -> None:

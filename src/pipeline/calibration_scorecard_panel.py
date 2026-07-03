@@ -13,8 +13,11 @@ conviction map — is never imported at the panel's module load (no cycle).
 
 Honesty is the whole point: when the ledger is too thin to coach, or the
 synthesised prose failed the eval gate, the section says so plainly rather than
-showing fabricated or unvetted coaching. Returns "" when no scorecard has been
-generated (the section simply doesn't appear).
+showing fabricated or unvetted coaching. When no scorecard has been generated
+yet, the section renders a one-line starvation stub (REQ-6: coach_pings /
+coach_mutes / an ungenerated scorecard must never render as a silent absence)
+instead of "" — the caller threads in how many decisions have graded so far so
+the stub reads as progress, not a dead end.
 """
 
 from __future__ import annotations
@@ -24,10 +27,20 @@ from html import escape
 from calibration_coach import CalibrationScorecard, NamedBias
 
 
-def render_scorecard_section(card: CalibrationScorecard | None) -> str:
-    """The coach's-read section, or "" when no scorecard exists yet."""
+def render_scorecard_section(card: CalibrationScorecard | None, *, n_graded: int = 0) -> str:
+    """The coach's-read section.
+
+    ``card`` None (no scorecard generated yet) renders a one-line honest
+    caption naming how many graded decisions have accrued so far
+    (``n_graded``, threaded in by the caller from the calibration stats the
+    page already computes) rather than vanishing — REQ-6's starvation stub."""
     if card is None:
-        return ""
+        return (
+            '<section class="panel cs-stub"><h2>Coach&rsquo;s read</h2>'
+            '<p class="muted cs-caption">Coach&rsquo;s read: no scorecard yet — generated '
+            "monthly once graded decisions accrue (currently "
+            f"{int(n_graded)} graded).</p></section>"
+        )
     head = (
         '<section class="panel"><h2>Coach&rsquo;s read</h2>'
         '<p class="sub">The monthly calibration scorecard — named recurring biases drawn from '
@@ -119,6 +132,7 @@ SCORECARD_CSS = """
 .cs-exp-hyp { font-size: var(--fs-body); font-weight: 600; margin: 0 0 2px; }
 .cs-exp-why { font-size: var(--fs-caption); color: var(--muted); margin: 0 0 4px; }
 .cs-note { font-size: var(--fs-caption); margin: 6px 0 0; }
+.cs-caption { font-size: var(--fs-caption); margin: 2px 0 0; }
 """
 
 

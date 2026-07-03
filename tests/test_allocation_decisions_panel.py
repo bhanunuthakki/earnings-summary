@@ -28,6 +28,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import comments_server  # noqa: E402
 
+from decision_calibration import CalibrationStats  # noqa: E402
 from integrations.portfolio_tracker_client import (  # noqa: E402
     LivePortfolio,
     LivePosition,
@@ -35,7 +36,13 @@ from integrations.portfolio_tracker_client import (  # noqa: E402
     PositionAlphaRow,
 )
 from pipeline.allocation_decisions_panel import (  # noqa: E402
+    COACH_CHANGED_TARGET,
     SizingAuditRow,
+    _coach_digest_section,
+    _coach_mutes_section,
+    _coach_pings_section,
+    _coach_pnl_section,
+    _query_coach_pnl,
     build_decisions_timeline,
     build_sizing_audit_rows,
     compose_decisions_page,
@@ -545,3 +552,341 @@ def test_decisions_record_panel_route(client: FlaskClient) -> None:
     assert "Sizing audit" in body
     assert "Decisions timeline" in body
     assert "conviction 5/5" in body
+
+
+# --------------------------------------------------------------------------- #
+# Coach P&L (REQ-7) — the guard's public scoreboard
+# --------------------------------------------------------------------------- #
+
+
+# ``decisions`` predates the 0059 stamp point (db.init_db() territory, same as
+# test_open_loops.py's _DECISIONS_DDL / test_governor.py's _PRE_DDL) — 0130's
+# extension is _has_table-guarded, so stamping past 0059 and upgrading to head
+# never creates it; hand-build the modern (post-0130) shape afterward so the
+# heuristic's decided_by / recommendation_kind / made_at columns are present.
+_MEMO_TEST_DECISIONS_DDL = """
+CREATE TABLE decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker VARCHAR(16),
+    recommendation_kind VARCHAR(32) NOT NULL,
+    decided_by VARCHAR(16) NOT NULL DEFAULT 'advisor',
+    made_at DATETIME NOT NULL,
+    created_at DATETIME NOT NULL
+);
+"""
+
+
+def _memo_db(tmp_path: Path, name: str = "coach.db") -> Path:
+    """Alembic-built DB through head — carries advisor_memos (0077, widened to
+    admit 'position_review' by 0140), stance_scores (0078), and
+    coach_pings/coach_mutes (0131). Stamps past baseline first (the ``client``
+    fixture's pattern above) — 0000_baseline assumes the db.py:init_db() shape
+    already exists, which an empty file doesn't have. ``decisions`` is hand-
+    built post-upgrade (see ``_MEMO_TEST_DECISIONS_DDL``)."""
+    db = tmp_path / name
+    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
+    command.stamp(cfg, _PRIOR_HEAD)
+    command.upgrade(cfg, "head")
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.executescript(_MEMO_TEST_DECISIONS_DDL)
+        conn.commit()
+    finally:
+        conn.close()
+    return db
+
+
+def _insert_review_memo(
+    db: Path,
+    *,
+    ticker: str,
+    verdict_source: str,
+    created_at: str,
+    user_id: str = "bhanu",
+) -> int:
+    import json
+
+    conn = sqlite3.connect(str(db))
+    try:
+        cur = conn.execute(
+            "INSERT INTO advisor_memos (user_id, kind, ticker, title, body_md, context_json, "
+            "stance, score_status, created_at) VALUES (?, 'position_review', ?, ?, 'body', ?, "
+            "'hold', 'pending', ?)",
+            (
+                user_id,
+                ticker,
+                f"Position review: {ticker}",
+                json.dumps({"verdict_source": verdict_source}),
+                created_at,
+            ),
+        )
+        memo_id = int(cur.lastrowid or 0)
+        conn.commit()
+        return memo_id
+    finally:
+        conn.close()
+
+
+def _insert_stance_score(db: Path, memo_id: int, verdict: str) -> None:
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO stance_scores (memo_id, user_id, verdict, benchmark_basis, "
+            "horizon_days, created_at) VALUES (?, 'bhanu', ?, 'none', 90, '2026-07-01')",
+            (memo_id, verdict),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _insert_owner_decision(db: Path, *, ticker: str, kind: str, made_at: str) -> None:
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO decisions (ticker, recommendation_kind, decided_by, made_at, "
+            "created_at) VALUES (?, ?, 'owner', ?, ?)",
+            (ticker, kind, made_at, made_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_coach_pnl_all_zero_is_honest(tmp_path: Path) -> None:
+    db = _memo_db(tmp_path)
+    pnl = _query_coach_pnl(db, user_id="bhanu")
+    assert pnl.reviews_run == 0
+    assert pnl.guard_fired == 0 and pnl.overridden == 0
+    assert pnl.graded_right == 0 and pnl.graded_total == 0
+    assert pnl.changed == 0
+    html = _coach_pnl_section(db, user_id="bhanu")
+    assert "Reviews run: <b>0</b> — the guard has never been exercised." in html
+
+
+def test_coach_pnl_counts_reviews_guard_fires_and_grades(tmp_path: Path) -> None:
+    db = _memo_db(tmp_path)
+    _insert_review_memo(db, ticker="NU", verdict_source="llm", created_at="2026-06-01T00:00:00")
+    m2 = _insert_review_memo(
+        db, ticker="META", verdict_source="guard_override", created_at="2026-06-02T00:00:00"
+    )
+    _insert_stance_score(db, m2, "correct")
+
+    pnl = _query_coach_pnl(db, user_id="bhanu")
+    assert pnl.reviews_run == 2
+    assert pnl.guard_fired == 1 and pnl.overridden == 1
+    assert pnl.graded_total == 1 and pnl.graded_right == 1
+
+    html = _coach_pnl_section(db, user_id="bhanu")
+    assert "Reviews run: <b>2</b>" in html
+    assert "guard fired: <b>1</b>" in html
+    assert "overridden: <b>1</b>" in html
+    assert "1/1 graded right" in html
+    assert f"Q3&rsquo;26 target: <b>{COACH_CHANGED_TARGET}</b>" in html
+    assert "/api/peek/memo/position_review" in html
+
+
+def test_coach_pnl_heuristic_counts_heeded_not_unheeded(tmp_path: Path) -> None:
+    """A guard_override with no contradicting owner sell/trim within 30d counts
+    as a changed decision; one immediately contradicted by an owner SELL does
+    not (the owner overrode the guard right back)."""
+    db = _memo_db(tmp_path)
+    # Heeded: guard said hold on NU, no sell/trim followed.
+    _insert_review_memo(
+        db, ticker="NU", verdict_source="guard_override", created_at="2026-06-01T00:00:00"
+    )
+    # Unheeded: guard said hold on META, owner sold 5 days later anyway.
+    _insert_review_memo(
+        db, ticker="META", verdict_source="guard_override", created_at="2026-06-01T00:00:00"
+    )
+    _insert_owner_decision(db, ticker="META", kind="sell", made_at="2026-06-06T00:00:00")
+
+    pnl = _query_coach_pnl(db, user_id="bhanu")
+    assert pnl.guard_fired == 2
+    assert pnl.changed == 1  # only NU's hold stuck
+
+
+def test_coach_pnl_section_never_raises_on_missing_tables(tmp_path: Path) -> None:
+    """A thin/hand-rolled DB with no advisor_memos table degrades to the
+    honest all-zero line, never a 500."""
+    db = tmp_path / "thin.db"
+    conn = sqlite3.connect(str(db))
+    conn.close()
+    html = _coach_pnl_section(db, user_id="bhanu")
+    assert "Reviews run: <b>0</b>" in html
+
+
+# --------------------------------------------------------------------------- #
+# Pings / mutes / digest (REQ-12) — first production renderers
+# --------------------------------------------------------------------------- #
+
+
+def _insert_ping(
+    db: Path, *, class_: str, key: str, ticker: str | None, status: str, created_at: str
+) -> int:
+    conn = sqlite3.connect(str(db))
+    try:
+        cur = conn.execute(
+            "INSERT INTO coach_pings (class_, key, ticker, body, status, created_at, "
+            "updated_at) VALUES (?, ?, ?, 'body', ?, ?, ?)",
+            (class_, key, ticker, status, created_at, created_at),
+        )
+        pid = int(cur.lastrowid or 0)
+        conn.commit()
+        return pid
+    finally:
+        conn.close()
+
+
+def _insert_mute(db: Path, *, class_: str, muted_at: str, reason: str | None = None) -> None:
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO coach_mutes (class_, muted_at, reason) VALUES (?, ?, ?)",
+            (class_, muted_at, reason),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_coach_pings_section_renders_seeded_rows_this_month(tmp_path: Path) -> None:
+    from datetime import datetime
+
+    db = _memo_db(tmp_path)
+    now = datetime(2026, 7, 10)
+    _insert_ping(
+        db,
+        class_="falsifier_breach",
+        key="alert:1",
+        ticker="NU",
+        status="sent",
+        created_at="2026-07-05T00:00:00",
+    )
+    # Out of window (June) — must not appear.
+    _insert_ping(
+        db,
+        class_="intent_followup",
+        key="intent:1:0",
+        ticker=None,
+        status="dismissed",
+        created_at="2026-06-01T00:00:00",
+    )
+    html = _coach_pings_section(db, now=now)
+    assert "falsifier_breach" in html and "NU" in html and "sent" in html
+    assert "intent_followup" not in html
+
+
+def test_coach_pings_section_empty_state_is_one_line(tmp_path: Path) -> None:
+    db = _memo_db(tmp_path)
+    html = _coach_pings_section(db)
+    assert "No pings this month." in html
+
+
+def test_coach_mutes_section_renders_row_with_unmute_button(tmp_path: Path) -> None:
+    db = _memo_db(tmp_path)
+    _insert_mute(db, class_="falsifier_breach", muted_at="2026-07-02T00:00:00")
+    html = _coach_mutes_section(db)
+    assert "falsifier_breach" in html
+    assert "muted since 2026-07-02" in html
+    assert "cpnl-unmute-btn" in html
+    assert "/api/coach/unmute" in html  # wired via _UNMUTE_JS
+
+
+def test_coach_mutes_section_empty_state_is_one_line(tmp_path: Path) -> None:
+    db = _memo_db(tmp_path)
+    html = _coach_mutes_section(db)
+    assert "No active mutes." in html
+
+
+def test_coach_digest_section_renders_and_empty_state(tmp_path: Path) -> None:
+    db = _memo_db(tmp_path)
+    empty_html = _coach_digest_section(db)
+    assert "Digest is empty." in empty_html
+
+    _insert_ping(
+        db,
+        class_="intent_followup",
+        key="intent:2:0",
+        ticker="WIX",
+        status="digest",
+        created_at="2026-07-01T00:00:00",
+    )
+    html = _coach_digest_section(db)
+    assert "intent_followup" in html and "WIX" in html
+
+
+def test_coach_unmute_route_calls_governor_and_row_disappears(
+    client: FlaskClient, tmp_path: Path
+) -> None:
+    db = tmp_path / "data" / "portfolio.db"
+    _insert_mute(db, class_="falsifier_breach", muted_at="2026-07-02T00:00:00")
+    resp = client.post("/api/coach/unmute", json={"class_": "falsifier_breach"})
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["ok"] is True and payload["unmuted"] is True
+
+    from research.governor import unmute as _unmute  # sanity: same function the route calls
+
+    assert _unmute("falsifier_breach", db_path=db) is False  # already gone
+
+    html = _coach_mutes_section(db)
+    assert "No active mutes." in html
+    assert "falsifier_breach" not in html
+
+
+def test_coach_unmute_route_options_preflight(client: FlaskClient) -> None:
+    resp = client.options("/api/coach/unmute")
+    assert resp.status_code == 204
+
+
+def test_coach_unmute_route_validates_body(client: FlaskClient) -> None:
+    resp = client.post("/api/coach/unmute", json={})
+    assert resp.status_code == 400
+
+
+# --------------------------------------------------------------------------- #
+# Mirror-first KPI-strip hoist
+# --------------------------------------------------------------------------- #
+
+
+def _stats(*, total: int, graded: int, overall_hit_rate: float | None) -> CalibrationStats:
+    return CalibrationStats(
+        total=total,
+        graded=graded,
+        overall_hit_rate=overall_hit_rate,
+        by_conviction=[],
+        action_mix={},
+        reversals=[],
+        reversals_vindicated=0,
+        reversals_cost=0,
+        time_to_outcome=[],
+    )
+
+
+_HOIST_MARKER = '<div class="cpnl-hoist">'
+
+
+def test_kpi_strip_hoisted_above_audit_section_when_calibration_present() -> None:
+    offline = LivePortfolio(available=False, api_url="http://x", error="down")
+    stats = _stats(total=5, graded=3, overall_hit_rate=0.6)
+    page = compose_decisions_page([], [], offline, None, calibration=stats)
+    kpi_pos = page.find(_HOIST_MARKER)
+    audit_pos = page.find("Sizing audit")
+    assert kpi_pos != -1 and audit_pos != -1
+    assert kpi_pos < audit_pos
+
+
+def test_kpi_strip_absent_without_calibration() -> None:
+    offline = LivePortfolio(available=False, api_url="http://x", error="down")
+    page = compose_decisions_page([], [], offline, None)
+    assert _HOIST_MARKER not in page
+
+
+def test_kpi_strip_absent_when_calibration_total_zero() -> None:
+    offline = LivePortfolio(available=False, api_url="http://x", error="down")
+    stats = _stats(total=0, graded=0, overall_hit_rate=None)
+    page = compose_decisions_page([], [], offline, None, calibration=stats)
+    assert _HOIST_MARKER not in page
