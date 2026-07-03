@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 import openpyxl
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -26,6 +27,7 @@ import refresh_dcf  # noqa: E402
 import set_scenario_priors as ssp  # noqa: E402
 
 from dcf import redesign  # noqa: E402
+from dcf import scenario_prior as scenario_prior_mod  # noqa: E402
 from dcf.scenario_prior import ScenarioPrior  # noqa: E402
 
 _BASE = redesign.RedesignInputs(
@@ -279,3 +281,121 @@ def test_writer_overwrite_owner_flag(tmp_path: Path) -> None:
     assert status == "written"
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["redesign"]["scenario_prior"]["set_by"] == "llm"
+
+
+def test_writer_stamps_inputs_sha256(tmp_path: Path) -> None:
+    path = tmp_path / "NU.json"
+    path.write_text(json.dumps({"redesign": {}}), encoding="utf-8")
+    status = ssp.write_scenario_prior_to_json(path, _llm_prior(), inputs_sha256="abc123")
+    assert status == "written"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["redesign"]["scenario_prior"]["inputs_sha256"] == "abc123"
+
+
+# --------------------------------------------------------------------------- #
+# 5. cadence — skip the LLM call when the thesis/bear anchors are unchanged
+# --------------------------------------------------------------------------- #
+def test_anchor_inputs_sha256_is_stable_and_sensitive() -> None:
+    h1 = scenario_prior_mod.anchor_inputs_sha256("thesis: durable moat")
+    h2 = scenario_prior_mod.anchor_inputs_sha256("thesis: durable moat")
+    h3 = scenario_prior_mod.anchor_inputs_sha256("thesis: fragile moat")
+    assert h1 == h2
+    assert h1 != h3
+
+
+def test_existing_inputs_sha256_reads_back_the_stamped_hash(tmp_path: Path) -> None:
+    path = tmp_path / "NU.json"
+    no_file = ssp._existing_inputs_sha256(path)  # pyright: ignore[reportPrivateUsage]
+    assert no_file is None  # no file yet
+    path.write_text(json.dumps({"redesign": {}}), encoding="utf-8")
+    no_block = ssp._existing_inputs_sha256(path)  # pyright: ignore[reportPrivateUsage]
+    assert no_block is None  # no scenario_prior block
+    ssp.write_scenario_prior_to_json(path, _llm_prior(), inputs_sha256="deadbeef")
+    stamped = ssp._existing_inputs_sha256(path)  # pyright: ignore[reportPrivateUsage]
+    assert stamped == "deadbeef"
+
+
+def _anchor_stub(text: str) -> object:
+    """A typed ``anchor_block_for_ticker`` stub for monkeypatching — avoids the
+    untyped-lambda pyright noise of patching a module attribute directly."""
+
+    def _stub(ticker: str, repo_root: object) -> str:
+        return text
+
+    return _stub
+
+
+def test_set_priors_only_changed_skips_llm_call_when_hash_matches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cadence mode: a name whose stamped inputs_sha256 already matches the
+    current thesis/bear anchors is skipped WITHOUT invoking the LLM producer at
+    all — the point of the cache-invalidation pattern (never mind the exact
+    weights, the call must simply not happen)."""
+    adir = tmp_path / "data" / "dcf_assumptions"
+    adir.mkdir(parents=True)
+    monkeypatch.setattr(ssp, "anchor_block_for_ticker", _anchor_stub("same anchor text"))
+    stable_hash = scenario_prior_mod.anchor_inputs_sha256("same anchor text")
+    (adir / "NU.json").write_text(
+        json.dumps(
+            {
+                "redesign": {
+                    "scenario_prior": {
+                        "bull_weight": 0.2,
+                        "base_weight": 0.5,
+                        "bear_weight": 0.3,
+                        "set_by": "llm",
+                        "inputs_sha256": stable_hash,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    calls: list[str] = []
+
+    def _fake_set_scenario_prior_for_ticker(
+        ticker: str, repo_root: object, **_kw: object
+    ) -> ScenarioPrior:
+        calls.append(ticker)
+        return _llm_prior()
+
+    monkeypatch.setattr(ssp, "set_scenario_prior_for_ticker", _fake_set_scenario_prior_for_ticker)
+
+    out = ssp.set_priors(tmp_path, ["NU"], apply=True, only_changed=True)
+    assert out["NU"] == "skipped_unchanged"
+    assert calls == []  # the LLM producer was never called
+
+    # A changed anchor text (different hash) DOES proceed to the LLM call.
+    monkeypatch.setattr(ssp, "anchor_block_for_ticker", _anchor_stub("NEW anchor text"))
+    out2 = ssp.set_priors(tmp_path, ["NU"], apply=True, only_changed=True)
+    assert out2["NU"] == "written"
+    assert calls == ["NU"]
+    data = json.loads((adir / "NU.json").read_text(encoding="utf-8"))
+    assert data["redesign"]["scenario_prior"][
+        "inputs_sha256"
+    ] == scenario_prior_mod.anchor_inputs_sha256("NEW anchor text")
+
+
+def test_set_priors_only_changed_always_proceeds_with_no_prior_on_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A name with no scenario_prior block yet has nothing to compare against —
+    --only-changed must not skip it (there's no stale answer to reuse)."""
+    adir = tmp_path / "data" / "dcf_assumptions"
+    adir.mkdir(parents=True)
+    (adir / "NU.json").write_text(json.dumps({"redesign": {}}), encoding="utf-8")
+    monkeypatch.setattr(ssp, "anchor_block_for_ticker", _anchor_stub("some anchor text"))
+    calls: list[str] = []
+
+    def _fake_set_scenario_prior_for_ticker(
+        ticker: str, repo_root: object, **_kw: object
+    ) -> ScenarioPrior:
+        calls.append(ticker)
+        return _llm_prior()
+
+    monkeypatch.setattr(ssp, "set_scenario_prior_for_ticker", _fake_set_scenario_prior_for_ticker)
+    out = ssp.set_priors(tmp_path, ["NU"], apply=True, only_changed=True)
+    assert out["NU"] == "written"
+    assert calls == ["NU"]
