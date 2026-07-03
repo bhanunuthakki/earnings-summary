@@ -59,6 +59,18 @@ class Moment:
     source_ref: str
 
 
+@dataclass(frozen=True, slots=True)
+class PingRow:
+    """A ``coach_pings`` row, as read back for the ``cp:review`` callback (the
+    Answer button on a falsifier_breach ping) — just enough to route the
+    reply."""
+
+    id: int
+    class_: str
+    ticker: str | None
+    status: str
+
+
 def _now(now: datetime | None) -> datetime:
     return (now or now_naive_utc()).replace(tzinfo=None)
 
@@ -151,7 +163,7 @@ def collect_moments(
                     ticker=str(r[1] or "") or None,
                     body=(
                         f'Standing intent still open: "{str(r[2])[:140]}" — still live? '
-                        "Reply, or /ledger-land closes it with a reason."
+                        "Reply here with a close reason, or resolve it from the Ledger tab."
                     ),
                     source_ref=f"note:{int(r[0])}",
                 )
@@ -323,6 +335,23 @@ def unmute(class_: str, *, db_path: Path | str | None = None) -> bool:
         cur = conn.execute("DELETE FROM coach_mutes WHERE class_ = ?", (class_,))
         conn.commit()
         return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_ping(ping_id: int, db_path: Path | str | None = None) -> PingRow | None:
+    """One ``coach_pings`` row by id, or None. Backs the ``cp:review`` callback
+    (the Answer button on a falsifier_breach ping) — it needs the ticker to
+    route the reply, without pulling in the full ``Moment`` collection path."""
+    conn = open_conn(db_path)
+    try:
+        row = conn.execute(
+            "SELECT id, class_, ticker, status FROM coach_pings WHERE id = ?",
+            (ping_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return PingRow(id=int(row[0]), class_=str(row[1]), ticker=row[2], status=str(row[3]))
     finally:
         conn.close()
 

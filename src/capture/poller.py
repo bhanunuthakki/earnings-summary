@@ -213,6 +213,24 @@ def _artifact_brief(
             research_notify.send_engage_brief(token, update.chat_id, brief, result.note_id)
 
 
+def _review_reply(repo_root: Path | None, text: str) -> str:
+    """The instant, no-LLM ``/review`` reply for the poller's slash-command
+    interception. Reuses ``advisor.position_review.review_reply_text`` — the
+    same parser + renderer the Ask-tab ``/review`` command calls — so a review
+    asked from Telegram and one asked from the web chat behave identically.
+    Never raises: a missing repo_root or a build failure degrades to a short
+    apology (per-update failures must never break the poll loop)."""
+    if repo_root is None:
+        return "Couldn't build that review (no database configured)."
+    try:
+        from advisor.position_review import review_reply_text
+
+        return review_reply_text(repo_root, text)
+    except Exception:
+        ticker = text.split()[1].upper() if len(text.split()) > 1 else "that ticker"
+        return f"Couldn't build a review for {ticker}."
+
+
 def poll_once(
     token: str,
     *,
@@ -242,22 +260,40 @@ def poll_once(
             save_chat_id(update.chat_id)
         if update.kind == "text" and update.text:
             if update.text.lstrip().startswith("/"):
-                # Telegram bot commands (/start, /help, ...) are chrome, not
-                # musings — never capture them. Greet on /start so the owner
-                # gets feedback that capture is live.
+                # Telegram bot commands (/start, /review, ...) are chrome, not
+                # musings — never capture them.
+                stripped = update.text.lstrip()
+                low = stripped.lower()
+                if low.startswith("/review"):
+                    # The coach's pings tell the owner to "/review {ticker}" —
+                    # make that work in the channel that carries the ping.
+                    # Reuses the exact ask-tab parsing/rendering so the two
+                    # surfaces never drift; LLM-free and fast.
+                    bump("command_review")
+                    if confirm and update.chat_id is not None:
+                        repo_root = Path(db_path).parent.parent if db_path else None
+                        reply = _review_reply(repo_root, stripped)
+                        with contextlib.suppress(telegram.TelegramError):
+                            telegram.send_message(token, update.chat_id, reply)
+                    continue
                 bump("command")
-                if (
-                    confirm
-                    and update.chat_id is not None
-                    and update.text.lstrip().lower().startswith("/start")
-                ):
-                    with contextlib.suppress(telegram.TelegramError):
-                        telegram.send_message(
-                            token,
-                            update.chat_id,
-                            "Ledger capture is live - send a voice memo or a thought "
-                            "and it lands in your Ledger.",
-                        )
+                if confirm and update.chat_id is not None:
+                    if low.startswith("/start"):
+                        with contextlib.suppress(telegram.TelegramError):
+                            telegram.send_message(
+                                token,
+                                update.chat_id,
+                                "Ledger capture is live - send a voice memo or a thought "
+                                "and it lands in your Ledger.",
+                            )
+                    else:
+                        with contextlib.suppress(telegram.TelegramError):
+                            telegram.send_message(
+                                token,
+                                update.chat_id,
+                                "Not a command here. /review <TICKER> works; everything "
+                                "else lives in the web chat (Ask tab).",
+                            )
                 continue
             # A bare URL → land as an On My Mind reading (a link the analyst
             # found), not a musing.  Anything else is stream-of-consciousness.

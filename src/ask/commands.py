@@ -10,7 +10,6 @@ endpoint behavior.
 
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 
@@ -31,9 +30,6 @@ _HELP_TEXT = (
 
 COMMAND_PREFIXES: tuple[str, ...] = ("/discovery", "/help", "/review")
 
-# "at $70" / "above 70" / "over $12.50" -> the price level to review at.
-_AT_PRICE_RX = re.compile(r"(?:at|above|over)\s*\$?\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
-
 
 def run_chat_command(repo_root: Path, message: str, registry: Registry) -> str | None:
     """Dispatch one deterministic command. Returns the reply text, or None
@@ -50,11 +46,6 @@ def run_chat_command(repo_root: Path, message: str, registry: Registry) -> str |
     return None
 
 
-def _parse_at_price(text: str) -> float | None:
-    match = _AT_PRICE_RX.search(text)
-    return float(match.group(1)) if match else None
-
-
 def _review_command(repo_root: Path, text: str) -> str:
     """``/review <TICKER> [at $PRICE]`` — the instant, no-LLM position read.
 
@@ -62,20 +53,15 @@ def _review_command(repo_root: Path, text: str) -> str:
     verdict, sizing) plus a mechanical trim/hold read. The full LLM-calibrated
     verdict (with the behavioral guard) is a separate, slower path — pointed to in
     the reply — so this command stays instant and budget-free.
-    """
-    from advisor.position_review import build_pre_analysis, render_pre_analysis_chat
 
-    parts = text.split()
-    if len(parts) < 2:
-        return "Usage: /review <TICKER> [at $PRICE] — e.g. `/review RBRK` or `/review FLKR at $70`."
-    ticker = parts[1].upper().lstrip("$")
-    at_price = _parse_at_price(text)
-    db_path = repo_root / "data" / "portfolio.db"
-    try:
-        pre = build_pre_analysis(repo_root, ticker, at_price=at_price, db_path=db_path)
-    except Exception as exc:
-        return f"Couldn't build a review for {ticker}: {type(exc).__name__}: {exc}"
-    return render_pre_analysis_chat(pre)
+    Delegates to ``advisor.position_review.review_reply_text`` — the ONE parser
+    for this command shape, shared with the Telegram poller's ``/review``
+    interception so the at-price regex and reply copy never drift between the
+    two chat surfaces.
+    """
+    from advisor.position_review import review_reply_text
+
+    return review_reply_text(repo_root, text)
 
 
 def _discovery_command(repo_root: Path, text: str, registry: Registry) -> str:

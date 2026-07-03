@@ -143,6 +143,78 @@ def test_notify_new_task_button_only_when_run_enabled(monkeypatch: pytest.Monkey
     assert spy2.sends[0][2] is None  # detection-only: no button
 
 
+def test_dispatch_cp_review_sends_pre_analysis(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Answer button on a falsifier_breach ping: answers the callback and
+    sends the same instant pre-analysis reply /review would, without the
+    owner retyping the command."""
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO coach_pings (class_, key, ticker, body, status, source_ref, "
+            "created_at, updated_at) VALUES ('falsifier_breach','alert:1','NU','x','sent',"
+            "'decision:1','2026-07-10','2026-07-10')"
+        )
+        conn.commit()
+        ping_id = int(conn.execute("SELECT id FROM coach_pings").fetchone()[0])
+    finally:
+        conn.close()
+
+    seen: list[tuple[object, str]] = []
+
+    def _fake_reply_text(repo_root: object, text: str) -> str:
+        seen.append((repo_root, text))
+        return "**NU** — position review (deterministic read)"
+
+    monkeypatch.setattr(
+        "advisor.position_review.review_reply_text", _fake_reply_text, raising=False
+    )
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok", _cb(f"cp:review:{ping_id}"), db_path=db_path, send=spy.send, answer=spy.answer
+    )
+    assert status == "cp_reviewed"
+    assert spy.answers and spy.answers[0][1] == "Reviewing NU..."
+    assert spy.sends and "NU" in spy.sends[0][1]
+    assert seen and seen[0][1] == "/review NU"
+
+
+def test_dispatch_cp_review_no_ticker(db_path: Path) -> None:
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO coach_pings (class_, key, ticker, body, status, source_ref, "
+            "created_at, updated_at) VALUES ('intent_followup','intent:1:0',NULL,'x','sent',"
+            "'note:1','2026-07-10','2026-07-10')"
+        )
+        conn.commit()
+        ping_id = int(conn.execute("SELECT id FROM coach_pings").fetchone()[0])
+    finally:
+        conn.close()
+
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok", _cb(f"cp:review:{ping_id}"), db_path=db_path, send=spy.send, answer=spy.answer
+    )
+    assert status == "cp_review_no_ticker"
+    assert spy.answers and spy.answers[0][1] == "No ticker on this ping."
+    assert not spy.sends
+
+
+def test_dispatch_cp_review_unknown_ping(db_path: Path) -> None:
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok", _cb("cp:review:999999"), db_path=db_path, send=spy.send, answer=spy.answer
+    )
+    assert status is None
+    assert spy.answers and spy.answers[0][1] == "Unrecognized action."
+
+
 def test_poller_routes_callback_to_dispatch(
     tmp_path: Path, db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
