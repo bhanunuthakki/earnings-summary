@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
 from collections import Counter
 from dataclasses import dataclass
@@ -59,11 +60,22 @@ from models.documents import (
     tier_for_source_type,
 )
 from models.facts import Currency, FactLocator, FiscalPeriodType, Unit
+from models.validation import Severity, ValidationRule
 from pipeline.confidence import score_confidence
+from pipeline.kpi_persistence import record_validation_issue
 from pipeline.restatement_detector import (
     _table_has_column,
     insert_with_restatement_detection,
 )
+
+log = logging.getLogger(__name__)
+
+# The units the SEC ladder legitimately persists: monetary/per_share values are
+# ACTUAL, share counts are COUNT. Anything else reaching the persist point is a
+# unit the pipeline can't faithfully represent — flag it (UNIT_MISMATCH) instead
+# of silently stamping it ACTUAL. See the sanity guard in
+# ``insert_facts_from_companyfacts``.
+_SANE_SEC_UNITS: frozenset[str] = frozenset({Unit.ACTUAL.value, Unit.COUNT.value})
 
 # Reverse-lookup CIK from `https://www.sec.gov/files/company_tickers.json`
 # (full portfolio + evaluation + watchlist sweep verified 2026-07-02). Update
@@ -843,14 +855,58 @@ def _modal_currency(units: dict[str, object], kind: LadderKind) -> str | None:
     return best[0]
 
 
+def _flag_non_actual_unit(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    ticker: str,
+    line_item: str,
+    period_end: str,
+    unit_code: str,
+    resolved_unit: str,
+    source_doc_id: int,
+) -> None:
+    """Record a WARN ``UNIT_MISMATCH`` for a SEC fact whose resolved unit is
+    neither ACTUAL nor COUNT, so it surfaces in the Provenance console instead of
+    being persisted with a wrong unit. Best-effort — a missing validation_issues
+    table (pre-0006 fixture) must never break ingest."""
+    try:
+        record_validation_issue(
+            conn,
+            run_id=run_id,
+            source_doc_id=source_doc_id,
+            ticker=ticker,
+            severity=Severity.WARN,
+            rule=ValidationRule.UNIT_MISMATCH,
+            raw_value=(
+                f"{line_item} @ {period_end[:10]}: SEC unit_code '{unit_code}' "
+                f"resolved to non-standard unit '{resolved_unit}'"
+            ),
+            expected="unit in {actual, count}",
+        )
+    except sqlite3.Error:
+        log.warning(
+            {
+                "event": "sec_xbrl_unit_guard_write_failed",
+                "ticker": ticker,
+                "line_item": line_item,
+            }
+        )
+
+
 def insert_facts_from_companyfacts(
     conn: sqlite3.Connection,
     *,
     ticker: str,
     payload: dict[str, object],
     accession_to_doc_id: dict[str, int],
+    run_id: str = "sec_xbrl_ingest",
 ) -> int:
-    """Walk TAG_LADDERS; insert financial_facts, first rung winning per period."""
+    """Walk TAG_LADDERS; insert financial_facts, first rung winning per period.
+
+    ``run_id`` tags any ``UNIT_MISMATCH`` validation_issues the unit sanity guard
+    raises (a value whose resolved unit is neither ACTUAL nor COUNT); production
+    passes the ingest run's id, ad-hoc callers get a stable default."""
     facts_raw = payload.get("facts", {})
     if not isinstance(facts_raw, dict):
         return 0
@@ -931,6 +987,29 @@ def insert_facts_from_companyfacts(
                     value = Decimal(str(val))
                     if ladder.sign < 0:
                         value = -value
+                    # Unit sanity guard: the ladder kind fixes the persisted unit
+                    # (shares → COUNT, everything else → ACTUAL). Should a future
+                    # kind (or a bug) yield anything outside {ACTUAL, COUNT}, flag
+                    # it into validation_issues and SKIP the row rather than
+                    # silently stamping a wrong unit — an UNIT_MISMATCH the
+                    # Provenance console then surfaces. Belt-and-suspenders behind
+                    # the unit-code family filter above; today it never fires,
+                    # which is the point of the guard.
+                    resolved_unit = (
+                        Unit.COUNT.value if ladder.kind == "shares" else Unit.ACTUAL.value
+                    )
+                    if resolved_unit not in _SANE_SEC_UNITS:
+                        _flag_non_actual_unit(
+                            conn,
+                            run_id=run_id,
+                            ticker=ticker,
+                            line_item=ladder.line_item,
+                            period_end=end,
+                            unit_code=unit_code,
+                            resolved_unit=resolved_unit,
+                            source_doc_id=accession_to_doc_id[accn],
+                        )
+                        continue
                     for fpt_out in fpts:
                         key = (end, fpt_out.value)
                         claimed_by = claimed.setdefault(key, rung_idx)
@@ -944,9 +1023,7 @@ def insert_facts_from_companyfacts(
                             line_item=ladder.line_item,
                             value=value,
                             currency=chosen_currency or None,
-                            unit=(
-                                Unit.COUNT.value if ladder.kind == "shares" else Unit.ACTUAL.value
-                            ),
+                            unit=resolved_unit,
                             source_doc_id=accession_to_doc_id[accn],
                             confidence=score_confidence(
                                 tier=tier_for_source_type(SourceType.SEC_XBRL),
@@ -976,8 +1053,13 @@ def ingest_for_ticker(
     *,
     ticker: str,
     project_root: Path,
+    run_id: str = "sec_xbrl_ingest",
 ) -> IngestStats:
-    """End-to-end: fetch + write to disk + insert documents + insert facts."""
+    """End-to-end: fetch + write to disk + insert documents + insert facts.
+
+    ``run_id`` flows to the unit sanity guard (see
+    :func:`insert_facts_from_companyfacts`); the fetch driver passes its
+    ingestion-run id so any UNIT_MISMATCH ties back to the run that raised it."""
     cik = CIK_MAP.get(ticker.upper())
     if cik is None:
         raise ValueError(f"No CIK registered for {ticker}; add to CIK_MAP")
@@ -988,6 +1070,10 @@ def ingest_for_ticker(
         conn, ticker=ticker, accessions=accessions, project_root=project_root
     )
     facts_inserted = insert_facts_from_companyfacts(
-        conn, ticker=ticker, payload=payload, accession_to_doc_id=accession_to_doc_id
+        conn,
+        ticker=ticker,
+        payload=payload,
+        accession_to_doc_id=accession_to_doc_id,
+        run_id=run_id,
     )
     return IngestStats(accessions_inserted=len(accession_to_doc_id), facts_inserted=facts_inserted)

@@ -112,7 +112,9 @@ def main() -> int:
             if i > 0:
                 time.sleep(_PER_TICKER_DELAY_S)
             try:
-                stats = ingest_for_ticker(conn, ticker=ticker, project_root=PROJECT_ROOT)
+                stats = ingest_for_ticker(
+                    conn, ticker=ticker, project_root=PROJECT_ROOT, run_id=run_id
+                )
             except OSError as e:
                 # Transient: network / filesystem. Continue with next ticker.
                 rows.append(
