@@ -437,9 +437,18 @@ def read_cached_report(db_path: Path) -> CachedReport | None:
     """The render-side read: the last-persisted collision report, or ``None``
     when nothing has been generated yet. Pure DB read — no LLM, no
     ``financial_facts`` — safe on the render path."""
+    import sqlite3
+
     import llm_artifact_store as store
 
-    artifact = store.read_current(ticker=None, purpose=PURPOSE, scope=_SCOPE, db_path=db_path)
+    try:
+        artifact = store.read_current(ticker=None, purpose=PURPOSE, scope=_SCOPE, db_path=db_path)
+    except sqlite3.OperationalError:
+        # A thin/older-schema DB (offline fixtures, pre-migration prod) has no
+        # llm_artifacts table — or one missing newer columns. "Safe on the
+        # render path" means the panel renders without the collision section,
+        # never 500s (the CI-red root cause after #784).
+        return None
     if artifact is None:
         return None
     report = CollisionReport.from_json(artifact.content_json)
