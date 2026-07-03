@@ -75,8 +75,34 @@ from provenance.overrides import (
     OverrideAction,
     active_scalar_override_map,
 )
+from timeseries.loaders import reader_tier_join_sql, reader_tier_rank_sql
 
 log = logging.getLogger(__name__)
+
+# Tier-aware winner ordering for the fact-series queries. The queries LEFT JOIN
+# documents as ``d`` and ORDER BY (period_end DESC, tier_rank DESC, id DESC) so
+# that, per (period_end, fiscal_period_type), the deterministic SEC XBRL row
+# leads the FMP row — the SAME (source_quality_tier rank, id) contract the
+# Series loaders enforce. ``_dedupe_series`` then keeps the FIRST row per
+# period, i.e. the tier-winner. The prior insertion-order pick (period_end DESC,
+# id DESC only) was source-agnostic and, on the ~162k FMP+SEC duplicated keys,
+# surfaced whichever row had the higher id (usually the later FMP ingest).
+# NULL/absent tier ranks 0 and loses only to a real tiered row. The join is
+# ORDER-BY-only — no extra SELECT column — so the positional row shape
+# (period_end, fiscal_period_type, value, unit, source_doc_id[, confidence])
+# every downstream consumer unpacks is unchanged. Computed per-connection
+# (``_tier_bits``) so a legacy DB without the tier column/documents degrades to
+# the id-only pick.
+
+
+def _tier_bits(conn: sqlite3.Connection, fact_alias: str) -> tuple[str, str]:
+    """(tier_rank_fragment, doc_join_clause) for a fact-series query over
+    ``fact_alias`` (``kf`` or ``ff``). Both empty-safe on legacy DBs."""
+    return (
+        reader_tier_rank_sql(conn),
+        reader_tier_join_sql(conn, fact_alias=fact_alias),
+    )
+
 
 # Below this scored confidence a grounded fact carries a "conf NN%" caution in
 # the text the MODEL reads (not just the UI popover): it mirrors the UI's
@@ -512,7 +538,11 @@ def _series_rows_conf(
 def _dedupe_series(
     rows: list[tuple[object, ...]],
 ) -> list[tuple[object, ...]]:
-    """Rows ordered (period_end DESC, id DESC) → first per period wins."""
+    """Rows ordered (period_end DESC, tier_rank DESC, id DESC) → first per
+    (period_end, fiscal_period_type) wins, i.e. the tier-winner (SEC beats FMP).
+    Keying on both period_end AND fiscal_period_type keeps the SEC FY/Q4
+    dual-write (same period_end, distinct fpt) as two rows rather than
+    collapsing them."""
     seen: set[tuple[str, str]] = set()
     out: list[tuple[object, ...]] = []
     for row in rows:
@@ -585,12 +615,15 @@ def _fact_ref_kpi_item(
         return None
     name = str(drow[0])
     unit = str(drow[1] or "")
+    tier_rank, doc_join = _tier_bits(conn, "kf")
     rows = _dedupe_series(
         _series_rows_conf(
             conn,
-            "SELECT period_end, fiscal_period_type, value, unit, source_doc_id{conf} "
-            "FROM kpi_facts WHERE ticker = ? AND kpi_definition_id = ? "
-            "ORDER BY period_end DESC, id DESC LIMIT 64",
+            "SELECT kf.period_end, kf.fiscal_period_type, kf.value, kf.unit, "
+            "kf.source_doc_id{conf} "
+            f"FROM kpi_facts kf {doc_join} "
+            "WHERE kf.ticker = ? AND kf.kpi_definition_id = ? "
+            f"ORDER BY kf.period_end DESC, {tier_rank} DESC, kf.id DESC LIMIT 64",
             (ticker, def_id),
         )
     )
@@ -619,17 +652,21 @@ def _fact_ref_fin_item(
     issues_by_ticker: IssuesByTicker | None = None,
 ) -> dict[str, object] | None:
     """Resolve a ``fin:{ticker}:{line_item}:{fpt}`` handle to its series."""
-    clauses = "ticker = ? AND line_item = ?"
+    clauses = "ff.ticker = ? AND ff.line_item = ?"
     params: list[object] = [ticker, line_item]
     fpt_u = fpt.upper()
     if fpt_u in _FIN_SPECIFIC_FPT:
-        clauses += " AND fiscal_period_type = ?"
+        clauses += " AND ff.fiscal_period_type = ?"
         params.append(fpt_u)
     else:
-        clauses += " AND fiscal_period_type IN ('Q1','Q2','Q3','Q4')"
+        clauses += " AND ff.fiscal_period_type IN ('Q1','Q2','Q3','Q4')"
+    tier_rank, doc_join = _tier_bits(conn, "ff")
     sql = (
-        "SELECT period_end, fiscal_period_type, value, unit, source_doc_id{conf} "
-        f"FROM financial_facts WHERE {clauses} ORDER BY period_end DESC, id DESC LIMIT 64"
+        "SELECT ff.period_end, ff.fiscal_period_type, ff.value, ff.unit, "
+        "ff.source_doc_id{conf} "
+        f"FROM financial_facts ff {doc_join} "
+        f"WHERE {clauses} "
+        f"ORDER BY ff.period_end DESC, {tier_rank} DESC, ff.id DESC LIMIT 64"
     )
     rows = _dedupe_series(_series_rows_conf(conn, sql, tuple(params)))
     rows, ov_map = _overlay_fact_rows(conn, ticker, FINANCIAL_FACT, line_item, rows)
@@ -714,12 +751,15 @@ def _fact_evidence(
         for def_id, name, unit in matched_kpis:
             if per_ticker >= _MAX_FACT_ITEMS_PER_TICKER:
                 break
+            kpi_tier_rank, kpi_doc_join = _tier_bits(conn, "kf")
             rows = _dedupe_series(
                 _series_rows_conf(
                     conn,
-                    "SELECT period_end, fiscal_period_type, value, unit, source_doc_id{conf} "
-                    "FROM kpi_facts WHERE ticker = ? AND kpi_definition_id = ? "
-                    "ORDER BY period_end DESC, id DESC LIMIT 64",
+                    "SELECT kf.period_end, kf.fiscal_period_type, kf.value, kf.unit, "
+                    "kf.source_doc_id{conf} "
+                    f"FROM kpi_facts kf {kpi_doc_join} "
+                    "WHERE kf.ticker = ? AND kf.kpi_definition_id = ? "
+                    f"ORDER BY kf.period_end DESC, {kpi_tier_rank} DESC, kf.id DESC LIMIT 64",
                     (ticker, def_id),
                 )
             )
@@ -756,13 +796,16 @@ def _fact_evidence(
         for line_item in matched_fins:
             if per_ticker >= _MAX_FACT_ITEMS_PER_TICKER:
                 break
+            fin_tier_rank, fin_doc_join = _tier_bits(conn, "ff")
             rows = _dedupe_series(
                 _series_rows_conf(
                     conn,
-                    "SELECT period_end, fiscal_period_type, value, unit, source_doc_id{conf} "
-                    "FROM financial_facts WHERE ticker = ? AND line_item = ? "
-                    "AND fiscal_period_type IN ('Q1','Q2','Q3','Q4') "
-                    "ORDER BY period_end DESC, id DESC LIMIT 64",
+                    "SELECT ff.period_end, ff.fiscal_period_type, ff.value, ff.unit, "
+                    "ff.source_doc_id{conf} "
+                    f"FROM financial_facts ff {fin_doc_join} "
+                    "WHERE ff.ticker = ? AND ff.line_item = ? "
+                    "AND ff.fiscal_period_type IN ('Q1','Q2','Q3','Q4') "
+                    f"ORDER BY ff.period_end DESC, {fin_tier_rank} DESC, ff.id DESC LIMIT 64",
                     (ticker, line_item),
                 )
             )

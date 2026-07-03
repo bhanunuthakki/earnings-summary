@@ -250,13 +250,100 @@ def _overlay_sourced_series(
     return out
 
 
-def _tier_rank_case_sql(column_alias: str) -> str:
+def tier_rank_case_sql(column_alias: str) -> str:
     """Build a CASE expression mapping source_quality_tier text -> int rank.
-    Used inline in SELECT for tier-aware ordering."""
+
+    Public so the reader families that can't route through the Series loaders
+    (cockpit_fundamentals, report §3 financials, fmp_derived_kpis, ask.grounding)
+    can replicate the loaders' EXACT ``(tier_rank, id)`` winner ordering in their
+    own SQL rather than diverging into a source-agnostic ``source_doc_id DESC``
+    pick. ``column_alias`` is the SQL reference to ``documents.source_quality_tier``
+    in the caller's query (e.g. ``"d.source_quality_tier"``). Unknown/NULL tiers
+    fall to rank 0, matching :data:`SOURCE_QUALITY_TIER_RANK`'s fallback."""
     cases = " ".join(
         f"WHEN '{tier}' THEN {rank}" for tier, rank in SOURCE_QUALITY_TIER_RANK.items()
     )
     return f"CASE {column_alias} {cases} ELSE 0 END"
+
+
+# Back-compat alias for the pre-public name (internal callers below).
+_tier_rank_case_sql = tier_rank_case_sql
+
+
+def _probe_has_table(conn: sqlite3.Connection, table: str) -> bool:
+    """row_factory-independent table probe for the reader helpers.
+
+    The Series loaders' ``_has_table``/``_has_column`` read ``r["name"]``, which
+    needs ``conn.row_factory = sqlite3.Row``. The reader families call the
+    ``reader_tier_*`` helpers with whatever connection they hold — research
+    cockpit / the refresh script open a bare (tuple-row) connection — so these
+    probes use positional access and work regardless of row_factory."""
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+        ).fetchone()
+    except sqlite3.Error:
+        return False
+    return row is not None
+
+
+def _probe_has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """row_factory-independent column probe (see :func:`_probe_has_table`).
+    PRAGMA table_info returns (cid, name, type, ...); name is index 1."""
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    except sqlite3.Error:
+        return False
+    return any(r[1] == column for r in rows)
+
+
+def reader_tier_rank_sql(
+    conn: sqlite3.Connection,
+    *,
+    tier_column: str = "d.source_quality_tier",
+    documents_table: str = "documents",
+) -> str:
+    """Tier-rank ORDER-BY fragment for a reader query, guarded for legacy DBs.
+
+    Returns :func:`tier_rank_case_sql` when ``documents.source_quality_tier``
+    exists, else the constant ``"NULL"`` so the caller's ``ORDER BY <this> DESC,
+    <table>.id DESC`` collapses to the pre-0053 ``id``-only pick on fixture DBs
+    that predate the tier column (or lack the ``documents`` table entirely). The
+    same degrade the Series loaders apply via their ``has_tier`` branch — factored
+    out so the four reader families that replicate the ordering in raw SQL
+    (cockpit_fundamentals, report §3 financials, fmp_derived_kpis, ask.grounding)
+    stay column-safe without duplicating the PRAGMA probe.
+
+    The degraded value is ``"NULL"``, NOT ``"0"``: a bare integer in an
+    ``ORDER BY`` is a POSITIONAL COLUMN REFERENCE in SQLite (``ORDER BY 0`` →
+    "term out of range"), whereas ``NULL`` is a constant that sorts all rows
+    equal so the ``id`` tiebreak takes over cleanly."""
+    if _probe_has_table(conn, documents_table) and _probe_has_column(
+        conn, documents_table, "source_quality_tier"
+    ):
+        return tier_rank_case_sql(tier_column)
+    return "NULL"
+
+
+def reader_tier_join_sql(
+    conn: sqlite3.Connection,
+    *,
+    fact_alias: str = "ff",
+    doc_alias: str = "d",
+    documents_table: str = "documents",
+) -> str:
+    """The ``LEFT JOIN documents`` clause a tier-aware reader query needs, or
+    ``""`` when the ``documents`` table is absent.
+
+    Paired with :func:`reader_tier_rank_sql`: when documents is missing the rank
+    fragment is the constant ``"NULL"`` AND this join is empty, so the query
+    never references the ``d`` alias it can't resolve — it degrades cleanly to
+    the id-only pick over ``financial_facts`` alone (the pre-0053 behavior). When
+    documents exists but the tier column doesn't, the join is still emitted
+    (harmless) and the rank fragment is ``"NULL"``."""
+    if _probe_has_table(conn, documents_table):
+        return f"LEFT JOIN {documents_table} {doc_alias} ON {doc_alias}.id = {fact_alias}.source_doc_id"
+    return ""
 
 
 def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:

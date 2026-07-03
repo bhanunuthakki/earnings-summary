@@ -52,6 +52,7 @@ from pipeline.kpi_persistence import find_or_create_kpi_definition
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
 from provenance.overrides import KPI as OVERRIDE_KPI
 from provenance.overrides import OverrideAction, active_scalar_override_map
+from timeseries.loaders import reader_tier_rank_sql
 
 log = logging.getLogger(__name__)
 
@@ -144,11 +145,25 @@ def _fetch_quarterly_facts(conn: sqlite3.Connection, ticker: str) -> list[Quarte
     `{TICKER}_income_statement.json` (no code writes one). So we exclude the
     `_ttm`/`_annual` rollups by file path and lean on the
     `fiscal_period_type IN ('Q1'..'Q4')` filter as the real guard against any
-    non-quarterly leakage. The `grouped` dict below dedupes by
-    (period_end, fiscal_period_type) so overlapping sources stay safe.
+    non-quarterly leakage.
+
+    Per-cell tier-aware winner: the query orders ASCENDING by
+    (source_quality_tier rank, id) and the ``bucket[line_item] = value``
+    overwrite keeps whichever row is processed LAST, so the highest-(tier, id)
+    row wins each (period_end, fiscal_period_type, line_item) cell — the SAME
+    contract the Series loaders (``timeseries.loaders``) enforce, so a
+    deterministic SEC XBRL row beats an FMP row regardless of ingest order. The
+    prior grouping had NO dedup (first cursor row set the source_doc_id and the
+    last write won each cell in arbitrary period_end-only order), so a single key
+    could mix an FMP revenue with a SEC operating_income. ``_source_doc_id``
+    tracks the winning revenue cell's document (the anchor the derived rows'
+    provenance ties to). Doc-type is still restricted to the FMP statement docs
+    the derivers were built around; a SEC row surfaces here only when it was
+    persisted under one of those doc_types.
     """
     all_line_items = _REQUIRED_LINE_ITEMS + _OPTIONAL_LINE_ITEMS + _BALANCE_LINE_ITEMS
     placeholders = ",".join("?" * len(all_line_items))
+    tier_rank = reader_tier_rank_sql(conn)
     cur = conn.execute(
         f"""
         SELECT ff.period_end, ff.fiscal_period_type, ff.line_item, ff.value, ff.source_doc_id
@@ -160,7 +175,7 @@ def _fetch_quarterly_facts(conn: sqlite3.Connection, ticker: str) -> list[Quarte
           AND d.file_path NOT LIKE '%_annual.json'
           AND ff.line_item IN ({placeholders})
           AND ff.fiscal_period_type IN ('Q1','Q2','Q3','Q4')
-        ORDER BY ff.period_end ASC
+        ORDER BY ff.period_end ASC, {tier_rank} ASC, ff.id ASC
         """,
         (ticker.upper(), *all_line_items),
     )
@@ -170,8 +185,13 @@ def _fetch_quarterly_facts(conn: sqlite3.Connection, ticker: str) -> list[Quarte
         if isinstance(pe, str):
             pe = datetime.fromisoformat(pe)
         key = (pe, row["fiscal_period_type"])
-        bucket = grouped.setdefault(key, {"_source_doc_id": int(row["source_doc_id"])})
+        bucket = grouped.setdefault(key, {})
         bucket[row["line_item"]] = Decimal(str(row["value"]))
+        # Anchor provenance to the winning revenue cell's document (revenue is
+        # the required base of every derivation). Rows arrive tier-ascending, so
+        # the last revenue write is the tier-winner.
+        if row["line_item"] == "revenue":
+            bucket["_source_doc_id"] = int(row["source_doc_id"])
 
     results: list[QuarterlyFacts] = []
     for (pe, fpt), bucket in sorted(grouped.items(), key=lambda kv: kv[0][0]):

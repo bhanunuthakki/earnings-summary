@@ -28,6 +28,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from timeseries.loaders import reader_tier_join_sql, reader_tier_rank_sql
+
 __all__ = [
     "compute_from_db",
     "materialize_fundamentals",
@@ -42,21 +44,38 @@ _SEMI_ANNUAL_GAP_DAYS = (175, 200)
 # ---------------------------------------------------------------------------
 # SQL (mirrors the logic in _eval_fundamentals; reads financial_facts directly
 # to avoid the metrics/ratios view ROW_NUMBER() scan over ALL line items).
+#
+# Tier-aware winner pick: LEFT JOIN documents so the ROW_NUMBER() dedup orders
+# by (source_quality_tier rank, id) — the SAME contract the Series loaders
+# (timeseries.loaders.load_financial_series) enforce, so a deterministic SEC
+# XBRL row beats an FMP row for the same logical key regardless of insertion
+# order. The prior ``source_doc_id DESC`` pick was source-agnostic and, on the
+# ~162k FMP+SEC duplicated keys, silently preferred whichever doc happened to
+# have the higher id (usually the later-ingested FMP row). LEFT JOIN (not inner)
+# keeps facts whose source_doc_id has no documents row (legacy/orphaned) — they
+# rank 0 and lose only to a real tiered row. ``id DESC`` remains the within-tier
+# tiebreak (most-recently-ingested wins). The FY/Q4 dual-write edge is inert
+# here: fiscal_period_type is in the PARTITION key, so FY and Q4 never collide.
 # ---------------------------------------------------------------------------
 
+# {tier_rank} / {doc_join} are filled per-connection (compute_from_db) via
+# reader_tier_rank_sql / reader_tier_join_sql so a pre-0053 fixture DB without
+# the tier column (or without documents) degrades to the id-only pick.
 _QUARTER_FUNDAMENTALS_SQL = """
 WITH dedup AS (
-    SELECT ticker,
-           CAST(substr(period_end, 1, 4) AS INTEGER) AS fiscal_year,
-           fiscal_period_type, line_item, value, period_end,
+    SELECT ff.ticker AS ticker,
+           CAST(substr(ff.period_end, 1, 4) AS INTEGER) AS fiscal_year,
+           ff.fiscal_period_type AS fiscal_period_type,
+           ff.line_item AS line_item, ff.value AS value, ff.period_end AS period_end,
            ROW_NUMBER() OVER (
-               PARTITION BY ticker, CAST(substr(period_end, 1, 4) AS INTEGER),
-                            fiscal_period_type, line_item
-               ORDER BY source_doc_id DESC, period_end DESC
+               PARTITION BY ff.ticker, CAST(substr(ff.period_end, 1, 4) AS INTEGER),
+                            ff.fiscal_period_type, ff.line_item
+               ORDER BY {tier_rank} DESC, ff.id DESC
            ) AS rn
-    FROM financial_facts
-    WHERE fiscal_period_type LIKE 'Q%'
-      AND line_item IN ('revenue', 'free_cash_flow', 'operating_cash_flow',
+    FROM financial_facts ff
+    {doc_join}
+    WHERE ff.fiscal_period_type LIKE 'Q%'
+      AND ff.line_item IN ('revenue', 'free_cash_flow', 'operating_cash_flow',
                         'capital_expenditure')
 )
 SELECT ticker,
@@ -74,17 +93,18 @@ ORDER BY ticker, period_end DESC
 
 _TTM_FCF_MARGIN_SQL = """
 WITH dedup AS (
-    SELECT ticker,
-           CAST(substr(period_end, 1, 4) AS INTEGER) AS fiscal_year,
-           line_item, value,
+    SELECT ff.ticker AS ticker,
+           CAST(substr(ff.period_end, 1, 4) AS INTEGER) AS fiscal_year,
+           ff.line_item AS line_item, ff.value AS value,
            ROW_NUMBER() OVER (
-               PARTITION BY ticker, CAST(substr(period_end, 1, 4) AS INTEGER),
-                            fiscal_period_type, line_item
-               ORDER BY source_doc_id DESC, period_end DESC
+               PARTITION BY ff.ticker, CAST(substr(ff.period_end, 1, 4) AS INTEGER),
+                            ff.fiscal_period_type, ff.line_item
+               ORDER BY {tier_rank} DESC, ff.id DESC
            ) AS rn
-    FROM financial_facts
-    WHERE fiscal_period_type = 'TTM'
-      AND line_item IN ('revenue', 'free_cash_flow')
+    FROM financial_facts ff
+    {doc_join}
+    WHERE ff.fiscal_period_type = 'TTM'
+      AND ff.line_item IN ('revenue', 'free_cash_flow')
 )
 SELECT ticker,
        CAST(MAX(CASE WHEN line_item = 'free_cash_flow' THEN value END) AS REAL)
@@ -187,8 +207,13 @@ def compute_from_db(
     quarterly rows (semi-annual reporters sum the newest two half-years).
     Degrades to {} when financial_facts is absent.
     """
+    tier_rank = reader_tier_rank_sql(conn)
+    doc_join = reader_tier_join_sql(conn)
+    ttm_sql = _TTM_FCF_MARGIN_SQL.format(tier_rank=tier_rank, doc_join=doc_join)
+    quarter_sql = _QUARTER_FUNDAMENTALS_SQL.format(tier_rank=tier_rank, doc_join=doc_join)
+
     fcf: dict[str, float] = {}
-    for r in _safe_rows(conn, _TTM_FCF_MARGIN_SQL):
+    for r in _safe_rows(conn, ttm_sql):
         try:
             if r["fcf_margin"] is not None:
                 fcf[str(r["ticker"]).upper()] = float(r["fcf_margin"]) * 100.0
@@ -196,7 +221,7 @@ def compute_from_db(
             continue
 
     by_ticker: dict[str, list[tuple[str, float, float | None]]] = {}
-    for r in _safe_rows(conn, _QUARTER_FUNDAMENTALS_SQL):
+    for r in _safe_rows(conn, quarter_sql):
         try:
             rev = float(r["revenue"])
         except (TypeError, ValueError):
@@ -247,9 +272,7 @@ def materialize_fundamentals(conn: sqlite3.Connection, repo_root: Path) -> int:
     }
     path = _cache_path(repo_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(
-        dir=str(path.parent), suffix=".tmp", prefix="cockpit_fundamentals."
-    )
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp", prefix="cockpit_fundamentals.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(payload, fh)
