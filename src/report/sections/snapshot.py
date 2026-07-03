@@ -39,7 +39,7 @@ def build(
     valuation = _valuation_snapshot(
         ticker, repo_root, current_price, model_link, mos_bar, sheet_url, held=held
     )
-    verdict = _verdict(ticker, repo_root)
+    verdict, verdict_as_of = _verdict(ticker, repo_root)
     tier_1_strip = _tier_1_strip(holdings)
     recent_decisions = _recent_decisions(ticker, repo_root)
 
@@ -66,6 +66,7 @@ def build(
         company_name=company_name,
         thesis_one_liner=thesis_clean,
         verdict=verdict,
+        verdict_as_of=verdict_as_of,
         valuation=valuation,
         tier_1_kpi_row=tier_1_strip,
         recent_decisions=recent_decisions,
@@ -521,26 +522,36 @@ def _sum_of_segments_npv_per_share(
     return seg_npv_total / shares
 
 
-def _verdict(ticker: str, repo_root: Path) -> Literal["intact", "watch", "broken", "pending"]:
+def _verdict(
+    ticker: str, repo_root: Path
+) -> tuple[Literal["intact", "watch", "broken", "pending"], datetime | None]:
+    """(verdict, as_of) — ``as_of`` is ``thesis_state.last_updated``, the
+    timestamp ``persist_verdict`` writes from ``verdict.evaluated_at``. The
+    chrome badge greys a verdict that predates the newest reported quarter
+    instead of rendering a stale read as fresh green."""
     conn = open_repo_db(repo_root)
     if conn is None or not has_table(conn, "thesis_state"):
         if conn is not None:
             conn.close()
-        return "pending"
+        return "pending", None
     cursor = conn.cursor()
-    cursor.execute("SELECT breach_status FROM thesis_state WHERE ticker = ?", (ticker.upper(),))
+    cursor.execute(
+        "SELECT breach_status, last_updated FROM thesis_state WHERE ticker = ?",
+        (ticker.upper(),),
+    )
     row = cursor.fetchone()
     conn.close()
     if row is None or row["breach_status"] is None:
-        return "pending"
+        return "pending", None
+    as_of = _parse_iso_datetime(row["last_updated"])
     status = row["breach_status"].lower()
     if status == "ok":
-        return "intact"
+        return "intact", as_of
     if status == "warn":
-        return "watch"
+        return "watch", as_of
     if status == "breach":
-        return "broken"
-    return "pending"
+        return "broken", as_of
+    return "pending", as_of
 
 
 _VALID_OUTCOME_LABELS: frozenset[str] = frozenset(

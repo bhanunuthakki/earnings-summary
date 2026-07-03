@@ -292,6 +292,9 @@
 .l1-chrome-left { display: flex; align-items: center; gap: 32px; }
 .l1-chrome-right { display: flex; align-items: center; gap: 10px; }
 .l1-identity { display: flex; align-items: flex-end; justify-content: space-between; padding: 32px var(--pad-x) 24px; border-bottom: 1px solid var(--border); gap: 32px; flex-wrap: wrap; }
+.l1-reread .panel-xlink { flex-shrink: 0; white-space: nowrap; }
+.l1-reread .reread-label { font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.08em; color: var(--warn); font-weight: 600; flex-shrink: 0; }
+.l1-reread p { margin: 0; flex: 1; font-size: 13.5px; line-height: 1.55; color: var(--fg-soft); }
 .l1-thesis .thesis-label { font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent, var(--ok)); font-weight: 600; margin-right: 10px; }
 .l1-thesis p { margin: 0; font-size: 13.5px; line-height: 1.65; max-width: 1180px; color: var(--fg-soft); }
 .l1-thesis p { margin: 4px 0 0; font-family: var(--serif); font-size: 14px; line-height: 1.55; color: var(--ink); /* Override the 1180px cap from the earlier .l1-thesis p rule — the thesis paragraph should span the full available width of the workspace shell so dense theses don't break across short, awkward lines. */ max-width: none; }
@@ -382,10 +385,12 @@
 .peer.active { background: var(--fg); color: var(--bg); }
 .peer:hover { background: var(--paper); }
 .pos { color: var(--pos); }
+.position-coaching .coaching-line { margin: 0; }
 .position-stat { background: var(--surface); padding: 16px 18px; }
 .position-stat-label { font-size: var(--fs-micro); color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
 .position-stat-sub { font-family: var(--mono); font-size: var(--fs-caption); margin-top: 4px; color: var(--muted); }
 .position-stat-value { font-family: var(--mono); font-size: 20px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.position-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px; background: var(--border); border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); }
 .prose > :first-child { margin-top: 0; }
 .prose > :last-child { margin-bottom: 0; }
 .prose code { font-family: var(--mono); font-size: 0.93em; background: var(--paper); border-radius: var(--radius); padding: 0.05em 0.35em; }
@@ -617,6 +622,7 @@
 /* ---- status/score pills: ONE filled badge — a soft status fill + token ink (design_language §3). This is the canonical replacement for the per-panel raw-hex pill systems (.ev-score-*, .badge.b-*, the calib/cockpit/memo tone pairs): a status pill never freehands a background/foreground hex pair. ---- */ .k-pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 9px; border-radius: var(--radius-full); font-size: var(--fs-caption); font-weight: 600; line-height: 1.5; white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--paper); color: var(--fg-soft); }
 /* ---- the canonical ticker label: mono symbol + muted truncated name ---- */ .k-tick { display: inline-flex; align-items: baseline; gap: 7px; min-width: 0; max-width: 100%; }
 /* .lens-warn / .lens-stale migrated to the control kit's .k-pill (+ k-pill-warn for DIRTY; neutral bare for STALE) — see workspace_sections/synthesis.py. */ .lens-five_min_reread .lens-body h2 { color: var(--accent); font-size: 16px; margin-top: 1em; }
+/* ============================================================ "What changed" hoist (five_min_reread lens lede) ============================================================ */ /* Mirrors .l1-thesis's card treatment (same inset, same density) with a distinct accent so the two ledes read as separate registers — the thesis is the standing read, this is the latest delta. */ .l1-reread { display: flex; gap: 22px; align-items: baseline; margin: 0 var(--pad-x) 8px; padding: 12px 16px; background: var(--panel); border-left: 3px solid var(--warn); border-radius: var(--radius); }
 /* ============================================================ Chat drawer ============================================================ */ .chat-drawer { position: fixed; bottom: 16px; right: calc(var(--sidebar-open-width, 0px) + 16px); z-index: 95; transition: right 0.2s ease; }
 /* ============================================================ Company tab ============================================================ */ .elevator-block { border: 1px solid var(--border-2); background: linear-gradient(180deg, var(--paper), var(--surface)); padding: 22px 26px; border-radius: var(--radius); font-family: var(--serif); font-size: 17px; line-height: 1.55; color: var(--fg); }
 /* ============================================================ Cross-quarter themes — prepared remarks vs Q&A rollup (§5 split) ============================================================ */ .theme-bucket { margin-top: 14px; }
@@ -628,7 +634,7 @@
 /* ============================================================ Panels ============================================================ */ .panel { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
 /* ============================================================ Peer row ============================================================ */ .peer-row { margin: var(--section-gap) var(--pad-x) 0; padding-top: 22px; border-top: 1px solid var(--border); }
 /* ============================================================ Phase 5 — Executive Compensation tab ============================================================ */ /* the CEO role tag rides the kit's .k-chip .k-chip-mono (outline mono) now — accent fill is interactive-only (§2), a role tag stays quiet. */ .ceo-pill { margin-left: 6px; vertical-align: middle; }
-/* ============================================================ Position tab ============================================================ */ .position-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px; background: var(--border); border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); }
+/* ============================================================ Position tab ============================================================ */ .position-coaching { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 0 0 var(--gap); }
 /* ============================================================ Primitives ============================================================ */ .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--border-2); border-radius: 999px; font-size: var(--fs-caption); font-weight: 500; color: var(--fg-soft); background: var(--surface); letter-spacing: 0.01em; white-space: nowrap; }
 /* ============================================================ Print ============================================================ */ @media print { .l1-chrome, .twk-toggle-btn, .twk-panel { display: none; } .tab-group-pane { display: block !important; } .tab-pane { display: block !important; padding-top: 16px; break-before: page; } .tabs, .subtabs { display: none; } .news-strip, .kpi-strip, .l1-identity { break-after: avoid; } }
 /* ============================================================ Responsive overrides (S16 PR1 + L13 PR2) ============================================================ */ /* Horizontal table scroll at small-laptop/tablet widths. */ @media (max-width: 1024px) { .tbl { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; } }

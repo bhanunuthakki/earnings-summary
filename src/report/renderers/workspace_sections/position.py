@@ -15,12 +15,28 @@ from report.renderers.workspace_sections._shared import _empty_panel, _esc, _fmt
 from ui import living_grid as lg
 
 __all__ = [
+    "_position_coaching",
     "_position_stat",
     "_position_tab",
 ]
 
+# The research server the report deep-links into (report opens via file://,
+# so the doorway must be absolute) — same hardcoded base the chat drawer /
+# sources tab use (workspace_sections/boot.py, workspace_sections/sources.py).
+# The Socratic think-through page is the deterministic per-ticker decision
+# surface every other "review this name" doorway in the workspace already
+# points at (chat drawer's "think it through", the console's Memos panel).
+_REVIEW_BASE = "http://localhost:7421"
 
-def _position_tab(body: StringIO, pp: PortfolioPositionSection | None) -> None:
+
+def _position_tab(
+    body: StringIO,
+    pp: PortfolioPositionSection | None,
+    *,
+    ticker: str = "",
+    position_review_count: int = 0,
+    graded_sell_line: str | None = None,
+) -> None:
     body.write('<div class="tab-body">')
     if pp is None or not pp.held:
         _empty_panel(
@@ -41,6 +57,8 @@ def _position_tab(body: StringIO, pp: PortfolioPositionSection | None) -> None:
     )
     # (Tracker snapshot date rides in the Accounts panel's as-of slot — P4.1.)
     body.write("</div></div>")
+
+    _position_coaching(body, ticker, position_review_count, graded_sell_line)
 
     body.write('<div class="position-stats">')
     _position_stat(body, "Cost basis", _fmt_usd(pp.total_cost_basis))
@@ -195,6 +213,32 @@ def _position_tab(body: StringIO, pp: PortfolioPositionSection | None) -> None:
             body.write("</div>")
         body.write("</div>")
 
+    body.write("</div>")
+
+
+def _position_coaching(
+    body: StringIO,
+    ticker: str,
+    position_review_count: int,
+    graded_sell_line: str | None,
+) -> None:
+    """Position-tab coaching lines (REQ-3/REQ-6): the behavioral-guard status,
+    the graded-sells base rate when that ledger exists on this branch, and a
+    doorway into the deterministic review surface for this name."""
+    body.write('<div class="position-coaching">')
+    reviews_word = "review" if position_review_count == 1 else "reviews"
+    body.write(
+        '<p class="coaching-line muted xsmall">Guard: never run on this name &middot; '
+        f"{position_review_count} position {reviews_word}</p>"
+    )
+    if graded_sell_line:
+        body.write(f'<p class="coaching-line muted xsmall">{_esc(graded_sell_line)}</p>')
+    if ticker:
+        body.write(
+            f'<a class="k-btn k-btn-quiet k-btn-sm" '
+            f'href="{_REVIEW_BASE}/socratic/{_esc(ticker.upper())}" '
+            'target="_blank" rel="noopener">Review this position &rarr;</a>'
+        )
     body.write("</div>")
 
 
