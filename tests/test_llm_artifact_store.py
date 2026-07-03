@@ -348,3 +348,44 @@ def test_mark_dirty_returns_zero_when_db_missing(tmp_path: Path) -> None:
 def test_drain_dirty_returns_empty_when_db_missing(tmp_path: Path) -> None:
     missing = tmp_path / "no_such.db"
     assert drain_dirty(db_path=missing) == []
+
+
+def _drifted_db(tmp_path: Path) -> Path:
+    """A DB where llm_artifacts EXISTS but predates several columns (no
+    fiscal_period, no superseded_by_id, ...). Mimics a legacy DB or a stale
+    hand-rolled test fixture — the reads' WHERE clauses reference columns that
+    aren't there."""
+    path = tmp_path / "drifted.db"
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE llm_artifacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT, purpose TEXT, scope TEXT, content_md TEXT,
+                generated_at TEXT
+            );
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return path
+
+
+def test_read_current_degrades_on_drifted_schema(tmp_path: Path) -> None:
+    """Regression: a present-but-drifted llm_artifacts (missing fiscal_period)
+    must degrade to None, not raise OperationalError and 500 the render path
+    (the portfolio-risk panel crash). _open guards a missing *table*; this
+    guards a missing *column*."""
+    path = _drifted_db(tmp_path)
+    assert (
+        read_current(ticker=None, purpose="thesis_collision", scope="portfolio", db_path=path)
+        is None
+    )
+
+
+def test_history_and_drain_degrade_on_drifted_schema(tmp_path: Path) -> None:
+    path = _drifted_db(tmp_path)
+    assert history(ticker="X", purpose="bear_case", db_path=path) == []
+    assert drain_dirty(db_path=path) == []
