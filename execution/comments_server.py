@@ -2573,6 +2573,18 @@ def create_app(
             abort(404)
         return Response(html, mimetype="text/html")
 
+    @app.route("/api/peek/review/<ticker>", methods=["GET"])
+    def peek_review(ticker: str):
+        """The instant, LLM-free position-review read (PR5) — the click-through
+        behind the Holding band's "Review" link and the portfolio cockpit's
+        review pill: grounded facts, mechanical read, tax block, the live
+        graded-sells base rate, and a footer button that escalates to the full
+        LLM-calibrated, memo-persisting review. Always 200 — build_pre_analysis
+        degrades tracker-offline / no-thesis on its own."""
+        from pipeline.peeks import render_review_peek
+
+        return Response(render_review_peek(repo_root, db_path, ticker), mimetype="text/html")
+
     @app.route("/api/peek/provenance", methods=["GET"])
     def peek_provenance():
         """Per-source data freshness with inline refresh buttons (UX9d) — the
@@ -3470,6 +3482,44 @@ def create_app(
         ]
         try:
             job = job_registry.start(ticker="_REPO", kind=f"advisor-{memo_kind}", argv=argv)
+        except RegistryConflict as e:
+            return ({"error": str(e)}, 409)
+        return (
+            {
+                "job_id": job.job_id,
+                "ticker": job.ticker,
+                "kind": job.kind,
+                "stream_url": f"/actions/stream/{job.job_id}",
+                "started_at": job.started_at.isoformat(),
+            },
+            201,
+        )
+
+    @app.route("/actions/position-review", methods=["POST", "OPTIONS"])
+    def start_position_review():
+        """Run the full governed position review (PR5 — the calibration
+        feeder) as a streamed single-flight job: {"ticker": str}. Runs
+        ``execution/review_position.py <TICKER> --verdict`` — the LLM verdict +
+        deterministic behavioral guard, PERSISTING an ``advisor_memos`` row
+        (kind ``position_review``) so the review finally lands a gradeable
+        memo. The review peek's "Full calibrated review (LLM)" button POSTs
+        here and streams the job log in place."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        ticker = str(body.get("ticker", "")).strip().upper()
+        if not ticker:
+            return ({"error": "ticker required"}, 400)
+        argv = [
+            sys.executable,
+            str(repo_root / "execution" / "review_position.py"),
+            ticker,
+            "--verdict",
+            "--db",
+            str(db_path),
+        ]
+        try:
+            job = job_registry.start(ticker=ticker, kind="position-review", argv=argv)
         except RegistryConflict as e:
             return ({"error": str(e)}, 409)
         return (

@@ -891,11 +891,15 @@ def load_graded_sell_base_rate(ticker: str, db_path: Path) -> str | None:
     if not db_path.exists():
         return None
     try:
-        from advisor.position_review import graded_sell_record  # type: ignore[attr-defined]
+        from advisor.position_review import graded_sell_record
     except ImportError:
         return None
     try:
-        result = cast("object", graded_sell_record(ticker, db_path=db_path))
+        # The record is deliberately portfolio-wide (it grades the OWNER's
+        # sell/trim pattern, not this name) — ``ticker`` stays in this loader's
+        # signature for the per-ticker P3 call shape but doesn't scope the SQL.
+        del ticker
+        result = cast("object", graded_sell_record(db_path))
     except sqlite3.Error:
         return None
     return cast("str | None", result)

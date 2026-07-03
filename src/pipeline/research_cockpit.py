@@ -990,7 +990,10 @@ def _render_row(row: CockpitRow, now: datetime, *, thin: bool) -> str:
     cells.extend(
         [
             f"<td>{_earnings_cell(row, now)}</td>",
-            f"<td>{_inbox_cell(row)}</td>",
+            # Portfolio rows only (not thin/evaluation): the review doorway
+            # rides in the same cell as the alert/doc pills — a held name is
+            # reviewable, a screen candidate isn't (PR5).
+            f"<td>{_inbox_cell(row, is_portfolio=not thin)}</td>",
             f"<td class='dot-col'>{_staleness_dot(row, now)}</td>",
         ]
     )
@@ -1149,7 +1152,7 @@ def _earnings_cell(row: CockpitRow, now: datetime) -> str:
     )
 
 
-def _inbox_cell(row: CockpitRow) -> str:
+def _inbox_cell(row: CockpitRow, *, is_portfolio: bool = False) -> str:
     pills: list[str] = []
     if row.pending_alerts:
         # data-peek-url: the pill peeks the pending cards in place (UX9); the
@@ -1180,6 +1183,18 @@ def _inbox_cell(row: CockpitRow) -> str:
         pills.append(
             f"<span class='k-pill k-pill-warn' title='open report comments'>"
             f"{n} comment{'s' if n != 1 else ''}</span>"
+        )
+    if is_portfolio:
+        # The review doorway (PR5): a held name is reviewable, a screen
+        # candidate isn't — this pill rides in every portfolio row (not
+        # count-gated like the alert/doc pills above) so the guard's base rate
+        # is always one click away, not only when something else is pending.
+        t = escape(row.base.ticker)
+        pills.append(
+            f"<a class='k-pill cockpit-count' href='/ticker/{t}' "
+            f"data-peek-url='/api/peek/review/{t}' "
+            f"data-peek-title='Position review · {t}' "
+            f"title='instant position review'>review</a>"
         )
     return f"<span class='cell-pills'>{''.join(pills)}</span>" if pills else _muted()
 

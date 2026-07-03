@@ -227,10 +227,10 @@ def build_challenge(
     read = ""
     if repo_root is not None:
         try:
-            from advisor.position_review import build_pre_analysis, render_pre_analysis_chat
+            from advisor.position_review import build_pre_analysis, render_pre_analysis_plain
 
             pre = build_pre_analysis(repo_root, pledge.ticker, db_path=db_path)
-            read = "\n\nCurrent read:\n" + render_pre_analysis_chat(pre)
+            read = "\n\nCurrent read:\n" + render_pre_analysis_plain(pre)
         except Exception:
             read = ""  # the challenge stands on its own
     ask = ""

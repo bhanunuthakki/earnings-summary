@@ -113,3 +113,20 @@ def test_downgrade_drops_index(tmp_path: Path) -> None:
         assert not _index_exists(conn, _INDEX)
     finally:
         conn.close()
+
+
+def test_upgrade_noops_when_financial_facts_is_absent(tmp_path: Path) -> None:
+    """``financial_facts`` predates the 0059 stamp (``db.init_db()`` territory,
+    same as ``decisions``) — a stamp-0059+upgrade-head test fixture that never
+    creates it must not raise NoSuchTableError (this was the regression: it
+    broke every such fixture repo-wide, e.g. tests/test_open_loops.py)."""
+    db = tmp_path / "no_facts.db"
+    sqlite3.connect(str(db)).close()  # a DB with no tables at all
+    cfg = _config(db)
+    command.stamp(cfg, PRIOR_HEAD)
+    command.upgrade(cfg, HEAD)  # must not raise
+    conn = sqlite3.connect(str(db))
+    try:
+        assert not _index_exists(conn, _INDEX)
+    finally:
+        conn.close()

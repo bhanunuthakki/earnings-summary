@@ -19,6 +19,11 @@ ticker no longer means navigating away from the panel you were on:
   buttons that POST the existing ``/actions/*`` endpoints and stream the job
   log into the peek — the click-through behind the freshness dots and the
   Home tier strip (UX9d).
+* :func:`render_review_peek` — the instant, LLM-free ``/review`` pre-analysis
+  (grounded facts, tax block, mechanical read, the live graded-sells base
+  rate) plus a footer button that escalates to the full LLM-calibrated,
+  memo-persisting review — the click-through behind the Holding band's
+  "Review" link and the portfolio cockpit's review pill (PR5).
 
 Source-document peeks are NOT here — ``/source/<doc_id>?fragment=1`` serves
 those straight from ``pipeline.source_viewers``.
@@ -62,6 +67,7 @@ __all__ = [
     "render_memo_peek",
     "render_new_docs_peek",
     "render_provenance_peek",
+    "render_review_peek",
     "render_score_peek",
     "render_ticker_peek",
 ]
@@ -563,6 +569,112 @@ def render_memo_peek(db_path: Path, kind: str) -> str | None:
         f'<div class="synthesis-body">{render_prose(body_md[:20000])}</div>'
         "</div>"
     )
+
+
+# ----------------------------------------------------------------------------
+# Review peek (PR5) — the instant /review pre-analysis + full-review doorway
+# ----------------------------------------------------------------------------
+
+
+def render_review_peek(repo_root: Path, db_path: Path, ticker: str) -> str:
+    """The instant, LLM-free position-review read for the Holding band's
+    "Review" link and the portfolio cockpit's review pill: the same grounded
+    facts + mechanical read + tax block + live graded-sells base rate
+    ``render_pre_analysis_chat`` renders for ``/review``, run through
+    :func:`ui.prose.render_prose` (it's markdown-ish text, not raw HTML), plus
+    a footer button that escalates to the full LLM-calibrated review — the
+    ``position_review`` dashboard action, which PERSISTS a gradeable memo.
+
+    Always renders (never None / 404): a name with no encoded thesis degrades
+    to the deterministic "encode a thesis first" read, same as ``/review``
+    proper. ``build_pre_analysis`` degrades tracker-offline / no-DCF on its
+    own, so this stays a thin render wrapper with no extra guarding.
+    """
+    from advisor.position_review import build_pre_analysis, render_pre_analysis_chat
+
+    t = ticker.strip().upper()
+    pre = build_pre_analysis(repo_root, t, db_path=db_path)
+    body = render_prose(render_pre_analysis_chat(pre, db_path=db_path))
+    escaped_t = escape(t, quote=True)
+    foot = (
+        '<div class="cc-review-foot">'
+        f'<button type="button" class="k-btn k-btn-primary k-btn-sm cc-review-btn" '
+        f'data-review-ticker="{escaped_t}">Full calibrated review (LLM)</button>'
+        '<pre class="cc-review-log" hidden></pre>'
+        "</div>"
+    )
+    return f'<div class="cc-review-peek">{body}{foot}</div><style>{_REVIEW_CSS}</style><script>{_REVIEW_JS}</script>'
+
+
+_REVIEW_CSS = """
+.cc-review-peek .synthesis-body { font-size: var(--fs-body); }
+.cc-review-foot { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline);
+  display: flex; flex-direction: column; gap: 8px; }
+.cc-review-log { font-family: var(--mono); font-size: var(--fs-micro); color: var(--fg-soft);
+  background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 8px 10px; margin: 0; max-height: 200px; overflow-y: auto;
+  white-space: pre-wrap; word-break: break-word; }
+""".strip()
+
+# The escalation button POSTs /actions/position-review (single-flight per
+# ticker, same registry every /actions/* endpoint shares) then streams the job
+# log over the standard /actions/stream/<job_id> SSE contract — the same
+# fetch-then-EventSource shape _PROV_JS uses. A run PERSISTS a position_review
+# memo (write_ledger=True), which is the point: the peek closing mid-stream
+# just means the memo lands without a visible "done" line, not a lost write.
+_REVIEW_JS = """
+(function () {
+  if (window.__ccReviewWired) return;
+  window.__ccReviewWired = true;
+  document.addEventListener('click', function (ev) {
+    var btn = ev.target && ev.target.closest ? ev.target.closest('button[data-review-ticker]') : null;
+    if (!btn || btn.disabled) return;
+    var wrap = btn.closest('.cc-review-peek');
+    var log = wrap ? wrap.querySelector('.cc-review-log') : null;
+    if (!log) return;
+    function line(t) { log.hidden = false; log.textContent += t + '\\n'; log.scrollTop = log.scrollHeight; }
+    var label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Running…';
+    fetch('/actions/position-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker: btn.getAttribute('data-review-ticker') })
+    }).then(function (resp) {
+      return resp.json().then(function (j) { return { ok: resp.ok, status: resp.status, body: j }; });
+    }).then(function (r) {
+      if (!r.ok) {
+        line('! ' + ((r.body && r.body.error) || ('HTTP ' + r.status)));
+        btn.disabled = false;
+        btn.textContent = label;
+        return;
+      }
+      line('> position review started (job ' + r.body.job_id + ')');
+      var es = new EventSource(r.body.stream_url);
+      var finished = false;
+      es.onmessage = function (e) {
+        var m;
+        try { m = JSON.parse(e.data); } catch (_) { return; }
+        if (m.event === 'log') { line(m.line); }
+        else if (m.event === 'done') {
+          finished = true;
+          line('# exit code ' + m.exit_code);
+          es.close();
+          btn.disabled = false;
+          btn.textContent = label;
+        }
+      };
+      es.onerror = function () {
+        if (finished) return;
+        line('! stream interrupted — is the server still running?');
+        es.close();
+        btn.disabled = false;
+        btn.textContent = label;
+      };
+    }).catch(function (e) { line('! ' + e.message); btn.disabled = false; btn.textContent = label; });
+  });
+})();
+""".strip()
 
 
 # ----------------------------------------------------------------------------

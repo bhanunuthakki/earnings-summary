@@ -168,6 +168,41 @@ def test_pledge_captures_decision_and_challenge_asks_for_missing(db: Path) -> No
     assert detect_and_capture_pledge(note_id, db_path=db, extract_call=call) is None
 
 
+def test_build_challenge_embeds_the_plain_renderer_when_repo_root_given(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pre-analysis embedded in the challenge is the PLAIN Telegram
+    variant, not the Markdown chat one — send_message never sets parse_mode,
+    so a Markdown body would arrive as a raw asterisk/backtick wall."""
+    note_id = _land_musing(db, "buying NVO ~$30k, high conviction, falsifier: none yet")
+    call, _ = _fake_extract(
+        {"ticker": "NVO", "direction": "buy", "conviction": "high", "falsifier": "none yet"}
+    )
+    pledge = detect_and_capture_pledge(note_id, db_path=db, extract_call=call)
+    assert pledge is not None
+
+    seen: list[object] = []
+
+    def _fake_pre_analysis(repo_root: object, ticker: str, *, db_path: object = None) -> object:
+        return object()
+
+    def _fake_render_plain(pre: object) -> str:
+        seen.append(pre)
+        return "NVO - position review (deterministic read)"
+
+    monkeypatch.setattr(
+        "advisor.position_review.build_pre_analysis", _fake_pre_analysis, raising=False
+    )
+    monkeypatch.setattr(
+        "advisor.position_review.render_pre_analysis_plain", _fake_render_plain, raising=False
+    )
+    challenge = build_challenge(pledge, repo_root=Path("."), db_path=db)
+    assert "Current read:" in challenge
+    assert "NVO - position review" in challenge
+    assert "**" not in challenge
+    assert seen  # the plain renderer was actually called
+
+
 def test_annotation_fills_only_nulls_write_once(db: Path) -> None:
     note_id = _land_musing(db, "adding to NU here")
     call, _ = _fake_extract({"ticker": "NU", "direction": "add", "conviction": None})

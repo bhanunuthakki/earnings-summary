@@ -20,7 +20,9 @@ from advisor.position_review import (
     PreAnalysis,
     mechanical_read,
     render_pre_analysis_chat,
+    render_pre_analysis_plain,
     render_tax_lines,
+    review_reply_text,
 )
 from advisor.position_tax import PositionTaxView, TrimTaxEstimate, unavailable_tax_view
 from ask.commands import COMMAND_PREFIXES, run_chat_command
@@ -97,6 +99,74 @@ def test_render_chat_contains_grounded_facts_and_cli_pointer() -> None:
     assert "Mechanical read:" in out
     assert "ladder: fair" in out
     assert "review_position.py RBRK --at-price 82" in out
+
+
+# --------------------------------------------------------------------------- #
+# render_pre_analysis_plain — the Telegram coach-voice variant (PR10)
+# --------------------------------------------------------------------------- #
+
+
+def test_render_plain_has_no_markdown_markers_or_broken_cli_pointer() -> None:
+    out = render_pre_analysis_plain(_pre(at_price=82.0))
+    assert "**" not in out
+    assert "`" not in out
+    assert "python execution" not in out
+
+
+def test_render_plain_carries_the_same_key_facts_as_chat() -> None:
+    """Parity check: both renderers must agree on the substantive facts — the
+    plain variant only drops Markdown chrome and the CLI pointer."""
+    pre = _pre(at_price=82.0)
+    chat = render_pre_analysis_chat(pre)
+    plain = render_pre_analysis_plain(pre)
+    assert pre.ticker in plain
+    assert "10.0%" in plain and "10.0%" in chat  # weight line
+    assert "91.09" in plain and "91.09" in chat  # fair value
+    assert "Mechanical read:" in plain
+    assert "ladder: fair" in plain
+
+
+def test_render_plain_ends_with_a_web_pointer_not_a_cli_command() -> None:
+    out = render_pre_analysis_plain(_pre())
+    assert "Full calibrated review: from the desk (Holding -> Review)." in out
+
+
+def test_render_plain_includes_tax_block_when_present() -> None:
+    out = render_pre_analysis_plain(_pre(tax=_TAX_VIEW))
+    assert "- Tax: taxable 60% of position" in out
+    assert out.index("- Tax:") < out.index("- Mechanical read:")
+
+
+# --------------------------------------------------------------------------- #
+# review_reply_text(plain=...) — the shared Telegram/web dispatch seam
+# --------------------------------------------------------------------------- #
+
+
+def test_review_reply_text_plain_renders_via_plain_variant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake(*_a: object, **_k: object) -> PreAnalysis:
+        return _pre(at_price=82.0)
+
+    monkeypatch.setattr(pr, "build_pre_analysis", _fake)
+    reply = review_reply_text(Path("."), "/review RBRK at $82", plain=True)
+    assert "**" not in reply and "`" not in reply
+    assert "RBRK" in reply
+
+
+def test_review_reply_text_default_stays_markdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake(*_a: object, **_k: object) -> PreAnalysis:
+        return _pre(at_price=82.0)
+
+    monkeypatch.setattr(pr, "build_pre_analysis", _fake)
+    reply = review_reply_text(Path("."), "/review RBRK at $82")
+    assert "**RBRK**" in reply
+
+
+def test_review_reply_text_plain_usage_message_is_ascii() -> None:
+    reply = review_reply_text(Path("."), "/review", plain=True)
+    assert "Usage:" in reply
+    assert "`" not in reply and "—" not in reply
 
 
 # --------------------------------------------------------------------------- #

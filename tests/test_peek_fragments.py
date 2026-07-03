@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS tracked_companies (
     name TEXT,
     list_type TEXT NOT NULL DEFAULT 'portfolio',
     archived_at TEXT,
-    last_built_at TEXT
+    last_built_at TEXT,
+    instrument_type TEXT
 );
 CREATE TABLE IF NOT EXISTS fmp_endpoint_status (
     ticker         TEXT    NOT NULL,
@@ -250,6 +251,85 @@ def test_peek_memo_unknown_kind_and_missing_row_404(client: FlaskClient) -> None
     assert client.get("/api/peek/memo/bogus_kind").status_code == 404
     # Valid kind, no memo yet — also a 404, not an empty page.
     assert client.get("/api/peek/memo/swap_check").status_code == 404
+
+
+# ----------------------------------------------------------------------------
+# /api/peek/review (PR5 — the instant position-review read + escalation button)
+# ----------------------------------------------------------------------------
+
+# decisions predates the 0059 stamp (db.init_db() territory), mirroring
+# tests/test_open_loops.py's _DECISIONS_DDL pattern (hand-built post-upgrade).
+_DECISIONS_DDL = """
+CREATE TABLE decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker VARCHAR(16),
+    recommendation_kind VARCHAR(32) NOT NULL,
+    conviction VARCHAR(16),
+    outcome_label VARCHAR(16) NOT NULL DEFAULT 'pending',
+    decided_by VARCHAR(16) NOT NULL DEFAULT 'advisor',
+    scope VARCHAR(16) NOT NULL DEFAULT 'ticker',
+    falsifier TEXT,
+    size_usd FLOAT,
+    user_notes TEXT,
+    made_at DATETIME NOT NULL,
+    created_at DATETIME NOT NULL
+);
+"""
+
+
+def _seed_decisions_table(db_path: Path) -> None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executescript(_DECISIONS_DDL)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_peek_review_renders_deterministic_pre_analysis(client: FlaskClient) -> None:
+    # No thesis JSON on file -> the deterministic encode-first degrade, same
+    # as the /review chat command; always 200, never a 404.
+    resp = client.get("/api/peek/review/RBRK")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert not body.lstrip().lower().startswith("<!doctype")  # fragment, not a page
+    assert "cc-review-peek" in body
+    assert "RBRK" in body
+    assert "Mechanical read" in body
+    # The escalation button + its log target ride the footer.
+    assert "Full calibrated review (LLM)" in body
+    assert 'data-review-ticker="RBRK"' in body
+    assert "cc-review-log" in body
+
+
+def test_peek_review_carries_the_live_graded_base_rate(client: FlaskClient, db_path: Path) -> None:
+    _seed_decisions_table(db_path)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        for t in ("MU", "TSM", "NVDA", "AMZN", "GOOGL"):
+            conn.execute(
+                "INSERT INTO decisions (ticker, recommendation_kind, outcome_label, "
+                "decided_by, made_at, created_at) VALUES (?, 'sell', 'wrong', 'owner', "
+                "'2026-06-01', '2026-06-01')",
+                (t,),
+            )
+        for t in ("RBRK", "WIX", "NOW"):
+            conn.execute(
+                "INSERT INTO decisions (ticker, recommendation_kind, outcome_label, "
+                "decided_by, made_at, created_at) VALUES (?, 'trim', 'correct', 'owner', "
+                "'2026-06-01', '2026-06-01')",
+                (t,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    body = client.get("/api/peek/review/RBRK").data.decode()
+    assert "Graded record on sells/trims: 5 of 8 wrong (AMZN, GOOGL, MU, NVDA, TSM)" in body
+
+
+def test_peek_review_omits_base_rate_when_nothing_graded(client: FlaskClient) -> None:
+    body = client.get("/api/peek/review/RBRK").data.decode()
+    assert "Graded record on sells/trims" not in body
 
 
 # ----------------------------------------------------------------------------
@@ -702,6 +782,38 @@ def test_cockpit_alert_pill_peeks_with_href_fallback() -> None:
     assert "href='/feed?ticker=NU&status=pending'" in html
 
 
+def test_cockpit_portfolio_row_carries_review_doorway() -> None:
+    """PR5: every Portfolio-list row gets a review pill (not count-gated like
+    the alert/doc pills), peeking the instant pre-analysis in place."""
+    base = DashboardRow(
+        ticker="NU",
+        list_type="portfolio",
+        fmp_last_pulled=None,
+        last_transcript=None,
+        last_build_at=None,
+        open_comments_count=0,
+        breach_status=None,
+    )
+    html = render_research_cockpit({"portfolio": [CockpitRow(base=base)]})
+    assert "data-peek-url='/api/peek/review/NU'" in html
+    assert "href='/ticker/NU'" in html  # real destination preserved for middle-click
+
+
+def test_cockpit_evaluation_row_has_no_review_doorway() -> None:
+    """Evaluation/screen candidates aren't held positions — no review pill."""
+    base = DashboardRow(
+        ticker="DLO",
+        list_type="evaluation",
+        fmp_last_pulled=None,
+        last_transcript=None,
+        last_build_at=None,
+        open_comments_count=0,
+        breach_status=None,
+    )
+    html = render_research_cockpit({"evaluation": [CockpitRow(base=base)]})
+    assert "/api/peek/review/" not in html
+
+
 def test_next_dollar_memo_link_peeks(db_path: Path) -> None:
     _seed_memo(db_path)
     html = render_next_dollar_panel(db_path)
@@ -790,6 +902,16 @@ def test_holding_band_freshness_dot_opens_provenance_peek(repo: Path) -> None:
     assert 'class="cc-fdot' in frag
     assert 'data-peek-url="/api/peek/provenance?ticker=NU"' in frag
     assert 'href="/#system"' in frag
+
+
+def test_holding_band_carries_review_doorway(repo: Path) -> None:
+    """PR5: the Holding band's utility links row (Report/DCF/Tracker) gains a
+    Review link peeking the instant pre-analysis in place."""
+    tcc = build_ticker_command_center(repo, "NU")
+    frag = render_ticker_fragment(tcc)
+    assert 'data-peek-url="/api/peek/review/NU"' in frag
+    assert 'href="/ticker/NU"' in frag  # real destination preserved for middle-click
+    assert ">Review<" in frag
 
 
 def test_tier_strip_chips_open_provenance_peek() -> None:
