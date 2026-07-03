@@ -23,7 +23,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import comments_server  # noqa: E402
 
 from pipeline.worldview_panel import render_worldview_body, render_worldview_section  # noqa: E402
-from synthesis.tenets import record_tenet  # noqa: E402
+from synthesis.tenets import ensure_tenet_for_note, record_tenet  # noqa: E402
 
 _PRIOR_HEAD = "0059_kpi_facts_restatement"
 
@@ -88,6 +88,15 @@ def test_body_shows_current_and_proposed_with_tension(db_file: Path) -> None:
 
 def test_body_empty_state(db_file: Path) -> None:
     assert "No Tenets yet" in render_worldview_body(db_file)
+
+
+def test_note_staged_tenet_surfaces_in_panel(db_file: Path) -> None:
+    # A Tenet staged straight from an On My Mind musing (the 'To Worldview' rung)
+    # lands ``proposed`` and shows in the approval queue through the existing path.
+    ensure_tenet_for_note(7, body_md="Let a working thesis run.", db_path=db_file)
+    html = render_worldview_body(db_file)
+    assert "Let a working thesis run." in html
+    assert 'data-tenet-action="approve"' in html
 
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@
     {"id": "wd-009-meli-print", "text": "MELI reported Q3 revenue of 5.6B, up 35% year over year", "expected": {"is_wondering": false, "ticker": null}},
     {"id": "wd-010-added-dip", "text": "added to NU on the dip today", "expected": {"is_wondering": false, "ticker": null}},
     {"id": "wd-011-macro-mood", "text": "the macro tape feels heavy and I'm uneasy", "expected": {"is_wondering": false, "ticker": null}},
-    {"id": "wd-012-really-executing", "text": "NU is really executing well on the credit book", "expected": {"is_wondering": false, "ticker": null}}
+    {"id": "wd-012-really-executing", "text": "NU is really executing well on the credit book", "expected": {"is_wondering": false, "ticker": null}},
+    {"id": "wd-013-lesson-learned", "text": "I wonder why I keep selling my winners too early — the lesson is to let a working thesis run, like I should have with NU", "expected": {"is_wondering": false, "ticker": null}}
   ]
 }

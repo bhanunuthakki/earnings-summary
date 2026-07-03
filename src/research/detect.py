@@ -59,7 +59,11 @@ def _build_prompt(text: str) -> str:
         "or REQUEST (it asks a question, expresses doubt, or asks you to look into / "
         "ingest / evaluate / add something) versus a FLAT OBSERVATION (a statement of "
         "fact with no question or request). Default to NOT a wondering when unsure — a "
-        "false positive wastes a research run.\n\n"
+        "false positive wastes a research run. A RETROSPECTIVE, post-mortem, or "
+        "lesson-learned about an already-resolved trade (a past-tense conclusion such "
+        'as "the lesson is...", "I sold too early", "that thesis worked/failed") '
+        "is NOT a wondering — it is a belief for the Worldview, not an open, "
+        "forward-looking research question.\n\n"
         f"Musing: {text}\n\n"
         'Return JSON ONLY: {"is_wondering": true|false, "claim": "<the question/request '
         'in one line>", "ticker": "<TICKER or null>", "suggested_artifacts": '
