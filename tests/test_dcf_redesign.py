@@ -519,6 +519,20 @@ def test_read_and_value_matches_builder_mirror(built_usd: tuple[Path, float]) ->
     assert rv.fx_to_usd == 1.0
 
 
+def test_builder_seeds_scenario_weights_and_reader_reads_them(
+    built_usd: tuple[Path, float],
+) -> None:
+    """The builder writes the scenario probability-weight cells (row 62) and
+    read_inputs reads them back — seeded to the symmetric default here (the test
+    FMP carries no scenario_prior block)."""
+    dest, _ = built_usd
+    inp = redesign.read_inputs(dest)
+    assert inp is not None
+    assert inp.weight_base == pytest.approx(0.50)
+    assert inp.weight_bull == pytest.approx(0.25)
+    assert inp.weight_bear == pytest.approx(0.25)
+
+
 # --------------------------------------------------------------------------- #
 # Semi-annual filer (BHP shape): H1/H2 reported as Q2/Q4, two periods per FY
 # --------------------------------------------------------------------------- #

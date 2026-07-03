@@ -467,12 +467,47 @@ def _unlink(path: Path) -> None:
         path.unlink()
 
 
+def _scenario_prior_snapshot(
+    inp: redesign_mod.RedesignInputs, meta: dict[str, object] | None
+) -> dict[str, object]:
+    """The ``scenario_prior`` block for the assumption snapshot: the weights of
+    record (the workbook cells, so owner edits are reflected) plus the LLM
+    rationale/provenance from the assumptions JSON. ``dcf.scenario_reward`` reads
+    the weights (PR E); the card renders the rationale."""
+    default_w = (
+        redesign_mod.DEFAULT_SCENARIO_WEIGHTS["bull"],
+        redesign_mod.DEFAULT_SCENARIO_WEIGHTS["base"],
+        redesign_mod.DEFAULT_SCENARIO_WEIGHTS["bear"],
+    )
+    is_global = all(
+        abs(a - b) < 1e-9
+        for a, b in zip((inp.weight_bull, inp.weight_base, inp.weight_bear), default_w, strict=True)
+    )
+    rationale = ""
+    set_by = "global" if is_global else "owner"
+    as_of = ""
+    if isinstance(meta, dict):
+        r = meta.get("rationale")
+        rationale = r if isinstance(r, str) else ""
+        sb = meta.get("set_by")
+        set_by = sb if isinstance(sb, str) and sb else set_by
+        ao = meta.get("as_of")
+        as_of = ao if isinstance(ao, str) else ""
+    return {
+        "weights": {"bull": inp.weight_bull, "base": inp.weight_base, "bear": inp.weight_bear},
+        "rationale": rationale,
+        "set_by": set_by,
+        "as_of": as_of,
+    }
+
+
 def _redesign_snapshot(
     rv: redesign_mod.RedesignValuation,
     workbook_path: str,
     *,
     scenarios: redesign_mod.ScenarioValues | None = None,
     inp: redesign_mod.RedesignInputs | None = None,
+    scenario_prior_meta: dict[str, object] | None = None,
 ) -> str:
     """Serialize the redesigned-DCF inputs/outputs into the assumption snapshot.
 
@@ -517,6 +552,11 @@ def _redesign_snapshot(
         priced_in = reverse_mod.solve_priced_in(inp)
         if priced_in is not None:
             payload["priced_in"] = priced_in.to_snapshot_dict()
+    # Per-name scenario prior: the weights of record (workbook) + the LLM rationale
+    # (assumptions JSON). scenario_reward consumes the weights; the card renders the
+    # rationale. Persisted always so a consumer never recomputes on read.
+    if inp is not None:
+        payload["scenario_prior"] = _scenario_prior_snapshot(inp, scenario_prior_meta)
     return json.dumps(payload, indent=2)
 
 
@@ -571,6 +611,50 @@ def _apply_inputs_to_block(rd: dict[str, object], inp: redesign_mod.RedesignInpu
     # Bull/Bear columns from this block) reproduces edited scenarios.
     rd["scenario_bull"] = dataclasses.asdict(inp.bull_deltas)
     rd["scenario_bear"] = dataclasses.asdict(inp.bear_deltas)
+    _mirror_scenario_prior_weights(rd, inp)
+
+
+def _mirror_scenario_prior_weights(rd: dict[str, object], inp: redesign_mod.RedesignInputs) -> None:
+    """Mirror the workbook's scenario probability weights into the redesign block's
+    ``scenario_prior`` sub-block so a from-scratch build reproduces them.
+
+    The LLM ``rationale``/``as_of`` are PRESERVED (they are narrative, like the Opus
+    reasoning). Provenance stays honest: when the owner has edited the weights away
+    from the stored ones, ``set_by`` flips ``llm`` -> ``owner`` so the card never
+    attributes an owner's split to the LLM. A block is only written when there is a
+    real prior on file (an existing block, or weights the owner moved off the
+    symmetric default) — the JSON stays clean for names with no per-name prior."""
+    existing_sp = rd.get("scenario_prior")
+    sp_block: dict[str, object] = (
+        dict(cast("dict[str, object]", existing_sp)) if isinstance(existing_sp, dict) else {}
+    )
+    new_w = (inp.weight_bull, inp.weight_base, inp.weight_bear)
+    default_w = (
+        redesign_mod.DEFAULT_SCENARIO_WEIGHTS["bull"],
+        redesign_mod.DEFAULT_SCENARIO_WEIGHTS["base"],
+        redesign_mod.DEFAULT_SCENARIO_WEIGHTS["bear"],
+    )
+    is_global = all(abs(a - b) < 1e-9 for a, b in zip(new_w, default_w, strict=True))
+    if not sp_block and is_global:
+        return  # no per-name prior on file and weights are the default — keep clean
+
+    def _wf(key: str) -> float | None:
+        v = sp_block.get(key)
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+    old_w = (_wf("bull_weight"), _wf("base_weight"), _wf("bear_weight"))
+    had_old = any(x is not None for x in old_w)
+    changed = had_old and any(
+        o is None or abs(o - n) > 1e-6 for o, n in zip(old_w, new_w, strict=True)
+    )
+    sp_block["bull_weight"] = inp.weight_bull
+    sp_block["base_weight"] = inp.weight_base
+    sp_block["bear_weight"] = inp.weight_bear
+    if changed and sp_block.get("set_by") == "llm":
+        sp_block["set_by"] = "owner"
+    elif "set_by" not in sp_block:
+        sp_block["set_by"] = "global" if is_global else "owner"
+    rd["scenario_prior"] = sp_block
 
 
 def sync_assumptions_json(
@@ -740,7 +824,13 @@ def _refresh_redesign(
         live_price=live.price if live else None,
         live_price_at=live.fetched_at if live else None,
         mos_bar_used=mos_bar_f,
-        assumption_snapshot_json=_redesign_snapshot(rv, str(dest), scenarios=scenarios, inp=inp),
+        assumption_snapshot_json=_redesign_snapshot(
+            rv,
+            str(dest),
+            scenarios=scenarios,
+            inp=inp,
+            scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
+        ),
         notes=f"workbook={dest.name} (redesigned)",
         assumptions_sync_status=sync.as_status_text(),
         assumptions_synced_at=datetime.now(UTC).replace(tzinfo=None),
@@ -878,7 +968,13 @@ def apply_edits(
         live_price=live_price,
         live_price_at=prior_price_at,
         mos_bar_used=mos_bar_f,
-        assumption_snapshot_json=_redesign_snapshot(rv, str(dest), scenarios=scenarios, inp=inp),
+        assumption_snapshot_json=_redesign_snapshot(
+            rv,
+            str(dest),
+            scenarios=scenarios,
+            inp=inp,
+            scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
+        ),
         notes=f"workbook={dest.name} (redesigned; in-app edit)",
         assumptions_sync_status=sync.as_status_text(),
         assumptions_synced_at=datetime.now(UTC).replace(tzinfo=None),
@@ -916,6 +1012,26 @@ def _load_holdings(repo_root: Path, ticker: str) -> dict[str, object] | None:
     if not isinstance(data, dict):
         return None
     return cast("dict[str, object]", data)
+
+
+def _load_scenario_prior_meta(repo_root: Path, ticker: str) -> dict[str, object] | None:
+    """The ``redesign.scenario_prior`` sub-block from ``data/dcf_assumptions/<T>.json``
+    (the LLM rationale + provenance), or None. Read AFTER ``sync_assumptions_json``,
+    so it reflects any owner-edit reconciliation the sync just wrote."""
+    path = repo_root / "data" / "dcf_assumptions" / f"{ticker.upper()}.json"
+    if not path.exists():
+        return None
+    try:
+        raw: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    block = cast("dict[str, object]", raw).get("redesign")
+    if not isinstance(block, dict):
+        return None
+    sp = cast("dict[str, object]", block).get("scenario_prior")
+    return cast("dict[str, object]", sp) if isinstance(sp, dict) else None
 
 
 if __name__ == "__main__":
