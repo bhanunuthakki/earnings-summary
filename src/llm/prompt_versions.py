@@ -221,8 +221,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # The Ledger DCF assumption-tweak extractor (dcf_assumption_extract).
     "dcf_assumption_extract": "v1",
     # Position-review verdict (src/advisor/position_review.py). Bump when
-    # _build_verdict_prompt / _BEHAVIORAL_RULES is materially rewritten.
-    "position_review": "v1",
+    # _build_verdict_prompt / _behavioral_rules is materially rewritten.
+    # v2 (PR5): rule 1's evidence is interpolated from the live
+    # graded_sell_record base rate instead of a hardcoded MU/GOOGL/TSM.
+    "position_review": "v2",
     # Per-name DCF scenario prior (src/dcf/scenario_prior.py, mode-A golden set).
     # Bump when the weight-setting prompt (dcf.scenario_prior._PROMPT) is materially
     # rewritten, then re-run `run_llm_evals.py --purpose scenario_prior`.

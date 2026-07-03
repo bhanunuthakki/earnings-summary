@@ -36,6 +36,7 @@ class _Spy:
     def __init__(self) -> None:
         self.sends: list[tuple[int, str, object]] = []
         self.answers: list[tuple[str, str | None]] = []
+        self.edits: list[tuple[int, int, str, object]] = []
 
     def send(self, token: str, chat_id: int, text: str, *, reply_markup: object = None) -> object:
         self.sends.append((chat_id, text, reply_markup))
@@ -45,10 +46,24 @@ class _Spy:
         self.answers.append((cqid, text))
         return {}
 
+    def edit(
+        self, token: str, chat_id: int, message_id: int, text: str, *, reply_markup: object = None
+    ) -> object:
+        self.edits.append((chat_id, message_id, text, reply_markup))
+        return {}
 
-def _cb(data: str) -> telegram.Update:
+
+def _cb(
+    data: str, *, message_id: int | None = None, message_text: str | None = None
+) -> telegram.Update:
     return telegram.Update(
-        update_id=1, kind="callback", chat_id=5, callback_data=data, callback_query_id="cq"
+        update_id=1,
+        kind="callback",
+        chat_id=5,
+        callback_data=data,
+        callback_query_id="cq",
+        message_id=message_id,
+        message_text=message_text,
     )
 
 
@@ -79,6 +94,140 @@ def test_dispatch_approve_flips_status(db_path: Path) -> None:
     prop = get_proposal(pid, db_path=db_path)
     assert prop is not None and prop.status == "approved"
     assert spy.answers and spy.answers[0][1] is not None and "approved" in spy.answers[0][1]
+
+
+# --------------------------------------------------------------------------- #
+# editMessage state stamps (PR10) — a handled card gets stamped + de-fanged
+# --------------------------------------------------------------------------- #
+
+
+def test_dispatch_approve_edits_original_card_and_strips_keyboard(db_path: Path) -> None:
+    pid = create_proposal(
+        task_id=None, kind="memo", ticker="NU", title="t", body_md="b", db_path=db_path
+    )
+    spy = _Spy()
+    update = _cb(f"rp:approve:{pid}", message_id=77, message_text="NU - t\n\nexcerpt")
+    status = research_notify.dispatch_callback(
+        "tok", update, db_path=db_path, send=spy.send, answer=spy.answer, edit=spy.edit
+    )
+    assert status == "approved"
+    assert len(spy.edits) == 1
+    chat_id, message_id, text, reply_markup = spy.edits[0]
+    assert (chat_id, message_id) == (5, 77)
+    assert text.startswith("NU - t\n\nexcerpt\n- approved ")
+    assert reply_markup is None  # the keyboard is stripped
+
+
+def test_dispatch_no_edit_without_message_id(db_path: Path) -> None:
+    """No originating message id (e.g. an older/synthetic update) -> the edit
+    is skipped silently; the action itself still succeeds."""
+    pid = create_proposal(
+        task_id=None, kind="memo", ticker="NU", title="t", body_md="b", db_path=db_path
+    )
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok",
+        _cb(f"rp:approve:{pid}"),  # no message_id
+        db_path=db_path,
+        send=spy.send,
+        answer=spy.answer,
+        edit=spy.edit,
+    )
+    assert status == "approved"
+    assert spy.edits == []
+
+
+def test_dispatch_stale_dismiss_edits_nothing(db_path: Path) -> None:
+    """'Already handled' re-presses (a ping not in sent/digest anymore) edit
+    nothing — only a genuinely-recorded dismissal stamps the card."""
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok",
+        _cb("cp:dismiss:999999", message_id=42, message_text="a ping"),
+        db_path=db_path,
+        send=spy.send,
+        answer=spy.answer,
+        edit=spy.edit,
+    )
+    assert status == "cp_stale"
+    assert spy.answers and spy.answers[0][1] == "Already handled."
+    assert spy.edits == []
+
+
+def test_dispatch_failed_run_edits_nothing(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LEDGER_RESEARCH_RUN", "1")
+    spy = _Spy()
+
+    def _boom(task_id: int, **kw: object) -> int:
+        raise RuntimeError("web fetch failed")
+
+    status = research_notify.dispatch_callback(
+        "tok",
+        _cb("rt:run:9", message_id=1, message_text="a wondering"),
+        db_path=db_path,
+        send=spy.send,
+        answer=spy.answer,
+        edit=spy.edit,
+        run=_boom,
+    )
+    assert status == "run_failed"
+    assert spy.edits == []
+
+
+def test_dispatch_edit_failure_never_breaks_the_action(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A TelegramError from the edit call is suppressed — the action's own
+    status/answer must be unaffected."""
+    pid = create_proposal(
+        task_id=None, kind="memo", ticker="NU", title="t", body_md="b", db_path=db_path
+    )
+    spy = _Spy()
+
+    def _broken_edit(*a: object, **k: object) -> object:
+        raise telegram.TelegramError("boom")
+
+    status = research_notify.dispatch_callback(
+        "tok",
+        _cb(f"rp:approve:{pid}", message_id=5, message_text="NU - t"),
+        db_path=db_path,
+        send=spy.send,
+        answer=spy.answer,
+        edit=_broken_edit,
+    )
+    assert status == "approved"
+    prop = get_proposal(pid, db_path=db_path)
+    assert prop is not None and prop.status == "approved"
+
+
+def test_dispatch_cp_dismiss_stamps_and_strips(db_path: Path) -> None:
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO coach_pings (class_, key, ticker, body, status, source_ref, "
+            "created_at, updated_at) VALUES ('intent_followup','intent:1:0',NULL,'x','sent',"
+            "'note:1','2026-07-10','2026-07-10')"
+        )
+        conn.commit()
+        ping_id = int(conn.execute("SELECT id FROM coach_pings").fetchone()[0])
+    finally:
+        conn.close()
+
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok",
+        _cb(f"cp:dismiss:{ping_id}", message_id=3, message_text="x"),
+        db_path=db_path,
+        send=spy.send,
+        answer=spy.answer,
+        edit=spy.edit,
+    )
+    assert status == "cp_dismissed"
+    assert len(spy.edits) == 1
+    assert "- dismissed" in spy.edits[0][2]
+    assert spy.edits[0][3] is None
 
 
 def test_dispatch_run_sends_proposal_card(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -163,11 +312,11 @@ def test_dispatch_cp_review_sends_pre_analysis(
     finally:
         conn.close()
 
-    seen: list[tuple[object, str]] = []
+    seen: list[tuple[object, str, bool]] = []
 
-    def _fake_reply_text(repo_root: object, text: str) -> str:
-        seen.append((repo_root, text))
-        return "**NU** — position review (deterministic read)"
+    def _fake_reply_text(repo_root: object, text: str, *, plain: bool = False) -> str:
+        seen.append((repo_root, text, plain))
+        return "NU - position review (deterministic read)"
 
     monkeypatch.setattr(
         "advisor.position_review.review_reply_text", _fake_reply_text, raising=False
@@ -180,6 +329,44 @@ def test_dispatch_cp_review_sends_pre_analysis(
     assert spy.answers and spy.answers[0][1] == "Reviewing NU..."
     assert spy.sends and "NU" in spy.sends[0][1]
     assert seen and seen[0][1] == "/review NU"
+    assert seen[0][2] is True  # the Telegram cp:review reply uses the plain renderer
+
+
+def test_dispatch_cp_review_stamps_with_ticker(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO coach_pings (class_, key, ticker, body, status, source_ref, "
+            "created_at, updated_at) VALUES ('falsifier_breach','alert:2','NU','x','sent',"
+            "'decision:2','2026-07-10','2026-07-10')"
+        )
+        conn.commit()
+        ping_id = int(conn.execute("SELECT id FROM coach_pings").fetchone()[0])
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(
+        "advisor.position_review.review_reply_text",
+        lambda repo_root, text, **kw: "review body",
+        raising=False,
+    )
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok",
+        _cb(f"cp:review:{ping_id}", message_id=8, message_text="falsifier tripped for NU"),
+        db_path=db_path,
+        send=spy.send,
+        answer=spy.answer,
+        edit=spy.edit,
+    )
+    assert status == "cp_reviewed"
+    assert len(spy.edits) == 1
+    assert "- reviewed NU" in spy.edits[0][2]
+    assert spy.edits[0][3] is None
 
 
 def test_dispatch_cp_review_no_ticker(db_path: Path) -> None:

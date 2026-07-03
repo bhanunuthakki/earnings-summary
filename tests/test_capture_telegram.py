@@ -50,6 +50,45 @@ def test_parse_callback_update() -> None:
     assert u.chat_id == 111
 
 
+def test_parse_callback_update_round_trips_message_id_and_text() -> None:
+    """The callback's originating message id/text round-trip off the fixture
+    payload — dispatch_callback's editMessage stamp needs both to edit the
+    ORIGINAL card in place."""
+    u = telegram.parse_update(
+        {
+            "update_id": 7,
+            "callback_query": {
+                "id": "q1",
+                "data": "rp:approve:42",
+                "message": {
+                    "chat": {"id": 111},
+                    "message_id": 9,
+                    "text": "NU - a proposal\n\nexcerpt",
+                },
+            },
+        }
+    )
+    assert u.message_id == 9
+    assert u.chat_id == 111
+    assert u.message_text == "NU - a proposal\n\nexcerpt"
+
+
+def test_parse_callback_update_no_text_defaults_none() -> None:
+    """Backward-compatible default: a callback payload with no message text
+    (or an older fixture predating this field) parses message_text=None."""
+    u = telegram.parse_update(
+        {
+            "update_id": 7,
+            "callback_query": {
+                "id": "q1",
+                "data": "rp:approve:42",
+                "message": {"chat": {"id": 111}, "message_id": 9},
+            },
+        }
+    )
+    assert u.message_text is None
+
+
 def test_parse_document_update() -> None:
     u = telegram.parse_update(
         {
@@ -114,6 +153,50 @@ def test_inline_keyboard() -> None:
             ]
         ]
     }
+
+
+def test_edit_message_posts_text_and_strips_keyboard_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: dict[str, object] = {}
+
+    def _fake_request(url: str, *, data: dict[str, object] | None = None, timeout: float = 60):
+        seen["url"] = url
+        seen["data"] = data
+        return {}
+
+    monkeypatch.setattr(telegram, "_request", _fake_request)
+    telegram.edit_message("tok", 111, 9, "new body")
+    assert "editMessageText" in seen["url"]
+    data = seen["data"]
+    assert data == {
+        "chat_id": 111,
+        "message_id": 9,
+        "text": "new body",
+        "reply_markup": {"inline_keyboard": []},
+    }
+
+
+def test_edit_message_carries_an_explicit_keyboard(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def _fake_request(url: str, *, data: dict[str, object] | None = None, timeout: float = 60):
+        seen["data"] = data
+        return {}
+
+    monkeypatch.setattr(telegram, "_request", _fake_request)
+    kb = telegram.inline_keyboard([[("Dismiss", "cp:dismiss:1")]])
+    telegram.edit_message("tok", 111, 9, "new body", reply_markup=kb)
+    assert seen["data"]["reply_markup"] == kb
+
+
+def test_edit_message_raises_telegram_error_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake_request(url: str, *, data: dict[str, object] | None = None, timeout: float = 60):
+        raise telegram.TelegramError("nope")
+
+    monkeypatch.setattr(telegram, "_request", _fake_request)
+    with pytest.raises(telegram.TelegramError):
+        telegram.edit_message("tok", 111, 9, "new body")
 
 
 def test_get_updates_parses_via_mock(monkeypatch: pytest.MonkeyPatch) -> None:

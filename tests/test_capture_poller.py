@@ -149,11 +149,11 @@ def test_poll_once_review_command_replies_with_pre_analysis(
     monkeypatch.setattr(
         telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
     )
-    seen_calls: list[tuple[object, str]] = []
+    seen_calls: list[tuple[object, str, bool]] = []
 
-    def _fake_reply_text(repo_root: object, text: str) -> str:
-        seen_calls.append((repo_root, text))
-        return "**NU** — position review (deterministic read)"
+    def _fake_reply_text(repo_root: object, text: str, *, plain: bool = False) -> str:
+        seen_calls.append((repo_root, text, plain))
+        return "NU - position review (deterministic read)"
 
     monkeypatch.setattr(
         "advisor.position_review.review_reply_text", _fake_reply_text, raising=False
@@ -171,6 +171,7 @@ def test_poll_once_review_command_replies_with_pre_analysis(
     assert len(sent) == 1
     assert "NU" in sent[0]
     assert seen_calls and seen_calls[0][1] == "/review NU"
+    assert seen_calls[0][2] is True  # the poller's /review reply uses the plain renderer
     # no capture/ingest occurred for a slash command
     assert notes.list_notes(kind="musing", db_path=db_path) == []
 
@@ -185,7 +186,7 @@ def test_poll_once_review_command_degrades_on_failure(
         telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
     )
 
-    def _boom(repo_root: object, text: str) -> str:
+    def _boom(repo_root: object, text: str, *, plain: bool = False) -> str:
         raise RuntimeError("cockpit unavailable")
 
     monkeypatch.setattr("advisor.position_review.review_reply_text", _boom, raising=False)

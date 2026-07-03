@@ -14,6 +14,7 @@ send/answer are injected so it is unit-testable without the network.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -30,6 +31,7 @@ from research.proposals import (
 
 SendFn = Callable[..., object]
 AnswerFn = Callable[..., object]
+EditFn = Callable[..., object]
 RunFn = Callable[..., "int | None"]
 
 # (button label, verb) — ASCII only (the thread stays emoji-free, like _CONFIRM).
@@ -164,6 +166,35 @@ def _default_runner(
     return run_research_task(task_id, db_path=db_path, repo_root=repo_root)
 
 
+def _state_stamp(label: str) -> str:
+    """``"- approved 07-03"`` — the naive-UTC now-helper repo-wide (see
+    ``research.governor._now`` / ``now_naive_utc``), MM-DD only: the stamp
+    marks a card as handled, not a precise audit timestamp."""
+    from user_state._db import now_naive_utc
+
+    return f"- {label} {now_naive_utc().strftime('%m-%d')}"
+
+
+def _stamp_card(
+    token: str,
+    update: telegram.Update,
+    stamp: str,
+    *,
+    edit: EditFn,
+) -> None:
+    """Best-effort editMessage on the ORIGINAL card after a successful action:
+    keep its text, append one state line, and strip the inline keyboard so a
+    handled card can never be re-pressed as a no-op-looking retry. Needs both
+    the chat + the originating message id (both parsed off callback_query);
+    a failed or impossible edit never affects the action itself."""
+    if update.chat_id is None or update.message_id is None:
+        return
+    body = update.message_text or ""
+    text = f"{body}\n{stamp}" if body else stamp
+    with contextlib.suppress(telegram.TelegramError):
+        edit(token, update.chat_id, update.message_id, text, reply_markup=None)
+
+
 def dispatch_callback(
     token: str,
     update: telegram.Update,
@@ -172,13 +203,19 @@ def dispatch_callback(
     repo_root: Path | None = None,
     send: SendFn = telegram.send_message,
     answer: AnswerFn = telegram.answer_callback,
+    edit: EditFn = telegram.edit_message,
     run: RunFn | None = None,
 ) -> str | None:
     """Handle one inline-button press. Returns a short status string (logs/tests).
 
     Trigger surface only — like the HTTP run route, it INVOKES the isolated engine
     (which keeps web-fetch and proposal-write in separate passes); it never fetches
-    the web itself."""
+    the web itself.
+
+    On every SUCCESSFUL action, best-effort ``edit`` the original card in place
+    (stamp + strip the keyboard) via :func:`_stamp_card` — a handled card stays
+    visibly handled and its buttons stop doing anything. A stale/failed/
+    malformed callback edits nothing."""
     parsed = parse_callback(update.callback_data)
     cqid = update.callback_query_id
     if parsed is None:
@@ -206,6 +243,7 @@ def dispatch_callback(
             proposal = get_proposal(proposal_id, db_path=db_path)
             if proposal is not None:
                 send_proposal_card(token, chat_id, proposal, send=send)
+        _stamp_card(token, update, _state_stamp("researched"), edit=edit)
         return "ran"
 
     if kind == "rp" and verb in PROPOSAL_VERBS:
@@ -221,6 +259,7 @@ def dispatch_callback(
         if cqid:
             suffix = f" {applied}" if applied else ""
             answer(token, cqid, text=f"{verb.capitalize()}: {status}.{suffix}")
+        _stamp_card(token, update, _state_stamp(status), edit=edit)
         return status
 
     if kind == "om":
@@ -236,6 +275,8 @@ def dispatch_callback(
         result = act_on_feed_item(obj_id, verb, db_path=db_path)
         if cqid:
             answer(token, cqid, text=result.message or ("Done." if result.ok else "Not found."))
+        if result.ok:
+            _stamp_card(token, update, _state_stamp(verb), edit=edit)
         return f"om_{verb}" if result.ok else "om_noop"
 
     if kind == "cp" and verb == "dismiss":
@@ -253,6 +294,8 @@ def dispatch_callback(
                 )
             else:
                 answer(token, cqid, text="Dismissed." if recorded else "Already handled.")
+        if recorded:
+            _stamp_card(token, update, _state_stamp("dismissed"), edit=edit)
         return "cp_dismissed" if recorded else "cp_stale"
 
     if kind == "cp" and verb == "review":
@@ -282,13 +325,14 @@ def dispatch_callback(
             root = repo_root or (Path(db_path).parent.parent if db_path else None)
             try:
                 reply = (
-                    review_reply_text(root, f"/review {ping.ticker}")
+                    review_reply_text(root, f"/review {ping.ticker}", plain=True)
                     if root is not None
                     else "Couldn't build that review (no database configured)."
                 )
             except Exception:
                 reply = f"Couldn't build a review for {ping.ticker}."
             send(token, chat_id, reply)
+        _stamp_card(token, update, _state_stamp(f"reviewed {ping.ticker}"), edit=edit)
         return "cp_reviewed"
 
     if cqid:

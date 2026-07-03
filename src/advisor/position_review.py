@@ -34,6 +34,7 @@ top-level ``db`` import triggers ``init_db``).
 from __future__ import annotations
 
 import re
+import sqlite3
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -63,10 +64,12 @@ __all__ = [
     "classify_valuation",
     "classify_weight_band",
     "encode_first_output",
+    "graded_sell_record",
     "mechanical_read",
     "parse_review_command",
     "parse_verdict_output",
     "render_pre_analysis_chat",
+    "render_pre_analysis_plain",
     "render_tax_lines",
     "review_position",
     "review_reply_text",
@@ -519,16 +522,83 @@ _VERDICT_KEYS: tuple[str, ...] = (
     "suggested_expression",
 )
 
-# The owner's documented decision-making, baked into the prompt as hard
-# constraints (from data/ledger_seed/seed.json). The deterministic guardrail
-# below is the backstop that ENFORCES rule 1 regardless of what the model does.
-_BEHAVIORAL_RULES = """\
+# Fallback when no graded sells/trims exist yet (or the query fails) — the
+# guard/prompt must never fabricate a ticker list.
+_GENERIC_SELL_PATTERN_LINE = "your sell-winners-too-early pattern"
+
+
+def graded_sell_record(db_path: Path | str | None) -> str | None:
+    """The owner's live graded record on sell/trim recommendations, as one line.
+
+    Reads ``decisions`` for his own rows (``decided_by = 'owner'``) recommending
+    a sell or trim that have since been graded (``outcome_label != 'pending'``),
+    and renders e.g. ``"Graded record on sells/trims: 5 of 8 wrong (MU, TSM,
+    NVDA, AMZN, GOOGL)"`` — the count of ``wrong``-graded calls over the total
+    graded, followed by the DISTINCT wrong-graded tickers (alphabetical).
+
+    Returns ``None`` when there is nothing graded yet (a fresh DB, or every
+    sell/trim still ``pending``) — the caller omits the line rather than
+    printing a hollow "0 of 0". Also ``None``/degraded on any DB error (missing
+    file, pre-``decisions`` schema): never fabricate a count or ticker list.
+    """
+    if db_path is None or not Path(db_path).exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except (sqlite3.Error, OSError, ValueError):
+        return None
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*), SUM(CASE WHEN outcome_label = 'wrong' THEN 1 ELSE 0 END) "
+            "FROM decisions WHERE decided_by = 'owner' "
+            "AND recommendation_kind IN ('sell', 'trim') AND outcome_label != 'pending'"
+        ).fetchone()
+        if row is None or not row[0]:
+            return None
+        total, wrong = int(row[0]), int(row[1] or 0)
+        tickers = [
+            str(r[0])
+            for r in conn.execute(
+                "SELECT DISTINCT ticker FROM decisions WHERE decided_by = 'owner' "
+                "AND recommendation_kind IN ('sell', 'trim') AND outcome_label = 'wrong' "
+                "AND ticker IS NOT NULL ORDER BY ticker"
+            ).fetchall()
+        ]
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+    names = f" ({', '.join(tickers)})" if tickers else ""
+    return f"Graded record on sells/trims: {wrong} of {total} wrong{names}"
+
+
+def _sell_pattern_phrase(graded_line: str | None) -> str:
+    """The parenthetical ticker clause for the guard/prompt copy — the derived
+    ``graded_sell_record`` line's ticker list when available, else the generic
+    phrase (never a hardcoded name list)."""
+    if graded_line is None:
+        return _GENERIC_SELL_PATTERN_LINE
+    match = re.search(r"\(([^)]+)\)\s*$", graded_line)
+    return f"sell-winners-too-early pattern ({match.group(1)})" if match else graded_line
+
+
+def _behavioral_rules(graded_line: str | None) -> str:
+    """The owner's documented decision-making, baked into the prompt as hard
+    constraints (from data/ledger_seed/seed.json), with rule 1's evidence
+    interpolated from the LIVE graded record rather than a stale hardcode.
+    The deterministic guardrail (:func:`apply_behavioral_guard`) is the backstop
+    that ENFORCES rule 1 regardless of what the model does."""
+    sell_evidence = (
+        f"his live graded record: {graded_line}"
+        if graded_line is not None
+        else "his self-diagnosed sell-winners-too-early flaw"
+    )
+    return f"""\
 Calibrate the verdict to THIS owner's documented decision-making:
-1. SELL-WINNERS-TOO-EARLY is his dominant, self-diagnosed flaw — he sold MU, GOOGL and TSM
-   far too early and regretted each. On an INTACT, high-conviction name, "it has run" or
-   "it looks expensive on the tape" is NEVER a sufficient reason to trim. The ONLY
-   price-agnostic reason to trim a healthy name is SIZING: weight above its target band, or
-   an oversized single-name concentration.
+1. SELL-WINNERS-TOO-EARLY is his dominant flaw — {sell_evidence}. On an INTACT,
+   high-conviction name, "it has run" or "it looks expensive on the tape" is NEVER a
+   sufficient reason to trim. The ONLY price-agnostic reason to trim a healthy name is
+   SIZING: weight above its target band, or an oversized single-name concentration.
 2. LEAP OVERLAY is his prescribed antidote — when he wants less capital at risk on a name he
    still believes in, prefer keep-the-core + a far-OTM long-dated LEAP over an outright trim
    (suggested_expression="LEAP-overlay").
@@ -621,7 +691,9 @@ def _tax_cost_phrase(tax: PositionTaxView | None) -> str | None:
     return f"~${trim.tax_low_usd:,.0f}-${trim.tax_high_usd:,.0f} (term unknown)"
 
 
-def apply_behavioral_guard(pre: PreAnalysis, out: VerdictOutput) -> VerdictOutput:
+def apply_behavioral_guard(
+    pre: PreAnalysis, out: VerdictOutput, *, graded_line: str | None = None
+) -> VerdictOutput:
     """Enforce the sell-winners-too-early rule deterministically.
 
     A ``trim``/``sell`` on a thesis that is intact-or-warn, NOT over-valued, and
@@ -630,6 +702,11 @@ def apply_behavioral_guard(pre: PreAnalysis, out: VerdictOutput) -> VerdictOutpu
     mistake. Override it to ``hold`` and say why. Legitimate trims survive
     untouched: a breached thesis, an over-valued name (ladder trim/sell), an
     above-band weight, or an oversized concentration all justify trimming.
+
+    ``graded_line`` is the caller-supplied output of :func:`graded_sell_record`
+    (built ONCE per review, not re-queried here) — the override text names the
+    live wrong-graded tickers when available and falls back to a generic
+    "sell-winners-too-early pattern" phrase (no hardcoded names) otherwise.
 
     When a tax view is on the pre-analysis, an override cites the trim's tax
     cost as supporting rationale — the tax never *drives* the verdict (that
@@ -645,16 +722,16 @@ def apply_behavioral_guard(pre: PreAnalysis, out: VerdictOutput) -> VerdictOutpu
     if thesis_healthy and not_overvalued and not sizing_justified:
         cost = _tax_cost_phrase(pre.tax)
         tax_support = f" Trimming now would also cost {cost} in taxes." if cost else ""
+        pattern = _sell_pattern_phrase(graded_line)
         return replace(
             out,
             verdict="hold",
             reason=f"[behavioral guard] Overrode a price-only {out.verdict} on an intact, "
             f"non-oversized, non-overvalued name.{tax_support} {out.reason}",
             behavioral_check=(
-                "This is the sell-winners-too-early pattern (MU/GOOGL/TSM): trimming a "
-                "healthy, non-oversized name that the framework says is not expensive. "
-                "Hold the core; if you want less capital at risk, use a LEAP overlay. "
-                f"{out.behavioral_check}"
+                f"This is the {pattern}: trimming a healthy, non-oversized name that the "
+                "framework says is not expensive. Hold the core; if you want less capital "
+                f"at risk, use a LEAP overlay. {out.behavioral_check}"
             ),
             suggested_expression="do-nothing",
             verdict_source="guard_override",
@@ -723,7 +800,9 @@ def _convictions_block(repo_root: Path, ticker: str, db_path: Path | str | None)
     return spotlight(raw, source="the owner's own captured convictions (the Ledger)")
 
 
-def _build_verdict_prompt(pre: PreAnalysis, convictions_block: str) -> str:
+def _build_verdict_prompt(
+    pre: PreAnalysis, convictions_block: str, *, graded_line: str | None = None
+) -> str:
     facts = (
         f"Ticker: {pre.ticker}\n"
         f"Weight: {pre.weight_pct}% of book (source: {pre.weight_source}); "
@@ -742,7 +821,7 @@ def _build_verdict_prompt(pre: PreAnalysis, convictions_block: str) -> str:
         "You are the owner's position-review analyst. Using the GROUNDED FACTS "
         "(deterministic, computed from the platform) and the owner's OWN convictions, "
         "return a single trim/hold/add/sell verdict for this ONE position.\n\n"
-        f"{_BEHAVIORAL_RULES}\n"
+        f"{_behavioral_rules(graded_line)}\n"
         f"## GROUNDED FACTS\n{facts}\n"
         f"## THE OWNER'S CONVICTIONS ON THIS NAME\n{convictions_block or '(none on file)'}\n\n"
         "## OUTPUT — return ONLY a JSON object with exactly these keys:\n"
@@ -871,9 +950,17 @@ def review_position(
     if not pre.thesis_present:
         out = encode_first_output(pre)
     else:
+        from db_paths import resolve_db_path
         from llm.structured import call_llm_structured
 
-        prompt = _build_verdict_prompt(pre, _convictions_block(repo_root, pre.ticker, db_path))
+        # Built ONCE per review and threaded into both the prompt and the guard
+        # override, so the model's rationale and the deterministic backstop
+        # always cite the same live count (never a stale hardcode, never a
+        # query race between the two call sites).
+        graded_line = graded_sell_record(resolve_db_path(db_path))
+        prompt = _build_verdict_prompt(
+            pre, _convictions_block(repo_root, pre.ticker, db_path), graded_line=graded_line
+        )
         # db_path= keeps the call's DB-backed layers (llm_calls cost ledger,
         # budget, pins) on the caller's DB — without it a library invocation
         # with an explicit db_path and no db.set_db_path bootstrap logged its
@@ -885,7 +972,9 @@ def review_position(
             required_keys=_VERDICT_KEYS,
             db_path=db_path,
         )
-        out = apply_behavioral_guard(pre, parse_verdict_output(cast("dict[str, object]", payload)))
+        out = apply_behavioral_guard(
+            pre, parse_verdict_output(cast("dict[str, object]", payload)), graded_line=graded_line
+        )
 
     memo_id = _persist_review(pre, out, user_id=user_id, db_path=db_path) if persist else None
     return PositionReview(pre=pre, output=out, memo_id=memo_id)
@@ -961,10 +1050,12 @@ def render_tax_lines(tax: PositionTaxView | None) -> list[str]:
     return lines
 
 
-def render_pre_analysis_chat(pre: PreAnalysis) -> str:
+def render_pre_analysis_chat(pre: PreAnalysis, *, db_path: Path | str | None = None) -> str:
     """Compact Markdown reply for the ``/review`` chat command — the grounded
-    facts plus the mechanical read, the tax block, and a pointer to the full
-    calibrated verdict."""
+    facts plus the mechanical read, the tax block, the live graded-sells base
+    rate (when any sells/trims are graded yet), and a pointer to the full
+    calibrated verdict. ``db_path`` is optional — omitted, the base-rate line
+    simply doesn't render (same degrade as a fresh/ungraded DB)."""
     wt = f"{pre.weight_pct:.1f}%" if pre.weight_pct is not None else "—"
     conc = f"FLAGGED (>= {CONCENTRATION_PCT:.0f}% single name)" if pre.concentration_flag else "no"
     fv = f"${pre.npv_per_share:,.2f}" if pre.npv_per_share is not None else "—"
@@ -972,6 +1063,7 @@ def render_pre_analysis_chat(pre: PreAnalysis) -> str:
     gap = f"{pre.dcf_gap_pct:+.1f}%" if pre.dcf_gap_pct is not None else "—"
     watch = f" · watch: {'; '.join(pre.tripped_rules)}" if pre.tripped_rules else ""
     at_flag = f" --at-price {pre.at_price:g}" if pre.at_price is not None else ""
+    graded_line = graded_sell_record(db_path)
     return "\n".join(
         [
             f"**{pre.ticker}** — position review (deterministic read; weight source: "
@@ -983,8 +1075,42 @@ def render_pre_analysis_chat(pre: PreAnalysis) -> str:
             f"ladder: {pre.valuation_verdict}",
             *render_tax_lines(pre.tax),
             f"- Mechanical read: {mechanical_read(pre)}",
+            *([f"- {graded_line}"] if graded_line is not None else []),
             f"- Full calibrated verdict (LLM + behavioral guard): "
             f"`python execution/review_position.py {pre.ticker}{at_flag}`",
+        ]
+    )
+
+
+def render_pre_analysis_plain(pre: PreAnalysis, *, db_path: Path | str | None = None) -> str:
+    """Plain-ASCII reply for the ``/review`` command on Telegram — the SAME
+    grounded facts as :func:`render_pre_analysis_chat` (including the live
+    graded-sells base rate), with no ``**``/backtick Markdown markers
+    (Telegram's ``send_message`` never sets ``parse_mode``, so a
+    Markdown-shaped body arrives as a raw text wall — literal asterisks and
+    backticks). Also drops the CLI pointer line: ``python execution/...`` is a
+    broken instruction in a chat channel with no shell. Ends instead with a
+    pointer to the calibrated review surface in the web app."""
+    wt = f"{pre.weight_pct:.1f}%" if pre.weight_pct is not None else "-"
+    conc = f"FLAGGED (>= {CONCENTRATION_PCT:.0f}% single name)" if pre.concentration_flag else "no"
+    fv = f"${pre.npv_per_share:,.2f}" if pre.npv_per_share is not None else "-"
+    asked = f"${pre.at_price:,.2f}" if pre.at_price is not None else "-"
+    gap = f"{pre.dcf_gap_pct:+.1f}%" if pre.dcf_gap_pct is not None else "-"
+    watch = f" - watch: {'; '.join(pre.tripped_rules)}" if pre.tripped_rules else ""
+    graded_line = graded_sell_record(db_path)
+    return "\n".join(
+        [
+            f"{pre.ticker} - position review (deterministic read; weight source: "
+            f"{pre.weight_source})",
+            f"- Sizing: {wt} of book - concentration: {conc} - band: {pre.weight_vs_band}",
+            f"- Fundamentals: thesis {pre.verdict_label or '-'} - "
+            f"break-rules {pre.break_rule_status}{watch}",
+            f"- Valuation: fair {fv} vs asked {asked} -> {gap} (+ = over-valued) - "
+            f"ladder: {pre.valuation_verdict}",
+            *render_tax_lines(pre.tax),
+            f"- Mechanical read: {mechanical_read(pre)}",
+            *([f"- {graded_line}"] if graded_line is not None else []),
+            "- Full calibrated review: from the desk (Holding -> Review).",
         ]
     )
 
@@ -1008,7 +1134,7 @@ def parse_review_command(text: str) -> tuple[str, float | None] | None:
     return ticker, at_price
 
 
-def review_reply_text(repo_root: Path, text: str) -> str:
+def review_reply_text(repo_root: Path, text: str, *, plain: bool = False) -> str:
     """``/review <TICKER> [at $PRICE]`` end-to-end: parse the ticker + at-price
     out of ``text`` and return the rendered instant pre-analysis reply.
 
@@ -1017,14 +1143,25 @@ def review_reply_text(repo_root: Path, text: str) -> str:
     instead of each re-implementing the parsing, so the at-price regex and the
     usage/error copy can never drift between the two surfaces. LLM-free and
     fast: ``build_pre_analysis`` never imports a model client.
+
+    ``plain=True`` (the Telegram callers) renders via
+    :func:`render_pre_analysis_plain` — no Markdown, since ``send_message``
+    never sets ``parse_mode`` there. The web chat (Ask tab) keeps the default
+    Markdown variant, which its renderer displays properly.
     """
+    if plain:
+        usage = "Usage: /review <TICKER> [at $PRICE] - e.g. /review RBRK or /review FLKR at $70."
+    else:
+        usage = "Usage: /review <TICKER> [at $PRICE] — e.g. `/review RBRK` or `/review FLKR at $70`."
     parsed = parse_review_command(text)
     if parsed is None:
-        return "Usage: /review <TICKER> [at $PRICE] — e.g. `/review RBRK` or `/review FLKR at $70`."
+        return usage
     ticker, at_price = parsed
     db_path = repo_root / "data" / "portfolio.db"
     try:
         pre = build_pre_analysis(repo_root, ticker, at_price=at_price, db_path=db_path)
     except Exception as exc:
         return f"Couldn't build a review for {ticker}: {type(exc).__name__}: {exc}"
-    return render_pre_analysis_chat(pre)
+    if plain:
+        return render_pre_analysis_plain(pre, db_path=db_path)
+    return render_pre_analysis_chat(pre, db_path=db_path)

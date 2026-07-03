@@ -225,7 +225,7 @@ def _review_reply(repo_root: Path | None, text: str) -> str:
     try:
         from advisor.position_review import review_reply_text
 
-        return review_reply_text(repo_root, text)
+        return review_reply_text(repo_root, text, plain=True)
     except Exception:
         ticker = text.split()[1].upper() if len(text.split()) > 1 else "that ticker"
         return f"Couldn't build a review for {ticker}."

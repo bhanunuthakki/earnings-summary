@@ -43,6 +43,10 @@ class Update:
     document_file_id: str | None = None
     document_file_name: str | None = None
     document_mime_type: str | None = None
+    # The ORIGINAL card's text (callback_query.message.text) — carried so a
+    # callback handler can editMessageText with the same body plus a state
+    # stamp, rather than needing a separate fetch. None for non-callback kinds.
+    message_text: str | None = None
 
 
 def _as_int(value: object) -> int | None:
@@ -73,6 +77,7 @@ def parse_update(raw: dict[str, object]) -> Update:
             message_id=_as_int(msg.get("message_id")),
             callback_data=_as_str(cq.get("data")),
             callback_query_id=_as_str(cq.get("id")),
+            message_text=_as_str(msg.get("text")),
         )
 
     msg = _as_dict(raw.get("message"))
@@ -202,3 +207,23 @@ def answer_callback(token: str, callback_query_id: str, *, text: str | None = No
     if text:
         data["text"] = text
     return _request(_API.format(token=token, method="answerCallbackQuery"), data=data)
+
+
+def edit_message(
+    token: str,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    *,
+    reply_markup: dict[str, object] | None = None,
+) -> object:
+    """Edit a previously-sent message's text (and inline keyboard) in place —
+    editMessageText. Passing ``reply_markup=None`` strips the keyboard (an empty
+    markup, not an absent field, is what clears it on Telegram's side)."""
+    data: dict[str, object] = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "reply_markup": reply_markup if reply_markup is not None else {"inline_keyboard": []},
+    }
+    return _request(_API.format(token=token, method="editMessageText"), data=data)

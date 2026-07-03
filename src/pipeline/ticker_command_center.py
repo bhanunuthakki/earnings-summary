@@ -756,13 +756,23 @@ def render_ticker_fragment(tcc: TickerCommandCenter) -> str:
 def _holding_band(tcc: TickerCommandCenter) -> str:
     """The one-line holding utility band (UX9c). Left: the type-ahead combobox
     (replacing the PR4 ticker/name heading + the shell's old cc-picker dropdown).
-    Right: verdict + freshness dot + report/DCF/tracker links + Ops/Notes icons.
-    The ✎ Notes button opens the shell's SHARED notes drawer (data-cc-notes-open),
-    which scopes to this ticker — so the holding's own PR4 notes drawer retires."""
+    Right: verdict + freshness dot + report/DCF/tracker/review links + Ops/Notes
+    icons. The ✎ Notes button opens the shell's SHARED notes drawer
+    (data-cc-notes-open), which scopes to this ticker — so the holding's own
+    PR4 notes drawer retires.
+
+    The Review link (PR5 — the behavioral guard's only point-of-action doorway
+    before this) peeks the instant pre-analysis + live graded-sells base rate
+    in place, with an escalation button to the full LLM-calibrated review;
+    ``/ticker/<T>`` stays its real href for middle-click / new tab (the
+    evaluation-report route also carries the position tab)."""
     ident = tcc.identity
+    t = escape(ident.ticker)
     links = [
-        f'<a href="/reports/{escape(ident.ticker)}" target="_blank" rel="noopener">Report ↗</a>',
-        f'<a href="/dcf/{escape(ident.ticker)}">DCF ↓</a>',
+        f'<a href="/reports/{t}" target="_blank" rel="noopener">Report ↗</a>',
+        f'<a href="/dcf/{t}">DCF ↓</a>',
+        f'<a href="/ticker/{t}" data-peek-url="/api/peek/review/{t}" '
+        f'data-peek-title="Position review · {t}">Review</a>',
     ]
     if tcc.tracker_url:
         links.append(
