@@ -5,10 +5,12 @@ locked, or doesn't have the llm_calls table, the writer logs a warning and
 returns — never raising. The LLM call that produced the row is too
 expensive to fail because of a logging miss.
 
-The writer uses `db.get_connection()` so it automatically picks up whichever
-repo-root the caller has set via `_sync_db_to_repo` (build_artifacts.py
-mutates db.DB_PATH when --repo-root is passed). Tests can inject a path
-through the `db_path` parameter directly.
+The writer resolves its DB via ``db_paths.resolve_db_path``: an explicit
+``db_path`` parameter wins; then an active ``db_paths.db_path_context`` (how
+``call_llm(db_path=...)`` scopes a call made against an explicit DB); then
+``db.DB_PATH`` — so it automatically picks up whichever repo-root the caller
+has set via ``_sync_db_to_repo`` (build_artifacts.py mutates db.DB_PATH when
+--repo-root is passed). Tests can inject a path through ``db_path`` directly.
 """
 
 from __future__ import annotations

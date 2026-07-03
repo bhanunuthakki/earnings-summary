@@ -874,11 +874,16 @@ def review_position(
         from llm.structured import call_llm_structured
 
         prompt = _build_verdict_prompt(pre, _convictions_block(repo_root, pre.ticker, db_path))
+        # db_path= keeps the call's DB-backed layers (llm_calls cost ledger,
+        # budget, pins) on the caller's DB — without it a library invocation
+        # with an explicit db_path and no db.set_db_path bootstrap logged its
+        # cost row against db.DB_PATH ("no such table: llm_calls").
         payload = call_llm_structured(
             prompt,
             purpose=POSITION_REVIEW_PURPOSE,
             ticker=pre.ticker,
             required_keys=_VERDICT_KEYS,
+            db_path=db_path,
         )
         out = apply_behavioral_guard(pre, parse_verdict_output(cast("dict[str, object]", payload)))
 
