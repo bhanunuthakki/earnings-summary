@@ -390,6 +390,38 @@ def test_capture_tray_chrome() -> None:
     assert "trayPrefillTicker" in SHELL_JS
 
 
+def test_capture_tray_coach_mount_and_renderer() -> None:
+    """W2: the tray's entry-coaching mount (pledge_challenge card /
+    annotated_decision_id receipt) — a DUPLICATED renderer (not shared) from
+    pipeline/ledger_panel.py's _CAPTURE_JS renderCoach, per the repo's
+    duplicate-simple-shared-logic preference. A challenge or receipt keeps the
+    tray open (only closeTray() on the plain/no-coaching path)."""
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    assert 'id="cc-capture-tray-coach"' in html
+    assert "res.pledge_challenge" in SHELL_JS
+    assert "res.annotated_decision_id" in SHELL_JS
+    assert "function trayRenderCoach" in SHELL_JS
+    # Escaped before injection (challenge text carries ** and tickers) and
+    # newlines become <br>, not raw markdown.
+    assert "escHtml(res.pledge_challenge)" in SHELL_JS
+    assert "<br>" in SHELL_JS
+    # The annotation tap re-POSTs the SAME capture endpoint.
+    assert SHELL_JS.count("'/api/capture/text'") >= 2
+    # The receipt doorway is interpolated, never a literal '#dec...' (hex-scan
+    # guard — see _TRAY_DECISIONS_HASH).
+    assert "/#decisions_record" in SHELL_JS
+    assert "__TRAY_DECISIONS_HASH__" not in SHELL_JS
+    # Dismiss is plain element removal, not a second CCOverlay-registered
+    # surface (it's inline content inside the tray, not a transient one).
+    assert "data-tray-coach-dismiss" in SHELL_JS
+    # trayCapture() only auto-closes when trayRenderCoach() reports nothing
+    # to show — it must gate closeTray() behind the renderer's return value.
+    capture_start = SHELL_JS.index("function trayCapture()")
+    capture_body = SHELL_JS[capture_start : capture_start + 1200]
+    assert "if (trayRenderCoach(res.j)) return;" in capture_body
+    assert "closeTray();" in capture_body
+
+
 def test_capture_tray_never_handles_escape_itself() -> None:
     """Constraint: Escape is CCOverlay's alone. The tray's own JS block must
     not add a local Escape branch (dismissal happens via CCOverlay.register,

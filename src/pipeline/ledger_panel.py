@@ -36,6 +36,14 @@ from ui.prose import render_prose
 from ui.time import stamp_html
 from user_state.notes import AnalystNoteRow, list_notes
 
+# The Portfolio > Decisions panel hash — interpolated rather than written as
+# one '#decisions...' literal: the token guard's hex scan reads '#dec' as a
+# raw color (tests/test_ui_controls.py scans every value literal in a
+# CSS-emitting module). See src/pipeline/open_loops.py _DECISIONS_HASH for
+# the same idiom.
+_DECISIONS_PANEL = "decisions_record"
+_DECISIONS_HASH = f"/#{_DECISIONS_PANEL}"
+
 _PANEL_STYLE = """<style>
 .ledger-cap { background: var(--surface); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-4); }
 .ledger-cap textarea { width: 100%; min-height: 64px; resize: vertical; font-family: var(--sans); font-size: var(--fs-body); }
@@ -56,13 +64,76 @@ _PANEL_STYLE = """<style>
 .ledger-stance { background: var(--surface); border-left: 3px solid var(--accent); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2); }
 .ledger-stance-head { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: var(--sp-1); }
 .ledger-stance-meta { color: var(--muted); font-size: var(--fs-micro); margin-left: auto; }
+.ledger-coach-card { background: var(--surface); border-left: 3px solid var(--accent); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2); position: relative; }
+.ledger-coach-body { font-size: var(--fs-body); line-height: 1.55; color: var(--fg-soft); white-space: normal; }
+.ledger-coach-row { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
+.ledger-coach-row input { flex: 1; font-family: var(--sans); font-size: var(--fs-body); }
+.ledger-coach-x { position: absolute; top: var(--sp-2); right: var(--sp-2); }
+.ledger-coach-receipt { color: var(--fg-soft); font-size: var(--fs-caption); }
 </style>"""
 
 _CAPTURE_JS = """<script>(function(){
   var btn=document.getElementById('ledger-cap-btn');
   var ta=document.getElementById('ledger-cap-text');
   var st=document.getElementById('ledger-cap-status');
+  var coach=document.getElementById('ledger-cap-coach');
   if(!btn||!ta){ return; }
+
+  function esc(s){
+    return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  // Plain-text challenge/receipt render: escape, then newlines -> <br> only
+  // (no markdown). DUPLICATED (not shared) in command_center_shell.py SHELL_JS
+  // trayRenderCoach() per the repo's duplicate-simple-shared-logic preference
+  // — see feedback_duplicate_simple_shared_logic.md.
+  function renderCoach(res){
+    if(!coach){ return; }
+    if(res && res.pledge_challenge){
+      var body=esc(res.pledge_challenge).replace(/\\n/g,'<br>');
+      coach.innerHTML =
+        '<div class="ledger-coach-card">'
+        +'<button type="button" class="k-btn k-btn-sm k-btn-quiet ledger-coach-x" '
+        +'data-coach-dismiss title="dismiss">&times;</button>'
+        +'<div class="ledger-coach-body">'+body+'</div>'
+        +'<div class="ledger-coach-row">'
+        +'<input type="text" id="ledger-coach-annotate" '
+        +'placeholder="conviction + falsifier \\u2014 one line completes the record">'
+        +'<button type="button" class="k-btn k-btn-primary k-btn-sm" id="ledger-coach-send">Send</button>'
+        +'</div></div>';
+      var sendBtn=document.getElementById('ledger-coach-send');
+      var input=document.getElementById('ledger-coach-annotate');
+      if(sendBtn && input){
+        sendBtn.addEventListener('click', function(){
+          var note=(input.value||'').trim();
+          if(!note){ input.focus(); return; }
+          sendBtn.disabled=true;
+          fetch('/api/capture/text',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:note})})
+            .then(function(r){ return r.json(); })
+            .then(function(res2){ renderCoach(res2); })
+            .catch(function(){ sendBtn.disabled=false; });
+        });
+      }
+      return;
+    }
+    if(res && res.annotated_decision_id){
+      coach.innerHTML =
+        '<div class="ledger-coach-card">'
+        +'<button type="button" class="k-btn k-btn-sm k-btn-quiet ledger-coach-x" '
+        +'data-coach-dismiss title="dismiss">&times;</button>'
+        +'<div class="ledger-coach-receipt">Noted \\u2014 recorded on decision '
+        +'<a href="__DECISIONS_HASH__">#' + esc(res.annotated_decision_id) + '</a></div></div>';
+      return;
+    }
+    coach.innerHTML='';
+  }
+  if(coach){
+    coach.addEventListener('click', function(e){
+      if(e.target.closest('[data-coach-dismiss]')){
+        coach.innerHTML='';
+      }
+    });
+  }
+
   function send(){
     var text=(ta.value||'').trim();
     if(!text){ ta.focus(); return; }
@@ -71,8 +142,12 @@ _CAPTURE_JS = """<script>(function(){
       .then(function(r){ return r.json(); })
       .then(function(res){
         ta.value='';
-        var tag = (res && res.ticker) ? (' - '+res.ticker) : ((res && res.needs_ticker) ? ' - needs ticker' : '');
-        if(st){ st.textContent='Captured'+tag; }
+        if(res && (res.pledge_challenge || res.annotated_decision_id)){
+          renderCoach(res);
+        } else {
+          var tag = (res && res.ticker) ? (' - '+res.ticker) : ((res && res.needs_ticker) ? ' - needs ticker' : '');
+          if(st){ st.textContent='Captured'+tag; }
+        }
         var list=document.getElementById('ledger-list');
         if(list){ fetch('/api/panel/musings?fragment=list').then(function(r){return r.text();}).then(function(h){ list.innerHTML=h; }); }
       })
@@ -82,6 +157,12 @@ _CAPTURE_JS = """<script>(function(){
   btn.addEventListener('click', send);
   ta.addEventListener('keydown', function(e){ if((e.metaKey||e.ctrlKey) && e.key==='Enter'){ send(); } });
 })();</script>"""
+# The receipt link's href is spliced in via .replace() on a plain placeholder
+# token, not an f-string brace hole — _CAPTURE_JS is one big JS block and
+# f-string-escaping every JS {..} would be fragile. Two ordinary string
+# literals join at import time, same spirit as open_loops.py's interpolated
+# _DECISIONS_HASH (never a single '#dec...' literal for the hex-scan guard).
+_CAPTURE_JS = _CAPTURE_JS.replace("__DECISIONS_HASH__", _DECISIONS_HASH)
 
 
 def _capture_box() -> str:
@@ -93,7 +174,11 @@ def _capture_box() -> str:
         '<div class="ledger-cap-row">'
         '<button type="button" class="k-btn k-btn-primary k-btn-sm" id="ledger-cap-btn">Capture</button>'
         '<span class="ledger-cap-status" id="ledger-cap-status"></span>'
-        "</div></div>" + _CAPTURE_JS
+        "</div></div>"
+        # Mounted between the cap row and the list (W2 spec): the entry-coach
+        # card (pledge_challenge) or the annotation receipt renders here,
+        # empty otherwise.
+        '<div id="ledger-cap-coach"></div>' + _CAPTURE_JS
     )
 
 

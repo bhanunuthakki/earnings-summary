@@ -99,3 +99,50 @@ def test_reject_drops_wondering_from_list(db_path: Path) -> None:
     after = render_ledger_research_list(db_path)
     assert "Open wonderings" not in after
     assert f'data-reject-task="{task_id}"' not in after
+
+
+# ---------------------------------------------------------------------------
+# W2 — desk-capture entry coaching: the capture box renders the
+# pledge_challenge card and the annotated_decision_id receipt the server
+# already computes (execution/comments_server.py capture_text), instead of
+# throwing them away. See src/pipeline/command_center_shell.py trayRenderCoach
+# for the tray's duplicated counterpart.
+# ---------------------------------------------------------------------------
+
+
+def test_capture_box_has_coach_mount_between_cap_row_and_list(db_path: Path) -> None:
+    html = render_ledger_panel(db_path)
+    cap_idx = html.index('id="ledger-cap-btn"')
+    coach_idx = html.index('id="ledger-cap-coach"')
+    list_idx = html.index('id="ledger-list"') if 'id="ledger-list"' in html else len(html)
+    assert cap_idx < coach_idx
+    # Coach mount renders before the (possibly-empty-state) list content.
+    assert coach_idx < list_idx
+
+
+def test_capture_js_renders_pledge_challenge_and_receipt(db_path: Path) -> None:
+    from pipeline.ledger_panel import (
+        _CAPTURE_JS,  # pyright: ignore[reportPrivateUsage]  # coaching-render contract under test
+    )
+
+    # The renderer branches on both fields the server returns and never on
+    # ticker/needs_ticker alone (that stays the plain 4s status fallback).
+    assert "res.pledge_challenge" in _CAPTURE_JS
+    assert "res.annotated_decision_id" in _CAPTURE_JS
+    assert "res.wondering_task_id" not in _CAPTURE_JS or "ledger-list" in _CAPTURE_JS
+    # Escaped before injection (challenge text carries ** and tickers).
+    assert "function esc(" in _CAPTURE_JS
+    assert "replace(/&/g" in _CAPTURE_JS
+    # Newlines become <br>, not raw markdown bold rendering.
+    assert "<br>" in _CAPTURE_JS
+    # The annotation tap re-POSTs the SAME endpoint (fills the newest pending
+    # stub) rather than a separate annotate route.
+    assert _CAPTURE_JS.count("/api/capture/text") == 2
+    # The receipt doorway is a real decisions_record panel hash, built by
+    # interpolation (not a literal '#dec...' — see the guard note at the top
+    # of the module).
+    assert "/#decisions_record" in _CAPTURE_JS
+    assert "__DECISIONS_HASH__" not in _CAPTURE_JS
+    # Dismiss is plain element removal, no CCOverlay (inline content).
+    assert "data-coach-dismiss" in _CAPTURE_JS
+    assert "CCOverlay" not in _CAPTURE_JS

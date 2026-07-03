@@ -516,6 +516,15 @@ _PEEK_HTML = (
 # (see SHELL_JS): the roster matcher already links a bare/`$`-prefixed symbol
 # in plain text (src/capture/matcher.py), so the tray just prepends the open
 # holding's ticker to the textarea — no server-side ticker param needed.
+#
+# The Portfolio > Decisions panel hash — interpolated (two literals joined at
+# import time) rather than written as one '#decisions...' literal: the token
+# guard's hex scan reads '#dec' as a raw color (tests/test_ui_controls.py
+# scans every value literal in a CSS-emitting module). Same idiom as
+# src/pipeline/open_loops.py _DECISIONS_HASH / src/pipeline/ledger_panel.py.
+_TRAY_DECISIONS_PANEL = "decisions_record"
+_TRAY_DECISIONS_HASH = "/#" + _TRAY_DECISIONS_PANEL
+
 _CAPTURE_TRAY_HTML = (
     # No per-surface scrim div — CCOverlay (S4) shows the one shared .k-scrim.
     '<div class="cc-capture-tray" id="cc-capture-tray" hidden role="dialog" '
@@ -534,6 +543,10 @@ _CAPTURE_TRAY_HTML = (
     '<button class="k-btn k-btn-primary k-btn-sm" id="cc-capture-tray-save" type="button">Capture</button>'
     '<span class="cc-capture-tray-msg muted" id="cc-capture-tray-msg"></span>'
     "</div>"
+    # W2 entry-coaching mount: the pledge_challenge card or the
+    # annotated_decision_id receipt renders here — empty otherwise. Keeps the
+    # tray open when a challenge comes back (see trayCapture() in SHELL_JS).
+    '<div id="cc-capture-tray-coach"></div>'
     "</div>"
 )
 
@@ -1207,6 +1220,13 @@ td.ticker a:hover { color: var(--accent); }
   margin-bottom: 8px; }
 .cc-capture-tray-row { display: flex; align-items: center; gap: 10px; }
 .cc-capture-tray-msg { font-size: var(--fs-caption); }
+.cc-tray-coach-card { background: var(--surface); border-left: 3px solid var(--accent);
+  border-radius: var(--radius); padding: 10px 12px; margin-top: 8px; position: relative; }
+.cc-tray-coach-body { font-size: var(--fs-body); line-height: 1.5; color: var(--fg-soft); }
+.cc-tray-coach-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.cc-tray-coach-row input { flex: 1; font-family: var(--sans); font-size: var(--fs-body); }
+.cc-tray-coach-x { position: absolute; top: 6px; right: 6px; }
+.cc-tray-coach-receipt { color: var(--fg-soft); font-size: var(--fs-caption); }
 
 /* ============================================================
    Responsive + touch-aware overrides (S16 PR1)
@@ -2001,6 +2021,7 @@ SHELL_JS = r"""
   var trayBody = document.getElementById('cc-capture-tray-body');
   var trayMsg = document.getElementById('cc-capture-tray-msg');
   var trayTickerChip = document.getElementById('cc-capture-tray-ticker');
+  var trayCoach = document.getElementById('cc-capture-tray-coach');
 
   function trayPrefillTicker() {
     var t = holdingTicker();
@@ -2009,6 +2030,64 @@ SHELL_JS = r"""
       else { trayTickerChip.textContent = ''; trayTickerChip.hidden = true; }
     }
     if (t && trayBody && !trayBody.value) trayBody.value = '$' + t + ' ';
+  }
+
+  // Plain-text challenge/receipt render: escape (escHtml, defined above with
+  // the palette), then newlines -> <br> only (no markdown). DUPLICATED (not
+  // shared) from pipeline/ledger_panel.py _CAPTURE_JS renderCoach() per the
+  // repo's duplicate-simple-shared-logic preference — see
+  // feedback_duplicate_simple_shared_logic.md. W2: a pledge_challenge keeps
+  // the tray OPEN (the owner should answer it) with the challenge + a
+  // one-field annotation input; an annotated_decision_id shows the receipt
+  // (also keeps the tray open long enough to read it).
+  function trayRenderCoach(res) {
+    if (!trayCoach) return;
+    if (res && res.pledge_challenge) {
+      var body = escHtml(res.pledge_challenge).replace(/\n/g, '<br>');
+      trayCoach.innerHTML =
+        '<div class="cc-tray-coach-card">'
+        + '<button type="button" class="k-btn k-btn-sm k-btn-quiet cc-tray-coach-x" '
+        + 'data-tray-coach-dismiss title="dismiss">&times;</button>'
+        + '<div class="cc-tray-coach-body">' + body + '</div>'
+        + '<div class="cc-tray-coach-row">'
+        + '<input type="text" id="cc-tray-coach-annotate" '
+        + 'placeholder="conviction + falsifier — one line completes the record">'
+        + '<button type="button" class="k-btn k-btn-primary k-btn-sm" id="cc-tray-coach-send">Send</button>'
+        + '</div></div>';
+      var sendBtn = document.getElementById('cc-tray-coach-send');
+      var input = document.getElementById('cc-tray-coach-annotate');
+      if (sendBtn && input) {
+        sendBtn.addEventListener('click', function () {
+          var note = (input.value || '').trim();
+          if (!note) { input.focus(); return; }
+          sendBtn.disabled = true;
+          fetch('/api/capture/text', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: note })
+          }).then(function (r) { return r.json(); })
+            .then(function (res2) { trayRenderCoach(res2); })
+            .catch(function () { sendBtn.disabled = false; });
+        });
+      }
+      return true;
+    }
+    if (res && res.annotated_decision_id) {
+      trayCoach.innerHTML =
+        '<div class="cc-tray-coach-card">'
+        + '<button type="button" class="k-btn k-btn-sm k-btn-quiet cc-tray-coach-x" '
+        + 'data-tray-coach-dismiss title="dismiss">&times;</button>'
+        + '<div class="cc-tray-coach-receipt">Noted — recorded on decision '
+        + '<a href="__TRAY_DECISIONS_HASH__">#' + escHtml(res.annotated_decision_id) + '</a></div></div>';
+      return true;
+    }
+    trayCoach.innerHTML = '';
+    return false;
+  }
+  if (trayCoach) {
+    trayCoach.addEventListener('click', function (e) {
+      if (e.target.closest('[data-tray-coach-dismiss]')) trayCoach.innerHTML = '';
+    });
   }
 
   function trayCapture() {
@@ -2025,7 +2104,11 @@ SHELL_JS = r"""
     }).then(function (res) {
       if (!res.ok) { if (trayMsg) trayMsg.textContent = 'error: ' + (res.j.error || 'failed'); return; }
       trayBody.value = '';
+      if (trayMsg) trayMsg.textContent = '';
       if (window.ccReloadNotesDrawer) window.ccReloadNotesDrawer();
+      // A challenge or receipt keeps the tray open — the owner should read/
+      // answer it rather than have it vanish with the close animation.
+      if (trayRenderCoach(res.j)) return;
       closeTray();
     }).catch(function () { if (trayMsg) trayMsg.textContent = 'network error'; });
   }
@@ -2432,6 +2515,13 @@ SHELL_JS = r"""
   onHashChange();  // initial activation from the current hash (or overview)
 })();
 """.strip()
+# The tray's receipt-link href is spliced in via .replace() on a plain
+# placeholder token, not an f-string brace hole — SHELL_JS is one big raw JS
+# block and f-string-escaping every JS {..} would be fragile. Two ordinary
+# string literals join at import time (same idiom as _TRAY_DECISIONS_HASH
+# above / open_loops.py's _DECISIONS_HASH): never a single '#dec...' literal
+# for the hex-scan guard.
+SHELL_JS = SHELL_JS.replace("__TRAY_DECISIONS_HASH__", _TRAY_DECISIONS_HASH)
 
 
 _DOC_HEAD = (
