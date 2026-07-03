@@ -106,7 +106,11 @@ def regress_loading(
 ) -> StyleLoading | None:
     """OLS beta (with intercept) of the asset's daily returns on the factor
     spread over their latest ``lookback_obs`` common dates. ``None`` below
-    ``min_obs`` common observations or on a degenerate (zero-variance) factor.
+    ``min_obs`` common observations, on a degenerate (zero-variance) factor,
+    or when either series carries a non-finite value (NaN/inf) anywhere in
+    the window — a single price-gap artifact in the cached series must not
+    silently poison the beta via ``math.fsum``, which propagates NaN/inf
+    without raising.
     """
     common = sorted(asset_returns.keys() & factor_returns.keys())[-lookback_obs:]
     if len(common) < min_obs:
@@ -114,6 +118,8 @@ def regress_loading(
     n = len(common)
     xs = [factor_returns[d] for d in common]
     ys = [asset_returns[d] for d in common]
+    if not all(math.isfinite(v) for v in xs) or not all(math.isfinite(v) for v in ys):
+        return None
     mean_x = math.fsum(xs) / n
     mean_y = math.fsum(ys) / n
     sxx = math.fsum((x - mean_x) ** 2 for x in xs)

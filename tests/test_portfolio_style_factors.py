@@ -74,6 +74,26 @@ def test_regress_loading_degenerate_factor_is_none() -> None:
     assert regress_loading(asset, factor) is None
 
 
+def test_regress_loading_nan_in_asset_series_returns_none() -> None:
+    """A single NaN from a price-gap artifact in the cached asset series must
+    not silently poison the beta via math.fsum (which propagates NaN without
+    raising) — the whole window is rejected instead."""
+    days = _trading_days(150)
+    factor = _factor_series(days)
+    asset = _asset_from_factor(factor, 0.8)
+    asset[days[10]] = math.nan
+    assert regress_loading(asset, factor) is None
+
+
+def test_regress_loading_inf_in_factor_series_returns_none() -> None:
+    """Same contamination guard, on the factor leg instead of the asset leg."""
+    days = _trading_days(150)
+    factor = _factor_series(days)
+    asset = _asset_from_factor(factor, 0.8)  # clean asset series, derived first
+    factor[days[75]] = math.inf
+    assert regress_loading(asset, factor) is None
+
+
 def test_factor_spread_returns_intersects_and_requires_both_legs() -> None:
     days = _trading_days(10)
     f = StyleFactorDef(key="t", label="T", long="AAA", short="BBB", spread_label="AAA - BBB")

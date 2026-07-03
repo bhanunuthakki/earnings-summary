@@ -51,6 +51,13 @@ __all__ = [
 # (the clusters rank attention, they don't measure a hedge ratio).
 CLUSTER_CORR = 0.70
 
+# The reason a name is dropped for being flat (zero-variance) INSIDE the
+# already-aligned window — deliberately worded so it can never be confused
+# with build_aligned_returns's upstream alignment-drop reasons ("only N
+# daily returns...", "calendar overlap...below N days"), which are a
+# history-LENGTH problem rather than a variance problem.
+_DEGENERATE_REASON = "degenerate (constant) over the aligned window"
+
 
 @dataclass(slots=True)
 class CrowdingCluster:
@@ -150,7 +157,16 @@ def build_holdings_correlation_from_disk(
 
     Returns ``None`` when fewer than two holdings have enough aligned history
     (nothing pairwise to say — the caller renders the empty state). Names with
-    thin/absent history are reported in ``dropped``, never silently omitted.
+    thin/absent history are reported in ``dropped``, never silently omitted —
+    each reason string names its own drop mode so the two are never
+    conflated: ``build_aligned_returns``'s upstream alignment drops read
+    "only N daily returns..." / "calendar overlap...below N days" (a
+    HISTORY-LENGTH problem — the name's calendar is too short or too short
+    relative to the rest of the book), while a column this function drops
+    itself for being flat *within* that already-aligned window reads
+    "degenerate (constant) over the aligned window" (a VARIANCE problem —
+    plenty of history, but the series doesn't move, e.g. a halted/thin-traded
+    name) — see ``_DEGENERATE_REASON``.
     """
     returns_by_ticker: dict[str, dict[date, float]] = {}
     missing: dict[str, str] = {}
@@ -164,6 +180,9 @@ def build_holdings_correlation_from_disk(
     if aligned is None:
         return None
     # Degenerate (zero-variance) columns would poison corrcoef — drop them.
+    # This is a DIFFERENT failure mode than aligned.dropped (which is about
+    # calendar/history length): distinguish the reason text so a reader (or a
+    # test) never has to guess which stage dropped a name.
     matrix = aligned.matrix
     keep = [i for i, s in enumerate(matrix.std(axis=0)) if float(s) > 0.0 and math.isfinite(s)]
     dropped = dict(missing)
@@ -171,7 +190,7 @@ def build_holdings_correlation_from_disk(
     if len(keep) < len(aligned.tickers):
         for i, t in enumerate(aligned.tickers):
             if i not in keep:
-                dropped[t] = "constant return series over the window"
+                dropped[t] = _DEGENERATE_REASON
         matrix = matrix[:, keep]
     kept_tickers = [aligned.tickers[i] for i in keep]
     corr = correlation_matrix(matrix)

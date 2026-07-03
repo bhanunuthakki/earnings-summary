@@ -74,3 +74,23 @@ def test_thesis_collision_section_renders_offline() -> None:
     html = _page(offline, _cached())
     assert "live portfolio tracker" in html  # the offline note still leads
     assert "Thesis collisions" in html and "Brazilian consumer credit cycle" in html
+
+
+def test_thesis_collision_section_annotates_stale_findings() -> None:
+    """When the caller has already filtered a CachedReport against the
+    current holding set (thesis_collision.read_cached_report's
+    current_tickers), a name sold since the audit ran must be called out
+    visibly rather than silently vanishing."""
+    stale_cached = CachedReport(
+        report=CollisionReport(tickers_analyzed=("GOOGL", "META", "MELI", "NU")),
+        generated_at="2026-07-02T10:00:00",
+        stale_tickers=("NU",),
+    )
+    html = _page(PortfolioAnalytics(available=True, api_url="http://x"), stale_cached)
+    assert "Portfolio changed since this audit" in html
+    assert "NU" in html
+
+
+def test_thesis_collision_section_no_stale_note_when_unchanged() -> None:
+    html = _page(PortfolioAnalytics(available=True, api_url="http://x"), _cached())
+    assert "Portfolio changed since this audit" not in html

@@ -152,6 +152,33 @@ def test_propose_drops_findings_with_hallucinated_or_single_ticker() -> None:
     assert report.clusters == ()
 
 
+def test_propose_logs_warning_when_hallucinated_ticker_dropped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A ticker outside the analyzed set is a hallucination-pattern signal —
+    it must surface at WARNING, not just vanish via validation."""
+    snaps = [_snap("AAA"), _snap("BBB")]
+    payload = _payload(
+        clusters=[{"tickers": ["AAA", "BBB", "ZZZ"], "driver": "x", "rationale": "y"}]
+    )
+    with caplog.at_level("WARNING", logger="thesis_collision"):
+        report = tc.propose_thesis_collisions(snaps, call=_fixed(payload))
+    assert len(report.clusters) == 1  # AAA+BBB survive; ZZZ dropped
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "ZZZ" in str(warnings[0].message)
+
+
+def test_propose_no_warning_when_no_hallucinated_ticker(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    snaps = [_snap("AAA"), _snap("BBB")]
+    payload = _payload(clusters=[{"tickers": ["AAA", "BBB"], "driver": "x", "rationale": "y"}])
+    with caplog.at_level("WARNING", logger="thesis_collision"):
+        tc.propose_thesis_collisions(snaps, call=_fixed(payload))
+    assert not [r for r in caplog.records if r.levelname == "WARNING"]
+
+
 def test_propose_dedupes_repeated_ticker_in_one_finding() -> None:
     snaps = [_snap("AAA"), _snap("BBB")]
     payload = _payload(
@@ -326,3 +353,65 @@ def test_read_cached_report_none_when_nothing_generated(tmp_path: Path) -> None:
 
 def test_read_cached_report_none_when_db_missing(tmp_path: Path) -> None:
     assert tc.read_cached_report(tmp_path / "nope.db") is None
+
+
+# ---------------------------------------------------------------------------
+# Composition-drift filtering (read_cached_report(current_tickers=...))
+# ---------------------------------------------------------------------------
+
+
+def test_read_cached_report_unfiltered_without_current_tickers(tmp_path: Path) -> None:
+    """Omitting current_tickers returns the raw cached report — no filtering,
+    no stale_tickers — preserving the pre-existing behavior for callers that
+    don't have (or don't need) the live holding set."""
+    db_path = _db(tmp_path)
+    _write_holdings(tmp_path, "AAA", thesis="Alpha thesis")
+    _write_holdings(tmp_path, "BBB", thesis="Beta thesis")
+    call = _fixed(_payload(clusters=[{"tickers": ["AAA", "BBB"], "driver": "d", "rationale": "r"}]))
+    tc.refresh_thesis_collision(db_path, tmp_path, ["AAA", "BBB"], call=call)
+
+    cached = tc.read_cached_report(db_path)
+    assert cached is not None
+    assert len(cached.report.clusters) == 1
+    assert cached.stale_tickers == ()
+    assert cached.portfolio_changed is False
+
+
+def test_read_cached_report_drops_findings_for_sold_names(tmp_path: Path) -> None:
+    """A cluster naming a ticker no longer in current_tickers (sold since the
+    audit ran) is dropped from the returned report, and the sold ticker is
+    recorded in stale_tickers so the caller can annotate visibly instead of
+    silently rendering a stale finding as if it's still live."""
+    db_path = _db(tmp_path)
+    _write_holdings(tmp_path, "AAA", thesis="Alpha thesis")
+    _write_holdings(tmp_path, "BBB", thesis="Beta thesis")
+    _write_holdings(tmp_path, "CCC", thesis="Gamma thesis")
+    call = _fixed(
+        _payload(
+            clusters=[{"tickers": ["AAA", "BBB"], "driver": "d", "rationale": "r"}],
+            contradictions=[{"tickers": ["BBB", "CCC"], "contradiction": "x", "rationale": "y"}],
+        )
+    )
+    tc.refresh_thesis_collision(db_path, tmp_path, ["AAA", "BBB", "CCC"], call=call)
+
+    # BBB has since been sold — only AAA/CCC remain in the book.
+    cached = tc.read_cached_report(db_path, ["AAA", "CCC"])
+    assert cached is not None
+    assert cached.report.clusters == ()  # AAA+BBB dropped (BBB sold)
+    assert cached.report.contradictions == ()  # BBB+CCC dropped (BBB sold)
+    assert cached.stale_tickers == ("BBB",)
+    assert cached.portfolio_changed is True
+
+
+def test_read_cached_report_keeps_findings_when_all_tickers_still_held(tmp_path: Path) -> None:
+    db_path = _db(tmp_path)
+    _write_holdings(tmp_path, "AAA", thesis="Alpha thesis")
+    _write_holdings(tmp_path, "BBB", thesis="Beta thesis")
+    call = _fixed(_payload(clusters=[{"tickers": ["AAA", "BBB"], "driver": "d", "rationale": "r"}]))
+    tc.refresh_thesis_collision(db_path, tmp_path, ["AAA", "BBB"], call=call)
+
+    cached = tc.read_cached_report(db_path, ["AAA", "BBB", "CCC"])  # CCC newly added, fine
+    assert cached is not None
+    assert len(cached.report.clusters) == 1
+    assert cached.stale_tickers == ()
+    assert cached.portfolio_changed is False
