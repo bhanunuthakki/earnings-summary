@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import cast
 
 from capture import telegram
 from research.proposals import (
@@ -99,6 +100,50 @@ def notify_new_task(
         )
     else:
         send(token, chat_id, f"Caught a wondering: {claim}\n(Enable research to dig in.)")
+
+
+def engage_brief_text(brief: dict[str, object]) -> str:
+    """Render the stored ``engage_brief`` payload into a Telegram message body
+    (ASCII, like the rest of the thread). Long fields are excerpted so the message
+    stays well under Telegram's limit."""
+    mode = str(brief.get("mode") or "brief")
+    lines: list[str] = [
+        "Stress-test of what you saved:" if mode == "stress" else "Brief of what you saved:"
+    ]
+    takeaways = brief.get("takeaways")
+    if isinstance(takeaways, list):
+        lines.extend(
+            f"- {str(t).strip()}" for t in cast("list[object]", takeaways)[:5] if str(t).strip()
+        )
+    bull = _excerpt(str(brief.get("bull") or ""), 500)
+    bear = _excerpt(str(brief.get("bear") or ""), 500)
+    if bull:
+        lines.append(f"\nBull: {bull}")
+    if bear:
+        lines.append(f"Bear: {bear}")
+    if mode == "stress":
+        for label, key in (
+            ("What would change your mind", "changes_mind"),
+            ("Second-order", "second_order"),
+            ("Your book", "portfolio_map"),
+        ):
+            val = _excerpt(str(brief.get(key) or ""), 400)
+            if val:
+                lines.append(f"\n{label}: {val}")
+    return "\n".join(lines)
+
+
+def send_engage_brief(
+    token: str,
+    chat_id: int,
+    brief: dict[str, object],
+    note_id: int,
+    *,
+    send: SendFn = telegram.send_message,
+) -> None:
+    """Push the artifact brief into the thread with the On My Mind action ladder — the
+    owner triages it (Incorporate / Discuss / Save / Dismiss) exactly like any card."""
+    send(token, chat_id, engage_brief_text(brief), reply_markup=onmymind_keyboard(note_id))
 
 
 def parse_callback(data: str | None) -> tuple[str, str, int] | None:

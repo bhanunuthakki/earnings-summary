@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import cast
@@ -159,6 +160,59 @@ def _pledge_and_annotate(
         return
 
 
+_BRIEF_OFF = frozenset({"0", "false", "no", ""})
+
+
+def artifact_brief_enabled() -> bool:
+    """Auto artifact-briefing runs by DEFAULT (the owner chose auto-on-capture). Set
+    ``LEDGER_ARTIFACT_BRIEF=0`` to disable — the kill switch for the web-fetch + LLM
+    spend the brief incurs."""
+    return os.environ.get("LEDGER_ARTIFACT_BRIEF", "1").strip().lower() not in _BRIEF_OFF
+
+
+def roster_tickers(roster: RosterIndex | None) -> tuple[str, ...]:
+    """The tracked ticker universe (for the brief's portfolio linkage)."""
+    if roster is None:
+        return ()
+    return tuple(sorted(set(roster.symbol_to_ticker.values())))
+
+
+def _artifact_brief(
+    token: str,
+    update: telegram.Update,
+    result: ingest.IngestResult,
+    roster: RosterIndex | None,
+    db_path: Path | str | None,
+    *,
+    enabled: bool,
+) -> None:
+    """Auto-brief tap: when the intent tap flagged an artifact musing (it stamped
+    ``engage_intent`` on the note), fetch + brief the artifact and push it back into
+    the thread with the action ladder. Fire-and-forget — a fetch/LLM/parse failure
+    NEVER affects capture. Gated by ``LEDGER_ARTIFACT_BRIEF`` (default on)."""
+    if not (artifact_brief_enabled() and result.status == "landed" and result.note_id is not None):
+        return
+    try:
+        from research.brief import generate_brief_for_note
+        from user_state.notes import get_note
+
+        note = get_note(result.note_id, db_path=db_path)
+        if note is None or not isinstance((note.context or {}).get("engage_intent"), dict):
+            return  # not an artifact musing — nothing to brief
+        cache_dir = Path(db_path).parent / "artifact_cache" if db_path else None
+        brief = generate_brief_for_note(
+            result.note_id,
+            db_path=db_path,
+            holdings=roster_tickers(roster),
+            cache_dir=cache_dir,
+        )
+    except Exception:  # auto-brief must never break capture
+        return
+    if brief and enabled and update.chat_id is not None:
+        with contextlib.suppress(telegram.TelegramError):
+            research_notify.send_engage_brief(token, update.chat_id, brief, result.note_id)
+
+
 def poll_once(
     token: str,
     *,
@@ -248,6 +302,7 @@ def poll_once(
                     bump("wondering")
                     _notify_wondering(token, update, tid, db_path, enabled=confirm)
                 _pledge_and_annotate(token, update, result, db_path, enabled=confirm)
+                _artifact_brief(token, update, result, roster, db_path, enabled=confirm)
         elif update.kind == "voice" and update.voice_file_id:
             dest = Path(audio_dir) / f"tg_{update.update_id}.oga"
             try:
@@ -281,6 +336,7 @@ def poll_once(
                 bump("wondering")
                 _notify_wondering(token, update, tid, db_path, enabled=confirm)
             _pledge_and_annotate(token, update, result, db_path, enabled=confirm)
+            _artifact_brief(token, update, result, roster, db_path, enabled=confirm)
         elif update.kind == "document" and update.document_file_id:
             # A PDF, deck, or any document file → land as an On My Mind reading.
             # The file is downloaded and stored locally so future text extraction
