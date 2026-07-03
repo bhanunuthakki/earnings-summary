@@ -759,8 +759,18 @@ def create_app(
         # The compact earnings look-ahead above the rail — the surviving piece
         # of the retired /digest page.
         upcoming_html = render_upcoming_strip(db_path, datetime.now(UTC).date())
+        # The ritual-debt band above the cockpit — the owner's open queues
+        # (Reconcile / Tenets / proposals / decision stubs / coach digest)
+        # lead the first screen; never raises on a thin DB.
+        from pipeline.open_loops import render_open_loops_band
+
+        open_loops_html = render_open_loops_band(db_path)
         overview = render_overview_panel(
-            rows, coverage, inbox_html=inbox_html, upcoming_html=upcoming_html
+            rows,
+            coverage,
+            inbox_html=inbox_html,
+            upcoming_html=upcoming_html,
+            open_loops_html=open_loops_html,
         )
         return Response(render_shell(overview_html=overview), mimetype="text/html")
 
