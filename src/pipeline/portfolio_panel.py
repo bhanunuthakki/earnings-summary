@@ -1381,7 +1381,7 @@ def render_portfolio_risk_panel(
     style = _build_style_rollup(analytics.positioning, db_path)
     correlation = _build_correlation_read(analytics.positioning, db_path)
     tail_stress = _build_tail_stress(analytics.positioning, db_path)
-    collision = read_cached_report(db_path) if db_path is not None else None
+    collision = _read_thesis_collision(analytics.positioning, db_path)
     scenarios = _scenario_options()
     digest = _cached_macro_digest_html(db_path) if db_path is not None else ""
     # On a successful read, refresh the last-known snapshot; when the tracker is
@@ -1477,6 +1477,22 @@ def _build_tail_stress(pos: Positioning | None, db_path: Path | None) -> TailStr
     if not weights:
         return None
     return build_tail_stress(db_path, weights)
+
+
+def _read_thesis_collision(pos: Positioning | None, db_path: Path | None) -> CachedReport | None:
+    """The cached thesis-collision audit, filtered against the CURRENT
+    holding set: a cached finding naming a name sold since the audit ran must
+    not render as if it's still describing the live book (composition drift
+    — see ``read_cached_report``'s ``current_tickers``). Falls back to the
+    unfiltered cached read when the current holding set can't be derived
+    (still safe: no LLM call, no crash), matching every other local section's
+    degrade-gracefully discipline."""
+    if db_path is None:
+        return None
+    weights = _local_book_weights(pos, db_path.parent.parent)
+    if not weights:
+        return read_cached_report(db_path)
+    return read_cached_report(db_path, list(weights))
 
 
 def compose_risk_page(
@@ -2087,7 +2103,7 @@ def _tail_stress_section(stress: TailStress | None) -> str:
         _kpi_card(
             "All-bears book drawdown",
             f"{stress.book_drawdown_pct:+.1f}%",
-            sub=f"{stress.covered_weight_pct:.0f}% of book modeled",
+            sub=f"{stress.modeled_weight_pct:.0f}% of book modeled",
             tone=_tone(stress.book_drawdown_pct),
         ),
         _kpi_card(
@@ -2140,9 +2156,16 @@ def _thesis_collision_section(cached: CachedReport | None) -> str:
     report = cached.report
     stamp = stamp_html(cached.generated_at, mode="date", prefix="as of ")
     n = len(report.tickers_analyzed)
+    stale_note = (
+        '<p class="muted pfr-top ptc-stale">Portfolio changed since this audit — findings '
+        "naming " + escape(", ".join(cached.stale_tickers)) + " (no longer held) were "
+        "dropped. Re-run the audit to cover the current book.</p>"
+        if cached.portfolio_changed
+        else ""
+    )
     if not report.clusters and not report.contradictions:
         return (
-            f"{head}"
+            f"{head}{stale_note}"
             f'<p class="muted">No shared-driver clusters or contradictions found across '
             f"{n} names ({stamp}).</p></section>"
         )
@@ -2165,7 +2188,7 @@ def _thesis_collision_section(cached: CachedReport | None) -> str:
         f'<p class="muted pfr-top">{n} names analyzed · {len(report.clusters)} shared-driver '
         f"clusters · {len(report.contradictions)} contradictions · {stamp}.</p>"
     )
-    return f'{head}<div class="ptc-findings">{"".join(findings)}</div>{note}</section>'
+    return f'{head}{stale_note}<div class="ptc-findings">{"".join(findings)}</div>{note}</section>'
 
 
 def _risk_reward_gap_section(gap: RiskRewardGap) -> str:

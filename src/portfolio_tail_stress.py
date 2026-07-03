@@ -67,7 +67,9 @@ class TailStress:
 
     rows: list[TailStressRow]  # worst contribution first, excluded rows last
     book_drawdown_pct: float  # sum of contributions over the modeled slice
-    covered_weight_pct: float  # book weight carrying a bear leg, in percent
+    modeled_weight_pct: float  # book weight WITH a bear scenario (not a drawdown-
+    # contribution weight — a name can be modeled and still contribute ~0 if its
+    # bear FV sits near the live price; this is coverage, not risk share)
     stale_weight_pct: float  # modeled weight flagged low-confidence, in percent
     names_with_bear: int
     names_total: int
@@ -155,7 +157,7 @@ def build_tail_stress(
 
     rows: list[TailStressRow] = []
     book_drawdown = 0.0
-    covered_w = 0.0
+    modeled_w = 0.0
     stale_w = 0.0
     with_bear = 0
     for t in sorted(positive):
@@ -216,7 +218,7 @@ def build_tail_stress(
             )
         )
         book_drawdown += contribution
-        covered_w += w * 100.0
+        modeled_w += w * 100.0
         with_bear += 1
         if stale_bits:
             stale_w += w * 100.0
@@ -241,7 +243,7 @@ def build_tail_stress(
     return TailStress(
         rows=rows,
         book_drawdown_pct=book_drawdown,
-        covered_weight_pct=covered_w,
+        modeled_weight_pct=modeled_w,
         stale_weight_pct=stale_w,
         names_with_bear=with_bear,
         names_total=len(positive),

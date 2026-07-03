@@ -131,6 +131,40 @@ def test_build_holdings_correlation_needs_two_names(tmp_path: Path) -> None:
     assert build_holdings_correlation_from_disk(tmp_path, [], None) is None
 
 
+def test_build_holdings_correlation_distinguishes_degenerate_from_alignment_drops(
+    tmp_path: Path,
+) -> None:
+    """Two different drop MODES must never collapse into one indistinguishable
+    reason string:
+    - FLKR has plenty of history but it's flat (zero variance) inside the
+      window shared with the rest of the book -> dropped locally by this
+      function's own degenerate-column check.
+    - THIN has real variance but far too little history -> dropped upstream
+      by build_aligned_returns for being below the overlap floor.
+    The two reasons must read differently so a caller can tell "the series
+    doesn't move" apart from "the series is too short"."""
+    days = _trading_days(300)
+    base = _wave(days, 0.7)
+    _write_price_chart(tmp_path, "AAA", base)
+    _write_price_chart(tmp_path, "BBB", {d: v * 1.2 for d, v in base.items()})
+    _write_price_chart(tmp_path, "FLKR", dict.fromkeys(days, 0.0))  # flat, full history
+    _write_price_chart(tmp_path, "THIN", dict(list(_wave(days, 1.9).items())[:40]))  # real
+    # variance, but only 40 days on file — below the 120-day overlap floor.
+
+    read = build_holdings_correlation_from_disk(
+        tmp_path, ["AAA", "BBB", "FLKR", "THIN"], {"AAA": 0.3, "BBB": 0.2}
+    )
+    assert read is not None
+    assert read.tickers == ["AAA", "BBB"]
+    assert set(read.dropped) == {"FLKR", "THIN"}
+    degenerate_reason = read.dropped["FLKR"]
+    alignment_reason = read.dropped["THIN"]
+    assert degenerate_reason != alignment_reason
+    assert "constant" in degenerate_reason or "degenerate" in degenerate_reason
+    assert "constant" not in alignment_reason and "degenerate" not in alignment_reason
+    assert "daily returns on file" in alignment_reason
+
+
 # ---------------------------------------------------------------------------
 # The Risk-tab section markup (via the page composer — both branches).
 # ---------------------------------------------------------------------------

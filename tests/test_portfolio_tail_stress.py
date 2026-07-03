@@ -100,7 +100,7 @@ def test_single_name_bear_contribution(tmp_path: Path) -> None:
     assert row.bear_return_pct is not None and abs(row.bear_return_pct - (-40.0)) < 1e-9
     assert row.contribution_pct is not None and abs(row.contribution_pct - (-20.0)) < 1e-9
     assert abs(stress.book_drawdown_pct - (-20.0)) < 1e-9
-    assert abs(stress.covered_weight_pct - 50.0) < 1e-9
+    assert abs(stress.modeled_weight_pct - 50.0) < 1e-9
     assert row.low_confidence is False
 
 
@@ -198,7 +198,7 @@ def _stress() -> TailStress:
             ),
         ],
         book_drawdown_pct=-8.0,
-        covered_weight_pct=20.0,
+        modeled_weight_pct=20.0,
         stale_weight_pct=0.0,
         names_with_bear=1,
         names_total=2,

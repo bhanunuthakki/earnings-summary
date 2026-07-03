@@ -290,13 +290,31 @@ def _default_call() -> CollisionCall:
 def _coerce_tickers(raw: object, known: frozenset[str]) -> tuple[str, ...] | None:
     """A finding's ticker list, validated against the actual analyzed set —
     unknown/hallucinated tickers are dropped; a finding left with fewer than
-    2 real tickers is discarded entirely (not a collision)."""
+    2 real tickers is discarded entirely (not a collision). Every dropped
+    ticker is logged at WARNING: a model that names tickers outside the
+    analyzed set is a hallucination-pattern signal worth watching for
+    model-degradation, not just a silent validation no-op."""
     if not isinstance(raw, list):
         return None
     seen: list[str] = []
+    unknown: list[str] = []
     for v in cast("list[object]", raw):
-        if isinstance(v, str) and v.strip().upper() in known and v.strip().upper() not in seen:
-            seen.append(v.strip().upper())
+        if not isinstance(v, str) or not v.strip():
+            continue
+        candidate = v.strip().upper()
+        if candidate in known:
+            if candidate not in seen:
+                seen.append(candidate)
+        elif candidate not in unknown:
+            unknown.append(candidate)
+    if unknown:
+        log.warning(
+            {
+                "event": "thesis_collision_dropped_hallucinated_tickers",
+                "dropped": unknown,
+                "known_count": len(known),
+            }
+        )
     return tuple(seen) if len(seen) >= 2 else None
 
 
@@ -431,12 +449,60 @@ def _prompt_version() -> str:
 class CachedReport:
     report: CollisionReport
     generated_at: str
+    # Names the cached findings reference that are no longer in the current
+    # portfolio (sold since this audit ran) — populated only when the caller
+    # passes ``current_tickers``; empty otherwise (composition unknown/unchanged).
+    stale_tickers: tuple[str, ...] = ()
+
+    @property
+    def portfolio_changed(self) -> bool:
+        """True when the cached audit references at least one name that has
+        since left the book — the render side must say so, not present sold
+        names' findings as if they still describe the live portfolio."""
+        return bool(self.stale_tickers)
 
 
-def read_cached_report(db_path: Path) -> CachedReport | None:
+def _filter_stale_findings(
+    report: CollisionReport, current_tickers: frozenset[str]
+) -> tuple[CollisionReport, tuple[str, ...]]:
+    """Drop any cluster/contradiction that names a ticker no longer held, and
+    report which sold tickers caused a drop — the composition-drift case:
+    findings involving a name that's left the book are no longer live, so
+    they must not render as current audit output."""
+    stale: set[str] = set()
+
+    def _is_current(tickers: Sequence[str]) -> bool:
+        missing = [t for t in tickers if t not in current_tickers]
+        if missing:
+            stale.update(missing)
+            return False
+        return True
+
+    clusters = tuple(c for c in report.clusters if _is_current(c.tickers))
+    contradictions = tuple(c for c in report.contradictions if _is_current(c.tickers))
+    filtered = CollisionReport(
+        clusters=clusters,
+        contradictions=contradictions,
+        tickers_analyzed=report.tickers_analyzed,
+    )
+    return filtered, tuple(sorted(stale))
+
+
+def read_cached_report(
+    db_path: Path, current_tickers: Sequence[str] | None = None
+) -> CachedReport | None:
     """The render-side read: the last-persisted collision report, or ``None``
     when nothing has been generated yet. Pure DB read — no LLM, no
-    ``financial_facts`` — safe on the render path."""
+    ``financial_facts`` — safe on the render path.
+
+    ``current_tickers`` is the live portfolio's holding set (as of the
+    render, not the audit run). When given, any cached finding that names a
+    ticker no longer held is dropped from the returned report and recorded in
+    ``CachedReport.stale_tickers`` so the caller can visibly annotate
+    ("portfolio changed since this audit") instead of silently showing a
+    sold name's collision as still live. Omit it (``None``) to get the raw
+    cached report unfiltered — e.g. for callers that already know the set is
+    current."""
     import sqlite3
 
     import llm_artifact_store as store
@@ -454,7 +520,12 @@ def read_cached_report(db_path: Path) -> CachedReport | None:
     report = CollisionReport.from_json(artifact.content_json)
     if report is None:
         return None
-    return CachedReport(report=report, generated_at=artifact.generated_at.isoformat())
+    generated_at = artifact.generated_at.isoformat()
+    if current_tickers is None:
+        return CachedReport(report=report, generated_at=generated_at)
+    known = frozenset(t.strip().upper() for t in current_tickers if t.strip())
+    filtered, stale = _filter_stale_findings(report, known)
+    return CachedReport(report=filtered, generated_at=generated_at, stale_tickers=stale)
 
 
 __all__ = [
