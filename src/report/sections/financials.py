@@ -55,7 +55,21 @@ from report.sections._common import (
     open_repo_db,
     quarter_label,
 )
-from timeseries.loaders import load_financial_cell_provenance, load_financial_fact_provenance
+from timeseries.loaders import (
+    load_financial_cell_provenance,
+    load_financial_fact_provenance,
+    reader_tier_join_sql,
+    reader_tier_rank_sql,
+)
+
+# Tier-aware winner ordering for §3's direct financial_facts reads — the SAME
+# (source_quality_tier rank, id) contract the Series loaders enforce, so a
+# deterministic SEC XBRL row beats an FMP row on the ~162k FMP+SEC duplicated
+# keys. The prior ``source_doc_id DESC`` pick was source-agnostic. The
+# ROW_NUMBER() CTEs LEFT JOIN documents as ``d`` and interpolate the fragment
+# from ``reader_tier_rank_sql`` in their ORDER BY (NULL/absent tier → rank 0, and
+# on a pre-0053 fixture without the column the whole fragment degrades to "0",
+# collapsing to the id-only pick). Computed per-connection so a legacy DB is safe.
 
 # (metrics-view column, display name, unit, display digits)
 _LINE_ITEM_SPECS: list[tuple[str, str, str, int]] = [
@@ -717,18 +731,21 @@ _FACT_PIVOT = """
 _QUARTERLY_FACTS_SQL = """
 WITH dedup AS (
     SELECT
-        period_end, currency, fiscal_period_type, line_item, value,
-        CAST(substr(period_end, 1, 4) AS INTEGER) AS cal_year,
-        (CAST(substr(period_end, 6, 2) AS INTEGER) - 1) / 3 + 1 AS cal_quarter,
+        ff.period_end AS period_end, ff.currency AS currency,
+        ff.fiscal_period_type AS fiscal_period_type,
+        ff.line_item AS line_item, ff.value AS value,
+        CAST(substr(ff.period_end, 1, 4) AS INTEGER) AS cal_year,
+        (CAST(substr(ff.period_end, 6, 2) AS INTEGER) - 1) / 3 + 1 AS cal_quarter,
         ROW_NUMBER() OVER (
             PARTITION BY
-                CAST(substr(period_end, 1, 4) AS INTEGER),
-                (CAST(substr(period_end, 6, 2) AS INTEGER) - 1) / 3 + 1,
-                line_item
-            ORDER BY source_doc_id DESC, period_end DESC
+                CAST(substr(ff.period_end, 1, 4) AS INTEGER),
+                (CAST(substr(ff.period_end, 6, 2) AS INTEGER) - 1) / 3 + 1,
+                ff.line_item
+            ORDER BY {tier_rank} DESC, ff.id DESC
         ) AS rn
-    FROM financial_facts
-    WHERE ticker = ? AND fiscal_period_type IN ({marks})
+    FROM financial_facts ff
+    {doc_join}
+    WHERE ff.ticker = ? AND ff.fiscal_period_type IN ({marks})
 )
 SELECT
 {pivot}
@@ -750,7 +767,12 @@ def _load_quarterly(conn: sqlite3.Connection, ticker: str) -> list[dict[str, obj
     placeholders = ",".join("?" * len(QUARTERLY_PERIOD_TYPES))
     cursor = conn.cursor()
     cursor.execute(
-        _QUARTERLY_FACTS_SQL.format(marks=placeholders, pivot=_FACT_PIVOT),
+        _QUARTERLY_FACTS_SQL.format(
+            marks=placeholders,
+            pivot=_FACT_PIVOT,
+            tier_rank=reader_tier_rank_sql(conn),
+            doc_join=reader_tier_join_sql(conn),
+        ),
         (ticker.upper(), *QUARTERLY_PERIOD_TYPES, UNDERLYING_QUARTERS * 4),
     )
     rows = [dict(r) for r in cursor.fetchall()]
@@ -821,14 +843,17 @@ def _to_display(value: object, column: str) -> float | None:
 _ANNUAL_FACTS_SQL = """
 WITH dedup AS (
     SELECT
-        period_end, currency, fiscal_period_type, line_item, value,
-        CAST(substr(period_end, 1, 4) AS INTEGER) AS fiscal_year,
+        ff.period_end AS period_end, ff.currency AS currency,
+        ff.fiscal_period_type AS fiscal_period_type,
+        ff.line_item AS line_item, ff.value AS value,
+        CAST(substr(ff.period_end, 1, 4) AS INTEGER) AS fiscal_year,
         ROW_NUMBER() OVER (
-            PARTITION BY CAST(substr(period_end, 1, 4) AS INTEGER), line_item
-            ORDER BY source_doc_id DESC, period_end DESC
+            PARTITION BY CAST(substr(ff.period_end, 1, 4) AS INTEGER), ff.line_item
+            ORDER BY {tier_rank} DESC, ff.id DESC
         ) AS rn
-    FROM financial_facts
-    WHERE ticker = ? AND fiscal_period_type IN ({marks})
+    FROM financial_facts ff
+    {doc_join}
+    WHERE ff.ticker = ? AND ff.fiscal_period_type IN ({marks})
 )
 SELECT
 {pivot}
@@ -844,7 +869,12 @@ def _load_annual(conn: sqlite3.Connection, ticker: str) -> list[dict[str, object
     placeholders = ",".join("?" * len(ANNUAL_PERIOD_TYPES))
     cursor = conn.cursor()
     cursor.execute(
-        _ANNUAL_FACTS_SQL.format(marks=placeholders, pivot=_FACT_PIVOT),
+        _ANNUAL_FACTS_SQL.format(
+            marks=placeholders,
+            pivot=_FACT_PIVOT,
+            tier_rank=reader_tier_rank_sql(conn),
+            doc_join=reader_tier_join_sql(conn),
+        ),
         (ticker.upper(), *ANNUAL_PERIOD_TYPES, ANNUAL_HISTORY_YEARS * 3),
     )
     rows = [dict(r) for r in cursor.fetchall()]
