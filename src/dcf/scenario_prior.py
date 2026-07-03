@@ -35,6 +35,7 @@ The seam is dependency-injected (``call=``) so it is unit-tested with no LLM.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -259,16 +260,15 @@ def generate_scenario_prior(
         return global_prior(today)
 
 
-def set_scenario_prior_for_ticker(
-    ticker: str,
-    repo_root: object,
-    *,
-    today: date | None = None,
-    call: ScenarioPriorCall | None = None,
-) -> ScenarioPrior:
-    """Compose the analyst's thesis/bear/priors anchors for ``ticker`` and generate
-    a per-name prior. The production entry point (PR D persists it); degrades to the
-    global prior when no anchors exist for the name."""
+def anchor_block_for_ticker(ticker: str, repo_root: object) -> str:
+    """Compose the analyst's thesis/bear/priors anchor block for ``ticker`` — the
+    same grounding text :func:`set_scenario_prior_for_ticker` feeds the LLM.
+
+    Split out so a cadence/refresh script (:mod:`execution.set_scenario_priors`
+    ``--only-changed``) can hash this text to decide whether the thesis/bear-case
+    input actually changed since the last LLM call, WITHOUT spending a call just
+    to find out — mirrors the ``dcf.compute.peer_selection`` cache-invalidation
+    pattern (hash the inputs, skip the call on a hit)."""
     from pathlib import Path
 
     from llm.anchors import (
@@ -279,10 +279,30 @@ def set_scenario_prior_for_ticker(
     )
 
     root = repo_root if isinstance(repo_root, Path) else Path(str(repo_root))
-    anchor_block = compose_anchor_block(
+    return compose_anchor_block(
         load_thesis_anchor(root, ticker),
         load_bear_anchor(root, ticker),
         "",
         load_priors_anchor(root, ticker),
     )
+
+
+def anchor_inputs_sha256(anchor_block: str) -> str:
+    """The stable hash of an anchor block, persisted alongside the prior
+    (``scenario_prior.inputs_sha256``) so a later cadence run can tell whether
+    the thesis/bear-case text changed without re-calling the LLM."""
+    return hashlib.sha256(anchor_block.encode("utf-8")).hexdigest()
+
+
+def set_scenario_prior_for_ticker(
+    ticker: str,
+    repo_root: object,
+    *,
+    today: date | None = None,
+    call: ScenarioPriorCall | None = None,
+) -> ScenarioPrior:
+    """Compose the analyst's thesis/bear/priors anchors for ``ticker`` and generate
+    a per-name prior. The production entry point (PR D persists it); degrades to the
+    global prior when no anchors exist for the name."""
+    anchor_block = anchor_block_for_ticker(ticker, repo_root)
     return generate_scenario_prior(ticker, anchor_block=anchor_block, today=today, call=call)

@@ -17,6 +17,17 @@ Discipline:
 - **A redesign block must already exist** (Opus pass or a prior sync); the producer
   never fabricates one.
 - Dry run by default; ``--apply`` writes. ``data/dcf_assumptions`` is gitignored.
+
+Cadence (``--only-changed``): priors are stable quarter-to-quarter — re-calling the
+LLM on an unchanged thesis/bear case just burns spend for the same answer. Every
+written block carries ``inputs_sha256`` (the sha256 of the composed thesis/bear/
+priors anchor text, :func:`dcf.scenario_prior.anchor_inputs_sha256`). ``--only-changed``
+recomputes that hash from the CURRENT anchors for each name and skips the LLM call
+entirely when it matches the block on file — mirroring
+``dcf.compute.peer_selection``'s ``inputs_sha256`` cache-invalidation pattern. A name
+with no prior yet (or an owner-set one, which is never touched anyway) always
+proceeds. The monthly cron (``cron/refresh_scenario_priors.task.xml``) always passes
+``--only-changed --apply``, so a quiet month costs nothing.
 """
 
 from __future__ import annotations
@@ -31,11 +42,20 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from dcf import universe as universe_mod  # noqa: E402
-from dcf.scenario_prior import ScenarioPrior, set_scenario_prior_for_ticker  # noqa: E402
+from dcf.scenario_prior import (  # noqa: E402
+    ScenarioPrior,
+    anchor_block_for_ticker,
+    anchor_inputs_sha256,
+    set_scenario_prior_for_ticker,
+)
 
 
 def write_scenario_prior_to_json(
-    path: Path, prior: ScenarioPrior, *, respect_owner: bool = True
+    path: Path,
+    prior: ScenarioPrior,
+    *,
+    respect_owner: bool = True,
+    inputs_sha256: str | None = None,
 ) -> str:
     """Write ``prior`` into ``path``'s ``redesign.scenario_prior`` sub-block,
     preserving every other key. Returns a status:
@@ -45,6 +65,10 @@ def write_scenario_prior_to_json(
     * ``"skipped_global"`` — the prior is the global fallback (no per-name call);
     * ``"skipped_no_redesign_block"`` — no redesign block to annotate (never fabricated);
     * ``"failed_read"`` / ``"failed_write"`` — I/O problem (surfaced, never silent).
+
+    ``inputs_sha256``, when given, is stamped onto the written block so a later
+    ``--only-changed`` cadence run can skip the LLM call when the thesis/bear-case
+    text hasn't moved.
     """
     if prior.set_by == "global":
         return "skipped_global"
@@ -68,7 +92,7 @@ def write_scenario_prior_to_json(
         and cast("dict[str, object]", existing).get("set_by") == "owner"
     ):
         return "skipped_owner"
-    rd["scenario_prior"] = {
+    sp_block: dict[str, object] = {
         "bull_weight": prior.bull,
         "base_weight": prior.base,
         "bear_weight": prior.bear,
@@ -76,6 +100,9 @@ def write_scenario_prior_to_json(
         "set_by": prior.set_by,
         "as_of": prior.as_of,
     }
+    if inputs_sha256 is not None:
+        sp_block["inputs_sha256"] = inputs_sha256
+    rd["scenario_prior"] = sp_block
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -84,19 +111,59 @@ def write_scenario_prior_to_json(
     return "written"
 
 
+def _existing_inputs_sha256(path: Path) -> str | None:
+    """The ``scenario_prior.inputs_sha256`` already on file for this name, or
+    ``None`` when absent/unreadable/no block yet — always treated as "changed"
+    (proceed to the LLM) in that case."""
+    try:
+        raw: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    block = cast("dict[str, object]", raw).get("redesign")
+    if not isinstance(block, dict):
+        return None
+    sp = cast("dict[str, object]", block).get("scenario_prior")
+    if not isinstance(sp, dict):
+        return None
+    h = cast("dict[str, object]", sp).get("inputs_sha256")
+    return h if isinstance(h, str) and h else None
+
+
 def set_priors(
-    repo_root: Path, tickers: list[str], *, apply: bool, respect_owner: bool = True
+    repo_root: Path,
+    tickers: list[str],
+    *,
+    apply: bool,
+    respect_owner: bool = True,
+    only_changed: bool = False,
 ) -> dict[str, str]:
     """Run the scenario_prior LLM over each ticker and (when ``apply``) persist it.
     Returns ticker -> status. A per-ticker LLM error degrades to the global prior
-    (``dcf.scenario_prior.generate_scenario_prior``), surfaced as ``skipped_global``."""
+    (``dcf.scenario_prior.generate_scenario_prior``), surfaced as ``skipped_global``.
+
+    ``only_changed``: hash the current thesis/bear/priors anchor text first (no
+    LLM spend) and skip straight to ``"skipped_unchanged"`` when it matches the
+    ``inputs_sha256`` already on file — the cadence mode. A name with no prior on
+    file yet always proceeds (nothing to compare against)."""
     out: dict[str, str] = {}
     for ticker in tickers:
         t = ticker.upper()
-        prior = set_scenario_prior_for_ticker(t, repo_root)
         path = repo_root / "data" / "dcf_assumptions" / f"{t}.json"
+        anchor_block = anchor_block_for_ticker(t, repo_root)
+        inputs_sha = anchor_inputs_sha256(anchor_block)
+        if only_changed and inputs_sha == _existing_inputs_sha256(path):
+            print(
+                f"  {t:6s} {'skipped_unchanged':26s} (thesis/bear anchors unchanged — no LLM call)"
+            )
+            out[t] = "skipped_unchanged"
+            continue
+        prior = set_scenario_prior_for_ticker(t, repo_root)
         if apply:
-            status = write_scenario_prior_to_json(path, prior, respect_owner=respect_owner)
+            status = write_scenario_prior_to_json(
+                path, prior, respect_owner=respect_owner, inputs_sha256=inputs_sha
+            )
         else:
             # Dry run: compute + report what WOULD be written (the LLM has run).
             if prior.set_by == "global":
@@ -131,6 +198,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="also overwrite owner-set priors (default: owner wins)",
     )
+    parser.add_argument(
+        "--only-changed",
+        action="store_true",
+        help="cadence mode: skip the LLM call for names whose thesis/bear-case "
+        "anchor text hasn't changed since the last stored inputs_sha256",
+    )
     args = parser.parse_args(argv)
 
     repo_root = Path(args.repo_root).resolve()
@@ -144,7 +217,11 @@ def main(argv: list[str] | None = None) -> int:
     mode = "APPLY" if args.apply else "DRY RUN (pass --apply to write)"
     print(f"Setting scenario priors — {mode}\n  repo_root={repo_root}\n  {len(tickers)} name(s)")
     counts = set_priors(
-        repo_root, tickers, apply=args.apply, respect_owner=not args.overwrite_owner
+        repo_root,
+        tickers,
+        apply=args.apply,
+        respect_owner=not args.overwrite_owner,
+        only_changed=args.only_changed,
     )
     tally: dict[str, int] = {}
     for status in counts.values():
