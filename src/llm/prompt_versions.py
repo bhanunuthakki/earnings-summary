@@ -224,6 +224,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # Bump when the weight-setting prompt (dcf.scenario_prior._PROMPT) is materially
     # rewritten, then re-run `run_llm_evals.py --purpose scenario_prior`.
     "scenario_prior": "v1",
+    # Whole-book thesis-collision audit (src/thesis_collision.py). IS the
+    # llm_artifacts cache key alongside the thesis-set hash — bumping it forks
+    # cached findings cleanly (a re-run is forced even if no thesis changed).
+    "thesis_collision": "v1",
 }
 
 _DEFAULT_VERSION = "v1"

@@ -187,6 +187,14 @@ LLM_MODELS: dict[str, str] = {
     # code and the owner's workbook edit always wins, so a bad call can't swing the
     # book; the scenario_prior golden set grades the directional skew.
     "scenario_prior": DEFAULT_MODEL,
+    # Whole-book thesis-collision audit (src/thesis_collision.py): one call over
+    # every portfolio name's thesis + tier-1 break-rule drivers, flagging
+    # shared-driver concentration and directly contradictory theses. Cross-name
+    # judgment over natural-language text -> Sonnet-tier reasoning, like
+    # scenario_prior/position_review; a low-frequency on-demand/cron call (the
+    # thesis set changes rarely), never on the render path (cached in
+    # llm_artifacts, keyed by a thesis-set hash).
+    "thesis_collision": DEFAULT_MODEL,
     # Long-context analytical writing
     "transcript_summary": DEFAULT_MODEL,
     "press_release_summary": DEFAULT_MODEL,

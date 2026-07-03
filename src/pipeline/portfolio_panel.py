@@ -81,6 +81,7 @@ from portfolio_style_factors import StyleFactorRollup, build_style_rollup_from_d
 from portfolio_tail_stress import TailStress, TailStressRow, build_tail_stress
 from portfolio_weights import read_materialized_weights
 from risk_reward import RiskRewardGap, RiskRewardGapRow, build_risk_reward_gap
+from thesis_collision import CachedReport, read_cached_report
 from ui import living_grid as lg
 from ui.controls import ticker_label
 from ui.time import stamp_html
@@ -1284,6 +1285,11 @@ _RISK_CSS = """<style>
 .pfc-clusters { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 0; }
 .pts-table { margin-top: 4px; }
 .pts-excluded { color: var(--muted); }
+.ptc-findings { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.ptc-finding { border-left: 2px solid var(--warn); padding-left: 10px; }
+.ptc-finding-bad { border-left-color: var(--bad); }
+.ptc-finding-head { font-size: var(--fs-body); }
+.ptc-finding-rationale { font-size: var(--fs-caption); color: var(--muted); margin: 2px 0 0; }
 .rrg-table { margin-top: 4px; }
 .rrg-mismatch { max-width: 460px; }
 .rrg-chips { display: inline-flex; gap: 4px; flex-wrap: wrap; vertical-align: middle; }
@@ -1375,6 +1381,7 @@ def render_portfolio_risk_panel(
     style = _build_style_rollup(analytics.positioning, db_path)
     correlation = _build_correlation_read(analytics.positioning, db_path)
     tail_stress = _build_tail_stress(analytics.positioning, db_path)
+    collision = read_cached_report(db_path) if db_path is not None else None
     scenarios = _scenario_options()
     digest = _cached_macro_digest_html(db_path) if db_path is not None else ""
     # On a successful read, refresh the last-known snapshot; when the tracker is
@@ -1393,6 +1400,7 @@ def render_portfolio_risk_panel(
         style=style,
         correlation=correlation,
         tail_stress=tail_stress,
+        collision=collision,
         scenarios=scenarios,
         digest=digest,
         snapshot=snapshot,
@@ -1483,6 +1491,7 @@ def compose_risk_page(
     style: StyleFactorRollup | None = None,
     correlation: CorrelationRead | None = None,
     tail_stress: TailStress | None = None,
+    collision: CachedReport | None = None,
 ) -> str:
     """Pure assembly of the Risk page (testable without network or DB). The
     ``#pfr-root`` wrapper is the re-inject target the run-scenario script swaps
@@ -1491,9 +1500,10 @@ def compose_risk_page(
     ``gap`` (L7) is the risk-budget allocator's risk-vs-reward-vs-conviction
     ranking; None hides the section (tracker offline / no weighted book).
     ``style`` (the value/size/momentum ETF-proxy loadings), ``correlation``
-    (the holdings pairwise matrix + crowding clusters), and ``tail_stress``
-    (the all-bears book drawdown) are computed from local disk/DB, so they
-    render in BOTH branches — tracker up or down."""
+    (the holdings pairwise matrix + crowding clusters), ``tail_stress`` (the
+    all-bears book drawdown), and ``collision`` (the cached thesis-collision
+    audit) are computed from local disk/DB, so they render in BOTH branches —
+    tracker up or down."""
     parts: list[str] = [_RISK_CSS, '<div id="pfr-root">']
     if analytics.available:
         if analytics.beta is not None:
@@ -1504,6 +1514,7 @@ def compose_risk_page(
         parts.append(_style_factor_section(style))
         parts.append(_correlation_section(correlation))
         parts.append(_tail_stress_section(tail_stress))
+        parts.append(_thesis_collision_section(collision))
         if gap is not None:
             parts.append(_risk_reward_gap_section(gap))
     else:
@@ -1514,6 +1525,7 @@ def compose_risk_page(
         parts.append(_style_factor_section(style))
         parts.append(_correlation_section(correlation))
         parts.append(_tail_stress_section(tail_stress))
+        parts.append(_thesis_collision_section(collision))
     parts.append(_macro_stress_section(scenarios, digest))
     parts.append("</div>")
     return "".join(parts)
@@ -2105,6 +2117,59 @@ def _tail_stress_section(stress: TailStress | None) -> str:
     )
     notes = "".join(f'<p class="muted pfr-top">{escape(n)}</p>' for n in stress.notes)
     return f"{head}{strip}{table}{notes}</section>"
+
+
+def _thesis_collision_section(cached: CachedReport | None) -> str:
+    """Whole-book thesis-collision audit: shared-driver clusters + contradictory
+    theses, from the cached LLM finding (never generated on the render path).
+    ``None`` gets the empty state naming the refresh command."""
+    head = (
+        '<section class="panel"><h2>Thesis collisions</h2>'
+        "<p class=\"sub\">Names that look independent on price stats but really share "
+        "one underlying driver, and theses that make directly contradictory bets — a "
+        "governed LLM read over every holding's thesis + tier-1 break-rule drivers. "
+        "Cached; regenerated on demand, not on every page load.</p>"
+    )
+    if cached is None:
+        return (
+            f"{head}"
+            '<p class="muted">No audit on file yet — run '
+            "<code>python execution/run_thesis_collision.py</code> "
+            "(re-running is free once the thesis set is unchanged).</p></section>"
+        )
+    report = cached.report
+    stamp = stamp_html(cached.generated_at, mode="date", prefix="as of ")
+    n = len(report.tickers_analyzed)
+    if not report.clusters and not report.contradictions:
+        return (
+            f"{head}"
+            f'<p class="muted">No shared-driver clusters or contradictions found across '
+            f"{n} names ({stamp}).</p></section>"
+        )
+    findings: list[str] = []
+    for c in report.clusters:
+        chips = " + ".join(
+            ticker_label(t, href=f"../research/{escape(t)}/") for t in c.tickers
+        )
+        findings.append(
+            '<div class="ptc-finding">'
+            f'<p class="ptc-finding-head"><strong>{chips}</strong> — {escape(c.driver)}</p>'
+            f'<p class="ptc-finding-rationale">{escape(c.rationale)}</p></div>'
+        )
+    for c in report.contradictions:
+        chips = " vs ".join(
+            ticker_label(t, href=f"../research/{escape(t)}/") for t in c.tickers
+        )
+        findings.append(
+            '<div class="ptc-finding ptc-finding-bad">'
+            f'<p class="ptc-finding-head"><strong>{chips}</strong> — {escape(c.contradiction)}</p>'
+            f'<p class="ptc-finding-rationale">{escape(c.rationale)}</p></div>'
+        )
+    note = (
+        f'<p class="muted pfr-top">{n} names analyzed · {len(report.clusters)} shared-driver '
+        f"clusters · {len(report.contradictions)} contradictions · {stamp}.</p>"
+    )
+    return f'{head}<div class="ptc-findings">{"".join(findings)}</div>{note}</section>'
 
 
 def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
