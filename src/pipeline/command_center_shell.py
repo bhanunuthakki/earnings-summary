@@ -234,13 +234,16 @@ def render_overview_panel(
     coverage: dict[str, dict[str, int]] | None,
     inbox_html: str | None = None,
     upcoming_html: str | None = None,
+    open_loops_html: str | None = None,
 ) -> str:
     """The inlined Home tab: the Research cockpit (the landing answer to
     "which holding needs my attention today?") with the tier-coverage strip
     below it, and — when provided — the unified Inbox in a right-hand rail
     (UX redesign PR3: what changed, beside what you hold), topped by the
     compact upcoming-earnings strip (``upcoming_html``, the surviving piece
-    of the retired /digest page). Reuses the existing public seams so there
+    of the retired /digest page). ``open_loops_html`` (the ritual-debt band,
+    ``pipeline.open_loops``) renders ABOVE the cockpit — the owner's own
+    queues before market data. Reuses the existing public seams so there
     is no second code path for any of this content. (The Ask dock is no
     longer panel content — it renders once in the shell chrome, see
     ``render_shell``, so it persists across tab switches.)"""
@@ -251,7 +254,8 @@ def render_overview_panel(
     # self-refresh every 90s via HTMX, re-rendering the whole cockpit fragment
     # in place (GET /api/cockpit) — no manual reload, no per-cell polling.
     main = (
-        '<div id="cc-cockpit-live" hx-get="/api/cockpit" '
+        (open_loops_html or "")
+        + '<div id="cc-cockpit-live" hx-get="/api/cockpit" '
         'hx-trigger="every 90s" hx-swap="innerHTML">'
         + render_research_cockpit(rows_by_list)
         + "</div>"
