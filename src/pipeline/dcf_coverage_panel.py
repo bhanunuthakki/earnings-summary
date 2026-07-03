@@ -114,10 +114,16 @@ def _parse_date(raw: object) -> date | None:
 
 
 def _query_runs(db_path: Path) -> dict[str, dict[str, object]]:
-    """dcf_runs keyed by ticker: valuation_date (the fair-value leg),
-    live_price_at (the price leg — re-priced daily by reprice_dcf), notes,
-    snapshot format, sync columns (when the DB has them — pre-0091 DBs simply
-    lack the keys)."""
+    """dcf_runs keyed by ticker — the NEWEST run per ticker: valuation_date
+    (the fair-value leg), live_price_at (the price leg — re-priced daily by
+    reprice_dcf), notes, snapshot format, sync columns (when the DB has them —
+    pre-0091 DBs simply lack the keys).
+
+    ORDER BY matters: the versioned dcf_runs schema (migration 0137) keeps
+    superseded history rows per ticker, so an unordered scan only picks the
+    newest run by rowid accident — SQLite guarantees no scan order. Newest
+    first + first-wins, the same current-run selection every other dcf_runs
+    reader uses (report snapshot, research cockpit, next-dollar model)."""
     out: dict[str, dict[str, object]] = {}
     if not db_path.exists():
         return out
@@ -137,13 +143,16 @@ def _query_runs(db_path: Path) -> dict[str, dict[str, object]]:
         )
         rows = conn.execute(
             "SELECT ticker, valuation_date, live_price_at, notes, assumption_snapshot_json"
-            f"{sync_sel} FROM dcf_runs"
+            f"{sync_sel} FROM dcf_runs ORDER BY valuation_date DESC, id DESC"
         ).fetchall()
     except sqlite3.Error:
         return out
     finally:
         conn.close()
     for r in rows:
+        t = str(r["ticker"]).upper()
+        if t in out:
+            continue
         d: dict[str, object] = {
             "valuation_date": r["valuation_date"],
             "live_price_at": r["live_price_at"],
@@ -153,7 +162,7 @@ def _query_runs(db_path: Path) -> dict[str, dict[str, object]]:
         if sync_sel:
             d["sync_status"] = r["assumptions_sync_status"]
             d["synced_at"] = r["assumptions_synced_at"]
-        out[str(r["ticker"]).upper()] = d
+        out[t] = d
     return out
 
 
