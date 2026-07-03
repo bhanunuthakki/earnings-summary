@@ -174,6 +174,7 @@ def _ensure_peer_selection(ticker: str, repo_root: Path) -> None:
                 "ticker": ticker,
                 "suggested": len(result.suggestions),
                 "fetched": len(result.fetched_peers),
+                "fetched_complete": len(result.fetched_complete),
                 "skipped": result.skipped_reason,
             },
         )

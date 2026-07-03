@@ -25,6 +25,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import compute.peer_selection as ps  # noqa: E402
 from compute.peer_selection import (  # noqa: E402
+    PeerFetchOutcome,
     PeerSuggestion,
     _fetch_peer_fundamentals,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
     extract_for_ticker,
@@ -310,8 +311,9 @@ def test_fetch_tops_up_only_missing_files(tmp_path: Path, monkeypatch: pytest.Mo
     fmp = tmp_path / "data" / "historical" / "fmp"
     _write_json(fmp / "INTR_profile.json", _profile("Inter & Co", None, None, 1e9))
 
-    fetched = _fetch_peer_fundamentals(["INTR"], tmp_path, self_ticker="NU")
-    assert fetched == ["INTR"]
+    outcome = _fetch_peer_fundamentals(["INTR"], tmp_path, self_ticker="NU")
+    assert outcome.fetched_any == ["INTR"]
+    assert outcome.fetched_complete == ["INTR"]  # all 4 endpoints resolved
     endpoints = [c[0].split("?")[0] for c in stub.calls]
     assert endpoints == ["key-metrics-ttm", "ratios-ttm", "income-statement"]
     income_params = stub.calls[-1][1]
@@ -332,7 +334,7 @@ def test_fetch_fully_cached_peer_costs_zero_calls(
         "income_statement_quarterly",
     ):
         _write_json(fmp / f"INTR_{suffix}.json", [{"x": 1}])
-    assert _fetch_peer_fundamentals(["INTR"], tmp_path, self_ticker="NU") == []
+    assert _fetch_peer_fundamentals(["INTR"], tmp_path, self_ticker="NU") == PeerFetchOutcome()
     assert stub.calls == []
 
 
@@ -340,8 +342,8 @@ def test_fetch_aborts_whole_run_on_429(tmp_path: Path, monkeypatch: pytest.Monke
     """429 = the FMP daily budget is exhausted — stop immediately instead of
     burning the remaining per-build call budget on more 429s."""
     stub = _install_stub(monkeypatch, _StubResponse(429, []))
-    fetched = _fetch_peer_fundamentals(["INTR", "STNE"], tmp_path, self_ticker="NU")
-    assert fetched == []
+    outcome = _fetch_peer_fundamentals(["INTR", "STNE"], tmp_path, self_ticker="NU")
+    assert outcome == PeerFetchOutcome()
     assert len(stub.calls) == 1  # first 429 aborts; STNE never attempted
     assert not (tmp_path / "data" / "historical" / "fmp" / "INTR_profile.json").exists()
 
@@ -352,8 +354,8 @@ def test_fetch_resolves_key_from_dotenv(tmp_path: Path, monkeypatch: pytest.Monk
     fetched_peers=[])."""
     stub = _install_stub(monkeypatch, _StubResponse(200, [{"x": 1}]), api_key=None)
     (tmp_path / ".env").write_text("FMP_API_KEY=k-dotenv\n", encoding="utf-8")
-    fetched = _fetch_peer_fundamentals(["INTR"], tmp_path, self_ticker="NU")
-    assert fetched == ["INTR"]
+    outcome = _fetch_peer_fundamentals(["INTR"], tmp_path, self_ticker="NU")
+    assert outcome.fetched_any == ["INTR"]
     assert all(c[1]["apikey"] == "k-dotenv" for c in stub.calls)
 
 
@@ -361,8 +363,51 @@ def test_fetch_skips_cleanly_without_any_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     stub = _install_stub(monkeypatch, _StubResponse(200, [{"x": 1}]), api_key=None)
-    assert _fetch_peer_fundamentals(["INTR"], tmp_path, self_ticker="NU") == []
+    assert _fetch_peer_fundamentals(["INTR"], tmp_path, self_ticker="NU") == PeerFetchOutcome()
     assert stub.calls == []
+
+
+class _StubRequestsPerEndpoint:
+    """Like ``_StubRequests`` but the response varies by endpoint — models a
+    free-tier account where some ``/stable`` endpoints 402 for a given symbol
+    while others (``profile``) succeed."""
+
+    def __init__(self, by_endpoint: dict[str, _StubResponse], default: _StubResponse) -> None:
+        self._by_endpoint = by_endpoint
+        self._default = default
+        self.calls: list[str] = []
+
+    def get(self, url: str, params: dict[str, str], timeout: int) -> _StubResponse:
+        endpoint = url.rsplit("/", 1)[-1]
+        self.calls.append(endpoint)
+        return self._by_endpoint.get(endpoint, self._default)
+
+
+def test_fetch_marks_partial_free_tier_peer_as_not_complete(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for the fetched_peers/fetched_complete split: a free-tier
+    account can 402 on key-metrics-ttm/ratios-ttm/income-statement while
+    profile still succeeds (observed for GRAB/INTR/KSPI/PAGS) — that peer must
+    land in fetched_any (so the panel doesn't skip it) but NOT in
+    fetched_complete (so partial-data peers stay distinguishable from
+    fully-resolved ones in the cache)."""
+    stub = _StubRequestsPerEndpoint(
+        by_endpoint={"profile": _StubResponse(200, [{"symbol": "GRAB"}])},
+        default=_StubResponse(402, {"error": "premium endpoint"}),
+    )
+    monkeypatch.setitem(sys.modules, "requests", stub)
+    monkeypatch.setattr(ps.time, "sleep", _no_sleep)
+    monkeypatch.setenv("FMP_API_KEY", "k-env")
+
+    outcome = _fetch_peer_fundamentals(["GRAB"], tmp_path, self_ticker="NU")
+
+    assert outcome.fetched_any == ["GRAB"]
+    assert outcome.fetched_complete == []
+    fmp = tmp_path / "data" / "historical" / "fmp"
+    assert (fmp / "GRAB_profile.json").exists()
+    for suffix in ("key_metrics_ttm", "financial_ratios_ttm", "income_statement_quarterly"):
+        assert not (fmp / f"GRAB_{suffix}.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -428,9 +473,9 @@ def test_cache_hit_still_tops_up_missing_fundamentals(
 
     fetch_calls: list[list[str]] = []
 
-    def _fake_fetch(peers: list[str], _root: Path, *, self_ticker: str) -> list[str]:
+    def _fake_fetch(peers: list[str], _root: Path, *, self_ticker: str) -> PeerFetchOutcome:
         fetch_calls.append(list(peers))
-        return ["INTR"]
+        return PeerFetchOutcome(fetched_any=["INTR"], fetched_complete=["INTR"])
 
     monkeypatch.setattr(ps, "_fetch_peer_fundamentals", _fake_fetch)
     # Second run: cache hit (no LLM call) but the top-up fetch runs and the
@@ -439,10 +484,12 @@ def test_cache_hit_still_tops_up_missing_fundamentals(
     assert llm_calls["n"] == 1  # still one LLM call — cache hit
     assert fetch_calls == [["INTR"]]
     assert r2.fetched_peers == ["INTR"]
+    assert r2.fetched_complete == ["INTR"]
     cached = json.loads(
         (tmp_path / "data" / "peer_selection" / "NU.json").read_text(encoding="utf-8")
     )
     assert cached["fetched_peers"] == ["INTR"]
+    assert cached["fetched_complete"] == ["INTR"]
     conn.close()
 
 

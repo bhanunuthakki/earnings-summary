@@ -108,7 +108,18 @@ class PeerSelectionResult:
     inputs_sha256: str | None
     model: str = DEFAULT_MODEL
     extracted_at: str | None = None
+    # A peer lands here the moment ANY of the 4 _FETCH_ENDPOINTS succeeded for
+    # it — kept for backward compatibility with existing cache JSON and the
+    # self-heal top-up check (`if result.suggestions` / `if topped`). Does NOT
+    # mean the peer's multiples fully resolve: a free-tier-402 peer (e.g.
+    # GRAB/INTR/KSPI/PAGS, where only `profile` is accessible) lands here too.
     fetched_peers: list[str] = field(default_factory=list[str])
+    # Subset of fetched_peers where EVERY _FETCH_ENDPOINTS call succeeded —
+    # the peer's multiples panel is expected to fully resolve, not just avoid
+    # an all-dash row. Distinguishes "some data" from "all data" without
+    # changing rendering (the renderer doesn't read either field; both are
+    # cache-side bookkeeping consulted by tooling/diagnostics).
+    fetched_complete: list[str] = field(default_factory=list[str])
     skipped_reason: str | None = None
 
 
@@ -257,8 +268,11 @@ def extract_for_ticker(
                     repo_root,
                     self_ticker=ticker,
                 )
-                if topped:
-                    result.fetched_peers = sorted({*result.fetched_peers, *topped})
+                if topped.fetched_any or topped.fetched_complete:
+                    result.fetched_peers = sorted({*result.fetched_peers, *topped.fetched_any})
+                    result.fetched_complete = sorted(
+                        {*result.fetched_complete, *topped.fetched_complete}
+                    )
                     _write_cache(cache_path, result)
             return result
 
@@ -286,9 +300,9 @@ def extract_for_ticker(
         return result
 
     sug_dicts = [{"ticker": s.ticker, "name": s.name, "why": s.why} for s in suggestions]
-    fetched: list[str] = []
+    fetch_outcome = PeerFetchOutcome()
     if fetch_fundamentals and suggestions:
-        fetched = _fetch_peer_fundamentals(
+        fetch_outcome = _fetch_peer_fundamentals(
             [s.ticker for s in suggestions], repo_root, self_ticker=ticker
         )
 
@@ -298,7 +312,8 @@ def extract_for_ticker(
         inputs_sha256=inputs_sha,
         model=LLM_MODELS.get(PURPOSE, DEFAULT_MODEL),
         extracted_at=_stamp(start),
-        fetched_peers=fetched,
+        fetched_peers=fetch_outcome.fetched_any,
+        fetched_complete=fetch_outcome.fetched_complete,
         skipped_reason=None if sug_dicts else "llm returned no peers",
     )
     _write_cache(cache_path, result)
@@ -430,7 +445,18 @@ def _resolve_fmp_key(repo_root: Path) -> str | None:
     return val.strip() if isinstance(val, str) and val.strip() else None
 
 
-def _fetch_peer_fundamentals(peers: list[str], repo_root: Path, *, self_ticker: str) -> list[str]:
+@dataclass
+class PeerFetchOutcome:
+    """Which suggested peers got FMP fundamentals this run, split by
+    completeness — see ``_fetch_peer_fundamentals``."""
+
+    fetched_any: list[str] = field(default_factory=list[str])
+    fetched_complete: list[str] = field(default_factory=list[str])
+
+
+def _fetch_peer_fundamentals(
+    peers: list[str], repo_root: Path, *, self_ticker: str
+) -> PeerFetchOutcome:
     """Fetch profile + key-metrics-ttm + ratios-ttm + quarterly income for each
     suggested peer, writing the JSON files ``load_peer_comp`` reads. Per-FILE
     skip: only endpoints whose cache file is missing are called, so a peer left
@@ -447,20 +473,29 @@ def _fetch_peer_fundamentals(peers: list[str], repo_root: Path, *, self_ticker: 
     renders metric-less and the existing all-dash filter drops it (unless it's
     also an owner-pinned named rival, which survives by design). A 429 (daily
     budget exhausted) aborts the remaining fetch outright; the next build
-    resumes the top-up."""
+    resumes the top-up.
+
+    Returns both ``fetched_any`` (at least one endpoint resolved — the
+    pre-existing behavior, kept for cache/self-heal compatibility) and
+    ``fetched_complete`` (every endpoint resolved, so the peer's multiples are
+    expected to fully populate). Free-tier accounts get 402 on some `/stable`
+    endpoints for certain symbols (observed for GRAB/INTR/KSPI/PAGS: `profile`
+    succeeds, the other 3 don't) — those peers were previously indistinguishable
+    from a fully-fetched peer in the cache."""
     api_key = _resolve_fmp_key(repo_root)
     if not api_key:
         log.info({"event": "peer_fetch_skipped_no_key", "ticker": self_ticker})
-        return []
+        return PeerFetchOutcome()
     fmp_dir = repo_root / "data" / "historical" / "fmp"
     fmp_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         import requests  # late — keep the render/import path free of it
     except ImportError:
-        return []
+        return PeerFetchOutcome()
 
-    fetched: list[str] = []
+    fetched_any: list[str] = []
+    fetched_complete: list[str] = []
     calls = 0
     for peer in peers:
         todo = [
@@ -476,14 +511,14 @@ def _fetch_peer_fundamentals(peers: list[str], repo_root: Path, *, self_ticker: 
                 log.warning(
                     {"event": "peer_fetch_budget_hit", "ticker": self_ticker, "calls": calls}
                 )
-                return fetched
+                return PeerFetchOutcome(fetched_any=fetched_any, fetched_complete=fetched_complete)
             calls += 1
             body = _stable_get(requests, endpoint, peer, api_key, params)
             if body is _RATE_LIMITED:
                 log.warning(
                     {"event": "peer_fetch_rate_limited", "ticker": self_ticker, "calls": calls}
                 )
-                return fetched
+                return PeerFetchOutcome(fetched_any=fetched_any, fetched_complete=fetched_complete)
             if body is not None:
                 (fmp_dir / f"{peer}_{suffix}.json").write_text(
                     json.dumps(body, indent=2), encoding="utf-8"
@@ -491,8 +526,13 @@ def _fetch_peer_fundamentals(peers: list[str], repo_root: Path, *, self_ticker: 
                 peer_ok = True
             time.sleep(0.1)  # gentle on the free-tier rate limit
         if peer_ok:
-            fetched.append(peer)
-    return fetched
+            fetched_any.append(peer)
+            # Complete iff every endpoint missing at loop-start now exists on
+            # disk (a 402/other error leaves its file unwritten).
+            all_landed = all((fmp_dir / f"{peer}_{suffix}.json").exists() for _, suffix, _ in todo)
+            if all_landed:
+                fetched_complete.append(peer)
+    return PeerFetchOutcome(fetched_any=fetched_any, fetched_complete=fetched_complete)
 
 
 def _stable_get(

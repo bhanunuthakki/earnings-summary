@@ -69,6 +69,7 @@ def main() -> int:
                     "suggested": len(result.suggestions),
                     "peers": [s["ticker"] for s in result.suggestions],
                     "fetched": result.fetched_peers,
+                    "fetched_complete": result.fetched_complete,
                     "skipped": result.skipped_reason,
                 }
             )
