@@ -94,6 +94,40 @@ def list_tenets(*, status: str = "current", db_path: Path | str | None = None) -
     return list_insights(kind=TENET_KIND, status=status, db_path=db_path)
 
 
+def tenet_for_note(note_id: int, *, db_path: Path | str | None = None) -> InsightRow | None:
+    """The newest live (proposed OR current) Tenet already citing this note, or None
+    — the idempotency probe for staging a Tenet straight from an On My Mind musing
+    (one musing never yields two candidate Tenets)."""
+    found: InsightRow | None = None
+    for status in ("proposed", "current"):
+        for t in list_insights(kind=TENET_KIND, status=status, db_path=db_path):
+            if note_id in t.source_note_ids and (found is None or t.id > found.id):
+                found = t
+    return found
+
+
+def ensure_tenet_for_note(
+    note_id: int, *, body_md: str, db_path: Path | str | None = None
+) -> InsightRow | None:
+    """Find-or-create a ``proposed`` Tenet grounded in a single On My Mind musing
+    (IDEMPOTENT per note_id). The synchronous 'To Worldview' ladder action stages
+    the musing's own words as the candidate belief WITHOUT an LLM distill call —
+    the owner rewords/approves it in the Worldview panel (mirrors how 'incorporate'
+    stages an inert research task). Returns the row, or None on an empty body."""
+    existing = tenet_for_note(note_id, db_path=db_path)
+    if existing is not None:
+        return existing
+    if not body_md.strip():
+        return None
+    return record_tenet(
+        body_md=body_md,
+        source_note_ids=(note_id,),
+        status="proposed",
+        provenance="derived",
+        db_path=db_path,
+    )
+
+
 def approve_tenet(tenet_id: int, *, db_path: Path | str | None = None) -> InsightRow | None:
     """Promote a ``proposed`` Tenet to ``current``, superseding the prior current
     one for its scope_key (belief revision). Returns the row, or None when the id is

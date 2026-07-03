@@ -10,7 +10,7 @@ from evals.golden_classifiers import (
     grade_wondering_detect_case,
     load_wondering_detect_golden,
 )
-from research.detect import detect_wondering
+from research.detect import _build_prompt, detect_wondering
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -84,6 +84,14 @@ def test_nullish_ticker_normalized_to_none() -> None:
     assert verdict.ticker is None
 
 
+def test_prompt_steers_retrospectives_to_false() -> None:
+    # The classifier must not misread a lesson-learned about a resolved trade as an
+    # open research question (it belongs in the Worldview, not the research queue).
+    prompt = _build_prompt("the lesson is I sold NU too early")
+    assert "RETROSPECTIVE" in prompt
+    assert "lesson-learned" in prompt
+
+
 def test_golden_file_is_valid_and_balanced() -> None:
     cases = load_wondering_detect_golden(
         PROJECT_ROOT / "evals" / "golden" / "wondering_detect.json"
@@ -122,8 +130,6 @@ def test_gate_field_reports_the_deciding_stage() -> None:
         detect_wondering("do NU's margins hold?", provenance="contains_fetched", call=_yes).gate
         == "trust_zone"
     )
-    assert (
-        detect_wondering("NU's NPL formation ticked up this quarter", call=_yes).gate == "regex"
-    )
+    assert detect_wondering("NU's NPL formation ticked up this quarter", call=_yes).gate == "regex"
     assert detect_wondering("do NU's margins still hold up?", call=_no).gate == "llm_no"
     assert detect_wondering("do NU's margins still hold up?", call=_yes).gate == "llm_yes"

@@ -3,7 +3,7 @@
 The read model (:func:`load_feed`) is a keyset-paginated reverse-chron slice of
 ``analyst_notes`` (``source='capture'``), with the Wondering badge resolved in a
 single BATCHED lookup (no N+1 across a page). The action core
-(:func:`act_on_feed_item`) is the one place the four ladder verbs execute, so the
+(:func:`act_on_feed_item`) is the one place the ladder verbs execute, so the
 web route and the Telegram callback share identical behavior (mirrors
 ``research.proposals.act_on_proposal``).
 
@@ -39,15 +39,18 @@ def onmymind_enabled() -> bool:
     return os.environ.get("LEDGER_ONMYMIND", "0").strip().lower() in _ON
 
 
-# The four rungs, canonical spelling shared by the route, the Telegram callback,
-# and the panel JS. 'save' = save-for-later; 'discuss' opens a Socratic thread.
-LADDER_VERBS: tuple[str, ...] = ("dismiss", "save", "discuss", "incorporate")
+# The ladder rungs, canonical spelling shared by the route, the Telegram callback,
+# and the panel JS. 'save' = save-for-later; 'discuss' opens a Socratic thread;
+# 'worldview' stages the musing as a candidate Tenet (a lesson-learned's proper
+# home, not the research queue).
+LADDER_VERBS: tuple[str, ...] = ("dismiss", "save", "discuss", "incorporate", "worldview")
 
 # ladder values persisted in context_json (dismiss is a status change, not a value)
 _LADDER_VALUE: dict[str, str] = {
     "save": "saved",
     "discuss": "discuss",
     "incorporate": "incorporated",
+    "worldview": "worldview",
 }
 
 # Persisted ladder value → the short display label the badge shows (renderer +
@@ -56,6 +59,7 @@ LADDER_LABELS: dict[str, str] = {
     "saved": "saved",
     "discuss": "discussing",
     "incorporated": "in research",
+    "worldview": "in worldview",
 }
 
 DEFAULT_PAGE = 30
@@ -167,11 +171,12 @@ def act_on_feed_item(
     *,
     db_path: Path | str | None = None,
 ) -> ActionResult:
-    """The ONE action core for the four ladder rungs. Pure, safe-by-construction:
-    it archives / patches context / find-or-creates an inert research task. It
-    NEVER fetches the web or writes a live artifact (incorporate only stages a
-    ``proposed`` task — the owner still runs it explicitly). Raises ValueError on
-    an unknown verb."""
+    """The ONE action core for the ladder rungs. Pure, safe-by-construction: it
+    archives / patches context / find-or-creates an inert research task or a
+    proposed Tenet. It NEVER fetches the web, calls an LLM, or writes a live
+    artifact (incorporate stages a ``proposed`` task, worldview a ``proposed``
+    Tenet — the owner still acts on each explicitly). Raises ValueError on an
+    unknown verb."""
     if verb not in LADDER_VERBS:
         raise ValueError(f"unknown ladder verb {verb!r}; expected one of {LADDER_VERBS}")
 
@@ -193,6 +198,18 @@ def act_on_feed_item(
         return ActionResult(
             ok=True, ladder="incorporated", task_id=task_id, message="Sent to research."
         )
+
+    if verb == "worldview":
+        # Stage the musing's own words as a candidate Tenet (proposed) WITHOUT an
+        # LLM distill call — same no-fetch/no-LLM discipline as 'incorporate'. The
+        # owner rewords/approves it in the Worldview panel.
+        from synthesis.tenets import ensure_tenet_for_note
+
+        tenet = ensure_tenet_for_note(note_id, body_md=note.body[:500], db_path=db_path)
+        if tenet is None:
+            return ActionResult(ok=False, message="Nothing to stage.")
+        patch_note_context(note_id, {"ladder": "worldview"}, db_path=db_path)
+        return ActionResult(ok=True, ladder="worldview", message="Staged as a candidate Tenet.")
 
     if verb == "discuss":
         patch_note_context(note_id, {"ladder": "discuss"}, db_path=db_path)

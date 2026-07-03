@@ -22,7 +22,7 @@ from onmymind.feed import (
     load_feed,
     onmymind_enabled,
 )
-from pipeline.worldview_panel import render_worldview_section
+from pipeline.worldview_panel import render_worldview_section, worldview_enabled
 from research.proposals import (
     ResearchProposal,
     ResearchTask,
@@ -552,6 +552,10 @@ _LADDER_BUTTONS: tuple[tuple[str, str, str], ...] = (
     ("dismiss", "Dismiss", "k-btn-danger"),
 )
 
+# The 'To Worldview' rung is only offered when the Worldview system is on —
+# it stages the musing as a candidate Tenet (a lesson-learned's proper home).
+_WORLDVIEW_BUTTON: tuple[str, str, str] = ("worldview", "To Worldview", "")
+
 
 def _feed_body(item: FeedItem) -> str:
     """A musing renders as prose; a reading renders by its shape — a link as an
@@ -591,9 +595,14 @@ def _feed_card(item: FeedItem) -> str:
     ladder_label = LADDER_LABELS.get(item.ladder or "", "")
     ladder_badge = f'<span class="om-ladder">{escape(ladder_label)}</span>'
     when = stamp_html(note.created_at, css="ledger-when")
+    # dismiss stays last (destructive); 'To Worldview' slots in just before it
+    # when the Worldview system is on.
+    rungs = _LADDER_BUTTONS
+    if worldview_enabled():
+        rungs = (*_LADDER_BUTTONS[:-1], _WORLDVIEW_BUTTON, _LADDER_BUTTONS[-1])
     buttons = "".join(
         f'<button type="button" class="k-btn k-btn-sm {cls}" data-om-verb="{verb}">{escape(label)}</button>'
-        for verb, label, cls in _LADDER_BUTTONS
+        for verb, label, cls in rungs
     )
     return (
         f'<div class="ledger-musing om-item" data-om-id="{note.id}">'

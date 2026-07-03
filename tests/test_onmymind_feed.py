@@ -221,6 +221,48 @@ def test_incorporate_reuses_the_auto_tap_task(db_path: Path) -> None:
     assert len(mine) == 1
 
 
+def test_worldview_stages_a_proposed_tenet_without_llm(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A lesson-learned musing routed to the Worldview stages a candidate Tenet
+    # straight from its own words — no LLM, no network (mirror incorporate).
+    from llm import structured
+    from synthesis import tenets
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise AssertionError("worldview must not call the LLM synchronously")
+
+    monkeypatch.setattr(structured, "call_llm_structured", _boom)
+
+    nid = _musing(db_path, "I sell my winners too early; let a working thesis run")
+    r1 = act_on_feed_item(nid, "worldview", db_path=db_path)
+    assert r1.ok and r1.ladder == "worldview"
+    proposed = tenets.list_tenets(status="proposed", db_path=db_path)
+    mine = [t for t in proposed if nid in t.source_note_ids]
+    assert len(mine) == 1
+    assert "winners too early" in mine[0].body_md
+    note = notes.get_note(nid, db_path=db_path)
+    assert note is not None and (note.context or {}).get("ladder") == "worldview"
+    # idempotent: a second tap reuses the same candidate Tenet
+    r2 = act_on_feed_item(nid, "worldview", db_path=db_path)
+    assert r2.ok
+    still = [
+        t
+        for t in tenets.list_tenets(status="proposed", db_path=db_path)
+        if nid in t.source_note_ids
+    ]
+    assert len(still) == 1
+
+
+def test_worldview_button_gated_by_flag(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LEDGER_ONMYMIND", "1")
+    _musing(db_path, "a thought")
+    monkeypatch.delenv("LEDGER_WORLDVIEW", raising=False)
+    assert 'data-om-verb="worldview"' not in render_onmymind_list(db_path)
+    monkeypatch.setenv("LEDGER_WORLDVIEW", "1")
+    assert 'data-om-verb="worldview"' in render_onmymind_list(db_path)
+
+
 def test_action_on_missing_note_is_not_ok(db_path: Path) -> None:
     for verb in ("dismiss", "save", "discuss", "incorporate"):
         res = act_on_feed_item(999999, verb, db_path=db_path)
