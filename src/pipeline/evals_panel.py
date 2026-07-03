@@ -70,6 +70,9 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
     # The Ledger Phase-1 research-loop gate (mode-A golden classifier) — kept in
     # sync with run_llm_evals.GOLDEN_PURPOSES (test_runner_purpose_lists_stay_in_sync).
     "wondering_detect",
+    # The Ledger intent tap (mode-A golden classifier) — supersedes wondering_detect
+    # on the live tap; kept in sync with run_llm_evals.GOLDEN_PURPOSES.
+    "capture_intent",
     # Position-review verdict audit (mode-B rubric) — in sync with
     # run_llm_evals.AUDIT_PURPOSES + rubric_judge.AUDIT_SPECS.
     "position_review",

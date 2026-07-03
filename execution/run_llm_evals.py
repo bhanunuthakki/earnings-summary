@@ -62,6 +62,9 @@ GOLDEN_PURPOSES = (
     # Per-name DCF scenario prior (mode-A: directional skew + grounded-call over
     # pinned thesis/bear anchors). RISKY-adjacent — it moves allocation.
     "scenario_prior",
+    # The Ledger intent tap — supersedes wondering_detect on the live tap
+    # (mode-A golden classifier: observation/wondering/brief_artifact/stress_artifact).
+    "capture_intent",
 )
 AUDIT_PURPOSES = (
     "bear_case",

@@ -328,11 +328,12 @@ def _tap_health_line(db_path: Path | str | None) -> str:
             "capture something and this line should move.</p>"
         )
     bits = [f"{total} tapped", f"{c['chip']} chips"]
-    filtered = c["regex"] + c["trust_zone"]
-    if filtered:
-        bits.append(f"{filtered} pre-gate filtered")
-    if c["llm_no"]:
-        bits.append(f"{c['llm_no']} classifier-no")
+    if c["engage"]:
+        bits.append(f"{c['engage']} briefs")
+    if c["trust_zone"]:
+        bits.append(f"{c['trust_zone']} pre-gate filtered")
+    if c["observation"]:
+        bits.append(f"{c['observation']} observations")
     if c["error"]:
         bits.append(f"{c['error']} errors")
     return f'<p class="ledger-sec-sub">Tap health (7d): {" · ".join(bits)}.</p>'

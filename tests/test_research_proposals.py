@@ -42,7 +42,7 @@ def _land(db_path: Path, text: str) -> int:
 
 
 def _yes(text: str) -> dict[str, object]:
-    return {"is_wondering": True, "claim": "do NU margins hold?", "ticker": "NU"}
+    return {"intent": "wondering", "claim": "do NU margins hold?", "ticker": "NU"}
 
 
 def test_create_list_and_status(db_path: Path) -> None:
@@ -68,16 +68,18 @@ def test_tap_creates_task_for_wondering(db_path: Path) -> None:
     assert task.ticker == "NU"
 
 
-def test_tap_skips_flat_observation_zero_llm(db_path: Path) -> None:
+def test_tap_no_task_for_observation(db_path: Path) -> None:
     note_id = _land(db_path, "NU's NPL formation ticked up to 4.5% this quarter")
     calls = {"n": 0}
 
-    def spy(text: str) -> dict[str, object]:
+    def obs(text: str) -> dict[str, object]:
         calls["n"] += 1
-        return _yes(text)
+        return {"intent": "observation", "claim": "", "ticker": None}
 
-    assert proposals.detect_and_create_task(note_id, db_path=db_path, call=spy) is None
-    assert calls["n"] == 0  # regex pre-gate short-circuits — no LLM, no task
+    assert proposals.detect_and_create_task(note_id, db_path=db_path, call=obs) is None
+    # No lexical pre-gate anymore — the classifier runs on EVERY owner musing (that
+    # is the whole point); a flat observation just yields no task.
+    assert calls["n"] == 1
     assert proposals.list_tasks(db_path=db_path) == []
 
 
@@ -121,18 +123,25 @@ def _tap_audit_rows(db_path: Path) -> list[tuple[str, str | None, str | None]]:
         conn.close()
 
 
-def test_tap_audits_chip_regex_llmno_and_error(db_path: Path) -> None:
+def test_tap_audits_chip_engage_observation_and_error(db_path: Path) -> None:
     # 1. wondering → chip: detail task:<id>, purpose recorded (LLM ran)
     note_id = _land(db_path, "do NU's margins still hold up here?")
     tid = proposals.detect_and_create_task(note_id, db_path=db_path, call=_yes, channel="tray")
-    # 2. flat observation → regex pre-gate: zero LLM, purpose None
-    flat_id = _land(db_path, "NU's NPL formation ticked up to 4.5% this quarter")
-    assert proposals.detect_and_create_task(flat_id, db_path=db_path, call=_yes) is None
-    # 3. classifier says no
-    wonder_id = _land(db_path, "should I look into NU's credit book?")
+    # 2. artifact intent → engage:<mode>, no task (routed to the artifact pipeline)
+    art_id = _land(db_path, "curious about the takeaways here, take a look")
     assert (
         proposals.detect_and_create_task(
-            wonder_id, db_path=db_path, call=lambda _t: {"is_wondering": False, "claim": ""}
+            art_id,
+            db_path=db_path,
+            call=lambda _t: {"intent": "brief_artifact", "claim": "takeaways?", "ticker": None},
+        )
+        is None
+    )
+    # 3. flat observation → no task, but the classifier DID run (no pre-gate)
+    obs_id = _land(db_path, "NU's NPL formation ticked up to 4.5% this quarter")
+    assert (
+        proposals.detect_and_create_task(
+            obs_id, db_path=db_path, call=lambda _t: {"intent": "observation", "claim": ""}
         )
         is None
     )
@@ -145,12 +154,18 @@ def test_tap_audits_chip_regex_llmno_and_error(db_path: Path) -> None:
     assert proposals.detect_and_create_task(boom_id, db_path=db_path, call=boom) is None
 
     rows = _tap_audit_rows(db_path)
-    assert [(r[1] or "").split(":")[0] for r in rows] == ["task", "regex", "llm_no", "error"]
-    assert rows[0] == ("tray", f"task:{tid}", "wondering_detect")
-    assert rows[1][2] is None  # pre-gate filtered: no LLM purpose attributed
+    assert [(r[1] or "").split(":")[0] for r in rows] == [
+        "task",
+        "engage",
+        "observation",
+        "error",
+    ]
+    assert rows[0] == ("tray", f"task:{tid}", "capture_intent")
+    assert rows[1][1] == "engage:brief" and rows[1][2] == "capture_intent"
+    assert rows[2][1] == "observation" and rows[2][2] == "capture_intent"
     assert rows[3][1] == "error:RuntimeError"
 
     from capture.audit import recent_tap_counts
 
     counts = recent_tap_counts(days=7, db_path=db_path)
-    assert counts == {"chip": 1, "regex": 1, "trust_zone": 0, "llm_no": 1, "error": 1}
+    assert counts == {"chip": 1, "engage": 1, "trust_zone": 0, "observation": 1, "error": 1}

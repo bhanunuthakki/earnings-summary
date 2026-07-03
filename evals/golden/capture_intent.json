@@ -1,0 +1,26 @@
+{
+  "purpose": "capture_intent",
+  "notes": "The live intent gate on captured musings: observation (flat) vs wondering (research-worthy, no artifact) vs brief_artifact (summarize this link/deck) vs stress_artifact (challenge/expand this artifact). A wrong intent routes the musing to the wrong action. Ports the wondering_detect corpus into the finer taxonomy (so the wondering/observation precision is still guarded now that this classifier — not the regex-gated detector — is the live tap) and adds artifact cases, including the real 'curious about takeaways here: <url>' the old regex allowlist silently dropped.",
+  "cases": [
+    {"id": "ci-001-add-watchlist", "text": "Add to watchlist: Dassault Systemes", "expected": {"intent": "wondering", "ticker": null}},
+    {"id": "ci-002-margins-hold", "text": "do NU's margins still hold up given where the credit cycle is?", "expected": {"intent": "wondering", "ticker": "NU"}},
+    {"id": "ci-003-take-rate", "text": "I wonder if MELI's take rate is really sustainable at these levels", "expected": {"intent": "wondering", "ticker": "MELI"}},
+    {"id": "ci-004-trim-bn", "text": "should I trim BN here or add more?", "expected": {"intent": "wondering", "ticker": "BN"}},
+    {"id": "ci-005-research-veev", "text": "research this: is VEEV's R&D reacceleration guide credible?", "expected": {"intent": "wondering", "ticker": "VEEV"}},
+    {"id": "ci-006-rule-of-40", "text": "how does NOW compare to CRM on rule of 40 these days?", "expected": {"intent": "wondering", "ticker": "NOW"}},
+    {"id": "ci-007-look-into-funding", "text": "should I look into NU's funding costs?", "expected": {"intent": "wondering", "ticker": "NU"}},
+    {"id": "ci-008-npl-observation", "text": "NU's NPL formation ticked up to 4.5% this quarter", "expected": {"intent": "observation", "ticker": null}},
+    {"id": "ci-009-meli-print", "text": "MELI reported Q3 revenue of 5.6B, up 35% year over year", "expected": {"intent": "observation", "ticker": null}},
+    {"id": "ci-010-added-dip", "text": "added to NU on the dip today", "expected": {"intent": "observation", "ticker": null}},
+    {"id": "ci-011-macro-mood", "text": "the macro tape feels heavy and I'm uneasy", "expected": {"intent": "observation", "ticker": null}},
+    {"id": "ci-012-really-executing", "text": "NU is really executing well on the credit book", "expected": {"intent": "observation", "ticker": null}},
+    {"id": "ci-100-semianalysis-takeaways", "text": "Curious about takeaways here: https://newsletter.semianalysis.com/p/tokenbudgeting-our-conversations", "expected": {"intent": "brief_artifact", "ticker": null}},
+    {"id": "ci-101-deck-gist", "text": "what's the gist of this deck?", "expected": {"intent": "brief_artifact", "ticker": null}},
+    {"id": "ci-102-summarize-article", "text": "summarize this article for me", "expected": {"intent": "brief_artifact", "ticker": null}},
+    {"id": "ci-103-meli-logistics-takeaways", "text": "good piece on MELI logistics — what are the key takeaways? https://www.example.com/meli-logistics", "expected": {"intent": "brief_artifact", "ticker": "MELI"}},
+    {"id": "ci-104-ingest-critique-nu", "text": "Ingest this deck and give me insights and a critical evaluation of NU", "expected": {"intent": "stress_artifact", "ticker": "NU"}},
+    {"id": "ci-105-poke-holes", "text": "poke holes in the bull case in this one: https://www.example.com/thesis", "expected": {"intent": "stress_artifact", "ticker": null}},
+    {"id": "ci-106-dig-deeper-rbrk", "text": "I already have the RBRK deck — expand and pressure-test my read on the net retention story", "expected": {"intent": "stress_artifact", "ticker": "RBRK"}},
+    {"id": "ci-107-stress-test-here", "text": "stress test the take-rate argument in this NU report and dig deeper", "expected": {"intent": "stress_artifact", "ticker": "NU"}}
+  ]
+}
