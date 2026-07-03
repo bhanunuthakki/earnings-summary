@@ -217,6 +217,10 @@ def _valuation_snapshot(
     upside = -over_under if over_under is not None else None
     trigger = _trigger_status(over_under, mos_bar_used, held=held)
     bull_fv, bear_fv = _scenario_range(row["assumption_snapshot_json"])
+    sp_weights, sp_rationale, sp_set_by = _scenario_prior_card(row["assumption_snapshot_json"])
+    exp_return, skew = _scenario_ev_skew(
+        live_price, cons_npv_per_share, row["assumption_snapshot_json"]
+    )
     sync_status = (
         str(row["assumptions_sync_status"])
         if has_sync_cols and row["assumptions_sync_status"] is not None
@@ -242,6 +246,11 @@ def _valuation_snapshot(
         bear_npv_per_share=bear_fv,
         valuation_model_label=_model_label(row["assumption_snapshot_json"]),
         priced_in=_priced_in(row["assumption_snapshot_json"]),
+        scenario_weights=sp_weights,
+        scenario_rationale=sp_rationale,
+        scenario_set_by=sp_set_by,
+        scenario_expected_return=exp_return,
+        scenario_skew=skew,
         assumptions_sync_status=sync_status,
         assumptions_synced_at=synced_at,
     )
@@ -352,6 +361,51 @@ def _priced_in(snapshot_json: object) -> PricedInCard | None:
         growth=growth,
         terminal=terminal,
     )
+
+
+def _scenario_prior_card(
+    snapshot_json: object,
+) -> tuple[dict[str, float] | None, str | None, str | None]:
+    """(weights, rationale, set_by) from the dcf_runs ``scenario_prior`` block, for
+    the valuation card. Weights are the normalized Bull/Base/Bear simplex (via the
+    single producer ``dcf.scenario_reward.parse_scenario_prior_weights``); rationale
+    is the LLM's (None when empty); set_by is "llm"/"owner"/"global". All None when
+    the run carries no scenario_prior block."""
+    from dcf.scenario_reward import parse_scenario_prior_weights
+
+    weights = parse_scenario_prior_weights(snapshot_json)
+    if weights is None:
+        return None, None, None
+    rationale: str | None = None
+    set_by: str | None = None
+    if isinstance(snapshot_json, str) and snapshot_json:
+        try:
+            data: object = json.loads(snapshot_json)
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            block = cast("dict[str, object]", data).get("scenario_prior")
+            if isinstance(block, dict):
+                b = cast("dict[str, object]", block)
+                r = b.get("rationale")
+                rationale = r.strip() if isinstance(r, str) and r.strip() else None
+                sb = b.get("set_by")
+                set_by = sb if isinstance(sb, str) and sb else None
+    return weights, rationale, set_by
+
+
+def _scenario_ev_skew(
+    price: float | None, base_fv: float | None, snapshot_json: object
+) -> tuple[float | None, float | None]:
+    """The probability-weighted expected value E[V] + its skew vs the base point
+    estimate, for the card (``dcf.scenario_reward``). Both None unless the run
+    carries a real scenario range (tails) — a point estimate has no skew to show."""
+    from dcf.scenario_reward import scenario_reward
+
+    reward = scenario_reward(price=price, base_fv=base_fv, snapshot_json=snapshot_json)
+    if reward is None or not reward.has_scenarios:
+        return None, None
+    return reward.expected_return, reward.skew
 
 
 # Snapshot "model" tag (stamped by the bespoke builders) → card-facing label.

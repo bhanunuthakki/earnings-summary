@@ -56,6 +56,11 @@ class ScenarioReward:
     has_scenarios: bool
     probabilities: dict[str, float]
     detail: str
+    # Where ``probabilities`` came from: ``"per_name"`` (the LLM/owner scenario_prior
+    # on the run's snapshot) or ``"global"`` (the symmetric 25/50/25 fallback). Lets
+    # a surface show whether a name carries a real per-name prior. Defaulted so any
+    # external constructor / older test keeps working.
+    weights_source: str = "global"
 
     @property
     def skew(self) -> float:
@@ -92,6 +97,44 @@ def parse_scenario_fair_values(snapshot_json: object) -> dict[str, float]:
     return out
 
 
+def parse_scenario_prior_weights(snapshot_json: object) -> dict[str, float] | None:
+    """Per-name Bull/Base/Bear probability weights from a ``dcf_runs`` assumption
+    snapshot's ``scenario_prior`` block (written by ``execution/refresh_dcf``), or
+    ``None`` when absent/malformed.
+
+    A valid result is a positive simplex over all three legs, normalized defensively
+    to sum 1. Anything else returns ``None`` so :func:`scenario_reward` falls back to
+    the documented global prior — a run without a per-name prior behaves exactly as
+    before this shipped."""
+    if not isinstance(snapshot_json, str) or not snapshot_json:
+        return None
+    try:
+        data: object = json.loads(snapshot_json)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    block = cast("dict[str, object]", data).get("scenario_prior")
+    if not isinstance(block, dict):
+        return None
+    weights = cast("dict[str, object]", block).get("weights")
+    if not isinstance(weights, dict):
+        return None
+    w = cast("dict[str, object]", weights)
+    out: dict[str, float] = {}
+    for key in ("bull", "base", "bear"):
+        v = w.get(key)
+        if not (
+            isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0
+        ):
+            return None
+        out[key] = float(v)
+    total = out["bull"] + out["base"] + out["bear"]
+    if total <= 0:
+        return None
+    return {k: v / total for k, v in out.items()}
+
+
 def scenario_reward(
     *, price: float | None, base_fv: float | None, snapshot_json: object = None
 ) -> ScenarioReward | None:
@@ -121,9 +164,14 @@ def scenario_reward(
     bear_return = ret("bear")
     has_scenarios = bull_return is not None or bear_return is not None
 
-    present = [s for s in SCENARIO_PROBABILITIES if s in fair_values]
-    mass = sum(SCENARIO_PROBABILITIES[s] for s in present)
-    probabilities = {s: SCENARIO_PROBABILITIES[s] / mass for s in present} if mass > 0 else {}
+    # Per-name prior (LLM/owner) when the run carries one, else the global 25/50/25.
+    # Both are renormalized over whichever legs are actually on file.
+    prior = parse_scenario_prior_weights(snapshot_json)
+    weights = prior if prior is not None else SCENARIO_PROBABILITIES
+    weights_source = "per_name" if prior is not None else "global"
+    present = [s for s in weights if s in fair_values]
+    mass = sum(weights[s] for s in present)
+    probabilities = {s: weights[s] / mass for s in present} if mass > 0 else {}
     expected_return = sum(probabilities[s] * (fair_values[s] / price - 1.0) for s in present)
 
     if has_scenarios:
@@ -142,4 +190,5 @@ def scenario_reward(
         has_scenarios=has_scenarios,
         probabilities=probabilities,
         detail=detail,
+        weights_source=weights_source,
     )

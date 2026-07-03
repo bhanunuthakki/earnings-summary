@@ -164,6 +164,19 @@ class ValuationSnapshot(BaseModel):
     # runs predating the block; the card then shows an explicit n/a.
     priced_in: PricedInCard | None = None
 
+    # Feature 2 — the per-name DCF scenario prior surfaced on the card: the
+    # LLM/owner Bull/Base/Bear weights + rationale (dcf_runs.assumption_snapshot_json
+    # ["scenario_prior"]), plus the probability-weighted expected value E[V] and its
+    # skew vs the base point estimate (dcf.scenario_reward over the live price +
+    # scenario fair values). Until now only the allocation surfaces saw E[V]/skew.
+    # None when the run carries no scenario_prior block / no usable reward.
+    # scenario_set_by is "llm" / "owner" / "global".
+    scenario_weights: dict[str, float] | None = None
+    scenario_rationale: str | None = None
+    scenario_set_by: str | None = None
+    scenario_expected_return: float | None = None  # E[V], a fraction (+0.12 = +12%)
+    scenario_skew: float | None = None  # E[V] - base point estimate, a fraction
+
     # S11 — workbook→assumptions-JSON sync outcome from dcf_runs (migration
     # 0091): 'synced' / 'created' / 'failed: <detail>' + the naive-UTC stamp.
     # None when the run predates the columns, the DB lacks them, or the
