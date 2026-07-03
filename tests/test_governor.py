@@ -17,6 +17,7 @@ from research.governor import (
     Moment,
     collect_moments,
     digest_pings,
+    get_ping,
     record_dismissal,
     run_governor,
     unmute,
@@ -217,3 +218,73 @@ def test_intent_followup_and_annotation_moments(db: Path) -> None:
         conn.close()
     classes = {m.class_ for m in collect_moments(db, now=_NOW)}
     assert classes == {"retro_annotation", "intent_followup"}
+
+
+def test_intent_followup_body_points_to_the_ledger_tab_not_ledger_land(db: Path) -> None:
+    """/ledger-land does not exist on Telegram — the ping must not tell the
+    owner to type a command that will silently vanish."""
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO analyst_notes (kind, status, body, source, created_at, updated_at) "
+            "VALUES ('intent','open','far-OTM LEAP sleeve on the next washout','capture',"
+            "'2026-06-01','2026-06-01')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    moments = [m for m in collect_moments(db, now=_NOW) if m.class_ == "intent_followup"]
+    assert moments
+    for m in moments:
+        assert "/ledger-land" not in m.body
+        assert "Ledger tab" in m.body
+
+
+def test_get_ping_returns_row_or_none(db: Path) -> None:
+    _seed_breach(db)
+    tally = run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
+    assert tally["sent"] == 1
+    conn = sqlite3.connect(str(db))
+    try:
+        ping_id = int(
+            conn.execute("SELECT id FROM coach_pings WHERE class_ = 'falsifier_breach'").fetchone()[
+                0
+            ]
+        )
+    finally:
+        conn.close()
+    row = get_ping(ping_id, db_path=db)
+    assert row is not None
+    assert row.id == ping_id
+    assert row.class_ == "falsifier_breach"
+    assert row.ticker == "NU"
+    assert row.status == "sent"
+    assert get_ping(999999, db_path=db) is None
+
+
+def test_falsifier_breach_ping_gets_the_two_button_keyboard() -> None:
+    """execution/run_coach_pings.py's Answer button — a falsifier_breach moment
+    with a ticker gets Answer+Dismiss; every other moment class (or a
+    falsifier_breach with no ticker) keeps the original Dismiss-only rows."""
+    from execution.run_coach_pings import ping_buttons
+
+    breach = Moment(
+        class_="falsifier_breach", key="alert:1", ticker="NU", body="x", source_ref="decision:1"
+    )
+    rows = ping_buttons(7, breach)
+    assert rows == [[("Answer: review NU", "cp:review:7"), ("Dismiss", "cp:dismiss:7")]]
+
+    no_ticker = Moment(
+        class_="falsifier_breach", key="alert:2", ticker=None, body="x", source_ref="decision:2"
+    )
+    assert ping_buttons(8, no_ticker) == [[("Dismiss", "cp:dismiss:8")]]
+
+    annotation = Moment(
+        class_="retro_annotation", key="annot:1", ticker="NU", body="x", source_ref="decision:1"
+    )
+    assert ping_buttons(9, annotation) == [[("Dismiss", "cp:dismiss:9")]]
+
+    intent = Moment(
+        class_="intent_followup", key="intent:1:0", ticker=None, body="x", source_ref="note:1"
+    )
+    assert ping_buttons(10, intent) == [[("Dismiss", "cp:dismiss:10")]]

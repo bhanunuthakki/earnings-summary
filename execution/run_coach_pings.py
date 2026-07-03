@@ -16,10 +16,30 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+if TYPE_CHECKING:
+    from research.governor import Moment
+
+
+def ping_buttons(ping_id: int, moment: Moment) -> list[list[tuple[str, str]]]:
+    """The inline-keyboard rows for one pushed ping: a falsifier_breach with a
+    ticker gets an Answer button that fires the ping's own stated next action
+    (``/review {ticker}``) in-place, alongside Dismiss; every other moment
+    class keeps the original Dismiss-only keyboard. Pure — no network — so the
+    button shape is unit-testable without a live Telegram send."""
+    if moment.class_ == "falsifier_breach" and moment.ticker:
+        return [
+            [
+                ("Answer: review " + moment.ticker, f"cp:review:{ping_id}"),
+                ("Dismiss", f"cp:dismiss:{ping_id}"),
+            ]
+        ]
+    return [[("Dismiss", f"cp:dismiss:{ping_id}")]]
 
 
 def main() -> int:
@@ -32,7 +52,7 @@ def main() -> int:
 
     from collections.abc import Callable
 
-    from research.governor import Moment, run_governor
+    from research.governor import run_governor
     from synthesis.auto_reconcile import auto_reconcile
 
     # Housekeeping first — derive, don't ask: anything software can resolve
@@ -59,9 +79,7 @@ def main() -> int:
                         bot_token,
                         owner_chat,
                         moment.body,
-                        reply_markup=telegram.inline_keyboard(
-                            [[("Dismiss", f"cp:dismiss:{ping_id}")]]
-                        ),
+                        reply_markup=telegram.inline_keyboard(ping_buttons(ping_id, moment)),
                     )
                     return True
                 except Exception:

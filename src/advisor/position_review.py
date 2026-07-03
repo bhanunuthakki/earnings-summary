@@ -33,6 +33,7 @@ top-level ``db`` import triggers ``init_db``).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -67,8 +68,14 @@ __all__ = [
     "render_pre_analysis_chat",
     "render_tax_lines",
     "review_position",
+    "review_reply_text",
     "summarize_verdict",
 ]
+
+# "at $70" / "above 70" / "over $12.50" -> the price level to review at. Shared
+# by every chat-shaped surface that parses "/review <TICKER> [at $X]" (the Ask
+# tab command and the Telegram poller) so the at-price behavior never drifts.
+_AT_PRICE_RX = re.compile(r"(?:at|above|over)\s*\$?\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE)
 
 # --------------------------------------------------------------------------- #
 # Tunables — the valuation ladder mirrors the ``dcf.valuation.over_under_pct``
@@ -974,3 +981,27 @@ def render_pre_analysis_chat(pre: PreAnalysis) -> str:
             f"`python execution/review_position.py {pre.ticker}{at_flag}`",
         ]
     )
+
+
+def review_reply_text(repo_root: Path, text: str) -> str:
+    """``/review <TICKER> [at $PRICE]`` end-to-end: parse the ticker + at-price
+    out of ``text`` and return the rendered instant pre-analysis reply.
+
+    The ONE place that parses this command shape — the Ask-tab chat command
+    (``ask.commands._review_command``) and the Telegram poller both call this
+    instead of each re-implementing the parsing, so the at-price regex and the
+    usage/error copy can never drift between the two surfaces. LLM-free and
+    fast: ``build_pre_analysis`` never imports a model client.
+    """
+    parts = text.split()
+    if len(parts) < 2:
+        return "Usage: /review <TICKER> [at $PRICE] — e.g. `/review RBRK` or `/review FLKR at $70`."
+    ticker = parts[1].upper().lstrip("$")
+    match = _AT_PRICE_RX.search(text)
+    at_price = float(match.group(1)) if match else None
+    db_path = repo_root / "data" / "portfolio.db"
+    try:
+        pre = build_pre_analysis(repo_root, ticker, at_price=at_price, db_path=db_path)
+    except Exception as exc:
+        return f"Couldn't build a review for {ticker}: {type(exc).__name__}: {exc}"
+    return render_pre_analysis_chat(pre)

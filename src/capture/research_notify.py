@@ -255,6 +255,42 @@ def dispatch_callback(
                 answer(token, cqid, text="Dismissed." if recorded else "Already handled.")
         return "cp_dismissed" if recorded else "cp_stale"
 
+    if kind == "cp" and verb == "review":
+        # The Answer button on a falsifier_breach ping — the ping's own stated
+        # next action (/review {ticker}) fired in-place, without the owner
+        # retyping it. Same instant, LLM-free reply as the poller's /review
+        # interception and the Ask-tab command.
+        from research.governor import get_ping
+
+        ping = get_ping(obj_id, db_path=db_path)
+        if ping is None:
+            if cqid:
+                answer(token, cqid, text="Unrecognized action.")
+            return None
+        if not ping.ticker:
+            if cqid:
+                answer(token, cqid, text="No ticker on this ping.")
+            return "cp_review_no_ticker"
+        if cqid:
+            answer(token, cqid, text=f"Reviewing {ping.ticker}...")
+        if chat_id is not None:
+            from advisor.position_review import review_reply_text
+
+            # Same repo_root derivation as the poller's own /review
+            # interception (poller.py's _pledge_and_annotate pattern) — the
+            # poller never passes repo_root through explicitly, only db_path.
+            root = repo_root or (Path(db_path).parent.parent if db_path else None)
+            try:
+                reply = (
+                    review_reply_text(root, f"/review {ping.ticker}")
+                    if root is not None
+                    else "Couldn't build that review (no database configured)."
+                )
+            except Exception:
+                reply = f"Couldn't build a review for {ping.ticker}."
+            send(token, chat_id, reply)
+        return "cp_reviewed"
+
     if cqid:
         answer(token, cqid, text="Unrecognized action.")
     return None

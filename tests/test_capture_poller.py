@@ -136,3 +136,114 @@ def test_poll_once_skips_bot_commands(
     assert len(musings) == 1  # only the real thought landed, not /start
     assert "Nubank looks good" in musings[0].body
     assert any("capture is live" in s for s in sent)  # /start got a greeting
+
+
+def test_poll_once_review_command_replies_with_pre_analysis(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The coach's pings say "/review {ticker}" — the poller must answer that
+    call-to-action in-channel instead of silently swallowing it."""
+    updates = [telegram.Update(update_id=50, kind="text", chat_id=1, text="/review NU")]
+    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    seen_calls: list[tuple[object, str]] = []
+
+    def _fake_reply_text(repo_root: object, text: str) -> str:
+        seen_calls.append((repo_root, text))
+        return "**NU** — position review (deterministic read)"
+
+    monkeypatch.setattr(
+        "advisor.position_review.review_reply_text", _fake_reply_text, raising=False
+    )
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert counts.get("command_review") == 1
+    assert counts.get("command") is None  # /review is its own bucket, not "command"
+    assert len(sent) == 1
+    assert "NU" in sent[0]
+    assert seen_calls and seen_calls[0][1] == "/review NU"
+    # no capture/ingest occurred for a slash command
+    assert notes.list_notes(kind="musing", db_path=db_path) == []
+
+
+def test_poll_once_review_command_degrades_on_failure(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    updates = [telegram.Update(update_id=51, kind="text", chat_id=1, text="/review BADTICKER")]
+    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+
+    def _boom(repo_root: object, text: str) -> str:
+        raise RuntimeError("cockpit unavailable")
+
+    monkeypatch.setattr("advisor.position_review.review_reply_text", _boom, raising=False)
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert counts.get("command_review") == 1
+    assert len(sent) == 1
+    assert "Couldn't build a review" in sent[0] and "BADTICKER" in sent[0]
+
+
+def test_poll_once_unknown_command_replies_instead_of_vanishing(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    updates = [telegram.Update(update_id=60, kind="text", chat_id=1, text="/foobar")]
+    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert counts.get("command") == 1
+    assert len(sent) == 1
+    assert "Not a command here" in sent[0] and "/review" in sent[0]
+    assert notes.list_notes(kind="musing", db_path=db_path) == []
+
+
+def test_poll_once_start_command_still_greets(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """/start behavior is unchanged by the unknown-command reply."""
+    updates = [telegram.Update(update_id=70, kind="text", chat_id=1, text="/start")]
+    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert counts.get("command") == 1
+    assert len(sent) == 1
+    assert "capture is live" in sent[0]
+    assert "Not a command here" not in sent[0]
