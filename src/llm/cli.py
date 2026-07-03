@@ -175,6 +175,13 @@ LLM_MODELS: dict[str, str] = {
     # call per on-demand review). A deterministic behavioral guardrail backstops the
     # sell-winners-too-early rule regardless of the model's call.
     "position_review": DEFAULT_MODEL,
+    # Per-name DCF scenario prior (src/dcf/scenario_prior.py). Judgment over the
+    # thesis/bear/KPI anchors to skew the Bull/Base/Bear weights that move
+    # allocation → Sonnet-tier reasoning (one batch call per name, latency
+    # unimportant), like position_review. A non-degenerate simplex is enforced in
+    # code and the owner's workbook edit always wins, so a bad call can't swing the
+    # book; the scenario_prior golden set grades the directional skew.
+    "scenario_prior": DEFAULT_MODEL,
     # Long-context analytical writing
     "transcript_summary": DEFAULT_MODEL,
     "press_release_summary": DEFAULT_MODEL,

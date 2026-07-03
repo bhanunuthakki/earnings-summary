@@ -1,0 +1,49 @@
+{
+  "purpose": "scenario_prior",
+  "version": 1,
+  "_readme": "Mode-A eval for the LLM scenario-prior setter (dcf.scenario_prior). Each case pins a thesis/bear anchor block whose asymmetry is unambiguous; score = 0.7*directional-skew-correct + 0.3*grounded-call (valid non-degenerate simplex from the LLM, not the global fallback, with a rationale). expected_skew is bull|bear|balanced (|bull-bear| >= 0.05 counts as a skew). anchor_block never states the weights, only the qualitative asymmetry. Re-run: python execution/run_llm_evals.py --purpose scenario_prior --min-score 0.7",
+  "cases": [
+    {
+      "id": "sp-fragile-highmultiple-bear",
+      "ticker": "TESTHM",
+      "expected_skew": "bear",
+      "note": "Rich multiple + decelerating growth + a serious, specific bear case = downside-skewed.",
+      "anchor_block": "## THESIS ANCHOR (analyst's own framing of this name)\n\n**Thesis statement:**\nA hyper-growth application-software name trading at ~22x forward sales on ~35% growth that is decelerating ~10 points a year. The entire bull case rests on the multiple holding while growth normalizes toward 20%; there is little valuation cushion if the market re-rates the group.\n\n**Tier-1 KPIs (with break conditions):**\n- **Net revenue retention** — breaks if it falls below 108%\n- **Billings growth** — breaks if it decelerates below 20% for two quarters\n\n## BEAR-CASE ANCHOR (from analyst's prior bear review)\n\n**Most underweighted by consensus:**\nConsensus underweights how much of the valuation is pure multiple. A single disappointing billings print historically compresses the multiple 30-40%, and the base case already assumes best-in-class execution every quarter with no room for a stumble.\n\n**Named failure modes the analyst is tracking:**\n- A large-enterprise budget freeze stalls net-new logos while the multiple is still priced for acceleration.\n- A well-capitalized platform incumbent bundles the core product for free, collapsing the pricing power the model assumes."
+    },
+    {
+      "id": "sp-regulatory-execution-bear",
+      "ticker": "TESTRG",
+      "expected_skew": "bear",
+      "note": "Single-country regulatory + credit-cycle exposure with a live bear case = downside-skewed.",
+      "anchor_block": "## THESIS ANCHOR (analyst's own framing of this name)\n\n**Thesis statement:**\nA fast-growing emerging-market consumer lender whose base-case fair value assumes the unsecured credit book keeps compounding at current loss rates through the cycle. The driver is a single regulator's stance on interchange and lending caps.\n\n**Quantitative thesis-breakers:**\n- Net charge-offs sustained above 6% would break the unit economics the DCF assumes.\n\n## BEAR-CASE ANCHOR (from analyst's prior bear review)\n\n**Most underweighted by consensus:**\nThe base case extrapolates benign credit through a first real downturn the company has never operated through. A rate-cap or interchange change from the single regulator it depends on would reset the terminal margin structurally lower, and the market is pricing continued benign conditions.\n\n**Named failure modes the analyst is tracking:**\n- A consumer-credit downturn drives charge-offs past the break level while provisioning lags.\n- A regulatory cap on lending rates compresses the take rate the terminal value rests on."
+    },
+    {
+      "id": "sp-protected-downside-optionality-bull",
+      "ticker": "TESTOP",
+      "expected_skew": "bull",
+      "note": "Cheap on the base business + free optionality + protected downside = upside-skewed.",
+      "anchor_block": "## THESIS ANCHOR (analyst's own framing of this name)\n\n**Thesis statement:**\nA cash-generative incumbent trading at ~9x FCF on the core business alone, where the base-case DCF gives ZERO credit to a fast-scaling second segment that is already at breakeven. Net cash is ~20% of the market cap, so the downside is anchored by the core FCF and the balance sheet.\n\n**Tier-1 KPIs (with break conditions):**\n- **Core FCF margin** — breaks if it falls below 25%\n- **Segment-2 revenue** — the option; base case models it at zero\n\n## BEAR-CASE ANCHOR (from analyst's prior bear review)\n\n**Most underweighted by consensus:**\nThe bear case struggles to find a scenario where the core FCF impairs meaningfully — demand is non-discretionary and the balance sheet is net cash. The main risk is dead money (the option never pays off), not permanent capital loss. Consensus underweights the second segment's optionality, which the base case deliberately values at zero."
+    },
+    {
+      "id": "sp-conservative-base-reopening-bull",
+      "ticker": "TESTCB",
+      "expected_skew": "bull",
+      "note": "Deliberately conservative base with clear upside optionality and limited downside = upside-skewed.",
+      "anchor_block": "## THESIS ANCHOR (analyst's own framing of this name)\n\n**Thesis statement:**\nA category-leading marketplace where the base-case DCF assumes take-rate holds flat and the nascent advertising and credit lines contribute nothing to terminal margin — a deliberately conservative base. Every disclosed cohort shows monetization rising with tenure, so the base likely understates terminal margin.\n\n## BEAR-CASE ANCHOR (from analyst's prior bear review)\n\n**Most underweighted by consensus:**\nThe realistic bear is slower monetization, not a broken model — GMV is sticky and the network effect is intact, so the downside is a lower growth rate rather than an impaired asset. The base case is set below management's own take-rate trajectory, leaving the skew to the upside as ads and credit ramp."
+    },
+    {
+      "id": "sp-two-sided-balanced",
+      "ticker": "TESTBAL",
+      "expected_skew": "balanced",
+      "note": "Genuinely symmetric range — real upside and real downside of similar weight.",
+      "anchor_block": "## THESIS ANCHOR (analyst's own framing of this name)\n\n**Thesis statement:**\nA diversified industrial compounder trading close to its historical median multiple. The bull case (a cyclical recovery in the short-cycle segment) and the bear case (a prolonged destocking cycle) are roughly equally probable, and the base case sits at mid-cycle assumptions with balanced risk either way.\n\n## BEAR-CASE ANCHOR (from analyst's prior bear review)\n\n**Most underweighted by consensus:**\nNeither tail dominates — the range is genuinely two-sided. A recovery and a deeper destock are both plausible from here, and the valuation already reflects a mid-cycle outcome, so there is no structural skew in either direction."
+    },
+    {
+      "id": "sp-fairly-valued-balanced",
+      "ticker": "TESTFV",
+      "expected_skew": "balanced",
+      "note": "Fairly valued, high-quality, symmetric — no structural skew.",
+      "anchor_block": "## THESIS ANCHOR (analyst's own framing of this name)\n\n**Thesis statement:**\nA high-quality mega-cap platform whose base case is close to a fair multiple on durable cash flows. Upside from a new product cycle and downside from a maturing core segment are of similar magnitude; the analyst holds it as a steady compounder with no strong directional tilt.\n\n## BEAR-CASE ANCHOR (from analyst's prior bear review)\n\n**Most underweighted by consensus:**\nThe bear and bull are close to symmetric around a defensible base — a modest multiple de-rating versus a modest re-rating, with the durable cash flows limiting how far either tail can run. There is no single fragile driver, so the prior should stay near symmetric."
+    }
+  ]
+}

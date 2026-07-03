@@ -59,6 +59,9 @@ GOLDEN_PURPOSES = (
     "key_metrics",
     # The Ledger Phase-1 research-loop gate (mode-A golden classifier).
     "wondering_detect",
+    # Per-name DCF scenario prior (mode-A: directional skew + grounded-call over
+    # pinned thesis/bear anchors). RISKY-adjacent — it moves allocation.
+    "scenario_prior",
 )
 AUDIT_PURPOSES = (
     "bear_case",
@@ -213,6 +216,19 @@ def main() -> int:
 
             golden_path = (args.golden or (PROJECT_ROOT / KM_GOLDEN)).resolve()
             summary = run_key_metrics_eval(
+                golden_path=golden_path,
+                code_root=PROJECT_ROOT,
+                limit=args.limit,
+            )
+        elif args.purpose == "scenario_prior":
+            # Mode-A: deterministic directional-skew + grounded-call grading over
+            # pinned thesis/bear anchors, no judge — --no-judge is a no-op like the
+            # other deterministic golden purposes.
+            from evals.scenario_prior import DEFAULT_GOLDEN_RELPATH as SP_GOLDEN
+            from evals.scenario_prior import run_scenario_prior_eval
+
+            golden_path = (args.golden or (PROJECT_ROOT / SP_GOLDEN)).resolve()
+            summary = run_scenario_prior_eval(
                 golden_path=golden_path,
                 code_root=PROJECT_ROOT,
                 limit=args.limit,

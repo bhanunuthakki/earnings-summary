@@ -53,6 +53,7 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
     "provenance_caution",
     "peer_selection",
     "key_metrics",
+    "scenario_prior",
     "bear_case",
     "transcript_summary",
     "advisor_next_dollar",
