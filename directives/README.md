@@ -46,7 +46,8 @@ Shipped feature specs from those programs: `key_metrics_picker.md` (the DIY metr
 `quarterly_refresh.md`, `micro_thesis_runbook.md`, `micro_thesis_skill.md`,
 `dcf_gsheets_setup.md`, `nvo_external_sources.md`, `design_conformance_audit.md`
 (the monthly semantic design-conformance audit, run as a scheduled task),
-`edgar_pipeline.md` (EDGAR = weekly free statement freshness; FMP = ~6-monthly paid backpop).
+`edgar_pipeline.md` (EDGAR = weekly free statement freshness; FMP = ~6-monthly paid backpop),
+`fmp_backpop.md` (the diff-aware `execution/fmp_backpop.py` playbook for that ~6-monthly window).
 
 **Trackers / data-quality logs:** `platform_backlog.md` (canonical cross-workspace tracker —
 check FIRST when asked about open work), `data_fixes.md`.
