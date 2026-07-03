@@ -583,6 +583,7 @@ def _valuation_summary_panel(body: StringIO, snap: SnapshotSection) -> None:
     if v.trigger_status and v.trigger_status != "unknown":
         _val_row(body, "Trigger status", v.trigger_status.upper())
     _priced_in_block(body, v)
+    _scenario_prior_block(body, v)
     _assumptions_sync_row(body, v)
     # (Valuation date rides in the header's as-of slot — P4.1 anatomy.)
     if v.sheet_url:
@@ -736,6 +737,32 @@ def _priced_in_block(body: StringIO, v: ValuationSnapshot) -> None:
             if lev.note:
                 value += f" - {lev.note}"
         _val_row(body, lev.label, value)
+
+
+_SCEN_SRC_LABEL = {"llm": "LLM", "owner": "owner", "global": "default"}
+
+
+def _scenario_prior_block(body: StringIO, v: ValuationSnapshot) -> None:
+    """Scenario prior on the card: the per-name Bull/Base/Bear odds + the
+    probability-weighted expected value E[V], its skew, and the LLM/owner rationale
+    (until now only the allocation surfaces saw E[V]/skew). Silent when the run
+    carries no scenario_prior block."""
+    w = v.scenario_weights
+    if w is None:
+        return
+    src = _SCEN_SRC_LABEL.get(v.scenario_set_by or "", "")
+    weights = f"{w['bull'] * 100:.0f}/{w['base'] * 100:.0f}/{w['bear'] * 100:.0f}"
+    _val_row(
+        body,
+        "Scenario prior",
+        f"{weights} bull/base/bear" + (f" ({src})" if src else ""),
+        muted=True,
+    )
+    if v.scenario_expected_return is not None:
+        skew_txt = f" · skew {v.scenario_skew * 100:+.1f}pts" if v.scenario_skew is not None else ""
+        _val_row(body, "Expected value E[V]", f"{v.scenario_expected_return * 100:+.0f}%{skew_txt}")
+    if v.scenario_rationale:
+        _val_row(body, "Why", v.scenario_rationale)
 
 
 def _break_rules_panel(body: StringIO, thesis: ThesisSection) -> None:
