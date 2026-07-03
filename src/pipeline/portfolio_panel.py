@@ -2125,7 +2125,7 @@ def _thesis_collision_section(cached: CachedReport | None) -> str:
     ``None`` gets the empty state naming the refresh command."""
     head = (
         '<section class="panel"><h2>Thesis collisions</h2>'
-        "<p class=\"sub\">Names that look independent on price stats but really share "
+        '<p class="sub">Names that look independent on price stats but really share '
         "one underlying driver, and theses that make directly contradictory bets — a "
         "governed LLM read over every holding's thesis + tier-1 break-rule drivers. "
         "Cached; regenerated on demand, not on every page load.</p>"
@@ -2148,18 +2148,14 @@ def _thesis_collision_section(cached: CachedReport | None) -> str:
         )
     findings: list[str] = []
     for c in report.clusters:
-        chips = " + ".join(
-            ticker_label(t, href=f"../research/{escape(t)}/") for t in c.tickers
-        )
+        chips = " + ".join(ticker_label(t, href=f"../research/{escape(t)}/") for t in c.tickers)
         findings.append(
             '<div class="ptc-finding">'
             f'<p class="ptc-finding-head"><strong>{chips}</strong> — {escape(c.driver)}</p>'
             f'<p class="ptc-finding-rationale">{escape(c.rationale)}</p></div>'
         )
     for c in report.contradictions:
-        chips = " vs ".join(
-            ticker_label(t, href=f"../research/{escape(t)}/") for t in c.tickers
-        )
+        chips = " vs ".join(ticker_label(t, href=f"../research/{escape(t)}/") for t in c.tickers)
         findings.append(
             '<div class="ptc-finding ptc-finding-bad">'
             f'<p class="ptc-finding-head"><strong>{chips}</strong> — {escape(c.contradiction)}</p>'
