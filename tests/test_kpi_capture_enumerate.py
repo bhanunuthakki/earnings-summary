@@ -307,6 +307,12 @@ def test_fiscal_period_type_for_calendar_and_jan_fye() -> None:
     # map is reversed so the supplement lands on the same axis as the analyst series.
     assert _fiscal_period_type_for("RBRK", datetime(2026, 1, 31)) is FiscalPeriodType.Q4
     assert _fiscal_period_type_for("RBRK", datetime(2025, 4, 30)) is FiscalPeriodType.Q1
+    # Oct-FYE issuer (AMAT): Oct-31 is fiscal Q4, Jan-31 is fiscal Q1 (not Q4,
+    # despite sharing January with Jan-FYE's Q4 above) — the reverse-lookup
+    # only matches on (month, day), so it's unaffected by the two conventions'
+    # different year_offset handling.
+    assert _fiscal_period_type_for("AMAT", datetime(2025, 10, 31)) is FiscalPeriodType.Q4
+    assert _fiscal_period_type_for("AMAT", datetime(2026, 1, 31)) is FiscalPeriodType.Q1
 
 
 def _register_supplement_pdf(

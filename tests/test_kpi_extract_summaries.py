@@ -25,6 +25,7 @@ from compute.kpi_extract_summaries import (
     _ensure_summary_document_row,
     _fact_units_by_name,
     _llm_extract,
+    _period_end,
     parse_decimal_value,
 )
 from models.facts import FiscalPeriodType, Unit
@@ -377,6 +378,38 @@ def test_ensure_summary_document_row_flags_unresolvable_parent(tmp_path: Path) -
     assert issue["ticker"] == "AMAT"
     assert issue["severity"] == Severity.WARN.value
     assert issue["rule"] == ValidationRule.MISSING_FIELD.value
+
+
+def test_period_end_calendar_fye_unaffected() -> None:
+    """Ordinary Dec-FYE tickers use the plain quarter->month/day map."""
+    assert _period_end("NVDA", 1, 2026) == datetime(2026, 3, 31)
+    assert _period_end("NVDA", 4, 2026) == datetime(2026, 12, 31)
+
+
+def test_period_end_jan_fye_rolls_only_q4() -> None:
+    """RBRK/VEEV (Jan FYE): Q1-Q3 land in the filename's label year; only Q4
+    (period-end month January) rolls into label_year + 1. Regression for the
+    fiscal-period stamping drift audit — this module's own filename-label
+    convention, not transcript_ingest.py's, must be preserved exactly."""
+    assert _period_end("RBRK", 1, 2026) == datetime(2026, 4, 30)
+    assert _period_end("RBRK", 3, 2026) == datetime(2026, 10, 31)
+    assert _period_end("RBRK", 4, 2026) == datetime(2027, 1, 31)
+    assert _period_end("VEEV", 1, 2025) == datetime(2025, 4, 30)
+    assert _period_end("VEEV", 4, 2025) == datetime(2026, 1, 31)
+
+
+def test_period_end_oct_fye_never_rolls() -> None:
+    """AMAT/TOL (Oct FYE): Q1's period-end month is also January (like Jan-FYE's
+    Q4), but must NOT roll over — all four quarters stay in the filename's
+    label year. Before this fix, AMAT/TOL were absent from
+    `_TICKER_QUARTER_PERIOD_END` entirely, so they fell through to the plain
+    calendar-quarter map (stamping e.g. AMAT_Q4_2025 as 2025-12-31 instead of
+    its true fiscal Q4 end 2025-10-31) — the root cause of 6 of the 10
+    llm_extracted parent_document_id backfill orphans (#765)."""
+    assert _period_end("AMAT", 4, 2025) == datetime(2025, 10, 31)
+    assert _period_end("AMAT", 1, 2026) == datetime(2026, 1, 31)
+    assert _period_end("TOL", 4, 2025) == datetime(2025, 10, 31)
+    assert _period_end("TOL", 1, 2026) == datetime(2026, 1, 31)
 
 
 def test_ensure_summary_document_row_is_idempotent_on_sha256(tmp_path: Path) -> None:
