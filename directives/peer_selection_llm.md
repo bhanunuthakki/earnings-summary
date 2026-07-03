@@ -118,15 +118,24 @@ Per `GEMINI.md` / the llm-evals rule, the new call needs all four:
   **CONFIRMED 2026-07-02** via `load_peer_comp(...)` for NU/NOW/VEEV post-#763: every row
   is tagged `thesis peer` with real business-model rationale (NU → SOFI/MELI/INTR/GRAB/
   KSPI/SE; NOW → WDAY/SNOW/CRM/DDOG/PLTR; VEEV → IQV/BR/VRSK/GWRE/TYL) — no FMP-only
-  junk (Barclays / Applied Materials) surfaced. **Caveat**: the static workspace HTML only
-  renders this panel for `--flavor evaluation` builds (`workspace_html.py`:
-  `company_peers = p3.peer_comp if is_eval else None`) — portfolio-flavor rebuilds (NU,
-  NOW, VEEV are all portfolio holdings) never show it in the static report. The only
-  flavor-agnostic surface is the live `/api/peers/<ticker>` route (the Ask tool's
-  "+ Peers" action) — confirmed end-to-end via a rebuilt ABNB (evaluation-flavor) report,
-  which renders the full `<table>` correctly. Flagging for the owner: if portfolio-held
-  names should also show this panel in their static report, that's a separate,
-  intentional scope decision (UX gating, not a peer_selection bug) — not made here.
+  junk (Barclays / Applied Materials) surfaced. **Static report visibility — RESOLVED
+  2026-07-02**: this was originally scope-gated to `--flavor evaluation` builds only
+  (`workspace_html.py`: `company_peers = p3.peer_comp if is_eval else None`), so
+  portfolio-flavor rebuilds (NU, NOW, VEEV, MELI, RBRK, WIX, NVO, GOOGL, META, BN — all
+  portfolio holdings) never showed it in the static report; only the live
+  `/api/peers/<ticker>` route (the Ask tool's "+ Peers" action) was flavor-agnostic. The
+  owner's decision, verbatim: "Yes, lift gate for all briefs, including holdings." Fixed
+  by unconditionally passing `p3.peer_comp` through in `_tab_defs` and having the Company
+  tab render `_peer_comp_panel` standalone when there's no `eval_snap` (portfolio/other
+  flavors skip only the eval-only "numbers at a glance" quick-categorization table, not
+  the peer panel) — `src/report/renderers/workspace_html.py` +
+  `src/report/renderers/workspace_sections/company.py`. `load_peer_comp` itself was
+  already flavor-agnostic (called unconditionally in `workspace_data.py`), so the LLM
+  suggestion/FMP corroboration merge, S5 `curate_peers` pins/excludes, the
+  `peers_section_override` quality gate, and hide-don't-stub all carry over unchanged —
+  no gate logic duplicated. Verified end-to-end via a rebuilt RBRK (portfolio-flavor)
+  report, which renders the full populated `<table class="tbl tbl-nowrap">` under
+  "Peer comparison" in the Company tab.
 - Suggested peers render WITH computed multiples (the fetch step works), not em-dashes.
   **CONFIRMED**, with one documented limitation: FMP's `stable` `key-metrics-ttm` /
   `ratios-ttm` / `income-statement` endpoints return **HTTP 402** ("not available under

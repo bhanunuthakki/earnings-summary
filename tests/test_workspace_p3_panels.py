@@ -842,6 +842,63 @@ def test_company_tab_emits_panels_with_data() -> None:
     assert "1 customer" in html
 
 
+def test_company_tab_shows_peer_panel_without_eval_snapshot() -> None:
+    """Owner decision 2026-07-02 (directives/peer_selection_llm.md): the peer
+    comparison panel is no longer eval-flavor-only. Portfolio (and any other
+    non-eval) flavor builds pass `eval_snap=None` — this must still render
+    `_peer_comp_panel` standalone, without the eval-only quick-categorization
+    ("numbers at a glance") table."""
+    out = StringIO()
+    peers = [
+        PeerCompRow(
+            peer_ticker="RIVL",
+            peer_name="Rival Systems",
+            market_cap_usd=48_000_000_000.0,
+            revenue_ttm_usd=5_900_000_000.0,
+            net_margin_ttm=0.18,
+            roic_ttm=0.21,
+            match_reasons=("named rival", "same industry"),
+        ),
+    ]
+    _company_tab(
+        out,
+        _empty_company_description(),
+        _empty_ir_docs(),
+        None,
+        [],
+        [],
+        [],
+        eval_snap=None,
+        peer_comp=peers,
+    )
+    html = out.getvalue()
+    assert "Peer comparison" in html
+    assert "RIVL" in html
+    assert "Rival Systems" in html
+    # The eval-only quick-categorization table must NOT appear.
+    assert "Numbers at a glance" not in html
+
+
+def test_company_tab_hides_peer_panel_when_no_peers_and_no_eval_snapshot() -> None:
+    """Hide-don't-stub still holds for non-eval flavor: no peer rows and no
+    eval snapshot means neither block renders."""
+    out = StringIO()
+    _company_tab(
+        out,
+        _empty_company_description(),
+        _empty_ir_docs(),
+        None,
+        [],
+        [],
+        [],
+        eval_snap=None,
+        peer_comp=[],
+    )
+    html = out.getvalue()
+    assert "Peer comparison" not in html
+    assert "Numbers at a glance" not in html
+
+
 # ---------------------------------------------------------------------------
 # Company tab — business-model section suppression (NU report comment #15)
 # ---------------------------------------------------------------------------
