@@ -188,6 +188,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # wondering_detect on the live tap. Bump when the intent prompt is materially
     # rewritten, then re-run `run_llm_evals.py --purpose capture_intent`.
     "capture_intent": "v1",
+    # The Ledger artifact brief (research.brief._build_prompt). Bump when the brief /
+    # stress prompt is materially rewritten.
+    "artifact_brief": "v1",
     # The Ledger Phase-1 research loop (two-pass): fetch / adversarial assess / narrate.
     "research_fetch": "v1",
     "research_adversarial_assess": "v1",

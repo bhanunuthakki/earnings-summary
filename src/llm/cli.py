@@ -124,6 +124,10 @@ LLM_MODELS: dict[str, str] = {
     # run on EVERY owner musing (no lexical pre-gate) → the cheap FAST tier; the
     # golden set (evals/golden/capture_intent.json) is its bar.
     "capture_intent": FAST_CLASSIFIER_MODEL,
+    # The Ledger artifact brief (research.brief). Analytical writing — takeaways +
+    # bull/bear (+ stress: falsifiers, second-order, portfolio map) over an extracted
+    # article/deck → the default analytical tier (Sonnet). Budget-capped (0139).
+    "artifact_brief": DEFAULT_MODEL,
     # The Ledger Phase-1 research loop (the two-pass trifecta firebreak): fetch
     # (web on, no writer) / adversarial assess / narrate (no web). Sonnet-tier
     # reasoning + web orchestration; monthly budgets seeded warn/warn/skip (0124),

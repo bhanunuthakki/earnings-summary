@@ -507,6 +507,12 @@ _ONMYMIND_STYLE = """<style>
 .om-ladder:empty { display: none; }
 .om-actions { flex-wrap: wrap; }
 .om-body a { overflow-wrap: anywhere; }
+.om-brief { margin-top: var(--sp-2); }
+.om-brief summary { font-size: var(--fs-caption); font-weight: 600; color: var(--accent); cursor: pointer; }
+.om-brief-body { margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-left: 3px solid var(--accent); font-size: var(--fs-caption); color: var(--fg-soft); }
+.om-brief-takeaways { margin: 0 0 var(--sp-2); padding-left: var(--sp-4); }
+.om-brief-line { margin: var(--sp-1) 0; }
+.om-brief-src { margin: var(--sp-2) 0 0; color: var(--muted); font-size: var(--fs-micro); }
 #onmymind-more { margin-top: var(--sp-2); }
 </style>"""
 
@@ -577,6 +583,47 @@ def _feed_body(item: FeedItem) -> str:
     return render_prose(note.body)
 
 
+def engage_brief_block(ctx: dict[str, object]) -> str:
+    """The attached artifact brief (``context['engage_brief']``) as a collapsible block —
+    takeaways + bull/bear, plus the stress layer (falsifiers / second-order / book)."""
+    brief = ctx.get("engage_brief")
+    if not isinstance(brief, dict):
+        return ""
+    b = cast("dict[str, object]", brief)
+    mode = str(b.get("mode") or "brief")
+    parts: list[str] = []
+    takeaways = b.get("takeaways")
+    if isinstance(takeaways, list):
+        lis = "".join(
+            f"<li>{escape(str(t))}</li>" for t in cast("list[object]", takeaways) if str(t).strip()
+        )
+        if lis:
+            parts.append(f'<ul class="om-brief-takeaways">{lis}</ul>')
+    rows: tuple[tuple[str, str], ...] = (("Bull", "bull"), ("Bear", "bear"))
+    if mode == "stress":
+        rows = (
+            *rows,
+            ("What would change your mind", "changes_mind"),
+            ("Second-order", "second_order"),
+            ("Your book", "portfolio_map"),
+        )
+    for label, key in rows:
+        val = str(b.get(key) or "").strip()
+        if val:
+            parts.append(
+                f'<p class="om-brief-line"><strong>{escape(label)}:</strong> {escape(val)}</p>'
+            )
+    if not parts:
+        return ""
+    src = str(b.get("source") or "")
+    src_line = f'<p class="om-brief-src">from {escape(src)}</p>' if src else ""
+    summary = "Stress-test attached" if mode == "stress" else "Brief attached"
+    return (
+        f'<details class="om-brief"><summary>{summary}</summary>'
+        f'<div class="om-brief-body">{"".join(parts)}{src_line}</div></details>'
+    )
+
+
 def _feed_card(item: FeedItem) -> str:
     note = item.note
     ctx = note.context or {}
@@ -608,6 +655,7 @@ def _feed_card(item: FeedItem) -> str:
         f'<div class="ledger-musing om-item" data-om-id="{note.id}">'
         f'<div class="ledger-musing-head">{ident}{type_chip}{wondering}{ladder_badge}{when}</div>'
         f'<div class="ledger-body om-body">{_feed_body(item)}</div>'
+        f"{engage_brief_block(ctx)}"
         f'<div class="ledger-cap-row om-actions">{buttons}</div>'
         "</div>"
     )
