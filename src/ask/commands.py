@@ -10,6 +10,7 @@ endpoint behavior.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -17,8 +18,9 @@ from dispatch_registry import Registry, RegistryConflict
 
 _HELP_TEXT = (
     "Commands handled instantly (no LLM):\n"
-    "- /review <TICKER> [at $PRICE] — grounded should-I-trim read: weight, break-rules, "
-    "valuation ladder, sizing, tax cost of the trim\n"
+    "- /review <TICKER> [at $PRICE] — instant grounded should-I-trim read (weight, "
+    "break-rules, valuation ladder, sizing, tax cost of the trim), then kicks off the "
+    "full governed verdict (LLM + behavioral guard) in the background and persists it\n"
     "- /discovery list — top live new-name candidates with why-surfaced\n"
     "- /discovery queue <TICKER> | /discovery dismiss <TICKER> [why...]\n"
     "- /discovery build <TICKER> — start the eval build (~25 min + LLM spend)\n"
@@ -30,8 +32,18 @@ _HELP_TEXT = (
 
 COMMAND_PREFIXES: tuple[str, ...] = ("/discovery", "/help", "/review")
 
+# Kill switch for the Slice-2 full-verdict follow-up job (default ON). Set
+# REVIEW_FULL_VERDICT=0 to keep /review purely the instant, no-LLM Slice-1
+# reply — e.g. while iterating on the prompt without spending budget on every
+# manual test, or if the background job ever needs a quick global disable.
+_FULL_VERDICT_OFF = {"0", "false", "no", "off"}
 
-def run_chat_command(repo_root: Path, message: str, registry: Registry) -> str | None:
+
+def _full_verdict_enabled() -> bool:
+    return os.environ.get("REVIEW_FULL_VERDICT", "1").strip().lower() not in _FULL_VERDICT_OFF
+
+
+def run_chat_command(repo_root: Path, message: str, registry: Registry | None) -> str | None:
     """Dispatch one deterministic command. Returns the reply text, or None
     when the message isn't a recognized command (the engine then routes it
     normally)."""
@@ -40,28 +52,83 @@ def run_chat_command(repo_root: Path, message: str, registry: Registry) -> str |
     if low.startswith("/help"):
         return _HELP_TEXT
     if low.startswith("/review"):
-        return _review_command(repo_root, text)
+        return _review_command(repo_root, text, registry)
     if low.startswith("/discovery"):
-        return _discovery_command(repo_root, text, registry)
+        return (
+            _discovery_command(repo_root, text, registry)
+            if registry is not None
+            else ("Commands aren't available on this surface — try /help in the report chat.")
+        )
     return None
 
 
-def _review_command(repo_root: Path, text: str) -> str:
-    """``/review <TICKER> [at $PRICE]`` — the instant, no-LLM position read.
+def _start_full_verdict_job(
+    repo_root: Path, ticker: str, at_price: float | None, registry: Registry
+) -> str:
+    """Kick off the governed Slice-2 review (LLM verdict + behavioral guard +
+    persisted ``advisor_memos`` row) as a background subprocess over the
+    existing action/SSE plumbing (``dispatch_registry.Registry`` — the same
+    single-flight job runner every dashboard action button uses).
 
-    Returns the deterministic pre-analysis (weight, break-rule status, DCF ladder
-    verdict, sizing) plus a mechanical trim/hold read. The full LLM-calibrated
-    verdict (with the behavioral guard) is a separate, slower path — pointed to in
-    the reply — so this command stays instant and budget-free.
-
-    Delegates to ``advisor.position_review.review_reply_text`` — the ONE parser
-    for this command shape, shared with the Telegram poller's ``/review``
-    interception so the at-price regex and reply copy never drift between the
-    two chat surfaces.
+    Best-effort: a busy slot (``RegistryConflict`` — a review for this ticker
+    is already running) or any other start failure degrades to a one-line
+    note rather than breaking the instant reply that already rendered.
     """
-    from advisor.position_review import review_reply_text
+    argv = [
+        sys.executable,
+        str(repo_root / "execution" / "review_position.py"),
+        ticker,
+        "--verdict",
+    ]
+    if at_price is not None:
+        argv.extend(["--at-price", str(at_price)])
+    try:
+        job = registry.start(ticker=ticker, kind="position-review-verdict", argv=argv)
+    except RegistryConflict:
+        return (
+            f"\n\n_A full verdict for {ticker} is already running in the background — "
+            "check Research -> Jobs._"
+        )
+    except Exception as exc:  # never let the background kickoff break the instant reply
+        return f"\n\n_Couldn't start the full verdict in the background: {type(exc).__name__}._"
+    return (
+        f"\n\n_Full calibrated verdict (LLM + behavioral guard) started in the background "
+        f"(job {job.job_id}) — it will persist as an advisor memo when done. "
+        "Check Research -> Jobs, or run `python execution/review_position.py "
+        f"{ticker} --verdict` yourself for the same result synchronously._"
+    )
 
-    return review_reply_text(repo_root, text)
+
+def _review_command(repo_root: Path, text: str, registry: Registry | None) -> str:
+    """``/review <TICKER> [at $PRICE]`` — instant, no-LLM position read, then
+    (by default) the full governed verdict kicked off in the background.
+
+    The instant reply is always the deterministic pre-analysis (weight,
+    break-rule status, DCF ladder verdict, sizing) plus a mechanical
+    trim/hold read — delegating to ``advisor.position_review.review_reply_text``,
+    the ONE parser for this command shape, shared with the Telegram poller's
+    ``/review`` interception so the at-price regex and reply copy never drift
+    between the two chat surfaces.
+
+    On a surface with a job registry (the Ask tab / report drawer — not the
+    Telegram poller, which has no Flask job registry to spawn against) and
+    with the ``REVIEW_FULL_VERDICT`` kill switch on (the default), this ALSO
+    starts the governed ``review_position()`` path — LLM verdict, deterministic
+    behavioral guard, persisted ``advisor_memos`` row — as a background job over
+    the same action/SSE plumbing every dashboard action button uses, so the
+    coaching surface actually persists a scoreable memo instead of only ever
+    rendering the free pre-analysis.
+    """
+    from advisor.position_review import parse_review_command, review_reply_text
+
+    reply = review_reply_text(repo_root, text)
+    if registry is None or not _full_verdict_enabled():
+        return reply
+    parsed = parse_review_command(text)
+    if parsed is None:
+        return reply  # usage message — nothing to review
+    ticker, at_price = parsed
+    return reply + _start_full_verdict_job(repo_root, ticker, at_price, registry)
 
 
 def _discovery_command(repo_root: Path, text: str, registry: Registry) -> str:
