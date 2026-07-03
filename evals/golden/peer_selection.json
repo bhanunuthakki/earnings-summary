@@ -1,6 +1,6 @@
 {
   "purpose": "peer_selection",
-  "version": 1,
+  "version": 2,
   "_readme": "Mode-A overlap eval for the LLM peer generator (directives/peer_selection_llm.md). Score = RECALL of `expected_peers` (the must-have business-model comps a fundamental analyst would expect); a case passes at recall >= 0.5. `also_valid` are correct-but-not-required alternatives counted only in the reported precision, never required. business_description is answer-neutral (never names a peer) so it can't leak the expected set. sector/industry are the same GICS-ish hints the production call passes. Re-run: python execution/run_llm_evals.py --purpose peer_selection --min-score 0.6",
   "cases": [
     {
@@ -9,10 +9,30 @@
       "name": "Nu Holdings",
       "sector": "Financial Services",
       "industry": "Banks - Diversified",
-      "segments": ["Credit card", "Personal lending", "Deposits", "Interchange & fees"],
+      "segments": [
+        "Credit card",
+        "Personal lending",
+        "Deposits",
+        "Interchange & fees"
+      ],
       "business_description": "A branchless, app-only digital financial-services platform serving retail consumers across Latin America. Acquires customers at near-zero marginal cost through a mobile app, monetizes via interchange, a fast-growing unsecured-lending book, and net interest income on low-cost deposits. The bet is consumer-banking disruption of high-fee incumbent banks through a low-cost-to-serve technology model.",
-      "expected_peers": ["SOFI", "INTR", "STNE"],
-      "also_valid": ["MELI", "PAGS", "HOOD", "DLO", "ITUB", "BBD", "LU"]
+      "expected_peers": [
+        "SOFI",
+        "INTR",
+        "STNE"
+      ],
+      "also_valid": [
+        "MELI",
+        "PAGS",
+        "HOOD",
+        "DLO",
+        "ITUB",
+        "BBD",
+        "LU",
+        "KSPI",
+        "SE",
+        "GRAB"
+      ]
     },
     {
       "id": "ps-now-enterprise-saas",
@@ -20,10 +40,25 @@
       "name": "ServiceNow",
       "sector": "Technology",
       "industry": "Software - Application",
-      "segments": ["Subscription", "Professional services"],
+      "segments": [
+        "Subscription",
+        "Professional services"
+      ],
       "business_description": "An enterprise software-as-a-service platform selling a cloud workflow/automation suite to large organizations on a recurring subscription basis. Lands with IT service management and expands across the enterprise with high net revenue retention; growth is seat- and module-expansion driven with strong operating leverage.",
-      "expected_peers": ["CRM", "WDAY", "SAP"],
-      "also_valid": ["SNOW", "DDOG", "TEAM", "HUBS", "ADBE", "ORCL", "PLTR"]
+      "expected_peers": [
+        "CRM",
+        "WDAY",
+        "SAP"
+      ],
+      "also_valid": [
+        "SNOW",
+        "DDOG",
+        "TEAM",
+        "HUBS",
+        "ADBE",
+        "ORCL",
+        "PLTR"
+      ]
     },
     {
       "id": "ps-meli-ecom-fintech",
@@ -31,10 +66,26 @@
       "name": "MercadoLibre",
       "sector": "Consumer Cyclical",
       "industry": "Internet Retail",
-      "segments": ["Commerce", "Fintech (Mercado Pago)"],
+      "segments": [
+        "Commerce",
+        "Fintech (Mercado Pago)"
+      ],
       "business_description": "A Latin American online marketplace bundled with a payments and digital-financial-services arm. Monetizes through marketplace take rate, advertising, logistics, and payment processing plus a growing consumer-credit book — an e-commerce-plus-fintech flywheel in emerging markets.",
-      "expected_peers": ["SE", "CPNG", "AMZN"],
-      "also_valid": ["SHOP", "BABA", "JD", "PDD", "NU", "STNE", "PAGS", "GRAB"]
+      "expected_peers": [
+        "SE",
+        "CPNG",
+        "AMZN"
+      ],
+      "also_valid": [
+        "SHOP",
+        "BABA",
+        "JD",
+        "PDD",
+        "NU",
+        "STNE",
+        "PAGS",
+        "GRAB"
+      ]
     },
     {
       "id": "ps-uber-mobility-marketplace",
@@ -42,10 +93,25 @@
       "name": "Uber Technologies",
       "sector": "Technology",
       "industry": "Software - Application",
-      "segments": ["Mobility", "Delivery", "Freight"],
+      "segments": [
+        "Mobility",
+        "Delivery",
+        "Freight"
+      ],
       "business_description": "A multi-sided on-demand marketplace matching consumers with drivers and couriers for ride-hailing and food/grocery delivery, taking a percentage of gross bookings. Network-effects and density economics drive margins; monetization expands through advertising and subscriptions.",
-      "expected_peers": ["LYFT", "DASH", "GRAB"],
-      "also_valid": ["ABNB", "BKNG", "DIDIY", "SE", "CART", "MELI"]
+      "expected_peers": [
+        "LYFT",
+        "DASH",
+        "GRAB"
+      ],
+      "also_valid": [
+        "ABNB",
+        "BKNG",
+        "DIDIY",
+        "SE",
+        "CART",
+        "MELI"
+      ]
     },
     {
       "id": "ps-meta-digital-ads",
@@ -53,10 +119,24 @@
       "name": "Meta Platforms",
       "sector": "Communication Services",
       "industry": "Internet Content & Information",
-      "segments": ["Family of Apps (advertising)", "Reality Labs"],
+      "segments": [
+        "Family of Apps (advertising)",
+        "Reality Labs"
+      ],
       "business_description": "A consumer social-media company that monetizes attention almost entirely through targeted digital advertising sold against a large engaged user base. Revenue scales with ad impressions and pricing; an AI-driven ranking/targeting stack is the core competitive moat.",
-      "expected_peers": ["GOOGL", "SNAP", "PINS"],
-      "also_valid": ["RDDT", "TTD", "GOOG", "BIDU", "SPOT", "MTCH"]
+      "expected_peers": [
+        "GOOGL",
+        "SNAP",
+        "PINS"
+      ],
+      "also_valid": [
+        "RDDT",
+        "TTD",
+        "GOOG",
+        "BIDU",
+        "SPOT",
+        "MTCH"
+      ]
     },
     {
       "id": "ps-veev-vertical-saas",
@@ -64,10 +144,40 @@
       "name": "Veeva Systems",
       "sector": "Healthcare",
       "industry": "Health Information Services",
-      "segments": ["Commercial Cloud", "Vault (R&D) Cloud"],
+      "segments": [
+        "Commercial Cloud",
+        "Vault (R&D) Cloud"
+      ],
       "business_description": "A vertical software-as-a-service vendor selling industry-specific cloud applications (CRM, content and data management) to a single regulated end-market on recurring subscriptions. Deep domain specialization and switching costs drive durable retention; growth is cross-sell of new cloud modules into the installed base.",
-      "expected_peers": ["CRM", "NOW", "WDAY"],
-      "also_valid": ["TYL", "PCOR", "MANH", "DSGX", "ADBE", "HUBS", "APPF"]
+      "_note": "expected_peers revised 2026-07-02: the original CRM/NOW/WDAY pick was itself the 'sector giant' bias this eval exists to catch — Veeva's own description says VERTICAL SaaS to a single regulated end-market, and CRM/NOW/WDAY are horizontal platforms. GWRE (insurance vertical SaaS) and NCNO (banking vertical SaaS) are the standard 'vertical-SaaS peer group' comps real equity research pairs with Veeva/Tyler/Procore; CERT (Certara) is the closest same-end-market (life-sciences) software peer. Confirmed by unanimous convergence across a 4-arm model sweep (Sonnet 4.6, Opus 4.8, Fable 5, plus a v1-prompt check) that ALL returned GWRE, 3/4 also returned NCNO — see directives/peer_selection_llm.md.",
+      "expected_peers": [
+        "GWRE",
+        "NCNO",
+        "CERT"
+      ],
+      "also_valid": [
+        "TYL",
+        "PCOR",
+        "MANH",
+        "DSGX",
+        "ADBE",
+        "HUBS",
+        "APPF",
+        "CRM",
+        "NOW",
+        "WDAY",
+        "MODN",
+        "CSGP",
+        "IQV",
+        "QTWO",
+        "BLKB",
+        "WK",
+        "INTA",
+        "PHR",
+        "BSY",
+        "DASTY",
+        "CWAN"
+      ]
     },
     {
       "id": "ps-crwd-cybersecurity-saas",
@@ -75,10 +185,23 @@
       "name": "CrowdStrike Holdings",
       "sector": "Technology",
       "industry": "Software - Infrastructure",
-      "segments": ["Subscription"],
+      "segments": [
+        "Subscription"
+      ],
       "business_description": "A cloud-native cybersecurity platform delivering endpoint and broader security protection via a single lightweight agent on a recurring per-endpoint subscription. Land-and-expand module attach drives net retention; a data/telemetry network effect strengthens detection as the customer base grows.",
-      "expected_peers": ["PANW", "ZS", "S"],
-      "also_valid": ["FTNT", "OKTA", "NET", "DDOG", "TENB", "CYBR"]
+      "expected_peers": [
+        "PANW",
+        "ZS",
+        "S"
+      ],
+      "also_valid": [
+        "FTNT",
+        "OKTA",
+        "NET",
+        "DDOG",
+        "TENB",
+        "CYBR"
+      ]
     },
     {
       "id": "ps-shop-commerce-platform",
@@ -86,10 +209,25 @@
       "name": "Shopify",
       "sector": "Technology",
       "industry": "Software - Application",
-      "segments": ["Subscription Solutions", "Merchant Solutions"],
+      "segments": [
+        "Subscription Solutions",
+        "Merchant Solutions"
+      ],
       "business_description": "A commerce-enablement platform that lets merchants run their own online stores, monetizing through SaaS subscriptions plus payments, capital, and fulfilment attached to merchant gross merchandise volume. Take-rate expansion on rising GMV is the growth engine.",
-      "expected_peers": ["WIX", "GDDY", "GLBE"],
-      "also_valid": ["BIGC", "AMZN", "MELI", "SE", "ETSY", "PYPL", "SQSP"]
+      "expected_peers": [
+        "WIX",
+        "GDDY",
+        "GLBE"
+      ],
+      "also_valid": [
+        "BIGC",
+        "AMZN",
+        "MELI",
+        "SE",
+        "ETSY",
+        "PYPL",
+        "SQSP"
+      ]
     },
     {
       "id": "ps-snow-data-cloud",
@@ -97,10 +235,24 @@
       "name": "Snowflake",
       "sector": "Technology",
       "industry": "Software - Application",
-      "segments": ["Product (consumption)", "Professional services"],
+      "segments": [
+        "Product (consumption)",
+        "Professional services"
+      ],
       "business_description": "A cloud data platform sold on consumption-based pricing — customers pay for storage and compute as they query and process data. Net revenue retention is driven by rising data workloads; the moat is data gravity and an expanding application/marketplace ecosystem.",
-      "expected_peers": ["DDOG", "MDB", "CFLT"],
-      "also_valid": ["PLTR", "NET", "DBX", "ESTC", "ORCL", "TEAM"]
+      "expected_peers": [
+        "DDOG",
+        "MDB",
+        "CFLT"
+      ],
+      "also_valid": [
+        "PLTR",
+        "NET",
+        "DBX",
+        "ESTC",
+        "ORCL",
+        "TEAM"
+      ]
     },
     {
       "id": "ps-abnb-travel-marketplace",
@@ -108,10 +260,67 @@
       "name": "Airbnb",
       "sector": "Consumer Cyclical",
       "industry": "Travel Services",
-      "segments": ["Marketplace (nights & experiences booked)"],
+      "segments": [
+        "Marketplace (nights & experiences booked)"
+      ],
       "business_description": "An online travel marketplace matching guests with hosts of short-term accommodation, taking a service fee on each booking. Asset-light, supply is user-generated; growth is driven by listings, nights booked, and pricing, with a strong direct-traffic brand reducing customer-acquisition cost.",
-      "expected_peers": ["BKNG", "EXPE", "TCOM"],
-      "also_valid": ["TRIP", "DESP", "MAR", "HLT", "UBER"]
+      "expected_peers": [
+        "BKNG",
+        "EXPE",
+        "TCOM"
+      ],
+      "also_valid": [
+        "TRIP",
+        "DESP",
+        "MAR",
+        "HLT",
+        "UBER"
+      ]
+    },
+    {
+      "id": "ps-wix-website-builder",
+      "ticker": "WIX",
+      "name": "Wix.com",
+      "sector": "Technology",
+      "industry": "Software - Infrastructure",
+      "segments": [
+        "Creative Subscriptions",
+        "Business Solutions"
+      ],
+      "business_description": "A website-builder SaaS for SMBs and self-creators: drag-and-drop and AI-generated sites monetized through creative subscriptions plus business solutions (payments take-rate, e-commerce apps, domains). A ~$2B-revenue subscription cash engine funding an AI site-builder land-grab; unit economics are seat subscriptions layered with GPV take-rate. NOTE: several once-obvious comps are no longer independently listed (Squarespace was taken private in 2024; Webflow and Duda are private) — a correct answer names only currently-listed US tickers.",
+      "expected_peers": [
+        "GDDY",
+        "SHOP"
+      ],
+      "also_valid": [
+        "BIGC",
+        "HUBS",
+        "ADBE",
+        "ETSY",
+        "TEAM"
+      ]
+    },
+    {
+      "id": "ps-crwv-neocloud",
+      "ticker": "CRWV",
+      "name": "CoreWeave",
+      "sector": "Technology",
+      "industry": "Software - Infrastructure",
+      "segments": [],
+      "business_description": "A GPU 'neocloud': rents dedicated NVIDIA Hopper/Blackwell fleets to AI labs and hyperscalers on multi-year take-or-pay contracts, debt-financed against contracted backlog (RPO). The business model is capital-intensive compute leasing with customer concentration (Microsoft, OpenAI), NOT general-purpose SaaS — the real competitive set is other AI-dedicated GPU clouds and HPC data-center landlords, not the software companies its GICS industry suggests.",
+      "expected_peers": [
+        "NBIS",
+        "IREN"
+      ],
+      "also_valid": [
+        "APLD",
+        "CORZ",
+        "HUT",
+        "ORCL",
+        "CIFR",
+        "WULF",
+        "GLXY"
+      ]
     }
   ]
 }
