@@ -78,6 +78,7 @@ from portfolio_risk_snapshot_store import (
     write_snapshot,
 )
 from portfolio_style_factors import StyleFactorRollup, build_style_rollup_from_disk
+from portfolio_tail_stress import TailStress, TailStressRow, build_tail_stress
 from portfolio_weights import read_materialized_weights
 from risk_reward import RiskRewardGap, RiskRewardGapRow, build_risk_reward_gap
 from ui import living_grid as lg
@@ -1281,6 +1282,8 @@ _RISK_CSS = """<style>
 .pfc-c3 { background: color-mix(in srgb, var(--bad) 30%, transparent); }
 .pfc-neg { background: color-mix(in srgb, var(--ok) 14%, transparent); }
 .pfc-clusters { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 0; }
+.pts-table { margin-top: 4px; }
+.pts-excluded { color: var(--muted); }
 .rrg-table { margin-top: 4px; }
 .rrg-mismatch { max-width: 460px; }
 .rrg-chips { display: inline-flex; gap: 4px; flex-wrap: wrap; vertical-align: middle; }
@@ -1371,6 +1374,7 @@ def render_portfolio_risk_panel(
             gap = _build_risk_reward_gap(analytics.positioning, db_path)
     style = _build_style_rollup(analytics.positioning, db_path)
     correlation = _build_correlation_read(analytics.positioning, db_path)
+    tail_stress = _build_tail_stress(analytics.positioning, db_path)
     scenarios = _scenario_options()
     digest = _cached_macro_digest_html(db_path) if db_path is not None else ""
     # On a successful read, refresh the last-known snapshot; when the tracker is
@@ -1388,6 +1392,7 @@ def render_portfolio_risk_panel(
         gap=gap,
         style=style,
         correlation=correlation,
+        tail_stress=tail_stress,
         scenarios=scenarios,
         digest=digest,
         snapshot=snapshot,
@@ -1454,6 +1459,18 @@ def _build_correlation_read(
     return build_holdings_correlation_from_disk(repo_root, list(weights), weights)
 
 
+def _build_tail_stress(pos: Positioning | None, db_path: Path | None) -> TailStress | None:
+    """The all-bears book stress, from local ``dcf_runs`` bear scenarios —
+    renders with the tracker DOWN (same weights degrade as the other local
+    sections; the DB read itself needs no tracker)."""
+    if db_path is None:
+        return None
+    weights = _local_book_weights(pos, db_path.parent.parent)
+    if not weights:
+        return None
+    return build_tail_stress(db_path, weights)
+
+
 def compose_risk_page(
     analytics: PortfolioAnalytics,
     *,
@@ -1465,6 +1482,7 @@ def compose_risk_page(
     gap: RiskRewardGap | None = None,
     style: StyleFactorRollup | None = None,
     correlation: CorrelationRead | None = None,
+    tail_stress: TailStress | None = None,
 ) -> str:
     """Pure assembly of the Risk page (testable without network or DB). The
     ``#pfr-root`` wrapper is the re-inject target the run-scenario script swaps
@@ -1472,9 +1490,10 @@ def compose_risk_page(
     last-known cached read) renders stamped values instead of a bare note.
     ``gap`` (L7) is the risk-budget allocator's risk-vs-reward-vs-conviction
     ranking; None hides the section (tracker offline / no weighted book).
-    ``style`` (the value/size/momentum ETF-proxy loadings) and ``correlation``
-    (the holdings pairwise matrix + crowding clusters) are computed from local
-    disk, so they render in BOTH branches — tracker up or down."""
+    ``style`` (the value/size/momentum ETF-proxy loadings), ``correlation``
+    (the holdings pairwise matrix + crowding clusters), and ``tail_stress``
+    (the all-bears book drawdown) are computed from local disk/DB, so they
+    render in BOTH branches — tracker up or down."""
     parts: list[str] = [_RISK_CSS, '<div id="pfr-root">']
     if analytics.available:
         if analytics.beta is not None:
@@ -1484,6 +1503,7 @@ def compose_risk_page(
             parts.append(_factor_exposure_section(factor))
         parts.append(_style_factor_section(style))
         parts.append(_correlation_section(correlation))
+        parts.append(_tail_stress_section(tail_stress))
         if gap is not None:
             parts.append(_risk_reward_gap_section(gap))
     else:
@@ -1493,6 +1513,7 @@ def compose_risk_page(
             parts.append(_risk_offline_note(analytics))
         parts.append(_style_factor_section(style))
         parts.append(_correlation_section(correlation))
+        parts.append(_tail_stress_section(tail_stress))
     parts.append(_macro_stress_section(scenarios, digest))
     parts.append("</div>")
     return "".join(parts)
@@ -1994,6 +2015,96 @@ def _correlation_section(read: CorrelationRead | None) -> str:
         else ""
     )
     return f"{head}{strip}{clusters_html}{table}{note}{dropped}</section>"
+
+
+def _tail_stress_row(r: TailStressRow) -> str:
+    ticker = ticker_label(r.ticker, href=f"../research/{escape(r.ticker)}/")
+    if r.excluded_reason is not None:
+        return (
+            "<tr>"
+            f"<td>{ticker}</td>"
+            f'<td class="num">{r.weight_pct:.1f}%</td>'
+            f'<td class="num pts-excluded" colspan="3">not modeled — {escape(r.excluded_reason)}</td>'
+            "</tr>"
+        )
+    bear_cell = (
+        f'<span class="{_tone(r.bear_return_pct)}">{r.bear_return_pct:+.0f}%</span>'
+        if r.bear_return_pct is not None
+        else '<span class="muted">&mdash;</span>'
+    )
+    contrib_cell = (
+        f'<span class="{_tone(r.contribution_pct)}">{r.contribution_pct:+.1f}pp</span>'
+        if r.contribution_pct is not None
+        else '<span class="muted">&mdash;</span>'
+    )
+    warn = (
+        f' <span class="muted" title="{escape(r.confidence_reason)}">&#9888;</span>'
+        if r.low_confidence and r.confidence_reason
+        else ""
+    )
+    return (
+        "<tr>"
+        f"<td>{ticker}</td>"
+        f'<td class="num">{r.weight_pct:.1f}%</td>'
+        f'<td class="num">{_money(r.live_price) if r.live_price is not None else "—"}</td>'
+        f'<td class="num">{_money(r.bear_fv) if r.bear_fv is not None else "—"}</td>'
+        f'<td class="num">{bear_cell}</td>'
+        f'<td class="num">{contrib_cell}{warn}</td>'
+        "</tr>"
+    )
+
+
+def _tail_stress_section(stress: TailStress | None) -> str:
+    """The all-bears book drawdown, from local ``dcf_runs`` bear scenarios.
+    Renders in both branches (local DB, no tracker dependency); ``None`` gets
+    the empty state rather than a hidden section."""
+    head = (
+        '<section class="panel"><h2>Scenario-tail stress</h2>'
+        '<p class="sub">If every holding fell to its DCF bear-case fair value tomorrow: the '
+        "book-level drawdown implied by summing each name's weight &times; bear-case return "
+        "(not a probability-weighted expectation — the joint-tail floor the scenario ranges "
+        "imply). Local <code>dcf_runs</code> only; renders with the tracker down.</p>"
+    )
+    if stress is None:
+        return (
+            f"{head}"
+            '<p class="muted">No weighted holdings to stress yet (needs the tracker or a '
+            "materialized weights cache).</p></section>"
+        )
+    cards = [
+        _kpi_card(
+            "All-bears book drawdown",
+            f"{stress.book_drawdown_pct:+.1f}%",
+            sub=f"{stress.covered_weight_pct:.0f}% of book modeled",
+            tone=_tone(stress.book_drawdown_pct),
+        ),
+        _kpi_card(
+            "Coverage",
+            f"{stress.names_with_bear} of {stress.names_total}",
+            sub="names with a bear scenario",
+        ),
+    ]
+    if stress.stale_weight_pct > 0:
+        cards.append(
+            _kpi_card(
+                "Stale weight",
+                f"{stress.stale_weight_pct:.0f}%",
+                sub="fair value / price aging out",
+                tone="neg",
+            )
+        )
+    strip = f'<div class="kpi-strip">{"".join(cards)}</div>'
+    rows_html = "".join(_tail_stress_row(r) for r in stress.rows)
+    table = (
+        '<table class="p-table pts-table"><thead><tr>'
+        "<th>Ticker</th>"
+        '<th class="num">Weight</th><th class="num">Live price</th>'
+        '<th class="num">Bear FV</th><th class="num">Bear return</th>'
+        '<th class="num">Contribution</th>'
+        f"</tr></thead><tbody>{rows_html}</tbody></table>"
+    )
+    notes = "".join(f'<p class="muted pfr-top">{escape(n)}</p>' for n in stress.notes)
+    return f"{head}{strip}{table}{notes}</section>"
 
 
 def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
