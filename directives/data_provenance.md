@@ -27,6 +27,23 @@ Every row in `documents` must have `(source_type, doc_type, file_path, sha256, f
 
 LLM-extracted documents must carry `parent_document_id` pointing at the primary document the LLM read from.
 
+### 2.1 Fiscal-period stamping drift (off-cycle-FYE issuers)
+
+`(ticker, period_end)` matching (used by `src/provenance/llm_extracted_parent.py::resolve_parent` and any other exact-date join across `documents`) is only reliable if every ingestion path stamps `period_end` on the **same fiscal calendar** for a given ticker. Multiple independent modules each hardcode their own per-ticker "which tickers have a non-December fiscal year end" override table, keyed off filename conventions like `<TICKER>_Q<N>_<YYYY>` — and those tables can drift out of sync, silently mis-stamping `period_end` for tickers missing from one table but present in another. This is **not** the same failure mode as a genuinely-missing source document (§2's `parent_document_id` can legitimately stay NULL when no primary doc was ever fetched) — it produces an *orphan that looks unresolvable but has a perfectly good source sitting one calendar-quarter away*.
+
+Concretely (audited 2026-07-02, following the #765 backfill): `compute/transcript_ingest.py::_FYE_OFFSETS` correctly covers `AMAT`/`TOL` (October FYE) alongside `RBRK`/`VEEV` (January FYE). `compute/kpi_extract_summaries.py::_TICKER_QUARTER_PERIOD_END` — a separate table driving the LLM-summary synthesis path, reading files off the identical `.tmp/<TICKER>_Q<N>_<YYYY>_*.txt` naming convention — only had `RBRK`/`VEEV`. `AMAT`/`TOL` fell through to the plain calendar-quarter default, stamping e.g. `AMAT_Q4_2025_summary.txt` (fiscal Q4 ending 2025-10-31, matching the registered transcript) as `period_end=2025-12-31` instead. The resolver's exact-date match then correctly reported "no candidate parent" — the transcript it should have matched was one quarter-and-two-months away on the calendar, not missing.
+
+**The #765 PR body's characterization of this as "AMAT/TOL have no registered transcript/IR document at all yet" was incorrect** — the transcripts were on file (`transcripts/processed/AMAT_Q4_2025.txt` id 5190, `AMAT_Q1_2026.txt` id 5189, `TOL_Q4_2025.txt` id 5354, `TOL_Q1_2026.txt` id 5353); the correcting record is this subsection.
+
+Two additional wrinkles worth knowing about, both distinct from the mis-stamping bug above:
+
+- The two modules' filename-year **labels** aren't always numerically identical for the same calendar quarter on the same ticker. `kpi_extract_summaries.py` named VEEV's quarter ending 2026-04-30 `VEEV_Q1_2026`; a later transcript-ingestion pass named the identical calendar quarter `VEEV_Q1_2027`. Both resolve to the correct `period_end` *within their own module* (each module's override table is tuned to its own labeling convention), so this by itself does not cause an orphan — but it means the two label conventions must never be compared to each other directly, only their resolved `period_end` dates.
+- A ticker can have its **transcript** registered for a period but never have its **IR press-release/presentation PDF** fetched for that same period (or vice versa) — a genuine missing-source gap, not a stamping bug. `parent_document_id` correctly stays NULL until the IR fetch pipeline (auto-discover or manual upload) actually lands that document.
+
+**Fix applied**: `compute/kpi_extract_summaries.py::_TICKER_QUARTER_PERIOD_END` now carries an explicit `year_offset` per quarter (not inferred from the month — Jan-FYE's Q4 and Oct-FYE's Q1 both land in January but roll to a different calendar year) and covers `AMAT`/`TOL`. `execution/backfill_fiscal_period_stamps.py` re-derives and corrects `documents.period_end` (and any dependent `kpi_facts.period_end` — `fiscal_period_type` is unaffected) for rows stamped before the fix; re-running `execution/backfill_llm_extracted_parents.py --apply` afterward resolves their `parent_document_id`.
+
+**When adding a ticker with a non-calendar fiscal year end**, update every module keeping its own copy of this override — grep for `_FYE_OFFSETS` / `_TICKER_QUARTER_PERIOD_END` (or equivalent) across `src/compute/` before assuming one edit is sufficient.
+
 ## 3. Conflict resolution when sources disagree
 
 Order of trust for the same `(ticker, period_end, line_item)`:
