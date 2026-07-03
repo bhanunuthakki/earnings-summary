@@ -1168,6 +1168,169 @@ def test_builder_reads_scenario_override_from_block(
     ) == pytest.approx(redesign.BULL_SEED.exit_multiple)
 
 
+def test_refresh_persists_seeded_per_name_prior_and_skews_reward(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A per-name ``scenario_prior`` block already on file (the producer's LLM
+    output) flows through end-to-end: the built workbook's weight cells (row 62)
+    seed from it, the ``dcf_runs`` snapshot carries both ``scenario_prior`` and
+    ``priced_in`` blocks, and ``dcf.scenario_reward`` skews its expected return
+    toward the per-name weights (not the symmetric 25/50/25 global)."""
+    from dcf import scenario_reward as scenario_reward_mod
+
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    adir = refresh_repo / "data" / "dcf_assumptions"
+    adir.mkdir(parents=True)
+    (adir / "TESTCO.json").write_text(
+        json.dumps(
+            {
+                "redesign": {
+                    "scenario_prior": {
+                        "bull_weight": 0.15,
+                        "base_weight": 0.50,
+                        "bear_weight": 0.35,
+                        "rationale": "fragile, execution-heavy thesis",
+                        "set_by": "llm",
+                        "as_of": "2026-07-01",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert res["status"] == "ok", res
+
+    # The built workbook's row-62 weight cells seeded from the per-name prior.
+    assert _dashboard_cell(
+        dest, redesign.SCEN_WEIGHTS_ROW, redesign.SCEN_COL_WEIGHT_BASE
+    ) == pytest.approx(0.50)
+    assert _dashboard_cell(
+        dest, redesign.SCEN_WEIGHTS_ROW, redesign.SCEN_COL_BULL
+    ) == pytest.approx(0.15)
+    assert _dashboard_cell(
+        dest, redesign.SCEN_WEIGHTS_ROW, redesign.SCEN_COL_BEAR
+    ) == pytest.approx(0.35)
+
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT npv_per_share, live_price, assumption_snapshot_json "
+        "FROM dcf_runs WHERE ticker='TESTCO'"
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    npv_per_share, live_price, snapshot_raw = row
+    snap = json.loads(snapshot_raw)
+
+    # Both blocks land on the run.
+    assert "priced_in" in snap
+    sp = snap["scenario_prior"]
+    assert sp["weights"] == {
+        "bull": pytest.approx(0.15),
+        "base": pytest.approx(0.50),
+        "bear": pytest.approx(0.35),
+    }
+    assert sp["rationale"] == "fragile, execution-heavy thesis"
+    assert sp["set_by"] == "llm"
+
+    # scenario_reward reads the per-name weights (not the global 25/50/25) and
+    # the skew reflects the bear-heavy tilt.
+    reward = scenario_reward_mod.scenario_reward(
+        price=live_price, base_fv=npv_per_share, snapshot_json=snapshot_raw
+    )
+    assert reward is not None
+    assert reward.weights_source == "per_name"
+    assert reward.probabilities["bear"] == pytest.approx(0.35)
+    assert reward.probabilities["bull"] == pytest.approx(0.15)
+    # A bear-heavy prior pulls the expected return below the symmetric-prior one.
+    global_reward = scenario_reward_mod.ScenarioReward(
+        expected_return=sum(
+            scenario_reward_mod.SCENARIO_PROBABILITIES[s]
+            * (
+                (
+                    scenario_reward_mod.parse_scenario_fair_values(snapshot_raw)
+                    | {"base": npv_per_share}
+                )[s]
+                / live_price
+                - 1.0
+            )
+            for s in ("bull", "base", "bear")
+        ),
+        base_return=npv_per_share / live_price - 1.0,
+        bull_return=None,
+        bear_return=None,
+        has_scenarios=True,
+        probabilities=scenario_reward_mod.SCENARIO_PROBABILITIES,
+        detail="",
+    )
+    assert reward.expected_return < global_reward.expected_return
+
+
+def test_owner_workbook_edit_off_default_creates_per_name_owner_prior(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The owner edits the row-62 weight cells directly in the workbook (no
+    per-name ``scenario_prior`` on file yet, no LLM run) — the sync MUST create a
+    per-name block with ``set_by='owner'`` rather than silently dropping the
+    edit, and that block MUST survive the next refresh (owner edits always
+    win)."""
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    adir = refresh_repo / "data" / "dcf_assumptions"
+
+    # First refresh: no assumptions JSON at all yet — a from-scratch build seeds
+    # row 62 at the symmetric global default (no prior on file).
+    refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert not (adir / "TESTCO.json").exists() or "scenario_prior" not in json.loads(
+        (adir / "TESTCO.json").read_text(encoding="utf-8")
+    ).get("redesign", {})
+
+    # The owner opens the workbook and edits the weight cells directly, off the
+    # 25/50/25 default — a locked-in decision, not an LLM proposal.
+    wb = openpyxl.load_workbook(str(dest))
+    dsh = wb["Dashboard"]
+    dsh.cell(row=redesign.SCEN_WEIGHTS_ROW, column=redesign.SCEN_COL_WEIGHT_BASE, value=0.50)
+    dsh.cell(row=redesign.SCEN_WEIGHTS_ROW, column=redesign.SCEN_COL_BULL, value=0.40)
+    dsh.cell(row=redesign.SCEN_WEIGHTS_ROW, column=redesign.SCEN_COL_BEAR, value=0.10)
+    wb.save(str(dest))
+    wb.close()
+
+    res = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert res["status"] == "ok", res
+
+    # A per-name owner block now exists — the edit was NOT silently lost.
+    rd = json.loads((adir / "TESTCO.json").read_text(encoding="utf-8"))["redesign"]
+    sp = rd["scenario_prior"]
+    assert sp["set_by"] == "owner"
+    assert sp["bull_weight"] == pytest.approx(0.40)
+    assert sp["base_weight"] == pytest.approx(0.50)
+    assert sp["bear_weight"] == pytest.approx(0.10)
+
+    # The workbook weight cells themselves carried the edit through this refresh.
+    assert _dashboard_cell(
+        dest, redesign.SCEN_WEIGHTS_ROW, redesign.SCEN_COL_BULL
+    ) == pytest.approx(0.40)
+    assert _dashboard_cell(
+        dest, redesign.SCEN_WEIGHTS_ROW, redesign.SCEN_COL_BEAR
+    ) == pytest.approx(0.10)
+
+    # A THIRD refresh (no further owner edit) must not revert the owner's block —
+    # it survives the next rebuild, seeded straight back from the JSON.
+    res2 = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert res2["status"] == "ok", res2
+    rd2 = json.loads((adir / "TESTCO.json").read_text(encoding="utf-8"))["redesign"]
+    sp2 = rd2["scenario_prior"]
+    assert sp2["set_by"] == "owner"
+    assert sp2["bull_weight"] == pytest.approx(0.40)
+    assert sp2["bear_weight"] == pytest.approx(0.10)
+    assert _dashboard_cell(
+        dest, redesign.SCEN_WEIGHTS_ROW, redesign.SCEN_COL_BULL
+    ) == pytest.approx(0.40)
+
+
 def test_apply_edits_persists_without_rebuild_and_records_override(
     refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
