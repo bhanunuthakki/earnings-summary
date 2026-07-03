@@ -65,6 +65,9 @@ _SYNCED_DCF_RUNS = _LEGACY_DCF_RUNS.replace(
     "    breakdown_json TEXT\n",
     "    breakdown_json TEXT,\n    assumptions_sync_status TEXT, assumptions_synced_at TEXT\n",
 )
+# The versioned schema (migration 0137): UNIQUE(ticker) dropped — superseded
+# history rows accumulate per ticker, many rows per name is the norm.
+_VERSIONED_DCF_RUNS = _SYNCED_DCF_RUNS.replace("ticker TEXT UNIQUE,", "ticker TEXT,")
 
 
 def _row(**overrides: object) -> persist_mod.DcfRunRow:
@@ -451,3 +454,57 @@ def test_price_leg_freshness_is_independent_of_valuation(tmp_path: Path) -> None
     # both tone classes present in the same row, so a reader sees the split.
     assert "dcv-ok" in html_out
     assert "dcv-warn" in html_out
+
+
+def test_coverage_reads_newest_run_not_superseded_history(tmp_path: Path) -> None:
+    """The versioned dcf_runs schema (migration 0137) keeps superseded history
+    rows per ticker, so multiple rows per name is the norm. The panel's
+    whole-table scan must pick each ticker's newest run explicitly — the old
+    unordered read let the LAST scanned row win, which is rowid order only by
+    accident (the same bug PR #805 fixed in the report's valuation card).
+    Inserting the newest run FIRST makes last-scanned-wins deterministically
+    surface the stale row."""
+    repo = tmp_path / "repo"
+    (repo / "data").mkdir(parents=True)
+    db = repo / "data" / "portfolio.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        _VERSIONED_DCF_RUNS
+        + "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, name TEXT);"
+        " INSERT INTO tracked_companies VALUES ('HIST', 'portfolio', 'History Co');"
+    )
+    today = date.today()
+    conn.execute(
+        "INSERT INTO dcf_runs (ticker, valuation_date, live_price_at, horizon_years,"
+        " wacc, terminal_growth, npv, npv_per_share, shares_outstanding, currency,"
+        " notes, assumption_snapshot_json, assumptions_sync_status,"
+        " assumptions_synced_at) VALUES ('HIST', ?, ?, 10, 0.09, 0, 1, 100.0, 1e9,"
+        " 'USD', 'workbook=HIST.xlsx (redesigned)', ?, 'synced', ?)",
+        (
+            today.isoformat(),
+            today.isoformat() + "T08:00:00",
+            json.dumps({"format": "redesign"}),
+            today.isoformat() + "T08:00:00",
+        ),
+    )
+    # The superseded history row (is_latest=0 in prod) — no live price, no sync
+    # outcome, a different notes format: every field a stale read would leak.
+    old_day = (today - timedelta(days=45)).isoformat()
+    conn.execute(
+        "INSERT INTO dcf_runs (ticker, valuation_date, horizon_years, wacc,"
+        " terminal_growth, npv, npv_per_share, shares_outstanding, currency,"
+        " notes, assumption_snapshot_json) VALUES ('HIST', ?, 10, 0.09, 0, 1,"
+        " 80.0, 1e9, 'USD', 'workbook=HIST.xlsx (legacy)', '{}')",
+        (old_day,),
+    )
+    conn.commit()
+    conn.close()
+
+    rows, _ = collect_rows(db, repo)
+    row = next(r for r in rows if r.ticker == "HIST")
+    # The NEWEST run's freshness legs, format and sync outcome — not the
+    # superseded 45-day-old row's.
+    assert row.last_valued == today
+    assert row.last_priced == today
+    assert row.run_format == "redesign"
+    assert row.sync_status == "synced"
