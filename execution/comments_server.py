@@ -567,6 +567,24 @@ def create_app(
             return ({"error": "task not runnable (missing or already researched)"}, 409)
         return {"proposal_id": proposal_id}
 
+    @app.route("/api/research/task/<int:task_id>/reject", methods=["POST", "OPTIONS"])
+    def research_reject(task_id: int):
+        """Dismiss a proposed wondering from the Ledger's open-wonderings list —
+        the counterpart to /run for a task that was never a real research
+        question (e.g. a retrospective lesson mis-staged via Incorporate). Flips
+        the task proposed → rejected so it drops out of the list. State-changing,
+        so a cross-site fetch is rejected; 404 on an unknown id."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        if request.headers.get("Sec-Fetch-Site", "") == "cross-site":
+            return ({"error": "cross-site reject rejected"}, 403)
+        from research.proposals import get_task, set_task_status
+
+        if get_task(task_id, db_path=db_path) is None:
+            return ({"error": "task not found"}, 404)
+        set_task_status(task_id, "rejected", db_path=db_path)
+        return {"ok": True}
+
     @app.route("/api/research/proposal/<int:proposal_id>/<verb>", methods=["POST", "OPTIONS"])
     def research_act(proposal_id: int, verb: str):
         """W1-7: the 4-action core (approve / further / steer / reject). 'approve'

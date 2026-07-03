@@ -106,3 +106,25 @@ def test_steer_action_records_direction(ctx) -> None:
 def test_unknown_verb_rejected(ctx) -> None:
     client, _db, _task_id, pid = ctx
     assert client.post(f"/api/research/proposal/{pid}/delete").status_code == 400
+
+
+def test_reject_task_drops_it_from_wonderings(ctx) -> None:
+    client, _db, task_id, _pid = ctx
+    resp = client.post(f"/api/research/task/{task_id}/reject")
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
+    body = client.get("/api/panel/musings?fragment=research").data.decode()
+    assert f'data-reject-task="{task_id}"' not in body
+
+
+def test_reject_task_cross_site_rejected(ctx) -> None:
+    client, _db, task_id, _pid = ctx
+    resp = client.post(
+        f"/api/research/task/{task_id}/reject", headers={"Sec-Fetch-Site": "cross-site"}
+    )
+    assert resp.status_code == 403
+
+
+def test_reject_unknown_task_404(ctx) -> None:
+    client, _db, _task_id, _pid = ctx
+    assert client.post("/api/research/task/999999/reject").status_code == 404

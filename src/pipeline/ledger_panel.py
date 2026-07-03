@@ -174,6 +174,15 @@ _RESEARCH_JS = """<script>(function(){
         .catch(function(){ run.disabled=false; run.textContent='Research it'; });
       return;
     }
+    var rej=e.target.closest('[data-reject-task]');
+    if(rej){
+      rej.disabled=true; rej.textContent='Dismissing...';
+      fetch('/api/research/task/'+rej.getAttribute('data-reject-task')+'/reject',{method:'POST'})
+        .then(function(r){ if(!r.ok){ throw new Error(); } return r.json(); })
+        .then(function(){ reload(); })
+        .catch(function(){ rej.disabled=false; rej.textContent='Dismiss'; });
+      return;
+    }
     var act=e.target.closest('[data-verb]');
     if(act){
       var verb=act.getAttribute('data-verb'); var body={};
@@ -194,15 +203,19 @@ def _task_chip(task: ResearchTask) -> str:
         if task.ticker
         else '<span class="ledger-unattr">unattributed</span>'
     )
+    dismiss = (
+        '<button type="button" class="k-btn k-btn-danger k-btn-sm" '
+        f'data-reject-task="{task.id}">Dismiss</button>'
+    )
     if research_run_enabled():
         action = (
             '<button type="button" class="k-btn k-btn-primary k-btn-sm" '
-            f'data-run-task="{task.id}">Research it</button>'
+            f'data-run-task="{task.id}">Research it</button>' + dismiss
         )
     else:
         action = (
             '<span class="ledger-cap-status">detection only — set '
-            "LEDGER_RESEARCH_RUN=1 to research</span>"
+            "LEDGER_RESEARCH_RUN=1 to research</span>" + dismiss
         )
     return (
         '<div class="ledger-musing">'

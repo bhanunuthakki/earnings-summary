@@ -82,3 +82,20 @@ def test_panel_shows_synthesized_stances(db_path: Path) -> None:
     html = render_ledger_panel(db_path)
     assert "What you think now" in html
     assert "Constructive on NU" in html
+
+
+def test_reject_drops_wondering_from_list(db_path: Path) -> None:
+    from pipeline.ledger_panel import render_ledger_research_list
+    from research.proposals import create_task, set_task_status
+
+    task_id = create_task(
+        note_id=None, claim="do NU's margins still hold?", ticker="NU", db_path=db_path
+    )
+    before = render_ledger_research_list(db_path)
+    assert "Open wonderings" in before
+    assert f'data-reject-task="{task_id}"' in before
+
+    set_task_status(task_id, "rejected", db_path=db_path)
+    after = render_ledger_research_list(db_path)
+    assert "Open wonderings" not in after
+    assert f'data-reject-task="{task_id}"' not in after
