@@ -39,6 +39,8 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Sequence
 
+import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "0141_reader_perf_indexes"
@@ -52,6 +54,13 @@ _INDEX_NAME = "idx_ff_lineitem_fpt_ticker_covering"
 def upgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name != "sqlite":  # pragma: no cover - the app is sqlite-only
+        return
+    # Stamped-DB tolerance: test fixtures stamp an empty DB mid-chain and
+    # upgrade to head, so financial_facts (created by init_db, not by any
+    # migration in the stamped range) may simply not exist. CREATE INDEX
+    # IF NOT EXISTS guards the index name, NOT the table — skip explicitly,
+    # like every other post-baseline migration that touches core tables.
+    if "financial_facts" not in sa.inspect(bind).get_table_names():
         return
     # IF NOT EXISTS keeps the migration idempotent across partial/re-run states.
     op.execute(
