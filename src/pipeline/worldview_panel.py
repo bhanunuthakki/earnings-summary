@@ -35,7 +35,7 @@ _WORLDVIEW_STYLE = """<style>
 .wv-add input { width: 100%; margin-top: var(--sp-2); font-family: var(--sans); font-size: var(--fs-caption); }
 .wv-add-row { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); flex-wrap: wrap; }
 .wv-status { font-size: var(--fs-caption); color: var(--muted); }
-.wv-scope { font-family: var(--mono); font-size: var(--fs-micro); color: var(--accent); text-transform: lowercase; }
+.wv-scope { font-family: var(--mono); font-size: var(--fs-micro); color: var(--muted); text-transform: lowercase; }
 .wv-prov { font-size: var(--fs-micro); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .wv-proposed-badge { font-size: var(--fs-micro); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
 .wv-tension { font-size: var(--fs-micro); font-weight: 600; color: var(--warn); text-transform: uppercase; letter-spacing: 0.05em; }

@@ -1296,7 +1296,7 @@ td.ticker a:hover { color: var(--accent); }
   margin-bottom: 8px; }
 .cc-capture-tray-row { display: flex; align-items: center; gap: 10px; }
 .cc-capture-tray-msg { font-size: var(--fs-caption); }
-.cc-tray-coach-card { background: var(--surface); border-left: 3px solid var(--accent);
+.cc-tray-coach-card { background: var(--surface); border-left: 3px solid var(--border-2);
   border-radius: var(--radius); padding: 10px 12px; margin-top: 8px; position: relative; }
 .cc-tray-coach-body { font-size: var(--fs-body); line-height: 1.5; color: var(--fg-soft); }
 .cc-tray-coach-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }

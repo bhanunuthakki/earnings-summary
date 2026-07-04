@@ -723,7 +723,7 @@ _PAGE_HEAD = (
   .synthesis-body h3 {{ font-size: var(--fs-section); }}
   /* h4-h6 share the body size: the one prose boundary maps deep markdown
      headings (###/####) here, and panels own the h2/h3 levels above them. */
-  .synthesis-body h4, .synthesis-body h5, .synthesis-body h6 {{ font-size: var(--fs-body); color: var(--ok); }}
+  .synthesis-body h4, .synthesis-body h5, .synthesis-body h6 {{ font-size: var(--fs-body); color: var(--fg); }}
   .synthesis-body strong {{ color: var(--fg); }}
   .synthesis-body code {{ background: var(--paper); padding: 1px 5px; border-radius: var(--radius); font-family: var(--mono); font-size: 0.93em; }}
   .synthesis-body ul {{ padding-left: 22px; }}
@@ -739,7 +739,7 @@ _PAGE_HEAD = (
   .reread-stamp {{ color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono); font-weight: 400; }}
   .reread-body {{ font-size: var(--fs-body); line-height: 1.55; margin-top: 10px; }}
   .reread-body h2, .reread-body h3, .reread-body h4 {{ color: var(--fg); margin: 10px 0 4px; }}
-  .reread-body h2 {{ font-size: var(--fs-section); color: var(--ok); }}
+  .reread-body h2 {{ font-size: var(--fs-section); color: var(--fg); }}
   .reread-body h3 {{ font-size: var(--fs-body); }}
   .reread-body strong {{ color: var(--fg); }}
   .reread-body ul {{ padding-left: 18px; }}

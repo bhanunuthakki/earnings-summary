@@ -61,7 +61,7 @@ VIEWER_CONTENT_CSS = """
 .sv-lines li:target { background: color-mix(in srgb, var(--warn) 14%, transparent);
   outline: 1px solid var(--warn); border-radius: var(--radius); }
 .sv-lines .ln-text { white-space: pre-wrap; word-break: break-word; }
-.sv-lines .ln-speaker { font-weight: 600; color: var(--accent); }
+.sv-lines .ln-speaker { font-weight: 600; color: var(--fg); }
 .sv-secnav { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 18px; }
 .sv-secnav a { text-decoration: none; }
 .sv-sec-row { padding: 4px 0; border-bottom: 1px solid var(--hairline); }
