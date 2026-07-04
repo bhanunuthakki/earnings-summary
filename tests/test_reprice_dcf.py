@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+import time
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -246,3 +247,150 @@ def test_downstream_consumers_read_repriced_value(tmp_path: Path) -> None:
     assert px == pytest.approx(24.0)
     assert fv == pytest.approx(20.0)
     assert gap == pytest.approx((24.0 / 20.0 - 1.0) * 100.0)  # +20%
+
+
+# --------------------------------------------------------------------------- #
+# Migration 0137 (is_latest) — reprice must not re-scan superseded history.
+# --------------------------------------------------------------------------- #
+# A minimal versioned schema: real dcf_runs (migration 0137+) drops the
+# UNIQUE(ticker) index (multiple rows per ticker survive as history) and adds
+# is_latest / superseded_at / superseded_by_id. This mirrors just enough of
+# that shape to exercise reprice's is_latest filter.
+_VERSIONED_SCHEMA = """
+CREATE TABLE dcf_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT,
+    valuation_date TEXT, horizon_years INTEGER,
+    wacc REAL, terminal_growth REAL,
+    npv REAL, npv_per_share REAL, shares_outstanding REAL,
+    currency TEXT, notes TEXT, run_id TEXT,
+    live_price REAL, live_price_at TEXT, over_under_pct REAL,
+    mos_bar_used REAL, assumption_snapshot_json TEXT,
+    revenue_growths_json TEXT, fcf_margin REAL,
+    created_at TEXT,
+    is_latest INTEGER NOT NULL DEFAULT 1,
+    superseded_at TEXT, superseded_by_id INTEGER,
+    CONSTRAINT ck_dcf_runs_over_under_ratio CHECK (
+        over_under_pct IS NULL
+        OR live_price IS NULL OR npv_per_share IS NULL
+        OR live_price <= 0 OR npv_per_share <= 0
+        OR ABS(over_under_pct - (1.0 * live_price / npv_per_share - 1.0)) <= 0.005
+    )
+);
+"""
+
+
+def _versioned_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(_VERSIONED_SCHEMA)
+    return conn
+
+
+def _insert_run(
+    conn: sqlite3.Connection,
+    ticker: str,
+    *,
+    npv_per_share: float,
+    live_price: float | None,
+    is_latest: bool,
+) -> int:
+    cur = conn.execute(
+        "INSERT INTO dcf_runs (ticker, valuation_date, npv_per_share, live_price, "
+        "over_under_pct, is_latest) VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            ticker,
+            "2026-05-01",
+            npv_per_share,
+            live_price,
+            persist.derive_over_under(live_price, npv_per_share),
+            1 if is_latest else 0,
+        ),
+    )
+    conn.commit()
+    return int(cur.lastrowid or 0)
+
+
+def test_reprice_only_touches_is_latest_rows_on_versioned_schema(tmp_path: Path) -> None:
+    """A superseded (is_latest=0) row must be left completely untouched — both
+    to avoid re-pricing stale history and, per the reprice.py docstring, to
+    keep the sweep's cost bounded to the current book rather than growing with
+    every accumulated superseded version."""
+    conn = _versioned_conn()
+    _insert_run(conn, "ZZT", npv_per_share=20.0, live_price=10.0, is_latest=False)
+    current_id = _insert_run(conn, "ZZT", npv_per_share=25.0, live_price=10.0, is_latest=True)
+
+    results = reprice_runs(conn, tmp_path, price_reader=_fixed_reader({"ZZT": 30.0}))
+
+    assert [r.ticker for r in results] == ["ZZT"]  # one result, not two
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, live_price, over_under_pct FROM dcf_runs ORDER BY id"
+    ).fetchall()
+    superseded, current = rows
+    assert superseded["live_price"] == pytest.approx(10.0)  # untouched
+    assert current["id"] == current_id
+    assert current["live_price"] == pytest.approx(30.0)  # repriced
+    assert current["over_under_pct"] == pytest.approx((30.0 - 25.0) / 25.0)
+
+
+def test_reprice_falls_back_to_max_id_on_pre_0137_schema(tmp_path: Path) -> None:
+    """No is_latest column at all (pre-migration-0137 DB) -> the MAX(id)-per-
+    ticker fallback still picks the single legacy row (UNIQUE(ticker) means
+    there is only ever one)."""
+    conn = _conn()  # the module-level pre-0137 fixture (no is_latest column)
+    _seed(conn, "ZZT", npv_per_share=20.0, live_price=10.0)
+
+    results = reprice_runs(conn, tmp_path, price_reader=_fixed_reader({"ZZT": 24.0}))
+
+    assert [r.status for r in results] == ["repriced"]
+
+
+# --------------------------------------------------------------------------- #
+# Per-ticker timeout bounding — a hung price fetch must not hang the sweep.
+# --------------------------------------------------------------------------- #
+
+
+def test_hung_ticker_does_not_block_the_others(tmp_path: Path) -> None:
+    """yfinance exposes no request-level timeout, so a stalled socket could
+    hang forever; reprice_runs must bound each ticker's fetch and move on. A
+    ticker that blows its budget degrades to "no_price" (stale row untouched)
+    without preventing the other tickers from being repriced, and the whole
+    call must return in well under "hang forever"."""
+    conn = _conn()
+    _seed(conn, "AAA", npv_per_share=20.0, live_price=10.0)
+    _seed(conn, "HUNG", npv_per_share=20.0, live_price=10.0)
+    _seed(conn, "BBB", npv_per_share=20.0, live_price=10.0)
+
+    def reader(_repo_root: Path, ticker: str) -> LivePrice | None:
+        if ticker.upper() == "HUNG":
+            time.sleep(5.0)  # longer than the timeout budget below
+            return LivePrice(price=999.0, fetched_at=_FRESH_AT, source_name="fake")
+        return LivePrice(price=24.0, fetched_at=_FRESH_AT, source_name="fake")
+
+    t0 = time.monotonic()
+    results = reprice_runs(
+        conn, tmp_path, price_reader=reader, price_fetch_workers=3, per_ticker_timeout_s=0.2
+    )
+    elapsed = time.monotonic() - t0
+
+    by_ticker = {r.ticker: r for r in results}
+    assert by_ticker["AAA"].status == "repriced"
+    assert by_ticker["BBB"].status == "repriced"
+    assert by_ticker["HUNG"].status == "no_price"  # degraded, not the fake 999.0 price
+    assert _read(conn, "HUNG")["live_price"] == pytest.approx(10.0)  # stale row untouched
+    assert elapsed < 4.0  # bounded by the 0.2s budget, not the 5s sleep
+
+
+def test_progress_events_cover_start_each_ticker_and_done(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    conn = _conn()
+    _seed(conn, "AAA", npv_per_share=20.0, live_price=10.0)
+    _seed(conn, "BBB", npv_per_share=20.0, live_price=10.0)
+
+    reprice_runs(conn, tmp_path, price_reader=_fixed_reader({"AAA": 24.0, "BBB": 24.0}))
+
+    err = capsys.readouterr().err
+    assert '"event": "reprice_start"' in err
+    assert '"event": "reprice_done"' in err
+    assert err.count('"event": "reprice_ticker_done"') == 2
