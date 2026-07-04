@@ -353,6 +353,42 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
     assert summary["stage_3_validate"] == "ok"
 
 
+def test_timeout_echoes_partial_output_captured_before_the_kill(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A killed-on-timeout child's ``TimeoutExpired`` carries whatever stdout/
+    stderr Python drained from the pipes before raising (verified in this
+    Python's stdlib: ``subprocess.run(..., timeout=...)`` populates
+    ``TimeoutExpired.stdout``/``.stderr`` even though it never returns a
+    CompletedProcess). Before the fix, `_run_stage` only echoed output on a
+    NORMAL return, so a killed stage's partial progress lines (e.g. a
+    per-ticker JSON progress event) were silently discarded and the cron log
+    showed a completely empty stage section -- exactly what happened in
+    production on the stage_0_news / stage_0e_reprice timeouts. This pins that
+    the partial output IS echoed on the timeout path too."""
+
+    def _raise_with_partial_output(argv: list[str], **kwargs: object) -> _FakeCompleted:
+        if _script_of(argv) == TRIGGERS_SCRIPT:
+            timeout = kwargs.get("timeout")
+            raise subprocess.TimeoutExpired(
+                cmd=argv,
+                timeout=timeout if isinstance(timeout, float | int) else 0,
+                output='{"event": "trigger_ticker_done", "ticker": "NU", "i": 3, "n": 98}\n',
+                stderr="partial stderr before the kill\n",
+            )
+        return _FakeCompleted(returncode=0)
+
+    monkeypatch.setattr("execution.run_morning_pipeline.subprocess.run", _raise_with_partial_output)
+
+    rc = run_morning_pipeline.main([])
+
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert '"ticker": "NU"' in captured.out
+    assert "partial stderr before the kill" in captured.err
+    assert "timed out after" in captured.err  # the failure banner still fires
+
+
 # ---------------------------------------------------------------------------
 # --skip-triggers — only the feed render runs
 # ---------------------------------------------------------------------------

@@ -42,7 +42,9 @@ import argparse
 import json
 import sqlite3
 import sys
-from concurrent.futures import ThreadPoolExecutor
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
 from typing import cast
 
@@ -64,9 +66,32 @@ DEFAULT_SOURCE = "auto"
 
 _GRADES_WORKERS = 8  # yfinance is HTTP-bound; EDGAR stays sequential (SEC throttle)
 
+# The primary per-ticker collection (FMP, or its WebSearch+Opus fallback on
+# refusal) used to run fully sequentially. That was fine while FMP served
+# news, but FMP's stock-news endpoint now 402s for every ticker (verified live
+# 2026-07-03 -- see directives/news_sources_plan.md Risk R6), so `auto` falls
+# back to a ~55s Opus web-search call for EVERY ticker in the book. Serially
+# across a ~100-ticker book that is ~90 minutes of work crammed into the old
+# 900s stage budget -- the exact cause of the stage_0_news timeout. Threaded
+# like the additive grades feed bounds the wall-clock to ceil(n/workers) calls
+# instead of n. 8 workers keeps the concurrent Claude-CLI subprocess burst
+# modest (each websearch call spawns its own `claude` process) while still
+# cutting a ~98-ticker, all-fallback book from ~90min to ceil(98/8) * 60s = 780s
+# worst case (every ticker hangs its full per-ticker budget) / ~715s typical
+# (every ticker takes the ~55s websearch fallback) -- both now fit inside
+# _NEWS_TIMEOUT_S alongside the additive EDGAR/grades feeds that run after.
+_PRIMARY_WORKERS = 8
+# Hard per-ticker wall-clock budget for the WHOLE _collect_for_ticker call
+# (FMP attempt + retries + the optional websearch fallback). Well over the
+# fallback's typical ~55s (measured live 2026-07-03) so a normal call always
+# completes, but bounded well under call_llm_with_web's own 1800s timeout floor
+# (CLAUDE_WEB_TIMEOUT_SECONDS) so one stuck ticker degrades to "no rows this
+# run" and releases its worker slot rather than the run inheriting that stall.
+_TICKER_TIMEOUT_S = 60.0
+
 
 def _log(event: str, **kwargs: object) -> None:
-    print(json.dumps({"event": event, **kwargs}), file=sys.stderr)
+    print(json.dumps({"event": event, **kwargs}), file=sys.stderr, flush=True)
 
 
 def fmp_refused(status: int, body: object) -> bool:
@@ -171,6 +196,85 @@ def _collect_additive(
     return rows
 
 
+def collect_primary(
+    tickers: list[str],
+    *,
+    source: str,
+    db_path: str,
+    days: int,
+    limit: int,
+    workers: int = _PRIMARY_WORKERS,
+    per_ticker_timeout_s: float = _TICKER_TIMEOUT_S,
+) -> list[NewsRow]:
+    """Collect every ticker's primary-policy rows (FMP, or its WebSearch+Opus
+    fallback on refusal) under bounded concurrency and a hard per-ticker time
+    budget.
+
+    Threaded across ``workers`` tickers at once so the whole book's wall-clock
+    is roughly ``ceil(n/workers) * per-ticker-time`` instead of ``n *
+    per-ticker-time`` — the fix for the stage timing out when every ticker
+    falls back to the ~55s Opus/web call (FMP news 402ing, verified live
+    2026-07-03). Each ticker also gets its own ``per_ticker_timeout_s`` wall-clock
+    cap so one stuck ticker (a hung web/LLM call) degrades to "no rows" and
+    frees its worker slot rather than blocking the whole run. Progress is
+    flushed to stderr per ticker so a killed stage's cron log shows exactly how
+    far the sweep got instead of an empty section.
+
+    The executor is shut down with ``wait=False``: a ticker that blows its
+    budget leaves an abandoned thread still running in the background (it will
+    finish or the interpreter will reap it at exit), but this function returns
+    as soon as every future has either resolved or been given up on — it must
+    NOT block on the executor's default ``wait=True`` shutdown, which would
+    wait for even an abandoned, still-sleeping worker thread to finish and
+    silently reintroduce the same "one hung ticker blocks everything" bug this
+    whole function exists to fix.
+    """
+    _log("news_primary_start", tickers=len(tickers), source=source, workers=workers)
+    t_start = time.monotonic()
+    rows: list[NewsRow] = []
+    done = 0
+    executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="news-primary")
+    try:
+        futures: dict[Future[list[NewsRow]], str] = {
+            executor.submit(
+                _collect_for_ticker,
+                ticker.upper(),
+                source=source,
+                db_path=db_path,
+                days=days,
+                limit=limit,
+            ): ticker.upper()
+            for ticker in tickers
+        }
+        for future, ticker in futures.items():
+            try:
+                ticker_rows = future.result(timeout=per_ticker_timeout_s)
+            except FutureTimeoutError:
+                _log(
+                    "news_primary_ticker_timeout",
+                    ticker=ticker,
+                    timeout_s=per_ticker_timeout_s,
+                )
+                ticker_rows = []
+            except Exception as exc:  # belt-and-suspenders; _collect_for_ticker degrades itself
+                _log("news_primary_ticker_error", ticker=ticker, error=str(exc)[:200])
+                ticker_rows = []
+            done += 1
+            rows.extend(ticker_rows)
+            _log(
+                "news_primary_ticker_done",
+                ticker=ticker,
+                i=done,
+                n=len(tickers),
+                rows=len(ticker_rows),
+                elapsed_s=round(time.monotonic() - t_start, 1),
+            )
+    finally:
+        executor.shutdown(wait=False)
+    _log("news_primary_done", tickers=len(tickers), rows=len(rows))
+    return rows
+
+
 def run(
     tickers: list[str],
     *,
@@ -190,13 +294,7 @@ def run(
         _log("news_no_tickers")
         return 0
 
-    all_rows: list[NewsRow] = []
-    for ticker in tickers:
-        all_rows.extend(
-            _collect_for_ticker(
-                ticker.upper(), source=source, db_path=db_path, days=days, limit=limit
-            )
-        )
+    all_rows = collect_primary(tickers, source=source, db_path=db_path, days=days, limit=limit)
 
     additive = _collect_additive(
         tickers,
@@ -206,14 +304,18 @@ def run(
         skip_s1_watch=skip_s1_watch,
     )
 
-    conn = sqlite3.connect(db_path)
+    # 30s busy timeout: this single persist lands AFTER the whole (potentially
+    # Opus-billed) collection — a brief concurrent writer must stall it, not
+    # throw the entire haul away with "database is locked" (sqlite's default
+    # busy wait is 5s; lock contention observed live 2026-07-03).
+    conn = sqlite3.connect(db_path, timeout=30.0)
     try:
         # Additive feeds supplement, never duplicate: drop any story the policy
         # rows (or the table) already carry under another url.
         additive = drop_duplicate_stories(conn, additive, against=all_rows)
         inserted, deduped = upsert_news_rows(conn, all_rows + additive)
     except sqlite3.OperationalError as exc:
-        _log("news_table_missing", error=str(exc))
+        _log("news_persist_failed", error=str(exc))
         return 1
     finally:
         conn.close()

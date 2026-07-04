@@ -88,11 +88,16 @@ DEFAULT_MAX_COST_USD = 10.0
 # feed render stage is a pure SQLite read + HTML write; 5 min is generous.
 _TRIGGERS_TIMEOUT_S = 1800
 _RENDER_TIMEOUT_S = 300
-# Stage 0 (news) is fast on the FMP path, but an `auto`/`websearch` run can make
-# one Opus web call per fallback ticker, so it gets more headroom than a render.
-# The additive EDGAR (sequential, SEC-throttled ~0.5s/ticker) + yfinance-grades
-# (threaded) feeds add a low single-digit number of minutes across the book.
-_NEWS_TIMEOUT_S = 900
+# Stage 0 (news) is fast on the FMP path, but FMP's stock-news endpoint now
+# 402s for the whole book (verified live 2026-07-03), so `auto` falls back to
+# an ~55s Opus web-search call per ticker -- fetch_news.py bounds this to
+# ceil(tickers/8) concurrent batches x a 60s per-ticker cap (see
+# _PRIMARY_WORKERS/_TICKER_TIMEOUT_S there), ~715-780s worst case for a ~98-
+# ticker book. The additive EDGAR (sequential, SEC-throttled ~0.15s/ticker) +
+# yfinance-grades (threaded) feeds add a low single-digit number of minutes on
+# top, hence 1200s (20 min) total -- this stage's honest cost once FMP news is
+# gone, not padding.
+_NEWS_TIMEOUT_S = 1200
 # Stage 3 (data validation) runs population-level range / magnitude-jump /
 # source-disagreement checks across every tracked ticker — a SQLite-bound sweep;
 # 10 min is generous.
@@ -116,8 +121,12 @@ _DECISION_ACTIONS_TIMEOUT_S = 120
 _FUNDAMENTALS_TIMEOUT_S = 60
 # Stage 0e (DCF re-price) re-divides each persisted fair value by a fresh live
 # price (per-ticker source-stack read, no DCF rebuild) so the trim/sell ladder +
-# next-dollar "ret" factor don't run on a stale price leg. ~90 names, yfinance
-# self-healing to the FMP cache — 5 min covers a slow/throttled morning.
+# next-dollar "ret" factor don't run on a stale price leg. Reads only
+# is_latest=1 rows (~96 tickers, not the ~149-row superseded-history table) and
+# fetches threaded (8 workers x a 15s per-ticker cap — src/dcf/reprice.py), so
+# the worst case (every ticker hangs its full budget) is
+# ceil(96/8) * 15s = 180s; a healthy morning measured ~55s live against prod
+# 2026-07-03. 5 min keeps real headroom over both.
 _REPRICE_TIMEOUT_S = 300
 # Stage 0f (candidate fit, L?) scores each evaluation name's fit to the held book
 # off the daily price cache + one tracker analytics fetch. ~30 screen names, a
@@ -513,6 +522,26 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
     return stages
 
 
+def _echo_captured_output(stdout: str | bytes | None, stderr: str | bytes | None) -> None:
+    """Write a subprocess's captured stdout/stderr to the parent's own streams.
+
+    Shared by the normal-exit and timeout paths so a killed stage's partial
+    output (whatever it flushed before the kill) is echoed exactly like a
+    completed stage's would be -- see ``_run_stage``'s docstring. The stages
+    run with ``text=True`` so both are ``str`` in practice; ``TimeoutExpired``
+    types its attributes ``bytes | None``, so bytes are decoded defensively."""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode("utf-8", errors="replace")
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", errors="replace")
+    if stdout:
+        sys.stdout.write(stdout)
+        if not stdout.endswith("\n"):
+            sys.stdout.write("\n")
+    if stderr:
+        sys.stderr.write(stderr)
+
+
 def _run_stage(stage: _Stage) -> _StageResult:
     """Invoke one stage as a subprocess; echo its output under a header.
 
@@ -521,6 +550,15 @@ def _run_stage(stage: _Stage) -> _StageResult:
     only runtime exceptions left are ``TimeoutExpired`` and ``OSError``
     (spawn failure), both caught and turned into a failed ``_StageResult``.
     This is what guarantees the caller's loop never aborts early.
+
+    ``capture_output=True`` buffers the child's stdout/stderr entirely in
+    memory and only returns it on a *normal* exit. A killed-on-timeout child's
+    ``TimeoutExpired`` exception carries whatever was captured before the kill
+    on its own ``.stdout`` / ``.stderr`` attributes (Python drains the pipes
+    before raising) -- this is echoed on a timeout too, so a future hang shows
+    the last progress line(s) the child managed to flush (e.g. reprice's
+    per-ticker ``reprice_ticker_done`` events, or fetch_news's per-ticker
+    events) instead of a completely empty stage section in the cron log.
     """
     sys.stdout.write(f"\n{'=' * 72}\n=== {stage.label}\n{'=' * 72}\n")
     sys.stdout.flush()
@@ -537,20 +575,16 @@ def _run_stage(stage: _Stage) -> _StageResult:
             timeout=stage.timeout_s,
             check=False,
         )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         elapsed = round(time.monotonic() - t0, 3)
+        _echo_captured_output(exc.stdout, exc.stderr)
         return _fail(stage, f"timed out after {stage.timeout_s}s", elapsed)
     except OSError as exc:
         elapsed = round(time.monotonic() - t0, 3)
         return _fail(stage, f"spawn failed: {exc}", elapsed)
 
     elapsed = round(time.monotonic() - t0, 3)
-    if proc.stdout:
-        sys.stdout.write(proc.stdout)
-        if not proc.stdout.endswith("\n"):
-            sys.stdout.write("\n")
-    if proc.stderr:
-        sys.stderr.write(proc.stderr)
+    _echo_captured_output(proc.stdout, proc.stderr)
 
     if proc.returncode == 0:
         sys.stdout.write(f"[{stage.key}] OK (exit 0, {elapsed}s)\n")
