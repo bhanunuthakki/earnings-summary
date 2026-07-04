@@ -82,6 +82,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from html import escape
+from pathlib import Path
+from typing import cast
 
 from dashboard.inbox import INBOX_CSS, INBOX_JS
 from dashboard.upcoming import UPCOMING_CSS
@@ -226,6 +228,14 @@ _LEGACY_PANEL_REDIRECTS: dict[str, str] = {
     # on the console like the other diagnostics ids rather than falling back to
     # Overview through the shell's unknown-hash router.
     "model_eval": "provenance",
+    # PR9 — readable aliases for the ritual vocabulary the audit found had no
+    # readable anchors: #ledger, #triggers, #health read as intent rather than
+    # requiring the reader to already know the canonical panel id underneath.
+    # Palette entries are UNCHANGED (ids stay canonical) — these are extra
+    # deep-link spellings only.
+    "ledger": "musings",
+    "triggers": "holdings",
+    "health": "provenance",
 }
 
 
@@ -254,8 +264,7 @@ def render_overview_panel(
     # self-refresh every 90s via HTMX, re-rendering the whole cockpit fragment
     # in place (GET /api/cockpit) — no manual reload, no per-cell polling.
     main = (
-        (open_loops_html or "")
-        + '<div id="cc-cockpit-live" hx-get="/api/cockpit" '
+        (open_loops_html or "") + '<div id="cc-cockpit-live" hx-get="/api/cockpit" '
         'hx-trigger="every 90s" hx-swap="innerHTML">'
         + render_research_cockpit(rows_by_list)
         + "</div>"
@@ -284,6 +293,7 @@ def render_shell(
     overview_html: str,
     generated_at: datetime | None = None,
     themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = _THEMES,
+    repo_root: Path | None = None,
 ) -> str:
     """Render the full command-center document.
 
@@ -291,8 +301,13 @@ def render_shell(
     inlined for first paint; every other sub-tab is an empty placeholder that
     lazy-loads from its ``/api/panel/<name>`` endpoint on first activation.
     The persistent Ask dock mounts once here, outside the panel container.
+    ``repo_root`` (PR9, optional) locates the cheap daily-chain status
+    artifact for the System icon's status dot — see
+    :func:`system_status_summary`; omitted, the button renders exactly as
+    before (no dot).
     """
     stamp = stamp_html(generated_at or datetime.now(UTC), css="cc-stamp", prefix="updated ")
+    system_status = system_status_summary(repo_root)
     flat_tabs = tuple(t for _tid, _tlabel, subs in themes for t in subs)
     # Single-sub-tab sections (Home, Ask, System): the same discriminator that
     # hides the sub-tab row (data-single) marks the panels whose title the SHELL
@@ -315,7 +330,7 @@ def render_shell(
             f'<button class="cc-palette-btn" id="cc-palette-open" type="button" '
             f'aria-label="Command palette (Ctrl+K)" '
             f'title="Jump to a ticker, tab, note, or saved view (Ctrl+K / Ctrl+Space)">⌘K</button>'
-            f"{_render_system_button(themes)}"
+            f"{_render_system_button(themes, system_status)}"
             f'<button class="cc-notes-btn k-btn k-btn-quiet" id="cc-notes-toggle" type="button" '
             f'aria-label="Quick notes" '
             f'title="Quick note + open notes (scoped to the open holding)">✎</button>'
@@ -426,20 +441,72 @@ def _render_section_nav(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]
     return "".join(out)
 
 
-def _render_system_button(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]) -> str:
+def system_status_summary(repo_root: Path | None) -> tuple[str, str] | None:
+    """The System icon's status dot (PR9): (tone, summary) derived from the
+    CHEAP daily-chain status artifact (``.tmp/daily_chain_status.json``,
+    written by ``execution/verify_daily_chain.py`` at the end of every morning
+    pipeline run) — a single-file JSON read, never the
+    ``cron_health_panel``'s multi-day ``ingestion_runs`` scan (shell chrome
+    must never carry a heavy render-path query). Returns None when the file is
+    absent/unparseable (fresh checkout, or the pipeline hasn't run yet) — the
+    caller renders no dot rather than guessing, and callers with no repo_root
+    at all (the plain ``render_shell(overview_html=...)`` call shape) get the
+    same None, so the button degrades to its pre-PR9 look.
+
+    Tone: 'ok' when the last recorded run succeeded, 'bad' on a failed/missing
+    run, 'warn' only on a read/parse hiccup (the artifact exists but couldn't
+    be trusted) — never silently 'ok'."""
+    if repo_root is None:
+        return None
+    import json as _json
+
+    path = Path(repo_root) / ".tmp" / "daily_chain_status.json"
+    try:
+        raw = _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    data = cast("dict[str, object]", raw)
+    verdict = str(data.get("verdict") or "")
+    if verdict == "ok":
+        return ("ok", "Morning pipeline OK")
+    if verdict == "missing":
+        return ("bad", "Morning pipeline has not run today")
+    if verdict == "db_error":
+        return ("warn", "Cron status unreadable")
+    # 'failed' or any other recorded verdict reads as bad — a stale/foreign
+    # value here means "trust it least", not "assume healthy".
+    err = str(data.get("error_summary") or "").strip()
+    return ("bad", f"Morning pipeline failed{f' — {err}' if err else ''}")
+
+
+def _render_system_button(
+    themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...],
+    status: tuple[str, str] | None = None,
+) -> str:
     """System as a top-right icon button (UX9b). Carries ``cc-theme-tab`` +
     ``data-theme-target`` so the activation JS treats it exactly like a nav
     section button; ``data-pal-label`` keeps its palette row readable (the
-    button's visible text is just the glyph)."""
+    button's visible text is just the glyph). ``status`` (PR9) — an
+    (ok|warn|bad, summary) pair from :func:`system_status_summary` — renders
+    a small dot on the button and folds the summary into the title; None (no
+    cheap source available) renders the button exactly as before."""
     for tid, tlabel, subs in themes:
         if tid not in _UTILITY_SECTIONS:
             continue
         sub_labels = " · ".join(label for _pid, label, _ep, _pk, _rq in subs)
+        title = f"{tlabel} · {sub_labels}"
+        dot = ""
+        if status is not None:
+            tone, summary = status
+            title = f"{title} · {summary}"
+            dot = f'<span class="cc-system-dot cc-system-dot-{escape(tone)}"></span>'
         return (
             f'<button class="cc-theme-tab cc-system-btn k-btn k-btn-quiet" type="button" role="tab" '
             f'tabindex="-1" data-theme-target="{escape(tid)}" data-pal-label="{escape(tlabel)}" '
-            f'aria-label="{escape(tlabel)}" title="{escape(f"{tlabel} · {sub_labels}", quote=True)}"'
-            f">▦</button>"
+            f'aria-label="{escape(tlabel)}" title="{escape(title, quote=True)}"'
+            f">▦{dot}</button>"
         )
     return ""
 
@@ -1093,8 +1160,17 @@ td.ticker a:hover { color: var(--accent); }
 /* System demoted to a utility icon (UX9b): same activation contract as a nav
    section button, rendered as a kit .k-btn .k-btn-quiet. Its selected state
    keeps the accent edge (accent = selected, per design language). */
-.cc-system-btn { margin-left: 6px; }
+.cc-system-btn { margin-left: 6px; position: relative; }
 .cc-system-btn.active { border-color: var(--accent); color: var(--accent); }
+/* System status dot (PR9) — ONE cheap ok/warn/bad tick derived from the
+   daily-chain status artifact (never a heavy render-path scan; see
+   _system_status_tone). Reuses the .k-pill severity tokens (color-mix over
+   --ok/--warn/--bad), just at dot scale rather than a text pill. */
+.cc-system-dot { position: absolute; top: 2px; right: 2px; width: 8px; height: 8px;
+  border-radius: var(--radius-full); border: 1px solid var(--surface); }
+.cc-system-dot-ok   { background: var(--ok); }
+.cc-system-dot-warn { background: var(--warn); }
+.cc-system-dot-bad  { background: var(--bad); }
 
 /* Shared ✎ Notes drawer trigger (UX9b) — a kit .k-btn .k-btn-quiet. */
 .cc-notes-btn { margin-left: 6px; }
@@ -1331,7 +1407,12 @@ SHELL_JS = r"""
     validation: 'provenance',
     restatements: 'provenance',
     // model_eval_loop.md PR4 — Optimizer panel's shareable anchor.
-    model_eval: 'provenance'
+    model_eval: 'provenance',
+    // PR9 — readable ritual-vocabulary aliases (extra spellings; palette
+    // entries keep the canonical ids).
+    ledger: 'musings',
+    triggers: 'holdings',
+    health: 'provenance'
   };
   // Legacy panels that became settings-drawer sections (P3.4): their old
   // deep-links also auto-open the drawer after landing on Governance.

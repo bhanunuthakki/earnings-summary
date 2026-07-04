@@ -146,3 +146,39 @@ def test_capture_js_renders_pledge_challenge_and_receipt(db_path: Path) -> None:
     # Dismiss is plain element removal, no CCOverlay (inline content).
     assert "data-coach-dismiss" in _CAPTURE_JS
     assert "CCOverlay" not in _CAPTURE_JS
+
+
+def test_owner_utterances_never_use_window_prompt() -> None:
+    """PR9: the two highest-stakes owner utterances (falsifier Rewrite, research
+    Steer) are in-card textarea swaps — a native prompt is a single-line,
+    unstyled OS modal that hides the card being edited and escapes the overlay
+    stack entirely. Comments may mention the old idiom; live calls may not."""
+    import inspect
+
+    import pipeline.ledger_panel as lp
+
+    src = inspect.getsource(lp)
+    assert "window.prompt(" not in src
+    # Both in-card editors exist, with kit buttons and a pre-fill/focus path.
+    assert "data-rewrite-save" in src and "data-rewrite-cancel" in src
+    assert "data-steer-save" in src and "data-steer-cancel" in src
+    assert "beginRewrite" in src and "beginSteer" in src
+
+
+def test_jump_toolbar_has_no_dead_onmymind_chip_when_flag_off() -> None:
+    """PR9 regression: the jump-chip toolbar must not offer an 'On My Mind'
+    chip when that section is suppressed (flag off) — a chip to a section that
+    doesn't render is the broken doorway the audit fought. Off, the front feed
+    is the plain Musings list, so the chip reads 'Musings' instead."""
+    from pipeline.ledger_panel import (
+        _jump_chip_toolbar,  # pyright: ignore[reportPrivateUsage]  # toolbar contract under test
+    )
+
+    off = _jump_chip_toolbar({}, onmymind_on=False)
+    assert "On My Mind" not in off
+    assert "ledger-jump-onmymind" not in off
+    assert "ledger-jump-musings" in off
+
+    on = _jump_chip_toolbar({}, onmymind_on=True)
+    assert "ledger-jump-onmymind" in on
+    assert "ledger-jump-musings" not in on

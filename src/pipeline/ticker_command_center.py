@@ -756,10 +756,11 @@ def render_ticker_fragment(tcc: TickerCommandCenter) -> str:
 def _holding_band(tcc: TickerCommandCenter) -> str:
     """The one-line holding utility band (UX9c). Left: the type-ahead combobox
     (replacing the PR4 ticker/name heading + the shell's old cc-picker dropdown).
-    Right: verdict + freshness dot + report/DCF/tracker/review links + Ops/Notes
-    icons. The ✎ Notes button opens the shell's SHARED notes drawer
+    Right: verdict + freshness dot + report/DCF/tracker/review/Ledger links +
+    Ops/Notes icons. The ✎ Notes button opens the shell's SHARED notes drawer
     (data-cc-notes-open), which scopes to this ticker — so the holding's own
-    PR4 notes drawer retires.
+    PR4 notes drawer retires. The Ledger link (PR9) is the one-click doorway
+    back to the Ledger tab while its sub-tab row is suppressed (see below).
 
     The Review link (PR5 — the behavioral guard's only point-of-action doorway
     before this) peeks the instant pre-analysis + live graded-sells base rate
@@ -778,6 +779,13 @@ def _holding_band(tcc: TickerCommandCenter) -> str:
         links.append(
             f'<a href="{escape(tcc.tracker_url)}" target="_blank" rel="noopener">Tracker ↗</a>'
         )
+    # PR9 — the Ledger doorway: while a holding is open the Companies sub-row
+    # (which carries the Ledger sub-tab) is suppressed for reading cleanliness
+    # (UX9c), so this is the one-click way back to the Ledger without first
+    # clearing the holding. A plain panel hash (no ticker) — the shell's
+    # hashchange router lands on the Ledger tab exactly like clicking its
+    # sub-tab would.
+    links.append('<a href="#musings" title="Open the Ledger">Ledger</a>')
     return (
         '<div class="cc-holding-head">'
         f"{_combobox(ident.ticker, ident.name)}"

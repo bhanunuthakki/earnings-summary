@@ -53,8 +53,14 @@ def ctx(tmp_path: Path) -> tuple[FlaskClient, Path, int, int]:
     return client, db, task_id, proposal_id
 
 
-def test_research_fragment_renders_proposals_and_wonderings(ctx) -> None:
+def test_research_fragment_renders_proposals_and_wonderings(
+    ctx, monkeypatch: pytest.MonkeyPatch
+) -> None:
     client, _db, _task_id, _pid = ctx
+    # Pin the run flag OFF regardless of the machine .env (a bare load_dotenv()
+    # in production imports resolves the MAIN repo's .env from any nested
+    # worktree and injects LEDGER_RESEARCH_RUN=1 — the conftest FMP_TIER note).
+    monkeypatch.delenv("LEDGER_RESEARCH_RUN", raising=False)
     resp = client.get("/api/panel/musings?fragment=research")
     assert resp.status_code == 200
     body = resp.data.decode()
@@ -63,7 +69,13 @@ def test_research_fragment_renders_proposals_and_wonderings(ctx) -> None:
     assert (
         "do NU&#x27;s margins still hold?" in body or "do NU's margins" in body
     )  # the open wondering
-    assert "detection only" in body  # run flag off by default → no Research button
+    # Run flag off by default -> no per-card "Research it" button, just Dismiss.
+    # (PR9: the "runs are off" explanation moved to ONE section-level line —
+    # see test_ledger_panel.py's copy tests — so this fragment, which is just
+    # the list, carries no env-var-shaped text at all.)
+    assert "data-run-task" not in body
+    assert "Dismiss" in body
+    assert "LEDGER_RESEARCH_RUN" not in body
 
 
 def test_research_run_disabled_by_default(ctx, monkeypatch: pytest.MonkeyPatch) -> None:

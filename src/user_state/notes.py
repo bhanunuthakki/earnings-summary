@@ -399,6 +399,42 @@ def route_triage_note(
         conn.close()
 
 
+def set_ticker(
+    note_id: int,
+    *,
+    ticker: str,
+    db_path: Path | str | None = None,
+) -> AnalystNoteRow | None:
+    """Attribute a ``needs_ticker`` musing to one of its candidates (PR9 Ledger
+    set-ticker chips). Write-once-ish: refuses (raises ``ValueError``) when the
+    note already carries a ticker, so a stray second tap can never silently
+    reassign a note someone already attributed. Clears the now-stale
+    ``needs_ticker`` / ``ticker_candidates`` context keys on success. Returns
+    None when the note doesn't exist."""
+    ticker = ticker.strip().upper()
+    if not ticker:
+        raise ValueError("ticker must be non-empty")
+    conn = open_conn(db_path)
+    try:
+        row = conn.execute("SELECT * FROM analyst_notes WHERE id = ?", (note_id,)).fetchone()
+        if row is None:
+            return None
+        current = _row_to_dc(row)
+        if current.ticker is not None:
+            raise ValueError(f"note {note_id} already has ticker {current.ticker!r}")
+        ctx = dict(current.context or {})
+        ctx.pop("needs_ticker", None)
+        ctx.pop("ticker_candidates", None)
+        conn.execute(
+            "UPDATE analyst_notes SET ticker = ?, context_json = ?, updated_at = ? WHERE id = ?",
+            (ticker, json.dumps(ctx), now_iso(), note_id),
+        )
+        conn.commit()
+        return _fetch_one(conn, note_id)
+    finally:
+        conn.close()
+
+
 def resolve_note(
     note_id: int,
     *,

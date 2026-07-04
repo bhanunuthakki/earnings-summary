@@ -32,7 +32,7 @@ log = logging.getLogger(__name__)
 _CONFIRM: dict[str, str] = {
     "landed": "Captured.",
     "reading_landed": "Saved to On My Mind.",
-    "needs_ticker": "Captured. (Which ticker? Set it from the Ledger.)",
+    "needs_ticker": "Captured. (Which ticker? Tap a candidate in the Ledger.)",
     "transcription_failed": "Couldn't transcribe that one - I kept the audio, try again?",
     "no_audio": "That voice note came through empty - try again?",
 }
