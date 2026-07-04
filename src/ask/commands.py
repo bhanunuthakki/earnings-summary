@@ -119,12 +119,12 @@ def _review_command(repo_root: Path, text: str, registry: Registry | None) -> st
     coaching surface actually persists a scoreable memo instead of only ever
     rendering the free pre-analysis.
     """
-    from advisor.position_review import parse_review_command, review_reply_text
+    from advisor.position_review import resolve_review_target, review_reply_text
 
     reply = review_reply_text(repo_root, text)
     if registry is None or not _full_verdict_enabled():
         return reply
-    parsed = parse_review_command(text)
+    parsed = resolve_review_target(repo_root, text)
     if parsed is None:
         return reply  # usage message — nothing to review
     ticker, at_price = parsed
