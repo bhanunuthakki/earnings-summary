@@ -56,6 +56,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import db  # noqa: E402
 from compute.say_do import (  # noqa: E402
     CommitmentExtractionManifest,
     persist_manifest,
@@ -212,7 +213,7 @@ def _run_auto(
     }
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--list-pending", action="store_true")
@@ -240,9 +241,18 @@ def main() -> int:
         help="--auto only: extract + report but do not persist",
     )
     parser.add_argument("--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"))
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="[extract_commitments] %(message)s")
+
+    # An explicit --db must also reach the governed LLM cost ledger. The --auto
+    # path calls `call_llm(purpose="saydo_commitment_extract")`, which resolves
+    # the llm_calls DB (plus the budget check and the LLM_MODELS pin) from the
+    # `db.DB_PATH` process global — NOT from `open_db(args.db)`. Without this sync
+    # an explicit --db (from a worktree / non-default cwd) would land the cost row
+    # in the default DB, the "no such table: llm_calls" split-brain. Per the
+    # db.set_db_path contract this also re-points DATA_DIR / FMP_DIR.
+    db.set_db_path(args.db)
 
     conn = open_db(args.db)
     try:

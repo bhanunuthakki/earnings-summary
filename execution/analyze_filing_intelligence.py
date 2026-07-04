@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import db  # noqa: E402
 from llm_client import DEFAULT_MODEL, JSON_FENCE_RE, call_llm  # noqa: E402
 
 log = logging.getLogger("analyze_filing_intelligence")
@@ -294,13 +295,21 @@ Return ONLY the valid JSON object. No markdown fence, no commentary, no conversa
     return result
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ticker", required=True, help="Single ticker")
     parser.add_argument("--year", type=int, default=None, help="Specific year")
     parser.add_argument("--refresh", action="store_true", help="Ignore cache")
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    # An explicit --repo-root must also reach the governed LLM cost ledger. The
+    # deep `strategic_analysis` call resolves the llm_calls DB (plus the budget
+    # check and the LLM_MODELS pin) from the `db.DB_PATH` process global, which
+    # this script otherwise never syncs — so a run against another checkout's
+    # data/ (e.g. --repo-root <MAIN> from a worktree) would silently land the
+    # cost row in the default DB. set_db_path also re-points DATA_DIR / FMP_DIR.
+    db.set_db_path(args.repo_root / "data" / "portfolio.db")
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 

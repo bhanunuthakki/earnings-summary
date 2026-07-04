@@ -98,6 +98,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 import comments  # noqa: E402
+import db  # noqa: E402
 from comments import Comment, ThreadEntry  # noqa: E402
 from llm_client import (  # noqa: E402
     JSON_FENCE_RE,
@@ -1891,7 +1892,7 @@ def _resolve_latest_report_date(repo_root: Path, ticker: str) -> date | None:
         return None
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--ticker")
@@ -1916,8 +1917,18 @@ def main() -> int:
         action="store_true",
         help="skip the auto-rebuild after apply (debug only — leaves the workspace HTML stale vs the updated holdings JSON).",
     )
-    args = p.parse_args()
+    args = p.parse_args(argv)
     repo_root = args.repo_root.resolve()
+
+    # An explicit --repo-root must also reach the governed LLM cost ledger. The
+    # per-comment routers make many governed calls (edit_thesis, edit_structured,
+    # intake_classifier, company_description, …), each resolving the llm_calls DB
+    # (plus the budget check and the LLM_MODELS pin) from the `db.DB_PATH` process
+    # global, which this script otherwise never syncs — so a run against another
+    # checkout's data/ (e.g. --repo-root <MAIN> from a worktree) would silently
+    # land the cost rows in the default DB. set_db_path also re-points
+    # DATA_DIR / FMP_DIR.
+    db.set_db_path(repo_root / "data" / "portfolio.db")
 
     tickers: list[str]
     if args.ticker:
