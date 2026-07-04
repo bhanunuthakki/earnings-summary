@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -28,6 +29,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import comments_server  # noqa: E402
 
+from advisor.position_review import attest_review_changed  # noqa: E402
 from decision_calibration import CalibrationStats  # noqa: E402
 from integrations.portfolio_tracker_client import (  # noqa: E402
     LivePortfolio,
@@ -605,9 +607,16 @@ def _insert_review_memo(
     verdict_source: str,
     created_at: str,
     user_id: str = "bhanu",
+    source: str | None = None,
+    owner_attested_change: bool = False,
 ) -> int:
     import json
 
+    ctx: dict[str, object] = {"verdict_source": verdict_source}
+    if source is not None:
+        ctx["source"] = source
+    if owner_attested_change:
+        ctx["owner_attested_change"] = True
     conn = sqlite3.connect(str(db))
     try:
         cur = conn.execute(
@@ -618,7 +627,7 @@ def _insert_review_memo(
                 user_id,
                 ticker,
                 f"Position review: {ticker}",
-                json.dumps({"verdict_source": verdict_source}),
+                json.dumps(ctx),
                 created_at,
             ),
         )
@@ -655,14 +664,19 @@ def _insert_owner_decision(db: Path, *, ticker: str, kind: str, made_at: str) ->
         conn.close()
 
 
+# A fixed "now" well past the 30d window for the 2026-06-01 memos below, so the
+# candidate/window logic is deterministic (no dependence on the wall clock).
+_NOW = datetime(2026, 7, 15)
+
+
 def test_coach_pnl_all_zero_is_honest(tmp_path: Path) -> None:
     db = _memo_db(tmp_path)
-    pnl = _query_coach_pnl(db, user_id="bhanu")
+    pnl = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
     assert pnl.reviews_run == 0
     assert pnl.guard_fired == 0 and pnl.overridden == 0
     assert pnl.graded_right == 0 and pnl.graded_total == 0
-    assert pnl.changed == 0
-    html = _coach_pnl_section(db, user_id="bhanu")
+    assert pnl.changed == 0 and pnl.candidate == 0
+    html = _coach_pnl_section(db, user_id="bhanu", now=_NOW)
     assert "Reviews run: <b>0</b> — the guard has never been exercised." in html
 
 
@@ -674,12 +688,12 @@ def test_coach_pnl_counts_reviews_guard_fires_and_grades(tmp_path: Path) -> None
     )
     _insert_stance_score(db, m2, "correct")
 
-    pnl = _query_coach_pnl(db, user_id="bhanu")
+    pnl = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
     assert pnl.reviews_run == 2
     assert pnl.guard_fired == 1 and pnl.overridden == 1
     assert pnl.graded_total == 1 and pnl.graded_right == 1
 
-    html = _coach_pnl_section(db, user_id="bhanu")
+    html = _coach_pnl_section(db, user_id="bhanu", now=_NOW)
     assert "Reviews run: <b>2</b>" in html
     assert "guard fired: <b>1</b>" in html
     assert "overridden: <b>1</b>" in html
@@ -688,24 +702,131 @@ def test_coach_pnl_counts_reviews_guard_fires_and_grades(tmp_path: Path) -> None
     assert "/api/peek/memo/position_review" in html
 
 
-def test_coach_pnl_heuristic_counts_heeded_not_unheeded(tmp_path: Path) -> None:
-    """A guard_override with no contradicting owner sell/trim within 30d counts
-    as a changed decision; one immediately contradicted by an owner SELL does
-    not (the owner overrode the guard right back)."""
+def test_coach_pnl_candidate_split_and_attestation_promotes_to_changed(tmp_path: Path) -> None:
+    """An eligible-but-unconfirmed guard_override is a CANDIDATE, never a
+    changed decision (silence is the platform default, not evidence). Only an
+    explicit owner attestation counts toward the Q3'26 target — and once it
+    does, the row leaves the candidate line."""
     db = _memo_db(tmp_path)
-    # Heeded: guard said hold on NU, no sell/trim followed.
-    _insert_review_memo(
+    # Heeded-so-far: guard held NU, window elapsed, no sell/trim -> candidate.
+    nu_id = _insert_review_memo(
         db, ticker="NU", verdict_source="guard_override", created_at="2026-06-01T00:00:00"
     )
-    # Unheeded: guard said hold on META, owner sold 5 days later anyway.
+    # Contradicted: guard held META, owner sold 5 days later -> neither.
     _insert_review_memo(
         db, ticker="META", verdict_source="guard_override", created_at="2026-06-01T00:00:00"
     )
     _insert_owner_decision(db, ticker="META", kind="sell", made_at="2026-06-06T00:00:00")
 
-    pnl = _query_coach_pnl(db, user_id="bhanu")
+    pnl = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
     assert pnl.guard_fired == 2
-    assert pnl.changed == 1  # only NU's hold stuck
+    assert pnl.changed == 0  # nothing attested yet — the honest target reading is 0
+    assert pnl.candidate == 1  # only NU is eligible + unconfirmed
+
+    html = _coach_pnl_section(db, user_id="bhanu", now=_NOW)
+    assert "Decisions changed by the coach: <b>0</b>" in html
+    assert "Candidates (eligible, unconfirmed): <b>1</b>" in html
+
+    # The owner attests NU changed their call -> it promotes to a counted change.
+    assert attest_review_changed(db, nu_id) is True
+    pnl2 = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
+    assert pnl2.changed == 1 and pnl2.candidate == 0
+    html2 = _coach_pnl_section(db, user_id="bhanu", now=_NOW)
+    assert "Decisions changed by the coach: <b>1</b>" in html2
+    assert "Candidates (eligible, unconfirmed)" not in html2
+
+
+def test_coach_pnl_window_not_elapsed_excludes_candidate(tmp_path: Path) -> None:
+    """A guard_override whose 30d window hasn't fully elapsed is NOT yet a
+    candidate — a memo written today trivially has no later sell, which must not
+    tick the counter."""
+    db = _memo_db(tmp_path)
+    # Created 5 days before now: 5d < 30d window -> not eligible yet.
+    _insert_review_memo(
+        db, ticker="NU", verdict_source="guard_override", created_at="2026-07-10T00:00:00"
+    )
+    pnl = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
+    assert pnl.guard_fired == 1
+    assert pnl.changed == 0 and pnl.candidate == 0
+
+    # Once the window has elapsed (now well past memo + 30d) it becomes a candidate.
+    later = datetime(2026, 8, 20)
+    pnl_later = _query_coach_pnl(db, user_id="bhanu", now=later)
+    assert pnl_later.candidate == 1
+
+
+def test_coach_pnl_agent_source_reviews_are_excluded(tmp_path: Path) -> None:
+    """A review persisted by an agent/CI run (context source='agent') never
+    enters ANY count — reviews_run, guard_fired, or the change tally — so an
+    automated verification run can't inflate the owner-facing scoreboard."""
+    db = _memo_db(tmp_path)
+    # Owner-driven guard_override (no source tag = legacy owner row) -> counts.
+    _insert_review_memo(
+        db, ticker="NU", verdict_source="guard_override", created_at="2026-06-01T00:00:00"
+    )
+    # Agent verification run on the same shape -> fully excluded, even though
+    # it too is a guard_override with an elapsed window.
+    _insert_review_memo(
+        db,
+        ticker="RBRK",
+        verdict_source="guard_override",
+        created_at="2026-06-01T00:00:00",
+        source="agent",
+    )
+    pnl = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
+    assert pnl.reviews_run == 1  # only the owner row
+    assert pnl.guard_fired == 1
+    assert pnl.candidate == 1 and pnl.changed == 0
+
+    # Even an (illegitimately) attested agent row stays out of the changed count.
+    _insert_review_memo(
+        db,
+        ticker="WIX",
+        verdict_source="guard_override",
+        created_at="2026-06-01T00:00:00",
+        source="agent",
+        owner_attested_change=True,
+    )
+    pnl2 = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
+    assert pnl2.reviews_run == 1 and pnl2.changed == 0
+
+
+def test_coach_attest_change_route_marks_memo(client: FlaskClient, tmp_path: Path) -> None:
+    """POST /api/coach/attest-change flips a guard_override review's
+    owner_attested_change flag; a second POST is an idempotent no-op (never a
+    double-count), and a bad body 400s."""
+    db = tmp_path / "data" / "portfolio.db"
+    memo_id = _insert_review_memo(
+        db, ticker="NU", verdict_source="guard_override", created_at="2026-06-01T00:00:00"
+    )
+    resp = client.post("/api/coach/attest-change", json={"memo_id": memo_id})
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["ok"] is True and payload["attested"] is True
+
+    # Now the Coach P&L counts it as a changed decision.
+    pnl = _query_coach_pnl(db, user_id="bhanu", now=_NOW)
+    assert pnl.changed == 1 and pnl.candidate == 0
+
+    # Idempotent: a repeat attestation does not count twice.
+    again = client.post("/api/coach/attest-change", json={"memo_id": memo_id})
+    assert again.get_json()["attested"] is False
+    assert _query_coach_pnl(db, user_id="bhanu", now=_NOW).changed == 1
+
+    assert client.post("/api/coach/attest-change", json={}).status_code == 400
+
+
+def test_attest_review_changed_guardrails(tmp_path: Path) -> None:
+    """The write path never fabricates a positive: an unknown memo, another
+    user's memo, and a repeat attestation all return False."""
+    db = _memo_db(tmp_path)
+    memo_id = _insert_review_memo(
+        db, ticker="NU", verdict_source="guard_override", created_at="2026-06-01T00:00:00"
+    )
+    assert attest_review_changed(db, 9999) is False  # no such memo
+    assert attest_review_changed(db, memo_id, user_id="someone_else") is False  # not their memo
+    assert attest_review_changed(db, memo_id) is True  # the owner's, first time
+    assert attest_review_changed(db, memo_id) is False  # idempotent second click
 
 
 def test_coach_pnl_section_never_raises_on_missing_tables(tmp_path: Path) -> None:

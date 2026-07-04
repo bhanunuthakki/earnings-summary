@@ -79,6 +79,10 @@ def _start_full_verdict_job(
         str(repo_root / "execution" / "review_position.py"),
         ticker,
         "--verdict",
+        # An owner-typed /review in the app — tag it 'doorway' so the persisted
+        # memo counts in the Coach P&L (the CLI defaults to 'agent' otherwise).
+        "--source",
+        "doorway",
     ]
     if at_price is not None:
         argv.extend(["--at-price", str(at_price)])
