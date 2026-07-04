@@ -2,6 +2,7 @@
 
 **Mapped against:** `origin/main` @ `c46a21c` (2026-07-04). Main merges ~10 PRs/day — spot-check line refs against HEAD before filing renderer bugs.
 **How this doc was built:** 9 read-only mapping agents over the actual renderers/routes/client JS; copy strings are exact and safe to assert on.
+**Want the human version first?** Read [`guided_tour.md`](guided_tour.md) — a plain-words, sit-beside-you demo of a normal week in the app, with the *why* woven in. This doc is the exhaustive click-by-click manual; the tour is the story. Read the tour, then come here when you want every button.
 
 ## How to use
 - Walk Parts in order; Part 0 lists the env flags, services, and data prerequisites each surface needs — set up once.
