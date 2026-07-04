@@ -42,7 +42,7 @@ from datetime import UTC, datetime
 from html import escape
 from io import StringIO
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, cast
 
 from alerts import AlertRow, get_alert, list_alerts, list_queued_actions_for_alert
 from dashboard._card import render_alert_card
@@ -542,7 +542,12 @@ def render_fit_peek(repo_root: Path, ticker: str) -> str | None:
 def render_memo_peek(db_path: Path, kind: str) -> str | None:
     """The latest advisor memo of ``kind``, markdown-rendered, for the
     portfolio insights' "full memo →" peek. None on an unknown kind or when
-    no memo of that kind exists yet."""
+    no memo of that kind exists yet.
+
+    A guard_override ``position_review`` memo also gets the owner's one-click
+    "this review changed my call" attestation (see :func:`_memo_attest_foot`) —
+    the sole surface that can move the Coach P&L's Q3'26 "changed >= 1" bar,
+    reached from that panel's "reviews →" doorway."""
     if kind not in _MEMO_KINDS or not db_path.exists():
         return None
     try:
@@ -551,7 +556,7 @@ def render_memo_peek(db_path: Path, kind: str) -> str | None:
         return None
     try:
         row = conn.execute(
-            "SELECT title, body_md, created_at FROM advisor_memos "
+            "SELECT id, title, body_md, created_at, context_json FROM advisor_memos "
             "WHERE kind = ? ORDER BY created_at DESC LIMIT 1",
             (kind,),
         ).fetchone()
@@ -561,14 +566,97 @@ def render_memo_peek(db_path: Path, kind: str) -> str | None:
         conn.close()
     if row is None:
         return None
-    title, body_md, created_at = str(row[0]), str(row[1]), str(row[2])
+    memo_id, title, body_md, created_at = int(row[0]), str(row[1]), str(row[2]), str(row[3])
+    foot = _memo_attest_foot(kind, memo_id, row[4])
     return (
         '<div class="cc-peek-memo">'
         f'<div class="cc-peek-memo-head"><h2>{escape(title)}</h2>'
         f"{stamp_html(created_at, mode='date')}</div>"
         f'<div class="synthesis-body">{render_prose(body_md[:20000])}</div>'
+        f"{foot}"
         "</div>"
     )
+
+
+def _memo_attest_foot(kind: str, memo_id: int, context_raw: object) -> str:
+    """The owner's one-click "this review changed my call" attestation, rendered
+    ONLY on a guard_override ``position_review`` memo that hasn't been attested
+    yet. Attestation is the sole input the Coach P&L counts toward its Q3'26
+    "changed >= 1" bar (the silence-implies-heeded heuristic feeds only the
+    separate "candidate" line), so this button is the one surface that can move
+    it. Any other kind, a non-override review, or an already-attested memo
+    renders nothing."""
+    if kind != "position_review":
+        return ""
+    ctx: dict[str, object] = {}
+    if context_raw:
+        try:
+            parsed = json.loads(str(context_raw))
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, dict):
+            ctx = cast("dict[str, object]", parsed)
+    if ctx.get("verdict_source") != "guard_override":
+        return ""
+    if ctx.get("owner_attested_change") is True:
+        return (
+            '<div class="cc-peek-attest cc-peek-attest-done">'
+            "&#10003; You confirmed this review changed your call &mdash; it counts toward "
+            "the coach&rsquo;s Q3&rsquo;26 bar.</div>"
+        )
+    return (
+        '<div class="cc-peek-attest">'
+        '<button type="button" class="k-btn k-btn-sm cc-attest-btn" '
+        f'data-attest-memo-id="{memo_id}">This review changed my call</button>'
+        '<span class="cc-attest-msg" hidden></span>'
+        f"</div><style>{_ATTEST_CSS}</style><script>{_ATTEST_JS}</script>"
+    )
+
+
+_ATTEST_CSS = """
+.cc-peek-attest { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline);
+  display: flex; align-items: center; gap: 10px; }
+.cc-peek-attest-done { color: var(--fg-soft); font-size: var(--fs-micro); }
+.cc-attest-msg { font-size: var(--fs-micro); color: var(--fg-soft); }
+""".strip()
+
+# POSTs {memo_id} to /api/coach/attest-change (the same Origin-guarded action
+# family /api/coach/unmute uses), then reflects the result in place. A confirmed
+# attestation is what promotes a "candidate" to a counted "changed" decision on
+# the Coach P&L; the button self-disables so a second click can't double-count
+# (the server is idempotent regardless — attest_review_changed no-ops if set).
+_ATTEST_JS = """
+(function () {
+  if (window.__ccAttestWired) return;
+  window.__ccAttestWired = true;
+  document.addEventListener('click', function (ev) {
+    var btn = ev.target && ev.target.closest ? ev.target.closest('button[data-attest-memo-id]') : null;
+    if (!btn || btn.disabled) return;
+    var wrap = btn.closest('.cc-peek-attest');
+    var msg = wrap ? wrap.querySelector('.cc-attest-msg') : null;
+    function say(t) { if (msg) { msg.hidden = false; msg.textContent = t; } }
+    var label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Recording\\u2026';
+    fetch('/api/coach/attest-change', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ memo_id: Number(btn.getAttribute('data-attest-memo-id')) })
+    }).then(function (resp) {
+      return resp.json().then(function (j) { return { ok: resp.ok, body: j }; });
+    }).then(function (r) {
+      if (r.ok && r.body && r.body.attested) {
+        btn.textContent = '\\u2713 Recorded';
+        say('Counts toward the coach\\u2019s Q3\\u201926 bar.');
+      } else {
+        btn.disabled = false;
+        btn.textContent = label;
+        say((r.body && r.body.error) || 'Already recorded.');
+      }
+    }).catch(function (e) { btn.disabled = false; btn.textContent = label; say(e.message); });
+  });
+})();
+""".strip()
 
 
 # ----------------------------------------------------------------------------

@@ -43,7 +43,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from advisor.position_review import (  # noqa: E402
+    AGENT_SOURCE,
     CONCENTRATION_PCT,
+    REVIEW_SOURCES,
     PositionReview,
     PreAnalysis,
     build_pre_analysis,
@@ -155,6 +157,16 @@ def main() -> int:
         action="store_true",
         help="with --verdict, run the LLM verdict but skip persisting the advisor_memos row",
     )
+    ap.add_argument(
+        "--source",
+        choices=REVIEW_SOURCES,
+        default=AGENT_SOURCE,
+        help=(
+            "provenance tag written to the persisted memo (default: agent). Owner-driven "
+            "surfaces pass their own; the DEFAULT 'agent' keeps automated/verification runs "
+            "OUT of the owner-facing Coach P&L (a hand-run owner CLI should pass --source cli)"
+        ),
+    )
     args = ap.parse_args()
 
     if args.verdict:
@@ -165,6 +177,7 @@ def main() -> int:
             api_url=args.api_url,
             db_path=args.db,
             persist=not args.no_persist,
+            source=args.source,
         )
         if args.json:
             print(

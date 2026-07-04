@@ -33,6 +33,7 @@ top-level ``db`` import triggers ``init_db``).
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from dataclasses import dataclass, replace
@@ -49,11 +50,15 @@ if TYPE_CHECKING:
     from compute.thesis_evaluator import ThesisVerdict
 
 __all__ = [
+    "AGENT_SOURCE",
     "BAND_TOLERANCE",
     "CONCENTRATION_PCT",
     "CONFIDENCES",
     "DEFAULT_MOS_BAR",
+    "OWNER_ATTESTED_KEY",
     "POSITION_REVIEW_PURPOSE",
+    "REVIEW_SOURCES",
+    "REVIEW_SOURCE_KEY",
     "SELL_OVER_UNDER",
     "SUGGESTED_EXPRESSIONS",
     "TRIM_OVER_UNDER",
@@ -62,6 +67,7 @@ __all__ = [
     "VerdictOutput",
     "apply_behavioral_guard",
     "assemble_pre_analysis",
+    "attest_review_changed",
     "build_pre_analysis",
     "classify_valuation",
     "classify_weight_band",
@@ -339,8 +345,6 @@ def _load_holdings_json(repo_root: Path, ticker: str) -> dict[str, object] | Non
     """Read ``micro_thesis/holdings/<TICKER>.json`` defensively; None on any
     read/parse failure or a non-object payload (so an unencoded name — FLKR —
     degrades cleanly to ``thesis_present=False``)."""
-    import json
-
     path = repo_root.joinpath(*_HOLDINGS_SUBDIR) / f"{ticker.upper()}.json"
     if not path.exists():
         return None
@@ -508,6 +512,23 @@ def build_pre_analysis(
 # --------------------------------------------------------------------------- #
 
 POSITION_REVIEW_PURPOSE = "position_review"
+
+# --------------------------------------------------------------------------- #
+# Provenance + attestation context keys (read by the Coach P&L scoreboard —
+# pipeline.allocation_decisions_panel — to keep agent/CI runs out of the
+# owner-facing counts, and to count a "decision changed by the coach" ONLY on
+# an explicit owner attestation, never on the silence-implies-heeded proxy).
+# --------------------------------------------------------------------------- #
+# Which surface persisted a review memo. Owner-driven surfaces (doorway/cli/
+# telegram) count in the Coach P&L; ``agent`` (verification/CI runs) is excluded
+# so an automated smoke run can never inflate the coach's scoreboard.
+REVIEW_SOURCE_KEY = "source"
+AGENT_SOURCE = "agent"
+REVIEW_SOURCES: tuple[str, ...] = ("doorway", "cli", "telegram", AGENT_SOURCE)
+# Set True only by :func:`attest_review_changed` (the owner's one-click "this
+# review changed my call"); the Q3'26 "changed >= 1" bar counts these alone.
+OWNER_ATTESTED_KEY = "owner_attested_change"
+
 CONFIDENCES: tuple[str, ...] = ("high", "medium", "low")
 SUGGESTED_EXPRESSIONS: tuple[str, ...] = (
     "trim-to-target",
@@ -903,8 +924,70 @@ def _tax_context(tax: PositionTaxView | None) -> dict[str, object] | None:
     return out
 
 
+def attest_review_changed(
+    db_path: Path | str | None, memo_id: int, *, user_id: str = DEFAULT_USER_ID
+) -> bool:
+    """Record the owner's explicit attestation that a position-review memo
+    changed their call — merges ``owner_attested_change=True`` into the memo's
+    ``context_json``.
+
+    This is the SOLE input that moves the Coach P&L's Q3'26 "changed >= 1" bar:
+    the silence-implies-heeded window heuristic feeds only the separate
+    "candidate" line, never the target counter (see
+    ``pipeline.allocation_decisions_panel._coach_change_tally``). So attestation
+    must be an explicit owner action, not something an agent run or the passage
+    of time can synthesize.
+
+    Returns True when a matching, not-yet-attested ``position_review`` memo owned
+    by ``user_id`` was updated; False on any miss (unknown / other-kind /
+    other-owner memo, already attested, or a DB/JSON error). Never raises and
+    never fabricates a positive — the counter it feeds must stay honest.
+    """
+    from db_paths import resolve_db_path
+
+    resolved = resolve_db_path(db_path)
+    if resolved is None or not Path(resolved).exists():
+        return False
+    try:
+        conn = sqlite3.connect(str(resolved))
+    except sqlite3.Error:
+        return False
+    try:
+        row = conn.execute(
+            "SELECT context_json FROM advisor_memos WHERE id = ? AND user_id = ? AND kind = ?",
+            (memo_id, user_id, POSITION_REVIEW_PURPOSE),
+        ).fetchone()
+        if row is None:
+            return False
+        ctx: dict[str, object] = {}
+        if row[0]:
+            try:
+                parsed = json.loads(str(row[0]))
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict):
+                ctx = cast("dict[str, object]", parsed)
+        if ctx.get(OWNER_ATTESTED_KEY) is True:
+            return False  # idempotent — a second click is not a second changed decision
+        ctx[OWNER_ATTESTED_KEY] = True
+        conn.execute(
+            "UPDATE advisor_memos SET context_json = ? WHERE id = ?", (json.dumps(ctx), memo_id)
+        )
+        conn.commit()
+        return True
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+
+
 def _persist_review(
-    pre: PreAnalysis, out: VerdictOutput, *, user_id: str, db_path: Path | str | None
+    pre: PreAnalysis,
+    out: VerdictOutput,
+    *,
+    user_id: str,
+    db_path: Path | str | None,
+    source: str,
 ) -> int | None:
     from advisor.memos import DEFAULT_HORIZON_DAYS, persist_memo
     from db_paths import resolve_db_path
@@ -921,6 +1004,9 @@ def _persist_review(
         "suggested_expression": out.suggested_expression,
         "verdict_source": out.verdict_source,
         "at_price": pre.at_price,
+        # Which surface ran this review — the Coach P&L excludes 'agent' so a
+        # verification/CI run never enters the owner-facing scoreboard.
+        REVIEW_SOURCE_KEY: source,
     }
     tax_context = _tax_context(pre.tax)
     if tax_context is not None:
@@ -950,6 +1036,7 @@ def review_position(
     api_url: str | None = None,
     db_path: Path | str | None = None,
     persist: bool = True,
+    source: str = AGENT_SOURCE,
 ) -> PositionReview:
     """End-to-end position review: grounded pre-analysis -> governed LLM verdict
     -> deterministic behavioral guard -> persisted memo.
@@ -959,6 +1046,12 @@ def review_position(
     ground a fundamentals call on. Otherwise the verdict is produced by the
     governed ``position_review`` LLM purpose (model-picked, cost-logged,
     schema-validated) and then passed through the behavioral guard.
+
+    ``source`` (one of :data:`REVIEW_SOURCES`) tags the persisted memo with the
+    surface that ran it. It DEFAULTS to ``agent`` — the integrity-safe default —
+    so a library/CLI/test invocation never silently inflates the owner-facing
+    Coach P&L; owner surfaces (the Holding-band doorway, the Ask/Telegram
+    ``/review`` command, a hand-run CLI) opt in with their own source.
     """
     pre = build_pre_analysis(
         repo_root, ticker, at_price=at_price, user_id=user_id, api_url=api_url, db_path=db_path
@@ -992,7 +1085,11 @@ def review_position(
             pre, parse_verdict_output(cast("dict[str, object]", payload)), graded_line=graded_line
         )
 
-    memo_id = _persist_review(pre, out, user_id=user_id, db_path=db_path) if persist else None
+    memo_id = (
+        _persist_review(pre, out, user_id=user_id, db_path=db_path, source=source)
+        if persist
+        else None
+    )
     return PositionReview(pre=pre, output=out, memo_id=memo_id)
 
 

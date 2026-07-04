@@ -253,6 +253,58 @@ def test_peek_memo_unknown_kind_and_missing_row_404(client: FlaskClient) -> None
     assert client.get("/api/peek/memo/swap_check").status_code == 404
 
 
+def _seed_review_memo(
+    db_path: Path, *, verdict_source: str, attested: bool = False, ticker: str = "NU"
+) -> None:
+    import json
+
+    ctx: dict[str, object] = {"verdict_source": verdict_source}
+    if attested:
+        ctx["owner_attested_change"] = True
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO advisor_memos (user_id, kind, ticker, title, body_md, context_json, "
+            "created_at) VALUES ('bhanu', 'position_review', ?, 'Position review: NU', 'body', "
+            "?, '2026-06-10 12:00:00')",
+            (ticker, json.dumps(ctx)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_peek_memo_review_shows_attest_button_for_guard_override(
+    client: FlaskClient, db_path: Path
+) -> None:
+    """A guard_override position-review memo peek carries the owner's one-click
+    'this review changed my call' attestation (the only surface that moves the
+    Coach P&L's Q3'26 bar)."""
+    _seed_review_memo(db_path, verdict_source="guard_override")
+    body = client.get("/api/peek/memo/position_review").data.decode()
+    assert "This review changed my call" in body
+    assert "data-attest-memo-id" in body
+    assert "/api/coach/attest-change" in body
+
+
+def test_peek_memo_review_already_attested_shows_confirmation(
+    client: FlaskClient, db_path: Path
+) -> None:
+    _seed_review_memo(db_path, verdict_source="guard_override", attested=True)
+    body = client.get("/api/peek/memo/position_review").data.decode()
+    assert "changed your call" in body  # the confirmation line
+    assert "This review changed my call" not in body  # button gone once attested
+
+
+def test_peek_memo_review_no_button_for_plain_llm_verdict(
+    client: FlaskClient, db_path: Path
+) -> None:
+    _seed_review_memo(db_path, verdict_source="llm")
+    body = client.get("/api/peek/memo/position_review").data.decode()
+    assert "This review changed my call" not in body
+    assert "data-attest-memo-id" not in body
+
+
 # ----------------------------------------------------------------------------
 # /api/peek/review (PR5 — the instant position-review read + escalation button)
 # ----------------------------------------------------------------------------

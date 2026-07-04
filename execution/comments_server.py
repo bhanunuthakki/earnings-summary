@@ -2610,6 +2610,27 @@ def create_app(
         unmuted = unmute(class_, db_path=db_path)
         return {"class_": class_, "ok": True, "unmuted": unmuted}
 
+    @app.route("/api/coach/attest-change", methods=["POST", "OPTIONS"])
+    def coach_attest_change_api():
+        """Record the owner's explicit "this review changed my call" attestation
+        on a guard_override position_review memo — the SOLE input that moves the
+        Coach P&L's Q3'26 "changed >= 1" bar (the silence-implies-heeded window
+        heuristic feeds only the separate "candidate" line, never the target).
+        JSON body: {"memo_id": int}. CSRF-guarded by the global Origin check.
+        ``attested`` is False when nothing matched or it was already recorded —
+        the counter it feeds must never be inflated by a no-op click."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from advisor.position_review import attest_review_changed
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        try:
+            memo_id = int(cast("int", body.get("memo_id")))
+        except (TypeError, ValueError):
+            return ({"error": "memo_id (int) required"}, 400)
+        attested = attest_review_changed(db_path, memo_id)
+        return {"memo_id": memo_id, "ok": True, "attested": attested}
+
     @app.route("/source/<int:doc_id>", methods=["GET"])
     def source_viewer(doc_id: int):
         """In-app source viewers (P3.5). Routes by doc_type: processed
@@ -3653,6 +3674,10 @@ def create_app(
             "--verdict",
             "--db",
             str(db_path),
+            # An in-app owner click — tag it so it counts in the Coach P&L (the
+            # CLI defaults to 'agent', which would exclude it).
+            "--source",
+            "doorway",
         ]
         try:
             job = job_registry.start(ticker=ticker, kind="position-review", argv=argv)

@@ -53,6 +53,7 @@ from datetime import datetime, timedelta
 from html import escape
 from pathlib import Path
 from statistics import median
+from typing import cast
 
 from attribution import SkillDecomposition, decompose_alpha
 from calibration_guard import confidence_note, is_confident
@@ -571,9 +572,9 @@ def _conviction_by_ticker(audit: list[SizingAuditRow]) -> dict[str, float]:
 # the title tooltip alongside the heuristic that counts toward it.
 COACH_CHANGED_TARGET = 1
 
-# How long after a guard_override memo we wait for a contradicting owner
-# sell/trim before crediting the coach with a "changed decision" (v1
-# heuristic — see _coach_changed_count docstring).
+# How long after a guard_override memo the window runs: only once it has fully
+# ELAPSED with no contradicting owner sell/trim is the review a "candidate"
+# (never counted toward the target — see _coach_change_tally docstring).
 _COACH_CHANGE_WINDOW_DAYS = 30
 _SELL_TRIM_KINDS = ("trim", "sell")
 
@@ -593,7 +594,14 @@ class CoachPnl:
     the same query.
     ``graded_right`` — of the reviews that have been graded (``stance_scores``
     joined by ``memo_id``), how many graded ``correct``.
-    ``changed`` — see ``_coach_changed_count``.
+    ``changed`` / ``candidate`` — see ``_coach_change_tally``. ``changed`` counts
+    ONLY guard_override reviews the owner explicitly attested changed their call
+    (the Q3'26 target); ``candidate`` counts the eligible-but-unconfirmed ones
+    (window elapsed, no contradicting owner sell/trim, no attestation yet) —
+    surfaced honestly but kept OUT of the target so silence can't satisfy it.
+
+    Every count excludes ``source == 'agent'`` memos (verification/CI runs), so
+    an automated review never enters the owner-facing scoreboard.
     """
 
     reviews_run: int
@@ -602,34 +610,62 @@ class CoachPnl:
     graded_right: int
     graded_total: int
     changed: int
+    candidate: int
 
 
-def _query_coach_pnl(db_path: Path, *, user_id: str) -> CoachPnl:
+def _memo_context(raw: object) -> dict[str, object]:
+    """Parse an ``advisor_memos.context_json`` cell to a dict; ``{}`` on NULL,
+    non-JSON, or a non-object payload (so a malformed row degrades, never
+    raises)."""
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(str(raw))
+    except ValueError:
+        return {}
+    return cast("dict[str, object]", parsed) if isinstance(parsed, dict) else {}
+
+
+def _query_coach_pnl(db_path: Path, *, user_id: str, now: datetime | None = None) -> CoachPnl:
     """Read-only aggregate over advisor_memos (+ stance_scores, + decisions for
-    the heuristic). Every query degrades to zero on a missing/partial table —
-    a thin DB must never 500 the panel (REQ-7's all-zero state IS the honest
-    answer, not an error)."""
+    the change heuristic). Every query degrades to zero on a missing/partial
+    table — a thin DB must never 500 the panel (REQ-7's all-zero state IS the
+    honest answer, not an error).
+
+    ``source == 'agent'`` reviews (verification/CI runs) are dropped up front so
+    they never enter ANY count — the scoreboard reflects owner-driven reviews
+    only. ``now`` (defaults to :func:`datetime.now`) is injected so the
+    window-elapsed candidate rule is deterministic under test.
+    """
+    # Lazy import: ``advisor.context`` imports THIS module, so importing anything
+    # from the ``advisor`` package at module top would form a cycle. By render
+    # time the package is fully initialized, so the import here is safe + cheap.
+    from advisor.position_review import AGENT_SOURCE, OWNER_ATTESTED_KEY, REVIEW_SOURCE_KEY
+
+    now = now or datetime.now()
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
-        review_rows = _safe_rows(
+        raw_rows = _safe_rows(
             conn,
             "SELECT id, ticker, context_json, created_at FROM advisor_memos "
             "WHERE user_id = ? AND kind = 'position_review'",
             (user_id,),
         )
-        reviews_run = len(review_rows)
+        review_rows: list[sqlite3.Row] = []
         guard_ids: list[int] = []
-        for r in review_rows:
-            ctx_raw = r["context_json"]
-            if not ctx_raw:
-                continue
-            try:
-                ctx = json.loads(str(ctx_raw))
-            except ValueError:
-                continue
-            if isinstance(ctx, dict) and ctx.get("verdict_source") == "guard_override":
-                guard_ids.append(int(r["id"]))
+        attested_ids: set[int] = set()
+        for r in raw_rows:
+            ctx = _memo_context(r["context_json"])
+            if ctx.get(REVIEW_SOURCE_KEY) == AGENT_SOURCE:
+                continue  # an automated run — never counts on the owner's scoreboard
+            review_rows.append(r)
+            if ctx.get("verdict_source") == "guard_override":
+                gid = int(r["id"])
+                guard_ids.append(gid)
+                if ctx.get(OWNER_ATTESTED_KEY) is True:
+                    attested_ids.add(gid)
+        reviews_run = len(review_rows)
         guard_fired = len(guard_ids)
 
         graded_total = 0
@@ -649,7 +685,9 @@ def _query_coach_pnl(db_path: Path, *, user_id: str) -> CoachPnl:
             graded_total = len(latest_by_memo)
             graded_right = sum(1 for v in latest_by_memo.values() if v == "correct")
 
-        changed = _coach_changed_count(conn, review_rows, guard_ids)
+        changed, candidate = _coach_change_tally(
+            conn, review_rows, guard_ids, attested_ids, now=now
+        )
     finally:
         conn.close()
     return CoachPnl(
@@ -659,58 +697,89 @@ def _query_coach_pnl(db_path: Path, *, user_id: str) -> CoachPnl:
         graded_right=graded_right,
         graded_total=graded_total,
         changed=changed,
+        candidate=candidate,
     )
 
 
-def _coach_changed_count(
-    conn: sqlite3.Connection, review_rows: list[sqlite3.Row], guard_ids: list[int]
-) -> int:
-    """v1 heuristic for "decisions changed by the coach" (REQ-7's literal
-    Q3'26 target counter): a ``guard_override`` review counts as a changed
-    decision when the owner did NOT record a contradicting sell/trim on that
-    same ticker within ``_COACH_CHANGE_WINDOW_DAYS`` of the memo — i.e. the
-    guard said hold, and the owner's subsequent recorded behavior didn't
-    override it. This is a proxy, not a causal claim (the owner may simply
-    have agreed already, or never revisited it) — documented here AND
-    surfaced in the rendered title tooltip so the number is never read as
-    more certain than it is."""
+def _coach_change_tally(
+    conn: sqlite3.Connection,
+    review_rows: list[sqlite3.Row],
+    guard_ids: list[int],
+    attested_ids: set[int],
+    *,
+    now: datetime,
+) -> tuple[int, int]:
+    """Split guard_override reviews into ``(changed, candidate)`` for the Coach
+    P&L's Q3'26 "changed >= 1" bar.
+
+    ``changed`` counts ONLY reviews the owner explicitly attested changed their
+    call (``owner_attested_change`` in ``attested_ids``). That attestation is
+    authoritative: it is counted regardless of the window or any later sell —
+    the owner said so directly. This is the only thing that moves the target,
+    because owner inaction is the platform's DEFAULT state (sells enter the
+    ledger only via irregular tracker reconciles/pledges), so "no contradicting
+    sell" cannot by itself be evidence the coach changed anything.
+
+    ``candidate`` counts the eligible-but-UNCONFIRMED reviews — the old v1
+    proxy, demoted out of the target: a guard_override whose
+    ``_COACH_CHANGE_WINDOW_DAYS`` window has fully ELAPSED (``now`` past the
+    window end — a memo created today is never eligible, it just hasn't had time
+    to be contradicted) with no owner sell/trim recorded on that ticker inside
+    the window, and no attestation yet. These are surfaced honestly as
+    "candidates" and invite a one-click confirmation, but never satisfy the bar
+    on their own.
+    """
     if not guard_ids:
-        return 0
+        return 0, 0
     by_id = {int(r["id"]): r for r in review_rows}
     changed = 0
+    candidate = 0
     for gid in guard_ids:
+        if gid in attested_ids:
+            changed += 1  # explicit owner attestation — authoritative, window-independent
+            continue
         row = by_id.get(gid)
         if row is None or not row["ticker"]:
             continue
-        ticker = str(row["ticker"]).upper()
         try:
             memo_at = datetime.fromisoformat(str(row["created_at"]))
         except ValueError:
             continue
-        window_end = (memo_at + timedelta(days=_COACH_CHANGE_WINDOW_DAYS)).isoformat()
+        window_end = memo_at + timedelta(days=_COACH_CHANGE_WINDOW_DAYS)
+        if now < window_end:
+            continue  # window still open — silence so far proves nothing yet
+        ticker = str(row["ticker"]).upper()
         marks = ",".join("?" for _ in _SELL_TRIM_KINDS)
         contradicting = _safe_rows(
             conn,
             f"SELECT 1 FROM decisions WHERE ticker = ? AND decided_by = 'owner' "
             f"AND recommendation_kind IN ({marks}) "
             "AND made_at > ? AND made_at <= ? LIMIT 1",
-            (ticker, *_SELL_TRIM_KINDS, row["created_at"], window_end),
+            (ticker, *_SELL_TRIM_KINDS, row["created_at"], window_end.isoformat()),
         )
         if not contradicting:
-            changed += 1
-    return changed
+            candidate += 1
+    return changed, candidate
 
 
-def _coach_pnl_section(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
+def _coach_pnl_section(
+    db_path: Path, *, user_id: str = DEFAULT_USER_ID, now: datetime | None = None
+) -> str:
     """The Coach P&L block (REQ-7) — mounted beside the coach's-read scorecard.
     Never raises: a missing advisor_memos/stance_scores/decisions table (a
     hand-DDL test fixture, or a DB stamped pre-0077) degrades every count to
     zero, which IS the honest all-zero line, not a swallowed error."""
     try:
-        pnl = _query_coach_pnl(db_path, user_id=user_id)
+        pnl = _query_coach_pnl(db_path, user_id=user_id, now=now)
     except sqlite3.OperationalError:
         pnl = CoachPnl(
-            reviews_run=0, guard_fired=0, overridden=0, graded_right=0, graded_total=0, changed=0
+            reviews_run=0,
+            guard_fired=0,
+            overridden=0,
+            graded_right=0,
+            graded_total=0,
+            changed=0,
+            candidate=0,
         )
     head = (
         '<section class="panel cpnl"><h2>Coach P&amp;L</h2>'
@@ -734,13 +803,26 @@ def _coach_pnl_section(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
             f"overridden: <b>{pnl.overridden}</b> &middot; {graded_bits}</p>"
         )
     tooltip = (
-        "v1 heuristic: a guard_override review counts as changed when no owner sell/trim "
-        f"on that ticker was recorded within {_COACH_CHANGE_WINDOW_DAYS}d of the memo — a "
-        "proxy, not a causal claim."
+        "Counts a guard_override review toward the target ONLY when the owner explicitly "
+        "attested it changed their call (one click on the review). Silence never counts: "
+        "owner inaction is the default state, so 'no contradicting sell' is not evidence."
     )
     target_line = (
         f'<p class="cpnl-line" title="{escape(tooltip)}">Decisions changed by the coach: '
         f"<b>{pnl.changed}</b> &middot; Q3&rsquo;26 target: <b>{COACH_CHANGED_TARGET}</b></p>"
+    )
+    cand_tooltip = (
+        f"Eligible but unconfirmed: a guard hold that has stuck {_COACH_CHANGE_WINDOW_DAYS}d "
+        "with no owner sell/trim on that ticker, but the owner hasn't attested it changed "
+        "their call. A proxy, not a causal claim — so it does NOT count toward the target. "
+        "Confirm it on the review to promote it to a changed decision."
+    )
+    candidate_line = (
+        f'<p class="cpnl-line cpnl-candidate" title="{escape(cand_tooltip)}">'
+        f"Candidates (eligible, unconfirmed): <b>{pnl.candidate}</b> "
+        "&mdash; confirm on the review to count.</p>"
+        if pnl.candidate
+        else ""
     )
     doorway = (
         '<p class="cpnl-line"><a href="#advisor_memos" '
@@ -749,7 +831,7 @@ def _coach_pnl_section(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
         if pnl.reviews_run
         else ""
     )
-    return f"{head}{review_line}{target_line}{doorway}</section>"
+    return f"{head}{review_line}{target_line}{candidate_line}{doorway}</section>"
 
 
 # --------------------------------------------------------------------------- #
