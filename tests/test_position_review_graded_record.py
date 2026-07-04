@@ -124,7 +124,9 @@ def test_none_when_only_non_owner_or_non_sell_rows(db_path: Path) -> None:
 
 
 def test_counts_and_ticker_list(db_path: Path) -> None:
-    # 5 of 8 wrong across a mix of sell/trim, owner rows only.
+    # 5 of 8 wrong across a mix of sell/trim, owner rows only. n=8 is below
+    # calibration_guard.MIN_CONFIDENT_N, so the line carries the guard's
+    # canonical sparse-n hedge — never a bare rate on a thin denominator.
     for t in ("MU", "TSM", "NVDA", "AMZN", "GOOGL"):
         _insert_decision(db_path, ticker=t, outcome_label="wrong")
     _insert_decision(db_path, ticker="RBRK", recommendation_kind="trim", outcome_label="correct")
@@ -133,7 +135,10 @@ def test_counts_and_ticker_list(db_path: Path) -> None:
         db_path, ticker="NOW", recommendation_kind="trim", outcome_label="unfalsifiable"
     )
     line = graded_sell_record(db_path)
-    assert line == "Graded record on sells/trims: 5 of 8 wrong (AMZN, GOOGL, MU, NVDA, TSM)"
+    assert line == (
+        "Graded record on sells/trims: 5 of 8 wrong (AMZN, GOOGL, MU, NVDA, TSM)"
+        " — n=8, low confidence"
+    )
 
 
 def test_excludes_non_owner_and_pending_rows_from_the_count(db_path: Path) -> None:
@@ -144,15 +149,27 @@ def test_excludes_non_owner_and_pending_rows_from_the_count(db_path: Path) -> No
     # Still pending — excluded.
     _insert_decision(db_path, ticker="BN", outcome_label="pending")
     line = graded_sell_record(db_path)
-    assert line == "Graded record on sells/trims: 1 of 2 wrong (MU)"
+    assert line == "Graded record on sells/trims: 1 of 2 wrong (MU) — n=2, low confidence"
 
 
 def test_zero_wrong_omits_ticker_parenthetical(db_path: Path) -> None:
     _insert_decision(db_path, ticker="NU", outcome_label="correct")
     _insert_decision(db_path, ticker="MELI", recommendation_kind="trim", outcome_label="mixed")
     line = graded_sell_record(db_path)
-    assert line == "Graded record on sells/trims: 0 of 2 wrong"
+    assert line == "Graded record on sells/trims: 0 of 2 wrong — n=2, low confidence"
     assert "(" not in line
+
+
+def test_confident_denominator_asserts_bare(db_path: Path) -> None:
+    # At n >= MIN_CONFIDENT_N (10) the rate may be asserted without a hedge —
+    # the denominator is already visible in "of 10".
+    for t in ("MU", "TSM", "NVDA"):
+        _insert_decision(db_path, ticker=t, outcome_label="wrong")
+    for t in ("RBRK", "NU", "MELI", "NOW", "WIX", "BN", "GOOGL"):
+        _insert_decision(db_path, ticker=t, recommendation_kind="trim", outcome_label="correct")
+    line = graded_sell_record(db_path)
+    assert line == "Graded record on sells/trims: 3 of 10 wrong (MU, NVDA, TSM)"
+    assert "low confidence" not in line
 
 
 # --------------------------------------------------------------------------- #
@@ -207,6 +224,18 @@ def test_guard_override_cites_live_graded_line_not_hardcoded_names() -> None:
     assert "MU, TSM, NVDA, AMZN, GOOGL" in guarded.behavioral_check
     # The stale hand-authored 3-ticker literal is gone from the codebase path.
     assert "MU/GOOGL/TSM" not in guarded.behavioral_check
+
+
+def test_guard_override_ticker_extraction_survives_the_sparse_hedge() -> None:
+    # graded_sell_record now suffixes a sparse-n hedge after the ticker
+    # parenthetical — the pattern phrase must still pull the tickers (the
+    # old end-anchored regex would fall back to the whole line) and must not
+    # drag the hedge prose into the override copy.
+    graded_line = "Graded record on sells/trims: 5 of 6 wrong (MU, TSM) — n=6, low confidence"
+    guarded = apply_behavioral_guard(_PRE, _trim_output(), graded_line=graded_line)
+    assert guarded.verdict == "hold"
+    assert "sell-winners-too-early pattern (MU, TSM)" in guarded.behavioral_check
+    assert "low confidence" not in guarded.behavioral_check
 
 
 def test_guard_override_degrades_to_generic_phrase_without_graded_line() -> None:

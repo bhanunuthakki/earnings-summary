@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from advisor.store import STANCES
+from calibration_guard import confidence_note, is_confident
 from identity import DEFAULT_USER_ID
 
 if TYPE_CHECKING:
@@ -534,14 +535,22 @@ def graded_sell_record(db_path: Path | str | None) -> str | None:
 
     Reads ``decisions`` for his own rows (``decided_by = 'owner'``) recommending
     a sell or trim that have since been graded (``outcome_label != 'pending'``),
-    and renders e.g. ``"Graded record on sells/trims: 5 of 8 wrong (MU, TSM,
-    NVDA, AMZN, GOOGL)"`` — the count of ``wrong``-graded calls over the total
-    graded, followed by the DISTINCT wrong-graded tickers (alphabetical).
+    and renders e.g. ``"Graded record on sells/trims: 5 of 8 wrong (AMZN,
+    GOOGL, MU, NVDA, TSM) — n=8, low confidence"`` — the count of
+    ``wrong``-graded calls over the total graded, followed by the DISTINCT
+    wrong-graded tickers (alphabetical).
 
     Returns ``None`` when there is nothing graded yet (a fresh DB, or every
     sell/trim still ``pending``) — the caller omits the line rather than
     printing a hollow "0 of 0". Also ``None``/degraded on any DB error (missing
     file, pre-``decisions`` schema): never fabricate a count or ticker list.
+
+    Below ``calibration_guard.MIN_CONFIDENT_N`` graded calls the line carries
+    the guard's canonical hedge (``"— n=6, low confidence"``): this string is
+    the coach's flagship evidence — it renders on the Position tab and is
+    interpolated into the verdict prompt as proof of a "dominant flaw" — and
+    the platform's own charter says a rate on a sparse denominator is reported
+    but never asserted bare.
     """
     if db_path is None or not Path(db_path).exists():
         return None
@@ -571,16 +580,21 @@ def graded_sell_record(db_path: Path | str | None) -> str | None:
     finally:
         conn.close()
     names = f" ({', '.join(tickers)})" if tickers else ""
-    return f"Graded record on sells/trims: {wrong} of {total} wrong{names}"
+    line = f"Graded record on sells/trims: {wrong} of {total} wrong{names}"
+    if not is_confident(total):
+        line += f" — {confidence_note(total)}"
+    return line
 
 
 def _sell_pattern_phrase(graded_line: str | None) -> str:
     """The parenthetical ticker clause for the guard/prompt copy — the derived
     ``graded_sell_record`` line's ticker list when available, else the generic
-    phrase (never a hardcoded name list)."""
+    phrase (never a hardcoded name list). The ticker parenthetical is the
+    line's only parenthesised clause (the sparse-n hedge is a dash clause), so
+    an unanchored search finds it whether or not the hedge follows."""
     if graded_line is None:
         return _GENERIC_SELL_PATTERN_LINE
-    match = re.search(r"\(([^)]+)\)\s*$", graded_line)
+    match = re.search(r"\(([^)]+)\)", graded_line)
     return f"sell-winners-too-early pattern ({match.group(1)})" if match else graded_line
 
 

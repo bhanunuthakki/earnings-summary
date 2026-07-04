@@ -325,6 +325,9 @@ def test_peek_review_carries_the_live_graded_base_rate(client: FlaskClient, db_p
         conn.close()
     body = client.get("/api/peek/review/RBRK").data.decode()
     assert "Graded record on sells/trims: 5 of 8 wrong (AMZN, GOOGL, MU, NVDA, TSM)" in body
+    # n=8 < MIN_CONFIDENT_N — the calibration-guard hedge must reach the
+    # rendered surface, not just the raw line.
+    assert "n=8, low confidence" in body
 
 
 def test_peek_review_omits_base_rate_when_nothing_graded(client: FlaskClient) -> None:
