@@ -993,7 +993,6 @@ INBOX_CSS = """
 .ix-hide { display: none !important; }
 /* "Why ranked here" — the factor breakdown rides the kind chip's title. */
 .ix-kind[title] { cursor: help; }
-.ix-kind-synthesis { color: var(--accent); }
 /* Consequence receipts (REQ-11): the muted, truncated outcome string a done
    chip carries — approve_and_apply's ledger/sizing summary. Full text on
    the native title= tooltip; no local color (inherits .ix-acted's muted). */

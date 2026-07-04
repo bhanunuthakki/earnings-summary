@@ -61,10 +61,10 @@ _PANEL_STYLE = """<style>
 .ledger-empty { color: var(--muted); font-style: italic; padding: var(--sp-3) 0; }
 .ledger-sec-h { font-size: var(--fs-section); font-weight: 600; color: var(--fg); margin: var(--sp-4) 0 var(--sp-1); }
 .ledger-sec-sub { font-size: var(--fs-caption); color: var(--muted); margin: 0 0 var(--sp-3); }
-.ledger-stance { background: var(--surface); border-left: 3px solid var(--accent); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2); }
+.ledger-stance { background: var(--surface); border-left: 3px solid var(--border-2); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2); }
 .ledger-stance-head { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: var(--sp-1); }
 .ledger-stance-meta { color: var(--muted); font-size: var(--fs-micro); margin-left: auto; }
-.ledger-coach-card { background: var(--surface); border-left: 3px solid var(--accent); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2); position: relative; }
+.ledger-coach-card { background: var(--surface); border-left: 3px solid var(--border-2); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2); position: relative; }
 .ledger-coach-body { font-size: var(--fs-body); line-height: 1.55; color: var(--fg-soft); white-space: normal; }
 .ledger-coach-row { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
 .ledger-coach-row input { flex: 1; font-family: var(--sans); font-size: var(--fs-body); }
@@ -836,7 +836,7 @@ _ONMYMIND_STYLE = """<style>
 .om-body a { overflow-wrap: anywhere; }
 .om-brief { margin-top: var(--sp-2); }
 .om-brief summary { font-size: var(--fs-caption); font-weight: 600; color: var(--accent); cursor: pointer; }
-.om-brief-body { margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-left: 3px solid var(--accent); font-size: var(--fs-caption); color: var(--fg-soft); }
+.om-brief-body { margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-left: 3px solid var(--border-2); font-size: var(--fs-caption); color: var(--fg-soft); }
 .om-brief-takeaways { margin: 0 0 var(--sp-2); padding-left: var(--sp-4); }
 .om-brief-line { margin: var(--sp-1) 0; }
 .om-brief-src { margin: var(--sp-2) 0 0; color: var(--muted); font-size: var(--fs-micro); }
