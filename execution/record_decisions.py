@@ -140,6 +140,7 @@ def main() -> int:
         f"no_conditions={conditions['no_conditions']} · "
         f"no_section={conditions['no_section']} · "
         f"parse_failed={conditions['parse_failed']} · "
+        f"deferred_transient={conditions['deferred_transient']} · "
         f"db_unavailable={conditions['db_unavailable']}"
     )
 
@@ -155,11 +156,20 @@ def main() -> int:
         f"no_conditions={qualitative['no_conditions']} · "
         f"no_section={qualitative['no_section']} · "
         f"parse_failed={qualitative['parse_failed']} · "
+        f"deferred_transient={qualitative['deferred_transient']} · "
         f"db_unavailable={qualitative['db_unavailable']}"
     )
-    # parse_failed rows stay unstamped and retry next run; surface in the exit
-    # code so the morning pipeline's stage status reflects the partial failure.
-    return 1 if (conditions["parse_failed"] or qualitative["parse_failed"]) else 0
+    # `parse_failed` (unusable JSON on both call_llm_structured attempts) and
+    # `deferred_transient` (a per-call CLI non-zero exit / timeout / both
+    # backends momentarily down) rows both stay unstamped and retry next run
+    # by design — a day where 1-of-N extractions hit a transient blip is NOT a
+    # stage failure, so neither tally affects the exit code. Hard stops
+    # (LLMBudgetExceeded / LLMSetupError) never reach here at all:
+    # attach_conditions / attach_qualitative_conditions let those PROPAGATE as
+    # an uncaught exception, which still crashes this script loudly (exit 1,
+    # via the uncaught traceback) exactly as before — only genuine
+    # configuration failures fail the stage now.
+    return 0
 
 
 if __name__ == "__main__":

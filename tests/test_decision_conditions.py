@@ -478,6 +478,98 @@ def test_attach_conditions_parse_failure_leaves_row_unstamped(
     assert row["conditions_extracted_at"] is None  # retried next run
 
 
+def test_attach_conditions_transient_failure_does_not_block_other_decisions(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient LLM-call failure (subprocess non-zero exit, timeout, both
+    Claude + Gemini momentarily down — modeled here as the plain RuntimeError
+    ``llm.fallback.try_gemini_fallback`` raises when the Gemini fallback isn't
+    configured either) on ONE decision must not deny every other decision its
+    conditions for the day (the bug this test guards against: it used to
+    propagate out of attach_conditions and crash the whole morning-pipeline
+    stage). Decision A stays unstamped (retried next run); decision B —
+    processed AFTER A in made_at order — still gets extracted."""
+    made_at_a = _NOW
+    made_at_b = (datetime.now(UTC).replace(tzinfo=None)).isoformat()
+    decision_a = _insert_artifact_decision(db, content_md=_FIVE_MIN_MD, ticker="NU")
+    decision_b = _insert_artifact_decision(db, content_md=_FIVE_MIN_MD, ticker="MELI")
+    conn = _connect(db)
+    conn.execute("UPDATE decisions SET made_at = ? WHERE id = ?", (made_at_a, decision_a))
+    conn.execute("UPDATE decisions SET made_at = ? WHERE id = ?", (made_at_b, decision_b))
+    conn.commit()
+    conn.close()
+
+    calls: list[str] = []
+
+    def flaky_structured(prompt: str, **kwargs: object) -> object:
+        ticker = kwargs.get("ticker")
+        calls.append(str(ticker))
+        if ticker == "NU":
+            raise RuntimeError(
+                "Claude CLI failed AND no Gemini fallback configured. "
+                "Original Claude error: CalledProcessError: exit 1"
+            )
+        return [_good_condition_obj()]
+
+    monkeypatch.setattr(dc, "call_llm_structured", flaky_structured)
+    tally = attach_conditions(db_path=db)
+
+    assert tally["deferred_transient"] == 1
+    assert tally["extracted"] == 1
+    assert calls == ["NU", "MELI"]  # both attempted — the loop kept going
+
+    conn = _connect(db)
+    row_a = conn.execute(
+        "SELECT decision_conditions, conditions_extracted_at FROM decisions WHERE id = ?",
+        (decision_a,),
+    ).fetchone()
+    row_b = conn.execute(
+        "SELECT decision_conditions, conditions_extracted_at FROM decisions WHERE id = ?",
+        (decision_b,),
+    ).fetchone()
+    conn.close()
+    # A: unstamped, so the existing unstamped→auto-retry design retries it
+    # next run.
+    assert row_a["decision_conditions"] is None
+    assert row_a["conditions_extracted_at"] is None
+    # B: stamped normally, unaffected by A's failure.
+    assert row_b["conditions_extracted_at"] is not None
+    assert json.loads(row_b["decision_conditions"])[0]["metric"] == "NPL 90d+"
+
+
+def test_attach_conditions_hard_stop_propagates(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """LLMSetupError (the CLI binary missing) is a hard, operator-actionable
+    stop per llm.cli.is_hard_stop — it must still propagate out of
+    attach_conditions and fail the stage loudly, unlike a transient failure."""
+    from llm.cli import LLMSetupError
+
+    _insert_artifact_decision(db, content_md=_FIVE_MIN_MD, ticker="NU")
+
+    def setup_broken(prompt: str, **kwargs: object) -> object:
+        raise LLMSetupError("Claude Code CLI ('claude') not found in PATH.")
+
+    monkeypatch.setattr(dc, "call_llm_structured", setup_broken)
+    with pytest.raises(LLMSetupError):
+        attach_conditions(db_path=db)
+
+
+def test_attach_conditions_budget_exceeded_propagates(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LLMBudgetExceeded (a hard per-purpose monthly cap) is likewise a hard
+    stop — degrading would silently mask that spend is over budget."""
+    from llm.cli import LLMBudgetExceeded
+
+    _insert_artifact_decision(db, content_md=_FIVE_MIN_MD, ticker="NU")
+
+    def budget_blocked(prompt: str, **kwargs: object) -> object:
+        raise LLMBudgetExceeded("decision_conditions_extract: monthly cap exceeded")
+
+    monkeypatch.setattr(dc, "call_llm_structured", budget_blocked)
+    with pytest.raises(LLMBudgetExceeded):
+        attach_conditions(db_path=db)
+
+
 def test_attach_conditions_pre_migration_db(tmp_path: Path) -> None:
     # decisions table without the 0086 columns → best-effort unavailable.
     path = tmp_path / "old.db"
