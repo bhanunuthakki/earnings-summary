@@ -19,6 +19,7 @@ from advisor import position_review as pr
 from advisor.position_review import (
     PreAnalysis,
     mechanical_read,
+    parse_review_command,
     render_pre_analysis_chat,
     render_pre_analysis_plain,
     render_tax_lines,
@@ -26,6 +27,7 @@ from advisor.position_review import (
 )
 from advisor.position_tax import PositionTaxView, TrimTaxEstimate, unavailable_tax_view
 from ask.commands import COMMAND_PREFIXES, run_chat_command
+from capture.matcher import DISTINCTIVE_ALIASES, build_roster_index
 from dispatch_registry import Job, Registry
 
 _PRE_DEFAULT = PreAnalysis(
@@ -137,6 +139,19 @@ def test_render_plain_includes_tax_block_when_present() -> None:
     assert out.index("- Tax:") < out.index("- Mechanical read:")
 
 
+def test_render_plain_tax_block_is_ascii_and_markdown_free() -> None:
+    """The shared tax renderer must honor the plain-ASCII contract on Telegram:
+    no `_footnote_` italics (they'd arrive as literal underscores with no
+    parse_mode) and no non-ASCII → / · separators."""
+    out = render_pre_analysis_plain(_pre(tax=_TAX_VIEW))
+    assert "→" not in out and "·" not in out
+    # the MAGI footnote renders WITHOUT the _italic_ markdown wrappers
+    assert "Tax estimate assumes 2026 MFJ" in out
+    assert "_Tax estimate" not in out
+    # the ST->LT wait line uses an ASCII arrow, not the Markdown-chat glyph
+    assert "(ST->LT)" in out and "(ST→LT)" not in out
+
+
 # --------------------------------------------------------------------------- #
 # review_reply_text(plain=...) — the shared Telegram/web dispatch seam
 # --------------------------------------------------------------------------- #
@@ -167,6 +182,104 @@ def test_review_reply_text_plain_usage_message_is_ascii() -> None:
     reply = review_reply_text(Path("."), "/review", plain=True)
     assert "Usage:" in reply
     assert "`" not in reply and "—" not in reply
+
+
+# --------------------------------------------------------------------------- #
+# name/alias resolution — "/review Rubrik" must review RBRK, not "RUBRIK"
+# --------------------------------------------------------------------------- #
+
+
+def _roster() -> object:
+    """A roster with the tracked symbols + the distinctive-name alias seed —
+    the same shape ``load_roster`` builds in prod."""
+    return build_roster_index(symbols=["RBRK", "NU", "NVO"], phrases=DISTINCTIVE_ALIASES)
+
+
+def test_parse_resolves_company_name_to_ticker() -> None:
+    roster = _roster()
+    assert parse_review_command("/review Rubrik", roster=roster) == ("RBRK", None)
+    # case-insensitive, and the "at $X" clause still parses alongside the name
+    assert parse_review_command("/review rubrik at $70", roster=roster) == ("RBRK", 70.0)
+    assert parse_review_command("/review Nubank", roster=roster) == ("NU", None)
+
+
+def test_parse_resolves_multiword_company_name() -> None:
+    roster = build_roster_index(symbols=["NVO"], phrases=DISTINCTIVE_ALIASES)
+    # a two-word name survives the "at $X" strip and resolves as a phrase
+    assert parse_review_command("/review Novo Nordisk at $120", roster=roster) == ("NVO", 120.0)
+
+
+def test_parse_bare_symbol_and_symbol_alias_still_resolve() -> None:
+    roster = _roster()
+    assert parse_review_command("/review RBRK", roster=roster) == ("RBRK", None)
+    assert parse_review_command("/review $RBRK at $70", roster=roster) == ("RBRK", 70.0)
+    # symbol-alias fallback still applies even when the roster has no name match
+    assert parse_review_command("/review googl", roster=roster) == ("GOOG", None)
+
+
+def test_parse_without_roster_uses_token_as_typed() -> None:
+    # No roster (resolution unavailable) → the token is used as-typed, uppercased
+    # — the pre-resolution behavior, so an un-rostered name still reviews.
+    assert parse_review_command("/review RBRK at $82") == ("RBRK", 82.0)
+    assert parse_review_command("/review Rubrik") == ("RUBRIK", None)
+
+
+def test_review_reply_text_resolves_company_name_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The whole Telegram/web seam: '/review Rubrik' must build the review for
+    RBRK, not the literal 'RUBRIK'."""
+    seen: dict[str, object] = {}
+
+    def _fake(_repo: object, ticker: str, **_k: object) -> PreAnalysis:
+        seen["ticker"] = ticker
+        return _pre()
+
+    monkeypatch.setattr(pr, "build_pre_analysis", _fake)
+    monkeypatch.setattr(
+        pr,
+        "_load_review_roster",
+        lambda _rr: build_roster_index(symbols=["RBRK"], phrases=DISTINCTIVE_ALIASES),
+    )
+    out = review_reply_text(Path("."), "/review Rubrik", plain=True)
+    assert seen["ticker"] == "RBRK"
+    assert "RBRK" in out
+
+
+def test_review_command_background_job_uses_resolved_ticker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The background full-verdict kickoff must schedule the RESOLVED ticker, so
+    '/review Rubrik' reviews AND grades RBRK — never a dangling 'RUBRIK' job."""
+    started: dict[str, object] = {}
+
+    def _fake(*_a: object, **_k: object) -> PreAnalysis:
+        return _pre()
+
+    class _Capturing(_NonSpawningRegistry):
+        def start(
+            self,
+            *,
+            ticker: str,
+            kind: str,
+            argv: list[str],
+            spawn: bool = True,
+            cwd: str | None = None,
+        ) -> Job:
+            started["ticker"] = ticker
+            started["argv"] = argv
+            return super().start(ticker=ticker, kind=kind, argv=argv, spawn=spawn, cwd=cwd)
+
+    monkeypatch.setattr(pr, "build_pre_analysis", _fake)
+    monkeypatch.setattr(
+        pr,
+        "_load_review_roster",
+        lambda _rr: build_roster_index(symbols=["RBRK"], phrases=DISTINCTIVE_ALIASES),
+    )
+    run_chat_command(Path("."), "/review Rubrik at $70", _Capturing())
+    assert started["ticker"] == "RBRK"
+    argv = cast("list[str]", started["argv"])
+    assert "RBRK" in argv and "--at-price" in argv and "70.0" in argv
 
 
 # --------------------------------------------------------------------------- #

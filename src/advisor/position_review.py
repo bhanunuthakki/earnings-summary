@@ -44,6 +44,7 @@ from identity import DEFAULT_USER_ID
 
 if TYPE_CHECKING:
     from advisor.position_tax import PositionTaxView
+    from capture.matcher import RosterIndex
     from compute.thesis_evaluator import ThesisVerdict
 
 __all__ = [
@@ -71,6 +72,7 @@ __all__ = [
     "render_pre_analysis_chat",
     "render_pre_analysis_plain",
     "render_tax_lines",
+    "resolve_review_target",
     "review_position",
     "review_reply_text",
     "summarize_verdict",
@@ -1010,11 +1012,18 @@ def mechanical_read(pre: PreAnalysis) -> str:
     )
 
 
-def render_tax_lines(tax: PositionTaxView | None) -> list[str]:
+def render_tax_lines(tax: PositionTaxView | None, *, plain: bool = False) -> list[str]:
     """Markdown bullets for the tax block — shared by the chat reply, the CLI
     summary, and the persisted memo body. Empty for a pre-tax-stage
     :class:`PreAnalysis` (``tax=None``); a single honest line when the tracker
-    couldn't supply a view; the dense block otherwise."""
+    couldn't supply a view; the dense block otherwise.
+
+    ``plain=True`` (the Telegram surface) drops the ``_footnote_`` Markdown
+    italics — the one marker the caller's plain-ASCII pass CAN'T strip, since an
+    underscore is ASCII and indistinguishable from data. The unicode separators
+    (``→``/``·``/``—``) are left as-is for :func:`render_pre_analysis_plain`'s
+    single ASCII pass to normalize. The default Markdown form is unchanged for
+    the web chat, the CLI, and the persisted memo, which render Markdown."""
     if tax is None:
         return []
     if not tax.available:
@@ -1046,7 +1055,7 @@ def render_tax_lines(tax: PositionTaxView | None) -> list[str]:
     if tax.approximate and tax.approx_reasons:
         lines.append(f"- Tax approx because: {'; '.join(tax.approx_reasons[:2])}")
     if tax.footnote:
-        lines.append(f"- _{tax.footnote}_")
+        lines.append(f"- {tax.footnote}" if plain else f"- _{tax.footnote}_")
     return lines
 
 
@@ -1082,6 +1091,30 @@ def render_pre_analysis_chat(pre: PreAnalysis, *, db_path: Path | str | None = N
     )
 
 
+# Non-ASCII glyphs the Markdown renderers use for polish (em/en dashes, arrow,
+# middot, ellipsis) mapped to their ASCII equivalents. Applied once to the
+# assembled Telegram reply so it is truly plain-ASCII regardless of which shared
+# helper (mechanical_read, render_tax_lines, a break-rule detail, ...) produced
+# the glyph -- one normalization point instead of ASCII-handling scattered across
+# every helper. send_message sets no parse_mode, so this is cosmetic on Telegram;
+# the pass just keeps the plain surface consistent and dependable. Keys use chr()
+# code points so the source carries no ambiguous-character glyphs (ruff RUF001).
+_PLAIN_ASCII: dict[str, str] = {
+    chr(0x2014): "-",  # em dash
+    chr(0x2013): "-",  # en dash
+    chr(0x2192): "->",  # right arrow
+    chr(0x00B7): "-",  # middle dot
+    chr(0x2026): "...",  # ellipsis
+}
+
+
+def _to_plain_ascii(text: str) -> str:
+    """Fold the cosmetic non-ASCII glyphs in ``text`` to ASCII (see ``_PLAIN_ASCII``)."""
+    for glyph, ascii_equiv in _PLAIN_ASCII.items():
+        text = text.replace(glyph, ascii_equiv)
+    return text
+
+
 def render_pre_analysis_plain(pre: PreAnalysis, *, db_path: Path | str | None = None) -> str:
     """Plain-ASCII reply for the ``/review`` command on Telegram — the SAME
     grounded facts as :func:`render_pre_analysis_chat` (including the live
@@ -1090,7 +1123,12 @@ def render_pre_analysis_plain(pre: PreAnalysis, *, db_path: Path | str | None = 
     Markdown-shaped body arrives as a raw text wall — literal asterisks and
     backticks). Also drops the CLI pointer line: ``python execution/...`` is a
     broken instruction in a chat channel with no shell. Ends instead with a
-    pointer to the calibrated review surface in the web app."""
+    pointer to the calibrated review surface in the web app.
+
+    A final :func:`_to_plain_ascii` pass folds the cosmetic non-ASCII glyphs the
+    shared helpers emit (``mechanical_read``'s em dashes, the tax block's ``→``/
+    ``·``) so the whole reply is plain-ASCII, and ``render_tax_lines(plain=True)``
+    drops the one Markdown marker that pass can't (the ``_footnote_`` italics)."""
     wt = f"{pre.weight_pct:.1f}%" if pre.weight_pct is not None else "-"
     conc = f"FLAGGED (>= {CONCENTRATION_PCT:.0f}% single name)" if pre.concentration_flag else "no"
     fv = f"${pre.npv_per_share:,.2f}" if pre.npv_per_share is not None else "-"
@@ -1098,7 +1136,7 @@ def render_pre_analysis_plain(pre: PreAnalysis, *, db_path: Path | str | None = 
     gap = f"{pre.dcf_gap_pct:+.1f}%" if pre.dcf_gap_pct is not None else "-"
     watch = f" - watch: {'; '.join(pre.tripped_rules)}" if pre.tripped_rules else ""
     graded_line = graded_sell_record(db_path)
-    return "\n".join(
+    body = "\n".join(
         [
             f"{pre.ticker} - position review (deterministic read; weight source: "
             f"{pre.weight_source})",
@@ -1107,31 +1145,94 @@ def render_pre_analysis_plain(pre: PreAnalysis, *, db_path: Path | str | None = 
             f"break-rules {pre.break_rule_status}{watch}",
             f"- Valuation: fair {fv} vs asked {asked} -> {gap} (+ = over-valued) - "
             f"ladder: {pre.valuation_verdict}",
-            *render_tax_lines(pre.tax),
+            *render_tax_lines(pre.tax, plain=True),
             f"- Mechanical read: {mechanical_read(pre)}",
             *([f"- {graded_line}"] if graded_line is not None else []),
             "- Full calibrated review: from the desk (Holding -> Review).",
         ]
     )
+    return _to_plain_ascii(body)
 
 
-def parse_review_command(text: str) -> tuple[str, float | None] | None:
-    """Parse ``/review <TICKER> [at $PRICE]`` into ``(ticker, at_price)``.
+def _resolve_review_target(body: str, roster: RosterIndex | None) -> str:
+    """Resolve the free-text name/symbol after ``/review`` to a canonical ticker.
 
-    Returns ``None`` when no ticker follows the command (the usage-message
-    case). The ONE parser for this command shape — shared by
-    ``review_reply_text`` (the instant Slice-1 reply), ``ask.commands``'s
-    background Slice-2 kickoff, and the Telegram poller — so the at-price
-    regex and the ticker-extraction rule (uppercase, strip a leading ``$``)
+    Prefers a roster name/alias match — ``Rubrik`` → ``RBRK``, ``Nubank`` →
+    ``NU``, multi-word ``Novo Nordisk`` → ``NVO`` — via the same deterministic
+    ``capture.matcher`` lanes the capture pipeline uses (so the two never drift).
+    Falls back to the first token treated as a literal symbol (uppercased,
+    leading ``$`` stripped, then canonicalized through ``capture.matcher``'s
+    index builder for symbol aliases like ``GOOGL`` → ``GOOG``) when the roster
+    has no name match — so a typed ticker still resolves and an un-rostered name
+    still reviews as typed.
+    """
+    from capture.matcher import build_roster_index, match_ticker
+
+    if roster is not None:
+        matched = match_ticker(body, roster).ticker
+        if matched is not None:
+            return matched
+    # Fall back to the first token as a literal symbol, canonicalized (GOOGL ->
+    # GOOG) through the same typed index builder the roster uses — this reuses
+    # capture.matcher's symbol-alias boundary instead of touching the untyped
+    # alias_manager directly.
+    tokens = body.split()
+    raw = (tokens[0] if tokens else body).upper().lstrip("$")
+    canonical = build_roster_index(symbols=[raw]).symbol_to_ticker
+    return next(iter(canonical.values()), raw)
+
+
+def parse_review_command(
+    text: str, *, roster: RosterIndex | None = None
+) -> tuple[str, float | None] | None:
+    """Parse ``/review <NAME|TICKER> [at $PRICE]`` into ``(ticker, at_price)``.
+
+    Returns ``None`` when nothing follows the command (the usage-message case).
+    The ONE parser for this command shape — shared by ``review_reply_text`` (the
+    instant Slice-1 reply), ``ask.commands``'s background Slice-2 kickoff, and
+    the Telegram poller — so the at-price regex and the ticker-resolution rule
     can never drift between callers.
+
+    With a ``roster`` (the prod/Telegram/web surfaces all supply one via
+    :func:`resolve_review_target`) the target is resolved through the roster's
+    name/alias lane, so a company NAME resolves to its ticker: ``/review Rubrik``
+    → ``RBRK``, ``/review Nubank at $12`` → ``(NU, 12.0)``, ``/review Novo
+    Nordisk`` → ``NVO``. Without a roster the target is the first token used
+    as-typed (uppercased, leading ``$`` stripped) — the pre-resolution behavior.
     """
     parts = text.split()
     if len(parts) < 2:
         return None
-    ticker = parts[1].upper().lstrip("$")
     match = _AT_PRICE_RX.search(text)
     at_price = float(match.group(1)) if match else None
+    # The name/symbol portion is everything after the command word, minus the
+    # trailing "at $X" clause — so a multi-word name ("Novo Nordisk") survives
+    # while the price level is still stripped out before resolution.
+    body = _AT_PRICE_RX.sub("", text.split(None, 1)[1]).strip()
+    ticker = _resolve_review_target(body, roster)
     return ticker, at_price
+
+
+def _load_review_roster(repo_root: Path) -> RosterIndex | None:
+    """Best-effort roster for ``/review`` name→ticker resolution; ``None`` on any
+    failure (the parser then falls back to the token-as-symbol behavior). Loads
+    ``tracked_companies`` merged with the distinctive-alias seed, so a name like
+    ``Rubrik`` resolves even when the DB is absent (the seed carries it)."""
+    try:
+        from capture.matcher import load_roster
+
+        return load_roster(repo_root / "data" / "portfolio.db")
+    except Exception:
+        return None
+
+
+def resolve_review_target(repo_root: Path, text: str) -> tuple[str, float | None] | None:
+    """Parse ``/review <NAME|TICKER> [at $X]`` AND resolve the name/symbol to a
+    canonical ticker via the roster — the ONE resolution entry shared by the
+    instant reply (:func:`review_reply_text`) and ``ask.commands``'s background
+    full-verdict kickoff, so both act on the SAME ticker (``/review Rubrik``
+    reviews AND schedules the governed verdict for ``RBRK``, not ``RUBRIK``)."""
+    return parse_review_command(text, roster=_load_review_roster(repo_root))
 
 
 def review_reply_text(repo_root: Path, text: str, *, plain: bool = False) -> str:
@@ -1148,14 +1249,16 @@ def review_reply_text(repo_root: Path, text: str, *, plain: bool = False) -> str
     :func:`render_pre_analysis_plain` — no Markdown, since ``send_message``
     never sets ``parse_mode`` there. The web chat (Ask tab) keeps the default
     Markdown variant, which its renderer displays properly.
+
+    The target is resolved through the roster (:func:`resolve_review_target`) so
+    a company NAME works, not just a ticker symbol — ``/review Rubrik`` reviews
+    ``RBRK`` — on both the Telegram and web surfaces.
     """
     if plain:
-        usage = "Usage: /review <TICKER> [at $PRICE] - e.g. /review RBRK or /review FLKR at $70."
+        usage = "Usage: /review <NAME|TICKER> [at $PRICE] - e.g. /review Rubrik at $70."
     else:
-        usage = (
-            "Usage: /review <TICKER> [at $PRICE] — e.g. `/review RBRK` or `/review FLKR at $70`."
-        )
-    parsed = parse_review_command(text)
+        usage = "Usage: /review <NAME|TICKER> [at $PRICE] — e.g. `/review Rubrik at $70`."
+    parsed = resolve_review_target(repo_root, text)
     if parsed is None:
         return usage
     ticker, at_price = parsed
