@@ -182,19 +182,34 @@ def test_position_coaching_renders_guard_line_and_review_doorway() -> None:
     out = StringIO()
     _position_coaching(out, "TEST", 3, None)
     html = out.getvalue()
-    assert "Guard: never run on this name" in html
-    assert "3 position reviews" in html
+    # With reviews on record the guard has fired -- the phrase is derived from
+    # the count, so it must NOT still claim the guard "never run" (the bug this
+    # test guards against: a literal "never run" beside a live non-zero count).
+    assert "Guard: consulted during 3 position reviews" in html
+    assert "never run" not in html
     assert 'href="http://localhost:7421/socratic/TEST"' in html
     assert "Review this position" in html
     # No graded-sells line yet -- that ledger is a parallel, unmerged PR.
     assert "graded" not in html.lower()
 
 
+def test_position_coaching_zero_reviews_keeps_honest_never_run() -> None:
+    # Honest-zero starvation wording: no review has ever run the guard here.
+    out = StringIO()
+    _position_coaching(out, "TEST", 0, None)
+    html = out.getvalue()
+    assert "Guard: never run on this name" in html
+    assert "0 position reviews" in html
+    assert "consulted" not in html
+
+
 def test_position_coaching_singular_review_count() -> None:
     out = StringIO()
     _position_coaching(out, "TEST", 1, None)
-    assert "1 position review" in out.getvalue()
-    assert "1 position reviews" not in out.getvalue()
+    html = out.getvalue()
+    assert "Guard: consulted during 1 position review" in html
+    assert "1 position reviews" not in html
+    assert "never run" not in html
 
 
 def test_position_coaching_includes_graded_sell_line_when_provided() -> None:

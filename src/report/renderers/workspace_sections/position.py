@@ -224,13 +224,21 @@ def _position_coaching(
 ) -> None:
     """Position-tab coaching lines (REQ-3/REQ-6): the behavioral-guard status,
     the graded-sells base rate when that ledger exists on this branch, and a
-    doorway into the deterministic review surface for this name."""
+    doorway into the deterministic review surface for this name.
+
+    The guard phrase is derived from ``position_review_count`` so it can never
+    contradict the count rendered beside it: the behavioral guard runs *inside*
+    a position review, so with zero reviews it has genuinely never fired on
+    this name (the honest-zero starvation wording), and with N reviews it was
+    consulted on each of them."""
     body.write('<div class="position-coaching">')
     reviews_word = "review" if position_review_count == 1 else "reviews"
-    body.write(
-        '<p class="coaching-line muted xsmall">Guard: never run on this name &middot; '
-        f"{position_review_count} position {reviews_word}</p>"
-    )
+    if position_review_count == 0:
+        # Honest-zero starvation: no review has ever run the guard on this name.
+        guard_line = "Guard: never run on this name &middot; 0 position reviews"
+    else:
+        guard_line = f"Guard: consulted during {position_review_count} position {reviews_word}"
+    body.write(f'<p class="coaching-line muted xsmall">{guard_line}</p>')
     if graded_sell_line:
         body.write(f'<p class="coaching-line muted xsmall">{_esc(graded_sell_line)}</p>')
     if ticker:
