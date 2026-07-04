@@ -35,15 +35,25 @@ from typing import cast
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import db  # noqa: E402
 from llm_client import call_llm  # noqa: E402
 
 _JSON_FENCE_RX = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
-def main() -> int:
-    args = _parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
     repo_root = args.repo_root.resolve()
     ticker = args.ticker.upper()
+
+    # An explicit --repo-root must also reach the governed LLM cost ledger:
+    # `call_llm(purpose="pressure_test_thesis")` resolves the llm_calls DB (plus
+    # the budget check and the LLM_MODELS pin) from the `db.DB_PATH` process
+    # global, which this script otherwise never syncs — so a run against another
+    # checkout's data/ (e.g. --repo-root <MAIN> from a worktree) would silently
+    # land the cost row in the default DB. set_db_path also re-points
+    # DATA_DIR / FMP_DIR for the corpus reads.
+    db.set_db_path(repo_root / "data" / "portfolio.db")
 
     thesis = _resolve_thesis(args.thesis, repo_root, ticker)
     if not thesis:
@@ -79,7 +89,7 @@ def main() -> int:
     return 0
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -94,7 +104,7 @@ def _parse_args() -> argparse.Namespace:
         default=PROJECT_ROOT,
         help="Repo root containing data/, micro_thesis/. Default: this repo.",
     )
-    return p.parse_args()
+    return p.parse_args(argv)
 
 
 def _resolve_thesis(cli_thesis: str | None, repo_root: Path, ticker: str) -> str | None:
