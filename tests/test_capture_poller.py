@@ -111,6 +111,49 @@ def test_poll_once_voice_downloads_lands_and_purges_audio(
     assert not (audio / "tg_30.oga").exists()  # audio purged once landed
 
 
+def test_poll_once_needs_ticker_offers_inline_candidates(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ambiguous musing (≥2 roster tickers) must not dead-end at 'go open
+    the Ledger' — the confirm carries one set-ticker button per candidate
+    (``st:<ticker>:<note_id>``), answerable from the thread."""
+    updates = [
+        telegram.Update(update_id=90, kind="text", chat_id=1, text="NU vs MELI - add to which?")
+    ]
+
+    def _get_updates(
+        token: str, offset: int | None = None, timeout: int = 50
+    ) -> list[telegram.Update]:
+        return updates
+
+    sent: list[tuple[str, object]] = []
+
+    def _send(
+        token: str, chat_id: int, text: str, reply_markup: object = None, **k: object
+    ) -> None:
+        sent.append((text, reply_markup))
+
+    monkeypatch.setattr(telegram, "get_updates", _get_updates)
+    monkeypatch.setattr(telegram, "send_message", _send)
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert counts.get("landed") == 1
+    musings = notes.list_notes(kind="musing", db_path=db_path)
+    assert len(musings) == 1 and musings[0].ticker is None
+    note_id = musings[0].id
+    assert len(sent) == 1
+    text, markup = sent[0]
+    assert text == "Captured. Which ticker?"
+    flat = str(markup)
+    assert f"st:NU:{note_id}" in flat and f"st:MELI:{note_id}" in flat
+
+
 def test_poll_once_skips_bot_commands(
     db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

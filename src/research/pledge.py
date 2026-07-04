@@ -41,10 +41,18 @@ from user_state._db import now_iso, open_conn
 
 # Pledge-shaped text: a stated (imminent) position change. Deliberately
 # narrow — "should I buy?" is a wondering, not a pledge; "bought last year"
-# is a memory. The retro net covers what this gate misses.
+# is a memory. The retro net covers what this gate misses. The sell side
+# carries the natural idioms of the sell-winners-early pattern this tap
+# exists to coach ("taking profits", "lightening up", ...) — an imminent sell
+# rarely announces itself as "selling". "exiting"/"cutting" are hedged so the
+# earnings idioms ("exiting the quarter with...", "cutting costs") stay
+# zero-token misses.
 _PLEDGE_RE = re.compile(
     r"\b(?:"
     r"buying|selling|trimming|adding\s+to"
+    r"|taking\s+profits|lightening(?:\s+up)?|dumping"
+    r"|exiting(?!\s+(?:the\s+)?(?:quarter|year|q[1-4]|fy\d*)\b)"
+    r"|cutting\s+(?:(?:my|the)\s+)?(?:\w+\s+)?(?:position|stake)"
     r"|about\s+to\s+(?:buy|sell|add|trim)"
     r"|i(?:'m|\s+am)\s+(?:buying|selling|adding|trimming)"
     r"|pledge[:\s]"

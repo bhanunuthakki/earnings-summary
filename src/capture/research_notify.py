@@ -4,6 +4,7 @@ thread and dispatch the inline-button callbacks back to the ONE action core.
 Callback data is a compact ``kind:verb:id`` triple:
   ``rt:run:<task_id>``        run the two-pass engine (flag-gated) → push the card
   ``rp:<verb>:<proposal_id>`` the 4-action core (approve / further / steer / reject)
+  ``st:<ticker>:<note_id>``   attribute a needs_ticker musing to a roster candidate
 
 Free-text in the thread stays a musing (the capture path); the buttons are the
 Wave-1 steering surface. A button 'steer' marks the proposal steered (the web inbox
@@ -15,7 +16,7 @@ send/answer are injected so it is unit-testable without the network.
 from __future__ import annotations
 
 import contextlib
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -66,6 +67,23 @@ _LADDER_LABELS: tuple[tuple[str, str], ...] = (
 def onmymind_keyboard(note_id: int) -> dict[str, object]:
     return telegram.inline_keyboard(
         [[(label, f"om:{verb}:{note_id}")] for label, verb in _LADDER_LABELS]
+    )
+
+
+def ticker_keyboard(note_id: int, candidates: Sequence[str]) -> dict[str, object] | None:
+    """The needs_ticker attribution buttons — one per roster candidate,
+    callback ``st:<TICKER>:<note_id>`` (the ticker rides the verb slot of the
+    ``kind:verb:id`` triple). None when no usable candidates remain — the
+    confirm then falls back to pointing at the Ledger's set-ticker chips."""
+    seen: list[str] = []
+    for c in candidates:
+        t = str(c).strip().upper()
+        if t and t not in seen:
+            seen.append(t)
+    if not seen:
+        return None
+    return telegram.inline_keyboard(
+        [[(t, f"st:{t}:{note_id}") for t in seen[i : i + 3]] for i in range(0, len(seen), 3)]
     )
 
 
@@ -278,6 +296,34 @@ def dispatch_callback(
         if result.ok:
             _stamp_card(token, update, _state_stamp(verb), edit=edit)
         return f"om_{verb}" if result.ok else "om_noop"
+
+    if kind == "st":
+        # A needs_ticker attribution from the thread — the same write-once
+        # ``set_ticker`` action the Ledger's set-ticker chips call (PR #816),
+        # so a button tap and a web click behave identically. The verb slot
+        # carries the candidate ticker; the id is the note.
+        from user_state.notes import set_ticker
+
+        ticker = verb.strip().upper()
+        if not ticker:
+            if cqid:
+                answer(token, cqid, text="Unrecognized action.")
+            return None
+        try:
+            row = set_ticker(obj_id, ticker=ticker, db_path=db_path)
+        except ValueError:
+            # write-once: a stray second tap can never silently reassign
+            if cqid:
+                answer(token, cqid, text="Already attributed.")
+            return "st_stale"
+        if row is None:
+            if cqid:
+                answer(token, cqid, text="Unrecognized action.")
+            return None
+        if cqid:
+            answer(token, cqid, text=f"Attributed to {ticker}.")
+        _stamp_card(token, update, _state_stamp(f"attributed {ticker}"), edit=edit)
+        return "st_set"
 
     if kind == "cp" and verb == "dismiss":
         # A coach-ping dismissal — the governor's training signal. Three

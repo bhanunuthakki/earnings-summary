@@ -292,6 +292,73 @@ def test_notify_new_task_button_only_when_run_enabled(monkeypatch: pytest.Monkey
     assert spy2.sends[0][2] is None  # detection-only: no button
 
 
+def test_ticker_keyboard_one_button_per_candidate() -> None:
+    kb = research_notify.ticker_keyboard(12, ["nu", "MELI", "NU", ""])
+    flat = str(kb)
+    assert "st:NU:12" in flat and "st:MELI:12" in flat
+    assert flat.count("st:NU:12") == 1  # deduped, case-folded
+    assert research_notify.ticker_keyboard(12, []) is None
+    assert research_notify.ticker_keyboard(12, ["", "  "]) is None
+
+
+def test_dispatch_st_attributes_needs_ticker_musing(db_path: Path) -> None:
+    """The st:<ticker>:<note_id> branch — the same write-once set_ticker action
+    the Ledger chips call, fired from the thread's candidate buttons."""
+    from user_state import notes
+
+    note = notes.create_note(
+        ticker=None,
+        kind="musing",
+        body="NU vs MELI - add to which?",
+        source="capture",
+        context={"needs_ticker": True, "ticker_candidates": ["MELI", "NU"]},
+        db_path=db_path,
+    )
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok",
+        _cb(f"st:NU:{note.id}", message_id=9, message_text="Captured. Which ticker?"),
+        db_path=db_path,
+        send=spy.send,
+        answer=spy.answer,
+        edit=spy.edit,
+    )
+    assert status == "st_set"
+    row = notes.get_note(note.id, db_path=db_path)
+    assert row is not None and row.ticker == "NU"
+    ctx = row.context or {}
+    assert "needs_ticker" not in ctx and "ticker_candidates" not in ctx
+    assert spy.answers and spy.answers[0][1] == "Attributed to NU."
+    assert len(spy.edits) == 1
+    assert "- attributed NU" in spy.edits[0][2]
+    assert spy.edits[0][3] is None  # buttons stripped — no re-press
+
+    # A stray second tap can never silently reassign (write-once)
+    spy2 = _Spy()
+    status2 = research_notify.dispatch_callback(
+        "tok",
+        _cb(f"st:MELI:{note.id}", message_id=9, message_text="x"),
+        db_path=db_path,
+        send=spy2.send,
+        answer=spy2.answer,
+        edit=spy2.edit,
+    )
+    assert status2 == "st_stale"
+    assert spy2.answers and spy2.answers[0][1] == "Already attributed."
+    assert spy2.edits == []
+    row2 = notes.get_note(note.id, db_path=db_path)
+    assert row2 is not None and row2.ticker == "NU"
+
+
+def test_dispatch_st_unknown_note_is_acknowledged(db_path: Path) -> None:
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok", _cb("st:NU:999999"), db_path=db_path, send=spy.send, answer=spy.answer
+    )
+    assert status is None
+    assert spy.answers and spy.answers[0][1] == "Unrecognized action."
+
+
 def test_dispatch_cp_review_sends_pre_analysis(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
