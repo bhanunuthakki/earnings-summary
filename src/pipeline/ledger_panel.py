@@ -87,6 +87,16 @@ _PANEL_STYLE = """<style>
 .ledger-armed-since { color: var(--muted); white-space: nowrap; }
 .ledger-armed-num a { color: var(--muted); text-decoration: none; }
 .ledger-armed-num a:hover { color: var(--accent); }
+/* Jump-chip toolbar (PR9) — mirrors the Provenance console's anchor-nav band;
+   one operating row above the sections, wraps on narrow widths. */
+.ledger-jump-toolbar { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-4); }
+/* Set-ticker chips (PR9) — the needs_ticker musing card's one-tap attribution
+   row; reuses .ledger-cap-row's flex layout via the extra class below. */
+.ledger-set-ticker { flex-wrap: wrap; }
+/* In-card Rewrite / Steer textareas (PR9, replaces window.prompt) — same
+   sizing family as the capture box's own textarea. */
+.ledger-rewrite-ta, .ledger-steer-ta { width: 100%; min-height: 56px; resize: vertical;
+  font-family: var(--sans); font-size: var(--fs-body); margin-bottom: var(--sp-2); }
 </style>"""
 
 _CAPTURE_JS = """<script>(function(){
@@ -199,11 +209,30 @@ def _capture_box() -> str:
     )
 
 
+def _ticker_candidate_chips(cands: object) -> str:
+    """One-click set-ticker chips (PR9) for a ``needs_ticker`` musing — each
+    button POSTs the new ``set_ticker`` lifecycle action for the one candidate
+    it names. Empty string when there are no candidates to offer (the plain
+    'needs ticker' badge is the only ident in that case)."""
+    if not isinstance(cands, list):
+        return ""
+    tickers = [str(c).strip().upper() for c in cast("list[object]", cands) if str(c).strip()]
+    if not tickers:
+        return ""
+    buttons = "".join(
+        f'<button type="button" class="k-chip k-chip-btn" '
+        f'data-set-ticker="{escape(t)}">{escape(t)}</button>'
+        for t in tickers
+    )
+    return f'<div class="ledger-cap-row ledger-set-ticker">{buttons}</div>'
+
+
 def _musing_card(row: AnalystNoteRow) -> str:
     ctx = row.context or {}
     channel = str(ctx.get("channel") or "")
     chan = f'<span class="ledger-chan">{escape(channel)}</span>' if channel else ""
     when = stamp_html(row.created_at, css="ledger-when")
+    chips = ""
     if row.ticker:
         ident = ticker_label(row.ticker)
     elif ctx.get("needs_ticker"):
@@ -215,12 +244,14 @@ def _musing_card(row: AnalystNoteRow) -> str:
         )
         label = f"needs ticker: {names}" if names else "needs ticker"
         ident = f'<span class="ledger-needs">{label}</span>'
+        chips = _ticker_candidate_chips(cands)
     else:
         ident = '<span class="ledger-unattr">unattributed</span>'
     return (
-        '<div class="ledger-musing">'
+        f'<div class="ledger-musing" data-note-id="{row.id}">'
         f'<div class="ledger-musing-head">{ident}{chan}{when}</div>'
         f'<div class="ledger-body">{render_prose(row.body)}</div>'
+        f"{chips}"
         "</div>"
     )
 
@@ -287,15 +318,46 @@ _RESEARCH_JS = """<script>(function(){
     }
     var act=e.target.closest('[data-verb]');
     if(act){
-      var verb=act.getAttribute('data-verb'); var body={};
+      var verb=act.getAttribute('data-verb');
       // One card per RUN: the button acts on every proposal the run drafted.
       var pids=(act.getAttribute('data-pids')||act.getAttribute('data-pid')||'').split(',');
-      if(verb==='steer'){ var dir=window.prompt('How should I steer this research?'); if(!dir){ return; } body.steer_text=dir; }
-      Promise.all(pids.filter(Boolean).map(function(pid){
-        return fetch('/api/research/proposal/'+pid+'/'+verb,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-      })).then(function(){ reload(); });
+      if(verb==='steer'){ beginSteer(act, pids); return; }
+      send(pids, verb, {});
     }
   });
+  function send(pids, verb, body){
+    Promise.all(pids.filter(Boolean).map(function(pid){
+      return fetch('/api/research/proposal/'+pid+'/'+verb,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    })).then(function(){ reload(); });
+  }
+  // In-card Steer (PR9, replaces window.prompt): the steering direction is an
+  // owner utterance — it gets a real textarea inside the proposal card (the
+  // Rewrite in-card-swap idiom), never a single-line unstyled OS modal.
+  function beginSteer(act, pids){
+    var card=act.closest('[data-prop-card]');
+    if(!card || card.getAttribute('data-editing')==='1'){ return; }
+    card.setAttribute('data-editing','1');
+    var row=act.closest('.ledger-cap-row');
+    var ed=document.createElement('div');
+    ed.innerHTML=
+      '<textarea class="ledger-rewrite-ta" rows="2" '
+      +'placeholder="How should I steer this research?"></textarea>'
+      +'<div class="ledger-cap-row">'
+      +'<button type="button" class="k-btn k-btn-primary k-btn-sm" data-steer-save>Steer</button>'
+      +'<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-steer-cancel>Cancel</button>'
+      +'</div>';
+    row.parentNode.insertBefore(ed, row.nextSibling);
+    var ta=ed.querySelector('.ledger-rewrite-ta');
+    if(ta){ ta.focus(); }
+    ed.querySelector('[data-steer-cancel]').addEventListener('click', function(){
+      ed.remove(); card.removeAttribute('data-editing');
+    });
+    ed.querySelector('[data-steer-save]').addEventListener('click', function(){
+      var dir=(ta&&ta.value||'').trim();
+      if(!dir){ if(ta){ ta.focus(); } return; }
+      send(pids, 'steer', {steer_text: dir});
+    });
+  }
 })();</script>"""
 
 
@@ -309,16 +371,15 @@ def _task_chip(task: ResearchTask) -> str:
         '<button type="button" class="k-btn k-btn-danger k-btn-sm" '
         f'data-reject-task="{task.id}">Dismiss</button>'
     )
+    # The "runs are off" state is explained ONCE at the section level (see
+    # _research_section's owner-voice muted line) — no per-card env-var leak.
     if research_run_enabled():
         action = (
             '<button type="button" class="k-btn k-btn-primary k-btn-sm" '
             f'data-run-task="{task.id}">Research it</button>' + dismiss
         )
     else:
-        action = (
-            '<span class="ledger-cap-status">detection only — set '
-            "LEDGER_RESEARCH_RUN=1 to research</span>" + dismiss
-        )
+        action = dismiss
     return (
         '<div class="ledger-musing">'
         f'<div class="ledger-musing-head">{ident}<span class="ledger-chan">wondering</span></div>'
@@ -380,10 +441,10 @@ def _proposal_group_card(group: list[ResearchProposal]) -> str:
         for c in companions
     )
     return (
-        '<div class="ledger-stance">'
+        f'<div class="ledger-stance" data-prop-card="{pids}">'
         '<div class="ledger-stance-head">'
         f'{ident}<span class="ledger-stance-meta">{escape(meta)}</span></div>'
-        f'<div class="ledger-body"><strong>{escape(title)}</strong>'
+        f'<div class="ledger-body ledger-editable-body"><strong>{escape(title)}</strong>'
         f"{body}"
         f"{rider}"
         f'<div class="ledger-cap-row">{footer}</div></div>'
@@ -441,14 +502,42 @@ def _tap_health_line(db_path: Path | str | None) -> str:
     return f'<p class="ledger-sec-sub">Tap health (7d): {" · ".join(bits)}.</p>'
 
 
-def _research_section(db_path: Path | str | None) -> str:
+def _research_runs_off_line() -> str:
+    """The owner-voice explanation for why wonderings sit undetonated — ONE
+    section-level line, replacing the old per-card 'set LEDGER_RESEARCH_RUN=1'
+    dev-syntax leak (a directive owner copy should never carry)."""
+    if research_run_enabled():
+        return ""
     return (
-        '<h3 class="ledger-sec-h">Research</h3>'
-        '<p class="ledger-sec-sub">Wonderings I detected in your musings, and the inert '
-        "proposals they produced — approve, dig further, steer, or reject. Nothing acts "
-        "until you say so.</p>"
+        '<p class="ledger-sec-sub">Research runs are off — wonderings are '
+        "collected and run when you enable research.</p>"
+    )
+
+
+_RESEARCH_TUTORIAL = (
+    "Wonderings I detected in your musings, and the inert proposals they "
+    "produced — approve, dig further, steer, or reject. Nothing acts until "
+    "you say so."
+)
+
+
+def _research_section(db_path: Path | str | None) -> str:
+    list_html = render_ledger_research_list(db_path)
+    # PR9 "no section ceremony": the tutorial sentence is a visible <p> only
+    # while the list is empty; once real proposals/wonderings exist it folds
+    # into the heading's title= instead of repeating on every visit.
+    if "ledger-empty" in list_html:
+        heading = '<h3 class="ledger-sec-h">Research</h3>'
+        sub = f'<p class="ledger-sec-sub">{escape(_RESEARCH_TUTORIAL)}</p>'
+    else:
+        heading = f'<h3 class="ledger-sec-h" title="{escape(_RESEARCH_TUTORIAL, quote=True)}">Research</h3>'
+        sub = ""
+    return (
+        heading
+        + sub
+        + _research_runs_off_line()
         + _tap_health_line(db_path)
-        + render_ledger_research_list(db_path)
+        + list_html
         + _RESEARCH_JS
     )
 
@@ -476,6 +565,46 @@ _RECONCILE_JS = """<script>(function(){
     el.textContent=text;
     el.hidden=false;
   }
+  function esc(s){
+    return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  // In-card Rewrite (PR9, replaces window.prompt): swaps the falsifier card's
+  // body for a textarea PRE-FILLED with the inferred text already on the
+  // card, plus kit Save/Cancel. No overlay — the card being edited stays
+  // visible by construction (the capture-box in-card-swap idiom).
+  function beginRewrite(card){
+    var body=card.querySelector('.ledger-editable-body');
+    if(!body || card.getAttribute('data-editing')==='1'){ return; }
+    card.setAttribute('data-editing','1');
+    var original=body.innerHTML;
+    var current=body.textContent||'';
+    body.innerHTML=
+      '<textarea class="ledger-rewrite-ta" rows="3">'+esc(current)+'</textarea>'
+      +'<div class="ledger-cap-row">'
+      +'<button type="button" class="k-btn k-btn-primary k-btn-sm" data-rewrite-save>Save</button>'
+      +'<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-rewrite-cancel>Cancel</button>'
+      +'</div>';
+    function restore(){
+      body.innerHTML=original;
+      card.removeAttribute('data-editing');
+    }
+    var ta=body.querySelector('.ledger-rewrite-ta');
+    if(ta){ ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    body.querySelector('[data-rewrite-cancel]').addEventListener('click', restore);
+    body.querySelector('[data-rewrite-save]').addEventListener('click', function(){
+      var txt=(ta&&ta.value||'').trim();
+      if(!txt){ if(ta){ ta.focus(); } return; }
+      var recId=card.getAttribute('data-rec-card');
+      fetch('/api/reconcile/falsifier/'+recId,
+            {method:'POST',headers:{'Content-Type':'application/json'},
+             body:JSON.stringify({action:'edit', text:txt})})
+        .then(function(r){ return r.json(); })
+        .then(function(res){
+          if(res && res.receipt){ showReceipt(res.receipt); }
+          reload();
+        });
+    });
+  }
   document.addEventListener('click', function(e){
     var v=e.target.closest('[data-rec-verdict]');
     if(v){
@@ -486,13 +615,14 @@ _RECONCILE_JS = """<script>(function(){
     }
     var f=e.target.closest('[data-falsifier-action]');
     if(f){
-      var action=f.getAttribute('data-falsifier-action'); var body={action:action};
+      var action=f.getAttribute('data-falsifier-action');
       if(action==='edit'){
-        var txt=window.prompt('Your falsifier, in your own words:');
-        if(!txt){ return; } body.text=txt;
+        var card=f.closest('[data-rec-card]');
+        if(card){ beginRewrite(card); }
+        return;
       }
       fetch('/api/reconcile/falsifier/'+f.getAttribute('data-rec-id'),
-            {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+            {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action})})
         .then(function(r){ return r.json(); })
         .then(function(res){
           if(res && res.receipt){ showReceipt(res.receipt); }
@@ -557,16 +687,25 @@ def render_reconcile_list(db_path: Path | str | None) -> str:
                 )
             )
             head = f"{escape(item.label)}<span class='ledger-chan'>inferred falsifier</span>"
-        else:
-            rec_kind = "note" if item.kind == "note" else "theme"
-            buttons = "".join(
-                f'<button type="button" class="k-btn k-btn-sm {cls}" '
-                f'data-rec-kind="{rec_kind}" data-rec-id="{item.item_id}" '
-                f'data-rec-verdict="{verdict}">{label}</button>'
-                for verdict, label, cls in _RECONCILE_VERDICTS
+            # data-rec-card + .ledger-editable-body: the in-card Rewrite swap
+            # (PR9) locates this exact card + the body div carrying the
+            # already-inferred text it pre-fills the textarea with.
+            cards.append(
+                f'<div class="ledger-musing" data-rec-card="{item.item_id}">'
+                f'<div class="ledger-musing-head">{head}</div>'
+                f'<div class="ledger-body ledger-editable-body">{escape(item.body[:400])}</div>'
+                f'<div class="ledger-cap-row">{buttons}</div></div>'
             )
-            tag = item.label if item.kind == "theme" else (item.source_ref or item.label)
-            head = f"<span class='ledger-chan'>{escape(tag)}</span>"
+            continue
+        rec_kind = "note" if item.kind == "note" else "theme"
+        buttons = "".join(
+            f'<button type="button" class="k-btn k-btn-sm {cls}" '
+            f'data-rec-kind="{rec_kind}" data-rec-id="{item.item_id}" '
+            f'data-rec-verdict="{verdict}">{label}</button>'
+            for verdict, label, cls in _RECONCILE_VERDICTS
+        )
+        tag = item.label if item.kind == "theme" else (item.source_ref or item.label)
+        head = f"<span class='ledger-chan'>{escape(tag)}</span>"
         cards.append(
             '<div class="ledger-musing">'
             f'<div class="ledger-musing-head">{head}</div>'
@@ -879,20 +1018,63 @@ def render_onmymind_list(
     return cards + _more_div(page.next_cursor)
 
 
+_ONMYMIND_TUTORIAL = (
+    "What you're thinking about and reading, newest first. Dismiss it, save it "
+    "for later, talk it through, or send it into research."
+)
+
+
 def _onmymind_section(db_path: Path | str | None, *, user_id: str = DEFAULT_USER_ID) -> str:
     """The On My Mind feed section — empty string when the flag is off (the panel
-    then keeps its plain Musings list unchanged)."""
+    then keeps its plain Musings list unchanged).
+
+    The tutorial sentence (PR9 "no section ceremony") renders as a visible
+    ``<p>`` only while the feed is empty (there's nothing else to look at, so
+    the explanation earns its place); once real cards exist it folds into the
+    heading's ``title=`` instead of repeating itself under every visit."""
     if not onmymind_enabled():
         return ""
+    list_html = render_onmymind_list(db_path, user_id=user_id)
+    if "ledger-empty" in list_html:
+        heading = '<h3 class="ledger-sec-h">On My Mind</h3>'
+        sub = f'<p class="ledger-sec-sub">{escape(_ONMYMIND_TUTORIAL)}</p>'
+    else:
+        heading = f'<h3 class="ledger-sec-h" title="{escape(_ONMYMIND_TUTORIAL, quote=True)}">On My Mind</h3>'
+        sub = ""
     return (
-        _ONMYMIND_STYLE + '<h3 class="ledger-sec-h">On My Mind</h3>'
-        '<p class="ledger-sec-sub">What you\'re thinking about and reading, newest first. '
-        "Dismiss it, save it for later, talk it through, or send it into research.</p>"
-        '<div id="onmymind-list">'
-        + render_onmymind_list(db_path, user_id=user_id)
+        _ONMYMIND_STYLE
+        + heading
+        + sub
+        + '<div id="onmymind-list">'
+        + list_html
         + "</div>"
         + _ONMYMIND_JS
     )
+
+
+# One guarded listener for the set-ticker chips (PR9): POSTs the new
+# set_ticker lifecycle action, then re-fetches the list fragment — the
+# existing list-refresh path _CAPTURE_JS already uses after a capture.
+_SET_TICKER_JS = """<script>(function(){
+  if(window.__ledgerSetTickerWired){ return; }
+  window.__ledgerSetTickerWired = true;
+  document.addEventListener('click', function(e){
+    var btn=e.target.closest('[data-set-ticker]');
+    if(!btn){ return; }
+    var card=btn.closest('[data-note-id]'); if(!card){ return; }
+    var noteId=card.getAttribute('data-note-id');
+    var ticker=btn.getAttribute('data-set-ticker');
+    btn.disabled=true;
+    fetch('/api/notes/'+noteId+'/set_ticker',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker:ticker})})
+      .then(function(r){ if(!r.ok){ throw new Error(); } return r.json(); })
+      .then(function(){
+        var list=document.getElementById('ledger-list');
+        if(list){ fetch('/api/panel/musings?fragment=list').then(function(r){return r.text();}).then(function(h){ list.innerHTML=h; }); }
+      })
+      .catch(function(){ btn.disabled=false; });
+  });
+})();</script>"""
 
 
 def render_ledger_list(db_path: Path | str | None, *, user_id: str = DEFAULT_USER_ID) -> str:
@@ -904,7 +1086,73 @@ def render_ledger_list(db_path: Path | str | None, *, user_id: str = DEFAULT_USE
             "thought above, or send one (voice or text) to your Telegram bot.</p></div>"
         )
     body = "".join(_musing_card(r) for r in rows)
-    return f'<div id="ledger-list">{body}</div>'
+    return f'<div id="ledger-list">{body}</div>{_SET_TICKER_JS}'
+
+
+def _jump_chip_counts(db_path: Path | str | None) -> dict[str, int]:
+    """Pending counts for the jump-chip toolbar's Research / Reconcile /
+    Worldview chips, reusing ``pipeline.open_loops``'s own cheap, independently-
+    guarded queries (never a duplicate SQL string) — each degrades to 0 on any
+    read failure so a chip count can never break the panel."""
+    from pipeline.open_loops import (
+        _pending_proposal_count,  # pyright: ignore[reportPrivateUsage]
+        _proposed_tenet_count,  # pyright: ignore[reportPrivateUsage]
+        _reconcile_count,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    counts: dict[str, int] = {}
+    try:
+        counts["reconcile"] = _reconcile_count(db_path)
+    except Exception:
+        counts["reconcile"] = 0
+    try:
+        counts["research"] = _pending_proposal_count(db_path)
+    except Exception:
+        counts["research"] = 0
+    try:
+        counts["worldview"] = _proposed_tenet_count(db_path)
+    except Exception:
+        counts["worldview"] = 0
+    return counts
+
+
+# (anchor id, chip label) — mirrors the Provenance console's anchor-nav
+# contract (data-prov-jump / scrollIntoView, never an href="#anchor": the
+# shell's hashchange router treats an unknown hash as a panel id and would
+# navigate away to Overview). See _JUMP_NAV_JS below.
+_JUMP_SECTIONS: tuple[tuple[str, str], ...] = (
+    ("capture", "Capture"),
+    ("onmymind", "On My Mind"),
+    ("worldview", "Worldview"),
+    ("stances", "Stances"),
+    ("research", "Research"),
+    ("reconcile", "Reconcile"),
+)
+
+_JUMP_NAV_JS = """
+(function () {
+  if (window.__ledgerJumpNav) return;
+  window.__ledgerJumpNav = true;
+  document.addEventListener('click', function (ev) {
+    var b = ev.target && ev.target.closest ? ev.target.closest('[data-ledger-jump]') : null;
+    if (!b) return;
+    ev.preventDefault();
+    var el = document.getElementById(b.getAttribute('data-ledger-jump'));
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+})();
+""".strip()
+
+
+def _jump_chip_toolbar(counts: dict[str, int]) -> str:
+    chips = "".join(
+        f'<button type="button" class="k-chip k-chip-btn" data-ledger-jump="ledger-jump-{anchor}">'
+        f"{escape(label)}"
+        + (f' <span class="k-chip-mono">{counts[anchor]}</span>' if counts.get(anchor) else "")
+        + "</button>"
+        for anchor, label in _JUMP_SECTIONS
+    )
+    return f'<div class="ledger-jump-toolbar">{chips}</div><script>{_JUMP_NAV_JS}</script>'
 
 
 def render_ledger_panel(db_path: Path | str | None, *, user_id: str = DEFAULT_USER_ID) -> str:
@@ -913,6 +1161,11 @@ def render_ledger_panel(db_path: Path | str | None, *, user_id: str = DEFAULT_US
     When ``LEDGER_ONMYMIND`` is on, the On My Mind feed (musings + readings, with
     the action ladder) is the front-of-funnel section and the plain Musings list is
     suppressed — On My Mind subsumes it. Off, the panel is unchanged.
+
+    A jump-chip toolbar (PR9) precedes the sections — each chip scrolls to its
+    anchor div (never an href hash; see ``_JUMP_NAV_JS``) and carries a pending
+    count where a queue exists (Research / Reconcile / Worldview), reusing
+    ``pipeline.open_loops``'s own cheap queries rather than duplicating SQL.
     """
     onmymind = _onmymind_section(db_path, user_id=user_id)
     # On My Mind is the broader feed (readings too, + the ladder); when it's live
@@ -922,17 +1175,37 @@ def render_ledger_panel(db_path: Path | str | None, *, user_id: str = DEFAULT_US
         if onmymind
         else '<h3 class="ledger-sec-h">Musings</h3>' + render_ledger_list(db_path, user_id=user_id)
     )
+    counts = _jump_chip_counts(db_path)
+    # PR9 "no section ceremony": the panel tutorial line is a visible <p> only
+    # while there's nothing captured yet (the front-of-funnel content — On My
+    # Mind when live, else the plain Musings list — is empty); once real
+    # captures exist it folds into <h2 title=> instead of repeating forever.
+    front_of_funnel = onmymind or musings_block
+    if "ledger-empty" in front_of_funnel:
+        h2 = "<h2>Ledger</h2>"
+        panel_sub = (
+            '<p class="sub">Your captured stream of consciousness. Talk or type a musing - '
+            "to your Telegram bot on the go, or here at the desk; it lands linked to a name "
+            "and you read it back below.</p>"
+        )
+    else:
+        h2 = (
+            '<h2 title="Your captured stream of consciousness — talk or type a musing, '
+            "to your Telegram bot on the go or here at the desk; it lands linked to a name "
+            'and you read it back below.">Ledger</h2>'
+        )
+        panel_sub = ""
     return (
-        _PANEL_STYLE + '<section class="panel"><h2>Ledger</h2>'
-        '<p class="sub">Your captured stream of consciousness. Talk or type a musing - '
-        "to your Telegram bot on the go, or here at the desk; it lands linked to a name "
-        "and you read it back below.</p>"
-        + _capture_box()
-        + onmymind
-        + render_worldview_section(db_path)
-        + _stance_section(db_path)
-        + _research_section(db_path)
-        + _reconcile_section(db_path)
-        + musings_block
+        _PANEL_STYLE
+        + f'<section class="panel">{h2}'
+        + panel_sub
+        + _jump_chip_toolbar(counts)
+        + f'<div id="ledger-jump-capture">{_capture_box()}</div>'
+        + f'<div id="ledger-jump-onmymind">{onmymind}</div>'
+        + f'<div id="ledger-jump-worldview">{render_worldview_section(db_path)}</div>'
+        + f'<div id="ledger-jump-stances">{_stance_section(db_path)}</div>'
+        + f'<div id="ledger-jump-research">{_research_section(db_path)}</div>'
+        + f'<div id="ledger-jump-reconcile">{_reconcile_section(db_path)}</div>'
+        + f'<div id="ledger-jump-musings">{musings_block}</div>'
         + "</section>"
     )

@@ -817,7 +817,9 @@ def create_app(
             upcoming_html=upcoming_html,
             open_loops_html=open_loops_html,
         )
-        return Response(render_shell(overview_html=overview), mimetype="text/html")
+        return Response(
+            render_shell(overview_html=overview, repo_root=repo_root), mimetype="text/html"
+        )
 
     @app.route("/api/dashboard", methods=["GET"])
     def dashboard_api():
@@ -1834,10 +1836,11 @@ def create_app(
     @app.route("/api/notes/<int:note_id>/<action>", methods=["POST", "OPTIONS"])
     def notes_action_api(note_id: int, action: str):
         """Lifecycle actions on one note (P4.5 + S15): resolve / reclassify /
-        supersede / archive / link / unlink. Supersede creates the chained
-        replacement and returns it; the others return the updated row. 404 on
-        unknown id or dangling link target, 400 on a bad kind, missing
-        supersede body, or a link with no target."""
+        supersede / archive / link / unlink / set_ticker. Supersede creates the
+        chained replacement and returns it; the others return the updated row.
+        404 on unknown id or dangling link target, 400 on a bad kind, missing
+        supersede body, a link with no target, or a set_ticker on a note that
+        already has one."""
         if request.method == "OPTIONS":
             return ("", 204)
         from user_state import notes as notes_store
@@ -1856,6 +1859,13 @@ def create_app(
             elif action == "unarchive":
                 # Wave 3b: the inbox's optimistic-archive Undo.
                 updated = notes_store.unarchive_note(note_id, db_path=db_path)
+            elif action == "set_ticker":
+                # PR9 Ledger set-ticker chips: attribute a needs_ticker musing to
+                # one of its detected candidates with a single tap.
+                set_ticker_raw = str(payload.get("ticker") or "").strip()
+                if not set_ticker_raw:
+                    return ({"error": "ticker required"}, 400)
+                updated = notes_store.set_ticker(note_id, ticker=set_ticker_raw, db_path=db_path)
             elif action == "reclassify":
                 updated = notes_store.reclassify_note(
                     note_id, kind=str(payload.get("kind") or ""), db_path=db_path

@@ -171,15 +171,27 @@ def render_worldview_body(db_path: Path | str | None) -> str:
     return "".join(parts)
 
 
+_WORLDVIEW_TUTORIAL = (
+    "The durable beliefs about how you invest — Tenets — distilled from what's "
+    "on your mind. You approve what the system proposes; contradictions with a "
+    "standing Tenet are flagged, never overwritten."
+)
+
+
 def render_worldview_section(db_path: Path | str | None) -> str:
-    """The Worldview section — empty string when ``LEDGER_WORLDVIEW`` is off."""
+    """The Worldview section — empty string when ``LEDGER_WORLDVIEW`` is off.
+
+    PR9 "no section ceremony": the tutorial sentence is a visible ``<p>`` only
+    while there are no Tenets yet (proposed or current) — once real Tenets
+    exist it folds into the heading's ``title=`` instead of repeating on
+    every visit."""
     if not worldview_enabled():
         return ""
-    return (
-        _WORLDVIEW_STYLE + '<h3 class="ledger-sec-h">Worldview</h3>'
-        '<p class="ledger-sec-sub">The durable beliefs about how you invest — Tenets — '
-        "distilled from what's on your mind. You approve what the system proposes; "
-        "contradictions with a standing Tenet are flagged, never overwritten.</p>"
-        + render_worldview_body(db_path)
-        + _WORLDVIEW_JS
-    )
+    body = render_worldview_body(db_path)
+    if "ledger-empty" in body:
+        heading = '<h3 class="ledger-sec-h">Worldview</h3>'
+        sub = f'<p class="ledger-sec-sub">{escape(_WORLDVIEW_TUTORIAL)}</p>'
+    else:
+        heading = f'<h3 class="ledger-sec-h" title="{escape(_WORLDVIEW_TUTORIAL, quote=True)}">Worldview</h3>'
+        sub = ""
+    return _WORLDVIEW_STYLE + heading + sub + body + _WORLDVIEW_JS

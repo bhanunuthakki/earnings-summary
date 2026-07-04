@@ -9,7 +9,9 @@ legacy-hash + section-alias redirects, the Ctrl+K palette chrome).
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 from pipeline.cc_state import CC_STATE_JS
 from pipeline.command_center_shell import (
@@ -21,6 +23,7 @@ from pipeline.command_center_shell import (
     SHELL_JS,
     render_overview_panel,
     render_shell,
+    system_status_summary,
 )
 
 
@@ -147,6 +150,80 @@ def test_system_demoted_to_utility_icon() -> None:
     assert 'data-cc-theme="system"' in html
 
 
+# ---------------------------------------------------------------------------
+# System status dot (PR9) — derived from the cheap daily-chain status
+# artifact, never the cron_health_panel's heavy multi-day ingestion_runs scan.
+# ---------------------------------------------------------------------------
+
+
+def _write_status(tmp_path: Path, payload: dict[str, object]) -> None:
+    status_dir = tmp_path / ".tmp"
+    status_dir.mkdir(parents=True, exist_ok=True)
+    (status_dir / "daily_chain_status.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_system_status_summary_none_without_repo_root() -> None:
+    assert system_status_summary(None) is None
+
+
+def test_system_status_summary_none_when_artifact_missing(tmp_path: Path) -> None:
+    assert system_status_summary(tmp_path) is None
+
+
+def test_system_status_summary_ok(tmp_path: Path) -> None:
+    _write_status(tmp_path, {"verdict": "ok", "runs_today": 1})
+    tone, summary = system_status_summary(tmp_path) or (None, None)
+    assert tone == "ok"
+    assert summary
+
+
+def test_system_status_summary_missing_verdict_is_bad(tmp_path: Path) -> None:
+    _write_status(tmp_path, {"verdict": "missing", "runs_today": 0})
+    tone, _summary = system_status_summary(tmp_path) or (None, None)
+    assert tone == "bad"
+
+
+def test_system_status_summary_failed_verdict_is_bad(tmp_path: Path) -> None:
+    _write_status(tmp_path, {"verdict": "failed", "error_summary": "kaboom"})
+    tone, summary = system_status_summary(tmp_path) or (None, None)
+    assert tone == "bad"
+    assert "kaboom" in (summary or "")
+
+
+def test_system_status_summary_db_error_is_warn(tmp_path: Path) -> None:
+    _write_status(tmp_path, {"verdict": "db_error", "error": "locked"})
+    tone, _summary = system_status_summary(tmp_path) or (None, None)
+    assert tone == "warn"
+
+
+def test_system_status_summary_corrupt_json_degrades_to_none(tmp_path: Path) -> None:
+    status_dir = tmp_path / ".tmp"
+    status_dir.mkdir(parents=True, exist_ok=True)
+    (status_dir / "daily_chain_status.json").write_text("not json", encoding="utf-8")
+    assert system_status_summary(tmp_path) is None
+
+
+def test_system_button_renders_dot_when_status_present() -> None:
+    html = render_shell(
+        overview_html="x",
+        generated_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    # No repo_root passed -> no dot ELEMENT (pre-PR9 look preserved; the
+    # .cc-system-dot CSS rules are unconditionally in the stylesheet).
+    assert '<span class="cc-system-dot' not in html
+
+
+def test_system_button_dot_wired_through_repo_root(tmp_path: Path) -> None:
+    _write_status(tmp_path, {"verdict": "ok", "runs_today": 1})
+    html = render_shell(
+        overview_html="x",
+        generated_at=datetime(2026, 6, 1, tzinfo=UTC),
+        repo_root=tmp_path,
+    )
+    assert 'class="cc-system-dot cc-system-dot-ok"' in html
+    assert "Morning pipeline OK" in html
+
+
 def test_single_tab_sections_suppress_their_sub_row() -> None:
     """Home and Ask have one sub-tab each — the row stays in the DOM (the JS
     derives the active section from the sub-tab's data-cc-theme) but is marked
@@ -207,7 +284,17 @@ def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
         "validation",
         "restatements",
         "model_eval",
+        "ledger",
+        "triggers",
+        "health",
     }
+    # PR9 — readable ritual-vocabulary aliases (the palette keeps canonical ids).
+    assert _LEGACY_PANEL_REDIRECTS["ledger"] == "musings"
+    assert _LEGACY_PANEL_REDIRECTS["triggers"] == "holdings"
+    assert _LEGACY_PANEL_REDIRECTS["health"] == "provenance"
+    assert "ledger:" in SHELL_JS.replace("'", "")
+    assert "triggers:" in SHELL_JS.replace("'", "")
+    assert "health:" in SHELL_JS.replace("'", "")
     # The collapsed diagnostics ids alias to the one console.
     for collapsed in (
         "section_coverage",
