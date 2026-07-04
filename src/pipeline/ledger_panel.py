@@ -1144,13 +1144,22 @@ _JUMP_NAV_JS = """
 """.strip()
 
 
-def _jump_chip_toolbar(counts: dict[str, int]) -> str:
+def _jump_chip_toolbar(counts: dict[str, int], *, onmymind_on: bool) -> str:
+    # A jump chip must point at a section that actually renders — a chip to a
+    # suppressed section is the broken doorway the audit fought. When On My Mind
+    # is off, that section is empty and the plain Musings list is the front feed,
+    # so the chip becomes "Musings" -> ledger-jump-musings instead.
+    sections = [
+        (anchor, label) for anchor, label in _JUMP_SECTIONS if anchor != "onmymind" or onmymind_on
+    ]
+    if not onmymind_on:
+        sections.append(("musings", "Musings"))
     chips = "".join(
         f'<button type="button" class="k-chip k-chip-btn" data-ledger-jump="ledger-jump-{anchor}">'
         f"{escape(label)}"
         + (f' <span class="k-chip-mono">{counts[anchor]}</span>' if counts.get(anchor) else "")
         + "</button>"
-        for anchor, label in _JUMP_SECTIONS
+        for anchor, label in sections
     )
     return f'<div class="ledger-jump-toolbar">{chips}</div><script>{_JUMP_NAV_JS}</script>'
 
@@ -1199,7 +1208,7 @@ def render_ledger_panel(db_path: Path | str | None, *, user_id: str = DEFAULT_US
         _PANEL_STYLE
         + f'<section class="panel">{h2}'
         + panel_sub
-        + _jump_chip_toolbar(counts)
+        + _jump_chip_toolbar(counts, onmymind_on=bool(onmymind))
         + f'<div id="ledger-jump-capture">{_capture_box()}</div>'
         + f'<div id="ledger-jump-onmymind">{onmymind}</div>'
         + f'<div id="ledger-jump-worldview">{render_worldview_section(db_path)}</div>'
