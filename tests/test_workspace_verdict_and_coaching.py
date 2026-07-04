@@ -15,9 +15,11 @@ from io import StringIO
 from pathlib import Path
 
 from report.models import (
+    CellSource,
     FinancialsSection,
     KpiLedgerRow,
     PortfolioPositionSection,
+    QuarterlyLineItem,
     SectionStatus,
     SynthesisLensRow,
     SynthesisSection,
@@ -25,6 +27,7 @@ from report.models import (
 from report.renderers.workspace_data import KpiStripTile, select_kpi_strip
 from report.renderers.workspace_html import (
     _kpi_tile,  # pyright: ignore[reportPrivateUsage]
+    _newest_quarter_ingested_at,  # pyright: ignore[reportPrivateUsage]
     _position_coaching,  # pyright: ignore[reportPrivateUsage]
     _reread_strip,  # pyright: ignore[reportPrivateUsage]
     _verdict_badge,  # pyright: ignore[reportPrivateUsage]
@@ -60,6 +63,82 @@ def test_verdict_badge_no_as_of_when_never_evaluated() -> None:
     out = _verdict_badge("pending", None, "Q1 2026")
     assert "as of" not in out
     assert "title=" not in out
+
+
+def test_verdict_badge_greys_in_the_print_gap_when_ingestion_known() -> None:
+    # THE fake-fresh window: Q1 2026 ends Mar-31 but the print only landed
+    # (was ingested) May-8. A verdict evaluated Apr-10 postdates the calendar
+    # quarter-end yet has NOT seen the print — with the ingestion date known,
+    # the badge must grey instead of rendering fresh-green.
+    out = _verdict_badge(
+        "intact", datetime(2026, 4, 10, 9, 0, 0), "Q1 2026", datetime(2026, 5, 8, 14, 0, 0)
+    )
+    assert "var(--muted-2)" in out
+    assert "var(--ok)" not in out
+    assert "predates the Q1 2026 print (data ingested 2026-05-08)" in out
+    assert "Thesis Intact" in out
+
+
+def test_verdict_badge_fresh_when_evaluation_postdates_ingestion() -> None:
+    out = _verdict_badge(
+        "intact", datetime(2026, 5, 20, 12, 0, 0), "Q1 2026", datetime(2026, 5, 8, 14, 0, 0)
+    )
+    assert "var(--ok)" in out
+    assert "var(--muted-2)" not in out
+    assert "predates" not in out
+
+
+# ---------------------------------------------------------------------------
+# 1b. Newest-quarter ingestion date (the badge's staleness reference)
+# ---------------------------------------------------------------------------
+
+
+def _line_item_with_sources(fetched: list[str | None]) -> QuarterlyLineItem:
+    return QuarterlyLineItem(
+        line_item="Revenue",
+        unit="USD millions",
+        levels_full=[1.0] * len(fetched),
+        sources_full=[
+            CellSource(source="sec_official", fetched_at=f) if f is not None else None
+            for f in fetched
+        ],
+    )
+
+
+def test_newest_quarter_ingested_at_is_max_fetched_at_of_newest_cells() -> None:
+    fin = FinancialsSection(
+        status=SectionStatus.OK,
+        quarter_labels=["Q4 2025", "Q1 2026"],
+        line_items=[
+            _line_item_with_sources(["2026-02-01 09:00:00", "2026-05-08 14:00:00"]),
+            _line_item_with_sources([None, "2026-05-10"]),
+        ],
+    )
+    # Only the NEWEST quarter's cells count (the Feb stamp belongs to Q4),
+    # and the max across line items wins.
+    assert _newest_quarter_ingested_at(fin) == datetime(2026, 5, 10)
+
+
+def test_newest_quarter_ingested_at_none_without_provenance() -> None:
+    fin = FinancialsSection(
+        status=SectionStatus.OK,
+        quarter_labels=["Q1 2026"],
+        line_items=[QuarterlyLineItem(line_item="Revenue", unit="USD millions", levels_full=[1.0])],
+    )
+    assert _newest_quarter_ingested_at(fin) is None
+
+
+def test_newest_quarter_ingested_at_skips_unparseable_and_missing_cells() -> None:
+    fin = FinancialsSection(
+        status=SectionStatus.OK,
+        quarter_labels=["Q4 2025", "Q1 2026"],
+        line_items=[
+            # Newest cell has no provenance row (older stamp is Q4's, not Q1's).
+            _line_item_with_sources(["2026-05-08 14:00:00", None]),
+            _line_item_with_sources([None, "not-a-timestamp"]),
+        ],
+    )
+    assert _newest_quarter_ingested_at(fin) is None
 
 
 # ---------------------------------------------------------------------------

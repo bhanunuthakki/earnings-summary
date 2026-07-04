@@ -8,11 +8,12 @@ re-exports in ``workspace_html``."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from io import StringIO
 
 from report.models import (
     BudgetSkip,
+    FinancialsSection,
     KpiLedgerRow,
     RecentDevelopmentsSection,
     ReportSpec,
@@ -48,6 +49,7 @@ __all__ = [
     "_identity",
     "_kpi_strip",
     "_kpi_tile",
+    "_newest_quarter_ingested_at",
     "_news_tab",
     "_news_tile",
     "_open_items_strip",
@@ -67,7 +69,14 @@ def _identity(body: StringIO, spec: ReportSpec) -> None:
     body.write('<div class="company-row">')
     body.write(f'<span class="company-name">{_esc(snap.company_name or spec.ticker)}</span>')
     newest_quarter = spec.financials.quarter_labels[-1] if spec.financials.quarter_labels else None
-    body.write(_verdict_badge(snap.verdict, snap.verdict_as_of, newest_quarter))
+    body.write(
+        _verdict_badge(
+            snap.verdict,
+            snap.verdict_as_of,
+            newest_quarter,
+            _newest_quarter_ingested_at(spec.financials),
+        )
+    )
     body.write("</div>")
     body.write('<div class="company-meta">')
     body.write(f"<span>USD · Report dated {fmt_date(spec.generation_date.isoformat())}</span>")
@@ -131,20 +140,55 @@ def _quarter_label_end_date(label: str) -> datetime | None:
     return datetime(year, month, day)
 
 
+def _newest_quarter_ingested_at(financials: FinancialsSection) -> datetime | None:
+    """When the newest quarter's data actually LANDED in this build — the max
+    ``documents.fetched_at`` across the levels table's newest-quarter cells
+    (``QuarterlyLineItem.sources_full`` aligns to ``levels_full``, whose last
+    entry is the newest quarter on the shared axis). None when no cell carries
+    dated provenance (older built reports, legacy DBs) — the badge then falls
+    back to the calendar quarter-end proxy."""
+    newest: datetime | None = None
+    for li in financials.line_items:
+        if not li.sources_full or len(li.sources_full) != len(li.levels_full):
+            continue
+        src = li.sources_full[-1]
+        if src is None or not src.fetched_at:
+            continue
+        try:
+            stamp = datetime.fromisoformat(src.fetched_at)
+        except ValueError:
+            continue
+        if stamp.tzinfo is not None:
+            # Naive-UTC convention (aware stamps crash comparisons downstream).
+            stamp = stamp.astimezone(UTC).replace(tzinfo=None)
+        if newest is None or stamp > newest:
+            newest = stamp
+    return newest
+
+
 def _verdict_badge(
     verdict: str,
     verdict_as_of: datetime | None = None,
     newest_quarter_label: str | None = None,
+    newest_ingested_at: datetime | None = None,
 ) -> str:
     """Thesis-verdict badge, dated + honest-grey when stale.
 
     ``verdict_as_of`` is ``thesis_state.last_updated`` (persist_verdict writes
-    ``verdict.evaluated_at`` there). When it predates the newest quarter this
-    build has data for, the evaluation is stale — the badge renders the
-    'pending' muted dot instead of the verdict's own tone so a stale read
+    ``verdict.evaluated_at`` there). When it predates the newest quarter's
+    print this build has data for, the evaluation is stale — the badge renders
+    the 'pending' muted dot instead of the verdict's own tone so a stale read
     never reads as fresh green (honest-grey, never fake-green), while the
     label text stays the actual verdict (still informative, just not implied
     current).
+
+    Staleness compares against ``newest_ingested_at`` — when the newest
+    quarter's facts were ingested (:func:`_newest_quarter_ingested_at`) — not
+    the calendar quarter-end. Prints land 4-7 weeks after quarter end, so a
+    verdict evaluated in that gap (after Mar-31, before the May print) has NOT
+    seen the newest quarter and must grey; the calendar proxy would render it
+    fake-fresh in exactly the window a new print most often flips a thesis.
+    The proxy remains only as the fallback when no ingestion date is known.
     """
     mapping = {
         "intact": ("Thesis Intact", "var(--ok)"),
@@ -154,10 +198,13 @@ def _verdict_badge(
     }
     label, dot = mapping.get(verdict, mapping["pending"])
     is_stale = False
-    if verdict_as_of is not None and newest_quarter_label is not None:
-        newest_end = _quarter_label_end_date(newest_quarter_label)
-        if newest_end is not None and verdict_as_of < newest_end:
-            is_stale = True
+    if verdict_as_of is not None:
+        if newest_ingested_at is not None:
+            is_stale = verdict_as_of < newest_ingested_at
+        elif newest_quarter_label is not None:
+            newest_end = _quarter_label_end_date(newest_quarter_label)
+            if newest_end is not None and verdict_as_of < newest_end:
+                is_stale = True
     if is_stale:
         dot = mapping["pending"][1]
     as_of_html = ""
@@ -167,7 +214,11 @@ def _verdict_badge(
         as_of_html = f' <span class="verdict-asof muted">as of {_esc(as_of_display)}</span>'
         title_bits = [f"Evaluated {verdict_as_of.date().isoformat()}"]
         if is_stale:
-            title_bits.append(f"predates the {newest_quarter_label} print")
+            quarter_phrase = f"the {newest_quarter_label}" if newest_quarter_label else "the newest"
+            stale_bit = f"predates {quarter_phrase} print"
+            if newest_ingested_at is not None:
+                stale_bit += f" (data ingested {newest_ingested_at.date().isoformat()})"
+            title_bits.append(stale_bit)
         title_attr = f' title="{_esc(" — ".join(title_bits))}"'
     return (
         f'<span class="badge"{title_attr}><span class="dot" style="background:{dot}"></span>'
