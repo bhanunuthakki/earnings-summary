@@ -64,7 +64,9 @@ _PANEL_STYLE = """<style>
   font: inherit; color: var(--fg); }
 .tri-text:hover { color: var(--accent); text-decoration: underline; }
 .tri-acts { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
-.tri-acts select { font-size: var(--fs-caption); }
+/* Route picker: the kit's <select> baseline owns border/radius/chevron/focus —
+   this only adds dense-row layout (caption type), never re-skins the control. */
+.tri-route { font-size: var(--fs-caption); padding-top: 3px; padding-bottom: 3px; }
 .tri-empty { color: var(--muted); padding: var(--sp-4) 0; }
 /* S4 drill-in: a right-side .k-overlay (look + open motion from the kit). */
 #triage-drawer { top: var(--sp-3); right: var(--sp-3); bottom: var(--sp-3);
@@ -95,7 +97,7 @@ def _route_select() -> str:
         f'<option value="{escape(i)}">{escape(_INTENT_LABELS.get(i, i))}</option>'
         for i in ROUTABLE_INTENTS
     )
-    return f'<select class="k-btn k-btn-quiet" data-act="route" title="Route to a real intent">{opts}</select>'
+    return f'<select class="tri-route" data-act="route" title="Route to a real intent">{opts}</select>'
 
 
 def _anchor_text(n: AnalystNoteRow) -> str:
