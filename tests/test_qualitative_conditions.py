@@ -198,6 +198,83 @@ def test_attach_qualitative_no_section_stamps_empty(
     assert val == "[]"  # stamped done, distinct from NULL
 
 
+def test_attach_qualitative_transient_failure_does_not_block_other_decisions(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same resilience contract as attach_conditions: a transient per-call
+    failure (subprocess non-zero exit / timeout / both backends momentarily
+    down) on one decision must not stop the loop from reaching the next one."""
+    conn = _conn(db)
+    try:
+        conn.execute("INSERT INTO llm_artifacts (id, content_md) VALUES (1, ?)", (_WWCMM,))
+        conn.execute(
+            "INSERT INTO decisions (ticker, recommendation_kind, source_artifact_id, made_at) "
+            "VALUES ('NU', 'add', 1, '2026-05-01')"
+        )
+        conn.execute("INSERT INTO llm_artifacts (id, content_md) VALUES (2, ?)", (_WWCMM,))
+        conn.execute(
+            "INSERT INTO decisions (ticker, recommendation_kind, source_artifact_id, made_at) "
+            "VALUES ('MELI', 'add', 2, '2026-05-02')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    calls: list[str] = []
+
+    def flaky(prompt: str, **kwargs: object) -> object:
+        ticker = str(kwargs.get("ticker"))
+        calls.append(ticker)
+        if ticker == "NU":
+            raise RuntimeError("claude -p exited 1 and Gemini fallback is not configured")
+        return [{"phrase": "the CEO departs", "watch_for": "news", "note": None}]
+
+    monkeypatch.setattr(dc, "call_llm_structured", flaky)
+    tally = dc.attach_qualitative_conditions(db_path=db)
+
+    assert tally["deferred_transient"] == 1
+    assert tally["extracted"] == 1
+    assert calls == ["NU", "MELI"]
+
+    conn = _conn(db)
+    try:
+        rows = {
+            r["ticker"]: r
+            for r in conn.execute(
+                "SELECT ticker, qualitative_conditions, qualitative_conditions_extracted_at "
+                "FROM decisions"
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+    assert rows["NU"]["qualitative_conditions_extracted_at"] is None  # retried next run
+    assert rows["MELI"]["qualitative_conditions_extracted_at"] is not None
+
+
+def test_attach_qualitative_hard_stop_propagates(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """LLMSetupError must still propagate — a missing CLI is an operator
+    problem, not a per-decision extraction quality issue."""
+    from llm.cli import LLMSetupError
+
+    conn = _conn(db)
+    try:
+        conn.execute("INSERT INTO llm_artifacts (id, content_md) VALUES (1, ?)", (_WWCMM,))
+        conn.execute(
+            "INSERT INTO decisions (ticker, recommendation_kind, source_artifact_id, made_at) "
+            "VALUES ('NU', 'add', 1, '2026-05-01')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    def setup_broken(prompt: str, **kwargs: object) -> object:
+        raise LLMSetupError("Claude Code CLI ('claude') not found in PATH.")
+
+    monkeypatch.setattr(dc, "call_llm_structured", setup_broken)
+    with pytest.raises(LLMSetupError):
+        dc.attach_qualitative_conditions(db_path=db)
+
+
 def test_attach_qualitative_no_column_degrades(tmp_path: Path) -> None:
     # A pre-0108 DB (decisions without the qualitative column) → db_unavailable.
     path = tmp_path / "old.db"

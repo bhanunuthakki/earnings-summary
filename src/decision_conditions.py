@@ -73,6 +73,7 @@ from pathlib import Path
 from typing import cast
 
 from clock import now_iso
+from llm.cli import is_hard_stop
 from llm.structured import StructuredParseError, call_llm_structured
 from models.facts import Unit
 
@@ -666,15 +667,21 @@ def attach_conditions(
 
     Per-row degradation: a missing source or absent section stamps the row
     with '[]' (done — re-running won't re-pay); a ``StructuredParseError``
-    leaves the row unstamped (retried next run) and is tallied. LLM hard
-    stops (budget cap, missing CLI) propagate — they are configuration, not
-    extraction quality, and must halt the batch loudly.
+    (bad JSON twice) or any other TRANSIENT LLM-call failure (CLI subprocess
+    non-zero exit, timeout, both Claude + Gemini momentarily unavailable)
+    leaves the row unstamped (retried next run) and is tallied. Either way the
+    loop CONTINUES to the next decision — one flaky call must not deny every
+    other decision its conditions for the day. LLM hard stops
+    (``LLMBudgetExceeded`` / ``LLMSetupError``, see ``llm.cli.is_hard_stop``)
+    still PROPAGATE — they are configuration problems, not extraction quality,
+    and must halt the batch loudly (re-running won't help until fixed).
     """
     tally = {
         "extracted": 0,
         "no_conditions": 0,
         "no_section": 0,
         "parse_failed": 0,
+        "deferred_transient": 0,
         "awaiting_ratification": 0,
         "db_unavailable": 0,
     }
@@ -746,6 +753,28 @@ def attach_conditions(
                     }
                 )
                 tally["parse_failed"] += 1
+                continue
+            except Exception as exc:
+                # Hard stops (budget cap / missing CLI) are configuration
+                # problems, not this decision's extraction quality — they must
+                # halt the WHOLE batch loudly (see llm.cli.is_hard_stop).
+                # Everything else (subprocess non-zero exit, timeout, both
+                # Claude + Gemini momentarily unavailable) is a TRANSIENT
+                # per-call failure: leave this row unstamped (conditions_
+                # extracted_at IS NULL keeps it in next run's queue) and move
+                # on so one bad call can't deny every other decision that
+                # day's condition extraction.
+                if is_hard_stop(exc):
+                    raise
+                log.warning(
+                    {
+                        "event": "decision_conditions_extract_transient_failure",
+                        "decision_id": decision_id,
+                        "ticker": ticker,
+                        "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                    }
+                )
+                tally["deferred_transient"] += 1
                 continue
             _stamp(conn, decision_id, conditions)
             if conditions:
@@ -823,15 +852,19 @@ def attach_qualitative_conditions(
     ``qualitative_conditions_extracted_at IS NULL`` rows oldest-first over the
     SAME "What would change my mind" prose, runs the qualitative pass, stamps the
     separate column. Independent of the numeric stamp, so the two passes never
-    block each other. Same degradation contract (missing source / no section →
-    stamped '[]'; ``StructuredParseError`` → unstamped, retried; LLM hard stops
-    propagate). No-op on a pre-0108 DB (the column is absent).
+    block each other. Same degradation contract as ``attach_conditions``:
+    missing source / no section → stamped '[]'; a ``StructuredParseError`` or
+    any other TRANSIENT LLM-call failure → unstamped, retried next run, loop
+    continues to the next decision; LLM hard stops (``is_hard_stop``)
+    propagate and halt the batch loudly. No-op on a pre-0108 DB (the column is
+    absent).
     """
     tally = {
         "extracted": 0,
         "no_conditions": 0,
         "no_section": 0,
         "parse_failed": 0,
+        "deferred_transient": 0,
         "db_unavailable": 0,
     }
     conn = _open(db_path)
@@ -882,6 +915,24 @@ def attach_qualitative_conditions(
                     }
                 )
                 tally["parse_failed"] += 1
+                continue
+            except Exception as exc:
+                # Same hard-stop-vs-transient split as attach_conditions: a
+                # budget cap / missing CLI must halt the whole batch loudly;
+                # everything else (subprocess non-zero exit, timeout, both
+                # backends momentarily down) leaves this row unstamped
+                # (retried next run) and the loop moves to the next decision.
+                if is_hard_stop(exc):
+                    raise
+                log.warning(
+                    {
+                        "event": "qualitative_conditions_extract_transient_failure",
+                        "decision_id": decision_id,
+                        "ticker": ticker,
+                        "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+                    }
+                )
+                tally["deferred_transient"] += 1
                 continue
             _stamp_qualitative(conn, decision_id, conditions)
             if conditions:
