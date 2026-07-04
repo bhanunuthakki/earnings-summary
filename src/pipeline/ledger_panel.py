@@ -70,6 +70,23 @@ _PANEL_STYLE = """<style>
 .ledger-coach-row input { flex: 1; font-family: var(--sans); font-size: var(--fs-body); }
 .ledger-coach-x { position: absolute; top: var(--sp-2); right: var(--sp-2); }
 .ledger-coach-receipt { color: var(--fg-soft); font-size: var(--fs-caption); }
+/* Ratify receipt (consequence receipts PR) — a transient one-line notice
+   above the Reconcile list; a sibling of #ledger-reconcile so the fragment
+   reload's outerHTML swap never clobbers it before it's read. */
+.ledger-receipt { color: var(--fg-soft); font-size: var(--fs-caption);
+  padding: var(--sp-2) 0; }
+/* Armed-falsifiers table — dense, token-only; no new color intent beyond
+   the existing muted/fg vocabulary. */
+.ledger-armed-h { font-size: var(--fs-caption); font-weight: 600; color: var(--fg);
+  margin: var(--sp-3) 0 var(--sp-1); text-transform: uppercase; letter-spacing: 0.05em; }
+.ledger-armed-table { width: 100%; border-collapse: collapse; font-size: var(--fs-caption); }
+.ledger-armed-table th { text-align: left; color: var(--muted); font-weight: 600;
+  padding: var(--sp-1) var(--sp-2); border-bottom: 1px solid var(--border); }
+.ledger-armed-table td { padding: var(--sp-1) var(--sp-2); border-bottom: 1px solid var(--hairline); }
+.ledger-armed-ticker { font-family: var(--mono); font-weight: 600; }
+.ledger-armed-since { color: var(--muted); white-space: nowrap; }
+.ledger-armed-num a { color: var(--muted); text-decoration: none; }
+.ledger-armed-num a:hover { color: var(--accent); }
 </style>"""
 
 _CAPTURE_JS = """<script>(function(){
@@ -450,6 +467,15 @@ _RECONCILE_JS = """<script>(function(){
     fetch('/api/panel/musings?fragment=reconcile').then(function(r){return r.text();})
       .then(function(h){ var el=document.getElementById('ledger-reconcile'); if(el){ el.outerHTML=h; } });
   }
+  // The ratify receipt ("armed"/"queued for arming") renders into
+  // #ledger-receipt — a SIBLING of #ledger-reconcile the reload() swap above
+  // never touches, so the notice survives the list refresh underneath it.
+  function showReceipt(text){
+    var el=document.getElementById('ledger-receipt');
+    if(!el){ return; }
+    el.textContent=text;
+    el.hidden=false;
+  }
   document.addEventListener('click', function(e){
     var v=e.target.closest('[data-rec-verdict]');
     if(v){
@@ -467,7 +493,11 @@ _RECONCILE_JS = """<script>(function(){
       }
       fetch('/api/reconcile/falsifier/'+f.getAttribute('data-rec-id'),
             {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
-        .then(function(){ reload(); });
+        .then(function(r){ return r.json(); })
+        .then(function(res){
+          if(res && res.receipt){ showReceipt(res.receipt); }
+          reload();
+        });
     }
   });
 })();</script>"""
@@ -546,6 +576,66 @@ def render_reconcile_list(db_path: Path | str | None) -> str:
     return f'<div id="ledger-reconcile">{"".join(cards)}</div>'
 
 
+def _condition_text(cond: object) -> str:
+    """One falsifier condition's display text — the owner's own ``note`` when
+    the extractor kept one, else the structured metric/op/threshold shape."""
+    from decision_conditions import DecisionCondition
+
+    if isinstance(cond, DecisionCondition):
+        if cond.note:
+            return cond.note
+        op_word = {"lt": "<", "le": "<=", "gt": ">", "ge": ">=", "eq": "="}.get(cond.op, cond.op)
+        return f"{cond.metric} {op_word} {cond.threshold:g} {cond.unit}"
+    return str(cond)
+
+
+def render_armed_falsifiers_table(db_path: Path | str | None) -> str:
+    """The Reconcile section's "Armed falsifiers (N)" table — one row per open
+    owner decision condition, read through :func:`decision_conditions.
+    load_all_open_decisions` (the SAME per-ticker accessor
+    ``DecisionConditionTrigger.scan`` evaluates — never the position-lifecycle
+    snapshot, which is a display-only summary the trigger never reads).
+
+    Hide-don't-stub: N=0 renders nothing (the caller decides whether a
+    receipt line alone still earns the section). Best-effort — any read
+    failure degrades to the empty string, never a 500."""
+    if db_path is None:
+        # decision_conditions.py's whole module contracts on a concrete
+        # Path|str (unlike synthesis.reconcile's Path|str|None-with-default
+        # convention this panel otherwise follows) — no default DB to fall
+        # back to here, so an absent path degrades like every other read
+        # failure below.
+        return ""
+    try:
+        from decision_conditions import load_all_open_decisions
+
+        decisions = load_all_open_decisions(db_path)
+    except Exception:
+        return ""
+    rows: list[tuple[str, str, str, int]] = []  # (ticker, falsifier, since, decision_id)
+    for d in decisions:
+        for cond in d.conditions:
+            rows.append((d.ticker, _condition_text(cond), d.made_at, d.decision_id))
+    if not rows:
+        return ""
+    body = "".join(
+        "<tr>"
+        f'<td class="ledger-armed-ticker">{escape(ticker)}</td>'
+        f'<td class="ledger-armed-falsifier" title="{escape(text)}">'
+        f"{escape(text[:100])}{'…' if len(text) > 100 else ''}</td>"
+        f'<td class="ledger-armed-since">{stamp_html(since, mode="date", css="")}</td>'
+        f'<td class="ledger-armed-num"><a href="{_DECISIONS_HASH}">#{decision_id}</a></td>'
+        "</tr>"
+        for ticker, text, since, decision_id in rows
+    )
+    return (
+        f'<h4 class="ledger-armed-h">Armed falsifiers ({len(rows)})</h4>'
+        '<table class="ledger-armed-table"><thead><tr>'
+        "<th>Ticker</th><th>Falsifier</th><th>Since</th><th>Decision</th>"
+        f"</tr></thead><tbody>{body}</tbody></table>"
+    )
+
+
 def _auto_reconcile_line(db_path: Path | str | None) -> str:
     """The 'derive, don't ask' receipt: what software already resolved, so the
     queue only ever shows the irreducible owner-only residue."""
@@ -568,13 +658,26 @@ def _auto_reconcile_line(db_path: Path | str | None) -> str:
 def _reconcile_section(db_path: Path | str | None) -> str:
     items = render_reconcile_list(db_path)
     auto_line = _auto_reconcile_line(db_path)
+    # A ratify receipt (the arming-status line) renders into this div, a
+    # SIBLING of #ledger-reconcile — not inside it — so the reload's
+    # outerHTML swap on #ledger-reconcile (or a direct ?fragment=reconcile
+    # refetch) can never clobber it before the owner reads it.
+    receipt_div = '<div id="ledger-receipt" class="ledger-receipt" hidden></div>'
+    armed_table = render_armed_falsifiers_table(db_path)
     if "ledger-empty" in items and auto_line:
-        # Nothing needs the owner — one receipt line, no section ceremony.
-        return f'<h3 class="ledger-sec-h">Reconcile</h3>{auto_line}'
+        # Nothing needs the owner's reconcile verdicts — but armed tripwires
+        # are still the between-reconciles reason to visit, so the table (if
+        # non-empty) survives the section's collapse to a receipt line.
+        return f'<h3 class="ledger-sec-h">Reconcile</h3>{auto_line}{receipt_div}{armed_table}'
     return (
         '<h3 class="ledger-sec-h">Reconcile</h3>'
         '<p class="ledger-sec-sub">Only what genuinely needs you — falsifiers I would '
-        "quote back at you must be in your own words.</p>" + auto_line + items + _RECONCILE_JS
+        "quote back at you must be in your own words.</p>"
+        + auto_line
+        + receipt_div
+        + items
+        + armed_table
+        + _RECONCILE_JS
     )
 
 

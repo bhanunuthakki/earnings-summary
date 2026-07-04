@@ -102,6 +102,9 @@ class AlertRow:
     signature_sha: str
     dismissed_at: datetime | None
     approved_at: datetime | None
+    # Optional, defaulted (0142): existing keyword-arg call sites (several
+    # test fixtures build AlertRow directly) stay byte-compatible.
+    dismiss_reason: str | None = None
 
 
 @dataclass(slots=True)
@@ -309,8 +312,14 @@ def approve_alert(alert_id: int, db_path: Path | str | None = None) -> AlertRow:
     )
 
 
-def dismiss_alert(alert_id: int, db_path: Path | str | None = None) -> AlertRow:
+def dismiss_alert(
+    alert_id: int, db_path: Path | str | None = None, *, reason: str | None = None
+) -> AlertRow:
     """Transition pending → dismissed. Stamps ``dismissed_at`` to now().
+
+    ``reason`` (0142) is the owner's own words on why the alert stopped
+    mattering — signal capture, not a required field: the dismiss itself
+    never blocks on it, so a blank/None reason just leaves the column NULL.
 
     See ``approve_alert`` for the exception semantics — symmetric.
     """
@@ -319,6 +328,7 @@ def dismiss_alert(alert_id: int, db_path: Path | str | None = None) -> AlertRow:
         target_status=ALERT_STATUS_DISMISSED,
         stamp_column="dismissed_at",
         db_path=db_path,
+        reason=reason,
     )
 
 
@@ -328,28 +338,73 @@ def _transition_alert(
     target_status: str,
     stamp_column: str,
     db_path: Path | str | None,
+    reason: str | None = None,
 ) -> AlertRow:
     """Shared pending → terminal-status transition.
 
     ``stamp_column`` is one of ``approved_at`` / ``dismissed_at`` — hard-coded
     to the matching column for the target status (no SQL injection surface;
-    callers come from this module only).
+    callers come from this module only). ``reason`` only ever applies to a
+    dismiss (approve carries no reason field); ignored otherwise.
     """
     if stamp_column not in {"approved_at", "dismissed_at"}:
         raise ValueError(f"unsupported stamp column: {stamp_column!r}")
     conn = _open(db_path)
     try:
         now = _now_iso()
-        cur = conn.execute(
-            f"""
-            UPDATE alerts
-            SET status = ?, {stamp_column} = ?
-            WHERE id = ? AND status = ?
-            """,
-            (target_status, now, alert_id, ALERT_STATUS_PENDING),
-        )
+        reason_clean = (reason or "").strip() or None
+        if stamp_column == "dismissed_at" and reason_clean is not None:
+            cur = conn.execute(
+                f"""
+                UPDATE alerts
+                SET status = ?, {stamp_column} = ?, dismiss_reason = ?
+                WHERE id = ? AND status = ?
+                """,
+                (target_status, now, reason_clean, alert_id, ALERT_STATUS_PENDING),
+            )
+        else:
+            cur = conn.execute(
+                f"""
+                UPDATE alerts
+                SET status = ?, {stamp_column} = ?
+                WHERE id = ? AND status = ?
+                """,
+                (target_status, now, alert_id, ALERT_STATUS_PENDING),
+            )
         if cur.rowcount == 0:
             _raise_transition_conflict(conn, "alerts", alert_id, ALERT_STATUS_PENDING)
+        conn.commit()
+        return _fetch_alert(conn, alert_id)
+    finally:
+        conn.close()
+
+
+def set_alert_dismiss_reason(
+    alert_id: int, reason: str, db_path: Path | str | None = None
+) -> AlertRow:
+    """Attach (or replace) the dismiss reason on an ALREADY-dismissed alert.
+
+    The dashboard's "why?" affordance renders only after the dismiss chip has
+    already swapped in (0142's deferred-signal-capture UX), so this is a
+    separate write from ``dismiss_alert`` itself — the dismiss never blocks on
+    a reason, and this call must not re-run (or fail on) the pending→dismissed
+    transition. Raises ``LookupError`` if the alert doesn't exist, or
+    ``ValueError`` if it was never dismissed (a reason on a pending/approved
+    alert has no meaning)."""
+    conn = _open(db_path)
+    try:
+        row = conn.execute("SELECT status FROM alerts WHERE id = ?", (alert_id,)).fetchone()
+        if row is None:
+            raise LookupError(f"alerts id={alert_id} not found")
+        if str(row["status"]) != ALERT_STATUS_DISMISSED:
+            raise ValueError(
+                f"alerts id={alert_id} status is {row['status']!r}, "
+                f"expected {ALERT_STATUS_DISMISSED!r} to attach a dismiss reason"
+            )
+        conn.execute(
+            "UPDATE alerts SET dismiss_reason = ? WHERE id = ?",
+            ((reason or "").strip() or None, alert_id),
+        )
         conn.commit()
         return _fetch_alert(conn, alert_id)
     finally:
@@ -658,6 +713,11 @@ def _fetch_action(conn: sqlite3.Connection, action_id: int) -> QueuedActionRow:
 
 def _row_to_alert(row: sqlite3.Row) -> AlertRow:
     raw_memo = row["memo_artifact_id"]
+    # dismiss_reason (0142) is read tolerantly: a hand-built pre-0142 fixture
+    # table (several trigger/attribution tests DDL 'alerts' directly, never
+    # through this column) must not IndexError on a plain SELECT *.
+    keys = row.keys()
+    reason = row["dismiss_reason"] if "dismiss_reason" in keys else None
     return AlertRow(
         id=int(row["id"]),
         user_id=str(row["user_id"]),
@@ -670,6 +730,7 @@ def _row_to_alert(row: sqlite3.Row) -> AlertRow:
         signature_sha=str(row["signature_sha"]),
         dismissed_at=_parse_dt_opt(row["dismissed_at"]),
         approved_at=_parse_dt_opt(row["approved_at"]),
+        dismiss_reason=(str(reason) if reason is not None else None),
     )
 
 

@@ -551,3 +551,116 @@ def test_load_open_decisions_filters(db: Path) -> None:
     assert d.recommendation_value == 20.0
     assert len(d.conditions) == 1
     assert d.conditions[0].metric == "NPL 90d+"
+
+
+# ---------------------------------------------------------------------------
+# arming_status — the ratify route's zero-LLM receipt read (consequence
+# receipts PR). Never calls the LLM extractor; only reports what a prior
+# attach_conditions pass already found.
+# ---------------------------------------------------------------------------
+
+
+def test_arming_status_unextracted_when_never_ran(db: Path) -> None:
+    conn = _connect(db)
+    conn.execute(
+        "INSERT INTO decisions (id, ticker, recommendation_kind, source_artifact_id, "
+        "made_at, created_at) VALUES (1, 'NU', 'trim', 1, ?, ?)",
+        (_NOW, _NOW),
+    )
+    conn.commit()
+    conn.close()
+    assert dc.arming_status(1, db) == "unextracted"
+
+
+def test_arming_status_armed_when_conditions_stamped(db: Path) -> None:
+    conditions_json = json.dumps([_good_condition_obj()])
+    conn = _connect(db)
+    conn.execute(
+        "INSERT INTO decisions (id, ticker, recommendation_kind, source_artifact_id, "
+        "made_at, created_at, decision_conditions, conditions_extracted_at) "
+        "VALUES (1, 'NU', 'trim', 1, ?, ?, ?, ?)",
+        (_NOW, _NOW, conditions_json, _NOW),
+    )
+    conn.commit()
+    conn.close()
+    assert dc.arming_status(1, db) == "armed"
+
+
+def test_arming_status_no_conditions_when_stamped_empty(db: Path) -> None:
+    conn = _connect(db)
+    conn.execute(
+        "INSERT INTO decisions (id, ticker, recommendation_kind, source_artifact_id, "
+        "made_at, created_at, decision_conditions, conditions_extracted_at) "
+        "VALUES (1, 'NU', 'trim', 1, ?, ?, '[]', ?)",
+        (_NOW, _NOW, _NOW),
+    )
+    conn.commit()
+    conn.close()
+    assert dc.arming_status(1, db) == "no_conditions"
+
+
+def test_arming_status_unknown_decision_degrades(db: Path) -> None:
+    assert dc.arming_status(424242, db) == "unextracted"
+
+
+def test_arming_status_missing_db_degrades(tmp_path: Path) -> None:
+    assert dc.arming_status(1, tmp_path / "nope.db") == "unextracted"
+
+
+def test_arming_status_never_calls_llm(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The zero-LLM contract: even an UNEXTRACTED row must not trigger
+    extraction as a side effect of the status read."""
+
+    def _boom(*args: object, **kwargs: object) -> object:
+        raise AssertionError("arming_status must never call the LLM extractor")
+
+    monkeypatch.setattr(dc, "call_llm_structured", _boom)
+    conn = _connect(db)
+    conn.execute(
+        "INSERT INTO decisions (id, ticker, recommendation_kind, source_artifact_id, "
+        "made_at, created_at) VALUES (1, 'NU', 'trim', 1, ?, ?)",
+        (_NOW, _NOW),
+    )
+    conn.commit()
+    conn.close()
+    assert dc.arming_status(1, db) == "unextracted"
+
+
+# ---------------------------------------------------------------------------
+# load_all_open_decisions — the armed-falsifiers table's cross-ticker read,
+# built from the SAME per-ticker accessor the trigger evaluates.
+# ---------------------------------------------------------------------------
+
+
+def test_load_all_open_decisions_spans_tickers(db: Path) -> None:
+    conditions_json = json.dumps([_good_condition_obj()])
+    conn = _connect(db)
+    conn.execute(
+        "INSERT INTO decisions (ticker, recommendation_kind, source_artifact_id, "
+        "made_at, created_at, decision_conditions) "
+        "VALUES ('NU', 'trim', 1, ?, ?, ?)",
+        (_NOW, _NOW, conditions_json),
+    )
+    conn.execute(
+        "INSERT INTO decisions (ticker, recommendation_kind, source_artifact_id, "
+        "made_at, created_at, decision_conditions) "
+        "VALUES ('MELI', 'add', 2, ?, ?, ?)",
+        (_NOW, _NOW, conditions_json),
+    )
+    # No conditions — must not contribute a ticker/row.
+    conn.execute(
+        "INSERT INTO decisions (ticker, recommendation_kind, source_artifact_id, "
+        "made_at, created_at, decision_conditions) VALUES ('WIX', 'hold', 3, ?, ?, '[]')",
+        (_NOW, _NOW),
+    )
+    conn.commit()
+    conn.close()
+
+    decisions = dc.load_all_open_decisions(db)
+    tickers = {d.ticker for d in decisions}
+    assert tickers == {"NU", "MELI"}
+    assert all(d.conditions for d in decisions)
+
+
+def test_load_all_open_decisions_missing_db_degrades(tmp_path: Path) -> None:
+    assert dc.load_all_open_decisions(tmp_path / "nope.db") == []

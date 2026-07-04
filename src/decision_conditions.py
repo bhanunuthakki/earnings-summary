@@ -758,6 +758,41 @@ def attach_conditions(
         conn.close()
 
 
+def arming_status(decision_id: int, db_path: Path | str) -> str:
+    """Zero-LLM read of one decision's tripwire-arming state, for the ratify
+    route's inline receipt (consequence receipts PR).
+
+    ``attach_conditions`` is the only path that STAMPS ``decision_conditions``,
+    and it always calls the ``decision_conditions_extract`` LLM purpose for an
+    unstamped row — real spend, and the wrong place to trigger it as a
+    side-effect of a ratify click. So this is a READ, not a run: it reports
+    whether the batch pass has already reached this decision and found at
+    least one condition ('armed'), already reached it and found none
+    ('no_conditions'), or hasn't reached it yet ('unextracted' — the ratify
+    route's cue to ship "queued for arming" wording rather than pretend
+    something ran). Best-effort like every other reader here: a missing DB/
+    table/row degrades to 'unextracted' rather than raising — a ratify click
+    must never 500 on this receipt lookup."""
+    conn = _open(db_path)
+    if conn is None:
+        return "unextracted"
+    try:
+        row = conn.execute(
+            "SELECT decision_conditions, conditions_extracted_at FROM decisions WHERE id = ?",
+            (decision_id,),
+        ).fetchone()
+        if row is None:
+            return "unextracted"
+        if row["conditions_extracted_at"] is None:
+            return "unextracted"
+        conditions = conditions_from_json(row["decision_conditions"])
+        return "armed" if conditions else "no_conditions"
+    except sqlite3.Error:
+        return "unextracted"
+    finally:
+        conn.close()
+
+
 def _stamp(conn: sqlite3.Connection, decision_id: int, conditions: list[DecisionCondition]) -> None:
     conn.execute(
         "UPDATE decisions SET decision_conditions = ?, conditions_extracted_at = ? WHERE id = ?",
@@ -927,6 +962,46 @@ def load_open_decisions(conn: sqlite3.Connection, ticker: str) -> list[OpenDecis
             )
         )
     return out
+
+
+def load_all_open_decisions(db_path: Path | str) -> list[OpenDecision]:
+    """Every open decision across every ticker that carries at least one
+    armed condition — the Ledger panel's "Armed falsifiers" table reads this,
+    the SAME set ``DecisionConditionTrigger.scan`` evaluates (per-ticker, via
+    :func:`load_open_decisions`): tickers are enumerated the identical way
+    ``standup.signals._decision_condition_signals`` does (distinct
+    ``decisions.ticker`` with a non-empty ``decision_conditions``), then each
+    ticker's rows are pulled through the real per-ticker reader — never a
+    flat cross-ticker query — so this table can never show a row the trigger
+    itself would skip. Best-effort: a missing DB/table degrades to []."""
+    conn = _open(db_path)
+    if conn is None:
+        return []
+    try:
+        try:
+            # No outcome_at filter here — a graded OWNER decision can still be
+            # open (the falsifier guards the position, not the trade); the
+            # per-ticker load_open_decisions call below re-applies the real
+            # (advisor-vs-owner) lifetime rule per row, so this pre-filter
+            # only needs to find candidate TICKERS, never candidate rows.
+            tickers = [
+                str(r["ticker"]).upper()
+                for r in conn.execute(
+                    "SELECT DISTINCT ticker FROM decisions "
+                    "WHERE ticker IS NOT NULL "
+                    "  AND decision_conditions IS NOT NULL AND decision_conditions != '[]'"
+                ).fetchall()
+                if r["ticker"]
+            ]
+        except sqlite3.Error:
+            return []
+        out: list[OpenDecision] = []
+        for ticker in tickers:
+            out.extend(load_open_decisions(conn, ticker))
+        out.sort(key=lambda d: d.made_at, reverse=True)
+        return out
+    finally:
+        conn.close()
 
 
 # ===========================================================================

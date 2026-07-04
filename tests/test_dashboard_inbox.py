@@ -432,6 +432,75 @@ def test_quick_actions_post_by_id_via_htmx() -> None:
 
 
 # ----------------------------------------------------------------------------
+# Consequence receipts (REQ-11): acted_span's optional detail / detail_href /
+# dismiss_why_id renderings, and byte-compat when none are passed.
+# ----------------------------------------------------------------------------
+
+
+def test_acted_span_byte_compatible_when_detail_absent() -> None:
+    """Every pre-receipts caller (approve/dismiss/archive chips elsewhere in
+    this module) keeps rendering identically — detail is purely additive."""
+    from dashboard.inbox import acted_span
+
+    assert acted_span("✓ applied", "applied") == (
+        '<span class="ix-quick ix-acted ix-acted-applied">✓ applied</span>'
+    )
+    assert acted_span("✕ dismissed", "cancelled", undo_url="/api/actions/5/uncancel") == (
+        '<span class="ix-quick ix-acted ix-acted-cancelled">✕ dismissed'
+        ' <button type="button" class="ix-undo k-btn k-btn-quiet k-btn-sm" '
+        'hx-post="/api/actions/5/uncancel" hx-target="closest .ix-quick" '
+        'hx-swap="outerHTML">undo</button></span>'
+    )
+
+
+def test_acted_span_detail_renders_muted_truncated_suffix() -> None:
+    from dashboard.inbox import acted_span
+
+    long_consequence = (
+        "Approved queued_action id=9 (action_kind=thesis_update). "
+        "Ledger entry id=42 written: NU thesis_update source_alert_id=7."
+    )
+    html = acted_span("✓ applied", "applied", detail=long_consequence)
+    assert "ix-acted-detail" in html
+    assert f'title="{long_consequence}"' in html  # full text always on title=
+    # Truncated to 60 visible chars + ellipsis in the VISIBLE tag content
+    # (after the title= attribute closes) — the body itself is truncated.
+    visible_body = html.split(f'title="{long_consequence}">', 1)[1]
+    assert "…</span>" in visible_body
+    assert long_consequence not in visible_body
+
+
+def test_acted_span_short_detail_renders_untruncated() -> None:
+    from dashboard.inbox import acted_span
+
+    html = acted_span("✓ applied", "applied", detail="Cancelled queued_action id=3.")
+    assert ">Cancelled queued_action id=3.<" in html
+    assert "…" not in html
+
+
+def test_acted_span_detail_href_becomes_a_doorway() -> None:
+    from dashboard.inbox import acted_span
+
+    html = acted_span(
+        "✓ applied",
+        "applied",
+        detail="Ledger entry id=42 written.",
+        detail_href="/#decisions_record",
+    )
+    assert '<a class="ix-acted-detail" href="/#decisions_record"' in html
+
+
+def test_acted_span_dismiss_why_renders_toggle_and_hidden_input() -> None:
+    from dashboard.inbox import acted_span
+
+    html = acted_span("✕ dismissed", "cancelled", dismiss_why_id=17)
+    assert "ix-why-toggle" in html
+    assert 'hx-post="/api/alerts/17/dismiss"' in html
+    assert 'name="reason"' in html
+    assert "hidden" in html  # the input starts hidden until "why?" is clicked
+
+
+# ----------------------------------------------------------------------------
 # Flat stream (2026-06-11): no recency-bucket headers
 # ----------------------------------------------------------------------------
 
