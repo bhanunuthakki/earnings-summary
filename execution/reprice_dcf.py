@@ -63,7 +63,11 @@ def main() -> int:
         sys.stderr.write(f"FATAL: no DB at {db_path}\n")
         return 2
 
-    conn = sqlite3.connect(str(db_path))
+    # 30s busy timeout: the price-leg UPDATEs are trivially fast but the DB is
+    # shared (dashboard server, overlapping crons) — a brief concurrent writer
+    # should stall this write, not kill the stage with "database is locked"
+    # (observed live 2026-07-03 under sqlite's 5s default).
+    conn = sqlite3.connect(str(db_path), timeout=30.0)
     try:
         results = reprice_runs(conn, repo_root, tickers=args.ticker)
     finally:
