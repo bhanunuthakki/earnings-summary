@@ -2583,6 +2583,23 @@ def create_app(
         ]
         return {"ticker": ticker, "ok": True, "created_ids": created}
 
+    @app.route("/api/coach/unmute", methods=["POST", "OPTIONS"])
+    def coach_unmute_api():
+        """Clear a coach_mutes row (REQ-12: mutes must be visible AND
+        reversible) — the first production caller of
+        ``research.governor.unmute``. JSON body: {"class_": "falsifier_breach"}.
+        CSRF-guarded by the global Origin check (csrf_origin_guard)."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from research.governor import unmute
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        class_ = str(body.get("class_") or "").strip()
+        if not class_:
+            return ({"error": "class_ required"}, 400)
+        unmuted = unmute(class_, db_path=db_path)
+        return {"class_": class_, "ok": True, "unmuted": unmuted}
+
     @app.route("/source/<int:doc_id>", methods=["GET"])
     def source_viewer(doc_id: int):
         """In-app source viewers (P3.5). Routes by doc_type: processed

@@ -46,9 +46,10 @@ sparser page).
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from html import escape
 from pathlib import Path
 from statistics import median
@@ -516,6 +517,7 @@ def render_allocation_decisions_panel(
     attribution = decompose_alpha(
         analytics.position_alpha, conviction_by_ticker=_conviction_by_ticker(audit)
     )
+    n_graded = calibration.graded if calibration is not None else 0
     return compose_decisions_page(
         audit,
         timeline,
@@ -523,31 +525,415 @@ def render_allocation_decisions_panel(
         analytics.position_alpha,
         calibration=calibration,
         attribution=attribution,
-        scorecard_html=_scorecard_html(db_path),
+        scorecard_html=_scorecard_html(db_path, n_graded=n_graded),
         beta=analytics.beta,
+        coach_pnl_html=_coach_pnl_section(db_path, user_id=user_id),
+        coach_pings_html=_coach_pings_section(db_path),
+        coach_mutes_html=_coach_mutes_section(db_path),
+        coach_digest_html=_coach_digest_section(db_path),
     )
 
 
-def _scorecard_html(db_path: Path) -> str:
+def _scorecard_html(db_path: Path, *, n_graded: int = 0) -> str:
     """The L8 coach's-read section (latest persisted scorecard) as ready-to-mount
-    HTML with its own <style>, or "" when none exists. Lazy-imports the coach +
-    scorecard panel so this module — which the coach imports — stays cycle-free,
-    and never lets a coach-side error break the decisions page."""
+    HTML with its own <style>. Lazy-imports the coach + scorecard panel so this
+    module — which the coach imports — stays cycle-free. Never lets a coach-side
+    error silently vanish the section (REQ-6): an ungenerated scorecard renders
+    the panel's own starvation stub (``n_graded`` threaded through so the caption
+    reads as progress); an exception renders a visible one-line failure stub
+    instead of swallowing to ""."""
     try:
         from calibration_coach import load_latest_scorecard
         from pipeline.calibration_scorecard_panel import SCORECARD_CSS, render_scorecard_section
 
         card = load_latest_scorecard(db_path.resolve().parent.parent)
-        section = render_scorecard_section(card)
-        return f"<style>{SCORECARD_CSS}</style>{section}" if section else ""
+        section = render_scorecard_section(card, n_graded=n_graded)
+        return f"<style>{SCORECARD_CSS}</style>{section}"
     except Exception:  # pragma: no cover - coaching must never break the page
-        return ""
+        return (
+            '<section class="panel"><h2>Coach&rsquo;s read</h2>'
+            '<p class="muted">Coach&rsquo;s read: failed to load — see logs.</p></section>'
+        )
 
 
 def _conviction_by_ticker(audit: list[SizingAuditRow]) -> dict[str, float]:
     """The stated-conviction map the shared attribution engine joins on — pulled
     off the audit's conviction column so the engine never imports this panel."""
     return {r.ticker: r.conviction for r in audit if r.conviction is not None}
+
+
+# --------------------------------------------------------------------------- #
+# Coach P&L — REQ-7: "has the coach ever been right?" as its own scoreboard.
+# --------------------------------------------------------------------------- #
+
+# The literal Q3'26 success bar the 2026-07-02 thought-partner review set: the
+# coach must change >= 1 real decision by Q3'26. Rendered in the KPI line and
+# the title tooltip alongside the heuristic that counts toward it.
+COACH_CHANGED_TARGET = 1
+
+# How long after a guard_override memo we wait for a contradicting owner
+# sell/trim before crediting the coach with a "changed decision" (v1
+# heuristic — see _coach_changed_count docstring).
+_COACH_CHANGE_WINDOW_DAYS = 30
+_SELL_TRIM_KINDS = ("trim", "sell")
+
+
+@dataclass(frozen=True, slots=True)
+class CoachPnl:
+    """The guard's public scoreboard — every count the coach must answer for.
+
+    ``reviews_run`` — total ``position_review`` memos ever persisted.
+    ``guard_fired`` / ``overridden`` — both count memos whose
+    ``context.verdict_source == 'guard_override'`` (apply_behavioral_guard has
+    no "fired but didn't change anything" state: it either overrides a
+    trim/sell to hold, or passes the LLM verdict through untouched) — kept as
+    two named lines because the spec's guard/review line and the literal
+    target counter read them as distinct questions ("did the guard ever
+    speak?" vs "did it ever change the outcome?"), even though today they are
+    the same query.
+    ``graded_right`` — of the reviews that have been graded (``stance_scores``
+    joined by ``memo_id``), how many graded ``correct``.
+    ``changed`` — see ``_coach_changed_count``.
+    """
+
+    reviews_run: int
+    guard_fired: int
+    overridden: int
+    graded_right: int
+    graded_total: int
+    changed: int
+
+
+def _query_coach_pnl(db_path: Path, *, user_id: str) -> CoachPnl:
+    """Read-only aggregate over advisor_memos (+ stance_scores, + decisions for
+    the heuristic). Every query degrades to zero on a missing/partial table —
+    a thin DB must never 500 the panel (REQ-7's all-zero state IS the honest
+    answer, not an error)."""
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        review_rows = _safe_rows(
+            conn,
+            "SELECT id, ticker, context_json, created_at FROM advisor_memos "
+            "WHERE user_id = ? AND kind = 'position_review'",
+            (user_id,),
+        )
+        reviews_run = len(review_rows)
+        guard_ids: list[int] = []
+        for r in review_rows:
+            ctx_raw = r["context_json"]
+            if not ctx_raw:
+                continue
+            try:
+                ctx = json.loads(str(ctx_raw))
+            except ValueError:
+                continue
+            if isinstance(ctx, dict) and ctx.get("verdict_source") == "guard_override":
+                guard_ids.append(int(r["id"]))
+        guard_fired = len(guard_ids)
+
+        graded_total = 0
+        graded_right = 0
+        if review_rows:
+            marks = ",".join("?" for _ in review_rows)
+            ids = [int(r["id"]) for r in review_rows]
+            score_rows = _safe_rows(
+                conn,
+                f"SELECT memo_id, verdict FROM stance_scores WHERE memo_id IN ({marks}) "
+                "ORDER BY memo_id, created_at DESC, id DESC",
+                tuple(ids),
+            )
+            latest_by_memo: dict[int, str] = {}
+            for r in score_rows:
+                latest_by_memo.setdefault(int(r["memo_id"]), str(r["verdict"]))
+            graded_total = len(latest_by_memo)
+            graded_right = sum(1 for v in latest_by_memo.values() if v == "correct")
+
+        changed = _coach_changed_count(conn, review_rows, guard_ids)
+    finally:
+        conn.close()
+    return CoachPnl(
+        reviews_run=reviews_run,
+        guard_fired=guard_fired,
+        overridden=guard_fired,
+        graded_right=graded_right,
+        graded_total=graded_total,
+        changed=changed,
+    )
+
+
+def _coach_changed_count(
+    conn: sqlite3.Connection, review_rows: list[sqlite3.Row], guard_ids: list[int]
+) -> int:
+    """v1 heuristic for "decisions changed by the coach" (REQ-7's literal
+    Q3'26 target counter): a ``guard_override`` review counts as a changed
+    decision when the owner did NOT record a contradicting sell/trim on that
+    same ticker within ``_COACH_CHANGE_WINDOW_DAYS`` of the memo — i.e. the
+    guard said hold, and the owner's subsequent recorded behavior didn't
+    override it. This is a proxy, not a causal claim (the owner may simply
+    have agreed already, or never revisited it) — documented here AND
+    surfaced in the rendered title tooltip so the number is never read as
+    more certain than it is."""
+    if not guard_ids:
+        return 0
+    by_id = {int(r["id"]): r for r in review_rows}
+    changed = 0
+    for gid in guard_ids:
+        row = by_id.get(gid)
+        if row is None or not row["ticker"]:
+            continue
+        ticker = str(row["ticker"]).upper()
+        try:
+            memo_at = datetime.fromisoformat(str(row["created_at"]))
+        except ValueError:
+            continue
+        window_end = (memo_at + timedelta(days=_COACH_CHANGE_WINDOW_DAYS)).isoformat()
+        marks = ",".join("?" for _ in _SELL_TRIM_KINDS)
+        contradicting = _safe_rows(
+            conn,
+            f"SELECT 1 FROM decisions WHERE ticker = ? AND decided_by = 'owner' "
+            f"AND recommendation_kind IN ({marks}) "
+            "AND made_at > ? AND made_at <= ? LIMIT 1",
+            (ticker, *_SELL_TRIM_KINDS, row["created_at"], window_end),
+        )
+        if not contradicting:
+            changed += 1
+    return changed
+
+
+def _coach_pnl_section(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
+    """The Coach P&L block (REQ-7) — mounted beside the coach's-read scorecard.
+    Never raises: a missing advisor_memos/stance_scores/decisions table (a
+    hand-DDL test fixture, or a DB stamped pre-0077) degrades every count to
+    zero, which IS the honest all-zero line, not a swallowed error."""
+    try:
+        pnl = _query_coach_pnl(db_path, user_id=user_id)
+    except sqlite3.OperationalError:
+        pnl = CoachPnl(
+            reviews_run=0, guard_fired=0, overridden=0, graded_right=0, graded_total=0, changed=0
+        )
+    head = (
+        '<section class="panel cpnl"><h2>Coach P&amp;L</h2>'
+        '<p class="sub">The guard\'s public scoreboard — every position review it has ever run, '
+        "whether it ever overrode a call, and how those calls graded. All-zero is the honest "
+        "answer until the guard has actually been exercised.</p>"
+    )
+    if pnl.reviews_run == 0:
+        review_line = (
+            '<p class="cpnl-line">Reviews run: <b>0</b> — the guard has never been exercised.</p>'
+        )
+    else:
+        graded_bits = (
+            f"{pnl.graded_right}/{pnl.graded_total} graded right"
+            if pnl.graded_total
+            else "graded right so far: 0"
+        )
+        review_line = (
+            f'<p class="cpnl-line">Reviews run: <b>{pnl.reviews_run}</b> &middot; '
+            f"guard fired: <b>{pnl.guard_fired}</b> &middot; "
+            f"overridden: <b>{pnl.overridden}</b> &middot; {graded_bits}</p>"
+        )
+    tooltip = (
+        "v1 heuristic: a guard_override review counts as changed when no owner sell/trim "
+        f"on that ticker was recorded within {_COACH_CHANGE_WINDOW_DAYS}d of the memo — a "
+        "proxy, not a causal claim."
+    )
+    target_line = (
+        f'<p class="cpnl-line" title="{escape(tooltip)}">Decisions changed by the coach: '
+        f"<b>{pnl.changed}</b> &middot; Q3&rsquo;26 target: <b>{COACH_CHANGED_TARGET}</b></p>"
+    )
+    doorway = (
+        '<p class="cpnl-line"><a href="#advisor_memos" '
+        'data-peek-url="/api/peek/memo/position_review" '
+        'data-peek-title="Latest position review">reviews &rarr;</a></p>'
+        if pnl.reviews_run
+        else ""
+    )
+    return f"{head}{review_line}{target_line}{doorway}</section>"
+
+
+# --------------------------------------------------------------------------- #
+# Pings / mutes / digest — REQ-12: the coach's initiation ledger, rendered for
+# the first time (digest_pings() and unmute() had zero production callers
+# before this panel; coach_pings/coach_mutes rendered nowhere in the app).
+# --------------------------------------------------------------------------- #
+
+_PING_STATUS_TONE: dict[str, str] = {
+    "sent": "ok",
+    "digest": "warn",
+    "dismissed": "muted",
+    "acted": "ok",
+    "skipped_muted": "muted",
+    "skipped_stale": "muted",
+}
+
+
+def _month_bounds_iso(now: datetime | None = None) -> tuple[str, str]:
+    stamp = now or datetime.now()
+    start = stamp.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if start.month == 12:
+        end = start.replace(year=start.year + 1, month=1)
+    else:
+        end = start.replace(month=start.month + 1)
+    return start.isoformat(), end.isoformat()
+
+
+def _coach_pings_section(db_path: Path, *, now: datetime | None = None) -> str:
+    """ "Coach pings (this month)" — the first production renderer of
+    coach_pings. One dense line per ping: class, ticker, status, date. Never
+    raises: coach_pings is a 0131+ table, absent on any DB stamped before it."""
+    start_iso, end_iso = _month_bounds_iso(now)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = _safe_rows(
+            conn,
+            "SELECT class_, ticker, status, created_at FROM coach_pings "
+            "WHERE created_at >= ? AND created_at < ? ORDER BY created_at DESC",
+            (start_iso, end_iso),
+        )
+    finally:
+        conn.close()
+    head = (
+        '<section class="panel"><h2>Coach pings (this month)</h2>'
+        '<p class="sub">Every initiation moment the governor considered this month — '
+        "the falsifier-breach / retro-annotation / intent-followup nudges, whether they "
+        "sent, waited in the digest, or were dismissed.</p>"
+    )
+    if not rows:
+        return f'{head}<p class="muted">No pings this month.</p></section>'
+    lines = "".join(_ping_line(r) for r in rows)
+    return f'{head}<div class="cpnl-list">{lines}</div></section>'
+
+
+def _ping_line(r: sqlite3.Row) -> str:
+    ticker = escape(str(r["ticker"])) if r["ticker"] else "&mdash;"
+    status = str(r["status"])
+    when = str(r["created_at"])[:10]
+    pill = f'<span class="k-pill{_pill_tone(_PING_STATUS_TONE.get(status, "muted"))}">{escape(status)}</span>'
+    return (
+        f'<p class="cpnl-line">{escape(str(r["class_"]))} &middot; {ticker} &middot; '
+        f"{pill} &middot; {escape(when)}</p>"
+    )
+
+
+def _coach_mutes_section(db_path: Path) -> str:
+    """ "Active mutes" — coach_mutes rows with an inline Unmute button (REQ-12:
+    visible AND reversible). Empty state is one muted line, not absent."""
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = _safe_rows(
+            conn, "SELECT class_, muted_at, reason FROM coach_mutes ORDER BY muted_at DESC"
+        )
+    finally:
+        conn.close()
+    head = (
+        '<section class="panel cpnl-mutes"><h2>Active mutes</h2>'
+        '<p class="sub">A class the owner dismissed three times in a row mutes itself until '
+        "cleared here — dismissals train the coach; it never argues.</p>"
+    )
+    if not rows:
+        return f'{head}<p class="muted">No active mutes.</p></section>'
+    lines = "".join(
+        '<p class="cpnl-line" data-mute-row data-class="'
+        f'{escape(str(r["class_"]))}">{escape(str(r["class_"]))} &mdash; muted since '
+        f"{escape(str(r['muted_at'])[:10])}"
+        f"{' (' + escape(str(r['reason'])) + ')' if r['reason'] else ''} "
+        f'<button type="button" class="k-btn k-btn-quiet k-btn-sm cpnl-unmute-btn" '
+        f'data-class="{escape(str(r["class_"]))}">unmute</button></p>'
+        for r in rows
+    )
+    return f'{head}<div class="cpnl-list">{lines}</div>{_UNMUTE_JS}</section>'
+
+
+def _coach_digest_section(db_path: Path) -> str:
+    """ "Digest queue" — research.governor.digest_pings() rows, the capped-out
+    / send-failed nudges the audit found vanishing silently. One line each
+    with class + ticker + age (days since the ping was created)."""
+    try:
+        from research.governor import digest_pings
+    except ImportError:  # pragma: no cover - module always present in prod
+        return ""
+    try:
+        rows = digest_pings(db_path, limit=20)
+    except Exception:  # pragma: no cover - the digest must never break the page
+        rows = []
+    head = (
+        '<section class="panel"><h2>Digest queue</h2>'
+        '<p class="sub">Nudges that hit the daily/weekly frequency cap or failed to send — '
+        "surfaced quietly here instead of vanishing silently.</p>"
+    )
+    if not rows:
+        return f'{head}<p class="muted">Digest is empty.</p></section>'
+    ticker_and_age = _digest_tickers_and_ages(db_path, [pid for pid, _cls, _body in rows])
+    lines = "".join(_digest_line(pid, cls, ticker_and_age.get(pid)) for pid, cls, _body in rows)
+    return f'{head}<div class="cpnl-list">{lines}</div></section>'
+
+
+def _digest_tickers_and_ages(
+    db_path: Path, ping_ids: list[int]
+) -> dict[int, tuple[str | None, str]]:
+    """Join ticker + created_at back onto the digest rows — digest_pings()
+    returns only (id, class, body), so the ticker/age this section renders is
+    read directly off coach_pings by id (read-only; never raises)."""
+    if not ping_ids:
+        return {}
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        marks = ",".join("?" for _ in ping_ids)
+        rows = _safe_rows(
+            conn,
+            f"SELECT id, ticker, created_at FROM coach_pings WHERE id IN ({marks})",
+            tuple(ping_ids),
+        )
+    finally:
+        conn.close()
+    out: dict[int, tuple[str | None, str]] = {}
+    for r in rows:
+        out[int(r["id"])] = (str(r["ticker"]) if r["ticker"] else None, str(r["created_at"]))
+    return out
+
+
+def _digest_line(ping_id: int, class_: str, ticker_age: tuple[str | None, str] | None) -> str:
+    ticker = escape(ticker_age[0]) if ticker_age and ticker_age[0] else "&mdash;"
+    age = _age_str(ticker_age[1]) if ticker_age else "&mdash;"
+    return f'<p class="cpnl-line">{escape(class_)} &middot; {ticker} &middot; {age}</p>'
+
+
+def _age_str(created_at: str) -> str:
+    try:
+        made = datetime.fromisoformat(created_at)
+    except ValueError:
+        return "&mdash;"
+    days = max(0, (datetime.now() - made).days)
+    return f"{days}d" if days else "today"
+
+
+_UNMUTE_JS = """<script>
+(function () {
+  document.querySelectorAll('.cpnl-unmute-btn').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var cls = btn.getAttribute('data-class');
+      var row = btn.closest('[data-mute-row]');
+      btn.disabled = true;
+      fetch('/api/coach/unmute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ class_: cls })
+      }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      }).then(function () {
+        if (row && row.parentNode) row.parentNode.removeChild(row);
+      }).catch(function () {
+        btn.disabled = false;
+      });
+    });
+  });
+})();
+</script>"""
 
 
 def compose_decisions_page(
@@ -559,21 +945,36 @@ def compose_decisions_page(
     attribution: SkillDecomposition | None = None,
     scorecard_html: str = "",
     beta: BetaStats | None = None,
+    coach_pnl_html: str = "",
+    coach_pings_html: str = "",
+    coach_mutes_html: str = "",
+    coach_digest_html: str = "",
 ) -> str:
     """Pure page assembly (testable without network or DB). ``calibration``
     None (pre-0046 substrate) hides the section entirely; ``attribution`` None
     (tracker offline / nothing to decompose) hides the skill block;
-    ``scorecard_html`` "" (no L8 scorecard generated yet) hides the coach's-read
-    section; ``beta`` carries the Jensen alpha joined beside the decomposition
-    (L-seam 5). The coach section is pre-rendered upstream (with its own <style>)
-    so this module never imports calibration_coach (which imports this one)."""
+    ``scorecard_html`` always renders (starvation stub or failure stub —
+    REQ-6, never ""); ``beta`` carries the Jensen alpha joined beside the
+    decomposition (L-seam 5). The coach section is pre-rendered upstream (with
+    its own <style>) so this module never imports calibration_coach (which
+    imports this one). ``coach_pnl_html`` / ``coach_pings_html`` /
+    ``coach_mutes_html`` / ``coach_digest_html`` default to "" so existing
+    callers (and every hand-built test page) are unaffected; the KPI vitals
+    strip is hoisted above the sizing audit as the page's opening line when a
+    calibration section is present."""
+    kpi_strip = _calibration_kpi_strip(calibration) if calibration is not None else ""
     return "".join(
         [
             _PANEL_CSS,
+            kpi_strip,
             _audit_section(audit, live, alpha),
             _calibration_section(calibration) if calibration is not None else "",
             _skill_decomposition_section(attribution, beta) if attribution is not None else "",
             scorecard_html,
+            coach_pnl_html,
+            coach_pings_html,
+            coach_mutes_html,
+            coach_digest_html,
             _timeline_section(timeline),
             f"<script>{_EDITOR_JS}</script>",
         ]
@@ -841,6 +1242,39 @@ def _cohort_trend_block(stats: CalibrationStats) -> str:
     )
 
 
+def _calibration_kpi_html(stats: CalibrationStats) -> str:
+    """The one-line calibration KPI vitals strip (decisions / graded / hit
+    rate / reversed) — shared by the full calibration section and the
+    mirror-first hoisted copy at the top of the page."""
+    hit = f"{stats.overall_hit_rate * 100.0:.0f}%" if stats.overall_hit_rate is not None else "—"
+    rev_n = len(stats.reversals)
+    return (
+        '<div class="adc-kpis">'
+        f'<span class="adc-kpi"><b>{stats.total}</b> decisions</span>'
+        f'<span class="adc-kpi"><b>{stats.graded}</b> graded</span>'
+        f'<span class="adc-kpi"><b>{hit}</b> hit rate</span>'
+        f'<span class="adc-kpi"><b>{rev_n}</b> reversed'
+        + (
+            f" ({stats.reversals_vindicated} vindicated &middot; {stats.reversals_cost} cost)"
+            if rev_n
+            else ""
+        )
+        + "</span></div>"
+    )
+
+
+def _calibration_kpi_strip(stats: CalibrationStats) -> str:
+    """Mirror-first hoist (confirmed minor finding): the calibration KPI
+    vitals strip repeated as the page's opening line, above the sizing audit,
+    so "how am I actually doing" is visible without scrolling to the
+    calibration section. Only when calibration has recorded decisions —
+    matches the empty-state handling in ``_calibration_section`` (an empty
+    ``adc-kpis`` strip with nothing behind it would be worse than no strip)."""
+    if stats.total == 0:
+        return ""
+    return f'<div class="cpnl-hoist">{_calibration_kpi_html(stats)}</div>'
+
+
 def _calibration_section(stats: CalibrationStats) -> str:
     """The decisions-history analysis (S15 PR2): hit rate by conviction,
     action mix + reversal track record, time-to-outcome. Deterministic
@@ -860,21 +1294,7 @@ def _calibration_section(stats: CalibrationStats) -> str:
             "memos into the ledger; grading accrues via the outcome rung.</p></section>"
         )
 
-    hit = f"{stats.overall_hit_rate * 100.0:.0f}%" if stats.overall_hit_rate is not None else "—"
-    rev_n = len(stats.reversals)
-    kpis = (
-        '<div class="adc-kpis">'
-        f'<span class="adc-kpi"><b>{stats.total}</b> decisions</span>'
-        f'<span class="adc-kpi"><b>{stats.graded}</b> graded</span>'
-        f'<span class="adc-kpi"><b>{hit}</b> hit rate</span>'
-        f'<span class="adc-kpi"><b>{rev_n}</b> reversed'
-        + (
-            f" ({stats.reversals_vindicated} vindicated &middot; {stats.reversals_cost} cost)"
-            if rev_n
-            else ""
-        )
-        + "</span></div>"
-    )
+    kpis = _calibration_kpi_html(stats)
 
     conviction_rows = "".join(
         "<tr>"
@@ -1310,6 +1730,16 @@ td.neg, span.neg { color: var(--bad); }
 .sk-lbl { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase;
   letter-spacing: 0.04em; }
 .sk-read { font-size: var(--fs-body); color: var(--fg); margin: 2px 0 10px; }
+/* Mirror-first hoist (S15 PR3): the calibration KPI strip repeated as the
+   page's opening line, above the sizing audit. */
+.cpnl-hoist { margin: 0 0 12px; }
+.cpnl-hoist .adc-kpis { margin: 0; }
+/* Coach P&L + pings/mutes/digest (S15 PR3, REQ-6/7/12): dense one-liners,
+   the established .adc-line rhythm. */
+.cpnl-line { font-size: var(--fs-caption); color: var(--muted); margin: 4px 0; }
+.cpnl-line b { color: var(--fg); font-variant-numeric: tabular-nums; }
+.cpnl-list { display: flex; flex-direction: column; gap: 2px; }
+.cpnl-unmute-btn { margin-left: 6px; }
 </style>"""
 
 # Editor wiring: toggle a row's intent editor, POST to /api/sizing-intents,

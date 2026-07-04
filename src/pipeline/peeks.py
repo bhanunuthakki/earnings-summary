@@ -82,8 +82,8 @@ _STATUS_TONE: dict[str, str] = {
     "intact": "ok",
 }
 
-# Mirrors ck_advisor_memos_kind (alembic 0077).
-_MEMO_KINDS = frozenset({"next_dollar", "swap_check", "socratic"})
+# Mirrors ck_advisor_memos_kind (alembic 0077 + 0140's position_review widen).
+_MEMO_KINDS = frozenset({"next_dollar", "swap_check", "socratic", "position_review"})
 
 
 # ----------------------------------------------------------------------------
