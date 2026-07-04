@@ -28,7 +28,9 @@ from research.proposals import detect_and_create_task, get_task, tap_enabled
 log = logging.getLogger(__name__)
 
 # Per-status confirmation replies (plain ASCII — no emoji). A duplicate/empty
-# gets no reply (silence = "already had it / nothing to say").
+# gets no reply (silence = "already had it / nothing to say"). The
+# needs_ticker text is the NO-BUTTONS fallback — when the candidate keyboard
+# rides along, _confirm asks in-channel instead of sending the owner away.
 _CONFIRM: dict[str, str] = {
     "landed": "Captured.",
     "reading_landed": "Saved to On My Mind.",
@@ -36,6 +38,15 @@ _CONFIRM: dict[str, str] = {
     "transcription_failed": "Couldn't transcribe that one - I kept the audio, try again?",
     "no_audio": "That voice note came through empty - try again?",
 }
+
+
+def _confirm_status(result: ingest.IngestResult) -> str:
+    """Ambiguity rides on a LANDED result (``needs_ticker`` flag, never its own
+    status) — surface it as its own confirm key so the reply can ask for the
+    ticker instead of a bare 'Captured.'."""
+    if result.status == "landed" and result.needs_ticker:
+        return "needs_ticker"
+    return result.status
 
 
 def load_offset(path: Path | str) -> int | None:
@@ -55,6 +66,30 @@ def save_offset(path: Path | str, offset: int) -> None:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"offset": offset}), encoding="utf-8")
+
+
+def _needs_ticker_markup(
+    result: ingest.IngestResult, db_path: Path | str | None
+) -> dict[str, object] | None:
+    """Set-ticker buttons on a needs_ticker confirm — the ambiguity is
+    resolvable in one tap from the thread (the same write-once ``set_ticker``
+    action the Ledger's chips call, via ``st:<ticker>:<note_id>``) instead of
+    dead-ending at 'go open the Ledger'. Best-effort: any read failure falls
+    back to the plain confirm text."""
+    if not (result.status == "landed" and result.needs_ticker and result.note_id is not None):
+        return None
+    try:
+        from user_state.notes import get_note
+
+        note = get_note(result.note_id, db_path=db_path)
+        cands = (note.context or {}).get("ticker_candidates") if note is not None else None
+        if not isinstance(cands, list):
+            return None
+        return research_notify.ticker_keyboard(
+            result.note_id, [str(c) for c in cast("list[object]", cands)]
+        )
+    except Exception:  # a failed keyboard never blocks the confirm
+        return None
 
 
 def _ladder_markup(result: ingest.IngestResult) -> dict[str, object] | None:
@@ -84,6 +119,8 @@ def _confirm(
     text = _CONFIRM.get(status)
     if status == "landed" and ticker:
         text = f"Captured. ({ticker})"
+    if status == "needs_ticker" and reply_markup is not None:
+        text = "Captured. Which ticker?"  # the candidate buttons carry the rest
     if not text:
         return
     # a failed confirmation never blocks capture
@@ -328,10 +365,10 @@ def poll_once(
                 _confirm(
                     token,
                     update,
-                    result.status,
+                    _confirm_status(result),
                     result.ticker,
                     enabled=confirm,
-                    reply_markup=_ladder_markup(result),
+                    reply_markup=_needs_ticker_markup(result, db_path) or _ladder_markup(result),
                 )
                 tid = _tap(result, db_path)
                 if tid is not None:
@@ -362,10 +399,10 @@ def poll_once(
             _confirm(
                 token,
                 update,
-                result.status,
+                _confirm_status(result),
                 result.ticker,
                 enabled=confirm,
-                reply_markup=_ladder_markup(result),
+                reply_markup=_needs_ticker_markup(result, db_path) or _ladder_markup(result),
             )
             tid = _tap(result, db_path)
             if tid is not None:

@@ -196,6 +196,45 @@ def test_system_status_summary_db_error_is_warn(tmp_path: Path) -> None:
     assert tone == "warn"
 
 
+def test_system_status_summary_stale_ok_artifact_is_bad(tmp_path: Path) -> None:
+    """A dead verify_daily_chain task must not leave yesterday's green dot up
+    forever: an 'ok' artifact whose latest_started_at is older than ~26h reads
+    bad, not ok."""
+    _write_status(
+        tmp_path,
+        {"verdict": "ok", "runs_today": 1, "latest_started_at": "2026-06-01 04:00:00"},
+    )
+    tone, summary = system_status_summary(tmp_path, now=datetime(2026, 6, 3, 8, 0, 0)) or (
+        None,
+        None,
+    )
+    assert tone == "bad"
+    assert "stale" in (summary or "").lower()
+
+
+def test_system_status_summary_fresh_ok_artifact_stays_ok(tmp_path: Path) -> None:
+    _write_status(
+        tmp_path,
+        {"verdict": "ok", "runs_today": 1, "latest_started_at": "2026-06-03 04:00:00"},
+    )
+    tone, _summary = system_status_summary(tmp_path, now=datetime(2026, 6, 3, 8, 0, 0)) or (
+        None,
+        None,
+    )
+    assert tone == "ok"
+
+
+def test_system_status_summary_unparseable_stamp_degrades_to_verdict(tmp_path: Path) -> None:
+    """An unreadable stamp can't prove staleness — the verdict alone decides
+    (hand-made and pre-stamp artifacts keep their pre-check behavior)."""
+    _write_status(tmp_path, {"verdict": "ok", "latest_started_at": "not a date"})
+    tone, _summary = system_status_summary(tmp_path, now=datetime(2026, 6, 3, 8, 0, 0)) or (
+        None,
+        None,
+    )
+    assert tone == "ok"
+
+
 def test_system_status_summary_corrupt_json_degrades_to_none(tmp_path: Path) -> None:
     status_dir = tmp_path / ".tmp"
     status_dir.mkdir(parents=True, exist_ok=True)

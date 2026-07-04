@@ -27,6 +27,9 @@ Governor rules, all deterministic, ZERO LLM:
 - **auto-mute**: ``MUTE_AFTER`` consecutive dismissals of a class mutes it
   until explicitly cleared — dismissals train the coach; it never argues.
 - one row per moment forever (UNIQUE class+key) — a moment is never re-pushed.
+  Single exception: ``send_failed`` (an attempted push that died in flight)
+  stays eligible, and the next run re-attempts delivery on the same row —
+  an undelivered ping was never a nag.
 
 The Telegram send is injected (``send_fn``) so the core is pure; the dismiss
 button routes back through ``research_notify`` (``cp:dismiss:<id>``).
@@ -233,21 +236,34 @@ def run_governor(
 ) -> dict[str, int]:
     """One governed pass: collect → freshness-gate → cap → send/digest.
 
-    ``send_fn(ping_id, moment) -> bool`` performs the push (Telegram); False
-    (or absence) downgrades the ping to digest. Deterministic, zero LLM."""
+    ``send_fn(ping_id, moment) -> bool`` performs the push (Telegram). No
+    ``send_fn`` at all (dry-run / no bot configured) downgrades the ping to
+    the quiet digest — that IS the delivery surface then. A ``send_fn`` that
+    returns False (an ATTEMPTED push failed — Telegram down, bad token) marks
+    the row ``send_failed``: the one status the anti-nag once-forever rule
+    exempts, so the next governor run re-attempts delivery instead of
+    silently dropping a falsifier_breach the owner never saw.
+    Deterministic, zero LLM."""
     stamp = _now(now)
-    tally = {"sent": 0, "digest": 0, "skipped_muted": 0, "skipped_stale": 0, "seen": 0}
+    tally = {
+        "sent": 0,
+        "digest": 0,
+        "skipped_muted": 0,
+        "skipped_stale": 0,
+        "send_failed": 0,
+        "seen": 0,
+    }
     moments = collect_moments(db_path, now=stamp)
     conn = open_conn(db_path)
     try:
         muted = {str(r[0]) for r in conn.execute("SELECT class_ FROM coach_mutes").fetchall()}
         for moment in moments:
-            exists = conn.execute(
-                "SELECT 1 FROM coach_pings WHERE class_ = ? AND key = ?",
+            prior = conn.execute(
+                "SELECT id, status FROM coach_pings WHERE class_ = ? AND key = ?",
                 (moment.class_, moment.key),
             ).fetchone()
-            if exists:
-                continue  # a moment is considered exactly once
+            if prior is not None and str(prior[1]) != "send_failed":
+                continue  # anti-nag: a moment is considered exactly once, forever
             tally["seen"] += 1
             iso = stamp.isoformat()
             if moment.class_ in muted:
@@ -257,34 +273,47 @@ def run_governor(
             else:
                 day, week = _sent_counts(conn, stamp)
                 status = "digest" if (day >= DAILY_CAP or week >= WEEKLY_CAP) else "sent"
-            cur = conn.execute(
-                """
-                INSERT INTO coach_pings
-                    (class_, key, ticker, body, status, source_ref, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    moment.class_,
-                    moment.key,
-                    moment.ticker,
-                    moment.body,
-                    status,
-                    moment.source_ref,
-                    iso,
-                    iso,
-                ),
-            )
+            if prior is None:
+                cur = conn.execute(
+                    """
+                    INSERT INTO coach_pings
+                        (class_, key, ticker, body, status, source_ref, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        moment.class_,
+                        moment.key,
+                        moment.ticker,
+                        moment.body,
+                        status,
+                        moment.source_ref,
+                        iso,
+                        iso,
+                    ),
+                )
+                ping_id = int(cur.lastrowid or 0)
+            else:
+                # A prior run's push died mid-flight — re-run the gates on the
+                # SAME row (UNIQUE class+key), then retry the delivery below.
+                ping_id = int(prior[0])
+                conn.execute(
+                    "UPDATE coach_pings SET status = ?, updated_at = ? WHERE id = ?",
+                    (status, iso, ping_id),
+                )
             conn.commit()
             if status == "sent":
-                ping_id = int(cur.lastrowid or 0)
-                delivered = bool(send_fn(ping_id, moment)) if send_fn else False
+                if send_fn is None:
+                    # No push channel — not a send failure; park in the digest.
+                    delivered, fallback = False, "digest"
+                else:
+                    delivered, fallback = bool(send_fn(ping_id, moment)), "send_failed"
                 if not delivered:
                     conn.execute(
-                        "UPDATE coach_pings SET status = 'digest', updated_at = ? WHERE id = ?",
-                        (iso, ping_id),
+                        "UPDATE coach_pings SET status = ?, updated_at = ? WHERE id = ?",
+                        (fallback, iso, ping_id),
                     )
                     conn.commit()
-                    status = "digest"
+                    status = fallback
             tally[status] += 1
     finally:
         conn.close()

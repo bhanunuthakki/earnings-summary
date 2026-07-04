@@ -160,10 +160,40 @@ def test_daily_cap_overflows_to_digest(db: Path) -> None:
     assert len(digest_pings(db)) == 1
 
 
-def test_failed_send_downgrades_to_digest(db: Path) -> None:
+def test_failed_send_is_retried_on_the_next_run(db: Path) -> None:
+    """A delivery FAILURE (send_fn returned False — Telegram down) is the one
+    state the once-forever rule exempts: the next run re-attempts the push on
+    the SAME row. Once delivered, once-forever reapplies."""
     _seed_breach(db)
     tally = run_governor(db, send_fn=lambda pid, m: False, now=_NOW)
-    assert tally["digest"] == 1 and tally["sent"] == 0
+    assert tally["send_failed"] == 1 and tally["sent"] == 0 and tally["digest"] == 0
+    assert digest_pings(db) == []  # a failed push is not quietly parked in the digest
+
+    sent: list[Moment] = []
+    tally2 = run_governor(db, send_fn=lambda pid, m: sent.append(m) or True, now=_NOW)
+    assert tally2["sent"] == 1 and tally2["seen"] == 1
+    assert [m.class_ for m in sent] == ["falsifier_breach"]
+
+    conn = sqlite3.connect(str(db))
+    try:
+        rows = conn.execute("SELECT status FROM coach_pings").fetchall()
+    finally:
+        conn.close()
+    assert [str(r[0]) for r in rows] == ["sent"]  # same UNIQUE row flipped, no duplicate
+
+    tally3 = run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
+    assert tally3["seen"] == 0  # delivered → considered exactly once again
+
+
+def test_no_send_channel_still_parks_in_digest(db: Path) -> None:
+    """send_fn=None (dry-run / no bot configured) is NOT a send failure — the
+    quiet digest is the delivery surface, and once-forever holds."""
+    _seed_breach(db)
+    tally = run_governor(db, send_fn=None, now=_NOW)
+    assert tally["digest"] == 1 and tally["send_failed"] == 0
+    assert len(digest_pings(db)) == 1
+    again = run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
+    assert again["seen"] == 0  # cap/no-channel overflow is never re-pushed
 
 
 def test_three_consecutive_dismissals_mute_the_class(db: Path) -> None:

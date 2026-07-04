@@ -441,7 +441,35 @@ def _render_section_nav(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]
     return "".join(out)
 
 
-def system_status_summary(repo_root: Path | None) -> tuple[str, str] | None:
+# The daily-chain artifact is rewritten by every morning run; older than a day
+# plus a grace window means no run has completed since — a dead verify task
+# must never leave yesterday's green dot up.
+_STATUS_STALE_HOURS = 26.0
+
+
+def _artifact_age_hours(data: dict[str, object], now: datetime | None) -> float | None:
+    """Age of the status artifact via its ``latest_started_at`` stamp (the
+    local clock, matching the ``ingestion_runs`` writer). None when the stamp
+    is absent or unparseable — hand-made or pre-stamp artifacts degrade to the
+    verdict alone rather than guessing an age."""
+    raw = data.get("latest_started_at")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        stamp = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if stamp.tzinfo is not None:
+        stamp = stamp.replace(tzinfo=None)
+    ref = now if now is not None else datetime.now()
+    if ref.tzinfo is not None:
+        ref = ref.replace(tzinfo=None)
+    return (ref - stamp).total_seconds() / 3600.0
+
+
+def system_status_summary(
+    repo_root: Path | None, *, now: datetime | None = None
+) -> tuple[str, str] | None:
     """The System icon's status dot (PR9): (tone, summary) derived from the
     CHEAP daily-chain status artifact (``.tmp/daily_chain_status.json``,
     written by ``execution/verify_daily_chain.py`` at the end of every morning
@@ -453,9 +481,12 @@ def system_status_summary(repo_root: Path | None) -> tuple[str, str] | None:
     at all (the plain ``render_shell(overview_html=...)`` call shape) get the
     same None, so the button degrades to its pre-PR9 look.
 
-    Tone: 'ok' when the last recorded run succeeded, 'bad' on a failed/missing
-    run, 'warn' only on a read/parse hiccup (the artifact exists but couldn't
-    be trusted) — never silently 'ok'."""
+    Tone: 'ok' when the last recorded run succeeded AND the artifact is fresh
+    (``latest_started_at`` within ~26h — a dead verify task must not leave
+    yesterday's green dot up forever), 'bad' on a failed/missing/stale run,
+    'warn' only on a read/parse hiccup (the artifact exists but couldn't be
+    trusted) — never silently 'ok'. ``now`` is a test seam for the age check;
+    it defaults to the local clock the artifact's stamps are written with."""
     if repo_root is None:
         return None
     import json as _json
@@ -470,6 +501,9 @@ def system_status_summary(repo_root: Path | None) -> tuple[str, str] | None:
     data = cast("dict[str, object]", raw)
     verdict = str(data.get("verdict") or "")
     if verdict == "ok":
+        age_h = _artifact_age_hours(data, now)
+        if age_h is not None and age_h > _STATUS_STALE_HOURS:
+            return ("bad", f"Morning pipeline status is stale ({int(age_h)}h old)")
         return ("ok", "Morning pipeline OK")
     if verdict == "missing":
         return ("bad", "Morning pipeline has not run today")

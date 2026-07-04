@@ -240,6 +240,43 @@ def test_annotation_fills_only_nulls_write_once(db: Path) -> None:
         conn.close()
 
 
+def test_pledge_gate_catches_natural_sell_idioms(db: Path) -> None:
+    """The sell-winners-early idioms — the exact pattern the pledge tap exists
+    to coach — must pass the regex pre-gate; an imminent sell rarely announces
+    itself as 'selling'."""
+    phrases = [
+        "taking profits on NVO here",
+        "lightening up on MELI into the print",
+        "lightening NU a touch this week",
+        "exiting RBRK this morning",
+        "dumping my WIX position today",
+        "cutting the position in half on NOW",
+        "cutting my NVO position back to 3%",
+    ]
+    for body in phrases:
+        note_id = _land_musing(db, body)
+        call, calls = _fake_extract({"ticker": "NVO", "direction": "sell"})
+        pledge = detect_and_capture_pledge(note_id, db_path=db, extract_call=call)
+        assert calls["n"] == 1, body  # the gate passed → extraction ran
+        assert pledge is not None and pledge.direction == "sell", body
+
+
+def test_pledge_gate_still_skips_company_narrative(db: Path) -> None:
+    """Company narrative reusing the same verbs ('exiting the quarter with...',
+    'cutting costs') must stay a zero-token miss — the gate exists so a
+    non-pledge never burns an extraction call."""
+    for body in (
+        "RBRK exiting the quarter with $1.3B ARR",
+        "NU exiting FY26 with NPLs stable",
+        "MELI is cutting costs aggressively in logistics",
+        "guide implies WIX exiting Q4 at a higher run-rate",
+    ):
+        note_id = _land_musing(db, body)
+        call, calls = _fake_extract({})
+        assert detect_and_capture_pledge(note_id, db_path=db, extract_call=call) is None, body
+        assert calls["n"] == 0, body
+
+
 def test_annotation_pre_gates(db: Path) -> None:
     # No pending stub → no extraction even for annotation-shaped text
     call, calls = _fake_extract({"conviction": "high"})
