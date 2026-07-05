@@ -1,0 +1,171 @@
+{
+  "ticker": "TECH",
+  "name": "Bio-Techne",
+  "last_updated": "2026-06-22",
+  "_status": "ai_generated_starting_point",
+  "_provenance": "AI-generated STARTING-POINT thesis (Opus 4.8, adversarial bull->red-team->synthesis loop, 2026-06-22). Macro priors supplied by user: onshoring + AI-driven drug-discovery spend. NEEDS user review/edit before treating as authored. Valuation grounded via web (FMP MCP key was down); DB price snapshot was stale.",
+  "thesis": "Bio-Techne is a high-quality life-science 'picks-and-shovels' franchise (65-70% gross margin: recombinant proteins, antibodies, immunoassays, instruments via Protein Sciences ~70% of rev; plus Diagnostics & Genomics incl. spatial biology/RNAscope). The cleanest part of the bull case is real: FY25 GAAP operating margin of 8.4% is optically depressed by a one-time ~$83M Exosome Diagnostics impairment (now divested), and underlying ADJUSTED operating margin still runs ~34%. The BET (user macro priors): onshoring + AI-driven drug discovery expand the number of biologics/discovery programs, and as the biotech funding winter thaws (funding +90%/+50% YoY in fiscal Q2/Q3 FY26), TECH re-accelerates from ~2-5% to high-single-digit organic by FY27, with GMP proteins for cell & gene therapy (~50% YoY) and spatial biology (COMET +65%) re-mixing toward higher growth. WHAT THE ADVERSARIAL LOOP FOUND (why this is a WATCH, not a buy): (1) the macro priors are DIFFUSE, long-dated, and SECTOR BETA shared with Thermo/Danaher/Merck KGaA - not TECH alpha; onshoring/BIOSECURE reagent pull-through is second-order and ~2027-2030; AI could even REDUCE wet-lab reagent burn per program. (2) The funding->reagent-spend catalyst ALREADY FIRED and revenue went the WRONG way: emerging-biotech revenue still declined and early-stage funding (the cohort that buys reagents) actually fell - Q3 FY26 organic was -2% (a miss), Q4 FY26 guided ~flat. The FY27 inflection is 100% forward narrative, not yet in the numbers. (3) VALUATION IS NOT CHEAP once the stale DB price is corrected: at ~$58 / ~$9.2B / ~7.8x EV-sales / ~31x EV/EBITDA / ~30x fwd P/E for a ~2-5% organic grower, there is no margin of safety, and sell-side targets are being CUT (Evercore 68->54, Stifel 65->50 Hold), stock -17% YTD. (4) The 'adjusted 34%' margin adds back ~$26M/quarter of recurring stock-comp + amortization; adjusted op margin was still DOWN 70bps YoY and GM down 120bps YoY. ROLE: a high-quality compounder to OWN ON A SETBACK, not at a premium multiple while the data disconfirms the reacceleration. Wait for one printed quarter of accelerating ex-headwind core organic growth (proof the funding lag is real, not perpetually rolling) before paying up. Watchlist/evaluation name - track, don't buy here.",
+  "verdict": "Watch (quality franchise, full multiple; FY27 reacceleration not yet in the numbers - macro priors are optionality, not the driver)",
+  "verdict_color": "yellow",
+  "key_driver": "Whether biotech-funding -> reagent-spend conversion is real & dated (early-stage funding turning + one quarter of accelerating ex-headwind CORE organic growth), vs a perpetually-rolling FY27 promise - AND whether the premium multiple (~30x fwd P/E) compresses on a setback",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Gross Margin (GAAP)",
+    "Free cash flow",
+    "Capex / Revenue (GAAP)"
+  ],
+  "tier_1_kpis": [
+    {
+      "name": "Total organic revenue growth (the keystone)",
+      "current": "Q3 FY26 -2% organic (a double miss); Q4 FY26 guided ~flat; FY23-25 settled at +2-5%",
+      "prior": null,
+      "yoy": null,
+      "status": "Red",
+      "break_condition": "Still <=0% organic through fiscal Q2 FY27 (Dec'26) -> the funding-lag reacceleration never arrived (thesis core fails)",
+      "source": "earnings release + transcript"
+    },
+    {
+      "name": "Emerging-biotech / early-stage funding -> revenue conversion",
+      "current": "Biotech funding +90%/+50% YoY fiscal Q2/Q3 FY26 BUT emerging-biotech revenue still declined; early-stage funding actually fell; mgmt admitted 'a little ahead of the horse'",
+      "prior": null,
+      "yoy": null,
+      "status": "Red",
+      "break_condition": "Emerging-biotech revenue stays negative 2 more quarters -> the 2-3 quarter lag is a rolling promise, not mechanical",
+      "source": "transcript"
+    },
+    {
+      "name": "GMP proteins / cell & gene therapy growth (company-specific engine)",
+      "current": "~50% YoY EX two fast-track customers (concentration); 18 programs in Phase II",
+      "prior": null,
+      "yoy": null,
+      "status": "Green-ish (but concentrated)",
+      "break_condition": "Decelerates below ~20% YoY, Phase-II program count stalls, OR a CGT customer/clinical setback (timing already swung total growth ~3pts)",
+      "source": "transcript + press releases"
+    },
+    {
+      "name": "Spatial biology (COMET vs RNAscope)",
+      "current": "Mid-teens overall; COMET +65% but RNAscope (installed-base cash cow) only high-single-digit and decelerating",
+      "prior": null,
+      "yoy": null,
+      "status": "Yellow",
+      "break_condition": "RNAscope goes flat/negative (share loss to 10x Genomics / Bruker / NanoString) while COMET too small to carry the mix",
+      "source": "transcript"
+    },
+    {
+      "name": "Adjusted operating margin (and its honesty vs GAAP)",
+      "current": "Adj op margin ~34% (Q3 FY26) but DOWN 70bps YoY; GAAP op margin 8.4% FY25 (Exosome impairment); ~$26M/q stock-comp+amort addbacks",
+      "prior": null,
+      "yoy": null,
+      "status": "Yellow",
+      "break_condition": "Adjusted op margin falls below ~30%, OR GAAP margin fails to normalize toward high-20s now that Exosome is divested",
+      "source": "earnings release (GAAP->adjusted bridge)"
+    },
+    {
+      "name": "Valuation / multiple vs growth (margin of safety)",
+      "current": "~$58 / ~$9.2B / ~7.8x EV-sales / ~31x EV/EBITDA / ~30x fwd P/E for a ~2-5% organic grower; targets being CUT; -17% YTD (DB price $45 is STALE)",
+      "prior": null,
+      "yoy": null,
+      "status": "Red",
+      "break_condition": "Multiple stays >28x fwd P/E without organic reacceleration -> paying premium for sector beta; re-rate to Constructive only if multiple compresses toward peers on a setback",
+      "source": "web (Yahoo/stockanalysis/gurufocus); FMP key was down"
+    }
+  ],
+  "tier_2_kpis": [
+    {"name": "China revenue exposure (~15%)", "current": "4 straight up-quarters; tariff risk ~$20M op-income if unmitigated", "source": "transcript"},
+    {"name": "US academic / NIH end-market (~12% of rev)", "current": "Stabilizing at low-single-digit; NIH ~40% proposed cut partly enjoined, grant-delay chill ongoing", "source": "transcript + NIH coverage"},
+    {"name": "Wilson Wolf $1B call option (G-Rex / CGT)", "current": "Exercisable on milestones by Dec 31 2027 (~4.4x rev); funding risk on $162M cash / $444M debt", "source": "press releases"}
+  ],
+  "nuance": {
+    "bear_case": "The single causal link the thesis depends on - biotech funding -> reagent pull-through - just got a live test and FAILED: funding rose +90%/+50% YoY while emerging-biotech revenue declined and early-stage funding fell. Headline organic is -2% with Q4 guided flat into easy comps; the core research-reagents/proteins/antibodies portfolio (the historic margin engine) declined mid-single-digits. Post-COVID the franchise has settled into ~2-5% organic with NIH/academic overhang + ~15% China + pharma destocking - structural deceleration, not a clean cyclical dip. And the valuation 'cheap at 6x sales' premise is arithmetically wrong on the corrected ~$58 price (~7.8x EV-sales, ~31x EV/EBITDA, ~30x fwd P/E); there is no margin of safety and analyst targets are falling.",
+    "adversarial_take": "This is a genuinely high-quality picks-and-shovels franchise priced for a recovery the most recent data actively contradicts, on a multiple that leaves zero room for the FY27 inflection to slip AGAIN. The catalyst already fired and revenue fell. The macro priors (onshoring, AI discovery) are real but diffuse, long-dated, and shared with larger peers - they support the narrative but cannot bear the thesis's weight. Lean Avoid at the current price; Watch for the inflection to show in reported numbers first.",
+    "stress_test": "If emerging-biotech revenue is still negative by Dec'26 AND adjusted margins keep declining YoY AND the multiple holds at ~30x, the name is a value trap - high quality, but dead money or worse as estimates and the multiple both compress.",
+    "valuation_whats_priced_in": "DB snapshot ($45.47 / $7.1B / ~6x sales) is STALE by ~30%. Corrected: ~$58 / ~$9.2B / ~$9.5B EV / ~7.8x EV-sales / ~31x EV/EBITDA / ~30x fwd P/E (FCF ~$257M = ~2.7% FCF yield on EV - thin). At a premium-to-history multiple on negative organic growth, the market is paying for the FY27 inflection in advance. The asymmetry is poor: catalyst already fired, revenue fell.",
+    "signposts_trap_vs_turn": [
+      "One printed quarter of accelerating EX-headwind core organic growth (the single most important tell)",
+      "Early-stage / emerging-biotech funding actually converting to reagent revenue (not just aggregate funding)",
+      "GMP/CGT growth broadening beyond the two fast-track customers",
+      "Adjusted op margin re-expanding YoY (not just sequentially off a depressed base) + GAAP normalizing post-Exosome",
+      "Multiple compressing toward tools peers on a setback (entry point)",
+      "RNAscope holding share vs 10x/Bruker/NanoString"
+    ]
+  },
+  "competitive_watchlist": [
+    "Thermo Fisher (TMO) - scale leader across reagents/instruments; sets pricing",
+    "Danaher (DHR) - Cytiva/Leica/Beckman; overlapping reagents + genomics + bioprocessing",
+    "Merck KGaA (MilliporeSigma) - reagents + bioprocessing",
+    "10x Genomics / Bruker / NanoString - spatial biology competition (RNAscope share)",
+    "Revvity (RVTY) - life-science reagents + diagnostics overlap"
+  ],
+  "thesis_breakers_qualitative": [
+    "Two more quarters of negative/flat organic with the cell-therapy headwind already rolled off",
+    "Early-stage biotech funding fails to convert to reagent revenue by Dec'26",
+    "Adjusted operating margin declines YoY for 2 consecutive quarters",
+    "GMP/CGT concentration exposed by a fast-track-customer loss or CGT clinical setback",
+    "Wilson Wolf $1B call forces a dilutive/leveraging event into a soft CGT market"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters - outright top-line contraction."
+    },
+    {
+      "rule_id": "universal_fcf_margin_collapse",
+      "kpi_name": "FCF Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 5,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin below 5% for 2 consecutive Qs - cash conversion broken. (Universal floor; per-ticker rules below are stricter.)"
+    }
+  ],
+  "business_model_rules": [
+    {
+      "rule_id": "tech_organic_growth_floor",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 3,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue YoY < 3% for 2Q - the FY27 reacceleration thesis requires a turn off the ~2-5% trough; sustained sub-3% confirms structural deceleration / value trap."
+    },
+    {
+      "rule_id": "tech_gross_margin_below_63",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 63,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GM < 63% for 2Q - this is a 65-68% gross-margin franchise; sub-63 means pricing/mix is structurally degrading (not just cyclical)."
+    },
+    {
+      "rule_id": "tech_operating_margin_below_15",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 15,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP op margin < 15% for 2Q with Exosome impairment ALREADY divested - means the margin recovery is not real and 'adjusted 34%' is masking structural erosion."
+    }
+  ],
+  "schema_version": 2,
+  "wacc": null,
+  "mos_bar": 0.3,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": null
+  },
+  "flags": [
+    "DCF_PARAMS_PENDING",
+    "AI_GENERATED_STARTING_POINT"
+  ],
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": [],
+  "data_note": "DB price/market-cap snapshot ($45.47 / $7.1B) is STALE (~30% low); corrected ~$58 / ~$9.2B as of Jun 2026 via web sources (FMP MCP key was down this session). Re-pin price/EV before any DCF. FY ends June (fiscal-year labels lead calendar)."
+}

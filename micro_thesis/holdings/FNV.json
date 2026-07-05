@@ -1,94 +1,151 @@
 {
   "ticker": "FNV",
   "name": "Franco-Nevada",
-  "last_updated": "2026-05-10",
-  "thesis": "Streaming/royalty company with optionality across gold + diversified commodities; thesis is sustained free cash flow + counter-cyclical M&A. STUB — needs user review.",
-  "verdict": "Pending",
-  "verdict_color": "gray",
-  "key_driver": "GEOs (gold-equivalent ounces) × realized prices",
+  "last_updated": "2026-06-25",
+  "thesis": "Franco-Nevada is the purest royalty/streaming compounder in precious metals: it owns price exposure without owning mines, so it bears no operating cost, capex, or labor inflation while collecting top-line revenue off ~430 assets. The model converts a gold bull market almost directly into free cash flow — FY2025 adjusted EBITDA margin was 90.9% and OCF was $1,493.7M (+80% YoY) on $1,822.8M revenue, and Q1 2026 already printed $650.7M revenue (+77%), $458.3M adjusted net income (70.4% margin), and a 91.0% EBITDA margin. The company is debt-free with $670.9M cash and ~$3.1B available capital, funding ~$1.8B of 2025 deals (Cote 7.5% GMR for $1,050M; Sibanye Western Limb stream $500M) plus 2026 additions (Gatos-area royalty $225M+, Casa Berardi $100M). The core bet: gold near ~$4,300/oz (off the Jan-2026 ~$5,590 peak; JPMorgan/BofA see ~$6,000 by year-end) keeps flowing through a fixed-cost structure, while 19 straight dividend hikes (now $0.44/qtr) and inflation-protected royalties compound book value. What the market under-models is Cobre Panama optionality — FNV's 2026 guidance of 510k-570k GEOs assumes ZERO restart, yet Panama has suspended arbitration and President Mulino is reopening restart talks; that asset was a >$300M/yr revenue contributor, pure upside not in numbers. What's PRICED IN: at a premium ~1.8x NAV, a high-30s forward P/E and ~0.7% yield, FNV already capitalizes high gold prices and a benign deal environment; the margin of safety is thin if gold mean-reverts toward the $3,000s, and the stock could de-rate even with strong fundamentals. The asymmetry favors patience: this is a great business whose price already embeds peak-commodity FCF plus a Panama win.",
+  "verdict": "Watch",
+  "verdict_color": "yellow",
+  "key_driver": "The realized gold price — with near-zero operating leverage, FNV's free cash flow tracks the gold price almost one-for-one, so the thesis lives or dies on gold holding its $4,000+ regime (Cobre Panama restart is the embedded free call option).",
   "chart_priorities": [
     "Revenue",
     "Operating income",
-    "Free cash flow",
-    "FCF Margin (GAAP)"
+    "Operating Margin (GAAP)",
+    "Net Income Margin (GAAP)"
   ],
-  "_status": "needs_user_review",
   "tier_1_kpis": [
     {
-      "name": "GEO production (oz)",
-      "current": "TBV from latest earnings release",
-      "prior": null,
+      "name": "Revenue",
+      "current": "$650.7m Q1 2026 (+77% YoY); FY2025 $1,822.8m (+64%)",
+      "prior": "~$367.5m Q1 2025",
       "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Below guidance midpoint for 2 consecutive years",
+      "status": "Green",
+      "break_condition": "Two consecutive quarters of YoY revenue decline outside a falling-gold tape (signals stream/royalty portfolio attrition, not just commodity beta)",
+      "source": "earnings release"
+    },
+    {
+      "name": "GEOs sold (gold-equivalent ounces)",
+      "current": "136,353 Q1 2026 (+8% YoY); FY2025 519,106 (+12%)",
+      "prior": "126,253 Q1 2025",
+      "yoy": null,
+      "status": "Green",
+      "break_condition": "FY GEOs falling below the 510,000 low end of 2026 guidance, signaling portfolio depletion outpacing new deals",
       "source": "operational review"
     },
     {
       "name": "Adjusted net income margin",
-      "current": "TBV from latest earnings release",
+      "current": "70.4% Q1 2026 ($458.3m on $650.7m); FY2025 adj net income $1,075.2m",
       "prior": null,
       "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Below 50% for 2 consecutive Qs",
+      "status": "Green",
+      "break_condition": "Adjusted margin compressing below ~60% absent a deliberate diversified-deal mix shift (would imply cost/structure creep alien to the royalty model)",
       "source": "earnings release"
     },
     {
-      "name": "Operating cash flow (TTM)",
-      "current": "TBV from latest earnings release",
+      "name": "Operating cash flow",
+      "current": "$520.4m Q1 2026; FY2025 $1,493.7m (+80% YoY), TTM ~$1,646m",
       "prior": null,
       "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Below $850M TTM in stable price environment",
+      "status": "Green",
+      "break_condition": "TTM OCF declining YoY while gold prices are flat-to-up (decoupling of cash conversion from the model)",
       "source": "earnings release"
     },
     {
-      "name": "Net cash position",
-      "current": "TBV from latest earnings release",
+      "name": "Net cash / available capital",
+      "current": "Debt-free; $670.9m cash, ~$3.1b available capital (FY2025 year-end)",
       "prior": null,
       "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Drops below zero (taking on net debt)",
+      "status": "Green",
+      "break_condition": "Taking on net debt to fund a single deal, or available capital falling below ~$1b without a transformational acquisition to show for it",
       "source": "earnings release"
     },
     {
-      "name": "New stream/royalty deals (annual count + size)",
-      "current": "TBV from latest earnings release",
-      "prior": null,
+      "name": "Deal pace (capital deployed on new royalties/streams)",
+      "current": "~$1.8b deployed in 2025 (Cote $1,050m GMR; Sibanye Western Limb $500m); 2026 adds Gatos-area royalty ~$225m+ and Casa Berardi $100m stream",
+      "prior": "FY2024 lower deal year",
       "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Zero new material deals in any 12-month period",
-      "source": "press releases"
+      "status": "Green",
+      "break_condition": "A full year with <$300m deployed and no pipeline disclosed (reinvestment engine stalling, the long-term growth lever)",
+      "source": "operational review"
     }
   ],
   "tier_2_kpis": [
     {
-      "name": "Cobre Panama settlement progress",
+      "name": "Adjusted EBITDA margin",
+      "current": "91.0% Q1 2026 ($591.9m); FY2025 90.9% ($1,656.1m)",
       "source": "earnings release"
     },
     {
-      "name": "Energy royalty revenue mix",
+      "name": "Precious-metals share of revenue",
+      "current": "87% of Q1 2026 revenue ($568.1m); FY2025 85% ($1,548.7m), diversified 15% ($259.9m)",
       "source": "earnings release"
     },
     {
-      "name": "Capital return pace",
+      "name": "Dividend per share",
+      "current": "$0.44/quarter (raised 16% for 2026); 19th consecutive annual increase",
       "source": "earnings release"
+    },
+    {
+      "name": "Realized gold price environment",
+      "current": "~$4,300/oz June 2026 (peaked ~$5,590 on Jan 28, 2026); JPMorgan/BofA target ~$6,000 by year-end 2026",
+      "source": "FMP"
+    },
+    {
+      "name": "Geographic concentration",
+      "current": "~84-87% of revenue from the Americas (~41% South America)",
+      "source": "operational review"
+    },
+    {
+      "name": "2026 GEO guidance (ex-Cobre Panama)",
+      "current": "510,000-570,000 total GEOs; 360,000-400,000 gold oz; ~90% precious metals — assumes NO Cobre Panama restart",
+      "source": "operational review"
     }
   ],
   "tier_3_kpis": [
     {
-      "name": "Pension / asset retirement obligations",
-      "source": "10-K / 10-Q"
+      "name": "Cobre Panama restart / arbitration status",
+      "source": "company disclosure"
+    },
+    {
+      "name": "Net income (GAAP)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Available undrawn credit facility",
+      "source": "earnings release"
+    },
+    {
+      "name": "Number of producing royalty/stream assets",
+      "source": "operational review"
+    },
+    {
+      "name": "Energy / iron-ore (diversified) revenue detail",
+      "source": "earnings release"
+    },
+    {
+      "name": "Forward P/CF and P/NAV multiple vs. WPM and RGLD",
+      "source": "FMP"
     }
   ],
+  "nuance": {
+    "bear_case": "Franco-Nevada at a premium ~1.8x NAV (BMO, Jan 2026) versus miners at 0.7-0.9x, a trailing P/E in the 50s (forward ~34), ~28x sales, and a token ~0.7% yield is priced for a permanent gold supercycle. Q1 2026's 'record' 77% revenue jump and gross-margin/GEO leap from $2,559 to $4,534 were almost entirely price, not volume: gold hit an all-time ~$5,590 (Jan 29, 2026) and has already mean-reverted ~20-25% toward ~$4,100 by late June. Current FCF is cyclically inflated. Concentration is real: Cobre Panama was ~17% of 2022 revenue ($223M), has been shut since late-2023 (a >US$1B impairment), carries zero in 2026 guidance, and a full restart hinges on October-2026 arbitration plus a Panamanian government demanding resource ownership. Meanwhile ~US$1.8B was deployed over two years into a crowded three-firm oligopoly where rising depletion costs signal pricier, lower-return deals. A premium multiple resting on a peaked commodity and a frozen flagship asset is fragile.",
+    "adversarial_take": "Bulls are capitalizing trough-of-supply, peak-of-price economics as if they were the through-cycle norm — paying a premium NAV and a high-50s trailing P/E for cash flows that just doubled on a gold spike that has already partially unwound. The mistake is treating Cobre Panama as a free option (zero in guidance, so 'all upside') while ignoring that the same asset already cost a US$1B impairment and is hostage to an arbitration and a government that wants the resource. You are underwriting record gold, a Panama restart, AND accretive redeployment of US$1.8B+ simultaneously. The right posture is Watch, not Buy: the business is genuinely high-quality (no debt, ~90% margins, diversified), but quality at the wrong price is a bad trade. Want it at a normalized-gold P/NAV closer to peers, after the multiple compresses toward 1.3-1.5x NAV on normalized FCF.",
+    "stress_test": "Assume gold mean-reverts from ~$4,100 to ~$3,000 (a further ~25%, still historically elevated). Royalty revenue is near-pure margin, so a ~25% price drop flows almost one-for-one to revenue and FCF — the Q1 2026 ~$650M run-rate compresses materially. Layer in Cobre Panama's arbitration slipping past 2026 (full restart pushed to 2028+, keeping ~10-15% of normalized GEOs offline) and one operator (e.g. Candelaria or Antapaccay) trimming output. The market then re-rates a now-shrinking earnings stream off a premium P/E and ~1.8x NAV toward ~1.3x — a double hit of lower numerator and lower multiple, compounding to a 40-50% drawdown from the early-2026 peak."
+  },
   "competitive_watchlist": [
     "Wheaton Precious Metals",
     "Royal Gold",
-    "Osisko Gold Royalties"
+    "Sandstorm Gold",
+    "Osisko Gold Royalties",
+    "Triple Flag Precious Metals"
   ],
   "thesis_breakers_qualitative": [
-    "Cobre Panama remains shut indefinitely",
-    "Gold price multi-year drawdown",
-    "Counter-cyclical M&A absent"
+    "Gold breaks below ~$3,000/oz and holds, collapsing the price-driven margin/GEO that drove Q1 2026 (from $2,559 to $4,534).",
+    "October-2026 Cobre Panama arbitration fails or stalls, with Panama insisting on state resource ownership and no full-restart timeline emerging.",
+    "A new acquisition is publicly criticized as dilutive/low-IRR, confirming reinvestment-return compression as rising depletion costs ($77.9M) already hint.",
+    "P/NAV multiple compresses toward peers/miners (1.3-1.5x), erasing the structural premium even if gold is flat.",
+    "A major operator (Candelaria, Antapaccay, Antamina) announces a production cut, mine-life downgrade, or labor/jurisdiction disruption.",
+    "Sell-side fair-value estimates are cut and the 'Buy' consensus flips to Hold as gold normalizes.",
+    "Resource nationalism or new royalty/windfall taxes in a key Latin American jurisdiction (~84% of revenue is Americas, ~41% South America) impair stream economics."
   ],
   "break_rules": [
     {
@@ -110,15 +167,6 @@
       "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
     },
     {
-      "rule_id": "universal_gross_margin_collapse",
-      "kpi_name": "Gross Margin (GAAP)",
-      "comparator": "lt",
-      "threshold": 20,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
-    },
-    {
       "rule_id": "universal_net_loss",
       "kpi_name": "Net Income Margin (GAAP)",
       "comparator": "lt",
@@ -126,33 +174,35 @@
       "unit": "percent",
       "consecutive_periods": 2,
       "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
-    },
+    }
+  ],
+  "business_model_rules": [
     {
-      "rule_id": "capex_intensity_too_high",
-      "kpi_name": "Capex / Revenue (GAAP)",
-      "comparator": "gt",
-      "threshold": 25,
-      "unit": "percent",
-      "consecutive_periods": 2,
-      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
-    },
-    {
-      "rule_id": "fcf_margin_collapse",
-      "kpi_name": "FCF Margin (GAAP)",
+      "rule_id": "fnv_op_margin_floor",
+      "kpi_name": "Operating Margin (GAAP)",
       "comparator": "lt",
-      "threshold": 5,
+      "threshold": 55,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
+      "narrative": "A royalty/streaming model has no mining opex or capex, so operating margin should sit comfortably above 60% (FNV runs ~70-83%). Two straight quarters below 55% would mean either cost structure is creeping in (alien to the model) or impairments/write-downs are recurring — both undercut the core 'price exposure without operating cost' thesis."
     },
     {
-      "rule_id": "ocf_decline_yoy",
-      "kpi_name": "Operating Cash Flow YoY Growth (USD)",
+      "rule_id": "fnv_net_margin_floor",
+      "kpi_name": "Net Income Margin (GAAP)",
       "comparator": "lt",
-      "threshold": -10,
+      "threshold": 50,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
+      "narrative": "FNV's near-pure-margin royalty economics deliver net margins of ~60-72%. Two consecutive quarters of GAAP net margin below 50% — absent a one-off impairment — would signal the cash-conversion advantage that justifies the premium multiple is eroding (cost creep, sustained write-downs, or stream economics deteriorating)."
+    },
+    {
+      "rule_id": "fnv_revenue_growth_break",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": -15,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Given a fixed, growing royalty portfolio and inflation-protected streams, revenue should grow through cycles unless gold collapses or assets deplete. Two consecutive quarters of revenue falling more than 15% YoY would indicate genuine portfolio attrition or a severe commodity-regime change that breaks the compounding story. (NB: FCF-margin and capex/revenue break rules are deliberately omitted — FNV's reported capex line captures lumpy stream/royalty ACQUISITIONS, not sustaining capex, so those ratios swing wildly and would false-breach for a royalty model.)"
     }
   ],
   "schema_version": 2,
@@ -164,8 +214,11 @@
     "gsheet_id": "1b16lTnxq6kvuLpYQR6NWuFJTXr3MJWSN_xAG_9kwORk"
   },
   "flags": [
+    "EVAL_THESIS_AUTHORED",
+    "AI_GENERATED_STARTING_POINT",
     "DCF_PARAMS_PENDING"
   ],
+  "_status": "ai_generated_starting_point",
   "segments": [],
   "operational_kpis": [],
   "break_rules_soft": []
