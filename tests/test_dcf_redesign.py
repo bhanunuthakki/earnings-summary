@@ -157,6 +157,85 @@ def test_negative_margin_yields_negative_value_without_crashing() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# SBC as an explicit after-tax expense (op margins stay non-GAAP)
+# --------------------------------------------------------------------------- #
+def test_sbc_defaults_to_zero_backcompat() -> None:
+    """A pre-SBC input set (no SBC fields) charges no SBC — the value is identical
+    to the old 'SBC nets out' behaviour, so legacy workbooks/fixtures don't move."""
+    assert _BASE.near_sbc_pct == 0.0
+    assert _BASE.terminal_sbc_pct == 0.0
+    # An explicit 0.0 must equal the default (the charge term vanishes).
+    zeroed = dataclasses.replace(_BASE, near_sbc_pct=0.0, terminal_sbc_pct=0.0)
+    assert redesign.value(zeroed).value_per_share_usd == pytest.approx(
+        redesign.value(_BASE).value_per_share_usd
+    )
+
+
+def test_charging_sbc_lowers_value() -> None:
+    """A heavy-SBC name (12% -> 8% of revenue) values materially LOWER than the
+    same name with SBC excluded — the whole point of the fix."""
+    heavy = dataclasses.replace(_BASE, near_sbc_pct=0.12, terminal_sbc_pct=0.08)
+    assert redesign.value(heavy).value_per_share_usd < redesign.value(_BASE).value_per_share_usd
+
+
+def test_sbc_charged_after_tax() -> None:
+    """The FCF-stream SBC charge is ``sbc_pct * revenue * (1 - tax)``: at a higher
+    tax rate the *same* SBC% charges LESS after-tax SBC. Isolate that channel by
+    valuing on an EV/Sales terminal (whose metric is revenue, so the terminal-EBITDA
+    SBC burden — deliberately NOT tax-adjusted — does not confound the comparison).
+
+    The SBC drag then scales cleanly by (1-tax): the drag at 40% tax is 0.60/0.90 of
+    the drag at 10% tax."""
+    lo_tax = dataclasses.replace(_BASE, tax_rate=0.10, terminal_basis="EV/Sales", exit_multiple=3.0)
+    hi_tax = dataclasses.replace(_BASE, tax_rate=0.40, terminal_basis="EV/Sales", exit_multiple=3.0)
+    sbc = {"near_sbc_pct": 0.10, "terminal_sbc_pct": 0.10}
+    drag_lo = (
+        redesign.value(lo_tax).value_per_share_usd
+        - redesign.value(dataclasses.replace(lo_tax, **sbc)).value_per_share_usd
+    )
+    drag_hi = (
+        redesign.value(hi_tax).value_per_share_usd
+        - redesign.value(dataclasses.replace(hi_tax, **sbc)).value_per_share_usd
+    )
+    # After-tax SBC at 40% tax is 0.60/0.90 of the charge at 10% tax.
+    assert drag_hi < drag_lo
+    assert drag_hi == pytest.approx(drag_lo * (0.60 / 0.90), rel=0.02)
+
+
+def test_terminal_ebitda_burdened_by_sbc() -> None:
+    """``_terminal_metrics`` burdens the exit-multiple EBITDA by terminal-year SBC
+    (ebitda = ebit - sbc + da), so the terminal metric drops when SBC is charged."""
+    no_sbc = redesign._terminal_metrics(redesign._project(_BASE), _BASE)
+    heavy_inp = dataclasses.replace(_BASE, near_sbc_pct=0.12, terminal_sbc_pct=0.10)
+    heavy = redesign._terminal_metrics(redesign._project(heavy_inp), heavy_inp)
+    assert heavy.ebitda < no_sbc.ebitda
+    # The burden equals terminal_sbc_pct * terminal revenue.
+    streams = redesign._project(heavy_inp)
+    burden = heavy_inp.terminal_sbc_pct * streams.revenue[-1]
+    assert no_sbc.ebitda - heavy.ebitda == pytest.approx(burden)
+
+
+def test_sbc_round_trips_through_dict() -> None:
+    heavy = dataclasses.replace(_BASE, near_sbc_pct=0.13, terminal_sbc_pct=0.07)
+    rebuilt = redesign.RedesignInputs.from_dict(heavy.to_dict())
+    assert rebuilt.near_sbc_pct == pytest.approx(0.13)
+    assert rebuilt.terminal_sbc_pct == pytest.approx(0.07)
+    assert rebuilt == heavy
+    assert redesign.value(rebuilt).value_per_share_usd == pytest.approx(
+        redesign.value(heavy).value_per_share_usd
+    )
+
+
+def test_from_dict_missing_sbc_defaults_to_zero() -> None:
+    payload = _BASE.to_dict()
+    del payload["near_sbc_pct"]
+    del payload["terminal_sbc_pct"]
+    inp = redesign.RedesignInputs.from_dict(payload)
+    assert inp.near_sbc_pct == 0.0
+    assert inp.terminal_sbc_pct == 0.0
+
+
+# --------------------------------------------------------------------------- #
 # Scenarios + sensitivity (pure engine)
 # --------------------------------------------------------------------------- #
 def test_scenario_values_order_bear_base_bull() -> None:
@@ -581,6 +660,97 @@ def test_reader_reads_dashboard_and_financials(built_usd: tuple[Path, float]) ->
     assert inp.diluted_shares_m == pytest.approx(100.0)
     assert 0.0 < inp.wacc < 0.25
     assert inp.consensus_years == 5  # 2026..2030 on the Consensus sheet
+
+
+# --------------------------------------------------------------------------- #
+# SBC + analyst-segment plumbing through the real builder
+# --------------------------------------------------------------------------- #
+def test_builder_writes_sbc_cells_reader_charges_them(built_usd: tuple[Path, float]) -> None:
+    """The builder writes the Dashboard SBC % inputs (rows 65/66) from the actuals
+    fade, the reader reads them back, and the value-of-record is the SBC-charged one
+    (the in-sheet valfcf formula + the reader mirror agree)."""
+    dest, builder_value = built_usd
+    inp = redesign.read_inputs(dest)
+    assert inp is not None
+    # The FMP fixture carries SBC at 5% of revenue, faded 5% -> 3% (x0.6 terminal).
+    assert inp.near_sbc_pct == pytest.approx(0.05, abs=0.01)
+    assert inp.terminal_sbc_pct == pytest.approx(0.03, abs=0.01)
+    assert inp.near_sbc_pct > 0  # SBC is actually charged now, not netted out
+    # The reader's value tracks the builder's own SBC-charged mirror.
+    rv = redesign.read_and_value(dest)
+    assert rv is not None
+    assert rv.value_per_share_usd == pytest.approx(builder_value, rel=0.03)
+
+
+def _build_with_assumptions(
+    repo: Path, ticker: str, redesign_block: dict[str, object], dest: Path
+) -> float:
+    """Write a data/dcf_assumptions/<T>.json redesign block, then run the builder."""
+    adir = repo / "data" / "dcf_assumptions"
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / f"{ticker}.json").write_text(
+        json.dumps({"ticker": ticker, "redesign": redesign_block}), encoding="utf-8"
+    )
+    return _build(repo, ticker, dest)
+
+
+def test_analyst_segments_override_fmp_and_split_base_revenue(tmp_path: Path) -> None:
+    """A valid analyst_segments block REPLACES the FMP-resolved segment set: the
+    workbook models the analyst's two streams, base revenue is split by base_pct,
+    and each segment grows on its own near/terminal rate (reader round-trips)."""
+    repo = tmp_path / "analyst"
+    _write_fmp(repo, "SEGCO", segments=True)  # FMP would resolve Cloud/Devices
+    dest = repo / "dcf" / "SEGCO.xlsx"
+    _build_with_assumptions(
+        repo,
+        "SEGCO",
+        {
+            "dcf_applicable": True,
+            "business_model": "operating",
+            "analyst_segments": {
+                "Legacy": {"base_pct": 0.80, "near_term_growth": 0.05, "terminal_growth": -0.01},
+                "NewEngine": {"base_pct": 0.20, "near_term_growth": 0.35, "terminal_growth": 0.04},
+            },
+        },
+        dest,
+    )
+    inp = redesign.read_inputs(dest)
+    assert inp is not None
+    # The analyst split, not FMP's Cloud/Devices.
+    assert set(inp.segments) == {"Legacy", "NewEngine"}
+    total_base = sum(inp.base_revenue_by_segment.values())
+    assert inp.base_revenue_by_segment["Legacy"] == pytest.approx(0.80 * total_base, rel=1e-3)
+    assert inp.base_revenue_by_segment["NewEngine"] == pytest.approx(0.20 * total_base, rel=1e-3)
+    # Each stream carries its own growth (a split FMP does not report).
+    assert inp.near_growth_by_segment["NewEngine"] == pytest.approx(0.35)
+    assert inp.terminal_growth_by_segment["Legacy"] == pytest.approx(-0.01)
+    rv = redesign.read_and_value(dest)
+    assert rv is not None and rv.value_per_share_usd > 0
+
+
+def test_invalid_analyst_segments_falls_back_to_fmp(tmp_path: Path) -> None:
+    """An analyst_segments block whose base_pct doesn't sum to ~1 is rejected — the
+    builder falls back to the FMP-resolved segments rather than half-applying it."""
+    repo = tmp_path / "analyst_bad"
+    _write_fmp(repo, "BADCO", segments=True)
+    dest = repo / "dcf" / "BADCO.xlsx"
+    _build_with_assumptions(
+        repo,
+        "BADCO",
+        {
+            "dcf_applicable": True,
+            "business_model": "operating",
+            "analyst_segments": {  # sums to 0.6 — invalid
+                "A": {"base_pct": 0.30, "near_term_growth": 0.05, "terminal_growth": 0.01},
+                "B": {"base_pct": 0.30, "near_term_growth": 0.05, "terminal_growth": 0.01},
+            },
+        },
+        dest,
+    )
+    inp = redesign.read_inputs(dest)
+    assert inp is not None
+    # Fell back to FMP's Cloud/Devices — the analyst A/B split was NOT applied.
+    assert set(inp.segments) == {"Cloud", "Devices"}
 
 
 def test_fx_applied_for_non_usd_reporter(tmp_path: Path) -> None:

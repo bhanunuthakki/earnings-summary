@@ -39,6 +39,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from compute.segment_cache import apply_overrides
+from dcf import analyst_segments as analyst_seg_mod
 from dcf import assumptions_doc, country_risk, fade_calibration, segment_coverage
 from dcf import global_assumptions as global_dcf
 from dcf import redesign as redesign_mod
@@ -263,6 +264,34 @@ if SINGLE_SEG and _cov.reason and _cov.reason.startswith("coverage"):
         file=sys.stderr,
     )
 
+# --- Analyst-defined segments (outruns FMP's reported detail) ------------------
+# When data/dcf_assumptions/<T>.json carries a valid redesign.analyst_segments
+# block, the analyst's split REPLACES the FMP-resolved product segments: the
+# builder defines those segments, splits base-year (income-statement) revenue by
+# base_pct, and drives per-segment growth from the block. An invalid/absent block
+# falls back to the FMP set, logging the reason loudly (never silently half-applied).
+_cache_for_seg = REPO / "data" / "dcf_assumptions" / f"{T}.json"
+_analyst_raw = None
+if _cache_for_seg.exists():
+    _cache_json = json.loads(_cache_for_seg.read_text(encoding="utf-8"))
+    if isinstance(_cache_json, dict):
+        _redesign_block = _cache_json.get("redesign")
+        if isinstance(_redesign_block, dict):
+            _analyst_raw = _redesign_block.get("analyst_segments")
+ANALYST_SEGS = analyst_seg_mod.parse_analyst_segments(_analyst_raw)
+if _analyst_raw is not None and not ANALYST_SEGS.valid:
+    print(
+        f"ANALYST_SEGMENTS\t{T}\tinvalid ({ANALYST_SEGS.reason}) -> FMP segments",
+        file=sys.stderr,
+    )
+if ANALYST_SEGS.valid:
+    PROD = ANALYST_SEGS.names
+    SINGLE_SEG = False
+    print(
+        f"ANALYST_SEGMENTS\t{T}\t{len(PROD)} analyst segments override FMP: {', '.join(PROD)}",
+        file=sys.stderr,
+    )
+
 
 def m(v):
     return v / 1e6 if isinstance(v, (int, float)) else None
@@ -308,7 +337,15 @@ def fade(a, b, n=N_FC):
 
 # product-segment annual actuals (for growth defaults)
 seg_ann = defaultdict(lambda: defaultdict(float))
-if SINGLE_SEG:
+if ANALYST_SEGS.valid:
+    # Analyst split: each year's COMPLETE income-statement revenue apportioned by
+    # base_pct. Like whole-company, this rebuilds from the full income statement
+    # (never a fraction), and momentum/growth are driven by the block below.
+    for y in [full_fys[0] - 1, *full_fys]:
+        _rev_y = fy_sum_raw(inc_i, "revenue", y)
+        for _name, _pct in ((s.name, s.base_pct) for s in ANALYST_SEGS.segments):
+            seg_ann[y][_name] = _pct * _rev_y
+elif SINGLE_SEG:
     for y in [full_fys[0] - 1, *full_fys]:
         seg_ann[y]["Total company"] = fy_sum_raw(inc_i, "revenue", y)
 else:
@@ -391,6 +428,13 @@ for j, y in enumerate(FC_YEARS):
     )
 da_pct = fade(ratios_ly["da"], ratios_ly["da"])
 sbc_pct = fade(ratios_ly["sbc"], ratios_ly["sbc"] * 0.6)
+# Dashboard SBC % inputs (near-term + terminal), defaulting from the actuals-based
+# fade above. Charged as an explicit after-tax expense by the engine (op margins are
+# NON-GAAP / SBC-excluded), and the terminal exit-multiple EBITDA is burdened by SBC.
+# A per-name _opus override (near/terminal, or a floor for an FMP data gap) is applied
+# in the _opus block below.
+SBC_NEAR = sbc_pct[0]
+SBC_TERM = sbc_pct[-1]
 # Capex anchored to Amazon's announced ~$200B 2026 capex (Jassy, Q4'25 call —
 # vs Street's ~$147B), then the capex/D&A ratio converges to ~1.05x as the AI
 # build-out matures (Damodaran reinvestment normalization).
@@ -461,6 +505,15 @@ g1_def = {s: sum(seg_growth[s][:ncons]) / ncons for s in PROD}  # avg over conse
 gT_def = {s: seg_growth[s][-1] for s in PROD}
 margin_near_def, margin_term_def = oim_list[0], oim_list[-1]
 
+# Analyst-defined segments drive their own near/terminal growth directly (that is
+# the whole point of the override — a split FMP does not report, growing on the
+# analyst's own path rather than a consensus-reconciled FMP momentum). The engine
+# reads these two Dashboard points per segment and fades between them; the margins,
+# terminal method and the rest still come from the _opus block below.
+if ANALYST_SEGS.valid:
+    g1_def = ANALYST_SEGS.near_growth()
+    gT_def = ANALYST_SEGS.terminal_growth()
+
 # --- Opus per-name override (if the Opus assumption pass has run for this name) ---
 OPUS_BASIS, OPUS_METHOD = "EV/EBITDA", "Exit multiple"
 CURRENCY = (inc[0].get("reportedCurrency") if inc else None) or "USD"
@@ -482,10 +535,22 @@ if _opus.get("dcf_applicable") is False:
     raise SystemExit(0)
 if _opus.get("segments"):
     _sg = _opus["segments"]
-    g1_def = {s: _sg.get(s, {}).get("near_term_growth", g1_def[s]) for s in PROD}
-    gT_def = {s: _sg.get(s, {}).get("terminal_growth", gT_def[s]) for s in PROD}
+    # analyst_segments (parsed above) already pinned g1_def/gT_def to the analyst's
+    # own per-segment growth; the FMP-named _opus["segments"] growth override does
+    # not apply to those analyst names, so only re-growth when NOT analyst-driven.
+    if not ANALYST_SEGS.valid:
+        g1_def = {s: _sg.get(s, {}).get("near_term_growth", g1_def[s]) for s in PROD}
+        gT_def = {s: _sg.get(s, {}).get("terminal_growth", gT_def[s]) for s in PROD}
     margin_near_def = _opus.get("near_term_op_margin", margin_near_def)
     margin_term_def = _opus.get("terminal_op_margin", margin_term_def)
+    # SBC %: an explicit near/terminal override wins; a floor guards an FMP data gap
+    # (some names — WIX — report 0 SBC for recent quarters, understating the fade).
+    SBC_NEAR = float(_opus.get("sbc_pct_near", SBC_NEAR))
+    SBC_TERM = float(_opus.get("sbc_pct_terminal", SBC_TERM))
+    _sbc_floor = _opus.get("sbc_pct_floor")
+    if _sbc_floor is not None:
+        SBC_NEAR = max(SBC_NEAR, float(_sbc_floor))
+        SBC_TERM = max(SBC_TERM, float(_sbc_floor) * 0.6)
     TAX = _opus.get("tax_rate", _g.tax_rate)
     EXIT_MULT = float(_opus.get("exit_multiple", EXIT_MULT))
     TG = _opus.get("terminal_growth_g", TG)
@@ -570,6 +635,10 @@ def _oim(j):  # ramp to terminal by the end of the consensus window, then hold
     return margin_near_def + (margin_term_def - margin_near_def) * min(1.0, j / (ncons - 1))
 
 
+def _sbc_pct(j):  # linear near->terminal fade of the SBC % of revenue
+    return SBC_NEAR + (SBC_TERM - SBC_NEAR) * j / (N_FC - 1)
+
+
 def _project():
     seg = {s: seg_ann[ly][s] for s in PROD}
     prev = sum(seg.values())
@@ -581,18 +650,23 @@ def _project():
         ebit = rr * _oim(j)
         nop = ebit * (1 - TAX)
         d, cx, nw = rr * da_pct[j], rr * da_pct[j] * capex_da[j], (rr - prev) * nwc_pct[j]
+        # Explicit after-tax SBC charge (op margin is NON-GAAP / SBC-excluded).
+        sbc_at = _sbc_pct(j) * rr * (1 - TAX)
         rev.append(rr)
         oi.append(ebit)
         da.append(d)
-        vf.append(nop + d - cx - nw)
+        vf.append(nop + d - cx - nw - sbc_at)
         prev = rr
     return rev, oi, da, vf
 
 
 rev_p, oi_p, da_p, vf_p = _project()
 # mirror the workbook's SELECTED terminal (Opus may pick perpetuity), then FX -> USD
+# EV/EBITDA is BURDENED by terminal-year SBC so the exit multiple applies to real
+# (SBC-charged) EBITDA — consistent with charging SBC as an operating expense.
+_sbc_term_M = _sbc_pct(N_FC - 1) * rev_p[-1]
 _tmetric = {
-    "EV/EBITDA": oi_p[-1] + da_p[-1],
+    "EV/EBITDA": oi_p[-1] - _sbc_term_M + da_p[-1],
     "EV/Sales": rev_p[-1],
     "EV/EBIT": oi_p[-1],
     "EV/FCF": vf_p[-1],
@@ -714,6 +788,8 @@ DB = {
     "kd": "Dashboard!$B$41",
     "crp": "Dashboard!$B$47",
     "curv": "Dashboard!$B$49",
+    "sbc_near": f"Dashboard!$B${redesign_mod._DB_SBC_NEAR}",
+    "sbc_term": f"Dashboard!$B${redesign_mod._DB_SBC_TERM}",
     "method": "Dashboard!$B$43",
     "basis": "Dashboard!$B$44",
     "mult": "Dashboard!$B$45",
@@ -804,7 +880,24 @@ fin_row["Diluted Shares (M)"] = write_qrow(
     "Diluted Shares (M)", lambda i, k: m(inc_i.get(k, {}).get("weightedAverageShsOutDil"))
 )
 
-if not SINGLE_SEG:
+if ANALYST_SEGS.valid:
+    # Analyst-defined segments: FMP has no per-quarter data for these names, so each
+    # segment row is base_pct x that quarter's actual revenue — written as HARDCODED
+    # actuals (blue), NOT a formula, so the offline reader (redesign.py._find_row/
+    # _fy_sum, which reads cell VALUES) picks up base-year revenue. The base-FY sum
+    # = base_pct x FY revenue — exactly the split the analyst set.
+    band(fs, frow, "REVENUE BY SEGMENT — ANALYST-DEFINED (% YoY, % of revenue)", NQ + 1)
+    frow += 1
+    _pct_by_name = {s.name: s.base_pct for s in ANALYST_SEGS.segments}
+    for s in PROD:
+        pct = _pct_by_name[s]
+        rr = write_qrow(
+            s, lambda i, k, p=pct: rv * p if (rv := m(inc_i.get(k, {}).get("revenue"))) else None
+        )
+        pseg_row[s] = rr
+        write_yoy(rr)
+        write_pct(rr, rev_r)
+elif not SINGLE_SEG:
     band(fs, frow, "REVENUE BY SEGMENT — PRODUCT (% YoY, % of revenue)", NQ + 1)
     frow += 1
     for s in PROD:
@@ -1034,8 +1127,10 @@ sbc_row = r
 put(md, r, 1, "+ SBC (non-cash)")
 for y in full_fys:
     put(md, r, yc[y], f"={fref('Stock-based Compensation', y)}", fmt=USD)
-for y in FC_YEARS:
-    put(md, r, yc[y], f"={mc(y)}{rev_row}*{sbc_pct[fcj[y]]:.4f}", fmt=USD)
+for y in FC_YEARS:  # SBC% = Dashboard near->terminal linear fade (green link)
+    j = fcj[y]
+    sbc_ramp = f"({DB['sbc_near']}+({DB['sbc_term']}-{DB['sbc_near']})*{j}/{N_FC - 1})"
+    put(md, r, yc[y], f"={mc(y)}{rev_row}*{sbc_ramp}", fmt=USD)
 r += 1
 nwc_row = r
 put(md, r, 1, "- dNWC")
@@ -1071,9 +1166,19 @@ for y in ALL:
     )
 r += 1
 valfcf_row = r
-put(md, r, 1, "Valuation FCF (FCFF - SBC)", bold=True)
+put(md, r, 1, "Valuation FCF (NOPAT + D&A - dNWC - Capex - after-tax SBC)", bold=True)
 for y in ALL:
-    put(md, r, yc[y], f"={mc(y)}{fcff_row}-{mc(y)}{sbc_row}", fmt=USD, bold=True)
+    # Charge SBC as a real after-tax expense: back out the FCFF add-back (- SBC),
+    # then charge the after-tax cash cost (- SBC*(1-tax)). Net vs FCFF: -SBC*(2-tax).
+    # The op margin is NON-GAAP (SBC-excluded), so this restores GAAP-equivalent FCF.
+    put(
+        md,
+        r,
+        yc[y],
+        f"={mc(y)}{fcff_row}-{mc(y)}{sbc_row}-{mc(y)}{sbc_row}*(1-Valuation!$B$5)",
+        fmt=USD,
+        bold=True,
+    )
 r += 2
 
 # --- Returns on capital & efficiency (level + incremental) ---
@@ -1300,8 +1405,10 @@ put(vs, tr + 2, 1, "Terminal revenue")
 put(vs, tr + 2, 2, f"=Model!{ty}{rev_row}", fmt=USD)
 put(vs, tr + 3, 1, "Terminal EBIT")
 put(vs, tr + 3, 2, f"=Model!{ty}{oi_row}", fmt=USD)
-put(vs, tr + 4, 1, "Terminal EBITDA")
-put(vs, tr + 4, 2, f"=Model!{ty}{oi_row}+Model!{ty}{da_row}", fmt=USD)
+put(vs, tr + 4, 1, "Terminal EBITDA (SBC-burdened)")
+# Burden EBITDA by terminal SBC so the exit multiple applies to REAL, SBC-charged
+# EBITDA — consistent with charging SBC as an operating expense in the FCF stream.
+put(vs, tr + 4, 2, f"=Model!{ty}{oi_row}+Model!{ty}{da_row}-Model!{ty}{sbc_row}", fmt=USD)
 put(vs, tr + 5, 1, "Terminal metric (per exit basis)")
 put(
     vs,
@@ -1756,6 +1863,29 @@ put(dsh, R.SCEN_WEIGHTS_ROW, R.SCEN_COL_WEIGHT_BASE, _w_base, fmt="0%", kind="in
 put(dsh, R.SCEN_WEIGHTS_ROW, R.SCEN_COL_BULL, _w_bull, fmt="0%", kind="in")
 put(dsh, R.SCEN_WEIGHTS_ROW, R.SCEN_COL_BEAR, _w_bear, fmt="0%", kind="in")
 
+# --- STOCK-BASED COMPENSATION: explicit after-tax charge (yellow, owner-editable) ---
+# Sits BELOW the SCENARIOS block (rows 64-66) so no existing Dashboard address
+# shifts. Operating margins stay NON-GAAP (SBC-excluded, comparable across names);
+# the engine charges SBC*(1-tax) as an explicit expense and burdens the terminal
+# exit-multiple EBITDA by SBC. Defaults from the actuals-based sbc_pct fade.
+band(dsh, redesign_mod._DB_SBC_BAND, "STOCK-BASED COMPENSATION (charged after-tax)", 5)
+put(dsh, redesign_mod._DB_SBC_NEAR, 1, "SBC % of revenue — near-term")
+put(dsh, redesign_mod._DB_SBC_NEAR, 2, SBC_NEAR, fmt=PCT, kind="in")
+put(
+    dsh,
+    redesign_mod._DB_SBC_NEAR,
+    5,
+    "charged as an after-tax expense; op margin is non-GAAP (SBC-excluded)",
+).font = SUB
+put(dsh, redesign_mod._DB_SBC_TERM, 1, "SBC % of revenue — terminal")
+put(dsh, redesign_mod._DB_SBC_TERM, 2, SBC_TERM, fmt=PCT, kind="in")
+put(
+    dsh,
+    redesign_mod._DB_SBC_TERM,
+    5,
+    "fades near->terminal; also burdens the exit-multiple EBITDA",
+).font = SUB
+
 ddm = DataValidation(type="list", formula1='"Perpetuity,Exit multiple"', allow_blank=False)
 ddb = DataValidation(type="list", formula1='"EV/EBITDA,EV/Sales,EV/EBIT,EV/FCF"', allow_blank=False)
 dsh.add_data_validation(ddm)
@@ -1876,6 +2006,8 @@ _inp = redesign_mod.RedesignInputs(
     cost_of_debt=KD,
     country_risk_premium=CRP,
     growth_fade_curvature=CURV,
+    near_sbc_pct=SBC_NEAR,
+    terminal_sbc_pct=SBC_TERM,
     terminal_method=OPUS_METHOD,
     terminal_basis=OPUS_BASIS,
     exit_multiple=EXIT_MULT,
