@@ -1,18 +1,17 @@
 {
   "ticker": "BKNG",
   "name": "Booking Holdings",
-  "last_updated": "2026-05-10",
-  "thesis": "Global accommodation booking leader with structural compounding from international markets + alternative accommodations + connected trip vision. STUB — needs user review.",
-  "verdict": "Pending",
-  "verdict_color": "gray",
-  "key_driver": "Room nights × ADR × take-rate × connected-trip attach",
+  "last_updated": "2026-07-06",
+  "thesis": "Booking Holdings compounds per-share free cash flow off five reinforcing pillars. (1) MARKET-SHARE GAINS: BKNG is taking share in its most valuable markets — U.S. accommodations grew low-teens room nights in Q1'26 (4th consecutive quarter of acceleration, materially above a low-single-digit market), the payoff of multi-year deliberate investment, while alternative accommodations grow faster than the core and close the listings gap vs. Airbnb. The two-sided flywheel (more supply -> more demand -> more supply) still turns. (2) FIRST-PARTY / DIRECT MIX: the economic heart of the thesis. Every booking that arrives direct (app, logged-in, Genius loyalty) instead of via paid Google/meta-search is structurally higher-margin — lower CAC, higher LTV. A rising direct mix plus Connected-Trip attach (flights +28%, attractions +25% globally in Q1'26, ground transport, and Penny's end-to-end agentic booking) is what converts top-line growth into WIDENING FCF margin. The mix shift, not just volume, is the margin engine. (3) AGENTIC-COMMERCE / DISINTERMEDIATION IS OVERBLOWN: the bear case is that LLM travel agents (or Google's own agentic layer) disintermediate the OTA and commoditize BKNG into a bare supplier. Rejected for three reasons — (a) BKNG's own agent (Penny/Priceline) can TRANSACT end-to-end, which most third-party planners cannot; the hard part is the supply, payments and service graph BKNG already owns; (b) BKNG partners from strength (Claude Live performance-marketing) rather than being bypassed; (c) the quantitative tell is MARKETING EFFICIENCY — if disintermediation were real, BKNG would be forced to pay up for traffic and marketing/gross-profit would climb. So long as marketing intensity holds flat-to-down while direct mix rises, 'AI eats the OTA' is not showing up where it would have to. A real fight to monitor, not a foregone loss. (4) DISCIPLINED CAPITAL ALLOCATOR: an asset-light, negative-working-capital model converts ~30-35%+ of revenue to free cash flow and returns essentially all of it, shrinking the share count meaningfully every year (buybacks + the newer dividend). FREE CASH FLOW is the proxy for this pillar; the bet is that per-share FCF compounds well above revenue as the buyback retires stock at reasonable multiples. (5) SECULAR TRAVEL TAM: travel is a structurally rising share of consumer wallet as global living standards climb and the middle class expands (especially Asia), and as developed-market consumers favor experiences over goods; digital penetration of travel booking still has 35-45%+ headroom (per management). Even flat share of a growing, digitizing market compounds — BKNG's share GAINS on top of that are the upside. This reframes cyclical demand shocks (geopolitics, recession) as interruptions to a secular up-trend, not the trend itself. Held with a constructive 3-5 year view; near-term geopolitical travel softness (Middle-East corridors) is a buying condition, not a thesis-breaker (see nuance).",
+  "verdict": "Intact",
+  "verdict_color": "green",
+  "key_driver": "Room nights x ADR x take-rate x direct-mix, compounded into FCF/share via buybacks",
   "chart_priorities": [
     "Revenue",
     "Operating income",
     "Free cash flow",
     "FCF Margin (GAAP)"
   ],
-  "_status": "needs_user_review",
   "tier_1_kpis": [
     {
       "name": "Room nights booked YoY growth",
@@ -20,7 +19,7 @@
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "<5% YoY for 2 consecutive Qs",
+      "break_condition": "<5% YoY for 2 consecutive Qs (ex-transitory geopolitical corridor shocks). PILLAR 1 (share/volume). BKNG runs 8-12% in normal cycles.",
       "source": "earnings release"
     },
     {
@@ -29,25 +28,25 @@
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "<8% YoY for 2 consecutive Qs",
+      "break_condition": "<8% YoY for 2 consecutive Qs (hard machine floor 6%). PILLAR 1 (share x price) — the cleanest top-line signal for an OTA.",
       "source": "earnings release"
     },
     {
-      "name": "Adjusted EBITDA margin",
+      "name": "Direct / first-party booking mix (app + logged-in + Genius)",
+      "current": "TBV from latest earnings release / 10-K disclosure",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Direct mix stalls or reverses for 2 consecutive periods. PILLAR 2 (channel control) — the margin engine; loss of direct share means re-dependence on paid Google/meta traffic.",
+      "source": "earnings release / 10-K"
+    },
+    {
+      "name": "Marketing efficiency (marketing spend / gross profit)",
       "current": "TBV from latest earnings release",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "Below 33% on TTM basis",
-      "source": "earnings release"
-    },
-    {
-      "name": "Marketing efficiency (marketing/gross profit)",
-      "current": "TBV from latest earnings release",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Rises >300 bps YoY for 2 consecutive Qs",
+      "break_condition": "Rises >300 bps YoY for 2 consecutive Qs. PILLAR 3 tell — a structural rise is the fingerprint of agentic disintermediation forcing BKNG to pay up for traffic.",
       "source": "earnings release commentary"
     },
     {
@@ -56,17 +55,31 @@
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "Below 28% on TTM basis",
+      "break_condition": "Below 30% on TTM basis for 2 consecutive Qs. PILLAR 4 proxy — BKNG's structural floor is 35%+; sub-30 means marketing/merchant-model investment is eroding cash generation.",
+      "source": "earnings release"
+    },
+    {
+      "name": "Adjusted EBITDA margin",
+      "current": "TBV from latest earnings release",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "Below 33% on TTM basis.",
       "source": "earnings release"
     }
   ],
   "tier_2_kpis": [
     {
-      "name": "Alternative accommodations mix",
+      "name": "Connected-Trip attach (flights / attractions / ground transport YoY growth)",
+      "current": "Q1'26 commentary: flights +28%, attractions +25% globally (narrative — pending extraction)",
+      "source": "earnings release / presentation"
+    },
+    {
+      "name": "Alternative accommodations mix / growth",
       "source": "earnings release"
     },
     {
-      "name": "Direct vs paid traffic mix",
+      "name": "ADR trajectory",
       "source": "earnings release"
     },
     {
@@ -76,27 +89,37 @@
   ],
   "tier_3_kpis": [
     {
-      "name": "Connected-trip / payments attach",
-      "source": "10-K / 10-Q"
+      "name": "Capital return / share-count reduction (buyback $ + diluted-share YoY change + dividend)",
+      "source": "10-K / 10-Q",
+      "note": "PILLAR 4 instrumentation — FCF margin (tier-1) is the primary machine-enforced proxy; this tracks whether the FCF is actually being returned and the share count is shrinking."
     },
     {
       "name": "Connected transactions YoY growth",
       "source": "earnings presentation"
     },
     {
-      "name": "Capital return pace",
+      "name": "Genius loyalty penetration / direct-app adoption",
       "source": "10-K / 10-Q"
     }
   ],
+  "nuance": {
+    "bear_case": "The disintermediation bear case: Google (which BKNG both pays and competes with for demand) leverages an agentic layer to re-route travel intent before it reaches Booking.com, and/or horizontal LLM agents commoditize the OTA into a supplier. Secondary risks: EU DMA/AI-Act constraints on Genius data and self-preferencing; ADR normalization after the post-COVID pricing bulge; a re-energized Expedia and Airbnb's push into direct/experiences. The thesis depends on direct mix rising and marketing efficiency holding — if both deteriorate together, the moat is being taxed by AI, not defended.",
+    "geopolitical_demand_shock_2026": "OWNER-RAISED (Iran / travel softness): Middle-East corridor disruption is ALREADY a live, quantified headwind — ~3 pts of Q2'26 room-night drag (guide 2-4% vs ~5-7% normalized), spanning inbound/outbound/intra-regional and Europe<->Asia transit. The owner's specific worry is a SECOND wave if the conflict resurfaces post-U.S.-election (Nov/Dec 2026). Why it is a buying condition, not a break: (1) BKNG's variable marketing, asset-light balance sheet, and geographic diversification absorb corridor shocks — one region's air-pocket does not break the FY; (2) FY'26 gross-bookings and EPS guidance held at the HIGH END despite the Q1 hit; (3) documented crisis-resilience playbook through 9/11, GFC, COVID, Russia-Ukraine, Israel-Hamas — demand normalizes. None of the encoded break-rules (room nights <5% 2Q, gross bookings FXN <6% 2Q, FCF <30% 2Q) trip on a transient corridor shock; the 'ex-transitory geopolitical shocks' qualifier on the room-nights rule is deliberate. On a 3-5 year horizon a 1-2 quarter demand dip is an entry, not an exit.",
+    "adversarial_take": "Low-teens U.S. room-night growth is unprecedented and unlikely to persist at that rate; normalization toward mid-single-digits is the base case and must not be mistaken for a thesis break. The genuine risk to watch is the JOINT move — direct mix flattening WHILE marketing efficiency erodes — because that is the signature of AI taxing the channel rather than a benign volume slowdown.",
+    "stress_test": "If marketing/gross-profit rises >300 bps YoY for 2 Qs AND direct/first-party mix declines YoY, the agentic-disintermediation pillar is failing even before FCF margin visibly cracks — treat that pair as an early exit signal, ahead of the FCF-margin hard rule."
+  },
   "competitive_watchlist": [
     "Airbnb",
     "Expedia",
+    "Google (Travel / agentic layer)",
     "Direct hotel booking"
   ],
   "thesis_breakers_qualitative": [
-    "Room nights turn negative",
-    "Marketing intensity creep without offset",
-    "Google search disintermediation"
+    "Room nights decelerate below mid-single-digits ex-transitory geopolitical shocks (share-gain pillar failing)",
+    "Marketing intensity (marketing / gross profit) rises structurally — the agentic-disintermediation tell",
+    "Direct / first-party mix stalls or reverses (loss of channel control, margin engine breaks)",
+    "Buyback pace collapses / share count stops shrinking (capital-allocation discipline breaks)",
+    "Google or an agentic layer demonstrably re-routes travel demand away from the OTA at scale"
   ],
   "break_rules": [
     {
@@ -149,7 +172,7 @@
       "threshold": 5,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "Room nights YoY < 5% for 2Q — core volume metric stalling. BKNG runs 8-12% in normal cycles."
+      "narrative": "Room nights YoY < 5% for 2Q — core volume metric stalling. BKNG runs 8-12% in normal cycles. (Watch: a single-quarter geopolitical corridor shock is transitory, not a break — see nuance.geopolitical_demand_shock_2026.)"
     },
     {
       "rule_id": "bkng_gross_bookings_fxn_below_6",
@@ -158,7 +181,7 @@
       "threshold": 6,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "Gross bookings FX-neutral < 6% for 2Q — take-rate × volume compounding thesis breaks; this is the cleanest top-line signal for an OTA."
+      "narrative": "Gross bookings FX-neutral < 6% for 2Q — take-rate x volume compounding thesis breaks; the cleanest top-line signal for an OTA."
     },
     {
       "rule_id": "bkng_fcf_margin_below_30",
@@ -167,7 +190,7 @@
       "threshold": 30,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "FCF margin < 30% for 2Q — BKNG's structural floor is 35%+. Sub-30 means marketing spend or merchant-model investments are eroding cash generation."
+      "narrative": "FCF margin < 30% for 2Q — BKNG's structural floor is 35%+. Sub-30 means marketing spend or merchant-model investment is eroding cash generation. PILLAR 4 hard rule (FCF is the owner's chosen capital-allocation proxy)."
     }
   ]
 }
