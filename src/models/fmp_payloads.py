@@ -130,6 +130,35 @@ class FmpCashFlowRecord(BaseModel):
     interestPaid: int | float | None = None
 
 
+class FmpAnalystEstimateRecord(BaseModel):
+    """One period record from FMP /stable/analyst-estimates?symbol={ticker}.
+
+    We model the fields the compute/DCF layers actually consume: the dollar
+    aggregates (revenue/ebitda/ebit/netIncome averages) and the per-share EPS
+    consensus. `date` is required (every consumer keys on the fiscal year); the
+    numeric fields are optional because FMP omits them for names with thin
+    coverage. This model gates the ingest write in `execution/save_fmp_data.py`
+    so a drifted envelope (e.g. a renamed `epsAvg`) is dumped + skipped rather
+    than silently caching a shape the extractors can't read.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    symbol: str
+    date: str
+    revenueAvg: int | float | None = None
+    ebitdaAvg: int | float | None = None
+    ebitAvg: int | float | None = None
+    netIncomeAvg: int | float | None = None
+    netIncomeHigh: int | float | None = None
+    netIncomeLow: int | float | None = None
+    epsAvg: int | float | None = None
+    epsHigh: int | float | None = None
+    epsLow: int | float | None = None
+    numAnalystsRevenue: int | None = None
+    numAnalystsEps: int | None = None
+
+
 class FmpAsReportedRecord(BaseModel):
     """One period record from FMP /stable/as-reported-* endpoints.
 

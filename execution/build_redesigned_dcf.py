@@ -1541,6 +1541,15 @@ band(dsh, 11, "GUARDRAIL SIGNALS (are my assumptions sane?)", 5)
 for j, h in enumerate(["Signal", "Value", "Flag", "Healthy"]):
     put(dsh, 12, 1 + j, h, bold=True)
 roic26 = f"Model!{mc(FC_YEARS[0])}{roic_row}"
+# Beginning invested capital for the 2026 ROIC (the prior FY's IC cell). When it
+# is <= 0 the ROIC ratio (NOPAT / IC) is mathematically meaningless, not a value
+# signal — negative-book-equity cannon-ballers (BKNG, AZO, DPZ, MCD, HD) run
+# invested capital negative after cumulative buybacks, which flips ROIC hugely
+# negative and would false-flag "! destroys" on some of the market's highest
+# cash-return businesses. The guardrail flag renders "n/a" for those names
+# instead; the underlying ROIC row is left untouched (this is interpretation,
+# not model math).
+ic_beg26 = f"Model!{mc(FC_YEARS[0] - 1)}{ic_row}"
 tw, ig, pu = f"Valuation!B{ck + 1}", f"Valuation!B{ck + 2}", f"'Monte Carlo'!B{MC_PUNDER_ROW}"
 guards = [
     ("Terminal weight (% of EV)", f"={tw}", PCT, f'=IF({tw}>0.9,"! high","ok")', "< 90%"),
@@ -1553,9 +1562,9 @@ guards = [
     ),
     (
         "ROIC - WACC (2026)",
-        f"={roic26}-WACC!B{WACC_ROW}",
+        f'=IF({ic_beg26}<=0,"n/a (neg. capital)",{roic26}-WACC!B{WACC_ROW})',
         PCT,
-        f'=IF({roic26}-WACC!B{WACC_ROW}<0,"! destroys","creates")',
+        f'=IF({ic_beg26}<=0,"n/a",IF({roic26}-WACC!B{WACC_ROW}<0,"! destroys","creates"))',
         "> 0",
     ),
     (

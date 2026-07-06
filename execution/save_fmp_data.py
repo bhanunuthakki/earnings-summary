@@ -37,10 +37,20 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import db as portfolio_db  # noqa: E402
 from log_redact import redact as _redact  # noqa: E402
+from compute.split_normalization import (  # noqa: E402
+    NormalizationEvent,
+    normalize_estimates,
+)
 from models.fmp_payloads import (  # noqa: E402
+    FmpAnalystEstimateRecord,
     FmpBalanceSheetRecord,
     FmpCashFlowRecord,
     FmpIncomeStatementRecord,
+)
+from pipeline.deferred_fmp import (  # noqa: E402
+    DeferredFmpTask,
+    default_store_path,
+    log_deferred,
 )
 from sources import registry as source_calls_log  # noqa: E402
 
@@ -410,6 +420,7 @@ _STABLE_VALIDATORS: dict[str, type[BaseModel]] = {
     "income-statement": FmpIncomeStatementRecord,
     "balance-sheet-statement": FmpBalanceSheetRecord,
     "cashflow-statement": FmpCashFlowRecord,
+    "analyst-estimates": FmpAnalystEstimateRecord,
 }
 
 
@@ -469,6 +480,114 @@ def _dump_validation_failure(
     }
     out.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
     return out
+
+
+# The catalog `path` for the analyst-consensus endpoint. Only this endpoint
+# carries the per-share (EPS) series that FMP splices across two split bases, so
+# split-normalization applies to it alone.
+_ANALYST_ESTIMATES_ENDPOINT = "analyst-estimates"
+
+
+def _load_income_rows(ticker: str) -> list[dict[str, object]]:
+    """Read the ticker's cached FMP income statement (annual). FMP delivers this
+    fully split-adjusted onto the CURRENT share basis, so it is the authority the
+    estimates normalizer reconciles the per-share series against. Returns [] when
+    it isn't cached yet (the normalizer then quarantines any spliced series
+    rather than guessing a basis)."""
+    path = FMP_DIR / f"{ticker}_income_statement_annual.json"
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    records = cast("list[object]", raw)
+    return [cast("dict[str, object]", r) for r in records if isinstance(r, dict)]
+
+
+def _normalize_estimates_body(
+    ticker: str,
+    body: object,
+) -> tuple[object, str | None, list[NormalizationEvent]]:
+    """Force the per-share series of an analyst-estimates payload onto ONE
+    current split basis before it is cached (fixes the BKNG-class contamination
+    where pre-split historical actuals are spliced with post-split forwards, and
+    repairs the grossly-corrupted historical `netIncomeAvg`).
+
+    Returns ``(body_to_write, quarantine_reason, events)``. When
+    ``quarantine_reason`` is non-None the caller dumps raw + skips the write (a
+    spliced series with no income-statement authority to reconcile). A non-list
+    body (empty / freshly-IPO'd) passes through untouched."""
+    if not isinstance(body, list):
+        return (body, None, [])
+    records = cast("list[object]", body)
+    rows = [cast("dict[str, object]", r) for r in records if isinstance(r, dict)]
+    result = normalize_estimates(rows, _load_income_rows(ticker))
+    no_events: list[NormalizationEvent] = []
+    if result.quarantined:
+        # `records` (the typed view of `body`) is dumped raw + skipped by the caller.
+        return (records, result.quarantine_reason, no_events)
+    if not result.changed:
+        return (records, None, no_events)
+    return (result.rows, None, result.events)
+
+
+def _dump_quarantine(
+    ticker: str,
+    endpoint: str,
+    period: str,
+    suffix: str,
+    body: object,
+    reason: str,
+) -> Path:
+    """Write a quarantined (un-reconcilable) estimates payload + the reason to
+    .tmp/ for inspection, per the schema-drift rule. Mirrors
+    `_dump_validation_failure` but for a normalization quarantine (no
+    ValidationError object). Returns the dump path so the status row can cite it.
+    """
+    _VALIDATION_DUMP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    out = _VALIDATION_DUMP_DIR / f"{ticker}_{suffix}_quarantine_{stamp}.json"
+    payload = {
+        "ticker": ticker,
+        "endpoint": endpoint,
+        "period": period,
+        "quarantine_reason": reason,
+        "raw_response": body,
+    }
+    out.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    return out
+
+
+def _log_deferred_split_quarantine(
+    ticker: str,
+    suffix: str,
+    reason: str,
+    dump_rel: Path,
+) -> None:
+    """Auto-populate the deferred-FMP backlog when a per-share series is
+    quarantined: the fix (back-adjust with the authoritative splits feed, or
+    re-pull clean consensus) is blocked on FMP access, so record it instead of
+    relying on memory. Best-effort: a backlog write failure must not break the
+    fetch, so it degrades to a stderr note."""
+    try:
+        log_deferred(
+            DeferredFmpTask(
+                area="split_normalization",
+                task=f"Reconcile quarantined analyst-estimates ({suffix}) for {ticker}",
+                blocked_on="fmp_splits_feed",
+                ticker=ticker,
+                context=(
+                    f"{reason}. Raw dumped to {dump_rel}. Needs the authoritative "
+                    "FMP splits feed (or a clean consensus re-pull) to back-adjust."
+                ),
+            ),
+            default_store_path(PROJECT_ROOT),
+        )
+    except (OSError, ValueError) as exc:
+        print(f"  warn: deferred-log write failed for {ticker}: {exc}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -895,6 +1014,58 @@ def run_ticker(
                     f"{dump_path.name} (write skipped)"
                 )
                 continue
+
+            # Split-basis normalization gate (analyst-estimates only). FMP splices
+            # a name's pre-split per-share actuals with its post-split forward
+            # consensus into one series (BKNG-class); force every per-share row
+            # onto the CURRENT basis and repair the corrupted historical
+            # netIncomeAvg before caching. A series we can't reconcile (no cached
+            # income statement to establish the basis) is quarantined: dump raw,
+            # skip the write, and auto-log a deferred FMP task so the backlog
+            # populates itself.
+            if endpoint == _ANALYST_ESTIMATES_ENDPOINT:
+                body, quarantine_reason, norm_events = _normalize_estimates_body(ticker, body)
+                if quarantine_reason is not None:
+                    dump_path = _dump_quarantine(
+                        ticker, endpoint, period, suffix, body, quarantine_reason
+                    )
+                    rel_dump = dump_path.relative_to(PROJECT_ROOT)
+                    _log_deferred_split_quarantine(ticker, suffix, quarantine_reason, rel_dump)
+                    pending.append(
+                        _build_status_row(
+                            ticker,
+                            endpoint,
+                            period,
+                            status="error",
+                            http_code=code,
+                            error_msg=(
+                                f"split_quarantine: {quarantine_reason}; "
+                                f"raw dumped to {rel_dump}"
+                            ),
+                        )
+                    )
+                    summary["error"] += 1
+                    src_calls.append(
+                        source_calls_log.PendingSourceCall(
+                            source_name=_FMP_SOURCE,
+                            kind=endpoint,
+                            ticker=ticker,
+                            status=source_calls_log.CallStatus.ERROR,
+                            latency_ms=_call_ms,
+                            http_code=code,
+                            notes="split_quarantine",
+                        )
+                    )
+                    print(
+                        f"  quar  {endpoint:48s} {period:8s} split quarantine -> "
+                        f"{dump_path.name} (write skipped, deferred-logged)"
+                    )
+                    continue
+                if norm_events:
+                    print(
+                        f"  norm  {endpoint:48s} {period:8s} "
+                        f"{len(norm_events)} per-share/NI cells normalized onto current basis"
+                    )
 
             file_path = FMP_DIR / f"{ticker}_{suffix}.json"
             file_path.write_text(json.dumps(body, indent=2), encoding="utf-8")

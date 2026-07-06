@@ -19,9 +19,17 @@ logs/
 *.log
 
 # Generated data — DB, FMP JSON cache, snapshots (1+ GB; reproducible
-# from execution/save_fmp_data.py and alembic migrations)
-data/
+# from execution/save_fmp_data.py and alembic migrations). Ignore the CONTENTS
+# (data/*) rather than the dir itself so specific durable files can be
+# re-included below (git won't descend into a fully-ignored `data/`).
+data/*
 *.db.bak.*
+# ...but the deferred-FMP-task backlog is a durable, self-populating record of
+# work blocked on FMP access (it is NOT reproducible from a cache re-pull), so it
+# is tracked. Mirrors the tracked data/ledger_seed/ precedent.
+!data/deferred_fmp/
+data/deferred_fmp/*
+!data/deferred_fmp/*.jsonl
 
 # IDE / agent state
 .claude/
