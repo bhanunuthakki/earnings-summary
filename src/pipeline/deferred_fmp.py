@@ -29,11 +29,12 @@ ticker that quarantines every day produces exactly one open row, not one per day
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from clock import now_iso
 
 
 class DeferredStatus(StrEnum):
@@ -64,7 +65,7 @@ class DeferredFmpTask(BaseModel):
 
 
 def _now_iso() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return now_iso()
 
 
 _DEFAULT_REL = Path("data") / "deferred_fmp" / "deferred_fmp.jsonl"

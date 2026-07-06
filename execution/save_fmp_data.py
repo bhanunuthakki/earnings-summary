@@ -1039,8 +1039,7 @@ def run_ticker(
                             status="error",
                             http_code=code,
                             error_msg=(
-                                f"split_quarantine: {quarantine_reason}; "
-                                f"raw dumped to {rel_dump}"
+                                f"split_quarantine: {quarantine_reason}; raw dumped to {rel_dump}"
                             ),
                         )
                     )
