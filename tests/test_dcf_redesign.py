@@ -753,6 +753,20 @@ def test_invalid_analyst_segments_falls_back_to_fmp(tmp_path: Path) -> None:
     assert set(inp.segments) == {"Cloud", "Devices"}
 
 
+def test_bare_exit_multiple_override_applies_without_segments_block(tmp_path: Path) -> None:
+    """A block with only `exit_multiple` (no `segments` sub-block) still applies —
+    the terminal-basis re-calibration (#837 SBC-burdened-EBITDA re-basing) sets the
+    exit multiple without fabricating a segments block. The builder's default is 12x;
+    a bare 20x override must land on the Dashboard cell and lift the value."""
+    repo = tmp_path / "bare_mult"
+    _write_fmp(repo, "MULTCO")  # single-segment, no analyst/opus segments
+    dest = repo / "dcf" / "MULTCO.xlsx"
+    _build_with_assumptions(repo, "MULTCO", {"dcf_applicable": True, "exit_multiple": 20.0}, dest)
+    inp = redesign.read_inputs(dest)
+    assert inp is not None
+    assert inp.exit_multiple == pytest.approx(20.0)  # bare override applied
+
+
 def test_fx_applied_for_non_usd_reporter(tmp_path: Path) -> None:
     """A non-USD reporter (EUR) gets a × FX multiplier off the VALUE/SHARE
     formula; the reporting-currency value is the USD value ÷ FX."""
