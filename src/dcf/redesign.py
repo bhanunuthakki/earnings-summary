@@ -136,6 +136,18 @@ SCEN_WEIGHTS_ROW = 62
 SCEN_COL_WEIGHT_BASE = 2  # column B (matches the "Base" header column)
 DEFAULT_SCENARIO_WEIGHTS: dict[str, float] = {"bull": 0.25, "base": 0.50, "bear": 0.25}
 
+# STOCK-BASED COMPENSATION band (Dashboard rows 64+). Two yellow owner inputs — the
+# near-term and terminal SBC % of revenue — sit BELOW the SCENARIOS block so no
+# existing Dashboard address (segments 20-27, scalars 29-49, SCENARIOS 50-62)
+# shifts. SBC is charged as an explicit after-tax expense in ``_project`` (the
+# operating margins stay NON-GAAP / SBC-excluded, comparable across names) and the
+# terminal EBITDA is burdened by SBC before the exit multiple applies. Optional: a
+# pre-SBC workbook has no rows 65/66, so both read back as 0.0 — i.e. exactly the
+# old "SBC never charged" behaviour, keeping legacy workbooks/fixtures unchanged.
+_DB_SBC_BAND = 64
+_DB_SBC_NEAR = 65
+_DB_SBC_TERM = 66
+
 SENSITIVITY_SHEET = "Sensitivity"
 
 # The numeric scalar inputs (Dashboard col B) preserved across a refresh, keyed by
@@ -154,6 +166,8 @@ _PRESERVED_SCALAR_ROWS: tuple[int, ...] = (
     _DB_CRP,
     _DB_MULT,
     _DB_TG,
+    _DB_SBC_NEAR,
+    _DB_SBC_TERM,
 )
 
 PERPETUITY = "Perpetuity"
@@ -278,6 +292,16 @@ class RedesignInputs:
     # (``dcf.fade_calibration``). Defaults to the module constant so a
     # pre-curvature workbook / test fixture reproduces the old global behaviour.
     growth_fade_curvature: float = GROWTH_FADE_CURVATURE
+    # Stock-based compensation charged as an explicit % of revenue (Dashboard rows
+    # 65/66, yellow — owner-editable). Non-GAAP operating margins EXCLUDE SBC (they
+    # stay comparable across names), so ``_project`` charges an after-tax SBC
+    # expense — ``sbc_pct * revenue * (1 - tax)`` — and ``_terminal_metrics``
+    # burdens the exit-multiple EBITDA by SBC. The near-term rate applies in the
+    # first forecast year and fades linearly to the terminal rate over the window,
+    # mirroring the builder's ``sbc_pct`` fade. Defaults to 0.0 so a pre-SBC
+    # workbook / fixture reproduces the old "SBC never charged" behaviour exactly.
+    near_sbc_pct: float = 0.0
+    terminal_sbc_pct: float = 0.0
     # Bull/Bear scenario offsets (Dashboard SCENARIOS block). Frozen instances
     # are immutable, so the shared seed defaults are safe; a pre-scenario
     # workbook reads back as the seeds, giving every name a meaningful range.
@@ -377,6 +401,15 @@ class RedesignInputs:
             raise RedesignError("DCF input 'growth_fade_curvature' must be a number")
         growth_fade_curvature = float(curv_raw)
 
+        def opt_sbc(key: str) -> float:
+            v = data.get(key, 0.0)
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                raise RedesignError(f"DCF input {key!r} must be a number")
+            return float(v)
+
+        near_sbc_pct = opt_sbc("near_sbc_pct")
+        terminal_sbc_pct = opt_sbc("terminal_sbc_pct")
+
         bull_raw = data.get("bull_deltas")
         bull = (
             ScenarioDeltas.from_dict(cast("Mapping[str, object]", bull_raw))
@@ -430,6 +463,8 @@ class RedesignInputs:
             fx_to_usd=req_float("fx_to_usd"),
             country_risk_premium=country_risk_premium,
             growth_fade_curvature=growth_fade_curvature,
+            near_sbc_pct=near_sbc_pct,
+            terminal_sbc_pct=terminal_sbc_pct,
             bull_deltas=bull,
             bear_deltas=bear,
             weight_bull=w_bull,
@@ -709,6 +744,10 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
         # Fade curvature is optional too: a pre-curvature workbook has no row 49,
         # so a blank reads back as the default (the old global behaviour).
         curv = _num(dsh, _DB_CURV, 2) or GROWTH_FADE_CURVATURE
+        # SBC % inputs are optional: a pre-SBC workbook has no rows 65/66, so both
+        # read back as 0.0 (the old "SBC never charged" behaviour).
+        sbc_near = _num(dsh, _DB_SBC_NEAR, 2) or 0.0
+        sbc_term = _num(dsh, _DB_SBC_TERM, 2) or 0.0
         exit_mult = _num(dsh, _DB_MULT, 2)
         tg = _num(dsh, _DB_TG, 2)
         price = _num(dsh, _DB_PRICE, 2)
@@ -828,6 +867,8 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
         fx_to_usd=fx,
         country_risk_premium=crp,
         growth_fade_curvature=curv,
+        near_sbc_pct=sbc_near,
+        terminal_sbc_pct=sbc_term,
         bull_deltas=bull,
         bear_deltas=bear,
         weight_bull=w_bull,
@@ -895,7 +936,15 @@ def _project(inp: RedesignInputs) -> _ProjectedStreams:
     ramps near→terminal by the end of the consensus window; D&A = ratio ×
     revenue; capex = D&A × (capex/D&A), where the 2026 ratio = capex / first-year
     D&A and fades to the terminal ratio; ΔNWC = 0.5% of incremental revenue;
-    valuation FCF = NOPAT + D&A − capex − ΔNWC (SBC nets out).
+    valuation FCF = NOPAT + D&A − capex − ΔNWC − after-tax SBC.
+
+    SBC is charged as an explicit after-tax expense: ``sbc[j]*(1-tax)`` where
+    ``sbc[j] = sbc_pct[j] * revenue[j]`` and the rate fades near→terminal linearly.
+    The operating margin here is NON-GAAP (SBC excluded), so NOPAT over-taxes by
+    the tax shield SBC would have provided; charging ``SBC*(1-tax)`` restores the
+    GAAP-equivalent free cash flow (NOPAT_gaap + D&A − capex − ΔNWC, where
+    NOPAT_gaap = (EBIT − SBC)*(1−tax) = NOPAT − SBC*(1−tax)). A pre-SBC workbook
+    reads ``sbc_pct = 0`` and the term vanishes, reproducing the old behaviour.
     """
     ramp_steps = inp.consensus_years - 1
     fade_span = N_FC - 1
@@ -909,6 +958,11 @@ def _project(inp: RedesignInputs) -> _ProjectedStreams:
     def op_margin(j: int) -> float:
         spread = inp.terminal_op_margin - inp.near_op_margin
         return inp.near_op_margin + spread * min(1.0, j / ramp_steps)
+
+    def sbc_pct(j: int) -> float:
+        # Linear near→terminal fade over the window, matching the builder's
+        # ``fade(sbc_near, sbc_term)`` and the in-sheet per-year SBC% row.
+        return inp.near_sbc_pct + (inp.terminal_sbc_pct - inp.near_sbc_pct) * j / fade_span
 
     revenue: list[float] = []
     ebit: list[float] = []
@@ -934,18 +988,28 @@ def _project(inp: RedesignInputs) -> _ProjectedStreams:
         capex = da[j] * capex_da
         nopat = ebit[j] * (1.0 - inp.tax_rate)
         delta_nwc = (revenue[j] - prev_rev) * NWC_PCT
-        valuation_fcf.append(nopat + da[j] - capex - delta_nwc)
+        sbc_after_tax = sbc_pct(j) * revenue[j] * (1.0 - inp.tax_rate)
+        valuation_fcf.append(nopat + da[j] - capex - delta_nwc - sbc_after_tax)
         prev_rev = revenue[j]
 
     return _ProjectedStreams(revenue, ebit, da, valuation_fcf)
 
 
-def _terminal_metrics(streams: _ProjectedStreams, tax_rate: float) -> val_mod.TerminalMetrics:
-    """Terminal-year line items the exit multiple can apply to (reporting ccy)."""
+def _terminal_metrics(streams: _ProjectedStreams, inp: RedesignInputs) -> val_mod.TerminalMetrics:
+    """Terminal-year line items the exit multiple can apply to (reporting ccy).
+
+    EBITDA is BURDENED by terminal-year SBC (``ebitda = ebit − sbc + da``) so the
+    exit multiple applies to real, SBC-charged EBITDA — consistent with charging
+    SBC as an operating expense in the FCF stream. For a heavy-SBC software name
+    this lowers the terminal value; for a pre-SBC workbook (``sbc_pct = 0``) the
+    burden is zero and this is the old ``ebit + da`` metric.
+    """
+    tax_rate = inp.tax_rate
+    sbc_terminal = inp.terminal_sbc_pct * streams.revenue[-1]
     return val_mod.TerminalMetrics(
         revenue=streams.revenue[-1],
         ebit=streams.ebit[-1],
-        ebitda=streams.ebit[-1] + streams.da[-1],
+        ebitda=streams.ebit[-1] - sbc_terminal + streams.da[-1],
         fcf=streams.valuation_fcf[-1],
         net_income=streams.ebit[-1] * (1.0 - tax_rate),
     )
@@ -962,7 +1026,7 @@ def value(inp: RedesignInputs) -> RedesignValuation:
     """
     streams = _project(inp)
     years = list(range(N_FC))  # discount exponents are positional, labels unused
-    terminal = _terminal_metrics(streams, inp.tax_rate)
+    terminal = _terminal_metrics(streams, inp)
 
     if inp.terminal_method == PERPETUITY:
         if inp.wacc <= inp.terminal_growth_g:
@@ -1264,6 +1328,8 @@ _SCALAR_ROW_ATTR: tuple[tuple[int, str], ...] = (
     (_DB_CRP, "country_risk_premium"),
     (_DB_MULT, "exit_multiple"),
     (_DB_TG, "terminal_growth_g"),
+    (_DB_SBC_NEAR, "near_sbc_pct"),
+    (_DB_SBC_TERM, "terminal_sbc_pct"),
 )
 
 
