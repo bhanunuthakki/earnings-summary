@@ -565,14 +565,29 @@ if _opus.get("segments"):
     cda0 = CAPEX_2026_M / _da_2026
     capex_da = fade(cda0, float(_opus.get("terminal_capex_da", 1.05)))
 
-# Exit multiple is a scalar terminal assumption independent of the segment set, so an
-# `exit_multiple` in the block applies even when there is no `segments` sub-block (the
-# guard above requires one). This lets a name with only a terminal re-basing on file
-# — e.g. the SBC-burdened-EBITDA multiple re-calibration (#837) — take effect without
-# fabricating a segments block. A name whose block already set it inside the guard is
-# unchanged (same value re-read here); a name with no block keeps the code default.
+# Scalar terminal assumptions (exit multiple, operating margins, SBC %) are
+# independent of the segment set, so a bare block override applies even without a
+# `segments` sub-block (the guard above requires one). This lets a name carry only a
+# terminal re-basing (#837 exit multiple) or a heavy-SBC margin/SBC normalization
+# (#838) without fabricating a segments block. A name whose block already set these
+# inside the guard is unchanged (same value re-read here); a name with no block keeps
+# the code/consensus default.
 if isinstance(_opus.get("exit_multiple"), (int, float)):
     EXIT_MULT = float(_opus["exit_multiple"])
+if isinstance(_opus.get("near_term_op_margin"), (int, float)):
+    margin_near_def = float(_opus["near_term_op_margin"])
+if isinstance(_opus.get("terminal_op_margin"), (int, float)):
+    margin_term_def = float(_opus["terminal_op_margin"])
+# #838 mature SBC normalization: explicit near/terminal SBC % (a mature large-software
+# floor, more disciplined than the actuals 0.6x fade that leaves a hyper-grower's SBC
+# at ~terminal-margin levels). Applies with or without a segments block.
+if isinstance(_opus.get("sbc_pct_near"), (int, float)):
+    SBC_NEAR = float(_opus["sbc_pct_near"])
+if isinstance(_opus.get("sbc_pct_terminal"), (int, float)):
+    SBC_TERM = float(_opus["sbc_pct_terminal"])
+if isinstance(_opus.get("sbc_pct_floor"), (int, float)):
+    SBC_NEAR = max(SBC_NEAR, float(_opus["sbc_pct_floor"]))
+    SBC_TERM = max(SBC_TERM, float(_opus["sbc_pct_floor"]) * 0.6)
 
 
 # Per-name growth-fade curvature: the convex shape whose revenue path best fits

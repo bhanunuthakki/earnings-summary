@@ -767,6 +767,32 @@ def test_bare_exit_multiple_override_applies_without_segments_block(tmp_path: Pa
     assert inp.exit_multiple == pytest.approx(20.0)  # bare override applied
 
 
+def test_bare_margin_and_sbc_overrides_apply_without_segments_block(tmp_path: Path) -> None:
+    """The #838 heavy-SBC terminal normalization: a block with only
+    `terminal_op_margin` + `sbc_pct_near`/`sbc_pct_terminal` (no `segments` sub-block)
+    still applies — margins and SBC % are scalar terminal assumptions independent of
+    the segment set, so a name carrying only a margin/SBC recut takes effect."""
+    repo = tmp_path / "bare_margin"
+    _write_fmp(repo, "MGNCO")  # single-segment, no segments block
+    dest = repo / "dcf" / "MGNCO.xlsx"
+    _build_with_assumptions(
+        repo,
+        "MGNCO",
+        {
+            "dcf_applicable": True,
+            "terminal_op_margin": 0.28,
+            "sbc_pct_near": 0.20,
+            "sbc_pct_terminal": 0.10,
+        },
+        dest,
+    )
+    inp = redesign.read_inputs(dest)
+    assert inp is not None
+    assert inp.terminal_op_margin == pytest.approx(0.28)  # bare margin override applied
+    assert inp.near_sbc_pct == pytest.approx(0.20)  # bare SBC overrides applied
+    assert inp.terminal_sbc_pct == pytest.approx(0.10)
+
+
 def test_fx_applied_for_non_usd_reporter(tmp_path: Path) -> None:
     """A non-USD reporter (EUR) gets a × FX multiplier off the VALUE/SHARE
     formula; the reporting-currency value is the USD value ÷ FX."""
