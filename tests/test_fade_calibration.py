@@ -85,3 +85,52 @@ def test_near_term_weighting_holds_fit_closer_to_near_years() -> None:
     flat_fit = fc.calibrate_curvature(_BASE, _NEAR, _TERM, consensus, N_FC, near_weight_decay=1.0)
     # Near-weighting sits at least as close to the near-years' p=2.0 as uniform does.
     assert abs(near_fit - 2.0) <= abs(flat_fit - 2.0)
+
+
+# --------------------------------------------------------------------------- #
+# Hyper-growth curvature FLOOR (#840)
+# --------------------------------------------------------------------------- #
+def test_revenue_weighted_spread_weights_by_base() -> None:
+    """The spread is base-revenue-weighted, so a small fast segment can't swamp a
+    dominant slow one (WIX's Base44 shape)."""
+    base = {"Core": 950.0, "Base44": 50.0}
+    near = {"Core": 0.12, "Base44": 0.40}
+    term = {"Core": -0.02, "Base44": 0.03}
+    spread = fc.revenue_weighted_spread(base, near, term)
+    # 0.95*(0.12 - -0.02) + 0.05*(0.40-0.03) = 0.95*0.14 + 0.05*0.37 = 0.133 + 0.0185
+    assert spread == pytest.approx(0.95 * 0.14 + 0.05 * 0.37)
+
+
+def test_floor_lifts_hyper_grower_to_convex() -> None:
+    """A hyper-grower whose consensus fit picks a near-linear curve is floored to the
+    convex 2.0 (spread 0.30/0.20 near vs 0.05/0.04 term >> 8pts)."""
+    # A concave-ish consensus path pulls the raw fit toward the 1.0 floor.
+    sustained = {
+        j: fc.project_total_revenue(_BASE, _NEAR, _TERM, 1.0, 5, N_FC)[j] for j in range(5)
+    }
+    raw = fc.calibrate_curvature(_BASE, _NEAR, _TERM, sustained, N_FC)
+    floored = fc.calibrate_curvature_with_floor(_BASE, _NEAR, _TERM, sustained, N_FC)
+    assert raw < fc.HYPER_GROWTH_CURVATURE_FLOOR  # the raw fit was below the floor
+    assert floored == pytest.approx(fc.HYPER_GROWTH_CURVATURE_FLOOR)  # floored up
+
+
+def test_floor_leaves_steady_name_unchanged() -> None:
+    """A steady name (small near-terminal spread) keeps its consensus fit — the floor
+    only bites for hyper-growers, so no name is ever MORE-inflated."""
+    base = {"A": 1000.0}
+    near = {"A": 0.06}
+    term = {"A": 0.04}  # spread 2pts << 8pts threshold
+    cons = {j: fc.project_total_revenue(base, near, term, 1.0, 5, N_FC)[j] for j in range(5)}
+    raw = fc.calibrate_curvature(base, near, term, cons, N_FC)
+    floored = fc.calibrate_curvature_with_floor(base, near, term, cons, N_FC)
+    assert floored == pytest.approx(raw)  # unchanged for a steady name
+
+
+def test_floor_never_lowers_a_high_fit() -> None:
+    """When the consensus fit is already ABOVE the floor, the floor leaves it — the
+    policy only raises linear fades, never caps a legitimately convex fit."""
+    fast = {0: 1300.0, 1: 1320.0, 2: 1330.0, 3: 1335.0, 4: 1338.0}  # implies a high p
+    raw = fc.calibrate_curvature(_BASE, _NEAR, _TERM, fast, N_FC)
+    floored = fc.calibrate_curvature_with_floor(_BASE, _NEAR, _TERM, fast, N_FC)
+    if raw >= fc.HYPER_GROWTH_CURVATURE_FLOOR:
+        assert floored == pytest.approx(raw)

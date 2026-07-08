@@ -579,10 +579,16 @@ if isinstance(_opus.get("exit_multiple"), (int, float)):
 # Street consensus, weighting near-term years most (dcf.fade_calibration). Runs for
 # every name (Opus-override or consensus-default g1/gT); an explicit block override
 # wins, and a name with < 2 consensus years keeps the default 2.0.
+#
+# #840 policy: the consensus fit can pick a linear (p≈1.0) fade for a hyper-grower,
+# which keeps growth hot for years and inflates terminal revenue / the pre-SBC base.
+# ``calibrate_curvature_with_floor`` floors the effective curvature at 2.0 (convex)
+# whenever the revenue-weighted (near−terminal) growth spread exceeds ~8pts — so fast
+# decelerators fade front-loaded, while steady names keep their consensus fit.
 _cons_by_offset = {y - FC_YEARS[0]: cons_rev[y] for y in cons_rev}
 CURV = float(
     _opus.get("growth_fade_curvature")
-    or fade_calibration.calibrate_curvature(
+    or fade_calibration.calibrate_curvature_with_floor(
         {s: seg_ann[ly][s] for s in PROD}, g1_def, gT_def, _cons_by_offset, N_FC
     )
 )

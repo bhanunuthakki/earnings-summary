@@ -35,6 +35,73 @@ CURVATURE_STEP = 0.05
 # 1.0, 0.60, 0.36, 0.22, 0.13, ...).
 NEAR_WEIGHT_DECAY = 0.6
 
+# Hyper-growth curvature FLOOR (#840). A linear fade (p≈1.0) fit to consensus keeps a
+# hyper-grower's growth elevated for years — a name modeled to fade to a *-2% terminal*
+# still GROWS through ~year 8 before rolling over, inflating terminal revenue and the
+# pre-SBC base (WIX: ~$3.7B linear vs ~$2.9B convex). Policy: whenever the
+# revenue-weighted (near_growth - terminal_growth) spread exceeds HYPER_GROWTH_SPREAD,
+# floor the effective curvature at HYPER_GROWTH_CURVATURE_FLOOR (convex, front-loaded
+# deceleration). This LOWERS hyper-growth valuations toward a more realistic, more
+# conservative path. Mature/steady names (small spread) keep their consensus-fit curve.
+HYPER_GROWTH_SPREAD = 0.08
+HYPER_GROWTH_CURVATURE_FLOOR = 2.0
+
+
+def revenue_weighted_spread(
+    base_by_segment: Mapping[str, float],
+    near_growth_by_segment: Mapping[str, float],
+    terminal_growth_by_segment: Mapping[str, float],
+) -> float:
+    """The base-revenue-weighted ``near_growth - terminal_growth`` spread across
+    segments. A large spread marks a hyper-grower whose fade shape materially drives
+    terminal revenue; a small/negative spread is a steady or decelerating-into-the-
+    forecast name where the curve barely matters. Weighting by base revenue lets a
+    small fast segment (e.g. WIX's Base44) not swamp a dominant slow one."""
+    total = sum(v for v in base_by_segment.values() if v > 0)
+    if total <= 0:
+        return 0.0
+    spread = 0.0
+    for s, base in base_by_segment.items():
+        if base <= 0:
+            continue
+        g1 = near_growth_by_segment.get(s, 0.0)
+        gt = terminal_growth_by_segment.get(s, 0.0)
+        spread += (base / total) * (g1 - gt)
+    return spread
+
+
+def calibrate_curvature_with_floor(
+    base_by_segment: Mapping[str, float],
+    near_growth_by_segment: Mapping[str, float],
+    terminal_growth_by_segment: Mapping[str, float],
+    consensus_by_offset: Mapping[int, float],
+    n_fc: int,
+    *,
+    spread_threshold: float = HYPER_GROWTH_SPREAD,
+    curvature_floor: float = HYPER_GROWTH_CURVATURE_FLOOR,
+) -> float:
+    """Consensus-fit curvature, then FLOORED for hyper-growth names (#840).
+
+    Fits the curvature to consensus exactly as :func:`calibrate_curvature`, then — when
+    the revenue-weighted near-terminal spread exceeds ``spread_threshold`` — raises it
+    to at least ``curvature_floor`` so the hyper-grower fades convex (front-loaded)
+    rather than linear. A steady name (small spread) is returned unchanged, so this
+    never MORE-inflates any name; it only makes fast decelerators more conservative.
+    """
+    fit = calibrate_curvature(
+        base_by_segment,
+        near_growth_by_segment,
+        terminal_growth_by_segment,
+        consensus_by_offset,
+        n_fc,
+    )
+    spread = revenue_weighted_spread(
+        base_by_segment, near_growth_by_segment, terminal_growth_by_segment
+    )
+    if spread > spread_threshold:
+        return max(fit, curvature_floor)
+    return fit
+
 
 def project_total_revenue(
     base_by_segment: Mapping[str, float],
