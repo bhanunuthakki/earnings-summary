@@ -70,6 +70,7 @@ __all__ = [
     "render_review_peek",
     "render_score_peek",
     "render_ticker_peek",
+    "render_what_if_peek",
 ]
 
 # Same worst-wins tone vocabulary the cockpit's verdict badge uses.
@@ -475,6 +476,20 @@ _SCORE_CSS = """
 .cc-score-formula { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft);
   margin-top: 4px; }
 .cc-score-legend { color: var(--muted); font-size: var(--fs-micro); margin-top: 6px; }
+.cc-fit-degraded { color: var(--warn); font-size: var(--fs-caption); margin-top: 6px; }
+.cc-fit-group { color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase;
+  letter-spacing: 0.05em; margin-top: 10px; }
+.cc-fit-strip { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft);
+  margin-top: 8px; }
+.cc-wi-weights { display: flex; gap: 4px; }
+.cc-wi-w-on { background: var(--accent-soft); }
+.cc-wi-row { display: grid; grid-template-columns: 104px 1fr 24px 1fr; gap: 10px;
+  align-items: center; padding: 6px 2px; border-bottom: 1px solid var(--hairline);
+  font-size: var(--fs-body); }
+.cc-wi-row:last-child { border-bottom: none; }
+.cc-wi-val { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.cc-wi-arrow { color: var(--muted); text-align: center; }
+.cc-wi-corrs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 """.strip()
 
 
@@ -503,6 +518,15 @@ def render_fit_peek(repo_root: Path, ticker: str) -> str | None:
     cf = read_materialized_candidate_fit(repo_root).get(t)
     if cf is None:
         return None
+    from candidate_fit_cache import read_materialized_fit_meta
+
+    meta = read_materialized_fit_meta(repo_root)
+    target_block = meta.get("target")
+    target_active = (
+        isinstance(target_block, dict)
+        and cast("dict[str, object]", target_block).get("source") == "intent"
+    )
+
     tone = fit_tone(cf.fit)
     big_tone = "score-hi" if tone == "hi" else "score-warn" if tone == "lo" else "mid"
     head = (
@@ -510,6 +534,13 @@ def render_fit_peek(repo_root: Path, ticker: str) -> str | None:
         '<span class="cc-score-cap">Portfolio fit to the held book</span>'
         f'<span class="cc-score-big {big_tone}">{cf.fit:.2f}</span>'
         "</div>"
+    )
+    degraded_html = (
+        '<div class="cc-fit-degraded">&#9888; book context degraded: '
+        + escape(" · ".join(cf.degraded))
+        + "</div>"
+        if cf.degraded
+        else ""
     )
     rows = "".join(
         _factor_row_html(
@@ -519,18 +550,169 @@ def render_fit_peek(repo_root: Path, ticker: str) -> str | None:
     )
     product = " &times; ".join(f"{f.multiplier:.2f}" for f in cf.factors)
     formula = f'<div class="cc-score-formula">1.00 &times; {product} = <b>{cf.fit:.2f}</b></div>'
+
+    # Fit v2: the target group — only when an owner intent (not the book
+    # default) is active; under the default the gaps are zero by construction
+    # and the group would be noise.
+    target_html = ""
+    if target_active and cf.target_factors and cf.fit_target is not None:
+        target_rows = "".join(
+            _factor_row_html(
+                f.label,
+                f.multiplier,
+                f.detail,
+                f.missing,
+                bar_min=_FIT_BAR_MIN,
+                bar_max=_FIT_BAR_MAX,
+            )
+            for f in cf.target_factors
+        )
+        narrative = ""
+        if isinstance(target_block, dict):
+            raw_narr = cast("dict[str, object]", target_block).get("narrative")
+            if isinstance(raw_narr, str) and raw_narr.strip():
+                narrative = f' title="{escape(raw_narr.strip(), quote=True)}"'
+        target_html = (
+            f'<div class="cc-fit-group"{narrative}>vs your positioning target</div>'
+            f'<div class="cc-score-rows">{target_rows}</div>'
+            f'<div class="cc-score-formula">{cf.fit:.2f} &times; '
+            + " &times; ".join(f"{f.multiplier:.2f}" for f in cf.target_factors)
+            + f" = <b>{cf.fit_target:.2f}</b> (fit to target)</div>"
+        )
+
+    # ΔSR + correlation-trend strip, and the doorway into the full what-if.
+    strip_bits: list[str] = []
+    if cf.sharpe_delta_bps is not None:
+        strip_bits.append(f"&Delta;SR at 3% = <b>{cf.sharpe_delta_bps:+.0f}bp</b> (modeled book)")
+    if cf.corr_trend is not None and cf.corr_recent is not None:
+        arrow = {"rising": "&uarr;", "falling": "&darr;", "stable": "&rarr;"}[cf.corr_trend]
+        strip_bits.append(f"corr trend {arrow} {cf.corr_trend} (63d {cf.corr_recent:+.2f})")
+    strip = f'<div class="cc-fit-strip">{" · ".join(strip_bits)}</div>' if strip_bits else ""
+
     legend_bits = ["&times;&gt;1 accretive", "&times;&lt;1 dilutive"]
     if cf.partial:
         legend_bits.append("missing factor scores neutral")
     legend = f'<div class="cc-score-legend">{" · ".join(legend_bits)}</div>'
+    tq = escape(t, quote=True)
     foot = (
-        f'<div class="cc-peek-foot"><a href="/ticker/{escape(t, quote=True)}">'
-        "open the evaluation report &rarr;</a></div>"
+        f'<div class="cc-peek-foot">'
+        f'<a class="k-chip k-chip-btn" data-peek-url="/api/peek/whatif?ticker={tq}" '
+        f'data-peek-title="What-if · {tq}" href="/ticker/{tq}">full what-if workup &rarr;</a>'
+        f' <a href="/ticker/{tq}">open the evaluation report &rarr;</a></div>'
     )
     return (
-        f'<div class="cc-score">{head}'
+        f'<div class="cc-score">{head}{degraded_html}'
         f'<div class="cc-score-rows">{rows}</div>'
-        f"{formula}{legend}</div>{foot}<style>{_SCORE_CSS}</style>"
+        f"{formula}{target_html}{strip}{legend}</div>{foot}<style>{_SCORE_CSS}</style>"
+    )
+
+
+# ----------------------------------------------------------------------------
+# What-if peek (cockpit ΔSR chip + the fit peek's doorway)
+# ----------------------------------------------------------------------------
+
+
+def render_what_if_peek(repo_root: Path, ticker: str, weight: float) -> str | None:
+    """The book BEFORE → AFTER adding one name at a chosen weight — vol, Sharpe
+    (Δ in bps), growth tilt, and the candidate's top correlations to individual
+    holdings, from ``allocation.what_if`` (module-cached; a cold compute is a
+    user-initiated click, never the table render). The weight selector chips
+    are peek doorways themselves — clicking 5% re-renders the popover at 5%.
+    None when the weights cache is empty (the route 404s)."""
+    from allocation.what_if import ALLOWED_WEIGHTS, clamp_weight, compute_what_if
+    from candidate_fit_cache import read_materialized_fit_meta
+    from portfolio_weights import read_materialized_weights
+
+    t = ticker.strip().upper()
+    weights = read_materialized_weights(repo_root)
+    if not weights:
+        return None
+    meta = read_materialized_fit_meta(repo_root)
+    book_block = cast("dict[str, object]", meta.get("book") or {})
+
+    def _opt(key: str) -> float | None:
+        v = book_block.get(key)
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+    w = clamp_weight(weight)
+    r = compute_what_if(
+        repo_root,
+        t,
+        w,
+        book_weights=weights,
+        risk_free_annual=_opt("risk_free_annual"),
+        book_growth_tilt=_opt("growth_tilt"),
+    )
+    tq = escape(t, quote=True)
+    selector = "".join(
+        (
+            f'<span class="k-chip k-chip-mono cc-wi-w-on">{aw * 100:g}%</span>'
+            if aw == w
+            else f'<a class="k-chip k-chip-mono k-chip-btn" '
+            f'data-peek-url="/api/peek/whatif?ticker={tq}&amp;w={aw}" '
+            f'data-peek-title="What-if · {tq}" href="/ticker/{tq}">{aw * 100:g}%</a>'
+        )
+        for aw in ALLOWED_WEIGHTS
+    )
+    head = (
+        '<div class="cc-score-head">'
+        f'<span class="cc-score-cap">What-if: add {escape(t)} at</span>'
+        f'<span class="cc-wi-weights">{selector}</span></div>'
+    )
+
+    def _row(label: str, before: float | None, after: float | None, fmt: str, mult: float) -> str:
+        b = format(before * mult, fmt) if before is not None else "—"
+        a = format(after * mult, fmt) if after is not None else "—"
+        tone = "mid"
+        if before is not None and after is not None:
+            tone = "pos" if after > before else "neg" if after < before else "mid"
+        return (
+            '<div class="cc-wi-row">'
+            f'<span class="cc-score-label">{escape(label)}</span>'
+            f'<span class="cc-wi-val">{b}</span>'
+            '<span class="cc-wi-arrow">&rarr;</span>'
+            f'<span class="cc-wi-val mult-{tone}">{a}</span></div>'
+        )
+
+    rows = [
+        _row("Vol (ann.)", r.vol_before_ann, r.vol_after_ann, ".1f", 100.0),
+        _row("Sharpe", r.sharpe_before, r.sharpe_after, "+.3f", 1.0),
+        _row("Growth tilt", r.growth_tilt_before, r.growth_tilt_after, "+.2f", 1.0),
+    ]
+    delta = (
+        f'<div class="cc-score-formula">&Delta;Sharpe = <b>{r.sharpe_delta_bps:+.0f}bp</b></div>'
+        if r.sharpe_delta_bps is not None
+        else ""
+    )
+    corr_html = ""
+    if r.top_correlations:
+        chips = " ".join(
+            f'<span class="k-chip k-chip-mono">{escape(sym)} {c:+.2f}</span>'
+            for sym, c in r.top_correlations
+        )
+        corr_html = (
+            '<div class="cc-fit-group">top correlations to holdings</div>'
+            f'<div class="cc-wi-corrs">{chips}</div>'
+        )
+    degraded_html = (
+        '<div class="cc-fit-degraded">&#9888; ' + escape(" · ".join(r.degraded)) + "</div>"
+        if r.degraded
+        else ""
+    )
+    obs = f" · {r.obs} common days" if r.obs else ""
+    through = f" · prices through {escape(r.prices_through)}" if r.prices_through else ""
+    legend = (
+        '<div class="cc-score-legend">modeled book (local price caches), pro-rata funded '
+        f"((1&minus;w)&middot;book + w&middot;{escape(t)}){obs}{through}</div>"
+    )
+    foot = (
+        f'<div class="cc-peek-foot"><a href="/ticker/{tq}">open the evaluation report '
+        "&rarr;</a></div>"
+    )
+    return (
+        f'<div class="cc-score">{head}{degraded_html}'
+        f'<div class="cc-score-rows">{"".join(rows)}</div>'
+        f"{delta}{corr_html}{legend}</div>{foot}<style>{_SCORE_CSS}</style>"
     )
 
 
