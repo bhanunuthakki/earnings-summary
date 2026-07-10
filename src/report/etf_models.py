@@ -70,8 +70,10 @@ class EtfHoldingsSection(BaseModel):
     missing: MissingReason | None = None
     as_of_date: date | None = None
     total_constituents: int = 0
-    top_holdings: list[EtfHoldingRow] = Field(default_factory=list)
-    sector_breakdown: list[EtfSectorBreakdownRow] = Field(default_factory=list)
+    top_holdings: list[EtfHoldingRow] = Field(default_factory=list[EtfHoldingRow])
+    sector_breakdown: list[EtfSectorBreakdownRow] = Field(
+        default_factory=list[EtfSectorBreakdownRow]
+    )
 
 
 class EtfRoleSynthesis(BaseModel):
