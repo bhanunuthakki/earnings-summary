@@ -60,12 +60,18 @@ def upsert_etf_profile(conn: sqlite3.Connection, profile: EtfProfile) -> None:
             ticker, name, issuer, expense_ratio, aum_usd_m, inception_date,
             asset_class, benchmark_index, domicile, listed_exchange,
             distribution_yield, description, sector_label,
-            nav, price, premium_discount_pct, source, profile_fetched_at
+            nav, price, premium_discount_pct,
+            pe_ratio, pb_ratio, weighted_avg_mktcap_usd_m,
+            characteristics_as_of, characteristics_source,
+            source, profile_fetched_at
         ) VALUES (
             :ticker, :name, :issuer, :expense_ratio, :aum_usd_m, :inception_date,
             :asset_class, :benchmark_index, :domicile, :listed_exchange,
             :distribution_yield, :description, :sector_label,
-            :nav, :price, :premium_discount_pct, :source, :profile_fetched_at
+            :nav, :price, :premium_discount_pct,
+            :pe_ratio, :pb_ratio, :weighted_avg_mktcap_usd_m,
+            :characteristics_as_of, :characteristics_source,
+            :source, :profile_fetched_at
         )
         ON CONFLICT(ticker) DO UPDATE SET
             name                  = excluded.name,
@@ -83,6 +89,14 @@ def upsert_etf_profile(conn: sqlite3.Connection, profile: EtfProfile) -> None:
             nav                   = excluded.nav,
             price                 = excluded.price,
             premium_discount_pct  = excluded.premium_discount_pct,
+            pe_ratio              = COALESCE(excluded.pe_ratio, etf_profile.pe_ratio),
+            pb_ratio              = COALESCE(excluded.pb_ratio, etf_profile.pb_ratio),
+            weighted_avg_mktcap_usd_m
+                = COALESCE(excluded.weighted_avg_mktcap_usd_m, etf_profile.weighted_avg_mktcap_usd_m),
+            characteristics_as_of
+                = COALESCE(excluded.characteristics_as_of, etf_profile.characteristics_as_of),
+            characteristics_source
+                = COALESCE(excluded.characteristics_source, etf_profile.characteristics_source),
             source                = excluded.source,
             profile_fetched_at    = excluded.profile_fetched_at
         """,
@@ -105,6 +119,13 @@ def upsert_etf_profile(conn: sqlite3.Connection, profile: EtfProfile) -> None:
             "nav": profile.nav,
             "price": profile.price,
             "premium_discount_pct": profile.premium_discount_pct,
+            "pe_ratio": profile.pe_ratio,
+            "pb_ratio": profile.pb_ratio,
+            "weighted_avg_mktcap_usd_m": profile.weighted_avg_mktcap_usd_m,
+            "characteristics_as_of": profile.characteristics_as_of.isoformat()
+            if profile.characteristics_as_of
+            else None,
+            "characteristics_source": profile.characteristics_source,
             "source": profile.source,
             "profile_fetched_at": profile.profile_fetched_at.isoformat(),
         },
@@ -138,6 +159,13 @@ def get_etf_profile(conn: sqlite3.Connection, ticker: str) -> EtfProfile | None:
         nav=row["nav"],
         price=row["price"],
         premium_discount_pct=row["premium_discount_pct"],
+        pe_ratio=row["pe_ratio"],
+        pb_ratio=row["pb_ratio"],
+        weighted_avg_mktcap_usd_m=row["weighted_avg_mktcap_usd_m"],
+        characteristics_as_of=date.fromisoformat(row["characteristics_as_of"])
+        if row["characteristics_as_of"]
+        else None,
+        characteristics_source=row["characteristics_source"],
         source=row["source"],
         profile_fetched_at=datetime.fromisoformat(row["profile_fetched_at"]),
     )
@@ -173,11 +201,11 @@ def upsert_etf_holdings(
             INSERT INTO etf_holdings (
                 ticker, as_of_date, constituent_ticker, name, weight_pct,
                 shares_held, market_value_usd, sector, asset_class,
-                rank_position, source, fetched_at
+                rank_position, country, source, fetched_at
             ) VALUES (
                 :ticker, :as_of_date, :constituent_ticker, :name, :weight_pct,
                 :shares_held, :market_value_usd, :sector, :asset_class,
-                :rank_position, :source, :fetched_at
+                :rank_position, :country, :source, :fetched_at
             )
             ON CONFLICT(ticker, as_of_date, constituent_ticker) DO UPDATE SET
                 name              = excluded.name,
@@ -187,6 +215,7 @@ def upsert_etf_holdings(
                 sector            = excluded.sector,
                 asset_class       = excluded.asset_class,
                 rank_position     = excluded.rank_position,
+                country           = COALESCE(excluded.country, etf_holdings.country),
                 source            = excluded.source,
                 fetched_at        = excluded.fetched_at
             """,
@@ -203,6 +232,7 @@ def upsert_etf_holdings(
                 "sector": h.sector,
                 "asset_class": h.asset_class,
                 "rank_position": h.rank_position,
+                "country": h.country,
                 "source": h.source,
                 "fetched_at": h.fetched_at.isoformat(),
             },
@@ -260,6 +290,7 @@ def get_etf_holdings(
                 sector=row["sector"],
                 asset_class=row["asset_class"],
                 rank_position=row["rank_position"],
+                country=row["country"],
                 source=row["source"],
                 fetched_at=datetime.fromisoformat(row["fetched_at"]),
             )

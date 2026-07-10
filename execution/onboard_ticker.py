@@ -457,10 +457,61 @@ def _run_saydo(ticker: str) -> int:
     ).returncode
 
 
-def _saydo_should_run(list_type: str | None, *, force: bool) -> bool:
+def _saydo_should_run(
+    list_type: str | None, *, force: bool, instrument: str | None = None
+) -> bool:
     """Say-Do generation runs for evaluation-list names (the gap this closes)
-    or for any name when forced (e.g. backfilling an already-onboarded ticker)."""
+    or for any name when forced (e.g. backfilling an already-onboarded ticker).
+
+    Never for ETFs — funds hold no earnings calls, so there are no
+    management commitments to pair. Belt-and-braces: the ETF onboarding
+    branch in ``main`` returns before this gate is ever consulted, but a
+    ``--force-saydo`` on an ETF must still be a no-op.
+    """
+    if instrument == "etf":
+        return False
     return force or list_type == "evaluation"
+
+
+def run_etf_onboarding(conn: sqlite3.Connection, ticker: str, repo_root: Path) -> int:
+    """The ETF onboarding-lite path (directives/etf_data.md): published data
+    only — N-PORT holdings, issuer overlay, yfinance price history. No
+    quarterly refresh, no transcripts, no IR crawl, no Say-Do: none of the
+    bottoms-up equity stages mean anything for a fund.
+
+    Returns 0 when at least one holdings source landed, 1 when both degraded
+    (evaluation analytics will be partial until a source succeeds), 2 on an
+    N-PORT schema-drift halt.
+    """
+    from etf_sources.ingest import refresh_published_data
+    from etf_sources.nport import NportParseError
+
+    print(f"[onboard] {ticker} stage=etf_published_data", flush=True)
+    try:
+        result = refresh_published_data(conn, ticker, repo_root)
+    except NportParseError as exc:
+        print(f"[onboard] {ticker} etf_published_data NPORT PARSE HALT: {exc}", flush=True)
+        return 2
+    conn.commit()
+    as_of = result.nport_as_of.isoformat() if result.nport_as_of else "-"
+    print(
+        f"[onboard] {ticker} etf nport={result.nport_status} as_of={as_of} "
+        f"rows={result.nport_rows} issuer={result.issuer_status} "
+        f"issuer_rows={result.issuer_rows} "
+        f"characteristics={'yes' if result.characteristics_applied else 'no'} "
+        f"prices={result.price_status} price_rows={result.price_rows}",
+        flush=True,
+    )
+    for skipped in ("quarterly_refresh", "backfill_transcripts", "ir_documents", "saydo"):
+        print(f"[onboard] {ticker} stage={skipped} SKIPPED (instrument_type=etf)", flush=True)
+    if result.nport_status == "unavailable" and result.issuer_status == "unavailable":
+        print(
+            f"[onboard] {ticker} WARNING: no ETF holdings source succeeded — "
+            f"look-through analytics degrade until one does",
+            flush=True,
+        )
+        return 1
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -506,6 +557,17 @@ def main() -> int:
             "hyperscaler) or 'auto' to let the deterministic classifier "
             "pick one. Omitting this flag preserves the prior generic-onboard "
             "behavior."
+        ),
+    )
+    ap.add_argument(
+        "--instrument",
+        choices=["etf", "equity", "adr"],
+        default=None,
+        help=(
+            "Force tracked_companies.instrument_type before classification. "
+            "Escape hatch for symbols whose FMP profile is unavailable (the "
+            "auto-classifier needs it); an ETF routes to the published-data "
+            "onboarding-lite path."
         ),
     )
     args = ap.parse_args()
@@ -569,8 +631,31 @@ def main() -> int:
         # direct/raw-SQL onboards don't sit at NULL forever and trip the
         # 'no_instrument_type' pending reason. See set_instrument_type_from_fmp.
         print(f"[onboard] {ticker} stage=set_instrument_type", flush=True)
+        if args.instrument:
+            conn.execute(
+                "UPDATE tracked_companies SET instrument_type = ? WHERE ticker = ?",
+                (args.instrument, ticker),
+            )
+            conn.commit()
         instrument = set_instrument_type_from_fmp(conn, ticker, PROJECT_ROOT)
         print(f"[onboard] {ticker} instrument_type={instrument!s}", flush=True)
+
+        # ETFs take the published-data onboarding-lite path: the remaining
+        # stages (quarterly refresh, transcripts, IR, Say-Do) are all
+        # bottoms-up equity machinery that means nothing for a fund.
+        instrument_value = getattr(instrument, "value", instrument)
+        if str(instrument_value or "").lower() == "etf":
+            run_id = start_run(conn, directive="onboard_ticker", ticker_scope=[ticker])
+            rc = run_etf_onboarding(conn, ticker, PROJECT_ROOT)
+            end_run(
+                conn,
+                run_id,
+                RunStageStatus.OK if rc == 0 else RunStageStatus.FAILED,
+                error_summary=None if rc == 0 else f"etf onboarding rc={rc}",
+            )
+            elapsed = (datetime.now() - started).total_seconds()
+            print(f"[onboard] {ticker} done in {elapsed:.1f}s (etf path rc={rc})", flush=True)
+            return rc
 
         print(f"[onboard] {ticker} stage=quarterly_refresh", flush=True)
         run_id = start_run(conn, directive="onboard_ticker", ticker_scope=[ticker])
@@ -628,7 +713,11 @@ def main() -> int:
     # them. Best-effort — LLM-bound and tolerant of coverage gaps.
     if not args.skip_saydo:
         list_type = _lookup_list_type(ticker)
-        if _saydo_should_run(list_type, force=args.force_saydo):
+        if _saydo_should_run(
+            list_type,
+            force=args.force_saydo,
+            instrument=str(instrument_value or "").lower() or None,
+        ):
             print(f"[onboard] {ticker} stage=saydo (list_type={list_type})", flush=True)
             saydo_rc = _run_saydo(ticker)
             if saydo_rc != 0:
