@@ -387,7 +387,7 @@ def test_ask_endpoint_answers_narrative_questions(
 
     prompts: list[str] = []
 
-    def fake_llm(prompt: str):
+    def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
         prompts.append(prompt)
         yield {"type": "delta", "text": "prose"}
         yield {"type": "final", "text": "a researched answer"}
@@ -422,7 +422,7 @@ def test_ask_endpoint_data_question_falls_back_to_narrative(
     def fake_compile(query: str, **_kw: object) -> nl_compile.NLCompileResult:
         return nl_compile.NLCompileResult(status="error", message="nope")
 
-    def fake_llm(prompt: str):
+    def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
         yield {"type": "final", "text": "prose fallback"}
 
     monkeypatch.setattr(nl_compile, "compile_nl_to_viewspec", fake_compile)
@@ -483,7 +483,7 @@ def test_ask_stream_endpoint_streams_narrative_deltas(
     channel (the whole point of the streaming sibling)."""
     import chat_session
 
-    def fake_llm(prompt: str):
+    def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
         yield {"type": "delta", "text": "chunk one "}
         yield {"type": "delta", "text": "chunk two"}
         yield {"type": "final", "text": "chunk one chunk two"}

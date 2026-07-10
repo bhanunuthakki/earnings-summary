@@ -616,7 +616,7 @@ def _narrative_events(
         + text
     )
     final_text, held, _trailing = yield from _gate_events(
-        chat_session.stream_llm_text(full_prompt), sniff=armed
+        chat_session.stream_llm_text(full_prompt, purpose=pack.narrative_purpose), sniff=armed
     )
     if final_text is None:  # error frame already yielded / defensive no-final
         return

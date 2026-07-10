@@ -229,6 +229,12 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # Bump when the weight-setting prompt (dcf.scenario_prior._PROMPT) is materially
     # rewritten, then re-run `run_llm_evals.py --purpose scenario_prior`.
     "scenario_prior": "v1",
+    # Positioning coach + encode (src/positioning/coach_pack.py + encode.py).
+    # Bump coach when _INSTRUCTIONS materially changes posture; bump encode
+    # when _prompt's schema/rules change (the approval form re-validates
+    # owner-side regardless, so an encode bump never risks silent state).
+    "positioning_coach_turn": "v1",
+    "positioning_encode": "v1",
     # Whole-book thesis-collision audit (src/thesis_collision.py). IS the
     # llm_artifacts cache key alongside the thesis-set hash — bumping it forks
     # cached findings cleanly (a re-run is forced even if no thesis changed).

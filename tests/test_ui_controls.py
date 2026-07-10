@@ -403,6 +403,7 @@ REGISTERED: frozenset[str] = frozenset(
         "pipeline/peeks.py",
         "pipeline/portfolio_panel.py",
         "pipeline/position_lifecycle_panel.py",
+        "pipeline/positioning_panel.py",
         "pipeline/research_cockpit.py",
         "pipeline/restatements_panel.py",
         "pipeline/section_coverage_panel.py",

@@ -330,7 +330,7 @@ def test_failed_compile_falls_back_to_narrative(
     through the narrative path, with a stage note saying so."""
     _patch_data_path(monkeypatch, compile_result=NLCompileResult(status="error", message="nope"))
 
-    def fake_llm(prompt: str):
+    def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
         yield {"type": "delta", "text": "prose "}
         yield {"type": "final", "text": "prose answer"}
 
@@ -417,7 +417,7 @@ def test_portfolio_narrative_composes_pack_context_and_history(
 ) -> None:
     prompts: list[str] = []
 
-    def fake_llm(prompt: str):
+    def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
         prompts.append(prompt)
         yield {"type": "delta", "text": "answer"}
         yield {"type": "final", "text": "answer"}
@@ -448,7 +448,7 @@ def test_portfolio_narrative_extracts_diff_proposal(
         '"target_path": "thesis", "new_value": "new", "summary": "tighten"}}\n```'
     )
 
-    def fake_llm(prompt: str):
+    def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
         yield {"type": "final", "text": answer}
 
     monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
@@ -469,7 +469,7 @@ def test_portfolio_narrative_extracts_diff_proposal(
 def test_portfolio_narrative_transport_error_passthrough(
     tmp_path: Path, missing_db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fake_llm(prompt: str):
+    def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
         yield {"type": "error", "error": "claude CLI not found in PATH"}
 
     monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
@@ -540,7 +540,7 @@ def test_portfolio_narrative_grounds_prompt_and_emits_pruned_citations(
     monkeypatch.setattr(ask_engine, "gather_evidence", _stub_gather(_evidence(1), _evidence(2)))
     prompts: list[str] = []
 
-    def fake_llm(prompt: str):
+    def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
         prompts.append(prompt)
         yield {"type": "final", "text": "Growth held up well [1]."}
 
@@ -580,7 +580,7 @@ def test_portfolio_narrative_unused_evidence_emits_no_citations(
 ) -> None:
     monkeypatch.setattr(ask_engine, "gather_evidence", _stub_gather(_evidence(1)))
 
-    def fake_llm(prompt: str):
+    def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
         yield {"type": "final", "text": "An answer with no markers at all."}
 
     monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
@@ -603,7 +603,7 @@ def test_portfolio_narrative_per_claim_event_reconciles_and_recovers(
     [2] joins the event even though the answer text never wrote ``[2]``."""
     monkeypatch.setattr(ask_engine, "gather_evidence", _stub_gather(_evidence(1), _evidence(2)))
 
-    def fake_llm(prompt: str):
+    def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
         yield {"type": "final", "text": "Growth held up well [1]. Margins expanded by 300bps."}
 
     monkeypatch.setattr(chat_session, "stream_llm_text", fake_llm)
@@ -683,7 +683,7 @@ def test_stream_response_appends_extra_context_to_system_prompt(
 ) -> None:
     prompts: list[str] = []
 
-    def fake_llm(prompt: str):
+    def fake_llm(prompt: str, *, purpose: str = "ask_answer"):
         prompts.append(prompt)
         yield {"type": "final", "text": "answer"}
 
