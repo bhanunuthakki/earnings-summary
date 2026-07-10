@@ -2899,6 +2899,29 @@ def create_app(
             abort(404)
         return Response(html, mimetype="text/html")
 
+    @app.route("/api/peek/whatif", methods=["GET"])
+    def peek_whatif():
+        """The before/after what-if for one name at a chosen weight — the
+        click-through behind the cockpit's ΔSR chip and the fit peek's doorway.
+        ``?w=`` snaps to the allowed weight menu (default 3%); the compute is
+        user-initiated and module-cached (allocation/what_if.py), never a
+        table-render cost. 404 for an untracked ticker or an empty weights
+        cache."""
+        from pipeline.peeks import render_what_if_peek
+
+        try:
+            ticker = ticker_validation.safe_ticker(request.args.get("ticker") or "")
+        except ValueError:
+            abort(404)
+        try:
+            w = float(request.args.get("w") or 0.03)
+        except (TypeError, ValueError):
+            w = 0.03
+        html = render_what_if_peek(repo_root, ticker, w)
+        if html is None:
+            abort(404)
+        return Response(html, mimetype="text/html")
+
     @app.route("/api/ticker/<ticker>", methods=["GET"])
     def ticker_api(ticker: str):
         """Full per-ticker command-center state as JSON: identity/freshness,

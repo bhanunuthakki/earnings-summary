@@ -848,6 +848,105 @@ def test_build_attaches_fit_from_cache(conn: sqlite3.Connection, repo_root: Path
     assert ">1.15</a>" in html
 
 
+def _write_fit_cache_v2(
+    repo_root: Path,
+    *,
+    target_source: str = "intent",
+    degraded: list[str] | None = None,
+) -> None:
+    (repo_root / "data").mkdir(parents=True, exist_ok=True)
+    (repo_root / "data" / "candidate_fit.json").write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "computed_at": "2026-07-10T04:00:00",
+                "book": {
+                    "sharpe": 0.9,
+                    "growth_tilt": 0.25,
+                    "risk_free_annual": 0.045,
+                    "degraded": degraded or [],
+                },
+                "target": {
+                    "source": target_source,
+                    "intent_id": 3 if target_source == "intent" else None,
+                    "narrative": "less growth, more intl value",
+                },
+                "fits": {
+                    "V": {
+                        "fit": 1.15,
+                        "why": "sharpe 1.12 (...) x divers 1.03 (...) = 1.15",
+                        "partial": False,
+                        "obs": 200,
+                        "factors": [
+                            {
+                                "key": "sharpe",
+                                "label": "Marginal Sharpe",
+                                "multiplier": 1.12,
+                                "detail": "SR ...",
+                                "missing": False,
+                            }
+                        ],
+                        "fit_target": 1.29,
+                        "target_factors": [
+                            {
+                                "key": "tgt_tilt",
+                                "label": "Target tilt",
+                                "multiplier": 1.12,
+                                "detail": "closes the tilt gap",
+                                "missing": False,
+                            }
+                        ],
+                        "sharpe_delta_bps": 12.4,
+                        "corr_trend": "rising",
+                        "corr_recent": 0.81,
+                        "degraded": degraded or [],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_render_fit_v2_target_chip_and_dsr_column(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
+    """With an ACTIVE intent target the Fit chip shows fit-to-target with the
+    tgt marker; the ΔSR column renders as a what-if peek doorway and sorts."""
+    _write_fit_cache_v2(repo_root, target_source="intent")
+    html = render_research_cockpit(build_cockpit_rows(conn, repo_root))
+    assert ">1.29<sup>tgt</sup></a>" in html  # fit-to-target shown, marked
+    assert html.count(">ΔSR<") == 1
+    assert "sortBy('dsr','num')" in html
+    assert "data-peek-url='/api/peek/whatif?ticker=V'" in html
+    assert ">+12bp</a>" in html
+    assert "Fit computed with degraded book context" not in html  # clean book → no banner
+
+
+def test_render_fit_v2_book_default_is_v1_identical(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
+    """Under the book-default target (no saved intent) the chip is the plain
+    fit number — no tgt marker, no behavior change vs v1."""
+    _write_fit_cache_v2(repo_root, target_source="book_default")
+    html = render_research_cockpit(build_cockpit_rows(conn, repo_root))
+    assert ">1.29<" not in html  # fit_target hidden under the default
+    assert ">1.15</a>" in html
+    assert "<sup>tgt</sup>" not in html
+
+
+def test_render_fit_v2_degraded_is_loud(conn: sqlite3.Connection, repo_root: Path) -> None:
+    """A degraded book context renders the warn chip with the ! glyph, the
+    reasons in the hover, and the one-line banner above the table."""
+    reasons = ["tracker offline and no risk snapshot — book Sharpe unknown"]
+    _write_fit_cache_v2(repo_root, target_source="intent", degraded=reasons)
+    html = render_research_cockpit(build_cockpit_rows(conn, repo_root))
+    assert "cockpit-degraded" in html
+    assert "Fit computed with degraded book context" in html
+    assert "BOOK CONTEXT DEGRADED" in html
+    assert ">! 1.29<sup>tgt</sup></a>" in html
+
+
 def test_render_escapes_company_name(rows: dict[str, list[CockpitRow]]) -> None:
     html = render_research_cockpit(rows)
     assert "Nu &amp; Co Holdings" in html

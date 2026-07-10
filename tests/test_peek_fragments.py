@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 
@@ -770,6 +770,74 @@ def test_peek_fit_no_cache_or_missing_ticker_404(client: FlaskClient, repo: Path
     _write_fit_cache(repo, ticker="DLO")
     assert client.get("/api/peek/fit?ticker=ZZZQ").status_code == 404  # not in the cache
     assert client.get("/api/peek/fit").status_code == 404  # no ticker
+
+
+# ----------------------------------------------------------------------------
+# What-if peek (cockpit ΔSR chip / fit-peek doorway)
+# ----------------------------------------------------------------------------
+
+
+def _seed_whatif_substrate(repo: Path) -> None:
+    """Synthetic price charts for two holdings + a candidate, plus the weights
+    cache — everything render_what_if_peek needs, no tracker, no network."""
+    import math as _math
+
+    fmp = repo / "data" / "historical" / "fmp"
+    fmp.mkdir(parents=True, exist_ok=True)
+    base = date(2025, 6, 1)
+
+    def _chart(ticker: str, gen: list[float]) -> None:
+        price = 100.0
+        rows = [{"date": base.isoformat(), "adjClose": price}]
+        for i, r in enumerate(gen, start=1):
+            price *= _math.exp(r)
+            rows.append({"date": (base + timedelta(days=i)).isoformat(), "adjClose": price})
+        (fmp / f"{ticker}_price_chart_10y_div_adj.json").write_text(
+            json.dumps(rows), encoding="utf-8"
+        )
+
+    market = [0.01 * _math.sin(i / 5.0) + 0.0004 for i in range(200)]
+    _chart("AAA", market)
+    _chart("BBB", [m * 0.9 for m in market])
+    _chart("DLO", [0.008 * _math.cos(i / 7.0) for i in range(200)])
+    (repo / "data" / "portfolio_weights.json").write_text(
+        json.dumps({"computed_at": "2026-07-10T04:00:00", "weights": {"AAA": 0.6, "BBB": 0.4}}),
+        encoding="utf-8",
+    )
+
+
+def test_peek_whatif_renders_before_after(client: FlaskClient, repo: Path) -> None:
+    from allocation.what_if import clear_caches
+
+    clear_caches()
+    _seed_whatif_substrate(repo)
+    _write_fit_cache(repo, ticker="DLO")  # supplies the book block (rf) via meta
+    resp = client.get("/api/peek/whatif?ticker=DLO")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "What-if: add DLO at" in body
+    assert "Vol (ann.)" in body and "Sharpe" in body
+    assert "top correlations to holdings" in body
+    assert "AAA" in body and "BBB" in body
+    # The weight selector: the active 3% is a chip, the others peek doorways.
+    assert "cc-wi-w-on" in body and ">3%<" in body
+    assert 'data-peek-url="/api/peek/whatif?ticker=DLO&amp;w=0.05"' in body
+    assert "pro-rata funded" in body
+
+
+def test_peek_whatif_clamps_weight_and_404s(client: FlaskClient, repo: Path) -> None:
+    from allocation.what_if import clear_caches
+
+    clear_caches()
+    # No weights cache → 404 (nothing to blend against).
+    assert client.get("/api/peek/whatif?ticker=DLO").status_code == 404
+    _seed_whatif_substrate(repo)
+    # A wild weight snaps to the allowed menu (0.5 → 8%).
+    resp = client.get("/api/peek/whatif?ticker=DLO&w=0.5")
+    assert resp.status_code == 200
+    assert ">8%<" in resp.data.decode()
+    # Bad ticker rejected by validation.
+    assert client.get("/api/peek/whatif?ticker=..%2Fetc").status_code == 404
 
 
 # ----------------------------------------------------------------------------

@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import cast
 
 from allocation.candidate_fit import fit_tone
-from candidate_fit_cache import read_materialized_candidate_fit
+from candidate_fit_cache import read_materialized_candidate_fit, read_materialized_fit_meta
 from cockpit_fundamentals import (
     compute_from_db as _compute_fundamentals,
 )
@@ -175,6 +175,15 @@ class CockpitRow:
     fit: float | None = None
     fit_why: str | None = None  # the fit-factor math, chip hover verbatim
     fit_partial: bool = False  # at least one fit factor's inputs unavailable
+    # Fit v2: fit against the ACTIVE positioning target (== fit when no intent
+    # is saved), the modeled-book ΔSharpe (bps at the default 3% what-if
+    # weight), and the book-context degradation reasons (loud, not a dimmed
+    # chip). ``fit_target_active`` says an owner intent — not the book default
+    # — is the target, so the chip shows fit-to-target with a marker.
+    fit_target: float | None = None
+    fit_target_active: bool = False
+    sharpe_delta_bps: float | None = None
+    fit_degraded: tuple[str, ...] = ()
     # Thesis detail
     kpi_deltas: list[KpiDelta] = field(default_factory=list["KpiDelta"])
     rule_summary: str | None = None  # breached/warned rule names for the badge hover
@@ -476,6 +485,14 @@ def build_cockpit_rows(
     # morning pipeline materialised (stage 0f). Absent (fresh install / no
     # pipeline run) → no Fit chip, exactly like the fundamentals cache.
     candidate_fit = read_materialized_candidate_fit(repo_root)
+    # Whether an owner positioning intent (vs the book default) is the active
+    # target — drives the Fit chip's fit-to-target display (v2 cache meta).
+    fit_meta = read_materialized_fit_meta(repo_root)
+    fit_target_block = fit_meta.get("target")
+    target_active = (
+        isinstance(fit_target_block, dict)
+        and cast("dict[str, object]", fit_target_block).get("source") == "intent"
+    )
     # Canonical calendar first (one batch query); the per-ticker FMP-cache file
     # read below remains as fallback for pre-0082 DBs / not-yet-refreshed rows.
     next_er = {t: d.isoformat() for t, d in upcoming_by_ticker(conn, ref.date()).items()}
@@ -497,6 +514,9 @@ def build_cockpit_rows(
             fit: float | None = None
             fit_why: str | None = None
             fit_partial = False
+            fit_target: float | None = None
+            sharpe_delta_bps: float | None = None
+            fit_degraded: tuple[str, ...] = ()
             if list_type == "evaluation":
                 upside = _dcf_upside_pct(fair_value, dcf_price)
                 score, why, partial = eval_attractiveness(
@@ -508,6 +528,9 @@ def build_cockpit_rows(
                 cf = candidate_fit.get(t)
                 if cf is not None:
                     fit, fit_why, fit_partial = cf.fit, cf.why, cf.partial
+                    fit_target = cf.fit_target
+                    sharpe_delta_bps = cf.sharpe_delta_bps
+                    fit_degraded = cf.degraded
             built.append(
                 CockpitRow(
                     base=row,
@@ -534,6 +557,10 @@ def build_cockpit_rows(
                     fit=fit,
                     fit_why=fit_why,
                     fit_partial=fit_partial,
+                    fit_target=fit_target,
+                    fit_target_active=bool(target_active),
+                    sharpe_delta_bps=sharpe_delta_bps,
+                    fit_degraded=fit_degraded,
                 )
             )
         if list_type == "evaluation":
@@ -868,12 +895,31 @@ def render_research_cockpit(
         [
             _COCKPIT_CSS,
             _render_list_section("Portfolio", portfolio, ref, thin=False),
-            _render_list_section("Evaluation", evaluation, ref, thin=True),
+            _render_list_section(
+                "Evaluation",
+                evaluation,
+                ref,
+                thin=True,
+                notice=_eval_degradation_notice(evaluation),
+            ),
         ]
     )
 
 
-def _render_list_section(title: str, rows: list[CockpitRow], now: datetime, *, thin: bool) -> str:
+def _eval_degradation_notice(rows: list[CockpitRow]) -> str | None:
+    """The one-line loud-degradation banner above the Evaluation table: the
+    book-context reasons the fits were computed without (tracker offline, no
+    risk snapshot, …). Rows all carry the same book-level reasons — read them
+    off the first fit-bearing row."""
+    for row in rows:
+        if row.fit_degraded:
+            return "Fit computed with degraded book context: " + " · ".join(row.fit_degraded)
+    return None
+
+
+def _render_list_section(
+    title: str, rows: list[CockpitRow], now: datetime, *, thin: bool, notice: str | None = None
+) -> str:
     if not rows:
         body = f"<p class='empty'>No {escape(title.lower())} tickers.</p>"
     else:
@@ -900,7 +946,19 @@ def _render_list_section(title: str, rows: list[CockpitRow], now: datetime, *, t
                     "num",
                     title="portfolio fit to the held book: marginal Sharpe x diversification "
                     "x factor exposure x sector (>1 accretive, <1 dilutive; click for the "
-                    "breakdown; dashed = partial data)",
+                    "breakdown; dashed = partial data). With a saved positioning intent the "
+                    "chip shows fit-to-TARGET (tgt marker).",
+                )
+                # ΔSR: the modeled-book Sharpe change (bps) of adding the name
+                # at the default 3% what-if weight — magnitude where Fit's
+                # marginal-Sharpe leg is pass/fail. Click for the full what-if.
+                + _sort_th(
+                    "ΔSR",
+                    "dsr",
+                    "num",
+                    title="modeled-book Sharpe change (basis points) of a 3% position, "
+                    "pro-rata funded; click for the full before/after what-if with a "
+                    "weight selector",
                 )
                 if thin
                 else ""
@@ -931,10 +989,16 @@ def _render_list_section(title: str, rows: list[CockpitRow], now: datetime, *, t
             + f"<table class='{cls}'>{head}<tbody>{body_rows}</tbody></table>"
             + lg.grid_close()
         )
+    notice_html = (
+        f"<p class='cockpit-degraded'><span class='k-chip k-chip-warn'>!</span> "
+        f"{escape(notice)}</p>"
+        if notice
+        else ""
+    )
     return (
         f"<section class='list-section cockpit-section'>"
         f"<h2>{escape(title)} <span class='count'>({len(rows)})</span></h2>"
-        f"{body}</section>"
+        f"{notice_html}{body}</section>"
     )
 
 
@@ -954,7 +1018,8 @@ def _row_sort_data(row: CockpitRow, *, thin: bool) -> str:
     if thin:
         data += (
             lg.data_num("score", row.attractiveness)
-            + lg.data_num("fit", row.fit)
+            + lg.data_num("fit", _fit_display_value(row))
+            + lg.data_num("dsr", row.sharpe_delta_bps)
             + lg.data_num("revyoy", row.rev_yoy_pct)
             + lg.data_num("fcfmgn", row.fcf_margin_pct)
         )
@@ -971,6 +1036,7 @@ def _render_row(row: CockpitRow, now: datetime, *, thin: bool) -> str:
     if thin:
         cells.append(f"<td class='num'>{_score_cell(row)}</td>")
         cells.append(f"<td class='num'>{_fit_cell(row)}</td>")
+        cells.append(f"<td class='num'>{_sharpe_delta_cell(row)}</td>")
     if not thin:
         cells.append(f"<td class='kpi-moves'>{_kpi_chips(row.kpi_deltas, row.base.ticker)}</td>")
     cells.extend(
@@ -1021,28 +1087,72 @@ def _score_cell(row: CockpitRow) -> str:
     )
 
 
+def _fit_display_value(row: CockpitRow) -> float | None:
+    """What the Fit chip shows: fit-to-TARGET when an owner intent is active
+    (== fit under the book default, so the number never jumps without a saved
+    intent), else the plain fit-to-book."""
+    if row.fit_target_active and row.fit_target is not None:
+        return row.fit_target
+    return row.fit
+
+
 def _fit_cell(row: CockpitRow) -> str:
     """The portfolio-fit chip — a peek doorway (UX9), sibling to the score chip.
     A plain click opens the fit breakdown (marginal Sharpe · diversification ·
-    factor exposure · sector) from the materialized cache; the factor math stays
-    in the hover ``title``; ``/ticker/<T>`` is the real href for middle-click.
-    Centered at 1.0 — ``fit-hi`` accretive to the book, ``fit-lo`` dilutive."""
-    if row.fit is None:
+    factor exposure · sector, plus the target group when an intent is active)
+    from the materialized cache; the factor math stays in the hover ``title``;
+    ``/ticker/<T>`` is the real href for middle-click. Centered at 1.0 —
+    ``fit-hi`` accretive, ``fit-lo`` dilutive. A degraded book context renders
+    the chip LOUD (warn tone + ! + the reasons in the hover), replacing the
+    old easy-to-miss opacity dim."""
+    shown = _fit_display_value(row)
+    if shown is None:
         return _muted()
-    tone = fit_tone(row.fit)
+    tone = fit_tone(shown)
     cls = "k-chip k-chip-mono"
-    if tone == "hi":
+    degraded = bool(row.fit_degraded)
+    if degraded:
+        cls += " k-chip-warn"
+    elif tone == "hi":
         cls += " k-chip-ok"
     elif tone == "lo":
         cls += " k-chip-warn"
     if row.fit_partial:
         cls += " chip-partial"
-    title = f" title='{escape(row.fit_why)}'" if row.fit_why else ""
+    title_bits: list[str] = []
+    if degraded:
+        title_bits.append("BOOK CONTEXT DEGRADED: " + " | ".join(row.fit_degraded))
+    if row.fit_why:
+        title_bits.append(row.fit_why)
+    title = f" title='{escape(' — '.join(title_bits))}'" if title_bits else ""
+    marker = "<sup>tgt</sup>" if row.fit_target_active and row.fit_target is not None else ""
+    bang = "! " if degraded else ""
     t = escape(row.base.ticker)
     return (
         f"<a class='{cls}' href='/ticker/{t}' "
         f"data-peek-url='/api/peek/fit?ticker={t}' "
-        f"data-peek-title='Portfolio fit · {t}'{title}>{row.fit:.2f}</a>"
+        f"data-peek-title='Portfolio fit · {t}'{title}>{bang}{shown:.2f}{marker}</a>"
+    )
+
+
+def _sharpe_delta_cell(row: CockpitRow) -> str:
+    """The ΔSR chip: modeled-book Sharpe change (bps) at the default 3% what-if
+    weight — a doorway into the full before/after what-if peek."""
+    if row.sharpe_delta_bps is None:
+        return _muted()
+    v = row.sharpe_delta_bps
+    cls = "k-chip k-chip-mono"
+    if v >= 5.0:
+        cls += " k-chip-ok"
+    elif v <= -5.0:
+        cls += " k-chip-warn"
+    t = escape(row.base.ticker)
+    return (
+        f"<a class='{cls}' href='/ticker/{t}' "
+        f"data-peek-url='/api/peek/whatif?ticker={t}' "
+        f"data-peek-title='What-if · {t}' "
+        f"title='modeled-book Sharpe change at a 3% position, pro-rata funded; "
+        f"click for the full what-if'>{v:+.0f}bp</a>"
     )
 
 
@@ -1251,6 +1361,9 @@ def _age_days(iso: str | None, now: datetime) -> float | None:
 _COCKPIT_CSS = """
 <style>
 .cockpit-section h2 { display: flex; align-items: baseline; gap: 6px; }
+.cockpit-degraded { font-size: var(--fs-caption); color: var(--warn); margin: 2px 0 8px;
+  display: flex; align-items: center; gap: 6px; }
+.cockpit-table sup { font-size: var(--fs-micro); color: var(--muted); margin-left: 1px; }
 .cockpit-table td { white-space: nowrap; }
 .cockpit-table td.kpi-moves { white-space: normal; }
 /* The Evaluation table is secondary to the Portfolio table — tighter padding
