@@ -208,6 +208,49 @@ def test_recent_nport_accessions_sorted_and_filtered() -> None:
     assert all(doc == "primary_doc.xml" for _, _, doc in hits)
 
 
+def test_recent_nport_accessions_normalizes_xsl_rendered_path() -> None:
+    """EDGAR's submissions index lists the XSL-RENDERED path for NPORT-P
+    (serves HTML); the raw XML is the bare basename — caught by the AVDV
+    end-to-end (the rendered doc halted the parser)."""
+    payload = {
+        "filings": {
+            "recent": {
+                "form": ["NPORT-P"],
+                "accessionNumber": ["0001-26-000009"],
+                "filingDate": ["2026-06-30"],
+                "primaryDocument": ["xslFormNPORT-P_X01/primary_doc.xml"],
+            }
+        }
+    }
+    hits = _recent_nport_accessions(payload)
+    assert hits == [("2026-06-30", "0001-26-000009", "primary_doc.xml")]
+
+
+def test_fetch_latest_report_skips_html_rendering(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fetched document that is an HTML rendering (not the raw filing) is a
+    URL-shape surprise, not schema drift — the accession is SKIPPED and the
+    probe continues, never a parse halt."""
+    ref = FundRef(ticker="TEST", cik=2222222, series_id="S000068000", class_id="C000217000")
+    responses: dict[str, object] = {
+        nport.EDGAR_SUBMISSIONS_URL.format(cik=ref.cik): SUBMISSIONS,
+        nport.EDGAR_FILE_URL.format(
+            cik_int=ref.cik, acc="000126000003", name="primary_doc.xml"
+        ): "<!DOCTYPE html PUBLIC ...><html>rendered viewer</html>",
+        nport.EDGAR_FILE_URL.format(
+            cik_int=ref.cik, acc="000126000002", name="primary_doc.xml"
+        ): NPORT_XML,
+    }
+
+    def fake_get(url: str, *, user_agent: str, as_json: bool) -> object | str | None:
+        return responses.get(url)
+
+    monkeypatch.setattr(nport, "_sec_get", fake_get)
+    report = nport.fetch_latest_report(ref, tmp_dir=tmp_path)
+    assert report is not None and report.accession == "0001-26-000002"  # the older, raw one
+
+
 # ---------------------------------------------------------------------------
 # N-PORT — parsing
 # ---------------------------------------------------------------------------
@@ -275,10 +318,12 @@ def test_fetch_latest_report_matches_series_and_dumps_on_drift(
     report = nport.fetch_latest_report(ref, tmp_dir=tmp_path)
     assert report is not None and report.accession == "0001-26-000003"
 
-    # Drift: the newest accession returns junk XML → halt + dump.
+    # Drift: the newest accession returns XML that ISN'T an NPORT-P shape
+    # (parses, but no genInfo) → halt + dump. (HTML renderings are a separate,
+    # SOFT skip — test_fetch_latest_report_skips_html_rendering.)
     responses[
         nport.EDGAR_FILE_URL.format(cik_int=ref.cik, acc="000126000003", name="primary_doc.xml")
-    ] = "<html>WAF page</html>"
+    ] = "<edgarSubmission><somethingElse/></edgarSubmission>"
     with pytest.raises(NportParseError, match="dumped"):
         nport.fetch_latest_report(ref, tmp_dir=tmp_path)
     assert (tmp_path / "TEST_000126000003.xml").exists()

@@ -188,6 +188,9 @@ class CockpitRow:
     # scale) but score via the fund-appropriate factors (pipeline/etf_score)
     # and wear a small ETF pill so the mixed table stays legible.
     is_etf: bool = False
+    # Already-held evaluation candidate (a held ETF never promotes to the
+    # portfolio list): the fit was scored ex-self; the row wears a held pill.
+    held_weight: float | None = None
     # Thesis detail
     kpi_deltas: list[KpiDelta] = field(default_factory=list["KpiDelta"])
     rule_summary: str | None = None  # breached/warned rule names for the badge hover
@@ -525,6 +528,7 @@ def build_cockpit_rows(
             fit_target: float | None = None
             sharpe_delta_bps: float | None = None
             fit_degraded: tuple[str, ...] = ()
+            held_weight: float | None = None
             is_etf = instrument_types.get(t) == "etf"
             if list_type == "evaluation":
                 if is_etf:
@@ -552,6 +556,7 @@ def build_cockpit_rows(
                     fit_target = cf.fit_target
                     sharpe_delta_bps = cf.sharpe_delta_bps
                     fit_degraded = cf.degraded
+                    held_weight = cf.held_weight
             built.append(
                 CockpitRow(
                     base=row,
@@ -583,6 +588,7 @@ def build_cockpit_rows(
                     sharpe_delta_bps=sharpe_delta_bps,
                     fit_degraded=fit_degraded,
                     is_etf=is_etf,
+                    held_weight=held_weight,
                 )
             )
         if list_type == "evaluation":
@@ -1066,8 +1072,20 @@ def _render_row(row: CockpitRow, now: datetime, *, thin: bool) -> str:
     t = escape(row.base.ticker)
     name_attr = f" title='{escape(row.name)}'" if row.name else ""
     # ETFs share the evaluation table but score on fund factors — the pill
-    # keeps the mixed table legible (and becomes the workup doorway later).
-    etf_pill = " <span class='k-pill'>ETF</span>" if row.is_etf else ""
+    # keeps the mixed table legible and IS the workup doorway (profile,
+    # loadings, look-through, what-if, role one-pager).
+    etf_pill = (
+        f" <a class='k-pill' href='/ticker/{t}' "
+        f"data-peek-url='/api/peek/etf_workup?ticker={t}' "
+        f"data-peek-title='ETF workup · {t}'>ETF</a>"
+        if row.is_etf
+        else ""
+    )
+    if row.held_weight is not None:
+        etf_pill += (
+            f" <span class='k-chip k-chip-mono' title='already held — fit scored against the "
+            f"ex-self book'>held {row.held_weight * 100.0:.1f}%</span>"
+        )
     cells = [
         f"<td class='ticker'{name_attr}><a href='/ticker/{t}'>{t}</a>{etf_pill}</td>",
         f"<td>{_verdict_badge(row, now)}</td>",

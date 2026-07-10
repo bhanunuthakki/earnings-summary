@@ -205,6 +205,13 @@ LLM_MODELS: dict[str, str] = {
     # encode can never silently become the target book — but the extraction
     # itself is nuance-sensitive (emit ONLY expressed dimensions) -> Sonnet.
     "positioning_encode": DEFAULT_MODEL,
+    # ETF role-in-portfolio one-pager (src/etf_role_synthesis.py): ONE synthesis
+    # call over a fully deterministic workup payload (score/fit factors,
+    # look-through overlap + country rollup, what-if rows, positioning target)
+    # — the model judges only the ROLE. Sonnet-tier synthesis; sha-keyed in
+    # llm_artifacts so reruns are free until the workup inputs move (~once per
+    # ETF per data change).
+    "etf_role_synthesis": DEFAULT_MODEL,
     # Whole-book thesis-collision audit (src/thesis_collision.py): one call over
     # every portfolio name's thesis + tier-1 break-rule drivers, flagging
     # shared-driver concentration and directly contradictory theses. Cross-name

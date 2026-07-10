@@ -235,6 +235,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # owner-side regardless, so an encode bump never risks silent state).
     "positioning_coach_turn": "v1",
     "positioning_encode": "v1",
+    # ETF role-in-portfolio one-pager (src/etf_role_synthesis.py). The version
+    # rides the llm_artifacts input sha — bumping it forks every cached
+    # one-pager cleanly (a regenerate is forced even if no input moved).
+    "etf_role_synthesis": "v1",
     # Whole-book thesis-collision audit (src/thesis_collision.py). IS the
     # llm_artifacts cache key alongside the thesis-set hash — bumping it forks
     # cached findings cleanly (a re-run is forced even if no thesis changed).

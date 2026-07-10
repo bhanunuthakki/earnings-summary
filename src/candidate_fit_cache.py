@@ -378,6 +378,7 @@ def _fit_to_json(fit: CandidateFit) -> dict[str, object]:
         "corr_trend": fit.corr_trend,
         "corr_recent": fit.corr_recent,
         "degraded": list(fit.degraded),
+        "held_weight": fit.held_weight,
     }
 
 
@@ -437,4 +438,5 @@ def _fit_from_json(ticker: str, blob: object) -> CandidateFit | None:
         corr_trend=str(corr_trend) if isinstance(corr_trend, str) else None,
         corr_recent=_opt_float(rec.get("corr_recent")),
         degraded=degraded,
+        held_weight=_opt_float(rec.get("held_weight")),
     )

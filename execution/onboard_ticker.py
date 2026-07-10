@@ -504,6 +504,24 @@ def run_etf_onboarding(conn: sqlite3.Connection, ticker: str, repo_root: Path) -
     )
     for skipped in ("quarterly_refresh", "backfill_transcripts", "ir_documents", "saydo"):
         print(f"[onboard] {ticker} stage={skipped} SKIPPED (instrument_type=etf)", flush=True)
+    # Role-in-portfolio one-pager: one governed LLM call, sha-cached, best
+    # effort (a fresh ETF lands with its workup; a failure never fails the
+    # onboard — the workup peek shows the build-hint CLI instead).
+    print(f"[onboard] {ticker} stage=etf_role_synthesis", flush=True)
+    workup_rc = subprocess.run(
+        [
+            sys.executable,
+            str(PROJECT_ROOT / "execution" / "build_etf_workup.py"),
+            "--ticker",
+            ticker,
+        ],
+        cwd=str(PROJECT_ROOT),
+    ).returncode
+    if workup_rc != 0:
+        print(
+            f"[onboard] {ticker} etf_role_synthesis rc={workup_rc}; continuing (best-effort)",
+            flush=True,
+        )
     if result.nport_status == "unavailable" and result.issuer_status == "unavailable":
         print(
             f"[onboard] {ticker} WARNING: no ETF holdings source succeeded — "
@@ -638,6 +656,18 @@ def main() -> int:
             )
             conn.commit()
         instrument = set_instrument_type_from_fmp(conn, ticker, PROJECT_ROOT)
+        if instrument is None:
+            # No FMP profile cache (plan-gated symbol / --skip-fmp): the
+            # classifier can't answer, but the COLUMN may already carry the
+            # kind (the --instrument override above, db.track_company's
+            # curated path, or a prior run) — read it directly, or the ETF
+            # branch below silently misses and the fund takes the equity
+            # pipeline (caught by the AVDV end-to-end).
+            row = conn.execute(
+                "SELECT instrument_type FROM tracked_companies WHERE ticker = ?",
+                (ticker,),
+            ).fetchone()
+            instrument = row[0] if row and row[0] else None
         print(f"[onboard] {ticker} instrument_type={instrument!s}", flush=True)
 
         # ETFs take the published-data onboarding-lite path: the remaining
