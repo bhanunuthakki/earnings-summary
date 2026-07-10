@@ -49,6 +49,7 @@ from dashboard._card import render_alert_card
 from dashboard.evidence_drawer import load_brief_provenance
 from identity import DEFAULT_USER_ID
 from pipeline.research_cockpit import (
+    AttractivenessBreakdown,
     AttractivenessFactor,
     attractiveness_tone,
     compute_attractiveness,
@@ -379,14 +380,25 @@ def render_score_peek(conn: sqlite3.Connection, repo_root: Path, ticker: str) ->
     legend. Reuses :func:`research_cockpit.compute_attractiveness` so the peek
     and the cockpit row read the same inputs and can't disagree. None when the
     ticker isn't a tracked, non-archived name (the route 404s)."""
-    bd = compute_attractiveness(conn, repo_root, ticker)
+    t = ticker.strip().upper()
+    caption = "Next-dollar attractiveness"
+    bd: AttractivenessBreakdown | None
+    if _is_etf(conn, t):
+        # ETFs score on fund factors (risk-adj return · expense · factor
+        # premium · basket valuation) from the Stage 0f cache — the render
+        # path never runs the Sharpe window / style OLS (mirrors the fit peek).
+        from etf_score_cache import read_materialized_etf_scores
+
+        bd = read_materialized_etf_scores(repo_root).get(t)
+        caption = "Next-dollar attractiveness (ETF factors)"
+    else:
+        bd = compute_attractiveness(conn, repo_root, ticker)
     if bd is None:
         return None
-    t = ticker.strip().upper()
     tone = attractiveness_tone(bd.score)
     head = (
         '<div class="cc-score-head">'
-        '<span class="cc-score-cap">Next-dollar attractiveness</span>'
+        f'<span class="cc-score-cap">{caption}</span>'
         f'<span class="cc-score-big score-{tone or "mid"}">{bd.score:.2f}</span>'
         "</div>"
     )
@@ -406,6 +418,19 @@ def render_score_peek(conn: sqlite3.Connection, repo_root: Path, ticker: str) ->
         f'<div class="cc-score-rows">{rows}</div>'
         f"{formula}{legend}</div>{foot}<style>{_SCORE_CSS}</style>"
     )
+
+
+def _is_etf(conn: sqlite3.Connection, ticker: str) -> bool:
+    """Instrument-kind check for the score peek's ETF branch; a pre-0044
+    substrate (missing column) reads as equity, the established default."""
+    try:
+        row = conn.execute(
+            "SELECT instrument_type FROM tracked_companies WHERE UPPER(ticker) = ? LIMIT 1",
+            (ticker,),
+        ).fetchone()
+    except sqlite3.Error:
+        return False
+    return bool(row) and str(row[0] or "").lower() == "etf"
 
 
 def _factor_row_html(

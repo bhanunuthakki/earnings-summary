@@ -184,6 +184,10 @@ class CockpitRow:
     fit_target_active: bool = False
     sharpe_delta_bps: float | None = None
     fit_degraded: tuple[str, ...] = ()
+    # Instrument kind: ETFs share the evaluation table (same sort, same chip
+    # scale) but score via the fund-appropriate factors (pipeline/etf_score)
+    # and wear a small ETF pill so the mixed table stays legible.
+    is_etf: bool = False
     # Thesis detail
     kpi_deltas: list[KpiDelta] = field(default_factory=list["KpiDelta"])
     rule_summary: str | None = None  # breached/warned rule names for the badge hover
@@ -485,6 +489,10 @@ def build_cockpit_rows(
     # morning pipeline materialised (stage 0f). Absent (fresh install / no
     # pipeline run) → no Fit chip, exactly like the fundamentals cache.
     candidate_fit = read_materialized_candidate_fit(repo_root)
+    instrument_types = _instrument_types(conn)
+    # ETF sibling scores (fund-appropriate factors, Stage 0f cache) — read
+    # lazily only when the evaluation list actually carries an ETF.
+    etf_scores: dict[str, AttractivenessBreakdown] | None = None
     # Whether an owner positioning intent (vs the book default) is the active
     # target — drives the Fit chip's fit-to-target display (v2 cache meta).
     fit_meta = read_materialized_fit_meta(repo_root)
@@ -517,14 +525,27 @@ def build_cockpit_rows(
             fit_target: float | None = None
             sharpe_delta_bps: float | None = None
             fit_degraded: tuple[str, ...] = ()
+            is_etf = instrument_types.get(t) == "etf"
             if list_type == "evaluation":
-                upside = _dcf_upside_pct(fair_value, dcf_price)
-                score, why, partial = eval_attractiveness(
-                    dcf_upside_pct=upside,
-                    rev_yoy_pct=rev_yoy,
-                    fcf_margin_pct=fcf_margin,
-                    peg_ratio=peg,
-                )
+                if is_etf:
+                    # Fund-appropriate score from the Stage 0f cache (the
+                    # equity factors are meaningless for a fund); absent cache
+                    # → no chip, the same degrade as Fit.
+                    if etf_scores is None:
+                        from etf_score_cache import read_materialized_etf_scores
+
+                        etf_scores = read_materialized_etf_scores(repo_root)
+                    ebd = etf_scores.get(t)
+                    if ebd is not None:
+                        score, why, partial = ebd.score, ebd.why, ebd.partial
+                else:
+                    upside = _dcf_upside_pct(fair_value, dcf_price)
+                    score, why, partial = eval_attractiveness(
+                        dcf_upside_pct=upside,
+                        rev_yoy_pct=rev_yoy,
+                        fcf_margin_pct=fcf_margin,
+                        peg_ratio=peg,
+                    )
                 cf = candidate_fit.get(t)
                 if cf is not None:
                     fit, fit_why, fit_partial = cf.fit, cf.why, cf.partial
@@ -561,6 +582,7 @@ def build_cockpit_rows(
                     fit_target_active=bool(target_active),
                     sharpe_delta_bps=sharpe_delta_bps,
                     fit_degraded=fit_degraded,
+                    is_etf=is_etf,
                 )
             )
         if list_type == "evaluation":
@@ -573,6 +595,20 @@ def build_cockpit_rows(
         else:
             built.sort(key=lambda r: r.attention_key)
         out[list_type] = built
+    return out
+
+
+def _instrument_types(conn: sqlite3.Connection) -> dict[str, str]:
+    """ticker → lower-cased instrument_type. Degrades to {} on a pre-0044
+    substrate (missing column) — everything then reads as equity, the
+    established default."""
+    out: dict[str, str] = {}
+    rows = _safe_rows(
+        conn,
+        "SELECT ticker, instrument_type FROM tracked_companies WHERE instrument_type IS NOT NULL",
+    )
+    for row in rows:
+        out[str(row["ticker"]).upper()] = str(row["instrument_type"]).lower()
     return out
 
 
@@ -1029,8 +1065,11 @@ def _row_sort_data(row: CockpitRow, *, thin: bool) -> str:
 def _render_row(row: CockpitRow, now: datetime, *, thin: bool) -> str:
     t = escape(row.base.ticker)
     name_attr = f" title='{escape(row.name)}'" if row.name else ""
+    # ETFs share the evaluation table but score on fund factors — the pill
+    # keeps the mixed table legible (and becomes the workup doorway later).
+    etf_pill = " <span class='k-pill'>ETF</span>" if row.is_etf else ""
     cells = [
-        f"<td class='ticker'{name_attr}><a href='/ticker/{t}'>{t}</a></td>",
+        f"<td class='ticker'{name_attr}><a href='/ticker/{t}'>{t}</a>{etf_pill}</td>",
         f"<td>{_verdict_badge(row, now)}</td>",
     ]
     if thin:
