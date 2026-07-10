@@ -291,3 +291,130 @@ def test_compute_fit_no_book_history_keeps_factor_and_sector(
     assert not by["factor"].missing  # SPY/QQQ present → growth tilt computable
     assert not by["sector"].missing
     assert fit.partial
+
+
+# --------------------------------------------------------------------------- #
+# Fit v2 — target factors, ΔSR, corr trend (positioning-aware scoring)
+# --------------------------------------------------------------------------- #
+
+
+def _target(**overrides):  # type: ignore[no-untyped-def]
+    from positioning.target import TargetContext
+
+    base: dict[str, object] = {"growth_tilt": None, "growth_tilt_band": 0.15, "source": "intent"}
+    base.update(overrides)
+    return TargetContext(**base)  # type: ignore[arg-type]
+
+
+def test_book_default_target_preserves_fit_exactly() -> None:
+    """The load-bearing regression: with the book-default target (no saved
+    intent), target factors are neutral and fit_target == fit — the base
+    fit/why are byte-identical to scoring without a target at all."""
+    from positioning.target import book_default_target
+
+    risk = CandidateRisk(
+        ticker="X", corr_to_book=0.3, sharpe=0.8, growth_tilt=-0.4, sector="Energy"
+    )
+    book = BookContext(
+        weights={},
+        sharpe=1.0,
+        growth_tilt=0.4,
+        sector_weights={"Energy": 0.10, "Technology": 0.50},
+    )
+    plain = score_candidate_fit(risk, book)
+    with_default = score_candidate_fit(risk, book, book_default_target(book))
+    assert with_default.fit == pytest.approx(plain.fit)
+    assert with_default.why == plain.why
+    assert with_default.fit_target == pytest.approx(plain.fit)
+    assert all(f.multiplier == 1.0 for f in with_default.target_factors)
+    assert plain.fit_target is None and plain.target_factors == []
+
+
+def test_target_tilt_factor_bands() -> None:
+    """Gap = target − book tilt; a candidate tilting toward the target closes
+    it (lift), against it widens (drag); inside the band is a scored neutral."""
+
+    def mult(cand_tilt: float, target_tilt: float, book_tilt: float = 0.4) -> float:
+        risk = CandidateRisk(ticker="X", growth_tilt=cand_tilt)
+        book = BookContext(weights={}, growth_tilt=book_tilt)
+        fit = score_candidate_fit(risk, book, _target(growth_tilt=target_tilt))
+        return {f.key: f.multiplier for f in fit.target_factors}["tgt_tilt"]
+
+    # Owner wants LESS growth (target -0.1 vs book +0.4 → gap negative):
+    assert mult(-0.5, -0.1) == pytest.approx(1.12)  # value name closes the gap
+    assert mult(+0.5, -0.1) == pytest.approx(0.88)  # growth name widens it
+    # Book already inside the band → neutral regardless of the candidate.
+    assert mult(-0.5, 0.35) == pytest.approx(1.0)
+    # Owner wants MORE growth (gap positive) → the sign flips.
+    assert mult(+0.5, 1.0) == pytest.approx(1.12)
+    assert mult(-0.5, 1.0) == pytest.approx(0.88)
+
+
+def test_target_sector_factor_explicit_targets_only() -> None:
+    book = BookContext(weights={}, sector_weights={"Technology": 0.45, "Energy": 0.02})
+    target = _target(
+        sector_weights={"Technology": 0.30, "Energy": 0.10},
+        sector_bands={"Technology": 0.05, "Energy": 0.03},
+    )
+
+    def factor(sector: str):  # type: ignore[no-untyped-def]
+        risk = CandidateRisk(ticker="X", sector=sector)
+        fit = score_candidate_fit(risk, book, target)
+        return {f.key: f for f in fit.target_factors}["tgt_sector"]
+
+    # Tech: target 30% vs book 45% → gap -15pp beyond the band → adding widens.
+    assert factor("Technology").multiplier == pytest.approx(0.90)
+    # Energy: target 10% vs book 2% → +8pp gap → adding closes an underweight.
+    assert factor("Energy").multiplier == pytest.approx(1.10)
+    # A sector with no explicit target reads a scored neutral, not missing.
+    healthcare = CandidateRisk(ticker="X", sector="Healthcare")
+    f = {f.key: f for f in score_candidate_fit(healthcare, book, target).target_factors}[
+        "tgt_sector"
+    ]
+    assert f.multiplier == pytest.approx(1.0) and not f.missing
+    # No sector at all → missing (neutral + flagged).
+    nosec = CandidateRisk(ticker="X")
+    f2 = {f.key: f for f in score_candidate_fit(nosec, book, target).target_factors}["tgt_sector"]
+    assert f2.missing
+
+
+def test_gatherer_sharpe_delta_and_corr_trend(tmp_path: Path, market: list[float]) -> None:
+    """ΔSR at the default weight is populated from the same series the fit
+    uses; a mirror-image candidate improves the book (positive bps), a clone
+    adds nothing (≈0). corr_trend classifies the 63-day window vs full."""
+    _seed_book_and_benchmarks(tmp_path, market)
+    _write_chart(tmp_path, "CLON", list(market))
+    _write_chart(tmp_path, "HEDG", [-m for m in market])
+    # A regime-shifter: anti-correlated for the first 137 days, tracking the
+    # book for the last 63 → full-window corr low, recent corr ≈ 1 → rising.
+    shift = [-m for m in market[:137]] + list(market[137:])
+    _write_chart(tmp_path, "SHFT", shift)
+
+    book = BookContext(
+        weights={"AAA": 0.5, "BBB": 0.5}, sharpe=1.0, risk_free_annual=0.02, growth_tilt=0.4
+    )
+    fits = compute_candidate_fit(tmp_path, ["CLON", "HEDG", "SHFT"], book)
+    clone, hedge, shifter = fits["CLON"], fits["HEDG"], fits["SHFT"]
+
+    assert clone.sharpe_delta_bps is not None
+    assert abs(clone.sharpe_delta_bps) < 5.0  # a clone barely moves the book
+    assert hedge.sharpe_delta_bps is not None
+    assert clone.corr_trend == "stable"
+    assert shifter.corr_trend == "rising"
+    assert shifter.corr_recent is not None and shifter.corr_recent > 0.8
+    # Degradation from the book propagates onto every fit (none here).
+    assert clone.degraded == ()
+
+
+def test_gatherer_degraded_propagates(tmp_path: Path, market: list[float]) -> None:
+    _seed_book_and_benchmarks(tmp_path, market)
+    _write_chart(tmp_path, "CORR", list(market))
+    book = BookContext(
+        weights={"AAA": 0.5, "BBB": 0.5},
+        sharpe=None,
+        risk_free_annual=None,
+        degraded=("tracker offline and no risk snapshot — book Sharpe unknown",),
+    )
+    fit = compute_candidate_fit(tmp_path, ["CORR"], book)["CORR"]
+    assert fit.degraded == book.degraded
+    assert fit.sharpe_delta_bps is None  # no rf → no ΔSR, never fabricated
