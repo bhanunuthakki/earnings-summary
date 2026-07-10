@@ -605,8 +605,7 @@ def _instrument_types(conn: sqlite3.Connection) -> dict[str, str]:
     out: dict[str, str] = {}
     rows = _safe_rows(
         conn,
-        "SELECT ticker, instrument_type FROM tracked_companies "
-        "WHERE instrument_type IS NOT NULL",
+        "SELECT ticker, instrument_type FROM tracked_companies WHERE instrument_type IS NOT NULL",
     )
     for row in rows:
         out[str(row["ticker"]).upper()] = str(row["instrument_type"]).lower()
