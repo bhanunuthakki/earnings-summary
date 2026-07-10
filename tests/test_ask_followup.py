@@ -559,7 +559,7 @@ def test_engine_portfolio_loop_end_to_end(repo: Path, monkeypatch: pytest.Monkey
 
     prompts: list[str] = []
 
-    def fake_stream(prompt: str):
+    def fake_stream(prompt: str, *, purpose: str = "ask_answer"):
         prompts.append(prompt)
         yield {"type": "delta", "text": _NEED_TRANSCRIPT}
         yield {"type": "final", "text": _NEED_TRANSCRIPT}
@@ -598,7 +598,7 @@ def test_engine_portfolio_loop_end_to_end(repo: Path, monkeypatch: pytest.Monkey
 def test_engine_portfolio_prose_answer_streams_unchanged(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fake_stream(_prompt: str):
+    def fake_stream(_prompt: str, *, purpose: str = "ask_answer"):
         yield {"type": "delta", "text": "Plain "}
         yield {"type": "delta", "text": "answer."}
         yield {"type": "final", "text": "Plain answer."}
@@ -614,7 +614,7 @@ def test_engine_portfolio_prose_answer_streams_unchanged(
 def test_engine_portfolio_followup_failure_yields_error(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def fake_stream(_prompt: str):
+    def fake_stream(_prompt: str, *, purpose: str = "ask_answer"):
         yield {"type": "final", "text": _NEED_TRANSCRIPT}
 
     def boom(*_a: object, **_k: object) -> str:
@@ -632,7 +632,7 @@ def test_engine_unarmed_turn_has_no_protocol_and_passes_json_through(
 ) -> None:
     prompts: list[str] = []
 
-    def fake_stream(prompt: str):
+    def fake_stream(prompt: str, *, purpose: str = "ask_answer"):
         prompts.append(prompt)
         yield {"type": "delta", "text": _NEED_TRANSCRIPT}
         yield {"type": "final", "text": _NEED_TRANSCRIPT}

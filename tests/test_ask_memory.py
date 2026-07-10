@@ -249,7 +249,7 @@ def _empty_evidence_block(evidence: object) -> str:
 
 
 def _make_fake_stream(text: str):
-    def fake(prompt: str) -> Iterator[dict[str, object]]:
+    def fake(prompt: str, *, purpose: str = "ask_answer") -> Iterator[dict[str, object]]:
         del prompt
         return _fake_stream(text)
 
@@ -283,7 +283,7 @@ class TestEngineSessionPersistence:
         """The second turn's prompt must include the first turn's text."""
         prompts: list[str] = []
 
-        def fake_stream(prompt: str) -> Iterator[dict[str, object]]:
+        def fake_stream(prompt: str, *, purpose: str = "ask_answer") -> Iterator[dict[str, object]]:
             prompts.append(prompt)
             yield {"type": "delta", "text": "answer"}
             yield {"type": "final", "text": "answer"}
@@ -308,7 +308,7 @@ class TestEngineSessionPersistence:
         """Legacy path: no session_id → client history tail is used."""
         prompts: list[str] = []
 
-        def fake_stream(prompt: str) -> Iterator[dict[str, object]]:
+        def fake_stream(prompt: str, *, purpose: str = "ask_answer") -> Iterator[dict[str, object]]:
             prompts.append(prompt)
             yield {"type": "delta", "text": "ok"}
             yield {"type": "final", "text": "ok"}
@@ -371,7 +371,7 @@ class TestHistoryCaps:
         prompt (the full thread is preserved in DB regardless)."""
         prompts: list[str] = []
 
-        def fake_stream(prompt: str) -> Iterator[dict[str, object]]:
+        def fake_stream(prompt: str, *, purpose: str = "ask_answer") -> Iterator[dict[str, object]]:
             prompts.append(prompt)
             yield {"type": "delta", "text": "ok"}
             yield {"type": "final", "text": "ok"}

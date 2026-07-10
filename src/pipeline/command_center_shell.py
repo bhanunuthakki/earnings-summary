@@ -679,6 +679,7 @@ _SKELETON_KINDS: dict[str, str] = {
     "portfolio": "kpis",
     "portfolio_risk": "kpis",
     "portfolio_synthesis": "cards",
+    "positioning": "cards",
     "decisions_record": "table",
     "advisor_memos": "cards",
     "holdings": "table",
