@@ -75,6 +75,9 @@ def assemble_payload(
     t = ticker.strip().upper()
     payload: dict[str, object] = {"ticker": t}
 
+    # instrument_store reads rows by name; callers' bare connections (the
+    # build CLI's) lack the Row factory — self-heal, the etf_overlap precedent.
+    conn.row_factory = sqlite3.Row
     try:
         profile = get_etf_profile(conn, t)
     except sqlite3.Error:

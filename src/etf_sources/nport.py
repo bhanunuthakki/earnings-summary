@@ -335,7 +335,11 @@ def _recent_nport_accessions(
         for i, f in enumerate(forms)
         if f == "NPORT-P" and i < len(accs)
     ]
-    hits = [(d, a, doc or "primary_doc.xml") for d, a, doc in hits if d and a]
+    # The submissions index lists the XSL-RENDERED path for NPORT-P (e.g.
+    # "xslFormNPORT-P_X01/primary_doc.xml"), which serves HTML. The raw XML is
+    # the bare basename in the accession folder — normalize to it (caught by
+    # the AVDV end-to-end: the rendered doc halted the parser).
+    hits = [(d, a, (doc.rsplit("/", 1)[-1] or "primary_doc.xml")) for d, a, doc in hits if d and a]
     hits.sort(reverse=True)
     return hits[:limit]
 
@@ -366,6 +370,12 @@ def fetch_latest_report(
         url = EDGAR_FILE_URL.format(cik_int=ref.cik, acc=acc, name=primary_doc)
         xml_text = _sec_get(url, user_agent=user_agent, as_json=False)
         if not isinstance(xml_text, str) or not xml_text.strip():
+            continue
+        head = xml_text.lstrip()[:200].lower()
+        if head.startswith("<!doctype html") or head.startswith("<html"):
+            # An HTML rendering, not the raw filing — a URL-shape surprise,
+            # not schema drift: skip the accession rather than halting.
+            log.warning({"event": "nport_html_not_xml", "ticker": ref.ticker, "url": url})
             continue
         try:
             report = parse_nport(xml_text, ref.ticker, accession=accession)

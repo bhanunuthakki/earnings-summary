@@ -656,6 +656,18 @@ def main() -> int:
             )
             conn.commit()
         instrument = set_instrument_type_from_fmp(conn, ticker, PROJECT_ROOT)
+        if instrument is None:
+            # No FMP profile cache (plan-gated symbol / --skip-fmp): the
+            # classifier can't answer, but the COLUMN may already carry the
+            # kind (the --instrument override above, db.track_company's
+            # curated path, or a prior run) — read it directly, or the ETF
+            # branch below silently misses and the fund takes the equity
+            # pipeline (caught by the AVDV end-to-end).
+            row = conn.execute(
+                "SELECT instrument_type FROM tracked_companies WHERE ticker = ?",
+                (ticker,),
+            ).fetchone()
+            instrument = row[0] if row and row[0] else None
         print(f"[onboard] {ticker} instrument_type={instrument!s}", flush=True)
 
         # ETFs take the published-data onboarding-lite path: the remaining
