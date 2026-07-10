@@ -40,11 +40,16 @@ def load_daily_closes(ticker: str, repo_root: Path) -> list[tuple[date, float]]:
     The canonical ``save_fmp_data`` filename is tried directly before any
     glob — the cache directory holds ~100k files, and one directory scan
     costs ~0.4s on this box (the panel loads every holding per render).
+
+    When the FMP cache has nothing for the ticker, the yfinance proxy store
+    (``data/factor_proxies/<T>.json``) is the fallback — the price path for
+    ETFs the FMP plan doesn't cover (directives/etf_data.md). FMP's
+    dividend-adjusted chart always wins when both exist.
     """
     fmp_dir = repo_root / "data" / "historical" / "fmp"
-    if not fmp_dir.exists():
-        return []
     upper = ticker.upper()
+    if not fmp_dir.exists():
+        return _load_proxy_store_closes(repo_root, upper)
     candidates = [
         p
         for p in (
@@ -87,7 +92,47 @@ def load_daily_closes(ticker: str, repo_root: Path) -> list[tuple[date, float]]:
         if out:
             out.sort(key=lambda t: t[0])
             return out
-    return []
+    return _load_proxy_store_closes(repo_root, upper)
+
+
+def _load_proxy_store_closes(repo_root: Path, upper: str) -> list[tuple[date, float]]:
+    """Parse ``data/factor_proxies/<T>.json`` (payload ``{"rows": [[iso_date,
+    close], ...]}``) into ascending (date, close) pairs; [] when absent or
+    malformed.
+
+    Deliberately re-implements ``factor_proxies.load_proxy_closes`` locally:
+    ``factor_proxies`` imports this module, so importing it back would be a
+    circular import. The payload shape is trivial and owned by
+    ``factor_proxies.store_proxy_series``.
+    """
+    path = repo_root / "data" / "factor_proxies" / f"{upper}.json"
+    try:
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    rows = cast("dict[str, object]", payload).get("rows")
+    if not isinstance(rows, list):
+        return []
+    out: list[tuple[date, float]] = []
+    for entry in cast("list[object]", rows):
+        if not isinstance(entry, list) or len(cast("list[object]", entry)) != 2:
+            continue
+        d_raw, v_raw = cast("list[object]", entry)
+        if not isinstance(d_raw, str) or isinstance(v_raw, bool):
+            continue
+        if not isinstance(v_raw, (int, float)):
+            continue
+        try:
+            d = date.fromisoformat(d_raw[:10])
+        except ValueError:
+            continue
+        v = float(v_raw)
+        if math.isfinite(v) and v > 0:
+            out.append((d, v))
+    out.sort(key=lambda t: t[0])
+    return out
 
 
 def daily_log_returns(prices: Sequence[tuple[date, float]]) -> dict[date, float]:

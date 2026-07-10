@@ -42,12 +42,24 @@ def dcf_universe(repo_root: Path) -> list[str]:
         conn = sqlite3.connect(str(db_path))
     except sqlite3.Error:
         return []
+    # ETFs on the evaluation list are analyzed via the published-data lane
+    # (directives/etf_data.md) — an FCFF DCF over a fund's non-existent income
+    # statement is nonsense, so they are excluded at the universe. The
+    # column-less retry keeps pre-0044 substrates (older test DBs) working.
+    query = (
+        "SELECT DISTINCT UPPER(ticker) FROM tracked_companies "
+        f"WHERE list_type IN ({placeholders}) "
+        "AND (instrument_type IS NULL OR LOWER(instrument_type) <> 'etf')"
+    )
     try:
-        rows = conn.execute(
-            "SELECT DISTINCT UPPER(ticker) FROM tracked_companies "
-            f"WHERE list_type IN ({placeholders})",
-            BRIEFED_LIST_TYPES,
-        ).fetchall()
+        try:
+            rows = conn.execute(query, BRIEFED_LIST_TYPES).fetchall()
+        except sqlite3.OperationalError:
+            rows = conn.execute(
+                "SELECT DISTINCT UPPER(ticker) FROM tracked_companies "
+                f"WHERE list_type IN ({placeholders})",
+                BRIEFED_LIST_TYPES,
+            ).fetchall()
     except sqlite3.Error:
         return []
     finally:

@@ -45,6 +45,15 @@ class EtfProfile(BaseModel):
     nav: float | None = None
     price: float | None = None
     premium_discount_pct: float | None = None  # decimal
+    # Basket characteristics published by the issuer (directives/etf_data.md).
+    # Ratios are multiples-of-1x (14.3 = 14.3x), not percents; they carry
+    # their own as-of + source because issuers refresh characteristics on a
+    # different cadence than the identity fields above.
+    pe_ratio: float | None = None
+    pb_ratio: float | None = None
+    weighted_avg_mktcap_usd_m: float | None = None  # millions USD
+    characteristics_as_of: date | None = None
+    characteristics_source: str | None = None
     source: str = "fmp"
     profile_fetched_at: datetime
 
@@ -67,5 +76,6 @@ class EtfHolding(BaseModel):
     sector: str | None = None
     asset_class: str | None = None
     rank_position: int | None = None
+    country: str | None = None  # constituent domicile (N-PORT invCountry, ISO-3166 alpha-2)
     source: str = "fmp"
     fetched_at: datetime

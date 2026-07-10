@@ -88,6 +88,11 @@ def etf_db(tmp_path: Path) -> Iterator[sqlite3.Connection]:
             nav REAL,
             price REAL,
             premium_discount_pct REAL,
+            pe_ratio REAL,
+            pb_ratio REAL,
+            weighted_avg_mktcap_usd_m REAL,
+            characteristics_as_of TEXT,
+            characteristics_source TEXT,
             source TEXT NOT NULL DEFAULT 'fmp',
             profile_fetched_at TIMESTAMP NOT NULL
         );
@@ -103,6 +108,7 @@ def etf_db(tmp_path: Path) -> Iterator[sqlite3.Connection]:
             sector TEXT,
             asset_class TEXT,
             rank_position INTEGER,
+            country TEXT,
             source TEXT NOT NULL DEFAULT 'fmp',
             fetched_at TIMESTAMP NOT NULL,
             PRIMARY KEY (ticker, as_of_date, constituent_ticker)
