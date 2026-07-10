@@ -22,7 +22,6 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import candidate_fit_cache as cfc  # noqa: E402
 from allocation.candidate_fit import BookContext, CandidateFit, FitFactor  # noqa: E402
 
-
 # --------------------------------------------------------------------------- #
 # Tracker / cache stubs
 # --------------------------------------------------------------------------- #
@@ -198,9 +197,10 @@ def test_materialize_then_read_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     captured: dict[str, object] = {}
 
-    def _fake_compute(repo_root, candidates, book, *, sectors=None):  # type: ignore[no-untyped-def]
+    def _fake_compute(repo_root, candidates, book, *, sectors=None, target=None):  # type: ignore[no-untyped-def]
         captured["candidates"] = list(candidates)
         captured["sectors"] = dict(sectors or {})
+        captured["target_source"] = getattr(target, "source", None)
         return {t: _fit(t) for t in candidates}
 
     monkeypatch.setattr(cfc, "compute_candidate_fit", _fake_compute, raising=True)
@@ -218,6 +218,9 @@ def test_materialize_then_read_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert n == 1  # only DLO (NU is portfolio, OLD is archived)
     assert captured["candidates"] == ["DLO"]
     assert captured["sectors"] == {"DLO": "Technology"}
+    # No positioning_intents table in the seed DB → the resolved target is the
+    # book default (behavior-preservation).
+    assert captured["target_source"] == "book_default"
     assert (tmp_path / "data" / "candidate_fit.json").exists()
 
     out = cfc.read_materialized_candidate_fit(tmp_path)
@@ -229,9 +232,94 @@ def test_materialize_then_read_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert [f.key for f in dlo.factors] == ["sharpe", "divers", "factor", "sector"]
     assert {f.key: f.missing for f in dlo.factors}["factor"] is True
 
+    # v2 payload shape: version stamp + book/target blocks readable via the
+    # meta reader.
+    meta = cfc.read_materialized_fit_meta(tmp_path)
+    assert meta.get("version") == 2
+    assert isinstance(meta.get("book"), dict)
+    target_block = meta.get("target")
+    assert isinstance(target_block, dict) and target_block["source"] == "book_default"
+
 
 def test_read_missing_or_malformed_cache_degrades_to_empty(tmp_path: Path) -> None:
     assert cfc.read_materialized_candidate_fit(tmp_path) == {}  # no file
+    assert cfc.read_materialized_fit_meta(tmp_path) == {}
     (tmp_path / "data").mkdir()
     (tmp_path / "data" / "candidate_fit.json").write_text("not json{", encoding="utf-8")
     assert cfc.read_materialized_candidate_fit(tmp_path) == {}
+    assert cfc.read_materialized_fit_meta(tmp_path) == {}
+
+
+def test_v1_payload_still_readable(tmp_path: Path) -> None:
+    """A pre-v2 cache (no version/target keys, fits without the new fields)
+    decodes into CandidateFit with the v2 fields at their defaults — last-good
+    semantics across the upgrade."""
+    data = tmp_path / "data"
+    data.mkdir()
+    v1 = {
+        "computed_at": "2026-07-01T04:00:00",
+        "book": {"sharpe": 0.8, "growth_tilt": 0.3, "risk_free_annual": 0.04},
+        "fits": {
+            "DLO": {
+                "fit": 1.05,
+                "why": "sharpe 1.05 (...) = 1.05",
+                "partial": False,
+                "obs": 200,
+                "factors": [
+                    {
+                        "key": "sharpe",
+                        "label": "Marginal Sharpe",
+                        "multiplier": 1.05,
+                        "detail": "...",
+                        "missing": False,
+                    }
+                ],
+            }
+        },
+    }
+    (data / "candidate_fit.json").write_text(json.dumps(v1), encoding="utf-8")
+    out = cfc.read_materialized_candidate_fit(tmp_path)
+    dlo = out["DLO"]
+    assert dlo.fit == pytest.approx(1.05)
+    assert dlo.fit_target is None
+    assert dlo.target_factors == []
+    assert dlo.sharpe_delta_bps is None
+    assert dlo.corr_trend is None
+    assert dlo.degraded == ()
+    meta = cfc.read_materialized_fit_meta(tmp_path)
+    assert "target" not in meta and meta.get("version") is None
+
+
+def test_assemble_book_context_degradation_reasons(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Offline with no snapshot → every absent input is NAMED (loud
+    degradation), not silently neutral."""
+    _patch_book_sources(
+        monkeypatch,
+        weights={},
+        analytics=_Analytics(available=False),
+        snapshot=None,
+    )
+    book = cfc.assemble_book_context(tmp_path, db_path=tmp_path / "x.db")
+    joined = " | ".join(book.degraded)
+    assert "book Sharpe unknown" in joined
+    assert "risk-free rate" in joined
+    assert "sector weights" in joined
+    assert "growth tilt" in joined
+    assert "weights cache empty" in joined
+    # Live-and-complete book carries no degradation reasons.
+    analytics = _Analytics(
+        available=True,
+        beta=_Beta(sharpe=0.9, rf=0.04),
+        positioning=_Positioning(by_sector=[_Bucket("Technology", 35.0)], correlations=[object()]),
+    )
+    _patch_book_sources(
+        monkeypatch,
+        weights={"AAA": 1.0},
+        analytics=analytics,
+        snapshot=None,
+        rollup_growth_tilt=0.42,
+    )
+    book = cfc.assemble_book_context(tmp_path, db_path=tmp_path / "x.db")
+    assert book.degraded == ()

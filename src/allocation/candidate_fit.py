@@ -44,13 +44,17 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from allocation.price_history import build_aligned_returns, daily_log_returns, load_daily_closes
+
+if TYPE_CHECKING:
+    from positioning.target import TargetContext
 
 # Candidate-vs-book history bar: a name needs this many common trading days with
 # the book (and with SPY/QQQ for the factor leg) before its price-derived factors
@@ -85,6 +89,11 @@ class BookContext:
     growth_tilt: float | None = None  # book qqq_beta - spy_beta (risk snapshot)
     sector_weights: dict[str, float] = field(default_factory=dict[str, float])  # frac by sector
     captured_at: str | None = None  # snapshot freshness, for a low-confidence flag
+    #: Human-readable reasons book inputs are absent ("tracker offline and no
+    #: risk snapshot → book Sharpe unknown"). Factors still contribute a
+    #: mathematical 1.0 (unknowable ≠ dilutive), but the read is VISIBLY
+    #: degraded — the assembler fills this, the chips/peeks surface it.
+    degraded: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,6 +113,7 @@ class CandidateRisk:
     sector: str | None = None  # FMP profile sector
     obs: int | None = None  # common trading days behind the geometry
     history_thin: bool = False  # had price history but < CAND_MIN_OBS overlap
+    corr_recent: float | None = None  # corr over the trailing CORR_TREND_OBS days
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +143,20 @@ class CandidateFit:
     why: str
     partial: bool
     obs: int | None = None
+    # ---- Fit v2 additions (all optional; a v1 cache row leaves them unset) ----
+    #: Fit against the ACTIVE TARGET book (positioning intent): ``fit`` times
+    #: the target-factor multipliers. With no saved intent the target defaults
+    #: to the current book, gaps are zero, target factors are neutral, and
+    #: ``fit_target == fit`` — the behavior-preservation guarantee.
+    fit_target: float | None = None
+    target_factors: list[FitFactor] = field(default_factory=list[FitFactor])
+    #: Estimated book-Sharpe change, in basis points, of adding the candidate
+    #: at the default what-if weight (modeled book, pro-rata funding).
+    sharpe_delta_bps: float | None = None
+    corr_trend: str | None = None  # 'rising' | 'falling' | 'stable'
+    corr_recent: float | None = None  # trailing-window corr behind the trend read
+    #: Book-context degradation reasons (mirrors ``BookContext.degraded``).
+    degraded: tuple[str, ...] = ()
 
 
 # --------------------------------------------------------------------------- #
@@ -165,6 +189,21 @@ _FACTOR_CROWD_MULT, _FACTOR_BALANCE_MULT = 0.88, 1.12
 
 # Sector fit: the book's existing fraction in the candidate's sector.
 _SECTOR_HEAVY, _SECTOR_WARM, _SECTOR_LIGHT = 0.30, 0.20, 0.05
+
+# Target factors (Fit v2): a candidate that moves the book TOWARD the owner's
+# stated target lifts, one that widens the gap drags — same magnitudes as the
+# factor-fit crowding/balance bands so the two factor groups read on one scale.
+_TARGET_TILT_MULT_CLOSES, _TARGET_TILT_MULT_WIDENS = 1.12, 0.88
+_TARGET_SECTOR_MULT_CLOSES, _TARGET_SECTOR_MULT_WIDENS = 1.10, 0.90
+
+# Correlation-trend read: trailing window length and the |Δcorr| that counts
+# as a regime move rather than noise.
+CORR_TREND_OBS = 63
+CORR_TREND_DELTA = 0.10
+
+# The default what-if weight behind the materialized ΔSR (allocation/what_if.py
+# owns the interactive weight menu; this is the one the cockpit column shows).
+WHAT_IF_DEFAULT_WEIGHT = 0.03
 
 # Composite tone thresholds (render-side): accretive vs dilutive to the book.
 FIT_HI, FIT_LO = 1.10, 0.90
@@ -262,10 +301,73 @@ def _sector_factor(risk: CandidateRisk, book: BookContext) -> FitFactor:
     return FitFactor("sector", "Sector fit", mult, detail, False)
 
 
-def score_candidate_fit(risk: CandidateRisk, book: BookContext) -> CandidateFit:
+def _target_tilt_factor(risk: CandidateRisk, book: BookContext, target: TargetContext) -> FitFactor:
+    """Does the candidate move the book's growth tilt TOWARD the target?
+
+    Gap = target tilt − book tilt. Inside the band (and always under a
+    book-default target, where the gap is zero by construction) the factor is
+    a scored neutral; outside it, a candidate tilting in the gap's direction
+    closes it (lift), tilting against it widens it (drag)."""
+    if target.growth_tilt is None or book.growth_tilt is None or risk.growth_tilt is None:
+        return FitFactor("tgt_tilt", "Target tilt", 1.0, "n/a", True)
+    gap = target.growth_tilt - book.growth_tilt
+    if abs(gap) <= target.growth_tilt_band:
+        detail = f"book tilt {book.growth_tilt:+.2f} already inside target band"
+        return FitFactor("tgt_tilt", "Target tilt", 1.0, detail, False)
+    toward = 1.0 if gap > 0 else -1.0
+    moves = toward * risk.growth_tilt
+    if moves > 0:
+        mult, note = _TARGET_TILT_MULT_CLOSES, "closes the tilt gap"
+    elif moves < 0:
+        mult, note = _TARGET_TILT_MULT_WIDENS, "widens the tilt gap"
+    else:
+        mult, note = 1.0, "tilt-neutral"
+    detail = (
+        f"target {target.growth_tilt:+.2f} vs book {book.growth_tilt:+.2f}, "
+        f"cand {risk.growth_tilt:+.2f} ({note})"
+    )
+    return FitFactor("tgt_tilt", "Target tilt", mult, detail, False)
+
+
+def _target_sector_factor(
+    risk: CandidateRisk, book: BookContext, target: TargetContext
+) -> FitFactor:
+    """Does the candidate's sector close an EXPLICIT target over/under-weight?
+
+    Only sectors the owner actually set (``target.sector_bands``) can gap —
+    everything else targets its current weight and reads a scored neutral."""
+    if risk.sector is None:
+        return FitFactor("tgt_sector", "Target sector", 1.0, "n/a", True)
+    band = target.sector_bands.get(risk.sector)
+    if band is None:
+        return FitFactor(
+            "tgt_sector", "Target sector", 1.0, f"{risk.sector}: no explicit target", False
+        )
+    gap = target.sector_weights.get(risk.sector, 0.0) - book.sector_weights.get(risk.sector, 0.0)
+    if gap > band:
+        mult, note = _TARGET_SECTOR_MULT_CLOSES, "closes an underweight"
+    elif gap < -band:
+        mult, note = _TARGET_SECTOR_MULT_WIDENS, "widens an overweight"
+    else:
+        mult, note = 1.0, "inside the target band"
+    detail = (
+        f"{risk.sector} target {target.sector_weights.get(risk.sector, 0.0) * 100.0:.0f}% vs "
+        f"book {book.sector_weights.get(risk.sector, 0.0) * 100.0:.0f}% ({note})"
+    )
+    return FitFactor("tgt_sector", "Target sector", mult, detail, False)
+
+
+def score_candidate_fit(
+    risk: CandidateRisk, book: BookContext, target: TargetContext | None = None
+) -> CandidateFit:
     """Pure scorer: a candidate's price-derived geometry + the book state → the
     four-factor fit decomposition. Missing factors contribute a neutral 1.0 and
-    flag the read partial (an unknowable fit must not read as dilutive)."""
+    flag the read partial (an unknowable fit must not read as dilutive).
+
+    With a ``target`` (positioning intent, or the book-default), the two
+    target factors are scored on top: ``fit_target = fit × Π(target factor
+    multipliers)``. The base ``fit``/``why`` are byte-identical with or
+    without a target — v1 consumers see no change."""
     factors = [
         _sharpe_factor(risk, book),
         _divers_factor(risk),
@@ -277,8 +379,29 @@ def score_candidate_fit(risk: CandidateRisk, book: BookContext) -> CandidateFit:
         fit *= f.multiplier
     partial = any(f.missing for f in factors)
     why = " x ".join(f"{f.key} {f.multiplier:.2f} ({f.detail})" for f in factors) + f" = {fit:.2f}"
+
+    fit_target: float | None = None
+    target_factors: list[FitFactor] = []
+    if target is not None:
+        target_factors = [
+            _target_tilt_factor(risk, book, target),
+            _target_sector_factor(risk, book, target),
+        ]
+        fit_target = fit
+        for f in target_factors:
+            fit_target *= f.multiplier
+
     return CandidateFit(
-        ticker=risk.ticker, factors=factors, fit=fit, why=why, partial=partial, obs=risk.obs
+        ticker=risk.ticker,
+        factors=factors,
+        fit=fit,
+        why=why,
+        partial=partial,
+        obs=risk.obs,
+        fit_target=fit_target,
+        target_factors=target_factors,
+        corr_recent=risk.corr_recent,
+        degraded=book.degraded,
     )
 
 
@@ -287,7 +410,7 @@ def score_candidate_fit(risk: CandidateRisk, book: BookContext) -> CandidateFit:
 # --------------------------------------------------------------------------- #
 
 
-def _mean_var(xs: list[float]) -> tuple[float, float]:
+def mean_var(xs: list[float]) -> tuple[float, float]:
     """Population mean and variance of a return series."""
     n = len(xs)
     if n == 0:
@@ -297,7 +420,7 @@ def _mean_var(xs: list[float]) -> tuple[float, float]:
     return mean, var
 
 
-def _cov(xs: list[float], ys: list[float]) -> float:
+def series_cov(xs: list[float], ys: list[float]) -> float:
     """Population covariance over paired, equal-length return series."""
     n = len(xs)
     if n == 0:
@@ -307,13 +430,13 @@ def _cov(xs: list[float], ys: list[float]) -> float:
     return sum((xs[i] - mx) * (ys[i] - my) for i in range(n)) / n
 
 
-def _beta(asset: list[float], market: list[float]) -> float | None:
+def ols_beta(asset: list[float], market: list[float]) -> float | None:
     """OLS beta of ``asset`` on ``market`` (cov / var_market). None when the
     market series has zero variance."""
-    _m_mean, var_m = _mean_var(market)
+    _m_mean, var_m = mean_var(market)
     if var_m <= 0.0:
         return None
-    return _cov(asset, market) / var_m
+    return series_cov(asset, market) / var_m
 
 
 def _book_return_series(
@@ -346,6 +469,16 @@ def _overlap(a: Mapping[date, float], b: Mapping[date, float]) -> list[date]:
     return sorted(set(a) & set(b))
 
 
+def _series_corr(xs: list[float], ys: list[float]) -> float | None:
+    """Sample correlation of two paired return series; None on zero variance."""
+    _x_mean, x_var = mean_var(xs)
+    _y_mean, y_var = mean_var(ys)
+    x_sd, y_sd = math.sqrt(x_var), math.sqrt(y_var)
+    if x_sd <= 0.0 or y_sd <= 0.0:
+        return None
+    return series_cov(xs, ys) / (x_sd * y_sd)
+
+
 def _candidate_risk(
     repo_root: Path,
     ticker: str,
@@ -356,18 +489,22 @@ def _candidate_risk(
     qqq_returns: Mapping[date, float],
     sector: str | None,
     min_overlap_obs: int,
+    cand_returns: Mapping[date, float] | None = None,
 ) -> CandidateRisk:
     """One candidate's geometry against the book + benchmarks, from price history.
 
     The book-relative legs (corr, marginal vol, Sharpe) need ``CAND_MIN_OBS``
     common days with the book; the growth-tilt leg needs the same against
     SPY/QQQ. Each leg degrades independently — a name can have a Sharpe read but
-    no growth tilt (e.g. no benchmark cache)."""
-    cand_returns = daily_log_returns(load_daily_closes(ticker, repo_root))
+    no growth tilt (e.g. no benchmark cache). ``cand_returns`` lets the caller
+    reuse an already-loaded return series (the gatherer loads each name once)."""
+    if cand_returns is None:
+        cand_returns = daily_log_returns(load_daily_closes(ticker, repo_root))
     if not cand_returns:
         return CandidateRisk(ticker=ticker, sector=sector)
 
     corr: float | None = None
+    corr_recent: float | None = None
     marginal_vol_ann: float | None = None
     sharpe: float | None = None
     obs: int | None = None
@@ -379,11 +516,11 @@ def _candidate_risk(
             cand = [cand_returns[d] for d in book_dates]
             bk = [book_series[d] for d in book_dates]
             obs = len(book_dates)
-            _cand_mean, cand_var = _mean_var(cand)
-            _bk_mean, bk_var = _mean_var(bk)
+            _cand_mean, cand_var = mean_var(cand)
+            _bk_mean, bk_var = mean_var(bk)
             cand_sd = math.sqrt(cand_var)
             bk_sd = math.sqrt(bk_var)
-            cov = _cov(cand, bk)
+            cov = series_cov(cand, bk)
             if cand_sd > 0.0 and bk_sd > 0.0:
                 corr = cov / (cand_sd * bk_sd)
             if bk_sd > 0.0:
@@ -391,6 +528,13 @@ def _candidate_risk(
             if cand_sd > 0.0 and book.risk_free_annual is not None:
                 ann_mean = _cand_mean * TRADING_DAYS
                 sharpe = (ann_mean - book.risk_free_annual) / (cand_sd * ANNUALIZE)
+            # Trailing-window correlation for the trend read (rising corr = a
+            # diversifier quietly becoming the book).
+            if len(book_dates) >= min_overlap_obs + CORR_TREND_OBS // 2:
+                recent = book_dates[-CORR_TREND_OBS:]
+                corr_recent = _series_corr(
+                    [cand_returns[d] for d in recent], [book_series[d] for d in recent]
+                )
         else:
             history_thin = True
 
@@ -398,8 +542,12 @@ def _candidate_risk(
     spy_dates = _overlap(cand_returns, spy_returns)
     qqq_dates = _overlap(cand_returns, qqq_returns)
     if len(spy_dates) >= min_overlap_obs and len(qqq_dates) >= min_overlap_obs:
-        beta_spy = _beta([cand_returns[d] for d in spy_dates], [spy_returns[d] for d in spy_dates])
-        beta_qqq = _beta([cand_returns[d] for d in qqq_dates], [qqq_returns[d] for d in qqq_dates])
+        beta_spy = ols_beta(
+            [cand_returns[d] for d in spy_dates], [spy_returns[d] for d in spy_dates]
+        )
+        beta_qqq = ols_beta(
+            [cand_returns[d] for d in qqq_dates], [qqq_returns[d] for d in qqq_dates]
+        )
         if beta_spy is not None and beta_qqq is not None:
             growth_tilt = beta_qqq - beta_spy
 
@@ -412,7 +560,52 @@ def _candidate_risk(
         sector=sector,
         obs=obs,
         history_thin=history_thin,
+        corr_recent=corr_recent,
     )
+
+
+def _classify_corr_trend(full: float | None, recent: float | None) -> str | None:
+    if full is None or recent is None:
+        return None
+    delta = recent - full
+    if delta >= CORR_TREND_DELTA:
+        return "rising"
+    if delta <= -CORR_TREND_DELTA:
+        return "falling"
+    return "stable"
+
+
+def _sharpe_delta_bps(
+    book_series: Mapping[date, float],
+    cand_returns: Mapping[date, float],
+    *,
+    risk_free_annual: float | None,
+    weight: float,
+    min_overlap_obs: int,
+) -> float | None:
+    """Book-Sharpe change (bps) of blending the candidate in at ``weight``,
+    pro-rata funded, over the common window. Same realized series both sides,
+    so the delta is internally consistent (allocation/what_if.py documents the
+    modeling choices; this is its cheap in-loop twin for the materializer)."""
+    if risk_free_annual is None or not book_series or not cand_returns:
+        return None
+    dates = _overlap(cand_returns, book_series)
+    if len(dates) < min_overlap_obs:
+        return None
+    bk = [book_series[d] for d in dates]
+    after = [(1.0 - weight) * book_series[d] + weight * cand_returns[d] for d in dates]
+
+    def _sr(xs: list[float]) -> float | None:
+        mean, var = mean_var(xs)
+        sd = math.sqrt(var)
+        if sd <= 0.0:
+            return None
+        return (mean * TRADING_DAYS - risk_free_annual) / (sd * ANNUALIZE)
+
+    before_sr, after_sr = _sr(bk), _sr(after)
+    if before_sr is None or after_sr is None:
+        return None
+    return (after_sr - before_sr) * 1e4
 
 
 def compute_candidate_fit(
@@ -423,14 +616,16 @@ def compute_candidate_fit(
     sectors: Mapping[str, str] | None = None,
     lookback_obs: int = 252,
     min_overlap_obs: int = CAND_MIN_OBS,
+    target: TargetContext | None = None,
 ) -> dict[str, CandidateFit]:
     """Portfolio-fit per evaluation name, from on-disk daily price history + the
     passed book state. One :class:`CandidateFit` per candidate (upper-cased key);
     a name with no usable history still gets an all-neutral, partial fit rather
     than vanishing. ``sectors`` maps ticker → sector (the FMP profile sector the
-    caller already reads); when absent the sector factor degrades. Heavy enough
-    (a price-history read per name) that it belongs in the morning pipeline, not
-    the render path."""
+    caller already reads); when absent the sector factor degrades. ``target``
+    (the resolved positioning target) adds the fit-to-target read and defaults
+    to None for v1 callers. Heavy enough (a price-history read per name) that it
+    belongs in the morning pipeline, not the render path."""
     book_series = _book_return_series(
         repo_root, book.weights, lookback_obs=lookback_obs, min_overlap_obs=min_overlap_obs
     )
@@ -442,6 +637,7 @@ def compute_candidate_fit(
         t = raw.strip().upper()
         if not t:
             continue
+        cand_returns = daily_log_returns(load_daily_closes(t, repo_root))
         risk = _candidate_risk(
             repo_root,
             t,
@@ -451,6 +647,18 @@ def compute_candidate_fit(
             qqq_returns=qqq_returns,
             sector=sectors.get(t),
             min_overlap_obs=min_overlap_obs,
+            cand_returns=cand_returns,
         )
-        out[t] = score_candidate_fit(risk, book)
+        fit = score_candidate_fit(risk, book, target)
+        out[t] = replace(
+            fit,
+            sharpe_delta_bps=_sharpe_delta_bps(
+                book_series,
+                cand_returns,
+                risk_free_annual=book.risk_free_annual,
+                weight=WHAT_IF_DEFAULT_WEIGHT,
+                min_overlap_obs=min_overlap_obs,
+            ),
+            corr_trend=_classify_corr_trend(risk.corr_to_book, risk.corr_recent),
+        )
     return out

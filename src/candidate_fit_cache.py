@@ -47,6 +47,7 @@ __all__ = [
     "assemble_book_context",
     "materialize_candidate_fit",
     "read_materialized_candidate_fit",
+    "read_materialized_fit_meta",
 ]
 
 # data/candidate_fit.json, repo-root relative (the data/ disk-cache home).
@@ -93,17 +94,33 @@ def assemble_book_context(
     )
     snapshot = read_latest_snapshot(db_path=db_path)
 
+    # Loud degradation: every absent book input records a human-readable
+    # reason. Factors still contribute a mathematical 1.0 (unknowable must not
+    # read dilutive), but the chips/peeks can now SAY the read is degraded
+    # instead of silently dimming.
+    degraded: list[str] = []
+    tracker_up = analytics.available
+
     sharpe: float | None = None
     risk_free_annual: float | None = None
-    if analytics.available and analytics.beta is not None:
+    if tracker_up and analytics.beta is not None:
         sharpe = analytics.beta.sharpe
         risk_free_annual = analytics.beta.risk_free_annual
     if sharpe is None and snapshot is not None:
         sharpe = snapshot.sharpe
+        if sharpe is not None:
+            degraded.append(
+                f"tracker offline — book Sharpe from the cached risk snapshot "
+                f"(as of {snapshot.captured_at or 'unknown'})"
+            )
+    if sharpe is None:
+        degraded.append("tracker offline and no risk snapshot — book Sharpe unknown")
+    if risk_free_annual is None:
+        degraded.append("risk-free rate is tracker-only — Marginal-Sharpe leg unscored")
 
     growth_tilt: float | None = None
     sector_weights: dict[str, float] = {}
-    if analytics.available and analytics.positioning is not None:
+    if tracker_up and analytics.positioning is not None:
         rollup = factor_exposure_rollup(analytics.positioning.correlations)
         if rollup is not None:
             growth_tilt = rollup.growth_tilt
@@ -116,6 +133,12 @@ def assemble_book_context(
                 sector_weights[bucket.label] = bucket.weight_pct / 100.0
     if growth_tilt is None and snapshot is not None:
         growth_tilt = snapshot.growth_tilt
+    if not sector_weights:
+        degraded.append("sector weights are tracker-only — sector factors unscored")
+    if growth_tilt is None:
+        degraded.append("book growth tilt unknown (no tracker, no snapshot)")
+    if not weights:
+        degraded.append("weights cache empty — book series undefined")
 
     captured_at = snapshot.captured_at if snapshot is not None else None
     return BookContext(
@@ -125,6 +148,7 @@ def assemble_book_context(
         growth_tilt=growth_tilt,
         sector_weights=sector_weights,
         captured_at=captured_at or None,
+        degraded=tuple(degraded),
     )
 
 
@@ -181,15 +205,33 @@ def materialize_candidate_fit(
     candidates = _evaluation_tickers(conn)
     book = assemble_book_context(repo_root, db_path=db_path, api_url=api_url)
     sectors = _load_sectors(repo_root, candidates)
-    fits = compute_candidate_fit(repo_root, candidates, book, sectors=sectors)
+    # The active positioning target (a pure local DB read — no new tracker
+    # dependency; with no saved intent this is the book default and the fit
+    # numbers are identical to v1).
+    from positioning.target import resolve_target_context
+
+    target = resolve_target_context(db_path, book)
+    fits = compute_candidate_fit(repo_root, candidates, book, sectors=sectors, target=target)
 
     payload = {
+        "version": 2,
         "computed_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
         "book": {
             "sharpe": book.sharpe,
             "growth_tilt": book.growth_tilt,
             "risk_free_annual": book.risk_free_annual,
             "captured_at": book.captured_at,
+            "degraded": list(book.degraded),
+        },
+        "target": {
+            "source": target.source,
+            "intent_id": target.intent_id,
+            "created_at": target.intent_created_at,
+            "narrative": target.narrative,
+            "growth_tilt": target.growth_tilt,
+            "sector_weights": target.sector_weights,
+            "sector_bands": target.sector_bands,
+            "sleeves": target.sleeves,
         },
         "fits": {t: _fit_to_json(f) for t, f in fits.items()},
     }
@@ -232,33 +274,54 @@ def read_materialized_candidate_fit(repo_root: Path) -> dict[str, CandidateFit]:
     return out
 
 
+def read_materialized_fit_meta(repo_root: Path) -> dict[str, object]:
+    """The cache's ``book`` + ``target`` blocks (plus version/computed_at) for
+    surfaces that need the context rather than per-ticker fits — the cockpit's
+    degradation banner, the fit peek's target header, the what-if route's book
+    inputs. ``{}`` when the cache is absent/unreadable; a v1 payload simply
+    lacks the ``target``/``degraded`` keys."""
+    try:
+        raw = _cache_path(repo_root).read_text(encoding="utf-8")
+        payload = json.loads(raw)
+    except (OSError, ValueError, TypeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    rec = cast("dict[str, object]", payload)
+    return {k: rec.get(k) for k in ("version", "computed_at", "book", "target") if k in rec}
+
+
+def _factor_to_json(f: FitFactor) -> dict[str, object]:
+    return {
+        "key": f.key,
+        "label": f.label,
+        "multiplier": f.multiplier,
+        "detail": f.detail,
+        "missing": f.missing,
+    }
+
+
 def _fit_to_json(fit: CandidateFit) -> dict[str, object]:
     return {
         "fit": fit.fit,
         "why": fit.why,
         "partial": fit.partial,
         "obs": fit.obs,
-        "factors": [
-            {
-                "key": f.key,
-                "label": f.label,
-                "multiplier": f.multiplier,
-                "detail": f.detail,
-                "missing": f.missing,
-            }
-            for f in fit.factors
-        ],
+        "factors": [_factor_to_json(f) for f in fit.factors],
+        # ---- v2 fields (readers tolerate their absence — v1 payloads) ----
+        "fit_target": fit.fit_target,
+        "target_factors": [_factor_to_json(f) for f in fit.target_factors],
+        "sharpe_delta_bps": fit.sharpe_delta_bps,
+        "corr_trend": fit.corr_trend,
+        "corr_recent": fit.corr_recent,
+        "degraded": list(fit.degraded),
     }
 
 
-def _fit_from_json(ticker: str, blob: object) -> CandidateFit | None:
-    if not isinstance(blob, dict):
-        return None
-    rec = cast("dict[str, object]", blob)
-    raw_factors = rec.get("factors")
-    if not isinstance(raw_factors, list):
-        return None
+def _factors_from_json(raw_factors: object) -> list[FitFactor]:
     factors: list[FitFactor] = []
+    if not isinstance(raw_factors, list):
+        return factors
     for raw in cast("list[object]", raw_factors):
         if not isinstance(raw, dict):
             continue
@@ -273,8 +336,30 @@ def _fit_from_json(ticker: str, blob: object) -> CandidateFit | None:
                 missing=bool(fr.get("missing", False)),
             )
         )
+    return factors
+
+
+def _opt_float(v: object) -> float | None:
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _fit_from_json(ticker: str, blob: object) -> CandidateFit | None:
+    if not isinstance(blob, dict):
+        return None
+    rec = cast("dict[str, object]", blob)
+    raw_factors = rec.get("factors")
+    if not isinstance(raw_factors, list):
+        return None
+    factors = _factors_from_json(cast("list[object]", raw_factors))
     fit_v = rec.get("fit")
     obs_v = rec.get("obs")
+    corr_trend = rec.get("corr_trend")
+    raw_degraded = rec.get("degraded")
+    degraded = (
+        tuple(str(d) for d in cast("list[object]", raw_degraded))
+        if isinstance(raw_degraded, list)
+        else ()
+    )
     return CandidateFit(
         ticker=ticker,
         factors=factors,
@@ -282,4 +367,11 @@ def _fit_from_json(ticker: str, blob: object) -> CandidateFit | None:
         why=str(rec.get("why", "")),
         partial=bool(rec.get("partial", False)),
         obs=int(obs_v) if isinstance(obs_v, (int, float)) else None,
+        # v2 fields — absent on a v1 payload, which decodes to the v1 shape.
+        fit_target=_opt_float(rec.get("fit_target")),
+        target_factors=_factors_from_json(rec.get("target_factors")),
+        sharpe_delta_bps=_opt_float(rec.get("sharpe_delta_bps")),
+        corr_trend=str(corr_trend) if isinstance(corr_trend, str) else None,
+        corr_recent=_opt_float(rec.get("corr_recent")),
+        degraded=degraded,
     )
