@@ -107,6 +107,39 @@ def test_overlap_math_and_rollups(conn: sqlite3.Connection) -> None:
     assert "nport as of 2026-05-31" in detail
 
 
+def test_country_rollup_falls_back_to_nport_snapshot(conn: sqlite3.Connection) -> None:
+    """A fresher issuer snapshot with no per-constituent country (Vanguard's
+    API doesn't publish it) must not shadow the spine's geography — the
+    country rollup falls back to the newest N-PORT snapshot (VWO E2E)."""
+    upsert_etf_holdings(
+        conn,
+        "VWO",
+        date(2026, 4, 30),
+        [
+            _holding("VWO", "2330", 0.15, country="TW"),
+            _holding("VWO", "700", 0.05, country="CN"),
+        ],
+    )
+    fresher_issuer = [
+        EtfHolding(
+            ticker="VWO",
+            as_of_date=date(2026, 5, 31),
+            constituent_ticker="2330",
+            name="TSMC",
+            weight_pct=0.15,
+            country=None,  # the issuer API publishes no country
+            source="issuer:vanguard",
+            fetched_at=datetime(2026, 7, 10),
+        )
+    ]
+    upsert_etf_holdings(conn, "VWO", date(2026, 5, 31), fresher_issuer)
+    ov = compute_lookthrough_overlap(conn, "VWO", {"NU": 1.0})
+    assert ov is not None
+    assert ov.source == "issuer:vanguard" and ov.as_of == date(2026, 5, 31)  # freshest wins
+    assert ov.country_weights == {"TW": pytest.approx(0.15), "CN": pytest.approx(0.05)}
+    assert ov.em_weight == pytest.approx(0.20)  # geography from the spine
+
+
 def test_overlap_none_without_holdings(conn: sqlite3.Connection) -> None:
     assert compute_lookthrough_overlap(conn, "GHOST", {"NU": 1.0}) is None
     bare = sqlite3.connect(":memory:")

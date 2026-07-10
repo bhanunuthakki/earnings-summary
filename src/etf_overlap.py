@@ -32,6 +32,10 @@ from instrument_store import get_etf_holdings
 #: (but still counted in the overlap fraction).
 _TOP_TABLE_CAP = 8
 
+#: The N-PORT spine's ``etf_holdings.source`` value (etf_sources.nport.SOURCE
+#: — mirrored as a literal so this module stays free of the fetch package).
+_SOURCE_NPORT = "nport"
+
 #: Countries commonly classified emerging — for the sleeve read (coarse on
 #: purpose: the sleeve factor only needs "does this fund serve an EM/intl
 #: sleeve", not an index vendor's exact taxonomy).
@@ -145,6 +149,13 @@ def compute_lookthrough_overlap(
                 )
             )
     rows.sort(key=lambda r: r.etf_weight, reverse=True)
+    if not countries:
+        # A fresher issuer snapshot may carry no per-constituent country
+        # (Vanguard's holdings API doesn't publish it) — the geography read
+        # then falls back to the newest N-PORT snapshot, which always does.
+        # (Caught by the VWO end-to-end: the issuer snapshot shadowed the
+        # spine's countries and the EM sleeve read vanished.)
+        countries = _nport_country_weights(conn, t)
     return EtfOverlap(
         ticker=t,
         as_of=holdings[0].as_of_date,
@@ -155,6 +166,23 @@ def compute_lookthrough_overlap(
         sector_weights=sectors,
         country_weights=countries,
     )
+
+
+def _nport_country_weights(conn: sqlite3.Connection, ticker: str) -> dict[str, float]:
+    """Country rollup from the newest N-PORT snapshot (the spine always
+    carries ``invCountry``); {} when none exists."""
+    try:
+        rows = conn.execute(
+            "SELECT country, SUM(COALESCE(weight_pct, 0)) AS w FROM etf_holdings "
+            "WHERE ticker = ? AND source = ? AND country IS NOT NULL "
+            "AND as_of_date = (SELECT MAX(as_of_date) FROM etf_holdings "
+            "                  WHERE ticker = ? AND source = ?) "
+            "GROUP BY country",
+            (ticker, _SOURCE_NPORT, ticker, _SOURCE_NPORT),
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    return {str(r[0]).strip().upper(): float(r[1]) for r in rows if r[0]}
 
 
 def overlap_detail(overlap: EtfOverlap) -> str:
