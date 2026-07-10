@@ -197,7 +197,7 @@ def test_materialize_then_read_round_trip(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     captured: dict[str, object] = {}
 
-    def _fake_compute(repo_root, candidates, book, *, sectors=None, target=None):  # type: ignore[no-untyped-def]
+    def _fake_compute(repo_root, candidates, book, *, sectors=None, target=None, **_kw):  # type: ignore[no-untyped-def]
         captured["candidates"] = list(candidates)
         captured["sectors"] = dict(sectors or {})
         captured["target_source"] = getattr(target, "source", None)
