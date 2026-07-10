@@ -114,6 +114,13 @@ class CandidateRisk:
     obs: int | None = None  # common trading days behind the geometry
     history_thin: bool = False  # had price history but < CAND_MIN_OBS overlap
     corr_recent: float | None = None  # corr over the trailing CORR_TREND_OBS days
+    # ETF-only legs (equities leave these unset and the factors are OMITTED,
+    # not neutral rows): look-through ownership overlap with the held book
+    # (etf_overlap.compute_lookthrough_overlap) and the explicit sleeves the
+    # fund's own published exposure serves (etf_overlap.sleeves_served).
+    overlap_pct: float | None = None  # fraction of ETF weight the book already owns
+    overlap_detail: str | None = None
+    sleeves_served: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +196,18 @@ _FACTOR_CROWD_MULT, _FACTOR_BALANCE_MULT = 0.88, 1.12
 
 # Sector fit: the book's existing fraction in the candidate's sector.
 _SECTOR_HEAVY, _SECTOR_WARM, _SECTOR_LIGHT = 0.30, 0.20, 0.05
+
+# Look-through overlap (ETF-only): the fraction of the fund's own weight
+# sitting in names the book already owns. High overlap = paying a fee to
+# re-buy the book; near-zero = genuinely additive exposure.
+_OVERLAP_HEAVY, _OVERLAP_WARM, _OVERLAP_LIGHT = 0.30, 0.15, 0.05
+_OVERLAP_HEAVY_MULT, _OVERLAP_WARM_MULT, _OVERLAP_LIGHT_MULT = 0.85, 0.92, 1.08
+
+# Sleeve factor (ETF-only, intent-only): a fund whose published exposure
+# serves an explicitly-targeted sleeve lifts. Gap magnitude is deliberately
+# unscored — the book's own sleeve weights aren't measured (yet); the detail
+# string says exactly that.
+_SLEEVE_SERVES_MULT = 1.10
 
 # Target factors (Fit v2): a candidate that moves the book TOWARD the owner's
 # stated target lifts, one that widens the gap drags — same magnitudes as the
@@ -301,6 +320,42 @@ def _sector_factor(risk: CandidateRisk, book: BookContext) -> FitFactor:
     return FitFactor("sector", "Sector fit", mult, detail, False)
 
 
+def _overlap_factor(risk: CandidateRisk) -> FitFactor | None:
+    """Look-through ownership overlap — ETF-only; ``None`` (factor OMITTED,
+    no neutral row) when the candidate carries no overlap read (every equity,
+    and an ETF whose holdings snapshot is absent)."""
+    if risk.overlap_pct is None:
+        return None
+    v = risk.overlap_pct
+    if v >= _OVERLAP_HEAVY:
+        mult, note = _OVERLAP_HEAVY_MULT, "largely holds what you own"
+    elif v >= _OVERLAP_WARM:
+        mult, note = _OVERLAP_WARM_MULT, "meaningful duplication"
+    elif v >= _OVERLAP_LIGHT:
+        mult, note = 1.0, "modest duplication"
+    else:
+        mult, note = _OVERLAP_LIGHT_MULT, "genuinely additive"
+    detail = risk.overlap_detail or f"{v * 100.0:.0f}% overlap"
+    return FitFactor("overlap", "Look-through overlap", mult, f"{detail} ({note})", False)
+
+
+def _target_sleeve_factor(risk: CandidateRisk, target: TargetContext) -> FitFactor | None:
+    """Does the fund serve an explicitly-targeted sleeve (intl / small_cap /
+    em)? ETF-only and intent-only: ``None`` unless the owner set sleeve
+    targets AND the fund's published exposure yields a sleeve read."""
+    if target.source != "intent" or not target.sleeves or not risk.sleeves_served:
+        return None
+    hits = sorted(set(risk.sleeves_served) & set(target.sleeves))
+    if hits:
+        detail = (
+            f"serves targeted sleeve{'s' if len(hits) > 1 else ''} {', '.join(hits)} "
+            f"(gap size unscored — book sleeve weights unmeasured)"
+        )
+        return FitFactor("sleeve", "Sleeve target", _SLEEVE_SERVES_MULT, detail, False)
+    detail = f"serves {', '.join(sorted(risk.sleeves_served))}; no explicit target among them"
+    return FitFactor("sleeve", "Sleeve target", 1.0, detail, False)
+
+
 def _target_tilt_factor(risk: CandidateRisk, book: BookContext, target: TargetContext) -> FitFactor:
     """Does the candidate move the book's growth tilt TOWARD the target?
 
@@ -374,6 +429,9 @@ def score_candidate_fit(
         _factor_factor(risk, book),
         _sector_factor(risk, book),
     ]
+    overlap = _overlap_factor(risk)
+    if overlap is not None:  # ETF-only 5th factor; equities keep 4 exactly
+        factors.append(overlap)
     fit = 1.0
     for f in factors:
         fit *= f.multiplier
@@ -387,6 +445,9 @@ def score_candidate_fit(
             _target_tilt_factor(risk, book, target),
             _target_sector_factor(risk, book, target),
         ]
+        sleeve = _target_sleeve_factor(risk, target)
+        if sleeve is not None:
+            target_factors.append(sleeve)
         fit_target = fit
         for f in target_factors:
             fit_target *= f.multiplier
@@ -490,6 +551,8 @@ def _candidate_risk(
     sector: str | None,
     min_overlap_obs: int,
     cand_returns: Mapping[date, float] | None = None,
+    overlap: tuple[float, str] | None = None,
+    sleeves_served: tuple[str, ...] = (),
 ) -> CandidateRisk:
     """One candidate's geometry against the book + benchmarks, from price history.
 
@@ -498,10 +561,18 @@ def _candidate_risk(
     SPY/QQQ. Each leg degrades independently — a name can have a Sharpe read but
     no growth tilt (e.g. no benchmark cache). ``cand_returns`` lets the caller
     reuse an already-loaded return series (the gatherer loads each name once)."""
+    overlap_pct = overlap[0] if overlap is not None else None
+    overlap_detail = overlap[1] if overlap is not None else None
     if cand_returns is None:
         cand_returns = daily_log_returns(load_daily_closes(ticker, repo_root))
     if not cand_returns:
-        return CandidateRisk(ticker=ticker, sector=sector)
+        return CandidateRisk(
+            ticker=ticker,
+            sector=sector,
+            overlap_pct=overlap_pct,
+            overlap_detail=overlap_detail,
+            sleeves_served=sleeves_served,
+        )
 
     corr: float | None = None
     corr_recent: float | None = None
@@ -561,6 +632,9 @@ def _candidate_risk(
         obs=obs,
         history_thin=history_thin,
         corr_recent=corr_recent,
+        overlap_pct=overlap_pct,
+        overlap_detail=overlap_detail,
+        sleeves_served=sleeves_served,
     )
 
 
@@ -617,6 +691,8 @@ def compute_candidate_fit(
     lookback_obs: int = 252,
     min_overlap_obs: int = CAND_MIN_OBS,
     target: TargetContext | None = None,
+    overlaps: Mapping[str, tuple[float, str]] | None = None,
+    sleeves: Mapping[str, tuple[str, ...]] | None = None,
 ) -> dict[str, CandidateFit]:
     """Portfolio-fit per evaluation name, from on-disk daily price history + the
     passed book state. One :class:`CandidateFit` per candidate (upper-cased key);
@@ -632,6 +708,8 @@ def compute_candidate_fit(
     spy_returns = daily_log_returns(load_daily_closes(_SPY, repo_root))
     qqq_returns = daily_log_returns(load_daily_closes(_QQQ, repo_root))
     sectors = sectors or {}
+    overlaps = overlaps or {}
+    sleeves = sleeves or {}
     out: dict[str, CandidateFit] = {}
     for raw in candidates:
         t = raw.strip().upper()
@@ -648,6 +726,8 @@ def compute_candidate_fit(
             sector=sectors.get(t),
             min_overlap_obs=min_overlap_obs,
             cand_returns=cand_returns,
+            overlap=overlaps.get(t),
+            sleeves_served=sleeves.get(t, ()),
         )
         fit = score_candidate_fit(risk, book, target)
         out[t] = replace(

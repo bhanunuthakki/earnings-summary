@@ -34,6 +34,7 @@ __all__ = [
     "materialize_etf_scores",
     "read_materialized_etf_loadings",
     "read_materialized_etf_scores",
+    "read_materialized_etf_whatif",
 ]
 
 _CACHE_REL: tuple[str, ...] = ("data", "etf_score.json")
@@ -57,6 +58,51 @@ def evaluation_etf_tickers(conn: sqlite3.Connection) -> list[str]:
     return [str(r[0]).upper() for r in rows if r[0]]
 
 
+_WHATIF_WEIGHTS: tuple[float, ...] = (0.01, 0.03, 0.05)
+
+
+def _whatif_rows(repo_root: Path, ticker: str) -> dict[str, dict[str, object]]:
+    """Precompute the workup's what-if rows (1/3/5%) from the fresh book
+    context — Stage 0f runs this AFTER materialize_candidate_fit, so the fit
+    meta's book block is today's. Empty when the weights cache is empty."""
+    from allocation.what_if import compute_what_if
+    from candidate_fit_cache import read_materialized_fit_meta
+    from portfolio_weights import read_materialized_weights
+
+    weights = read_materialized_weights(repo_root)
+    if not weights:
+        return {}
+    book_block = cast("dict[str, object]", read_materialized_fit_meta(repo_root).get("book") or {})
+
+    def _opt(key: str) -> float | None:
+        v = book_block.get(key)
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+    out: dict[str, dict[str, object]] = {}
+    for w in _WHATIF_WEIGHTS:
+        r = compute_what_if(
+            repo_root,
+            ticker,
+            w,
+            book_weights=weights,
+            risk_free_annual=_opt("risk_free_annual"),
+            book_growth_tilt=_opt("growth_tilt"),
+        )
+        out[f"{w:g}"] = {
+            "vol_before_ann": r.vol_before_ann,
+            "vol_after_ann": r.vol_after_ann,
+            "sharpe_before": r.sharpe_before,
+            "sharpe_after": r.sharpe_after,
+            "sharpe_delta_bps": r.sharpe_delta_bps,
+            "growth_tilt_before": r.growth_tilt_before,
+            "growth_tilt_after": r.growth_tilt_after,
+            "obs": r.obs,
+            "prices_through": r.prices_through,
+            "degraded": list(r.degraded),
+        }
+    return out
+
+
 def materialize_etf_scores(conn: sqlite3.Connection, repo_root: Path) -> int:
     """Score every evaluation ETF and write the cache atomically; returns the
     number scored. Zero ETFs still writes (an empty cache is the valid 'no
@@ -64,6 +110,7 @@ def materialize_etf_scores(conn: sqlite3.Connection, repo_root: Path) -> int:
     tickers = evaluation_etf_tickers(conn)
     scores: dict[str, dict[str, object]] = {}
     loadings: dict[str, list[dict[str, object]]] = {}
+    whatif: dict[str, dict[str, dict[str, object]]] = {}
     for t in tickers:
         inputs = gather_etf_score_inputs(conn, repo_root, t)
         bd = compute_etf_score(conn, repo_root, t)
@@ -72,10 +119,14 @@ def materialize_etf_scores(conn: sqlite3.Connection, repo_root: Path) -> int:
             {"key": ld.key, "beta": ld.beta, "r_squared": ld.r_squared, "n_obs": ld.n_obs}
             for ld in inputs.loadings
         ]
+        rows = _whatif_rows(repo_root, t)
+        if rows:
+            whatif[t] = rows
     payload = {
         "computed_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
         "scores": scores,
         "loadings": loadings,
+        "whatif": whatif,
     }
     path = _cache_path(repo_root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -133,6 +184,24 @@ def read_materialized_etf_loadings(repo_root: Path) -> dict[str, list[StyleLoadi
                     n_obs=int(n_obs) if isinstance(n_obs, (int, float)) else 0,
                 )
             )
+        out[str(ticker).upper()] = decoded
+    return out
+
+
+def read_materialized_etf_whatif(repo_root: Path) -> dict[str, dict[str, dict[str, object]]]:
+    """ticker → weight-key ('0.01'/'0.03'/'0.05') → what-if row, for the
+    workup fragment; ``{}`` on absence."""
+    raw = _read_payload(repo_root).get("whatif")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, dict[str, object]]] = {}
+    for ticker, rows in cast("dict[str, object]", raw).items():
+        if not isinstance(rows, dict):
+            continue
+        decoded: dict[str, dict[str, object]] = {}
+        for wkey, row in cast("dict[str, object]", rows).items():
+            if isinstance(row, dict):
+                decoded[str(wkey)] = cast("dict[str, object]", row)
         out[str(ticker).upper()] = decoded
     return out
 
