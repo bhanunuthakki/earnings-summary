@@ -943,6 +943,15 @@ def create_app(
 
             return Response(render_portfolio_synthesis_panel(db_path), mimetype="text/html")
 
+        if name == "positioning":
+            # Portfolio → Positioning: the owner's durable target book
+            # (positioning_intents) + version history + the coach thread with
+            # its propose→approve flow. GET path reads the materialized fit
+            # meta + local DB only — never the tracker.
+            from pipeline.positioning_panel import render_positioning_panel
+
+            return Response(render_positioning_panel(db_path, repo_root), mimetype="text/html")
+
         if name == "portfolio_risk":
             # Portfolio → Risk (L5): the whole-book risk cockpit — book drawdown
             # (max DD + underwater curve + recovery) computed from the tracker's
@@ -2051,6 +2060,94 @@ def create_app(
         )
         sid = sess.id if sess else (turn.session_id or "")
         return _stream_engine_events_with_session(events, sid)
+
+    # ------------------------------------------------------------------
+    # Positioning coach (the fit-v2 positioning surface)
+    # ------------------------------------------------------------------
+
+    @app.route("/api/positioning/coach", methods=["POST"])
+    def positioning_coach():
+        """One coach turn — the unified ask engine with the POSITIONING pack
+        (socratic push-back + live book grounding, billed under
+        ``positioning_coach_turn``). Sessions are scoped ``positioning`` so
+        coach threads never mix into the Ask tab's list. Buffered JSON (the
+        panel shows a thinking indicator); always carries ``session_id``."""
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        query = str(body.get("query") or "").strip()
+        if not query:
+            return ({"error": "query required"}, 400)
+        raw_sid = body.get("session_id")
+        client_sid = str(raw_sid).strip() if isinstance(raw_sid, str) and raw_sid else None
+        sess = ensure_session(client_sid, scope="positioning", db_path=db_path)
+        from positioning.coach_pack import build_positioning_pack
+
+        pack = build_positioning_pack(repo_root, db_path)
+        events = respond_turn(
+            AskTurn(text=query, session_id=sess.id),
+            pack,
+            db_path=db_path,
+            repo_root=repo_root,
+            registry=job_registry,
+        )
+        result = fold_events(events)
+        result["session_id"] = sess.id
+        return result
+
+    @app.route("/api/positioning/propose", methods=["POST"])
+    def positioning_propose():
+        """Encode the coach conversation into an owner-editable approval form
+        (HTML fragment). Encode failures are loud 400s with the reason —
+        never a silently-empty proposal."""
+        from llm.cli import is_hard_stop
+        from pipeline.positioning_panel import render_approval_form
+        from positioning.encode import EncodeError, propose_profile
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        sid = str(body.get("session_id") or "").strip()
+        if not sid:
+            return ("session_id required", 400)
+        try:
+            proposal = propose_profile(db_path, repo_root, session_id=sid)
+        except EncodeError as exc:
+            return (str(exc), 400)
+        except Exception as exc:  # structured-call failures: hard stops propagate loud
+            if is_hard_stop(exc):
+                raise
+            return (f"encode failed: {exc}", 502)
+        return Response(render_approval_form(proposal), mimetype="text/html")
+
+    @app.route("/api/positioning/approve", methods=["POST"])
+    def positioning_approve():
+        """Persist a positioning intent FROM THE SUBMITTED FORM VALUES (the
+        owner-wins seam: edits beat the LLM proposal). Returns the refreshed
+        active-target card fragment; validation problems are owner-facing
+        400s."""
+        from pipeline.positioning_panel import (
+            FormError,
+            profile_from_form,
+            render_active_target_card,
+        )
+        from positioning.store import append_intent
+
+        form = {k: v for k, v in request.form.items()}
+        try:
+            profile, narrative = profile_from_form(form)
+        except FormError as exc:
+            return (str(exc), 400)
+        session_id = (form.get("session_id") or "").strip() or None
+        conn = sqlite3.connect(str(db_path))
+        try:
+            append_intent(
+                conn,
+                narrative=narrative,
+                profile=profile,
+                source="coach" if session_id else "manual",
+                coach_session_id=session_id,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return Response(render_active_target_card(db_path, repo_root), mimetype="text/html")
 
     # ------------------------------------------------------------------
     # Ask session management (S3 thread list / rename / delete)

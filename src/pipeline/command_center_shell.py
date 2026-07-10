@@ -168,6 +168,11 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
             # Performance's bottom strip: thesis rollup + sector exposure, the
             # next-dollar allocation distribution, the cross-portfolio lens memo.
             ("portfolio_synthesis", "Synthesis", "/api/panel/portfolio_synthesis", False, False),
+            # Fit v2 — the owner's durable target book (positioning_intents):
+            # active target vs current readings, version history, and the
+            # positioning coach with its propose→approve encode flow. The
+            # evaluation-list fit chips score against what's saved here.
+            ("positioning", "Positioning", "/api/panel/positioning", False, False),
             # P2.2 — the allocation-decisions record: sizing audit + the merged
             # decisions timeline (thesis ledger + sizing intents + decision
             # notes). The standalone Thesis Ledger tab folded into it.

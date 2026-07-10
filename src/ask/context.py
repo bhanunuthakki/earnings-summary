@@ -44,6 +44,11 @@ class ContextPack:
     # (report context + priors + prior threads) and persists the thread.
     system_context: str | None = None
     persist: bool = False
+    # The LLM purpose the portfolio-narrative path bills/routes under. Packs
+    # that are conversational surfaces of their own (the positioning coach)
+    # override this so their spend and model routing are governed separately
+    # from the Ask tab (LLM_MODELS / llm_budgets are purpose-keyed).
+    narrative_purpose: str = "ask_answer"
 
 
 def build_ticker_pack(ticker: str, report_date: date) -> ContextPack:

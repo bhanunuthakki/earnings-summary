@@ -192,6 +192,19 @@ LLM_MODELS: dict[str, str] = {
     # code and the owner's workbook edit always wins, so a bad call can't swing the
     # book; the scenario_prior golden set grades the directional skew.
     "scenario_prior": DEFAULT_MODEL,
+    # Positioning coach (src/positioning/coach_pack.py via ask.engine): the
+    # standing conversation about the book's SHAPE — socratic push-back,
+    # inconsistency-spotting against the live book, iterating owner intent
+    # toward concrete targets. Judgment-heavy dialogue with the ask_answer
+    # quality bar -> Sonnet-tier; owner-initiated turns only, never scheduled.
+    "positioning_coach_turn": DEFAULT_MODEL,
+    # Positioning encode (src/positioning/encode.py): one structured call that
+    # turns a converged coach thread into a PositioningProfile PROPOSAL.
+    # Deterministic validation backstops it (Pydantic bounds + closed
+    # vocabularies) and the owner's approval-form edits always win, so a bad
+    # encode can never silently become the target book — but the extraction
+    # itself is nuance-sensitive (emit ONLY expressed dimensions) -> Sonnet.
+    "positioning_encode": DEFAULT_MODEL,
     # Whole-book thesis-collision audit (src/thesis_collision.py): one call over
     # every portfolio name's thesis + tier-1 break-rule drivers, flagging
     # shared-driver concentration and directly contradictory theses. Cross-name
