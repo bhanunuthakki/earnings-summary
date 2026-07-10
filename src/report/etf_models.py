@@ -16,6 +16,7 @@ re-wiring everything.
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -71,6 +72,25 @@ class EtfHoldingsSection(BaseModel):
     total_constituents: int = 0
     top_holdings: list[EtfHoldingRow] = Field(default_factory=list)
     sector_breakdown: list[EtfSectorBreakdownRow] = Field(default_factory=list)
+
+
+class EtfRoleSynthesis(BaseModel):
+    """The governed 'role in portfolio' one-pager (purpose
+    ``etf_role_synthesis``) — the ONLY semantic judgment in the ETF workup.
+    Every number the model saw was deterministic (score/fit factors, overlap,
+    country rollup, what-if deltas, target gaps); the synthesis says what
+    role the fund would actually play in THIS book. Schema-validated before
+    persisting to ``llm_artifacts`` (sha-keyed, so reruns are free until the
+    inputs move)."""
+
+    role_summary: str = Field(max_length=900)  # <=120 words, plain language
+    what_it_adds: list[str] = Field(default_factory=list[str], max_length=4)
+    overlap_caution: str | None = None
+    verdict: Literal[
+        "closes_target_gap", "diversifier", "redundant", "style_crowding", "insufficient_data"
+    ]
+    suggested_weight_band: str | None = None  # e.g. "2-4%"
+    watch_items: list[str] = Field(default_factory=list[str], max_length=3)
 
 
 class EtfBriefSpec(BaseModel):

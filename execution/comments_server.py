@@ -2922,6 +2922,27 @@ def create_app(
             abort(404)
         return Response(html, mimetype="text/html")
 
+    @app.route("/api/peek/etf_workup", methods=["GET"])
+    def peek_etf_workup():
+        """The ETF workup — profile strip, style loadings, look-through
+        overlap + country exposure, precomputed what-if rows, and the governed
+        role-in-portfolio one-pager. All disk/DB reads (the LLM one-pager is a
+        cached artifact); 404 for a non-ETF ticker."""
+        from pipeline.etf_workup import render_etf_workup
+
+        try:
+            ticker = ticker_validation.safe_ticker(request.args.get("ticker") or "")
+        except ValueError:
+            abort(404)
+        conn = _open_db()
+        try:
+            html = render_etf_workup(conn, repo_root, db_path, ticker)
+        finally:
+            conn.close()
+        if html is None:
+            abort(404)
+        return Response(html, mimetype="text/html")
+
     @app.route("/api/ticker/<ticker>", methods=["GET"])
     def ticker_api(ticker: str):
         """Full per-ticker command-center state as JSON: identity/freshness,

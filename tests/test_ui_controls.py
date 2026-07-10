@@ -392,6 +392,7 @@ REGISTERED: frozenset[str] = frozenset(
         "pipeline/dcf_globals_panel.py",
         "pipeline/diet_panel.py",
         "pipeline/discovery_panel.py",
+        "pipeline/etf_workup.py",
         "pipeline/evals_panel.py",
         "pipeline/explore_panel.py",
         "pipeline/fact_overrides_panel.py",

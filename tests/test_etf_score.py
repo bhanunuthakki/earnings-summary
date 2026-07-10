@@ -301,7 +301,9 @@ def test_cockpit_etf_row_uses_cached_score_and_pill(
     assert avuv.attractiveness is not None
     assert avuv.attractiveness_why is not None and avuv.attractiveness_why.startswith("ret ")
     html = render_research_cockpit(rows)
-    assert "<span class='k-pill'>ETF</span>" in html
+    # The ETF pill is the workup peek's doorway (PR 8).
+    assert ">ETF</a>" in html
+    assert "data-peek-url='/api/peek/etf_workup?ticker=AVUV'" in html
     assert "data-peek-url='/api/peek/score?ticker=AVUV'" in html
 
 

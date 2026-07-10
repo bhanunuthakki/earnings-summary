@@ -164,6 +164,12 @@ class CandidateFit:
     corr_recent: float | None = None  # trailing-window corr behind the trend read
     #: Book-context degradation reasons (mirrors ``BookContext.degraded``).
     degraded: tuple[str, ...] = ()
+    #: The candidate's CURRENT book weight when it is already held (a held ETF
+    #: stays on the evaluation list by design — the reconciler never promotes
+    #: funds). Non-None means the fit was scored against the EX-SELF book
+    #: (weights minus the candidate), killing the self-inclusion bias where a
+    #: held name's correlation to "the book" is inflated by itself.
+    held_weight: float | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -716,10 +722,28 @@ def compute_candidate_fit(
         if not t:
             continue
         cand_returns = daily_log_returns(load_daily_closes(t, repo_root))
+        # Self-inclusion bias: a candidate the book ALREADY holds (a held ETF
+        # stays list_type='evaluation' by design) must score against the
+        # ex-self book, or its own returns inflate the correlation leg. Only
+        # held candidates pay the extra series build (a handful at most).
+        held_w = book.weights.get(t, 0.0)
+        series = book_series
+        if held_w > 0:
+            ex_weights = {k: v for k, v in book.weights.items() if k != t}
+            series = (
+                _book_return_series(
+                    repo_root,
+                    ex_weights,
+                    lookback_obs=lookback_obs,
+                    min_overlap_obs=min_overlap_obs,
+                )
+                if len(ex_weights) >= 2
+                else {}
+            )
         risk = _candidate_risk(
             repo_root,
             t,
-            book_series=book_series,
+            book_series=series,
             book=book,
             spy_returns=spy_returns,
             qqq_returns=qqq_returns,
@@ -733,12 +757,13 @@ def compute_candidate_fit(
         out[t] = replace(
             fit,
             sharpe_delta_bps=_sharpe_delta_bps(
-                book_series,
+                series,
                 cand_returns,
                 risk_free_annual=book.risk_free_annual,
                 weight=WHAT_IF_DEFAULT_WEIGHT,
                 min_overlap_obs=min_overlap_obs,
             ),
             corr_trend=_classify_corr_trend(risk.corr_to_book, risk.corr_recent),
+            held_weight=held_w if held_w > 0 else None,
         )
     return out
