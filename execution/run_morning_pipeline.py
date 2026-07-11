@@ -140,6 +140,12 @@ _CANDIDATE_FIT_TIMEOUT_S = 180
 # the network). ~6 small downloads; 5 min covers a throttled morning. A
 # failure keeps the last-good files.
 _FACTOR_PROXIES_TIMEOUT_S = 300
+# Stage 0h (naked-position gate, Monthly Red Team Phase 1 guard 7) computes
+# three read-only checks per held name (downside trigger encoded, realistic
+# bear persisted, thesis fresh) and materializes the result to
+# data/dashboard/position_guard.json — a handful of read-only SQLite queries
+# plus small holdings-JSON file reads, no network, no LLM. 2 min is generous.
+_POSITION_GUARD_TIMEOUT_S = 120
 # Stage 1b (proactive standup, L9) composes a grounded brief through the Ask
 # engine + an eval-judge pass per surviving trip. Rate limits cap it at a few
 # deliveries/day, but each is a streamed `claude -p` answer plus ≤2 follow-ups
@@ -158,6 +164,7 @@ STAGE_FUNDAMENTALS = "stage_0d_fundamentals"
 STAGE_REPRICE = "stage_0e_reprice"
 STAGE_CANDIDATE_FIT = "stage_0f_candidate_fit"
 STAGE_FACTOR_PROXIES = "stage_0g_factor_proxies"
+STAGE_POSITION_GUARD = "stage_0h_position_guard"
 STAGE_TRIGGERS = "stage_1_triggers"
 STAGE_STANDUP = "stage_1b_standup"
 STAGE_FEED = "stage_2_feed"
@@ -173,6 +180,7 @@ _ALL_STAGE_KEYS = (
     STAGE_REPRICE,
     STAGE_CANDIDATE_FIT,
     STAGE_FACTOR_PROXIES,
+    STAGE_POSITION_GUARD,
     STAGE_TRIGGERS,
     STAGE_STANDUP,
     STAGE_FEED,
@@ -445,6 +453,30 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
                     *proxies_root_args,
                 ],
                 timeout_s=_FACTOR_PROXIES_TIMEOUT_S,
+            )
+        )
+        # Stage 0h -- naked-position gate (Monthly Red Team Phase 1 guard 7):
+        # materializes data/dashboard/position_guard.json so the Risk panel's
+        # render path reads the cache instead of recomputing the three
+        # per-name checks (downside trigger / realistic bear / thesis
+        # freshness) on every request. Runs after 0c lifecycle (fresh
+        # materialized weights) and 0g factor proxies (no ordering dependency
+        # on it, just grouped with the other local-substrate cache refreshes).
+        # Only --db-path is forwarded (not user-scoped, no LLM). Skipped on
+        # the re-render-only path (--skip-triggers).
+        position_guard_db_args = (
+            ["--db-path", str(args.db_path)] if args.db_path is not None else []
+        )
+        stages.append(
+            _Stage(
+                key=STAGE_POSITION_GUARD,
+                label="Stage 0h - naked-position gate (refresh_position_guard.py)",
+                argv=[
+                    py,
+                    str(exec_dir / "refresh_position_guard.py"),
+                    *position_guard_db_args,
+                ],
+                timeout_s=_POSITION_GUARD_TIMEOUT_S,
             )
         )
 
