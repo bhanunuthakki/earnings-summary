@@ -963,6 +963,14 @@ def create_app(
 
             return Response(render_portfolio_risk_panel(db_path=db_path), mimetype="text/html")
 
+        if name == "red_team":
+            # Portfolio -> Red Team (PR5): the monthly First-Saturday
+            # adversarial brief. Read-only in this PR — status chips only,
+            # the response loop lands in PR6.
+            from pipeline.red_team_panel import render_red_team_panel
+
+            return Response(render_red_team_panel(db_path=db_path), mimetype="text/html")
+
         if name == "ir_coverage":
             # Per-name IR auto-fetch coverage: which portfolio/eval names have
             # auto-fetched IR docs vs. which need a manual pull (+ why).

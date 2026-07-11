@@ -243,6 +243,11 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # llm_artifacts cache key alongside the thesis-set hash — bumping it forks
     # cached findings cleanly (a re-run is forced even if no thesis changed).
     "thesis_collision": "v1",
+    # Monthly Red Team engine (src/redteam/, PR5). Bump when a lens's framing
+    # in lenses._LENS_FRAMING (red_team_attack) or a cross-book prompt in
+    # cross_book.py (red_team_cross_book) is materially rewritten.
+    "red_team_attack": "v1",
+    "red_team_cross_book": "v1",
 }
 
 _DEFAULT_VERSION = "v1"

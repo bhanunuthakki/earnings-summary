@@ -164,6 +164,11 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
             # per-ticker correlation/beta rows, and the macro-stress lens with a
             # scenario picker. Grouped with Performance (same pillar).
             ("portfolio_risk", "Risk", "/api/panel/portfolio_risk", False, False),
+            # PR5 — the monthly First-Saturday adversarial review's dense brief
+            # (directives/monthly_red_team.md Phase 2): one rotating-lens attack
+            # per held name + the three cross-book passes. Read-only status
+            # chips this PR; the REFUTE/ACCEPT/DEFER response loop is PR6.
+            ("red_team", "Red Team", "/api/panel/red_team", False, False),
             # UX round 4 — the portfolio-level reading layer surfaced out of
             # Performance's bottom strip: thesis rollup + sector exposure, the
             # next-dollar allocation distribution, the cross-portfolio lens memo.

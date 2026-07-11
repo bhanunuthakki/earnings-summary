@@ -502,6 +502,17 @@ LLM_MODELS: dict[str, str] = {
     # AuditSpec.judge_model in the grader config (not here) if agreement
     # spot-checks (execution/spot_check_eval_judge.py) come back weak.
     "eval_judge": FAST_CLASSIFIER_MODEL,
+    # Monthly Red Team engine (src/redteam/, directives/monthly_red_team.md
+    # Phase 2, PR5). red_team_attack is the per-name rotating-lens adversarial
+    # call (one held name x one lens per call); red_team_cross_book is the
+    # three deterministic-input cross-book passes (factor-block / style-drift
+    # / human-capital). Both are judgment over already-computed evidence
+    # (thesis anchor, correlation clusters, style loadings) — Sonnet-tier
+    # reasoning, cheapest-at-parity starting point (directives/
+    # cheapest_model_routing.md); ~15 calls/run per llm_quota_scheduling.md,
+    # eval coverage is an explicitly tracked follow-up (not this PR).
+    "red_team_attack": DEFAULT_MODEL,
+    "red_team_cross_book": DEFAULT_MODEL,
     # NOT here by design: the 14 dynamic `lens:<name>` purposes (plus the
     # scenario-suffixed lens:macro_scenario:<id> / lens:portfolio_macro_stress:<id>)
     # resolve their model from the Lens object itself
