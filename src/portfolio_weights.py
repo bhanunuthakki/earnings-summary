@@ -34,7 +34,12 @@ from typing import TYPE_CHECKING, cast
 if TYPE_CHECKING:
     from integrations.portfolio_tracker_client import LivePortfolio
 
-__all__ = ["materialize_weights", "read_materialized_weights", "weights_from_portfolio"]
+__all__ = [
+    "materialize_weights",
+    "read_materialized_weights",
+    "read_materialized_weights_as_of",
+    "weights_from_portfolio",
+]
 
 # data/portfolio_weights.json, repo-root relative (the data/ disk-cache home).
 _CACHE_REL: tuple[str, ...] = ("data", "portfolio_weights.json")
@@ -110,3 +115,26 @@ def read_materialized_weights(repo_root: Path) -> dict[str, float]:
         if isinstance(v, (int, float)) and not isinstance(v, bool):
             out[k.upper()] = float(v)
     return out
+
+
+def read_materialized_weights_as_of(repo_root: Path) -> str | None:
+    """The materialized weights cache's ``computed_at`` stamp (naive-UTC ISO),
+    or ``None`` when the cache is absent/unreadable. Separate from
+    ``read_materialized_weights`` (which only needs the weights) because
+    ``execution/export_book_cma.py`` uses this stamp as its idempotency key
+    (``weights_as_of`` unchanged since the last export -> skip, matching the
+    directive's "before executing, check whether the deliverable for that key
+    already exists" rule) without every other caller paying for it."""
+    path = _cache_path(repo_root)
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    stamp = cast("dict[str, object]", payload).get("computed_at")
+    return stamp if isinstance(stamp, str) else None

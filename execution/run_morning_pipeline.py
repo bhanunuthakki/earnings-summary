@@ -133,10 +133,12 @@ _REPRICE_TIMEOUT_S = 300
 # covariance-grade read each plus a loopback HTTP group — 3 min is generous and
 # covers a tracker that is slow to answer.
 _CANDIDATE_FIT_TIMEOUT_S = 180
-# Stage 0g (factor proxies) refreshes the 5 ETF style-proxy close series from
-# yfinance into data/factor_proxies/ so the Risk panel's value/size/momentum
-# loadings read a fresh local store (never the network). 5 small downloads;
-# 5 min covers a throttled morning. A failure keeps the last-good files.
+# Stage 0g (factor proxies) refreshes the 5 ETF style-proxy close series PLUS
+# the held-ETF price series the FMP cache doesn't cover (FLKR) from yfinance
+# into data/factor_proxies/ so the Risk panel's value/size/momentum loadings
+# AND the correlation/Monte-Carlo sections read a fresh local store (never
+# the network). ~6 small downloads; 5 min covers a throttled morning. A
+# failure keeps the last-good files.
 _FACTOR_PROXIES_TIMEOUT_S = 300
 # Stage 1b (proactive standup, L9) composes a grounded brief through the Ask
 # engine + an eval-judge pass per surviving trip. Rate limits cap it at a few
@@ -423,11 +425,13 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
             )
         )
         # Stage 0g -- factor proxies: refresh the ETF style-proxy close series
-        # (SPY/VTV/VUG/IWM/MTUM) from yfinance into data/factor_proxies/ so the
-        # Risk panel's value/size/momentum loadings read a fresh LOCAL store —
-        # the render path never touches the network. Not user-scoped, no LLM;
-        # --repo-root follows the db override so tests/dev runs never write the
-        # real repo's data/. Skipped on the re-render-only path.
+        # (SPY/VTV/VUG/IWM/MTUM) PLUS held-ETF price series the FMP cache
+        # doesn't cover (FLKR) from yfinance into data/factor_proxies/ so the
+        # Risk panel's value/size/momentum loadings AND the correlation/
+        # Monte-Carlo sections read a fresh LOCAL store — the render path
+        # never touches the network. Not user-scoped, no LLM; --repo-root
+        # follows the db override so tests/dev runs never write the real
+        # repo's data/. Skipped on the re-render-only path.
         proxies_root_args = (
             ["--repo-root", str(args.db_path.parent.parent)] if args.db_path is not None else []
         )

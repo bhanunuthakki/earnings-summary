@@ -64,6 +64,17 @@ from portfolio_correlation import (
     CorrelationRead,
     build_holdings_correlation_from_disk,
 )
+from portfolio_montecarlo import (
+    DEFAULT_N_PATHS,
+    DEFAULT_T_DF,
+    DRAWDOWN_LABELS,
+    WEALTHPLAN_CMA_ASSUMED_VOL_PCT,
+    DistributionRead,
+    EventStressResult,
+    MonteCarloRead,
+    build_book_monte_carlo,
+    build_joint_latam_stress,
+)
 from portfolio_risk import (
     CrowdedName,
     DrawdownPoint,
@@ -1285,6 +1296,7 @@ _RISK_CSS = """<style>
 .pfc-clusters { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 0; }
 .pts-table { margin-top: 4px; }
 .pts-excluded { color: var(--muted); }
+.pfm-table { margin-top: 4px; max-width: 360px; }
 .ptc-findings { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .ptc-finding { border-left: 2px solid var(--warn); padding-left: 10px; }
 .ptc-finding-bad { border-left-color: var(--bad); }
@@ -1381,6 +1393,8 @@ def render_portfolio_risk_panel(
     style = _build_style_rollup(analytics.positioning, db_path)
     correlation = _build_correlation_read(analytics.positioning, db_path)
     tail_stress = _build_tail_stress(analytics.positioning, db_path)
+    monte_carlo = _build_monte_carlo(analytics.positioning, db_path)
+    joint_latam = _build_joint_latam_stress(analytics.positioning, db_path)
     collision = _read_thesis_collision(analytics.positioning, db_path)
     scenarios = _scenario_options()
     digest = _cached_macro_digest_html(db_path) if db_path is not None else ""
@@ -1400,6 +1414,8 @@ def render_portfolio_risk_panel(
         style=style,
         correlation=correlation,
         tail_stress=tail_stress,
+        monte_carlo=monte_carlo,
+        joint_latam=joint_latam,
         collision=collision,
         scenarios=scenarios,
         digest=digest,
@@ -1479,6 +1495,31 @@ def _build_tail_stress(pos: Positioning | None, db_path: Path | None) -> TailStr
     return build_tail_stress(db_path, weights)
 
 
+def _build_monte_carlo(pos: Positioning | None, db_path: Path | None) -> MonteCarloRead | None:
+    """The fat-tailed book Monte Carlo (PR4) — computed entirely from the
+    local price cache, same weights degrade as the other local sections."""
+    if db_path is None:
+        return None
+    weights = _local_book_weights(pos, db_path.parent.parent)
+    if not weights:
+        return None
+    return build_book_monte_carlo(db_path.parent.parent, weights)
+
+
+def _build_joint_latam_stress(
+    pos: Positioning | None, db_path: Path | None
+) -> EventStressResult | None:
+    """The joint-LatAm event-correlation stress (PR4) — reads local
+    ``dcf_runs`` bear scenarios (same substrate as ``_build_tail_stress``);
+    renders with the tracker DOWN."""
+    if db_path is None:
+        return None
+    weights = _local_book_weights(pos, db_path.parent.parent)
+    if not weights:
+        return None
+    return build_joint_latam_stress(db_path, weights)
+
+
 def _read_thesis_collision(pos: Positioning | None, db_path: Path | None) -> CachedReport | None:
     """The cached thesis-collision audit, filtered against the CURRENT
     holding set: a cached finding naming a name sold since the audit ran must
@@ -1507,6 +1548,8 @@ def compose_risk_page(
     style: StyleFactorRollup | None = None,
     correlation: CorrelationRead | None = None,
     tail_stress: TailStress | None = None,
+    monte_carlo: MonteCarloRead | None = None,
+    joint_latam: EventStressResult | None = None,
     collision: CachedReport | None = None,
 ) -> str:
     """Pure assembly of the Risk page (testable without network or DB). The
@@ -1517,9 +1560,10 @@ def compose_risk_page(
     ranking; None hides the section (tracker offline / no weighted book).
     ``style`` (the value/size/momentum ETF-proxy loadings), ``correlation``
     (the holdings pairwise matrix + crowding clusters), ``tail_stress`` (the
-    all-bears book drawdown), and ``collision`` (the cached thesis-collision
-    audit) are computed from local disk/DB, so they render in BOTH branches —
-    tracker up or down."""
+    all-bears book drawdown), ``monte_carlo`` (the fat-tailed book simulation)
+    + ``joint_latam`` (its companion event-correlation stress), and
+    ``collision`` (the cached thesis-collision audit) are computed from local
+    disk/DB, so they render in BOTH branches — tracker up or down."""
     parts: list[str] = [_RISK_CSS, '<div id="pfr-root">']
     if analytics.available:
         if analytics.beta is not None:
@@ -1530,6 +1574,7 @@ def compose_risk_page(
         parts.append(_style_factor_section(style))
         parts.append(_correlation_section(correlation))
         parts.append(_tail_stress_section(tail_stress))
+        parts.append(_monte_carlo_section(monte_carlo, joint_latam))
         parts.append(_thesis_collision_section(collision))
         if gap is not None:
             parts.append(_risk_reward_gap_section(gap))
@@ -1541,6 +1586,7 @@ def compose_risk_page(
         parts.append(_style_factor_section(style))
         parts.append(_correlation_section(correlation))
         parts.append(_tail_stress_section(tail_stress))
+        parts.append(_monte_carlo_section(monte_carlo, joint_latam))
         parts.append(_thesis_collision_section(collision))
     parts.append(_macro_stress_section(scenarios, digest))
     parts.append("</div>")
@@ -2133,6 +2179,126 @@ def _tail_stress_section(stress: TailStress | None) -> str:
     )
     notes = "".join(f'<p class="muted pfr-top">{escape(n)}</p>' for n in stress.notes)
     return f"{head}{strip}{table}{notes}</section>"
+
+
+def _mc_prob_row(label: str, normal: DistributionRead, student_t: DistributionRead) -> str:
+    return (
+        f"<tr><td>&lt;{escape(label)}</td>"
+        f'<td class="num">{normal.prob_below.get(label, 0.0) * 100.0:.1f}%</td>'
+        f'<td class="num">{student_t.prob_below.get(label, 0.0) * 100.0:.1f}%</td></tr>'
+    )
+
+
+def _joint_latam_block(stress: EventStressResult | None) -> str:
+    if stress is None:
+        return (
+            '<div class="k-well pfr-top"><strong>Joint-LatAm stress</strong> '
+            '<span class="muted">— not enough weighted holdings to stress.</span></div>'
+        )
+    bad = stress.book_return_pct <= -15.0
+    pill_tone = "k-pill-bad" if bad else "k-pill-warn"
+    well_tone = "k-well-bad" if bad else "k-well-warn"
+    top_legs = sorted(stress.legs, key=lambda leg: leg.return_pct)[:5]
+    legs_html = ", ".join(
+        f"{ticker_label(leg.ticker, href=f'../research/{escape(leg.ticker)}/')} "
+        f'<span class="{_tone(leg.return_pct)}" title="{escape(leg.label)}">'
+        f"{leg.return_pct:+.0f}%</span>"
+        for leg in top_legs
+    )
+    notes = (
+        f'<p class="muted pfr-top">{escape("; ".join(stress.notes))}</p>' if stress.notes else ""
+    )
+    return (
+        f'<div class="k-well {well_tone} pfr-top">'
+        f"<strong>{escape(stress.title)}</strong> "
+        f'<span class="k-pill {pill_tone}">{stress.book_return_pct:+.1f}% book</span>'
+        f'<p class="muted pfr-top">{escape(stress.description)}</p>'
+        f'<p class="pfr-top">{legs_html}</p>{notes}</div>'
+    )
+
+
+def _monte_carlo_section(mc: MonteCarloRead | None, joint_latam: EventStressResult | None) -> str:
+    """Fat-tailed book Monte Carlo (PR4, directives/monthly_red_team.md Phase
+    3): a multivariate-normal AND multivariate Student-t (df=4) annual-horizon
+    simulation from the local price cache's aligned daily covariance (one
+    shared crash-mixing chi-square draw per path, so the tails co-move),
+    beside its companion joint-LatAm event-correlation stress. Local price
+    cache + local ``dcf_runs`` only; renders with the tracker down, same as
+    the correlation/style/tail-stress sections above it."""
+    head = (
+        '<section class="panel"><h2>Tail risk (Monte Carlo)</h2>'
+        f'<p class="sub">{DEFAULT_N_PATHS:,}-path simulation of the book\'s ANNUAL return '
+        "from the local price cache's aligned daily covariance (normal vs Student-t, "
+        f"df={DEFAULT_T_DF} &mdash; one shared crash-mixing chi-square draw per path so the "
+        "tails co-move, not simulated day-by-day since that would CLT-average the fat tail "
+        "away), plus a deterministic joint-LatAm event stress. Local data only; renders "
+        "with the tracker down.</p>"
+    )
+    if mc is None:
+        return (
+            f"{head}"
+            '<p class="muted">Not enough daily price history across two or more modeled '
+            "holdings for a book simulation yet.</p></section>"
+        )
+    # The normal model's vol is the well-behaved covariance-implied number (the
+    # CMA comparison point — directives/monthly_red_team.md Phase 3's "~22-27%
+    # book" is this figure); the t-model's arithmetic vol is NOT shown as a
+    # headline stat — expm1() of a heavy-tailed log-shock makes the simple-
+    # return std dev wildly sensitive to a handful of extreme upside draws
+    # (the same convexity that makes lognormal mean != median), so the
+    # t-distribution's honest contribution here is its PERCENTILES/
+    # probabilities (robust to a few outlier paths), not its variance.
+    cma_note = (
+        f"wealthplan CMA assumes {WEALTHPLAN_CMA_ASSUMED_VOL_PCT:.0f}% vol &middot; this book "
+        f"simulates &sim;{mc.normal.vol_pct:.0f}%"
+    )
+    p30 = mc.student_t.prob_below.get("-30%", 0.0)
+    cards = [
+        _kpi_card(
+            "t-dist 1st pctile (annual)",
+            f"{mc.student_t.pct_1st:+.0f}%",
+            sub=f"normal {mc.normal.pct_1st:+.0f}%",
+            tone=_tone(mc.student_t.pct_1st),
+        ),
+        _kpi_card(
+            "P(book &lt; -30%)",
+            f"{p30 * 100.0:.1f}%",
+            sub=f"normal {mc.normal.prob_below.get('-30%', 0.0) * 100.0:.1f}%",
+            tone="neg" if p30 > 0.02 else "",
+        ),
+        _kpi_card(
+            "Book vol",
+            f"{mc.normal.vol_pct:.1f}%",
+            sub="annualized · normal/covariance basis",
+        ),
+        _kpi_card(
+            "Coverage",
+            f"{mc.modeled_weight_pct:.0f}%",
+            sub=f"of book modeled ({len(mc.tickers)} names + cash-likes)",
+            tone="neg" if mc.modeled_weight_pct < 90.0 else "",
+        ),
+    ]
+    strip = f'<div class="kpi-strip">{"".join(cards)}</div>'
+    cma_chip = f'<p class="pfr-top"><span class="k-chip k-chip-warn">{cma_note}</span></p>'
+    prob_rows = "".join(_mc_prob_row(label, mc.normal, mc.student_t) for label in DRAWDOWN_LABELS)
+    table = (
+        '<table class="p-table pfm-table"><thead><tr><th>Book return</th>'
+        '<th class="num">P (normal)</th><th class="num">P (t-dist)</th>'
+        f"</tr></thead><tbody>{prob_rows}</tbody></table>"
+    )
+    bits = [f"{mc.n_paths:,} paths", f"seed {mc.seed}", f"{mc.n_obs} common trading days"]
+    if mc.prices_through is not None:
+        bits.append(f"prices through {mc.prices_through.isoformat()}")
+    note = f'<p class="muted pfr-top">{escape(" · ".join(bits))}. {escape(mc.drift_source)}.</p>'
+    dropped = (
+        '<p class="muted pfr-top">Not modeled: '
+        + escape("; ".join(f"{t} — {reason}" for t, reason in sorted(mc.dropped.items())))
+        + ".</p>"
+        if mc.dropped
+        else ""
+    )
+    latam_html = _joint_latam_block(joint_latam)
+    return f"{head}{strip}{cma_chip}{table}{note}{dropped}{latam_html}</section>"
 
 
 def _thesis_collision_section(cached: CachedReport | None) -> str:
