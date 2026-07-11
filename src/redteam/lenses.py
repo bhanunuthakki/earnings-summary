@@ -26,6 +26,7 @@ from typing import cast
 
 from pydantic import ValidationError
 
+from bear_lint import BearLintFinding
 from llm.anchors import load_thesis_anchor
 from llm.structured import StructuredParseError, call_llm_structured
 from model_provenance.basis import dcf_basis
@@ -66,12 +67,16 @@ class NameEvidencePack:
     verdict: str | None
     key_driver: str | None
     # DCF-vs-market disagreement, when a dcf_runs row exists — None means "no
-    # DCF on file", NOT "0% disagreement". Populated via model_provenance.basis
-    # (already-merged, DB-backed) rather than the PR1-sibling bear-realism
-    # lint module (bear_provenance / lint_class), which is not yet on this
-    # branch — those two fields are simply omitted when absent, per the
-    # directive's "degrade gracefully" instruction.
+    # DCF on file", NOT "0% disagreement". Populated via model_provenance.basis.
     over_under_pct: float | None
+    # Bear-realism lint (Phase 1 PR1, src/bear_lint.py — merged): the held
+    # name's latest top-level DCF bear-scenario classification
+    # ("missing" | "not_a_bear" | "shallow" | "ok") and its provenance
+    # ("seed" | "thesis" | "owner"). None when no bear-lint finding is
+    # available (e.g. no dcf_runs row, or the caller didn't pass one) —
+    # degrades to omitting the evidence line rather than fabricating it.
+    bear_status: str | None = None
+    bear_provenance: str | None = None
 
 
 def build_name_evidence_pack(
@@ -80,10 +85,14 @@ def build_name_evidence_pack(
     *,
     ticker: str,
     weight_pct: float,
+    bear_finding: BearLintFinding | None = None,
 ) -> NameEvidencePack | None:
     """Assemble one held name's evidence pack. ``None`` when there is no
     holdings JSON on file at all (nothing to attack — the caller skips and
-    tallies it, it never fabricates a thesis)."""
+    tallies it, it never fabricates a thesis). ``bear_finding`` is the
+    caller's pre-computed ``bear_lint.build_bear_lint`` row for this ticker
+    (one book-wide lint pass, not one per name) — omitted when the caller has
+    none (a DB without ``dcf_runs``, or bear_lint unavailable)."""
     import sqlite3
 
     payload = load_holdings_json(repo_root, ticker)
@@ -116,6 +125,8 @@ def build_name_evidence_pack(
         verdict=(verdict if isinstance(verdict, str) else None),
         key_driver=(key_driver if isinstance(key_driver, str) else None),
         over_under_pct=over_under_pct,
+        bear_status=(bear_finding.status if bear_finding is not None else None),
+        bear_provenance=(bear_finding.provenance if bear_finding is not None else None),
     )
 
 
@@ -221,6 +232,10 @@ def build_prompt(pack: NameEvidencePack, lens: str, *, other_holdings_line: str)
         if pack.over_under_pct is not None
         else "No DCF fair-value model on file for this name."
     )
+    bear_line = ""
+    if pack.bear_status is not None:
+        prov = f", provenance {pack.bear_provenance}" if pack.bear_provenance else ""
+        bear_line = f" Bear-realism lint: {pack.bear_status}{prov}."
     anchor = pack.thesis_anchor_md.strip() or "(no thesis anchor on file)"
 
     return (
@@ -228,7 +243,7 @@ def build_prompt(pack: NameEvidencePack, lens: str, *, other_holdings_line: str)
         f"{pack.ticker}, in a long-only equity portfolio. Your job is NOT to "
         f"summarize the thesis — it is to attack it.\n\n"
         f"{framing}\n\n"
-        f"{weight_line} {verdict_line} {driver_line} {dcf_line}\n\n"
+        f"{weight_line} {verdict_line} {driver_line} {dcf_line}{bear_line}\n\n"
         f"{anchor}\n\n"
         f"Other names currently held in the same book (for shared-factor / "
         f"crowding context): {other_holdings_line or '(none on file)'}\n\n"

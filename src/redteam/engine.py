@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from bear_lint import BearLintFinding, build_bear_lint
 from clock import now_naive_utc
 from llm.cli import is_hard_stop
 from portfolio_correlation import build_holdings_correlation_from_disk
@@ -183,10 +184,26 @@ def _run_per_name(
     dry_run: bool,
     result: RedTeamRunResult,
 ) -> None:
+    # Bear-realism lint (Phase 1 PR1, src/bear_lint.py): one book-wide pass,
+    # not one per name — a pure disk/DB read, safe even in --dry-run. A
+    # failure here (e.g. no dcf_runs table) degrades to no bear evidence for
+    # every name rather than blocking the per-name pass.
+    try:
+        bear_by_ticker: dict[str, BearLintFinding] = {
+            f.ticker: f for f in build_bear_lint(db_path, repo_root=repo_root).findings
+        }
+    except Exception as exc:  # best-effort context, never blocks the pass
+        log.debug({"event": "red_team_bear_lint_failed", "error": str(exc)})
+        bear_by_ticker = {}
+
     for ticker in tickers:
         lens = lenses.lens_for(ticker, month_index)
         pack: NameEvidencePack | None = lenses.build_name_evidence_pack(
-            repo_root, conn, ticker=ticker, weight_pct=weights[ticker]
+            repo_root,
+            conn,
+            ticker=ticker,
+            weight_pct=weights[ticker],
+            bear_finding=bear_by_ticker.get(ticker),
         )
         if pack is None:
             _bump(result.tally, "no_thesis")

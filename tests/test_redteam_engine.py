@@ -119,6 +119,46 @@ def test_month_index_increases_monotonically_across_year_boundary() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Bear-realism lint integration (Phase 1 PR1, src/bear_lint.py)
+# ---------------------------------------------------------------------------
+
+
+def test_evidence_pack_carries_bear_finding_into_the_prompt(tmp_path: Path) -> None:
+    from bear_lint import STATUS_NOT_A_BEAR, BearLintFinding
+
+    repo_root = _make_repo_root(tmp_path, {"NU": 0.10})
+    finding = BearLintFinding(
+        ticker="NU",
+        status=STATUS_NOT_A_BEAR,
+        weight_pct=10.0,
+        live_price=100.0,
+        bear_fv=105.0,
+        bear_return_pct=5.0,
+        provenance="seed",
+        reason="bear fair value at/above live price",
+    )
+    pack = lenses.build_name_evidence_pack(
+        repo_root, None, ticker="NU", weight_pct=0.10, bear_finding=finding
+    )
+    assert pack is not None
+    assert pack.bear_status == STATUS_NOT_A_BEAR
+    assert pack.bear_provenance == "seed"
+
+    prompt = lenses.build_prompt(pack, "model_vs_market", other_holdings_line="")
+    assert "not_a_bear" in prompt
+    assert "seed" in prompt
+
+
+def test_evidence_pack_omits_bear_line_when_no_finding(tmp_path: Path) -> None:
+    repo_root = _make_repo_root(tmp_path, {"NU": 0.10})
+    pack = lenses.build_name_evidence_pack(repo_root, None, ticker="NU", weight_pct=0.10)
+    assert pack is not None
+    assert pack.bear_status is None
+    prompt = lenses.build_prompt(pack, "model_vs_market", other_holdings_line="")
+    assert "Bear-realism lint" not in prompt
+
+
+# ---------------------------------------------------------------------------
 # Dry-run: zero LLM calls
 # ---------------------------------------------------------------------------
 
