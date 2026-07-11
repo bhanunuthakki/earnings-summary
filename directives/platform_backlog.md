@@ -25,3 +25,16 @@ Full audit of the eval/routing infrastructure against the llm-ops bar (session g
 - [ ] **[llm-ops]** Uncovered high-value purposes (33 registered purposes have no eval mode): recent_developments ($78/mo, needs a web-tolerant rubric), exec_comp_alignment ($28/mo), saydo_commitment_extract (new — mode-A golden set from hand-labeled transcripts), lens:* family ($25/mo combined, one shared rubric), research_* trifecta, theme_synthesis.
 - [ ] **[llm-ops]** `artifact_brief` (auto-brief on capture, #788, Ledger Phase 3) has no eval yet — another uncovered purpose per the row above, called out separately since it's newer and fires on every capture (not yet cost-profiled). Tracked as uncovered, not built.
 - [ ] **[llm-ops]** decide_switch direction-aware agreement (carried from the 2026-06-11 finding): when judges split "tie vs candidate-wins" (both pro-downgrade), don't count it as disagreement — company_description-style HOLDs under-switch.
+
+## Monthly Red Team program (2026-07-10 adversarial portfolio review)
+
+Program spec: `directives/monthly_red_team.md`. Findings that motivated it: fake `BEAR_SEED` bears (UBER/WIX/NVO/BKNG bear FV above live), MELI/NU (25% of book) with no scenario block at all, NU compound tripwire prose-only with a lit leg invisible, MELI NIMAL glide (−490bps/yr toward the 15% floor) reading plain OK, corrupt NU customer KPI series, book vol ~22-27% vs wealthplan CMA 16%.
+
+- [ ] **[risk]** PR1: coverage gate + bear-realism lint + per-name bear deltas (`BEAR_SEED` → labeled fallback with provenance)
+- [ ] **[evaluator]** PR2: trajectory WARN soft rules + encode NU net-adds/penetration compound + MELI NIMAL glide + KPI monotonicity guard + NU series data fix
+- [ ] **[pipeline]** PR3: naked-position gate (nightly; downside trigger + realistic bear + thesis ≤90d; violations = standing chips)
+- [ ] **[risk]** PR4: fat-tail multivariate-t book MC + joint-LatAm event-corr stress + FLKR price-history cache + quarterly wealthplan CMA export
+- [ ] **[llm-ops]** PR5: First-Saturday red-team pipeline (rotating lenses, cross-book passes, `red_team_items`, quota-window registration, per-item degrade). New purpose needs LLM_MODELS + prompt_versions; eval coverage tracked as follow-up under "uncovered purposes"
+- [ ] **[ui]** PR6: forced response loop — REFUTE (ledger) / ACCEPT (auto-artifact) / DEFER-once (then Home-band escalation), month-close gate, Telegram `/redteam`
+- [ ] **[calibration]** PR7: scored-miss gate on re-underwrites (Brier entry before new thesis admitted) + Decision P&L wiring + January annual-letter draft
+- [ ] **[data]** owner-pending honest bears for MELI (~−60%) and NU (~−69%) once PR1 mechanism lands
