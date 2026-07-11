@@ -81,7 +81,14 @@ def _add_price(db: Path, ticker: str, price: float, created_at: str, *, is_lates
 
 
 def test_refute_scores_positive_when_price_holds(db: Path) -> None:
-    _add_item(db, ticker="MELI", lens="shared_factor", kind="per_name", status="refuted", responded_at=_OLD)
+    _add_item(
+        db,
+        ticker="MELI",
+        lens="shared_factor",
+        kind="per_name",
+        status="refuted",
+        responded_at=_OLD,
+    )
     _add_price(db, "MELI", 1000, _OLD, is_latest=0)
     _add_price(db, "MELI", 1100, _NEW, is_latest=1)
     report = build_decision_pnl(db_path=db, now=_NOW)
@@ -93,7 +100,14 @@ def test_refute_scores_positive_when_price_holds(db: Path) -> None:
 
 
 def test_refute_scores_negative_when_price_falls(db: Path) -> None:
-    _add_item(db, ticker="MELI", lens="shared_factor", kind="per_name", status="refuted", responded_at=_OLD)
+    _add_item(
+        db,
+        ticker="MELI",
+        lens="shared_factor",
+        kind="per_name",
+        status="refuted",
+        responded_at=_OLD,
+    )
     _add_price(db, "MELI", 1000, _OLD, is_latest=0)
     _add_price(db, "MELI", 800, _NEW, is_latest=1)
     report = build_decision_pnl(db_path=db, now=_NOW)
@@ -103,7 +117,14 @@ def test_refute_scores_negative_when_price_falls(db: Path) -> None:
 
 
 def test_accept_scores_positive_when_price_falls(db: Path) -> None:
-    _add_item(db, ticker="NU", lens="fx_translation", kind="per_name", status="accepted", responded_at=_OLD)
+    _add_item(
+        db,
+        ticker="NU",
+        lens="fx_translation",
+        kind="per_name",
+        status="accepted",
+        responded_at=_OLD,
+    )
     _add_price(db, "NU", 10, _OLD, is_latest=0)
     _add_price(db, "NU", 8, _NEW, is_latest=1)
     report = build_decision_pnl(db_path=db, now=_NOW)
@@ -114,7 +135,14 @@ def test_accept_scores_positive_when_price_falls(db: Path) -> None:
 
 
 def test_accept_scores_negative_when_price_rises(db: Path) -> None:
-    _add_item(db, ticker="NU", lens="fx_translation", kind="per_name", status="accepted", responded_at=_OLD)
+    _add_item(
+        db,
+        ticker="NU",
+        lens="fx_translation",
+        kind="per_name",
+        status="accepted",
+        responded_at=_OLD,
+    )
     _add_price(db, "NU", 10, _OLD, is_latest=0)
     _add_price(db, "NU", 12, _NEW, is_latest=1)
     report = build_decision_pnl(db_path=db, now=_NOW)
@@ -123,7 +151,14 @@ def test_accept_scores_negative_when_price_rises(db: Path) -> None:
 
 
 def test_defer_is_informational_not_scored(db: Path) -> None:
-    _add_item(db, ticker="WIX", lens="model_vs_market", kind="per_name", status="deferred", responded_at=_OLD)
+    _add_item(
+        db,
+        ticker="WIX",
+        lens="model_vs_market",
+        kind="per_name",
+        status="deferred",
+        responded_at=_OLD,
+    )
     _add_price(db, "WIX", 100, _OLD, is_latest=0)
     _add_price(db, "WIX", 120, _NEW, is_latest=1)
     report = build_decision_pnl(db_path=db, now=_NOW)
@@ -134,7 +169,9 @@ def test_defer_is_informational_not_scored(db: Path) -> None:
 
 
 def test_cross_book_item_is_not_price_scorable(db: Path) -> None:
-    _add_item(db, ticker=None, lens="style_drift", kind="cross_book", status="refuted", responded_at=_OLD)
+    _add_item(
+        db, ticker=None, lens="style_drift", kind="cross_book", status="refuted", responded_at=_OLD
+    )
     report = build_decision_pnl(db_path=db, now=_NOW)
     row = report.rows[0]
     assert row.ticker is None
@@ -143,7 +180,14 @@ def test_cross_book_item_is_not_price_scorable(db: Path) -> None:
 
 
 def test_missing_price_data_is_unscorable_not_a_crash(db: Path) -> None:
-    _add_item(db, ticker="ORPHAN", lens="fx_translation", kind="per_name", status="refuted", responded_at=_OLD)
+    _add_item(
+        db,
+        ticker="ORPHAN",
+        lens="fx_translation",
+        kind="per_name",
+        status="refuted",
+        responded_at=_OLD,
+    )
     report = build_decision_pnl(db_path=db, now=_NOW)
     row = report.rows[0]
     assert row.scored_pct is None
@@ -158,7 +202,14 @@ def test_missing_price_data_is_unscorable_not_a_crash(db: Path) -> None:
 
 def test_recent_response_is_not_yet_due(db: Path) -> None:
     recent = "2026-07-01T00:00:00"  # < 2 quarters before _NOW
-    _add_item(db, ticker="MELI", lens="shared_factor", kind="per_name", status="refuted", responded_at=recent)
+    _add_item(
+        db,
+        ticker="MELI",
+        lens="shared_factor",
+        kind="per_name",
+        status="refuted",
+        responded_at=recent,
+    )
     report = build_decision_pnl(db_path=db, now=_NOW, min_quarters=DEFAULT_MIN_QUARTERS)
     assert report.n_due == 0
     assert report.n_not_yet_due == 1
@@ -166,7 +217,14 @@ def test_recent_response_is_not_yet_due(db: Path) -> None:
 
 
 def test_min_quarters_is_configurable(db: Path) -> None:
-    _add_item(db, ticker="MELI", lens="shared_factor", kind="per_name", status="refuted", responded_at="2026-06-01T00:00:00")
+    _add_item(
+        db,
+        ticker="MELI",
+        lens="shared_factor",
+        kind="per_name",
+        status="refuted",
+        responded_at="2026-06-01T00:00:00",
+    )
     report = build_decision_pnl(db_path=db, now=_NOW, min_quarters=0)
     assert report.n_due == 1
 

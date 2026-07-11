@@ -102,10 +102,19 @@ def render_redteam_pnl_section(
         due_line = (
             f'<p class="rtp-due">{report.n_due} response(s) due for scoring'
             + (f" &middot; {report.n_not_yet_due} not yet due" if report.n_not_yet_due else "")
-            + (f" &middot; {report.n_unscorable} unscorable (no price on file)" if report.n_unscorable else "")
+            + (
+                f" &middot; {report.n_unscorable} unscorable (no price on file)"
+                if report.n_unscorable
+                else ""
+            )
             + "</p>"
         )
-        body = due_line + '<div class="rtp-rows">' + "".join(_row_html(r) for r in report.rows) + "</div>"
+        body = (
+            due_line
+            + '<div class="rtp-rows">'
+            + "".join(_row_html(r) for r in report.rows)
+            + "</div>"
+        )
     sc_html = ""
     if scorecard is not None:
         sc_html = (

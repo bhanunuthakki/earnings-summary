@@ -93,8 +93,12 @@ def test_log_scored_miss_inserts_owner_row(db: Path) -> None:
 
 def test_log_scored_miss_folds_prior_probability_into_rationale(db: Path) -> None:
     lsm.log_scored_miss(
-        db_path=db, ticker="NVO", conviction="high", belief="belief text",
-        outcome="outcome text", prior_probability=0.72,
+        db_path=db,
+        ticker="NVO",
+        conviction="high",
+        belief="belief text",
+        outcome="outcome text",
+        prior_probability=0.72,
     )
     row = _rows(db)[0]
     assert "0.72" in row["rationale_excerpt"]

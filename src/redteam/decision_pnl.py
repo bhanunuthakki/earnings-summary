@@ -315,7 +315,13 @@ class YearlyScorecard:
 # cut-discipline read — position_entries.exit_reason has no controlled
 # vocabulary (owner-authored prose at exit time), so this is a documented,
 # deliberately narrow keyword match rather than a guess-fix on ambiguous text.
-_RULE_KEYWORDS: tuple[str, ...] = ("break rule", "break_rule", "thesis broke", "breach", "rule fired")
+_RULE_KEYWORDS: tuple[str, ...] = (
+    "break rule",
+    "break_rule",
+    "thesis broke",
+    "breach",
+    "rule fired",
+)
 _MIN_CUT_DISCIPLINE_N = 3
 
 
@@ -354,7 +360,9 @@ def _brier_trend_number(db_path: Path | str) -> ScorecardNumber:
 def _cut_discipline_number(db_path: Path | str, *, user_id: str) -> ScorecardNumber:
     from position_lifecycle import list_entries
 
-    entries = [e for e in list_entries(db_path=db_path, user_id=user_id, limit=500) if not e.is_open]
+    entries = [
+        e for e in list_entries(db_path=db_path, user_id=user_id, limit=500) if not e.is_open
+    ]
     rule_exits = [e for e in entries if _is_rule_triggered(e.exit_reason)]
     if len(rule_exits) < _MIN_CUT_DISCIPLINE_N:
         return ScorecardNumber(
@@ -425,9 +433,7 @@ def _rule_execution_fidelity_number() -> ScorecardNumber:
     )
 
 
-def build_yearly_scorecard(
-    *, db_path: Path | str, user_id: str = "bhanu"
-) -> YearlyScorecard:
+def build_yearly_scorecard(*, db_path: Path | str, user_id: str = "bhanu") -> YearlyScorecard:
     """The three headline numbers the directive names. Each degrades to an
     honest, self-explaining empty state rather than a fabricated placeholder —
     per the directive, most of these are expected to read "no data yet" today."""

@@ -117,7 +117,9 @@ def _seed_breach(conn: sqlite3.Connection, ticker: str = "NVO") -> None:
     conn.commit()
 
 
-def _log_scored_miss(conn: sqlite3.Connection, ticker: str = "NVO", created_at: str = "2026-02-01T00:00:00") -> None:
+def _log_scored_miss(
+    conn: sqlite3.Connection, ticker: str = "NVO", created_at: str = "2026-02-01T00:00:00"
+) -> None:
     conn.execute(
         "INSERT INTO decisions (ticker, recommendation_kind, conviction, decided_by, scope, "
         "rationale_excerpt, made_at, outcome_at, outcome_label, outcome_notes, created_at) "
@@ -183,7 +185,11 @@ def test_evaluate_gate_not_reunderwrite_when_ok(conn: sqlite3.Connection) -> Non
 
 def test_evaluate_gate_not_reunderwrite_when_unchanged(conn: sqlite3.Connection) -> None:
     v = evaluate_gate(
-        conn, ticker="NVO", prior_thesis="same text", prior_breach_status="breach", new_thesis="same text"
+        conn,
+        ticker="NVO",
+        prior_thesis="same text",
+        prior_breach_status="breach",
+        new_thesis="same text",
     )
     assert v.is_reunderwrite is False
 
@@ -191,8 +197,11 @@ def test_evaluate_gate_not_reunderwrite_when_unchanged(conn: sqlite3.Connection)
 def test_evaluate_gate_blocks_reunderwrite_without_scored_miss(conn: sqlite3.Connection) -> None:
     _seed_breach(conn)
     v = evaluate_gate(
-        conn, ticker="NVO", prior_thesis="old GLP-1 volume-growth thesis",
-        prior_breach_status="breach", new_thesis="brand new different narrative",
+        conn,
+        ticker="NVO",
+        prior_thesis="old GLP-1 volume-growth thesis",
+        prior_breach_status="breach",
+        new_thesis="brand new different narrative",
     )
     assert v.is_reunderwrite is True
     assert v.blocked is True
@@ -203,8 +212,11 @@ def test_evaluate_gate_unblocks_with_scored_miss(conn: sqlite3.Connection) -> No
     _seed_breach(conn)
     _log_scored_miss(conn, created_at="2026-02-01T00:00:00")
     v = evaluate_gate(
-        conn, ticker="NVO", prior_thesis="old GLP-1 volume-growth thesis",
-        prior_breach_status="breach", new_thesis="brand new different narrative",
+        conn,
+        ticker="NVO",
+        prior_thesis="old GLP-1 volume-growth thesis",
+        prior_breach_status="breach",
+        new_thesis="brand new different narrative",
     )
     assert v.is_reunderwrite is True
     assert v.blocked is False
@@ -218,8 +230,12 @@ def test_evaluate_gate_unblocks_with_scored_miss(conn: sqlite3.Connection) -> No
 
 def _verdict(ticker: str, thesis: str, status: BreachStatus, when: datetime) -> ThesisVerdict:
     return ThesisVerdict(
-        ticker=ticker, thesis=thesis, overall_status=status,
-        rule_evaluations=(), evaluated_at=when, soft_rule_results=(),
+        ticker=ticker,
+        thesis=thesis,
+        overall_status=status,
+        rule_evaluations=(),
+        evaluated_at=when,
+        soft_rule_results=(),
     )
 
 
@@ -282,7 +298,9 @@ def test_persist_verdict_never_gates_a_corruption_stub(conn: sqlite3.Connection)
         "'{\"_status\": \"stub_regenerated_from_corruption\"}', '2026-01-01T00:00:00')"
     )
     conn.commit()
-    v = _verdict("MELI", "MercadoLibre flywheel, freshly re-ingested", BreachStatus.OK, datetime(2026, 3, 1))
+    v = _verdict(
+        "MELI", "MercadoLibre flywheel, freshly re-ingested", BreachStatus.OK, datetime(2026, 3, 1)
+    )
     persist_verdict(conn, v)  # must not raise
     row = conn.execute("SELECT breach_status FROM thesis_state WHERE ticker='MELI'").fetchone()
     assert row["breach_status"] == "ok"

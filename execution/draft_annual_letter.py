@@ -231,7 +231,9 @@ def draft_letter(*, evidence: AnnualLetterEvidence, db_path: Path) -> str:
         required_keys=("letter_md",),
         db_path=db_path,
     )
-    letter = cast("dict[str, object]", payload).get("letter_md") if isinstance(payload, dict) else None
+    letter = (
+        cast("dict[str, object]", payload).get("letter_md") if isinstance(payload, dict) else None
+    )
     if not isinstance(letter, str) or not letter.strip():
         raise StructuredParseError("annual_letter: empty letter_md in response")
     return letter.strip()

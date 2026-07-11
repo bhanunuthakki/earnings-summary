@@ -44,7 +44,9 @@ def test_render_none_report_is_honest_not_blank() -> None:
 
 
 def test_render_empty_rows_shows_due_counts() -> None:
-    report = DecisionPnlReport(min_quarters=2, as_of="2026-07-11", rows=[], n_due=0, n_not_yet_due=3)
+    report = DecisionPnlReport(
+        min_quarters=2, as_of="2026-07-11", rows=[], n_due=0, n_not_yet_due=3
+    )
     html = render_redteam_pnl_section(report, None)
     assert "0 responses due for scoring" in html
     assert "3 responded but not yet 2 quarters old" in html
@@ -63,8 +65,15 @@ def test_render_rows_include_ticker_status_and_score() -> None:
 
 
 def test_render_cross_book_row_shows_cross_book_label() -> None:
-    row = _row(ticker=None, kind="cross_book", price_then=None, price_now=None,
-               price_move_pct=None, scored_pct=None, note="cross-book item — not price-scorable")
+    row = _row(
+        ticker=None,
+        kind="cross_book",
+        price_then=None,
+        price_now=None,
+        price_move_pct=None,
+        scored_pct=None,
+        note="cross-book item — not price-scorable",
+    )
     report = DecisionPnlReport(min_quarters=2, as_of="x", rows=[row], n_due=1, n_not_yet_due=0)
     html = render_redteam_pnl_section(report, None)
     assert "Cross-book" in html

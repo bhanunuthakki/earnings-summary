@@ -112,7 +112,9 @@ def test_render_evidence_md_shows_honest_empty_sections(repo: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_draft_letter_calls_structured_llm_once(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_draft_letter_calls_structured_llm_once(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     db = repo / "data" / "portfolio.db"
     ev = dal.build_evidence_pack(db_path=db, repo_root=repo, year=2026)
     calls: list[dict[str, object]] = []
@@ -186,9 +188,7 @@ def test_cli_writes_letter_and_is_idempotent(
     assert "First draft body." in out_path.read_text(encoding="utf-8")
 
 
-def test_cli_force_overwrites_existing_letter(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_cli_force_overwrites_existing_letter(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dal, "call_llm_structured", lambda *a, **k: {"letter_md": "v1"})
     db = repo / "data" / "portfolio.db"
     dal.main(["--year", "2026", "--repo-root", str(repo), "--db", str(db)])
