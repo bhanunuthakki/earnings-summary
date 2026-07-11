@@ -832,18 +832,28 @@ def _soft_rules_panel(body: StringIO, soft_evals: list[SoftRuleEvaluation]) -> N
     """Render predicate-style soft signals as a sibling panel to break rules.
 
     Lives next to (not inside) the break-rules panel so the YELLOW-only
-    semantics stay visually distinct: hard rules can go RED, soft rules can't.
+    escalation semantics stay visually distinct: hard rules can go RED, soft
+    rules can't. `unresolved` (couldn't be evaluated — no data, or a
+    data-quality guard tripped) renders in the same amber (`break-status-warn`,
+    `var(--warn)`) as a fired rule — visible and distinct from a clean GREEN —
+    per `directives/monthly_red_team.md` Phase 1's "never silently green"
+    contract; only its label differs (UNRESOLVED vs YELLOW) so a reader can
+    tell "flagged" apart from "couldn't check".
     """
     fired = sum(1 for ev in soft_evals if ev.status == "yellow")
-    body.write(_panel_head("Soft signals", sub=f"{fired} of {len(soft_evals)} fired"))
+    unresolved = sum(1 for ev in soft_evals if ev.status == "unresolved")
+    sub = f"{fired} of {len(soft_evals)} fired"
+    if unresolved:
+        sub += f", {unresolved} unresolved"
+    body.write(_panel_head("Soft signals", sub=sub))
     body.write('<table class="tbl"><thead><tr>')
     body.write('<th>Rule</th><th>Evidence</th><th class="num">Status</th></tr></thead><tbody>')
     for ev in soft_evals:
         body.write('<tr class="break-row">')
         body.write(f"<td><strong>{_esc(ev.rule_name)}</strong></td>")
         body.write(f'<td><span class="xsmall muted">{_esc(ev.evidence)}</span></td>')
-        status_cls = "break-status-warn" if ev.status == "yellow" else "break-status-ok"
-        label = "YELLOW" if ev.status == "yellow" else "OK"
+        status_cls = "break-status-ok" if ev.status == "green" else "break-status-warn"
+        label = {"yellow": "YELLOW", "unresolved": "UNRESOLVED"}.get(ev.status, "OK")
         body.write(f'<td class="num {status_cls}">{label}</td>')
         body.write("</tr>")
     body.write("</tbody></table></div>")

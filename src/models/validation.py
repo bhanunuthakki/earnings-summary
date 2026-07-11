@@ -52,6 +52,12 @@ class ValidationRule(StrEnum):
     # a reader regressed off the (source_quality_tier, id) contract. Raised by
     # the reader-tier audit (pipeline.reader_tier_audit), never at ingest.
     READER_TIER_MISMATCH = "reader_tier_mismatch"
+    # A KPI marked cumulative (pipeline.kpi_persistence._is_cumulative_kpi —
+    # e.g. "Total customers") decreased chronologically. Cumulative series
+    # should be non-decreasing; a decrease is a genuine data-quality signal
+    # (restatement, extraction error) — the persist-time guard REJECTS the
+    # write and raises this rather than silently storing a broken series.
+    NON_MONOTONIC_CUMULATIVE = "non_monotonic_cumulative"
 
 
 class ValidationIssue(BaseModel):

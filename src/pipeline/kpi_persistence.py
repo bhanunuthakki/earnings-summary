@@ -13,13 +13,14 @@ directly into kpi_facts.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, Field
 
-from compute.kpi_resolver import canonical_metric_name
+from compute.kpi_resolver import canonical_metric_name, normalize_kpi_name
 from credibility.observations import KPI_FACTS, record_restatement_observation
 from models.documents import SourceType, tier_for_source_type
 from models.facts import FactLocator, FiscalPeriodType, Unit
@@ -28,6 +29,8 @@ from models.unit_convert import convert_unit
 from models.validation import Severity, ValidationRule
 from pipeline.confidence import score_confidence
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
+
+log = logging.getLogger(__name__)
 
 # kpi_facts.source_excerpt is VARCHAR(1024) (alembic 0033) — clip on write so
 # an over-eager extractor can't push a page of context into the column.
@@ -303,6 +306,98 @@ def _reconcile_unit(
     return converted, canonical, False
 
 
+# ---------------------------------------------------------------------------
+# Cumulative-series sanity guard (red-team PR2 item 4,
+# directives/monthly_red_team.md Phase 1 "KPI series sanity"): a KPI marked
+# cumulative (never-decreasing, e.g. a running customer count) is checked
+# against its chronological neighbors at persist time. A decrease, or a
+# >1000x unit-scale jump between adjacent prints (a raw-count row landing
+# inside a millions-scale series — the exact NU "Total customers" def 641
+# corruption the audit found), is REJECTED rather than silently written. This
+# is a small explicit allowlist (matched on the normalized name, so "Total
+# customers", "Total customers (millions)", and per-ticker variants all
+# match) rather than a new kpi_definitions column — extend the set when a new
+# cumulative-count metric needs the guard.
+# ---------------------------------------------------------------------------
+
+_CUMULATIVE_KPI_NAME_MARKERS: frozenset[str] = frozenset({"total customers"})
+
+_UNIT_JUMP_RATIO = Decimal("1000")
+
+
+def _is_cumulative_kpi(name: str) -> bool:
+    normalized = normalize_kpi_name(name)
+    return any(marker in normalized for marker in _CUMULATIVE_KPI_NAME_MARKERS)
+
+
+def _decimal_unit_jump(a: Decimal, b: Decimal, *, ratio_limit: Decimal = _UNIT_JUMP_RATIO) -> bool:
+    """True when `b` is a >ratio_limit× jump from `a` in either direction."""
+    lo, hi = sorted((abs(a), abs(b)))
+    if lo == 0:
+        return hi > 0 and hi > ratio_limit
+    return hi / lo > ratio_limit
+
+
+def _cumulative_guard_violation(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    kpi_definition_id: int,
+    period_end: datetime,
+    value: Decimal,
+) -> str | None:
+    """Return a violation reason if writing `value` at `period_end` would break
+    monotonicity or introduce a >1000x unit-scale jump versus this cumulative
+    KPI's chronologically-adjacent prints already on file. None = guard clears.
+
+    Checks both neighbors (not just "latest") so a backfill anywhere in the
+    timeline — not only an append at the end — is guarded.
+    """
+    rows = conn.execute(
+        "SELECT period_end, value FROM kpi_facts "
+        "WHERE ticker = ? AND kpi_definition_id = ? ORDER BY period_end",
+        (ticker.upper(), kpi_definition_id),
+    ).fetchall()
+    prev_v: Decimal | None = None
+    prev_pe: str | None = None
+    next_v: Decimal | None = None
+    next_pe: str | None = None
+    for row in rows:
+        row_pe_raw = row["period_end"]
+        row_pe = (
+            row_pe_raw
+            if isinstance(row_pe_raw, datetime)
+            else datetime.fromisoformat(str(row_pe_raw))
+        )
+        if row_pe < period_end:
+            prev_v, prev_pe = Decimal(str(row["value"])), row_pe.date().isoformat()
+        elif row_pe > period_end and next_v is None:
+            next_v, next_pe = Decimal(str(row["value"])), row_pe.date().isoformat()
+    if prev_v is not None:
+        if value < prev_v:
+            return (
+                f"non-monotonic: {value} at {period_end.date().isoformat()} < "
+                f"prior {prev_v} at {prev_pe} — cumulative series should not decrease"
+            )
+        if _decimal_unit_jump(prev_v, value):
+            return (
+                f"unit discontinuity: {prev_v} at {prev_pe} -> {value} at "
+                f"{period_end.date().isoformat()} (>{_UNIT_JUMP_RATIO}x jump)"
+            )
+    if next_v is not None:
+        if next_v < value:
+            return (
+                f"non-monotonic: next print {next_v} at {next_pe} < "
+                f"{value} at {period_end.date().isoformat()} — cumulative series should not decrease"
+            )
+        if _decimal_unit_jump(value, next_v):
+            return (
+                f"unit discontinuity: {value} at {period_end.date().isoformat()} -> "
+                f"{next_v} at {next_pe} (>{_UNIT_JUMP_RATIO}x jump)"
+            )
+    return None
+
+
 def _insert_kpi_fact(
     conn: sqlite3.Connection,
     *,
@@ -554,6 +649,48 @@ def persist_manifest(
             # manifests), which defaults to ANALYST.
             origin=manifest.origins.get(kpi.name, manifest.origin),
         )
+
+        # Cumulative-series sanity guard: reject (never guess-fix) a write that
+        # would break monotonicity or introduce a unit-scale jump on a KPI
+        # marked cumulative. Logged loud to stderr per the schema-drift rule —
+        # the fix belongs in the data (execution/fix_kpi_series.py), not a
+        # silent persist-time rescale.
+        if _is_cumulative_kpi(store_name):
+            violation = _cumulative_guard_violation(
+                conn,
+                ticker=manifest.ticker,
+                kpi_definition_id=kpi_def_id,
+                period_end=manifest.period_end,
+                value=value,
+            )
+            if violation is not None:
+                log.error(
+                    {
+                        "event": "cumulative_kpi_guard_violation",
+                        "ticker": manifest.ticker,
+                        "kpi_name": store_name,
+                        "period_end": manifest.period_end.date().isoformat(),
+                        "value": str(value),
+                        "reason": violation,
+                    }
+                )
+                record_validation_issue(
+                    conn,
+                    run_id=run_id,
+                    source_doc_id=manifest.source_doc_id,
+                    ticker=manifest.ticker,
+                    severity=Severity.WARN,
+                    rule=(
+                        ValidationRule.NON_MONOTONIC_CUMULATIVE
+                        if "non-monotonic" in violation
+                        else ValidationRule.MAGNITUDE_JUMP
+                    ),
+                    raw_value=f"{store_name}={value} at {manifest.period_end.date().isoformat()}",
+                    expected=violation,
+                )
+                issues += 1
+                continue
+
         excerpt = kpi.source_excerpt.strip()[:_SOURCE_EXCERPT_MAX] if kpi.source_excerpt else None
         was_inserted = _insert_kpi_fact(
             conn,

@@ -19,20 +19,43 @@ Predicate primitives (MVP):
   series_above    — metric above threshold for N consecutive Q
   ratio_breach    — numerator/denominator in `direction` vs threshold for N Q
   compound        — AND/OR over child predicates
+  trajectory      — linear-fit the last `lookback_prints` and project whether the
+                     trend crosses `threshold` within `horizon_prints` future prints
+                     (red-team PR2: `directives/monthly_red_team.md` Phase 1
+                     "Trajectory WARN")
 
-Out of scope here: new predicate types, LLM-authored rules, evaluator-level
-caching. Add a primitive only when an actual holdings JSON needs it.
+Every primitive above accepts a metric spec. Bare metric specs (`metric` on
+series_below/above/decel, `kpi_name` on trajectory, numerator/denominator on
+ratio_breach) default to the raw series (`derived: "level"`, implicit). Setting
+`derived: "delta"` evaluates consecutive-print DIFFERENCES instead of levels —
+e.g. NU's "net adds" is delta(Total customers). A cumulative series that is
+non-monotonic or has a >1000x unit-scale jump between adjacent prints can't be
+trusted to produce a real delta — the predicate reports UNRESOLVED with a
+data-quality reason rather than compute a garbage number (red-team PR2 item 2).
+
+Status is three-valued: GREEN (evaluated, didn't fire), YELLOW (evaluated,
+fired), UNRESOLVED (couldn't be evaluated — insufficient data, a malformed
+predicate, or a data-quality guard tripped). UNRESOLVED is never silently
+collapsed into GREEN — Phase 1's "Prose-rule encoding" contract requires a
+rule leg with no data to stay visible. RED is reserved for hard rules; soft
+rules never escalate the holding past WARN, whether they fire or are
+unresolved (see `thesis_evaluator._rollup_with_soft`).
+
+Out of scope here: new predicate types beyond `trajectory`, LLM-authored
+rules, evaluator-level caching. Add a primitive only when an actual holdings
+JSON needs it.
 """
 
 from __future__ import annotations
 
+import itertools
 import logging
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Literal, cast
+from typing import Any, Literal, NamedTuple, cast
 
 from pydantic import BaseModel, Field
 
@@ -40,7 +63,8 @@ log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Status — soft rules emit only GREEN (not fired) or YELLOW (fired). RED is
+# Status — soft rules emit GREEN (evaluated, not fired), YELLOW (evaluated,
+# fired), or UNRESOLVED (couldn't be evaluated — never silently GREEN). RED is
 # reserved for hard rules; mixing the two would let a single soft signal
 # escalate to thesis-broken, which contradicts the design.
 # ---------------------------------------------------------------------------
@@ -49,6 +73,7 @@ log = logging.getLogger(__name__)
 class SoftRuleStatus(StrEnum):
     GREEN = "green"
     YELLOW = "yellow"
+    UNRESOLVED = "unresolved"
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +87,7 @@ class PredicateType(StrEnum):
     SERIES_ABOVE = "series_above"
     RATIO_BREACH = "ratio_breach"
     COMPOUND = "compound"
+    TRAJECTORY = "trajectory"
 
 
 class FactSource(StrEnum):
@@ -215,6 +241,73 @@ def _fetch_series(
 
 
 # ---------------------------------------------------------------------------
+# Derived-metric layer — `derived: "delta"` turns a level series into its
+# consecutive-print differences (NU's "net adds" = delta(Total customers)).
+# Guarded: a cumulative series that decreases, or jumps by >1000x between
+# adjacent prints (a raw-count row landing inside a millions-scale series —
+# exactly the NU "Total customers" def 641 corruption the red-team audit
+# found), can't be trusted to produce a real delta. The guard scans the FULL
+# fetched history (not just the caller's lookback window) so a single bad
+# print anywhere in the series blocks every delta computed through it until
+# the underlying data is fixed (execution/fix_kpi_series.py) — fail closed,
+# never a garbage delta.
+# ---------------------------------------------------------------------------
+
+_UNIT_JUMP_RATIO = 1000.0
+
+
+def _has_unit_jump(prev_v: float, cur_v: float, *, ratio_limit: float = _UNIT_JUMP_RATIO) -> bool:
+    """True when `cur_v` is a >ratio_limit× jump from `prev_v` in either direction."""
+    lo, hi = sorted((abs(prev_v), abs(cur_v)))
+    if lo == 0:
+        return hi > 0 and hi > ratio_limit
+    return hi / lo > ratio_limit
+
+
+def _fetch_series_with_derived(
+    conn: sqlite3.Connection,
+    ticker: str,
+    metric: str,
+    source: FactSource,
+    derived: str,
+) -> tuple[list[tuple[datetime, float]] | None, str | None]:
+    """Return (series, None) on success, or (None, reason) when a data-quality
+    guard blocks a `derived: "delta"` computation. `derived == "level"` (the
+    default) always succeeds — it's the raw series, unguarded (existing
+    predicates already tolerate a noisy level series; only a DELTA over a
+    cumulative series risks manufacturing a nonsense number from a unit error).
+    """
+    raw = _fetch_series(conn, ticker, metric, source)
+    if derived == "level":
+        return raw, None
+    if derived != "delta":
+        raise ValueError(f"unsupported derived transform: {derived!r}")
+    if len(raw) < 2:
+        return [], None
+    for (prev_p, prev_v), (cur_p, cur_v) in itertools.pairwise(raw):
+        if cur_v < prev_v:
+            return None, (
+                f"non-monotonic {metric}: {cur_v:g} at {cur_p.date().isoformat()} < "
+                f"{prev_v:g} at {prev_p.date().isoformat()} — cumulative series should "
+                "not decrease; delta not computed"
+            )
+        if _has_unit_jump(prev_v, cur_v):
+            return None, (
+                f"unit discontinuity in {metric}: {prev_v:g} at {prev_p.date().isoformat()} "
+                f"-> {cur_v:g} at {cur_p.date().isoformat()} (>{_UNIT_JUMP_RATIO:g}x jump) — "
+                "likely a scale error; delta not computed"
+            )
+    deltas = [(cur_p, cur_v - prev_v) for (_, prev_v), (cur_p, cur_v) in itertools.pairwise(raw)]
+    return deltas, None
+
+
+class _MetricSpec(NamedTuple):
+    name: str
+    source: FactSource
+    derived: str  # "level" | "delta"
+
+
+# ---------------------------------------------------------------------------
 # Predicate implementations
 # ---------------------------------------------------------------------------
 
@@ -228,22 +321,37 @@ def _param(params: dict[str, Any], key: str, *, required: bool = True) -> Any:
     return None
 
 
-def _source_from_param(params: dict[str, Any]) -> FactSource:
-    """Default to FINANCIAL when unspecified — the most common case for the
-    canonical metrics (revenue, fcf, operating_cash_flow). Holdings JSONs that
-    want KPI facts opt in explicitly with `source: "kpi"`."""
-    raw = params.get("source", FactSource.FINANCIAL.value)
+def _source_from_param(
+    params: dict[str, Any], *, default: FactSource = FactSource.FINANCIAL
+) -> FactSource:
+    """Default to `default` (FINANCIAL for most predicates) when unspecified.
+    Holdings JSONs that want KPI facts opt in explicitly with `source: "kpi"`."""
+    raw = params.get("source", default.value)
     try:
         return FactSource(str(raw))
     except ValueError as exc:
         raise ValueError(f"invalid source: {raw!r}") from exc
 
 
+def _derived_from_param(params: dict[str, Any]) -> str:
+    """`derived` opt-in: "level" (default, raw series) or "delta" (consecutive-
+    print differences — see the derived-metric layer above)."""
+    raw = str(params.get("derived", "level"))
+    if raw not in ("level", "delta"):
+        raise ValueError(f"invalid derived transform: {raw!r} (must be 'level' or 'delta')")
+    return raw
+
+
 @dataclass(frozen=True)
 class _PredOutcome:
-    """Internal: one predicate's verdict + the context for evidence rendering."""
+    """Internal: one predicate's verdict + the context for evidence rendering.
 
-    fired: bool
+    `fired` is three-valued: True (fired → YELLOW), False (evaluated, didn't
+    fire → GREEN), None (couldn't be evaluated — insufficient data or a
+    data-quality guard tripped → UNRESOLVED, never silently GREEN).
+    """
+
+    fired: bool | None
     evidence_keys: dict[str, Any]
     description: str  # fallback used when evidence_template is missing/unfillable
 
@@ -262,17 +370,24 @@ def _eval_series_decel(
     """
     metric = str(_param(params, "metric"))
     source = _source_from_param(params)
+    derived = _derived_from_param(params)
     periods = int(_param(params, "periods"))
     threshold_bps = float(_param(params, "threshold_bps"))
     if periods < 1:
         raise ValueError("series_decel periods must be >= 1")
-    series = _fetch_series(conn, ticker, metric, source)
+    series, guard_reason = _fetch_series_with_derived(conn, ticker, metric, source, derived)
+    if series is None:
+        return _PredOutcome(
+            fired=None,
+            evidence_keys={"metric": metric, "derived": derived},
+            description=f"unresolved: {guard_reason}",
+        )
     if len(series) < periods + 5:
         return _PredOutcome(
-            fired=False,
+            fired=None,
             evidence_keys={"metric": metric, "have": len(series), "need": periods + 5},
             description=(
-                f"insufficient data for series_decel({metric}): "
+                f"unresolved: insufficient data for series_decel({metric}): "
                 f"have {len(series)} quarters, need {periods + 5}"
             ),
         )
@@ -284,9 +399,9 @@ def _eval_series_decel(
         _, base_val = series[idx - 4]
         if base_val == 0:
             return _PredOutcome(
-                fired=False,
+                fired=None,
                 evidence_keys={"metric": metric, "zero_base_at": cur_period.isoformat()},
-                description=f"series_decel({metric}): zero base value blocks YoY",
+                description=f"unresolved: series_decel({metric}): zero base value blocks YoY",
             )
         growth_pct = (cur_val / base_val - 1.0) * 100.0
         yoy.append((cur_period, growth_pct))
@@ -335,17 +450,24 @@ def _eval_series_threshold(
     """series_below / series_above — all of the last N quarters on one side of threshold."""
     metric = str(_param(params, "metric"))
     source = _source_from_param(params)
+    derived = _derived_from_param(params)
     threshold = float(_param(params, "threshold"))
     periods = int(_param(params, "periods"))
     if periods < 1:
         raise ValueError(f"series_{direction} periods must be >= 1")
-    series = _fetch_series(conn, ticker, metric, source)
+    series, guard_reason = _fetch_series_with_derived(conn, ticker, metric, source, derived)
+    if series is None:
+        return _PredOutcome(
+            fired=None,
+            evidence_keys={"metric": metric, "derived": derived},
+            description=f"unresolved: {guard_reason}",
+        )
     if len(series) < periods:
         return _PredOutcome(
-            fired=False,
+            fired=None,
             evidence_keys={"metric": metric, "have": len(series), "need": periods},
             description=(
-                f"insufficient data for series_{direction}({metric}): "
+                f"unresolved: insufficient data for series_{direction}({metric}): "
                 f"have {len(series)} quarters, need {periods}"
             ),
         )
@@ -396,8 +518,19 @@ def _eval_ratio_breach(
     if periods < 1:
         raise ValueError("ratio_breach periods must be >= 1")
 
-    num_series = _fetch_series(conn, ticker, num_spec[0], num_spec[1])
-    den_series = _fetch_series(conn, ticker, den_spec[0], den_spec[1])
+    num_series, num_guard = _fetch_series_with_derived(
+        conn, ticker, num_spec.name, num_spec.source, num_spec.derived
+    )
+    den_series, den_guard = _fetch_series_with_derived(
+        conn, ticker, den_spec.name, den_spec.source, den_spec.derived
+    )
+    if num_series is None or den_series is None:
+        reason = num_guard if num_series is None else den_guard
+        return _PredOutcome(
+            fired=None,
+            evidence_keys={"numerator": num_spec.name, "denominator": den_spec.name},
+            description=f"unresolved: {reason}",
+        )
     num_map = {pe: v for pe, v in num_series}
     den_map = {pe: v for pe, v in den_series}
     # Inner-join on period_end so we only compute the ratio where both sides
@@ -409,15 +542,15 @@ def _eval_ratio_breach(
     ]
     if len(paired) < periods:
         return _PredOutcome(
-            fired=False,
+            fired=None,
             evidence_keys={
-                "numerator": num_spec[0],
-                "denominator": den_spec[0],
+                "numerator": num_spec.name,
+                "denominator": den_spec.name,
                 "have": len(paired),
                 "need": periods,
             },
             description=(
-                f"insufficient data for ratio_breach({num_spec[0]}/{den_spec[0]}): "
+                f"unresolved: insufficient data for ratio_breach({num_spec.name}/{den_spec.name}): "
                 f"have {len(paired)} paired quarters, need {periods}"
             ),
         )
@@ -430,8 +563,8 @@ def _eval_ratio_breach(
     return _PredOutcome(
         fired=fired,
         evidence_keys={
-            "numerator": num_spec[0],
-            "denominator": den_spec[0],
+            "numerator": num_spec.name,
+            "denominator": den_spec.name,
             "threshold": threshold,
             "threshold_pct": round(threshold * 100.0, 2),
             "direction": direction,
@@ -442,7 +575,7 @@ def _eval_ratio_breach(
             "last_period": window[-1][0].isoformat(),
         },
         description=(
-            f"{num_spec[0]} / {den_spec[0]} {direction} {threshold * 100:.1f}% "
+            f"{num_spec.name} / {den_spec.name} {direction} {threshold * 100:.1f}% "
             f"for {periods} consecutive Q "
             f"(ratios: {', '.join(f'{r * 100:.1f}%' for _, r in window)})"
             + ("; FIRED" if fired else "; ok")
@@ -450,30 +583,64 @@ def _eval_ratio_breach(
     )
 
 
-def _metric_spec(raw: Any) -> tuple[str, FactSource]:
-    """Coerce a numerator/denominator entry into (name, source).
+def _metric_spec(raw: Any) -> _MetricSpec:
+    """Coerce a numerator/denominator entry into a `_MetricSpec`.
 
-    Accepts either a bare string (defaults to financial) or a {name, source}
-    dict. Strict on shape — invalid entries raise so the rule fails loud and
-    the analyst fixes the JSON rather than silently no-op'ing.
+    Accepts either a bare string (defaults to financial, `derived: "level"`)
+    or a `{name, source, derived}` dict. Strict on shape — invalid entries
+    raise so the rule fails loud and the analyst fixes the JSON rather than
+    silently no-op'ing.
     """
     if isinstance(raw, str):
-        return (raw, FactSource.FINANCIAL)
+        return _MetricSpec(raw, FactSource.FINANCIAL, "level")
     if isinstance(raw, dict):
         spec_dict: dict[str, Any] = cast("dict[str, Any]", raw)
         name_val = spec_dict.get("name")
         if not isinstance(name_val, str) or not name_val:
             raise ValueError(f"metric spec missing `name`: {raw!r}")
         source_raw = spec_dict.get("source", FactSource.FINANCIAL.value)
+        derived_raw = str(spec_dict.get("derived", "level"))
+        if derived_raw not in ("level", "delta"):
+            raise ValueError(f"invalid derived transform in metric spec: {derived_raw!r}")
         try:
-            return (name_val, FactSource(str(source_raw)))
+            return _MetricSpec(name_val, FactSource(str(source_raw)), derived_raw)
         except ValueError as exc:
             raise ValueError(f"invalid source in metric spec: {source_raw!r}") from exc
     raise ValueError(f"metric spec must be str or dict, got {type(raw).__name__}: {raw!r}")
 
 
+def _kleene_and(vals: list[bool | None]) -> bool | None:
+    """Three-valued AND: any definite False wins; else any Unknown → Unknown;
+    else True. Standard Kleene logic — lets a compound rule stay UNRESOLVED
+    (not silently GREEN) when one leg can't be evaluated but no leg has
+    definitively cleared the bar."""
+    if any(v is False for v in vals):
+        return False
+    if any(v is None for v in vals):
+        return None
+    return True
+
+
+def _kleene_or(vals: list[bool | None]) -> bool | None:
+    """Three-valued OR: any definite True wins; else any Unknown → Unknown;
+    else False."""
+    if any(v is True for v in vals):
+        return True
+    if any(v is None for v in vals):
+        return None
+    return False
+
+
 def _eval_compound(conn: sqlite3.Connection, ticker: str, params: dict[str, Any]) -> _PredOutcome:
-    """AND / OR over child predicates."""
+    """AND / OR over child predicates, three-valued (Kleene) so an unresolved
+    child never gets silently absorbed into a plain green/fired verdict.
+
+    Example: NU's "net adds <5M/Q AND Brazil flagship penetration declining
+    QoQ" — the penetration leg has zero rows on file (def 639), so it's
+    UNRESOLVED. Even if the net-adds leg fires, `AND(True, None) == None` —
+    the compound renders UNRESOLVED (visible, amber), never a false GREEN
+    that would hide the fact that one leg genuinely can't be checked yet.
+    """
     op = str(_param(params, "op")).lower()
     if op not in ("and", "or"):
         raise ValueError(f"compound op must be 'and' or 'or', got {op!r}")
@@ -484,10 +651,16 @@ def _eval_compound(conn: sqlite3.Connection, ticker: str, params: dict[str, Any]
     for entry in cast("list[Any]", children_raw):
         children.append(SoftRulePredicate.model_validate(entry))
     child_outcomes = [_evaluate_predicate(conn, ticker, c) for c in children]
-    if op == "and":
-        fired = all(c.fired for c in child_outcomes)
+    child_fired = [c.fired for c in child_outcomes]
+    fired = _kleene_and(child_fired) if op == "and" else _kleene_or(child_fired)
+    fired_count = sum(1 for f in child_fired if f is True)
+    unresolved_count = sum(1 for f in child_fired if f is None)
+    if fired is None:
+        outcome_word = "UNRESOLVED"
+    elif fired:
+        outcome_word = "FIRED"
     else:
-        fired = any(c.fired for c in child_outcomes)
+        outcome_word = "ok"
     return _PredOutcome(
         fired=fired,
         evidence_keys={
@@ -503,9 +676,162 @@ def _eval_compound(conn: sqlite3.Connection, ticker: str, params: dict[str, Any]
         },
         description=(
             f"compound {op.upper()} over {len(children)} children: "
-            f"{sum(c.fired for c in child_outcomes)}/{len(children)} fired"
-            + ("; FIRED" if fired else "; ok")
+            f"{fired_count} fired, {unresolved_count} unresolved, "
+            f"{len(children) - fired_count - unresolved_count} clear; {outcome_word}"
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# trajectory — linear-fit the last `lookback_prints` and project whether the
+# trend crosses `threshold` within `horizon_prints` future prints. This is
+# the Phase 1 "Trajectory WARN" contract: MELI's NIMAL glided 22.7% → 17.8%
+# YoY (-490bps/yr) toward its encoded 15%-floor rule but read plain OK,
+# because the hard rule only fires once the floor is actually crossed. A
+# trajectory soft rule surfaces the approach BEFORE the crossing.
+# ---------------------------------------------------------------------------
+
+_TRAJECTORY_COMPARATORS = ("lt", "le", "gt", "ge")
+
+
+def _trajectory_hit(v: float, comparator: str, threshold: float) -> bool:
+    if comparator == "lt":
+        return v < threshold
+    if comparator == "le":
+        return v <= threshold
+    if comparator == "gt":
+        return v > threshold
+    return v >= threshold  # "ge"
+
+
+_COMPARATOR_SYMBOL = {"lt": "<", "le": "<=", "gt": ">", "ge": ">="}
+
+
+def _linear_fit(xs: list[int], ys: list[float]) -> tuple[float, float]:
+    """OLS slope + intercept for y = slope*x + intercept. `xs` are always
+    distinct consecutive integers (0..n-1) here so the denominator is never
+    zero for n >= 2 — no degenerate branch needed."""
+    n = len(xs)
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    denom = sum((x - mean_x) ** 2 for x in xs)
+    if denom == 0:
+        return 0.0, mean_y
+    slope = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys, strict=True)) / denom
+    intercept = mean_y - slope * mean_x
+    return slope, intercept
+
+
+def _add_quarters(period: datetime, n: int) -> datetime:
+    """Project `period` forward by `n` quarters (n may be 0)."""
+    month0 = period.month - 1 + 3 * n
+    year = period.year + month0 // 12
+    month = month0 % 12 + 1
+    day = min(period.day, 28)  # side-step month-length overflow (Q-end dates only)
+    return period.replace(year=year, month=month, day=day)
+
+
+def _quarter_label(period: datetime) -> str:
+    q = (period.month - 1) // 3 + 1
+    return f"Q{q}'{period.year % 100:02d}"
+
+
+def _eval_trajectory(conn: sqlite3.Connection, ticker: str, params: dict[str, Any]) -> _PredOutcome:
+    """Linear-fit the last `lookback_prints` of `kpi_name` and project forward.
+
+    Fires (WARN) when the fitted trend crosses `threshold` within
+    `horizon_prints` future prints. Insufficient data (fewer than
+    `lookback_prints` observations) or a blocked `derived: "delta"` guard
+    → UNRESOLVED, never a silent non-fire.
+    """
+    kpi_name = str(_param(params, "kpi_name"))
+    source = _source_from_param(params, default=FactSource.KPI)
+    derived = _derived_from_param(params)
+    threshold = float(_param(params, "threshold"))
+    comparator = str(_param(params, "comparator")).lower()
+    if comparator not in _TRAJECTORY_COMPARATORS:
+        raise ValueError(
+            f"trajectory comparator must be one of {_TRAJECTORY_COMPARATORS}, got {comparator!r}"
+        )
+    lookback = int(params.get("lookback_prints", 4))
+    if lookback < 3:
+        raise ValueError("trajectory lookback_prints must be >= 3")
+    horizon = int(params.get("horizon_prints", 2))
+    if horizon < 1:
+        raise ValueError("trajectory horizon_prints must be >= 1")
+
+    series, guard_reason = _fetch_series_with_derived(conn, ticker, kpi_name, source, derived)
+    if series is None:
+        return _PredOutcome(
+            fired=None,
+            evidence_keys={"kpi_name": kpi_name, "derived": derived},
+            description=f"unresolved: {guard_reason}",
+        )
+    if len(series) < lookback:
+        return _PredOutcome(
+            fired=None,
+            evidence_keys={"kpi_name": kpi_name, "have": len(series), "need": lookback},
+            description=(
+                f"unresolved: insufficient data for trajectory({kpi_name}): "
+                f"have {len(series)} prints, need {lookback}"
+            ),
+        )
+    window = series[-lookback:]
+    periods = [p for p, _ in window]
+    ys = [v for _, v in window]
+    xs = list(range(lookback))
+    slope, intercept = _linear_fit(xs, ys)
+    last_value = ys[-1]
+    last_period = periods[-1]
+    symbol = _COMPARATOR_SYMBOL[comparator]
+    already_violating = _trajectory_hit(last_value, comparator, threshold)
+
+    trip_h: int | None = None
+    trip_value: float | None = None
+    for h in range(1, horizon + 1):
+        projected = intercept + slope * (lookback - 1 + h)
+        if _trajectory_hit(projected, comparator, threshold):
+            trip_h = h
+            trip_value = projected
+            break
+
+    fired = trip_h is not None
+    trip_period_label = _quarter_label(_add_quarters(last_period, trip_h)) if trip_h else None
+    last_period_label = _quarter_label(last_period)
+
+    if fired and already_violating and trip_h == 1:
+        description = (
+            f"{kpi_name} already {symbol}{threshold:g} as of {last_period_label} "
+            f"(trend {slope:+.2f}/print over last {lookback}Q continues); trip {trip_period_label}"
+        )
+    elif fired:
+        description = (
+            f"{kpi_name} trajectory ({slope:+.2f}/print over last {lookback}Q, last={last_value:.2f} "
+            f"at {last_period_label}) projects {symbol}{threshold:g} by {trip_period_label}"
+        )
+    else:
+        description = (
+            f"{kpi_name} trajectory ({slope:+.2f}/print over last {lookback}Q, last={last_value:.2f} "
+            f"at {last_period_label}) not projected {symbol}{threshold:g} within {horizon} prints"
+        )
+
+    return _PredOutcome(
+        fired=fired,
+        evidence_keys={
+            "kpi_name": kpi_name,
+            "threshold": threshold,
+            "comparator": comparator,
+            "lookback_prints": lookback,
+            "horizon_prints": horizon,
+            "slope_per_period": round(slope, 4),
+            "last_value": round(last_value, 4),
+            "last_period": last_period_label,
+            "trip_period": trip_period_label,
+            "trip_h": trip_h,
+            "trip_value": round(trip_value, 4) if trip_value is not None else None,
+            "already_violating": already_violating,
+        },
+        description=description,
     )
 
 
@@ -532,6 +858,7 @@ _PREDICATE_DISPATCH: dict[PredicateType, _PredHandler] = {
     PredicateType.SERIES_ABOVE: _series_above_handler,
     PredicateType.RATIO_BREACH: _eval_ratio_breach,
     PredicateType.COMPOUND: _eval_compound,
+    PredicateType.TRAJECTORY: _eval_trajectory,
 }
 
 
@@ -550,18 +877,38 @@ def _evaluate_predicate(
 # ---------------------------------------------------------------------------
 
 
+class _NoneAsMissing(dict[str, Any]):
+    """A dict-for-`str.format` where a `None` value counts as missing.
+
+    Several evidence keys are conditionally populated — `trajectory`'s
+    `trip_period`/`trip_h`/`trip_value` are `None` when the rule doesn't fire.
+    A bare `.format(**keys)` would happily stringify that as the literal text
+    "None" (`str.format` doesn't raise on a present-but-None value), producing
+    a nonsense sentence like "...projects <15% by None". Treating None as
+    absent routes those templates through the same missing-key fallback that
+    already covers a template referencing a key the predicate didn't expose.
+    """
+
+    def __getitem__(self, key: str) -> Any:
+        value = super().__getitem__(key)
+        if value is None:
+            raise KeyError(key)
+        return value
+
+
 def _render_evidence(template: str | None, outcome: _PredOutcome) -> str:
     """Render the evidence string from the template + predicate context.
 
-    Falls back to the predicate's `description` when the template is missing
-    or references a key the predicate didn't expose. The analyst seeing
-    "fired but template borked" still gets a useful sentence — never an empty
-    string in the brief.
+    Falls back to the predicate's `description` when the template is missing,
+    references a key the predicate didn't expose, or references a key whose
+    value is `None` (see `_NoneAsMissing`). The analyst seeing "fired but
+    template borked" still gets a useful sentence — never an empty string, and
+    never a literal "None" leaking into the brief.
     """
     if not template:
         return outcome.description
     try:
-        return template.format(**outcome.evidence_keys)
+        return template.format_map(_NoneAsMissing(outcome.evidence_keys))
     except (KeyError, IndexError, ValueError) as exc:
         log.warning(
             {"event": "soft_rule_template_render_failed", "error": str(exc), "template": template}
@@ -577,9 +924,10 @@ def evaluate_soft_rules(
     """Evaluate every soft rule for `ticker` and return per-rule results.
 
     Errors in a single rule (invalid predicate, missing required param) are
-    logged and skipped — the rule is treated as GREEN with the error in its
-    evidence so the analyst sees something rather than silently losing the
-    rule. Hard failures here must never break the thesis evaluator pipeline.
+    logged and surfaced as UNRESOLVED — never GREEN — with the error in its
+    evidence, so a malformed rule stays visibly broken rather than reading as
+    "checked, all clear". Hard failures here must never break the thesis
+    evaluator pipeline; other rules in the same call still evaluate.
     """
     now = datetime.now()
     out: list[SoftRuleResult] = []
@@ -597,14 +945,19 @@ def evaluate_soft_rules(
             out.append(
                 SoftRuleResult(
                     rule_name=rule.name,
-                    status=SoftRuleStatus.GREEN,
+                    status=SoftRuleStatus.UNRESOLVED,
                     evidence=f"soft rule '{rule.name}' did not evaluate: {exc}",
                     details={"error": str(exc)},
                     evaluated_at=now,
                 )
             )
             continue
-        status = SoftRuleStatus.YELLOW if outcome.fired else SoftRuleStatus.GREEN
+        if outcome.fired is None:
+            status = SoftRuleStatus.UNRESOLVED
+        elif outcome.fired:
+            status = SoftRuleStatus.YELLOW
+        else:
+            status = SoftRuleStatus.GREEN
         evidence = _render_evidence(rule.evidence_template, outcome)
         out.append(
             SoftRuleResult(

@@ -533,7 +533,10 @@ def _break_rules_block(out: StringIO, s: ThesisSection) -> None:
         _break_rule_table_md(out, business)
     if s.soft_rule_evaluations:
         out.write("#### Soft signals\n\n")
-        out.write("_Predicate-style watch signals — never escalate past YELLOW._\n\n")
+        out.write(
+            "_Predicate-style watch signals — GREEN (clear) / YELLOW (fired) / "
+            "UNRESOLVED (couldn't be checked); never escalate the holding past WARN._\n\n"
+        )
         _soft_rule_table_md(out, s.soft_rule_evaluations)
 
 

@@ -212,6 +212,152 @@ def test_record_validation_issue_inserts_row(conn: sqlite3.Connection) -> None:
     assert dict(row)["rule"] == "source_disagreement"
 
 
+# ---------------------------------------------------------------------------
+# Cumulative-series sanity guard (red-team PR2 item 4,
+# directives/monthly_red_team.md Phase 1 "KPI series sanity"). "Total
+# customers" is the explicit allowlist marker (pipeline.kpi_persistence.
+# _CUMULATIVE_KPI_NAME_MARKERS) — matches "Total customers", "Total customers
+# (millions)", etc. via the normalized-name substring check.
+# ---------------------------------------------------------------------------
+
+
+def _customers_manifest(
+    *, period_end: datetime, value: Decimal, source_doc_id: int, ticker: str = "NU"
+) -> KpiExtractionManifest:
+    return KpiExtractionManifest(
+        ticker=ticker,
+        period_end=period_end,
+        fiscal_period_type=FiscalPeriodType.Q1,
+        source_doc_id=source_doc_id,
+        values=[KpiValue(name="Total customers (millions)", value=value, unit=Unit.COUNT)],
+    )
+
+
+def test_persist_manifest_allows_normal_cumulative_growth(conn: sqlite3.Connection) -> None:
+    """A cumulative KPI that grows quarter over quarter is unaffected by the guard."""
+    persist_manifest(
+        conn,
+        run_id="r1",
+        manifest=_customers_manifest(
+            period_end=datetime(2025, 3, 31), value=Decimal("100"), source_doc_id=1
+        ),
+    )
+    result = persist_manifest(
+        conn,
+        run_id="r2",
+        manifest=_customers_manifest(
+            period_end=datetime(2025, 6, 30), value=Decimal("110"), source_doc_id=2
+        ),
+    )
+    assert result.inserted == 1
+    assert result.validation_issues == 0
+
+
+def test_persist_manifest_rejects_non_monotonic_cumulative_kpi(conn: sqlite3.Connection) -> None:
+    """A later print with a LOWER value than its prior print is rejected — a
+    cumulative series should never decrease. NEVER guess-fixed; the row is
+    skipped and a NON_MONOTONIC_CUMULATIVE validation_issue is raised."""
+    persist_manifest(
+        conn,
+        run_id="r1",
+        manifest=_customers_manifest(
+            period_end=datetime(2025, 3, 31), value=Decimal("119"), source_doc_id=1
+        ),
+    )
+    result = persist_manifest(
+        conn,
+        run_id="r2",
+        manifest=_customers_manifest(
+            period_end=datetime(2025, 6, 30), value=Decimal("95"), source_doc_id=2
+        ),
+    )
+    assert result.inserted == 0
+    assert result.validation_issues == 1
+    issue = dict(conn.execute("SELECT rule, severity, expected FROM validation_issues").fetchone())
+    assert issue["rule"] == ValidationRule.NON_MONOTONIC_CUMULATIVE.value
+    assert issue["severity"] == Severity.WARN.value
+    assert "non-monotonic" in issue["expected"].lower()
+    # And the bad value never landed in kpi_facts.
+    rows = conn.execute("SELECT value FROM kpi_facts").fetchall()
+    assert [float(dict(r)["value"]) for r in rows] == [119.0]
+
+
+def test_persist_manifest_rejects_unit_jump_cumulative_kpi(conn: sqlite3.Connection) -> None:
+    """A raw-count row landing inside a millions-scale series (>1000x jump) —
+    the exact NU 'Total customers' def 641 corruption the red-team audit
+    found — is rejected as a MAGNITUDE_JUMP, never silently stored."""
+    persist_manifest(
+        conn,
+        run_id="r1",
+        manifest=_customers_manifest(
+            period_end=datetime(2025, 3, 31), value=Decimal("119"), source_doc_id=1
+        ),
+    )
+    result = persist_manifest(
+        conn,
+        run_id="r2",
+        manifest=_customers_manifest(
+            period_end=datetime(2025, 6, 30), value=Decimal("114000000"), source_doc_id=2
+        ),
+    )
+    assert result.inserted == 0
+    assert result.validation_issues == 1
+    issue = dict(conn.execute("SELECT rule, expected FROM validation_issues").fetchone())
+    assert issue["rule"] == ValidationRule.MAGNITUDE_JUMP.value
+    assert "unit discontinuity" in issue["expected"].lower()
+
+
+def test_persist_manifest_guard_checks_backfill_against_later_print_too(
+    conn: sqlite3.Connection,
+) -> None:
+    """Backfilling an EARLIER period that would sit ABOVE an already-stored
+    LATER print is also rejected — the guard checks both neighbors, not just
+    'is this newer than the latest row'."""
+    persist_manifest(
+        conn,
+        run_id="r1",
+        manifest=_customers_manifest(
+            period_end=datetime(2025, 6, 30), value=Decimal("110"), source_doc_id=1
+        ),
+    )
+    # Backfilling Q1 with a value HIGHER than the already-stored Q2 is non-monotonic.
+    result = persist_manifest(
+        conn,
+        run_id="r2",
+        manifest=_customers_manifest(
+            period_end=datetime(2025, 3, 31), value=Decimal("115"), source_doc_id=2
+        ),
+    )
+    assert result.inserted == 0
+    assert result.validation_issues == 1
+    issue = dict(conn.execute("SELECT rule FROM validation_issues").fetchone())
+    assert issue["rule"] == ValidationRule.NON_MONOTONIC_CUMULATIVE.value
+
+
+def test_cumulative_guard_scoped_to_marked_kpis_only(conn: sqlite3.Connection) -> None:
+    """A non-cumulative KPI (not on the allowlist) that decreases QoQ is
+    unaffected — the guard only applies to KPIs matching the cumulative
+    markers (e.g. "Total customers"), never a blanket monotonicity rule."""
+    manifest1 = KpiExtractionManifest(
+        ticker="NU",
+        period_end=datetime(2025, 3, 31),
+        fiscal_period_type=FiscalPeriodType.Q1,
+        source_doc_id=1,
+        values=[KpiValue(name="Monthly ARPAC (USD)", value=Decimal("12"), unit=Unit.ACTUAL)],
+    )
+    manifest2 = KpiExtractionManifest(
+        ticker="NU",
+        period_end=datetime(2025, 6, 30),
+        fiscal_period_type=FiscalPeriodType.Q2,
+        source_doc_id=2,
+        values=[KpiValue(name="Monthly ARPAC (USD)", value=Decimal("9"), unit=Unit.ACTUAL)],
+    )
+    persist_manifest(conn, run_id="r1", manifest=manifest1)
+    result = persist_manifest(conn, run_id="r2", manifest=manifest2)
+    assert result.inserted == 1
+    assert result.validation_issues == 0
+
+
 def test_kpi_value_rejects_invalid_confidence() -> None:
     """KpiValue.confidence must be in [0, 1]."""
     with pytest.raises(ValueError):
