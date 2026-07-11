@@ -11,6 +11,12 @@ stage 0g) and persists them under ``data/factor_proxies/<ETF>.json``. The
 render path only ever READS the files — never the network — the same
 materialized-cache discipline as ``portfolio_weights``.
 
+The same store also carries HELD_ETF_TICKERS — real portfolio holdings (FLKR)
+that the FMP price-chart cache doesn't cover but that need a daily close
+series for the correlation/style/Monte-Carlo sections just the same as a
+style-factor proxy does; ``allocation.price_history.load_daily_closes``
+already falls back to this store for ANY ticker missing from the FMP cache.
+
 Last-good semantics match ``materialize_weights``: a failed fetch leaves the
 existing file untouched, so a transient yfinance outage degrades to a stale
 (dated) series instead of a blank section.
@@ -31,6 +37,7 @@ from typing import Any, cast
 from allocation.price_history import daily_log_returns
 
 __all__ = [
+    "HELD_ETF_TICKERS",
     "PROXY_TICKERS",
     "fetch_proxy_series",
     "load_proxy_closes",
@@ -43,6 +50,17 @@ __all__ = [
 # Every ETF any style-factor spread references (portfolio_style_factors owns
 # WHICH spreads exist; this store just keeps the series they need fresh).
 PROXY_TICKERS: tuple[str, ...] = ("SPY", "VTV", "VUG", "IWM", "MTUM")
+
+# Held ETFs the FMP price-chart cache doesn't cover (no SEC filer / not a
+# tracked-company price-chart pull — directives/monthly_red_team.md PR4) but
+# that portfolio_correlation / portfolio_style_factors / portfolio_montecarlo
+# still need a daily close series for: same store, different reason for being
+# here (a real HOLDING needing daily prices, not a style-factor spread leg).
+# Kept separate from PROXY_TICKERS so load_proxy_returns()'s style-factor
+# default is unaffected — only the CLI's default --tickers list (and so
+# morning-pipeline stage 0g) picks these up, keeping the cache fresh
+# alongside the style proxies without a second fetch stage.
+HELD_ETF_TICKERS: tuple[str, ...] = ("FLKR",)
 
 # ~2 calendar years of daily closes comfortably covers the 252-observation
 # regression window plus the calendar-intersection losses against holdings.
