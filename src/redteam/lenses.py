@@ -162,8 +162,8 @@ _LENS_FRAMING: dict[str, str] = {
         "factor (a commodity input, a geography, a regulator, a platform "
         "dependency, a credit cycle) that this name's thesis is MOST exposed "
         "to, and that plausibly also drives another position in the same "
-        "book. State the factor explicitly and falsifiably — not \"the "
-        "economy\" but a specific, checkable driver."
+        'book. State the factor explicitly and falsifiably — not "the '
+        'economy" but a specific, checkable driver.'
     ),
     "fx_translation": (
         "ATTACK ANGLE: FX / currency-translation risk. Identify how currency "

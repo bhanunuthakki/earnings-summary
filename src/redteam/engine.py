@@ -89,9 +89,7 @@ def held_tickers(repo_root: Path) -> dict[str, float]:
 
     raw = read_materialized_weights(repo_root)
     excluded = CASH_LIKE_TICKERS | INDEX_ETF_TICKERS
-    return {
-        t: w for t, w in raw.items() if w > _MIN_WEIGHT_PCT and t.upper() not in excluded
-    }
+    return {t: w for t, w in raw.items() if w > _MIN_WEIGHT_PCT and t.upper() not in excluded}
 
 
 def _other_holdings_line(ticker: str, weights: Mapping[str, float]) -> str:
@@ -225,7 +223,14 @@ def _run_per_name(
                 pack, lens, run_key=run_key, other_holdings_line=other_line
             )
         except RedTeamLensError as exc:
-            log.warning({"event": "red_team_per_name_parse_failed", "ticker": ticker, "lens": lens, "error": str(exc)})
+            log.warning(
+                {
+                    "event": "red_team_per_name_parse_failed",
+                    "ticker": ticker,
+                    "lens": lens,
+                    "error": str(exc),
+                }
+            )
             _bump(result.tally, "parse_failed")
             continue
         except Exception as exc:
@@ -243,7 +248,12 @@ def _run_per_name(
             continue
 
         item_id = store.insert_item(
-            db_path=db_path, run_key=run_key, ticker=ticker, lens=lens, kind="per_name", item=llm_item
+            db_path=db_path,
+            run_key=run_key,
+            ticker=ticker,
+            lens=lens,
+            kind="per_name",
+            item=llm_item,
         )
         result.item_ids.append(item_id)
         _bump(result.tally, f"lens:{lens}")
@@ -313,7 +323,9 @@ def _run_cross_book(
         try:
             llm_item = generate()
         except cross_book.RedTeamCrossBookError as exc:
-            log.warning({"event": "red_team_cross_book_parse_failed", "lens": lens, "error": str(exc)})
+            log.warning(
+                {"event": "red_team_cross_book_parse_failed", "lens": lens, "error": str(exc)}
+            )
             _bump(result.tally, "parse_failed")
             continue
         except Exception as exc:
@@ -336,7 +348,12 @@ def _run_cross_book(
             continue
 
         item_id = store.insert_item(
-            db_path=db_path, run_key=run_key, ticker=None, lens=lens, kind="cross_book", item=llm_item
+            db_path=db_path,
+            run_key=run_key,
+            ticker=None,
+            lens=lens,
+            kind="cross_book",
+            item=llm_item,
         )
         result.item_ids.append(item_id)
         _bump(result.tally, f"lens:{lens}")

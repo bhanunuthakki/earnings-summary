@@ -173,7 +173,9 @@ def test_dry_run_makes_zero_llm_calls(tmp_path: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(lenses, "call_llm_structured", _boom)
     monkeypatch.setattr(cross_book, "call_llm_structured", _boom)
 
-    result = engine.run_red_team(repo_root=repo_root, db_path=db_path, month="2026-08", dry_run=True)
+    result = engine.run_red_team(
+        repo_root=repo_root, db_path=db_path, month="2026-08", dry_run=True
+    )
 
     assert result.dry_run is True
     assert not result.already_done
@@ -274,7 +276,9 @@ def test_parse_failure_on_both_attempts_tallies_and_continues(
     result = engine.run_red_team(repo_root=repo_root, db_path=db_path, month="2026-08")
     assert result.tally.get("parse_failed", 0) == 1
     per_name_items = [
-        i for i in store.list_items_for_run(db_path=db_path, run_key=result.run_key) if i.kind == "per_name"
+        i
+        for i in store.list_items_for_run(db_path=db_path, run_key=result.run_key)
+        if i.kind == "per_name"
     ]
     assert per_name_items == []
 
@@ -297,7 +301,8 @@ def test_missing_thesis_json_is_skipped_not_fabricated(
     result = engine.run_red_team(repo_root=repo_root, db_path=db_path, month="2026-08")
     assert result.tally.get("no_thesis", 0) == 1
     assert result.tally.get("generated", 0) == 0 or all(
-        i.kind == "cross_book" for i in store.list_items_for_run(db_path=db_path, run_key=result.run_key)
+        i.kind == "cross_book"
+        for i in store.list_items_for_run(db_path=db_path, run_key=result.run_key)
     )
 
 

@@ -97,7 +97,9 @@ def _write_dry_run_artifact(repo_root: Path, result: RedTeamRunResult) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--month", default=None, help="YYYY-MM; default = current month")
     parser.add_argument(
         "--force", action="store_true", help="Re-run even if this month already has items"
@@ -107,7 +109,9 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Assemble evidence packs + prompts, print item counts + first prompt. ZERO LLM calls.",
     )
-    parser.add_argument("--limit", type=int, default=None, help="Cap held names processed (smoke tests)")
+    parser.add_argument(
+        "--limit", type=int, default=None, help="Cap held names processed (smoke tests)"
+    )
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     parser.add_argument("--db", type=Path, default=PROJECT_ROOT / "data" / "portfolio.db")
     parser.add_argument(
@@ -133,7 +137,13 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"skipped": "not_first_saturday"}))
         return 0
 
-    _log("red_team_run_start", month=args.month, force=args.force, dry_run=args.dry_run, limit=args.limit)
+    _log(
+        "red_team_run_start",
+        month=args.month,
+        force=args.force,
+        dry_run=args.dry_run,
+        limit=args.limit,
+    )
 
     try:
         result = run_red_team(
@@ -178,7 +188,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     brief_path = _write_brief_snapshot(repo_root, result.run_key, db_path)
-    _log("red_team_run_done", run_key=result.run_key, tally=result.tally, brief_path=str(brief_path) if brief_path else None)
+    _log(
+        "red_team_run_done",
+        run_key=result.run_key,
+        tally=result.tally,
+        brief_path=str(brief_path) if brief_path else None,
+    )
     print(
         json.dumps(
             {
