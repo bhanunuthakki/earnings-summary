@@ -97,6 +97,32 @@ def parse_scenario_fair_values(snapshot_json: object) -> dict[str, float]:
     return out
 
 
+def parse_scenario_bear_provenance(snapshot_json: object) -> str | None:
+    """The bear leg's provenance from a ``dcf_runs`` assumption snapshot's
+    ``scenarios.bear.provenance`` field (written by ``refresh_dcf._redesign_snapshot``,
+    Monthly Red Team Phase 1 guard 3): ``"seed"`` (the generic BEAR_SEED offsets,
+    untouched), ``"thesis"`` (a holdings-JSON ``bear_deltas`` override), or
+    ``"owner"`` (a hand-edited workbook Dashboard cell). ``None`` when absent,
+    malformed, or an unrecognized value — tolerant of pre-provenance snapshots and
+    non-redesign formats, mirroring :func:`parse_scenario_fair_values`."""
+    if not isinstance(snapshot_json, str) or not snapshot_json:
+        return None
+    try:
+        data: object = json.loads(snapshot_json)
+    except ValueError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    scenarios = cast("dict[str, object]", data).get("scenarios")
+    if not isinstance(scenarios, dict):
+        return None
+    bear = cast("dict[str, object]", scenarios).get("bear")
+    if not isinstance(bear, dict):
+        return None
+    prov = cast("dict[str, object]", bear).get("provenance")
+    return prov if prov in ("seed", "thesis", "owner") else None
+
+
 def parse_scenario_prior_weights(snapshot_json: object) -> dict[str, float] | None:
     """Per-name Bull/Base/Bear probability weights from a ``dcf_runs`` assumption
     snapshot's ``scenario_prior`` block (written by ``execution/refresh_dcf``), or

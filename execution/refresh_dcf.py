@@ -44,6 +44,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
@@ -508,13 +509,19 @@ def _redesign_snapshot(
     scenarios: redesign_mod.ScenarioValues | None = None,
     inp: redesign_mod.RedesignInputs | None = None,
     scenario_prior_meta: dict[str, object] | None = None,
+    holdings: Mapping[str, object] | None = None,
 ) -> str:
     """Serialize the redesigned-DCF inputs/outputs into the assumption snapshot.
 
     ``scenarios`` adds the Bull/Bear fair values (and the deltas that produced
     them) — BASE stays the row's ``npv_per_share``/``over_under_pct`` (the 0076
     convention untouched); Bull/Bear live only here, for the valuation card and
-    any risk/reward consumer.
+    any risk/reward consumer. ``holdings`` (the already-loaded ``micro_thesis/
+    holdings/<T>.json`` dict, Monthly Red Team Phase 1 guard 3) feeds the bear
+    leg's ``provenance`` classification — ``"seed" | "thesis" | "owner"`` — so a
+    consumer (``dcf.scenario_reward.parse_scenario_bear_provenance``, the bear-
+    realism lint) can tell a generic mild-disappointment bear apart from one the
+    analyst actually calibrated.
     """
     payload: dict[str, object] = {
         "workbook_path": workbook_path,
@@ -542,6 +549,7 @@ def _redesign_snapshot(
             "bear": {
                 "fair_value_per_share_usd": scenarios.bear,
                 "deltas": dataclasses.asdict(inp.bear_deltas),
+                "provenance": redesign_mod.classify_bear_provenance(inp.bear_deltas, holdings),
             },
         }
     # Reverse-DCF: the market-implied assumption set at the workbook's current
@@ -830,6 +838,7 @@ def _refresh_redesign(
             scenarios=scenarios,
             inp=inp,
             scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
+            holdings=holdings,
         ),
         notes=f"workbook={dest.name} (redesigned)",
         assumptions_sync_status=sync.as_status_text(),
@@ -974,6 +983,7 @@ def apply_edits(
             scenarios=scenarios,
             inp=inp,
             scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
+            holdings=holdings,
         ),
         notes=f"workbook={dest.name} (redesigned; in-app edit)",
         assumptions_sync_status=sync.as_status_text(),

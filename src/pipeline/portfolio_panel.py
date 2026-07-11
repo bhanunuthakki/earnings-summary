@@ -44,6 +44,15 @@ from html import escape
 from pathlib import Path
 
 from allocation import FACTOR_LABELS, NextDollarModel, build_next_dollar_model
+from bear_lint import (
+    SHALLOW_BEAR_FLOOR_PCT,
+    STATUS_MISSING,
+    STATUS_NOT_A_BEAR,
+    STATUS_SHALLOW,
+    BearLintFinding,
+    BearLintReport,
+    build_bear_lint,
+)
 from integrations.portfolio_tracker_client import (
     TAX_BUCKETS,
     AllocationBucket,
@@ -89,7 +98,13 @@ from portfolio_risk_snapshot_store import (
     write_snapshot,
 )
 from portfolio_style_factors import StyleFactorRollup, build_style_rollup_from_disk
-from portfolio_tail_stress import TailStress, TailStressRow, build_tail_stress
+from portfolio_tail_stress import (
+    COVERAGE_BAD_PCT,
+    COVERAGE_WARN_PCT,
+    TailStress,
+    TailStressRow,
+    build_tail_stress,
+)
 from portfolio_weights import read_materialized_weights
 from risk_reward import RiskRewardGap, RiskRewardGapRow, build_risk_reward_gap
 from thesis_collision import CachedReport, read_cached_report
@@ -1297,6 +1312,10 @@ _RISK_CSS = """<style>
 .pts-table { margin-top: 4px; }
 .pts-excluded { color: var(--muted); }
 .pfm-table { margin-top: 4px; max-width: 360px; }
+/* Coverage-gate warning (Monthly Red Team Phase 1 guard 1): a leading pill
+   line the aggregate headline sits BELOW, never a quiet footnote — the
+   book-level scenario/reward rollups (tail stress, risk-vs-reward) share it. */
+.pfr-coverage-warn { font-size: var(--fs-body); margin: 8px 0; }
 .ptc-findings { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .ptc-finding { border-left: 2px solid var(--warn); padding-left: 10px; }
 .ptc-finding-bad { border-left-color: var(--bad); }
@@ -1395,6 +1414,7 @@ def render_portfolio_risk_panel(
     tail_stress = _build_tail_stress(analytics.positioning, db_path)
     monte_carlo = _build_monte_carlo(analytics.positioning, db_path)
     joint_latam = _build_joint_latam_stress(analytics.positioning, db_path)
+    bear_lint = _build_bear_lint(db_path)
     collision = _read_thesis_collision(analytics.positioning, db_path)
     scenarios = _scenario_options()
     digest = _cached_macro_digest_html(db_path) if db_path is not None else ""
@@ -1416,6 +1436,7 @@ def render_portfolio_risk_panel(
         tail_stress=tail_stress,
         monte_carlo=monte_carlo,
         joint_latam=joint_latam,
+        bear_lint=bear_lint,
         collision=collision,
         scenarios=scenarios,
         digest=digest,
@@ -1520,6 +1541,19 @@ def _build_joint_latam_stress(
     return build_joint_latam_stress(db_path, weights)
 
 
+def _build_bear_lint(db_path: Path | None) -> BearLintReport | None:
+    """The bear-realism lint (Monthly Red Team Phase 1 guard 2) — from the
+    materialized weights cache, so it renders with the tracker DOWN like the
+    other local Risk-tab sections. ``None`` when there is no DB or no weighted
+    holdings (the caller renders the empty state)."""
+    if db_path is None:
+        return None
+    weights = read_materialized_weights(db_path.parent.parent)
+    if not weights:
+        return None
+    return build_bear_lint(db_path, db_path.parent.parent)
+
+
 def _read_thesis_collision(pos: Positioning | None, db_path: Path | None) -> CachedReport | None:
     """The cached thesis-collision audit, filtered against the CURRENT
     holding set: a cached finding naming a name sold since the audit ran must
@@ -1550,6 +1584,7 @@ def compose_risk_page(
     tail_stress: TailStress | None = None,
     monte_carlo: MonteCarloRead | None = None,
     joint_latam: EventStressResult | None = None,
+    bear_lint: BearLintReport | None = None,
     collision: CachedReport | None = None,
 ) -> str:
     """Pure assembly of the Risk page (testable without network or DB). The
@@ -1561,9 +1596,11 @@ def compose_risk_page(
     ``style`` (the value/size/momentum ETF-proxy loadings), ``correlation``
     (the holdings pairwise matrix + crowding clusters), ``tail_stress`` (the
     all-bears book drawdown), ``monte_carlo`` (the fat-tailed book simulation)
-    + ``joint_latam`` (its companion event-correlation stress), and
-    ``collision`` (the cached thesis-collision audit) are computed from local
-    disk/DB, so they render in BOTH branches — tracker up or down."""
+    + ``joint_latam`` (its companion event-correlation stress), ``bear_lint``
+    (the bear-realism lint, Monthly Red Team Phase 1 guard 2 — rides right
+    alongside tail stress), and ``collision`` (the cached thesis-collision
+    audit) are computed from local disk/DB, so they render in BOTH branches —
+    tracker up or down."""
     parts: list[str] = [_RISK_CSS, '<div id="pfr-root">']
     if analytics.available:
         if analytics.beta is not None:
@@ -1575,6 +1612,7 @@ def compose_risk_page(
         parts.append(_correlation_section(correlation))
         parts.append(_tail_stress_section(tail_stress))
         parts.append(_monte_carlo_section(monte_carlo, joint_latam))
+        parts.append(_bear_lint_section(bear_lint))
         parts.append(_thesis_collision_section(collision))
         if gap is not None:
             parts.append(_risk_reward_gap_section(gap))
@@ -1587,6 +1625,7 @@ def compose_risk_page(
         parts.append(_correlation_section(correlation))
         parts.append(_tail_stress_section(tail_stress))
         parts.append(_monte_carlo_section(monte_carlo, joint_latam))
+        parts.append(_bear_lint_section(bear_lint))
         parts.append(_thesis_collision_section(collision))
     parts.append(_macro_stress_section(scenarios, digest))
     parts.append("</div>")
@@ -2128,10 +2167,33 @@ def _tail_stress_row(r: TailStressRow) -> str:
     )
 
 
+def _coverage_warning_html(modeled_pct: float, *, noun: str = "book") -> str:
+    """A leading UNMODELED warning pill when ``modeled_pct`` of the ``noun``
+    sits below :data:`COVERAGE_WARN_PCT` — Monthly Red Team Phase 1 guard 1: a
+    book-level scenario/reward rollup must never render its aggregate as a
+    clean, healthy-looking number while the majority of the book carries no
+    modeled read. ``""`` when coverage clears the bar (no warning to show)."""
+    if modeled_pct >= COVERAGE_WARN_PCT:
+        return ""
+    tone = "k-pill-bad" if modeled_pct < COVERAGE_BAD_PCT else "k-pill-warn"
+    unmodeled = 100.0 - modeled_pct
+    return (
+        '<p class="pfr-coverage-warn">'
+        f'<span class="k-pill {tone}">{unmodeled:.0f}% OF {escape(noun.upper())} UNMODELED</span> '
+        f"— only {modeled_pct:.0f}% of the {escape(noun)} carries a modeled read; the number "
+        f"below is NOT a whole-{escape(noun)} figure.</p>"
+    )
+
+
 def _tail_stress_section(stress: TailStress | None) -> str:
     """The all-bears book drawdown, from local ``dcf_runs`` bear scenarios.
     Renders in both branches (local DB, no tracker dependency); ``None`` gets
-    the empty state rather than a hidden section."""
+    the empty state rather than a hidden section. Coverage gate (Monthly Red
+    Team Phase 1 guard 1): below :data:`COVERAGE_WARN_PCT` modeled, a leading
+    UNMODELED pill replaces the plain "% of book modeled" sub-line and the
+    headline number's tone is stripped (never colored green/red as if it were
+    a confident, whole-book read) — the design principle the 2026-07
+    adversarial review named: 42%-modeled must not render healthy."""
     head = (
         '<section class="panel"><h2>Scenario-tail stress</h2>'
         '<p class="sub">If every holding fell to its DCF bear-case fair value tomorrow: the '
@@ -2145,12 +2207,19 @@ def _tail_stress_section(stress: TailStress | None) -> str:
             '<p class="muted">No weighted holdings to stress yet (needs the tracker or a '
             "materialized weights cache).</p></section>"
         )
+    coverage_warn = _coverage_warning_html(stress.modeled_weight_pct)
+    drawdown_sub = (
+        f"over the {stress.modeled_weight_pct:.0f}% modeled — NOT the whole book"
+        if coverage_warn
+        else f"{stress.modeled_weight_pct:.0f}% of book modeled"
+    )
+    drawdown_tone = "" if coverage_warn else _tone(stress.book_drawdown_pct)
     cards = [
         _kpi_card(
             "All-bears book drawdown",
             f"{stress.book_drawdown_pct:+.1f}%",
-            sub=f"{stress.modeled_weight_pct:.0f}% of book modeled",
-            tone=_tone(stress.book_drawdown_pct),
+            sub=drawdown_sub,
+            tone=drawdown_tone,
         ),
         _kpi_card(
             "Coverage",
@@ -2178,7 +2247,104 @@ def _tail_stress_section(stress: TailStress | None) -> str:
         f"</tr></thead><tbody>{rows_html}</tbody></table>"
     )
     notes = "".join(f'<p class="muted pfr-top">{escape(n)}</p>' for n in stress.notes)
-    return f"{head}{strip}{table}{notes}</section>"
+    return f"{head}{coverage_warn}{strip}{table}{notes}</section>"
+
+
+_BEAR_LINT_STATUS_LABEL: dict[str, str] = {
+    STATUS_NOT_A_BEAR: "NOT A BEAR",
+    STATUS_MISSING: "MISSING",
+    STATUS_SHALLOW: "SHALLOW",
+    "ok": "OK",
+}
+_BEAR_LINT_STATUS_TONE: dict[str, str] = {
+    STATUS_NOT_A_BEAR: "bad",
+    STATUS_MISSING: "bad",
+    STATUS_SHALLOW: "warn",
+    "ok": "ok",
+}
+
+
+def _bear_lint_row(f: BearLintFinding) -> str:
+    ticker = ticker_label(f.ticker, href=f"../research/{escape(f.ticker)}/")
+    tone = _BEAR_LINT_STATUS_TONE[f.status]
+    label = _BEAR_LINT_STATUS_LABEL[f.status]
+    status_cell = f'<span class="k-pill k-pill-{tone}">{escape(label)}</span>'
+    prov_cell = (
+        f'<span class="k-chip k-chip-mono">{escape(f.provenance)}</span>'
+        if f.provenance is not None
+        else '<span class="muted">&mdash;</span>'
+    )
+    bear_cell = (
+        f"{_money(f.bear_fv)} ({f.bear_return_pct:+.0f}%)"
+        if f.bear_fv is not None and f.bear_return_pct is not None
+        else '<span class="muted">&mdash;</span>'
+    )
+    return (
+        "<tr>"
+        f"<td>{ticker}</td>"
+        f'<td class="num">{f.weight_pct:.1f}%</td>'
+        f"<td>{status_cell}</td>"
+        f'<td class="num">{_money(f.live_price) if f.live_price is not None else "—"}</td>'
+        f'<td class="num">{bear_cell}</td>'
+        f"<td>{prov_cell}</td>"
+        f"<td>{escape(f.reason)}</td>"
+        "</tr>"
+    )
+
+
+def _bear_lint_section(report: BearLintReport | None) -> str:
+    """Bear-realism lint (Monthly Red Team Phase 1 guard 2): every held name's
+    latest top-level DCF bear scenario, classified missing / not-a-bear /
+    shallow / ok. Rides the same Risk-tab area as tail stress — the 2026-07
+    adversarial review's #3 failure mode: fake ``BEAR_SEED`` bears sitting AT/
+    ABOVE the live price for several names meant every scenario-reward
+    consumer silently read "no downside" for half the book."""
+    head = (
+        '<section class="panel"><h2>Bear-realism lint</h2>'
+        '<p class="sub">Every held name\'s latest top-level DCF bear scenario, checked against '
+        "the live price: a bear case AT or ABOVE price isn't downside at all, and one less than "
+        f"{SHALLOW_BEAR_FLOOR_PCT:.0f}% below price reads as ordinary volatility, not a "
+        "thesis-break bear. Provenance names whether the bear came from the generic "
+        "<code>BEAR_SEED</code> offset, a thesis-calibrated holdings override, or an owner "
+        "workbook edit. Local <code>dcf_runs</code> only; renders with the tracker down.</p>"
+    )
+    if report is None or not report.findings:
+        return (
+            f"{head}"
+            '<p class="muted">No weighted holdings to lint yet (needs the tracker or a '
+            "materialized weights cache).</p></section>"
+        )
+    flagged = report.flagged
+    counts: dict[str, int] = {}
+    for f in report.findings:
+        counts[f.status] = counts.get(f.status, 0) + 1
+    cards = [
+        _kpi_card(
+            "Flagged",
+            str(len(flagged)),
+            sub=f"of {len(report.findings)} held names",
+            tone="neg" if flagged else "",
+        ),
+    ]
+    for status in (STATUS_NOT_A_BEAR, STATUS_MISSING, STATUS_SHALLOW):
+        n = counts.get(status, 0)
+        if n:
+            cards.append(_kpi_card(_BEAR_LINT_STATUS_LABEL[status].title(), str(n)))
+    strip = f'<div class="kpi-strip">{"".join(cards)}</div>'
+    if not flagged:
+        return (
+            f'{head}{strip}<p class="muted pfr-top">Every held name clears the lint.</p></section>'
+        )
+    rows_html = "".join(_bear_lint_row(f) for f in flagged)
+    table = (
+        '<table class="p-table pts-table"><thead><tr>'
+        "<th>Ticker</th>"
+        '<th class="num">Weight</th><th>Status</th>'
+        '<th class="num">Live price</th><th class="num">Bear FV (return)</th>'
+        "<th>Provenance</th><th>Reason</th>"
+        f"</tr></thead><tbody>{rows_html}</tbody></table>"
+    )
+    return f"{head}{strip}{table}</section>"
 
 
 def _mc_prob_row(label: str, normal: DistributionRead, student_t: DistributionRead) -> str:
@@ -2390,6 +2556,11 @@ def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
         bits.append(f"prices through {gap.prices_through.isoformat()}")
     bits.append(f"{gap.valued_names}/{len(gap.rows)} priced by a current DCF")
     sub = f'<p class="sub">{escape(" · ".join(bits))}.</p>'
+    # Coverage gate (Monthly Red Team Phase 1 guard 1): the reward leg is a
+    # book-level scenario-reward rollup too — a majority-unscored reward share
+    # must not read as a quiet footnote fraction, same bar as tail stress.
+    valued_pct = gap.valued_names / len(gap.rows) * 100.0
+    coverage_warn = _coverage_warning_html(valued_pct, noun="reward")
     rows_html = "".join(_rrg_row(r) for r in gap.rows)
     notes = "".join(f'<p class="muted pfr-top">{escape(n)}</p>' for n in gap.notes)
     table = (
@@ -2401,7 +2572,7 @@ def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
         "<th>Mismatch</th>"
         f"</tr></thead><tbody>{rows_html}</tbody></table>"
     )
-    return f"{head}{sub}{table}{notes}</section>"
+    return f"{head}{coverage_warn}{sub}{table}{notes}</section>"
 
 
 def _rrg_row(r: RiskRewardGapRow) -> str:

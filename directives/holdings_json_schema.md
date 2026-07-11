@@ -33,6 +33,7 @@ mean. When a field's semantics change, edit here in the same PR.
   "break_rules": [...],                   // hard universal tripwires (see below)
   "business_model_rules": [...],          // hard per-ticker breakers (see below)
   "break_rules_soft": [...],              // predicate-style YELLOW signals (see below)
+  "bear_deltas": {...},                   // optional; thesis-calibrated DCF bear scenario (see below)
 
   "schema_version": 2,
   "wacc": 0.095,
@@ -109,6 +110,47 @@ feed `src/report/sections/p3_data.py::load_peer_comp`:
   `load_peer_comp` re-checks it every build (`evaluate_peers_override`): the
   panel hides while too few credible comps qualify and returns on its own once
   enough are pinned — the condition is acted on, not just recorded.
+
+## `bear_deltas` — thesis-calibrated DCF bear scenario (Monthly Red Team Phase 1)
+
+The DCF's bear scenario defaults to `BEAR_SEED` (`src/dcf/redesign.py`) — a
+generic -3pt near-term growth / -1pt margin / -2x exit-multiple offset applied
+to EVERY name, regardless of what would actually break its thesis. The
+2026-07 adversarial review found this produces bear cases that sit AT or
+ABOVE the live price for several names (a "bear" with no downside) — the
+`bear_lint` module (`src/bear_lint.py`) flags these as `not_a_bear` /
+`shallow`.
+
+`bear_deltas` lets the analyst name a thesis-specific bear instead of the
+generic seed. It is a fallback default only — an owner's workbook Dashboard
+edit (the Bear column's yellow cells) still wins unconditionally once one is
+on file; this only changes what a FRESH scenario build seeds the Bear column
+with before any owner edit exists.
+
+```jsonc
+{
+  "bear_deltas": {
+    "growth_delta_pp": -8.0,       // shifts BOTH near- and terminal-segment growth (pp)
+    "margin_delta_pp": -3.0,       // shifts BOTH near- and terminal operating margin (pp)
+    "exit_multiple_delta": -6.0,   // shifts the exit multiple (turns)
+    "terminal_g_delta_pp": -0.5,   // optional; shifts terminal growth g (pp)
+    "note": "NIMAL floor breach — the thesis-break bear, not a mild dip"
+  }
+}
+```
+
+All four numeric levers are optional; an unset lever falls back to
+`BEAR_SEED`'s value for that lever, so a thesis only needs to name the
+specific break rather than re-derive the whole six-lever range. `note` is
+free text, not consumed by any reader — it documents WHY for the next reader.
+
+Provenance travels with every persisted bear scenario
+(`dcf_runs.assumption_snapshot_json.scenarios.bear.provenance`, read via
+`dcf.scenario_reward.parse_scenario_bear_provenance`): `"seed"` (untouched
+`BEAR_SEED`), `"thesis"` (this block), or `"owner"` (a hand-edited workbook
+cell) — `bear_lint` surfaces a `seed`-provenance bear on a portfolio name even
+when it happens to clear the realism floor, since a generic offset producing
+a plausible number by coincidence still isn't a thesis read.
 
 ## Hard break rules — `break_rules` and `business_model_rules`
 
