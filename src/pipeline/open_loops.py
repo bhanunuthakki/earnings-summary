@@ -31,6 +31,7 @@ from user_state._db import open_conn
 _DECISIONS_PANEL = "decisions_record"
 _LEDGER_HASH = "/#musings"
 _DECISIONS_HASH = f"/#{_DECISIONS_PANEL}"
+_RED_TEAM_HASH = "/#red_team"
 
 STYLE = """<style>
 .cc-open-loops { display: flex; flex-wrap: wrap; align-items: baseline;
@@ -40,6 +41,8 @@ STYLE = """<style>
 .cc-ol-line:hover { color: var(--accent); }
 .cc-ol-count { font-family: var(--mono); }
 .cc-ol-clear { color: var(--muted); }
+.cc-ol-escalation { margin: 0 0 8px; }
+.cc-ol-escalation a { color: inherit; text-decoration: underline; }
 </style>"""
 
 
@@ -114,9 +117,41 @@ def _line(href: str, label: str, count: int, suffix: str = "") -> str:
     )
 
 
+def _red_team_escalated_count(db_path: Path | str | None) -> int:
+    """Items that used their one allowed DEFER and are still unanswered
+    (PR6, monthly_red_team.md Phase 2 — "a SECOND defer ... escalates to a
+    persistent Home-band banner"). Degrades to 0 on a pre-migration DB (the
+    caller's own try/except already covers it; this helper just isolates
+    the redteam import so a missing package can't break the whole band)."""
+    from redteam.gate import escalated_items
+
+    return len(escalated_items(db_path=db_path))
+
+
+def _escalation_banner(db_path: Path | str | None) -> str:
+    """The persistent 'Red Team: N items escalated' banner — a k-well -bad
+    block (never the quiet ritual-debt line style; this is a forced-response
+    failure, not an inert queue count) rendered ABOVE the open-loops line.
+    Empty string when nothing is escalated."""
+    try:
+        n = _red_team_escalated_count(db_path)
+    except Exception:
+        return ""
+    if not n:
+        return ""
+    plural = "item" if n == 1 else "items"
+    return (
+        '<div class="k-well k-well-bad cc-ol-escalation">'
+        f'<a href="{_RED_TEAM_HASH}">Red Team: {n} {plural} escalated — '
+        "respond to close the month</a></div>"
+    )
+
+
 def render_open_loops_band(db_path: Path | str | None = None) -> str:
-    """One dense line per non-empty ritual queue, each a doorway; an explicit
+    """The persistent Red Team escalation banner (if any) followed by one
+    dense line per non-empty ritual queue, each a doorway; an explicit
     'Ritual clear' line when nothing waits. Never raises."""
+    banner = _escalation_banner(db_path)
     lines: list[str] = []
 
     try:
@@ -152,11 +187,13 @@ def render_open_loops_band(db_path: Path | str | None = None) -> str:
 
     if not lines:
         return (
-            STYLE + '<div class="cc-open-loops">'
+            STYLE + banner + '<div class="cc-open-loops">'
             '<span class="cc-ol-clear">Ritual clear - nothing waiting on you.</span></div>'
         )
     return (
-        STYLE + '<div class="cc-open-loops"><span class="cc-ol-head">Open loops</span>'
+        STYLE
+        + banner
+        + '<div class="cc-open-loops"><span class="cc-ol-head">Open loops</span>'
         + "".join(lines)
         + "</div>"
     )

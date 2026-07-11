@@ -246,6 +246,222 @@ def test_poll_once_review_command_degrades_on_failure(
     assert "Couldn't build a review" in sent[0] and "BADTICKER" in sent[0]
 
 
+def _seed_red_team_item(
+    db_path: Path, *, ticker: str = "NU", proposed_change_md: str = "Trim on FX risk."
+) -> int:
+    from redteam import store
+    from redteam.models import RedTeamLLMItem
+
+    return store.insert_item(
+        db_path=db_path,
+        run_key="red_team_2026_08",
+        ticker=ticker,
+        lens="fx_translation",
+        kind="per_name",
+        item=RedTeamLLMItem(
+            attack_md="Attack text.",
+            question_md="Question text?",
+            proposed_change_md=proposed_change_md,
+            severity="high",
+        ),
+    )
+
+
+def test_poll_once_redteam_list_command_replies_with_numbered_items(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ "/redteam" (PR6) — the poller must list open items in-channel, LLM-free,
+    the same shape /review already gets."""
+    _seed_red_team_item(db_path)
+    updates = [telegram.Update(update_id=70, kind="text", chat_id=1, text="/redteam")]
+    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert counts.get("command_redteam") == 1
+    assert counts.get("command") is None  # its own bucket, not "command"
+    assert len(sent) == 1
+    assert "red_team_2026_08" in sent[0]
+    assert "1. [HIGH] NU" in sent[0]
+    assert notes.list_notes(kind="musing", db_path=db_path) == []
+
+
+def test_poll_once_redteam_accept_command_responds_via_shared_state_machine(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ "/redteam 1 accept" answers item #1 through redteam.response.respond —
+    the SAME function the Flask /api/red_team/<id>/respond route calls."""
+    from redteam import store
+
+    item_id = _seed_red_team_item(db_path)
+    updates = [telegram.Update(update_id=71, kind="text", chat_id=1, text="/redteam 1 accept")]
+    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert counts.get("command_redteam") == 1
+    assert "Accepted #1" in sent[0]
+    row = store.get_item(db_path=db_path, item_id=item_id)
+    assert row is not None
+    assert row.status == "accepted"
+
+
+def test_poll_once_redteam_refute_without_text_asks_for_reasoning(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_red_team_item(db_path)
+    updates = [telegram.Update(update_id=72, kind="text", chat_id=1, text="/redteam 1 refute")]
+    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert "REFUTE needs your reasoning" in sent[0]
+
+
+def test_poll_once_redteam_refute_with_text_writes_ledger(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from user_state.ledger import list_entries
+
+    _seed_red_team_item(db_path)
+    updates = [
+        telegram.Update(
+            update_id=73, kind="text", chat_id=1, text="/redteam 1 refute Already hedged."
+        )
+    ]
+    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert "Refuted #1" in sent[0]
+    entries = list_entries(ticker="NU", entry_kind="red_team_refute", db_path=db_path)
+    assert len(entries) == 1
+    assert "Already hedged" in entries[0].body
+
+
+def test_poll_once_redteam_second_defer_reports_escalation(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_red_team_item(db_path)
+    monkeypatch.setattr(
+        telegram,
+        "get_updates",
+        lambda token, offset=None, timeout=50: [
+            telegram.Update(update_id=74, kind="text", chat_id=1, text="/redteam 1 defer")
+        ],
+    )
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert "Deferred #1" in sent[0]
+
+    # A second /redteam with a fresh listing re-numbers against the still-open
+    # (deferred) item as #1 again; deferring it a second time must escalate.
+    monkeypatch.setattr(
+        telegram,
+        "get_updates",
+        lambda token, offset=None, timeout=50: [
+            telegram.Update(update_id=75, kind="text", chat_id=1, text="/redteam 1 defer")
+        ],
+    )
+    poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert "already deferred once" in sent[1]
+    assert "escalated" in sent[1]
+
+
+def test_poll_once_redteam_out_of_range_index_replies_with_usage(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_red_team_item(db_path)
+    updates = [telegram.Update(update_id=76, kind="text", chat_id=1, text="/redteam 9 accept")]
+    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert "No item #9" in sent[0]
+
+
+def test_poll_once_redteam_list_when_no_run_yet(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    updates = [telegram.Update(update_id=77, kind="text", chat_id=1, text="/redteam")]
+    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert "No red-team run yet" in sent[0]
+
+
 def test_poll_once_unknown_command_replies_instead_of_vanishing(
     db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
