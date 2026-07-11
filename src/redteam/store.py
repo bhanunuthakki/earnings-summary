@@ -186,3 +186,100 @@ def latest_run_key(*, db_path: Path | str | None) -> str | None:
         return str(row["run_key"]) if row is not None else None
     finally:
         conn.close()
+
+
+def get_item(*, db_path: Path | str | None, item_id: int) -> RedTeamItemRow | None:
+    """One item by id, or ``None`` when missing / the table/DB doesn't exist
+    yet — the forced-response loop's (PR6) read before every transition."""
+    try:
+        conn = open_conn(db_path)
+    except (FileNotFoundError, RuntimeError):
+        return None
+    try:
+        if not _has_table(conn):
+            return None
+        row = conn.execute(
+            f"SELECT {', '.join(_ROW_COLUMNS)} FROM {_TABLE} WHERE id = ?", (item_id,)
+        ).fetchone()
+        return None if row is None else _row_to_dc(row)
+    finally:
+        conn.close()
+
+
+def list_items_by_status(
+    *, db_path: Path | str | None, statuses: tuple[str, ...]
+) -> list[RedTeamItemRow]:
+    """Every item across ALL run_keys currently in one of ``statuses``,
+    oldest first. Powers ``redteam.gate.escalated_items`` — the persistent
+    Home-band nag doesn't scope to the latest run, since a deferred item from
+    an older month is still unresolved. ``[]`` on a missing DB/table."""
+    if not statuses:
+        return []
+    try:
+        conn = open_conn(db_path)
+    except (FileNotFoundError, RuntimeError):
+        return []
+    try:
+        if not _has_table(conn):
+            return []
+        placeholders = ", ".join("?" * len(statuses))
+        rows = conn.execute(
+            f"SELECT {', '.join(_ROW_COLUMNS)} FROM {_TABLE} "
+            f"WHERE status IN ({placeholders}) ORDER BY created_at ASC, id ASC",
+            statuses,
+        ).fetchall()
+        return [_row_to_dc(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def set_response(
+    *,
+    db_path: Path | str | None,
+    item_id: int,
+    status: Status,
+    response_md: str | None,
+) -> RedTeamItemRow | None:
+    """Persist a terminal response (``status='refuted'`` or ``'accepted'``):
+    writes ``status``, ``response_md``, and stamps ``responded_at``. Returns
+    the updated row, or ``None`` when ``item_id`` doesn't exist."""
+    conn = open_conn(db_path)
+    try:
+        cur = conn.execute(
+            f"UPDATE {_TABLE} SET status = ?, response_md = ?, responded_at = ? WHERE id = ?",
+            (status, response_md, now_iso(), item_id),
+        )
+        if cur.rowcount == 0:
+            return None
+        conn.commit()
+        row = conn.execute(
+            f"SELECT {', '.join(_ROW_COLUMNS)} FROM {_TABLE} WHERE id = ?", (item_id,)
+        ).fetchone()
+        return None if row is None else _row_to_dc(row)
+    finally:
+        conn.close()
+
+
+def increment_defer(*, db_path: Path | str | None, item_id: int) -> RedTeamItemRow | None:
+    """The FIRST defer only: flips an ``open`` item to ``status='deferred'``
+    and bumps ``defer_count`` 0->1 in one guarded UPDATE (``WHERE status =
+    'open'``). Returns ``None`` when ``item_id`` is missing OR the item isn't
+    currently ``open`` (already deferred/refuted/accepted/closed) — the
+    caller (``redteam.response._defer``) reads that as "second defer,
+    reject" since it already checked existence + terminal status upstream."""
+    conn = open_conn(db_path)
+    try:
+        cur = conn.execute(
+            f"UPDATE {_TABLE} SET defer_count = defer_count + 1, status = 'deferred' "
+            "WHERE id = ? AND status = 'open'",
+            (item_id,),
+        )
+        if cur.rowcount == 0:
+            return None
+        conn.commit()
+        row = conn.execute(
+            f"SELECT {', '.join(_ROW_COLUMNS)} FROM {_TABLE} WHERE id = ?", (item_id,)
+        ).fetchone()
+        return None if row is None else _row_to_dc(row)
+    finally:
+        conn.close()

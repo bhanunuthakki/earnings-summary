@@ -3766,6 +3766,64 @@ def create_app(
             return ({"error": f"issue {issue_id} not found or already resolved"}, 404)
         return {"ok": True, "issue_id": issue_id, "resolved_at": resolved_at}
 
+    @app.route("/api/red_team/<int:item_id>/respond", methods=["POST", "OPTIONS"])
+    def respond_red_team_item(item_id: int):
+        """Forced-response action on one ``red_team_items`` row (PR6 —
+        monthly_red_team.md Phase 2 "Forced response" bullet). JSON body
+        ``{"action": "refute" | "accept" | "defer", "response_md"?: str}``.
+        Unlike the sibling ``/actions/*`` endpoints this is a SYNCHRONOUS DB
+        write (the ``resolve_issue`` idiom above), not a streamed job.
+
+        REFUTE requires non-empty ``response_md`` -> 400 without it. A
+        SECOND defer on an already-``deferred`` item is rejected -> 409 (the
+        Red Team panel then re-renders that item as escalated; PR6's
+        Home-band banner picks it up too). All state-machine logic lives in
+        ``redteam.response.respond`` — the SAME function the Telegram
+        ``/redteam`` command calls, so a response typed in the app and one
+        typed from Telegram behave identically.
+        """
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from redteam import response as rt_response
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        action_raw = payload.get("action")
+        if action_raw not in ("refute", "accept", "defer"):
+            return ({"error": "action must be one of refute | accept | defer"}, 400)
+        action = cast("rt_response.Action", action_raw)
+        response_md_raw = payload.get("response_md")
+        response_md = str(response_md_raw) if response_md_raw is not None else None
+
+        try:
+            result = rt_response.respond(
+                db_path=db_path, item_id=item_id, action=action, response_md=response_md
+            )
+        except rt_response.ItemNotFoundError:
+            return ({"error": f"red_team_items id={item_id} not found"}, 404)
+        except rt_response.ResponseRequiresTextError as exc:
+            return ({"error": str(exc)}, 400)
+        except rt_response.AlreadyRespondedError as exc:
+            return ({"error": str(exc)}, 409)
+        except rt_response.SecondDeferRejectedError as exc:
+            return (
+                {
+                    "error": str(exc),
+                    "escalated": True,
+                    "item_id": exc.item.id,
+                    "status": exc.item.status,
+                    "defer_count": exc.item.defer_count,
+                },
+                409,
+            )
+        return {
+            "ok": True,
+            "item_id": result.item.id,
+            "status": result.item.status,
+            "defer_count": result.item.defer_count,
+            "artifact_kind": result.artifact_kind,
+            "artifact_id": result.artifact_id,
+        }
+
     @app.route("/actions/advisor-memo", methods=["POST", "OPTIONS"])
     def start_advisor_memo():
         """Run an advisor memo generation (master build P2.3) as a streamed

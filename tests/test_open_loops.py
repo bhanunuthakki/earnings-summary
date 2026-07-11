@@ -140,10 +140,56 @@ def test_never_raises_without_schema(tmp_path: Path) -> None:
     assert "Ritual clear" in html
 
 
-def test_overview_panel_prepends_band() -> None:
-    html = render_overview_panel(
-        {}, None, open_loops_html='<div class="cc-open-loops">BAND</div>'
+def test_red_team_escalation_banner_absent_with_no_deferred_items(db_path: Path) -> None:
+    html = render_open_loops_band(db_path)
+    assert "escalated" not in html
+    assert "k-well-bad" not in html
+
+
+def test_red_team_escalation_banner_renders_on_second_defer(db_path: Path) -> None:
+    from redteam import response, store
+    from redteam.models import RedTeamLLMItem
+
+    item_id = store.insert_item(
+        db_path=db_path,
+        run_key="red_team_2026_08",
+        ticker="NU",
+        lens="fx_translation",
+        kind="per_name",
+        item=RedTeamLLMItem(
+            attack_md="Attack.", question_md="Q?", proposed_change_md="Change.", severity="high"
+        ),
     )
+    response.respond(db_path=db_path, item_id=item_id, action="defer")
+    html = render_open_loops_band(db_path)
+    assert "Red Team: 1 item escalated" in html
+    assert "k-well" in html
+    assert "k-well-bad" in html
+    assert 'href="/#red_team"' in html
+
+
+def test_red_team_escalation_banner_clears_once_answered(db_path: Path) -> None:
+    from redteam import response, store
+    from redteam.models import RedTeamLLMItem
+
+    item_id = store.insert_item(
+        db_path=db_path,
+        run_key="red_team_2026_08",
+        ticker="NU",
+        lens="fx_translation",
+        kind="per_name",
+        item=RedTeamLLMItem(
+            attack_md="Attack.", question_md="Q?", proposed_change_md="Change.", severity="high"
+        ),
+    )
+    response.respond(db_path=db_path, item_id=item_id, action="defer")
+    assert "escalated" in render_open_loops_band(db_path)
+    response.respond(db_path=db_path, item_id=item_id, action="accept")
+    assert "escalated" not in render_open_loops_band(db_path)
+
+
+def test_overview_panel_prepends_band() -> None:
+    html = render_overview_panel({}, None, open_loops_html='<div class="cc-open-loops">BAND</div>')
     assert "BAND" in html
     assert html.index("BAND") < html.index("cc-cockpit-live")
     # Without the band the panel is byte-identical to the pre-band contract.

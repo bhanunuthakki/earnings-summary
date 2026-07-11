@@ -1,5 +1,6 @@
-"""Render tests for the Red Team Brief (src/redteam/brief.py) — the kit-composed
-fragment PR5 ships read-only (status chips, no response actions)."""
+"""Render tests for the Red Team Brief (src/redteam/brief.py). PR5 shipped it
+read-only (status chips, no response actions); PR6 adds REFUTE/ACCEPT/DEFER
+buttons on answerable items and the month-status header pill."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from redteam.brief import render_red_team_brief  # noqa: E402
+from redteam.gate import MonthStatus  # noqa: E402
 from redteam.models import Kind, RedTeamItemRow, Severity, Status  # noqa: E402
 
 
@@ -82,7 +84,59 @@ def test_items_grouped_per_name_then_cross_book() -> None:
     assert html.index("Per-name") < html.index("Cross-book")
 
 
-def test_no_action_buttons_rendered_in_pr5() -> None:
-    # PR6 owns REFUTE/ACCEPT/DEFER — this PR renders read-only status chips.
+def test_open_item_renders_response_action_buttons() -> None:
+    html = render_red_team_brief([_row(status="open")], run_key="red_team_2026_08")
+    assert 'data-rt-act="refute"' in html
+    assert 'data-rt-act="accept"' in html
+    assert 'data-rt-act="defer"' in html
+    assert "k-btn" in html
+    assert "ix-act" in html
+
+
+def test_deferred_item_still_renders_action_buttons() -> None:
+    # Deferred is not terminal — refute/accept remain answerable.
+    html = render_red_team_brief([_row(status="deferred")], run_key="red_team_2026_08")
+    assert 'data-rt-act="refute"' in html
+
+
+def test_terminal_status_items_render_no_action_buttons() -> None:
+    # The panel-wide wiring <script> (a static selector referencing
+    # '[data-rt-act]') AND the CSS rule '.rt-actions { ... }' are still
+    # present once there's at least one item, so assert on the rendered
+    # element markup, not the bare class-name substring.
+    for status in ("refuted", "accepted", "closed"):
+        html = render_red_team_brief([_row(status=status)], run_key="red_team_2026_08")
+        assert '<div class="rt-actions"' not in html
+        assert 'data-rt-act="refute"' not in html
+
+
+def test_response_script_only_present_when_there_are_items() -> None:
     html = render_red_team_brief([_row()], run_key="red_team_2026_08")
-    assert "k-btn" not in html
+    assert "<script>" in html
+    assert 'data-panel="red_team"' in html
+    # No script tag / actions wiring in the empty state — nothing to click.
+    empty_html = render_red_team_brief([], run_key=None)
+    assert "<script>" not in empty_html
+    assert "data-rt-act" not in empty_html
+
+
+def test_month_status_pill_absent_without_month_status() -> None:
+    html = render_red_team_brief([_row()], run_key="red_team_2026_08")
+    assert "k-pill-warn" not in html
+    assert "CLOSED" not in html
+
+
+def test_month_status_pill_open_count() -> None:
+    ms = MonthStatus(run_key="red_team_2026_08", unresolved_count=3, is_closed=False)
+    html = render_red_team_brief([_row()], run_key="red_team_2026_08", month_status=ms)
+    assert "OPEN 3" in html
+    assert "k-pill-warn" in html
+
+
+def test_month_status_pill_closed() -> None:
+    ms = MonthStatus(run_key="red_team_2026_08", unresolved_count=0, is_closed=True)
+    html = render_red_team_brief(
+        [_row(status="accepted")], run_key="red_team_2026_08", month_status=ms
+    )
+    assert "CLOSED" in html
+    assert "k-pill-ok" in html

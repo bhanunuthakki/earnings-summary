@@ -268,6 +268,24 @@ def _review_reply(repo_root: Path | None, text: str) -> str:
         return f"Couldn't build a review for {ticker}."
 
 
+def _redteam_reply(db_path: Path | str | None, text: str) -> str:
+    """The instant, no-LLM ``/redteam`` reply for the poller's slash-command
+    interception. Reuses ``redteam.telegram_cmd.redteam_reply_text`` — the
+    SAME numbered-list/response logic ``redteam.response.respond`` backs for
+    the cockpit's ``/api/red_team/<id>/respond`` route, so a response typed
+    from Telegram and one clicked in the web panel behave identically. Never
+    raises: a missing db_path or any failure degrades to a short apology
+    (per-update failures must never break the poll loop)."""
+    if db_path is None:
+        return "Couldn't reach the red-team store (no database configured)."
+    try:
+        from redteam.telegram_cmd import redteam_reply_text
+
+        return redteam_reply_text(text, db_path=db_path)
+    except Exception:
+        return "Couldn't process that /redteam command."
+
+
 def poll_once(
     token: str,
     *,
@@ -310,6 +328,19 @@ def poll_once(
                     if confirm and update.chat_id is not None:
                         repo_root = Path(db_path).parent.parent if db_path else None
                         reply = _review_reply(repo_root, stripped)
+                        with contextlib.suppress(telegram.TelegramError):
+                            telegram.send_message(token, update.chat_id, reply)
+                    continue
+                if low.startswith("/redteam"):
+                    # PR6 — the monthly Red Team's forced-response loop reachable
+                    # from Telegram: bare "/redteam" lists open items, "/redteam
+                    # <n> refute|accept|defer [text]" answers one. Reuses
+                    # redteam.response.respond via redteam.telegram_cmd — the SAME
+                    # state machine the cockpit's /api/red_team/<id>/respond route
+                    # calls. LLM-free and fast, same shape as /review above.
+                    bump("command_redteam")
+                    if confirm and update.chat_id is not None:
+                        reply = _redteam_reply(db_path, stripped)
                         with contextlib.suppress(telegram.TelegramError):
                             telegram.send_message(token, update.chat_id, reply)
                     continue

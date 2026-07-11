@@ -28,6 +28,9 @@ _KIND_LABELS: Mapping[str, str] = {
     "thesis_update": "Thesis update",
     "bear_append": "Bear case",
     "earnings_prep_append": "Earnings prep",
+    # PR6 (monthly_red_team.md Phase 2): the REFUTE reasoning for a per-name
+    # red-team item lands here via redteam.response._refute.
+    "red_team_refute": "Red Team refute",
 }
 
 _PANEL_STYLE = """<style>
