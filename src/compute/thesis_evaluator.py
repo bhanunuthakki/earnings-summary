@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -47,6 +48,9 @@ from models.kpis import BreachStatus
 from models.unit_convert import convert_unit
 from provenance.overrides import KPI as OVERRIDE_KPI
 from provenance.overrides import OverrideAction, active_scalar_override_map
+from thesis_reunderwrite_gate import ReUnderwriteBlockedError, evaluate_gate
+
+log = logging.getLogger(__name__)
 
 
 class Comparator(StrEnum):
@@ -617,12 +621,33 @@ def refresh_thesis_mirror(
     return drifted
 
 
+# Mirrors sync_thesis_state.py's ``_STUB_STATUS`` (kept as a plain literal here
+# rather than imported — that module is a standalone CLI, not a library seam).
+_STUB_REGENERATED_STATUS = "stub_regenerated_from_corruption"
+
+
+def _is_corruption_stub(raw_json: object) -> bool:
+    """True when a thesis_state row's mirrored content is only the
+    corruption-recovery placeholder, never a real owner-underwritten thesis."""
+    if not isinstance(raw_json, str) or not raw_json:
+        return False
+    try:
+        parsed = json.loads(raw_json)
+    except ValueError:
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    status = cast("dict[str, object]", parsed).get("_status")
+    return status == _STUB_REGENERATED_STATUS
+
+
 def persist_verdict(
     conn: sqlite3.Connection,
     verdict: ThesisVerdict,
     *,
     run_id: str | None = None,
     holdings_dir: Path | None = None,
+    override: bool = False,
 ) -> None:
     """Update thesis_state.breach_status (current snapshot) AND append to thesis_evaluations (history).
 
@@ -635,7 +660,44 @@ def persist_verdict(
     drifted from the file it was evaluated against. Omitting ``holdings_dir``
     preserves the historical behavior — breach_status/history only, raw_json
     left as-is — for callers that don't have the file at hand.
+
+    Scored-miss gate (monthly_red_team.md Phase 3, PR7 — the NVO precedent): a
+    thesis currently ``warn``/``breach`` whose text is being materially rewritten
+    is a RE-UNDERWRITE. It is blocked with :class:`ReUnderwriteBlockedError`
+    (naming the exact `execution/log_scored_miss.py` invocation to unblock it)
+    unless ``override=True`` — which is honored but logged loudly, never a
+    silent bypass. A ticker with no prior ``thesis_state`` row, one that is
+    ``ok``/unset, or one whose stored content is only the corruption-recovery
+    stub (``raw_json._status == "stub_regenerated_from_corruption"``, seeded by
+    `sync_thesis_state.py`'s repair path) is never gated — a stub was never a
+    real underwritten belief, so there is nothing to score a miss against. See
+    ``thesis_reunderwrite_gate`` for the exact predicate.
     """
+    prior = conn.execute(
+        "SELECT thesis, breach_status, raw_json FROM thesis_state WHERE ticker = ?",
+        (verdict.ticker,),
+    ).fetchone()
+    if prior is not None and not _is_corruption_stub(prior["raw_json"]):
+        gate = evaluate_gate(
+            conn,
+            ticker=verdict.ticker,
+            prior_thesis=prior["thesis"],
+            prior_breach_status=prior["breach_status"],
+            new_thesis=verdict.thesis,
+        )
+        if gate.is_reunderwrite:
+            if gate.blocked and not override:
+                raise ReUnderwriteBlockedError(verdict.ticker, onset=gate.onset)
+            if gate.blocked and override:
+                log.warning(
+                    {
+                        "event": "thesis_reunderwrite_gate_overridden",
+                        "ticker": verdict.ticker,
+                        "onset": gate.onset,
+                        "run_id": run_id,
+                    }
+                )
+
     # Upsert: a thesis_state row may not exist yet (e.g. ticker added via raw SQL
     # bypassing the track_company → onboard_ticker → seed flow). New rows get an
     # empty raw_json placeholder; `holdings_dir` (when passed) re-mirrors it below.

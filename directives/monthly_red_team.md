@@ -60,7 +60,10 @@ failure mode.
   understates the ~22–27% book).
 - **Annual letter**: each January, auto-draft a letter-to-self from the ledger + trades + Brier
   trajectory; the owner edits and signs. The yearly scorecard is three numbers: Brier trend,
-  cut-discipline hit rate, and rule-execution fidelity in drawdowns.
+  cut-discipline hit rate, and rule-execution fidelity in drawdowns. Built (PR7): no dedicated
+  January cron — invoke by hand each January, `python execution/draft_annual_letter.py --year <YYYY>`
+  (idempotency key `annual_letter_{YYYY}`, defaults to last year); the three scorecard numbers
+  render wherever Decision P&L renders (`redteam.decision_pnl.build_yearly_scorecard`).
 
 ## Component map (build order)
 

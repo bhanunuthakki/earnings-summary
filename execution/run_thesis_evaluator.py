@@ -29,6 +29,7 @@ from compute.thesis_evaluator import (  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
+from thesis_reunderwrite_gate import ReUnderwriteBlockedError  # noqa: E402
 
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 
@@ -79,6 +80,18 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Print verdicts without persisting")
     parser.add_argument("--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"))
     parser.add_argument("--holdings-dir", default=str(_HOLDINGS_DIR), type=Path)
+    parser.add_argument(
+        "--override",
+        action="store_true",
+        help=(
+            "Bypass the scored-miss re-underwrite gate (monthly_red_team.md Phase 3): "
+            "normally, re-persisting a MATERIALLY changed thesis for a ticker currently "
+            "warn/breach is blocked until `execution/log_scored_miss.py` has recorded a "
+            "calibration entry for the belief that broke. Every use of --override is "
+            "logged loudly (event=thesis_reunderwrite_gate_overridden) — it is never a "
+            "silent bypass. Prefer logging the scored miss first."
+        ),
+    )
     args = parser.parse_args()
 
     conn = open_db(args.db)
@@ -124,10 +137,29 @@ def main() -> int:
 
             verdicts.append(verdict)
             if not args.dry_run:
-                # Pass holdings_dir so the thesis_state content mirror
-                # (raw_json/thesis) is re-synced from the file this verdict was
-                # built from — the mirror can't silently drift behind the file.
-                persist_verdict(conn, verdict, run_id=run_id, holdings_dir=args.holdings_dir)
+                try:
+                    # Pass holdings_dir so the thesis_state content mirror
+                    # (raw_json/thesis) is re-synced from the file this verdict was
+                    # built from — the mirror can't silently drift behind the file.
+                    persist_verdict(
+                        conn,
+                        verdict,
+                        run_id=run_id,
+                        holdings_dir=args.holdings_dir,
+                        override=args.override,
+                    )
+                except ReUnderwriteBlockedError as e:
+                    failed += 1
+                    record_stage(
+                        conn,
+                        run_id,
+                        ticker,
+                        StageName.SYNTHESIZE,
+                        StageStatus.FAILED,
+                        error_msg=str(e)[:500],
+                    )
+                    sys.stderr.write(f"BLOCKED {ticker}: {e}\n")
+                    continue
             record_stage(
                 conn,
                 run_id,

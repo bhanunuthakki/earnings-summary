@@ -141,6 +141,35 @@ def list_items_for_run(*, db_path: Path | str | None, run_key: str) -> list[RedT
         conn.close()
 
 
+_RESPONDED_STATUSES = ("refuted", "accepted", "deferred")
+
+
+def list_responded_items(*, db_path: Path | str | None) -> list[RedTeamItemRow]:
+    """Every item across ALL runs that has been responded to (status in
+    refuted/accepted/deferred), oldest-response-first — the population
+    ``redteam.decision_pnl`` scores. ``closed`` items are excluded (closed is
+    a terminal administrative state distinct from "responded"; PR6 does not
+    define what closes an item, so this store makes no assumption about it).
+    ``[]`` on a missing DB/table, matching the store's read-tolerant posture."""
+    try:
+        conn = open_conn(db_path)
+    except (FileNotFoundError, RuntimeError):
+        return []
+    try:
+        if not _has_table(conn):
+            return []
+        marks = ",".join("?" for _ in _RESPONDED_STATUSES)
+        rows = conn.execute(
+            f"SELECT {', '.join(_ROW_COLUMNS)} FROM {_TABLE} "
+            f"WHERE status IN ({marks}) AND responded_at IS NOT NULL "
+            "ORDER BY responded_at ASC, id ASC",
+            _RESPONDED_STATUSES,
+        ).fetchall()
+        return [_row_to_dc(r) for r in rows]
+    finally:
+        conn.close()
+
+
 def latest_run_key(*, db_path: Path | str | None) -> str | None:
     """The most recently created run_key present in the table, or ``None``
     when the table is empty/absent — the panel's default scope."""

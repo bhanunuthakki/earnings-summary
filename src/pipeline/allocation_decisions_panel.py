@@ -532,7 +532,44 @@ def render_allocation_decisions_panel(
         coach_pings_html=_coach_pings_section(db_path),
         coach_mutes_html=_coach_mutes_section(db_path),
         coach_digest_html=_coach_digest_section(db_path),
+        redteam_pnl_html=_redteam_pnl_html(db_path, user_id=user_id),
+        annual_letter_html=_annual_letter_html(db_path),
     )
+
+
+def _annual_letter_html(db_path: Path) -> str:
+    """The annual letter-to-self section (monthly_red_team.md Phase 3). Never
+    lets a failure vanish the section."""
+    try:
+        from pipeline.annual_letter_panel import render_annual_letter_section
+
+        repo_root = db_path.resolve().parent.parent
+        return render_annual_letter_section(repo_root)
+    except Exception:  # pragma: no cover - this section must never break the page
+        return (
+            '<section class="panel"><h2>Letter to self</h2>'
+            '<p class="muted">Letter to self unavailable — see logs.</p></section>'
+        )
+
+
+def _redteam_pnl_html(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
+    """The Decision P&L (Red Team) section (monthly_red_team.md Phase 3), mounted
+    beside Coach P&L. Never lets a failure vanish the section (same posture as
+    ``_scorecard_html``): an exception renders a visible one-line failure stub."""
+    try:
+        from pipeline.redteam_pnl_panel import REDTEAM_PNL_CSS, render_redteam_pnl_section
+        from redteam.decision_pnl import build_decision_pnl, build_yearly_scorecard
+
+        repo_root = db_path.resolve().parent.parent
+        report = build_decision_pnl(db_path=db_path, repo_root=repo_root)
+        scorecard = build_yearly_scorecard(db_path=db_path, user_id=user_id)
+        section = render_redteam_pnl_section(report, scorecard)
+        return f"<style>{REDTEAM_PNL_CSS}</style>{section}"
+    except Exception:  # pragma: no cover - this section must never break the page
+        return (
+            '<section class="panel"><h2>Decision P&amp;L (Red Team)</h2>'
+            '<p class="muted">Decision P&amp;L unavailable — see logs.</p></section>'
+        )
 
 
 def _scorecard_html(db_path: Path, *, n_graded: int = 0) -> str:
@@ -1031,6 +1068,8 @@ def compose_decisions_page(
     coach_pings_html: str = "",
     coach_mutes_html: str = "",
     coach_digest_html: str = "",
+    redteam_pnl_html: str = "",
+    annual_letter_html: str = "",
 ) -> str:
     """Pure page assembly (testable without network or DB). ``calibration``
     None (pre-0046 substrate) hides the section entirely; ``attribution`` None
@@ -1054,6 +1093,8 @@ def compose_decisions_page(
             _skill_decomposition_section(attribution, beta) if attribution is not None else "",
             scorecard_html,
             coach_pnl_html,
+            redteam_pnl_html,
+            annual_letter_html,
             coach_pings_html,
             coach_mutes_html,
             coach_digest_html,
