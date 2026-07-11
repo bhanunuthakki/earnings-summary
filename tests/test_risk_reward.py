@@ -264,6 +264,37 @@ def test_gap_section_renders_with_control_kit() -> None:
     assert "k-pill" in html and "k-chip" in html  # kit pill + chips, no raw hex
     assert "of book risk vs" in html and "of expected reward" in html  # the parity-gap chip
     assert "NU" in html
+    assert "OF REWARD UNMODELED" not in html  # 3/3 valued -> full coverage, no warning
+
+
+def test_gap_section_low_reward_coverage_leads_with_warning() -> None:
+    """Monthly Red Team Phase 1 guard 1: the reward leg is a book-level
+    scenario-reward rollup too — a majority-unscored reward share must lead
+    with the same UNMODELED warning tail stress does, not a quiet footnote."""
+    from risk_reward import RiskRewardGap
+
+    book = _book(
+        risk_share={"NU": 0.50, "META": 0.40, "WIX": 0.10},
+        weights={"NU": 0.3, "META": 0.5, "WIX": 0.2},
+    )
+    # Only 1 of 3 names has a usable reward -> 33% valued, well under COVERAGE_BAD_PCT.
+    rows, valued = build_gap_rows(book, rewards={"NU": _reward(0.05)}, convictions={"NU": 3.0})
+    gap = RiskRewardGap(
+        rows=rows,
+        portfolio_vol_ann=0.2,
+        weights_source="tracker",
+        prices_through=date(2026, 6, 1),
+        cov_obs=252,
+        shrinkage=0.1,
+        valued_names=valued,
+    )
+    from pipeline.portfolio_panel import (
+        _risk_reward_gap_section,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    html = _risk_reward_gap_section(gap)
+    assert "OF REWARD UNMODELED" in html
+    assert "k-pill-bad" in html
 
 
 def test_gap_section_hidden_reason_renders_note() -> None:

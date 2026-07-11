@@ -32,6 +32,8 @@ from pathlib import Path
 from dcf.scenario_reward import parse_scenario_fair_values
 
 __all__ = [
+    "COVERAGE_BAD_PCT",
+    "COVERAGE_WARN_PCT",
     "FV_STALE_DAYS",
     "PRICE_STALE_DAYS",
     "TailStress",
@@ -44,6 +46,15 @@ __all__ = [
 # re-priced daily by morning stage 0e so a week-old price is itself a tell.
 FV_STALE_DAYS = 30
 PRICE_STALE_DAYS = 7
+
+# Coverage-gate thresholds (Monthly Red Team Phase 1, guard 1 — the 2026-07
+# adversarial review's #1 failure mode: tail stress modeled 42% of the book and
+# still rendered a clean, healthy-looking headline). Shared by every book-level
+# scenario/reward rollup that reports a coverage fraction, so the "when does the
+# headline get subordinated to an UNMODELED warning" line is drawn ONCE:
+# below COVERAGE_WARN_PCT modeled → amber; below COVERAGE_BAD_PCT modeled → red.
+COVERAGE_WARN_PCT = 90.0
+COVERAGE_BAD_PCT = 60.0
 
 
 @dataclass(slots=True)

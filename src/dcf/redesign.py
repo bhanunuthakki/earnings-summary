@@ -245,6 +245,98 @@ BEAR_SEED = ScenarioDeltas(
 )
 
 
+# --------------------------------------------------------------------------- #
+# Thesis-calibrated bear override (Monthly Red Team Phase 1, guard 3).
+#
+# BEAR_SEED is a generic "mild disappointment" offset — the same -3pt growth /
+# -1pt margin / -2x exit shift for every name, regardless of what the analyst's
+# own thesis says would actually break it. ``micro_thesis/holdings/<T>.json`` may
+# carry an optional ``bear_deltas`` block (documented in
+# ``directives/holdings_json_schema.md``) that overrides the SEED default (never
+# an owner's workbook edit — that machinery, ``scenario_bull``/``scenario_bear``
+# in ``data/dcf_assumptions/<T>.json`` mirrored by
+# ``refresh_dcf._apply_inputs_to_block``, is untouched and still wins whenever it
+# is on file). The holdings schema is intentionally simpler than the workbook's
+# 6-lever ``ScenarioDeltas`` — one growth/margin/exit-multiple/terminal-g pp-or-
+# turns delta each, applied uniformly to the near+term legs — so an analyst names
+# the thesis-break magnitude without hand-deriving six numbers.
+# --------------------------------------------------------------------------- #
+
+
+def parse_thesis_bear_deltas(holdings: Mapping[str, object] | None) -> ScenarioDeltas | None:
+    """The holdings JSON's thesis-calibrated ``bear_deltas`` override, or
+    ``None`` when absent/malformed (a name with no override, or a block with no
+    recognized numeric lever, is exactly ``None`` — the caller falls back to
+    ``BEAR_SEED``). ``holdings`` is the already-loaded ``micro_thesis/holdings/
+    <T>.json`` dict — this function does no I/O.
+
+    Recognized keys (all optional, in percentage points except the exit
+    multiple, which is in turns): ``growth_delta_pp`` (shifts BOTH near- and
+    terminal-segment growth), ``margin_delta_pp`` (shifts both near- and
+    terminal operating margin), ``exit_multiple_delta`` (shifts the exit
+    multiple), ``terminal_g_delta_pp`` (shifts terminal growth g). A lever the
+    block doesn't set falls back to ``BEAR_SEED``'s value for that lever, so a
+    thesis only needs to name the specific break, not re-derive the whole range.
+    """
+    if not isinstance(holdings, Mapping):
+        return None
+    raw_obj = holdings.get("bear_deltas")
+    if not isinstance(raw_obj, Mapping):
+        return None
+    raw = cast("Mapping[str, object]", raw_obj)
+
+    def _num(key: str) -> float | None:
+        v = raw.get(key)
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        return float(v)
+
+    growth_pp = _num("growth_delta_pp")
+    margin_pp = _num("margin_delta_pp")
+    exit_delta = _num("exit_multiple_delta")
+    term_g_pp = _num("terminal_g_delta_pp")
+    if growth_pp is None and margin_pp is None and exit_delta is None and term_g_pp is None:
+        return None  # block present but no recognized lever — not a real override
+
+    growth = growth_pp / 100.0 if growth_pp is not None else BEAR_SEED.growth_near
+    margin = margin_pp / 100.0 if margin_pp is not None else BEAR_SEED.margin_near
+    exit_multiple = exit_delta if exit_delta is not None else BEAR_SEED.exit_multiple
+    terminal_g = term_g_pp / 100.0 if term_g_pp is not None else BEAR_SEED.terminal_g
+    return ScenarioDeltas(
+        growth_near=growth,
+        growth_term=growth,
+        margin_near=margin,
+        margin_term=margin,
+        exit_multiple=exit_multiple,
+        terminal_g=terminal_g,
+    )
+
+
+def thesis_bear_seed(holdings: Mapping[str, object] | None) -> ScenarioDeltas:
+    """``BEAR_SEED``, overridden by the holdings JSON's thesis-calibrated
+    ``bear_deltas`` when present — the default a FRESH scenario build (no owner
+    workbook edit on file yet) seeds the Bear column from."""
+    return parse_thesis_bear_deltas(holdings) or BEAR_SEED
+
+
+def classify_bear_provenance(
+    bear_deltas: ScenarioDeltas, holdings: Mapping[str, object] | None
+) -> str:
+    """``"seed"`` | ``"thesis"`` | ``"owner"`` for the bear deltas actually in use
+    (a run's ``inp.bear_deltas``, read back from the workbook), by comparing
+    against ``BEAR_SEED`` and the holdings JSON's thesis override (if any).
+
+    Pure — no I/O; the caller has already loaded ``holdings``. ``"owner"`` is
+    the catch-all: a workbook Dashboard edit away from both the generic seed and
+    the thesis override is, by construction, a hand edit."""
+    if bear_deltas == BEAR_SEED:
+        return "seed"
+    thesis = parse_thesis_bear_deltas(holdings)
+    if thesis is not None and bear_deltas == thesis:
+        return "thesis"
+    return "owner"
+
+
 @dataclass(frozen=True)
 class RedesignInputs:
     """Everything ``value()`` needs, read from a redesigned workbook.

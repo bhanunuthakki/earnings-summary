@@ -213,10 +213,12 @@ def _page(analytics: PortfolioAnalytics, stress: TailStress | None) -> str:
 
 
 def test_tail_stress_section_renders_rows_and_headline() -> None:
+    # 20% modeled is well below COVERAGE_WARN_PCT — the coverage gate takes over
+    # the sub-line (Monthly Red Team Phase 1 guard 1), so the plain "% of book
+    # modeled" reading no longer appears; see test_low_coverage_* below.
     html = _page(PortfolioAnalytics(available=True, api_url="http://x"), _stress())
     assert "Scenario-tail stress" in html
     assert "-8.0%" in html  # headline book drawdown
-    assert "20% of book modeled" in html
     assert "1 of 2" in html
     assert "MELI" in html and "-40%" in html and "-8.0pp" in html
     assert "FLKR" in html and "not modeled" in html and "no DCF run on file" in html
@@ -235,3 +237,60 @@ def test_tail_stress_section_renders_offline() -> None:
     html = _page(offline, _stress())
     assert "live portfolio tracker" in html
     assert "Scenario-tail stress" in html and "-8.0%" in html
+
+
+# ---------------------------------------------------------------------------
+# Coverage gate (Monthly Red Team Phase 1 guard 1) — the 2026-07 adversarial
+# review's #1 failure mode: tail stress modeled 42% of the book and still
+# rendered a clean, healthy-looking headline.
+# ---------------------------------------------------------------------------
+
+
+def _stress_with_coverage(modeled_pct: float) -> TailStress:
+    s = _stress()
+    return TailStress(
+        rows=s.rows,
+        book_drawdown_pct=s.book_drawdown_pct,
+        modeled_weight_pct=modeled_pct,
+        stale_weight_pct=s.stale_weight_pct,
+        names_with_bear=s.names_with_bear,
+        names_total=s.names_total,
+        notes=s.notes,
+    )
+
+
+def test_low_coverage_leads_with_bad_pill_and_subordinates_headline() -> None:
+    # 20% modeled < COVERAGE_BAD_PCT (60%) -> the red pill, and the headline
+    # number's tone is stripped (never a clean green/red as if confident).
+    html = _page(
+        PortfolioAnalytics(available=True, api_url="http://x"), _stress_with_coverage(20.0)
+    )
+    assert "80% OF BOOK UNMODELED" in html
+    assert "k-pill-bad" in html
+    assert "over the 20% modeled" in html
+    assert "NOT the whole book" in html
+    assert "20% of book modeled" not in html  # the plain healthy sub-line is gone
+    # The drawdown card itself must not carry a pos/neg tone class — never a
+    # clean healthy-looking number when majority-unmodeled.
+    assert '<div class="kpi-card"><div class="kpi-label">All-bears book drawdown</div>' in html
+
+
+def test_mid_coverage_leads_with_warn_pill() -> None:
+    # 75% modeled is between COVERAGE_BAD_PCT and COVERAGE_WARN_PCT -> amber.
+    html = _page(
+        PortfolioAnalytics(available=True, api_url="http://x"), _stress_with_coverage(75.0)
+    )
+    assert "25% OF BOOK UNMODELED" in html
+    assert "k-pill-warn" in html
+    assert "k-pill-bad" not in html
+
+
+def test_high_coverage_has_no_warning_pill() -> None:
+    # 95% modeled clears COVERAGE_WARN_PCT (90%) -> no coverage-warning pill,
+    # the plain "% of book modeled" sub-line stays, and the headline keeps its
+    # normal pos/neg tone.
+    html = _page(
+        PortfolioAnalytics(available=True, api_url="http://x"), _stress_with_coverage(95.0)
+    )
+    assert "OF BOOK UNMODELED" not in html
+    assert "95% of book modeled" in html

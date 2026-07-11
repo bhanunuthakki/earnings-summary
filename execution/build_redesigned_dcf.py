@@ -625,8 +625,22 @@ def _scen_deltas(raw, seed):
     )
 
 
+# Thesis-calibrated bear override (Monthly Red Team Phase 1, guard 3): when no
+# owner workbook edit is on file yet (``_opus`` has no ``scenario_bear`` block —
+# a from-scratch build), fall back to the holdings JSON's ``bear_deltas`` when
+# the analyst has named one, rather than always the generic BEAR_SEED offsets.
+# An existing owner-edited block still wins unconditionally (unchanged above).
+_holdings_path = REPO / "micro_thesis" / "holdings" / f"{T.upper()}.json"
+_holdings_raw: dict | None = None
+if _holdings_path.exists():
+    try:
+        _hd = json.loads(_holdings_path.read_text(encoding="utf-8"))
+        _holdings_raw = _hd if isinstance(_hd, dict) else None
+    except (OSError, ValueError):
+        _holdings_raw = None
+
 BULL_D = _scen_deltas(_opus.get("scenario_bull"), redesign_mod.BULL_SEED)
-BEAR_D = _scen_deltas(_opus.get("scenario_bear"), redesign_mod.BEAR_SEED)
+BEAR_D = _scen_deltas(_opus.get("scenario_bear"), redesign_mod.thesis_bear_seed(_holdings_raw))
 
 
 def _weights(raw, default):
