@@ -76,6 +76,10 @@ try:
     from dcf.redesign import GROWTH_FADE_CURVATURE as _CURVATURE
 except ImportError:  # pragma: no cover
     _CURVATURE = 2.0
+try:  # scenario emission (Monthly Red Team PR8) -- best-effort like persistence
+    from dcf import redesign as redesign_mod
+except ImportError:  # pragma: no cover
+    redesign_mod = None  # type: ignore[assignment]
 
 YELLOW = PatternFill("solid", fgColor="FFF2CC")
 HEAD_FILL = PatternFill("solid", fgColor="1F2937")
@@ -318,6 +322,86 @@ def load_assumptions(ticker: str) -> Assum:
         except (OSError, json.JSONDecodeError, ValueError, KeyError):
             pass
     return s
+
+
+# --------------------------------------------------------------------------- #
+# Scenario emission (Monthly Red Team PR8).
+#
+# Mirrors the redesigned refresher's persisted ``scenarios`` block (bull/base/
+# bear fair values + bear provenance) so MELI stops being invisible to every
+# scenario consumer (``dcf.scenario_reward``, ``bear_lint``, tail stress). The
+# shared 6-lever ``ScenarioDeltas`` vocabulary maps onto THIS SOTP's levers:
+#
+#   growth deltas   -> Commerce, Fintech-payments AND credit-book growth
+#                      (near/terminal) — a demand shock hits all three engines
+#   margin deltas   -> Commerce + Fintech-payments EBIT margins AND the credit
+#                      book's NIMAL (near/terminal) — a price war compresses the
+#                      operating segments while a credit cycle compresses NIMAL
+#   exit multiple Δ -> the operating exit EV/EBITDA (turns, floored at 1x). The
+#                      credit leg's Gordon terminal compresses through NIMAL/g,
+#                      not through this multiple
+#   terminal g Δ    -> credit terminal growth g (and the operating perpetuity
+#                      cross-check g, cosmetic)
+#
+# Bear deltas: holdings ``bear_deltas`` when present (provenance "thesis"), else
+# the generic BEAR_SEED (provenance "seed" — a labeled fallback). Legible over
+# precise, per the red-team directive.
+# --------------------------------------------------------------------------- #
+def _load_holdings(ticker: str) -> dict[str, object] | None:
+    path = REPO / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+    if not path.exists():
+        return None
+    try:
+        data: Any = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return cast("dict[str, object]", data) if isinstance(data, dict) else None
+
+
+def scenario_assumptions(s: Assum, deltas: Any) -> Assum:
+    """``s`` shifted by one scenario's ``dcf.redesign.ScenarioDeltas`` under the
+    documented lever mapping. Guardrails keep the credit Gordon terminal
+    well-posed (g < ke, ROE > g) and the exit multiple positive."""
+    import copy
+
+    s2 = copy.copy(s)
+    for attr in ("comm_g_near", "fpay_g_near", "cbg_near"):
+        setattr(s2, attr, getattr(s2, attr) + deltas.growth_near)
+    for attr in ("comm_g_term", "fpay_g_term", "cbg_term"):
+        setattr(s2, attr, getattr(s2, attr) + deltas.growth_term)
+    for attr in ("comm_margin_near", "fpay_margin_near", "nimal_near"):
+        setattr(s2, attr, getattr(s2, attr) + deltas.margin_near)
+    for attr in ("comm_margin_term", "fpay_margin_term", "nimal_term"):
+        setattr(s2, attr, getattr(s2, attr) + deltas.margin_term)
+    s2.op_exit_ebitda_mult = max(1.0, s2.op_exit_ebitda_mult + deltas.exit_multiple)
+    s2.credit_g_term += deltas.terminal_g
+    s2.g_term += deltas.terminal_g
+    s2.credit_g_term = min(s2.credit_g_term, s2.credit_ke - 0.01)
+    s2.credit_terminal_roe = max(s2.credit_terminal_roe, s2.credit_g_term + 0.01)
+    return s2
+
+
+def scenarios_block(s: Assum, m: Mirror, holdings: dict[str, object] | None) -> dict[str, object]:
+    """The ``scenarios`` payload for ``dcf_runs.assumption_snapshot_json`` —
+    structurally identical to ``refresh_dcf._redesign_snapshot``'s block, so
+    ``parse_scenario_fair_values`` / ``parse_scenario_bear_provenance`` read it
+    unchanged. Requires ``redesign_mod`` (caller gates on it)."""
+    import dataclasses as _dc
+
+    bull_d = redesign_mod.BULL_SEED
+    bear_d = redesign_mod.thesis_bear_seed(holdings)
+    provenance = "thesis" if redesign_mod.parse_thesis_bear_deltas(holdings) is not None else "seed"
+    bull_vps = mirror(scenario_assumptions(s, bull_d)).vps
+    bear_vps = mirror(scenario_assumptions(s, bear_d)).vps
+    return {
+        "base": {"fair_value_per_share_usd": m.vps},
+        "bull": {"fair_value_per_share_usd": bull_vps, "deltas": _dc.asdict(bull_d)},
+        "bear": {
+            "fair_value_per_share_usd": bear_vps,
+            "deltas": _dc.asdict(bear_d),
+            "provenance": provenance,
+        },
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -634,30 +718,25 @@ def persist_dcf_run(s: Assum, m: Mirror) -> bool:
     db = REPO / "data" / "portfolio.db"
     if persist_mod is None or not db.exists() or not m.vps:
         return False
-    holdings = REPO / "micro_thesis" / "holdings" / f"{T}.json"
-    mos: object = None
-    if holdings.exists():
-        try:
-            mos = json.loads(holdings.read_text(encoding="utf-8")).get("mos_bar")
-        except (OSError, json.JSONDecodeError):
-            mos = None
-    snap = json.dumps(
-        {
-            "model": "meli_platform_sotp",
-            "value_per_share": m.vps,
-            "operating_ev_m": m.operating_ev,
-            "credit_equity_value_m": m.credit_equity_value,
-            "equity_value_m": m.equity_value,
-            "terminal_operating_revenue_m": m.op_terminal_revenue,
-            "terminal_credit_roe": m.credit_terminal_roe,
-            "terminal_blended_op_margin": m.terminal_blended_op_margin,
-            "wacc": s.wacc,
-            "credit_ke": s.credit_ke,
-            "country_risk_premium": s.country_risk_premium,
-            "workbook": str(DEST),
-        },
-        indent=2,
-    )
+    holdings = _load_holdings(T)
+    mos: object = holdings.get("mos_bar") if holdings else None
+    snap_payload: dict[str, object] = {
+        "model": "meli_platform_sotp",
+        "value_per_share": m.vps,
+        "operating_ev_m": m.operating_ev,
+        "credit_equity_value_m": m.credit_equity_value,
+        "equity_value_m": m.equity_value,
+        "terminal_operating_revenue_m": m.op_terminal_revenue,
+        "terminal_credit_roe": m.credit_terminal_roe,
+        "terminal_blended_op_margin": m.terminal_blended_op_margin,
+        "wacc": s.wacc,
+        "credit_ke": s.credit_ke,
+        "country_risk_premium": s.country_risk_premium,
+        "workbook": str(DEST),
+    }
+    if redesign_mod is not None:
+        snap_payload["scenarios"] = scenarios_block(s, m, holdings)
+    snap = json.dumps(snap_payload, indent=2)
     row = persist_mod.DcfRunRow(
         ticker=T,
         valuation_date=date.today(),
