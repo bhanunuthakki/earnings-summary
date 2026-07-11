@@ -30,11 +30,13 @@ Full audit of the eval/routing infrastructure against the llm-ops bar (session g
 
 Program spec: `directives/monthly_red_team.md`. Findings that motivated it: fake `BEAR_SEED` bears (UBER/WIX/NVO/BKNG bear FV above live), MELI/NU (25% of book) with no scenario block at all, NU compound tripwire prose-only with a lit leg invisible, MELI NIMAL glide (−490bps/yr toward the 15% floor) reading plain OK, corrupt NU customer KPI series, book vol ~22-27% vs wealthplan CMA 16%.
 
-- [ ] **[risk]** PR1: coverage gate + bear-realism lint + per-name bear deltas (`BEAR_SEED` → labeled fallback with provenance)
-- [ ] **[evaluator]** PR2: trajectory WARN soft rules + encode NU net-adds/penetration compound + MELI NIMAL glide + KPI monotonicity guard + NU series data fix
-- [ ] **[pipeline]** PR3: naked-position gate (nightly; downside trigger + realistic bear + thesis ≤90d; violations = standing chips)
-- [ ] **[risk]** PR4: fat-tail multivariate-t book MC + joint-LatAm event-corr stress + FLKR price-history cache + quarterly wealthplan CMA export
-- [ ] **[llm-ops]** PR5: First-Saturday red-team pipeline (rotating lenses, cross-book passes, `red_team_items`, quota-window registration, per-item degrade). New purpose needs LLM_MODELS + prompt_versions; eval coverage tracked as follow-up under "uncovered purposes"
-- [ ] **[ui]** PR6: forced response loop — REFUTE (ledger) / ACCEPT (auto-artifact) / DEFER-once (then Home-band escalation), month-close gate, Telegram `/redteam`
-- [ ] **[calibration]** PR7: scored-miss gate on re-underwrites (Brier entry before new thesis admitted) + Decision P&L wiring + January annual-letter draft
-- [ ] **[data]** owner-pending honest bears for MELI (~−60%) and NU (~−69%) once PR1 mechanism lands
+- [x] **[risk]** PR1: coverage gate + bear-realism lint + per-name bear deltas (`BEAR_SEED` → labeled fallback with provenance). **Shipped #854 (2026-07-11).**
+- [x] **[evaluator]** PR2: trajectory WARN soft rules + encode NU net-adds/penetration compound + MELI NIMAL glide + KPI monotonicity guard + NU series data fix. **Shipped #855; NU fact 42198 unit-fixed in prod, fact 42175 dip = open note 58.**
+- [x] **[pipeline]** PR3: naked-position gate (nightly stage 0h; downside trigger + realistic bear + thesis ≤90d; violations = standing chips). **Shipped #858 + VTI/VOO price-history rider; live gate went 7→1 violations after the data pass.**
+- [x] **[risk]** PR4: fat-tail multivariate-t book MC + joint-LatAm event-corr stress + FLKR price-history cache + quarterly wealthplan CMA export. **Shipped #853.**
+- [x] **[llm-ops]** PR5: First-Saturday red-team pipeline (rotating lenses, cross-book passes, `red_team_items` 0147, quota-window registration, per-item degrade). **Shipped #857; task registered, next run 2026-08-01 10:00.** Eval coverage for `red_team_attack`/`red_team_cross_book` still open under "uncovered purposes".
+- [x] **[ui]** PR6: forced response loop — REFUTE (ledger) / ACCEPT (auto-artifact) / DEFER-once (then Home-band escalation), month-close gate, Telegram `/redteam`. **Shipped #861.** Note: capture_poller task is currently Disabled → Telegram commands inert until re-enabled.
+- [x] **[calibration]** PR7: scored-miss gate on re-underwrites (Brier entry before new thesis admitted) + Decision P&L wiring + January annual-letter draft (manual, no cron). **Shipped #860.** `annual_letter` purpose also uncovered by evals.
+- [x] **[data]** honest thesis bears persisted for all six flagged names (NU −69% $4.08, MELI −60% $724, UBER/WIX −39%, BKNG −32%, NVO −31%; notes say "pending owner review") + prod migration 0147 + FLKR thesis-mirror sync. **Done 2026-07-11 (PR8 #859 + data pass; backup `portfolio.db.bak_redteam_datapass_20260711`).**
+- [ ] **[risk]** FLKR residual naked-position violation: an ETF can't have a DCF bear — owner decision needed (ETF exemption in position_guard vs a non-DCF scenario source for the memory-cycle bear)
+- [ ] **[risk]** Tail-stress headline stuck at ~69% modeled by construction (index/cash sleeves have no DCF bears) — needs an ETF-sleeve stress treatment so the coverage gate can clear 90%
