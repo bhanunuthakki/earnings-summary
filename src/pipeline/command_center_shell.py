@@ -683,6 +683,9 @@ _SKELETON_KINDS: dict[str, str] = {
     "explore": "form",
     "portfolio": "kpis",
     "portfolio_risk": "kpis",
+    # Red Team Brief (PR5): a stack of k-well item cards, same shape as the
+    # memo/synthesis card surfaces.
+    "red_team": "cards",
     "portfolio_synthesis": "cards",
     "positioning": "cards",
     "decisions_record": "table",
