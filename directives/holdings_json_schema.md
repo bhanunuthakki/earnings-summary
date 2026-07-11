@@ -140,15 +140,27 @@ Rollup: holding-level status is the worst rule status across both arrays.
 
 ## Soft rules — `break_rules_soft`
 
-Predicate-style watch signals. Each rule either fires (YELLOW) or doesn't
-(GREEN) — they never escalate the holding to BREACH on their own. When any
-soft rule fires AND no hard rule breaches, the rollup goes to WARN.
+Predicate-style watch signals. Each rule evaluates to one of three statuses:
+
+- **GREEN** — evaluated, didn't fire.
+- **YELLOW** — evaluated, fired.
+- **UNRESOLVED** — couldn't be evaluated (insufficient data, a malformed
+  predicate, or a data-quality guard tripped on a `derived: "delta"` metric).
+  Never collapsed into GREEN — `directives/monthly_red_team.md` Phase 1's
+  "Prose-rule encoding" contract requires a rule leg with no data to stay
+  visible, not silently read as "checked, all clear". The §2 renderer shows
+  UNRESOLVED in the same amber tone as YELLOW, labeled distinctly.
+
+Soft rules never escalate the holding to BREACH on their own. When any soft
+rule is YELLOW **or** UNRESOLVED, and no hard rule breaches, the rollup goes
+to WARN — an unresolved soft rule is itself a signal ("this needs attention,
+the data can't confirm or deny it"), not silence.
 
 ```jsonc
 {
   "name": "growth_decel_2q",              // unique-ish, used as the display label
   "predicate": {
-    "type": "series_decel|series_below|series_above|ratio_breach|compound",
+    "type": "series_decel|series_below|series_above|ratio_breach|compound|trajectory",
     "params": { ... }                     // shape depends on type, see below
   },
   "evidence_template": "Revenue YoY decel {first_bps} → {second_bps}bps"
@@ -159,6 +171,24 @@ soft rule fires AND no hard rule breaches, the rollup goes to WARN.
 the predicate type (listed below). When the template is omitted or fails to
 render (missing key), the evaluator falls back to a generated description so
 the brief always has *some* evidence text.
+
+### `derived: "delta"` — consecutive-print differences
+
+Any metric spec (`metric` on `series_decel`/`series_below`/`series_above`,
+`kpi_name` on `trajectory`, `numerator`/`denominator` on `ratio_breach`)
+accepts an optional `"derived": "delta"` key alongside `"source"`. It swaps
+the raw level series for consecutive-print DIFFERENCES — e.g. NU's "net
+adds" is `delta(Total customers)`, not the level itself. Omitted or
+`"level"` (the default) uses the raw series unchanged.
+
+A cumulative series feeding a `delta` can't be trusted blindly: a decrease
+(the series should be non-decreasing) or a >1000× jump between adjacent
+prints (a raw-count row landing inside a millions-scale series — the exact
+"Total customers" def-641 corruption the 2026-07 red-team audit found) means
+the delta would be garbage. Either condition trips a data-quality guard and
+the rule reports **UNRESOLVED** with the reason named, rather than compute a
+nonsense delta. See `execution/fix_kpi_series.py` for the persist-time
+counterpart that catches this at the source.
 
 ### Predicate types
 
@@ -172,6 +202,7 @@ consecutive quarters. Deceleration at quarter Q = `YoY(Q-1) - YoY(Q)` in bps
 {"type": "series_decel", "params": {
   "metric": "revenue",                    // financial_facts.line_item OR kpi name
   "source": "financial",                  // optional; "financial" (default) | "kpi"
+  "derived": "level",                     // optional; "level" (default) | "delta"
   "periods": 2,                           // consecutive Q with decel ≥ threshold
   "threshold_bps": 200                    // 200bps = 2.00pp decel per Q
 }}
@@ -181,7 +212,7 @@ Evidence template keys: `metric`, `periods`, `threshold_bps`, `first_bps`,
 `second_bps`, `last_yoy_pct`, `prior_yoy_pct`, `decel_series_bps`,
 `last_period`.
 
-Needs ≥ `periods + 5` quarters of underlying data; otherwise GREEN with
+Needs ≥ `periods + 5` quarters of underlying data; otherwise UNRESOLVED with
 "insufficient data" evidence.
 
 #### `series_below` / `series_above`
@@ -193,6 +224,7 @@ quarters.
 {"type": "series_below", "params": {
   "metric": "Non-GAAP operating margin",
   "source": "kpi",
+  "derived": "level",                     // optional; "level" (default) | "delta"
   "threshold": 38,
   "periods": 2
 }}
@@ -200,6 +232,40 @@ quarters.
 
 Evidence keys: `metric`, `threshold`, `periods`, `direction`, `last_value`,
 `values`, `last_period`.
+
+Fewer than `periods` observations, or a `derived: "delta"` data-quality guard
+trip → UNRESOLVED, never a silent GREEN.
+
+#### `trajectory`
+
+Linear-fits the last `lookback_prints` observations and projects whether the
+trend crosses `threshold` within `horizon_prints` future prints. This is the
+Phase 1 "Trajectory WARN" contract: a rule can be OK today by the hard-rule
+threshold and still be visibly gliding toward it (MELI's NIMAL: 22.7% →
+17.8% YoY, −490bps/yr, toward the 15%-floor `meli_nimal_below_15` hard rule —
+plain OK today, but the trajectory rule surfaces the approach).
+
+```jsonc
+{"type": "trajectory", "params": {
+  "kpi_name": "NIMAL (net interest margin after losses)",
+  "source": "kpi",                        // optional; "kpi" (default for trajectory) | "financial"
+  "derived": "level",                     // optional; "level" (default) | "delta"
+  "comparator": "lt",                     // lt | le | gt | ge — direction that counts as "crossed"
+  "threshold": 15,
+  "lookback_prints": 4,                   // optional, default 4, minimum 3
+  "horizon_prints": 2                     // optional, default 2, minimum 1
+}}
+```
+
+Evidence keys: `kpi_name`, `threshold`, `comparator`, `lookback_prints`,
+`horizon_prints`, `slope_per_period`, `last_value`, `last_period`,
+`trip_period`, `trip_h`, `trip_value`, `already_violating`.
+
+Fewer than `lookback_prints` observations, or a `derived: "delta"`
+data-quality guard trip → UNRESOLVED ("thin" data), never a silent
+non-fire. A flat or receding trend (never projected to cross within
+`horizon_prints`) → GREEN. A trend projected to cross → YELLOW, with
+`trip_period` naming the quarter (e.g. `"Q1'27"`).
 
 #### `ratio_breach`
 
@@ -218,10 +284,11 @@ fraction (`0.15` for 15%) so the JSON matches what the analyst writes
 ```
 
 `numerator` and `denominator` are either bare strings (default to
-`source: "financial"`) or `{name, source}` dicts:
+`source: "financial"`, `derived: "level"`) or `{name, source, derived}`
+dicts:
 
 ```jsonc
-"numerator": {"name": "AWS Operating Income", "source": "financial"}
+"numerator": {"name": "AWS Operating Income", "source": "financial", "derived": "level"}
 ```
 
 Evidence keys: `numerator`, `denominator`, `threshold`, `threshold_pct`,
@@ -230,8 +297,25 @@ Evidence keys: `numerator`, `denominator`, `threshold`, `threshold_pct`,
 
 #### `compound`
 
-Boolean over child predicates. Use `op: "and"` when a soft rule needs
-multiple conditions both met; `op: "or"` when either condition suffices.
+Three-valued (Kleene) boolean over child predicates. Use `op: "and"` when a
+soft rule needs multiple conditions both met; `op: "or"` when either
+condition suffices. Each child predicate evaluates to fired / not-fired /
+**unresolved** (see the tri-state status above), and the compound combines
+them without ever laundering an unresolved child into a plain fired/clear
+verdict:
+
+- `AND`: any definite `False` child wins (→ not fired) even with an
+  unresolved sibling; else any unresolved child → the compound is
+  **UNRESOLVED**; else all `True` → fired.
+- `OR`: any definite `True` child wins (→ fired) even with an unresolved
+  sibling; else any unresolved child → the compound is **UNRESOLVED**; else
+  all `False` → not fired.
+
+This is how NU's "net adds <5M/Q AND Brazil flagship penetration declining
+QoQ" tripwire — previously thesis prose only, one leg already lit, zero
+panel signal — now renders: the penetration leg has no data (def 639, zero
+rows) → UNRESOLVED, so even with the net-adds leg firing the compound reads
+**UNRESOLVED** (visible amber), never a false GREEN.
 
 ```jsonc
 {"type": "compound", "params": {
@@ -243,14 +327,16 @@ multiple conditions both met; `op: "or"` when either condition suffices.
 }}
 ```
 
-Evidence keys: `op`, `children` (list of `{type, fired, description}`).
+Evidence keys: `op`, `children` (list of `{type, fired, description}` —
+`fired` is `true` / `false` / `null` for unresolved).
 
 ### Error handling
 
 Soft-rule evaluation is best-effort: any single rule that throws (missing
-param, invalid source, schema typo) is logged + emitted as GREEN with the
-error embedded in `evidence`. The thesis evaluator pipeline must not crash
-on a malformed soft rule.
+param, invalid source, schema typo) is logged + emitted as **UNRESOLVED**
+(never GREEN) with the error embedded in `evidence`. The thesis evaluator
+pipeline must not crash on a malformed soft rule — other rules in the same
+call still evaluate.
 
 ## Persistence
 

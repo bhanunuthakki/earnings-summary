@@ -396,14 +396,19 @@ class BreakRuleEvaluation(BaseModel):
 class SoftRuleEvaluation(BaseModel):
     """One evaluated soft (predicate-style) rule.
 
-    Soft rules emit only green / yellow — never red. The §2 renderer surfaces
-    fired (yellow) rules inline with hard-rule tables, color-coded by status.
-    `details` carries the predicate-specific payload (deceleration bps, ratio
-    values, etc.) so the renderer can show numeric evidence beside the prose.
+    Soft rules emit green (evaluated, didn't fire) / yellow (evaluated,
+    fired) / unresolved (couldn't be evaluated — no data, or a data-quality
+    guard tripped) — never red. The §2 renderer surfaces fired (yellow) AND
+    unresolved rules inline with hard-rule tables, color-coded by status;
+    `unresolved` renders in the same amber tone as `yellow` (visible, never
+    silently green) per `directives/monthly_red_team.md` Phase 1's
+    "Prose-rule encoding" contract. `details` carries the predicate-specific
+    payload (deceleration bps, ratio values, trajectory slope/trip period,
+    etc.) so the renderer can show numeric evidence beside the prose.
     """
 
     rule_name: str
-    status: Literal["green", "yellow"]
+    status: Literal["green", "yellow", "unresolved"]
     evidence: str
     details: dict[str, object] = Field(default_factory=dict)
 

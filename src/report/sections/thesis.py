@@ -440,11 +440,21 @@ def _load_break_rule_state(
 
 def _parse_soft_evaluation(raw: dict[str, object]) -> SoftRuleEvaluation:
     """Parse one persisted soft-rule result row. Status defaults to green for
-    forward-compatibility: any unknown status string is treated as 'not fired'
-    so a brief generated against a newer schema never silently shows a YELLOW
-    banner without explicit opt-in."""
+    forward-compatibility: any status string this renderer doesn't recognize
+    is treated as 'not fired' so a brief generated against a newer schema
+    never silently shows a YELLOW/UNRESOLVED banner without explicit opt-in.
+    'unresolved' (a soft rule that couldn't be evaluated — no data, or a
+    data-quality guard tripped) is recognized explicitly: red-team PR2's
+    "never silently green" contract requires it stay visible, not collapse
+    into the green default."""
     status_raw = str(raw.get("status", "green")).lower()
-    status: Literal["green", "yellow"] = "yellow" if status_raw == "yellow" else "green"
+    status: Literal["green", "yellow", "unresolved"]
+    if status_raw == "yellow":
+        status = "yellow"
+    elif status_raw == "unresolved":
+        status = "unresolved"
+    else:
+        status = "green"
     details_raw = raw.get("details")
     details: dict[str, object] = details_raw if isinstance(details_raw, dict) else {}
     return SoftRuleEvaluation(

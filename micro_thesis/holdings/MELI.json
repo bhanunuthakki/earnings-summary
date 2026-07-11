@@ -198,7 +198,23 @@
   },
   "segments": [],
   "operational_kpis": [],
-  "break_rules_soft": [],
+  "break_rules_soft": [
+    {
+      "name": "meli_nimal_trajectory_15_floor",
+      "predicate": {
+        "type": "trajectory",
+        "params": {
+          "kpi_name": "NIMAL (net interest margin after losses)",
+          "source": "kpi",
+          "comparator": "lt",
+          "threshold": 15,
+          "lookback_prints": 4,
+          "horizon_prints": 2
+        }
+      },
+      "evidence_template": "NIMAL glide {slope_per_period}pp/print over last {lookback_prints}Q (last={last_value}% at {last_period}) projects <{threshold}% by {trip_period}"
+    }
+  ],
   "business_model_rules": [
     {
       "rule_id": "meli_gmv_growth_below_20",

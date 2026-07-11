@@ -213,7 +213,56 @@
   },
   "segments": [],
   "operational_kpis": [],
-  "break_rules_soft": [],
+  "break_rules_soft": [
+    {
+      "name": "nu_net_adds_trajectory_below_5m",
+      "predicate": {
+        "type": "trajectory",
+        "params": {
+          "kpi_name": "Total customers (millions)",
+          "source": "kpi",
+          "derived": "delta",
+          "comparator": "lt",
+          "threshold": 5,
+          "lookback_prints": 4,
+          "horizon_prints": 2
+        }
+      },
+      "evidence_template": "Net adds trajectory {slope_per_period}M/print over last {lookback_prints}Q (last={last_value}M at {last_period}) projects <{threshold}M/Q by {trip_period}"
+    },
+    {
+      "name": "nu_net_adds_and_brazil_penetration_rollover",
+      "predicate": {
+        "type": "compound",
+        "params": {
+          "op": "and",
+          "predicates": [
+            {
+              "type": "series_below",
+              "params": {
+                "metric": "Total customers (millions)",
+                "source": "kpi",
+                "derived": "delta",
+                "threshold": 5,
+                "periods": 1
+              }
+            },
+            {
+              "type": "series_below",
+              "params": {
+                "metric": "Product penetration by country (% of customers using each product, Brazil/Mexico/Colombia x credit card/personal loan/investments/insurance)",
+                "source": "kpi",
+                "derived": "delta",
+                "threshold": 0,
+                "periods": 1
+              }
+            }
+          ]
+        }
+      },
+      "evidence_template": "Compound tripwire (thesis prose bet #2): net adds <5M/Q AND Brazil flagship penetration declining QoQ — {op} over children"
+    }
+  ],
   "business_model_rules": [
     {
       "rule_id": "nu_npl_above_7",

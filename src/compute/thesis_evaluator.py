@@ -6,8 +6,14 @@ consecutive periods." This module joins those rules against the most-recent
 N kpi_facts rows per KPI, classifies each rule (OK / WATCH / BREACH), and
 returns the holding-level verdict (worst-rule wins).
 
-Trend rules ("declining QoQ") and derived metrics ("net adds = delta") are
-out of scope for the MVP — flagged via UNSUPPORTED_RULE in validation_issues.
+Trend rules and derived metrics on the HARD (`break_rules` /
+`business_model_rules`) path remain out of scope — those stay
+"KPI X comparator threshold for N consecutive periods" against level series.
+Trend/slope signals ("the curve is bending toward a floor") and derived
+metrics ("net adds = delta(Total customers)") are handled on the SOFT
+(`break_rules_soft`) path instead, via the `trajectory` predicate type and
+the `derived: "delta"` metric-spec opt-in — see
+`compute.soft_rule_evaluator` and `directives/holdings_json_schema.md`.
 """
 
 from __future__ import annotations
@@ -441,17 +447,28 @@ def _rollup_with_soft(
     hard_evaluations: list[RuleEvaluation],
     soft_results: list[SoftRuleResult],
 ) -> BreachStatus:
-    """Combined rollup: hard BREACH wins; else any soft YELLOW → WARN; else OK.
+    """Combined rollup: hard BREACH wins; else any soft YELLOW/UNRESOLVED → WARN; else OK.
 
     Hard WARN (some-but-not-all consecutive periods matched) is preserved as
     WARN. Soft rules never escalate past WARN — that's a design contract:
     "the curve is bending" is a watch signal, not a thesis-broken signal.
+
+    A soft rule that's UNRESOLVED (couldn't be evaluated — no data, or a
+    data-quality guard tripped) escalates to WARN too, not just YELLOW. This
+    closes the exact gap the 2026-07 red-team audit found: NU's compound
+    net-adds/Brazil-penetration tripwire existed only as thesis prose, one
+    leg was already lit, and the panel showed plain OK because there was no
+    machine signal at all. An UNRESOLVED soft rule IS a machine signal — "this
+    needs attention, the data can't confirm or deny it" — and must be visible
+    at the rollup level, not just in the per-rule soft-signals panel.
     """
     hard_status = _rollup_status(hard_evaluations)
     if hard_status is BreachStatus.BREACH:
         return BreachStatus.BREACH
-    any_soft_fired = any(r.status is SoftRuleStatus.YELLOW for r in soft_results)
-    if any_soft_fired:
+    any_soft_needs_attention = any(
+        r.status in (SoftRuleStatus.YELLOW, SoftRuleStatus.UNRESOLVED) for r in soft_results
+    )
+    if any_soft_needs_attention:
         return BreachStatus.WARN
     return hard_status
 
