@@ -2,7 +2,7 @@
 
 Pulls ~2 years of dividend-adjusted daily closes for the style-factor proxy
 ETFs (SPY / VTV / VUG / IWM / MTUM) PLUS any held ETF the FMP price-chart
-cache doesn't cover (``factor_proxies.HELD_ETF_TICKERS`` — FLKR) from
+cache doesn't cover (``factor_proxies.HELD_ETF_TICKERS`` — FLKR, VTI, VOO) from
 yfinance and persists them to ``data/factor_proxies/<TICKER>.json``
 (``src/factor_proxies.py`` owns the store). The Risk panel's style-factor /
 correlation / Monte-Carlo sections only ever read the files, so this is the

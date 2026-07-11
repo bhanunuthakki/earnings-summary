@@ -11,9 +11,11 @@ stage 0g) and persists them under ``data/factor_proxies/<ETF>.json``. The
 render path only ever READS the files — never the network — the same
 materialized-cache discipline as ``portfolio_weights``.
 
-The same store also carries HELD_ETF_TICKERS — real portfolio holdings (FLKR)
-that the FMP price-chart cache doesn't cover but that need a daily close
-series for the correlation/style/Monte-Carlo sections just the same as a
+The same store also carries HELD_ETF_TICKERS — real portfolio holdings (FLKR,
+plus the index sleeve VTI/VOO — Monthly Red Team Phase 1 PR3 found ~21% of the
+book had no price history anywhere, silently shrinking correlation/Monte-Carlo
+coverage) that the FMP price-chart cache doesn't cover but that need a daily
+close series for the correlation/style/Monte-Carlo sections just the same as a
 style-factor proxy does; ``allocation.price_history.load_daily_closes``
 already falls back to this store for ANY ticker missing from the FMP cache.
 
@@ -60,7 +62,7 @@ PROXY_TICKERS: tuple[str, ...] = ("SPY", "VTV", "VUG", "IWM", "MTUM")
 # default is unaffected — only the CLI's default --tickers list (and so
 # morning-pipeline stage 0g) picks these up, keeping the cache fresh
 # alongside the style proxies without a second fetch stage.
-HELD_ETF_TICKERS: tuple[str, ...] = ("FLKR",)
+HELD_ETF_TICKERS: tuple[str, ...] = ("FLKR", "VTI", "VOO")
 
 # ~2 calendar years of daily closes comfortably covers the 252-observation
 # regression window plus the calendar-intersection losses against holdings.

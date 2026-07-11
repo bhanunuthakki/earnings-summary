@@ -106,6 +106,18 @@ from portfolio_tail_stress import (
     build_tail_stress,
 )
 from portfolio_weights import read_materialized_weights
+from position_guard import (
+    CHECK_BEAR,
+    CHECK_DOWNSIDE,
+    CHECK_THESIS,
+    THESIS_FRESHNESS_DAYS,
+)
+from position_guard_cache import (
+    PositionGuardCacheModel,
+    PositionGuardCheckModel,
+    PositionGuardRowModel,
+    read_position_guard_cache,
+)
 from risk_reward import RiskRewardGap, RiskRewardGapRow, build_risk_reward_gap
 from thesis_collision import CachedReport, read_cached_report
 from ui import living_grid as lg
@@ -1325,6 +1337,10 @@ _RISK_CSS = """<style>
 .rrg-mismatch { max-width: 460px; }
 .rrg-chips { display: inline-flex; gap: 4px; flex-wrap: wrap; vertical-align: middle; }
 .rrg-score { margin-right: 8px; }
+/* Naked-position gate violation chips (Monthly Red Team Phase 1 guard 7):
+   one dense standing chip per violation, wrapping — the .k-chip kit base
+   (controls.py), only the layout (flex-wrap + gaps) is local. */
+.pfr-naked-chips { display: flex; flex-wrap: wrap; gap: 7px; margin: 8px 0 12px; }
 </style>"""
 
 # Fires the portfolio macro-stress lens (execution/run_scenario.py --portfolio)
@@ -1415,6 +1431,7 @@ def render_portfolio_risk_panel(
     monte_carlo = _build_monte_carlo(analytics.positioning, db_path)
     joint_latam = _build_joint_latam_stress(analytics.positioning, db_path)
     bear_lint = _build_bear_lint(db_path)
+    position_guard = _read_position_guard(db_path)
     collision = _read_thesis_collision(analytics.positioning, db_path)
     scenarios = _scenario_options()
     digest = _cached_macro_digest_html(db_path) if db_path is not None else ""
@@ -1437,6 +1454,7 @@ def render_portfolio_risk_panel(
         monte_carlo=monte_carlo,
         joint_latam=joint_latam,
         bear_lint=bear_lint,
+        position_guard=position_guard,
         collision=collision,
         scenarios=scenarios,
         digest=digest,
@@ -1554,6 +1572,19 @@ def _build_bear_lint(db_path: Path | None) -> BearLintReport | None:
     return build_bear_lint(db_path, db_path.parent.parent)
 
 
+def _read_position_guard(db_path: Path | None) -> PositionGuardCacheModel | None:
+    """The naked-position gate (Monthly Red Team Phase 1 guard 7) — READS the
+    nightly-materialized cache (``data/dashboard/position_guard.json``,
+    ``execution/refresh_position_guard.py``, morning-pipeline stage 0h) rather
+    than recomputing: the whole point of materializing it is that a render
+    never pays for the DB reads. ``None`` when there is no DB or no cache on
+    file yet (the caller renders the empty state, distinct from "zero
+    violations")."""
+    if db_path is None:
+        return None
+    return read_position_guard_cache(db_path.parent.parent)
+
+
 def _read_thesis_collision(pos: Positioning | None, db_path: Path | None) -> CachedReport | None:
     """The cached thesis-collision audit, filtered against the CURRENT
     holding set: a cached finding naming a name sold since the audit ran must
@@ -1585,6 +1616,7 @@ def compose_risk_page(
     monte_carlo: MonteCarloRead | None = None,
     joint_latam: EventStressResult | None = None,
     bear_lint: BearLintReport | None = None,
+    position_guard: PositionGuardCacheModel | None = None,
     collision: CachedReport | None = None,
 ) -> str:
     """Pure assembly of the Risk page (testable without network or DB). The
@@ -1598,8 +1630,10 @@ def compose_risk_page(
     all-bears book drawdown), ``monte_carlo`` (the fat-tailed book simulation)
     + ``joint_latam`` (its companion event-correlation stress), ``bear_lint``
     (the bear-realism lint, Monthly Red Team Phase 1 guard 2 — rides right
-    alongside tail stress), and ``collision`` (the cached thesis-collision
-    audit) are computed from local disk/DB, so they render in BOTH branches —
+    alongside tail stress), ``position_guard`` (the naked-position gate,
+    guard 7 — the nightly-materialized cache, never recomputed here), and
+    ``collision`` (the cached thesis-collision audit) are computed from local
+    disk/DB, so they render in BOTH branches —
     tracker up or down."""
     parts: list[str] = [_RISK_CSS, '<div id="pfr-root">']
     if analytics.available:
@@ -1613,6 +1647,7 @@ def compose_risk_page(
         parts.append(_tail_stress_section(tail_stress))
         parts.append(_monte_carlo_section(monte_carlo, joint_latam))
         parts.append(_bear_lint_section(bear_lint))
+        parts.append(_position_guard_section(position_guard))
         parts.append(_thesis_collision_section(collision))
         if gap is not None:
             parts.append(_risk_reward_gap_section(gap))
@@ -1626,6 +1661,7 @@ def compose_risk_page(
         parts.append(_tail_stress_section(tail_stress))
         parts.append(_monte_carlo_section(monte_carlo, joint_latam))
         parts.append(_bear_lint_section(bear_lint))
+        parts.append(_position_guard_section(position_guard))
         parts.append(_thesis_collision_section(collision))
     parts.append(_macro_stress_section(scenarios, digest))
     parts.append("</div>")
@@ -2345,6 +2381,130 @@ def _bear_lint_section(report: BearLintReport | None) -> str:
         f"</tr></thead><tbody>{rows_html}</tbody></table>"
     )
     return f"{head}{strip}{table}</section>"
+
+
+# ---------------------------------------------------------------------------
+# Naked-position gate (Monthly Red Team Phase 1 guard 7). Reads the nightly-
+# materialized cache (position_guard_cache.read_position_guard_cache) —
+# NEVER recomputes ``position_guard.build_position_guard`` on the render
+# path, matching the directive's "renders never recompute" contract for this
+# guard specifically.
+# ---------------------------------------------------------------------------
+
+_PG_CHECK_ORDER: tuple[str, ...] = (CHECK_DOWNSIDE, CHECK_BEAR, CHECK_THESIS)
+_PG_CHECK_LABEL: dict[str, str] = {
+    CHECK_DOWNSIDE: "Downside trigger",
+    CHECK_BEAR: "Realistic bear",
+    CHECK_THESIS: "Thesis freshness",
+}
+_PG_CHECK_WHATS_WRONG: dict[str, str] = {
+    CHECK_DOWNSIDE: "no downside rule",
+    CHECK_BEAR: "no realistic bear",
+    CHECK_THESIS: "thesis stale",
+}
+_PG_CHECK_FIX: dict[str, str] = {
+    CHECK_DOWNSIDE: "encode an exit ladder (sizing intent or break_rules)",
+    CHECK_BEAR: "persist a realistic DCF bear case",
+    CHECK_THESIS: "refresh the thesis",
+}
+
+
+def _pg_field(row: PositionGuardRowModel, check: str) -> PositionGuardCheckModel:
+    return {
+        CHECK_DOWNSIDE: row.downside_trigger,
+        CHECK_BEAR: row.realistic_bear,
+        CHECK_THESIS: row.thesis_fresh,
+    }[check]
+
+
+def _naked_position_summary_pill(cache: PositionGuardCacheModel | None) -> str:
+    """The compact Risk-panel summary row: ``NAKED POSITIONS: N``, k-pill-bad
+    when N>0, k-pill-ok when the book is clean (or there's nothing to gate
+    yet — an empty gate is not itself a violation)."""
+    n = len(cache.violations) if cache is not None else 0
+    tone = "k-pill-bad" if n > 0 else "k-pill-ok"
+    return f'<p class="pfr-top"><span class="k-pill {tone}">NAKED POSITIONS: {n}</span></p>'
+
+
+def _violation_chip(row: PositionGuardRowModel) -> str:
+    """One dense standing chip per violation: ticker + which check(s) failed
+    + the one-line fix — e.g. "FLKR: no downside rule — encode an exit
+    ladder". The full per-check reasons ride the hover tooltip; the table
+    below carries them inline for anyone who wants the detail without
+    hovering."""
+    failing = [c for c in _PG_CHECK_ORDER if c in row.failed_checks]
+    whats_wrong = " + ".join(_PG_CHECK_WHATS_WRONG[c] for c in failing)
+    fix = _PG_CHECK_FIX[failing[0]] if failing else ""
+    tooltip = " · ".join(f"{_PG_CHECK_LABEL[c]}: {_pg_field(row, c).reason}" for c in failing)
+    return (
+        f'<a class="k-chip k-chip-bad" href="#holding={escape(row.ticker)}" '
+        f'data-peek-ticker="{escape(row.ticker)}" title="{escape(tooltip)}">'
+        f"{escape(row.ticker)}: {escape(whats_wrong)} — {escape(fix)}</a>"
+    )
+
+
+def _pg_check_cell(check: PositionGuardCheckModel) -> str:
+    tone = "ok" if check.passed else "bad"
+    label = "OK" if check.passed else "FAIL"
+    return f'<td><span class="k-pill k-pill-{tone}">{label}</span> {escape(check.reason)}</td>'
+
+
+def _position_guard_table_row(row: PositionGuardRowModel) -> str:
+    ticker = ticker_label(row.ticker, href=f"../research/{escape(row.ticker)}/")
+    return (
+        "<tr>"
+        f"<td>{ticker}</td>"
+        f'<td class="num">{row.weight_pct:.1f}%</td>'
+        f"{_pg_check_cell(row.downside_trigger)}"
+        f"{_pg_check_cell(row.realistic_bear)}"
+        f"{_pg_check_cell(row.thesis_fresh)}"
+        "</tr>"
+    )
+
+
+def _position_guard_section(cache: PositionGuardCacheModel | None) -> str:
+    """Naked-position gate (Monthly Red Team Phase 1 guard 7): every held name
+    above 0.5% needs a downside exit rule the platform can enforce, a
+    realistic persisted bear case (bear-realism lint clears ok/shallow), and
+    a thesis updated within the freshness window on file. Violations render
+    as standing chips (one dense card per violation, ticker + failing
+    check(s) + the one-line fix) plus a full per-check table; a summary
+    k-pill leads the section either way. Reads the nightly-materialized
+    cache — never recomputes on the render path."""
+    head = (
+        '<section class="panel"><h2>Naked-position gate</h2>'
+        '<p class="sub">Every held name above 0.5% of book needs all three on file: a '
+        "downside exit rule the platform can enforce (a sizing-intent price rung or "
+        "holdings-JSON break rules), a realistic persisted DCF bear case (the bear-realism "
+        f"lint above must clear ok/shallow), and a thesis updated within "
+        f"{THESIS_FRESHNESS_DAYS} days. Nightly-materialized "
+        "(<code>data/dashboard/position_guard.json</code>) — violations block the monthly "
+        "close (<code>directives/monthly_red_team.md</code> Phase 1).</p>"
+    )
+    if cache is None or not cache.rows:
+        return (
+            f"{head}{_naked_position_summary_pill(None)}"
+            '<p class="muted pfr-top">No weighted holdings to gate yet (needs the morning '
+            "pipeline to have run stage 0h at least once).</p></section>"
+        )
+    violations = cache.violations
+    pill = _naked_position_summary_pill(cache)
+    if not violations:
+        return (
+            f"{head}{pill}"
+            '<p class="muted pfr-top">Every held name clears the naked-position gate.'
+            "</p></section>"
+        )
+    chips = "".join(_violation_chip(r) for r in violations)
+    rows_html = "".join(_position_guard_table_row(r) for r in violations)
+    table = (
+        '<table class="p-table pts-table"><thead><tr>'
+        "<th>Ticker</th>"
+        '<th class="num">Weight</th><th>Downside trigger</th>'
+        "<th>Realistic bear</th><th>Thesis freshness</th>"
+        f"</tr></thead><tbody>{rows_html}</tbody></table>"
+    )
+    return f'{head}{pill}<div class="pfr-naked-chips">{chips}</div>{table}</section>'
 
 
 def _mc_prob_row(label: str, normal: DistributionRead, student_t: DistributionRead) -> str:
