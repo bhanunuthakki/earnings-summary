@@ -513,6 +513,15 @@ LLM_MODELS: dict[str, str] = {
     # eval coverage is an explicitly tracked follow-up (not this PR).
     "red_team_attack": DEFAULT_MODEL,
     "red_team_cross_book": DEFAULT_MODEL,
+    # Annual letter-to-self (monthly_red_team.md Phase 3, PR7): ONE call/year
+    # drafting a letter from a fully deterministic evidence pack (the year's
+    # ledger entries, position_entries changes, red-team response log,
+    # calibration/Brier trajectory, decision P&L rows) — judgment-heavy
+    # synthesis in the owner's voice, latency irrelevant, ~1 call/year -> Sonnet
+    # (cheapest-at-parity starting point, like red_team_attack/scenario_prior).
+    # The owner edits/signs the output file directly; a bad draft costs nothing
+    # but a re-run.
+    "annual_letter": DEFAULT_MODEL,
     # NOT here by design: the 14 dynamic `lens:<name>` purposes (plus the
     # scenario-suffixed lens:macro_scenario:<id> / lens:portfolio_macro_stress:<id>)
     # resolve their model from the Lens object itself

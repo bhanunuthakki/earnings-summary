@@ -248,6 +248,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # cross_book.py (red_team_cross_book) is materially rewritten.
     "red_team_attack": "v1",
     "red_team_cross_book": "v1",
+    # Annual letter-to-self (monthly_red_team.md Phase 3, PR7,
+    # execution/draft_annual_letter.py). Bump when the drafting prompt is
+    # materially rewritten.
+    "annual_letter": "v1",
 }
 
 _DEFAULT_VERSION = "v1"
