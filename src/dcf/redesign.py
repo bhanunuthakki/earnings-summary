@@ -337,6 +337,22 @@ def classify_bear_provenance(
     return "owner"
 
 
+def resolve_mirrored_bear(
+    mirrored: ScenarioDeltas, holdings: Mapping[str, object] | None
+) -> ScenarioDeltas:
+    """The bear deltas a FRESH build seeds the Bear column with, given the
+    assumptions-JSON ``scenario_bear`` mirror parsed as ``mirrored`` (exactly
+    ``BEAR_SEED`` when the mirror is absent).
+
+    A mirror that still equals the untouched generic seed is the labeled
+    fallback ``sync_assumptions_json`` wrote back from a never-edited workbook,
+    NOT an owner edit — so the holdings thesis override (when the analyst has
+    named one) outranks it. Any seed-differing mirror is an owner edit (or an
+    earlier thesis seed) and wins unconditionally, per guard 3's contract.
+    Pure — no I/O."""
+    return thesis_bear_seed(holdings) if mirrored == BEAR_SEED else mirrored
+
+
 @dataclass(frozen=True)
 class RedesignInputs:
     """Everything ``value()`` needs, read from a redesigned workbook.
@@ -1503,6 +1519,50 @@ def capture_dashboard(workbook_path: Path) -> CapturedDashboard | None:
         terminal_basis=basis,
         scenario_deltas=scenario_deltas,
         scenario_weights=scenario_weights,
+    )
+
+
+def strip_unedited_seed_bear(
+    captured: CapturedDashboard | None, holdings: Mapping[str, object] | None
+) -> CapturedDashboard | None:
+    """Drop the captured Bear-column scenario cells when they reconstruct exactly
+    the untouched ``BEAR_SEED`` and the holdings JSON names a thesis-calibrated
+    ``bear_deltas`` override (Monthly Red Team guard 3).
+
+    An UNTOUCHED generic seed in the workbook is a labeled fallback, not an
+    owner edit — without this, the capture→inject preservation loop would
+    re-inject the stale seed over the freshly thesis-seeded Bear column forever,
+    and a name whose analyst has since named a real thesis-break bear could
+    never pick it up. Any Bear column that differs from the seed (an owner edit,
+    or a previously applied thesis seed) is preserved untouched, and a name with
+    no thesis override keeps today's behaviour exactly. Bull cells are never
+    touched."""
+    if captured is None:
+        return None
+    if parse_thesis_bear_deltas(holdings) is None:
+        return captured
+
+    def bear_cell(row: int, default: float) -> float:
+        v = captured.scenario_deltas.get((row, SCEN_COL_BEAR))
+        return v if v is not None else default
+
+    # Blank cells fall back to the seed lever, mirroring _read_scenario_deltas —
+    # so a pre-scenario workbook (no Bear cells at all) also reads as the seed.
+    reconstructed = ScenarioDeltas(
+        growth_near=bear_cell(SCEN_ROW_GROWTH_NEAR, BEAR_SEED.growth_near),
+        growth_term=bear_cell(SCEN_ROW_GROWTH_TERM, BEAR_SEED.growth_term),
+        margin_near=bear_cell(SCEN_ROW_MARGIN_NEAR, BEAR_SEED.margin_near),
+        margin_term=bear_cell(SCEN_ROW_MARGIN_TERM, BEAR_SEED.margin_term),
+        exit_multiple=bear_cell(SCEN_ROW_EXIT_MULT, BEAR_SEED.exit_multiple),
+        terminal_g=bear_cell(SCEN_ROW_TG, BEAR_SEED.terminal_g),
+    )
+    if reconstructed != BEAR_SEED:
+        return captured  # owner-edited (or already-thesis) bear wins unconditionally
+    return dataclasses.replace(
+        captured,
+        scenario_deltas={
+            k: v for k, v in captured.scenario_deltas.items() if k[1] != SCEN_COL_BEAR
+        },
     )
 
 

@@ -188,6 +188,13 @@
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
     }
   ],
+  "bear_deltas": {
+    "growth_delta_pp": -7.5,
+    "margin_delta_pp": -5.0,
+    "exit_multiple_delta": -4.0,
+    "terminal_g_delta_pp": -1.5,
+    "note": "NIMAL-floor breach + competitive price war (2026-07 red team): NIMAL and operating margins -5pp (terminal NIMAL 15%->10%), all-segment growth -7.5pp, operating exit 12x->8x EV/EBITDA, credit terminal g -1.5pp. Implied bear FV ~$725/sh vs ~$1,809 live (-60%). Pending owner review."
+  },
   "schema_version": 2,
   "wacc": 0.11,
   "mos_bar": 0.2,

@@ -733,7 +733,13 @@ def _refresh_redesign(
     ticker = ticker.upper()
     live = live_price_mod.read_live_price(repo_root, ticker)
 
+    holdings = _load_holdings(repo_root, ticker)
     captured = redesign_mod.capture_dashboard(dest) if dest.exists() else None
+    # Guard 3 (Monthly Red Team): an UNTOUCHED BEAR_SEED Bear column is a labeled
+    # fallback, not an owner edit — don't let the capture→inject loop re-inject it
+    # over a freshly thesis-seeded Bear column when the holdings JSON names a
+    # thesis-calibrated bear. Owner-edited bears are preserved unconditionally.
+    captured = redesign_mod.strip_unedited_seed_bear(captured, holdings)
 
     # Build to a sibling temp file so a build failure never corrupts the user's
     # existing workbook; only a clean build is swapped into place.
@@ -809,7 +815,6 @@ def _refresh_redesign(
     if sync.status == "failed":
         sys.stderr.write(f"WARNING: assumptions sync for {ticker} failed: {sync.detail}\n")
 
-    holdings = _load_holdings(repo_root, ticker)
     mos_bar = holdings.get("mos_bar") if holdings else None
     mos_bar_f = float(mos_bar) if isinstance(mos_bar, (int, float)) else None
 

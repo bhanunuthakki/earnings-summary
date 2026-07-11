@@ -59,6 +59,10 @@ try:  # global macro assumptions -- best-effort; degrades to in-code seed defaul
     from dcf import global_assumptions as global_dcf
 except ImportError:  # pragma: no cover
     global_dcf = None  # type: ignore[assignment]
+try:  # scenario emission (Monthly Red Team PR8) -- best-effort like persistence
+    from dcf import redesign as redesign_mod
+except ImportError:  # pragma: no cover
+    redesign_mod = None  # type: ignore[assignment]
 
 YELLOW = PatternFill("solid", fgColor="FFF2CC")
 BLUE_FONT = Font(color="1F4E79")
@@ -263,6 +267,85 @@ def load_assumptions(ticker: str) -> Assum:
         except (OSError, json.JSONDecodeError, ValueError, KeyError):
             pass
     return s
+
+
+# --------------------------------------------------------------------------- #
+# Scenario emission (Monthly Red Team PR8).
+#
+# The redesigned FCFF refresher persists a ``scenarios`` block (bull/base/bear
+# fair values per share + the bear leg's provenance) that every risk consumer
+# reads (``dcf.scenario_reward.parse_scenario_fair_values``, ``bear_lint``,
+# ``portfolio_tail_stress``). This bespoke platform builder historically wrote
+# none, so NU had NO modeled downside anywhere. The block below maps the shared
+# 6-lever ``ScenarioDeltas`` vocabulary onto THIS model's own levers:
+#
+#   growth deltas   -> customer growth AND ARPAC growth (near/terminal) — the
+#                      two engines of platform revenue
+#   margin deltas   -> gross margin (near/terminal) — a credit-cycle NPL spike
+#                      lands in NU's managerial P&L as gross-profit compression
+#   exit multiple Δ -> sustainable terminal ROE, 1pp per turn. The terminal here
+#                      is Gordon NI*(1+g)*(1-g/ROE)/(ke-g); its implied multiple
+#                      compresses through ROE, so "-7 turns" reads as ROE -7pp
+#   terminal g Δ    -> terminal growth g
+#
+# The bear deltas come from the holdings JSON's thesis-calibrated ``bear_deltas``
+# when present (provenance "thesis"), else the generic BEAR_SEED (provenance
+# "seed" — a labeled fallback, flagged by bear_lint on portfolio names). The
+# arithmetic is deliberately coarse: an honest thesis-break bear, not precision.
+# --------------------------------------------------------------------------- #
+def _load_holdings(ticker: str) -> dict[str, object] | None:
+    path = REPO / "micro_thesis" / "holdings" / f"{ticker.upper()}.json"
+    if not path.exists():
+        return None
+    try:
+        data: Any = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return cast("dict[str, object]", data) if isinstance(data, dict) else None
+
+
+def scenario_assumptions(s: Assum, deltas: Any) -> Assum:
+    """``s`` shifted by one scenario's ``dcf.redesign.ScenarioDeltas`` under the
+    documented lever mapping. Guardrails keep the Gordon terminal well-posed
+    (g < ke, ROE > g) so a severe bear stays a small positive value rather than
+    a sign-flipped artifact."""
+    import copy
+
+    s2 = copy.copy(s)
+    s2.custg_near += deltas.growth_near
+    s2.custg_term += deltas.growth_term
+    s2.arpacg_near += deltas.growth_near
+    s2.arpacg_term += deltas.growth_term
+    s2.gpm_near += deltas.margin_near
+    s2.gpm_term += deltas.margin_term
+    s2.terminal_roe += deltas.exit_multiple / 100.0
+    s2.g_term += deltas.terminal_g
+    s2.g_term = min(s2.g_term, s2.ke - 0.01)
+    s2.terminal_roe = max(s2.terminal_roe, s2.g_term + 0.01)
+    return s2
+
+
+def scenarios_block(s: Assum, m: Mirror, holdings: dict[str, object] | None) -> dict[str, object]:
+    """The ``scenarios`` payload for ``dcf_runs.assumption_snapshot_json`` —
+    structurally identical to ``refresh_dcf._redesign_snapshot``'s block, so
+    ``parse_scenario_fair_values`` / ``parse_scenario_bear_provenance`` read it
+    unchanged. Requires ``redesign_mod`` (caller gates on it)."""
+    import dataclasses as _dc
+
+    bull_d = redesign_mod.BULL_SEED
+    bear_d = redesign_mod.thesis_bear_seed(holdings)
+    provenance = "thesis" if redesign_mod.parse_thesis_bear_deltas(holdings) is not None else "seed"
+    bull_vps = mirror(scenario_assumptions(s, bull_d)).vps
+    bear_vps = mirror(scenario_assumptions(s, bear_d)).vps
+    return {
+        "base": {"fair_value_per_share_usd": m.vps},
+        "bull": {"fair_value_per_share_usd": bull_vps, "deltas": _dc.asdict(bull_d)},
+        "bear": {
+            "fair_value_per_share_usd": bear_vps,
+            "deltas": _dc.asdict(bear_d),
+            "provenance": provenance,
+        },
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -555,28 +638,23 @@ def persist_dcf_run(s: Assum, m: Mirror) -> bool:
     db = REPO / "data" / "portfolio.db"
     if persist_mod is None or not db.exists() or not m.vps:
         return False
-    holdings = REPO / "micro_thesis" / "holdings" / f"{T}.json"
-    mos: object = None
-    if holdings.exists():
-        try:
-            mos = json.loads(holdings.read_text(encoding="utf-8")).get("mos_bar")
-        except (OSError, json.JSONDecodeError):
-            mos = None
-    snap = json.dumps(
-        {
-            "model": "platform_dcf",
-            "value_per_share_fcfe": m.vps,
-            "value_per_share_residual_income": m.vps_ri,
-            "value_per_share_exit_pe": m.vps_pe,
-            "equity_value_fcfe_m": m.value_fcfe,
-            "terminal_roe": m.roe_term,
-            "terminal_customers_m": m.rows[-1].cust,
-            "terminal_arpac": m.rows[-1].arpac,
-            "ke": s.ke,
-            "workbook": str(DEST),
-        },
-        indent=2,
-    )
+    holdings = _load_holdings(T)
+    mos: object = holdings.get("mos_bar") if holdings else None
+    snap_payload: dict[str, object] = {
+        "model": "platform_dcf",
+        "value_per_share_fcfe": m.vps,
+        "value_per_share_residual_income": m.vps_ri,
+        "value_per_share_exit_pe": m.vps_pe,
+        "equity_value_fcfe_m": m.value_fcfe,
+        "terminal_roe": m.roe_term,
+        "terminal_customers_m": m.rows[-1].cust,
+        "terminal_arpac": m.rows[-1].arpac,
+        "ke": s.ke,
+        "workbook": str(DEST),
+    }
+    if redesign_mod is not None:
+        snap_payload["scenarios"] = scenarios_block(s, m, holdings)
+    snap = json.dumps(snap_payload, indent=2)
     row = persist_mod.DcfRunRow(
         ticker=T,
         valuation_date=date.today(),

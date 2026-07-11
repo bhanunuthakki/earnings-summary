@@ -190,6 +190,13 @@
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
     }
   ],
+  "bear_deltas": {
+    "growth_delta_pp": -5.0,
+    "margin_delta_pp": -4.0,
+    "exit_multiple_delta": -4.0,
+    "terminal_g_delta_pp": -0.5,
+    "note": "Thesis-break bear (2026-07 red team): two consecutive CER-revenue misses + EM patent LOE + Wegovy demand-driven volume decline + accelerating Lilly share loss - growth -5pp, margin -4pp, exit -4 turns, terminal g -0.5pp. Implied bear FV ~$34/sh vs ~$49.5 live (-31%). Pending owner review."
+  },
   "schema_version": 2,
   "wacc": 0.085,
   "mos_bar": 0.3,
