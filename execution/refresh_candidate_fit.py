@@ -51,6 +51,17 @@ def main() -> int:
         default=None,
         help="Portfolio-tracker base URL (default: PORTFOLIO_TRACKER_API_URL or :8000).",
     )
+    parser.add_argument(
+        "--refresh-synthesis",
+        action="store_true",
+        help="Also refresh each evaluation ETF's role-in-portfolio one-pager "
+        "(sha-gated LLM calls, ~60s each when inputs moved). OFF by default: "
+        "Stage 0f runs on a 180s pure-math budget, and the workup payload's "
+        "floats wiggle daily, so the sha gate re-bills most mornings — the "
+        "2026-07-11 triggered run timed out the stage on exactly this. "
+        "Syntheses refresh at onboard time, via build_etf_workup.py, or by "
+        "passing this flag from a wider-budget context (weekly ETF refresh).",
+    )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
@@ -75,17 +86,16 @@ def main() -> int:
         # fund-appropriate score for evaluation-list ETFs — see
         # pipeline/etf_score.py and directives/etf_data.md.
         n_etf = materialize_etf_scores(conn, repo_root)
-        # Role-synthesis refresh, sha-gated: the pre-check makes this FREE
-        # when an ETF's workup inputs haven't moved (no LLM call at all) and
-        # one governed call when they have. Per-item degrade per the
-        # scheduled-LLM policy: hard stops propagate, transient failures log
-        # and continue.
-        from etf_role_synthesis import generate_role_synthesis
-        from etf_score_cache import evaluation_etf_tickers
+        if args.refresh_synthesis:
+            # Role-synthesis refresh (OPT-IN — see the flag's help): sha-gated,
+            # per-item degrade per the scheduled-LLM policy — hard stops
+            # propagate, transient failures log and continue.
+            from etf_role_synthesis import generate_role_synthesis
+            from etf_score_cache import evaluation_etf_tickers
 
-        for etf_ticker in evaluation_etf_tickers(conn):
-            _artifact_id, status = generate_role_synthesis(conn, repo_root, db_path, etf_ticker)
-            log.info("etf_role_synthesis %s status=%s", etf_ticker, status)
+            for etf_ticker in evaluation_etf_tickers(conn):
+                _artifact_id, status = generate_role_synthesis(conn, repo_root, db_path, etf_ticker)
+                log.info("etf_role_synthesis %s status=%s", etf_ticker, status)
     finally:
         conn.close()
 
