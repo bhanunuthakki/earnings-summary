@@ -8,6 +8,7 @@ to first; content density grows as upstream sections fill in.
 from __future__ import annotations
 
 from io import StringIO
+from pathlib import Path
 
 from report.models import (
     AppendixSection,
@@ -41,6 +42,7 @@ from report.models import (
     ValuationSnapshot,
 )
 from report.renderers.numfmt import fmt_compact_usd as _fmt_compact_usd
+from report.renderers.workspace_data import load_standing_rules
 
 
 def render(spec: ReportSpec) -> str:
@@ -172,7 +174,47 @@ def _portfolio_position(out: StringIO, spec: ReportSpec) -> None:
                     f"  - {d.outcome_notes[:200]}{'…' if len(d.outcome_notes) > 200 else ''}\n"
                 )
         out.write("\n")
+    _standing_rules_md(out, spec)
     out.write("---\n\n")
+
+
+def _standing_rules_md(out: StringIO, spec: ReportSpec) -> None:
+    """Standing sizing rules (Monthly Red Team PR10 — surface wiring): the
+    markdown mirror of the workspace Position tab's Standing-rules block, from
+    the same ``load_standing_rules`` loader (one query, one draft parse).
+    Silent when no rows are on file — same hide-don't-stub as the HTML."""
+    rules = load_standing_rules(
+        spec.ticker, Path(spec.repo_root) / "data" / "portfolio.db", Path(spec.repo_root)
+    )
+    if rules is None or not rules.rows:
+        return
+    out.write("**Standing rules**")
+    coverage: list[str] = []
+    if rules.downside_passed is not None:
+        coverage.append(f"downside rule {'✓' if rules.downside_passed else '✗'}")
+    if rules.add_passed is not None:
+        if rules.add_passed:
+            coverage.append(f"add-rung {'✓ (draft)' if rules.add_is_draft else '✓'}")
+        else:
+            coverage.append("add-rung —")
+    if coverage:
+        out.write(f" · {' · '.join(coverage)}")
+    out.write("\n\n")
+    for row in rules.rows:
+        draft = " `[DRAFT]`" if row.is_draft else ""
+        if row.intent_value is None:
+            value = ""
+        elif row.intent_kind.endswith("pct"):
+            value = f" = {row.intent_value:.1f}%"
+        elif "price" in row.intent_kind:
+            value = f" = ${row.intent_value:,.2f}"
+        else:
+            value = f" = {row.intent_value:g}"
+        out.write(
+            f"- **{row.intent_kind}**{value}{draft} "
+            f"({row.updated_at.date().isoformat()}): {row.narrative}\n"
+        )
+    out.write("\n")
 
 
 def _section_header(out: StringIO, num: int, title: str, status: SectionStatus) -> None:

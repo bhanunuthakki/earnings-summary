@@ -113,7 +113,11 @@ from report.models import (
     ValuationSnapshot,
 )
 from report.renderers import workspace_html
-from report.renderers.workspace_data import WorkspaceP3Panels
+from report.renderers.workspace_data import (
+    StandingRuleRow,
+    StandingRulesPanel,
+    WorkspaceP3Panels,
+)
 from report.sections.p3_data import (
     CustomerConcentrationRow,
     DecisionHistorySummary,
@@ -1355,6 +1359,36 @@ def _p3_rich() -> WorkspaceP3Panels:
                 resolved_at=None,
             ),
         ],
+        # PR10 (Monthly Red Team surface wiring): the Position tab's
+        # Standing-rules block — one owner-authored target weight + one
+        # machine-proposed DRAFT add-rung, plus the guard's coverage read.
+        standing_rules=StandingRulesPanel(
+            rows=[
+                StandingRuleRow(
+                    intent_kind="add_rung",
+                    intent_value=None,
+                    # The loader strips the "[draft, pending owner review]"
+                    # prefix (the DRAFT chip carries it); fixture mirrors
+                    # loader output.
+                    narrative=(
+                        "Add-rung: add <$62.00 (-25% from live) -> +1% of book, "
+                        "conditioned on thesis intact."
+                    ),
+                    is_draft=True,
+                    updated_at=_TS,
+                ),
+                StandingRuleRow(
+                    intent_kind="target_weight_pct",
+                    intent_value=6.0,
+                    narrative="Target 6% after the Q1 print; trim above fair value ~$95.",
+                    is_draft=False,
+                    updated_at=_TS,
+                ),
+            ],
+            downside_passed=True,
+            add_passed=True,
+            add_is_draft=True,
+        ),
     )
 
 
@@ -1590,10 +1624,23 @@ def _patched_p3_loader(_ticker: str, _root: Path) -> WorkspaceP3Panels:
     return _p3_rich()
 
 
+def _patched_p3_loader_no_rules(_ticker: str, _root: Path) -> WorkspaceP3Panels:
+    """The evaluation flavor's P3 bundle: same rich rows but NO standing
+    rules — that flavor's fixture pins the exited-name shape (standalone
+    Decisions tab, no Position group), which a sizing-intent row would
+    legitimately override (PR10 renders the Position tab whenever intents
+    exist, held or not)."""
+    import dataclasses
+
+    return dataclasses.replace(_p3_rich(), standing_rules=None)
+
+
 def _render_parts(flavor: str, repo_root: Path) -> dict[str, str]:
     root = str(repo_root)
-    spec = _portfolio_spec(root) if flavor == "portfolio" else _evaluation_spec(root)
-    with mock.patch.object(workspace_html, "load_workspace_p3_panels", _patched_p3_loader):
+    is_portfolio = flavor == "portfolio"
+    spec = _portfolio_spec(root) if is_portfolio else _evaluation_spec(root)
+    loader = _patched_p3_loader if is_portfolio else _patched_p3_loader_no_rules
+    with mock.patch.object(workspace_html, "load_workspace_p3_panels", loader):
         doc = workspace_html.render(spec)
         doc_again = workspace_html.render(spec)
     # Determinism guard: two renders of the same spec must be identical after
