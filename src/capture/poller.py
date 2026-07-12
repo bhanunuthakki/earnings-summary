@@ -197,6 +197,35 @@ def _pledge_and_annotate(
         return
 
 
+def _answer(
+    token: str,
+    update: telegram.Update,
+    result: ingest.IngestResult,
+    db_path: Path | str | None,
+    *,
+    enabled: bool,
+) -> None:
+    """Answer a question-shaped capture back into the thread (best-effort).
+
+    Uses the SAME answer core the web feed stores (``onmymind.respond``), so a
+    question asked from Telegram and one typed at the desk get the identical
+    answer — one brain, two mouths. ``answer_capture`` returns None (and never
+    touches the engine) for a plain musing, so this is a cheap no-op for the
+    common case. Fire-and-forget — an answer failure never affects capture."""
+    if not (result.status == "landed" and result.note_id is not None) or db_path is None:
+        return
+    try:
+        from onmymind.respond import answer_capture
+
+        repo_root = Path(db_path).parent.parent
+        answer = answer_capture(result.note_id, repo_root=repo_root, db_path=db_path)
+    except Exception:  # answering must never break the poll loop
+        return
+    if answer and enabled and update.chat_id is not None:
+        with contextlib.suppress(telegram.TelegramError):
+            telegram.send_message(token, update.chat_id, answer)
+
+
 _BRIEF_OFF = frozenset({"0", "false", "no", ""})
 
 
@@ -449,6 +478,7 @@ def poll_once(
                     _notify_wondering(token, update, tid, db_path, enabled=confirm)
                 _pledge_and_annotate(token, update, result, db_path, enabled=confirm)
                 _artifact_brief(token, update, result, roster, db_path, enabled=confirm)
+                _answer(token, update, result, db_path, enabled=confirm)
         elif update.kind == "voice" and update.voice_file_id:
             dest = Path(audio_dir) / f"tg_{update.update_id}.oga"
             try:
@@ -483,6 +513,7 @@ def poll_once(
                 _notify_wondering(token, update, tid, db_path, enabled=confirm)
             _pledge_and_annotate(token, update, result, db_path, enabled=confirm)
             _artifact_brief(token, update, result, roster, db_path, enabled=confirm)
+            _answer(token, update, result, db_path, enabled=confirm)
         elif update.kind == "document" and update.document_file_id:
             # A PDF, deck, or any document file → land as an On My Mind reading.
             # The file is downloaded and stored locally so future text extraction
