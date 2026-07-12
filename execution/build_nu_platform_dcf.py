@@ -404,7 +404,15 @@ R = {
 }
 
 
-def build(s: Assum, m: Mirror, dest: Path) -> None:
+def build(s: Assum, m: Mirror, dest: Path, holdings: dict[str, object] | None = None) -> None:
+    """``holdings`` (Monthly Red Team PR10) is the already-loaded
+    ``micro_thesis/holdings/<T>.json`` dict, threaded through so the Scenario
+    sheet's Bear/Bull rows derive from the SAME ``scenario_assumptions()`` call
+    ``scenarios_block`` uses for the persisted ``dcf_runs`` snapshot — the sheet
+    can no longer show a bear the rest of the platform (bear_lint, tail stress,
+    red-team evidence packs) disagrees with. ``None`` (no holdings on file / not
+    passed) degrades to the generic ``BEAR_SEED`` fallback, same as
+    ``scenarios_block``."""
     wb = openpyxl.Workbook()
     dash = wb.active
     dash.title = "Dashboard"
@@ -591,26 +599,56 @@ def build(s: Assum, m: Mirror, dest: Path) -> None:
     )
     for cc in ("A2", "B2", "C2", "D2", "E2"):
         scn[cc].font = SUB_FONT
-    import copy
-
-    scenarios = [
-        ("Bear", 0.05, 0.04, 0.38),
-        ("Base", s.custg_near, s.arpacg_near, s.gpm_term),
-        ("Bull", 0.12, 0.11, 0.45),
-    ]
     r = 3
-    for name, cg, ag, gm in scenarios:
-        s2 = copy.copy(s)
-        s2.custg_near, s2.arpacg_near, s2.gpm_term = cg, ag, gm
-        v = mirror(s2).vps
-        scn.cell(row=r, column=1, value=name).font = Font(bold=(name == "Base"), color="374151")
-        for col, vv, f in zip(("B", "C", "D"), (cg, ag, gm), (PCT, PCT, PCT), strict=True):
-            cc = scn[f"{col}{r}"]
-            cc.value = vv
-            cc.number_format = f
-        ec = scn.cell(row=r, column=5, value=round(v, 2))
-        ec.number_format = NUM2
-        ec.font = Font(bold=(name == "Base"))
+    if redesign_mod is not None:
+        # Monthly Red Team PR10: Bear/Bull rows come from the SAME
+        # scenario_assumptions() call scenarios_block() uses for the persisted
+        # dcf_runs snapshot (bear deltas from holdings bear_deltas when present,
+        # provenance "thesis"; else the generic BEAR_SEED, provenance "seed") —
+        # this sheet and the snapshot every risk consumer reads (bear_lint,
+        # tail stress, red-team evidence packs) can no longer disagree.
+        bull_d = redesign_mod.BULL_SEED
+        bear_d = redesign_mod.thesis_bear_seed(holdings)
+        bear_provenance = (
+            "thesis" if redesign_mod.parse_thesis_bear_deltas(holdings) is not None else "seed"
+        )
+        scenario_rows: list[tuple[str, Assum]] = [
+            ("Bear", scenario_assumptions(s, bear_d)),
+            ("Base", s),
+            ("Bull", scenario_assumptions(s, bull_d)),
+        ]
+        for name, s2 in scenario_rows:
+            v = mirror(s2).vps
+            scn.cell(row=r, column=1, value=name).font = Font(bold=(name == "Base"), color="374151")
+            for col, vv in zip(
+                ("B", "C", "D"),
+                (s2.custg_near, s2.arpacg_near, s2.gpm_term),
+                strict=True,
+            ):
+                cc = scn[f"{col}{r}"]
+                cc.value = vv
+                cc.number_format = PCT
+            ec = scn.cell(row=r, column=5, value=round(v, 2))
+            ec.number_format = NUM2
+            ec.font = Font(bold=(name == "Base"))
+            r += 1
+        prov_label = (
+            "bear from holdings bear_deltas (thesis)"
+            if bear_provenance == "thesis"
+            else "bear from generic BEAR_SEED (seed fallback -- no holdings bear_deltas on file)"
+        )
+        scn.cell(row=r, column=1, value="Bear provenance").font = Font(italic=True, color="6B7280")
+        prov_cell = scn.cell(row=r, column=2, value=prov_label)
+        prov_cell.font = Font(italic=True, color="6B7280", size=9)
+        scn.merge_cells(start_row=r, start_column=2, end_row=r, end_column=5)
+        r += 1
+    else:  # pragma: no cover - import failure only, exercised by no test env
+        # dcf.redesign unavailable: degrade LOUDLY (an empty/stale scenario row
+        # is exactly the PR10 bug) rather than silently falling back to the old
+        # hardcoded Bear/Bull levers.
+        scn.cell(
+            row=r, column=1, value="Scenarios unavailable (dcf.redesign import failed)"
+        ).font = Font(italic=True, color="B91C1C")
         r += 1
     r += 1
     _hdr(scn, f"A{r}", "REVERSE-SOLVE - what the price implies")
@@ -634,11 +672,18 @@ def build(s: Assum, m: Mirror, dest: Path) -> None:
     wb.save(dest)
 
 
-def persist_dcf_run(s: Assum, m: Mirror) -> bool:
+def persist_dcf_run(s: Assum, m: Mirror, holdings: dict[str, object] | None = None) -> bool:
+    """``holdings=None`` (the pre-PR10 2-arg call shape every test/caller uses)
+    loads ``micro_thesis/holdings/<T>.json`` itself, same as before. ``main()``
+    now passes the SAME dict ``build()``'s Scenario sheet used, so a mid-run
+    file edit can never make the sheet and the persisted snapshot disagree —
+    a ticker with genuinely no holdings JSON still resolves to ``None`` either
+    way, so this collapses "not passed" and "no holdings on file" safely."""
     db = REPO / "data" / "portfolio.db"
     if persist_mod is None or not db.exists() or not m.vps:
         return False
-    holdings = _load_holdings(T)
+    if holdings is None:
+        holdings = _load_holdings(T)
     mos: object = holdings.get("mos_bar") if holdings else None
     snap_payload: dict[str, object] = {
         "model": "platform_dcf",
@@ -678,8 +723,14 @@ def persist_dcf_run(s: Assum, m: Mirror) -> bool:
 def main() -> int:
     s = load_assumptions(T)
     m = mirror(s)
-    build(s, m, DEST)
-    persisted = persist_dcf_run(s, m) if os.environ.get("DCF_PERSIST", "1") == "1" else False
+    # Loaded once and threaded through both the Scenario sheet (build) and the
+    # persisted snapshot (persist_dcf_run) — PR10: one holdings read, one bear,
+    # never two that could drift on a mid-run file edit.
+    holdings = _load_holdings(T)
+    build(s, m, DEST, holdings)
+    persisted = (
+        persist_dcf_run(s, m, holdings) if os.environ.get("DCF_PERSIST", "1") == "1" else False
+    )
     up = (m.vps / s.price - 1) if s.price else 0.0
     last = m.rows[-1]
     print(

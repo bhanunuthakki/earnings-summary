@@ -26,7 +26,7 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -825,6 +825,12 @@ class WorkspaceP3Panels:
     # name · N position reviews". 0 when the table/DB is absent (best-effort,
     # same degrade contract as every other P3 accessor).
     position_review_count: int = 0
+    # PR10 (Monthly Red Team surface wiring): the ticker's standing sizing
+    # rules (position_sizing_intent history + guard coverage read) for the
+    # Position tab's Standing-rules block. None = no rows on file / DB absent
+    # (the block hides, hide-don't-stub). StandingRulesPanel is defined later
+    # in this module — fine under `from __future__ import annotations`.
+    standing_rules: StandingRulesPanel | None = None
 
     @classmethod
     def empty(cls) -> WorkspaceP3Panels:
@@ -905,6 +911,150 @@ def load_graded_sell_base_rate(ticker: str, db_path: Path) -> str | None:
     return cast("str | None", result)
 
 
+# ---------------------------------------------------------------------------
+# Standing rules (Monthly Red Team PR10 — surface wiring)
+# ---------------------------------------------------------------------------
+#
+# The per-ticker brief's Position tab historically rendered zero
+# ``position_sizing_intent`` content — the FLKR exit ladder, RBRK/BKNG target
+# weights and the DRAFT add-rungs were visible to the Risk panel, /review and
+# Ask but invisible in the brief. This loader reads the ticker's full intent
+# history (the same table + row shape ``position_guard`` reads) and derives
+# the coverage line via ``position_guard.evaluate_downside_trigger`` /
+# ``evaluate_add_trigger`` — the naked-position gate's OWN detection logic,
+# never re-derived.
+
+# The DRAFT provenance prefixes the red-team write paths stamp on narratives:
+# PR9's data pass writes "[draft, pending owner review] ..." and
+# redteam.response._accept writes "[red-team accepted, pending owner edit] ..."
+# — both are machine-proposed rows awaiting the owner, rendered as a quiet
+# DRAFT chip (the bracketed prefix is stripped from the displayed narrative —
+# the chip IS the prefix) rather than blended in with owner-authored rules.
+_DRAFT_NARRATIVE_RE = re.compile(
+    r"^\s*\[\s*(?:draft\b|red-team accepted\b)[^\]]*\]\s*", re.IGNORECASE
+)
+
+
+@dataclass(frozen=True)
+class StandingRuleRow:
+    """One ``position_sizing_intent`` row, render-ready."""
+
+    intent_kind: str
+    intent_value: float | None
+    narrative: str
+    is_draft: bool
+    updated_at: datetime
+
+
+@dataclass(frozen=True)
+class StandingRulesPanel:
+    """The Position tab's Standing-rules block: every sizing intent on file
+    for one ticker, newest first, plus the guard's coverage read.
+
+    ``downside_passed`` / ``add_passed`` are ``None`` when the guard module
+    was unavailable (guarded import), never a guess. ``add_is_draft`` marks an
+    add-rung whose only evidence rows are machine-proposed drafts."""
+
+    rows: list[StandingRuleRow]
+    downside_passed: bool | None
+    add_passed: bool | None
+    add_is_draft: bool = False
+
+
+def _parse_intent_dt(raw: object) -> datetime | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        dt = datetime.fromisoformat(str(raw))
+    except ValueError:
+        return None
+    # Naive-UTC convention (reference_naive_utc): strip any aware offset so
+    # pre-migration rows compare/render like the naive rows.
+    return dt.replace(tzinfo=None) if dt.tzinfo is not None else dt
+
+
+def load_standing_rules(ticker: str, db_path: Path, repo_root: Path) -> StandingRulesPanel | None:
+    """The ticker's ``position_sizing_intent`` history as a render-ready
+    panel, or ``None`` when there are no rows on file (hide-don't-stub) or the
+    DB/table is absent — the same best-effort degrade contract as every other
+    loader in this module."""
+    if not db_path.exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    conn.row_factory = sqlite3.Row
+    try:
+        raw_rows = conn.execute(
+            "SELECT intent_kind, intent_value, narrative, updated_at "
+            "FROM position_sizing_intent WHERE ticker = ? "
+            "ORDER BY updated_at DESC, id DESC",
+            (ticker.upper().strip(),),
+        ).fetchall()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+    if not raw_rows:
+        return None
+
+    rows: list[StandingRuleRow] = []
+    for r in raw_rows:
+        narrative = str(r["narrative"]) if r["narrative"] is not None else ""
+        is_draft = bool(_DRAFT_NARRATIVE_RE.match(narrative))
+        if is_draft:
+            # The DRAFT chip carries the provenance — strip the raw prefix
+            # from the displayed narrative so it isn't said twice.
+            narrative = _DRAFT_NARRATIVE_RE.sub("", narrative, count=1)
+        updated_at = _parse_intent_dt(r["updated_at"]) or datetime(1970, 1, 1)
+        rows.append(
+            StandingRuleRow(
+                intent_kind=str(r["intent_kind"]),
+                intent_value=(float(r["intent_value"]) if r["intent_value"] is not None else None),
+                narrative=narrative,
+                is_draft=is_draft,
+                updated_at=updated_at,
+            )
+        )
+
+    # Coverage line — reuse position_guard's exact detection (never
+    # re-derived). Guarded import so this renderer never hard-depends on the
+    # guard module's transitive imports; a failure degrades the coverage line
+    # to absent, never the whole panel.
+    downside_passed: bool | None = None
+    add_passed: bool | None = None
+    add_is_draft = False
+    try:
+        from position_guard import IntentRow, evaluate_add_trigger, evaluate_downside_trigger
+
+        intents = [
+            IntentRow(intent_kind=row.intent_kind, narrative=row.narrative or None) for row in rows
+        ]
+        downside_passed = evaluate_downside_trigger(
+            intents, repo_root=repo_root, ticker=ticker
+        ).passed
+        add_passed = evaluate_add_trigger(intents).passed
+        if add_passed:
+            # The add check passed — draft iff NO non-draft row alone passes
+            # it, i.e. the pre-commitment currently rests on machine-proposed
+            # rows awaiting owner review.
+            non_draft = [
+                IntentRow(intent_kind=row.intent_kind, narrative=row.narrative or None)
+                for row in rows
+                if not row.is_draft
+            ]
+            add_is_draft = not evaluate_add_trigger(non_draft).passed
+    except ImportError:
+        pass
+    return StandingRulesPanel(
+        rows=rows,
+        downside_passed=downside_passed,
+        add_passed=add_passed,
+        add_is_draft=add_is_draft,
+    )
+
+
 def load_workspace_p3_panels(ticker: str, repo_root: Path) -> WorkspaceP3Panels:
     """Call every P3 accessor once and return the bundle.
 
@@ -922,6 +1072,7 @@ def load_workspace_p3_panels(ticker: str, repo_root: Path) -> WorkspaceP3Panels:
         peer_comp=load_peer_comp(ticker, repo_root=repo_root),
         open_notes=_load_open_notes_safe(ticker, db_path),
         position_review_count=_load_position_review_count_safe(ticker, db_path),
+        standing_rules=load_standing_rules(ticker, db_path, repo_root),
     )
 
 
@@ -929,8 +1080,11 @@ __all__ = [
     "KpiStripTile",
     "NewsTile",
     "PrintVsGuideRow",
+    "StandingRuleRow",
+    "StandingRulesPanel",
     "WorkspaceP3Panels",
     "format_ledger_value",
+    "load_standing_rules",
     "load_workspace_p3_panels",
     "parse_print_vs_guide",
     "quarter_short",

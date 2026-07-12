@@ -12,7 +12,12 @@ and NU (~25% of the book) invisible to tail stress / bear lint. These tests pin:
   * the Gordon-terminal guardrails hold under extreme deltas,
   * ``redesign.strip_unedited_seed_bear`` / ``redesign.resolve_mirrored_bear``
     treat an untouched BEAR_SEED as a fallback, never an owner edit,
-  * the six red-team holdings JSONs carry valid, owner-pending bear_deltas.
+  * the six red-team holdings JSONs carry valid, owner-pending bear_deltas,
+  * (PR10 — surface wiring) the workbook ``Scenario`` SHEET's Bear/Bull rows
+    derive from the exact same ``scenario_assumptions()`` call as
+    ``scenarios_block`` (the persisted snapshot), with a provenance note cell,
+    so the workbook and every risk consumer that reads the persisted block
+    (bear_lint, tail stress, red-team evidence packs) can never disagree.
 """
 
 from __future__ import annotations
@@ -21,6 +26,9 @@ import json
 import sys
 from pathlib import Path
 from typing import cast
+
+import openpyxl
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -225,6 +233,84 @@ def test_resolve_mirrored_bear_keeps_owner_edit() -> None:
 
 def test_resolve_mirrored_bear_seed_without_thesis() -> None:
     assert redesign.resolve_mirrored_bear(redesign.BEAR_SEED, None) == redesign.BEAR_SEED
+
+
+# --------------------------------------------------------------------------- #
+# PR10: workbook Scenario sheet == persisted snapshot (both builders)
+# --------------------------------------------------------------------------- #
+
+
+def _sheet_scenarios(dest: Path) -> tuple[dict[str, float], str]:
+    """``({scenario_name: value_per_share}, provenance_note)`` from the
+    workbook's Scenario sheet — rows 3-5 (Bear/Base/Bull) + the provenance
+    note cell on row 6."""
+    ws = openpyxl.load_workbook(str(dest))["Scenario"]
+    fvs = {str(ws[f"A{r}"].value): float(cast("float", ws[f"E{r}"].value)) for r in (3, 4, 5)}
+    assert str(ws["A6"].value) == "Bear provenance"
+    return fvs, str(ws["B6"].value)
+
+
+def _persisted_fvs(block: dict[str, object]) -> dict[str, float]:
+    return parse_scenario_fair_values(_snapshot_json(block))
+
+
+def test_nu_sheet_bear_matches_persisted_snapshot_thesis(tmp_path: Path) -> None:
+    """The regression the PR exists for: sheet-bear VPS == persisted-snapshot
+    bear VPS on a fixture assumption set (thesis bear_deltas)."""
+    s = nu.Assum()
+    m = nu.mirror(s)
+    dest = tmp_path / "NU.xlsx"
+    nu.build(s, m, dest, THESIS_HOLDINGS)
+    sheet, provenance_note = _sheet_scenarios(dest)
+    persisted = _persisted_fvs(nu.scenarios_block(s, m, THESIS_HOLDINGS))
+    for name in ("Bear", "Base", "Bull"):
+        # The sheet rounds to cents; the snapshot stores full precision.
+        assert sheet[name] == pytest.approx(persisted[name.lower()], abs=0.005), name
+    assert "thesis" in provenance_note
+    assert "seed" not in provenance_note
+
+
+def test_nu_sheet_bear_seed_fallback_labeled(tmp_path: Path) -> None:
+    s = nu.Assum()
+    m = nu.mirror(s)
+    dest = tmp_path / "NU_seed.xlsx"
+    nu.build(s, m, dest, None)
+    sheet, provenance_note = _sheet_scenarios(dest)
+    persisted = _persisted_fvs(nu.scenarios_block(s, m, None))
+    assert sheet["Bear"] == pytest.approx(persisted["bear"], abs=0.005)
+    assert "seed fallback" in provenance_note
+
+
+def test_meli_sheet_bear_matches_persisted_snapshot_thesis(tmp_path: Path) -> None:
+    s = meli.Assum(derive_capm=0)
+    m = meli.mirror(s)
+    dest = tmp_path / "MELI.xlsx"
+    meli.build(s, m, dest, THESIS_HOLDINGS)
+    sheet, provenance_note = _sheet_scenarios(dest)
+    persisted = _persisted_fvs(meli.scenarios_block(s, m, THESIS_HOLDINGS))
+    for name in ("Bear", "Base", "Bull"):
+        assert sheet[name] == pytest.approx(persisted[name.lower()], abs=0.005), name
+    assert "thesis" in provenance_note
+
+
+def test_meli_sheet_bear_seed_fallback_labeled(tmp_path: Path) -> None:
+    s = meli.Assum(derive_capm=0)
+    m = meli.mirror(s)
+    dest = tmp_path / "MELI_seed.xlsx"
+    meli.build(s, m, dest, {})
+    sheet, provenance_note = _sheet_scenarios(dest)
+    persisted = _persisted_fvs(meli.scenarios_block(s, m, {}))
+    assert sheet["Bear"] == pytest.approx(persisted["bear"], abs=0.005)
+    assert "seed fallback" in provenance_note
+
+
+def test_sheet_lever_columns_show_post_delta_values() -> None:
+    """The sheet's B-D columns display the ACTUAL post-delta lever values, not
+    the legacy hardcoded ones — pinned via the same scenario_assumptions call."""
+    s = nu.Assum()
+    bear = nu.scenario_assumptions(s, redesign.thesis_bear_seed(THESIS_HOLDINGS))
+    assert bear.custg_near == pytest.approx(s.custg_near - 0.08)
+    assert bear.gpm_term == pytest.approx(s.gpm_term - 0.06)
 
 
 # --------------------------------------------------------------------------- #

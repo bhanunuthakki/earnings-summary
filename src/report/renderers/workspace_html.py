@@ -520,20 +520,26 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
             lambda b: _synthesis_tab(b, spec.synthesis),
         ),
     ]
-    if pos is not None and pos.held:
+    # PR10 (Monthly Red Team surface wiring): the Position tab also renders
+    # when standing sizing rules exist for an unheld name — a rule encoded
+    # before entry (or lingering after exit) must never be invisible just
+    # because the tracker shows zero shares.
+    standing = p3.standing_rules
+    if (pos is not None and pos.held) or (standing is not None and standing.rows):
         db_path = Path(spec.repo_root) / "data" / "portfolio.db"
         graded_sell_line = load_graded_sell_base_rate(spec.ticker, db_path)
         tabs.append(
             (
                 "position",
                 "Position",
-                len(pos.accounts),
+                len(pos.accounts) if pos is not None and pos.held else None,
                 lambda b: _position_tab(
                     b,
                     pos,
                     ticker=spec.ticker,
                     position_review_count=p3.position_review_count,
                     graded_sell_line=graded_sell_line,
+                    standing_rules=standing,
                 ),
             )
         )
