@@ -51,6 +51,7 @@ def _build_config(args: argparse.Namespace) -> StandupConfig:
         per_name_cooldown_days=args.cooldown_days,
         dedup_days=args.dedup_days,
         min_score=args.min_score,
+        caveat_floor=args.caveat_floor,
         max_signals_considered=args.limit,
     )
 
@@ -79,6 +80,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cooldown-days", type=int, default=3)
     parser.add_argument("--dedup-days", type=int, default=7)
     parser.add_argument("--min-score", type=float, default=0.75)
+    parser.add_argument(
+        "--caveat-floor",
+        type=float,
+        default=0.60,
+        help="deliver-with-caveat floor (below min-score, above this: delivered with a "
+        "one-line caveat prefix instead of suppressed).",
+    )
     parser.add_argument("--limit", type=int, default=25, help="Max signals composed per run.")
     # detection thresholds
     parser.add_argument("--journal-stale-days", type=int, default=30)

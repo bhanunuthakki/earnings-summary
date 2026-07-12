@@ -43,6 +43,24 @@ registry**.
 | capture poller (service, event-driven) | continuous | `capture_intent` (Haiku per musing), `artifact_brief` (Sonnet) | no fixed window; starved calls surface as missed classifications — budgets seeded warn-mode (0138/0139) |
 | `coach_pings` | daily 07:15 | **none** (zero-LLM governor) | listed to show it's quota-safe |
 | `run_red_team` | monthly, first Saturday 10:00 | `red_team_attack` (per held name, rotating lens), `red_team_cross_book` (factor-block / style-drift / human-capital, 3 calls) | daytime weekend slot, clear of the fleet's protected windows; ~15 calls/run; per-item degrade (directives/monthly_red_team.md Phase 2); Windows Task Scheduler has no native Nth-weekday trigger, so the task fires every Saturday and the script itself no-ops unless it's the month's first (`execution/run_red_team.py::is_first_saturday`) |
+| `run_weekly_packet` | Sunday 08:00 | `weekly_packet_predraft` (Haiku, per packet item) | navigation_ia.md §3.1 (PR2) — daytime weekend slot, clear of the fleet's protected windows; per-item degrade (a failed/unparseable predraft ships the item without a suggested verdict, never blocks the packet); the recurring **task itself** (Windows Task Scheduler entry) is registered separately, out of scope for this PR — this row only reserves the LLM window. |
+| `run_decision_nudge` | same-day, event-triggered off the morning pipeline / on-demand | **none** (zero-LLM — the scan and message text are both deterministic) | listed to show it's quota-safe, like `coach_pings` |
 
 Keep this table current — it is the collision surface an orchestrator checks before
 launching a wave or adding a cron.
+
+## Incident note — the standup judge's "9 of 12 suppressed" (2026-07-11 audit, PR2)
+
+The `eval_judge` calls behind the standup's suppressed briefs were NOT genuine
+low-quality verdicts — every one of them was exactly this directive's rule 3
+failure signature: `CalledProcessError` exit 1 from `claude.CMD`, immediately
+followed by the `LLM_FALLBACK_DISABLED=1` `RuntimeError` (see `llm_calls`,
+`purpose='eval_judge'`, 2026-07-03 onward). `standup.gate.judge_item` correctly
+classifies this as non-hard-stop and returns a `score=0.0` sentinel — but until
+PR2, that sentinel was recorded under `STATUS_SUPPRESSED_EVAL`, which is in the
+dedup set, so each transient failure locked its trip out of retry for a full
+`dedup_days` (7-day) window. `standup.ledger.STATUS_JUDGE_FAILED` (excluded from
+dedup) now fixes the mis-recording. The underlying CLI failures themselves are a
+separate, still-open investigation — almost certainly the quota-collision this
+directive exists to prevent (rule 1); the standup pipeline's fixed daily run
+time should be checked against burst-hour proximity per rule 2.

@@ -5,6 +5,9 @@ Callback data is a compact ``kind:verb:id`` triple:
   ``rt:run:<task_id>``        run the two-pass engine (flag-gated) → push the card
   ``rp:<verb>:<proposal_id>`` the 4-action core (approve / further / steer / reject)
   ``st:<ticker>:<note_id>``   attribute a needs_ticker musing to a roster candidate
+  ``wk:<verb>:<item_id>``     the Sunday packet's per-item verdict (PR2; item_id is a
+                              weekly_packet_items row id) — accept / rewrite / drop / defer
+  ``dn:<verb>:<decision_id>`` the point-of-intent decision nudge (PR2) — fill / skip
 
 Free-text in the thread stays a musing (the capture path); the buttons are the
 Wave-1 steering surface. A button 'steer' marks the proposal steered (the web inbox
@@ -380,6 +383,63 @@ def dispatch_callback(
             send(token, chat_id, reply)
         _stamp_card(token, update, _state_stamp(f"reviewed {ping.ticker}"), edit=edit)
         return "cp_reviewed"
+
+    if kind == "wk":
+        # PR2 — the Sunday packet's action core (weekly_packet.apply_verdict).
+        # 'awaiting' stashes a free-text reply (rewrite / decision fill-in);
+        # a terminal verb applies immediately to the underlying substrate and
+        # may complete the run, in which case the 'Packet clear' receipt goes
+        # out right here (the receipt fires off the LAST verdict, not off the
+        # original send — verdicts land async, hours or days apart).
+        from pipeline.weekly_packet import apply_verdict, get_item, maybe_send_receipt
+
+        result = apply_verdict(obj_id, verb, chat_id=chat_id, db_path=db_path)
+        if result is None:
+            if cqid:
+                still_there = get_item(obj_id, db_path=db_path) is not None
+                answer(
+                    token, cqid, text="Already handled." if still_there else "Unrecognized action."
+                )
+            return "wk_stale"
+        if result == "awaiting":
+            if cqid:
+                answer(token, cqid, text="Reply here with your own words.")
+            return "wk_awaiting"
+        if cqid:
+            answer(token, cqid, text=f"{result.capitalize()}.")
+        _stamp_card(token, update, _state_stamp(result), edit=edit)
+        item = get_item(obj_id, db_path=db_path)
+        if item is not None and chat_id is not None:
+            with contextlib.suppress(Exception):
+                maybe_send_receipt(token, chat_id, item.run_id, db_path=db_path, send=send)
+        return f"wk_{result}"
+
+    if kind == "dn":
+        # The point-of-intent decision nudge (PR2, Deliverable 2) — Fill in
+        # now stashes the awaited two-line reply; Skip just records the
+        # owner saw it (never re-nudged; the standing open-loops band keeps
+        # the debt visible).
+        from capture.decision_nudge import mark_skipped, start_fill_in
+
+        if verb == "fill":
+            if chat_id is not None:
+                start_fill_in(obj_id, chat_id=chat_id, db_path=db_path)
+            if cqid:
+                answer(
+                    token,
+                    cqid,
+                    text="Reply with two lines: conviction, then what would prove you wrong.",
+                )
+            return "dn_awaiting"
+        if verb == "skip":
+            mark_skipped(obj_id, db_path=db_path)
+            if cqid:
+                answer(token, cqid, text="Skipped.")
+            _stamp_card(token, update, _state_stamp("skipped"), edit=edit)
+            return "dn_skipped"
+        if cqid:
+            answer(token, cqid, text="Unrecognized action.")
+        return None
 
     if cqid:
         answer(token, cqid, text="Unrecognized action.")

@@ -96,10 +96,14 @@ DERIVE-DON'T-ASK (system assembles everything; owner supplies only verdicts):
    conviction? what would prove you wrong?"* This attacks the exact observed failure
    (decisions 96/97) at the moment of intent instead of waiting on a dashboard visit.
 3. **Un-gag the standup channel.** The proactive briefing has delivered 3 briefs ever and
-   self-suppressed 9 of 12 since — its LLM quality judge is tuned to silence
-   (`src/standup/run.py`, `standup_messages`). Re-tune the judge (or add a
-   deliver-with-caveat tier) before building any *new* push surface; a gagged channel is
-   indistinguishable from a missing one.
+   recorded 9+ suppressions since. **Corrected diagnosis (PR-2 implementation):** the
+   judge was not tuned to silence — its own LLM call has been *failing outright* daily
+   since 2026-07-03 (CLI exit 1, `llm_calls` purpose=`eval_judge`; all "scores" were 0.0
+   failure sentinels), and the failure was mis-recorded as `suppressed_eval`, which sits
+   in the dedup set — locking each failed brief out of retry for 7 days. PR-2 fixed the
+   mis-recording (`STATUS_JUDGE_FAILED`, excluded from dedup) and added the
+   deliver-with-caveat tier; the underlying CLI failure is a separate open incident
+   (registered in `directives/llm_quota_scheduling.md`).
 
 Scheduling discipline: both scheduled legs follow the per-item degrade pattern and
 register their windows in `directives/llm_quota_scheduling.md` (repo rule for every new
