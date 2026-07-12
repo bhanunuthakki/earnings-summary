@@ -62,6 +62,12 @@ class PositionGuardRowModel(BaseModel):
     downside_trigger: PositionGuardCheckModel
     realistic_bear: PositionGuardCheckModel
     thesis_fresh: PositionGuardCheckModel
+    # ADVISORY (Bull-side symmetry, PR9) — ``None`` when the name isn't a
+    # high-conviction held position (not applicable) OR when reading an
+    # OLDER cache written before this field existed (pydantic default on a
+    # missing key), so a stale cache renders with no advisory row rather
+    # than failing validation. Never participates in `passed`/`failed_checks`.
+    add_trigger: PositionGuardCheckModel | None = None
 
 
 class PositionGuardCacheModel(BaseModel):
@@ -90,6 +96,7 @@ def _row_model(r: PositionGuardRow) -> PositionGuardRowModel:
         downside_trigger=_check_model(r.downside_trigger),
         realistic_bear=_check_model(r.realistic_bear),
         thesis_fresh=_check_model(r.thesis_fresh),
+        add_trigger=(_check_model(r.add_trigger) if r.add_trigger is not None else None),
     )
 
 

@@ -57,6 +57,7 @@ _LENS_LABEL: dict[str, str] = {
     "competitive_encroachment": "Competitive Encroachment",
     "model_vs_market": "Model vs Market",
     "behavioral_consistency": "Behavioral Consistency",
+    "missed_upside": "Missed Upside",
     "factor_block": "Factor Block",
     "style_drift": "Style Drift",
     "human_capital": "Human Capital",

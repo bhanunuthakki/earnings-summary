@@ -23,7 +23,7 @@ failure mode.
 | Trajectory WARN | `break_rules_soft` supports slope rules: last 2–4 prints project a hard-rule threshold crossing within ≤2 prints → WARN with the projected trip date. (MELI NIMAL −490bps/yr toward the 15% floor must not read plain OK.) |
 | Prose-rule encoding | Compound/derived tripwires in thesis text MUST exist as machine rules (soft-rule `compound` predicate). A rule leg with no data renders UNRESOLVED — visible, never silently green. |
 | KPI series sanity | Cumulative series (customers, etc.) get a monotonicity + unit-jump guard at persist time; violations halt-and-surface per the schema-drift rule, never guess-fixed. |
-| Naked-position gate | Nightly: every held name needs (a) an encoded downside trigger (sizing-intent downside rung or non-empty break rules), (b) a persisted realistic bear (present + not lint-flagged), (c) thesis updated ≤90d. Violations are standing chips that block the monthly close. |
+| Naked-position gate | Nightly: every held name needs (a) an encoded downside trigger (sizing-intent downside rung or non-empty break rules), (b) a persisted realistic bear (present + not lint-flagged), (c) thesis updated ≤90d. Violations are standing chips that block the monthly close. A fourth, ADVISORY check (`add_trigger`, PR9) asks whether HIGH-CONVICTION held names also carry an encoded add-rung (a buy pre-commitment, mirroring the downside rung); missing one never blocks the close or counts toward `NAKED POSITIONS` — it renders as a separate quiet nudge, deliberately asymmetric with the violation-grade checks above (missing downside protection is a blowup risk; missing upside protection is a missed-opportunity risk). |
 
 ## Phase 2 — First-Saturday Red Team (the forcing function)
 
@@ -32,8 +32,11 @@ failure mode.
   `llm_quota_scheduling.md`. Idempotency key: `red_team_{YYYY_MM}`.
 - **Per-name pass**: one adversarial LLM call per held name with a **rotating lens** —
   `shared_factor`, `fx_translation`, `competitive_encroachment`, `model_vs_market` (fair value
-  disagrees with market >2x → attack the model), `behavioral_consistency`. Rotation state
-  persisted; the same name must not get the same lens twice in a row.
+  disagrees with market >2x → attack the model), `behavioral_consistency`, `missed_upside` (PR9 —
+  the one lens that inverts direction: attacks the owner's CAUTION, not the position, surfacing
+  positions capped below fair value, high-conviction names with no add-rung, or bear deltas more
+  severe than the thesis justifies). Rotation state persisted; the same name must not get the same
+  lens twice in a row.
 - **Cross-book passes**: factor-block detection (e.g. the MELI+NU Brazil-credit pair), style drift
   vs stated strategy (value/size/momentum loadings vs the owner's GARP+index+momentum-sleeve
   statement), human-capital overlay (owner income is tech/AI-correlated; flag book bets that

@@ -117,3 +117,63 @@ def test_second_write_overwrites_first(tmp_path: Path) -> None:
     cache = read_position_guard_cache(tmp_path)
     assert cache is not None
     assert len(cache.rows) == 2
+
+
+# ---------------------------------------------------------------------------
+# add_trigger backward-compat (PR9, Bull-side symmetry): a cache written
+# before this field existed must still validate + render, with add_trigger
+# defaulting to None (not applicable) rather than failing schema validation.
+# ---------------------------------------------------------------------------
+
+
+def test_write_then_read_round_trips_add_trigger(tmp_path: Path) -> None:
+    passing = PositionGuardCheck(True, "ok")
+    failing = PositionGuardCheck(False, "no add-rung on file")
+    report = PositionGuardReport(
+        rows=[
+            PositionGuardRow(
+                ticker="NU",
+                weight_pct=10.0,
+                downside_trigger=passing,
+                realistic_bear=passing,
+                thesis_fresh=passing,
+                add_trigger=failing,
+            )
+        ]
+    )
+    write_position_guard_cache(tmp_path, report, computed_at=_STAMP)
+    cache = read_position_guard_cache(tmp_path)
+    assert cache is not None
+    (row,) = cache.rows
+    assert row.add_trigger is not None
+    assert not row.add_trigger.passed
+    assert row.passed  # advisory never flips the violation-grade result
+
+
+def test_read_tolerates_pre_pr9_cache_missing_add_trigger_key(tmp_path: Path) -> None:
+    """A cache JSON written by the pre-PR9 code (no add_trigger key at all in
+    any row) must still validate — the field defaults to None per-row rather
+    than raising, so an old cache renders with no advisory row until the
+    nightly stage recomputes it."""
+    path = cache_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "computed_at": _STAMP.isoformat(),
+        "rows": [
+            {
+                "ticker": "NU",
+                "weight_pct": 10.0,
+                "passed": True,
+                "failed_checks": [],
+                "downside_trigger": {"passed": True, "reason": "ok"},
+                "realistic_bear": {"passed": True, "reason": "ok"},
+                "thesis_fresh": {"passed": True, "reason": "ok"},
+                # no "add_trigger" key at all — the pre-PR9 shape.
+            }
+        ],
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    cache = read_position_guard_cache(tmp_path)
+    assert cache is not None
+    (row,) = cache.rows
+    assert row.add_trigger is None

@@ -107,6 +107,7 @@ from portfolio_tail_stress import (
 )
 from portfolio_weights import read_materialized_weights
 from position_guard import (
+    CHECK_ADD,
     CHECK_BEAR,
     CHECK_DOWNSIDE,
     CHECK_THESIS,
@@ -2462,6 +2463,42 @@ def _position_guard_table_row(row: PositionGuardRowModel) -> str:
     )
 
 
+def _add_trigger_advisories(cache: PositionGuardCacheModel) -> list[PositionGuardRowModel]:
+    """High-conviction held names (module docstring "Bull-side symmetry",
+    ``position_guard.CHECK_ADD``) missing an add-rung — the ADVISORY nudge
+    list. Deliberately NOT ``cache.violations``: a row can clear all three
+    violation-grade checks and still land here, and a row already in
+    ``violations`` can land here too — the two lists are independent."""
+    return [r for r in cache.rows if r.add_trigger is not None and not r.add_trigger.passed]
+
+
+def _add_trigger_chip(row: PositionGuardRowModel) -> str:
+    """One quiet chip — plain ``.k-chip`` (no ok/warn/bad tone), the
+    "neutral nudge" rendering the advisory severity calls for (module
+    docstring: missing upside is a nudge, never a violation-grade color)."""
+    check = row.add_trigger
+    assert check is not None  # caller filters via _add_trigger_advisories
+    return (
+        f'<a class="k-chip" href="#holding={escape(row.ticker)}" '
+        f'data-peek-ticker="{escape(row.ticker)}" title="{escape(check.reason)}" '
+        f'data-check="{CHECK_ADD}">'
+        f"{escape(row.ticker)}: high conviction, no add-rung encoded</a>"
+    )
+
+
+def _add_trigger_advisory_block(cache: PositionGuardCacheModel) -> str:
+    advisories = _add_trigger_advisories(cache)
+    if not advisories:
+        return ""
+    chips = "".join(_add_trigger_chip(r) for r in advisories)
+    return (
+        '<p class="sub pfr-top"><strong>Add-rung advisory</strong> — high-conviction names '
+        "with no encoded buy pre-commitment (sell rules but no buy rules). A nudge, not a "
+        "violation: never counted in NAKED POSITIONS or the monthly-close gate.</p>"
+        f'<div class="pfr-naked-chips">{chips}</div>'
+    )
+
+
 def _position_guard_section(cache: PositionGuardCacheModel | None) -> str:
     """Naked-position gate (Monthly Red Team Phase 1 guard 7): every held name
     above 0.5% needs a downside exit rule the platform can enforce, a
@@ -2470,7 +2507,13 @@ def _position_guard_section(cache: PositionGuardCacheModel | None) -> str:
     as standing chips (one dense card per violation, ticker + failing
     check(s) + the one-line fix) plus a full per-check table; a summary
     k-pill leads the section either way. Reads the nightly-materialized
-    cache — never recomputes on the render path."""
+    cache — never recomputes on the render path.
+
+    A fourth, ADVISORY row (``_add_trigger_advisory_block``) renders
+    separately below, for high-conviction names with no encoded add-rung —
+    never folded into the violations chips/table/pill above (Bull-side
+    symmetry, PR9: missing downside is a violation, missing upside is a
+    nudge)."""
     head = (
         '<section class="panel"><h2>Naked-position gate</h2>'
         '<p class="sub">Every held name above 0.5% of book needs all three on file: a '
@@ -2489,11 +2532,12 @@ def _position_guard_section(cache: PositionGuardCacheModel | None) -> str:
         )
     violations = cache.violations
     pill = _naked_position_summary_pill(cache)
+    advisory = _add_trigger_advisory_block(cache)
     if not violations:
         return (
             f"{head}{pill}"
             '<p class="muted pfr-top">Every held name clears the naked-position gate.'
-            "</p></section>"
+            f"</p>{advisory}</section>"
         )
     chips = "".join(_violation_chip(r) for r in violations)
     rows_html = "".join(_position_guard_table_row(r) for r in violations)
@@ -2504,7 +2548,7 @@ def _position_guard_section(cache: PositionGuardCacheModel | None) -> str:
         "<th>Realistic bear</th><th>Thesis freshness</th>"
         f"</tr></thead><tbody>{rows_html}</tbody></table>"
     )
-    return f'{head}{pill}<div class="pfr-naked-chips">{chips}</div>{table}</section>'
+    return f'{head}{pill}<div class="pfr-naked-chips">{chips}</div>{table}{advisory}</section>'
 
 
 def _mc_prob_row(label: str, normal: DistributionRead, student_t: DistributionRead) -> str:

@@ -26,6 +26,14 @@ LENS_NAMES: tuple[str, ...] = (
     "competitive_encroachment",
     "model_vs_market",
     "behavioral_consistency",
+    # Bull-side symmetry (Monthly Red Team PR9): the other five lenses all
+    # attack the POSITION; this one inverts direction and attacks the
+    # owner's CAUTION instead — see redteam/lenses.py's
+    # build_missed_upside_prompt. Added to the rotation, not appended after
+    # it, so mod-6 (not mod-5 + a special case) is the one source of truth
+    # for "no repeat in a row" — safe to change the modulus because no
+    # red_team_items rows exist in prod yet (verified 2026-07-11).
+    "missed_upside",
 )
 
 CROSS_BOOK_LENS_NAMES: tuple[str, ...] = (

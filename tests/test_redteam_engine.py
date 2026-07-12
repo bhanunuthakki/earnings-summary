@@ -118,6 +118,89 @@ def test_month_index_increases_monotonically_across_year_boundary() -> None:
     assert lenses.month_index_for("2026-12") + 1 == lenses.month_index_for("2027-01")
 
 
+def test_lens_rotation_covers_all_six_lenses_mod_len() -> None:
+    """PR9 (Bull-side symmetry) grew LENS_NAMES from 5 to 6 — the rotation
+    modulus follows len(LENS_NAMES) automatically, so every lens (including
+    the new missed_upside) is reachable and the no-repeat guarantee holds
+    for mod 6, not just mod 5."""
+    assert len(lenses.LENS_NAMES) == 6
+    assert "missed_upside" in lenses.LENS_NAMES
+    seen = {lenses.lens_for("NU", i) for i in range(6)}
+    assert seen == set(lenses.LENS_NAMES)  # every lens reachable within one full cycle
+
+
+# ---------------------------------------------------------------------------
+# Bull-side symmetry (PR9): missed_upside lens + downside/add-rung evidence
+# flags (redteam.lenses reusing position_guard's detection, never re-derived)
+# ---------------------------------------------------------------------------
+
+
+def test_missed_upside_prompt_attacks_caution_not_the_position(tmp_path: Path) -> None:
+    repo_root = _make_repo_root(tmp_path, {"NU": 0.10})
+    pack = lenses.build_name_evidence_pack(repo_root, None, ticker="NU", weight_pct=0.10)
+    assert pack is not None
+    prompt = lenses.build_prompt(pack, "missed_upside", other_holdings_line="MELI (8.0%)")
+    assert "attacking the owner's caution on NU" in prompt
+    assert "under-underwritten upside" in prompt
+    assert "add-rung" in prompt
+    # Evidence flags render even when both are False (defaults, no DB conn).
+    assert "Downside rung encoded: no" in prompt
+    assert "Add-rung (buy pre-commitment) encoded: no" in prompt
+
+
+def test_build_prompt_dispatches_missed_upside_via_lens_name() -> None:
+    """build_prompt(..., 'missed_upside', ...) must route to the inverted
+    prompt, not fall through to the shared_factor default like an unknown
+    lens name would."""
+    from redteam.lenses import NameEvidencePack
+
+    pack = NameEvidencePack(
+        ticker="NU",
+        weight_pct=0.10,
+        thesis_anchor_md="Digital bank thesis.",
+        verdict="Intact",
+        key_driver=None,
+        over_under_pct=None,
+    )
+    dispatched = lenses.build_prompt(pack, "missed_upside", other_holdings_line="")
+    direct = lenses.build_missed_upside_prompt(pack, other_holdings_line="")
+    assert dispatched == direct
+    assert "attacking the owner's caution" in dispatched
+
+
+def test_evidence_pack_carries_rung_flags_from_position_sizing_intent(tmp_path: Path) -> None:
+    """The evidence-pack flags must come from position_guard's actual
+    detection (holdings-JSON break rules OR sizing-intent rung+action), not a
+    re-derived heuristic — exercised over a real sqlite3.Connection."""
+    repo_root = _make_repo_root(tmp_path, {"NU": 0.10})
+    db_path = _make_db(tmp_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE position_sizing_intent "
+        "(id INTEGER PRIMARY KEY, ticker TEXT, intent_kind TEXT, narrative TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO position_sizing_intent (ticker, intent_kind, narrative) VALUES "
+        "('NU', 'target_weight_pct', 'DOWNSIDE: close <$10 -> cut to 5%.')"
+    )
+    conn.commit()
+    conn.row_factory = sqlite3.Row
+
+    pack = lenses.build_name_evidence_pack(repo_root, conn, ticker="NU", weight_pct=0.10)
+    conn.close()
+    assert pack is not None
+    assert pack.has_downside_rung is True
+    assert pack.has_add_rung is False  # no add-shaped intent on file
+
+
+def test_evidence_pack_rung_flags_default_false_without_a_connection(tmp_path: Path) -> None:
+    repo_root = _make_repo_root(tmp_path, {"NU": 0.10})
+    pack = lenses.build_name_evidence_pack(repo_root, None, ticker="NU", weight_pct=0.10)
+    assert pack is not None
+    assert pack.has_downside_rung is False
+    assert pack.has_add_rung is False
+
+
 # ---------------------------------------------------------------------------
 # Bear-realism lint integration (Phase 1 PR1, src/bear_lint.py)
 # ---------------------------------------------------------------------------
