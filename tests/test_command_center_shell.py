@@ -91,11 +91,16 @@ def test_render_shell_five_section_structure() -> None:
     assert html.startswith("<!doctype html>")
     assert html.rstrip().endswith("</body></html>")
     assert "<title>Portfolio · command center</title>" in html
-    # Every section keeps its activation contract — four in the primary nav,
-    # System as the utility icon (UX9b) — and every one keeps a sub-tab row.
-    for section in ("home", "companies", "ask", "portfolio", "system"):
+    # Every section keeps its activation contract — four in the primary nav
+    # (Today/Companies/Portfolio/Review), System as the utility icon (UX9b) —
+    # and every one keeps a sub-tab row. Ask is fully hidden (navigation_ia):
+    # no button anywhere (so no data-theme-target), but its sub-row + panel
+    # survive, which is what keeps #explore / goAsk / the dock ⇗ working.
+    for section in ("home", "companies", "portfolio", "review", "system"):
         assert f'data-theme-target="{section}"' in html
         assert f'data-cc-theme="{section}"' in html  # its sub-tab row exists
+    assert 'data-theme-target="ask"' not in html
+    assert 'data-cc-theme="ask"' in html
     # The old three-theme ids are gone from the nav.
     for dead in ("research", "governance"):
         assert f'data-theme-target="{dead}"' not in html
@@ -131,15 +136,25 @@ def test_render_shell_five_section_structure() -> None:
 
 
 def test_system_demoted_to_utility_icon() -> None:
-    """UX9b: the primary nav carries Home · Companies · Ask · Portfolio only;
-    System rides as a top-right icon button that keeps the cc-theme-tab /
-    data-theme-target activation contract (its sub-tabs render as before once
-    opened) plus a data-pal-label so its palette row stays readable."""
+    """navigation_ia over UX9b: the primary nav carries Today · Companies ·
+    Portfolio · Review only; System rides as a top-right icon button that
+    keeps the cc-theme-tab / data-theme-target activation contract (its
+    sub-tabs render as before once opened) plus a data-pal-label so its
+    palette row stays readable; Ask has NO top-bar button at all."""
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
     topnav = html.split('class="cc-topnav"', 1)[1].split("</nav>", 1)[0]
-    for primary in ("home", "companies", "ask", "portfolio"):
+    for primary in ("home", "companies", "portfolio", "review"):
         assert f'data-theme-target="{primary}"' in topnav
     assert 'data-theme-target="system"' not in topnav
+    # Ask: hidden from the top bar (_HIDDEN_NAV_SECTIONS) but the section
+    # machinery survives — the explore panel + sub-row render, so #explore /
+    # goAsk / the dock ⇗ pop-out all still land on the full page.
+    assert 'data-theme-target="ask"' not in topnav
+    assert 'data-tab-target="explore"' in html
+    assert 'data-panel="explore"' in html
+    # Labels: Home reads "Today"; the Review section is present.
+    assert ">Today</button>" in topnav
+    assert ">Review</button>" in topnav
     # The icon button: theme contract intact (cc-theme-tab + cc-system-btn
     # activation hooks preserved), now composing the kit quiet button.
     assert 'class="cc-theme-tab cc-system-btn k-btn k-btn-quiet"' in html
@@ -148,6 +163,26 @@ def test_system_demoted_to_utility_icon() -> None:
     assert "data-pal-label" in SHELL_JS
     # System's sub-tab row still exists for when the icon activates it.
     assert 'data-cc-theme="system"' in html
+
+
+def test_review_section_reparents_the_ritual_surfaces() -> None:
+    """navigation_ia §2.1: Ledger + Triage + Journal move out of Companies into
+    the Review section — panel ids UNCHANGED (every #musings/#journal/#triage/
+    #ledger deep link survives), the Ledger lands the section (first sub-tab,
+    deliberately unsplit), and Companies keeps only its company-shaped tabs."""
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    for pid in ("musings", "triage", "journal"):
+        # Each sub-tab renders exactly once, tagged with its new section.
+        assert f'data-tab-target="{pid}" data-cc-theme="review"' in html
+        assert html.count(f'data-tab-target="{pid}"') == 1
+    # Ledger (musings) is the landing sub-tab: first of the review row.
+    musings = html.index('data-tab-target="musings"')
+    triage = html.index('data-tab-target="triage"')
+    journal = html.index('data-tab-target="journal"')
+    assert musings < triage < journal
+    # Companies keeps exactly its company-shaped sub-tabs.
+    for pid in ("holding", "discovery", "diet"):
+        assert f'data-tab-target="{pid}" data-cc-theme="companies"' in html
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +361,7 @@ def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
         "ledger",
         "triggers",
         "health",
+        "review",
     }
     # PR9 — readable ritual-vocabulary aliases (the palette keeps canonical ids).
     assert _LEGACY_PANEL_REDIRECTS["ledger"] == "musings"
@@ -359,6 +395,9 @@ def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
     assert _LEGACY_PANEL_REDIRECTS["companies"] == "holding"
     assert _LEGACY_PANEL_REDIRECTS["ask"] == "explore"
     assert _LEGACY_PANEL_REDIRECTS["system"] == "provenance"
+    # navigation_ia — the Review section name lands on its Ledger landing.
+    assert _LEGACY_PANEL_REDIRECTS["review"] == "musings"
+    assert "review:" in SHELL_JS.replace("'", "")
     # The drawer-section legacy ids also auto-open the drawer on arrival.
     assert "DRAWER_OPENERS = { budget: 1, actions: 1 }" in SHELL_JS
 
@@ -575,30 +614,30 @@ def test_sub_tab_buttons_carry_their_section() -> None:
     assert 'data-tab-target="provenance" data-cc-theme="system"' in html
 
 
-def test_synthesis_subtab_sits_right_after_performance() -> None:
-    """UX round 4: the portfolio-level synthesis (thesis rollup · exposure ·
-    next-dollar distribution · lens memo) surfaced as its own lazy sub-tab,
-    placed immediately after Performance — it was a buried strip at the bottom
-    of the Performance fragment."""
+def test_synthesis_lands_the_portfolio_section() -> None:
+    """navigation_ia §2.1: Synthesis (thesis health + allocation) is the
+    Portfolio section's FIRST sub-tab — the landing view. Performance is an
+    outcome, not the front door; it sits second, ahead of the record tabs."""
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
     assert 'data-endpoint="/api/panel/portfolio_synthesis"' in html
     # The trailing quote keeps "portfolio" from matching "portfolio_synthesis".
     perf = html.index('data-tab-target="portfolio"')
     synth = html.index('data-tab-target="portfolio_synthesis"')
     decisions = html.index('data-tab-target="decisions_record"')
-    assert perf < synth < decisions
+    assert synth < perf < decisions
 
 
-def test_risk_subtab_sits_between_performance_and_synthesis() -> None:
+def test_risk_subtab_sits_right_after_performance() -> None:
     """L5: the whole-book Risk cockpit is its own lazy sub-tab, grouped with
-    Performance (same pillar) — placed right after it, before Synthesis."""
+    Performance (same pillar) — right after it, both behind the Synthesis
+    landing tab (navigation_ia §2.1)."""
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
     assert 'data-endpoint="/api/panel/portfolio_risk"' in html
     assert 'data-tab-target="portfolio_risk" data-cc-theme="portfolio"' in html
     perf = html.index('data-tab-target="portfolio"')
     risk = html.index('data-tab-target="portfolio_risk"')
     synth = html.index('data-tab-target="portfolio_synthesis"')
-    assert perf < risk < synth
+    assert synth < perf < risk
 
 
 def test_content_width_is_wide() -> None:
@@ -756,11 +795,12 @@ def test_hashless_boot_restores_last_tab_within_the_session() -> None:
 
 def test_shell_js_prefetch_and_warm_start() -> None:
     """S14: hover on a section/sub-tab button warms its landing panel; after
-    first paint an idle pass warms Portfolio (the tracker round-trip) and Ask.
-    In-flight fetches are shared so activation never double-fetches."""
+    first paint an idle pass warms Portfolio's landing (Synthesis — the
+    tracker round-trip) and Ask. In-flight fetches are shared so activation
+    never double-fetches."""
     assert "function prefetchPanel" in SHELL_JS
     assert "'.cc-theme-tab, .cc-tab[data-tab-target]'" in SHELL_JS
-    assert "WARM_PANELS = ['portfolio', 'explore']" in SHELL_JS
+    assert "WARM_PANELS = ['portfolio_synthesis', 'explore']" in SHELL_JS
     assert "requestIdleCallback" in SHELL_JS
     assert "INFLIGHT" in SHELL_JS
 

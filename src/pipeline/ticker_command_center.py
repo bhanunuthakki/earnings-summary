@@ -515,7 +515,7 @@ def render_notes_drawer_fragment(repo_root: Path, ticker: str | None = None) -> 
     list. Ticker-scoped (Holding tab open) it also carries that name's recent
     alerts — the content the holding page's PR4 Notes drawer held — so nothing
     the analyst used to see there is lost. The full lifecycle UI (resolve ·
-    reclassify · supersede) stays on Companies → Journal; this drawer is
+    reclassify · supersede) stays on Review → Journal; this drawer is
     capture + recall without leaving the current screen."""
     t = ticker.strip().upper() if ticker and ticker.strip() else None
     parts = [_quick_add_form(t)]
@@ -534,7 +534,7 @@ def render_notes_drawer_fragment(repo_root: Path, ticker: str | None = None) -> 
         parts.append(_notes_rail_section(notes))
     parts.append(
         '<p class="cc-notes-foot">Resolve · reclassify · supersede live in '
-        '<a href="/#journal">Companies → Journal</a>.</p>'
+        '<a href="/#journal">Review → Journal</a>.</p>'
     )
     return "".join(parts)
 

@@ -1,4 +1,4 @@
-"""Companies → Triage panel — the dedicated home for parked comments (S11).
+"""Review → Triage panel — the dedicated home for parked comments (S11).
 
 The comment classifier is closed under no-fit (Instrument Paradigm §1): a
 directive it can't map to an actionable router lands at the ``needs_triage``

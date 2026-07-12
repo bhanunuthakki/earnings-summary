@@ -23,8 +23,9 @@ banner LEADS the page (it auto-starts on open, since the whole page reads from
 the tracker); tracker up but an analytics endpoint failing → the other sections
 still render and the failed ones are named in a footnote. The window controls
 ride in the Performance panel header (the chart they drive), not a standalone
-top bar. The Synthesis tab never shows the offline card — its panels fall back
-to equal-weighted readings and say so in their sub-lines.
+top bar. The Synthesis tab — the Portfolio section's landing tab since the
+navigation_ia.md reorder — also leads with the offline banner when the tracker
+is down; its panels still fall back to equal-weighted readings below it.
 
 Reuses the dark panel/table/kpi-strip CSS vocabulary the shell already defines;
 the fragment-local additions (legend chips, allocation bars, the benchmark
@@ -254,6 +255,18 @@ def compose_portfolio_page(
 # already-parsed PortfolioAnalytics — no network, no benchmark math.
 # ---------------------------------------------------------------------------
 
+# Tracker-offline banner rules, shared by Performance (always) and Synthesis
+# (when the tracker is down — navigation_ia.md §2.1: a landing page must
+# self-report its degradation, not silently fall back to equal-weight). Its own
+# <style> block so each fragment ships it independently of the big sheets.
+_TRACKER_BANNER_CSS = """<style>
+/* Tracker-offline banner: the page's data source is down, so this LEADS the
+   page (the start control is prominent), never a buried bottom card. */
+.pf-tracker-banner { border-left: 3px solid var(--warn); }
+.pf-tracker-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin: 12px 0 0; }
+</style>"""
+
 # Styling only the Performance fragment needs; everything else reuses the
 # shell's panel/kpi/table vocabulary. Colors key off the shared token variables
 # so a palette change in ui/tokens.py propagates here untouched. (The Synthesis
@@ -309,12 +322,7 @@ _ANALYTICS_CSS = """<style>
   white-space: normal; display: none; }
 .pf-info:hover .pf-info-pop, .pf-info:focus .pf-info-pop,
 .pf-info:focus-within .pf-info-pop { display: block; }
-/* Tracker-offline banner: the page's data source is down, so this LEADS the
-   page (the start control is prominent), never a buried bottom card. */
-.pf-tracker-banner { border-left: 3px solid var(--warn); }
-.pf-tracker-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  margin: 12px 0 0; }
-</style>"""
+</style>""" + _TRACKER_BANNER_CSS
 
 # Styling for the Synthesis fragment: the rollup/exposure insights grid and
 # the next-dollar distribution rows. Same token-variable discipline as
@@ -999,9 +1007,11 @@ def _offline_reason(error: str | None) -> str:
 def render_portfolio_synthesis_panel(db_path: Path, *, api_url: str | None = None) -> str:
     """The Portfolio → Synthesis tab fragment. Fetches the live book once (the
     exposure weighting and the next-dollar model prefer live position weights
-    and fall back to equal-weight when the tracker is down — no offline card
-    here, Performance carries it) plus the cached ``cross_portfolio_synthesis``
-    lens memo, then assembles the page."""
+    and fall back to equal-weight when the tracker is down) plus the cached
+    ``cross_portfolio_synthesis`` lens memo, then assembles the page. As the
+    section's LANDING tab (navigation_ia.md §2.1) it now leads with the
+    tracker-offline banner when the live fetch failed — a front door must
+    say its weights are degraded, not silently show equal-weight."""
     # Lazy imports keep the analytical builder out of this module's import graph
     # until the panel is actually requested.
     from pipeline.analytical_dashboard import build_analytical_dashboard
@@ -1016,10 +1026,15 @@ def render_portfolio_synthesis_panel(db_path: Path, *, api_url: str | None = Non
 def compose_synthesis_page(db_path: Path, live: LivePortfolio, synthesis: str) -> str:
     """Page assembly over an already-fetched live book + lens-memo fragment
     (testable without network; the insight panels read the DB themselves):
-    the rollup/exposure grid, then the next-dollar distribution full-width,
-    then the memo."""
+    the tracker-offline banner when the live book is unavailable (landing-tab
+    honesty — the exposure/next-dollar panels below are equal-weighted then),
+    the rollup/exposure grid, the next-dollar distribution full-width, then
+    the memo."""
     grid = "".join(p for p in (_thesis_rollup_panel(db_path), _exposure_panel(db_path, live)) if p)
     parts: list[str] = [_INSIGHTS_CSS]
+    if not live.available:
+        parts.append(_TRACKER_BANNER_CSS)
+        parts.append(_tracker_offline_banner(live))
     if grid:
         parts.append(f'<div class="pf-insights">{grid}</div>')
     parts.append(render_next_dollar_panel(db_path, live))
