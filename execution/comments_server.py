@@ -1354,14 +1354,48 @@ def create_app(
             mimetype="text/html",
         )
 
-    # ----- PANEL LATENCY METRICS (S14) -----
+    # ----- PANEL LATENCY METRICS (S14) + ACTIVATION COUNTS (navigation_ia §5) -----
     # The shell's loader POSTs one sample per panel activation/refresh
-    # (fetch/render/total ms + which cache path served it). In-memory ring
-    # only — perceived-latency telemetry for a single-operator localhost app
-    # is diagnostics, not data; a DB table would outlive its usefulness.
+    # (fetch/render/total ms + which cache path served it). Latency stays an
+    # in-memory ring — perceived-latency telemetry for a single-operator
+    # localhost app is diagnostics, not data. The activation COUNT, though, is
+    # data (instrument-first: "does the owner actually walk this surface?"),
+    # so user-perceived activations (cold|swr — not prefetch/revalidate, which
+    # are speculative/background) also bump a durable (panel_id, day) counter.
     # Surfaced in System → Data Cache (the panel fetches the GET aggregate).
     panel_metrics: deque[dict[str, object]] = deque(maxlen=500)
     metric_cache_modes = frozenset({"cold", "swr", "prefetch", "revalidate"})
+    activation_cache_modes = frozenset({"cold", "swr"})
+
+    def _bump_activation_count(panel: str) -> None:
+        """UPSERT +1 for (panel, today) — lazy DDL so a fresh init_db database
+        works without alembic (0147 records the schema lineage). Never raises:
+        metrics must never break the shell."""
+        try:
+            conn = _open_db()
+            try:
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS panel_activation_counts ("
+                    " panel_id TEXT NOT NULL, day TEXT NOT NULL,"
+                    " count INTEGER NOT NULL DEFAULT 0,"
+                    " PRIMARY KEY (panel_id, day))"
+                )
+                conn.execute(
+                    "INSERT INTO panel_activation_counts (panel_id, day, count)"
+                    " VALUES (?, ?, 1)"
+                    " ON CONFLICT(panel_id, day) DO UPDATE SET count = count + 1",
+                    (panel, datetime.now(UTC).strftime("%Y-%m-%d")),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            print(
+                json.dumps(
+                    {"event": "panel_activation_count_failed", "panel": panel, "error": str(exc)}
+                ),
+                file=sys.stderr,
+            )
 
     @app.route("/api/metrics/panel", methods=["POST", "OPTIONS"])
     def panel_metrics_post():
@@ -1394,6 +1428,8 @@ def create_app(
                 "at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
             }
         )
+        if cache in activation_cache_modes:
+            _bump_activation_count(panel[:40])
         return ("", 204)
 
     @app.route("/api/metrics/panel", methods=["GET"])
@@ -1428,11 +1464,28 @@ def create_app(
         # The headline: what a tab activation FEELS like (cold first hits vs
         # the cache-served paths). `revalidate` is background work — excluded.
         perceived = [v for (_panel, c), vals in groups.items() if c != "revalidate" for v in vals]
+        # Durable per-panel activation totals (navigation_ia §5) — unlike the
+        # latency ring these survive restarts; absent table reads as empty
+        # (fresh DB before the first POST creates it).
+        activations: dict[str, int] = {}
+        try:
+            conn = _open_db()
+            try:
+                cur = conn.execute(
+                    "SELECT panel_id, SUM(count) AS n FROM panel_activation_counts"
+                    " WHERE day >= date('now', '-30 days') GROUP BY panel_id ORDER BY n DESC"
+                )
+                activations = {str(r["panel_id"]): int(r["n"]) for r in cur.fetchall()}
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            activations = {}
         return {
             "rows": rows,
             "samples": len(panel_metrics),
             "perceived_p50_ms": _p(perceived, 0.50) if perceived else None,
             "perceived_p95_ms": _p(perceived, 0.95) if perceived else None,
+            "activations_30d": activations,
         }
 
     @app.route("/analytical", methods=["GET"])

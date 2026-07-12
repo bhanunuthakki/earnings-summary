@@ -534,7 +534,7 @@ Budget gating is **DB, not env**: `llm_budgets`/`llm_budget_alerts` (migration 0
 - Empty agenda: "No investor days on the calendar — these land as the IR-events feed records them."
 - Pre-0095 DB (no `signals` table): both empty states, no 500. Diet rows never appear in the Inbox (no decay/veto).
 
-## Journal (Companies → Journal)
+## Journal (Review → Journal)
 **Reach:** `/#journal`. Fragment `GET /api/panel/journal[?ticker=&kind=&status=&fragment=list|reconcile]`. **Preconditions:** server; `analyst_notes` (0074), links 0093.
 **Renders (top→bottom):** `<h2>Journal</h2>`; new-note form (textarea placeholder "New note… (a watch item, a question to answer, an assumption to check)", kind select, ticker input placeholder "TICKER" title "Blank = portfolio-level note", "Add note" primary). Pending-reconciliation strip (only when non-empty): warn chip "pending reconciliation" + "N open note(s) whose linked object concluded", warn-well cards with body, "decision/position #id · label — conclusion" line, buttons "Resolve with conclusion" and "Keep open (unlink)". Filter row: ticker input · kind select ("any kind"+NOTE_KINDS) · status select (open/resolved/superseded/archived/all, default open) · "Filter" button · count span. Note list: owner cards (kind chip · ticker sym or PORTFOLIO chip · colored status · date · source · anchor `@ type · key` · linked-object chips `→ decision #7` mono, warn-toned + "— conclusion" when concluded, "· auto-resolve" suffix) with body prose, resolution line "↳ …" or "supersedes note #N", and (open notes only) action row: Resolve · Supersede · Archive · reclassify select · Link controls (target select grouped Decisions/Position stints + "auto-resolve" checkbox + Link button; or Unlink when linked). Below owner notes: collapsed `<details>` "Advisor synthesis — N machine-authored memo(s)" silo with recessed memo cards ("Advisor memo" chip, body, "Open in Memos" link `#advisor_memos`, Archive). Footer hint: "Resolve closes an item … Superseded and archived notes are kept forever — memory is the point."
 
@@ -558,7 +558,7 @@ Budget gating is **DB, not env**: `llm_budgets`/`llm_budget_alerts` (migration 0
 - All-synthesis result: owner silo shows "No notes of your own match this filter."
 - Missing/pre-0074 DB → empty state, no 500. Reconcile strip absent entirely when nothing pending.
 
-## Triage (Companies → Triage)
+## Triage (Review → Triage)
 **Reach:** `/#triage`. Fragment `GET /api/panel/triage[?fragment=list]`. **Preconditions:** server; `analyst_notes`; rows = `source='comment'` notes with `context_json['intent']=='needs_triage'`.
 **Renders (top→bottom):** panel_toolbar "Triage" with "N open" chip; sub-copy "Comments the classifier could not map to an actionable router (unmappable or conditional directives) park here instead of being force-bucketed. Route each to the real intent it meant, resolve it once handled, or dismiss it." Living-grid filter bar ("Filter by name / anchor / text…", "N parked") + `.p-table`: sortable When/Name/Anchor · Comment (truncated ≤160 chars as a button, title "Open detail") · Disposition cell ("Route to…" select with intents Question/Thesis edit/Structured edit/Drop KPI/Extract KPI/Curate peers/Data fix/Rewrite section + Resolve + Dismiss buttons). Hidden right-rail drill-in drawer (`CCOverlay`, role=dialog, aria-modal, focus-trap): "Parked comment" h3 + × close, mono meta line (ticker/PORTFOLIO · anchor · report DATE · tab · filed DATE), quoted selected-text block, full body (textContent, pre-wrap), and the same Route/Resolve/Dismiss action row.
 

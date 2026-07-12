@@ -24,15 +24,17 @@ Design — thin shell + lazy panels:
   likely-next panels (Portfolio's tracker round-trip especially). Each
   activation's fetch/render timings POST to ``/api/metrics/panel`` and read
   back in System → Data Cache.
-* **Four primary sections + a System icon (UX9b over the PR2 IA)**: the top
-  bar's nav carries Home / Companies / Ask / Portfolio; System demoted to a
-  top-right icon button beside ⌘K and ⚙ Settings (same ``data-theme-target``
-  contract, so its sub-tabs render exactly as before once opened). Only the
-  active section's sub-tab row renders below the bar (single-tab sections
-  render none). A Ctrl/Cmd+K — or Ctrl+Space — command palette jumps to
-  tickers, tabs, actions, open journal notes, and saved views; anything else
-  you type hands off to the Ask tab as a question. Legacy hashes (and the
-  section names themselves) remap — see ``_LEGACY_PANEL_REDIRECTS``.
+* **Four primary sections + a System icon (navigation_ia.md over UX9b)**: the
+  top bar's nav carries Today / Companies / Portfolio / Review; System stays a
+  top-right icon button beside ⌘K and ⚙ Settings, and Ask is a HIDDEN section
+  (``_HIDDEN_NAV_SECTIONS``) — full section behavior (panels, deep links,
+  palette entry, goAsk/goView handoffs) but no top-bar button; it is reached
+  via the dock's ⇗ pop-out, the palette, ``data-ask-q`` doorways, and
+  ``#explore``. Only the active section's sub-tab row renders below the bar
+  (single-tab sections render none). A Ctrl/Cmd+K — or Ctrl+Space — command
+  palette jumps to tickers, tabs, actions, open journal notes, and saved
+  views; anything else you type hands off to Ask as a question. Legacy hashes
+  (and the section names themselves) remap — see ``_LEGACY_PANEL_REDIRECTS``.
 * **A shared ✎ Notes drawer in the top bar**: quick-add (kind · ticker ·
   body → ``POST /api/notes``) + the open-notes list, lazy-fetched from
   ``GET /api/panel/notes_drawer`` on every open; when the Holding tab is
@@ -98,15 +100,16 @@ from ui.source_chip import SOURCE_CHIP_JS
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
 
-# Four primary sections + System-as-icon (UX9b over the PR2 five-section IA):
-# the top bar's nav carries Home · Companies · Ask · Portfolio; System (the
-# diagnostics surfaces) demoted to a top-right icon button in the utility
-# cluster — it stays a full section (sub-tab row, deep links, palette entry)
-# once opened. The active section's sub-tabs render in ONE row below the bar
-# (sections with a single sub-tab suppress the row entirely, so Home and Ask
-# have zero secondary chrome). "Governance" demoted into System alongside the
-# settings drawer; "Research" split into Home (the cockpit) / Companies
-# (per-name work) / Ask (the NL+ViewSpec surface).
+# Four primary sections + System-as-icon + Ask-as-hidden (navigation_ia.md over
+# the UX9b IA): the top bar's nav carries Today · Companies · Portfolio ·
+# Review; System (the diagnostics surfaces) stays a top-right icon button in
+# the utility cluster, and Ask keeps full section behavior with NO top-bar
+# button at all (_HIDDEN_NAV_SECTIONS — reached via dock ⇗ / palette /
+# data-ask-q doorways / #explore). Review is the ritual wing: the Ledger +
+# Triage + Journal re-parented out of Companies with panel ids unchanged. The
+# active section's sub-tabs render in ONE row below the bar (sections with a
+# single sub-tab suppress the row entirely, so Today and Ask have zero
+# secondary chrome).
 #
 # Sub-tab entries keep the original shape — (panel_id, label, endpoint,
 # is_picker, picker_required) — and PANEL IDS ARE UNCHANGED, so every
@@ -117,7 +120,7 @@ _SubTab = tuple[str, str, str | None, bool, bool]
 _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
     (
         "home",
-        "Home",
+        "Today",
         (("overview", "Overview", None, False, False),),
     ),
     (
@@ -134,17 +137,6 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
             # Discovery: Discovery sources NEW names, Diet curates signal on the
             # names you already track.
             ("diet", "Diet", "/api/panel/diet", False, False),
-            # The analyst journal's lifecycle home (P4.5): list / filter /
-            # resolve / reclassify / supersede over analyst_notes.
-            ("journal", "Journal", "/api/panel/journal", False, False),
-            # The parked-comment disposition queue (S11): comments the classifier
-            # couldn't route (`needs_triage`) — route / resolve / dismiss. A lens
-            # over the same analyst_notes spine the Journal reads.
-            ("triage", "Triage", "/api/panel/triage", False, False),
-            # The Ledger (capture program): the captured stream-of-consciousness
-            # read-back + at-desk quick-capture. Telegram is the primary mouth;
-            # this is the desk mouth + the dogfood read-back (Wave A).
-            ("musings", "Ledger", "/api/panel/musings", False, False),
         ),
     ),
     (
@@ -158,6 +150,12 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
         "portfolio",
         "Portfolio",
         (
+            # navigation_ia.md §2.1 — Synthesis (thesis health + allocation)
+            # LANDS the section; Performance is an outcome, not the front door.
+            # UX round 4 — the portfolio-level reading layer surfaced out of
+            # Performance's bottom strip: thesis rollup + sector exposure, the
+            # next-dollar allocation distribution, the cross-portfolio lens memo.
+            ("portfolio_synthesis", "Synthesis", "/api/panel/portfolio_synthesis", False, False),
             ("portfolio", "Performance", "/api/panel/portfolio", False, False),
             # L5 — the whole-book risk cockpit: book drawdown (max DD + underwater
             # curve + recovery), factor/style exposure rolled up from the
@@ -169,10 +167,6 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
             # per held name + the three cross-book passes. Read-only status
             # chips this PR; the REFUTE/ACCEPT/DEFER response loop is PR6.
             ("red_team", "Red Team", "/api/panel/red_team", False, False),
-            # UX round 4 — the portfolio-level reading layer surfaced out of
-            # Performance's bottom strip: thesis rollup + sector exposure, the
-            # next-dollar allocation distribution, the cross-portfolio lens memo.
-            ("portfolio_synthesis", "Synthesis", "/api/panel/portfolio_synthesis", False, False),
             # Fit v2 — the owner's durable target book (positioning_intents):
             # active target vs current readings, version history, and the
             # positioning coach with its propose→approve encode flow. The
@@ -186,6 +180,31 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
             # deterministic swap screen, and the durable memo record.
             ("advisor_memos", "Memos", "/api/panel/advisor_memos", False, False),
             ("holdings", "Triggers", "/api/panel/holdings", False, False),
+        ),
+    ),
+    (
+        # navigation_ia.md §2.1 — the system's memory of the owner, first-class:
+        # the three ritual surfaces re-parented out of Companies (panel ids
+        # UNCHANGED, so every #musings/#journal/#triage/#ledger link survives).
+        # The Ledger lands the section — it was genuinely buried before: the
+        # Companies sub-row (its only nav handle) is suppressed while a holding
+        # is open. Deliberately NOT split into cadence sub-pages — the one-page
+        # Ledger's scroll-to-bottom completion semantics match how the owner
+        # actually clears rituals (bounded packets, not standing drips).
+        "review",
+        "Review",
+        (
+            # The Ledger (capture program): the captured stream-of-consciousness
+            # read-back + at-desk quick-capture. Telegram is the primary mouth;
+            # this is the desk mouth + the dogfood read-back (Wave A).
+            ("musings", "Ledger", "/api/panel/musings", False, False),
+            # The parked-comment disposition queue (S11): comments the classifier
+            # couldn't route (`needs_triage`) — route / resolve / dismiss. A lens
+            # over the same analyst_notes spine the Journal reads.
+            ("triage", "Triage", "/api/panel/triage", False, False),
+            # The analyst journal's lifecycle home (P4.5): list / filter /
+            # resolve / reclassify / supersede over analyst_notes.
+            ("journal", "Journal", "/api/panel/journal", False, False),
         ),
     ),
     (
@@ -246,6 +265,10 @@ _LEGACY_PANEL_REDIRECTS: dict[str, str] = {
     "ledger": "musings",
     "triggers": "holdings",
     "health": "provenance",
+    # navigation_ia.md §6.3 — the Review section's name aliases to its landing
+    # panel (the Ledger), like the other section names above. Values here must
+    # be PANEL IDS (lookups don't chain; the guard test enforces it).
+    "review": "musings",
 }
 
 
@@ -433,15 +456,23 @@ _NOTES_DRAWER_HTML = (
 # change.
 _UTILITY_SECTIONS: frozenset[str] = frozenset({"system"})
 
+# Sections with NO top-bar presence at all (navigation_ia.md §2.1): full section
+# behavior — panels, sub-tab row, deep links, palette entry, goAsk/goView
+# handoffs — but no primary button. Ask lives here: it is a modality reached
+# via the dock's ⇗ pop-out, the ⌘K palette, data-ask-q doorways, and #explore,
+# not a destination. Distinct from _UTILITY_SECTIONS (which still render a
+# button, just as an icon — and _render_system_button supports exactly one).
+_HIDDEN_NAV_SECTIONS: frozenset[str] = frozenset({"ask"})
+
 
 def _render_section_nav(themes: tuple[tuple[str, str, tuple[_SubTab, ...]], ...]) -> str:
     """The primary section buttons, inline in the top bar — every section
-    except the utility-icon ones (System). The attribute contract
-    (``data-theme-target``) is unchanged from the theme era — the JS keys off
-    it, only the visual placement moved."""
+    except the utility-icon ones (System) and the hidden ones (Ask). The
+    attribute contract (``data-theme-target``) is unchanged from the theme
+    era — the JS keys off it, only the visual placement moved."""
     out = ['<nav class="cc-topnav" role="tablist">']
     for tid, tlabel, _subs in themes:
-        if tid in _UTILITY_SECTIONS:
+        if tid in _UTILITY_SECTIONS or tid in _HIDDEN_NAV_SECTIONS:
             continue
         out.append(
             f'<button class="cc-tab cc-theme-tab" type="button" role="tab" '
@@ -1460,7 +1491,9 @@ SHELL_JS = r"""
     // entries keep the canonical ids).
     ledger: 'musings',
     triggers: 'holdings',
-    health: 'provenance'
+    health: 'provenance',
+    // navigation_ia.md — the Review section name lands on its Ledger landing.
+    review: 'musings'
   };
   // Legacy panels that became settings-drawer sections (P3.4): their old
   // deep-links also auto-open the drawer after landing on Governance.
@@ -1593,7 +1626,7 @@ SHELL_JS = r"""
   var SKEL = {};            // panel id -> boot placeholder markup
   var INFLIGHT = {};        // cache key -> in-flight fragment promise
   var FRESH_MS = 30000;     // just-fetched window: skip revalidation
-  var WARM_PANELS = ['portfolio', 'explore'];
+  var WARM_PANELS = ['portfolio_synthesis', 'explore'];
 
   panels.forEach(function (p) {
     if (p.getAttribute('data-loaded') !== '1') {
@@ -1819,7 +1852,7 @@ SHELL_JS = r"""
       // While a specific holding is open (Holding panel + a ticker), suppress
       // the Companies sub-row for a clean reading view (UX9c) — the band's
       // combobox switches holdings, and the row returns on the no-ticker state
-      // / Discovery / Journal. Other sections show their row as usual.
+      // / Discovery / Diet. Other sections show their row as usual.
       var holdingOpen = (panelId === 'holding' && !!ticker);
       subnavs.forEach(function (n) {
         var theme = n.getAttribute('data-cc-theme');

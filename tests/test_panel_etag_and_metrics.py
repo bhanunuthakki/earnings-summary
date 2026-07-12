@@ -5,7 +5,9 @@ The ETag layer is an after_request hook — every 200-OK GET panel fragment
 carries a content ETag and `Cache-Control: no-cache`, and a matching
 If-None-Match revalidation comes back 304 with an empty body (the
 stale-while-revalidate client then keeps its cached copy). The metrics pair
-(`POST`/`GET /api/metrics/panel`) is a deque ring, no DB.
+(`POST`/`GET /api/metrics/panel`) is a deque ring for latency — plus, since
+navigation_ia §5 (instrument-first), a durable ``panel_activation_counts``
+(panel_id, day) counter bumped only by user-perceived activations (cold|swr).
 """
 
 from __future__ import annotations
@@ -128,6 +130,34 @@ def test_metrics_post_rejects_malformed(client: FlaskClient) -> None:
     # The null-total sample is held in the ring but aggregates to no row.
     assert agg["samples"] == 1
     assert agg["rows"] == []
+
+
+def test_activation_counts_persist_per_panel_per_day(client: FlaskClient, tmp_path: Path) -> None:
+    """navigation_ia §5: cold|swr samples bump the durable (panel_id, day)
+    counter — prefetch/revalidate are speculative/background and must NOT
+    count as visits. The GET aggregate surfaces the 30-day totals."""
+    samples = [
+        {"panel": "musings", "cache": "cold", "total_ms": 100},
+        {"panel": "musings", "cache": "swr", "total_ms": 10},
+        {"panel": "musings", "cache": "prefetch", "total_ms": 8},  # not a visit
+        {"panel": "musings", "cache": "revalidate", "total_ms": 90},  # background
+        {"panel": "portfolio_synthesis", "cache": "cold", "total_ms": 200},
+    ]
+    for s in samples:
+        assert client.post("/api/metrics/panel", json=s).status_code == 204
+    # Durable: the counter lives in the DB, not the ring.
+    conn = sqlite3.connect(str(tmp_path / "data" / "portfolio.db"))
+    try:
+        rows = dict(
+            conn.execute(
+                "SELECT panel_id, SUM(count) FROM panel_activation_counts GROUP BY panel_id"
+            ).fetchall()
+        )
+    finally:
+        conn.close()
+    assert rows == {"musings": 2, "portfolio_synthesis": 1}
+    agg = client.get("/api/metrics/panel").get_json()
+    assert agg["activations_30d"] == {"musings": 2, "portfolio_synthesis": 1}
 
 
 def test_source_calls_panel_carries_latency_readout(client: FlaskClient) -> None:

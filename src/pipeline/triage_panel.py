@@ -1,4 +1,4 @@
-"""Companies → Triage panel — the dedicated home for parked comments (S11).
+"""Review → Triage panel — the dedicated home for parked comments (S11).
 
 The comment classifier is closed under no-fit (Instrument Paradigm §1): a
 directive it can't map to an actionable router lands at the ``needs_triage``
@@ -97,7 +97,9 @@ def _route_select() -> str:
         f'<option value="{escape(i)}">{escape(_INTENT_LABELS.get(i, i))}</option>'
         for i in ROUTABLE_INTENTS
     )
-    return f'<select class="tri-route" data-act="route" title="Route to a real intent">{opts}</select>'
+    return (
+        f'<select class="tri-route" data-act="route" title="Route to a real intent">{opts}</select>'
+    )
 
 
 def _anchor_text(n: AnalystNoteRow) -> str:
