@@ -1391,7 +1391,9 @@ def create_app(
                 conn.close()
         except sqlite3.Error as exc:
             print(
-                json.dumps({"event": "panel_activation_count_failed", "panel": panel, "error": str(exc)}),
+                json.dumps(
+                    {"event": "panel_activation_count_failed", "panel": panel, "error": str(exc)}
+                ),
                 file=sys.stderr,
             )
 

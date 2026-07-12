@@ -271,7 +271,8 @@ _TRACKER_BANNER_CSS = """<style>
 # shell's panel/kpi/table vocabulary. Colors key off the shared token variables
 # so a palette change in ui/tokens.py propagates here untouched. (The Synthesis
 # fragment carries its own block — _INSIGHTS_CSS.)
-_ANALYTICS_CSS = """<style>
+_ANALYTICS_CSS = (
+    """<style>
 .pf-legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 2px 0 10px; font-size: var(--fs-body); }
 .pf-chip { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
 .pf-chip strong { color: var(--fg); font-variant-numeric: tabular-nums; }
@@ -322,7 +323,9 @@ _ANALYTICS_CSS = """<style>
   white-space: normal; display: none; }
 .pf-info:hover .pf-info-pop, .pf-info:focus .pf-info-pop,
 .pf-info:focus-within .pf-info-pop { display: block; }
-</style>""" + _TRACKER_BANNER_CSS
+</style>"""
+    + _TRACKER_BANNER_CSS
+)
 
 # Styling for the Synthesis fragment: the rollup/exposure insights grid and
 # the next-dollar distribution rows. Same token-variable discipline as

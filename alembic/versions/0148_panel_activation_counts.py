@@ -7,10 +7,11 @@ unfalsifiable. This table keeps only the count (panel_id, day) → n; the
 latency percentiles stay ephemeral. The POST handler upserts lazily with
 ``CREATE TABLE IF NOT EXISTS`` (a fresh init_db DB works without alembic), so
 this migration is the schema-lineage record with the stamped-DB guard
-(mirrors 0141's ``sa.inspect`` pattern).
+(mirrors 0141's ``sa.inspect`` pattern). Renumbered 0147→0148 at rebase time:
+the red-team wave landed its own 0147 on main first.
 
-Revision ID: 0147_panel_activation_counts
-Revises: 0146_positioning_budgets
+Revision ID: 0148_panel_activation_counts
+Revises: 0147_red_team_items
 Create Date: 2026-07-11
 """
 
@@ -22,8 +23,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0147_panel_activation_counts"
-down_revision: str | Sequence[str] | None = "0146_positioning_budgets"
+revision: str = "0148_panel_activation_counts"
+down_revision: str | Sequence[str] | None = "0147_red_team_items"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
