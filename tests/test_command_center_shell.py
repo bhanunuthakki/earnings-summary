@@ -56,10 +56,11 @@ def test_overview_rail_carries_unread_badge_and_inbox_js() -> None:
     assert "data-ix-badge" not in bare
 
 
-def test_overview_rail_mounts_upcoming_strip_above_the_inbox() -> None:
-    """The retired /digest page's one surviving feature: the compact
-    upcoming-earnings strip renders inside the rail, ABOVE the Inbox header.
-    Without it the rail renders exactly as before."""
+def test_overview_main_column_hoists_upcoming_strip_above_cockpit() -> None:
+    """PR3 (navigation_ia §4): the retired /digest page's one surviving
+    feature — the compact upcoming-earnings strip — is HOISTED from the rail
+    into the main column, after the since-last/continue placeholder and
+    before the cockpit; the rail keeps only the Inbox."""
     html = render_overview_panel(
         {"portfolio": [], "evaluation": []},
         coverage={},
@@ -67,7 +68,12 @@ def test_overview_rail_mounts_upcoming_strip_above_the_inbox() -> None:
         upcoming_html='<div class="up-strip">UP-MARKER</div>',
     )
     assert "UP-MARKER" in html
-    assert html.index('class="up-strip"') < html.index("ix-stream")
+    assert html.index('id="cc-today-bands"') < html.index('class="up-strip"')
+    assert html.index('class="up-strip"') < html.index("cc-cockpit-live")
+    # It's in the MAIN column, not the rail.
+    main_start = html.index('class="cc-home-main"')
+    rail_start = html.index('class="cc-home-rail"')
+    assert main_start < html.index('class="up-strip"') < rail_start
     # The rail links to the feed only — the digest link is gone.
     assert 'href="/feed"' in html
     assert "/digest" not in html
@@ -81,6 +87,22 @@ def test_overview_rail_mounts_upcoming_strip_above_the_inbox() -> None:
     assert 'data-ix-badge="home"' in no_strip
     # The strip's CSS ships with the shell stylesheet.
     assert ".up-strip {" in SHELL_CSS
+
+
+def test_overview_main_column_has_today_bands_placeholder() -> None:
+    """The empty ``#cc-today-bands`` placeholder (PR3) always renders in the
+    main column, right after open_loops — SHELL_JS fills it client-side
+    (since-last fetch + the continue-line) on Overview activation; a
+    JS-disabled or pre-migration load costs nothing and reserves no space.
+    Present with or without a rail (inbox_html)."""
+    html = render_overview_panel(
+        {"portfolio": [], "evaluation": []},
+        coverage={},
+        open_loops_html='<div class="cc-open-loops">LOOP-MARKER</div>',
+    )
+    assert html.index("LOOP-MARKER") < html.index('id="cc-today-bands"')
+    assert html.index('id="cc-today-bands"') < html.index("cc-cockpit-live")
+    assert '<div id="cc-today-bands"></div>' in html
 
 
 def test_render_shell_five_section_structure() -> None:
@@ -832,3 +854,32 @@ def test_ask_dock_is_persistent_shell_chrome() -> None:
     # Mode persists in localStorage; the thread tail in sessionStorage.
     assert "askDockMode" in html
     assert "cc-ask-dock-tail" in html
+
+
+def test_today_bands_js_wiring() -> None:
+    """PR3 (navigation_ia §4): SHELL_JS's single ``activate()`` choke-point
+    records "Continue where you left off" (every non-Overview activation
+    writes ``lastContext`` through CCState — never raw storage, preserving
+    the "SHELL_JS never touches localStorage/sessionStorage directly"
+    invariant); TODAY_BANDS_JS (inlined with the Overview fragment, since its
+    DOM persists across tab switches and a one-shot script would never
+    re-check) owns the ``ix-last-seen:overview`` stamp + the since-last
+    fetch, re-triggered on every reveal via IntersectionObserver — the same
+    idiom INBOX_JS uses for its own per-surface unread mark."""
+    assert "window.CCState.setJSON('lastContext'" in SHELL_JS
+    assert "if (panelId !== 'overview') {" in SHELL_JS
+    assert "localStorage" not in SHELL_JS  # the invariant this PR must preserve
+
+    from pipeline.command_center_shell import TODAY_BANDS_JS
+
+    assert "'ix-last-seen:overview'" in TODAY_BANDS_JS
+    assert "'/api/panel/since_last?since='" in TODAY_BANDS_JS
+    assert "IntersectionObserver" in TODAY_BANDS_JS
+    assert "getElementById('cc-today-bands')" in TODAY_BANDS_JS
+    assert "window.CCState.getJSON('lastContext')" in TODAY_BANDS_JS
+    html = render_overview_panel({"portfolio": [], "evaluation": []}, coverage={})
+    assert TODAY_BANDS_JS in html
+    assert html.index('id="cc-today-bands"') < html.index(TODAY_BANDS_JS[:40])
+    # lastContext is a namespaced, LOCAL (cross-session) CCState key — the
+    # KEYS contract, not a raw ad-hoc localStorage call.
+    assert "lastContext:  { store: 'local' }" in CC_STATE_JS

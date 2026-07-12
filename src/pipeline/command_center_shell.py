@@ -271,6 +271,84 @@ _LEGACY_PANEL_REDIRECTS: dict[str, str] = {
     "review": "musings",
 }
 
+# "Today" briefing bands (navigation_ia §4 PR3), inlined once with the
+# Overview fragment — plain string (not an f-string) so its braces survive
+# f-string assembly untouched, same idiom as SHELL_JS/INBOX_JS.
+#
+# Overview is server-inlined exactly ONCE (its DOM node persists across tab
+# switches; ``activate()`` only toggles ``hidden``), so a plain top-level
+# script here would run once at page load and never again — wrong for a band
+# meant to refresh on every LATER return to Home. INBOX_JS's own answer to
+# the same problem is the template: an IntersectionObserver on the band's
+# placeholder re-fires on every reveal (``hidden`` toggling changes layout,
+# so the observer sees a real intersection transition each time), so this
+# needs no hook into SHELL_JS's ``activate()`` at all for band 1.
+#
+# Band 1 ("Since you last looked", ``pipeline.since_last``) reads/writes the
+# ``ix-last-seen:overview`` localStorage stamp directly — the same raw
+# convention INBOX_JS uses for ``ix-last-seen:<surface>`` (cc_state.py
+# documents this as a deliberate NON-goal of the CCState store). Band 2
+# ("Continue where you left off") is pure client state via the CCState
+# ``lastContext`` key SHELL_JS's ``activate()`` writes on every non-Overview
+# activation. ``sinceLastCache`` holds the last-fetched band-1 HTML so a
+# same-session revisit inside the 6h window repaints it instead of blanking
+# it — only a genuinely new fetch (stamp >6h stale) replaces it.
+TODAY_BANDS_JS = r"""
+(function () {
+  if (window.__ccTodayBandsWired) return;
+  window.__ccTodayBandsWired = true;
+
+  var STAMP_KEY = 'ix-last-seen:overview';
+  var STALE_MS = 6 * 60 * 60 * 1000;
+  var CONTINUE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+  var sinceLastCache = '';
+
+  function continueLineHtml() {
+    var ctx = (window.CCState && window.CCState.getJSON)
+      ? window.CCState.getJSON('lastContext') : null;
+    if (!ctx || !ctx.panel || ctx.panel === 'overview') return '';
+    var age = Date.now() - (ctx.ts || 0);
+    if (!(age >= 0) || age > CONTINUE_MAX_AGE_MS) return '';
+    var hash = '#' + ctx.panel + (ctx.ticker ? '=' + encodeURIComponent(ctx.ticker) : '');
+    var label = ctx.ticker ? (ctx.ticker + ' · ' + ctx.panel) : ctx.panel;
+    return '<div class="cc-open-loops"><a class="cc-ol-line" href="' + hash + '">'
+      + 'Continue: ' + label + ' →</a></div>';
+  }
+
+  function paint(host) { host.innerHTML = sinceLastCache + continueLineHtml(); }
+
+  function refresh(host) {
+    paint(host);
+    var stamp = null;
+    try { stamp = localStorage.getItem(STAMP_KEY); } catch (e) { return; }
+    if (!stamp) {
+      // First visit ever: no window to summarize — just start the clock.
+      try { localStorage.setItem(STAMP_KEY, new Date().toISOString()); } catch (e) {}
+      return;
+    }
+    if (Date.now() - new Date(stamp).getTime() < STALE_MS) return;
+    fetch('/api/panel/since_last?since=' + encodeURIComponent(stamp))
+      .then(function (r) { return r.ok ? r.text() : ''; })
+      .then(function (html) {
+        sinceLastCache = html || '';
+        try { localStorage.setItem(STAMP_KEY, new Date().toISOString()); } catch (e) {}
+        paint(host);
+      })
+      .catch(function () {});
+  }
+
+  var host = document.getElementById('cc-today-bands');
+  if (!host) return;
+  if (typeof IntersectionObserver === 'undefined') { refresh(host); return; }
+  var io = new IntersectionObserver(function (entries) {
+    for (var i = 0; i < entries.length; i++) {
+      if (entries[i].isIntersecting) refresh(host);
+    }
+  });
+  io.observe(host);
+})();
+""".strip()
+
 
 def render_overview_panel(
     rows_by_list: dict[str, list[CockpitRow]],
@@ -282,14 +360,30 @@ def render_overview_panel(
     """The inlined Home tab: the Research cockpit (the landing answer to
     "which holding needs my attention today?") with the tier-coverage strip
     below it, and — when provided — the unified Inbox in a right-hand rail
-    (UX redesign PR3: what changed, beside what you hold), topped by the
-    compact upcoming-earnings strip (``upcoming_html``, the surviving piece
-    of the retired /digest page). ``open_loops_html`` (the ritual-debt band,
-    ``pipeline.open_loops``) renders ABOVE the cockpit — the owner's own
-    queues before market data. Reuses the existing public seams so there
-    is no second code path for any of this content. (The Ask dock is no
-    longer panel content — it renders once in the shell chrome, see
-    ``render_shell``, so it persists across tab switches.)"""
+    (UX redesign PR3: what changed, beside what you hold).
+
+    The "Today" briefing bands (navigation_ia §4 PR3), all additive, in the
+    main column, in this order:
+
+      1. ``open_loops_html`` (the ritual-debt band, ``pipeline.open_loops``) —
+         the owner's own queues before market data.
+      2/3. ``#cc-today-bands`` — an EMPTY placeholder ``TODAY_BANDS_JS``
+         (inlined right after it) fills client-side, on every reveal of
+         Overview (an IntersectionObserver, not a one-shot — Overview's DOM
+         persists across tab switches): "Since you last looked" (fetched
+         from ``GET /api/panel/since_last`` once the ``ix-last-seen:overview``
+         localStorage stamp is >6h stale; ``pipeline.since_last``) followed by
+         "Continue where you left off" (purely from the ``lastContext``
+         CCState key SHELL_JS's ``activate()`` writes — no server round-trip).
+         Server-rendered empty so a JS-disabled or first-ever load costs
+         nothing and reserves no space.
+      4. ``upcoming_html`` — the compact upcoming-earnings strip, HOISTED here
+         from the rail (the surviving piece of the retired /digest page).
+
+    Reuses the existing public seams so there is no second code path for any
+    of this content. (The Ask dock is no longer panel content — it renders
+    once in the shell chrome, see ``render_shell``, so it persists across tab
+    switches.)"""
     from pipeline.analytical_dashboard_html import render_tier_coverage_strip
     from pipeline.research_cockpit import render_research_cockpit
 
@@ -297,7 +391,11 @@ def render_overview_panel(
     # self-refresh every 90s via HTMX, re-rendering the whole cockpit fragment
     # in place (GET /api/cockpit) — no manual reload, no per-cell polling.
     main = (
-        (open_loops_html or "") + '<div id="cc-cockpit-live" hx-get="/api/cockpit" '
+        (open_loops_html or "")
+        + '<div id="cc-today-bands"></div>'
+        + f"<script>{TODAY_BANDS_JS}</script>"
+        + (upcoming_html or "")
+        + '<div id="cc-cockpit-live" hx-get="/api/cockpit" '
         'hx-trigger="every 90s" hx-swap="innerHTML">'
         + render_research_cockpit(rows_by_list)
         + "</div>"
@@ -310,7 +408,6 @@ def render_overview_panel(
     # localStorage mark and wires the cards' hover ✓/✕ quick actions.
     rail = (
         '<aside class="cc-home-rail">'
-        f"{upcoming_html or ''}"
         '<div class="cc-home-rail-head">'
         '<h2>Inbox<span class="ix-badge" data-ix-badge="home" hidden></span></h2>'
         '<span class="cc-home-rail-links"><a href="/feed">full feed</a></span></div>'
@@ -1865,6 +1962,18 @@ SHELL_JS = r"""
     // ticker-scoped panels so the last holding survives a detour through
     // other tabs. The boot path replays these on a hash-less reload.
     window.CCState.set('tab', panelId);
+    // "Continue where you left off" substrate (PR3): every NON-overview
+    // activation is a "left off" moment. TODAY_BANDS_JS (inlined with the
+    // Overview fragment — see render_overview_panel) reads this back and
+    // repaints on its own visibility-driven refresh; nothing to do here
+    // when panelId IS overview.
+    if (panelId !== 'overview') {
+      window.CCState.setJSON('lastContext', {
+        ticker: ticker || null,
+        panel: panelId,
+        ts: Date.now(),
+      });
+    }
     // ``data-picker`` panels are ticker-scoped: pass the hash ticker straight to
     // loadBody (the in-fragment combobox supplies it via the #holding=<T> hash).
     var isPicker = panel.getAttribute('data-picker') === '1';

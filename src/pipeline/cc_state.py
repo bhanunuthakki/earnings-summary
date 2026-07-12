@@ -43,6 +43,12 @@ CC_STATE_JS = r"""
        askTail       session  dock thread tail JSON      (dock → dock, across reloads)
        dockMode      local    min|float|split            (dock; legacy askDockMode/askDockOpen)
        drawer:<ep>   local    settings-drawer section open ('1'/'0'; legacy cc-drawer-sec:<ep>)
+       lastContext   local    {ticker,panel,ts} for "Continue where you left off"
+                              (navigation_ia §4 PR3) — written on every activation of a
+                              NON-overview panel, read only by Overview's activation
+                              to render its doorway line. 'local' (not session) so the
+                              doorway survives a fresh tab, unlike section/tab/ticker
+                              above, which are deliberately session-scoped.
        panel:<id>[:T] session  SWR fragment cache {etag,html,ts} via CCState.panel.*
 
      API:
@@ -76,7 +82,10 @@ CC_STATE_JS = r"""
       { k: 'askDockMode' },
       // The pre-dock boolean: open -> float, else min.
       { k: 'askDockOpen', map: function (v) { return v === '1' ? 'float' : 'min'; } }
-    ] }
+    ] },
+    // "Continue where you left off" (navigation_ia §4 PR3): local, not
+    // session — the whole point is surviving into a fresh tab/reload.
+    lastContext:  { store: 'local' }
   };
 
   function spec(key) {

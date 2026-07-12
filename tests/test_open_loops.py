@@ -192,5 +192,13 @@ def test_overview_panel_prepends_band() -> None:
     html = render_overview_panel({}, None, open_loops_html='<div class="cc-open-loops">BAND</div>')
     assert "BAND" in html
     assert html.index("BAND") < html.index("cc-cockpit-live")
-    # Without the band the panel is byte-identical to the pre-band contract.
-    assert "cc-open-loops" not in render_overview_panel({}, None)
+    # Without the band, no open-loops markup is rendered in the DOCUMENT BODY
+    # — TODAY_BANDS_JS (navigation_ia §4 PR3, always inlined) reuses the
+    # ``.cc-open-loops``/``.cc-ol-line`` classes at runtime for its own
+    # "Continue where you left off" line, so its JS *source* legitimately
+    # contains the literal substring; strip that one known script before
+    # asserting the body itself stayed band-free.
+    from pipeline.command_center_shell import TODAY_BANDS_JS
+
+    bare = render_overview_panel({}, None).replace(f"<script>{TODAY_BANDS_JS}</script>", "")
+    assert "cc-open-loops" not in bare

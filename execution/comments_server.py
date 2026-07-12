@@ -856,6 +856,26 @@ def create_app(
 
         return Response(render_cron_health_live_body(db_path), mimetype="text/html")
 
+    @app.route("/api/panel/since_last", methods=["GET"])
+    def since_last_fragment():
+        """The "since you last looked" headline band (navigation_ia §4 PR3),
+        fetched by the shell only when the client's ``ix-last-seen:overview``
+        localStorage stamp is >6h stale. ``?since=<ISO 8601>`` is required —
+        the client always supplies its own stamp, so a missing/unparseable
+        value is a 400, not a silent "now" fallback. ``now`` is always the
+        server clock. Naive-UTC per the repo convention; an aware value is
+        normalized rather than rejected."""
+        from pipeline.since_last import build_since_last, render_since_last_band
+
+        raw_since = request.args.get("since", "")
+        try:
+            since = datetime.fromisoformat(raw_since)
+        except (ValueError, TypeError):
+            return ({"error": "since=<ISO 8601 timestamp> required"}, 400)
+        now = datetime.now(UTC).replace(tzinfo=None)
+        story = build_since_last(db_path, since=since, now=now)
+        return Response(render_since_last_band(story), mimetype="text/html")
+
     @app.route("/api/overview", methods=["GET"])
     def overview_api():
         """Cross-ticker analytical overview as JSON: trigger ladder, insider
