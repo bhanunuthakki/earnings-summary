@@ -557,6 +557,17 @@ def create_app(
                     annotated_decision_id = annotate_latest_pending(text, db_path=db_path)
             except Exception:
                 pass
+        # The answer tap: a question-shaped capture gets answered NOW via the
+        # unified ask engine and the answer is stored on the note, so the feed
+        # card (re-fetched right after this POST) paints it with no LLM on the
+        # render path. Fire-and-forget — never blocks the capture that landed.
+        ledger_answer: str | None = None
+        if result.status == "landed" and result.note_id is not None:
+            from onmymind.respond import answer_capture
+
+            ledger_answer = answer_capture(
+                result.note_id, repo_root=repo_root, db_path=db_path
+            )
         return {
             "status": result.status,
             "note_id": result.note_id,
@@ -565,6 +576,7 @@ def create_app(
             "wondering_task_id": wondering_task_id,
             "pledge_challenge": pledge_challenge,
             "annotated_decision_id": annotated_decision_id,
+            "answer": ledger_answer,
         }
 
     @app.route("/api/research/task/<int:task_id>/run", methods=["POST", "OPTIONS"])

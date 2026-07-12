@@ -485,6 +485,75 @@ def test_poll_once_unknown_command_replies_instead_of_vanishing(
     assert notes.list_notes(kind="musing", db_path=db_path) == []
 
 
+def test_poll_once_answers_a_question(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A question sent to the bot gets ANSWERED in-thread via the shared answer
+    core (the overhaul) — not just 'Captured.'. The engine is faked so no live
+    model call runs; the real answer_capture plumbing (store + return) executes."""
+    from collections.abc import Iterator
+
+    updates = [
+        telegram.Update(update_id=80, kind="text", chat_id=1, text="What's my cost basis on MELI?")
+    ]
+    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+
+    def _stub(*_a: object, **_k: object) -> Iterator[dict[str, object]]:
+        yield {"type": "final", "text": "Your MELI cost basis is $1,240.", "route": "narrative"}
+
+    monkeypatch.setattr("onmymind.respond.respond_turn", _stub)
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert counts.get("landed") == 1
+    assert any("cost basis is $1,240" in s for s in sent)  # the answer reached the thread
+    musings = notes.list_notes(kind="musing", db_path=db_path)
+    assert (musings[0].context or {}).get("ledger_answer", {}).get("text") == (
+        "Your MELI cost basis is $1,240."
+    )
+
+
+def test_poll_once_musing_not_answered(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plain reflection (not a question) never spins the engine and gets no
+    answer message — only the ordinary capture confirm."""
+    from collections.abc import Iterator
+
+    updates = [telegram.Update(update_id=81, kind="text", chat_id=1, text="MELI looks cheap here")]
+    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    engine_calls = {"n": 0}
+
+    def _stub(*_a: object, **_k: object) -> Iterator[dict[str, object]]:
+        engine_calls["n"] += 1
+        yield {"type": "final", "text": "should not run", "route": "narrative"}
+
+    monkeypatch.setattr("onmymind.respond.respond_turn", _stub)
+    poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert engine_calls["n"] == 0  # the answer core self-gates before the engine
+    assert not any("should not run" in s for s in sent)
+
+
 def test_poll_once_start_command_still_greets(
     db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -22,6 +22,7 @@ from onmymind.feed import (
     load_feed,
     onmymind_enabled,
 )
+from onmymind.respond import is_answerable_capture
 from pipeline.worldview_panel import render_worldview_section, worldview_enabled
 from research.proposals import (
     ResearchProposal,
@@ -97,6 +98,18 @@ _PANEL_STYLE = """<style>
    sizing family as the capture box's own textarea. */
 .ledger-rewrite-ta, .ledger-steer-ta { width: 100%; min-height: 56px; resize: vertical;
   font-family: var(--sans); font-size: var(--fs-body); margin-bottom: var(--sp-2); }
+/* Queues (overhaul P4): the four machinery sections (research / reconcile /
+   worldview / stances) collapse into ONE block below the feed, so the tab reads
+   conversation-first. Closed by default; a count on the summary surfaces pending
+   work without re-inflating the wall of sections. Token-only. */
+.ledger-queues { margin-top: var(--sp-4); border-top: 1px solid var(--border); }
+.ledger-queues-sum { cursor: pointer; padding: var(--sp-3) 0; font-size: var(--fs-section); font-weight: 600; color: var(--fg); list-style: none; display: flex; align-items: baseline; gap: var(--sp-2); }
+.ledger-queues-sum::-webkit-details-marker { display: none; }
+.ledger-queues-sum::before { content: "\\25B8"; color: var(--muted); font-size: var(--fs-caption); }
+.ledger-queues[open] .ledger-queues-sum::before { content: "\\25BE"; }
+.ledger-queues-hint { font-size: var(--fs-caption); font-weight: 400; color: var(--muted); }
+.ledger-queues-count { font-size: var(--fs-caption); font-weight: 600; color: var(--accent); }
+.ledger-queues-body { padding-top: var(--sp-2); }
 </style>"""
 
 _CAPTURE_JS = """<script>(function(){
@@ -171,10 +184,17 @@ _CAPTURE_JS = """<script>(function(){
         ta.value='';
         if(res && (res.pledge_challenge || res.annotated_decision_id)){
           renderCoach(res);
+        } else if(res && res.answer){
+          if(st){ st.textContent='Answered'; }
         } else {
           var tag = (res && res.ticker) ? (' - '+res.ticker) : ((res && res.needs_ticker) ? ' - needs ticker' : '');
           if(st){ st.textContent='Captured'+tag; }
         }
+        // Refresh whichever feed is mounted: the capture feed (when the flag
+        // is on it replaces the plain Musings list) carries the just-stored
+        // inline answer, so the new card paints its answer without a reload.
+        var om=document.getElementById('onmymind-list');
+        if(om){ fetch('/api/panel/musings?fragment=onmymind').then(function(r){return r.text();}).then(function(h){ om.innerHTML=h; }); return; }
         var list=document.getElementById('ledger-list');
         if(list){ fetch('/api/panel/musings?fragment=list').then(function(r){return r.text();}).then(function(h){ list.innerHTML=h; }); }
       })
@@ -840,6 +860,23 @@ _ONMYMIND_STYLE = """<style>
 .om-brief-takeaways { margin: 0 0 var(--sp-2); padding-left: var(--sp-4); }
 .om-brief-line { margin: var(--sp-1) 0; }
 .om-brief-src { margin: var(--sp-2) 0 0; color: var(--muted); font-size: var(--fs-micro); }
+/* The inline answer (overhaul): the Ledger's response to a question-shaped
+   capture, generated once at capture time and stored on the note. A quiet
+   accent-bordered block under the captured thought — distinct from the thought
+   itself, token-only. */
+.om-answer { margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); font-size: var(--fs-caption); line-height: 1.55; color: var(--fg-soft); }
+.om-answer > :first-child { margin-top: 0; }
+.om-answer > :last-child { margin-bottom: 0; }
+.om-answer-label { display: block; font-size: var(--fs-micro); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--sp-1); }
+/* Inline chat (overhaul P3): "Ask more" / "Discuss" expands a real thread with
+   the Ask brain right inside the card — no navigation, no popup. Token-only. */
+.om-chat { margin-top: var(--sp-2); border-top: 1px solid var(--hairline); padding-top: var(--sp-2); }
+.om-chat-thread { display: flex; flex-direction: column; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.om-chat-msg { font-size: var(--fs-caption); line-height: 1.5; padding: var(--sp-2) var(--sp-3); border-radius: var(--radius); max-width: 90%; overflow-wrap: anywhere; }
+.om-chat-user { align-self: flex-end; background: var(--accent-soft); color: var(--fg); }
+.om-chat-assistant { align-self: flex-start; background: var(--surface); color: var(--fg-soft); }
+.om-chat-pending { color: var(--muted); }
+.om-chat-input { flex: 1; font-family: var(--sans); font-size: var(--fs-body); }
 #onmymind-more { margin-top: var(--sp-2); }
 </style>"""
 
@@ -876,18 +913,75 @@ _ONMYMIND_JS = """<script>(function(){
   });
 })();</script>"""
 
-# (verb, label, button-class) — the ladder rungs, incorporate-first (the payoff
-# action), dismiss last (destructive, danger-styled).
-_LADDER_BUTTONS: tuple[tuple[str, str, str], ...] = (
-    ("incorporate", "Incorporate", "k-btn-primary"),
-    ("discuss", "Discuss", ""),
-    ("save", "Save for later", ""),
-    ("dismiss", "Dismiss", "k-btn-danger"),
-)
 
-# The 'To Worldview' rung is only offered when the Worldview system is on —
-# it stages the musing as a candidate Tenet (a lesson-learned's proper home).
-_WORLDVIEW_BUTTON: tuple[str, str, str] = ("worldview", "To Worldview", "")
+# Inline chat (P3): one delegated listener opens a real Ask thread inside a
+# card. First turn seeds the tail from the captured question + its stored answer
+# (no session yet); the returned session_id continues it server-side after that.
+_OM_CHAT_JS = """<script>(function(){
+  if(window.__omChatWired){ return; }
+  window.__omChatWired = true;
+  function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function bubble(role, text){
+    return '<div class="om-chat-msg om-chat-'+role+'">'+esc(text).replace(/\\n/g,'<br>')+'</div>';
+  }
+  function openChat(card){
+    var existing=card.querySelector('.om-chat');
+    if(existing){ var i=existing.querySelector('.om-chat-input'); if(i){ i.focus(); } return; }
+    var ticker=card.getAttribute('data-om-ticker')||'';
+    var box=document.createElement('div');
+    box.className='om-chat';
+    box.innerHTML=
+      '<div class="om-chat-thread"></div>'
+      +'<div class="ledger-cap-row">'
+      +'<input type="text" class="om-chat-input" placeholder="Ask a follow-up...">'
+      +'<button type="button" class="k-btn k-btn-primary k-btn-sm om-chat-send">Send</button>'
+      +'</div>';
+    card.appendChild(box);
+    var input=box.querySelector('.om-chat-input');
+    var thread=box.querySelector('.om-chat-thread');
+    var send=box.querySelector('.om-chat-send');
+    var bodyEl=card.querySelector('.om-body');
+    var ansEl=card.querySelector('.om-answer');
+    var seededQ=bodyEl?(bodyEl.textContent||'').trim():'';
+    var seededA=ansEl?(ansEl.textContent||'').replace(/^\\s*Answer\\s*/,'').trim():'';
+    var state={ session_id:null, history:(seededA?[{role:'user',text:seededQ},{role:'assistant',text:seededA}]:[]) };
+    function turn(){
+      var q=(input.value||'').trim();
+      if(!q){ input.focus(); return; }
+      input.value=''; send.disabled=true;
+      thread.insertAdjacentHTML('beforeend', bubble('user', q));
+      var pend=document.createElement('div');
+      pend.className='om-chat-msg om-chat-assistant om-chat-pending';
+      pend.textContent='...'; thread.appendChild(pend);
+      var payload={ query:q };
+      if(ticker){ payload.tickers=[ticker]; }
+      if(state.session_id){ payload.session_id=state.session_id; }
+      else if(state.history.length){ payload.history=state.history; }
+      fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+        .then(function(r){ return r.json(); })
+        .then(function(res){
+          pend.remove(); send.disabled=false;
+          var ans=(res && (res.text || res.message)) || 'No answer came back.';
+          thread.insertAdjacentHTML('beforeend', bubble('assistant', ans));
+          if(res && res.session_id){ state.session_id=res.session_id; state.history=[]; }
+          input.focus();
+        })
+        .catch(function(){
+          pend.remove(); send.disabled=false;
+          thread.insertAdjacentHTML('beforeend', bubble('assistant','Could not reach the server - try again.'));
+        });
+    }
+    send.addEventListener('click', turn);
+    input.addEventListener('keydown', function(e){ if(e.key==='Enter'){ turn(); } });
+    input.focus();
+  }
+  document.addEventListener('click', function(e){
+    var b=e.target.closest('[data-om-ask]');
+    if(!b){ return; }
+    var card=b.closest('[data-om-id]'); if(!card){ return; }
+    openChat(card);
+  });
+})();</script>"""
 
 
 def _feed_body(item: FeedItem) -> str:
@@ -951,6 +1045,71 @@ def engage_brief_block(ctx: dict[str, object]) -> str:
     )
 
 
+def _answer_block(ctx: dict[str, object]) -> str:
+    """The Ledger's inline answer to a question-shaped capture (the overhaul).
+
+    Generated once at capture time by ``onmymind.respond.answer_capture`` and
+    stored on the note (``context['ledger_answer']``); this renders the stored
+    text with NO LLM on the read path. Empty string when the capture wasn't a
+    question (no answer stored)."""
+    ans = ctx.get("ledger_answer")
+    if not isinstance(ans, dict):
+        return ""
+    text = str(cast("dict[str, object]", ans).get("text") or "").strip()
+    if not text:
+        return ""
+    return (
+        '<div class="om-answer"><span class="om-answer-label">Answer</span>'
+        f"{render_prose(text)}</div>"
+    )
+
+
+def _is_question_item(item: FeedItem) -> bool:
+    """A card is a question when the answer core already answered it (a stored
+    ``ledger_answer``) or its text still reads as a question (answers off / a
+    pre-overhaul capture). Questions get the inline chat, not the filing ladder."""
+    if isinstance((item.note.context or {}).get("ledger_answer"), dict):
+        return True
+    return item.item_type == "musing" and is_answerable_capture(item.note.body)
+
+
+def _verb_button(verb: str, label: str, cls: str) -> str:
+    return f'<button type="button" class="k-btn k-btn-sm {cls}" data-om-verb="{verb}">{escape(label)}</button>'
+
+
+def _ask_button(label: str) -> str:
+    # The inline-chat opener — replaces the old popup-blocked window.open
+    # "Discuss" (a window.open inside a fetch .then never counts as a user
+    # gesture, so the browser silently swallowed it). Not a ladder verb.
+    return f'<button type="button" class="k-btn k-btn-sm k-btn-primary" data-om-ask>{escape(label)}</button>'
+
+
+def _feed_actions(item: FeedItem) -> str:
+    """The card's action row — FEWER buttons, chosen by what the card IS (the
+    overhaul's answer to "too prescriptive"). A reading is researched; a
+    question opens the inline chat; a wondering goes to research; a plain musing
+    can be discussed, saved, sent to Worldview, or dismissed. dismiss stays last
+    (destructive)."""
+    dismiss = _verb_button("dismiss", "Dismiss", "k-btn-danger")
+    if item.item_type in ("doc", "link"):
+        return _verb_button("incorporate", "Research this", "") + dismiss
+    if _is_question_item(item):
+        # The answer is the payoff; keep it a conversation, not a filing task.
+        return _ask_button("Ask more") + _verb_button("save", "Save for later", "") + dismiss
+    if item.wondering:
+        return (
+            _verb_button("incorporate", "Research it", "k-btn-primary")
+            + _ask_button("Discuss")
+            + dismiss
+        )
+    # a plain reflection / musing
+    parts = [_ask_button("Discuss"), _verb_button("save", "Save for later", "")]
+    if worldview_enabled():
+        parts.append(_verb_button("worldview", "To Worldview", ""))
+    parts.append(dismiss)
+    return "".join(parts)
+
+
 def _feed_card(item: FeedItem) -> str:
     note = item.note
     ctx = note.context or {}
@@ -969,21 +1128,14 @@ def _feed_card(item: FeedItem) -> str:
     ladder_label = LADDER_LABELS.get(item.ladder or "", "")
     ladder_badge = f'<span class="om-ladder">{escape(ladder_label)}</span>'
     when = stamp_html(note.created_at, css="ledger-when")
-    # dismiss stays last (destructive); 'To Worldview' slots in just before it
-    # when the Worldview system is on.
-    rungs = _LADDER_BUTTONS
-    if worldview_enabled():
-        rungs = (*_LADDER_BUTTONS[:-1], _WORLDVIEW_BUTTON, _LADDER_BUTTONS[-1])
-    buttons = "".join(
-        f'<button type="button" class="k-btn k-btn-sm {cls}" data-om-verb="{verb}">{escape(label)}</button>'
-        for verb, label, cls in rungs
-    )
     return (
-        f'<div class="ledger-musing om-item" data-om-id="{note.id}">'
+        f'<div class="ledger-musing om-item" data-om-id="{note.id}" '
+        f'data-om-ticker="{escape(note.ticker or "", quote=True)}">'
         f'<div class="ledger-musing-head">{ident}{type_chip}{wondering}{ladder_badge}{when}</div>'
         f'<div class="ledger-body om-body">{_feed_body(item)}</div>'
+        f"{_answer_block(ctx)}"
         f"{engage_brief_block(ctx)}"
-        f'<div class="ledger-cap-row om-actions">{buttons}</div>'
+        f'<div class="ledger-cap-row om-actions">{_feed_actions(item)}</div>'
         "</div>"
     )
 
@@ -1049,6 +1201,7 @@ def _onmymind_section(db_path: Path | str | None, *, user_id: str = DEFAULT_USER
         + list_html
         + "</div>"
         + _ONMYMIND_JS
+        + _OM_CHAT_JS
     )
 
 
@@ -1138,7 +1291,12 @@ _JUMP_NAV_JS = """
     if (!b) return;
     ev.preventDefault();
     var el = document.getElementById(b.getAttribute('data-ledger-jump'));
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (!el) return;
+    // A chip to a section now living inside the collapsed Queues block must
+    // open it first, or scrollIntoView lands on a hidden element.
+    var d = el.closest('details');
+    if (d && !d.open) d.open = true;
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 })();
 """.strip()
@@ -1204,6 +1362,30 @@ def render_ledger_panel(db_path: Path | str | None, *, user_id: str = DEFAULT_US
             'and you read it back below.">Ledger</h2>'
         )
         panel_sub = ""
+    # P4 whole-tab reorg: capture + the conversational feed are the front door;
+    # the four machinery sections fold into ONE collapsible "Queues" block below,
+    # closed by default with a pending-count so real work is signposted but no
+    # longer a wall of stacked sections. The jump chips still reach each section
+    # (the nav JS opens the Queues block first — see _JUMP_NAV_JS).
+    queue_pending = (
+        counts.get("research", 0) + counts.get("reconcile", 0) + counts.get("worldview", 0)
+    )
+    count_badge = (
+        f'<span class="ledger-queues-count">{queue_pending} pending</span>' if queue_pending else ""
+    )
+    queues = (
+        '<details class="ledger-queues" id="ledger-queues">'
+        '<summary class="ledger-queues-sum">Queues'
+        f"{count_badge}"
+        '<span class="ledger-queues-hint">research · reconcile · worldview · stances</span>'
+        "</summary>"
+        '<div class="ledger-queues-body">'
+        + f'<div id="ledger-jump-worldview">{render_worldview_section(db_path)}</div>'
+        + f'<div id="ledger-jump-stances">{_stance_section(db_path)}</div>'
+        + f'<div id="ledger-jump-research">{_research_section(db_path)}</div>'
+        + f'<div id="ledger-jump-reconcile">{_reconcile_section(db_path)}</div>'
+        + "</div></details>"
+    )
     return (
         _PANEL_STYLE
         + f'<section class="panel">{h2}'
@@ -1211,10 +1393,7 @@ def render_ledger_panel(db_path: Path | str | None, *, user_id: str = DEFAULT_US
         + _jump_chip_toolbar(counts, onmymind_on=bool(onmymind))
         + f'<div id="ledger-jump-capture">{_capture_box()}</div>'
         + f'<div id="ledger-jump-onmymind">{onmymind}</div>'
-        + f'<div id="ledger-jump-worldview">{render_worldview_section(db_path)}</div>'
-        + f'<div id="ledger-jump-stances">{_stance_section(db_path)}</div>'
-        + f'<div id="ledger-jump-research">{_research_section(db_path)}</div>'
-        + f'<div id="ledger-jump-reconcile">{_reconcile_section(db_path)}</div>'
         + f'<div id="ledger-jump-musings">{musings_block}</div>'
+        + queues
         + "</section>"
     )
