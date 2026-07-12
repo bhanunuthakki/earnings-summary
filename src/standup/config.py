@@ -51,3 +51,29 @@ class StandupConfig:
     # the ask_advisory_answer rubric's own pass threshold (0.70); set higher to
     # bias toward silence on borderline-quality briefs.
     min_score: float = 0.75
+    # The deliver-with-caveat floor (navigation_ia.md §3.3 — "un-gag the
+    # standup judge"). A GENUINELY-scored brief (the judge call succeeded and
+    # returned a real facet_scores verdict — see standup.gate.GateOutcome.
+    # judge_failed) in [caveat_floor, min_score) still reaches the thread,
+    # prefixed with a one-line caveat, instead of being silently suppressed;
+    # below caveat_floor it stays suppressed. A JUDGE-CALL FAILURE (infra, not
+    # a quality verdict) is never eligible for the caveat tier regardless of
+    # score — see standup.run.
+    #
+    # 0.60 chosen deliberately below the rubric's own pass_threshold (0.70,
+    # evals/rubrics/ask_advisory_answer.md) by a margin roughly matching how
+    # far above that threshold min_score already sits (0.75, +0.05): a brief
+    # here failed the rubric's bar, but only modestly (facets averaging in
+    # the high-0.6s) — worth showing with the caveat given the channel was
+    # otherwise silent 75%+ of days (2026-07 audit). Below 0.60 the brief
+    # meaningfully failed multiple facets (grounding / calibration / risk-
+    # reward) and a bad, ungrounded advisory push is still worse than
+    # silence — stays fully suppressed.
+    #
+    # No genuinely-low-but-real score currently exists to calibrate against:
+    # the 2026-07 audit found EVERY historical suppression was actually a
+    # judge-call failure (score=0.0 sentinel, not a real verdict — see
+    # standup.ledger's STATUS_JUDGE_FAILED note), so this floor is a
+    # considered a-priori choice, not a fit to observed data. Revisit once a
+    # real distribution of genuinely-scored below-bar briefs accumulates.
+    caveat_floor: float = 0.60

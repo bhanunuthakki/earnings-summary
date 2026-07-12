@@ -34,12 +34,22 @@ from standup.signals import StandupSignal
 
 @dataclass(frozen=True, slots=True)
 class GateOutcome:
-    """The verdict on one composed brief."""
+    """The verdict on one composed brief.
+
+    ``judge_failed`` distinguishes an infra failure (the judge call itself
+    errored, or returned unparseable JSON — ``CaseResult.failure_stage ==
+    "judge"``) from a GENUINE low quality score. Both used to collapse into
+    ``score=0.0``, indistinguishable at this layer — which is how the
+    standup channel's "9 of 12 suppressed" turned out to be almost entirely
+    judge-call failures (``eval_judge`` / Claude CLI errors) locked out for a
+    full ``dedup_days`` window each time, not a miscalibrated quality bar.
+    See ``standup.run`` for how the two are now handled differently."""
 
     passed: bool
     score: float
     rationale: str
     facet_scores: dict[str, float] = field(default_factory=dict[str, float])
+    judge_failed: bool = False
 
 
 def _format_citations(citations: list[dict[str, object]]) -> str:
@@ -122,6 +132,7 @@ def gate_message(
         score=result.score,
         rationale=result.judge_rationale or "",
         facet_scores=facet_scores,
+        judge_failed=(result.failure_stage == "judge"),
     )
 
 

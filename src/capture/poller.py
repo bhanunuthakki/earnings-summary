@@ -286,6 +286,45 @@ def _redteam_reply(db_path: Path | str | None, text: str) -> str:
         return "Couldn't process that /redteam command."
 
 
+def _dispatch_pending_reply(
+    token: str, update: telegram.Update, db_path: Path | str | None
+) -> bool:
+    """Check the shared awaited-reply stash (PR2 — the Sunday packet's Rewrite
+    action + the decision nudge's Fill-in-now) BEFORE the default musing
+    route. Returns True iff this text was consumed as an awaited reply (the
+    caller must ``continue``, never falling through to ``ingest_capture``).
+    An expired/absent await returns False — capture is never permanently
+    hijacked."""
+    if update.chat_id is None or not update.text:
+        return False
+    from capture import decision_nudge, pending_replies
+    from pipeline import weekly_packet
+
+    pending = pending_replies.peek(update.chat_id, db_path=db_path)
+    if pending is None:
+        return False
+    if pending.kind == decision_nudge.FILL_IN_KIND:
+        decision_nudge.handle_fill_in_reply(
+            token, update.chat_id, update.text, pending, db_path=db_path
+        )
+        return True
+    if pending.kind == weekly_packet.REWRITE_KIND:
+        item, wrote = weekly_packet.handle_awaited_reply(pending, update.text, db_path=db_path)
+        with contextlib.suppress(telegram.TelegramError):
+            telegram.send_message(
+                token,
+                update.chat_id,
+                "Recorded." if wrote else "Couldn't parse that - tap the button again to retry.",
+            )
+        if item is not None and item.verdict is not None:
+            with contextlib.suppress(Exception):
+                weekly_packet.maybe_send_receipt(
+                    token, update.chat_id, item.run_id, db_path=db_path
+                )
+        return True
+    return False
+
+
 def poll_once(
     token: str,
     *,
@@ -362,6 +401,9 @@ def poll_once(
                                 "Not a command here. /review <TICKER> works; everything "
                                 "else lives in the web chat (Ask tab).",
                             )
+                continue
+            if update.chat_id is not None and _dispatch_pending_reply(token, update, db_path):
+                bump("pending_reply")
                 continue
             # A bare URL → land as an On My Mind reading (a link the analyst
             # found), not a musing.  Anything else is stream-of-consciousness.

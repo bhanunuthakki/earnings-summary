@@ -23,6 +23,8 @@ from standup.compose import ComposedMessage, EventsFn, compose, frame_question
 from standup.gate import gate_message
 from standup.ledger import (
     STATUS_DELIVERED,
+    STATUS_DELIVERED_CAVEAT,
+    STATUS_JUDGE_FAILED,
     STATUS_SUPPRESSED_EVAL,
     delivered_today_count,
     recently_composed_signatures,
@@ -627,6 +629,33 @@ def test_gate_passes_high_score_and_suppresses_below_floor(rubric: object) -> No
     assert not mid.passed and mid.score == pytest.approx(0.72)
 
 
+def test_gate_marks_judge_failed_on_call_exception(rubric: object) -> None:
+    """The '9 of 12 suppressed' incident: a raising judge call (the observed
+    Claude-CLI CalledProcessError) must be distinguishable from a genuine low
+    score — GateOutcome.judge_failed flags it."""
+    sig = _signal()
+    composed = ComposedMessage(question="q", answer="a [1]", citations=[{"n": 1, "label": "x"}])
+
+    def raising_caller(prompt: str, **kw: object) -> str:
+        raise RuntimeError("claude cli exit 1")
+
+    outcome = gate_message(sig, composed, rubric=rubric, min_score=0.75, caller=raising_caller)  # type: ignore[arg-type]
+    assert outcome.judge_failed is True
+    assert outcome.score == pytest.approx(0.0)
+    assert not outcome.passed
+
+
+def test_gate_marks_judge_failed_on_unparseable_verdict(rubric: object) -> None:
+    sig = _signal()
+    composed = ComposedMessage(question="q", answer="a [1]", citations=[{"n": 1, "label": "x"}])
+
+    def bad_caller(prompt: str, **kw: object) -> str:
+        return "not json at all"
+
+    outcome = gate_message(sig, composed, rubric=rubric, min_score=0.75, caller=bad_caller)  # type: ignore[arg-type]
+    assert outcome.judge_failed is True
+
+
 # ---------------------------------------------------------------------------
 # End-to-end orchestration
 # ---------------------------------------------------------------------------
@@ -791,3 +820,108 @@ def test_run_standup_injects_memory_caveat_on_subsequent_brief(db: Path, rubric:
     )
     assert report.delivered == 1
     assert any("PRIOR" in q and "re-derive" in q for q in captured)
+
+
+# ---------------------------------------------------------------------------
+# Deliver-with-caveat tier + the judge-failed retry fix (PR2, Deliverable 3)
+# ---------------------------------------------------------------------------
+
+
+def test_run_standup_caveat_tier_delivers_with_prefix(db: Path, rubric: object) -> None:
+    _add_tracked(db, "NU")
+    _add_dcf(db, "NU", fv=10.0, px=13.0, days_ago=200)
+    # 0.65 is genuinely scored (a real, parsed verdict) — in [caveat_floor=0.60, min_score=0.75)
+    report = run_standup(
+        db_path=db,
+        repo_root=db.parent,
+        events_fn=_fixed_events([]),
+        rubric=rubric,  # type: ignore[arg-type]
+        now=_NOW,
+        user_id=USER,
+        judge_caller=_judge(0.65),
+        config=StandupConfig(),
+    )
+    assert report.delivered == 0
+    assert report.delivered_caveat == 1
+    conn = _conn(db)
+    try:
+        row = conn.execute("SELECT status FROM standup_messages").fetchone()
+        turn = conn.execute("SELECT text FROM ask_turns WHERE role = 'assistant'").fetchone()
+    finally:
+        conn.close()
+    assert row["status"] == STATUS_DELIVERED_CAVEAT
+    assert turn["text"].startswith("(below the usual bar")
+
+
+def test_run_standup_below_caveat_floor_still_fully_suppressed(db: Path, rubric: object) -> None:
+    _add_tracked(db, "NU")
+    _add_dcf(db, "NU", fv=10.0, px=13.0, days_ago=200)
+    # 0.3 is genuinely scored but below caveat_floor=0.60 -> stays suppressed
+    report = run_standup(
+        db_path=db,
+        repo_root=db.parent,
+        events_fn=_fixed_events([]),
+        rubric=rubric,  # type: ignore[arg-type]
+        now=_NOW,
+        user_id=USER,
+        judge_caller=_judge(0.3),
+        config=StandupConfig(),
+    )
+    assert report.delivered == 0 and report.delivered_caveat == 0
+    assert report.suppressed_eval == 1
+    conn = _conn(db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM ask_turns").fetchone()[0] == 0
+        assert (
+            conn.execute("SELECT status FROM standup_messages").fetchone()[0]
+            == STATUS_SUPPRESSED_EVAL
+        )
+    finally:
+        conn.close()
+
+
+def test_run_standup_judge_failed_is_not_dedup_locked_and_retries(db: Path, rubric: object) -> None:
+    """The actual 2026-07 incident, reproduced: a raising judge call must
+    record STATUS_JUDGE_FAILED (not STATUS_SUPPRESSED_EVAL) and must NOT be
+    excluded from retry on the very next run."""
+    _add_tracked(db, "NU")
+    _add_dcf(db, "NU", fv=10.0, px=13.0, days_ago=200)
+
+    def raising_caller(prompt: str, **kw: object) -> str:
+        raise RuntimeError("claude cli exit 1")
+
+    report1 = run_standup(
+        db_path=db,
+        repo_root=db.parent,
+        events_fn=_fixed_events([]),
+        rubric=rubric,  # type: ignore[arg-type]
+        now=_NOW,
+        user_id=USER,
+        judge_caller=raising_caller,
+        config=StandupConfig(),
+    )
+    assert report1.delivered == 0
+    assert report1.judge_failed == 1
+    conn = _conn(db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM ask_turns").fetchone()[0] == 0
+        assert (
+            conn.execute("SELECT status FROM standup_messages").fetchone()[0] == STATUS_JUDGE_FAILED
+        )
+    finally:
+        conn.close()
+
+    # Same trip, same run instant (well within dedup_days=7) — a genuinely
+    # working judge on the NEXT run must still get a chance (no dedup lockout).
+    report2 = run_standup(
+        db_path=db,
+        repo_root=db.parent,
+        events_fn=_fixed_events([]),
+        rubric=rubric,  # type: ignore[arg-type]
+        now=_NOW,
+        user_id=USER,
+        judge_caller=_judge(1.0),
+        config=StandupConfig(),
+    )
+    assert report2.deduped == 0
+    assert report2.delivered == 1

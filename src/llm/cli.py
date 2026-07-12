@@ -125,6 +125,14 @@ LLM_MODELS: dict[str, str] = {
     # run on EVERY owner musing (no lexical pre-gate) → the cheap FAST tier; the
     # golden set (evals/golden/capture_intent.json) is its bar.
     "capture_intent": FAST_CLASSIFIER_MODEL,
+    # The Sunday packet's per-item verdict pre-draft (pipeline.weekly_packet,
+    # PR2 — navigation_ia.md §3.1). A short, closed-shape suggestion
+    # ("ratify|drop|defer - <reason>") grounded ONLY in the item text it's
+    # given — no web, no open-ended reasoning → the cheap FAST tier. Runs
+    # once per packet item, once a week; per-item degrade (a failure ships
+    # the item without a draft, never blocks the packet). Budget-capped,
+    # warn mode (0149).
+    "weekly_packet_predraft": FAST_CLASSIFIER_MODEL,
     # The Ledger artifact brief (research.brief). Analytical writing — takeaways +
     # bull/bear (+ stress: falsifiers, second-order, portfolio map) over an extracted
     # article/deck → the default analytical tier (Sonnet). Budget-capped (0139).
