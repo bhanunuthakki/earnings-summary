@@ -8,8 +8,12 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from pipeline.portfolio_panel import _position_guard_section  # pyright: ignore[reportPrivateUsage]
+from pipeline.portfolio_panel import (  # pyright: ignore[reportPrivateUsage]
+    _add_trigger_advisories,
+    _position_guard_section,
+)
 from position_guard import (
+    CHECK_ADD,
     CHECK_BEAR,
     CHECK_DOWNSIDE,
     CHECK_THESIS,
@@ -34,9 +38,25 @@ def _make_db(tmp_path: Path) -> Path:
         "narrative TEXT, created_at TEXT)"
     )
     conn.execute("CREATE TABLE v_thesis_status (ticker TEXT, thesis_updated_at TEXT)")
+    conn.execute(
+        "CREATE TABLE position_entries ("
+        "id INTEGER PRIMARY KEY, ticker TEXT, entry_conviction TEXT, exit_date TEXT)"
+    )
     conn.commit()
     conn.close()
     return db_path
+
+
+def _insert_position_entry(
+    db_path: Path, ticker: str, *, conviction: str | None, exit_date: str | None = None
+) -> None:
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "INSERT INTO position_entries (ticker, entry_conviction, exit_date) VALUES (?, ?, ?)",
+        (ticker, conviction, exit_date),
+    )
+    conn.commit()
+    conn.close()
 
 
 def _weights_cache(repo_root: Path, weights: dict[str, float]) -> None:
@@ -269,6 +289,113 @@ def test_downside_pass_via_explicit_intent_kind(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Check (d) — add_trigger (ADVISORY, PR9 Bull-side symmetry): only applies to
+# HIGH-CONVICTION held names; never a violation.
+# ---------------------------------------------------------------------------
+
+
+def test_add_trigger_not_applicable_for_non_high_conviction_name(tmp_path: Path) -> None:
+    """No position_entries row at all (or conviction != high) -> add_trigger
+    is None (not applicable), not a fail — the check simply doesn't fire."""
+    db_path = _make_db(tmp_path)
+    _weights_cache(tmp_path, {"AAA": 0.05})
+    _fully_covered(db_path, tmp_path, "AAA")
+    report = build_position_guard(db_path, tmp_path, now=_NOW)
+    (row,) = report.rows
+    assert row.add_trigger is None
+    assert row.passed  # not applicable never taints the violation-grade checks
+
+
+def test_add_trigger_fails_for_high_conviction_name_with_no_add_rung(tmp_path: Path) -> None:
+    db_path = _make_db(tmp_path)
+    _weights_cache(tmp_path, {"NU": 0.10})
+    _fully_covered(db_path, tmp_path, "NU")
+    _insert_position_entry(db_path, "NU", conviction="high")
+    report = build_position_guard(db_path, tmp_path, now=_NOW)
+    (row,) = report.rows
+    assert row.add_trigger is not None
+    assert not row.add_trigger.passed
+    assert "no add-rung on file" in row.add_trigger.reason
+    # ADVISORY: never taints the violation-grade result.
+    assert row.passed
+    assert CHECK_ADD not in row.failed_checks
+
+
+def test_add_trigger_ignores_closed_high_conviction_entries(tmp_path: Path) -> None:
+    """A high-conviction entry that has already exited (exit_date set) must
+    not put the ticker in scope for the advisory — only OPEN high-conviction
+    positions count."""
+    db_path = _make_db(tmp_path)
+    _weights_cache(tmp_path, {"NU": 0.10})
+    _fully_covered(db_path, tmp_path, "NU")
+    _insert_position_entry(db_path, "NU", conviction="high", exit_date="2026-01-01")
+    report = build_position_guard(db_path, tmp_path, now=_NOW)
+    (row,) = report.rows
+    assert row.add_trigger is None
+
+
+def test_add_trigger_passes_via_explicit_intent_kind(tmp_path: Path) -> None:
+    db_path = _make_db(tmp_path)
+    _weights_cache(tmp_path, {"NU": 0.10})
+    _fully_covered(db_path, tmp_path, "NU")
+    _insert_position_entry(db_path, "NU", conviction="high")
+    _insert_intent(db_path, "NU", intent_kind="add_rung", narrative="add at $10, +1% of book")
+    report = build_position_guard(db_path, tmp_path, now=_NOW)
+    (row,) = report.rows
+    assert row.add_trigger is not None
+    assert row.add_trigger.passed
+    assert "intent kind" in row.add_trigger.reason
+
+
+def test_add_trigger_passes_via_narrative_price_rung_and_add_action(tmp_path: Path) -> None:
+    db_path = _make_db(tmp_path)
+    _weights_cache(tmp_path, {"NU": 0.10})
+    _fully_covered(db_path, tmp_path, "NU")
+    _insert_position_entry(db_path, "NU", conviction="high")
+    _insert_intent(
+        db_path,
+        "NU",
+        narrative="[draft] UPSIDE: add <$10.00 (+1% of book) if thesis intact / no breach.",
+    )
+    report = build_position_guard(db_path, tmp_path, now=_NOW)
+    (row,) = report.rows
+    assert row.add_trigger is not None
+    assert row.add_trigger.passed
+    assert "add-rung" in row.add_trigger.reason
+
+
+def test_add_trigger_ambiguous_rung_without_add_action_fails(tmp_path: Path) -> None:
+    """A below-price rung whose nearby action is a DOWNSIDE verb (cut/exit),
+    not an add-shaped one, must not false-positive pass the add check —
+    mirrors RBRK's downside-check isolation test."""
+    db_path = _make_db(tmp_path)
+    _weights_cache(tmp_path, {"NU": 0.10})
+    _fully_covered(db_path, tmp_path, "NU")
+    _insert_position_entry(db_path, "NU", conviction="high")
+    _insert_intent(db_path, "NU", narrative="DOWNSIDE: close <$10.00 -> cut to 5%.")
+    report = build_position_guard(db_path, tmp_path, now=_NOW)
+    (row,) = report.rows
+    assert row.add_trigger is not None
+    assert not row.add_trigger.passed  # this is the downside rung, not an add-rung
+
+
+def test_add_trigger_advisory_never_pollutes_violations_or_pill(tmp_path: Path) -> None:
+    """A high-conviction name failing add_trigger while otherwise fully
+    covered must still count as passed/clean — the NAKED POSITIONS pill and
+    report.violations are unaffected by the advisory check."""
+    db_path = _make_db(tmp_path)
+    _weights_cache(tmp_path, {"NU": 0.10})
+    _fully_covered(db_path, tmp_path, "NU")
+    _insert_position_entry(db_path, "NU", conviction="high")
+    report = build_position_guard(db_path, tmp_path, now=_NOW)
+    (row,) = report.rows
+    assert row.add_trigger is not None
+    assert not row.add_trigger.passed
+    assert row.passed
+    assert report.violations == []
+
+
+# ---------------------------------------------------------------------------
 # Check (b) — realistic bear (reuses bear_lint)
 # ---------------------------------------------------------------------------
 
@@ -401,3 +528,56 @@ def test_position_guard_section_renders_violation_chip_and_table(tmp_path: Path)
     assert "encode an exit ladder" in html
     assert "k-chip-bad" in html
     assert "<table" in html
+
+
+# ---------------------------------------------------------------------------
+# Advisory add-rung rendering (PR9): a separate quiet row/chips, never folded
+# into NAKED POSITIONS / violations / the table above.
+# ---------------------------------------------------------------------------
+
+
+def test_add_trigger_advisories_helper_only_returns_failing_high_conviction_rows(
+    tmp_path: Path,
+) -> None:
+    db_path = _make_db(tmp_path)
+    _weights_cache(tmp_path, {"NU": 0.10, "MELI": 0.08, "AAA": 0.05})
+    for t in ("NU", "MELI", "AAA"):
+        _fully_covered(db_path, tmp_path, t)
+    _insert_position_entry(db_path, "NU", conviction="high")  # no add-rung -> advisory
+    _insert_position_entry(db_path, "MELI", conviction="high")
+    _insert_intent(db_path, "MELI", intent_kind="add_rung", narrative="add at $1355")  # covered
+    # AAA: not high conviction -> add_trigger stays None, never an advisory.
+    report = build_position_guard(db_path, tmp_path, now=_NOW)
+    cache = to_cache_model(report, computed_at=_NOW)
+    advisories = _add_trigger_advisories(cache)
+    assert [r.ticker for r in advisories] == ["NU"]
+
+
+def test_position_guard_section_renders_advisory_separately_from_violations(
+    tmp_path: Path,
+) -> None:
+    """A high-conviction name with no add-rung, otherwise fully covered, must
+    render a quiet advisory chip while NAKED POSITIONS stays 0 and no
+    violation chip/table appears for it."""
+    db_path = _make_db(tmp_path)
+    _weights_cache(tmp_path, {"NU": 0.10})
+    _fully_covered(db_path, tmp_path, "NU")
+    _insert_position_entry(db_path, "NU", conviction="high")
+    report = build_position_guard(db_path, tmp_path, now=_NOW)
+    cache = to_cache_model(report, computed_at=_NOW)
+    html = _position_guard_section(cache)
+    assert "NAKED POSITIONS: 0" in html  # advisory never counted
+    assert "k-pill-bad" not in html  # the summary pill stays k-pill-ok
+    assert "NU: high conviction, no add-rung encoded" in html
+    assert "Add-rung advisory" in html
+    assert "k-chip-bad" not in html  # quiet chip, not a violation-tone chip
+
+
+def test_position_guard_section_omits_advisory_block_when_none_apply(tmp_path: Path) -> None:
+    db_path = _make_db(tmp_path)
+    _weights_cache(tmp_path, {"AAA": 0.05})
+    _fully_covered(db_path, tmp_path, "AAA")
+    report = build_position_guard(db_path, tmp_path, now=_NOW)
+    cache = to_cache_model(report, computed_at=_NOW)
+    html = _position_guard_section(cache)
+    assert "Add-rung advisory" not in html

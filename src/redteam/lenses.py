@@ -1,4 +1,4 @@
-"""The five rotating per-name attack lenses (monthly_red_team.md Phase 2).
+"""The six rotating per-name attack lenses (monthly_red_team.md Phase 2).
 
 Lens rotation is DETERMINISTIC, not stateful: ``lens_for(ticker, month_index)``
 derives the lens from a stable hash of the ticker plus the calendar month
@@ -6,13 +6,25 @@ index, so no rotation-state table is needed and the choice is reproducible
 from (ticker, month) alone. ``month_index`` increases by exactly 1 every
 calendar month, so consecutive months always land on a different lens (the
 directive's "the same name must not get the same lens twice in a row" —
-guaranteed because +1 mod 5 is never 0). Python's built-in ``hash()`` is
-process-salted (``PYTHONHASHSEED``) and would NOT be reproducible across runs,
-so this uses a fixed ``sha256``-derived seed instead.
+guaranteed because +1 mod N is never 0 for any N > 1, where N =
+``len(LENS_NAMES)``). Python's built-in ``hash()`` is process-salted
+(``PYTHONHASHSEED``) and would NOT be reproducible across runs, so this uses a
+fixed ``sha256``-derived seed instead.
+
+PR9 (Bull-side symmetry) grew ``LENS_NAMES`` from 5 to 6 — the rotation
+modulus below follows ``len(LENS_NAMES)`` automatically, so this needed no
+code change beyond the new name in ``redteam.models``. Safe to change:
+``red_team_items`` carried zero rows in prod at PR9 time (no persisted run
+has ever depended on the old mod-5 assignment), so there is no historical
+rotation state to preserve continuity with.
 
 Evidence is assembled entirely in CODE (thesis anchor, verdict, weight, latest
-DCF over/under — Layer-3 discipline: no business logic riding in the prompt
-that code can compute). The LLM's only job is the adversarial judgment.
+DCF over/under, downside/add-rung presence — Layer-3 discipline: no business
+logic riding in the prompt that code can compute). The LLM's only job is the
+adversarial judgment. ``missed_upside`` (PR9) is the one lens that inverts
+attack direction: the other five attack the POSITION (find why the thesis is
+wrong); ``missed_upside`` attacks the owner's CAUTION (find where the thesis
+is being under-expressed) — see ``build_missed_upside_prompt``.
 """
 
 from __future__ import annotations
@@ -30,6 +42,7 @@ from bear_lint import BearLintFinding
 from llm.anchors import load_thesis_anchor
 from llm.structured import StructuredParseError, call_llm_structured
 from model_provenance.basis import dcf_basis
+from position_guard import evaluate_add_trigger, evaluate_downside_trigger, fetch_intent_rows
 from redteam.models import LENS_NAMES, RedTeamLLMItem
 
 log = logging.getLogger(__name__)
@@ -77,6 +90,20 @@ class NameEvidencePack:
     # degrades to omitting the evidence line rather than fabricating it.
     bear_status: str | None = None
     bear_provenance: str | None = None
+    # "Bear depth" (PR9, missed_upside evidence) — the same
+    # ``BearLintFinding.bear_return_pct`` (bear_fv/live_price - 1, in
+    # percent) the Risk panel already reads; None under the same conditions
+    # as bear_status/bear_provenance above.
+    bear_return_pct: float | None = None
+    # PR9 (Bull-side symmetry) evidence flags — whether THIS name has an
+    # encoded downside exit rule / add-rung on file, derived via
+    # ``position_guard.evaluate_downside_trigger`` /
+    # ``.evaluate_add_trigger`` (the SAME detection the naked-position gate
+    # uses — never re-derived). Both default False when ``conn`` isn't a
+    # live ``sqlite3.Connection`` (e.g. --dry-run), matching this dataclass's
+    # existing "degrade to omitted/false rather than fabricate" posture.
+    has_downside_rung: bool = False
+    has_add_rung: bool = False
 
 
 def build_name_evidence_pack(
@@ -118,6 +145,24 @@ def build_name_evidence_pack(
             except (ValueError, TypeError):
                 over_under_pct = None
 
+    # PR9 evidence flags: reuse position_guard's exact detection (never
+    # re-derived) via the ticker's position_sizing_intent history over the
+    # SAME open connection. Best-effort — a read failure degrades to False
+    # (no rung on file), never blocks the pack.
+    has_downside_rung = False
+    has_add_rung = False
+    if isinstance(conn, sqlite3.Connection):
+        try:
+            intents = fetch_intent_rows(conn, ticker)
+            has_downside_rung = evaluate_downside_trigger(
+                intents, repo_root=repo_root, ticker=ticker
+            ).passed
+            has_add_rung = evaluate_add_trigger(intents).passed
+        except Exception as exc:  # best-effort — never blocks the pack
+            log.debug(
+                {"event": "red_team_rung_evidence_failed", "ticker": ticker, "error": str(exc)}
+            )
+
     return NameEvidencePack(
         ticker=ticker.upper(),
         weight_pct=weight_pct,
@@ -127,6 +172,9 @@ def build_name_evidence_pack(
         over_under_pct=over_under_pct,
         bear_status=(bear_finding.status if bear_finding is not None else None),
         bear_provenance=(bear_finding.provenance if bear_finding is not None else None),
+        bear_return_pct=(bear_finding.bear_return_pct if bear_finding is not None else None),
+        has_downside_rung=has_downside_rung,
+        has_add_rung=has_add_rung,
     )
 
 
@@ -220,12 +268,21 @@ _ITEM_SCHEMA_INSTRUCTIONS = (
 )
 
 
-def build_prompt(pack: NameEvidencePack, lens: str, *, other_holdings_line: str) -> str:
-    """Compose the one-shot adversarial prompt for ``lens`` over ``pack``."""
-    framing = _LENS_FRAMING.get(lens, _LENS_FRAMING["shared_factor"])
-    verdict_line = f"Current verdict: {pack.verdict}." if pack.verdict else ""
-    driver_line = f"Key driver: {pack.key_driver}." if pack.key_driver else ""
-    weight_line = f"Book weight: {pack.weight_pct:.1%} of portfolio."
+@dataclass(slots=True, frozen=True)
+class _EvidenceLines:
+    """The evidence sentences shared by every lens prompt — assembled once so
+    ``build_prompt`` and ``build_missed_upside_prompt`` render the identical
+    facts, never two independently-drifting phrasings of the same pack."""
+
+    verdict: str
+    driver: str
+    weight: str
+    dcf: str
+    bear: str
+    anchor: str
+
+
+def _evidence_lines(pack: NameEvidencePack) -> _EvidenceLines:
     dcf_line = (
         f"DCF model disagrees with the market by {pack.over_under_pct:+.1%} "
         "(fair value vs. live price)."
@@ -235,18 +292,72 @@ def build_prompt(pack: NameEvidencePack, lens: str, *, other_holdings_line: str)
     bear_line = ""
     if pack.bear_status is not None:
         prov = f", provenance {pack.bear_provenance}" if pack.bear_provenance else ""
-        bear_line = f" Bear-realism lint: {pack.bear_status}{prov}."
-    anchor = pack.thesis_anchor_md.strip() or "(no thesis anchor on file)"
+        depth = f", bear case {pack.bear_return_pct:+.1%} vs live" if pack.bear_return_pct else ""
+        bear_line = f" Bear-realism lint: {pack.bear_status}{prov}{depth}."
+    return _EvidenceLines(
+        verdict=(f"Current verdict: {pack.verdict}." if pack.verdict else ""),
+        driver=(f"Key driver: {pack.key_driver}." if pack.key_driver else ""),
+        weight=f"Book weight: {pack.weight_pct:.1%} of portfolio.",
+        dcf=dcf_line,
+        bear=bear_line,
+        anchor=pack.thesis_anchor_md.strip() or "(no thesis anchor on file)",
+    )
+
+
+def build_prompt(pack: NameEvidencePack, lens: str, *, other_holdings_line: str) -> str:
+    """Compose the one-shot adversarial prompt for ``lens`` over ``pack``.
+    Dispatches to :func:`build_missed_upside_prompt` for the one lens
+    (``missed_upside``, PR9) whose attack direction inverts."""
+    if lens == "missed_upside":
+        return build_missed_upside_prompt(pack, other_holdings_line=other_holdings_line)
+    framing = _LENS_FRAMING.get(lens, _LENS_FRAMING["shared_factor"])
+    ev = _evidence_lines(pack)
 
     return (
         f"You are the monthly adversarial Red Team reviewing a held position, "
         f"{pack.ticker}, in a long-only equity portfolio. Your job is NOT to "
         f"summarize the thesis — it is to attack it.\n\n"
         f"{framing}\n\n"
-        f"{weight_line} {verdict_line} {driver_line} {dcf_line}{bear_line}\n\n"
-        f"{anchor}\n\n"
+        f"{ev.weight} {ev.verdict} {ev.driver} {ev.dcf}{ev.bear}\n\n"
+        f"{ev.anchor}\n\n"
         f"Other names currently held in the same book (for shared-factor / "
         f"crowding context): {other_holdings_line or '(none on file)'}\n\n"
+        f"{_ITEM_SCHEMA_INSTRUCTIONS}"
+    )
+
+
+def build_missed_upside_prompt(pack: NameEvidencePack, *, other_holdings_line: str) -> str:
+    """The ``missed_upside`` lens (Bull-side symmetry, PR9): attacks the
+    owner's CAUTION on ``pack.ticker``, not the position — the mirror image
+    of every other lens above. See the module docstring for why this exists
+    (the program's other five lenses all attack longs; nothing attacked the
+    owner's tendency to under-underwrite upside)."""
+    ev = _evidence_lines(pack)
+    rung_line = (
+        f"Downside rung encoded: {'yes' if pack.has_downside_rung else 'no'}. "
+        f"Add-rung (buy pre-commitment) encoded: {'yes' if pack.has_add_rung else 'no'}."
+    )
+
+    return (
+        f"You are the monthly adversarial Red Team reviewing a held position, "
+        f"{pack.ticker}, in a long-only equity portfolio. You are attacking "
+        f"the owner's caution on {pack.ticker}, not the position — the "
+        "opposite job of the other five lenses.\n\n"
+        f"{ev.weight} {ev.verdict} {ev.driver} {ev.dcf}{ev.bear} {rung_line}\n\n"
+        f"{ev.anchor}\n\n"
+        "Using the evidence pack above (thesis + verdict, weight, DCF "
+        "over/under, bear provenance and bear depth, encoded downside rungs, "
+        "encoded add-rungs or their absence), produce ONE falsifiable attack "
+        "on under-underwritten upside: a position trimmed or capped below "
+        "the owner's own fair value; a high-conviction name with no encoded "
+        "add-rung (sell rules but no buy rules); a bear delta materially "
+        "more severe than the encoded thesis breakers justify; or "
+        "conviction claimed in the thesis that current weight does not "
+        "express. Propose a concrete bull-side pre-commitment: an add-rung "
+        "(price level + size + thesis-intact condition) or a bear-delta "
+        "revision.\n\n"
+        f"Other names currently held in the same book (for context): "
+        f"{other_holdings_line or '(none on file)'}\n\n"
         f"{_ITEM_SCHEMA_INSTRUCTIONS}"
     )
 
