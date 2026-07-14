@@ -33,8 +33,11 @@ def db_path(tmp_path: Path) -> Path:
 
 
 def test_empty_panel_shows_capture_box(db_path: Path) -> None:
+    # LEDGER_ONMYMIND defaults ON (2026-07-14): an empty panel shows the On-My-Mind
+    # feed's empty state, not the legacy "No musings yet" list. The capture box is
+    # present in either mode — that's what this test guards.
     html = render_ledger_panel(db_path)
-    assert "No musings yet" in html
+    assert "Nothing on your mind yet" in html
     assert "ledger-cap" in html
     assert ">Capture<" in html
     assert "/api/capture/text" in html  # the capture box POST target
