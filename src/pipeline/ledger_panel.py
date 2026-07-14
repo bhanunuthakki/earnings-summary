@@ -343,6 +343,21 @@ _RESEARCH_JS = """<script>(function(){
       var pids=(act.getAttribute('data-pids')||act.getAttribute('data-pid')||'').split(',');
       if(verb==='steer'){ beginSteer(act, pids); return; }
       send(pids, verb, {});
+      return;
+    }
+    // Backlink from a research item to the musing that spawned it (owner
+    // feedback 2026-07-14: "no apparent link to the musing"). Router-safe
+    // scroll (no hash change) + a brief highlight; no-op if the note is on
+    // another page of the feed.
+    var back=e.target.closest('[data-goto-note]');
+    if(back){
+      e.preventDefault();
+      var card=document.getElementById('om-note-'+back.getAttribute('data-goto-note'));
+      if(card){
+        card.scrollIntoView({behavior:'smooth', block:'center'});
+        card.classList.add('om-flash');
+        setTimeout(function(){ card.classList.remove('om-flash'); }, 1600);
+      }
     }
   });
   function send(pids, verb, body){
@@ -400,9 +415,16 @@ def _task_chip(task: ResearchTask) -> str:
         )
     else:
         action = dismiss
+    backlink = (
+        '<button type="button" class="k-chip k-chip-btn ledger-backlink" '
+        f'data-goto-note="{task.note_id}" title="Jump to the note that raised this">'
+        "↩ from your note</button>"
+        if task.note_id
+        else ""
+    )
     return (
         '<div class="ledger-musing">'
-        f'<div class="ledger-musing-head">{ident}<span class="ledger-chan">wondering</span></div>'
+        f'<div class="ledger-musing-head">{ident}<span class="ledger-chan">wondering</span>{backlink}</div>'
         f'<div class="ledger-body">{escape(task.claim)}</div>'
         f'<div class="ledger-cap-row">{action}</div></div>'
     )
@@ -460,10 +482,20 @@ def _proposal_group_card(group: list[ResearchProposal]) -> str:
         "(approve applies it too).</p>"
         for c in companions
     )
+    # Doorway back to the musing that seeded this run (owner feedback 2026-07-14).
+    source_ids = getattr(primary, "source_note_ids", None)
+    first_note = source_ids[0] if isinstance(source_ids, list) and source_ids else None
+    backlink = (
+        '<button type="button" class="k-chip k-chip-btn ledger-backlink" '
+        f'data-goto-note="{first_note}" title="Jump to the note that seeded this">'
+        "↩ from your note</button>"
+        if first_note
+        else ""
+    )
     return (
         f'<div class="ledger-stance" data-prop-card="{pids}">'
         '<div class="ledger-stance-head">'
-        f'{ident}<span class="ledger-stance-meta">{escape(meta)}</span></div>'
+        f'{ident}<span class="ledger-stance-meta">{escape(meta)}</span>{backlink}</div>'
         f'<div class="ledger-body ledger-editable-body"><strong>{escape(title)}</strong>'
         f"{body}"
         f"{rider}"
@@ -654,9 +686,16 @@ _RECONCILE_JS = """<script>(function(){
 
 
 def _missing_falsifier_line(db_path: Path | str | None) -> str:
-    """One dense line for live held positions with no falsifier — no tripwire
-    coverage is an irreducible owner ask; 'add' routes to the same
-    /api/reconcile/falsifier/<id> edit action the ratify queue uses."""
+    """Live held positions with no falsifier — no tripwire coverage is an
+    irreducible owner ask. Each gap is its OWN ``data-rec-card`` with an empty
+    editable body, so 'Add falsifier' opens the same in-card editor the ratify
+    queue uses and Save POSTs ``{action:'edit', text}`` to
+    /api/reconcile/falsifier/<decision_id>.
+
+    (Bug fix 2026-07-14: the old dense single line wrapped every 'add' in ONE
+    div with no ``data-rec-card``, so ``beginRewrite``'s
+    ``closest('[data-rec-card]')`` returned null and the button silently did
+    nothing.)"""
     from synthesis.reconcile import list_missing_falsifiers
 
     try:
@@ -665,18 +704,25 @@ def _missing_falsifier_line(db_path: Path | str | None) -> str:
         gaps = []
     if not gaps:
         return ""
-    asks = " · ".join(
-        f"{escape(gap.label)} — "
-        f'<button type="button" class="k-btn k-btn-sm k-btn-primary" '
-        f'data-falsifier-action="edit" data-rec-id="{gap.item_id}">add</button>'
-        for gap in gaps
-    )
     lead = (
         "1 live decision needs a falsifier"
         if len(gaps) == 1
         else f"{len(gaps)} live decisions need a falsifier"
     )
-    return f'<div class="ledger-musing"><div class="ledger-body">{lead}: {asks}</div></div>'
+    cards = "".join(
+        f'<div class="ledger-musing" data-rec-card="{gap.item_id}">'
+        f'<div class="ledger-musing-head">{escape(gap.label)}'
+        "<span class='ledger-chan'>needs falsifier</span></div>"
+        # Empty editable body → the in-card editor opens blank for the owner to
+        # author the tripwire in their own words (beginRewrite reads this node).
+        '<div class="ledger-body ledger-editable-body"></div>'
+        '<div class="ledger-cap-row">'
+        '<button type="button" class="k-btn k-btn-sm k-btn-primary" '
+        f'data-falsifier-action="edit" data-rec-id="{gap.item_id}">Add falsifier</button>'
+        "</div></div>"
+        for gap in gaps
+    )
+    return f'<div class="ledger-missing-lead muted">{escape(lead)}:</div>{cards}'
 
 
 def render_reconcile_list(db_path: Path | str | None) -> str:
@@ -853,6 +899,14 @@ _ONMYMIND_STYLE = """<style>
 .om-ladder { font-size: var(--fs-micro); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
 .om-ladder:empty { display: none; }
 .om-actions { flex-wrap: wrap; }
+/* Backlink from a research item to its source note + the brief highlight the
+   scroll applies on arrival (owner feedback 2026-07-14). */
+.ledger-backlink { margin-left: auto; }
+.om-flash { animation: om-flash-kf 1.6s ease-out; }
+@keyframes om-flash-kf {
+  0%, 100% { background: transparent; }
+  20% { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+}
 .om-body a { overflow-wrap: anywhere; }
 .om-brief { margin-top: var(--sp-2); }
 .om-brief summary { font-size: var(--fs-caption); font-weight: 600; color: var(--accent); cursor: pointer; }
@@ -1113,10 +1167,25 @@ def _feed_actions(item: FeedItem) -> str:
 def _feed_card(item: FeedItem) -> str:
     note = item.note
     ctx = note.context or {}
+    chips = ""
     if note.ticker:
         ident = ticker_label(note.ticker)
     elif item.item_type in ("doc", "link"):
         ident = '<span class="ledger-unattr">reading</span>'
+    elif ctx.get("needs_ticker"):
+        # Restore the set-ticker attribution path in feed mode (bug fix
+        # 2026-07-14: the chips existed only on the legacy _musing_card, so a
+        # needs_ticker capture had NO way to be attributed once the feed flag
+        # was on). Mirrors _musing_card's needs-ticker branch.
+        cands = ctx.get("ticker_candidates")
+        names = (
+            ", ".join(escape(str(c)) for c in cast("list[object]", cands))
+            if isinstance(cands, list)
+            else ""
+        )
+        label = f"needs ticker: {names}" if names else "needs ticker"
+        ident = f'<span class="ledger-needs">{label}</span>'
+        chips = _ticker_candidate_chips(cands)
     else:
         ident = '<span class="ledger-unattr">unattributed</span>'
     if item.item_type == "musing":
@@ -1129,12 +1198,14 @@ def _feed_card(item: FeedItem) -> str:
     ladder_badge = f'<span class="om-ladder">{escape(ladder_label)}</span>'
     when = stamp_html(note.created_at, css="ledger-when")
     return (
-        f'<div class="ledger-musing om-item" data-om-id="{note.id}" '
+        f'<div class="ledger-musing om-item" id="om-note-{note.id}" data-om-id="{note.id}" '
+        f'data-note-id="{note.id}" '
         f'data-om-ticker="{escape(note.ticker or "", quote=True)}">'
         f'<div class="ledger-musing-head">{ident}{type_chip}{wondering}{ladder_badge}{when}</div>'
         f'<div class="ledger-body om-body">{_feed_body(item)}</div>'
         f"{_answer_block(ctx)}"
         f"{engage_brief_block(ctx)}"
+        f"{chips}"
         f'<div class="ledger-cap-row om-actions">{_feed_actions(item)}</div>'
         "</div>"
     )
@@ -1202,6 +1273,9 @@ def _onmymind_section(db_path: Path | str | None, *, user_id: str = DEFAULT_USER
         + "</div>"
         + _ONMYMIND_JS
         + _OM_CHAT_JS
+        # Set-ticker chips now render on feed cards too (needs_ticker branch of
+        # _feed_card), so the listener must be wired in feed mode as well.
+        + _SET_TICKER_JS
     )
 
 
@@ -1222,6 +1296,10 @@ _SET_TICKER_JS = """<script>(function(){
       headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker:ticker})})
       .then(function(r){ if(!r.ok){ throw new Error(); } return r.json(); })
       .then(function(){
+        // Refresh whichever feed is mounted (onmymind when the flag is on,
+        // else the legacy list) — same dual-target idiom as _CAPTURE_JS.
+        var om=document.getElementById('onmymind-list');
+        if(om){ fetch('/api/panel/musings?fragment=onmymind').then(function(r){return r.text();}).then(function(h){ om.innerHTML=h; }); return; }
         var list=document.getElementById('ledger-list');
         if(list){ fetch('/api/panel/musings?fragment=list').then(function(r){return r.text();}).then(function(h){ list.innerHTML=h; }); }
       })

@@ -134,6 +134,37 @@ DEFAULT_WEIGHTS: dict[str, float] = {
 # (src/news/store.py) so a mirrored row keeps a chronological lexical sort.
 _DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
+# Low-signal publishers the FMP news firehose aggregates — content farms and
+# ratings-recap wires that dilute the reading lane (owner feedback 2026-07-14:
+# "shit sources"). Matched case-insensitively as a substring of the row's
+# ``firm`` (news.source). A row with no firm (NULL) is never denied — we only
+# drop KNOWN low-quality publishers, never unknown ones. This is a read-time
+# curation filter, not a decay factor: it removes rows, never reorders them, so
+# the non-decaying ordering guarantee is untouched.
+_LOW_QUALITY_SOURCE_TOKENS: tuple[str, ...] = (
+    "zacks",
+    "motley fool",
+    "fool.com",
+    "investorplace",
+    "simply wall st",
+    "insider monkey",
+    "gurufocus",
+    "etf daily news",
+    "validea",
+    "24/7 wall st",
+    "tipranks",
+    "marketbeat",
+)
+
+
+def _is_low_quality_source(firm: str | None) -> bool:
+    """True iff ``firm`` names a denylisted low-signal publisher. NULL/unknown
+    firms are always kept."""
+    if not firm:
+        return False
+    low = firm.lower()
+    return any(token in low for token in _LOW_QUALITY_SOURCE_TOKENS)
+
 
 def is_diet_only(signal_type: str) -> bool:
     """True iff this type is pull-lane exclusive — it has no news backing and
@@ -237,17 +268,22 @@ def load_diet_signals(
         return []
     try:
         marks = ",".join("?" for _ in wanted)
+        # Over-fetch (3x headroom) so the low-quality-source filter below can
+        # drop content-farm rows without starving the stream — the guarantee is
+        # still "the most recent good rows", just computed over a wider window.
         rows = conn.execute(
             f"SELECT {_SELECT_COLS} FROM signals "
             f"WHERE signal_type IN ({marks}) "
             "ORDER BY published_at DESC, weight DESC, id DESC LIMIT ?",
-            (*wanted, int(limit)),
+            (*wanted, int(limit) * 3),
         ).fetchall()
     except sqlite3.Error:
         return []
     finally:
         conn.close()
-    return [_row_to_signal(r) for r in rows]
+    signals = [_row_to_signal(r) for r in rows]
+    kept = [s for s in signals if not _is_low_quality_source(s.firm)]
+    return kept[: int(limit)]
 
 
 def load_forward_agenda(

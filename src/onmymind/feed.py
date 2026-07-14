@@ -30,13 +30,17 @@ from user_state.notes import (
     patch_note_context,
 )
 
-# The feed is flag-gated (default OFF) so a half-wired surface is never visible;
-# the owner is the release manager and flips it when the loop is proven.
+# The feed is flag-gated. Default flipped ON 2026-07-14 (owner sign-off): the
+# overhauled feed (inline answers, contextual actions, inline chat) is the
+# intended Ledger — with it OFF the owner saw the pre-overhaul plain Musings
+# list with no action buttons and no rendered answers ("unresponsive buttons").
+# Set LEDGER_ONMYMIND=0 to fall back to the legacy list.
 _ON = frozenset({"1", "true", "yes", "on"})
+_OFF = frozenset({"0", "false", "no", "off"})
 
 
 def onmymind_enabled() -> bool:
-    return os.environ.get("LEDGER_ONMYMIND", "0").strip().lower() in _ON
+    return os.environ.get("LEDGER_ONMYMIND", "1").strip().lower() not in _OFF
 
 
 # The ladder rungs, canonical spelling shared by the route, the Telegram callback,

@@ -211,12 +211,10 @@ def render_evidence_drawer(
 def _render_summary_section(parsed: Mapping[str, object]) -> str:
     raw_summary = parsed.get("summary")
     if raw_summary is None or raw_summary == "":
-        return (
-            '<div class="evidence-section evidence-why">'
-            '<div class="evidence-section-title">Why this fired</div>'
-            '<div class="muted">No summary supplied by the sensor.</div>'
-            "</div>"
-        )
+        # Hide-don't-stub (owner feedback 2026-07-14: alert cards were mostly
+        # empty stacked labels). An empty summary renders nothing rather than a
+        # labelled "No summary" filler row.
+        return ""
     return (
         '<div class="evidence-section evidence-why">'
         '<div class="evidence-section-title">Why this fired</div>'
@@ -269,12 +267,11 @@ def _render_citations_section(
     citations = _normalize_citations(parsed.get("citations"))
     citations.extend(_citations_from_shifts(parsed.get("shifts")))
     if not citations:
-        return (
-            '<div class="evidence-section evidence-citations">'
-            '<div class="evidence-section-title">Source citations</div>'
-            '<div class="muted">No citations supplied.</div>'
-            "</div>"
-        )
+        # Hide-don't-stub: no citations → render nothing rather than a labelled
+        # "No citations supplied" row (owner feedback 2026-07-14: empty stacked
+        # labels killed the density). The Raw evidence drawer still carries the
+        # full payload for anyone who needs to audit.
+        return ""
 
     rows: list[str] = []
     rows.append(

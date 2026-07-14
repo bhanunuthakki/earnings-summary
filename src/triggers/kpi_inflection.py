@@ -107,8 +107,10 @@ _SERIES_SNAPSHOT_LEN = 8
 
 # |z| bar at which an *un-thresholded* KPI's inflection is significant enough
 # to fire on its own. A mild inflection on a tracked-but-unthresholded KPI is
-# noise and stays silent.
-_SIGNIFICANT_ZSCORE = 2.0
+# noise and stays silent. Raised 2.0 -> 2.5 (owner feedback 2026-07-14: low
+# alert quality) — on the short quarterly windows here (z-window as small as 4)
+# a |z|>=2 crossing is statistically weak and over-fires.
+_SIGNIFICANT_ZSCORE = 2.5
 
 # Registry threshold_direction vocabulary (migration 0060).
 _THRESHOLD_BELOW = "below"

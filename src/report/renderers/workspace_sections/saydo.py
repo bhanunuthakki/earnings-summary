@@ -8,7 +8,7 @@ re-exports in ``workspace_html``."""
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from io import StringIO
 from pathlib import Path
 
@@ -155,14 +155,26 @@ def _saydo_verdicts_panel(body: StringIO, rows: list[SayDoVerdictRow]) -> None:
     """
     if not rows:
         return
+    today = datetime.now().date()
     graded = sum(1 for r in rows if r.outcome is not None)
+    n = len(rows)
     body.write(
         _panel_head(
             "Say·Do verdict ledger",
-            sub=f"{len(rows)} commitment{'s' if len(rows) != 1 else ''} · {graded} graded",
+            sub=f"{n} commitment{'s' if n != 1 else ''} tracked · {graded} with a reported result",
             classes="saydo-verdicts-panel",
         )
     )
+    if graded == 0:
+        # All commitments are still open — the target quarters haven't reported
+        # yet (or the reported figure hasn't matched). This is a legitimate
+        # "not due yet" state, NOT missing data — owner feedback 2026-07-14:
+        # the bare "0 graded / NO DATA" read as broken.
+        body.write(
+            '<p class="muted saydo-pending-note">None have a reported result yet — '
+            "each commitment is graded automatically once its target quarter prints. "
+            "The status column shows how long each has to run.</p>"
+        )
     body.write(lg.grid_open())
     body.write(lg.filter_bar(len(rows), noun="commitments"))
     body.write(
@@ -183,6 +195,11 @@ def _saydo_verdicts_panel(body: StringIO, rows: list[SayDoVerdictRow]) -> None:
         else:
             realized = '<span class="muted">—</span>'
         outcome = r.outcome if r.outcome else "no_data"
+        outcome_pill = (
+            _outcome_pill(outcome)
+            if r.outcome
+            else _saydo_pending_pill(r.period_target.date(), today)
+        )
         made_label = _fmt_made_period(r.period_made)
         target_label = _fmt_made_period(r.period_target)
         # data-made/-target are ISO dates so the text sort orders chronologically
@@ -200,7 +217,7 @@ def _saydo_verdicts_panel(body: StringIO, rows: list[SayDoVerdictRow]) -> None:
         body.write(f'<td class="saydo-metric">{_esc(r.kpi_name)}</td>')
         body.write(f'<td class="saydo-guide">{_esc(promise)}</td>')
         body.write(f'<td class="saydo-actual"><strong>{realized}</strong></td>')
-        body.write(f"<td>{_outcome_pill(outcome)}</td>")
+        body.write(f"<td>{outcome_pill}</td>")
         body.write("</tr>")
     body.write("</tbody></table>")
     body.write(lg.grid_close())
@@ -247,7 +264,11 @@ def _saydo_print_vs_guide(
     llm_filtered: bool,
 ) -> None:
     if llm_filtered and total_parsed > len(rows):
-        sub = f"{len(rows)} of {total_parsed} commitments · LLM-judged for thesis relevance"
+        dropped = total_parsed - len(rows)
+        sub = (
+            f"showing {len(rows)} of {total_parsed} — {dropped} set aside as not "
+            "thesis-relevant (not missing data)"
+        )
     else:
         sub = f"{len(rows)} commitments scored"
     body.write(_panel_head("Print vs guide", sub=sub))
@@ -294,6 +315,31 @@ def _outcome_pill(outcome: str) -> str:
     tone_name, label = mapping.get(outcome.lower(), ("muted", outcome.upper()))
     tone = _CHIP_TONE.get(tone_name, "")
     return f'<span class="k-chip k-chip-mono{tone}">{_esc(label)}</span>'
+
+
+def _saydo_pending_pill(period_target: date, today: date) -> str:
+    """A self-explanatory pill for an as-yet-ungraded commitment.
+
+    Replaces the bare "NO DATA" (owner feedback 2026-07-14: it read as broken
+    data). A commitment is ungraded because its target quarter either hasn't
+    arrived (AWAITING) or has passed without a matched print yet (PENDING) —
+    both legitimate open states, distinguished so the reader can tell "not due"
+    from "overdue".
+    """
+    if period_target > today:
+        label, title = "AWAITING", f"Target {_quarter_label(period_target)} hasn't reported yet"
+    else:
+        label, title = (
+            "PENDING",
+            f"Target {_quarter_label(period_target)} has passed — awaiting the reported figure",
+        )
+    return f'<span class="k-chip k-chip-mono" title="{_esc(title)}">{label}</span>'
+
+
+def _quarter_label(d: date) -> str:
+    """``Q3 '25`` from a date (mirrors ``_fmt_made_period`` for a plain date)."""
+    quarter = (d.month - 1) // 3 + 1
+    return f"Q{quarter} {chr(0x2019)}{str(d.year)[2:]}"
 
 
 def _saydo_historical_ledger(body: StringIO, metrics: list[SayDoHistoricalMetric]) -> None:

@@ -185,19 +185,21 @@ def test_empty_evidence_string_is_malformed() -> None:
 # ----------------------------------------------------------------------------
 
 
-def test_evidence_without_summary_renders_no_summary_text() -> None:
-    """A valid JSON object with no summary key still renders the section header
-    but emits a 'no summary' muted note instead of crashing on a None."""
+def test_evidence_without_summary_hides_the_section() -> None:
+    """Hide-don't-stub (owner feedback 2026-07-14): a missing summary renders
+    nothing rather than an empty labelled 'Why this fired / No summary' row, so
+    thin alerts don't stack empty labels. Must not crash on the None."""
     alert = _make_alert(evidence=json.dumps({"citations": []}))
     html = render_evidence_drawer(alert)
-    assert "Why this fired" in html
-    assert "No summary supplied" in html
+    assert "Why this fired" not in html
+    assert "No summary supplied" not in html
 
 
-def test_evidence_without_citations_renders_no_citations_note() -> None:
+def test_evidence_without_citations_hides_the_section() -> None:
     alert = _make_alert(evidence=json.dumps({"summary": "ok"}))
     html = render_evidence_drawer(alert)
-    assert "No citations supplied" in html
+    assert "Source citations" not in html
+    assert "No citations supplied" not in html
 
 
 # ----------------------------------------------------------------------------

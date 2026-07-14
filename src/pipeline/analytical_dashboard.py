@@ -516,6 +516,20 @@ def _build_trigger_ladder(
     if not has_dcf:
         return []
 
+    # The ladder is only relevant for names the owner has an actual thesis on
+    # (owner feedback 2026-07-14: "Triggers has so much irrelevant data — it
+    # should only be for names where I have a thesis"). Require a non-empty
+    # thesis_state.thesis, the same has_written_thesis predicate the canonical
+    # v_thesis_status view uses (migration 0143). Absent the table, no ladder.
+    has_thesis_state = (
+        conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='thesis_state'"
+        ).fetchone()
+        is not None
+    )
+    if not has_thesis_state:
+        return []
+
     # Subquery: each ticker's latest dcf_runs row (segment_name = NULL = consolidated)
     rows = conn.execute(
         f"""
@@ -540,9 +554,10 @@ def _build_trigger_ladder(
         LEFT JOIN dcf_runs dr
           ON dr.ticker = tc.ticker AND dr.valuation_date = ld.vd
           AND (dr.segment_name IS NULL OR dr.segment_name = '')
-        LEFT JOIN thesis_state ts ON ts.ticker = tc.ticker
+        JOIN thesis_state ts ON ts.ticker = tc.ticker
         WHERE tc.archived_at IS NULL
           AND tc.list_type IN ({placeholders})
+          AND TRIM(COALESCE(ts.thesis, '')) <> ''
         ORDER BY ABS(COALESCE(dr.over_under_pct, 0)) DESC, tc.ticker
         """,
         list_types,

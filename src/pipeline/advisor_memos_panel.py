@@ -167,28 +167,37 @@ def _screen_section(
             '<p class="muted">No screen rows — needs holdings and external names with '
             "usable DCF runs.</p></section>"
         )
+    # The "best alternative" is a single portfolio-wide winner (the highest-upside
+    # eligible external name), so it is identical on every row — owner feedback
+    # 2026-07-14: "why is the alternative the same for everything — remove the
+    # column." Name it ONCE in a caption; the table then carries only per-holding
+    # data (its own upside + the margin against that one alternative).
+    best = screen[0]
+    caption = (
+        f'<p class="sub am-swap-target">Best available alternative: '
+        f'<a href="/ticker/{escape(best.candidate)}" class="ticker-link">{escape(best.candidate)}</a> '
+        f'<span class="muted">({escape(best.candidate_list)})</span> '
+        f"at {best.candidate_upside_pct:+.0f}% DCF upside. Each holding below is scored by the "
+        "margin its own upside trails this alternative.</p>"
+    )
     rows = "".join(
         f"<tr{_screen_data(s)}>"
         f'<td class="ticker"><a href="/ticker/{escape(s.holding)}" class="ticker-link">'
         f"{escape(s.holding)}</a></td>"
         f'<td class="num">{s.holding_upside_pct:+.0f}%</td>'
-        f"<td>{escape(s.candidate)} <span class='muted'>({escape(s.candidate_list)})</span></td>"
-        f'<td class="num">{s.candidate_upside_pct:+.0f}%</td>'
         f'<td class="num {"am-cleared" if s.cleared else ""}">{s.margin_pp:+.0f}pp</td>'
         f"<td>{_bar_cell(s)}</td>"
         "</tr>"
         for s in screen
     )
     return (
-        f"{head}"
+        f"{head}{caption}"
         + lg.grid_open()
-        + lg.filter_bar(len(screen), noun="rows", placeholder="Filter by holding / alternative…")
+        + lg.filter_bar(len(screen), noun="rows", placeholder="Filter by holding…")
         + '<table class="am-screen"><thead><tr>'
         + lg.th("Holding", "holding", "text", num=False)
         + lg.th("Upside", "hupside", "num")
-        + lg.th("Best alternative", "alt", "text", num=False)
-        + lg.th("Upside", "aupside", "num")
-        + lg.th("Margin", "margin", "num")
+        + lg.th("Margin vs alt", "margin", "num")
         + "<th>Bar</th>"
         + "</tr></thead><tbody>"
         + f"{rows}</tbody></table>"
@@ -199,11 +208,9 @@ def _screen_section(
 
 def _screen_data(s: SwapCandidate) -> str:
     return (
-        lg.data_text(f"{s.holding} {s.candidate} {s.candidate_list}")
+        lg.data_text(f"{s.holding} {s.candidate}")
         + lg.data_text_key("holding", s.holding)
         + lg.data_num("hupside", s.holding_upside_pct)
-        + lg.data_text_key("alt", s.candidate)
-        + lg.data_num("aupside", s.candidate_upside_pct)
         + lg.data_num("margin", s.margin_pp)
     )
 

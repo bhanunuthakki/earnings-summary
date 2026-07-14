@@ -56,11 +56,10 @@ def test_overview_rail_carries_unread_badge_and_inbox_js() -> None:
     assert "data-ix-badge" not in bare
 
 
-def test_overview_main_column_hoists_upcoming_strip_above_cockpit() -> None:
-    """PR3 (navigation_ia §4): the retired /digest page's one surviving
-    feature — the compact upcoming-earnings strip — is HOISTED from the rail
-    into the main column, after the since-last/continue placeholder and
-    before the cockpit; the rail keeps only the Inbox."""
+def test_overview_demotes_upcoming_into_the_inbox_rail() -> None:
+    """Owner feedback 2026-07-14: upcoming earnings is DEMOTED from a pinned top
+    box in the main column into a collapsed section inside the Inbox rail — "a
+    subtab/category in inbox, not a top pinned box"."""
     html = render_overview_panel(
         {"portfolio": [], "evaluation": []},
         coverage={},
@@ -68,12 +67,13 @@ def test_overview_main_column_hoists_upcoming_strip_above_cockpit() -> None:
         upcoming_html='<div class="up-strip">UP-MARKER</div>',
     )
     assert "UP-MARKER" in html
-    assert html.index('id="cc-today-bands"') < html.index('class="up-strip"')
-    assert html.index('class="up-strip"') < html.index("cc-cockpit-live")
-    # It's in the MAIN column, not the rail.
-    main_start = html.index('class="cc-home-main"')
+    # It sits in the RAIL now (after the rail starts), wrapped in a collapsible,
+    # and BEFORE the inbox stream — no longer between the bands and the cockpit.
+    assert "cc-rail-upcoming" in html
     rail_start = html.index('class="cc-home-rail"')
-    assert main_start < html.index('class="up-strip"') < rail_start
+    assert rail_start < html.index('class="up-strip"')
+    assert html.index('class="up-strip"') < html.index("ix-stream")
+    assert html.index("cc-cockpit-live") < html.index('class="cc-home-rail"')
     # The rail links to the feed only — the digest link is gone.
     assert 'href="/feed"' in html
     assert "/digest" not in html
@@ -84,6 +84,7 @@ def test_overview_main_column_hoists_upcoming_strip_above_cockpit() -> None:
         inbox_html='<div class="ix-stream"></div>',
     )
     assert "up-strip" not in no_strip
+    assert "cc-rail-upcoming" not in no_strip
     assert 'data-ix-badge="home"' in no_strip
     # The strip's CSS ships with the shell stylesheet.
     assert ".up-strip {" in SHELL_CSS

@@ -52,8 +52,9 @@ _RECENCY_DAYS = 30
 # A restated value must move the figure by at least this percent to fire. Below
 # it the change is a rounding-level reclassification, not a thesis-relevant
 # correction. (The credibility ledger's immaterial tolerance is 0.5%; the push
-# bar is deliberately higher.)
-_MATERIAL_DELTA_PCT = 1.0
+# bar is deliberately higher.) Raised 1.0 -> 3.0 (owner feedback 2026-07-14:
+# pending-alert quality was low — a 1% restatement is noise, not a signal).
+_MATERIAL_DELTA_PCT = 3.0
 
 # Defensive cap on candidates emitted per ticker per run — dedup already
 # suppresses re-fires, but this bounds a pathological backfill.

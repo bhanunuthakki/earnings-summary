@@ -993,20 +993,25 @@ def _failure_modes_panel(body: StringIO, bear: BearCaseSection) -> None:
 
 def _failure_mode_card(body: StringIO, idx: int, fm: FailureMode) -> None:
     anchor_key = _esc(fm.hypothesis[:80])
+    # Only emit a meta row when its value is present — owner feedback 2026-07-14:
+    # the fixed 4-row label grid stacked empty labels and killed the density.
+    meta_pairs = (
+        ("Evidence", fm.evidence_in_data),
+        ("Leading", fm.leading_indicator),
+        ("Quant impact", fm.quantitative_impact),
+        ("Refutation", fm.refutation_criteria),
+    )
+    meta = "".join(
+        f'<span class="failure-label">{label}</span><span>{_esc(value)}</span>'
+        for label, value in meta_pairs
+        if value and value.strip()
+    )
+    meta_html = f'<div class="failure-meta">{meta}</div>' if meta else ""
     body.write(
         f'<div class="failure" data-commentable="true" data-anchor-type="failure_mode" '
         f'data-anchor-key="{anchor_key}" data-anchor-tab="bear">'
         f'<div class="failure-num">{idx + 1:02d}</div>'
         '<div class="failure-body">'
         f'<div class="failure-title">{_esc(fm.hypothesis)}</div>'
-        '<div class="failure-meta">'
-        '<span class="failure-label">Evidence</span>'
-        f"<span>{_esc(fm.evidence_in_data)}</span>"
-        '<span class="failure-label">Leading</span>'
-        f"<span>{_esc(fm.leading_indicator)}</span>"
-        '<span class="failure-label">Quant impact</span>'
-        f"<span>{_esc(fm.quantitative_impact)}</span>"
-        '<span class="failure-label">Refutation</span>'
-        f"<span>{_esc(fm.refutation_criteria)}</span>"
-        "</div></div></div>"
+        f"{meta_html}</div></div>"
     )

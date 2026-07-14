@@ -492,5 +492,31 @@ def test_thesis_tones_memo_invalidates_on_db_write(tmp_path: Path) -> None:
 
 def test_why_string_names_every_factor() -> None:
     why = _rank([_alert_item()])[0].score_why
-    for token in ("severity", "x recency", "x position", "x thesis", "="):
+    for token in ("severity", "x recency", "x position", "x thesis", "x strength", "="):
         assert token in why
+
+
+def test_signal_strength_orders_within_a_category() -> None:
+    """Owner feedback 2026-07-14: ordering felt random because a marginal and a
+    screaming alert of the same kind scored identically. A high-|z| KPI inflection
+    now outranks a barely-significant one (same ticker, recency, position)."""
+    strong = _alert_item(trigger_kind="kpi_inflection", evidence={"zscore": 6.0})
+    weak = _alert_item(trigger_kind="kpi_inflection", evidence={"zscore": 2.1})
+    ranked = _rank([weak, strong])
+    assert ranked[0].score > ranked[1].score
+    assert "|z| 6.0" in ranked[0].score_why
+
+
+def test_owner_falsifier_breach_is_max_strength() -> None:
+    """A decision_condition breach (owner-authored falsifier) is the strongest
+    signal class — it takes the strength ceiling."""
+    it = _alert_item(trigger_kind="decision_condition", evidence={"detail": "NPL > 5%"})
+    why = _rank([it])[0].score_why
+    assert "strength 1.50 (owner falsifier breach)" in why
+
+
+def test_strength_is_inert_without_a_magnitude() -> None:
+    """An alert with no recognised magnitude field is neutral (1.0) — the factor
+    never penalises alerts it can't score."""
+    why = _rank([_alert_item(trigger_kind="earnings_tone")])[0].score_why
+    assert "strength 1.00 (n/a)" in why

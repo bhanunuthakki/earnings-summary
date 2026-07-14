@@ -117,6 +117,91 @@ def test_no_raw_hex_in_output(db: Path) -> None:
     assert not re.findall(r"(?<![\w&])#[0-9a-fA-F]{3,8}\b", html)
 
 
+def test_book_names_float_to_top_and_are_marked(tmp_path: Path) -> None:
+    """Owner feedback 2026-07-14: the diet must prioritise portfolio + evaluation
+    names. A held name with an OLDER story still leads a watchlist name with a
+    NEWER one, and carries the 'core' marker."""
+    d = tmp_path / "prio.db"
+    make_news_then_signals(
+        d,
+        [
+            # book name, older
+            (
+                "NU",
+                "Nu held story",
+                "http://x/nu",
+                "2026-06-10 09:00:00",
+                None,
+                "Reuters",
+                "fmp_stock_news",
+                "t",
+            ),
+            # non-book name, newer (would lead in pure recency)
+            (
+                "ZZZ",
+                "Zzz watch story",
+                "http://x/zz",
+                "2026-06-14 09:00:00",
+                None,
+                "Reuters",
+                "fmp_stock_news",
+                "t",
+            ),
+        ],
+    )
+    conn = sqlite3.connect(str(d))
+    try:
+        conn.execute(
+            "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TIMESTAMP)"
+        )
+        conn.executemany(
+            "INSERT INTO tracked_companies (ticker, list_type) VALUES (?, ?)",
+            [("NU", "portfolio"), ("ZZZ", "watchlist")],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    html = render_diet_panel(d)
+    # Held name leads despite its older timestamp; watchlist name follows.
+    assert html.index("Nu held story") < html.index("Zzz watch story")
+    # The book row is marked; the watchlist row is not.
+    assert "core" in html
+
+
+def test_low_quality_sources_are_filtered_from_the_stream(tmp_path: Path) -> None:
+    """Owner feedback 2026-07-14: 'shit sources'. Content-farm publishers are
+    dropped from the reading lane; reputable ones stay."""
+    d = tmp_path / "sources.db"
+    make_news_then_signals(
+        d,
+        [
+            (
+                "NU",
+                "Nu real report",
+                "http://x/1",
+                "2026-06-12 09:00:00",
+                None,
+                "Reuters",
+                "fmp_stock_news",
+                "t",
+            ),
+            (
+                "NU",
+                "Nu farm recap",
+                "http://x/2",
+                "2026-06-13 09:00:00",
+                None,
+                "Zacks Investment Research",
+                "fmp_stock_news",
+                "t",
+            ),
+        ],
+    )
+    html = render_diet_panel(d)
+    assert "Nu real report" in html
+    assert "Nu farm recap" not in html
+
+
 def test_escapes_untrusted_headline(tmp_path: Path) -> None:
     d = tmp_path / "xss.db"
     make_news_then_signals(

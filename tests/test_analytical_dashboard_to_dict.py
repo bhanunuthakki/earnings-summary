@@ -54,6 +54,7 @@ def _seed_db(db_path: Path) -> None:
         );
         CREATE TABLE thesis_state (
             ticker TEXT NOT NULL,
+            thesis TEXT,
             breach_status TEXT
         );
         CREATE TABLE dcf_runs (
@@ -123,7 +124,10 @@ def _seed_db(db_path: Path) -> None:
     conn.execute(
         "INSERT INTO tracked_companies (ticker, name, list_type) VALUES ('NU', 'Nu', 'portfolio')"
     )
-    conn.execute("INSERT INTO thesis_state (ticker, breach_status) VALUES ('NU', 'watch')")
+    conn.execute(
+        "INSERT INTO thesis_state (ticker, thesis, breach_status) "
+        "VALUES ('NU', 'Digital bank compounding deposits and cross-sell.', 'watch')"
+    )
     conn.execute(
         "INSERT INTO dcf_runs (ticker, valuation_date, segment_name, over_under_pct, "
         "mos_bar_used, live_price, npv_per_share) "
