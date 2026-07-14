@@ -25,6 +25,7 @@ kit (`.p-table`/`.k-pill`/`.k-chip`/`ticker_label`) — no raw hex, guard-clean.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, date, datetime
 from html import escape
 from pathlib import Path
@@ -39,6 +40,36 @@ from signals.store import (
 )
 from ui import living_grid as lg
 from ui.controls import ticker_label
+
+# Names on the book lead the reading lane (owner feedback 2026-07-14: "no
+# priority for portfolio and eval list"). portfolio first, then evaluation,
+# then everything else — a stored-field salience tier applied at the panel, so
+# the diet reader stays a pure non-decaying recency sort (the guard invariant).
+_BOOK_PRIORITY: dict[str, int] = {"portfolio": 0, "evaluation": 1}
+_BOOK_MARKER: dict[str, tuple[str, str]] = {
+    "portfolio": ("core", "Held"),
+    "evaluation": ("eval", "On the evaluation list"),
+}
+
+
+def _load_list_types(db_path: Path) -> dict[str, str]:
+    """``ticker -> list_type`` for active tracked names — used only to float the
+    owner's book to the top of the reading lane and mark it. Degrades to ``{}``
+    on any read error (the panel then renders in plain recency order)."""
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return {}
+    try:
+        rows = conn.execute(
+            "SELECT ticker, list_type FROM tracked_companies WHERE archived_at IS NULL"
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+    return {str(t): str(lt) for t, lt in rows if t and lt}
+
 
 # The non-forward-dated reading lanes shown in the ingest stream: news-backed
 # ratings + news (mirrored) plus media appearances (written direct, free path).
@@ -83,6 +114,9 @@ def render_diet_panel(db_path: Path) -> str:
     today = datetime.now(UTC).date()
     stream = load_diet_signals(db_path, types=_STREAM_TYPES, limit=80)
     agenda = load_forward_agenda(db_path, on_or_after=today, limit=40)
+    list_types = _load_list_types(db_path)
+    # Stable sort (recency preserved within tier): book names float to the top.
+    stream.sort(key=lambda r: _BOOK_PRIORITY.get(list_types.get(r.ticker, ""), 9))
     return "".join(
         [
             _PANEL_STYLE,
@@ -91,7 +125,7 @@ def render_diet_panel(db_path: Path) -> str:
             "kept separate from the inbox's push lane (what needs your <strong>action</strong>). "
             "Sell-side ratings and news here never decay or fire an alert; a thesis breach "
             "still reaches the inbox.</p>",
-            _stream_section(stream),
+            _stream_section(stream, list_types),
             _agenda_section(agenda, today),
             _scaffold_note(),
             "</section>",
@@ -99,18 +133,19 @@ def render_diet_panel(db_path: Path) -> str:
     )
 
 
-def _stream_section(rows: list[SignalRow]) -> str:
+def _stream_section(rows: list[SignalRow], list_types: dict[str, str]) -> str:
     head = (
         '<div class="diet-sec first"><h3 class="diet-sec-h">Ingest stream</h3>'
-        '<p class="diet-sec-sub">Recent sell-side ratings + news on tracked names, '
-        "newest first. Not ranked by urgency — this is reading, not triage.</p>"
+        '<p class="diet-sec-sub">Recent sell-side ratings + news, '
+        "<strong>your book first</strong> (held then evaluation), each newest-first. "
+        "Not ranked by urgency — this is reading, not triage.</p>"
     )
     if not rows:
         return (
             head + '<p class="diet-empty">No diet signals yet — they populate from the '
             "news + yfinance-grades feeds.</p></div>"
         )
-    body = "".join(_stream_row(r) for r in rows)
+    body = "".join(_stream_row(r, list_types.get(r.ticker, "")) for r in rows)
     table = (
         lg.grid_open()
         + lg.filter_bar(len(rows), noun="signals", placeholder="Filter by name / source / text…")
@@ -126,7 +161,7 @@ def _stream_section(rows: list[SignalRow]) -> str:
     return head + table + "</div>"
 
 
-def _stream_row(r: SignalRow) -> str:
+def _stream_row(r: SignalRow, list_type: str = "") -> str:
     label, tone = _TYPE_PILL.get(r.signal_type, (r.signal_type, ""))
     pill_cls = f"k-pill {tone}".strip()
     type_cell = f'<span class="{pill_cls}">{escape(label)}</span>'
@@ -137,8 +172,14 @@ def _stream_row(r: SignalRow) -> str:
         else title
     )
     firm = f'<span class="diet-firm">{escape(r.firm)}</span>' if r.firm else "—"
+    marker = _BOOK_MARKER.get(list_type)
+    marker_html = (
+        f' <span class="k-chip k-chip-mono" title="{escape(marker[1])}">{marker[0]}</span>'
+        if marker
+        else ""
+    )
     data = (
-        lg.data_text(f"{r.ticker} {r.title} {r.firm or ''} {label}")
+        lg.data_text(f"{r.ticker} {r.title} {r.firm or ''} {label} {list_type}")
         + lg.data_text_key("when", r.published_at[:10])
         + lg.data_text_key("name", r.ticker)
         + lg.data_text_key("type", label)
@@ -147,7 +188,7 @@ def _stream_row(r: SignalRow) -> str:
     return (
         f"<tr{data}>"
         f'<td class="diet-when">{escape(r.published_at[:10])}</td>'
-        f"<td>{ticker_label(r.ticker)}</td>"
+        f"<td>{ticker_label(r.ticker)}{marker_html}</td>"
         f"<td>{type_cell}</td>"
         f'<td class="diet-sig">{sig_cell}</td>'
         f"<td>{firm}</td>"
