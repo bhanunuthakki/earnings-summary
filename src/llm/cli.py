@@ -773,6 +773,22 @@ def _enforce_budget_pre_call(purpose: str | None, *, force_budget_bypass: bool) 
             )
 
 
+def _stderr_tail(exc: BaseException, limit: int = 400) -> str:
+    """Best-effort tail of a failed subprocess's captured stderr (falls back
+    to stdout). ``str(subprocess.CalledProcessError)`` is just "Command '...'
+    returned non-zero exit status N" — the actual reason (usage-limit reached,
+    auth expired, network error) lives in ``.stderr``/``.stdout``, which
+    ``capture_output=True`` populates on the exception but the default
+    ``__str__`` drops. Every ledger row previously recorded that generic
+    message regardless of cause, which is why a systemic quota-exhaustion
+    incident and a one-off CLI bug were indistinguishable after the fact."""
+    stderr = str(getattr(exc, "stderr", None) or "").strip()
+    if stderr:
+        return stderr[-limit:]
+    stdout = str(getattr(exc, "stdout", None) or "").strip()
+    return stdout[-limit:] if stdout else ""
+
+
 def _call_claude(
     prompt: str,
     model: str = DEFAULT_MODEL,
@@ -895,6 +911,10 @@ def _call_claude(
         return text
     except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as claude_error:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
+        error_msg = f"{type(claude_error).__name__}: {str(claude_error)[:500]}"
+        tail = _stderr_tail(claude_error)
+        if tail:
+            error_msg += f" | output: {tail}"
         record_llm_call(
             started_at=started_at,
             elapsed_ms=elapsed_ms,
@@ -905,7 +925,7 @@ def _call_claude(
             ticker=ticker,
             scope=scope,
             run_id=run_id,
-            error=f"{type(claude_error).__name__}: {str(claude_error)[:500]}",
+            error=error_msg,
         )
         # Operational failure — try Gemini fallback. fallback_call_logged raises
         # if no Gemini key is configured, surfacing both errors together. The
@@ -1282,6 +1302,10 @@ def call_llm_with_web(
         return text
     except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as web_err:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
+        web_error_msg = f"{type(web_err).__name__}: {str(web_err)[:500]}"
+        web_tail = _stderr_tail(web_err)
+        if web_tail:
+            web_error_msg += f" | output: {web_tail}"
         record_llm_call(
             started_at=started_at,
             elapsed_ms=elapsed_ms,
@@ -1292,7 +1316,7 @@ def call_llm_with_web(
             ticker=ticker,
             scope=scope or "web",
             run_id=run_id,
-            error=f"{type(web_err).__name__}: {str(web_err)[:500]}",
+            error=web_error_msg,
         )
         log.warning(
             {

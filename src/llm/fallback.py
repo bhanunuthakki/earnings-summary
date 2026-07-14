@@ -43,6 +43,28 @@ GEMINI_FALLBACK_MODEL = "gemini-2.5-flash"
 GEMINI_REQUEST_TIMEOUT_S = float(os.environ.get("GEMINI_TIMEOUT_S", "120"))
 
 
+def _stderr_tail(exc: BaseException, limit: int = 400) -> str:
+    """Best-effort tail of a failed subprocess's captured stderr (falls back
+    to stdout). ``str(subprocess.CalledProcessError)`` drops both, so the
+    RuntimeErrors below used to name only "returned non-zero exit status N"
+    with no hint of WHY (quota exhaustion, auth, network). Duplicated from
+    ``llm.cli._stderr_tail`` rather than imported — importing ``llm.cli``
+    here would cycle back through ``llm.ledger`` -> ``llm.fallback``."""
+    stderr = str(getattr(exc, "stderr", None) or "").strip()
+    if stderr:
+        return stderr[-limit:]
+    stdout = str(getattr(exc, "stdout", None) or "").strip()
+    return stdout[-limit:] if stdout else ""
+
+
+def _describe(claude_error: Exception, limit: int = 300) -> str:
+    """``{type}: {message}`` plus any captured stderr/stdout tail — the
+    single place the three RuntimeErrors below render the Claude root cause."""
+    base = f"{type(claude_error).__name__}: {str(claude_error)[:limit]}"
+    tail = _stderr_tail(claude_error)
+    return f"{base} | output: {tail}" if tail else base
+
+
 def is_fallback_disabled() -> bool:
     """Returns True when the operator has explicitly disabled the Gemini
     fallback via ``LLM_FALLBACK_DISABLED=1`` in the environment.
@@ -93,14 +115,14 @@ def try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
         raise RuntimeError(
             f"Claude CLI failed and Gemini fallback is disabled "
             f"(LLM_FALLBACK_DISABLED=1).\n"
-            f"Claude error: {type(claude_error).__name__}: {str(claude_error)[:300]}"
+            f"Claude error: {_describe(claude_error)}"
         ) from claude_error
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise RuntimeError(
             "Claude CLI failed AND no Gemini fallback configured. "
-            f"Original Claude error: {type(claude_error).__name__}: {str(claude_error)[:300]}\n"
+            f"Original Claude error: {_describe(claude_error)}\n"
             "Add GEMINI_API_KEY=<your-key> to .env to enable the fallback path "
             "(or set LLM_FALLBACK_DISABLED=1 to explicitly opt out)."
         ) from claude_error
@@ -124,7 +146,7 @@ def try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
     if not text:
         raise RuntimeError(
             "Both LLMs failed: Claude CLI errored AND Gemini fallback returned empty response.\n"
-            f"Claude error: {type(claude_error).__name__}: {str(claude_error)[:200]}"
+            f"Claude error: {_describe(claude_error)}"
         ) from claude_error
     log.info({"event": "gemini_fallback_done", "response_chars": len(text)})
     return text

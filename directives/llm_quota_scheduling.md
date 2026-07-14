@@ -36,9 +36,9 @@ registry**.
 
 | Task | Schedule | LLM legs | Notes |
 |---|---|---|---|
-| `run_morning_pipeline` | daily 04:00 | stage 0 news → `material_news_classification`; stage 0b `decision_conditions_extract` (+ qualitative twin) | the canonical protected window; post-#814 degrades per-item |
+| `run_morning_pipeline` | daily 04:00 | stage 0 news → `material_news_classification`; stage 0b `decision_conditions_extract` (+ qualitative twin); stage 1b standup (`run_standup.py`) → `ask_answer` compose + `eval_judge` gate per surviving trip | the canonical protected window; post-#814 degrades per-item; stage 1b was the previously-undocumented leg behind the 2026-07-13 incident (below) |
 | `refresh_scenario_priors` | monthly, 1st 03:00 | `scenario_prior` (Sonnet) | `--only-changed` + `inputs_sha256` → usually zero calls |
-| weekly eval rungs (`run_grade_calibration` / model-eval) | Sun ~10:30 | `eval_judge`, rubric audits, sweep candidates | daytime slot — deliberately outside burst hours |
+| weekly eval rungs (`run_grade_calibration` / model-eval) | Sun 10:30 | `eval_judge`, rubric audits, sweep candidates | daytime slot — deliberately outside burst hours; the LIVE Windows Task Scheduler entry had drifted to 03:30 (inside the protected window, colliding with `run_morning_pipeline`) — re-registered to 10:30 on 2026-07-13, see incident note below |
 | `ledger_synthesis` | daily (morning block) | `theme_synth` | cost-capped; degrades to "synthesis not available" |
 | capture poller (service, event-driven) | continuous | `capture_intent` (Haiku per musing), `artifact_brief` (Sonnet) | no fixed window; starved calls surface as missed classifications — budgets seeded warn-mode (0138/0139) |
 | `coach_pings` | daily 07:15 | **none** (zero-LLM governor) | listed to show it's quota-safe |
@@ -60,7 +60,31 @@ classifies this as non-hard-stop and returns a `score=0.0` sentinel — but unti
 PR2, that sentinel was recorded under `STATUS_SUPPRESSED_EVAL`, which is in the
 dedup set, so each transient failure locked its trip out of retry for a full
 `dedup_days` (7-day) window. `standup.ledger.STATUS_JUDGE_FAILED` (excluded from
-dedup) now fixes the mis-recording. The underlying CLI failures themselves are a
-separate, still-open investigation — almost certainly the quota-collision this
-directive exists to prevent (rule 1); the standup pipeline's fixed daily run
-time should be checked against burst-hour proximity per rule 2.
+dedup) now fixes the mis-recording.
+
+**Follow-up — root cause closed (2026-07-13).** The underlying `CalledProcessError`
+exit-1s were a genuine quota collision (rule 1), not a code/flag bug — confirmed by
+reproducing the exact CLI invocation in isolation (succeeds in ~2-3s) and then
+finding that during the failure windows EVERY purpose failed identically (Haiku,
+Sonnet, and Opus calls alike — `eval_judge`, `lens:five_min_reread`, `news_structuring`,
+`decision_conditions_extract`, etc.), each taking ~180-200s before exiting 1, never
+fast, never varying. Two compounding scheduling problems:
+
+1. **Registry/reality drift.** This table documented the weekly eval rung at "Sun
+   ~10:30", but the live Windows Task Scheduler `grade_calibration` entry was
+   actually registered at Sun 03:30 — squarely inside the 03:00-05:00 protected
+   window, and on Sundays landing on top of `run_morning_pipeline`'s own 04:00 run.
+   Re-registered to 10:30 on 2026-07-13 (`Set-ScheduledTask`), matching the
+   documented intent.
+2. **Undocumented LLM leg.** `run_morning_pipeline`'s stage 1b (`run_standup.py`,
+   added after this table was last updated) fires its own `ask_answer` +
+   `eval_judge` calls daily, ~20-50 min into the 04:00 run — inside the same
+   protected window but never listed in this registry. Now added to the
+   `run_morning_pipeline` row above.
+
+Also fixed: `src/llm/cli.py` and `src/llm/fallback.py` were logging only
+`CalledProcessError`'s generic `str()` ("returned non-zero exit status 1"),
+discarding the subprocess's captured `stderr`/`stdout` — every historical
+`llm_calls.error` row was indistinguishable regardless of cause. Both now append
+a stderr/stdout tail, so a future quota incident (or any other CLI failure)
+self-diagnoses from the ledger without a live investigation.
