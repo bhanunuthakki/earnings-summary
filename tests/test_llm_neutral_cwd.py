@@ -1,4 +1,4 @@
-"""Both LLM subprocess paths run the `claude -p` CLI from a NEUTRAL cwd.
+"""Both LLM subprocess paths run the `claude -p` CLI from a NEUTRAL cwd + env.
 
 The plain path (`call_llm` -> `_call_claude`) and the WebSearch/WebFetch path
 (`call_llm_with_web`) both shell out to `claude -p`. If that subprocess inherits
@@ -12,6 +12,13 @@ repo root (e.g. `build_artifacts` launched by `full_refresh.bat` for the §8
 "Recent Developments" web brief) would hang. WebSearch and WebFetch are
 built-in Claude tools that do not need the project `.mcp.json`, so the neutral
 cwd does not break the web path.
+
+The env is neutralized for the same reason the cwd is (2026-07 incident): an
+ambient `ANTHROPIC_BASE_URL` — a User-scope leftover from the interactive
+Headroom-proxy wrapper, or the process-scoped one inherited when the server is
+launched from inside a `ch` session — silently reroutes every pipeline call to
+a proxy that is usually not running. Both paths must strip it; rerouting this
+app's transport is opt-in via `ES_CLAUDE_BASE_URL` only.
 
 The test stays fully offline: setup verification is bypassed, subprocess.run is
 stubbed (capturing the kwargs handed to it), and the ledger write is no-oped.
@@ -103,3 +110,42 @@ def test_both_paths_run_in_neutral_cwd(capture_run_calls: list[dict[str, Any]]) 
     # caller like full_refresh.bat would otherwise leak in — DOES have one.)
     assert os.path.isdir(web_cwd)
     assert not os.path.exists(os.path.join(web_cwd, ".mcp.json"))
+
+
+def test_both_paths_strip_ambient_anthropic_base_url(
+    capture_run_calls: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An inherited ANTHROPIC_BASE_URL (User-scope leftover or a `ch`-session
+    leak) must NOT reach the `claude -p` subprocess — it reroutes every
+    pipeline call to the Headroom proxy, which is usually not running
+    (the 2026-07-03..13 all-purposes outage)."""
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8787")
+    monkeypatch.delenv(cli.ES_CLAUDE_BASE_URL_VAR, raising=False)
+    monkeypatch.setattr(cli, "_stripped_base_url_logged", False)
+
+    cli.call_llm("prompt", force_budget_bypass=True)
+    cli.call_llm_with_web("prompt", force_budget_bypass=True)
+
+    assert len(capture_run_calls) == 2
+    for kwargs in capture_run_calls:
+        env = kwargs.get("env")
+        assert env is not None, "path passed no env to subprocess.run"
+        assert "ANTHROPIC_BASE_URL" not in env
+        # The rest of the environment still flows through (auth, PATH, etc.).
+        assert "PATH" in env or "Path" in env
+
+
+def test_explicit_es_claude_base_url_is_honored(
+    capture_run_calls: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Rerouting this app's transport is an explicit app-level decision:
+    ES_CLAUDE_BASE_URL is re-pinned onto ANTHROPIC_BASE_URL for the subprocess,
+    and wins over any ambient value."""
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:8787")
+    monkeypatch.setenv(cli.ES_CLAUDE_BASE_URL_VAR, "https://gateway.example/claude")
+
+    cli.call_llm("prompt", force_budget_bypass=True)
+
+    env = capture_run_calls[0].get("env")
+    assert env is not None
+    assert env["ANTHROPIC_BASE_URL"] == "https://gateway.example/claude"
