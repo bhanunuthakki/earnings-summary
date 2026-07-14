@@ -78,6 +78,47 @@ def _neutral_subprocess_cwd() -> str:
     return _neutral_cwd_cache
 
 
+# Set to reroute THIS app's `claude -p` transport to a non-default endpoint.
+# The inherited ANTHROPIC_BASE_URL is deliberately NOT honored — see
+# _subprocess_env.
+ES_CLAUDE_BASE_URL_VAR = "ES_CLAUDE_BASE_URL"
+
+_stripped_base_url_logged = False
+
+
+def _subprocess_env() -> dict[str, str]:
+    """Sanitized environment for the `claude -p` subprocess.
+
+    Strips an inherited ``ANTHROPIC_BASE_URL``: 2026-07 incident — a
+    machine-level (User-scope) ``ANTHROPIC_BASE_URL=http://127.0.0.1:8787``
+    left behind by the interactive Headroom-proxy wrapper silently rerouted
+    every scheduled pipeline's CLI call to a proxy that was only running
+    during interactive sessions; ~10 days of ~95% transport failure across
+    all purposes (llm_calls 07-03..07-13), invisible because the ledger then
+    recorded only exit codes. The same leak recurs process-scoped whenever
+    the dashboard/poller is launched from inside a `ch` session, so cwd-style
+    neutrality (see _neutral_subprocess_cwd) is applied to the env too:
+    rerouting this app's transport must be an explicit app-level decision via
+    ``ES_CLAUDE_BASE_URL``, never an ambient inheritance.
+    """
+    global _stripped_base_url_logged
+    env = dict(os.environ)
+    inherited = env.pop("ANTHROPIC_BASE_URL", None)
+    explicit = env.get(ES_CLAUDE_BASE_URL_VAR)
+    if explicit:
+        env["ANTHROPIC_BASE_URL"] = explicit
+    elif inherited and not _stripped_base_url_logged:
+        _stripped_base_url_logged = True
+        log.warning(
+            {
+                "event": "llm_env_base_url_stripped",
+                "inherited": inherited,
+                "hint": f"set {ES_CLAUDE_BASE_URL_VAR} to reroute this app deliberately",
+            }
+        )
+    return env
+
+
 # Default Claude model for prompt calls. Sonnet 4.6 chosen as a balance of
 # quality and speed across the pipeline's tasks. Per-function overrides via
 # the `model` argument on _call_claude or by adding the purpose to LLM_MODELS.
@@ -873,6 +914,7 @@ def _call_claude(
             check=True,
             timeout=timeout_seconds,
             cwd=_neutral_subprocess_cwd(),  # avoid booting the project's MCP servers (hangs)
+            env=_subprocess_env(),  # strip ambient ANTHROPIC_BASE_URL (2026-07 incident)
         )
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         # Parse the JSON envelope. ValueError when malformed → caught below
@@ -1265,6 +1307,7 @@ def call_llm_with_web(
             check=True,
             timeout=timeout_seconds,
             cwd=_neutral_subprocess_cwd(),  # avoid booting the project's MCP servers (hangs); WebSearch/WebFetch are built-in tools and don't need .mcp.json
+            env=_subprocess_env(),  # strip ambient ANTHROPIC_BASE_URL (2026-07 incident)
         )
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         text, meta = parse_claude_json_output(result.stdout.strip())

@@ -62,13 +62,24 @@ dedup set, so each transient failure locked its trip out of retry for a full
 `dedup_days` (7-day) window. `standup.ledger.STATUS_JUDGE_FAILED` (excluded from
 dedup) now fixes the mis-recording.
 
-**Follow-up — root cause closed (2026-07-13).** The underlying `CalledProcessError`
-exit-1s were a genuine quota collision (rule 1), not a code/flag bug — confirmed by
-reproducing the exact CLI invocation in isolation (succeeds in ~2-3s) and then
-finding that during the failure windows EVERY purpose failed identically (Haiku,
-Sonnet, and Opus calls alike — `eval_judge`, `lens:five_min_reread`, `news_structuring`,
-`decision_conditions_extract`, etc.), each taking ~180-200s before exiting 1, never
-fast, never varying. Two compounding scheduling problems:
+**Follow-up — root cause closed (2026-07-13, amended same day).** The dominant
+cause was NOT quota: a **User-scope `ANTHROPIC_BASE_URL=http://127.0.0.1:8787`**
+(left behind by the interactive Headroom-proxy setup, ~2026-06-28) rerouted every
+scheduled `claude -p` subprocess to a proxy that only runs during interactive
+sessions. That is why EVERY purpose failed identically around the clock
+(~237 errs/day, 07-05→07-13, successes clustering 21:00-24:00 PT when a session
+had the proxy up), and why each call hung ~180-200s before exit 1 (connection
+retries against a dead port — a quota refusal fails fast). Fixed 2026-07-13:
+the User-scope env var removed (`ch`/`claude-headroom.cmd` sets it process-scoped
+itself, so interactive Headroom is unaffected), and `src/llm/cli.py` now strips
+an inherited `ANTHROPIC_BASE_URL` from the subprocess env entirely — rerouting
+this app's transport requires the explicit `ES_CLAUDE_BASE_URL` (see
+`_subprocess_env`). NOTE the process-scoped recurrence risk this guards against:
+a dashboard/poller restarted from inside a `ch` session inherits the proxy URL
+and breaks identically the moment the proxy dies.
+
+Two genuine (secondary) scheduling problems were found and fixed in the same
+investigation — real rule-1 pressure on Sundays, but not the outage's cause:
 
 1. **Registry/reality drift.** This table documented the weekly eval rung at "Sun
    ~10:30", but the live Windows Task Scheduler `grade_calibration` entry was
