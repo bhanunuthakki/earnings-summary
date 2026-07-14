@@ -986,7 +986,14 @@ button { transition: color var(--transition), border-color var(--transition),
 .cc-home-grid { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: var(--sp-5);
   align-items: start; }
 @media (max-width: 1180px) { .cc-home-grid { grid-template-columns: 1fr; } }
-.cc-home-rail { position: sticky; top: 64px; }
+/* The main column is a grid item whose default min-width:auto lets a wide
+   nowrap table (the Evaluation cockpit) grow past its track and spill into the
+   sticky Inbox rail. Pin min-width:0 so the column honors its track, and give
+   its tables their own horizontal scroll so wide content scrolls in-place
+   instead of overlapping the rail. */
+.cc-home-main { min-width: 0; }
+.cc-home-main .lg { overflow-x: auto; }
+.cc-home-rail { position: sticky; top: 64px; min-width: 0; }
 .cc-home-rail-head { display: flex; align-items: baseline; justify-content: space-between;
   margin-bottom: var(--sp-2); }
 .cc-home-rail-head h2 { font-size: var(--fs-section); text-transform: uppercase;

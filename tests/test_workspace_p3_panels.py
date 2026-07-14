@@ -447,7 +447,7 @@ def test_saydo_verdicts_panel_renders_rows() -> None:
     html = out.getvalue()
     assert "Say·Do verdict ledger" in html
     assert "2 commitments" in html
-    assert "2 graded" in html
+    assert "2 with a reported result" in html
     assert "Cloud revenue growth" in html
     assert "Operating margin" in html
     # comparator symbol mapping (≥) — the literal '>=' falls through
