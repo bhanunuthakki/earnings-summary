@@ -67,8 +67,12 @@ def _ids(page_items: list[FeedItem]) -> list[int]:
 # ---------------------------------------------------------------------------
 
 
-def test_flag_default_off(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_flag_default_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Default flipped ON 2026-07-14 (owner sign-off) — the overhauled feed is
+    # the intended Ledger; LEDGER_ONMYMIND=0 opts back to the legacy list.
     monkeypatch.delenv("LEDGER_ONMYMIND", raising=False)
+    assert onmymind_enabled() is True
+    monkeypatch.setenv("LEDGER_ONMYMIND", "0")
     assert onmymind_enabled() is False
     monkeypatch.setenv("LEDGER_ONMYMIND", "1")
     assert onmymind_enabled() is True
@@ -291,7 +295,8 @@ def test_panel_shows_onmymind_when_flag_on(db_path: Path, monkeypatch: pytest.Mo
 
 
 def test_panel_unchanged_when_flag_off(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("LEDGER_ONMYMIND", raising=False)
+    # Explicit opt-out (default is now ON) → the legacy plain list stands.
+    monkeypatch.setenv("LEDGER_ONMYMIND", "0")
     _musing(db_path, "a thought")
     html = render_ledger_panel(db_path)
     assert "On My Mind" not in html

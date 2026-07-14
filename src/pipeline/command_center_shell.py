@@ -390,11 +390,22 @@ def render_overview_panel(
     # The cockpit's time-varying tiles (price · earnings countdown · staleness)
     # self-refresh every 90s via HTMX, re-rendering the whole cockpit fragment
     # in place (GET /api/cockpit) — no manual reload, no per-cell polling.
+    # Upcoming earnings is DEMOTED from a pinned top box into the Inbox rail as a
+    # collapsed section (owner feedback 2026-07-14: "can be a subtab/category in
+    # inbox, not a top pinned box"). The .up-strip CSS was designed for the rail
+    # to begin with; #866 hoisted it into the main column — this reverses that.
+    upcoming_rail = (
+        '<details class="cc-rail-upcoming">'
+        "<summary>Upcoming earnings</summary>"
+        f"{upcoming_html}"
+        "</details>"
+        if upcoming_html
+        else ""
+    )
     main = (
         (open_loops_html or "")
         + '<div id="cc-today-bands"></div>'
         + f"<script>{TODAY_BANDS_JS}</script>"
-        + (upcoming_html or "")
         + '<div id="cc-cockpit-live" hx-get="/api/cockpit" '
         'hx-trigger="every 90s" hx-swap="innerHTML">'
         + render_research_cockpit(rows_by_list)
@@ -402,7 +413,9 @@ def render_overview_panel(
         + render_tier_coverage_strip(coverage or {})
     )
     if not inbox_html:
-        return main
+        # No rail to host the strip — keep it visible in the main column so a
+        # rail-less render never loses it.
+        return (upcoming_rail or "") + main
     # The badge carries the "new since you last looked" count; INBOX_JS (one
     # IIFE, embedded with the rail it drives) fills it from the per-surface
     # localStorage mark and wires the cards' hover ✓/✕ quick actions.
@@ -411,6 +424,7 @@ def render_overview_panel(
         '<div class="cc-home-rail-head">'
         '<h2>Inbox<span class="ix-badge" data-ix-badge="home" hidden></span></h2>'
         '<span class="cc-home-rail-links"><a href="/feed">full feed</a></span></div>'
+        f"{upcoming_rail}"
         f"{inbox_html}"
         f"<script>{INBOX_JS}</script>"
         "</aside>"
@@ -1003,6 +1017,15 @@ button { transition: color var(--transition), border-color var(--transition),
 .cc-home-rail-links a:hover { color: var(--accent); }
 .cc-home-rail .ix-stream { max-height: calc(100vh - 140px); max-height: calc(100dvh - 140px); overflow-y: auto;
   padding-right: 2px; }
+/* Upcoming earnings, demoted into the rail as a collapsed section (the strip's
+   own head is redundant with the summary, so hide it). */
+.cc-rail-upcoming { margin-bottom: var(--sp-3); }
+.cc-rail-upcoming > summary { cursor: pointer; list-style: none; padding: var(--sp-1) 0;
+  font-size: var(--fs-section); text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
+.cc-rail-upcoming > summary::-webkit-details-marker { display: none; }
+.cc-rail-upcoming > summary::before { content: '\25B8 '; }
+.cc-rail-upcoming[open] > summary::before { content: '\25BE '; }
+.cc-rail-upcoming .up-strip-head { display: none; }
 .cc-panel[hidden] { display: none; }
 .cc-loading, .cc-empty { color: var(--muted); font-size: var(--fs-body); padding: 24px 4px; }
 /* Skeleton shimmer under the loading text (PR8) — feedback that the panel
