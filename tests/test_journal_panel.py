@@ -229,10 +229,19 @@ def test_panel_route_serves_fragment(client: FlaskClient, db_path: Path) -> None
     assert b"jr-filters" not in frag.data  # list-only fragment
 
 
-def test_shell_carries_journal_subtab() -> None:
+def test_shell_aliases_journal_into_the_ledger_console() -> None:
+    """Phase-5 aggressive IA: Journal is no longer a standalone sub-tab — it
+    composes into the single Review → Ledger console (reusing the `musings`
+    id) and its old #journal deep-link aliases there. The builder's own
+    /api/panel/journal route stays live for the composite + direct fetch."""
+    from pipeline.command_center_shell import (
+        _LEGACY_PANEL_REDIRECTS,  # pyright: ignore[reportPrivateUsage]
+    )
+
     html = render_shell(overview_html="<p>x</p>")
-    assert 'data-panel="journal"' in html or "journal" in html
-    assert "Journal" in html
+    assert 'data-tab-target="journal"' not in html
+    assert _LEGACY_PANEL_REDIRECTS["journal"] == "musings"
+    assert "journal:" in html.replace("'", "")  # mirrored in the SHELL_JS REDIRECTS map
 
 
 # ----------------------------------------------------------------------------

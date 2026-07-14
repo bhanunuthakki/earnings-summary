@@ -105,17 +105,21 @@ from ui.tokens import FAVICON_LINK, palette_css
 # Review; System (the diagnostics surfaces) stays a top-right icon button in
 # the utility cluster, and Ask keeps full section behavior with NO top-bar
 # button at all (_HIDDEN_NAV_SECTIONS — reached via dock ⇗ / palette /
-# data-ask-q doorways / #explore). Review is the ritual wing: the Ledger +
-# Triage + Journal re-parented out of Companies with panel ids unchanged. The
-# active section's sub-tabs render in ONE row below the bar (sections with a
-# single sub-tab suppress the row entirely, so Today and Ask have zero
-# secondary chrome).
+# data-ask-q doorways / #explore). Phase-5 aggressive IA collapsed the two
+# sprawling sections into composite consoles: Portfolio's 8 sub-tabs → 3
+# (Health / Allocation / Record) and Review's 3 ritual lenses → 1 (Ledger), each
+# a page COMPOSING the existing builders behind an anchor-nav band (the S10
+# Provenance-console pattern). The active section's sub-tabs render in ONE row
+# below the bar (sections with a single sub-tab suppress the row entirely, so
+# Today · Ask · Review have zero secondary chrome).
 #
 # Sub-tab entries keep the original shape — (panel_id, label, endpoint,
-# is_picker, picker_required) — and PANEL IDS ARE UNCHANGED, so every
-# existing deep-link (#holding=NU, #explore, #validation …) still resolves;
-# the JS variable names keep saying "theme" for the same reason (the
-# attribute contract data-theme-target / data-cc-theme is load-bearing).
+# is_picker, picker_required). The COMPOSITE ids are new (portfolio_health /
+# portfolio_allocation / portfolio_record) or reused (Review keeps `musings`);
+# every collapsed builder id still resolves via _LEGACY_PANEL_REDIRECTS and its
+# /api/panel/<id> builder route stays live. The JS variable names keep saying
+# "theme" (the attribute contract data-theme-target / data-cc-theme is
+# load-bearing).
 _SubTab = tuple[str, str, str | None, bool, bool]
 _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
     (
@@ -147,39 +151,34 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
         (("explore", "Ask", "/api/panel/explore", False, False),),
     ),
     (
+        # Phase-5 aggressive IA (owner: "too many surfaces with duplicative
+        # functions") — the 8 Portfolio sub-tabs collapse into THREE composite
+        # consoles, each composing the existing builders behind an anchor-nav
+        # band (the S10 Provenance-console pattern; pipeline/console_scaffold.py
+        # + pipeline/portfolio_console_panel.py). Builder ids are UNCHANGED and
+        # their /api/panel/<id> routes stay live; every old id aliases into its
+        # new composite via _LEGACY_PANEL_REDIRECTS, so #portfolio_risk /
+        # #decisions_record / #positioning … all still resolve.
         "portfolio",
         "Portfolio",
         (
-            # navigation_ia.md §2.1 — Synthesis (thesis health + allocation)
-            # LANDS the section; Performance is an outcome, not the front door.
-            # UX round 4 — the portfolio-level reading layer surfaced out of
-            # Performance's bottom strip: thesis rollup + sector exposure, the
-            # next-dollar allocation distribution, the cross-portfolio lens memo.
-            ("portfolio_synthesis", "Synthesis", "/api/panel/portfolio_synthesis", False, False),
-            ("portfolio", "Performance", "/api/panel/portfolio", False, False),
-            # L5 — the whole-book risk cockpit: book drawdown (max DD + underwater
-            # curve + recovery), factor/style exposure rolled up from the
-            # per-ticker correlation/beta rows, and the macro-stress lens with a
-            # scenario picker. Grouped with Performance (same pillar).
-            ("portfolio_risk", "Risk", "/api/panel/portfolio_risk", False, False),
-            # PR5 — the monthly First-Saturday adversarial review's dense brief
-            # (directives/monthly_red_team.md Phase 2): one rotating-lens attack
-            # per held name + the three cross-book passes. Read-only status
-            # chips this PR; the REFUTE/ACCEPT/DEFER response loop is PR6.
-            ("red_team", "Red Team", "/api/panel/red_team", False, False),
-            # Fit v2 — the owner's durable target book (positioning_intents):
-            # active target vs current readings, version history, and the
-            # positioning coach with its propose→approve encode flow. The
-            # evaluation-list fit chips score against what's saved here.
-            ("positioning", "Positioning", "/api/panel/positioning", False, False),
-            # P2.2 — the allocation-decisions record: sizing audit + the merged
-            # decisions timeline (thesis ledger + sizing intents + decision
-            # notes). The standalone Thesis Ledger tab folded into it.
-            ("decisions_record", "Decisions", "/api/panel/decisions_record", False, False),
-            # P2.3 — advisor memos: next-dollar + swap-discipline runs, the
-            # deterministic swap screen, and the durable memo record.
-            ("advisor_memos", "Memos", "/api/panel/advisor_memos", False, False),
-            ("holdings", "Triggers", "/api/panel/holdings", False, False),
+            # Health — thesis health & what could break it: Synthesis (thesis
+            # rollup + allocation, the landing) + the whole-book Risk cockpit +
+            # the monthly adversarial Red Team brief.
+            ("portfolio_health", "Health", "/api/panel/portfolio_health", False, False),
+            # Allocation — where capital goes & how it's doing: the durable
+            # target book (Positioning) + the tracker-fed Performance page.
+            (
+                "portfolio_allocation",
+                "Allocation",
+                "/api/panel/portfolio_allocation",
+                False,
+                False,
+            ),
+            # Record — the audit trail: the allocation-decisions record (sizing
+            # audit + merged decisions timeline) + advisor Memos + the Triggers
+            # ladder (the old `holdings` panel).
+            ("portfolio_record", "Record", "/api/panel/portfolio_record", False, False),
         ),
     ),
     (
@@ -194,17 +193,16 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
         "review",
         "Review",
         (
-            # The Ledger (capture program): the captured stream-of-consciousness
-            # read-back + at-desk quick-capture. Telegram is the primary mouth;
-            # this is the desk mouth + the dogfood read-back (Wave A).
+            # Phase-5 aggressive IA — the three ritual lenses over analyst_notes
+            # (Ledger feed / Triage / Journal) collapse into ONE Ledger console
+            # that composes all three behind an anchor-nav band (single sub-tab,
+            # data-single, so no subnav row). It REUSES the `musings` panel id
+            # (the Ledger feed leads); #triage / #journal alias here via
+            # _LEGACY_PANEL_REDIRECTS, and each builder's /api/panel/<id> route
+            # (plus the musings ?fragment=… sub-routes) stays live. The one-page
+            # form keeps the Sunday-ritual completion semantics (scroll-to-bottom
+            # = done) the owner's binge-clear pattern matches.
             ("musings", "Ledger", "/api/panel/musings", False, False),
-            # The parked-comment disposition queue (S11): comments the classifier
-            # couldn't route (`needs_triage`) — route / resolve / dismiss. A lens
-            # over the same analyst_notes spine the Journal reads.
-            ("triage", "Triage", "/api/panel/triage", False, False),
-            # The analyst journal's lifecycle home (P4.5): list / filter /
-            # resolve / reclassify / supersede over analyst_notes.
-            ("journal", "Journal", "/api/panel/journal", False, False),
         ),
     ),
     (
@@ -232,8 +230,10 @@ _LEGACY_PANEL_REDIRECTS: dict[str, str] = {
     "prereads": "overview",
     "insiders": "overview",
     "predictions": "overview",
-    "decisions": "decisions_record",
-    "thesis_ledger": "decisions_record",
+    # P5 — the allocation-decisions record folded into the Portfolio → Record
+    # composite; its old deep-links land there.
+    "decisions": "portfolio_record",
+    "thesis_ledger": "portfolio_record",
     "budget": "provenance",
     "actions": "provenance",
     "home": "overview",
@@ -263,12 +263,31 @@ _LEGACY_PANEL_REDIRECTS: dict[str, str] = {
     # Palette entries are UNCHANGED (ids stay canonical) — these are extra
     # deep-link spellings only.
     "ledger": "musings",
-    "triggers": "holdings",
-    "health": "provenance",
+    # P5 — Triggers folded into the Portfolio → Record composite; #health now
+    # names the real Portfolio → Health composite (was → provenance before the
+    # System-health console existed as the only "Health" surface).
+    "triggers": "portfolio_record",
+    "health": "portfolio_health",
     # navigation_ia.md §6.3 — the Review section's name aliases to its landing
     # panel (the Ledger), like the other section names above. Values here must
     # be PANEL IDS (lookups don't chain; the guard test enforces it).
     "review": "musings",
+    # Phase-5 aggressive IA — the 8 Portfolio sub-tabs collapsed into three
+    # composite consoles (Health / Allocation / Record) and the Review section's
+    # three lenses into one Ledger console. Every old panel id aliases into the
+    # composite that now COMPOSES it (the /api/panel/<id> builder routes stay
+    # live for the composites + peek + direct fetch). Values are real panel ids
+    # (lookups don't chain; the guard test enforces set-equality).
+    "portfolio_synthesis": "portfolio_health",
+    "portfolio_risk": "portfolio_health",
+    "red_team": "portfolio_health",
+    "positioning": "portfolio_allocation",
+    "portfolio": "portfolio_allocation",
+    "decisions_record": "portfolio_record",
+    "advisor_memos": "portfolio_record",
+    "holdings": "portfolio_record",
+    "triage": "musings",
+    "journal": "musings",
 }
 
 # "Today" briefing bands (navigation_ia §4 PR3), inlined once with the
@@ -819,20 +838,16 @@ _SKELETON_KINDS: dict[str, str] = {
     "holding": "band",
     "discovery": "table",
     "diet": "table",
-    "journal": "cards",
-    "triage": "table",
+    # Review 3→1 (P5): the single Ledger console reuses the `musings` id and
+    # leads with the capture feed's card stream.
     "musings": "cards",
     "explore": "form",
-    "portfolio": "kpis",
-    "portfolio_risk": "kpis",
-    # Red Team Brief (PR5): a stack of k-well item cards, same shape as the
-    # memo/synthesis card surfaces.
-    "red_team": "cards",
-    "portfolio_synthesis": "cards",
-    "positioning": "cards",
-    "decisions_record": "table",
-    "advisor_memos": "cards",
-    "holdings": "table",
+    # Portfolio 8→3 (P5): three composite consoles. Health leads with the
+    # Synthesis card surfaces; Allocation with Positioning's KPI-ish target
+    # book; Record with the decisions/sizing tables.
+    "portfolio_health": "cards",
+    "portfolio_allocation": "kpis",
+    "portfolio_record": "table",
     # The 8 System diagnostics tabs collapsed into one Provenance console (S10) —
     # it leads with the Coverage matrix above several stacked panels.
     "provenance": "kpis",
@@ -1595,8 +1610,8 @@ SHELL_JS = r"""
     prereads: 'overview',
     insiders: 'overview',
     predictions: 'overview',
-    decisions: 'decisions_record',
-    thesis_ledger: 'decisions_record',
+    decisions: 'portfolio_record',
+    thesis_ledger: 'portfolio_record',
     budget: 'provenance',
     actions: 'provenance',
     home: 'overview',
@@ -1617,10 +1632,23 @@ SHELL_JS = r"""
     // PR9 — readable ritual-vocabulary aliases (extra spellings; palette
     // entries keep the canonical ids).
     ledger: 'musings',
-    triggers: 'holdings',
-    health: 'provenance',
+    triggers: 'portfolio_record',
+    health: 'portfolio_health',
     // navigation_ia.md — the Review section name lands on its Ledger landing.
-    review: 'musings'
+    review: 'musings',
+    // Phase-5 aggressive IA — Portfolio 8→3 + Review 3→1: every old panel id
+    // aliases into the composite console that now composes it. Kept in sync
+    // with _LEGACY_PANEL_REDIRECTS in the Python module.
+    portfolio_synthesis: 'portfolio_health',
+    portfolio_risk: 'portfolio_health',
+    red_team: 'portfolio_health',
+    positioning: 'portfolio_allocation',
+    portfolio: 'portfolio_allocation',
+    decisions_record: 'portfolio_record',
+    advisor_memos: 'portfolio_record',
+    holdings: 'portfolio_record',
+    triage: 'musings',
+    journal: 'musings'
   };
   // Legacy panels that became settings-drawer sections (P3.4): their old
   // deep-links also auto-open the drawer after landing on Governance.
@@ -1753,7 +1781,7 @@ SHELL_JS = r"""
   var SKEL = {};            // panel id -> boot placeholder markup
   var INFLIGHT = {};        // cache key -> in-flight fragment promise
   var FRESH_MS = 30000;     // just-fetched window: skip revalidation
-  var WARM_PANELS = ['portfolio_synthesis', 'explore'];
+  var WARM_PANELS = ['portfolio_health', 'explore'];
 
   panels.forEach(function (p) {
     if (p.getAttribute('data-loaded') !== '1') {

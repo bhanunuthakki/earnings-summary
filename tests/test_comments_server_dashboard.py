@@ -128,8 +128,9 @@ def test_dashboard_page_returns_shell(client):
     assert 'class="cc-topnav"' in body
     assert 'data-theme-target="home"' in body
     assert 'data-panel="overview"' in body
-    # Other tabs lazy-load from /api/panel/<name>.
-    assert 'data-endpoint="/api/panel/holdings"' in body
+    # Other tabs lazy-load from /api/panel/<name> (Phase-5 IA: Portfolio's
+    # Record composite replaced the standalone Triggers/holdings sub-tab).
+    assert 'data-endpoint="/api/panel/portfolio_record"' in body
     assert 'data-endpoint="/api/panel/budget"' in body
     # Overview is inlined → the seeded tickers appear on first paint, as
     # cockpit rows (this minimal schema lacks the enrichment tables — the

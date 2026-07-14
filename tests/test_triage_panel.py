@@ -185,12 +185,22 @@ def test_panel_empty_state(db_path: Path) -> None:
     assert "0 open" in render_triage_panel(db_path)
 
 
-def test_shell_carries_triage_subtab() -> None:
-    from pipeline.command_center_shell import render_shell
+def test_shell_aliases_triage_into_the_ledger_console() -> None:
+    """Phase-5 aggressive IA: Triage is no longer a standalone sub-tab — it
+    composes into the single Review → Ledger console (reusing the `musings`
+    id) and its old #triage deep-link aliases there. The builder's own
+    /api/panel/triage route stays live (see test_panel_route_serves_full_and_list)."""
+    from pipeline.command_center_shell import (
+        _LEGACY_PANEL_REDIRECTS,  # pyright: ignore[reportPrivateUsage]
+        render_shell,
+    )
 
     html = render_shell(overview_html="<p>x</p>")
-    assert "triage" in html
-    assert "Triage" in html
+    # No standalone Triage sub-tab anymore.
+    assert 'data-tab-target="triage"' not in html
+    # The old deep-link aliases to the reused Ledger (musings) console.
+    assert _LEGACY_PANEL_REDIRECTS["triage"] == "musings"
+    assert "triage:" in html.replace("'", "")  # mirrored in the SHELL_JS REDIRECTS map
 
 
 # ----------------------------------------------------------------------------

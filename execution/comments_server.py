@@ -565,9 +565,7 @@ def create_app(
         if result.status == "landed" and result.note_id is not None:
             from onmymind.respond import answer_capture
 
-            ledger_answer = answer_capture(
-                result.note_id, repo_root=repo_root, db_path=db_path
-            )
+            ledger_answer = answer_capture(result.note_id, repo_root=repo_root, db_path=db_path)
         return {
             "status": result.status,
             "note_id": result.note_id,
@@ -1003,6 +1001,41 @@ def create_app(
 
             return Response(render_red_team_panel(db_path=db_path), mimetype="text/html")
 
+        if name == "portfolio_health":
+            # Portfolio -> Health (Phase-5 IA): the composite console composing
+            # Synthesis + Risk + Red Team behind an anchor-nav band (the S10
+            # Provenance-console pattern). The three builder routes above stay
+            # live for the composite + peek + direct fetch.
+            from pipeline.portfolio_console_panel import render_portfolio_health_panel
+
+            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            return Response(
+                render_portfolio_health_panel(db_path, user_id=user_id), mimetype="text/html"
+            )
+
+        if name == "portfolio_allocation":
+            # Portfolio -> Allocation (Phase-5 IA): composes Positioning +
+            # Performance. Performance's own window bar re-windows via the
+            # /api/panel/portfolio route (kept live); this landing shows the
+            # default window.
+            from pipeline.portfolio_console_panel import render_portfolio_allocation_panel
+
+            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            return Response(
+                render_portfolio_allocation_panel(db_path, repo_root, user_id=user_id),
+                mimetype="text/html",
+            )
+
+        if name == "portfolio_record":
+            # Portfolio -> Record (Phase-5 IA): composes the allocation-decisions
+            # record + advisor Memos + the Triggers ladder (old `holdings`).
+            from pipeline.portfolio_console_panel import render_portfolio_record_panel
+
+            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            return Response(
+                render_portfolio_record_panel(db_path, user_id=user_id), mimetype="text/html"
+            )
+
         if name == "ir_coverage":
             # Per-name IR auto-fetch coverage: which portfolio/eval names have
             # auto-fetched IR docs vs. which need a manual pull (+ why).
@@ -1113,13 +1146,14 @@ def create_app(
             return Response(render_diet_panel(db_path), mimetype="text/html")
 
         if name == "musings":
-            # Companies → Ledger (The Ledger capture program): the captured
-            # stream-of-consciousness read-back + at-desk quick-capture box.
-            # ``?fragment=list`` returns just the musings list the box reloads
-            # after a POST /api/capture/text.
+            # Review → Ledger (Phase-5 IA): the `musings` panel id now serves the
+            # composite Ledger console (feed + Triage + Journal behind an
+            # anchor-nav band) on the default render; the in-panel refresh
+            # ``?fragment=…`` sub-routes still return just the Ledger builder's
+            # fragments (list / onmymind / research / reconcile / worldview) so
+            # the capture box + On-My-Mind feed reload in place unchanged.
             from pipeline.ledger_panel import (
                 render_ledger_list,
-                render_ledger_panel,
                 render_ledger_research_list,
                 render_onmymind_list,
                 render_reconcile_list,
@@ -1148,8 +1182,12 @@ def create_app(
                 from pipeline.worldview_panel import render_worldview_body
 
                 return Response(render_worldview_body(db_path), mimetype="text/html")
-            l_renderer = render_ledger_list if fragment == "list" else render_ledger_panel
-            return Response(l_renderer(db_path, user_id=user_id), mimetype="text/html")
+            if fragment == "list":
+                return Response(render_ledger_list(db_path, user_id=user_id), mimetype="text/html")
+            # Default: the composite Ledger console (Phase-5 IA).
+            from pipeline.ledger_console_panel import render_ledger_console
+
+            return Response(render_ledger_console(db_path, user_id=user_id), mimetype="text/html")
 
         if name == "discovery":
             # Research → Discovery (P5.4): the candidate approval queue —
