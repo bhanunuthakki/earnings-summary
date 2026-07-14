@@ -10,6 +10,9 @@ it matters":
           x recency decay (30h half-life)
           x position weight (live tracker % of book, equal-weight fallback)
           x thesis relevance (ticker currently WARN / BREACH)
+          x signal strength (the alert's OWN evidence magnitude — |z|,
+            relevance, restatement delta, owner-falsifier breach — so a strong
+            alert outranks a marginal one WITHIN its category; 1.0 when absent)
 
 No ML: each factor is a small lookup table, and the factor breakdown ships
 on the card as the "why ranked here" tooltip (``InboxItem.score_why``).
@@ -541,6 +544,63 @@ def _age_text(hours: float) -> str:
     return f"{hours / 24.0:.0f}d old"
 
 
+# Signal-strength factor (owner feedback 2026-07-14: pending-alert ordering felt
+# "random and low" because a marginal alert and a screaming one scored identically
+# within a category). Reads the alert's OWN evidence magnitude so a strong signal
+# outranks a weak one in the same category. Bounded [_STRENGTH_MIN, _STRENGTH_MAX]
+# so it refines order WITHIN a category without overriding the owner-set category
+# severity ordering.
+_STRENGTH_MIN = 0.75
+_STRENGTH_MAX = 1.5
+
+
+def _clampf(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
+
+def _is_num(v: object) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _strength_factor(it: InboxItem) -> tuple[float, str]:
+    """A bounded multiplier from the alert's own evidence magnitude. Returns
+    ``(1.0, "n/a")`` for non-alert items or evidence with no recognised
+    magnitude, so it is inert unless a real strength signal is present."""
+    alert = it.alert
+    if alert is None or not alert.evidence_json:
+        return 1.0, "n/a"
+    try:
+        ev = json.loads(alert.evidence_json)
+    except (ValueError, TypeError):
+        return 1.0, "n/a"
+    if not isinstance(ev, dict):
+        return 1.0, "n/a"
+
+    # An owner-authored falsifier breach is the highest-quality signal there is.
+    if (alert.trigger_kind or "").lower() == "decision_condition":
+        return _STRENGTH_MAX, "owner falsifier breach"
+    # A KPI that crossed a registered threshold / is a thesis-breaker is decisive.
+    if ev.get("threshold_crossed") or ev.get("is_thesis_breaker"):
+        return _STRENGTH_MAX, "threshold crossed"
+    # KPI inflection: scale by statistical surprise (|z|); z=2 → ~0.85, z=6 → 1.5.
+    z = ev.get("zscore")
+    if _is_num(z):
+        az = abs(float(z))
+        return _clampf(0.85 + 0.16 * (az - 2.0), _STRENGTH_MIN, _STRENGTH_MAX), f"|z| {az:.1f}"
+    # Material news: LLM relevance 0..1 → 0.7..1.5.
+    rel = ev.get("relevance_score")
+    if _is_num(rel):
+        return _clampf(
+            0.7 + 0.8 * float(rel), _STRENGTH_MIN, _STRENGTH_MAX
+        ), f"relevance {float(rel):.2f}"
+    # Restatement: bigger revision, stronger signal.
+    d = ev.get("delta_pct")
+    if _is_num(d):
+        ad = abs(float(d))
+        return _clampf(0.9 + 0.06 * ad, _STRENGTH_MIN, _STRENGTH_MAX), f"Δ {ad:.1f}%"
+    return 1.0, "n/a"
+
+
 def _score_one(
     it: InboxItem,
     category: str,
@@ -572,10 +632,13 @@ def _score_one(
     thesis = _THESIS_TONE_FACTORS.get(tone, 1.0)
     tone_text = tone or "n/a"
 
-    score = severity * recency * position * thesis
+    strength, strength_text = _strength_factor(it)
+
+    score = severity * recency * position * thesis * strength
     why = (
         f"severity {severity:.2f} ({sev_text}) x recency {recency:.2f} ({_age_text(age_hours)}) "
         f"x position {position:.2f} ({pos_text}) x thesis {thesis:.2f} ({tone_text}) "
+        f"x strength {strength:.2f} ({strength_text}) "
         f"= {score:.2f}"
     )
     return score, why
