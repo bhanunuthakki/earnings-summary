@@ -292,6 +292,29 @@ def test_parse_condition_watermark_fields_round_trip() -> None:
     assert junk.breached_at_attach is False
 
 
+def test_parse_condition_not_before_round_trip() -> None:
+    """not_before (milestone-dated tripwires, 2026-07-16) survives a JSON
+    round-trip; legacy JSON without the key defaults to None (evaluable now);
+    a malformed value degrades to None rather than rejecting the condition."""
+    cond = parse_condition(_good_condition_obj(not_before="2027-07-01"))
+    assert cond is not None
+    assert cond.not_before == "2027-07-01"
+    encoded = cond.as_json_obj()
+    assert encoded["not_before"] == "2027-07-01"
+    assert parse_condition(encoded) == cond
+
+    legacy = parse_condition(_good_condition_obj())
+    assert legacy is not None
+    assert legacy.not_before is None
+
+    junk = parse_condition(_good_condition_obj(not_before=42))
+    assert junk is not None
+    assert junk.not_before is None
+    blank = parse_condition(_good_condition_obj(not_before="   "))
+    assert blank is not None
+    assert blank.not_before is None
+
+
 def test_conditions_from_json_corrupt_degrades() -> None:
     assert conditions_from_json(None) == ()
     assert conditions_from_json("") == ()
@@ -335,6 +358,49 @@ def test_extract_conditions_drops_invalid_and_caps(monkeypatch: pytest.MonkeyPat
     prompt = seen["prompt"]
     assert isinstance(prompt, str)
     assert "NPL 90d+" in prompt and "revenue" in prompt
+
+
+def test_extract_conditions_carries_decision_date_and_not_before(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The v2 prompt anchors milestone horizons on the decision date (made_at)
+    and the response schema's not_before flows through to the parsed
+    condition. Without made_at (the eval harness path) the date renders as
+    'unknown' rather than crashing the format."""
+    seen: dict[str, object] = {}
+
+    def fake_structured(prompt: str, **kwargs: object) -> object:
+        seen["prompt"] = prompt
+        return [_good_condition_obj(not_before="2027-07-01")]
+
+    monkeypatch.setattr(dc, "call_llm_structured", fake_structured)
+    out = extract_conditions(
+        "Base44 ARR reaches $200M in ~12 months",
+        ticker="WIX",
+        kpi_names=[],
+        line_items=[],
+        made_at="2026-07-01T08:00:00",
+    )
+    assert len(out) == 1
+    assert out[0].not_before == "2027-07-01"
+    prompt = seen["prompt"]
+    assert isinstance(prompt, str)
+    assert "decision was made on 2026-07-01" in prompt
+    assert '"not_before"' in prompt
+
+    # No made_at → 'unknown' decision date, still a well-formed prompt.
+    extract_conditions("s", ticker="WIX", kpi_names=[], line_items=[])
+    prompt = seen["prompt"]
+    assert isinstance(prompt, str)
+    assert "decision was made on unknown" in prompt
+
+
+def test_decision_conditions_extract_prompt_version_bumped() -> None:
+    """The v2 prompt rewrite (not_before + decision date) is registered in the
+    single bump-point registry."""
+    from llm.prompt_versions import prompt_version_for
+
+    assert prompt_version_for("decision_conditions_extract") == "v2"
 
 
 def test_extract_conditions_parse_error_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -457,6 +523,33 @@ def test_attach_conditions_artifact_and_memo_sources(
     again = attach_conditions(db_path=db)
     assert again["extracted"] == 0
     assert again["no_section"] == 0
+
+
+def test_attach_conditions_passes_made_at_into_the_prompt(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The batch rung feeds each decision's made_at to the extractor so the
+    v2 prompt can anchor 'in ~12 months'-style horizons on the real decision
+    date, and the extractor's not_before lands in the stamped JSON."""
+    _insert_artifact_decision(db, content_md=_FIVE_MIN_MD)
+    seen: dict[str, object] = {}
+
+    def fake_structured(prompt: str, **kwargs: object) -> object:
+        seen["prompt"] = prompt
+        return [_good_condition_obj(not_before="2027-07-01")]
+
+    monkeypatch.setattr(dc, "call_llm_structured", fake_structured)
+    tally = attach_conditions(db_path=db)
+    assert tally["extracted"] == 1
+    prompt = seen["prompt"]
+    assert isinstance(prompt, str)
+    assert f"decision was made on {_NOW[:10]}" in prompt
+
+    conn = _connect(db)
+    row = conn.execute("SELECT decision_conditions FROM decisions").fetchone()
+    conn.close()
+    stored = json.loads(row["decision_conditions"])
+    assert stored[0]["not_before"] == "2027-07-01"
 
 
 def test_attach_conditions_stamps_baseline_and_breached_at_attach(

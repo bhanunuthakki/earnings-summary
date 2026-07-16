@@ -120,7 +120,11 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # Falsifiable-condition extraction (src/decision_conditions.py, mode-A
     # golden set). Bump when _EXTRACTION_PROMPT is materially rewritten, then
     # re-run `run_llm_evals.py --purpose decision_conditions_extract`.
-    "decision_conditions_extract": "v1",
+    # v2 (2026-07-16): milestone-dated tripwires — the prompt now carries the
+    # decision date and asks for `not_before` (decision date + stated horizon)
+    # on forward-looking milestone conditions, so "reaches $X in ~12 months"
+    # stops being encoded as an immediately-evaluable threshold.
+    "decision_conditions_extract": "v2",
     # Qualitative-condition extraction (src/decision_conditions.py, L9 PR2 — the
     # non-numeric news/earnings-tone bridge). Bump when _QUALITATIVE_PROMPT is
     # materially rewritten.
