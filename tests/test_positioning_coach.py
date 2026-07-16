@@ -101,6 +101,14 @@ def _patch_history(monkeypatch: pytest.MonkeyPatch, turns: list[dict[str, str]])
     monkeypatch.setattr(encode_mod, "load_recent_history", lambda sid, **kw: turns)
 
 
+def _patch_encode_llm(monkeypatch: pytest.MonkeyPatch, fn: object) -> None:
+    # ``propose_profile`` imports call_llm_structured FUNCTION-LOCALLY (the
+    # module-level import dragged the ~10s llm transport chain into the
+    # Positioning panel's render path — Phase-5 verifier fix 5), so the patch
+    # targets the source module the lazy import resolves against.
+    monkeypatch.setattr("llm.structured.call_llm_structured", fn)
+
+
 def test_propose_profile_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_history(monkeypatch, _THREAD)
     payload = {
@@ -120,7 +128,7 @@ def test_propose_profile_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         captured["purpose"] = kw.get("purpose")
         return payload
 
-    monkeypatch.setattr(encode_mod, "call_llm_structured", fake_structured)
+    _patch_encode_llm(monkeypatch, fake_structured)
     proposal = propose_profile(
         tmp_path / "missing.db", tmp_path, session_id="s1", sector_vocabulary=["Technology"]
     )
@@ -135,10 +143,8 @@ def test_propose_profile_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 def test_propose_profile_invalid_is_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_history(monkeypatch, _THREAD)
-    monkeypatch.setattr(
-        encode_mod,
-        "call_llm_structured",
-        lambda *a, **k: {"profile": {"sleeves": {"crypto": 0.5}}, "summary": "x"},
+    _patch_encode_llm(
+        monkeypatch, lambda *a, **k: {"profile": {"sleeves": {"crypto": 0.5}}, "summary": "x"}
     )
     with pytest.raises(EncodeError, match="failed validation"):
         propose_profile(tmp_path / "m.db", tmp_path, session_id="s1", sector_vocabulary=[])
@@ -151,9 +157,7 @@ def test_propose_profile_empty_conversation_and_empty_profile(
     with pytest.raises(EncodeError, match="no conversation"):
         propose_profile(tmp_path / "m.db", tmp_path, session_id="s1", sector_vocabulary=[])
     _patch_history(monkeypatch, _THREAD)
-    monkeypatch.setattr(
-        encode_mod, "call_llm_structured", lambda *a, **k: {"profile": {}, "summary": "x"}
-    )
+    _patch_encode_llm(monkeypatch, lambda *a, **k: {"profile": {}, "summary": "x"})
     with pytest.raises(EncodeError, match="hasn't expressed any quantitative target"):
         propose_profile(tmp_path / "m.db", tmp_path, session_id="s1", sector_vocabulary=[])
 

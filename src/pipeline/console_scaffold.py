@@ -48,6 +48,8 @@ def render_console(
     sections: list[ConsoleSection],
     *,
     wrap_class: str,
+    extra_nav: str = "",
+    nav_exclude: tuple[str, ...] = (),
 ) -> str:
     """Assemble a composite console: an anchor-nav band (jump chips) over the
     composed builder sections.
@@ -56,16 +58,24 @@ def render_console(
     nav owns the single-sub-tab title (design_language §6.1). Each section is
     wrapped in ``<div id="csec-<anchor>">`` so the chips jump to it.
 
+    ``extra_nav`` carries pre-rendered chips a composed builder contributes to
+    the band (e.g. the Ledger feed's internal jump chips) — it LEADS the band
+    because those chips point into the landing section, which precedes the
+    later sections in page order. ``nav_exclude`` drops named anchors' own
+    chips (the section still renders), for the landing section whose ``<h2>``
+    sits directly under the band and would otherwise duplicate as a chip.
+
     The nav chips scroll via a ``data-console-jump`` data attribute + a guarded
     document-level listener (``_CONSOLE_NAV_JS``), NOT an ``href="#anchor"``: the
     shell's hashchange router treats an unknown hash as a panel id and would fall
     back to Overview, navigating AWAY from the console. A data-attr +
     ``scrollIntoView`` never touches ``location.hash``, so the router never fires.
     """
-    nav = "".join(
+    nav = extra_nav + "".join(
         f'<button type="button" class="k-chip k-chip-btn" data-console-jump="csec-{escape(anchor)}">'
         f"{escape(label)}</button>"
         for anchor, label, _ in sections
+        if anchor not in nav_exclude
     )
     toolbar = panel_toolbar(title, filters=nav, suppress_title=True)
     body = "".join(

@@ -23,9 +23,14 @@ from pathlib import Path
 from typing import cast
 
 from ask.store import load_recent_history
-from llm.structured import call_llm_structured
 from positioning.profile import SLEEVE_KEYS, PositioningProfile
 from positioning.store import latest_intent
+
+# NOTE: ``llm.structured`` is imported function-locally in ``propose_profile``
+# (the only caller), NOT here. A module-level import drags the whole llm
+# transport chain — llm.cli → llm.ledger → llm.fallback → google.generativeai,
+# ~10s cold — into every importer of :class:`ProposedProfile`, and
+# ``pipeline.positioning_panel``'s render path never makes an LLM call.
 
 ENCODE_PURPOSE = "positioning_encode"
 
@@ -141,6 +146,8 @@ def propose_profile(
     ``profile`` fails validation (loud, per the boundary contract) — and lets
     ``call_llm_structured``'s own hard-stop/parse errors propagate untouched.
     """
+    from llm.structured import call_llm_structured  # lazy — see module NOTE
+
     history = load_recent_history(
         session_id, db_path=db_path, max_turns=_MAX_TURNS, max_chars=_MAX_CHARS
     )
