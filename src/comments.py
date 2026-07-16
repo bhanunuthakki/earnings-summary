@@ -355,6 +355,7 @@ def _sync_notes_best_effort(repo_root: Path, ticker: str, report_date: date) -> 
         from user_state.notes import sync_store_comments
 
         sync_store_comments(repo_root, ticker=ticker, report_date=report_date, db_path=db_path)
+        _triage_suggest_best_effort(db_path)
     except sqlite3.OperationalError as e:
         # Pre-0074 schema (no analyst_notes table yet) — quiet skip; the
         # backfill CLI catches the table up after `alembic upgrade head`.
@@ -366,6 +367,30 @@ def _sync_notes_best_effort(repo_root: Path, ticker: str, report_date: date) -> 
             report_date,
             exc_info=True,
         )
+
+
+def _triage_suggest_best_effort(db_path: Path) -> None:
+    """Fire the Triage second-pass route sweep on a background thread after a
+    comment sync — a freshly parked ``needs_triage`` comment gets its route
+    suggestion (or auto-route) without the owner ever operating the menu.
+
+    Opt-in (``TRIAGE_SUGGEST=1``): the sweep spends FAST-tier LLM calls, so it
+    must never fire from tests / CI / ad-hoc scripts that write comments —
+    prod's .env owns the switch. Bounded (≤3 items per pass), per-item degrade
+    inside the sweep, daemon thread — a suggestion can never block or break
+    the comment write that triggered it."""
+    if os.environ.get("TRIAGE_SUGGEST", "0") != "1":
+        return
+
+    def _run() -> None:
+        try:
+            from user_state.triage_suggest import sweep_unsuggested
+
+            sweep_unsuggested(db_path=db_path, limit=3)
+        except Exception:
+            logging.getLogger(__name__).debug("triage suggest sweep failed", exc_info=True)
+
+    threading.Thread(target=_run, daemon=True, name="triage-suggest").start()
 
 
 def list_comments(

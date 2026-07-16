@@ -134,6 +134,22 @@ def _row(n: AnalystNoteRow) -> str:
         f'data-created="{escape(n.created_at.date().isoformat(), quote=True)}" '
         f'data-body="{escape(body, quote=True)}"'
     )
+    # The second-pass route suggestion (user_state.triage_suggest): a stored
+    # low-confidence verdict leads the row as ONE one-tap button — the owner
+    # confirms a pick instead of operating an 8-option menu. High-confidence
+    # verdicts auto-routed at sweep time and never reach this row.
+    sugg = ctx.get("route_suggestion")
+    sugg_btn = ""
+    if isinstance(sugg, dict):
+        si = str(sugg.get("intent") or "")
+        if si in _INTENT_LABELS:
+            reason = str(sugg.get("reason") or "")
+            sugg_btn = (
+                '<button type="button" class="k-btn k-btn-primary k-btn-sm" '
+                f'data-act="route-suggested" data-intent="{escape(si, quote=True)}" '
+                f'title="{escape(reason, quote=True)}">'
+                f"Route to {escape(_INTENT_LABELS[si])}</button>"
+            )
     # The living-grid filter key (data-text); the sort keys reuse the drill-in
     # data-* already on the row (data-created / data-ticker / data-anchor).
     filt = lg.data_text(f"{n.ticker or ''} {_anchor_text(n)} {body}")
@@ -145,6 +161,7 @@ def _row(n: AnalystNoteRow) -> str:
         f'<td><button type="button" class="tri-text" data-act="open" '
         f'title="Open detail">{escape(_truncate(body))}</button></td>'
         '<td><div class="tri-acts">'
+        f"{sugg_btn}"
         f"{_route_select()}"
         '<button type="button" class="k-btn k-btn-quiet" data-act="resolve">Resolve</button>'
         '<button type="button" class="k-btn k-btn-quiet" data-act="dismiss">Dismiss</button>'
@@ -321,6 +338,8 @@ Route each to the real intent it meant, resolve it once handled, or dismiss it.<
       beginResolve(holder, id);
     }} else if (act === 'dismiss') {{
       post('/api/notes/' + id + '/archive', {{}}, btn);
+    }} else if (act === 'route-suggested') {{
+      post('/api/notes/' + id + '/route', {{intent: btn.getAttribute('data-intent')}}, btn);
     }}
   }});
   root.addEventListener('change', function (ev) {{

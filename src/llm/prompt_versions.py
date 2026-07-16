@@ -196,6 +196,12 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # wondering_detect on the live tap. Bump when the intent prompt is materially
     # rewritten, then re-run `run_llm_evals.py --purpose capture_intent`.
     "capture_intent": "v1",
+    # The Ledger reply router (onmymind.reply._build_prompt). Bump when the
+    # reply-intent prompt is materially rewritten.
+    "ledger_reply_intent": "v1",
+    # The Triage second-pass router (user_state.triage_suggest._build_prompt).
+    # Bump when the route-suggest prompt is materially rewritten.
+    "triage_route_suggest": "v1",
     # The Ledger artifact brief (research.brief._build_prompt). Bump when the brief /
     # stress prompt is materially rewritten.
     "artifact_brief": "v1",
