@@ -184,6 +184,15 @@ Chips: `.k-chip` (+ `-ok/-warn/-bad/-accent`, `-mono`, `.is-on` for filter
 toggles). Radius-full, micro, uppercase. One shape for every badge/status/
 filter chip in the app.
 
+Status dots: `.k-dot` (+ `-ok/-warn/-bad/-muted`). The one filled circular
+status tick — freshness ticks, cron run-marks, system-status marks. Fill is
+`currentColor`, so a tone modifier only sets `color` (the `.k-prov-tick`
+idiom); a surface sizes it via `--k-dot-size` (default 8px) and adds layout
+only (margin, position, a ring border), never a fill. THE replacement for the
+four duplicated dot-tone systems (`.dot-*` / `.fdot-*` / `.ch-dot-*` /
+`.cc-system-dot-*`); a surface that needs a bespoke neutral shade sets a local
+`color` on the same `.k-dot`.
+
 Menus/popovers: `.k-menu` (+ `li.sel`) for any floating list (combobox
 results, palettes).
 

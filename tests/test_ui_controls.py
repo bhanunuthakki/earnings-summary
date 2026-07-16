@@ -223,6 +223,23 @@ def test_status_well_kit_is_block_soft_fill() -> None:
         assert f"color-mix(in srgb, var({tok}) 16%, transparent)" in css
 
 
+def test_status_dot_kit_is_currentcolor_circle_over_tokens() -> None:
+    """``.k-dot`` is the one filled circular status dot — a full-radius circle
+    filled with ``currentColor`` so a tone modifier only sets ``color`` (the
+    .k-prov-tick idiom). The four semantic variants derive from
+    --ok/--warn/--bad/--muted so the per-panel dot-tone systems
+    (.dot-*/.fdot-*/.ch-dot-*/.cc-system-dot-*) can be deleted."""
+    css = controls_css("dark")
+    base = css.split(".k-dot {", 1)[1].split("}", 1)[0]
+    assert "border-radius: var(--radius-full)" in base
+    assert "background: currentColor" in base
+    # size is a var with a layout fallback so a surface resizes without re-skinning
+    assert "var(--k-dot-size, 8px)" in base
+    for tone, tok in (("ok", "--ok"), ("warn", "--warn"), ("bad", "--bad"), ("muted", "--muted")):
+        rule = css.split(f".k-dot-{tone}", 1)[1].split("}", 1)[0]
+        assert f"color: var({tok})" in rule
+
+
 def test_overlay_primitive_scrim_and_elevation() -> None:
     """``.k-scrim`` + ``.k-overlay`` are the tokenized substrate S4's CCOverlay
     JS wires dismissal onto: neutral scrim, surface panel, one radius + the one

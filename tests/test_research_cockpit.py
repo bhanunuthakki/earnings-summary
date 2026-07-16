@@ -847,8 +847,8 @@ def test_render_valuation_cells(rows: dict[str, list[CockpitRow]]) -> None:
 
 def test_render_staleness_dots(rows: dict[str, list[CockpitRow]]) -> None:
     html = render_research_cockpit(rows)
-    assert "dot-ok" in html  # NU: FMP 1h ago, build 2d ago
-    assert "dot-bad" in html  # AAA / V: never pulled, never built
+    assert "k-dot-ok" in html  # NU: FMP 1h ago, build 2d ago
+    assert "k-dot-bad" in html  # AAA / V: never pulled, never built
     assert "transcript 2026-03-31 (Q&amp;A)" in html  # detail lives in the hover
 
 

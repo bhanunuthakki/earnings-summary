@@ -1088,7 +1088,7 @@ def _render_list_section(
             )
             + _sort_th("Next ER", "er", "text", num=False)
             + "<th>Inbox</th>"
-            "<th class='dot-col' title='Ops freshness'>&#9679;</th>"
+            "<th class='dot-col' title='Ops freshness'><span class='k-dot k-dot-muted'></span></th>"
             "</tr></thead>"
         )
         body_rows = "".join(_render_row(r, now, thin=thin) for r in rows)
@@ -1478,10 +1478,10 @@ def _staleness_dot(row: CockpitRow, now: datetime) -> str:
         detail.append(f"transcript {transcript.period_end}{qa}")
     t = escape(row.base.ticker)
     return (
-        f"<a class='stale-dot dot-{tone}' href='/#system' "
+        f"<a class='stale-dot' href='/#system' "
         f"data-peek-url='/api/peek/provenance?ticker={t}' "
         f"data-peek-title='Data provenance · {t}' "
-        f"title='{escape(' · '.join(detail))}'>&#9679;</a>"
+        f"title='{escape(' · '.join(detail))}'><span class='k-dot k-dot-{tone}'></span></a>"
     )
 
 
@@ -1525,12 +1525,9 @@ a.k-chip:hover { color: var(--fg); border-color: var(--border-2); }
 .kpi-move { margin: 1px 4px 1px 0; }
 .cell-pills { display: inline-flex; gap: 4px; flex-wrap: wrap; }
 .er-soon { color: var(--warn); font-weight: 600; }
-.stale-dot { font-size: var(--fs-micro); cursor: help; }
+.stale-dot { cursor: help; }
 a.stale-dot { text-decoration: none; cursor: pointer; }
 .dot-col { text-align: center; width: 28px; }
-.dot-ok { color: var(--ok); }
-.dot-warn { color: var(--warn); }
-.dot-bad { color: var(--bad); }
 td.pos, span.pos { color: var(--ok); }
 td.neg, span.neg { color: var(--bad); }
 </style>

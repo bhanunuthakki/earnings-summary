@@ -26,12 +26,9 @@ log = logging.getLogger(__name__)
 _PANEL_STYLE = """<style>
 .ch-dir { font-weight:600; white-space:nowrap; }
 .ch-dots { white-space:nowrap; }
-.ch-dot { display:inline-block; width:11px; height:11px; border-radius:var(--radius-full);
-  margin:0 1px; vertical-align:middle; }
-.ch-dot-ok   { background:var(--ok); }
-.ch-dot-fail { background:var(--bad); }
-.ch-dot-miss { background:var(--border); }
-.ch-dot-prog { background:var(--warn); }
+.ch-dot { --k-dot-size:11px; margin:0 1px; }
+/* the unique faint "no run" shade — the ok/fail/prog tones ride the kit .k-dot */
+.ch-dot-miss { color:var(--border); }
 .ch-status-ok   { color:var(--ok);   font-weight:600; }
 .ch-status-fail { color:var(--bad);  font-weight:600; }
 .ch-status-miss { color:var(--muted); }
@@ -77,13 +74,13 @@ def _query_runs(db_path: Path, since: datetime) -> dict[tuple[str, str], str]:
 
 def _dot(status: str | None) -> str:
     if status is None:
-        return '<span class="ch-dot ch-dot-miss" title="no run"></span>'
+        return '<span class="ch-dot k-dot ch-dot-miss" title="no run"></span>'
     cls = {
-        "ok": "ch-dot-ok",
-        "failed": "ch-dot-fail",
-        "in_progress": "ch-dot-prog",
+        "ok": "k-dot-ok",
+        "failed": "k-dot-bad",
+        "in_progress": "k-dot-warn",
     }.get(status, "ch-dot-miss")
-    return f'<span class="ch-dot {cls}" title="{escape(status)}"></span>'
+    return f'<span class="ch-dot k-dot {cls}" title="{escape(status)}"></span>'
 
 
 def _day_label(d: date) -> str:

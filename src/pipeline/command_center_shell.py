@@ -706,7 +706,7 @@ def _render_system_button(
         if status is not None:
             tone, summary = status
             title = f"{title} · {summary}"
-            dot = f'<span class="cc-system-dot cc-system-dot-{escape(tone)}"></span>'
+            dot = f'<span class="cc-system-dot k-dot k-dot-{escape(tone)}"></span>'
         return (
             f'<button class="cc-theme-tab cc-system-btn k-btn k-btn-quiet" type="button" role="tab" '
             f'tabindex="-1" data-theme-target="{escape(tid)}" data-pal-label="{escape(tlabel)}" '
@@ -1248,7 +1248,6 @@ td.ticker a:hover { color: var(--accent); }
 .fresh-label { font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--muted); }
 .fresh-val { font-size: var(--fs-section); font-variant-numeric: tabular-nums; }
-.ok-dot { color: var(--ok); }
 /* .tcc-refresh buttons compose the kit (.k-btn .k-btn-primary / .k-btn-quiet) at
    their emitter; only the inter-button spacing stays local. */
 .tcc-refresh { margin-right: 4px; }
@@ -1385,13 +1384,10 @@ td.ticker a:hover { color: var(--accent); }
 .cc-system-btn.active { border-color: var(--accent); color: var(--accent); }
 /* System status dot (PR9) — ONE cheap ok/warn/bad tick derived from the
    daily-chain status artifact (never a heavy render-path scan; see
-   _system_status_tone). Reuses the .k-pill severity tokens (color-mix over
-   --ok/--warn/--bad), just at dot scale rather than a text pill. */
-.cc-system-dot { position: absolute; top: 2px; right: 2px; width: 8px; height: 8px;
-  border-radius: var(--radius-full); border: 1px solid var(--surface); }
-.cc-system-dot-ok   { background: var(--ok); }
-.cc-system-dot-warn { background: var(--warn); }
-.cc-system-dot-bad  { background: var(--bad); }
+   _system_status_tone). The tone rides the kit .k-dot (+ .k-dot-ok/-warn/-bad);
+   this rule adds only the corner position + the surface ring that lifts the dot
+   off the tab. */
+.cc-system-dot { position: absolute; top: 2px; right: 2px; border: 1px solid var(--surface); }
 
 /* Shared ✎ Notes drawer trigger (UX9b) — a kit .k-btn .k-btn-quiet. */
 .cc-notes-btn { margin-left: 6px; }

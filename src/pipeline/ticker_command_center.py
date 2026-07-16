@@ -867,7 +867,7 @@ def _freshness_dot(ident: TickerIdentity) -> str:
         a for a in (_age_days(ident.last_build_at), _age_days(ident.last_fmp_at)) if a is not None
     ]
     worst = max(ages) if ages else None
-    tone = "fdot-bad" if worst is None or worst > 21 else ("fdot-warn" if worst > 7 else "fdot-ok")
+    tone = "bad" if worst is None or worst > 21 else ("warn" if worst > 7 else "ok")
     bits = [
         f"Build {fmt_reltime(ident.last_build_at)}" if ident.last_build_at else "Never built",
         f"FMP pull {fmt_reltime(ident.last_fmp_at)}" if ident.last_fmp_at else "No FMP pull",
@@ -876,9 +876,10 @@ def _freshness_dot(ident: TickerIdentity) -> str:
     title = escape(" · ".join(b for b in bits if b), quote=True)
     t = escape(ident.ticker, quote=True)
     return (
-        f'<a class="cc-fdot {tone}" href="/#system" '
+        f'<a class="cc-fdot" href="/#system" '
         f'data-peek-url="/api/peek/provenance?ticker={t}" '
-        f'data-peek-title="Data provenance · {t}" title="{title}">●</a>'
+        f'data-peek-title="Data provenance · {t}" title="{title}">'
+        f'<span class="k-dot k-dot-{tone}"></span></a>'
     )
 
 
@@ -1077,11 +1078,8 @@ _TCC_DRAWER_STYLE = """<style>
 .cc-holding-head { display: flex; justify-content: space-between; align-items: center;
   flex-wrap: wrap; gap: 12px; min-height: 40px; margin-bottom: 14px; padding-bottom: 10px;
   border-bottom: 1px solid var(--border); }
-.cc-fdot { font-size: var(--fs-body); cursor: help; margin-left: 6px; }
+.cc-fdot { cursor: help; margin-left: 6px; }
 a.cc-fdot { text-decoration: none; cursor: pointer; }
-.fdot-ok { color: var(--ok); }
-.fdot-warn { color: var(--warn); }
-.fdot-bad { color: var(--bad); }
 .tcc-report-main .cc-report-frame { height: calc(100vh - 200px); height: calc(100dvh - 200px); }
 .tcc-drawer-scrim { position: fixed; inset: 0; background: var(--scrim); z-index: 34;
   animation: cc-fade-in var(--transition); }
@@ -1383,7 +1381,7 @@ def _artifacts_section(artifacts: list[Artifact]) -> str:
 def _artifact_row(a: Artifact) -> str:
     if a.exists:
         status = f"{a.count} file(s)" if a.count is not None else _size(a.size_bytes)
-        status_html = f'<span class="ok-dot">●</span> {escape(status)}'
+        status_html = f'<span class="k-dot k-dot-ok"></span> {escape(status)}'
     else:
         status_html = '<span class="muted">absent</span>'
     return (
@@ -1500,7 +1498,6 @@ _PAGE_HEAD = (
   code {{ font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }}
   .pos .kpi-value, td.pos {{ color: var(--ok); }}
   .neg .kpi-value, td.neg {{ color: var(--bad); }}
-  .ok-dot {{ color: var(--ok); }}
   .fresh-strip {{ display: flex; gap: 1px; margin-bottom: 22px; background: var(--border); border-radius: var(--radius); overflow: hidden; }}
   .fresh-cell {{ background: var(--surface); padding: 8px 14px; flex: 1; }}
   .fresh-label {{ font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
