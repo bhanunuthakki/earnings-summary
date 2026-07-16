@@ -82,6 +82,7 @@ their braces pass through untouched; only the small assembly bits interpolate.
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
@@ -369,6 +370,28 @@ TODAY_BANDS_JS = r"""
 """.strip()
 
 
+# Persist the Upcoming-earnings <details> open/closed state per browser (wave B
+# B2) — an ix-last-seen-style localStorage key. Guarded per ELEMENT (not per
+# window): the shell's injectHtml re-executes panel scripts on every fragment
+# injection, and each injection carries a fresh <details> node to (re)wire.
+_UPCOMING_STATE_JS = r"""
+(function () {
+  var KEY = 'cc-upcoming-open';
+  var d = document.querySelector('.cc-rail-upcoming');
+  if (!d || d.__ccUpWired) return;
+  d.__ccUpWired = true;
+  try {
+    if (window.localStorage && localStorage.getItem(KEY) === '1') d.open = true;
+  } catch (e) {}
+  d.addEventListener('toggle', function () {
+    try {
+      if (window.localStorage) localStorage.setItem(KEY, d.open ? '1' : '0');
+    } catch (e) {}
+  });
+})();
+""".strip()
+
+
 def render_overview_panel(
     rows_by_list: dict[str, list[CockpitRow]],
     coverage: dict[str, dict[str, int]] | None,
@@ -413,14 +436,21 @@ def render_overview_panel(
     # collapsed section (owner feedback 2026-07-14: "can be a subtab/category in
     # inbox, not a top pinned box"). The .up-strip CSS was designed for the rail
     # to begin with; #866 hoisted it into the main column — this reverses that.
-    upcoming_rail = (
-        '<details class="cc-rail-upcoming">'
-        "<summary>Upcoming earnings</summary>"
-        f"{upcoming_html}"
-        "</details>"
-        if upcoming_html
-        else ""
-    )
+    # Wave B (B2): the summary is INFORMATIVE while collapsed — the strip
+    # builder stamps "Upcoming earnings · N in 14d — next TICK MM-DD" onto its
+    # root as data-up-summary (already HTML-escaped) and the shell hoists it
+    # here; open/closed persists per browser via _UPCOMING_STATE_JS.
+    upcoming_rail = ""
+    if upcoming_html:
+        m = re.search(r'data-up-summary="([^"]*)"', upcoming_html)
+        upcoming_summary = m.group(1) if m else "Upcoming earnings"
+        upcoming_rail = (
+            '<details class="cc-rail-upcoming">'
+            f"<summary>{upcoming_summary}</summary>"
+            f"{upcoming_html}"
+            "</details>"
+            f"<script>{_UPCOMING_STATE_JS}</script>"
+        )
     main = (
         (open_loops_html or "")
         + '<div id="cc-today-bands"></div>'

@@ -731,9 +731,54 @@ def _display_body(it: InboxItem) -> str:
     identity so an ordinary note that legitimately opens with a bracket is
     untouched."""
     body = it.body or _alert_memo(it)
+    if not body and it.kind == "alert" and it.title == "decision_condition":
+        # decision_condition evidence carries none of the generic memo fields
+        # (its drafter memo rides the queued action, not the evidence), so the
+        # card showed ONLY the "Condition met" chip — two conditions differing
+        # by threshold were indistinguishable. Surface the condition itself +
+        # the latest observed value as the one-line body.
+        body = _decision_condition_body(it)
     if it.semantic_kind == SEMANTIC_ADVISOR_MEMO:
         return _LEADING_TAG_RE.sub("", body)
     return body
+
+
+def _decision_condition_body(it: InboxItem) -> str:
+    """One-line body for a ``decision_condition`` alert, from its evidence:
+    ``condition_label`` (metric ≤/≥ threshold unit, the analyst's own tripwire
+    wording) plus the latest observed value + period — the two facts that make
+    the card readable and disambiguate same-metric conditions. Best-effort ""
+    on malformed/missing evidence (the card then keeps its chip-only shape)."""
+    if it.alert is None or not it.alert.evidence_json:
+        return ""
+    try:
+        parsed = json.loads(it.alert.evidence_json)
+    except (ValueError, TypeError):
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    ev = cast("Mapping[str, object]", parsed)
+    label = ev.get("condition_label")
+    if not isinstance(label, str) or not label.strip():
+        return ""
+    latest: object = ev.get("latest_value")
+    if not isinstance(latest, (int, float)):
+        observed = ev.get("observed")
+        if isinstance(observed, list) and observed:
+            head: object = cast("list[object]", observed)[0]
+            if isinstance(head, dict):
+                latest = cast("Mapping[str, object]", head).get("value")
+    parts = [label.strip()]
+    if isinstance(latest, (int, float)) and not isinstance(latest, bool):
+        unit = ev.get("unit")
+        period = ev.get("period_end")
+        obs = f"latest {latest:g}"
+        if isinstance(unit, str) and unit.strip():
+            obs += f" {unit.strip()}"
+        if isinstance(period, str) and period.strip():
+            obs += f" @ {period.strip()}"
+        parts.append(obs)
+    return " — ".join(parts)
 
 
 def _render_memo_actions(out: StringIO, it: InboxItem) -> None:
