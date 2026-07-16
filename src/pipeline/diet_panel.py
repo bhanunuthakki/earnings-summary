@@ -84,6 +84,7 @@ _PANEL_STYLE = """<style>
 .diet-sec-h { font-size: var(--fs-section); font-weight: 600; color: var(--fg);
   margin: 0 0 var(--sp-2); }
 .diet-sec-sub { font-size: var(--fs-caption); color: var(--muted); margin: 0 0 var(--sp-3); }
+.diet-fresh { color: var(--muted); font-size: var(--fs-micro); white-space: nowrap; }
 .diet-when { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .diet-sig a { color: var(--fg); text-decoration: none; }
 .diet-sig a:hover { color: var(--accent); text-decoration: underline; }
@@ -133,12 +134,43 @@ def render_diet_panel(db_path: Path) -> str:
     )
 
 
+# The stream is "fresh" while its newest signal is at most this old; older
+# means the upstream fetch has likely stalled (wave B B3 — the feed once sat
+# 13 days stale with no cue) and the header carries a .k-chip-warn instead of
+# the quiet muted stamp.
+_FRESH_MAX_AGE_HOURS = 48
+
+
+def _freshness_line(rows: list[SignalRow]) -> str:
+    """One "newest signal Nd ago" stamp for the stream header, from the rows
+    already loaded (no extra query). Warn chip when the newest published_at is
+    older than ``_FRESH_MAX_AGE_HOURS``; "" when nothing is parseable."""
+    stamps = [r.published_at for r in rows if r.published_at]
+    if not stamps:
+        return ""
+    try:
+        newest = datetime.fromisoformat(max(stamps)[:19].replace("T", " "))
+    except ValueError:
+        return ""
+    age = datetime.now(UTC).replace(tzinfo=None) - newest  # naive-UTC convention
+    days = max(age.days, 0)
+    label = f"newest signal {days}d ago"
+    if age.total_seconds() > _FRESH_MAX_AGE_HOURS * 3600:
+        return (
+            ' <span class="k-chip k-chip-warn" title="The newest diet signal is '
+            f"{days} days old — the upstream news/grades fetch may have stalled.\">"
+            f"{escape(label)}</span>"
+        )
+    return f' <span class="diet-fresh">{escape(label)}</span>'
+
+
 def _stream_section(rows: list[SignalRow], list_types: dict[str, str]) -> str:
     head = (
         '<div class="diet-sec first"><h3 class="diet-sec-h">Ingest stream</h3>'
         '<p class="diet-sec-sub">Recent sell-side ratings + news, '
         "<strong>your book first</strong> (held then evaluation), each newest-first. "
-        "Not ranked by urgency — this is reading, not triage.</p>"
+        "Not ranked by urgency — this is reading, not triage."
+        f"{_freshness_line(rows)}</p>"
     )
     if not rows:
         return (
