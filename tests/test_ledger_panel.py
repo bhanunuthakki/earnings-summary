@@ -282,3 +282,62 @@ def test_onmymind_js_has_no_dead_discuss_popup_branch() -> None:
 
     assert "thread_url" not in _ONMYMIND_JS
     assert "window.open" not in _ONMYMIND_JS
+
+
+def test_incorporated_ladder_badge_is_a_research_doorway(db_path: Path) -> None:
+    """Wave B (B7): the "in research" badge is a doorway — a k-chip button
+    carrying data-ledger-jump into the Research queue (the existing jump
+    listener opens Queues + scrolls). Other ladder values stay inert spans."""
+    from onmymind.feed import FeedItem
+    from pipeline.ledger_panel import render_feed_card
+    from user_state.notes import create_note
+
+    note = create_note(
+        ticker="NU",
+        kind="musing",
+        body="unit economics wondering, now in the research queue",
+        source="capture",
+        context={"ledger": "musing", "ladder": "incorporated"},
+        db_path=db_path,
+    )
+    html = render_feed_card(
+        FeedItem(note=note, item_type="musing", ladder="incorporated", wondering=None)
+    )
+    assert 'data-ledger-jump="ledger-jump-research"' in html
+    assert 'class="k-chip k-chip-btn om-ladder"' in html
+    assert ">in research</button>" in html
+    # A merely-saved musing keeps the inert badge — no doorway.
+    saved = render_feed_card(FeedItem(note=note, item_type="musing", ladder="saved", wondering=None))
+    assert "data-ledger-jump" not in saved
+    assert '<span class="om-ladder">saved</span>' in saved
+
+
+def test_queues_summary_reflects_armed_falsifiers(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wave B (B11): the Queues summary said "N pending" (research+reconcile+
+    worldview) while the block ALSO held a large armed-falsifiers table — the
+    badge must reflect what's inside. The count is parsed off the rendered
+    table header, so it can never drift from what actually rendered."""
+    import pipeline.ledger_panel as lp
+
+    monkeypatch.setattr(
+        lp,
+        "render_armed_falsifiers_table",
+        lambda _db: (
+            '<h4 class="ledger-armed-h">Armed falsifiers (184)</h4>'
+            '<table class="ledger-armed-table"></table>'
+        ),
+    )
+    html = lp.render_ledger_panel(db_path)
+    assert "184 armed falsifiers" in html
+    # The badge sits inside the <summary> — visible while the block is closed.
+    summ_start = html.index('<summary class="ledger-queues-sum">')
+    summ_end = html.index("</summary>", summ_start)
+    assert summ_start < html.index("184 armed falsifiers") < summ_end
+
+
+def test_queues_summary_stays_quiet_without_armed_falsifiers(db_path: Path) -> None:
+    """No armed table → no phantom badge (hide-don't-stub)."""
+    html = render_ledger_panel(db_path)
+    assert "armed falsifier" not in html
