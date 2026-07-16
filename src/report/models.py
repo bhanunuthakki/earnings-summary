@@ -1115,6 +1115,10 @@ class SynthesisLensRow(BaseModel):
     model: str | None = None
     generated_at: datetime | None = None
     is_dirty: bool = False
+    # WHY the artifact is dirty (llm_artifacts.dirty_reason) — lets the
+    # renderer word the stale-claim warning precisely (wave B B10b: e.g.
+    # 'saydo_grades_changed' → "graded commitments changed since this memo").
+    dirty_reason: str | None = None
     is_stale: bool = False  # informational only; renderer can warn
     # L12: when the lens authored its prose with inline ``[n]`` evidence
     # markers (numbered from its ordered ``source_doc_ids``), this carries the

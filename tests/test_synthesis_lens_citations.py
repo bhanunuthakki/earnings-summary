@@ -254,6 +254,7 @@ def _fake_artifact(content_md: str, source_doc_ids: list[int]) -> SimpleNamespac
         model="claude-sonnet-4-6",
         generated_at=datetime(2026, 6, 1, tzinfo=UTC),
         dirty=False,
+        dirty_reason=None,
         source_doc_ids=source_doc_ids,
     )
 
@@ -322,3 +323,46 @@ def test_synthesis_tab_uncited_lens_is_unchanged() -> None:
     html = body.getvalue()
     assert "cite-wrap" not in html
     assert "[1]" in html  # marker stays literal text
+
+
+# ---------------------------------------------------------------------------
+# 6. Wave B (B10b): a DIRTY lens prefixes a stale-claim warning line.
+# ---------------------------------------------------------------------------
+
+
+def test_dirty_saydo_lens_prefixes_regenerate_warning() -> None:
+    row = SynthesisLensRow(
+        name="mgmt_credibility_score",
+        content_md="Management is 0-for-3 on margin guidance.",
+        is_dirty=True,
+        dirty_reason="saydo_grades_changed",
+    )
+    section = SynthesisSection(status=SectionStatus.OK, ticker="VEEV", lenses=[row])
+    body = StringIO()
+    _synthesis_tab(body, section)
+    html = body.getvalue()
+    assert "graded commitments changed since this memo — regenerate" in html
+    # The warning LEADS the prose (the header pill alone was easy to miss).
+    assert html.index("lens-dirty-note") < html.index("0-for-3")
+
+
+def test_dirty_lens_with_other_reason_gets_generic_warning() -> None:
+    row = SynthesisLensRow(
+        name="bull_case",
+        content_md="Bullish memo body.",
+        is_dirty=True,
+        dirty_reason="facts_restated",
+    )
+    section = SynthesisSection(status=SectionStatus.OK, ticker="VEEV", lenses=[row])
+    body = StringIO()
+    _synthesis_tab(body, section)
+    html = body.getvalue()
+    assert "inputs changed since this memo — regenerate" in html
+
+
+def test_clean_lens_has_no_warning_line() -> None:
+    row = SynthesisLensRow(name="bull_case", content_md="Bullish memo body.")
+    section = SynthesisSection(status=SectionStatus.OK, ticker="VEEV", lenses=[row])
+    body = StringIO()
+    _synthesis_tab(body, section)
+    assert "lens-dirty-note" not in body.getvalue()
