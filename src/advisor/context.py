@@ -139,11 +139,13 @@ def load_valuations(
         lists = {str(r[0]).upper(): str(r[1]) for r in cur.fetchall()}
     except sqlite3.OperationalError:
         lists = {}
-    # Stub-thesis names (74 prod thesis_state rows carry the literal
-    # "STUB: needs user-authored thesis") are unresearched by definition —
-    # flag them so screens can exclude them from the candidate pool.
+    # Stub-thesis names (prod thesis_state rows carry the literal
+    # "STUB: needs user-authored thesis" — sometimes EMBEDDED mid-text, e.g.
+    # ROP's "…industrial software. STUB: needs user-authored thesis…", so the
+    # marker is matched as a substring, never a prefix) are unresearched by
+    # definition — flag them so screens can exclude them from the pool.
     try:
-        cur = conn.execute("SELECT UPPER(ticker) FROM thesis_state WHERE thesis LIKE 'STUB:%'")
+        cur = conn.execute("SELECT UPPER(ticker) FROM thesis_state WHERE thesis LIKE '%STUB:%'")
         stub_tickers = {str(r[0]) for r in cur.fetchall()}
     except sqlite3.OperationalError:
         stub_tickers = set()

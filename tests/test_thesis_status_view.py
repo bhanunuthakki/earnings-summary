@@ -156,6 +156,28 @@ def test_stub_thesis_reads_false_but_present(tmp_path: Path) -> None:
     assert out["NU"].has_written_thesis is True
 
 
+def test_embedded_stub_marker_reads_false_innocent_words_do_not(tmp_path: Path) -> None:
+    """Red-team wave B: prod carries stub rows with the marker EMBEDDED
+    mid-text (live example, ROP: "Roper Technologies — diversified industrial
+    software. STUB: needs user-authored thesis…"). 0151's prefix predicate
+    missed them; 0152 matches the literal ``STUB:`` token as a substring.
+    Prose that merely contains stub-ish words (stubborn, STUBHUB — no colon)
+    must NOT be excluded."""
+    db = tmp_path / "data" / "portfolio.db"
+    db.parent.mkdir(parents=True)
+    _build_db(db)
+    _seed_thesis_state(
+        db, "EMB", "Real sentence. STUB: needs user-authored thesis", "ok"
+    )
+    _seed_thesis_state(
+        db, "SBRN", "A stubbornly durable moat; the STUBHUB comp is irrelevant.", "ok"
+    )
+
+    out = read_thesis_status(["EMB", "SBRN"], db_path=db)
+    assert out["EMB"].has_written_thesis is False  # embedded marker excluded
+    assert out["SBRN"].has_written_thesis is True  # innocent words survive
+
+
 def test_unknown_ticker_absent_and_case_insensitive(tmp_path: Path) -> None:
     db = tmp_path / "data" / "portfolio.db"
     db.parent.mkdir(parents=True)
