@@ -243,6 +243,8 @@ def test_panel_renders_default_and_intent_states(tmp_path: Path) -> None:
     # No DB / no cache → default-to-book card, empty history, coach present.
     html = render_positioning_panel(tmp_path / "missing.db", tmp_path)
     assert "defaulting to current book" in html
+    # Wave B (B6): the section header names WHICH coach.
+    assert "<h3>Positioning coach</h3>" in html
     assert "pos-chat-form" in html and "/api/positioning/coach" in html
     assert "Propose targets from this conversation" in html
     # With a saved intent → versioned card + narrative + dimensions.

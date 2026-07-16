@@ -34,15 +34,18 @@ def render_scorecard_section(card: CalibrationScorecard | None, *, n_graded: int
     caption naming how many graded decisions have accrued so far
     (``n_graded``, threaded in by the caller from the calibration stats the
     page already computes) rather than vanishing — REQ-6's starvation stub."""
+    # "Calibration coach" (wave B B6): the section header names WHICH coach —
+    # Allocation carries the Positioning coach, Record this one. Inner labels
+    # ("Coach's read: …") keep their wording.
     if card is None:
         return (
-            '<section class="panel cs-stub"><h2>Coach&rsquo;s read</h2>'
+            '<section class="panel cs-stub"><h2>Calibration coach</h2>'
             '<p class="muted cs-caption">Coach&rsquo;s read: no scorecard yet — generated '
             "monthly once graded decisions accrue (currently "
             f"{int(n_graded)} graded).</p></section>"
         )
     head = (
-        '<section class="panel"><h2>Coach&rsquo;s read</h2>'
+        '<section class="panel"><h2>Calibration coach</h2>'
         '<p class="sub">The monthly calibration scorecard — named recurring biases drawn from '
         "your own graded history, and one falsifiable behavioural experiment for the period. "
         "LLM-composed and eval-gated against the <code>calibration_coach</code> rubric before "
