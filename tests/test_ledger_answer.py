@@ -47,7 +47,10 @@ def _answer_on(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _musing(db_path: Path, text: str) -> int:
-    return ingest.ingest_capture(channel="tray", text=text, roster=ROSTER, db_path=db_path).note_id or 0
+    return (
+        ingest.ingest_capture(channel="tray", text=text, roster=ROSTER, db_path=db_path).note_id
+        or 0
+    )
 
 
 def _fake_engine(answer: str) -> None:
@@ -168,44 +171,46 @@ def test_feed_card_renders_answer(db_path: Path, monkeypatch: pytest.MonkeyPatch
     assert "Your MELI cost basis is $1,240." in html
 
 
-# --- P3: contextual actions --------------------------------------------------
+# --- Phase B: the universal reply box ----------------------------------------
 
 
-def test_question_card_gets_inline_chat_not_filing(
+def test_question_card_gets_reply_box_and_dismiss(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A question card offers the inline chat ('Ask more') + Save + Dismiss —
-    NOT Incorporate/Worldview. The answer is the payoff, not a filing task."""
+    """Every card carries ONE interaction — the reply box (routed by the
+    ledger_reply_intent classifier) — plus Dismiss. The per-type verb menus
+    (Research it / Save / Worldview / Ask more) are gone; the placeholder is
+    the only per-type contextualization left."""
     monkeypatch.setenv("LEDGER_ONMYMIND", "1")
     monkeypatch.setattr(respond, "respond_turn", _fake_engine("Your MELI cost basis is $1,240."))
     nid = _musing(db_path, "What's my cost basis on MELI?")
     respond.answer_capture(nid, repo_root=db_path.parent, db_path=db_path)
     html = render_onmymind_list(db_path)
-    assert "data-om-ask" in html  # the inline-chat opener
+    assert "om-reply-input" in html and "data-om-reply" in html
+    assert "Ask a follow-up" in html  # the question-card placeholder
     assert 'data-om-verb="dismiss"' in html
-    assert 'data-om-verb="incorporate"' not in html  # no research-filing on a question
+    assert 'data-om-verb="incorporate"' not in html
+    assert 'data-om-verb="save"' not in html
     assert 'data-om-verb="worldview"' not in html
+    assert "data-om-ask" not in html  # the old chat-opener button is gone
 
 
-def test_reading_card_gets_research_and_dismiss(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_reading_card_gets_reply_box(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LEDGER_ONMYMIND", "1")
     ingest.ingest_reading(
         channel="tray", url="https://example.com/x", external_ref="tray:r1", db_path=db_path
     )
     html = render_onmymind_list(db_path)
-    assert "Research this" in html and 'data-om-verb="incorporate"' in html
-    assert "data-om-ask" not in html  # a reading isn't a conversation
+    assert "om-reply-input" in html and "data-om-reply" in html
+    assert "research it, save it, or ask about it" in html  # the reading placeholder
+    assert 'data-om-verb="incorporate"' not in html
 
 
-def test_plain_musing_gets_discuss_save_dismiss(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_plain_musing_gets_reply_box(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LEDGER_ONMYMIND", "1")
     monkeypatch.delenv("LEDGER_WORLDVIEW", raising=False)
     _musing(db_path, "MELI looks cheap here")
     html = render_onmymind_list(db_path)
-    assert "data-om-ask" in html  # Discuss opens the inline chat
-    assert 'data-om-verb="save"' in html and 'data-om-verb="dismiss"' in html
-    assert 'data-om-verb="incorporate"' not in html  # a plain musing isn't auto-research
+    assert "om-reply-input" in html and "data-om-reply" in html
+    assert 'data-om-verb="dismiss"' in html
+    assert 'data-om-verb="save"' not in html

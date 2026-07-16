@@ -604,6 +604,52 @@ def create_app(
             "answering": answering,
         }
 
+    @app.route("/api/onmymind/<int:note_id>/reply", methods=["POST", "OPTIONS"])
+    def onmymind_reply(note_id: int):
+        """The universal reply box (Phase B): free text on a feed card, routed
+        by the ``ledger_reply_intent`` classifier instead of a verb-button
+        taxonomy. Action intents flow through the SAME ``act_on_feed_item``
+        core the old buttons (and the Telegram keyboard) call; ``question``
+        hands back ``{mode: 'chat'}`` and the client streams the answer via
+        /api/ask/stream; ``note`` appends the reply to the card's thread
+        context. The classify is one short FAST-tier call — the client shows
+        the pending bubble the moment the POST leaves."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from onmymind.feed import LADDER_LABELS, act_on_feed_item
+        from onmymind.reply import ACTION_VERB, classify_reply
+        from user_state.notes import get_note, patch_note_context
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            return ({"error": "text required"}, 400)
+        note = get_note(note_id, db_path=db_path)
+        if note is None:
+            return ({"error": "not found"}, 404)
+        try:
+            verdict = classify_reply(note.body, text)
+        except Exception:  # classifier failure degrades to conversation
+            app.logger.warning("reply classify failed for note %s", note_id, exc_info=True)
+            return {"ok": True, "mode": "chat", "intent": "question"}
+        if verdict.is_action:
+            res = act_on_feed_item(note_id, ACTION_VERB[verdict.intent], db_path=db_path)
+            return {
+                "ok": res.ok,
+                "mode": "acted",
+                "intent": verdict.intent,
+                "removed": res.removed,
+                "ladder_label": LADDER_LABELS.get(res.ladder or "", ""),
+                "receipt": res.message,
+            }
+        if verdict.intent == "note":
+            replies = (note.context or {}).get("owner_replies")
+            thread = list(cast("list[object]", replies)) if isinstance(replies, list) else []
+            thread.append(text)
+            patch_note_context(note_id, {"owner_replies": thread[-20:]}, db_path=db_path)
+            return {"ok": True, "mode": "acted", "intent": "note", "receipt": "Noted."}
+        return {"ok": True, "mode": "chat", "intent": verdict.intent}
+
     @app.route("/api/onmymind/<int:note_id>/answer", methods=["GET"])
     def onmymind_answer(note_id: int):
         """The answer-poll read behind the async capture tap: the stored

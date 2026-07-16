@@ -258,13 +258,18 @@ def test_worldview_stages_a_proposed_tenet_without_llm(
     assert len(still) == 1
 
 
-def test_worldview_button_gated_by_flag(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_worldview_button_reply_routes_it(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase B: the To-Worldview button is gone regardless of the flag — the
+    reply box routes a worldview-shaped reply through the ledger_reply_intent
+    classifier instead (the 'worldview' ladder verb stays live server-side)."""
     monkeypatch.setenv("LEDGER_ONMYMIND", "1")
     _musing(db_path, "a thought")
-    monkeypatch.delenv("LEDGER_WORLDVIEW", raising=False)
-    assert 'data-om-verb="worldview"' not in render_onmymind_list(db_path)
     monkeypatch.setenv("LEDGER_WORLDVIEW", "1")
-    assert 'data-om-verb="worldview"' in render_onmymind_list(db_path)
+    html = render_onmymind_list(db_path)
+    assert 'data-om-verb="worldview"' not in html
+    assert "om-reply-input" in html and "data-om-reply" in html
 
 
 def test_action_on_missing_note_is_not_ok(db_path: Path) -> None:

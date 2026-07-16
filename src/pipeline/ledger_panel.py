@@ -23,7 +23,7 @@ from onmymind.feed import (
     onmymind_enabled,
 )
 from onmymind.respond import is_answerable_capture
-from pipeline.worldview_panel import render_worldview_section, worldview_enabled
+from pipeline.worldview_panel import render_worldview_section
 from research.proposals import (
     ResearchProposal,
     ResearchTask,
@@ -1015,6 +1015,10 @@ _ONMYMIND_STYLE = """<style>
 .om-chat-assistant { align-self: flex-start; background: var(--surface); color: var(--fg-soft); }
 .om-chat-pending { color: var(--muted); }
 .om-chat-input { flex: 1; font-family: var(--sans); font-size: var(--fs-body); }
+/* The universal reply box (Phase B) — one input per card, routed by the
+   reply-intent classifier; the receipt bubble is the acted-path acknowledgement. */
+.om-reply-input { flex: 1; font-family: var(--sans); font-size: var(--fs-body); }
+.om-chat-receipt { color: var(--accent); font-weight: 600; }
 #onmymind-more { margin-top: var(--sp-2); }
 </style>"""
 
@@ -1051,111 +1055,152 @@ _ONMYMIND_JS = """<script>(function(){
 })();</script>"""
 
 
-# Inline chat (P3): one delegated listener opens a real Ask thread inside a
-# card. First turn seeds the tail from the captured question + its stored answer
-# (no session yet); the returned session_id continues it server-side after that.
+# The universal reply box (Phase B): every card carries ONE input. The first
+# send classifies via /api/onmymind/<id>/reply (FAST tier): an action intent
+# executes through the same act_on_feed_item core the old buttons used and
+# paints a receipt bubble; 'question' streams a real Ask turn in-card
+# (/api/ask/stream — stage/delta frames, never a frozen '...'); once a chat
+# session is live on a card, later sends stream directly (no re-classify).
 _OM_CHAT_JS = """<script>(function(){
   if(window.__omChatWired){ return; }
   window.__omChatWired = true;
+  var states={};
   function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
   function bubble(role, text){
     return '<div class="om-chat-msg om-chat-'+role+'">'+esc(text).replace(/\\n/g,'<br>')+'</div>';
   }
-  function openChat(card){
-    var existing=card.querySelector('.om-chat');
-    if(existing){ var i=existing.querySelector('.om-chat-input'); if(i){ i.focus(); } return; }
+  function cardState(card){
+    var id=card.getAttribute('data-om-id');
+    if(!states[id]){
+      var bodyEl=card.querySelector('.om-body');
+      var ansEl=card.querySelector('.om-answer');
+      var seededQ=bodyEl?(bodyEl.textContent||'').trim():'';
+      var seededA=ansEl?(ansEl.textContent||'').replace(/^\\s*Answer\\s*/,'').trim():'';
+      states[id]={ session_id:null, history:(seededA?[{role:'user',text:seededQ},{role:'assistant',text:seededA}]:[]) };
+    }
+    return states[id];
+  }
+  function ensureThread(card){
+    var thread=card.querySelector('.om-chat-thread');
+    if(thread){ return thread; }
+    thread=document.createElement('div');
+    thread.className='om-chat-thread om-chat';
+    var row=card.querySelector('.om-actions');
+    if(row && row.parentNode){ row.parentNode.insertBefore(thread, row); }
+    else { card.appendChild(thread); }
+    return thread;
+  }
+  function streamTurn(card, q, pend, done){
+    var state=cardState(card);
+    var thread=ensureThread(card);
     var ticker=card.getAttribute('data-om-ticker')||'';
-    var box=document.createElement('div');
-    box.className='om-chat';
-    box.innerHTML=
-      '<div class="om-chat-thread"></div>'
-      +'<div class="ledger-cap-row">'
-      +'<input type="text" class="om-chat-input" placeholder="Ask a follow-up...">'
-      +'<button type="button" class="k-btn k-btn-primary k-btn-sm om-chat-send">Send</button>'
-      +'</div>';
-    card.appendChild(box);
-    var input=box.querySelector('.om-chat-input');
-    var thread=box.querySelector('.om-chat-thread');
-    var send=box.querySelector('.om-chat-send');
-    var bodyEl=card.querySelector('.om-body');
-    var ansEl=card.querySelector('.om-answer');
-    var seededQ=bodyEl?(bodyEl.textContent||'').trim():'';
-    var seededA=ansEl?(ansEl.textContent||'').replace(/^\\s*Answer\\s*/,'').trim():'';
-    var state={ session_id:null, history:(seededA?[{role:'user',text:seededQ},{role:'assistant',text:seededA}]:[]) };
-    // Streams /api/ask/stream (SSE over a POST body): stage frames narrate the
-    // wait ("answering..."), delta frames paint text as it generates, final
-    // settles the bubble. The buffered /api/ask sibling left the user staring
-    // at a frozen '...' for the whole LLM round-trip — the "stuck button" feel.
-    function turn(){
-      var q=(input.value||'').trim();
-      if(!q){ input.focus(); return; }
-      input.value=''; send.disabled=true;
-      thread.insertAdjacentHTML('beforeend', bubble('user', q));
-      var pend=document.createElement('div');
-      pend.className='om-chat-msg om-chat-assistant om-chat-pending';
-      pend.textContent='...'; thread.appendChild(pend);
-      var payload={ query:q };
-      if(ticker){ payload.tickers=[ticker]; }
-      if(state.session_id){ payload.session_id=state.session_id; }
-      else if(state.history.length){ payload.history=state.history; }
-      var acc=''; var finalText=null; var errText=null;
-      function handle(ev){
-        if(!ev || !ev.type){ return; }
-        if(ev.type==='session'){ if(ev.session_id){ state.session_id=ev.session_id; state.history=[]; } return; }
-        if(ev.type==='stage'){ if(!acc){ pend.textContent=(ev.stage||'working')+'...'; } return; }
-        if(ev.type==='delta' && ev.text){
-          acc+=ev.text;
+    var payload={ query:q };
+    if(ticker){ payload.tickers=[ticker]; }
+    if(state.session_id){ payload.session_id=state.session_id; }
+    else if(state.history.length){ payload.history=state.history; }
+    var acc=''; var finalText=null; var errText=null;
+    function handle(ev){
+      if(!ev || !ev.type){ return; }
+      if(ev.type==='session'){ if(ev.session_id){ state.session_id=ev.session_id; state.history=[]; } return; }
+      if(ev.type==='stage'){ if(!acc){ pend.textContent=(ev.stage||'working')+'...'; } return; }
+      if(ev.type==='delta' && ev.text){
+        acc+=ev.text;
+        pend.classList.remove('om-chat-pending');
+        pend.innerHTML=esc(acc).replace(/\\n/g,'<br>');
+        return;
+      }
+      if(ev.type==='final'){ finalText=(ev.text||ev.message||acc); return; }
+      if(ev.type==='error'){ errText=ev.error||'Something went wrong.'; return; }
+    }
+    function finish(){
+      var out=errText || finalText || acc || 'No answer came back.';
+      pend.remove();
+      thread.insertAdjacentHTML('beforeend', bubble('assistant', out));
+      done();
+    }
+    fetch('/api/ask/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+      .then(function(r){
+        if(!r.ok || !r.body){ throw new Error('bad response'); }
+        var reader=r.body.getReader();
+        var dec=new TextDecoder();
+        var buf='';
+        function pump(){
+          return reader.read().then(function(step){
+            if(step.done){ finish(); return; }
+            buf+=dec.decode(step.value,{stream:true});
+            var idx;
+            while((idx=buf.indexOf('\\n\\n'))!==-1){
+              var frame=buf.slice(0,idx); buf=buf.slice(idx+2);
+              if(frame.indexOf('data: ')!==0){ continue; }
+              var ev=null;
+              try{ ev=JSON.parse(frame.slice(6)); }catch(err){ ev=null; }
+              if(ev){ handle(ev); }
+            }
+            return pump();
+          });
+        }
+        return pump();
+      })
+      .catch(function(){
+        pend.remove();
+        thread.insertAdjacentHTML('beforeend', bubble('assistant','Could not reach the server - try again.'));
+        done();
+      });
+  }
+  function sendReply(card){
+    var input=card.querySelector('.om-reply-input');
+    var btn=card.querySelector('[data-om-reply]');
+    if(!input){ return; }
+    var q=(input.value||'').trim();
+    if(!q){ input.focus(); return; }
+    input.value='';
+    if(btn){ btn.disabled=true; }
+    var thread=ensureThread(card);
+    thread.insertAdjacentHTML('beforeend', bubble('user', q));
+    var pend=document.createElement('div');
+    pend.className='om-chat-msg om-chat-assistant om-chat-pending';
+    pend.textContent='...'; thread.appendChild(pend);
+    function done(){ if(btn){ btn.disabled=false; } input.focus(); }
+    var state=cardState(card);
+    if(state.session_id){ streamTurn(card, q, pend, done); return; }
+    var id=card.getAttribute('data-om-id');
+    fetch('/api/onmymind/'+id+'/reply',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:q})})
+      .then(function(r){ if(!r.ok){ throw new Error(); } return r.json(); })
+      .then(function(res){
+        if(res && res.mode==='acted'){
           pend.classList.remove('om-chat-pending');
-          pend.innerHTML=esc(acc).replace(/\\n/g,'<br>');
+          pend.classList.add('om-chat-receipt');
+          pend.textContent=res.receipt||'Done.';
+          var badge=card.querySelector('.om-ladder');
+          if(badge && res.ladder_label){ badge.textContent=res.ladder_label; }
+          if(res.removed){
+            setTimeout(function(){ if(card.parentNode){ card.parentNode.removeChild(card); } }, 900);
+          }
+          done();
           return;
         }
-        if(ev.type==='final'){ finalText=(ev.text||ev.message||acc); return; }
-        if(ev.type==='error'){ errText=ev.error||'Something went wrong.'; return; }
-      }
-      function finish(){
-        send.disabled=false;
-        var out=errText || finalText || acc || 'No answer came back.';
+        // mode 'chat' (or anything unexpected): converse.
+        streamTurn(card, q, pend, done);
+      })
+      .catch(function(){
         pend.remove();
-        thread.insertAdjacentHTML('beforeend', bubble('assistant', out));
-        input.focus();
-      }
-      fetch('/api/ask/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
-        .then(function(r){
-          if(!r.ok || !r.body){ throw new Error('bad response'); }
-          var reader=r.body.getReader();
-          var dec=new TextDecoder();
-          var buf='';
-          function pump(){
-            return reader.read().then(function(step){
-              if(step.done){ finish(); return; }
-              buf+=dec.decode(step.value,{stream:true});
-              var idx;
-              while((idx=buf.indexOf('\\n\\n'))!==-1){
-                var frame=buf.slice(0,idx); buf=buf.slice(idx+2);
-                if(frame.indexOf('data: ')!==0){ continue; }
-                var ev=null;
-                try{ ev=JSON.parse(frame.slice(6)); }catch(err){ ev=null; }
-                if(ev){ handle(ev); }
-              }
-              return pump();
-            });
-          }
-          return pump();
-        })
-        .catch(function(){
-          pend.remove(); send.disabled=false;
-          thread.insertAdjacentHTML('beforeend', bubble('assistant','Could not reach the server - try again.'));
-        });
-    }
-    send.addEventListener('click', turn);
-    input.addEventListener('keydown', function(e){ if(e.key==='Enter'){ turn(); } });
-    input.focus();
+        ensureThread(card).insertAdjacentHTML('beforeend', bubble('assistant','Could not reach the server - try again.'));
+        done();
+      });
   }
   document.addEventListener('click', function(e){
-    var b=e.target.closest('[data-om-ask]');
+    var b=e.target.closest('[data-om-reply]');
     if(!b){ return; }
     var card=b.closest('[data-om-id]'); if(!card){ return; }
-    openChat(card);
+    sendReply(card);
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key!=='Enter'){ return; }
+    var input=e.target && e.target.closest ? e.target.closest('.om-reply-input') : null;
+    if(!input){ return; }
+    var card=input.closest('[data-om-id]'); if(!card){ return; }
+    e.preventDefault();
+    sendReply(card);
   });
 })();</script>"""
 
@@ -1260,37 +1305,30 @@ def _verb_button(verb: str, label: str, cls: str) -> str:
     return f'<button type="button" class="k-btn k-btn-sm {cls}" data-om-verb="{verb}">{escape(label)}</button>'
 
 
-def _ask_button(label: str) -> str:
-    # The inline-chat opener — replaces the old popup-blocked window.open
-    # "Discuss" (a window.open inside a fetch .then never counts as a user
-    # gesture, so the browser silently swallowed it). Not a ladder verb.
-    return f'<button type="button" class="k-btn k-btn-sm k-btn-primary" data-om-ask>{escape(label)}</button>'
+def _reply_placeholder(item: FeedItem) -> str:
+    """The reply box's nudge, phrased by what the card IS — the one remaining
+    per-type contextualization now that the verb menus are gone."""
+    if item.item_type in ("doc", "link"):
+        return "Reply - research it, save it, or ask about it..."
+    if _is_question_item(item):
+        return "Ask a follow-up..."
+    if item.wondering:
+        return "Reply - research it, or just talk it through..."
+    return "Reply - save it, send to research, or talk it through..."
 
 
 def _feed_actions(item: FeedItem) -> str:
-    """The card's action row — FEWER buttons, chosen by what the card IS (the
-    overhaul's answer to "too prescriptive"). A reading is researched; a
-    question opens the inline chat; a wondering goes to research; a plain musing
-    can be discussed, saved, sent to Worldview, or dismissed. dismiss stays last
-    (destructive)."""
-    dismiss = _verb_button("dismiss", "Dismiss", "k-btn-danger")
-    if item.item_type in ("doc", "link"):
-        return _verb_button("incorporate", "Research this", "") + dismiss
-    if _is_question_item(item):
-        # The answer is the payoff; keep it a conversation, not a filing task.
-        return _ask_button("Ask more") + _verb_button("save", "Save for later", "") + dismiss
-    if item.wondering:
-        return (
-            _verb_button("incorporate", "Research it", "k-btn-primary")
-            + _ask_button("Discuss")
-            + dismiss
-        )
-    # a plain reflection / musing
-    parts = [_ask_button("Discuss"), _verb_button("save", "Save for later", "")]
-    if worldview_enabled():
-        parts.append(_verb_button("worldview", "To Worldview", ""))
-    parts.append(dismiss)
-    return "".join(parts)
+    """The card's action row (Phase B): ONE universal interaction — a reply box
+    routed by the ``ledger_reply_intent`` classifier — plus Dismiss. The per-type
+    verb menus (Research it / Save / Worldview / Ask more…) made the owner the
+    router; now "dig into this" / "keep this" / "what changed?" all land in the
+    same box and the machine routes them (act / converse / note)."""
+    return (
+        f'<input type="text" class="om-reply-input" '
+        f'placeholder="{escape(_reply_placeholder(item), quote=True)}">'
+        '<button type="button" class="k-btn k-btn-primary k-btn-sm" data-om-reply>Send</button>'
+        + _verb_button("dismiss", "Dismiss", "k-btn-danger")
+    )
 
 
 def _feed_card(item: FeedItem) -> str:

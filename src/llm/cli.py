@@ -166,6 +166,16 @@ LLM_MODELS: dict[str, str] = {
     # run on EVERY owner musing (no lexical pre-gate) → the cheap FAST tier; the
     # golden set (evals/golden/capture_intent.json) is its bar.
     "capture_intent": FAST_CLASSIFIER_MODEL,
+    # The Ledger reply router (onmymind.reply). A closed enum classification —
+    # research/save/worldview/dismiss/question/note — over one owner reply to a
+    # feed card (the reply box replaced the per-card verb buttons). Fails open
+    # to 'question' (converse, never act) → the cheap FAST tier.
+    "ledger_reply_intent": FAST_CLASSIFIER_MODEL,
+    # The Triage second-pass router (user_state.triage_suggest). Given the FULL
+    # routable-intent menu, which route would the owner pick for a parked
+    # comment, and how sure are we? high → auto-route, low → one-tap suggestion,
+    # park/failure → unchanged. Closed enum → the cheap FAST tier.
+    "triage_route_suggest": FAST_CLASSIFIER_MODEL,
     # The Sunday packet's per-item verdict pre-draft (pipeline.weekly_packet,
     # PR2 — navigation_ia.md §3.1). A short, closed-shape suggestion
     # ("ratify|drop|defer - <reason>") grounded ONLY in the item text it's
