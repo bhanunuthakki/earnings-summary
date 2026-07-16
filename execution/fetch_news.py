@@ -59,7 +59,9 @@ import execution.fetch_yf_grades as yfgrades  # noqa: E402
 from competitive.sec_watch import check_s1_watch, load_watches  # noqa: E402
 from db import DB_PATH  # noqa: E402
 from execution.fetch_news_websearch import fetch_websearch_news_for_ticker  # noqa: E402
+from llm.cli import is_hard_stop  # noqa: E402
 from news.store import NewsRow, drop_duplicate_stories, upsert_news_rows  # noqa: E402
+from signals.quality import score_unscored_signals  # noqa: E402
 
 SOURCES = ("fmp", "websearch", "auto")
 DEFAULT_SOURCE = "auto"
@@ -329,6 +331,21 @@ def run(
         inserted=inserted,
         deduped=deduped,
     )
+
+    # Follow-on: LLM information-quality scoring of the freshly-mirrored diet
+    # signals (upsert_news_rows ran sync_news_to_signals). Batched Haiku calls
+    # over rows WHERE quality_score IS NULL, capped per run; the pass degrades
+    # per-batch internally (transient failures leave rows NULL — retried on
+    # the next fetch) and this wrapper only lets HARD stops (budget cap /
+    # missing CLI — llm.cli.is_hard_stop) fail the run loudly. The news rows
+    # themselves are already persisted either way.
+    try:
+        quality_tally = score_unscored_signals(db_path)
+        _log("news_diet_quality_scored", **quality_tally)
+    except Exception as exc:
+        if is_hard_stop(exc):
+            raise
+        _log("news_diet_quality_deferred", error=f"{type(exc).__name__}: {str(exc)[:200]}")
     return 0
 
 

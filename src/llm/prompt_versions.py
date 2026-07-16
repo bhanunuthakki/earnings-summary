@@ -129,6 +129,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # non-numeric news/earnings-tone bridge). Bump when _QUALITATIVE_PROMPT is
     # materially rewritten.
     "qualitative_conditions_extract": "v1",
+    # Diet information-quality scoring (src/signals/quality.py — the ingest-time
+    # replacement for the static publisher denylist). Bump when _PROMPT's rubric
+    # is materially rewritten.
+    "diet_source_quality": "v1",
     # LLM peer selection (src/compute/peer_selection.py, mode-A overlap golden
     # set). Bump when _build_prompt is materially rewritten, then re-run
     # `run_llm_evals.py --purpose peer_selection --min-score ...`.
