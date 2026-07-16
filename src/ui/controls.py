@@ -469,6 +469,49 @@ def prov_severity_tone(severity: str | None) -> str:
     return _SEVERITY_TONE.get(sev, "muted")
 
 
+# ---------------------------------------------------------------------------
+# Thesis / break-rule status → tone: ONE vocabulary for every surface that
+# colors a thesis verdict or rule status (the cockpit, peeks, the ticker
+# command center, allocation decisions, portfolio health, the workspace break
+# rules). The per-surface copies of this map drifted: `warn` rendered as a
+# NEUTRAL pill on the ticker command center (its local dict only knew `watch`),
+# `broken` fell to muted on the allocation panel, and the workspace break-rules
+# table colored a healthy rule ACCENT BLUE (tokens.py reserves accent for
+# interactive). Route every thesis-status color through here instead.
+# ---------------------------------------------------------------------------
+
+_THESIS_STATUS_TONE: dict[str, str] = {
+    "breach": "bad",
+    "broken": "bad",
+    "warn": "warn",
+    "watch": "warn",
+    "ok": "ok",
+    "intact": "ok",
+}
+
+_TONED = ("ok", "warn", "bad", "accent")
+
+
+def thesis_status_tone(status: str | None) -> str:
+    """Kit tone token (``'ok'`` / ``'warn'`` / ``'bad'``) for a thesis-verdict /
+    break-rule status word; ``''`` (neutral) for anything else — `unresolved`
+    and unknown vocabulary degrade to the un-toned base control, never to a
+    wrong color."""
+    return _THESIS_STATUS_TONE.get((status or "").strip().lower(), "")
+
+
+def pill_tone_class(tone: str) -> str:
+    """``' k-pill-<tone>'`` (leading space, appendable to a class string) for a
+    real tone, ``''`` for neutral/unknown — the muted-fallback guard every
+    surface used to re-implement inline."""
+    return f" k-pill-{tone}" if tone in _TONED else ""
+
+
+def chip_tone_class(tone: str) -> str:
+    """``' k-chip-<tone>'`` counterpart of :func:`pill_tone_class`."""
+    return f" k-chip-{tone}" if tone in _TONED else ""
+
+
 def prov_severity_tick(severity: str | None, *, label: str | None = None) -> str:
     """The canonical data-quality severity indicator: a tone dot + short label
     (HALT / WARN). Tone via :func:`prov_severity_tone`; ``label`` overrides the

@@ -268,6 +268,61 @@ def test_build_kpi_deltas_only_for_portfolio(rows: dict[str, list[CockpitRow]]) 
     assert _by_ticker(rows["evaluation"])["V"].kpi_deltas == []
 
 
+def test_rule_tone_fuzzy_match() -> None:
+    """The evaluator's rule names and the KPI-definition names drift apart in
+    casing and unit suffixes on prod (AMZN matched 0 of 3 tier-1 defs, TSM's
+    live BREACH rendered a neutral gray chip) — a breached rule must still
+    tone its chip: exact match first, then case-insensitive, then token-set
+    (subset either way), worst status winning on ambiguity."""
+    from pipeline.research_cockpit import _rule_status_for  # pyright: ignore[reportPrivateUsage]
+
+    tones = {
+        "Gross Margin (GAAP)": "breach",
+        "AWS Operating Margin": "warn",
+        "FCF Margin (GAAP)": "ok",
+    }
+    # Exact, casefold, token-subset rungs.
+    assert _rule_status_for("Gross Margin (GAAP)", tones) == ("breach", "Gross Margin (GAAP)")
+    assert _rule_status_for("AWS operating margin", tones) == ("warn", "AWS Operating Margin")
+    assert _rule_status_for("Gross margin", tones) == ("breach", "Gross Margin (GAAP)")
+    # Unrelated names never match — no tone is better than a wrong tone.
+    assert _rule_status_for("Members YoY growth", tones) == ("", "")
+    # Ambiguous token matches take the WORST status — never hide a breach.
+    multi = {"Revenue YoY Growth (USD)": "ok", "Total Revenue YoY Growth (USD)": "breach"}
+    status, _rule = _rule_status_for("Revenue YoY growth", multi)
+    assert status == "breach"
+
+
+def test_toned_severity_first_under_cap() -> None:
+    """A breached tier-1 KPI must never be pushed out of the capped chip row
+    by bigger-but-benign moves (the old pure-magnitude sort dropped it)."""
+    from pipeline.research_cockpit import KpiDelta, _toned  # pyright: ignore[reportPrivateUsage]
+
+    def mk(name: str, latest: float) -> KpiDelta:
+        return KpiDelta(
+            name=name,
+            unit="usd",
+            latest_value=latest,
+            prior_value=10.0,
+            latest_period="2026-03-31",
+            prior_period="2025-12-31",
+            tone="neutral",
+        )
+
+    deltas = [
+        mk("Neutral A", 20.0),
+        mk("Neutral B", 19.0),
+        mk("Neutral C", 18.0),
+        mk("Breached tiny", 10.1),
+    ]
+    out = _toned(deltas, {"Breached tiny": "breach"})
+    assert len(out) == 3
+    assert out[0].name == "Breached tiny"
+    assert out[0].tone == "bad"
+    assert out[0].tone_why == "break rule 'Breached tiny': breach"
+    assert [d.name for d in out[1:]] == ["Neutral A", "Neutral B"]
+
+
 def test_tier1_future_period_facts_excluded(conn: sqlite3.Connection) -> None:
     """A forward-dated (guidance/forecast) fact must not masquerade as the latest
     actual: the ``as_of`` guard drops period_ends in the future so the move is
@@ -756,6 +811,28 @@ def test_render_badges_chips_and_pills(rows: dict[str, list[CockpitRow]]) -> Non
     assert "/feed?ticker=NU&amp;status=pending" in html or "/feed?ticker=NU&status=pending" in html
     assert "2 alerts" in html
     assert "1 new doc" in html
+
+
+def test_alert_pill_red_reserved_for_tier1(conn: sqlite3.Connection, repo_root: Path) -> None:
+    """Routine pending alerts render an AMBER pill; red is reserved for a
+    pending tier-1/decisive alert (owner falsifier breach / registered
+    threshold crossing), with the tier-1 count named in the hover — so a red
+    pill on Home always means a thesis-decisive alert."""
+    html = render_research_cockpit(build_cockpit_rows(conn, repo_root))
+    assert "k-pill k-pill-warn cockpit-count" in html  # 2 routine pending alerts
+    assert "k-pill k-pill-bad cockpit-count" not in html
+    conn.execute(
+        "INSERT INTO alerts (user_id, ticker, trigger_kind, fired_at, status, "
+        "evidence_json, signature_sha) "
+        "VALUES ('bhanu', 'NU', 'decision_condition', ?, 'pending', "
+        "'{\"decided_by\": \"owner\"}', 'sig-t1')",
+        (_iso(NOW - timedelta(hours=1)),),
+    )
+    conn.commit()
+    html2 = render_research_cockpit(build_cockpit_rows(conn, repo_root))
+    assert "k-pill k-pill-bad cockpit-count" in html2
+    assert "3 alerts" in html2
+    assert "1 tier-1" in html2  # the hover names the decisive subset
 
 
 def test_render_valuation_cells(rows: dict[str, list[CockpitRow]]) -> None:

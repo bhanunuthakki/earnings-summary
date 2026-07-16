@@ -58,6 +58,7 @@ from pipeline.research_cockpit import (
     profile_quote,
 )
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_reltime
+from ui.controls import pill_tone_class, thesis_status_tone
 from ui.prose import render_prose
 from ui.time import stamp_html
 
@@ -74,15 +75,9 @@ __all__ = [
     "render_what_if_peek",
 ]
 
-# Same worst-wins tone vocabulary the cockpit's verdict badge uses.
-_STATUS_TONE: dict[str, str] = {
-    "breach": "bad",
-    "broken": "bad",
-    "warn": "warn",
-    "watch": "warn",
-    "ok": "ok",
-    "intact": "ok",
-}
+# Thesis-status tones route through the shared kit resolver
+# (ui.controls.thesis_status_tone) — the same vocabulary the cockpit's
+# verdict badge uses, kept in one place.
 
 # Mirrors ck_advisor_memos_kind (alembic 0077 + 0140's position_review widen).
 _MEMO_KINDS = frozenset({"next_dollar", "swap_check", "socratic", "position_review"})
@@ -300,8 +295,7 @@ def render_ticker_peek(
 
     badge = ""
     if verdict:
-        tone = _STATUS_TONE.get(verdict.lower(), "muted")
-        pill_tone = f" k-pill-{tone}" if tone in ("ok", "warn", "bad") else ""
+        pill_tone = pill_tone_class(thesis_status_tone(verdict))
         badge = f'<span class="k-pill{pill_tone}">{escape(verdict)}</span>'
     head = f'<div class="cc-mini-head"><span class="cc-mini-ticker">{escape(t)}</span>{badge}</div>'
     name_html = f'<div class="cc-mini-name">{escape(name)}</div>' if name else ""

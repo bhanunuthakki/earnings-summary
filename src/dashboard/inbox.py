@@ -50,6 +50,7 @@ from dashboard.inbox_rank import (
     CATEGORY_ORDER,
     SEMANTIC_ADVISOR_MEMO,
     annotate_and_rank,
+    decisive_alert_reason,
     inbox_label,
     note_semantic_kind,
 )
@@ -541,8 +542,17 @@ def _render_item(
     # The raw trigger_kind rides a data-attr (a machine hook, like data-cat /
     # data-kind) — never a visible label; the chip humanizes it (§8).
     trig_attr = f' data-trigger="{_esc(it.title)}"' if it.kind == "alert" else ""
+    # Tier-1 severity (one definition with the ranking layer): a decisive
+    # alert — owner falsifier breach, registered threshold crossing — carries
+    # a bad-toned rail + chip so it reads apart from routine news at a glance.
+    decisive = (
+        decisive_alert_reason(it.title, it.alert.evidence_json)
+        if it.kind == "alert" and it.alert is not None
+        else None
+    )
+    card_cls = "ix-card ix-sev-bad" if decisive else "ix-card"
     out.write(
-        f'<div class="ix-card" data-kind="{_esc(it.kind)}"{cat_attr}{trig_attr} '
+        f'<div class="{card_cls}" data-kind="{_esc(it.kind)}"{cat_attr}{trig_attr} '
         f'data-when="{when_attr}">'
     )
     out.write('<div class="ix-head">')
@@ -559,6 +569,10 @@ def _render_item(
     out.write(
         f'<span class="ix-kind ix-kind-{_esc(it.kind)}"{why_attr}>{_esc(_chip_label(it))}</span>'
     )
+    if decisive:
+        # The kit outline chip in bad tone — the same red the cockpit's
+        # tier-1 pending pill carries, with the reason in the hover.
+        out.write(f'<span class="k-chip k-chip-bad" title="{_esc(decisive)}">tier 1</span>')
     if show_status and it.status and it.status not in ("open",):
         # The filled status pill is the kit .k-pill (controls.py §3); .ix-status
         # stays only as the JS hook (INBOX_JS swaps the tone in place).
@@ -979,6 +993,11 @@ INBOX_CSS = """
    change, zero layout shift. Accent is sanctioned here: unread marks are
    actionable state, the one non-link accent this surface carries. */
 .ix-new { box-shadow: inset 2px 0 0 var(--accent); }
+/* Tier-1 severity rail — a decisive alert (owner falsifier breach, registered
+   threshold crossing) reads apart from routine cards at a glance. Declared
+   AFTER .ix-new so on a card that is both new and decisive the status color
+   wins (the unread badge count still carries newness). */
+.ix-sev-bad { box-shadow: inset 2px 0 0 var(--bad); }
 .ix-badge { display: inline-block; min-width: 14px; text-align: center;
   margin-left: 6px; padding: 1px 5px; border-radius: var(--radius-full);
   background: var(--accent); color: var(--accent-contrast);

@@ -123,7 +123,7 @@ from position_guard_cache import (
 from risk_reward import RiskRewardGap, RiskRewardGapRow, build_risk_reward_gap
 from thesis_collision import CachedReport, read_cached_report
 from ui import living_grid as lg
-from ui.controls import ticker_label
+from ui.controls import chip_tone_class, thesis_status_tone, ticker_label
 from ui.time import stamp_html
 from ui.tokens import CHART_SERIES
 
@@ -1095,13 +1095,16 @@ def _thesis_rollup_panel(db_path: Path) -> str:
         conn.close()
     if not latest:
         return ""
-    tones = {"ok": "ok", "intact": "ok", "watch": "warn", "warn": "warn"}
-    flagged = [(t, s) for t, s in sorted(latest.items()) if tones.get(s, "bad") != "ok"]
+    # Tone via the shared kit resolver: the local map here defaulted every
+    # unknown status to RED (an `unresolved` evaluation rendered as a breach);
+    # now breach/broken are red, warn/watch amber, and unknown vocabulary
+    # stays a neutral chip — still flagged, never mis-colored.
+    flagged = [(t, s) for t, s in sorted(latest.items()) if thesis_status_tone(s) != "ok"]
     ok_n = len(latest) - len(flagged)
     chips = "".join(
         # data-peek-ticker: the chip text carries " · status", so the hover
         # mini-card needs the bare symbol spelled out (UX9).
-        f'<a class="k-chip k-chip-{tones.get(s, "bad")}" href="#holding={escape(t)}" '
+        f'<a class="k-chip{chip_tone_class(thesis_status_tone(s))}" href="#holding={escape(t)}" '
         f'data-peek-ticker="{escape(t)}">'
         f"{escape(t)} · {escape(s)}</a>"
         for t, s in flagged

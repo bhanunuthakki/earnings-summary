@@ -38,6 +38,7 @@ network.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -57,6 +58,7 @@ from expected_earnings import upcoming_by_ticker
 from pipeline.dashboard_status import DashboardRow, build_dashboard_rows
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_pp, fmt_reltime
 from ui import living_grid as lg
+from ui.controls import pill_tone_class, thesis_status_tone
 
 # Thesis-verdict sort rank: worst = highest so a numeric (descending-first) sort
 # floats breaches to the top, matching the cockpit's default attention order.
@@ -86,16 +88,10 @@ def _sort_th(label: str, key: str, sort_type: str, *, num: bool = True, title: s
 
 
 # Worst-wins ordering for thesis verdicts and rule statuses; doubles as the
-# attention sort key (breach floats to the top of the cockpit).
+# attention sort key (breach floats to the top of the cockpit). Tone mapping
+# is the shared kit resolver (ui.controls.thesis_status_tone) — one vocabulary
+# across every surface that colors a thesis status.
 _STATUS_RANK: dict[str, int] = {"breach": 0, "broken": 0, "warn": 1, "watch": 1, "unresolved": 2}
-_STATUS_TONE: dict[str, str] = {
-    "breach": "bad",
-    "broken": "bad",
-    "warn": "warn",
-    "watch": "warn",
-    "ok": "ok",
-    "intact": "ok",
-}
 
 # Staleness-dot thresholds (days). The FMP cycle is daily and builds are
 # weekly-ish, so a few quiet days is normal; beyond these the cron is broken.
@@ -116,6 +112,7 @@ class KpiDelta:
     latest_period: str  # ISO date
     prior_period: str  # ISO date
     tone: str  # "bad" | "warn" | "ok" | "neutral" (from a matching break rule)
+    tone_why: str = ""  # the matched break rule + its status ("" when neutral)
 
     @property
     def is_pp(self) -> bool:
@@ -158,6 +155,7 @@ class CockpitRow:
     # Events
     next_earnings: str | None = None  # ISO date
     pending_alerts: int = 0
+    pending_tier1_alerts: int = 0  # decisive subset (falsifier / threshold breach)
     new_docs: int = 0
     # Eval-screen fundamentals (PR7): the thin/evaluation table swaps the
     # mostly-empty portfolio columns for screen-relevant ones.
@@ -478,6 +476,7 @@ def build_cockpit_rows(
 
     names = _company_names(conn, tickers)
     alerts = _pending_alert_counts(conn)
+    tier1_alerts = _pending_tier1_counts(conn)
     dcf = latest_dcf_runs(conn)
     docs = _new_doc_counts(conn)
     evals = _latest_evaluations(conn)
@@ -571,6 +570,7 @@ def build_cockpit_rows(
                     peg_ratio=peg,
                     next_earnings=next_er.get(t) or next_earnings(repo_root, t, ref),
                     pending_alerts=alerts.get(t, 0),
+                    pending_tier1_alerts=tier1_alerts.get(t, 0),
                     new_docs=docs.get(t, 0),
                     kpi_deltas=deltas,
                     rule_summary=rule_summary,
@@ -657,6 +657,27 @@ def _pending_alert_counts(conn: sqlite3.Connection) -> dict[str, int]:
         conn, "SELECT ticker, COUNT(*) AS n FROM alerts WHERE status='pending' GROUP BY ticker"
     )
     return {str(r["ticker"]): int(r["n"]) for r in rows}
+
+
+def _pending_tier1_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Pending alerts per ticker that are tier-1/decisive (owner falsifier
+    breach, registered threshold crossing) — the shared
+    ``decisive_alert_reason`` definition, so the cockpit pill and the feed
+    cards can never disagree about what counts as tier-1."""
+    from dashboard.inbox_rank import decisive_alert_reason
+
+    rows = _safe_rows(
+        conn,
+        "SELECT ticker, trigger_kind, evidence_json FROM alerts WHERE status='pending'",
+    )
+    out: dict[str, int] = {}
+    for r in rows:
+        kind = str(r["trigger_kind"] or "")
+        evidence = str(r["evidence_json"] or "")
+        if decisive_alert_reason(kind, evidence) is not None:
+            t = str(r["ticker"])
+            out[t] = out.get(t, 0) + 1
+    return out
 
 
 def latest_dcf_runs(
@@ -827,22 +848,70 @@ def _tier1_kpi_deltas(
     return out
 
 
-def _toned(deltas: list[KpiDelta], rule_tones: dict[str, str]) -> list[KpiDelta]:
-    """Largest movers first, capped, with each chip toned by any break rule that
-    references the same KPI name in the latest evaluation."""
-    toned = [
-        KpiDelta(
-            name=d.name,
-            unit=d.unit,
-            latest_value=d.latest_value,
-            prior_value=d.prior_value,
-            latest_period=d.latest_period,
-            prior_period=d.prior_period,
-            tone=_STATUS_TONE.get(rule_tones.get(d.name, ""), "neutral"),
-        )
-        for d in deltas
+_NAME_TOKEN_RX = re.compile(r"[a-z0-9%+]+")
+
+# Chip-cap priority: a breached/warned tier-1 KPI must NEVER be pushed out of
+# the capped chip row by a bigger-but-benign move. ok/neutral stay magnitude-
+# ordered among themselves.
+_TONE_PRIORITY: dict[str, int] = {"bad": 0, "warn": 1}
+
+
+def _kpi_tokens(name: str) -> frozenset[str]:
+    return frozenset(_NAME_TOKEN_RX.findall(name.lower()))
+
+
+def _rule_status_for(name: str, rule_tones: dict[str, str]) -> tuple[str, str]:
+    """(status, matched rule name) of the break rule backing one tier-1 KPI
+    chip — ``("", "")`` when no rule matches. Exact name first, then
+    case-insensitive, then a token-set ladder (equality, then subset either
+    way): the evaluator's rule names and the KPI definitions drift apart in
+    casing and unit suffixes on prod ('Gross margin' vs 'Gross Margin (GAAP)'),
+    which left BREACHED tier-1 KPIs rendering as neutral gray chips. Multiple
+    token matches take the WORST status — never hide a breach behind an
+    ambiguous name."""
+    if name in rule_tones:
+        return rule_tones[name], name
+    folded = {k.lower(): (v, k) for k, v in rule_tones.items()}
+    if name.lower() in folded:
+        status, rule_name = folded[name.lower()]
+        return status, rule_name
+    toks = _kpi_tokens(name)
+    if not toks:
+        return "", ""
+    matches = [
+        (status, rule_name)
+        for rule_name, status in rule_tones.items()
+        if (rt := _kpi_tokens(rule_name)) and (rt == toks or rt < toks or toks < rt)
     ]
-    toned.sort(key=lambda d: (-d.magnitude, d.name))
+    if not matches:
+        return "", ""
+    return min(matches, key=lambda m: _STATUS_RANK.get(m[0], 3))
+
+
+def _toned(deltas: list[KpiDelta], rule_tones: dict[str, str]) -> list[KpiDelta]:
+    """Worst break-rule status first (bad, then warn), then largest movers,
+    capped — with each chip toned by the break rule that references its KPI in
+    the latest evaluation (fuzzy-matched; see ``_rule_status_for``)."""
+    toned: list[KpiDelta] = []
+    for d in deltas:
+        status, rule_name = _rule_status_for(d.name, rule_tones)
+        tone = thesis_status_tone(status) or "neutral"
+        why = ""
+        if tone in ("bad", "warn", "ok") and rule_name:
+            why = f"break rule '{rule_name}': {status}"
+        toned.append(
+            KpiDelta(
+                name=d.name,
+                unit=d.unit,
+                latest_value=d.latest_value,
+                prior_value=d.prior_value,
+                latest_period=d.latest_period,
+                prior_period=d.prior_period,
+                tone=tone,
+                tone_why=why,
+            )
+        )
+    toned.sort(key=lambda d: (_TONE_PRIORITY.get(d.tone, 2), -d.magnitude, d.name))
     return toned[:_MAX_KPI_CHIPS]
 
 
@@ -1235,14 +1304,13 @@ def _verdict_badge(row: CockpitRow, now: datetime) -> str:
     status = row.base.breach_status
     if status is None:
         return _muted()
-    tone = _STATUS_TONE.get(status.lower(), "muted")
     bits: list[str] = []
     if row.rule_summary:
         bits.append(row.rule_summary)
     if row.evaluated_at:
         bits.append(f"evaluated {fmt_reltime(row.evaluated_at, now=now)}")
     title = f" title='{escape(' — '.join(bits))}'" if bits else ""
-    pill_tone = f" k-pill-{tone}" if tone in ("ok", "warn", "bad") else ""
+    pill_tone = pill_tone_class(thesis_status_tone(status))
     return f"<span class='k-pill{pill_tone}'{title}>{escape(status)}</span>"
 
 
@@ -1264,6 +1332,9 @@ def _kpi_chips(deltas: list[KpiDelta], ticker: str) -> str:
             f"{d.name}: {d.prior_value:g} → {d.latest_value:g} {d.unit} "
             f"({d.prior_period} → {d.latest_period})"
         )
+        if d.tone_why:
+            # Why this chip carries its color — the matched break rule + status.
+            title += f" — {d.tone_why}"
         ask_q = f"{metric} for {ticker}, last 12 quarters"
         chip_tone = f" k-chip-{d.tone}" if d.tone in ("bad", "warn", "ok") else ""
         chips.append(
@@ -1324,12 +1395,24 @@ def _inbox_cell(row: CockpitRow, *, is_portfolio: bool = False) -> str:
     if row.pending_alerts:
         # data-peek-url: the pill peeks the pending cards in place (UX9); the
         # /feed href stays the real destination for middle-click / new tab.
+        # Red is RESERVED for tier-1 (owner falsifier breach / registered
+        # threshold crossing — the shared decisive_alert_reason definition);
+        # routine pending review is amber, so a red pill always means a
+        # thesis-decisive alert, matching the feed cards' tier-1 rail.
         t = escape(row.base.ticker)
+        if row.pending_tier1_alerts:
+            tone, title = (
+                "k-pill-bad",
+                f"unreviewed alerts — {row.pending_tier1_alerts} tier-1 "
+                "(falsifier / threshold breach)",
+            )
+        else:
+            tone, title = "k-pill-warn", "unreviewed alerts"
         pills.append(
-            f"<a class='k-pill k-pill-bad cockpit-count' href='/feed?ticker={t}&status=pending' "
+            f"<a class='k-pill {tone} cockpit-count' href='/feed?ticker={t}&status=pending' "
             f"data-peek-url='/api/peek/alerts?ticker={t}&status=pending' "
             f"data-peek-title='Pending alerts · {t}' "
-            f"title='unreviewed alerts'>{row.pending_alerts} alert"
+            f"title='{escape(title)}'>{row.pending_alerts} alert"
             f"{'s' if row.pending_alerts != 1 else ''}</a>"
         )
     if row.new_docs:

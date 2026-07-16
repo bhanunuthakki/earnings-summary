@@ -29,7 +29,7 @@ from dashboard.evidence_drawer import load_brief_provenance
 from pipeline.analysis_log import AnalysisLog, build_analysis_log
 from pipeline.artifact_inventory import Artifact, build_artifact_inventory
 from report.renderers.numfmt import fmt_date, fmt_reltime
-from ui.controls import controls_css, ticker_label
+from ui.controls import controls_css, pill_tone_class, thesis_status_tone, ticker_label
 from ui.prose import render_prose
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
@@ -1236,15 +1236,10 @@ def _identity_badges(ident: TickerIdentity) -> str:
         bits.append(f'<span class="k-chip">{escape(ident.list_type)}</span>')
     breach = ident.breach_status
     if breach:
-        # breach status → the kit filled status pill + tone.
-        tone = {
-            "intact": "k-pill-ok",
-            "ok": "k-pill-ok",
-            "watch": "k-pill-warn",
-            "broken": "k-pill-bad",
-            "breach": "k-pill-bad",
-        }.get(breach, "")
-        cls = f"k-pill {tone}".strip()
+        # breach status → the kit filled status pill + the SHARED tone
+        # resolver (the local dict here missed `warn`, which rendered as a
+        # neutral gray pill while every other surface showed amber).
+        cls = f"k-pill{pill_tone_class(thesis_status_tone(breach))}"
         bits.append(f'<span class="{cls}">{escape(breach)}</span>')
     return f'<div class="badges">{"".join(bits)}</div>'
 

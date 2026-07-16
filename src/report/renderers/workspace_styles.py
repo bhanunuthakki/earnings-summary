@@ -812,7 +812,10 @@ details.panel > summary:hover { background: var(--paper); }
   font-family: var(--mono); font-size: var(--fs-micro); color: var(--muted);
 }
 
-.break-status-ok { color: var(--accent); }
+/* Break-rule status is STATUS color (design_language §2): green=good like
+   every other surface — the old accent-blue "ok" predated the green
+   unification and left the report disagreeing with the dashboard's pills. */
+.break-status-ok { color: var(--ok); }
 .break-status-warn { color: var(--warn); }
 .break-status-breach { color: var(--bad); }
 .break-status-unresolved { color: var(--muted); }

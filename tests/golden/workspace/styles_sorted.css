@@ -4,7 +4,6 @@
 .break-row .muted.xsmall { display: block; margin-top: 4px; font-size: var(--fs-micro); font-weight: 400; line-height: 1.4; }
 .break-row td { vertical-align: top; }
 .break-status-breach { color: var(--bad); }
-.break-status-ok { color: var(--accent); }
 .break-status-unresolved { color: var(--muted); }
 .break-status-warn { color: var(--warn); }
 .chart-cell { width: 100%; }
@@ -648,6 +647,7 @@
 /* ============================================================ Valuation tab ============================================================ */ .valuation-headline { padding: 14px 16px; }
 /* ============================================================ Workspace shell ============================================================ */ .l1-root { flex: 1; min-width: 0; height: 100vh; height: 100dvh; overflow-y: auto; background: var(--bg); color: var(--fg); font-family: var(--sans); display: flex; flex-direction: column; padding-bottom: 32px; }
 /* Action buttons are the kit's quiet small button (.k-btn.k-btn-quiet.k-btn-sm, added in the JS markup); this layout-only rule keeps the row spacing. */ .cmt-actions { margin-top: 8px; display: flex; gap: 6px; }
+/* Break-rule status is STATUS color (design_language §2): green=good like every other surface — the old accent-blue "ok" predated the green unification and left the report disagreeing with the dashboard's pills. */ .break-status-ok { color: var(--ok); }
 /* Break-rules detail row — appears under each main rule row when narrative / detail / observations are present. Quieter background so the parent row reads first. */ .break-detail td { padding: 4px var(--panel-pad-x) 10px !important; border-top: 0 !important; background: var(--paper); color: var(--muted); }
 /* Canonical table rule: numbers mono, labels/headers sans. Every value cell is a <td> (cv2-matrix-cell / -cagr-cell); the row label + column headers are <th>, which inherit the page's sans. */ .cv2-matrix td { font-family: var(--mono, 'JetBrains Mono', monospace); }
 /* Dark-mode override for the charts_v2 YoY matrix — the upstream CSS is light-themed (white/grey backgrounds, dark text). Override the colors to match the workspace dark palette so the matrix doesn't stand out. */ :root[data-theme="dark"] .cv2-matrix-wrap { color: var(--fg-soft); }
