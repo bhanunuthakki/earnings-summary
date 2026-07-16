@@ -41,12 +41,18 @@ Revises: 0142_alerts_dismiss_reason
 
 from __future__ import annotations
 
+import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "0143_v_thesis_status_view"
 down_revision: str | None = "0142_alerts_dismiss_reason"
 branch_labels = None
 depends_on = None
+
+# Every table the view SELECTs from. The view is only created when ALL are
+# present — see upgrade() for why a dangling view is a live landmine.
+_SOURCE_TABLES = ("thesis_state", "thesis_ledger_entries", "analyst_notes")
 
 _VIEW_SQL = """
 CREATE VIEW v_thesis_status AS
@@ -96,15 +102,21 @@ LEFT JOIN (
 
 
 def upgrade() -> None:
-    # Pure-additive CREATE VIEW, and unconditional: SQLite binds a view's tables
-    # lazily (CREATE VIEW succeeds even if thesis_state / analyst_notes /
-    # thesis_ledger_entries aren't present yet — the error, if any, only surfaces
-    # on SELECT, where the read helper catches it and degrades to {}). So there's
-    # no table-existence guard to get wrong across the different DB-build orders
-    # (full migration chain vs. init_db create_all vs. a stamp-then-upgrade test).
-    # DROP-then-CREATE keeps it idempotent.
+    # Guarded CREATE VIEW. The original revision created the view
+    # unconditionally, on the theory that SQLite binds a view's tables lazily
+    # (CREATE VIEW succeeds without thesis_state/analyst_notes; the error only
+    # surfaces on SELECT, which readers catch). That held until 2026-07-16:
+    # SQLite validates EVERY view in the schema during ALTER TABLE ... RENAME —
+    # the rename step of any batch_alter_table — so a dangling view turns every
+    # later batch migration into "error in view v_thesis_status" on DBs built
+    # by stamp-then-upgrade tests (which never ran 0008/0074). Create the view
+    # only when all of its source tables exist; a DB without them has no
+    # readers of the view either. DROP-then-CREATE keeps it idempotent.
     op.execute("DROP VIEW IF EXISTS v_thesis_status")
-    op.execute(_VIEW_SQL)
+    insp = sa.inspect(op.get_bind())
+    tables = set(insp.get_table_names())
+    if all(t in tables for t in _SOURCE_TABLES):
+        op.execute(_VIEW_SQL)
 
 
 def downgrade() -> None:

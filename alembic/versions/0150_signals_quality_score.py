@@ -61,5 +61,10 @@ def downgrade() -> None:
         return
     if not _has_column(insp, "signals", "quality_score"):
         return
-    with op.batch_alter_table("signals") as batch:
-        batch.drop_column("quality_score")
+    # Native DROP COLUMN (SQLite >= 3.35), NOT batch_alter_table: the batch
+    # path recreates the table via a RENAME, and SQLite validates every view
+    # in the schema on rename — on stamp-then-upgrade test DBs the 0143 view
+    # could dangle over never-created tables and abort the rename ("error in
+    # view v_thesis_status", CI 2026-07-16). quality_score is a bare nullable
+    # REAL with no constraints/indexes, so the direct drop is safe.
+    op.drop_column("signals", "quality_score")
