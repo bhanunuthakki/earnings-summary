@@ -265,6 +265,33 @@ def test_parse_condition_not_a_dict_and_default_periods() -> None:
     assert cond.for_periods == 1
 
 
+def test_parse_condition_watermark_fields_round_trip() -> None:
+    """baseline_period_end / breached_at_attach (alert-quality gates) survive
+    a JSON round-trip; legacy JSON without the keys defaults them."""
+    cond = parse_condition(
+        _good_condition_obj(baseline_period_end="2026-03-31", breached_at_attach=True)
+    )
+    assert cond is not None
+    assert cond.baseline_period_end == "2026-03-31"
+    assert cond.breached_at_attach is True
+    encoded = cond.as_json_obj()
+    assert encoded["baseline_period_end"] == "2026-03-31"
+    assert encoded["breached_at_attach"] is True
+    again = parse_condition(encoded)
+    assert again == cond
+
+    legacy = parse_condition(_good_condition_obj())
+    assert legacy is not None
+    assert legacy.baseline_period_end is None
+    assert legacy.breached_at_attach is False
+
+    # Malformed annotation values degrade to defaults, never reject the row.
+    junk = parse_condition(_good_condition_obj(baseline_period_end=42, breached_at_attach="yes"))
+    assert junk is not None
+    assert junk.baseline_period_end is None
+    assert junk.breached_at_attach is False
+
+
 def test_conditions_from_json_corrupt_degrades() -> None:
     assert conditions_from_json(None) == ()
     assert conditions_from_json("") == ()
@@ -430,6 +457,62 @@ def test_attach_conditions_artifact_and_memo_sources(
     again = attach_conditions(db_path=db)
     assert again["extracted"] == 0
     assert again["no_section"] == 0
+
+
+def test_attach_conditions_stamps_baseline_and_breached_at_attach(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The breach-freshness watermark: attach stamps each condition with the
+    latest ALREADY-OBSERVED period_end for its metric, and marks a condition
+    that is already breached against that history (so it can never later
+    push-fire on the same stale data)."""
+    _insert_artifact_decision(db, content_md=_FIVE_MIN_MD)
+    conn = _connect(db)
+    conn.execute(
+        "INSERT INTO kpi_definitions (ticker, name, unit) VALUES ('NU', 'NPL 90d+', 'percent')"
+    )
+    # Two consecutive periods above the 7.0 threshold → already BREACHED.
+    for i, (period_end, value) in enumerate([("2025-12-31", 7.2), ("2026-03-31", 7.5)]):
+        conn.execute(
+            "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, "
+            "value, unit, source_doc_id) VALUES ('NU', ?, 'Q1', 1, ?, 'percent', ?)",
+            (period_end, value, i + 1),
+        )
+    conn.execute(
+        "INSERT INTO kpi_definitions (ticker, name, unit) VALUES ('NU', 'Monthly ARPAC', 'actual')"
+    )
+    # Healthy (not breached): 12 > the 10 threshold on an 'lt' condition.
+    conn.execute(
+        "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, "
+        "value, unit, source_doc_id) VALUES ('NU', '2026-03-31', 'Q1', 2, 12.0, 'actual', 1)"
+    )
+    conn.commit()
+    conn.close()
+
+    def fake_structured(prompt: str, **kwargs: object) -> object:
+        return [
+            _good_condition_obj(),  # NPL 90d+ gt 7.0 for 2 — already breached
+            _good_condition_obj(
+                metric="Monthly ARPAC", op="lt", threshold=10.0, unit="actual", for_periods=1
+            ),
+            _good_condition_obj(metric="Ghost Metric"),  # no facts → no baseline
+        ]
+
+    monkeypatch.setattr(dc, "call_llm_structured", fake_structured)
+    tally = attach_conditions(db_path=db)
+    assert tally["extracted"] == 1
+
+    conn = _connect(db)
+    row = conn.execute("SELECT decision_conditions FROM decisions").fetchone()
+    conn.close()
+    stored = json.loads(row["decision_conditions"])
+    by_metric = {c["metric"]: c for c in stored}
+    assert by_metric["NPL 90d+"]["baseline_period_end"] == "2026-03-31"
+    assert by_metric["NPL 90d+"]["breached_at_attach"] is True
+    assert by_metric["Monthly ARPAC"]["baseline_period_end"] == "2026-03-31"
+    assert by_metric["Monthly ARPAC"]["breached_at_attach"] is False
+    assert by_metric["Ghost Metric"]["baseline_period_end"] is None
+    assert by_metric["Ghost Metric"]["breached_at_attach"] is False
 
 
 def test_attach_conditions_sectionless_prose_stamps_empty(
@@ -643,6 +726,8 @@ def test_load_open_decisions_filters(db: Path) -> None:
     assert d.recommendation_value == 20.0
     assert len(d.conditions) == 1
     assert d.conditions[0].metric == "NPL 90d+"
+    # Pre-0130 schema (no decided_by column) → None, read as advisor-authored.
+    assert d.decided_by is None
 
 
 # ---------------------------------------------------------------------------

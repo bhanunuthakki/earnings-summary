@@ -552,6 +552,9 @@ def _age_text(hours: float) -> str:
 # severity ordering.
 _STRENGTH_MIN = 0.75
 _STRENGTH_MAX = 1.5
+# Advisor-authored decision-condition breaches: a modest lift, never the
+# owner-falsifier ceiling (see _strength_factor).
+_ADVISOR_CONDITION_STRENGTH = 1.15
 
 
 def _clampf(x: float, lo: float, hi: float) -> float:
@@ -576,9 +579,15 @@ def _strength_factor(it: InboxItem) -> tuple[float, str]:
     if not isinstance(ev, dict):
         return 1.0, "n/a"
 
-    # An owner-authored falsifier breach is the highest-quality signal there is.
+    # An OWNER-authored falsifier breach is the highest-quality signal there
+    # is — but only the owner's own words earn the ceiling. Advisor-authored
+    # condition breaches (the 2026-07-01 sweep class) are informative, not
+    # screaming; evidence rows written before decided_by was threaded through
+    # lack the key and are treated as advisor, never boosted to the ceiling.
     if (alert.trigger_kind or "").lower() == "decision_condition":
-        return _STRENGTH_MAX, "owner falsifier breach"
+        if ev.get("decided_by") == "owner":
+            return _STRENGTH_MAX, "owner falsifier breach"
+        return _ADVISOR_CONDITION_STRENGTH, "advisor condition breach"
     # A KPI that crossed a registered threshold / is a thesis-breaker is decisive.
     if ev.get("threshold_crossed") or ev.get("is_thesis_breaker"):
         return _STRENGTH_MAX, "threshold crossed"

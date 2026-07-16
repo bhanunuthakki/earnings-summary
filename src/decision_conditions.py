@@ -67,15 +67,19 @@ import json
 import logging
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from clock import now_iso
 from llm.cli import is_hard_stop
 from llm.structured import StructuredParseError, call_llm_structured
 from models.facts import Unit
+
+if TYPE_CHECKING:
+    from compute.thesis_evaluator import KpiObservation
 
 log = logging.getLogger(__name__)
 
@@ -133,7 +137,16 @@ _STANCE_TO_KIND: dict[str, str] = {
 
 @dataclass(frozen=True, slots=True)
 class DecisionCondition:
-    """One validated falsifiable condition (see the module docstring schema)."""
+    """One validated falsifiable condition (see the module docstring schema).
+
+    ``baseline_period_end`` is the breach-freshness watermark (alert-quality
+    gates, 2026-07-15): the latest period_end already observed for the metric
+    AT ATTACH TIME. The evaluator only push-fires on an observation strictly
+    AFTER it — a condition that was already breached when it was written is
+    displayed, never news. ``breached_at_attach`` records that already-breached
+    state for owner-facing surfaces. Both are backward-compatible JSON:
+    legacy stored conditions simply lack the keys.
+    """
 
     metric: str
     metric_source: str | None
@@ -142,6 +155,8 @@ class DecisionCondition:
     unit: str
     for_periods: int
     note: str | None
+    baseline_period_end: str | None = None
+    breached_at_attach: bool = False
 
     def as_json_obj(self) -> dict[str, object]:
         return {
@@ -152,6 +167,8 @@ class DecisionCondition:
             "unit": self.unit,
             "for_periods": self.for_periods,
             "note": self.note,
+            "baseline_period_end": self.baseline_period_end,
+            "breached_at_attach": self.breached_at_attach,
         }
 
 
@@ -176,7 +193,8 @@ class QualitativeCondition:
 @dataclass(frozen=True, slots=True)
 class OpenDecision:
     """A not-yet-graded decision with its parsed conditions — the evaluator
-    rung's read shape."""
+    rung's read shape. ``decided_by`` is None on a pre-0130 schema (column
+    absent) — treated as advisor-authored by the push-lane relevance gate."""
 
     decision_id: int
     ticker: str
@@ -185,6 +203,7 @@ class OpenDecision:
     made_at: str
     source_lens: str | None
     conditions: tuple[DecisionCondition, ...]
+    decided_by: str | None = None
 
 
 # ===========================================================================
@@ -292,6 +311,17 @@ def parse_condition(raw: object) -> DecisionCondition | None:
     note_raw = obj.get("note")
     note = note_raw.strip()[:300] if isinstance(note_raw, str) and note_raw.strip() else None
 
+    # Watermark annotations (stamped by attach_conditions, absent on legacy
+    # JSON and on fresh extractor output). Tolerant: a malformed value
+    # degrades to the default rather than rejecting the whole condition.
+    baseline_raw = obj.get("baseline_period_end")
+    baseline = (
+        baseline_raw.strip()[:32]
+        if isinstance(baseline_raw, str) and baseline_raw.strip()
+        else None
+    )
+    breached_at_attach = obj.get("breached_at_attach") is True
+
     return DecisionCondition(
         metric=metric[:200],
         metric_source=metric_source,
@@ -300,6 +330,8 @@ def parse_condition(raw: object) -> DecisionCondition | None:
         unit=unit,
         for_periods=periods_raw,
         note=note,
+        baseline_period_end=baseline,
+        breached_at_attach=breached_at_attach,
     )
 
 
@@ -654,6 +686,126 @@ def _stance_excerpt(body_md: object) -> str | None:
     return text[:512] or None
 
 
+def fetch_financial_history(
+    conn: sqlite3.Connection,
+    ticker: str,
+    line_item: str,
+    n_periods: int,
+) -> list[KpiObservation] | None:
+    """financial_facts twin of ``compute.thesis_evaluator.fetch_kpi_observations``.
+
+    Line items are already canonical (the extraction prompt copies them
+    verbatim from the ticker's vocabulary), so no resolver pass. Coexisting
+    rows per period dedup to the latest-ingested source (MAX(source_doc_id)),
+    and one observation survives per period_end DATE — a same-date FY/Q4 pair
+    collapses rather than double-counting a consecutive-periods window.
+    Returns None when the line item has no rows at all (unresolvable),
+    matching the kpi fetcher's no-definition signal. Shared by the
+    decision-condition trigger (evaluation side) and the attach-time
+    watermark stamping below, so the two can never read different histories.
+    """
+    from compute.thesis_evaluator import KpiObservation
+
+    rows = conn.execute(
+        "SELECT ff.period_end, ff.value, ff.unit "
+        "FROM financial_facts ff "
+        "WHERE ff.ticker = ? AND ff.line_item = ? "
+        "  AND ff.id = ("
+        "      SELECT f2.id FROM financial_facts f2 "
+        "      WHERE f2.ticker = ff.ticker AND f2.line_item = ff.line_item "
+        "        AND f2.period_end = ff.period_end "
+        "      ORDER BY f2.source_doc_id DESC, f2.id DESC LIMIT 1) "
+        "ORDER BY ff.period_end DESC LIMIT ?",
+        (ticker.upper(), line_item, n_periods),
+    ).fetchall()
+    if not rows:
+        return None
+    out: list[KpiObservation] = []
+    for row in rows:
+        period = row["period_end"]
+        if isinstance(period, str):
+            period = datetime.fromisoformat(period)
+        try:
+            value = Decimal(str(row["value"]))
+            unit = Unit(row["unit"]) if row["unit"] else Unit.ACTUAL
+        except (InvalidOperation, ValueError):
+            continue
+        out.append(KpiObservation(period_end=period, value=value, unit=unit))
+    return out or None
+
+
+def stamp_condition_baselines(
+    conn: sqlite3.Connection,
+    ticker: str,
+    conditions: list[DecisionCondition],
+) -> list[DecisionCondition]:
+    """Stamp each freshly-extracted condition's breach-freshness watermark.
+
+    ``baseline_period_end`` becomes the latest period_end ALREADY OBSERVED for
+    the condition's metric at attach time; when the condition is already
+    breached against that history, ``breached_at_attach`` is set too. The
+    evaluator (``triggers.decision_condition``) then push-fires only on an
+    observation strictly after the baseline — "the thing you said would change
+    your mind just happened", never "here is data that predates your decision".
+
+    Best-effort per condition: an unresolved metric, a missing table, or an
+    invalid op/unit leaves the condition unstamped (baseline None — the
+    evaluator's legacy freshness fallback governs it).
+    """
+    from compute.thesis_evaluator import (
+        BreakRule,
+        Comparator,
+        evaluate_rule,
+        fetch_kpi_observations,
+    )
+    from models.kpis import BreachStatus
+
+    out: list[DecisionCondition] = []
+    for cond in conditions:
+        if cond.metric_source not in METRIC_SOURCES:
+            out.append(cond)
+            continue
+        try:
+            if cond.metric_source == "kpi":
+                observations = fetch_kpi_observations(conn, ticker, cond.metric, cond.for_periods)
+            else:
+                observations = fetch_financial_history(conn, ticker, cond.metric, cond.for_periods)
+        except sqlite3.Error:
+            out.append(cond)
+            continue
+        if not observations:
+            out.append(cond)
+            continue
+        latest = observations[0]  # fetchers return newest-first
+        baseline = latest.period_end.date().isoformat()
+        breached = False
+        try:
+            rule = BreakRule(
+                rule_id=f"attach_baseline:{cond.metric[:64]}",
+                kpi_name=cond.metric,
+                comparator=Comparator(cond.op),
+                threshold=Decimal(str(cond.threshold)),
+                unit=Unit(cond.unit),
+                consecutive_periods=cond.for_periods,
+                narrative=(cond.note or cond.metric)[:1000],
+            )
+            evaluation = evaluate_rule(rule, observations)
+            breached = evaluation.status is BreachStatus.BREACH
+        except (ValueError, InvalidOperation):
+            pass  # corrupt op/unit — baseline still worth keeping
+        out.append(replace(cond, baseline_period_end=baseline, breached_at_attach=breached))
+        if breached:
+            log.info(
+                {
+                    "event": "decision_condition_breached_at_attach",
+                    "ticker": ticker,
+                    "metric": cond.metric,
+                    "baseline_period_end": baseline,
+                }
+            )
+    return out
+
+
 def attach_conditions(
     *,
     db_path: Path | str,
@@ -776,6 +928,10 @@ def attach_conditions(
                 )
                 tally["deferred_transient"] += 1
                 continue
+            # Breach-freshness watermark: record what was already observed for
+            # each metric at attach time so an already-true condition can never
+            # push-fire later as "news" (alert-quality gates, 2026-07-15).
+            conditions = stamp_condition_baselines(conn, ticker, conditions)
             _stamp(conn, decision_id, conditions)
             if conditions:
                 tally["extracted"] += 1
@@ -971,9 +1127,11 @@ def load_open_decisions(conn: sqlite3.Connection, ticker: str) -> list[OpenDecis
 
     Tolerant of the pre-0086/pre-0130 schema (returns [] / falls back)."""
     owner_alive = ""
+    decided_by_col = "NULL AS decided_by"
     try:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)").fetchall()}
         if "decided_by" in cols:
+            decided_by_col = "d.decided_by"
             owner_alive = (
                 " OR (d.decided_by = 'owner' AND EXISTS ("
                 "SELECT 1 FROM tracked_companies t WHERE t.ticker = d.ticker"
@@ -985,7 +1143,7 @@ def load_open_decisions(conn: sqlite3.Connection, ticker: str) -> list[OpenDecis
         rows = conn.execute(
             f"""
             SELECT d.id, d.ticker, d.recommendation_kind, d.recommendation_value,
-                   d.made_at, d.source_lens, d.decision_conditions
+                   d.made_at, d.source_lens, d.decision_conditions, {decided_by_col}
             FROM decisions d
             WHERE d.ticker = ? AND (d.outcome_at IS NULL{owner_alive})
               AND d.decision_conditions IS NOT NULL AND d.decision_conditions != '[]'
@@ -1010,6 +1168,7 @@ def load_open_decisions(conn: sqlite3.Connection, ticker: str) -> list[OpenDecis
                 made_at=str(row["made_at"]),
                 source_lens=(str(row["source_lens"]) if row["source_lens"] is not None else None),
                 conditions=conditions,
+                decided_by=(str(row["decided_by"]) if row["decided_by"] is not None else None),
             )
         )
     return out
