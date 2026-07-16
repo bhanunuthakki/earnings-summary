@@ -1530,6 +1530,202 @@ def _jump_chip_counts(db_path: Path | str | None) -> dict[str, int]:
     return counts
 
 
+# ---------------------------------------------------------------------------
+# The packet walk (Phase C): a bounded "N need you" session over everything
+# awaiting an owner verdict — research proposals, proposed Tenets, triage
+# suggestions, the reconcile queue — one item at a time, ending in "Clear".
+# The owner's proven behavior is binge-clearing bounded packets (the Sunday
+# Telegram packet); an infinite feed with collapsed queues has no completion
+# semantics, so nothing ever feels finished. Cards REUSE the exact builders
+# their home sections render, so the existing document-delegated action
+# handlers work unchanged inside the walk.
+# ---------------------------------------------------------------------------
+
+_PACKET_STYLE = """<style>
+.ledger-packet { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-4); }
+.pk-band { display: flex; align-items: baseline; gap: var(--sp-3); }
+.pk-count { font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
+.pk-hint { font-size: var(--fs-caption); color: var(--muted); }
+.pk-progress { display: flex; align-items: baseline; gap: var(--sp-2); font-size: var(--fs-caption); color: var(--muted); margin: var(--sp-2) 0; }
+.pk-item > .ledger-musing, .pk-item > .ledger-stance { margin-bottom: 0; }
+.pk-clear { color: var(--ok); font-weight: 600; padding: var(--sp-3) 0; }
+</style>"""
+
+_PACKET_JS = """<script>(function(){
+  if(window.__ledgerPacketWired){ return; }
+  window.__ledgerPacketWired = true;
+  function items(root){ return root.querySelectorAll('.pk-item'); }
+  function show(root, i){
+    var list=items(root);
+    for(var k=0;k<list.length;k++){ list[k].hidden=(k!==i); }
+    var pos=root.querySelector('[data-pk-pos]');
+    if(pos){ pos.textContent=String(Math.min(i+1, list.length)); }
+    var clear=root.querySelector('.pk-clear');
+    if(clear){ clear.hidden=(i<list.length); }
+    if(i>=list.length){
+      var prog=root.querySelector('.pk-progress');
+      if(prog){ prog.hidden=true; }
+    }
+    root.setAttribute('data-pk-i', String(i));
+  }
+  function advance(root){
+    var i=parseInt(root.getAttribute('data-pk-i')||'0',10);
+    show(root, i+1);
+  }
+  document.addEventListener('click', function(e){
+    var root=e.target && e.target.closest ? e.target.closest('.ledger-packet') : null;
+    if(!root){ return; }
+    if(e.target.closest('[data-pk-start]')){
+      var band=root.querySelector('.pk-band'); if(band){ band.hidden=true; }
+      var stage=root.querySelector('.pk-stage'); if(stage){ stage.hidden=false; }
+      show(root, 0);
+      return;
+    }
+    if(e.target.closest('[data-pk-skip]')){ advance(root); return; }
+    if(e.target.closest('[data-pk-close]')){
+      var st=root.querySelector('.pk-stage'); if(st){ st.hidden=true; }
+      var bd=root.querySelector('.pk-band'); if(bd){ bd.hidden=false; }
+      return;
+    }
+    // Triage mini-card actions (these cards have no home-section handler).
+    var tr=e.target.closest('[data-pk-route]');
+    if(tr){
+      tr.disabled=true;
+      fetch('/api/notes/'+tr.getAttribute('data-note-id')+'/route',
+        {method:'POST',headers:{'Content-Type':'application/json'},
+         body:JSON.stringify({intent:tr.getAttribute('data-intent')})})
+        .then(function(r){ if(r.ok){ advance(root); } else { tr.disabled=false; } })
+        .catch(function(){ tr.disabled=false; });
+      return;
+    }
+    var td=e.target.closest('[data-pk-dismiss]');
+    if(td){
+      td.disabled=true;
+      fetch('/api/notes/'+td.getAttribute('data-note-id')+'/archive',
+        {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
+        .then(function(r){ if(r.ok){ advance(root); } else { td.disabled=false; } })
+        .catch(function(){ td.disabled=false; });
+      return;
+    }
+    // A settling action on a reused card (proposal verbs except the Steer
+    // opener, tenet approve/reject, reconcile verdicts, falsifier ratify/drop,
+    // the in-card Steer/Rewrite saves) advances the walk after a beat — the
+    // card's own handler runs first via the same event.
+    var settle=e.target.closest(
+      '[data-verb]:not([data-verb="steer"]),[data-tenet-action],[data-rec-verdict],'
+      +'[data-falsifier-action="ratify"],[data-falsifier-action="drop"],'
+      +'[data-steer-save],[data-rewrite-save]');
+    if(settle){ setTimeout(function(){ advance(root); }, 900); }
+  });
+})();</script>"""
+
+
+def _triage_packet_card(note: AnalystNoteRow) -> str:
+    """A parked comment as a packet item: the body + the one-tap suggested
+    route (when the second pass left one) + Dismiss. These buttons carry
+    ``data-pk-*`` hooks — the packet JS posts them directly (the Triage
+    panel's own listener is scoped to its root and can't see this copy)."""
+    ctx = note.context or {}
+    sugg = ctx.get("route_suggestion")
+    route_btn = ""
+    if isinstance(sugg, dict):
+        si = str(cast("dict[str, object]", sugg).get("intent") or "")
+        if si:
+            from pipeline.triage_panel import _INTENT_LABELS  # pyright: ignore[reportPrivateUsage]
+
+            if si in _INTENT_LABELS:
+                route_btn = (
+                    '<button type="button" class="k-btn k-btn-primary k-btn-sm" '
+                    f'data-pk-route data-note-id="{note.id}" '
+                    f'data-intent="{escape(si, quote=True)}">'
+                    f"Route to {escape(_INTENT_LABELS[si])}</button>"
+                )
+    ident = ticker_label(note.ticker) if note.ticker else '<span class="k-chip">PORTFOLIO</span>'
+    return (
+        '<div class="ledger-musing">'
+        f'<div class="ledger-musing-head">{ident}<span class="ledger-chan">parked comment</span></div>'
+        f'<div class="ledger-body">{escape(note.body[:400])}</div>'
+        '<div class="ledger-cap-row">'
+        f"{route_btn}"
+        '<button type="button" class="k-btn k-btn-danger k-btn-sm" '
+        f'data-pk-dismiss data-note-id="{note.id}">Dismiss</button>'
+        "</div></div>"
+    )
+
+
+def _packet_items(db_path: Path | str | None) -> list[str]:
+    """Everything awaiting an owner verdict, one card per item, each reusing
+    its home section's builder. Every source degrades independently — a broken
+    read drops its items, never the packet."""
+    items: list[str] = []
+    try:
+        proposals = list_proposals(status="pending", db_path=db_path)
+        groups: dict[int, list[ResearchProposal]] = {}
+        for p in proposals:
+            groups.setdefault(p.task_id if p.task_id is not None else -p.id, []).append(p)
+        items.extend(_proposal_group_card(g) for g in groups.values())
+    except Exception:
+        pass
+    try:
+        from pipeline.worldview_panel import (
+            _proposed_card,  # pyright: ignore[reportPrivateUsage]
+            worldview_enabled,
+        )
+        from synthesis.tenets import list_tenets
+
+        if worldview_enabled():
+            items.extend(_proposed_card(t) for t in list_tenets(status="proposed", db_path=db_path))
+    except Exception:
+        pass
+    try:
+        from user_state.notes import list_triage_notes
+
+        items.extend(
+            _triage_packet_card(n)
+            for n in list_triage_notes(db_path=db_path)
+            if isinstance((n.context or {}).get("route_suggestion"), dict)
+        )
+    except Exception:
+        pass
+    try:
+        reconcile = render_reconcile_list(db_path)
+        if "ledger-empty" not in reconcile:
+            items.append(reconcile.replace('id="ledger-reconcile"', 'data-pk-reconcile=""', 1))
+    except Exception:
+        pass
+    return items
+
+
+def _packet_section(db_path: Path | str | None) -> str:
+    """The bounded "N need you" walk — empty string when nothing needs the
+    owner (the packet only exists when it can end in Clear)."""
+    items = _packet_items(db_path)
+    if not items:
+        return ""
+    n = len(items)
+    noun = "needs" if n == 1 else "need"
+    cards = "".join(f'<div class="pk-item" hidden>{card}</div>' for card in items)
+    return (
+        _PACKET_STYLE
+        + '<div class="ledger-packet" id="ledger-packet" data-pk-i="0">'
+        + '<div class="pk-band">'
+        + f'<span class="pk-count">{n} {noun} you</span>'
+        + '<button type="button" class="k-btn k-btn-primary k-btn-sm" data-pk-start>Start</button>'
+        + '<span class="pk-hint">one at a time, ends in Clear</span>'
+        + "</div>"
+        + '<div class="pk-stage" hidden>'
+        + '<div class="pk-progress"><span data-pk-pos>1</span>'
+        + f"<span>of {n}</span>"
+        + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-pk-skip>Skip</button>'
+        + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-pk-close>Close</button>'
+        + "</div>"
+        + cards
+        + '<div class="pk-clear" hidden>Clear — nothing else needs you.</div>'
+        + "</div></div>"
+        + _PACKET_JS
+    )
+
+
 # (anchor id, chip label) — mirrors the Provenance console's anchor-nav
 # contract (data-prov-jump / scrollIntoView, never an href="#anchor": the
 # shell's hashchange router treats an unknown hash as a panel id and would
@@ -1677,6 +1873,9 @@ def render_ledger_panel(
         + panel_sub
         + ("" if embedded else _jump_chip_toolbar(counts, onmymind_on=bool(onmymind)))
         + f'<div id="ledger-jump-capture">{_capture_box()}</div>'
+        # The bounded packet walk (Phase C) leads the feed: a finite "N need
+        # you" session with completion semantics, before the open-ended stream.
+        + _packet_section(db_path)
         + f'<div id="ledger-jump-onmymind">{onmymind}</div>'
         + f'<div id="ledger-jump-musings">{musings_block}</div>'
         + queues

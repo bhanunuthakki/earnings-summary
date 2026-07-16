@@ -528,6 +528,7 @@ def create_app(
         text = str(payload.get("text") or "").strip()
         if not text:
             return ({"error": "text required"}, 400)
+        _bump_activation_count("act:capture")
         result = ingest_capture(channel="tray", media_kind="text", text=text, db_path=db_path)
         # Fire the wondering tap on a landed tray musing — previously only the
         # Telegram poller tapped, so a TYPED wondering never became a chip.
@@ -632,6 +633,7 @@ def create_app(
         except Exception:  # classifier failure degrades to conversation
             app.logger.warning("reply classify failed for note %s", note_id, exc_info=True)
             return {"ok": True, "mode": "chat", "intent": "question"}
+        _bump_activation_count(f"act:reply:{verdict.intent}")
         if verdict.is_action:
             res = act_on_feed_item(note_id, ACTION_VERB[verdict.intent], db_path=db_path)
             return {
@@ -693,11 +695,36 @@ def create_app(
 
         def _run_bg() -> None:
             try:
-                run_research_task(task_id, db_path=db_path, repo_root=repo_root)
+                proposal_id = run_research_task(task_id, db_path=db_path, repo_root=repo_root)
             except Exception:  # the engine reverts the row; the poll sees 'proposed'
                 app.logger.warning("research run failed for task %s", task_id, exc_info=True)
+                return
+            if proposal_id is None:
+                return
+            # Push the drafted proposal to the owner's Telegram thread (Phase C:
+            # close the loop where the owner lives). The Telegram-initiated run
+            # already did this; a WEB-initiated run's draft used to settle
+            # silently into the collapsed Queues block — a click whose payoff
+            # arrives minutes later, invisible, reads as a dead button.
+            # Best-effort: no bot token / no chat id on file → skip quietly.
+            try:
+                from capture import research_notify, token_store
+                from research.proposals import get_proposal
+
+                token = token_store.load_token(
+                    repo_root / "data" / "secrets" / "telegram_bot_token"
+                )
+                chat_id = token_store.load_chat_id(
+                    repo_root / "data" / "capture" / "telegram_chat_id.json"
+                )
+                prop = get_proposal(proposal_id, db_path=db_path)
+                if token and chat_id is not None and prop is not None:
+                    research_notify.send_proposal_card(token, chat_id, prop)
+            except Exception:
+                app.logger.debug("research telegram push skipped", exc_info=True)
 
         threading.Thread(target=_run_bg, daemon=True, name=f"research-run-{task_id}").start()
+        _bump_activation_count("act:research_run")
         return {"started": True}
 
     @app.route("/api/research/task/<int:task_id>/status", methods=["GET"])
@@ -726,6 +753,7 @@ def create_app(
 
         if get_task(task_id, db_path=db_path) is None:
             return ({"error": "task not found"}, 404)
+        _bump_activation_count("act:research_reject")
         set_task_status(task_id, "rejected", db_path=db_path)
         return {"ok": True}
 
@@ -742,6 +770,7 @@ def create_app(
             return ({"error": f"unknown verb {verb!r}"}, 400)
         payload = cast("dict[str, object]", request.get_json(silent=True) or {})
         steer_text = str(payload.get("steer_text") or "").strip() or None
+        _bump_activation_count(f"act:proposal:{verb}")
         status = act_on_proposal(proposal_id, verb, steer_text=steer_text, db_path=db_path)
         applied = ""
         if verb == "approve":
@@ -767,6 +796,7 @@ def create_app(
         if verdict not in RECONCILE_VERDICTS:
             return ({"error": f"unknown verdict {verdict!r}"}, 400)
         fn = reconcile_note if kind == "note" else reconcile_theme
+        _bump_activation_count(f"act:reconcile:{verdict}")
         ok = fn(item_id, verdict, db_path=db_path)
         return ({"ok": ok}, 200 if ok else 404)
 
@@ -793,6 +823,7 @@ def create_app(
         action = str(payload.get("action") or "")
         if action not in FALSIFIER_ACTIONS:
             return ({"error": f"unknown action {action!r}"}, 400)
+        _bump_activation_count(f"act:falsifier:{action}")
         text = str(payload.get("text") or "").strip() or None
         try:
             ok = falsifier_action(decision_id, action, text=text, db_path=db_path)
@@ -825,6 +856,7 @@ def create_app(
 
         if verb not in LADDER_VERBS:
             return ({"error": f"unknown verb {verb!r}"}, 400)
+        _bump_activation_count(f"act:om:{verb}")
         result = act_on_feed_item(note_id, verb, db_path=db_path)
         return (
             {
@@ -2112,6 +2144,7 @@ def create_app(
             return ("", 204)
         from user_state import notes as notes_store
 
+        _bump_activation_count(f"act:note:{action}")
         payload = cast("dict[str, object]", request.get_json(silent=True) or {})
         try:
             if action == "resolve":
