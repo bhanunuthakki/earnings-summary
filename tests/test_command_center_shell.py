@@ -128,24 +128,39 @@ def test_render_shell_five_section_structure() -> None:
     for dead in ("research", "governance"):
         assert f'data-theme-target="{dead}"' not in html
     # Surviving sub-tabs, each tagged with its section. System collapsed its
-    # 8-tab diagnostics strip into the single "provenance" console (S10).
+    # 8-tab diagnostics strip into the single "provenance" console (S10);
+    # Portfolio collapsed its 8 into three composites and Review its 3 into the
+    # single "musings" Ledger console (Phase-5 IA).
     for target in (
         "overview",
         "holding",
         "discovery",
-        "journal",
+        "musings",
         "explore",
-        "portfolio",
-        "portfolio_synthesis",
-        "decisions_record",
-        "advisor_memos",
-        "holdings",
+        "portfolio_health",
+        "portfolio_allocation",
+        "portfolio_record",
         "provenance",
     ):
         assert f'data-tab-target="{target}"' in html
     # The collapsed System diagnostics ids are no longer sub-tabs (they alias to
     # the provenance console via _LEGACY_PANEL_REDIRECTS).
     for collapsed in ("section_coverage", "ir_coverage", "source_calls", "validation"):
+        assert f'data-tab-target="{collapsed}"' not in html
+    # The collapsed Portfolio + Review builder ids are no longer sub-tabs either
+    # (they alias to their composite console).
+    for collapsed in (
+        "portfolio_synthesis",
+        "portfolio_risk",
+        "red_team",
+        "positioning",
+        "portfolio",
+        "decisions_record",
+        "advisor_memos",
+        "holdings",
+        "triage",
+        "journal",
+    ):
         assert f'data-tab-target="{collapsed}"' not in html
     for drawered in ("budget", "actions"):
         assert f'data-tab-target="{drawered}"' not in html
@@ -188,21 +203,20 @@ def test_system_demoted_to_utility_icon() -> None:
     assert 'data-cc-theme="system"' in html
 
 
-def test_review_section_reparents_the_ritual_surfaces() -> None:
-    """navigation_ia §2.1: Ledger + Triage + Journal move out of Companies into
-    the Review section — panel ids UNCHANGED (every #musings/#journal/#triage/
-    #ledger deep link survives), the Ledger lands the section (first sub-tab,
-    deliberately unsplit), and Companies keeps only its company-shaped tabs."""
+def test_review_section_collapses_to_the_ledger_console() -> None:
+    """Phase-5 aggressive IA: Review's three ritual lenses (Ledger + Triage +
+    Journal) collapse into ONE Ledger console that REUSES the `musings` panel id
+    (single sub-tab). #triage / #journal alias to it; every #musings / #ledger /
+    #review deep link still lands, and Companies keeps only its company tabs."""
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
-    for pid in ("musings", "triage", "journal"):
-        # Each sub-tab renders exactly once, tagged with its new section.
-        assert f'data-tab-target="{pid}" data-cc-theme="review"' in html
-        assert html.count(f'data-tab-target="{pid}"') == 1
-    # Ledger (musings) is the landing sub-tab: first of the review row.
-    musings = html.index('data-tab-target="musings"')
-    triage = html.index('data-tab-target="triage"')
-    journal = html.index('data-tab-target="journal"')
-    assert musings < triage < journal
+    # The single Review sub-tab is the Ledger (musings) console.
+    assert 'data-tab-target="musings" data-cc-theme="review"' in html
+    assert html.count('data-tab-target="musings"') == 1
+    # Triage + Journal are no longer sub-tabs (they compose into the console and
+    # alias to musings via _LEGACY_PANEL_REDIRECTS).
+    for pid in ("triage", "journal"):
+        assert f'data-tab-target="{pid}"' not in html
+        assert _LEGACY_PANEL_REDIRECTS[pid] == "musings"
     # Companies keeps exactly its company-shaped sub-tabs.
     for pid in ("holding", "discovery", "diet"):
         assert f'data-tab-target="{pid}" data-cc-theme="companies"' in html
@@ -331,7 +345,10 @@ def test_single_tab_sections_suppress_their_sub_row() -> None:
     # System collapsed to one Provenance sub-tab (S10) → its row is now single
     # and suppressed too, exactly like Home / Ask.
     assert 'data-cc-theme="system" data-single="1"' in html
+    # Review collapsed to one Ledger sub-tab (Phase-5) → single + suppressed too.
+    assert 'data-cc-theme="review" data-single="1"' in html
     assert 'data-cc-theme="companies" data-single="1"' not in html
+    # Portfolio kept three composite sub-tabs → NOT single.
     assert 'data-cc-theme="portfolio" data-single="1"' not in html
     # The CSS that suppresses single-tab rows + the [hidden] restatement that
     # keeps inactive rows from stacking (display:flex used to beat [hidden]).
@@ -359,7 +376,8 @@ def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
         # The JS REDIRECTS map carries every killed panel.
         assert f"{killed}:" in SHELL_JS.replace("'", "")
     # Python-side map mirrors the JS one (keep-in-sync contract). S10 added the
-    # 8 collapsed System diagnostics ids — all aliasing to the provenance console.
+    # 8 collapsed System diagnostics ids; Phase-5 added the 8 Portfolio + 2
+    # Review builder ids — all aliasing to their composite console.
     assert set(_LEGACY_PANEL_REDIRECTS) == {
         "prereads",
         "insiders",
@@ -385,11 +403,24 @@ def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
         "triggers",
         "health",
         "review",
+        # Phase-5 aggressive IA — Portfolio 8→3 + Review 3→1.
+        "portfolio_synthesis",
+        "portfolio_risk",
+        "red_team",
+        "positioning",
+        "portfolio",
+        "decisions_record",
+        "advisor_memos",
+        "holdings",
+        "triage",
+        "journal",
     }
-    # PR9 — readable ritual-vocabulary aliases (the palette keeps canonical ids).
+    # PR9 — readable ritual-vocabulary aliases (the palette keeps canonical ids);
+    # Phase-5 repointed #triggers → Record and #health → the Portfolio Health
+    # composite (a real "Health" surface now exists).
     assert _LEGACY_PANEL_REDIRECTS["ledger"] == "musings"
-    assert _LEGACY_PANEL_REDIRECTS["triggers"] == "holdings"
-    assert _LEGACY_PANEL_REDIRECTS["health"] == "provenance"
+    assert _LEGACY_PANEL_REDIRECTS["triggers"] == "portfolio_record"
+    assert _LEGACY_PANEL_REDIRECTS["health"] == "portfolio_health"
     assert "ledger:" in SHELL_JS.replace("'", "")
     assert "triggers:" in SHELL_JS.replace("'", "")
     assert "health:" in SHELL_JS.replace("'", "")
@@ -410,9 +441,28 @@ def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
         assert f"{alias}:" in SHELL_JS.replace("'", "")
     for new_home in _LEGACY_PANEL_REDIRECTS.values():
         assert f'data-tab-target="{new_home}"' in html
-    # The old decisions/ledger deep-links land on the allocation record.
-    assert _LEGACY_PANEL_REDIRECTS["decisions"] == "decisions_record"
-    assert _LEGACY_PANEL_REDIRECTS["thesis_ledger"] == "decisions_record"
+    # Phase-5 — the Portfolio 8→3 collapse: every old builder id aliases into its
+    # composite console, and each alias is mirrored in SHELL_JS.
+    for pid, home in (
+        ("portfolio_synthesis", "portfolio_health"),
+        ("portfolio_risk", "portfolio_health"),
+        ("red_team", "portfolio_health"),
+        ("positioning", "portfolio_allocation"),
+        ("portfolio", "portfolio_allocation"),
+        ("decisions_record", "portfolio_record"),
+        ("advisor_memos", "portfolio_record"),
+        ("holdings", "portfolio_record"),
+    ):
+        assert _LEGACY_PANEL_REDIRECTS[pid] == home
+        assert f"{pid}:" in SHELL_JS.replace("'", "")
+    # Review 3→1 — triage/journal alias to the reused musings console.
+    assert _LEGACY_PANEL_REDIRECTS["triage"] == "musings"
+    assert _LEGACY_PANEL_REDIRECTS["journal"] == "musings"
+    assert "triage:" in SHELL_JS.replace("'", "")
+    assert "journal:" in SHELL_JS.replace("'", "")
+    # The old decisions/ledger deep-links land on the Record composite.
+    assert _LEGACY_PANEL_REDIRECTS["decisions"] == "portfolio_record"
+    assert _LEGACY_PANEL_REDIRECTS["thesis_ledger"] == "portfolio_record"
     # Section aliases land on each section's first panel.
     assert _LEGACY_PANEL_REDIRECTS["home"] == "overview"
     assert _LEGACY_PANEL_REDIRECTS["companies"] == "holding"
@@ -428,7 +478,7 @@ def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
 def test_render_shell_lazy_endpoints_and_pickers() -> None:
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
     # Lazy panels carry their fetch endpoint and start unloaded.
-    assert 'data-endpoint="/api/panel/holdings"' in html
+    assert 'data-endpoint="/api/panel/portfolio_record"' in html
     assert 'data-endpoint="/api/panel/provenance"' in html
     assert 'data-loaded="0"' in html
     # The Holding drill-down is ticker-scoped (data-picker routes the hash ticker
@@ -632,35 +682,26 @@ def test_sub_tab_buttons_carry_their_section() -> None:
     assert 'data-tab-target="overview" data-cc-theme="home"' in html
     assert 'data-tab-target="holding" data-cc-theme="companies"' in html
     assert 'data-tab-target="explore" data-cc-theme="ask"' in html
-    assert 'data-tab-target="portfolio_synthesis" data-cc-theme="portfolio"' in html
-    assert 'data-tab-target="decisions_record" data-cc-theme="portfolio"' in html
+    assert 'data-tab-target="portfolio_health" data-cc-theme="portfolio"' in html
+    assert 'data-tab-target="portfolio_record" data-cc-theme="portfolio"' in html
+    assert 'data-tab-target="musings" data-cc-theme="review"' in html
     assert 'data-tab-target="provenance" data-cc-theme="system"' in html
 
 
-def test_synthesis_lands_the_portfolio_section() -> None:
-    """navigation_ia §2.1: Synthesis (thesis health + allocation) is the
-    Portfolio section's FIRST sub-tab — the landing view. Performance is an
-    outcome, not the front door; it sits second, ahead of the record tabs."""
+def test_portfolio_collapses_to_three_composites_in_order() -> None:
+    """Phase-5 aggressive IA: the 8 Portfolio sub-tabs collapse into THREE
+    composite consoles — Health (Synthesis + Risk + Red Team) lands, then
+    Allocation (Positioning + Performance), then Record (Decisions + Memos +
+    Triggers). Each is a lazy composite endpoint; the old builder ids are gone
+    from the sub-tab row (they alias to the composites)."""
     html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
-    assert 'data-endpoint="/api/panel/portfolio_synthesis"' in html
-    # The trailing quote keeps "portfolio" from matching "portfolio_synthesis".
-    perf = html.index('data-tab-target="portfolio"')
-    synth = html.index('data-tab-target="portfolio_synthesis"')
-    decisions = html.index('data-tab-target="decisions_record"')
-    assert synth < perf < decisions
-
-
-def test_risk_subtab_sits_right_after_performance() -> None:
-    """L5: the whole-book Risk cockpit is its own lazy sub-tab, grouped with
-    Performance (same pillar) — right after it, both behind the Synthesis
-    landing tab (navigation_ia §2.1)."""
-    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
-    assert 'data-endpoint="/api/panel/portfolio_risk"' in html
-    assert 'data-tab-target="portfolio_risk" data-cc-theme="portfolio"' in html
-    perf = html.index('data-tab-target="portfolio"')
-    risk = html.index('data-tab-target="portfolio_risk"')
-    synth = html.index('data-tab-target="portfolio_synthesis"')
-    assert synth < perf < risk
+    for pid in ("portfolio_health", "portfolio_allocation", "portfolio_record"):
+        assert f'data-endpoint="/api/panel/{pid}"' in html
+        assert f'data-tab-target="{pid}" data-cc-theme="portfolio"' in html
+    health = html.index('data-tab-target="portfolio_health"')
+    allocation = html.index('data-tab-target="portfolio_allocation"')
+    record = html.index('data-tab-target="portfolio_record"')
+    assert health < allocation < record
 
 
 def test_content_width_is_wide() -> None:
@@ -818,12 +859,12 @@ def test_hashless_boot_restores_last_tab_within_the_session() -> None:
 
 def test_shell_js_prefetch_and_warm_start() -> None:
     """S14: hover on a section/sub-tab button warms its landing panel; after
-    first paint an idle pass warms Portfolio's landing (Synthesis — the
-    tracker round-trip) and Ask. In-flight fetches are shared so activation
+    first paint an idle pass warms Portfolio's landing (the Health composite —
+    the tracker round-trip) and Ask. In-flight fetches are shared so activation
     never double-fetches."""
     assert "function prefetchPanel" in SHELL_JS
     assert "'.cc-theme-tab, .cc-tab[data-tab-target]'" in SHELL_JS
-    assert "WARM_PANELS = ['portfolio_synthesis', 'explore']" in SHELL_JS
+    assert "WARM_PANELS = ['portfolio_health', 'explore']" in SHELL_JS
     assert "requestIdleCallback" in SHELL_JS
     assert "INFLIGHT" in SHELL_JS
 

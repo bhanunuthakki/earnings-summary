@@ -1020,6 +1020,9 @@ def test_single_sub_tab_panels_do_not_reprint_their_section_title() -> None:
         "overview": "pipeline/command_center_shell.py",  # render_overview_panel (inlined)
         "explore": "pipeline/explore_panel.py",
         "provenance": "pipeline/provenance_panel.py",
+        # Phase-5 IA: Review collapsed to the single Ledger console (reuses the
+        # `musings` pid); its default render is the composite scaffold.
+        "musings": "pipeline/ledger_console_panel.py",
     }
     single_sub = {
         pid: {tlabel, label}
