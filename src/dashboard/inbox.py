@@ -739,7 +739,12 @@ def _display_body(it: InboxItem) -> str:
         # the latest observed value as the one-line body.
         body = _decision_condition_body(it)
     if it.semantic_kind == SEMANTIC_ADVISOR_MEMO:
-        return _LEADING_TAG_RE.sub("", body)
+        # Defensive render-time pass (B8): legacy memo rows persisted before
+        # the writer-side stripper may still open with the model's process
+        # narration — never serve it as the card's summary line.
+        from llm.postprocess import strip_llm_preamble
+
+        return strip_llm_preamble(_LEADING_TAG_RE.sub("", body))
     return body
 
 

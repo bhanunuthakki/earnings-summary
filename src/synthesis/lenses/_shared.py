@@ -222,6 +222,13 @@ def run_lens(
         )
         return None
 
+    # B8: drop leaked process narration ("Having exhausted my web budget… Here
+    # is the brief:") before the artifact is cached — every downstream surface
+    # serves content_md verbatim.
+    from llm.postprocess import strip_llm_preamble
+
+    content = strip_llm_preamble(content)
+
     # Grounding: if the model's prose restated a DCF/MoS figure that contradicts
     # the figures of record (dcf_runs), append a corrective footnote carrying the
     # canonical numbers and log the drift. Conservative — only fires on an explicit
