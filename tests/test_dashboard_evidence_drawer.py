@@ -230,6 +230,72 @@ def test_summary_section_present_when_drawer_default_expanded() -> None:
     assert html.startswith("<details open")
 
 
+# ----------------------------------------------------------------------------
+# Tier-1 severity chip (shared dashboard.inbox_rank.decisive_alert_reason)
+# ----------------------------------------------------------------------------
+
+
+def test_owner_falsifier_breach_renders_tier1_chip_in_header() -> None:
+    """A decisive alert — an OWNER-authored decision-condition breach — carries
+    the kit ``k-chip k-chip-bad`` "tier 1" chip in the drawer header, with the
+    reason in the title attr. Same definition and treatment as the feed card /
+    cockpit pill (decisive_alert_reason), never re-derived here."""
+    alert = _make_alert(
+        trigger_kind="decision_condition",
+        evidence=json.dumps({"summary": "Falsifier tripped.", "decided_by": "owner"}),
+    )
+    html = render_evidence_drawer(alert)
+    assert 'class="k-chip k-chip-bad"' in html
+    assert ">tier 1</span>" in html
+    assert 'title="owner falsifier breach"' in html
+    # The chip rides in the header summary, ahead of the body sections.
+    assert html.index(">tier 1</span>") < html.index("evidence-body")
+
+
+def test_threshold_crossing_evidence_renders_tier1_chip() -> None:
+    """A registered threshold crossing / thesis-breaker KPI is decisive for any
+    trigger_kind — the chip's reason reads "threshold crossed"."""
+    alert = _make_alert(
+        trigger_kind="kpi_inflection",
+        evidence=json.dumps({"summary": "Margin cracked the floor.", "threshold_crossed": True}),
+    )
+    html = render_evidence_drawer(alert)
+    assert 'class="k-chip k-chip-bad"' in html
+    assert 'title="threshold crossed"' in html
+
+
+def test_routine_alert_renders_no_tier1_chip() -> None:
+    """A routine alert (no owner breach, no threshold crossing) shows no tier-1
+    chip — red stays reserved for decisive alerts."""
+    alert = _make_alert(
+        trigger_kind="kpi_inflection",
+        evidence=json.dumps({"summary": "KPI wobbled.", "zscore": 2.1}),
+    )
+    html = render_evidence_drawer(alert)
+    assert "tier 1" not in html
+    assert "k-chip-bad" not in html
+
+
+def test_advisor_condition_breach_is_not_tier1() -> None:
+    """Owner-gated (#875): an ADVISOR-authored condition breach is informative,
+    not screaming — no red tier-1 chip."""
+    alert = _make_alert(
+        trigger_kind="decision_condition",
+        evidence=json.dumps({"summary": "Advisor note tripped.", "decided_by": "advisor"}),
+    )
+    html = render_evidence_drawer(alert)
+    assert "tier 1" not in html
+
+
+def test_malformed_evidence_renders_no_tier1_chip() -> None:
+    """Unparseable evidence can't be decisive — the malformed-notice path shows
+    no tier-1 chip (decisive_alert_reason returns None on a parse failure)."""
+    alert = _make_alert(evidence="not-valid-json{{")
+    html = render_evidence_drawer(alert)
+    assert "tier 1" not in html
+    assert "Malformed evidence" in html
+
+
 def test_citations_nested_under_shifts_render_with_composed_locator() -> None:
     """earnings_tone nests its citations PER-SHIFT (``shifts[].citations``) with
     ``{period, line_number}`` rather than a top-level ``citations[]`` carrying a

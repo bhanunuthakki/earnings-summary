@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import cast
 
 from alerts import AlertRow
+from dashboard.inbox_rank import decisive_alert_reason
 
 _CITATION_KIND_LABELS: dict[str, str] = {
     "transcript_line": "Transcript line",
@@ -171,7 +172,18 @@ def render_evidence_drawer(
     open_attr = " open" if default_open else ""
     body: list[str] = []
     body.append(f'<details{open_attr} class="evidence-drawer">')
-    body.append('<summary class="evidence-summary">Evidence</summary>')
+    # Tier-1 severity, one definition shared with the ranking + feed/cockpit
+    # color coding (dashboard.inbox_rank.decisive_alert_reason): a decisive
+    # alert — owner falsifier breach, registered threshold crossing — carries
+    # the kit bad-toned chip in the header so the drawer reads apart from a
+    # routine one, with the reason in the hover. Never re-derived here.
+    decisive = decisive_alert_reason(alert.trigger_kind, alert.evidence_json)
+    tier1_chip = (
+        f' <span class="k-chip k-chip-bad" title="{_esc(decisive)}">tier 1</span>'
+        if decisive
+        else ""
+    )
+    body.append(f'<summary class="evidence-summary">Evidence{tier1_chip}</summary>')
     body.append('<div class="evidence-body">')
 
     parsed = _parse_evidence(alert.evidence_json)
