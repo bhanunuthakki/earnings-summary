@@ -107,7 +107,7 @@ def test_panel_shows_ok_run(tmp_path: Path) -> None:
     html = render_cron_health_panel(db_path)
     assert "Cron health" in html
     assert "Morning pipeline" in html
-    assert "ch-dot-ok" in html
+    assert "k-dot-ok" in html
     assert "OK" in html
 
 
@@ -130,7 +130,7 @@ def test_panel_shows_failed_run(tmp_path: Path) -> None:
     from pipeline.cron_health_panel import render_cron_health_panel
 
     html = render_cron_health_panel(db_path)
-    assert "ch-dot-fail" in html
+    assert "k-dot-bad" in html
     assert "failed" in html
 
 

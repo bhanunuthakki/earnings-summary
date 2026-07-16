@@ -443,7 +443,7 @@ def test_system_button_dot_wired_through_repo_root(tmp_path: Path) -> None:
         generated_at=datetime(2026, 6, 1, tzinfo=UTC),
         repo_root=tmp_path,
     )
-    assert 'class="cc-system-dot cc-system-dot-ok"' in html
+    assert 'class="cc-system-dot k-dot k-dot-ok"' in html
     assert "Morning pipeline OK" in html
 
 

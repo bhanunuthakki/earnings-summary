@@ -39,6 +39,12 @@ Composition contract — ``controls_css(default)`` rides immediately after
 * ``.k-well`` (+ ``-ok/-warn/-bad/-accent``) — the soft-filled BLOCK sibling of
   ``.k-pill`` for KPI cards / callouts / tone rows: same ``color-mix`` family,
   box radius.
+* ``.k-dot`` (+ ``-ok/-warn/-bad/-muted``) — the one filled circular STATUS dot
+  (freshness ticks, cron run-marks, system-status marks). Fill is
+  ``currentColor``, so a tone modifier only sets ``color``; a surface sizes it
+  via ``--k-dot-size`` and adds layout only. THE replacement for the four
+  duplicated dot-tone systems (``.dot-*`` / ``.fdot-*`` / ``.ch-dot-*`` /
+  ``.cc-system-dot-*``).
 * ``.k-scrim`` + ``.k-overlay`` — the one transient-surface primitive (Law 3):
   a neutral scrim + an elevated, radiused, motion-on-open panel. ``CCOverlay``
   (S4) wires dismissal (close + Esc + scrim click-out + focus trap) on top; kit
@@ -220,6 +226,20 @@ a.k-tick-sym:hover { color: var(--accent); }
 .k-well-warn   { background: color-mix(in srgb, var(--warn) 16%, transparent); }
 .k-well-bad    { background: color-mix(in srgb, var(--bad) 16%, transparent); }
 .k-well-accent { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+
+/* ---- status dot: ONE filled circular tick (design_language §4). THE single
+   home of the ok/warn/bad → --ok/--warn/--bad mapping four surfaces duplicated
+   under .dot-*/.fdot-*/.ch-dot-*/.cc-system-dot-*. Fill is `currentColor`, so a
+   tone modifier only sets `color` (mirrors the .k-prov-tick idiom): the same
+   class colors a bg circle here and — where a surface still needs a neutral or
+   bespoke shade — takes any local `color`. A surface sets --k-dot-size (default
+   8px) and adds layout only (margin, position, a ring border), never a fill. ---- */
+.k-dot { display: inline-block; width: var(--k-dot-size, 8px); height: var(--k-dot-size, 8px);
+  border-radius: var(--radius-full); background: currentColor; vertical-align: middle; }
+.k-dot-ok    { color: var(--ok); }
+.k-dot-warn  { color: var(--warn); }
+.k-dot-bad   { color: var(--bad); }
+.k-dot-muted { color: var(--muted); }
 
 /* ---- overlay primitive (Law 3): one scrim + one elevated panel. S4's
    CCOverlay JS registers/dismisses these (close + Esc + scrim click-out + focus
