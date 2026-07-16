@@ -40,6 +40,7 @@ import math
 import os
 import queue
 import sys
+import threading
 import urllib.parse
 from collections import deque
 from collections.abc import Iterator
@@ -557,15 +558,40 @@ def create_app(
                     annotated_decision_id = annotate_latest_pending(text, db_path=db_path)
             except Exception:
                 pass
-        # The answer tap: a question-shaped capture gets answered NOW via the
-        # unified ask engine and the answer is stored on the note, so the feed
-        # card (re-fetched right after this POST) paints it with no LLM on the
-        # render path. Fire-and-forget — never blocks the capture that landed.
+        # The answer tap: a question-shaped capture gets answered via the
+        # unified ask engine on a BACKGROUND thread and stored on the note —
+        # the POST returns immediately (the old inline call pinned this
+        # request, and the Capture button, on a multi-second LLM round-trip).
+        # The note is marked ledger_answer_pending first so the card renders
+        # an honest "Answering…" state; the capture JS polls
+        # /api/onmymind/<id>/answer and swaps the card when the answer lands.
+        # LEDGER_ANSWER_SYNC=1 restores the inline call (tests + a no-JS ops
+        # fallback); the Telegram poller keeps its own synchronous reply path.
         ledger_answer: str | None = None
+        answering = False
         if result.status == "landed" and result.note_id is not None:
-            from onmymind.respond import answer_capture
+            from onmymind.respond import answer_capture, will_answer
+            from user_state.notes import patch_note_context
 
-            ledger_answer = answer_capture(result.note_id, repo_root=repo_root, db_path=db_path)
+            answer_sync = os.environ.get("LEDGER_ANSWER_SYNC", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
+            if answer_sync:
+                ledger_answer = answer_capture(result.note_id, repo_root=repo_root, db_path=db_path)
+            elif will_answer(result.note_id, db_path=db_path):
+                note_id = result.note_id
+                patch_note_context(note_id, {"ledger_answer_pending": True}, db_path=db_path)
+                threading.Thread(
+                    target=answer_capture,
+                    args=(note_id,),
+                    kwargs={"repo_root": repo_root, "db_path": db_path},
+                    daemon=True,
+                    name=f"ledger-answer-{note_id}",
+                ).start()
+                answering = True
         return {
             "status": result.status,
             "note_id": result.note_id,
@@ -575,29 +601,69 @@ def create_app(
             "pledge_challenge": pledge_challenge,
             "annotated_decision_id": annotated_decision_id,
             "answer": ledger_answer,
+            "answering": answering,
         }
+
+    @app.route("/api/onmymind/<int:note_id>/answer", methods=["GET"])
+    def onmymind_answer(note_id: int):
+        """The answer-poll read behind the async capture tap: the stored
+        ``ledger_answer`` text (if it has landed) + the pending flag. Cheap
+        context read — no LLM ever runs here."""
+        from user_state.notes import get_note
+
+        note = get_note(note_id, db_path=db_path)
+        if note is None:
+            return ({"error": "not found"}, 404)
+        ctx = note.context or {}
+        ans = ctx.get("ledger_answer")
+        text = (
+            str(cast("dict[str, object]", ans).get("text") or "") if isinstance(ans, dict) else ""
+        )
+        return {"answer": text or None, "pending": bool(ctx.get("ledger_answer_pending"))}
 
     @app.route("/api/research/task/<int:task_id>/run", methods=["POST", "OPTIONS"])
     def research_run(task_id: int):
         """W1-5d: run the two-pass research engine on a proposed task → an inert
         proposal. Gated by LEDGER_RESEARCH_RUN (the only place the expensive web
         pass is triggered, and only on an explicit owner tap). CSRF-guarded by the
-        global Origin check."""
+        global Origin check.
+
+        The engine takes seconds-to-minutes (web pass + two LLM passes) —
+        running it inline pinned this request, and the "Research it" button,
+        for that whole window. The run happens on a background thread and this
+        returns ``{started: true}`` immediately; the panel polls
+        ``/api/research/task/<id>/status`` (``run_research_task`` moves the row
+        proposed → running → drafted, reverting to proposed on failure)."""
         if request.method == "OPTIONS":
             return ("", 204)
-        from research.proposals import research_run_enabled
+        from research.proposals import get_task, research_run_enabled
 
         if not research_run_enabled():
             return ({"error": "research run disabled; set LEDGER_RESEARCH_RUN=1"}, 403)
+        task = get_task(task_id, db_path=db_path)
+        if task is None or task.status != "proposed":
+            return ({"error": "task not runnable (missing or already researched)"}, 409)
         from research.run import run_research_task
 
-        try:
-            proposal_id = run_research_task(task_id, db_path=db_path, repo_root=repo_root)
-        except Exception as exc:  # a run failure reverts the task; surface it
-            return ({"error": f"research failed: {exc}"}, 500)
-        if proposal_id is None:
-            return ({"error": "task not runnable (missing or already researched)"}, 409)
-        return {"proposal_id": proposal_id}
+        def _run_bg() -> None:
+            try:
+                run_research_task(task_id, db_path=db_path, repo_root=repo_root)
+            except Exception:  # the engine reverts the row; the poll sees 'proposed'
+                app.logger.warning("research run failed for task %s", task_id, exc_info=True)
+
+        threading.Thread(target=_run_bg, daemon=True, name=f"research-run-{task_id}").start()
+        return {"started": True}
+
+    @app.route("/api/research/task/<int:task_id>/status", methods=["GET"])
+    def research_task_status(task_id: int):
+        """The run-poll read: the task's current status (proposed / running /
+        drafted / …) so the panel knows when the background run finished."""
+        from research.proposals import get_task
+
+        task = get_task(task_id, db_path=db_path)
+        if task is None:
+            return ({"error": "not found"}, 404)
+        return {"status": task.status}
 
     @app.route("/api/research/task/<int:task_id>/reject", methods=["POST", "OPTIONS"])
     def research_reject(task_id: int):
@@ -1184,6 +1250,21 @@ def create_app(
                 return Response(render_worldview_body(db_path), mimetype="text/html")
             if fragment == "list":
                 return Response(render_ledger_list(db_path, user_id=user_id), mimetype="text/html")
+            if fragment == "card":
+                # One feed card by note id — the card-level refresh (set-ticker,
+                # the freshly-captured prepend, the answer-poll swap) so an
+                # action never repaints the whole list. 404 keeps the client on
+                # its full-refresh fallback.
+                from onmymind.feed import load_feed_item
+                from pipeline.ledger_panel import render_feed_card
+
+                raw_note = request.args.get("note", "")
+                if not raw_note.isdigit():
+                    return ("note id required", 400)
+                item = load_feed_item(int(raw_note), db_path=db_path)
+                if item is None:
+                    return ("not found", 404)
+                return Response(render_feed_card(item), mimetype="text/html")
             # Default: the composite Ledger console (Phase-5 IA).
             from pipeline.ledger_console_panel import render_ledger_console
 

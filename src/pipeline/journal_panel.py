@@ -80,6 +80,14 @@ _PANEL_STYLE = """<style>
 .jr-note-new .jr-row { display:flex; gap:8px; margin-top:6px; }
 .jr-empty { color:var(--muted); padding:18px 0; }
 .jr-hint { color:var(--muted); font-size:var(--fs-caption); margin-top:10px; }
+/* Embedded (composite-console) section heading — the console band owns the
+   tab title, so the <h2> collapses to a section-level h3. */
+.jr-h { font-size:var(--fs-section); font-weight:600; color:var(--fg);
+  margin:var(--sp-4) 0 var(--sp-1); }
+/* In-card Resolve / Supersede editor (replaces window.prompt — the blocking
+   OS modal the ledger banned in PR9 survived here). */
+.jr-edit-ta { width:100%; box-sizing:border-box; min-height:48px; resize:vertical;
+  font-family:var(--sans); font-size:var(--fs-body); margin-top:8px; }
 /* S15 links: the linked-object chip is a .k-chip-mono (+ .k-chip-warn when the
    linked object has concluded); only the link-control row layout is local. */
 .jr-link-box { display:inline-flex; align-items:center; gap:6px; }
@@ -398,9 +406,14 @@ def render_journal_panel(
     ticker: str | None = None,
     kind: str | None = None,
     status: str = "open",
+    embedded: bool = False,
 ) -> str:
     """The Research → Journal tab fragment: capture form + reconciliation
-    strip + filters + list."""
+    strip + filters + list.
+
+    ``embedded=True`` (the composite Ledger console) collapses the tab-level
+    ``<h2>`` to a section heading — the console's single band already names
+    and jumps to this section (chrome merge)."""
     if status not in _STATUS_FILTERS:
         status = "open"
     kind_opts = '<option value="">any kind</option>' + "".join(
@@ -417,8 +430,9 @@ def render_journal_panel(
     )
     reconcile = render_reconciliation_list(db_path, user_id=user_id, ticker=ticker)
     ticker_val = escape(ticker or "")
+    heading = '<h3 class="jr-h">Journal</h3>' if embedded else "<h2>Journal</h2>"
     return f"""{_PANEL_STYLE}
-<h2>Journal</h2>
+{heading}
 <div id="jr-root">
 <form class="jr-note-new" id="jr-new">
   <textarea name="body" placeholder="New note&hellip; (a watch item, a question to answer, an assumption to check)"></textarea>
@@ -481,6 +495,43 @@ forever — memory is the point.</p>
       if (r.ok) {{ form.body.value = ''; form.ticker.value = ''; refresh(); }}
     }});
   }});
+  // In-card editor for resolve / rec-resolve / supersede (replaces the
+  // blocking window.prompt modals): textarea + kit Save/Cancel appended to
+  // the card, pre-filled where a suggestion exists.
+  function beginEdit(holder, id, act, prefill, placeholder, required) {{
+    if (holder.getAttribute('data-editing') === '1') return;
+    holder.setAttribute('data-editing', '1');
+    var ed = document.createElement('div');
+    var ta = document.createElement('textarea');
+    ta.className = 'jr-edit-ta'; ta.rows = 2; ta.placeholder = placeholder; ta.value = prefill;
+    var row = document.createElement('div'); row.className = 'jr-actions';
+    var save = document.createElement('button');
+    save.type = 'button'; save.className = 'k-btn k-btn-primary k-btn-sm';
+    save.textContent = act === 'supersede' ? 'Supersede' : 'Resolve';
+    var cancel = document.createElement('button');
+    cancel.type = 'button'; cancel.className = 'k-btn k-btn-quiet k-btn-sm';
+    cancel.textContent = 'Cancel';
+    row.appendChild(save); row.appendChild(cancel);
+    ed.appendChild(ta); ed.appendChild(row);
+    holder.appendChild(ed);
+    ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+    cancel.addEventListener('click', function () {{
+      ed.remove(); holder.removeAttribute('data-editing');
+    }});
+    save.addEventListener('click', function () {{
+      var txt = ta.value.trim();
+      if (required && !txt) {{ ta.focus(); return; }}
+      save.disabled = true;
+      var payload = {{}};
+      if (act === 'supersede') payload.body = txt;
+      else if (txt) payload.resolution_note = txt;
+      fetch('/api/notes/' + id + '/' + act, {{
+        method: 'POST', headers: {{'Content-Type': 'application/json'}},
+        body: JSON.stringify(payload)
+      }}).then(function (r) {{ if (r.ok) refresh(); else save.disabled = false; }})
+        .catch(function () {{ save.disabled = false; }});
+    }});
+  }}
   root.addEventListener('click', function (ev) {{
     var btn = ev.target.closest('button[data-act]');
     if (!btn) return;
@@ -488,24 +539,20 @@ forever — memory is the point.</p>
     if (!holder) return;
     var id = holder.getAttribute('data-note-id');
     var act = btn.getAttribute('data-act');
-    var payload = {{}};
     if (act === 'resolve') {{
-      var note = window.prompt('Resolution note (optional):', '');
-      if (note === null) return;
-      if (note.trim()) payload.resolution_note = note.trim();
+      beginEdit(holder, id, 'resolve', '', 'Resolution note (optional)', false);
+      return;
     }}
     if (act === 'rec-resolve') {{
-      var suggested = holder.getAttribute('data-suggest') || '';
-      var rec = window.prompt('Resolution note:', suggested);
-      if (rec === null) return;
-      act = 'resolve';
-      if (rec.trim()) payload.resolution_note = rec.trim();
+      beginEdit(holder, id, 'resolve', holder.getAttribute('data-suggest') || '',
+                'Resolution note', false);
+      return;
     }}
     if (act === 'supersede') {{
-      var text = window.prompt('Replacement note text:', '');
-      if (text === null || !text.trim()) return;
-      payload.body = text.trim();
+      beginEdit(holder, id, 'supersede', '', 'Replacement note text', true);
+      return;
     }}
+    var payload = {{}};
     if (act === 'link') {{
       var sel = holder.querySelector('select[data-role="link-target"]');
       if (!sel || !sel.value) return;
@@ -515,10 +562,12 @@ forever — memory is the point.</p>
       var auto = holder.querySelector('input[data-role="link-auto"]');
       payload.auto_resolve = !!(auto && auto.checked);
     }}
+    btn.disabled = true;
     fetch('/api/notes/' + id + '/' + act, {{
       method: 'POST', headers: {{'Content-Type': 'application/json'}},
       body: JSON.stringify(payload)
-    }}).then(function (r) {{ if (r.ok) refresh(); }});
+    }}).then(function (r) {{ if (r.ok) refresh(); else btn.disabled = false; }})
+      .catch(function () {{ btn.disabled = false; }});
   }});
   root.addEventListener('change', function (ev) {{
     var sel = ev.target.closest('select[data-act="reclassify"]');

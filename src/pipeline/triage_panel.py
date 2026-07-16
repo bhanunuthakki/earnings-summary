@@ -68,6 +68,15 @@ _PANEL_STYLE = """<style>
    this only adds dense-row layout (caption type), never re-skins the control. */
 .tri-route { font-size: var(--fs-caption); padding-top: 3px; padding-bottom: 3px; }
 .tri-empty { color: var(--muted); padding: var(--sp-4) 0; }
+/* Embedded (composite-console) section heading — the console band owns the
+   tab title, so the panel_toolbar collapses to a section-level h3. */
+.tri-h { font-size: var(--fs-section); font-weight: 600; color: var(--fg);
+  margin: var(--sp-4) 0 var(--sp-1); display: flex; align-items: baseline; gap: var(--sp-2); }
+/* In-row Resolve editor (replaces window.prompt — the blocking OS modal the
+   ledger banned in PR9 survived here). Same sizing family as the ledger's
+   in-card rewrite textarea. */
+.tri-resolve-ta { width: 100%; min-height: 48px; resize: vertical;
+  font-family: var(--sans); font-size: var(--fs-body); margin-bottom: var(--sp-2); }
 /* S4 drill-in: a right-side .k-overlay (look + open motion from the kit). */
 #triage-drawer { top: var(--sp-3); right: var(--sp-3); bottom: var(--sp-3);
   width: min(460px, 92vw); display: flex; flex-direction: column;
@@ -171,18 +180,28 @@ def render_triage_list(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
     )
 
 
-def render_triage_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
+def render_triage_panel(
+    db_path: Path,
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    embedded: bool = False,
+) -> str:
     """The Triage tab fragment: one operating band + the parked-comment table +
     the S4 drill-in drawer. Pure read over ``analyst_notes``; the row
-    dispositions POST the ordinary ``/api/notes`` lifecycle routes."""
+    dispositions POST the ordinary ``/api/notes`` lifecycle routes.
+
+    ``embedded=True`` (the composite Ledger console) collapses the tab-level
+    ``panel_toolbar`` to a section heading — the console's single band already
+    names and jumps to this section (chrome merge)."""
     try:
         count = len(list_triage_notes(user_id=user_id, db_path=db_path))
     except sqlite3.Error:
         count = 0
-    toolbar = panel_toolbar(
-        "Triage",
-        filters=f'<span class="k-chip" id="tri-count">{count} open</span>',
-    )
+    count_chip = f'<span class="k-chip" id="tri-count">{count} open</span>'
+    if embedded:
+        toolbar = f'<h3 class="tri-h">Triage {count_chip}</h3>'
+    else:
+        toolbar = panel_toolbar("Triage", filters=count_chip)
     table = render_triage_list(db_path, user_id=user_id)
     return f"""{_PANEL_STYLE}
 {toolbar}
@@ -228,12 +247,45 @@ Route each to the real intent it meant, resolve it once handled, or dismiss it.<
         if (c) c.textContent = n + ' open';
       }});
   }}
-  function post(url, payload) {{
+  function post(url, payload, btn) {{
+    if (btn) btn.disabled = true;
     fetch(url, {{
       method: 'POST', headers: {{'Content-Type': 'application/json'}},
       body: JSON.stringify(payload || {{}})
     }}).then(function (r) {{
       if (r.ok) {{ if (ov) ov.close(); refresh(); }}
+      else if (btn) btn.disabled = false;
+    }}).catch(function () {{ if (btn) btn.disabled = false; }});
+  }}
+  // In-place Resolve editor (replaces window.prompt): a table row grows a
+  // sibling row with the textarea; the drawer's action strip appends it inline.
+  function beginResolve(holder, id) {{
+    if (holder.getAttribute('data-editing') === '1') return;
+    holder.setAttribute('data-editing', '1');
+    var inner =
+      '<textarea class="tri-resolve-ta" rows="2" placeholder="Resolution note (optional)"></textarea>'
+      + '<div class="tri-acts">'
+      + '<button type="button" class="k-btn k-btn-primary k-btn-sm" data-tri-resolve-save>Resolve</button>'
+      + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-tri-resolve-cancel>Cancel</button>'
+      + '</div>';
+    var ed;
+    if (holder.tagName === 'TR') {{
+      ed = document.createElement('tr');
+      ed.innerHTML = '<td colspan="5">' + inner + '</td>';
+      holder.parentNode.insertBefore(ed, holder.nextSibling);
+    }} else {{
+      ed = document.createElement('div');
+      ed.innerHTML = inner;
+      holder.appendChild(ed);
+    }}
+    var ta = ed.querySelector('.tri-resolve-ta');
+    if (ta) ta.focus();
+    ed.querySelector('[data-tri-resolve-cancel]').addEventListener('click', function () {{
+      ed.remove(); holder.removeAttribute('data-editing');
+    }});
+    ed.querySelector('[data-tri-resolve-save]').addEventListener('click', function () {{
+      var note = (ta && ta.value || '').trim();
+      post('/api/notes/' + id + '/resolve', note ? {{resolution_note: note}} : {{}}, this);
     }});
   }}
   function openDrawer(holder) {{
@@ -266,11 +318,9 @@ Route each to the real intent it meant, resolve it once handled, or dismiss it.<
     var id = holder.getAttribute('data-note-id');
     if (!id) return;
     if (act === 'resolve') {{
-      var note = window.prompt('Resolution note (optional):', '');
-      if (note === null) return;
-      post('/api/notes/' + id + '/resolve', note.trim() ? {{resolution_note: note.trim()}} : {{}});
+      beginResolve(holder, id);
     }} else if (act === 'dismiss') {{
-      post('/api/notes/' + id + '/archive', {{}});
+      post('/api/notes/' + id + '/archive', {{}}, btn);
     }}
   }});
   root.addEventListener('change', function (ev) {{
@@ -278,7 +328,7 @@ Route each to the real intent it meant, resolve it once handled, or dismiss it.<
     if (!sel || !sel.value) return;
     var holder = sel.closest('[data-note-id]');
     if (!holder || !holder.getAttribute('data-note-id')) return;
-    post('/api/notes/' + holder.getAttribute('data-note-id') + '/route', {{intent: sel.value}});
+    post('/api/notes/' + holder.getAttribute('data-note-id') + '/route', {{intent: sel.value}}, sel);
   }});
 }})();
 </script>"""

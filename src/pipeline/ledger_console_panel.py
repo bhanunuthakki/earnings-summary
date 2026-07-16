@@ -40,8 +40,16 @@ def render_ledger_console(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> s
 
     sections: list[ConsoleSection] = [
         ("feed", "Ledger", lambda: render_ledger_panel(db_path, user_id=user_id, embedded=True)),
-        ("triage", "Triage", lambda: render_triage_panel(db_path, user_id=user_id)),
-        ("journal", "Journal", lambda: render_journal_panel(db_path, user_id=user_id)),
+        # Triage/Journal render embedded too: their tab-level chrome (a
+        # panel_toolbar / an <h2>) collapses to a section h3 — the band's chip
+        # names the section, and a second tab title under it was the remaining
+        # sliver of the double-chrome defect.
+        ("triage", "Triage", lambda: render_triage_panel(db_path, user_id=user_id, embedded=True)),
+        (
+            "journal",
+            "Journal",
+            lambda: render_journal_panel(db_path, user_id=user_id, embedded=True),
+        ),
     ]
     return render_console(
         "Ledger",

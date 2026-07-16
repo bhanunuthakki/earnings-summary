@@ -162,6 +162,27 @@ def load_feed(
     return FeedPage(items=items, next_cursor=next_cursor)
 
 
+def load_feed_item(
+    note_id: int,
+    *,
+    db_path: Path | str | None = None,
+) -> FeedItem | None:
+    """One feed row by note id — the card-level refresh read (a single card
+    re-renders in place after set-ticker / capture instead of repainting the
+    whole list, which would destroy any open inline chat). None for a missing,
+    archived, or non-feed note."""
+    note = get_note(note_id, db_path=db_path)
+    if note is None or note.kind not in FEED_KINDS or note.status == "archived":
+        return None
+    tasks = get_tasks_for_notes([note.id], db_path=db_path)
+    return FeedItem(
+        note=note,
+        item_type=_item_type(note),
+        ladder=_ladder(note),
+        wondering=tasks.get(note.id),
+    )
+
+
 def _thread_url_for(note: AnalystNoteRow) -> str:
     """Where 'discuss' hands off. A ticker-scoped item continues in that name's
     command-center chat; a portfolio-level item continues on the dashboard. (The
