@@ -59,6 +59,7 @@ __all__ = [
     "CATEGORY_ORDER",
     "SEMANTIC_ADVISOR_MEMO",
     "annotate_and_rank",
+    "decisive_alert_reason",
     "inbox_label",
     "note_semantic_kind",
 ]
@@ -565,6 +566,35 @@ def _is_num(v: object) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+def decisive_alert_reason(trigger_kind: str | None, evidence_json: str | None) -> str | None:
+    """The tier-1/decisive reason behind an alert, or ``None`` for a routine
+    one: an OWNER-authored decision-condition (falsifier) breach, or evidence
+    showing a registered threshold crossing / thesis-breaker KPI. ONE
+    definition shared by the ranking strength factor and every surface that
+    color-codes alert severity (feed cards, the cockpit's pending-alerts
+    pill), so weight and color can never disagree about what counts as
+    tier-1.
+
+    Owner-gated per the #875 relevance fix: an ADVISOR-authored condition
+    breach (or a pre-decided_by evidence row) is informative, not screaming —
+    it earns neither the ranking ceiling nor the red severity treatment."""
+    if not evidence_json:
+        return None
+    try:
+        ev = json.loads(evidence_json)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(ev, dict):
+        return None
+    if (trigger_kind or "").lower() == "decision_condition":
+        if ev.get("decided_by") == "owner":
+            return "owner falsifier breach"
+        return None
+    if ev.get("threshold_crossed") or ev.get("is_thesis_breaker"):
+        return "threshold crossed"
+    return None
+
+
 def _strength_factor(it: InboxItem) -> tuple[float, str]:
     """A bounded multiplier from the alert's own evidence magnitude. Returns
     ``(1.0, "n/a")`` for non-alert items or evidence with no recognised
@@ -579,18 +609,17 @@ def _strength_factor(it: InboxItem) -> tuple[float, str]:
     if not isinstance(ev, dict):
         return 1.0, "n/a"
 
-    # An OWNER-authored falsifier breach is the highest-quality signal there
-    # is — but only the owner's own words earn the ceiling. Advisor-authored
-    # condition breaches (the 2026-07-01 sweep class) are informative, not
-    # screaming; evidence rows written before decided_by was threaded through
-    # lack the key and are treated as advisor, never boosted to the ceiling.
+    # A tier-1/decisive signal — an OWNER-authored falsifier breach or a
+    # registered threshold crossing — is the highest-quality signal there is
+    # and earns the ceiling (decisive_alert_reason, shared with the severity
+    # color coding). An ADVISOR-authored condition breach (the 2026-07-01
+    # sweep class; also pre-decided_by evidence rows, which lack the key) is
+    # informative, not screaming: a modest lift, never the ceiling.
+    decisive = decisive_alert_reason(alert.trigger_kind, alert.evidence_json)
+    if decisive is not None:
+        return _STRENGTH_MAX, decisive
     if (alert.trigger_kind or "").lower() == "decision_condition":
-        if ev.get("decided_by") == "owner":
-            return _STRENGTH_MAX, "owner falsifier breach"
         return _ADVISOR_CONDITION_STRENGTH, "advisor condition breach"
-    # A KPI that crossed a registered threshold / is a thesis-breaker is decisive.
-    if ev.get("threshold_crossed") or ev.get("is_thesis_breaker"):
-        return _STRENGTH_MAX, "threshold crossed"
     # KPI inflection: scale by statistical surprise (|z|); z=2 → ~0.85, z=6 → 1.5.
     z = ev.get("zscore")
     if _is_num(z):

@@ -389,6 +389,70 @@ def test_alert_without_a_drafted_action_still_gets_dismiss_alert(db_path: Path) 
     assert 'class="ix-act' not in render_inbox_stream(items, db_path=db_path)
 
 
+def test_tier1_decisive_alert_carries_severity_rail_and_chip(db_path: Path) -> None:
+    """A decisive alert — an OWNER falsifier (decision_condition) breach or a
+    registered threshold crossing — reads apart from routine cards at a
+    glance: a bad-toned left rail on the card + a `tier 1` kit chip with the
+    reason in the hover. A routine alert carries neither, and an ADVISOR
+    condition breach is NOT tier-1 (the #875 relevance gate: informative,
+    never screaming)."""
+    fire_alert(
+        ticker="NU",
+        trigger_kind="decision_condition",
+        fired_at=datetime.now(UTC),
+        evidence_json=json.dumps(
+            {"summary": "NPL 15-90d crossed the owner bar.", "decided_by": "owner"}
+        ),
+        signature_sha="sig-tier1",
+        db_path=db_path,
+    )
+    fire_alert(
+        ticker="NU",
+        trigger_kind="decision_condition",
+        fired_at=datetime.now(UTC) - timedelta(minutes=30),
+        evidence_json=json.dumps({"summary": "Advisor sweep condition.", "decided_by": "advisor"}),
+        signature_sha="sig-advisor",
+        db_path=db_path,
+    )
+    fire_alert(
+        ticker="NU",
+        trigger_kind="kpi_inflection",
+        fired_at=datetime.now(UTC) - timedelta(hours=1),
+        evidence_json=json.dumps({"zscore": 1.2}),
+        signature_sha="sig-routine",
+        db_path=db_path,
+    )
+    html = render_inbox_stream(collect_inbox(db_path), db_path=db_path, compact=True)
+    assert html.count('class="ix-card ix-sev-bad"') == 1
+    assert html.count(">tier 1</span>") == 1
+    assert 'title="owner falsifier breach"' in html
+    # The advisor + routine cards stay plain ix-cards.
+    assert html.count('class="ix-card"') == 2
+
+
+def test_tier1_threshold_crossed_evidence_marks_the_card(db_path: Path) -> None:
+    """Evidence-driven decisiveness (threshold_crossed / is_thesis_breaker)
+    marks the card the same way the falsifier trigger does — ONE definition
+    shared with the ranking layer's strength factor."""
+    fire_alert(
+        ticker="NU",
+        trigger_kind="kpi_inflection",
+        fired_at=datetime.now(UTC),
+        evidence_json=json.dumps({"threshold_crossed": True, "zscore": 4.0}),
+        signature_sha="sig-threshold",
+        db_path=db_path,
+    )
+    html = render_inbox_stream(collect_inbox(db_path), db_path=db_path)
+    assert 'class="ix-card ix-sev-bad"' in html
+    assert 'title="threshold crossed"' in html
+    # The severity rail CSS exists and is declared AFTER the unread accent
+    # rail so a new + decisive card shows the status color.
+    from dashboard.inbox import INBOX_CSS
+
+    assert ".ix-sev-bad { box-shadow: inset 2px 0 0 var(--bad); }" in INBOX_CSS
+    assert INBOX_CSS.index(".ix-new {") < INBOX_CSS.index(".ix-sev-bad {")
+
+
 def test_plain_note_gets_a_dismiss_chip_but_ledger_does_not(db_path: Path) -> None:
     """Parity for actionable cards only (owner choice): a plain analyst note is
     dismissable (archive) from the rail, but an informational thesis-ledger

@@ -74,6 +74,7 @@ from integrations.portfolio_tracker_client import (
 )
 from pipeline.research_cockpit import latest_dcf_runs, latest_dcf_scenarios
 from ui import living_grid as lg
+from ui.controls import pill_tone_class, thesis_status_tone
 from ui.prose import render_prose
 from user_state.ledger import list_recent_entries
 from user_state.notes import list_notes
@@ -83,12 +84,9 @@ from user_state.sizing import PositionSizingIntentRow, list_intents
 CONVICTION_KIND = "conviction"
 TARGET_WEIGHT_KIND = "target_weight_pct"
 
-_VERDICT_TONE: dict[str, str] = {
-    "ok": "ok",
-    "warn": "warn",
-    "breach": "bad",
-    "unresolved": "muted",
-}
+# Thesis-verdict tones route through the shared kit resolver
+# (ui.controls.thesis_status_tone): the local map here missed `broken`/`watch`/
+# `intact`, which rendered as muted gray while other surfaces colored them.
 
 
 @dataclass(frozen=True, slots=True)
@@ -1160,14 +1158,16 @@ def _audit_section(
 
 
 def _pill_tone(tone: str) -> str:
-    """Map an ok/warn/bad/muted tone word to the kit .k-pill suffix (muted → bare)."""
-    return f" k-pill-{tone}" if tone in ("ok", "warn", "bad") else ""
+    """Map an ok/warn/bad/muted tone word to the kit .k-pill suffix (muted →
+    bare). Thin alias of the kit's :func:`ui.controls.pill_tone_class` so this
+    panel's many tone tables share the one whitelist."""
+    return pill_tone_class(tone)
 
 
 def _audit_row(r: SizingAuditRow) -> str:
     name_attr = f' title="{escape(r.name)}"' if r.name else ""
     verdict = (
-        f'<span class="k-pill{_pill_tone(_VERDICT_TONE.get(r.verdict, "muted"))}">{escape(r.verdict)}'
+        f'<span class="k-pill{_pill_tone(thesis_status_tone(r.verdict))}">{escape(r.verdict)}'
         "</span>"
         if r.verdict
         else '<span class="muted">&mdash;</span>'
