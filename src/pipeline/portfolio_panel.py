@@ -68,6 +68,7 @@ from integrations.portfolio_tracker_client import (
     Positioning,
     fetch_live_portfolio,
     fetch_portfolio_analytics,
+    probe_tracker,
 )
 from portfolio_correlation import (
     CLUSTER_CORR,
@@ -154,6 +155,10 @@ class WindowSelection:
 
 _DEFAULT_WINDOW = WindowSelection()
 
+# The degraded-marker reason stamped when the B4b liveness probe says the
+# tracker host is down and the data fetchers are skipped entirely.
+_PROBE_DOWN_ERROR = "tracker liveness probe failed (connection refused or timed out)"
+
 
 def _valid_iso(s: str | None) -> str | None:
     """``YYYY-MM-DD`` normalized, or None for absent/garbage input."""
@@ -193,13 +198,23 @@ def render_portfolio_panel(
     serves the cached read when the tracker is down). The synthesis layer lives
     on its own sub-tab — ``render_portfolio_synthesis_panel``."""
     window = validated_window(start_date, end_date, include_backfill)
-    analytics = fetch_portfolio_analytics(
-        api_url=api_url,
-        start_date=window.start_date,
-        end_date=window.end_date,
-        include_backfill=window.include_backfill,
-    )
-    live = fetch_live_portfolio(api_url=api_url)
+    # ONE cheap liveness probe first (wave B B4b): a down tracker used to cost
+    # a serial walk of every data GET's failure path before the offline banner
+    # painted. Down → skip the fetchers entirely and render the banner now.
+    alive, base = probe_tracker(api_url)
+    if alive:
+        analytics = fetch_portfolio_analytics(
+            api_url=api_url,
+            start_date=window.start_date,
+            end_date=window.end_date,
+            include_backfill=window.include_backfill,
+        )
+        live = fetch_live_portfolio(api_url=api_url)
+    else:
+        analytics = PortfolioAnalytics(
+            available=False, api_url=base, errors={"performance": _PROBE_DOWN_ERROR}
+        )
+        live = LivePortfolio(available=False, api_url=base, error=_PROBE_DOWN_ERROR)
     # Keep the risk snapshot fresh on a successful read; fall back to it (stamped)
     # when the analytics are down so the page still carries a risk read (L5 PR2).
     snapshot: RiskSnapshot | None = None
@@ -1030,10 +1045,51 @@ def render_portfolio_synthesis_panel(db_path: Path, *, api_url: str | None = Non
     from pipeline.analytical_dashboard import build_analytical_dashboard
     from pipeline.analytical_dashboard_html import render_panel_fragment
 
-    live = fetch_live_portfolio(api_url=api_url)
+    # Liveness probe first (B4b): tracker down → equal-weight degrade + the
+    # offline banner immediately, without walking the live fetch's timeouts.
+    alive, base = probe_tracker(api_url)
+    live = (
+        fetch_live_portfolio(api_url=api_url)
+        if alive
+        else LivePortfolio(available=False, api_url=base, error=_PROBE_DOWN_ERROR)
+    )
     dash = build_analytical_dashboard(db_path, sections={"portfolio_synthesis"})
-    memo = render_panel_fragment(dash, "portfolio") or ""
+    memo = _synthesis_memo_doorway(dash.portfolio_synthesis_md) or (
+        render_panel_fragment(dash, "portfolio") or ""
+    )
     return compose_synthesis_page(db_path, live, memo)
+
+
+def _synthesis_memo_headline(content_md: str, cap: int = 220) -> str:
+    """The memo's first substantive prose line (headings/bullets skipped) —
+    the one-line conclusion the Health console shows instead of the body."""
+    for raw in content_md.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", "-", "*", ">", "|", "```")):
+            continue
+        return line[:cap]
+    return content_md.strip().replace("\n", " ")[:cap]
+
+
+def _synthesis_memo_doorway(content_md: str | None) -> str:
+    """Wave B (B5): the Health console's Synthesis section no longer embeds the
+    FULL cross-portfolio lens memo — the same memo already renders in Record's
+    Memos section, so Health showed it twice. Render headline + a "full memo →"
+    doorway (``#advisor_memos`` — the shell's ANCHORS redirect lands it on
+    Record's memos section). "" when nothing is cached, so the caller falls
+    back to the existing run-hint stub."""
+    if not content_md:
+        return ""
+    headline = _synthesis_memo_headline(content_md)
+    return (
+        '<section class="panel synthesis-panel"><div class="panel-head">'
+        "<h2>Portfolio synthesis</h2>"
+        '<p class="sub">Cross-ticker patterns · the full memo lives in Record → Memos.</p>'
+        '</div><div class="panel-body">'
+        f'<p class="pf-syn-headline">{escape(headline)}</p>'
+        '<p><a class="k-chip k-chip-btn" href="#advisor_memos">full memo →</a></p>'
+        "</div></section>"
+    )
 
 
 def compose_synthesis_page(db_path: Path, live: LivePortfolio, synthesis: str) -> str:
@@ -1441,8 +1497,15 @@ def render_portfolio_risk_panel(
     (from the live tracker) and the whole-book macro-stress lens (from the local
     artifact cache, with a scenario picker). The tracker-fed sections degrade to
     an offline note; the macro-stress section renders regardless."""
-    analytics = fetch_portfolio_analytics(
-        api_url=api_url, only={"performance", "positioning", "beta"}
+    # Liveness probe first (B4b): a down tracker renders the offline/cached
+    # branch immediately instead of walking three data GETs' failure paths.
+    alive, base = probe_tracker(api_url)
+    analytics = (
+        fetch_portfolio_analytics(api_url=api_url, only={"performance", "positioning", "beta"})
+        if alive
+        else PortfolioAnalytics(
+            available=False, api_url=base, errors={"positioning": _PROBE_DOWN_ERROR}
+        )
     )
     drawdown = (
         compute_drawdown(analytics.performance.points)

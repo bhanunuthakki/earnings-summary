@@ -21,26 +21,46 @@ carry the page.
 
 from __future__ import annotations
 
+from html import escape
 from pathlib import Path
 
 from identity import DEFAULT_USER_ID
 from pipeline.console_scaffold import ConsoleSection, render_console
 
 
+def _lazy_section_placeholder(endpoint: str, label: str) -> str:
+    """A deferred console section (wave B B4a): a placeholder that HTMX swaps
+    for the real builder fragment when it scrolls into view. The composite's
+    landing section paints immediately; the heavy tracker/LLM builders load on
+    reveal through the per-builder ``/api/panel/<id>`` routes (deliberately
+    kept live). ``hx-swap="outerHTML"`` replaces only this inner div — the
+    ``csec-*`` wrapper ``render_console`` adds stays, so the anchor-nav jump
+    chips still land. The shell inlines HTMX and its ``injectHtml`` calls
+    ``htmx.process`` on injected fragments, so ``revealed`` wires reliably."""
+    return (
+        f'<div hx-get="{escape(endpoint, quote=True)}" hx-trigger="revealed" '
+        'hx-swap="outerHTML">'
+        f'<p class="cc-loading">Loading {escape(label)}…</p>'
+        "</div>"
+    )
+
+
 def render_portfolio_health_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
     """Portfolio → Health: thesis health and what could break it. Composes the
     Synthesis (thesis rollup + allocation) landing, the whole-book Risk cockpit,
-    and the monthly adversarial Red Team brief."""
-    from pipeline.portfolio_panel import (
-        render_portfolio_risk_panel,
-        render_portfolio_synthesis_panel,
-    )
-    from pipeline.red_team_panel import render_red_team_panel
+    and the monthly adversarial Red Team brief. Risk + Red Team are the
+    console's heavy tail (tracker round-trips + the brief) — they defer to
+    on-reveal HTMX fragments so Synthesis paints first (B4a)."""
+    from pipeline.portfolio_panel import render_portfolio_synthesis_panel
 
     sections: list[ConsoleSection] = [
         ("synthesis", "Synthesis", lambda: render_portfolio_synthesis_panel(db_path)),
-        ("risk", "Risk", lambda: render_portfolio_risk_panel(db_path=db_path)),
-        ("red_team", "Red Team", lambda: render_red_team_panel(db_path=db_path)),
+        ("risk", "Risk", lambda: _lazy_section_placeholder("/api/panel/portfolio_risk", "Risk")),
+        (
+            "red_team",
+            "Red Team",
+            lambda: _lazy_section_placeholder("/api/panel/red_team", "Red Team"),
+        ),
     ]
     return render_console("Health", sections, wrap_class="portfolio-health-console")
 
@@ -49,13 +69,18 @@ def render_portfolio_allocation_panel(
     db_path: Path, repo_root: Path | None = None, *, user_id: str = DEFAULT_USER_ID
 ) -> str:
     """Portfolio → Allocation: where capital goes and how it's doing. Composes
-    the durable target book (Positioning) and the tracker-fed Performance page."""
-    from pipeline.portfolio_panel import render_portfolio_panel
+    the durable target book (Positioning) and the tracker-fed Performance page —
+    Performance defers to an on-reveal HTMX fragment (B4a) so the local-DB
+    Positioning landing never waits on tracker round-trips."""
     from pipeline.positioning_panel import render_positioning_panel
 
     sections: list[ConsoleSection] = [
         ("positioning", "Positioning", lambda: render_positioning_panel(db_path, repo_root)),
-        ("performance", "Performance", lambda: render_portfolio_panel(db_path=db_path)),
+        (
+            "performance",
+            "Performance",
+            lambda: _lazy_section_placeholder("/api/panel/portfolio", "Performance"),
+        ),
     ]
     return render_console("Allocation", sections, wrap_class="portfolio-allocation-console")
 

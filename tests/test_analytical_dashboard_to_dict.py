@@ -547,6 +547,9 @@ def test_panel_fragment_portfolio_window_args_flow_to_the_tracker_fetch(
     ) -> LivePortfolio:
         return LivePortfolio(available=True, api_url="http://x", total_market_value=0.0)
 
+    # Wave B (B4b): a liveness probe now gates the data walk — mark it up so
+    # the patched fetchers are reached.
+    monkeypatch.setattr(pp, "probe_tracker", lambda api_url=None: (True, "http://x"))
     monkeypatch.setattr(pp, "fetch_portfolio_analytics", _fake_analytics)
     monkeypatch.setattr(pp, "fetch_live_portfolio", _fake_live)
     resp = client.get(

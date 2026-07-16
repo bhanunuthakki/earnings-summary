@@ -1079,6 +1079,31 @@ def _resolve_base(api_url: str | None) -> str:
     return (api_url or os.environ.get("PORTFOLIO_TRACKER_API_URL") or _DEFAULT_API_URL).rstrip("/")
 
 
+# One-shot liveness probe budget (wave B B4b). Deliberately tighter than the
+# data timeouts: the probe exists so a DOWN tracker costs ONE ~1s round-trip
+# instead of a serial walk of every data GET's failure path.
+_PROBE_TIMEOUT_SECONDS = 1.0
+
+
+def probe_tracker(
+    api_url: str | None = None, *, timeout: float = _PROBE_TIMEOUT_SECONDS
+) -> tuple[bool, str]:
+    """ONE cheap liveness probe: ``(alive, resolved_base_url)``.
+
+    Composite pages that make several serial tracker GETs call this first and
+    skip the whole data walk when the host is down, rendering the offline
+    banner immediately. ANY HTTP response (even a 404 on ``/``) means the
+    server is up — only a transport-level failure (refused connect, timeout)
+    reads as down. Never raises. The data fetchers' own timeouts are untouched.
+    """
+    base = _resolve_base(api_url)
+    try:
+        requests.get(f"{base}/", timeout=(min(_CONNECT_TIMEOUT_SECONDS, timeout), timeout))
+    except requests.RequestException:
+        return (False, base)
+    return (True, base)
+
+
 def _fetch_section(
     path: str,
     parse: Callable[[dict[str, object]], _T],
