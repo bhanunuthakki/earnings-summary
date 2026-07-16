@@ -65,14 +65,19 @@ def _build_db(db_path: Path) -> None:
     cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
     command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, "head")
 
+    # thesis_state must exist BEFORE the chain runs (as it does on prod, where
+    # 0008 ran for real): 0143 now creates the view only when all its source
+    # tables are present — a dangling view breaks every later batch-migration
+    # rename (the 2026-07-16 CI incident).
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute(_THESIS_STATE_DDL)
         conn.commit()
     finally:
         conn.close()
+
+    command.upgrade(cfg, "head")
 
     # NU: a real thesis + two ledger entries + one open question + one open musing.
     _seed_thesis_state(db_path, "NU", "NIM holds despite mix shift.", "ok")
