@@ -151,6 +151,7 @@ def _val(
     list_type: str = "watchlist",
     verdict: str | None = "ok",
     dcf_date: str = "2026-06-01",
+    stub: bool = False,
 ) -> TickerValuation:
     return TickerValuation(
         ticker=ticker,
@@ -158,6 +159,7 @@ def _val(
         dcf_date=dcf_date,
         list_type=list_type,
         verdict=verdict,
+        stub_thesis=stub,
     )
 
 
@@ -198,6 +200,71 @@ def test_screen_excludes_breached_stale_and_implausible_candidates() -> None:
         now=_NOW,
     )
     assert none == []
+
+
+def test_screen_never_crowns_a_stub_thesis_candidate() -> None:
+    """Red-team wave A: a name whose thesis_state.thesis is the literal
+    "STUB: needs user-authored thesis" placeholder is unresearched — however
+    juicy its sweep-built DCF looks, it must never be the "best alternative"."""
+    holdings = {"NU": _val("NU", 10.0, list_type="portfolio")}
+    candidates = {
+        "STB": _val("STB", 60.0, stub=True),  # widest upside, but a stub thesis
+        "OK": _val("OK", 35.0),
+    }
+    screen = screen_swap_candidates(holdings, candidates, margin_pp=15.0, now=_NOW)
+    (row,) = screen
+    assert row.candidate == "OK"
+    # An all-stub pool yields NO swap rows at all rather than crowning a stub.
+    only_stub = screen_swap_candidates(
+        holdings, {"STB": candidates["STB"]}, margin_pp=15.0, now=_NOW
+    )
+    assert only_stub == []
+
+
+def test_load_valuations_flags_stub_thesis_names(tmp_path) -> None:
+    """load_valuations joins thesis_state minimally to stamp ``stub_thesis``,
+    so the screen's eligibility filter has the signal without re-querying."""
+    import sqlite3 as _sqlite3
+
+    from advisor.context import load_valuations
+
+    conn = _sqlite3.connect(str(tmp_path / "vals.db"))
+    conn.row_factory = _sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE tracked_companies (
+            ticker TEXT PRIMARY KEY, list_type TEXT NOT NULL, archived_at TEXT
+        );
+        CREATE TABLE thesis_state (ticker TEXT NOT NULL, thesis TEXT);
+        CREATE TABLE dcf_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL, valuation_date TEXT,
+            npv_per_share REAL, live_price REAL, created_at TEXT
+        );
+        """
+    )
+    for ticker, list_type, thesis in (
+        ("NU", "portfolio", "Real thesis."),
+        ("STB", "watchlist", "STUB: needs user-authored thesis"),
+        ("OK", "evaluation", "Another real thesis."),
+    ):
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, list_type) VALUES (?, ?)",
+            (ticker, list_type),
+        )
+        conn.execute("INSERT INTO thesis_state (ticker, thesis) VALUES (?, ?)", (ticker, thesis))
+        conn.execute(
+            "INSERT INTO dcf_runs (ticker, valuation_date, npv_per_share, live_price, "
+            "created_at) VALUES (?, '2026-06-01', 12.0, 10.0, '2026-06-01T00:00:00')",
+            (ticker,),
+        )
+    conn.commit()
+
+    holdings, candidates = load_valuations(conn)
+    conn.close()
+    assert holdings["NU"].stub_thesis is False
+    assert candidates["STB"].stub_thesis is True
+    assert candidates["OK"].stub_thesis is False
 
 
 # --------------------------------------------------------------------------- #

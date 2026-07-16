@@ -104,6 +104,45 @@ def test_reject_drops_wondering_from_list(db_path: Path) -> None:
     assert f'data-reject-task="{task_id}"' not in after
 
 
+def test_proposal_card_renders_backlink_from_source_note(db_path: Path) -> None:
+    """Red-team wave A: prod proposal rows carry source_note_ids='[54]' but the
+    dataclass never mapped the column, so the "from your note" doorway NEVER
+    rendered. A seeded id must now produce the data-goto-note backlink."""
+    from pipeline.ledger_panel import render_ledger_research_list
+    from research.proposals import create_proposal
+
+    create_proposal(
+        task_id=None,
+        kind="memo",
+        ticker="NU",
+        title="NU margin durability",
+        body_md="The margin question, researched.",
+        source_note_ids="[54]",
+        db_path=db_path,
+    )
+    html = render_ledger_research_list(db_path)
+    assert 'data-goto-note="54"' in html
+    assert "from your note" in html
+
+
+def test_proposal_card_garbage_source_note_ids_renders_without_backlink(db_path: Path) -> None:
+    from pipeline.ledger_panel import render_ledger_research_list
+    from research.proposals import create_proposal
+
+    create_proposal(
+        task_id=None,
+        kind="memo",
+        ticker="NU",
+        title="NU margin durability",
+        body_md="The margin question, researched.",
+        source_note_ids="not json at all",
+        db_path=db_path,
+    )
+    html = render_ledger_research_list(db_path)  # must not crash
+    assert "NU margin durability" in html
+    assert "ledger-backlink" not in html
+
+
 # ---------------------------------------------------------------------------
 # W2 — desk-capture entry coaching: the capture box renders the
 # pledge_challenge card and the annotated_decision_id receipt the server

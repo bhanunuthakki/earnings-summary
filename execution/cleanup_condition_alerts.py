@@ -19,6 +19,14 @@ A pending decision_condition alert is dismissed when it fails either gate:
     carries one), or, for legacy evidence with no baseline, it is older than
     ``--stale-days`` (default 135) at run time.
 
+Dismissing an alert also CANCELS its still-pending child ``queued_actions``
+in the same transaction (red-team wave A: pending actions dangling under
+dismissed alerts rendered live approve buttons on closed decisions).
+
+``--repair-orphans`` runs a separate mode instead: cancel every pending
+``queued_action`` whose parent alert is not pending (ANY trigger kind) —
+the repair for rows orphaned before this script cancelled children.
+
 Dry-run by default; ``--apply`` performs the update. Idempotent: only
 ``status='pending'`` rows are touched, so a re-run finds nothing. One summary
 line per alert + a count on stdout; structured JSON events on stderr.
@@ -26,6 +34,8 @@ line per alert + a count on stdout; structured JSON events on stderr.
 Usage:
     python execution/cleanup_condition_alerts.py --db-path data/portfolio.db
     python execution/cleanup_condition_alerts.py --db-path data/portfolio.db --apply
+    python execution/cleanup_condition_alerts.py --db-path data/portfolio.db --repair-orphans
+    python execution/cleanup_condition_alerts.py --db-path data/portfolio.db --repair-orphans --apply
 """
 
 from __future__ import annotations
@@ -40,6 +50,14 @@ from typing import cast
 
 DISMISS_REASON = "auto: pre-gate advisor/evaluation tripwire noise (2026-07-15)"
 DEFAULT_STALE_DAYS = 135
+_ORPHAN_SQL = """
+SELECT qa.id AS action_id, qa.alert_id, qa.action_kind,
+       a.status AS alert_status, a.ticker, a.trigger_kind
+FROM queued_actions qa
+JOIN alerts a ON a.id = qa.alert_id
+WHERE qa.status = 'pending' AND a.status <> 'pending'
+ORDER BY qa.id
+"""
 
 
 def _emit(event: dict[str, object]) -> None:
@@ -106,6 +124,85 @@ def _is_stale(evidence: dict[str, object], *, now: datetime, stale_days: int) ->
     return observed < now - timedelta(days=stale_days)
 
 
+def _has_queued_actions(conn: sqlite3.Connection) -> bool:
+    return {"alert_id", "status", "cancelled_at"} <= _columns(conn, "queued_actions")
+
+
+def _cancel_child_actions(conn: sqlite3.Connection, alert_id: int, *, apply_changes: bool) -> int:
+    """Cancel the still-pending queued_actions under one alert (same
+    transaction as its dismissal — the caller commits). Dry-run counts only."""
+    if not _has_queued_actions(conn):
+        return 0
+    if not apply_changes:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM queued_actions WHERE alert_id = ? AND status = 'pending'",
+            (alert_id,),
+        ).fetchone()
+        return int(row[0]) if row else 0
+    cur = conn.execute(
+        "UPDATE queued_actions SET status = 'cancelled', cancelled_at = ? "
+        "WHERE alert_id = ? AND status = 'pending'",
+        (_now_iso(), alert_id),
+    )
+    return int(cur.rowcount)
+
+
+def _repair_orphans(conn: sqlite3.Connection, *, apply_changes: bool) -> int:
+    """Cancel pending queued_actions whose parent alert is not pending (any
+    trigger kind). Idempotent — cancelled rows never match again. Returns the
+    process exit code."""
+    if not _has_queued_actions(conn):
+        _emit(
+            {
+                "event": "schema_missing",
+                "error": "queued_actions table lacks alert_id/status/cancelled_at",
+            }
+        )
+        return 1
+    rows = conn.execute(_ORPHAN_SQL).fetchall()
+    cancelled = 0
+    for row in rows:
+        action_id = int(row["action_id"])
+        verb = "CANCEL" if apply_changes else "WOULD-CANCEL"
+        sys.stdout.write(
+            f"{verb} queued_action {action_id} ({row['action_kind']}) "
+            f"under alert {row['alert_id']} {row['ticker']} "
+            f"[{row['trigger_kind']}, status={row['alert_status']}]\n"
+        )
+        _emit(
+            {
+                "event": "orphan_action_cancelled" if apply_changes else "dry_run_cancel",
+                "action_id": action_id,
+                "alert_id": int(row["alert_id"]),
+                "ticker": row["ticker"],
+                "alert_status": row["alert_status"],
+            }
+        )
+        if apply_changes:
+            conn.execute(
+                "UPDATE queued_actions SET status = 'cancelled', cancelled_at = ? "
+                "WHERE id = ? AND status = 'pending'",
+                (_now_iso(), action_id),
+            )
+            cancelled += 1
+    if apply_changes:
+        conn.commit()
+    mode = "apply" if apply_changes else "dry-run"
+    sys.stdout.write(
+        f"{mode}: {cancelled if apply_changes else len(rows)} orphaned pending "
+        f"queued_actions {'cancelled' if apply_changes else 'found'}\n"
+    )
+    _emit(
+        {
+            "event": "repair_orphans_summary",
+            "mode": mode,
+            "found": len(rows),
+            "cancelled": cancelled,
+        }
+    )
+    return 0
+
+
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -128,6 +225,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         type=int,
         default=DEFAULT_STALE_DAYS,
         help=f"Freshness fallback for evidence with no baseline (default {DEFAULT_STALE_DAYS}).",
+    )
+    parser.add_argument(
+        "--repair-orphans",
+        action="store_true",
+        help="Instead of the condition-alert cleanup: cancel pending queued_actions "
+        "whose parent alert is not pending (any trigger kind). Dry-run unless --apply.",
     )
     return parser.parse_args(argv)
 
@@ -157,6 +260,8 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
             return 1
+        if args.repair_orphans:
+            return _repair_orphans(conn, apply_changes=apply_changes)
         has_decided_by = "decided_by" in _columns(conn, "decisions")
 
         rows = conn.execute(
@@ -194,11 +299,16 @@ def main(argv: list[str] | None = None) -> int:
                 continue
 
             dismissed += 1
+            # A dismissed alert must not leave live approve buttons behind:
+            # cancel its still-pending child queued_actions in the SAME
+            # transaction as the dismissal.
+            child_count = _cancel_child_actions(conn, alert_id, apply_changes=apply_changes)
             verb = "DISMISS" if apply_changes else "WOULD-DISMISS"
+            child_note = f"; cancelling {child_count} pending action(s)" if child_count else ""
             sys.stdout.write(
                 f"{verb} alert {alert_id} {ticker} "
                 f"(decided_by={decided_by or '?'}, portfolio={portfolio}; "
-                f"{'; '.join(reasons)})\n"
+                f"{'; '.join(reasons)}{child_note})\n"
             )
             _emit(
                 {
@@ -208,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
                     "decided_by": decided_by,
                     "portfolio": portfolio,
                     "reasons": reasons,
+                    "child_actions_cancelled": child_count,
                 }
             )
             if apply_changes:

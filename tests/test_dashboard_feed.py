@@ -106,26 +106,27 @@ def _seed_mixed_statuses(db_path: Path) -> list[int]:
     return ids
 
 
-def test_five_mixed_status_alerts_all_render_with_correct_badge(
+def test_mixed_status_default_feed_shows_pending_and_approved_only(
     db_path: Path,
 ) -> None:
+    """Red-team wave A: the DEFAULT stream carries the queue (pending) plus
+    approved history — dismissed rows are settled noise and stay out unless
+    explicitly requested via ?status=dismissed."""
     _seed_mixed_statuses(db_path)
     html = render_alert_feed(db_path=db_path)
-    # Sanity: the count line should reflect 5 alerts
-    assert "5 shown" in html
-    # The status badges should reflect the actual states
+    # 2 pending + 2 approved; the dismissed META earnings_tone stays out.
+    assert "4 shown" in html
     assert html.count(">pending<") >= 2
     assert html.count(">approved<") >= 2
-    assert html.count(">dismissed<") >= 1
-    # All 5 trigger kinds appear
+    assert html.count(">dismissed<") == 0
     for kind in (
         "kpi_inflection",
         "material_news",
         "saydo_due",
         "thesis_drift",
-        "earnings_tone",
     ):
         assert kind in html
+    assert "earnings_tone" not in html  # the dismissed alert's kind
 
 
 # ----------------------------------------------------------------------------
@@ -225,7 +226,9 @@ def test_plain_feed_is_the_full_stream(db_path: Path) -> None:
     create_note(ticker="NU", kind="watch", body="Watch NIM trajectory", db_path=db_path)
 
     html = render_alert_feed(db_path=db_path)
-    assert "7 shown" in html
+    # 4 alerts (the dismissed one stays out of the default stream) + 1 ledger
+    # entry + 1 note.
+    assert "6 shown" in html
     assert "ROE floor re-tested and held" in html
     assert "Watch NIM trajectory" in html
 
@@ -249,18 +252,18 @@ def test_alert_filters_narrow_back_to_alerts_only(db_path: Path) -> None:
 
 def test_category_chips_render_with_counts(db_path: Path) -> None:
     """The feed renders the category filter chips: every seeded category
-    appears with its count (earnings_tone → Earnings, kpi_inflection /
-    thesis_drift → Thesis changes, saydo_due → Watch items, material_news →
-    News), and cards carry the matching data-cat hooks the chip JS filters on."""
+    appears with its count (kpi_inflection / thesis_drift → Thesis changes,
+    saydo_due → Watch items, material_news → News), and cards carry the
+    matching data-cat hooks the chip JS filters on. The dismissed
+    earnings_tone alert is out of the default stream, so no Earnings chip."""
     _seed_mixed_statuses(db_path)
     html = render_alert_feed(db_path=db_path)
     assert 'class="ix-cats"' in html
-    assert "All <span>5</span>" in html
-    assert "Earnings <span>1</span>" in html
+    assert "All <span>4</span>" in html
+    assert "Earnings <span>" not in html  # only the dismissed alert was Earnings
     assert "News <span>1</span>" in html
     assert "Thesis changes <span>2</span>" in html
     assert "Watch items <span>1</span>" in html
-    assert 'data-cat="earnings"' in html
     assert 'data-cat="thesis"' in html
 
 
@@ -289,7 +292,7 @@ def test_every_card_carries_the_ranking_tooltip(db_path: Path) -> None:
     one per card, naming every factor."""
     _seed_mixed_statuses(db_path)
     html = render_alert_feed(db_path=db_path)
-    assert html.count('title="ranked: severity') == 5
+    assert html.count('title="ranked: severity') == 4
     assert "x recency" in html
     assert "x position" in html
     assert "x thesis" in html

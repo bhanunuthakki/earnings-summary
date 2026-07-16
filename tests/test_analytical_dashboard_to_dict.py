@@ -257,6 +257,81 @@ def test_trigger_ladder_null_price_row_is_well_formed() -> None:
     assert row_html.count("<td") == 8
 
 
+def _seed_ladder_extras(db_path: Path) -> None:
+    """On top of _seed_db (NU: portfolio, real thesis): a watchlist name with a
+    REAL thesis (WLR), a watchlist name with the prod STUB placeholder (STB),
+    and an evaluation name with a real thesis (EVA) — all with fresh DCFs."""
+    conn = sqlite3.connect(str(db_path))
+    for ticker, list_type, thesis in (
+        ("WLR", "watchlist", "Real watchlist thesis."),
+        ("STB", "watchlist", "STUB: needs user-authored thesis"),
+        ("EVA", "evaluation", "Real evaluation thesis."),
+    ):
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type) VALUES (?, ?, ?)",
+            (ticker, ticker.title(), list_type),
+        )
+        conn.execute(
+            "INSERT INTO thesis_state (ticker, thesis, breach_status) VALUES (?, ?, 'ok')",
+            (ticker, thesis),
+        )
+        conn.execute(
+            "INSERT INTO dcf_runs (ticker, valuation_date, segment_name, over_under_pct, "
+            "mos_bar_used, live_price, npv_per_share) VALUES (?, '2026-05-01', NULL, "
+            "0.30, 0.25, 10.0, 7.0)",
+            (ticker,),
+        )
+    conn.commit()
+    conn.close()
+
+
+def test_trigger_ladder_excludes_stub_thesis_names(tmp_path: Path) -> None:
+    """Red-team wave A: 74 prod thesis_state rows carry the literal
+    "STUB: needs user-authored thesis" — the ladder's has-a-thesis predicate
+    must exclude them (they are exactly the irrelevant rows the owner flagged),
+    while a real thesis on the same list still qualifies."""
+    db_path = tmp_path / "portfolio.db"
+    _seed_db(db_path)
+    _seed_ladder_extras(db_path)
+
+    dash = build_analytical_dashboard(db_path, sections={"trigger_ladder"})
+    tickers = {r.ticker for r in dash.trigger_ladder}
+    assert "NU" in tickers and "WLR" in tickers  # real theses stay
+    assert "STB" not in tickers  # the stub never enters
+
+
+def test_trigger_ladder_list_types_scopes_to_evaluation(tmp_path: Path) -> None:
+    """`list_types=("portfolio", "evaluation")` (the Record console's scope)
+    swaps watchlist rows for evaluation ones — and the stub is excluded under
+    ANY scope."""
+    db_path = tmp_path / "portfolio.db"
+    _seed_db(db_path)
+    _seed_ladder_extras(db_path)
+
+    dash = build_analytical_dashboard(
+        db_path, sections={"trigger_ladder"}, list_types=("portfolio", "evaluation")
+    )
+    tickers = {r.ticker for r in dash.trigger_ladder}
+    assert tickers == {"NU", "EVA"}  # no watchlist rows, no stub
+
+
+def test_record_console_triggers_scope_and_stub_filter(tmp_path: Path) -> None:
+    """The Record console's Triggers section renders portfolio + evaluation
+    theses only — watchlist rows (real or stub) stay out of it."""
+    from pipeline.portfolio_console_panel import (
+        _render_triggers,  # pyright: ignore[reportPrivateUsage]  # scope contract under test
+    )
+
+    db_path = tmp_path / "portfolio.db"
+    _seed_db(db_path)
+    _seed_ladder_extras(db_path)
+
+    html = _render_triggers(db_path)
+    assert "NU" in html and "EVA" in html
+    assert "STB" not in html
+    assert "WLR" not in html  # watchlist scope removed from the console
+
+
 def test_llm_budget_panel_by_ticker(tmp_path: Path) -> None:
     """The by-ticker companion view: MTD spend grouped by attributed ticker,
     spanning every purpose (budgeted or not), with a synthetic bucket for

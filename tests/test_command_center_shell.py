@@ -1007,3 +1007,14 @@ def test_today_bands_js_wiring() -> None:
     # lastContext is a namespaced, LOCAL (cross-session) CCState key — the
     # KEYS contract, not a raw ad-hoc localStorage call.
     assert "lastContext:  { store: 'local' }" in CC_STATE_JS
+
+
+def test_rail_upcoming_disclosure_glyphs_are_css_escapes_not_octal_mojibake() -> None:
+    """Red-team wave A regression: SHELL_CSS is a non-raw Python string, so a
+    single-backslash ``content: '\\25B8 '`` in the source was eaten by Python
+    as an OCTAL escape — chr(0o25) — and the rail's Upcoming-earnings summary
+    rendered a control char + literal "B8 " ("B8 Upcoming earnings"). The
+    served CSS must carry the real CSS escapes and no 0x15 byte."""
+    assert "content: '\\25B8 ';" in SHELL_CSS  # CSS escape for U+25B8 (closed)
+    assert "content: '\\25BE ';" in SHELL_CSS  # CSS escape for U+25BE (open)
+    assert "\x15" not in SHELL_CSS  # the octal-escape mojibake byte

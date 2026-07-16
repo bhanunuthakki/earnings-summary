@@ -1038,8 +1038,12 @@ button { transition: color var(--transition), border-color var(--transition),
 .cc-rail-upcoming > summary { cursor: pointer; list-style: none; padding: var(--sp-1) 0;
   font-size: var(--fs-section); text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
 .cc-rail-upcoming > summary::-webkit-details-marker { display: none; }
-.cc-rail-upcoming > summary::before { content: '\25B8 '; }
-.cc-rail-upcoming[open] > summary::before { content: '\25BE '; }
+/* NB: SHELL_CSS is a non-raw Python string — a single backslash before "25B8"
+   would be eaten by Python as an OCTAL escape (0x15) and render literal "B8 "
+   text before the summary. Keep the backslashes doubled so the served CSS
+   carries the real escapes for the ▸ / ▾ marker glyphs. */
+.cc-rail-upcoming > summary::before { content: '\\25B8 '; }
+.cc-rail-upcoming[open] > summary::before { content: '\\25BE '; }
 .cc-rail-upcoming .up-strip-head { display: none; }
 .cc-panel[hidden] { display: none; }
 .cc-loading, .cc-empty { color: var(--muted); font-size: var(--fs-body); padding: 24px 4px; }
