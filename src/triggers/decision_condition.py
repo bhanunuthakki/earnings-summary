@@ -179,6 +179,22 @@ class DecisionConditionTrigger:
                 )
                 continue
             for index, cond in enumerate(decision.conditions):
+                if cond.not_before and cond.not_before[:10] > now.date().isoformat():
+                    # Milestone window not yet open ("reaches $200M ARR in
+                    # ~12 months"): the tripwire means nothing before the
+                    # stated horizon — skipped BEFORE any observation fetch
+                    # (cheapest gate first). Panels/armed-falsifier surfaces
+                    # still display the condition; only evaluation defers.
+                    log.info(
+                        {
+                            "event": "decision_condition_not_yet_open",
+                            "ticker": ticker,
+                            "decision_id": decision.decision_id,
+                            "condition_index": index,
+                            "not_before": cond.not_before,
+                        }
+                    )
+                    continue
                 if cond.metric_source not in ("kpi", "financial"):
                     continue  # unresolved at extraction — display-only
                 rule = _condition_rule(decision.decision_id, index, cond)
@@ -335,6 +351,7 @@ def _evidence(
         "decided_by": decision.decided_by,
         "source_lens": decision.source_lens,
         "baseline_period_end": cond.baseline_period_end,
+        "not_before": cond.not_before,
         "metric": cond.metric,
         "metric_source": cond.metric_source,
         "op": cond.op,

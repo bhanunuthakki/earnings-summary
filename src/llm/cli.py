@@ -477,6 +477,12 @@ LLM_MODELS: dict[str, str] = {
     # prose. Same narrow, closed-vocab JSON shape, run once per new decision →
     # the same cheap Haiku tier (Gemini un-pinned 2026-07-02, off the active pareto).
     "qualitative_conditions_extract": FAST_CLASSIFIER_MODEL,
+    # Diet information-quality scoring (src/signals/quality.py): batched 0..1
+    # grading of news-backed diet signals (id+firm+headline in, id+score out)
+    # so load_diet_signals can filter on the STORED score instead of the static
+    # publisher denylist. Short, schema-validated, batched (≤20 rows/call,
+    # ≤5 calls/run as a fetch_news follow-on) — Haiku tier.
+    "diet_source_quality": FAST_CLASSIFIER_MODEL,
     # NL → ViewSpec compile (master build P5.2): the Explore panel's query
     # box. Narrowly-scoped JSON-output against a supplied metric vocabulary,
     # interactive (the owner is waiting at the input) — latency dominates.

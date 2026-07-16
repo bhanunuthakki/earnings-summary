@@ -146,6 +146,14 @@ class DecisionCondition:
     displayed, never news. ``breached_at_attach`` records that already-breached
     state for owner-facing surfaces. Both are backward-compatible JSON:
     legacy stored conditions simply lack the keys.
+
+    ``not_before`` (ISO date, 2026-07-16) is the milestone window: a
+    FORWARD-LOOKING condition ("Base44 ARR reaches $200M in ~12 months")
+    encodes a threshold that is trivially true/false TODAY — the tripwire
+    only means something once the stated horizon has elapsed. The extractor
+    sets it to decision date + the stated horizon; the evaluator skips the
+    condition entirely while ``not_before`` is in the future (panels still
+    display it). None (the default, and every legacy row) = evaluable now.
     """
 
     metric: str
@@ -155,6 +163,7 @@ class DecisionCondition:
     unit: str
     for_periods: int
     note: str | None
+    not_before: str | None = None
     baseline_period_end: str | None = None
     breached_at_attach: bool = False
 
@@ -167,6 +176,7 @@ class DecisionCondition:
             "unit": self.unit,
             "for_periods": self.for_periods,
             "note": self.note,
+            "not_before": self.not_before,
             "baseline_period_end": self.baseline_period_end,
             "breached_at_attach": self.breached_at_attach,
         }
@@ -311,6 +321,16 @@ def parse_condition(raw: object) -> DecisionCondition | None:
     note_raw = obj.get("note")
     note = note_raw.strip()[:300] if isinstance(note_raw, str) and note_raw.strip() else None
 
+    # Milestone window (extractor-set on forward-looking conditions, absent on
+    # legacy JSON). Tolerant like the watermark fields below: a malformed value
+    # degrades to None (evaluable now) rather than rejecting the condition.
+    not_before_raw = obj.get("not_before")
+    not_before = (
+        not_before_raw.strip()[:32]
+        if isinstance(not_before_raw, str) and not_before_raw.strip()
+        else None
+    )
+
     # Watermark annotations (stamped by attach_conditions, absent on legacy
     # JSON and on fresh extractor output). Tolerant: a malformed value
     # degrades to the default rather than rejecting the whole condition.
@@ -330,6 +350,7 @@ def parse_condition(raw: object) -> DecisionCondition | None:
         unit=unit,
         for_periods=periods_raw,
         note=note,
+        not_before=not_before,
         baseline_period_end=baseline,
         breached_at_attach=breached_at_attach,
     )
@@ -414,10 +435,10 @@ def qualitative_conditions_from_json(raw: str | None) -> tuple[QualitativeCondit
 _EXTRACTION_PROMPT = """You are a strict JSON extractor for falsifiable investment conditions.
 
 The markdown below is the "What would change my mind" section of an analyst
-memo for {ticker}. Extract every FALSIFIABLE numeric condition — a metric, a
-direction, and a number that future reported data can satisfy or not. Skip
-purely qualitative triggers that carry no number (e.g. "a credible competitor
-enters the market").
+memo for {ticker}. The decision was made on {decision_date}. Extract every
+FALSIFIABLE numeric condition — a metric, a direction, and a number that
+future reported data can satisfy or not. Skip purely qualitative triggers
+that carry no number (e.g. "a credible competitor enters the market").
 
 Known metric names for {ticker}. When the prose refers to one of these, copy
 the name EXACTLY as written here and set metric_source accordingly; when
@@ -439,6 +460,7 @@ Return ONLY a JSON array — no markdown fences, no commentary. Each element:
   "threshold": <number>,
   "unit": "actual" | "thousands" | "millions" | "billions" | "percent" | "ratio" | "bps" | "count",
   "for_periods": <integer >= 1>,
+  "not_before": "<YYYY-MM-DD>" | null,
   "note": "<short quote of the source phrase>"
 }}
 
@@ -449,6 +471,14 @@ Rules:
   "millions". "$1.2B" -> 1.2, "billions". "150bps" -> 150, "bps". A bare
   customer/user count -> "count".
 - "for_periods": "for 2 consecutive quarters" -> 2. Unstated -> 1.
+- "not_before": for a FORWARD-LOOKING MILESTONE — the prose states a future
+  horizon for the condition ("in ~12 months", "by FY27", "within 2 quarters",
+  "ARR reaches $200M in a year") — set not_before to the decision date
+  ({decision_date}) plus the stated horizon, as YYYY-MM-DD ("by FY27"-style
+  deadlines -> that fiscal year's end). The condition will NOT be evaluated
+  before that date, so a "fails to reach X by then" milestone doesn't fire
+  the day it is written. A condition with no stated future horizon (an
+  ordinary "if the metric crosses X" tripwire) -> null.
 - If the section contains no falsifiable numeric conditions, return [].
 
 Section:
@@ -497,16 +527,24 @@ def extract_conditions(
     ticker: str,
     kpi_names: list[str],
     line_items: list[str],
+    made_at: str | None = None,
 ) -> list[DecisionCondition]:
     """One LLM pass over a "What would change my mind" section.
+
+    ``made_at`` is the decision's timestamp — the anchor the model adds a
+    stated horizon ("in ~12 months") to when setting ``not_before``. Optional
+    (the eval harness calls without it): absent, the model is told the date
+    is unknown and milestone conditions simply stay undated.
 
     Raises whatever ``call_llm_structured`` raises (hard stops propagate;
     ``StructuredParseError`` after the built-in retry) — the batch rung
     decides how to degrade. Individually invalid entries are dropped with a
     log line; the valid remainder survives.
     """
+    decision_date = (made_at or "")[:10] or "unknown"
     prompt = _EXTRACTION_PROMPT.format(
         ticker=ticker.upper(),
+        decision_date=decision_date,
         kpi_names=_format_vocab(kpi_names),
         line_items=_format_vocab(line_items),
         section=section[:4000],
@@ -855,7 +893,7 @@ def attach_conditions(
             prose_col = "NULL AS owner_prose"
         rows = conn.execute(
             f"""
-            SELECT d.id, d.ticker, d.source_artifact_id, d.source_memo_id,
+            SELECT d.id, d.ticker, d.made_at, d.source_artifact_id, d.source_memo_id,
                    a.content_md AS artifact_md, m.body_md AS memo_md, {prose_col}
             FROM decisions d
             LEFT JOIN llm_artifacts a ON a.id = d.source_artifact_id
@@ -891,9 +929,14 @@ def attach_conditions(
                 continue
 
             kpi_names, line_items = metric_vocabulary(conn, ticker)
+            made_at = str(row["made_at"]) if row["made_at"] is not None else None
             try:
                 conditions = extract_conditions(
-                    section, ticker=ticker, kpi_names=kpi_names, line_items=line_items
+                    section,
+                    ticker=ticker,
+                    kpi_names=kpi_names,
+                    line_items=line_items,
+                    made_at=made_at,
                 )
             except StructuredParseError as exc:
                 log.error(

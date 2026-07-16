@@ -380,6 +380,50 @@ def test_scan_legacy_condition_fresh_observation_fires(conn: sqlite3.Connection)
 
 
 # ---------------------------------------------------------------------------
+# Milestone window (not_before): a forward-looking condition ("reaches $200M
+# ARR in ~12 months") is not evaluated before its horizon opens.
+# ---------------------------------------------------------------------------
+
+
+def test_scan_skips_condition_with_future_not_before(conn: sqlite3.Connection) -> None:
+    """The milestone-dated tripwire: breaching data exists TODAY (the milestone
+    is trivially unmet the day it is written), but the window hasn't opened —
+    no candidate. The condition is still displayed (load_open_decisions)."""
+    future = (datetime.now(UTC).replace(tzinfo=None) + timedelta(days=200)).date().isoformat()
+    _insert_decision(conn, [_condition(not_before=future)], decided_by="owner")
+    _insert_kpi_series(conn, values=_BREACHING)
+    assert DecisionConditionTrigger().scan("NU", conn) == []
+
+    # Display surfaces still see the condition — only evaluation is deferred.
+    from decision_conditions import load_open_decisions
+
+    conn.row_factory = sqlite3.Row
+    [decision] = load_open_decisions(conn, "NU")
+    assert decision.conditions[0].not_before == future
+
+
+def test_scan_evaluates_condition_with_past_not_before(conn: sqlite3.Connection) -> None:
+    """Once the milestone window has opened (not_before in the past), the
+    condition evaluates exactly like any other."""
+    past = (datetime.now(UTC).replace(tzinfo=None) - timedelta(days=5)).date().isoformat()
+    _insert_decision(conn, [_condition(not_before=past)], decided_by="owner")
+    _insert_kpi_series(conn, values=_BREACHING)
+    candidates = DecisionConditionTrigger().scan("NU", conn)
+    assert len(candidates) == 1
+    assert candidates[0].evidence["not_before"] == past
+
+
+def test_scan_legacy_condition_without_not_before_unchanged(conn: sqlite3.Connection) -> None:
+    """Legacy stored JSON (no not_before key) keeps firing as before — the
+    gate only defers explicitly future-dated milestones."""
+    _insert_decision(conn, [_condition()], decided_by="owner")
+    _insert_kpi_series(conn, values=_BREACHING)
+    candidates = DecisionConditionTrigger().scan("NU", conn)
+    assert len(candidates) == 1
+    assert candidates[0].evidence["not_before"] is None
+
+
+# ---------------------------------------------------------------------------
 # should_fire / signature / build_alert / draft_actions
 # ---------------------------------------------------------------------------
 

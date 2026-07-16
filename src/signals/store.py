@@ -55,6 +55,7 @@ __all__ = [
     "CADENCE_SCHEDULED",
     "DEFAULT_WEIGHTS",
     "DIET_ONLY_TYPES",
+    "MIN_QUALITY_SCORE",
     "NEWS_MIRRORED_TYPES",
     "SCAFFOLD_TYPES",
     "SIGNAL_BUYSIDE_RATING",
@@ -134,13 +135,27 @@ DEFAULT_WEIGHTS: dict[str, float] = {
 # (src/news/store.py) so a mirrored row keeps a chronological lexical sort.
 _DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
+# The read-time quality gate has two rungs (2026-07-16):
+#
+#   1. ``quality_score`` (alembic 0150) — an LLM information-quality score
+#      0..1 stamped ONCE at ingest by the ``diet_source_quality`` purpose
+#      (``signals.quality``): original reporting / primary sources high,
+#      recycled recaps / content farms low. A SCORED row is governed by the
+#      score alone: drop below ``MIN_QUALITY_SCORE``, keep at/above.
+#   2. The static denylist below — the belt-and-braces fallback for rows the
+#      batch pass hasn't scored yet (quality_score NULL) and for pre-0150 DBs.
+#
+# Both are read-time curation filters on STORED fields, not decay factors:
+# they remove rows, never reorder them, so the non-decaying ordering guarantee
+# (the diet guard) is untouched.
+MIN_QUALITY_SCORE = 0.4
+
 # Low-signal publishers the FMP news firehose aggregates — content farms and
 # ratings-recap wires that dilute the reading lane (owner feedback 2026-07-14:
 # "shit sources"). Matched case-insensitively as a substring of the row's
 # ``firm`` (news.source). A row with no firm (NULL) is never denied — we only
-# drop KNOWN low-quality publishers, never unknown ones. This is a read-time
-# curation filter, not a decay factor: it removes rows, never reorders them, so
-# the non-decaying ordering guarantee is untouched.
+# drop KNOWN low-quality publishers, never unknown ones. Fallback rung only:
+# consulted for rows with no stored ``quality_score`` yet.
 _LOW_QUALITY_SOURCE_TOKENS: tuple[str, ...] = (
     "zacks",
     "motley fool",
@@ -164,6 +179,15 @@ def _is_low_quality_source(firm: str | None) -> bool:
         return False
     low = firm.lower()
     return any(token in low for token in _LOW_QUALITY_SOURCE_TOKENS)
+
+
+def _passes_quality_gate(signal: SignalRow) -> bool:
+    """The two-rung read-time quality gate (see the comment above
+    ``MIN_QUALITY_SCORE``): a scored row is governed by its stored LLM score;
+    an unscored row falls back to the static publisher denylist."""
+    if signal.quality_score is not None:
+        return signal.quality_score >= MIN_QUALITY_SCORE
+    return not _is_low_quality_source(signal.firm)
 
 
 def is_diet_only(signal_type: str) -> bool:
@@ -201,6 +225,9 @@ class SignalRow:
     event_date: str | None = None
     source_feed: str | None = None
     news_id: int | None = None
+    # LLM information-quality score 0..1 (alembic 0150), stamped at ingest by
+    # signals.quality. None = not yet scored / pre-0150 DB.
+    quality_score: float | None = None
 
 
 _SELECT_COLS = (
@@ -210,6 +237,9 @@ _SELECT_COLS = (
 
 
 def _row_to_signal(row: Sequence[object]) -> SignalRow:
+    # Tolerates both select shapes: the 13-col legacy shape and the 14-col
+    # quality-aware one (load_diet_signals falls back on a pre-0150 DB).
+    quality = row[13] if len(row) > 13 else None
     return SignalRow(
         id=int(row[0]),  # type: ignore[arg-type]
         ticker=str(row[1]),
@@ -224,6 +254,7 @@ def _row_to_signal(row: Sequence[object]) -> SignalRow:
         event_date=str(row[10]) if row[10] is not None else None,
         source_feed=str(row[11]) if row[11] is not None else None,
         news_id=int(row[12]) if row[12] is not None else None,  # type: ignore[arg-type]
+        quality_score=float(quality) if quality is not None else None,  # type: ignore[arg-type]
     )
 
 
@@ -268,21 +299,28 @@ def load_diet_signals(
         return []
     try:
         marks = ",".join("?" for _ in wanted)
-        # Over-fetch (3x headroom) so the low-quality-source filter below can
-        # drop content-farm rows without starving the stream — the guarantee is
+        # Over-fetch (3x headroom) so the quality gate below can drop
+        # content-farm rows without starving the stream — the guarantee is
         # still "the most recent good rows", just computed over a wider window.
-        rows = conn.execute(
-            f"SELECT {_SELECT_COLS} FROM signals "
-            f"WHERE signal_type IN ({marks}) "
-            "ORDER BY published_at DESC, weight DESC, id DESC LIMIT ?",
-            (*wanted, int(limit) * 3),
-        ).fetchall()
+        where_order = (
+            f"FROM signals WHERE signal_type IN ({marks}) "
+            "ORDER BY published_at DESC, weight DESC, id DESC LIMIT ?"
+        )
+        params = (*wanted, int(limit) * 3)
+        try:
+            rows = conn.execute(
+                f"SELECT {_SELECT_COLS}, quality_score {where_order}", params
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # Pre-0150 DB (no quality_score column): legacy select — every row
+            # reads as unscored and the static denylist governs alone.
+            rows = conn.execute(f"SELECT {_SELECT_COLS} {where_order}", params).fetchall()
     except sqlite3.Error:
         return []
     finally:
         conn.close()
     signals = [_row_to_signal(r) for r in rows]
-    kept = [s for s in signals if not _is_low_quality_source(s.firm)]
+    kept = [s for s in signals if _passes_quality_gate(s)]
     return kept[: int(limit)]
 
 
