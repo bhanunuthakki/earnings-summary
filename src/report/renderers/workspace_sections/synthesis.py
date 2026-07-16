@@ -98,6 +98,16 @@ def _synthesis_tab(body: StringIO, section: SynthesisSection | None) -> None:
         # L12: a lens that authored inline [n] markers carries the chip payloads
         # to resolve them (else .citations is empty → render_prose unchanged).
         prose = _render_markdown(lens.content_md, citations=lens.citations)
+        if lens.is_dirty:
+            # B10b: a dirty artifact must never read as current — one muted
+            # line ahead of the prose names WHAT invalidated it (the DIRTY
+            # pill alone was easy to miss on a long memo).
+            note = (
+                "⚠ graded commitments changed since this memo — regenerate"
+                if lens.dirty_reason == "saydo_grades_changed"
+                else "⚠ inputs changed since this memo — regenerate"
+            )
+            prose = f'<p class="muted lens-dirty-note">{_esc(note)}</p>{prose}'
         if is_first:
             body.write(
                 f'<div class="{lens_cls}"><div class="panel-head">{head_inner}</div>'

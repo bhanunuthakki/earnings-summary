@@ -91,6 +91,36 @@ def test_overview_demotes_upcoming_into_the_inbox_rail() -> None:
     assert ".up-strip {" in SHELL_CSS
 
 
+def test_upcoming_rail_summary_is_informative_and_state_persists() -> None:
+    """Wave B (B2): the collapsed Upcoming-earnings <details> must answer
+    "anything soon?" while closed — the shell hoists the strip's
+    data-up-summary line into the <summary> — and the open/closed state
+    persists per browser via a guarded localStorage script."""
+    html = render_overview_panel(
+        {"portfolio": [], "evaluation": []},
+        coverage={},
+        inbox_html='<div class="ix-stream ix-compact" data-ix-surface="home"></div>',
+        upcoming_html=(
+            '<div class="up-strip" '
+            'data-up-summary="Upcoming earnings · 3 in 14d — next WIX 07-18">UP</div>'
+        ),
+    )
+    assert "<summary>Upcoming earnings · 3 in 14d — next WIX 07-18</summary>" in html
+    # The persistence script rides WITH the details block (re-executed on every
+    # shell injection; per-element wired guard).
+    assert "cc-upcoming-open" in html
+    assert "localStorage" in html
+    assert "__ccUpWired" in html
+    # A strip without the data-attr (defensive) falls back to the bare label.
+    bare = render_overview_panel(
+        {"portfolio": [], "evaluation": []},
+        coverage={},
+        inbox_html='<div class="ix-stream"></div>',
+        upcoming_html='<div class="up-strip">UP-MARKER</div>',
+    )
+    assert "<summary>Upcoming earnings</summary>" in bare
+
+
 def test_overview_main_column_has_today_bands_placeholder() -> None:
     """The empty ``#cc-today-bands`` placeholder (PR3) always renders in the
     main column, right after open_loops — SHELL_JS fills it client-side

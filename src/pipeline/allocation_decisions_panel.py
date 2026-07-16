@@ -587,7 +587,7 @@ def _scorecard_html(db_path: Path, *, n_graded: int = 0) -> str:
         return f"<style>{SCORECARD_CSS}</style>{section}"
     except Exception:  # pragma: no cover - coaching must never break the page
         return (
-            '<section class="panel"><h2>Coach&rsquo;s read</h2>'
+            '<section class="panel"><h2>Calibration coach</h2>'
             '<p class="muted">Coach&rsquo;s read: failed to load — see logs.</p></section>'
         )
 

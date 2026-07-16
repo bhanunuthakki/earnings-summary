@@ -148,6 +148,7 @@ def build(ticker: str, repo_root: Path) -> SynthesisSection:
                     model=art.model,
                     generated_at=generated_at,
                     is_dirty=art.dirty,
+                    dirty_reason=art.dirty_reason,
                     is_stale=generated_at < stale_cutoff,
                     citations=tuple(citations),
                 )

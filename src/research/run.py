@@ -179,9 +179,13 @@ def _narrate(
         f"Company: {ticker or 'n/a'}\nQuestion: {claim}\n\n{quarantine(evidence)}"
     )
     obj = caller(prompt, purpose="research_narrate", required_keys=("title", "body_md"))
+    from llm.postprocess import strip_llm_preamble
+
     return ProposalDraft(
         title=str(obj.get("title") or claim)[:200],
-        body_md=str(obj.get("body_md") or ""),
+        # B8: drop leaked process narration ("Having exhausted my web budget…
+        # Here is the brief:") before the memo is persisted/served.
+        body_md=strip_llm_preamble(str(obj.get("body_md") or "")),
         stance=stance,
     )
 

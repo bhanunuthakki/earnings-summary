@@ -20,10 +20,11 @@ import hashlib
 import json
 import logging
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Callable, cast
+from typing import cast
 
 from llm.style import compose_brief_prompt, style_block_cache_token
 from llm.untrusted import spotlight
@@ -138,7 +139,7 @@ def run_lens(
 
     try:
         ctx = lens.build_context(ticker, repo_root)
-    except Exception as exc:  # noqa: BLE001 — defensive across context loaders
+    except Exception as exc:
         log.warning(
             {
                 "event": "lens_context_build_failed",
@@ -211,7 +212,7 @@ def run_lens(
             scope=lens.scope,
             model=lens.model,
         )
-    except Exception as exc:  # noqa: BLE001 — record + return
+    except Exception as exc:
         log.warning(
             {
                 "event": "lens_llm_call_failed",
@@ -221,6 +222,13 @@ def run_lens(
             }
         )
         return None
+
+    # B8: drop leaked process narration ("Having exhausted my web budget… Here
+    # is the brief:") before the artifact is cached — every downstream surface
+    # serves content_md verbatim.
+    from llm.postprocess import strip_llm_preamble
+
+    content = strip_llm_preamble(content)
 
     # Grounding: if the model's prose restated a DCF/MoS figure that contradicts
     # the figures of record (dcf_runs), append a corrective footnote carrying the

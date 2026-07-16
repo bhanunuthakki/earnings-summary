@@ -220,6 +220,9 @@ def test_risk_panel_persists_snapshot_on_successful_fetch(
 ) -> None:
     import pipeline.portfolio_panel as pp
 
+    # Wave B (B4b): a liveness probe now gates the data walk — mark it up so
+    # the patched fetcher is reached.
+    monkeypatch.setattr(pp, "probe_tracker", lambda api_url=None: (True, "http://x"))
     monkeypatch.setattr(pp, "fetch_portfolio_analytics", lambda **_kw: _populated_analytics())
     html = pp.render_portfolio_risk_panel(api_url="http://x", db_path=migrated_db)
     assert "Factor &amp; style exposure" in html  # live render

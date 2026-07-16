@@ -450,7 +450,9 @@ def render_positioning_panel(db_path: Path, repo_root: Path) -> str:
             '<div class="pos-grid">',
             render_active_target_card(db_path, repo_root),
             _history_well(db_path),
-            '<div class="k-well pos-span"><h3>Coach</h3>',
+            # "Positioning coach" (wave B B6) — disambiguates from Record's
+            # Calibration coach; a bare "Coach" read as the same product twice.
+            '<div class="k-well pos-span"><h3>Positioning coach</h3>',
             '<div class="pos-chat-log" id="pos-chat-log"></div>',
             '<form class="pos-chat-form" id="pos-chat-form">',
             '<textarea id="pos-chat-input" placeholder="e.g. I want more international ',

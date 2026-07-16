@@ -181,7 +181,17 @@ def render_upcoming_strip(
     if not upcoming:
         return ""
     out = StringIO()
-    out.write('<div class="up-strip">')
+    # data-up-summary: the one-line informative summary the shell hoists into
+    # its collapsed <details> header ("Upcoming earnings · N in 14d — next TICK
+    # MM-DD") so the closed section still answers "anything soon?" at a glance.
+    # Rides the strip root as a data attribute so the builder seam stays a
+    # single HTML string (command_center_shell reads it back; wave B B2).
+    next_ticker, next_when, _ = upcoming[0]
+    summary = (
+        f"Upcoming earnings · {len(upcoming)} in {horizon_days}d"
+        f" — next {next_ticker} {next_when.strftime('%m-%d')}"
+    )
+    out.write(f'<div class="up-strip" data-up-summary="{_esc(summary)}">')
     out.write(
         '<div class="up-strip-head">Upcoming earnings'
         f'<span class="up-strip-sub">next {horizon_days}d</span></div>'

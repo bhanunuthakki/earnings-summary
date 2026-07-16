@@ -265,6 +265,11 @@ def _seed_ladder_extras(db_path: Path) -> None:
     for ticker, list_type, thesis in (
         ("WLR", "watchlist", "Real watchlist thesis."),
         ("STB", "watchlist", "STUB: needs user-authored thesis"),
+        # Wave B: the marker also appears EMBEDDED mid-text on prod (ROP) —
+        # matched as a substring — while stub-ish words without the literal
+        # `STUB:` token stay a real thesis.
+        ("EMB", "watchlist", "Diversified industrial software. STUB: needs user-authored thesis"),
+        ("SBRN", "watchlist", "A stubbornly durable moat; the STUBHUB comp is irrelevant."),
         ("EVA", "evaluation", "Real evaluation thesis."),
     ):
         conn.execute(
@@ -298,6 +303,8 @@ def test_trigger_ladder_excludes_stub_thesis_names(tmp_path: Path) -> None:
     tickers = {r.ticker for r in dash.trigger_ladder}
     assert "NU" in tickers and "WLR" in tickers  # real theses stay
     assert "STB" not in tickers  # the stub never enters
+    assert "EMB" not in tickers  # embedded marker (ROP-style) excluded too
+    assert "SBRN" in tickers  # stubborn/STUBHUB prose is NOT a stub
 
 
 def test_trigger_ladder_list_types_scopes_to_evaluation(tmp_path: Path) -> None:
@@ -540,6 +547,9 @@ def test_panel_fragment_portfolio_window_args_flow_to_the_tracker_fetch(
     ) -> LivePortfolio:
         return LivePortfolio(available=True, api_url="http://x", total_market_value=0.0)
 
+    # Wave B (B4b): a liveness probe now gates the data walk — mark it up so
+    # the patched fetchers are reached.
+    monkeypatch.setattr(pp, "probe_tracker", lambda api_url=None: (True, "http://x"))
     monkeypatch.setattr(pp, "fetch_portfolio_analytics", _fake_analytics)
     monkeypatch.setattr(pp, "fetch_live_portfolio", _fake_live)
     resp = client.get(

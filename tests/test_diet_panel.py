@@ -202,6 +202,32 @@ def test_low_quality_sources_are_filtered_from_the_stream(tmp_path: Path) -> Non
     assert "Nu farm recap" not in html
 
 
+def test_stale_stream_carries_freshness_warn_chip(db: Path) -> None:
+    """Wave B (B3): the fixture's newest signal is weeks old — the stream
+    header must say so with a warn chip instead of silently rendering a
+    stale feed as current."""
+    html = render_diet_panel(db)
+    assert "newest signal" in html
+    assert 'class="k-chip k-chip-warn"' in html
+    assert "may have stalled" in html
+
+
+def test_fresh_stream_has_no_warn_chip(tmp_path: Path) -> None:
+    """A stream whose newest signal is under 48h old gets the quiet muted
+    stamp, never the warn chip."""
+    from datetime import UTC, datetime
+
+    d = tmp_path / "fresh.db"
+    now = datetime.now(UTC).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    make_news_then_signals(
+        d,
+        [("NU", "Nu fresh story", "http://x/1", now, None, "Reuters", "fmp_stock_news", "t")],
+    )
+    html = render_diet_panel(d)
+    assert "newest signal 0d ago" in html
+    assert "k-chip-warn" not in html
+
+
 def test_escapes_untrusted_headline(tmp_path: Path) -> None:
     d = tmp_path / "xss.db"
     make_news_then_signals(

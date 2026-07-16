@@ -325,3 +325,110 @@ def test_match_pending_full_cycle(conn: sqlite3.Connection) -> None:
     # Re-running should be idempotent — outcome already set, nothing pending
     pending = fetch_pending_commitments(conn, ticker="MELI")
     assert pending == []
+
+
+def _seed_llm_artifacts(conn: sqlite3.Connection) -> None:
+    """A minimal llm_artifacts shape (only the columns the dirty-marker touches)."""
+    conn.executescript(
+        """
+        CREATE TABLE llm_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT,
+            scope TEXT NOT NULL DEFAULT 'ticker',
+            purpose TEXT NOT NULL,
+            superseded_by_id INTEGER,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            dirty_reason TEXT
+        );
+        """
+    )
+    rows = [
+        ("MELI", "ticker", "lens:mgmt_credibility_score", None, 0),
+        ("VEEV", "ticker", "lens:mgmt_credibility_score", None, 0),  # other ticker
+        (None, "portfolio", "lens:cross_portfolio_synthesis", None, 0),
+        ("MELI", "ticker", "bear_case", None, 0),  # unrelated purpose
+        ("MELI", "ticker", "lens:mgmt_credibility_score", 99, 0),  # superseded
+    ]
+    conn.executemany(
+        "INSERT INTO llm_artifacts (ticker, scope, purpose, superseded_by_id, dirty) "
+        "VALUES (?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+
+
+def test_new_grades_dirty_the_narrative_artifacts(conn: sqlite3.Connection) -> None:
+    """Wave B (B10a): after match_pending writes a real grade for a ticker, the
+    cached lens:mgmt_credibility_score (that ticker) and the portfolio-scoped
+    lens:cross_portfolio_synthesis go dirty=1 / dirty_reason=saydo_grades_changed
+    — so the VEEV-style stale "0-for-3" narrative can never read as current.
+    Untouched: other tickers, other purposes, superseded rows."""
+    _seed_llm_artifacts(conn)
+    seg = _seed_segment(conn, "MELI")
+    _seed_kpi_fact(
+        conn,
+        ticker="MELI",
+        kpi_name="operating_margin",
+        value=Decimal("13.5"),
+        period_end=datetime(2024, 12, 31),
+    )
+    persist_commitment(
+        conn,
+        commitment=CommitmentInput(
+            ticker="MELI",
+            period_made=datetime(2024, 9, 30),
+            transcript_segment_id=seg,
+            period_target=datetime(2024, 12, 31),
+            kpi_name="operating_margin",
+            comparator=Comparator.GE,
+            target_value=Decimal("13"),
+            unit=Unit.PERCENT,
+            narrative="mid-teens margins by Q4",
+        ),
+    )
+    conn.commit()
+
+    results = match_pending(conn, ticker="MELI")
+    assert results[0].outcome == CommitmentOutcome.HIT
+
+    def state(where: str) -> list[tuple[int, str | None]]:
+        return [
+            (int(r["dirty"]), r["dirty_reason"])
+            for r in conn.execute(
+                f"SELECT dirty, dirty_reason FROM llm_artifacts WHERE {where}"
+            ).fetchall()
+        ]
+
+    assert state(
+        "ticker='MELI' AND purpose='lens:mgmt_credibility_score' AND superseded_by_id IS NULL"
+    ) == [(1, "saydo_grades_changed")]
+    assert state("scope='portfolio' AND purpose='lens:cross_portfolio_synthesis'") == [
+        (1, "saydo_grades_changed")
+    ]
+    assert state("ticker='VEEV'") == [(0, None)]  # other ticker untouched
+    assert state("purpose='bear_case'") == [(0, None)]  # other purpose untouched
+    assert state("superseded_by_id IS NOT NULL") == [(0, None)]  # history untouched
+
+
+def test_no_data_outcome_does_not_dirty_artifacts(conn: sqlite3.Connection) -> None:
+    """NO_DATA writes nothing to the ledger, so nothing is invalidated."""
+    _seed_llm_artifacts(conn)
+    seg = _seed_segment(conn, "MELI")
+    persist_commitment(
+        conn,
+        commitment=CommitmentInput(
+            ticker="MELI",
+            period_made=datetime(2024, 9, 30),
+            transcript_segment_id=seg,
+            period_target=datetime(2024, 12, 31),
+            kpi_name="operating_margin",
+            comparator=Comparator.GE,
+            target_value=Decimal("13"),
+            unit=Unit.PERCENT,
+            narrative="mid-teens margins by Q4",
+        ),
+    )
+    conn.commit()
+    results = match_pending(conn, ticker="MELI")
+    assert results[0].outcome == CommitmentOutcome.NO_DATA
+    assert conn.execute("SELECT COUNT(*) FROM llm_artifacts WHERE dirty=1").fetchone()[0] == 0

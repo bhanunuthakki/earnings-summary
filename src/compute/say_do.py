@@ -331,11 +331,56 @@ def match_commitment(conn: sqlite3.Connection, commitment: CommitmentRow) -> Mat
     )
 
 
+# Stamped as llm_artifacts.dirty_reason when new grades land (wave B B10a).
+_SAYDO_DIRTY_REASON = "saydo_grades_changed"
+
+
+def _mark_narrative_artifacts_dirty(conn: sqlite3.Connection, tickers: set[str]) -> int:
+    """After new Say-Do grades land for ``tickers``, dirty the cached narrative
+    artifacts that interpret them — ``lens:mgmt_credibility_score`` per ticker
+    and the portfolio-scoped ``lens:cross_portfolio_synthesis`` — so a
+    corrected ledger can never be silently contradicted by a stale memo (the
+    VEEV "0-for-3" reconciliation defect, wave B B10a). Same UPDATE shape as
+    ``llm_artifact_store.mark_dirty``, run on the CALLER's connection so the
+    flip commits with the grades. Best-effort: 0 when the table is absent."""
+    if not tickers:
+        return 0
+    has_artifacts = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_artifacts'"
+    ).fetchone()
+    if has_artifacts is None:
+        return 0
+    n = 0
+    for t in sorted(tickers):
+        cur = conn.execute(
+            "UPDATE llm_artifacts SET dirty = 1, dirty_reason = ? "
+            "WHERE ticker = ? AND purpose = 'lens:mgmt_credibility_score' "
+            "AND superseded_by_id IS NULL AND dirty = 0",
+            (_SAYDO_DIRTY_REASON, t),
+        )
+        n += cur.rowcount
+    cur = conn.execute(
+        "UPDATE llm_artifacts SET dirty = 1, dirty_reason = ? "
+        "WHERE scope = 'portfolio' AND purpose = 'lens:cross_portfolio_synthesis' "
+        "AND superseded_by_id IS NULL AND dirty = 0",
+        (_SAYDO_DIRTY_REASON,),
+    )
+    n += cur.rowcount
+    conn.commit()
+    return n
+
+
 def match_pending(
     conn: sqlite3.Connection,
     *,
     ticker: str | None = None,
 ) -> list[MatchResult]:
-    """Match every commitment with NULL outcome. Returns one result per commitment."""
+    """Match every commitment with NULL outcome. Returns one result per
+    commitment. Tickers that received an actual grade (NO_DATA writes nothing)
+    also get their cached narrative artifacts marked dirty — see
+    ``_mark_narrative_artifacts_dirty``."""
     pending = fetch_pending_commitments(conn, ticker=ticker)
-    return [match_commitment(conn, c) for c in pending]
+    results = [match_commitment(conn, c) for c in pending]
+    graded = {r.ticker for r in results if r.outcome != CommitmentOutcome.NO_DATA}
+    _mark_narrative_artifacts_dirty(conn, graded)
+    return results

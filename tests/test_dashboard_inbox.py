@@ -430,6 +430,48 @@ def test_tier1_decisive_alert_carries_severity_rail_and_chip(db_path: Path) -> N
     assert html.count('class="ix-card"') == 2
 
 
+def _dc_evidence(threshold: float) -> dict[str, object]:
+    """A decision_condition evidence blob shaped like the trigger's _evidence()
+    output — NO generic memo fields (memo/summary/…), which is exactly why the
+    card used to render bodyless."""
+    return {
+        "decision_id": 12,
+        "condition_index": 0,
+        "decision_summary": "the 2026-05-01 TRIM decision (memo)",
+        "decided_by": "owner",
+        "metric": "take_rate",
+        "op": "lt",
+        "threshold": threshold,
+        "unit": "%",
+        "for_periods": 1,
+        "condition_label": f"take_rate below {threshold:g} %",
+        "latest_value": 2.9,
+        "period_end": "2026-06-30",
+        "observed": [{"period_end": "2026-06-30", "value": 2.9}],
+    }
+
+
+def test_decision_condition_cards_surface_condition_and_observed_value(db_path: Path) -> None:
+    """Red-team wave B (B1): decision_condition evidence carries none of the
+    generic memo fields, so the card body was empty — two WIX cards read as
+    identical "Condition met" chips. The body now shows condition_label + the
+    latest observed value, so same-metric conditions differing only by
+    threshold are distinguishable."""
+    for i, threshold in enumerate((3.0, 2.5)):
+        fire_alert(
+            ticker="WIX",
+            trigger_kind="decision_condition",
+            fired_at=datetime.now(UTC) - timedelta(minutes=i),
+            evidence_json=json.dumps(_dc_evidence(threshold)),
+            signature_sha=f"sig-dc-{threshold}",
+            db_path=db_path,
+        )
+    html = render_inbox_stream(collect_inbox(db_path), db_path=db_path)
+    assert "take_rate below 3 %" in html
+    assert "take_rate below 2.5 %" in html
+    assert html.count("latest 2.9 % @ 2026-06-30") == 2
+
+
 def test_tier1_threshold_crossed_evidence_marks_the_card(db_path: Path) -> None:
     """Evidence-driven decisiveness (threshold_crossed / is_thesis_breaker)
     marks the card the same way the falsifier trigger does — ONE definition

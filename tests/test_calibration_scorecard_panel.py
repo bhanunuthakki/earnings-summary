@@ -47,6 +47,7 @@ def test_render_none_is_a_starvation_stub_not_empty() -> None:
     vanish — the caption threads in how many decisions have graded so far."""
     html = render_scorecard_section(None)
     assert html != ""
+    assert "<h2>Calibration coach</h2>" in html  # B6: disambiguated header
     assert "no scorecard yet" in html
     assert "currently 0 graded" in html
 
@@ -62,7 +63,9 @@ def test_render_coached_card_shows_biases_and_experiment() -> None:
         DecisionCondition("sizing contribution", None, "gt", 0.0, "actual", 1, "turns positive"),
     )
     html = render_scorecard_section(_card(biases=[bias], experiment=exp, coach_quality_ok=True))
-    assert "Coach" in html and "rsquo;s read" in html  # the section header
+    # Wave B (B6): the header names WHICH coach — "Calibration coach", never a
+    # bare "Coach" that collides with Allocation's Positioning coach.
+    assert "<h2>Calibration coach</h2>" in html
     assert "oversizes adds" in html
     assert "sizing -$3,000" in html  # the evidence chip
     assert "5/5 conviction add" in html  # the tell

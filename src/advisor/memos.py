@@ -184,6 +184,12 @@ def persist_memo(
     row is the system of record and must survive a partial memory write.
     Public: the Socratic flow (P2.4) persists through the same path, passing
     the parsed stance + owner-chosen horizon."""
+    from llm.postprocess import strip_llm_preamble
+
+    # B8: every advisor memo body passes the preamble stripper at persist time
+    # so leaked process narration never reaches the memo record, the note
+    # summary line, or the ledger echo.
+    body_md = strip_llm_preamble(body_md)
     memo = insert_memo(
         user_id=user_id,
         kind=kind,

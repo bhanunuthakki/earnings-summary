@@ -11,6 +11,7 @@ Pure read over the analyst_notes spine; token-only styles (guard-clean).
 
 from __future__ import annotations
 
+import re
 from html import escape
 from pathlib import Path
 from typing import cast
@@ -1365,7 +1366,18 @@ def _feed_card(item: FeedItem) -> str:
         type_chip = f'<span class="om-type">{escape(item.item_type)}</span>'
     wondering = '<span class="om-wondering">wondering</span>' if item.wondering else ""
     ladder_label = LADDER_LABELS.get(item.ladder or "", "")
-    ladder_badge = f'<span class="om-ladder">{escape(ladder_label)}</span>'
+    if item.ladder == "incorporated":
+        # Wave B (B7): "in research" is a doorway, not an inert badge — the
+        # existing data-ledger-jump listener opens the Queues block and scrolls
+        # to the Research section. Keeps .om-ladder so the post-action label
+        # repaint still finds it. Other ladder values stay inert spans.
+        ladder_badge = (
+            '<button type="button" class="k-chip k-chip-btn om-ladder" '
+            'data-ledger-jump="ledger-jump-research" '
+            f'title="Open the research queue">{escape(ladder_label)}</button>'
+        )
+    else:
+        ladder_badge = f'<span class="om-ladder">{escape(ladder_label)}</span>'
     when = stamp_html(note.created_at, css="ledger-when")
     return (
         f'<div class="ledger-musing om-item" id="om-note-{note.id}" data-om-id="{note.id}" '
@@ -1854,21 +1866,32 @@ def render_ledger_panel(
     queue_pending = (
         counts.get("research", 0) + counts.get("reconcile", 0) + counts.get("worldview", 0)
     )
-    count_badge = (
-        f'<span class="ledger-queues-count">{queue_pending} pending</span>' if queue_pending else ""
+    queues_body = (
+        f'<div id="ledger-jump-worldview">{render_worldview_section(db_path)}</div>'
+        f'<div id="ledger-jump-stances">{_stance_section(db_path)}</div>'
+        f'<div id="ledger-jump-research">{_research_section(db_path)}</div>'
+        f'<div id="ledger-jump-reconcile">{_reconcile_section(db_path)}</div>'
     )
+    # B11 (wave B): the summary must reflect what's inside — "N pending" alone
+    # hid ~184 armed falsifiers behind a closed block. The armed count is read
+    # off the ALREADY-rendered table header ("Armed falsifiers (N)"), so no
+    # second query and no drift from what actually rendered.
+    armed_m = re.search(r"Armed falsifiers \((\d+)\)", queues_body)
+    armed_n = int(armed_m.group(1)) if armed_m else 0
+    badges = []
+    if queue_pending:
+        badges.append(f"{queue_pending} pending")
+    if armed_n:
+        plural = "s" if armed_n != 1 else ""
+        badges.append(f"{armed_n} armed falsifier{plural}")
+    count_badge = "".join(f'<span class="ledger-queues-count">{b}</span>' for b in badges)
     queues = (
         '<details class="ledger-queues" id="ledger-queues">'
         '<summary class="ledger-queues-sum">Queues'
         f"{count_badge}"
         '<span class="ledger-queues-hint">research · reconcile · worldview · stances</span>'
         "</summary>"
-        '<div class="ledger-queues-body">'
-        + f'<div id="ledger-jump-worldview">{render_worldview_section(db_path)}</div>'
-        + f'<div id="ledger-jump-stances">{_stance_section(db_path)}</div>'
-        + f'<div id="ledger-jump-research">{_research_section(db_path)}</div>'
-        + f'<div id="ledger-jump-reconcile">{_reconcile_section(db_path)}</div>'
-        + "</div></details>"
+        '<div class="ledger-queues-body">' + queues_body + "</div></details>"
     )
     return (
         _PANEL_STYLE
