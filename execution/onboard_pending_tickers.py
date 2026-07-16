@@ -14,8 +14,15 @@ AND ANY of:
     (parse stage never ran)
   - 0 rows in dcf_runs                       -> 'no_dcf_run'
     (analysis stage never ran)
-  - has transcripts but 0 management_commitments -> 'no_commitments'
-    (commitments never extracted from existing transcripts)
+  - has extractable transcripts but 0 management_commitments -> 'no_commitments'
+    (commitments never extracted from existing transcripts). "Extractable"
+    mirrors compute.say_do_extractor.transcripts_pending_extraction: at least
+    one transcript with no commitment_scan_log row (a recorded zero-commitment
+    scan is a durable outcome, not a retry candidate), and the ticker has a
+    kpi_definitions catalog (an empty catalog predetermines the extraction to
+    zero commitments). Without those two guards the queue flags tickers the
+    extractor will never target and re-runs a no-op subprocess hourly forever
+    (the 2026-07-16 MELI/AGX/DASH/FIGR eternal-churn).
 
 Per-ticker work depends on pending_reason:
   - no_instrument_type / no_financial_facts / no_dcf_run:
@@ -118,7 +125,37 @@ class TickerResult:
     elapsed_seconds: float
 
 
-_PENDING_SQL = f"""
+# Excludes transcripts already recorded in commitment_scan_log — a
+# zero-commitment scan is a durable outcome the extractor never retries, so
+# such transcripts must not keep their ticker in the queue.
+_SCAN_LOG_FILTER = (
+    " AND NOT EXISTS (SELECT 1 FROM commitment_scan_log l WHERE l.transcript_id = t.id)"
+)
+
+
+def _commitments_pending_predicate(scan_log_exists: bool) -> str:
+    """The no_commitments arm, mirroring the extractor's own target selection
+    (compute.say_do_extractor.transcripts_pending_extraction). Any predicate
+    looser than the extractor's flags tickers whose --auto run returns
+    targets=0, and those churn as hourly no-op subprocesses forever."""
+    scan_filter = _SCAN_LOG_FILTER if scan_log_exists else ""
+    return f"""(
+      EXISTS (
+        SELECT 1 FROM transcripts t
+        WHERE UPPER(t.ticker) = UPPER(tc.ticker){scan_filter}
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM management_commitments mc WHERE UPPER(mc.ticker) = UPPER(tc.ticker)
+      )
+      AND EXISTS (
+        SELECT 1 FROM kpi_definitions k WHERE UPPER(k.ticker) = UPPER(tc.ticker)
+      )
+    )"""
+
+
+def _pending_sql(scan_log_exists: bool) -> str:
+    commitments_pending = _commitments_pending_predicate(scan_log_exists)
+    return f"""
 SELECT
   tc.ticker,
   CASE
@@ -134,10 +171,7 @@ SELECT
     WHEN tc.instrument_type != 'etf'
          AND (SELECT COUNT(*) FROM dcf_runs d WHERE UPPER(d.ticker) = UPPER(tc.ticker)) = 0
       THEN 'no_dcf_run'
-    WHEN EXISTS (SELECT 1 FROM transcripts t WHERE UPPER(t.ticker) = UPPER(tc.ticker))
-         AND NOT EXISTS (
-           SELECT 1 FROM management_commitments mc WHERE UPPER(mc.ticker) = UPPER(tc.ticker)
-         )
+    WHEN {commitments_pending}
       THEN 'no_commitments'
     ELSE 'ok'
   END AS pending_reason
@@ -153,22 +187,27 @@ WHERE tc.list_type IN {db.ACTIVE_LIST_TYPES_SQL}
       tc.instrument_type != 'etf'
       AND (SELECT COUNT(*) FROM dcf_runs d WHERE UPPER(d.ticker) = UPPER(tc.ticker)) = 0
     )
-    OR (
-      EXISTS (SELECT 1 FROM transcripts t WHERE UPPER(t.ticker) = UPPER(tc.ticker))
-      AND NOT EXISTS (
-        SELECT 1 FROM management_commitments mc WHERE UPPER(mc.ticker) = UPPER(tc.ticker)
-      )
-    )
+    OR {commitments_pending}
   )
 ORDER BY tc.added_at, tc.ticker
 """
+
+
+def _scan_log_exists(conn: sqlite3.Connection) -> bool:
+    """True when the commitment_scan_log table (migration 0129) exists.
+    Selection degrades gracefully on a pre-0129 DB, matching the extractor's
+    scan_log_available: every unscanned-looking transcript stays pending."""
+    cur = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'commitment_scan_log'"
+    )
+    return cur.fetchone() is not None
 
 
 def find_pending_tickers(db_path: Path) -> list[tuple[str, str]]:
     """Return [(ticker, pending_reason), ...] for every P+W ticker still missing onboard data."""
     conn = open_db(db_path)
     try:
-        cur = conn.execute(_PENDING_SQL)
+        cur = conn.execute(_pending_sql(_scan_log_exists(conn)))
         return [(row["ticker"], row["pending_reason"]) for row in cur.fetchall()]
     finally:
         conn.close()
