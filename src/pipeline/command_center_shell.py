@@ -1146,6 +1146,10 @@ td { padding: 8px 10px; border-bottom: 1px solid var(--hairline); vertical-align
 tbody tr:hover td { background: var(--paper); }
 td.num { text-align: right; }
 td.muted { color: var(--muted-2); }
+/* Shared green/red number cell for COMPOSED fragments that carry no controls_css
+   of their own (portfolio_panel's `<td class="num pos">`, its _kpi_card tones):
+   this is load-bearing shell infrastructure, NOT the per-surface duplication the
+   k-num-pos/-neg kit primitive replaced. Kept deliberately. */
 td.pos { color: var(--ok); }
 td.neg { color: var(--bad); }
 .ticker-link { color: var(--fg); text-decoration: none; font-weight: 600; }
@@ -1208,6 +1212,11 @@ code { font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }
 .kpi-card.tone-warn { border-left: 3px solid var(--warn); }
 .kpi-card.tone-bad { border-left: 3px solid var(--bad); }
 .kpi-card.tone-muted { border-left: 3px solid var(--muted-2); }
+/* Load-bearing compound for COMPOSED fragments (portfolio_panel's _kpi_card
+   tone="pos"/"neg"): the value takes green/red, overriding .kpi-value's own
+   `color: var(--fg)` below — a plain k-num-pos on the value can't win that
+   same-specificity cascade. Kept per design_language §4 (load-bearing → keep
+   the surface rule); NOT the number-text duplication k-num-pos/-neg replaced. */
 .kpi-card.pos .kpi-value { color: var(--ok); }
 .kpi-card.neg .kpi-value { color: var(--bad); }
 .kpi-label { font-size: var(--fs-caption); color: var(--muted); letter-spacing: 0.06em;

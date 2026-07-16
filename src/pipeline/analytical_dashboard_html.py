@@ -657,9 +657,9 @@ def _predictions_section(rows: list[PredictionOutcomeRow]) -> str:
                 f'<td><a href="../research/{escape(ticker)}/" class="ticker-link">{escape(ticker)}</a></td>'
                 f"<td>{escape(source_kind)}</td>"
                 f'<td class="num muted">{outcomes.get("pending", 0)}</td>'
-                f'<td class="num pos">{outcomes.get("met", 0)}</td>'
+                f'<td class="num k-num-pos">{outcomes.get("met", 0)}</td>'
                 f'<td class="num">{outcomes.get("mixed", 0)}</td>'
-                f'<td class="num neg">{outcomes.get("missed", 0)}</td>'
+                f'<td class="num k-num-neg">{outcomes.get("missed", 0)}</td>'
                 f'<td class="num">{hit_rate}</td>'
                 "</tr>"
             )
@@ -698,8 +698,6 @@ _PAGE_HEAD = (
   tbody tr:hover td {{ background: var(--paper); }}
   td.num {{ text-align: right; }}
   td.muted {{ color: var(--muted-2); }}
-  td.pos {{ color: var(--ok); }}
-  td.neg {{ color: var(--bad); }}
   .ticker-link {{ color: var(--fg); text-decoration: none; font-weight: 600; transition: color var(--transition); }}
   .ticker-link:hover {{ color: var(--accent); }}
   tr.tone-sell {{ background: color-mix(in srgb, var(--bad) 6%, transparent); }}

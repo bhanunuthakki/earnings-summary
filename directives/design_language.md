@@ -193,6 +193,17 @@ four duplicated dot-tone systems (`.dot-*` / `.fdot-*` / `.ch-dot-*` /
 `.cc-system-dot-*`); a surface that needs a bespoke neutral shade sets a local
 `color` on the same `.k-dot`.
 
+Green/red number text: `.k-num-pos` / `.k-num-neg` → `--ok` / `--bad`. The one
+positive/negative NUMBER-text tone for dashboard/pipeline surfaces — P&L cells,
+deltas, alpha. THE home for the green/red numeric color those surfaces
+duplicated as `td.pos`/`span.pos`/`.sk-val.pos` etc.; in a compound class keep
+the layout token and swap only `pos`/`neg` (e.g. `class="sk-val pos"` →
+`class="sk-val k-num-pos"`). Status green/red **only** — the report renderers
+(`src/report/renderers/**`) keep their **local** `.pos`/`.neg`, where the class
+is semantically overloaded and sometimes means accent-wayfinding
+(`--accent`/`--muted`), not green/red. That report-local meaning is a separate
+concern and deliberately stays out of the kit; do not migrate it.
+
 Menus/popovers: `.k-menu` (+ `li.sel`) for any floating list (combobox
 results, palettes).
 
