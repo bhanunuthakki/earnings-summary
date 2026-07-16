@@ -77,7 +77,7 @@ import sqlite3
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from enum import StrEnum
 from pathlib import Path
 from typing import cast
@@ -462,7 +462,7 @@ def main() -> int:
     # traceback. run_id keeps the second-resolution stamp (human-readable,
     # unaffected) — only the log filename needs the extra entropy.
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    log_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    log_stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     log_path = _LOG_DIR / f"onboard_pending_{log_stamp}.log"
 
     pending_all = find_pending_tickers(Path(args.db))
