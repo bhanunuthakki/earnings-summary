@@ -950,7 +950,6 @@ _ONMYMIND_JS = """<script>(function(){
           if(res.removed){ if(card.parentNode){ card.parentNode.removeChild(card); } return; }
           var badge=card.querySelector('.om-ladder');
           if(badge){ badge.textContent=res.ladder_label||''; }
-          if(res.thread_url){ window.open(res.thread_url,'_blank','noopener'); }
         })
         .catch(function(){ act.disabled=false; });
       return;
@@ -1380,7 +1379,7 @@ _JUMP_NAV_JS = """
 """.strip()
 
 
-def _jump_chip_toolbar(counts: dict[str, int], *, onmymind_on: bool) -> str:
+def _jump_chips(counts: dict[str, int], *, onmymind_on: bool) -> str:
     # A jump chip must point at a section that actually renders — a chip to a
     # suppressed section is the broken doorway the audit fought. When On My Mind
     # is off, that section is empty and the plain Musings list is the front feed,
@@ -1390,17 +1389,34 @@ def _jump_chip_toolbar(counts: dict[str, int], *, onmymind_on: bool) -> str:
     ]
     if not onmymind_on:
         sections.append(("musings", "Musings"))
-    chips = "".join(
+    return "".join(
         f'<button type="button" class="k-chip k-chip-btn" data-ledger-jump="ledger-jump-{anchor}">'
         f"{escape(label)}"
         + (f' <span class="k-chip-mono">{counts[anchor]}</span>' if counts.get(anchor) else "")
         + "</button>"
         for anchor, label in sections
     )
+
+
+def _jump_chip_toolbar(counts: dict[str, int], *, onmymind_on: bool) -> str:
+    chips = _jump_chips(counts, onmymind_on=onmymind_on)
     return f'<div class="ledger-jump-toolbar">{chips}</div><script>{_JUMP_NAV_JS}</script>'
 
 
-def render_ledger_panel(db_path: Path | str | None, *, user_id: str = DEFAULT_USER_ID) -> str:
+def render_ledger_jump_chips(db_path: Path | str | None) -> str:
+    """The feed's jump chips + their nav listener, bare (no toolbar wrapper),
+    for the composite Ledger console's merged band (``render_ledger_console``
+    passes them as ``extra_nav`` and calls the feed ``embedded=True`` so the
+    chips render exactly once). Same chips, counts, and ``data-ledger-jump``
+    contract as the standalone panel's own toolbar."""
+    counts = _jump_chip_counts(db_path)
+    chips = _jump_chips(counts, onmymind_on=onmymind_enabled())
+    return f"{chips}<script>{_JUMP_NAV_JS}</script>"
+
+
+def render_ledger_panel(
+    db_path: Path | str | None, *, user_id: str = DEFAULT_USER_ID, embedded: bool = False
+) -> str:
     """The Ledger tab: capture box + newest-first musings.
 
     When ``LEDGER_ONMYMIND`` is on, the On My Mind feed (musings + readings, with
@@ -1411,6 +1427,13 @@ def render_ledger_panel(db_path: Path | str | None, *, user_id: str = DEFAULT_US
     anchor div (never an href hash; see ``_JUMP_NAV_JS``) and carries a pending
     count where a queue exists (Research / Reconcile / Worldview), reusing
     ``pipeline.open_loops``'s own cheap queries rather than duplicating SQL.
+
+    ``embedded=True`` suppresses that internal toolbar: inside the composite
+    Ledger console the band already carries the same chips
+    (``render_ledger_jump_chips`` via ``render_console``'s ``extra_nav``), and
+    two stacked chip bands were exactly the double-chrome the Phase-5 verifier
+    flagged. Standalone rendering (``/api/panel/musings`` fragments, the legacy
+    non-console path) is unchanged by the default.
     """
     onmymind = _onmymind_section(db_path, user_id=user_id)
     # On My Mind is the broader feed (readings too, + the ladder); when it's live
@@ -1468,7 +1491,7 @@ def render_ledger_panel(db_path: Path | str | None, *, user_id: str = DEFAULT_US
         _PANEL_STYLE
         + f'<section class="panel">{h2}'
         + panel_sub
-        + _jump_chip_toolbar(counts, onmymind_on=bool(onmymind))
+        + ("" if embedded else _jump_chip_toolbar(counts, onmymind_on=bool(onmymind)))
         + f'<div id="ledger-jump-capture">{_capture_box()}</div>'
         + f'<div id="ledger-jump-onmymind">{onmymind}</div>'
         + f'<div id="ledger-jump-musings">{musings_block}</div>'

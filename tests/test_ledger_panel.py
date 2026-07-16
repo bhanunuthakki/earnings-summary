@@ -185,3 +185,61 @@ def test_jump_toolbar_has_no_dead_onmymind_chip_when_flag_off() -> None:
     on = _jump_chip_toolbar({}, onmymind_on=True)
     assert "ledger-jump-onmymind" in on
     assert "ledger-jump-musings" not in on
+
+
+def test_ledger_console_renders_one_merged_nav_band(db_path: Path) -> None:
+    """Phase-5 verifier fix 3: the Ledger console rendered TWO stacked chrome
+    bands — the console's jump band over the feed's own chip toolbar, with a
+    'Ledger' chip directly above an identical <h2>Ledger</h2>. Now ONE merged
+    band: the console band carries the feed's chips (extra_nav), the feed
+    renders embedded (internal toolbar suppressed), and the redundant Ledger
+    chip is dropped while Triage + Journal chips stay."""
+    from pipeline.ledger_console_panel import render_ledger_console
+
+    html = render_ledger_console(db_path)
+    assert "This section failed to render" not in html
+    # The feed's chips appear exactly once — in the console band, not a second
+    # internal toolbar.
+    assert html.count('data-ledger-jump="ledger-jump-capture"') == 1
+    assert 'class="ledger-jump-toolbar"' not in html
+    # The redundant 'Ledger' console chip is gone (its <h2> sits right below);
+    # Triage + Journal console chips stay.
+    assert 'data-console-jump="csec-feed"' not in html
+    assert 'data-console-jump="csec-triage"' in html
+    assert 'data-console-jump="csec-journal"' in html
+    # Band order follows page order: feed chips lead, console chips follow.
+    assert html.index('data-ledger-jump="ledger-jump-capture"') < html.index(
+        'data-console-jump="csec-triage"'
+    )
+    # The feed's jump targets still exist and the data-ledger-jump listener
+    # (which opens the collapsed Queues block before scrolling) still ships.
+    assert 'id="ledger-jump-capture"' in html
+    assert 'id="ledger-jump-research"' in html
+    assert "__ledgerJumpNav" in html
+    # Exactly one Ledger title on the page (the feed's own <h2>).
+    assert html.count(">Ledger</h2>") == 1
+
+
+def test_standalone_ledger_panel_keeps_its_internal_toolbar(db_path: Path) -> None:
+    """The legacy non-console rendering is unchanged by the embedded seam:
+    the default (embedded=False) still carries the internal chip toolbar."""
+    html = render_ledger_panel(db_path)
+    assert 'class="ledger-jump-toolbar"' in html
+    assert 'data-ledger-jump="ledger-jump-capture"' in html
+    # Embedded mode suppresses ONLY the toolbar; the sections stay.
+    embedded = render_ledger_panel(db_path, embedded=True)
+    assert 'class="ledger-jump-toolbar"' not in embedded
+    assert 'id="ledger-jump-capture"' in embedded
+
+
+def test_onmymind_js_has_no_dead_discuss_popup_branch() -> None:
+    """Phase-5 verifier fix 6: no web button emits data-om-verb="discuss"
+    anymore (Discuss is the inline-chat data-om-ask path), so the old
+    window.open(thread_url) branch was unreachable from the web. The
+    server-side discuss verb stays — Telegram uses it."""
+    from pipeline.ledger_panel import (
+        _ONMYMIND_JS,  # pyright: ignore[reportPrivateUsage]  # dead-branch regression guard
+    )
+
+    assert "thread_url" not in _ONMYMIND_JS
+    assert "window.open" not in _ONMYMIND_JS

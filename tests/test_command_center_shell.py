@@ -10,6 +10,7 @@ legacy-hash + section-alias redirects, the Ctrl+K palette chrome).
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -220,6 +221,87 @@ def test_review_section_collapses_to_the_ledger_console() -> None:
     # Companies keeps exactly its company-shaped sub-tabs.
     for pid in ("holding", "discovery", "diet"):
         assert f'data-tab-target="{pid}" data-cc-theme="companies"' in html
+
+
+def _shell_js_array(name: str) -> str:
+    """The literal body of a ``var <name> = [...]``/``{...}`` block in SHELL_JS."""
+    m = re.search(rf"var {name} = [\[{{](.*?)[\]}}];", SHELL_JS, re.S)
+    assert m, f"SHELL_JS lost its {name} block"
+    return m.group(1)
+
+
+def test_palette_aliases_cover_every_collapsed_subtab_name() -> None:
+    """Phase-5 verifier fix 1: the composite consoles collapsed 10 sub-tab names
+    out of the ⌘K palette's searchable corpus (its labels came only from live
+    buttons). PALETTE_ALIASES restores each as a palette entry that runs the OLD
+    panel id — which flows through REDIRECTS (landing the composite) and ANCHORS
+    (scrolling to the section)."""
+    body = _shell_js_array("PALETTE_ALIASES")
+    entries = re.findall(r"\['([^']+)', '([^']+)', '([^']+)'\]", body)
+    assert {label for label, _, _ in entries} == {
+        "Synthesis",
+        "Performance",
+        "Risk",
+        "Red Team",
+        "Positioning",
+        "Decisions",
+        "Memos",
+        "Triggers",
+        "Triage",
+        "Journal",
+    }
+    for _label, legacy, _hint in entries:
+        # Every alias runs a legacy id the redirect map resolves.
+        assert legacy in _LEGACY_PANEL_REDIRECTS, legacy
+    # palStatic() feeds the aliases into the palette corpus.
+    assert "PALETTE_ALIASES.forEach" in SHELL_JS
+
+
+def test_legacy_deep_links_scroll_to_their_console_section() -> None:
+    """Phase-5 verifier fix 2: an old deep-link (#advisor_memos, #portfolio_risk,
+    …) must land on its SECTION inside the composite console, not the top.
+    onHashChange stashes ANCHORS[legacy] BEFORE the REDIRECTS overwrite discards
+    the legacy id; consumePendingJump() scrolls at every paint point."""
+    body = _shell_js_array("ANCHORS")
+    anchors = dict(re.findall(r"(\w+): '([\w-]+)'", body))
+    assert anchors == {
+        # Portfolio 8→3 + Review 3→1 composites (console_scaffold csec-* ids).
+        "portfolio_synthesis": "csec-synthesis",
+        "portfolio_risk": "csec-risk",
+        "red_team": "csec-red_team",
+        "positioning": "csec-positioning",
+        "portfolio": "csec-performance",
+        "decisions": "csec-decisions",
+        "decisions_record": "csec-decisions",
+        "thesis_ledger": "csec-decisions",
+        "advisor_memos": "csec-memos",
+        "holdings": "csec-triggers",
+        "triggers": "csec-triggers",
+        "triage": "csec-triage",
+        "journal": "csec-journal",
+        # S10 Provenance console (prov-* ids) — same gap, same fix.
+        "section_coverage": "prov-coverage",
+        "ir_coverage": "prov-ir_coverage",
+        "source_calls": "prov-source_calls",
+        "cron_health": "prov-cron_health",
+        "dcf_coverage": "prov-dcf_coverage",
+        "evals": "prov-evals",
+        "validation": "prov-validation",
+        "restatements": "prov-restatements",
+        "model_eval": "prov-model_eval",
+    }
+    # Every ANCHORS key is a legacy id the redirect map also handles (the jump
+    # is a refinement of the redirect, never a replacement for it).
+    for legacy in anchors:
+        assert legacy in _LEGACY_PANEL_REDIRECTS, legacy
+    # The stash is captured BEFORE the redirect overwrites the parsed panel id.
+    stash = SHELL_JS.index("window.__ccPendingJump = ANCHORS[p.panel]")
+    redirect = SHELL_JS.index("if (REDIRECTS[p.panel])")
+    assert stash < redirect
+    # Consumed at the paint points (cached + both fresh-inject branches in
+    # loadBody) plus immediately after activation for already-loaded panels.
+    assert SHELL_JS.count("consumePendingJump()") >= 4
+    assert "scrollIntoView({ behavior: 'smooth', block: 'start' })" in SHELL_JS
 
 
 # ---------------------------------------------------------------------------

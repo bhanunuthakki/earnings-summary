@@ -1654,6 +1654,76 @@ SHELL_JS = r"""
   // deep-links also auto-open the drawer after landing on Governance.
   var DRAWER_OPENERS = { budget: 1, actions: 1 };
 
+  // Where inside its composite console a collapsed panel id used to live:
+  // legacy id -> the console's section-anchor id (csec-* from
+  // console_scaffold, prov-* from the S10 Provenance console). onHashChange
+  // stashes the target BEFORE the REDIRECTS overwrite discards the legacy id;
+  // consumePendingJump() scrolls to it once the composite is painted, so an
+  // old deep-link (e.g. href="#advisor_memos") lands on its SECTION instead
+  // of the composite's top.
+  var ANCHORS = {
+    portfolio_synthesis: 'csec-synthesis',
+    portfolio_risk: 'csec-risk',
+    red_team: 'csec-red_team',
+    positioning: 'csec-positioning',
+    portfolio: 'csec-performance',
+    decisions: 'csec-decisions',
+    decisions_record: 'csec-decisions',
+    thesis_ledger: 'csec-decisions',
+    advisor_memos: 'csec-memos',
+    holdings: 'csec-triggers',
+    triggers: 'csec-triggers',
+    triage: 'csec-triage',
+    journal: 'csec-journal',
+    // S10 Provenance console — the same pre-existing gap, same anchor scheme
+    // (each collapsed diagnostics id maps to its prov-<anchor> section div).
+    section_coverage: 'prov-coverage',
+    ir_coverage: 'prov-ir_coverage',
+    source_calls: 'prov-source_calls',
+    cron_health: 'prov-cron_health',
+    dcf_coverage: 'prov-dcf_coverage',
+    evals: 'prov-evals',
+    validation: 'prov-validation',
+    restatements: 'prov-restatements',
+    model_eval: 'prov-model_eval'
+  };
+
+  // The 10 collapsed sub-tab names stay searchable in the ⌘K palette (post-P5
+  // the sub-tab buttons only say Overview/Health/Allocation/… so "Risk",
+  // "Memos", "Journal" … matched NOTHING). Each alias runs its OLD panel id:
+  // REDIRECTS lands the composite console, ANCHORS scrolls to the section.
+  // [label, legacy panel id, palette hint].
+  var PALETTE_ALIASES = [
+    ['Synthesis', 'portfolio_synthesis', 'Portfolio · Health'],
+    ['Risk', 'portfolio_risk', 'Portfolio · Health'],
+    ['Red Team', 'red_team', 'Portfolio · Health'],
+    ['Positioning', 'positioning', 'Portfolio · Allocation'],
+    ['Performance', 'portfolio', 'Portfolio · Allocation'],
+    ['Decisions', 'decisions_record', 'Portfolio · Record'],
+    ['Memos', 'advisor_memos', 'Portfolio · Record'],
+    ['Triggers', 'triggers', 'Portfolio · Record'],
+    ['Triage', 'triage', 'Review · Ledger'],
+    ['Journal', 'journal', 'Review · Ledger']
+  ];
+
+  // Consume a pending legacy-deep-link jump (see ANCHORS): scroll the painted
+  // composite to the section the OLD panel id named. Called at every paint
+  // point in loadBody (the section isn't in the DOM before the fragment
+  // lands) and right after activation for already-loaded composites. A target
+  // inside a collapsed <details> (the Ledger's Queues block) is opened first
+  // so scrollIntoView never aims at a hidden element. The stash survives
+  // paints that don't contain the target and is reset on every hash change.
+  function consumePendingJump() {
+    var id = window.__ccPendingJump;
+    if (!id) return;
+    var el = document.getElementById(id);
+    if (!el) return;
+    window.__ccPendingJump = null;
+    var d = el.closest ? el.closest('details') : null;
+    if (d && !d.open) d.open = true;
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   // ----- Accessibility helpers -----
   var liveRegion = document.getElementById('cc-live');
   function announce(msg) {
@@ -1870,6 +1940,7 @@ SHELL_JS = r"""
       var paintMs = performance.now() - t0;
       served = (Date.now() - (cached.ts || 0) < FRESH_MS) ? 'prefetch' : 'swr';
       record(pid, served, null, paintMs, paintMs, 200);
+      consumePendingJump();  // cached paint — the legacy deep-link's section exists now
       if (served === 'prefetch') return;  // just fetched — skip revalidation
     } else {
       body.innerHTML = skelFor(pid);
@@ -1901,12 +1972,14 @@ SHELL_JS = r"""
         window.scrollTo(0, y);
         body.scrollTop = st;
         record(pid, 'revalidate', fetchMs, performance.now() - tR, fetchMs + (performance.now() - tR), 200);
+        consumePendingJump();  // fresh inject — the legacy deep-link's section exists now
       } else {
         var tR2 = performance.now();
         injectHtml(body, res.html);
         panel.setAttribute('data-current-ticker', ticker || '');
         record(pid, 'cold', fetchMs, performance.now() - tR2, performance.now() - t0, 200);
         announce((pid || 'panel') + ' ready');
+        consumePendingJump();  // cold paint — the legacy deep-link's section exists now
       }
       cacheSet(key, entry);
     }).catch(function (e) {
@@ -2062,8 +2135,14 @@ SHELL_JS = r"""
     closeHover();
     var p = parseHash();
     var wasDrawerPanel = !!DRAWER_OPENERS[p.panel];
+    // Stash the legacy id's section target BEFORE the redirect discards it
+    // (also resets any stale pending jump on every ordinary hash change).
+    window.__ccPendingJump = ANCHORS[p.panel] || null;
     if (REDIRECTS[p.panel]) { p = { panel: REDIRECTS[p.panel], ticker: null }; }
     activate(p.panel, p.ticker);
+    // Composite already painted (data-loaded panels repaint nothing): no
+    // loadBody paint point will fire, so consume the jump right here.
+    consumePendingJump();
     if (wasDrawerPanel) openDrawer();
   }
 
@@ -2231,6 +2310,11 @@ SHELL_JS = r"""
         hint: t.getAttribute('data-cc-theme'),
         run: goHash(t.getAttribute('data-tab-target'))
       });
+    });
+    // The collapsed Phase-5 sub-tab names (Risk, Memos, Journal, …) — no
+    // button carries them anymore, so they alias in here (see PALETTE_ALIASES).
+    PALETTE_ALIASES.forEach(function (a) {
+      items.push({ label: a[0], hint: a[2], run: goHash(a[1]) });
     });
     items.push({ label: 'Settings & maintenance', hint: 'drawer', run: openDrawer });
     items.push({ label: 'Alert feed', hint: 'page', run: goUrl('/feed') });

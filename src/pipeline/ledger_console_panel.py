@@ -26,14 +26,27 @@ from pipeline.console_scaffold import ConsoleSection, render_console
 def render_ledger_console(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
     """Review → Ledger: the capture-and-disposition console. Composes the Ledger
     capture feed (landing), the parked-comment Triage queue, and the analyst
-    Journal lifecycle — three lenses over ``analyst_notes`` on one page."""
+    Journal lifecycle — three lenses over ``analyst_notes`` on one page.
+
+    ONE merged nav band (Phase-5 verifier: double-chrome): the feed renders
+    ``embedded`` (its internal chip toolbar suppressed) and contributes its six
+    jump chips to the console band via ``extra_nav`` — ``data-ledger-jump``
+    behavior included, since the chips ship with their own nav listener. The
+    feed's own "Ledger" chip is dropped from the band (``nav_exclude``): its
+    ``<h2>Ledger</h2>`` sits directly below; Triage + Journal chips stay."""
     from pipeline.journal_panel import render_journal_panel
-    from pipeline.ledger_panel import render_ledger_panel
+    from pipeline.ledger_panel import render_ledger_jump_chips, render_ledger_panel
     from pipeline.triage_panel import render_triage_panel
 
     sections: list[ConsoleSection] = [
-        ("feed", "Ledger", lambda: render_ledger_panel(db_path, user_id=user_id)),
+        ("feed", "Ledger", lambda: render_ledger_panel(db_path, user_id=user_id, embedded=True)),
         ("triage", "Triage", lambda: render_triage_panel(db_path, user_id=user_id)),
         ("journal", "Journal", lambda: render_journal_panel(db_path, user_id=user_id)),
     ]
-    return render_console("Ledger", sections, wrap_class="ledger-console")
+    return render_console(
+        "Ledger",
+        sections,
+        wrap_class="ledger-console",
+        extra_nav=render_ledger_jump_chips(db_path),
+        nav_exclude=("feed",),
+    )

@@ -440,13 +440,22 @@ _WINDOW_JS = r"""
 """
 
 # One-click tracker start (PR6). Plain string — braces are literal JS.
+# Class-scoped, not id-scoped (Phase-5 verifier): the banner is emitted by BOTH
+# the Synthesis section (Health console) and the Performance section
+# (Allocation console), and with duplicate ids getElementById always resolved
+# the FIRST instance — whichever composite loaded second had a dead Start
+# button. Each run wires every still-unwired banner in the document, each
+# scoped to its own subtree.
 _START_TRACKER_JS = """
 (function () {
-  var btn = document.getElementById('pf-start-tracker');
+  var banners = document.querySelectorAll('.pf-live-offline');
+  Array.prototype.forEach.call(banners, function (banner) { wireBanner(banner); });
+  function wireBanner(banner) {
+  var btn = banner.querySelector('.pf-start-tracker');
   if (!btn || btn.dataset.wired) return;
   btn.dataset.wired = '1';
-  var msg = document.getElementById('pf-start-msg');
-  var log = document.getElementById('pf-start-log');
+  var msg = banner.querySelector('.pf-start-msg');
+  var log = banner.querySelector('.pf-start-log');
   function reinject(target, html) {
     target.innerHTML = html;
     var scripts = target.querySelectorAll('script');
@@ -465,8 +474,7 @@ _START_TRACKER_JS = """
     }
     fetch('/api/panel/portfolio').then(function (r) { return r.text(); }).then(function (html) {
       if (html.indexOf('pf-live-offline') === -1) {
-        var card = document.getElementById('pf-live-offline');
-        var target = card ? card.closest('.cc-panel-body') : null;
+        var target = banner.closest('.cc-panel-body');
         if (target) { reinject(target, html); } else { location.reload(); }
       } else {
         setTimeout(function () { pollPanel(tries - 1); }, 3000);
@@ -507,11 +515,12 @@ _START_TRACKER_JS = """
   btn.addEventListener('click', function () { startTracker(false); });
   // Auto-start when the page opens — the tracker powers the WHOLE portfolio
   // page, so don't make the user hunt for a button. Guarded to fire once per
-  // page load so re-injecting this banner can't spawn a start loop; a hard
-  // failure leaves the manual button to retry.
+  // page load so re-injecting this banner (or a second banner instance) can't
+  // spawn a start loop; a hard failure leaves the manual button to retry.
   if (!window.__pfTrackerAutostart) {
     window.__pfTrackerAutostart = true;
     startTracker(true);
+  }
   }
 })();
 """
@@ -2885,18 +2894,22 @@ def _tracker_offline_banner(live: LivePortfolio) -> str:
     tracker's own venv, from its checkout) and the panel re-fetches itself until
     :8000 answers; the raw requests repr stays in the collapsed details."""
     return (
-        '<section class="panel pf-tracker-banner" id="pf-live-offline">'
+        # Class hooks, not ids (Phase-5 verifier): this banner renders in BOTH
+        # the Health console (Synthesis) and the Allocation console
+        # (Performance); duplicate ids left the second instance's Start button
+        # dead. _START_TRACKER_JS wires every unwired .pf-live-offline subtree.
+        '<section class="panel pf-tracker-banner pf-live-offline">'
         "<h2>Portfolio tracker</h2>"
         '<p class="sub">This whole page reads from the companion portfolio-tracker — '
         "live positions, performance vs benchmarks, risk, and allocation. It isn't "
         "running yet, so there's nothing to show until it starts.</p>"
         f'<p class="muted">{escape(_offline_reason(live.error))}</p>'
         '<div class="pf-tracker-actions">'
-        '<button type="button" class="k-btn k-btn-primary" id="pf-start-tracker">'
+        '<button type="button" class="pf-start-tracker k-btn k-btn-primary">'
         "Start tracker</button>"
-        '<span class="muted" id="pf-start-msg">starting automatically…</span>'
+        '<span class="pf-start-msg muted">starting automatically…</span>'
         "</div>"
-        '<pre id="pf-start-log" class="cli-hint" '
+        '<pre class="pf-start-log cli-hint" '
         'style="display:none; max-height:180px; overflow:auto"></pre>'
         '<details class="offline-tech"><summary>Start it manually · technical detail</summary>'
         '<pre class="cli-hint">cd ../portfolio-tracker &amp;&amp; '

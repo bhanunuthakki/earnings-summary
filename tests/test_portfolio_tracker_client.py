@@ -623,13 +623,46 @@ def test_render_offline_shows_start_hint() -> None:
     )
     assert "isn't running" in html  # humane lede, not a raw requests repr
     assert "uvicorn portfolio_tracker.api.main:app" in html  # the manual hint
-    # PR6: a one-click start button wired to /actions/start-tracker.
-    assert 'id="pf-start-tracker"' in html
+    # PR6: a one-click start button wired to /actions/start-tracker. Class-
+    # scoped (Phase-5 verifier fix 4): the banner renders in BOTH the Health
+    # and Allocation composites, so ids would collide across the document.
+    assert 'class="pf-start-tracker k-btn k-btn-primary"' in html
     assert "/actions/start-tracker" in html
     # The raw error survives, but only inside the collapsed technical details.
     assert "offline-tech" in html
     assert "ConnectionError: nope" in html
     assert "<!doctype" not in html.lower()
+
+
+def test_two_offline_banners_coexist_without_duplicate_ids() -> None:
+    """Phase-5 verifier fix 4: the tracker-offline banner is emitted by BOTH the
+    Synthesis section (Health console) and the Performance section (Allocation
+    console). With id-scoped hooks, getElementById always resolved the FIRST
+    instance, leaving the second console's Start button dead. The hooks are
+    classes now, and the wiring script wires EVERY unwired instance."""
+    import re
+
+    live = LivePortfolio(
+        available=False, api_url="http://localhost:8000", error="ConnectionError: nope"
+    )
+    banner = render_live_portfolio_section(live)
+    # No id-based hooks left on the banner itself.
+    for legacy_id in ("pf-start-tracker", "pf-start-log", "pf-start-msg", "pf-live-offline"):
+        assert f'id="{legacy_id}"' not in banner
+    # Two instances in one document introduce NO duplicate ids at all.
+    doc = banner + banner
+    ids = re.findall(r'id="([^"]+)"', doc)
+    assert len(ids) == len(set(ids)), f"duplicate ids across two banners: {ids}"
+    # Both instances carry a wireable button, scoped per subtree: the script
+    # walks every .pf-live-offline banner and wires its own .pf-start-tracker.
+    assert doc.count('class="pf-start-tracker k-btn k-btn-primary"') == 2
+    assert "querySelectorAll('.pf-live-offline')" in banner
+    assert "banner.querySelector('.pf-start-tracker')" in banner
+    assert "getElementById('pf-start-tracker')" not in banner
+    # The per-button re-wire guard survives (dataset.wired), and the page-level
+    # autostart guard still fires the start exactly once per page load.
+    assert "btn.dataset.wired" in banner
+    assert "window.__pfTrackerAutostart" in banner
 
 
 def test_render_populated_positions_and_taxable() -> None:
@@ -1090,7 +1123,9 @@ def test_compose_page_offline_leads_with_start_banner() -> None:
         available=False, api_url="http://localhost:8000", error="ConnectionError: nope"
     )
     html = compose_portfolio_page(analytics, live)
-    assert 'id="pf-live-offline"' in html and "Start tracker" in html
+    # Class-scoped hook (Phase-5 verifier fix 4 — the banner also renders in
+    # the Health console, so an id would collide across the document).
+    assert "pf-live-offline" in html and "Start tracker" in html
     assert "__pfTrackerAutostart" in html  # auto-starts when the page opens
     assert 'id="pf-window-bar"' not in html  # no chart, so no window controls
     assert html.count("<section") == 1  # just the banner — nothing buried below it
