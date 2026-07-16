@@ -156,6 +156,32 @@ def test_zero_dcf_flags_pending_when_facts_present(db: Path) -> None:
     assert pending == [("BKNG", "no_dcf_run")]
 
 
+def test_etf_with_no_facts_or_dcf_is_not_pending(db: Path) -> None:
+    """ETFs onboard via the published-data lane (N-PORT + issuer overlay), so
+    zero financial_facts / dcf_runs is their steady state — flagging them
+    'no_financial_facts' re-runs the full FMP onboard hourly forever (the
+    2026-07 free-tier quota starvation)."""
+    mod = _load_module()
+    _add_ticker(db, "AVDV", "evaluation", instrument_type="etf", facts=0, dcf=0)
+    assert mod.find_pending_tickers(db) == []
+
+
+def test_etf_missing_instrument_type_still_flags_pending(db: Path) -> None:
+    """The ETF carve-out keys off instrument_type; a NULL there still means the
+    ticker bypassed the auto-onboard hook and must be flagged."""
+    mod = _load_module()
+    _add_ticker(db, "VWO", "evaluation", instrument_type=None, facts=0, dcf=0)
+    assert mod.find_pending_tickers(db) == [("VWO", "no_instrument_type")]
+
+
+def test_etf_with_transcripts_but_no_commitments_is_still_pending(db: Path) -> None:
+    """The carve-out only covers the facts/DCF arms — commitment extraction
+    still applies to anything that has transcripts."""
+    mod = _load_module()
+    _add_ticker(db, "AVUV", "evaluation", instrument_type="etf", facts=0, dcf=0, transcripts=1)
+    assert mod.find_pending_tickers(db) == [("AVUV", "no_commitments")]
+
+
 def test_excludes_index_member_and_none_rows(db: Path) -> None:
     mod = _load_module()
     _add_ticker(db, "AAPL", "index_member", instrument_type=None, facts=0, dcf=0)
