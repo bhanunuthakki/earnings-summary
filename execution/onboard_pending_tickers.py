@@ -123,9 +123,16 @@ SELECT
   tc.ticker,
   CASE
     WHEN tc.instrument_type IS NULL THEN 'no_instrument_type'
-    WHEN (SELECT COUNT(*) FROM financial_facts ff WHERE UPPER(ff.ticker) = UPPER(tc.ticker)) = 0
+    -- ETFs have no FMP financial statements and no DCF by design (they onboard
+    -- via the published-data lane: N-PORT + issuer overlay — src/etf_sources/).
+    -- Without this guard an evaluation ETF is eternally 'no_financial_facts'
+    -- and re-runs the full ~40-endpoint FMP onboard every hour, forever —
+    -- the 2026-07 free-tier quota starvation.
+    WHEN tc.instrument_type != 'etf'
+         AND (SELECT COUNT(*) FROM financial_facts ff WHERE UPPER(ff.ticker) = UPPER(tc.ticker)) = 0
       THEN 'no_financial_facts'
-    WHEN (SELECT COUNT(*) FROM dcf_runs d WHERE UPPER(d.ticker) = UPPER(tc.ticker)) = 0
+    WHEN tc.instrument_type != 'etf'
+         AND (SELECT COUNT(*) FROM dcf_runs d WHERE UPPER(d.ticker) = UPPER(tc.ticker)) = 0
       THEN 'no_dcf_run'
     WHEN EXISTS (SELECT 1 FROM transcripts t WHERE UPPER(t.ticker) = UPPER(tc.ticker))
          AND NOT EXISTS (
@@ -138,8 +145,14 @@ FROM tracked_companies tc
 WHERE tc.list_type IN {db.ACTIVE_LIST_TYPES_SQL}
   AND (
     tc.instrument_type IS NULL
-    OR (SELECT COUNT(*) FROM financial_facts ff WHERE UPPER(ff.ticker) = UPPER(tc.ticker)) = 0
-    OR (SELECT COUNT(*) FROM dcf_runs d WHERE UPPER(d.ticker) = UPPER(tc.ticker)) = 0
+    OR (
+      tc.instrument_type != 'etf'
+      AND (SELECT COUNT(*) FROM financial_facts ff WHERE UPPER(ff.ticker) = UPPER(tc.ticker)) = 0
+    )
+    OR (
+      tc.instrument_type != 'etf'
+      AND (SELECT COUNT(*) FROM dcf_runs d WHERE UPPER(d.ticker) = UPPER(tc.ticker)) = 0
+    )
     OR (
       EXISTS (SELECT 1 FROM transcripts t WHERE UPPER(t.ticker) = UPPER(tc.ticker))
       AND NOT EXISTS (
