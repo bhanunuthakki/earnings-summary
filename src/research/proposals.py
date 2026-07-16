@@ -33,6 +33,9 @@ TASK_STATUSES: tuple[str, ...] = (
     "approved",
     "rejected",
     "superseded",
+    # Swept by execution/expire_stale_research.py: a 'proposed' wondering nobody
+    # ran for N days leaves the queue so pending counts stay trustworthy.
+    "expired",
 )
 PROPOSAL_VERBS: tuple[str, ...] = ("approve", "further", "steer", "reject")
 

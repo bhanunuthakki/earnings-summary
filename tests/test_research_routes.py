@@ -85,15 +85,48 @@ def test_research_run_disabled_by_default(ctx, monkeypatch: pytest.MonkeyPatch) 
     assert resp.status_code == 403
 
 
-def test_research_run_enabled_invokes_engine(ctx, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_research_run_enabled_invokes_engine_async(ctx, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The run route returns immediately ({started: true}) and drives the
+    engine on a background thread — the engine took seconds-to-minutes inline,
+    which pinned the request (and the 'Research it' button) for that window."""
+    import threading as _threading
+
     client, _db, task_id, _pid = ctx
     monkeypatch.setenv("LEDGER_RESEARCH_RUN", "1")
     import research.run as run_mod
 
-    monkeypatch.setattr(run_mod, "run_research_task", lambda tid, **kw: 4242)
+    ran = _threading.Event()
+    seen: list[int] = []
+
+    def _fake_run(tid: int, **kw: object) -> int:
+        seen.append(tid)
+        ran.set()
+        return 4242
+
+    monkeypatch.setattr(run_mod, "run_research_task", _fake_run)
     resp = client.post(f"/api/research/task/{task_id}/run")
     assert resp.status_code == 200
-    assert resp.get_json()["proposal_id"] == 4242
+    assert resp.get_json() == {"started": True}
+    assert ran.wait(timeout=5), "background research thread never ran"
+    assert seen == [task_id]
+
+
+def test_research_run_conflict_when_not_proposed(ctx, monkeypatch: pytest.MonkeyPatch) -> None:
+    from research.proposals import set_task_status
+
+    client, db, task_id, _pid = ctx
+    monkeypatch.setenv("LEDGER_RESEARCH_RUN", "1")
+    set_task_status(task_id, "drafted", db_path=db)
+    resp = client.post(f"/api/research/task/{task_id}/run")
+    assert resp.status_code == 409
+
+
+def test_research_task_status_endpoint(ctx) -> None:
+    client, _db, task_id, _pid = ctx
+    resp = client.get(f"/api/research/task/{task_id}/status")
+    assert resp.status_code == 200
+    assert resp.get_json() == {"status": "proposed"}
+    assert client.get("/api/research/task/999999/status").status_code == 404
 
 
 def test_approve_action_flips_status_inert(ctx) -> None:

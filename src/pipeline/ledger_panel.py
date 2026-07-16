@@ -174,6 +174,33 @@ _CAPTURE_JS = """<script>(function(){
     });
   }
 
+  // Patch one feed card in place from the server (fragment=card) — used to
+  // paint the freshly-captured card and, later, to swap the "Answering..."
+  // block for the stored answer once the background answer lands.
+  function patchCard(id){
+    fetch('/api/panel/musings?fragment=card&note='+encodeURIComponent(id))
+      .then(function(r){ return r.ok ? r.text() : ''; })
+      .then(function(h){
+        var cur=document.getElementById('om-note-'+id);
+        if(cur && h){ cur.outerHTML=h; }
+      });
+  }
+  // The answer is generated on a background thread server-side (the capture
+  // POST returns immediately); poll the note until the answer (or a cleared
+  // pending flag) arrives, then repaint just that card. ~60s cap.
+  function pollAnswer(id, n){
+    if(n>24){ patchCard(id); return; }
+    setTimeout(function(){
+      fetch('/api/onmymind/'+id+'/answer')
+        .then(function(r){ return r.json(); })
+        .then(function(res){
+          if(res && res.pending && !res.answer){ pollAnswer(id, n+1); return; }
+          patchCard(id);
+          if(st && res && res.answer){ st.textContent='Answered'; setTimeout(function(){ st.textContent=''; },4000); }
+        })
+        .catch(function(){ pollAnswer(id, n+1); });
+    }, 2500);
+  }
   function send(){
     var text=(ta.value||'').trim();
     if(!text){ ta.focus(); return; }
@@ -184,16 +211,31 @@ _CAPTURE_JS = """<script>(function(){
         ta.value='';
         if(res && (res.pledge_challenge || res.annotated_decision_id)){
           renderCoach(res);
-        } else if(res && res.answer){
-          if(st){ st.textContent='Answered'; }
+        } else if(res && (res.answer || res.answering)){
+          if(st){ st.textContent=res.answer?'Answered':'Captured - answering...'; }
         } else {
           var tag = (res && res.ticker) ? (' - '+res.ticker) : ((res && res.needs_ticker) ? ' - needs ticker' : '');
           if(st){ st.textContent='Captured'+tag; }
         }
-        // Refresh whichever feed is mounted: the capture feed (when the flag
-        // is on it replaces the plain Musings list) carries the just-stored
-        // inline answer, so the new card paints its answer without a reload.
+        // Prepend just the new card (fragment=card) instead of repainting the
+        // whole list — a full repaint would destroy any open inline chat on
+        // the cards below. Legacy (flag-off) list keeps its full refresh.
         var om=document.getElementById('onmymind-list');
+        if(om && res && res.note_id){
+          fetch('/api/panel/musings?fragment=card&note='+encodeURIComponent(res.note_id))
+            .then(function(r){ return r.ok ? r.text() : ''; })
+            .then(function(h){
+              if(h){
+                var empty=om.querySelector('.ledger-empty');
+                if(empty){ empty.remove(); }
+                om.insertAdjacentHTML('afterbegin', h);
+              } else {
+                fetch('/api/panel/musings?fragment=onmymind').then(function(r){return r.text();}).then(function(h2){ om.innerHTML=h2; });
+              }
+              if(res.answering){ pollAnswer(res.note_id, 0); }
+            });
+          return;
+        }
         if(om){ fetch('/api/panel/musings?fragment=onmymind').then(function(r){return r.text();}).then(function(h){ om.innerHTML=h; }); return; }
         var list=document.getElementById('ledger-list');
         if(list){ fetch('/api/panel/musings?fragment=list').then(function(r){return r.text();}).then(function(h){ list.innerHTML=h; }); }
@@ -317,13 +359,44 @@ _RESEARCH_JS = """<script>(function(){
     fetch('/api/panel/musings?fragment=research').then(function(r){return r.text();})
       .then(function(h){ var el=document.getElementById('ledger-research'); if(el){ el.outerHTML=h; } });
   }
+  // The run endpoint returns immediately ({started:true}) and researches on a
+  // server thread — poll the task's status until it leaves 'running'. A
+  // finished run shows up in the reloaded fragment; a revert to 'proposed'
+  // means the run failed and was rolled back (retryable).
+  function pollRun(tid, btn, n){
+    if(n>120){ btn.textContent='Still running - check back'; return; }
+    setTimeout(function(){
+      fetch('/api/research/task/'+tid+'/status')
+        .then(function(r){ if(!r.ok){ throw new Error(); } return r.json(); })
+        .then(function(res){
+          var s=res && res.status;
+          if(s==='running'){ pollRun(tid, btn, n+1); return; }
+          if(s==='proposed'){
+            btn.disabled=false; btn.textContent='Research it';
+            btn.title='The run failed and was rolled back - tap to retry.';
+            return;
+          }
+          reload();
+        })
+        .catch(function(){ pollRun(tid, btn, n+1); });
+    }, 5000);
+  }
+  function rowButtons(el){
+    var row=el.closest('.ledger-cap-row');
+    return row ? row.querySelectorAll('button') : [el];
+  }
+  function setRow(el, disabled){
+    var btns=rowButtons(el);
+    for(var i=0;i<btns.length;i++){ btns[i].disabled=disabled; }
+  }
   document.addEventListener('click', function(e){
     var run=e.target.closest('[data-run-task]');
     if(run){
+      var tid=run.getAttribute('data-run-task');
       run.disabled=true; run.textContent='Researching...';
-      fetch('/api/research/task/'+run.getAttribute('data-run-task')+'/run',{method:'POST'})
+      fetch('/api/research/task/'+tid+'/run',{method:'POST'})
         .then(function(r){ if(!r.ok){ throw new Error(); } return r.json(); })
-        .then(function(){ reload(); })
+        .then(function(){ pollRun(tid, run, 0); })
         .catch(function(){ run.disabled=false; run.textContent='Research it'; });
       return;
     }
@@ -342,7 +415,8 @@ _RESEARCH_JS = """<script>(function(){
       // One card per RUN: the button acts on every proposal the run drafted.
       var pids=(act.getAttribute('data-pids')||act.getAttribute('data-pid')||'').split(',');
       if(verb==='steer'){ beginSteer(act, pids); return; }
-      send(pids, verb, {});
+      setRow(act, true);
+      send(pids, verb, {}, act);
       return;
     }
     // Backlink from a research item to the musing that spawned it (owner
@@ -360,10 +434,11 @@ _RESEARCH_JS = """<script>(function(){
       }
     }
   });
-  function send(pids, verb, body){
+  function send(pids, verb, body, src){
     Promise.all(pids.filter(Boolean).map(function(pid){
       return fetch('/api/research/proposal/'+pid+'/'+verb,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    })).then(function(){ reload(); });
+    })).then(function(){ reload(); })
+      .catch(function(){ if(src){ setRow(src, false); } });
   }
   // In-card Steer (PR9, replaces window.prompt): the steering direction is an
   // owner utterance — it gets a real textarea inside the proposal card (the
@@ -390,7 +465,8 @@ _RESEARCH_JS = """<script>(function(){
     ed.querySelector('[data-steer-save]').addEventListener('click', function(){
       var dir=(ta&&ta.value||'').trim();
       if(!dir){ if(ta){ ta.focus(); } return; }
-      send(pids, 'steer', {steer_text: dir});
+      this.disabled=true;
+      send(pids, 'steer', {steer_text: dir}, this);
     });
   }
 })();</script>"""
@@ -646,6 +722,7 @@ _RECONCILE_JS = """<script>(function(){
     body.querySelector('[data-rewrite-save]').addEventListener('click', function(){
       var txt=(ta&&ta.value||'').trim();
       if(!txt){ if(ta){ ta.focus(); } return; }
+      this.disabled=true;
       var recId=card.getAttribute('data-rec-card');
       fetch('/api/reconcile/falsifier/'+recId,
             {method:'POST',headers:{'Content-Type':'application/json'},
@@ -660,9 +737,11 @@ _RECONCILE_JS = """<script>(function(){
   document.addEventListener('click', function(e){
     var v=e.target.closest('[data-rec-verdict]');
     if(v){
+      v.disabled=true;
       fetch('/api/reconcile/'+v.getAttribute('data-rec-kind')+'/'+v.getAttribute('data-rec-id')
             +'/'+v.getAttribute('data-rec-verdict'),{method:'POST'})
-        .then(function(){ reload(); });
+        .then(function(){ reload(); })
+        .catch(function(){ v.disabled=false; });
       return;
     }
     var f=e.target.closest('[data-falsifier-action]');
@@ -673,13 +752,15 @@ _RECONCILE_JS = """<script>(function(){
         if(card){ beginRewrite(card); }
         return;
       }
+      f.disabled=true;
       fetch('/api/reconcile/falsifier/'+f.getAttribute('data-rec-id'),
             {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action})})
         .then(function(r){ return r.json(); })
         .then(function(res){
           if(res && res.receipt){ showReceipt(res.receipt); }
           reload();
-        });
+        })
+        .catch(function(){ f.disabled=false; });
     }
   });
 })();</script>"""
@@ -922,6 +1003,9 @@ _ONMYMIND_STYLE = """<style>
 .om-answer > :first-child { margin-top: 0; }
 .om-answer > :last-child { margin-bottom: 0; }
 .om-answer-label { display: block; font-size: var(--fs-micro); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--sp-1); }
+/* The answer is being generated on a background thread — an honest quiet
+   in-progress state the poll swaps for the real answer when it lands. */
+.om-answer-pending { color: var(--muted); font-style: italic; }
 /* Inline chat (overhaul P3): "Ask more" / "Discuss" expands a real thread with
    the Ask brain right inside the card — no navigation, no popup. Token-only. */
 .om-chat { margin-top: var(--sp-2); border-top: 1px solid var(--hairline); padding-top: var(--sp-2); }
@@ -998,6 +1082,10 @@ _OM_CHAT_JS = """<script>(function(){
     var seededQ=bodyEl?(bodyEl.textContent||'').trim():'';
     var seededA=ansEl?(ansEl.textContent||'').replace(/^\\s*Answer\\s*/,'').trim():'';
     var state={ session_id:null, history:(seededA?[{role:'user',text:seededQ},{role:'assistant',text:seededA}]:[]) };
+    // Streams /api/ask/stream (SSE over a POST body): stage frames narrate the
+    // wait ("answering..."), delta frames paint text as it generates, final
+    // settles the bubble. The buffered /api/ask sibling left the user staring
+    // at a frozen '...' for the whole LLM round-trip — the "stuck button" feel.
     function turn(){
       var q=(input.value||'').trim();
       if(!q){ input.focus(); return; }
@@ -1010,14 +1098,49 @@ _OM_CHAT_JS = """<script>(function(){
       if(ticker){ payload.tickers=[ticker]; }
       if(state.session_id){ payload.session_id=state.session_id; }
       else if(state.history.length){ payload.history=state.history; }
-      fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
-        .then(function(r){ return r.json(); })
-        .then(function(res){
-          pend.remove(); send.disabled=false;
-          var ans=(res && (res.text || res.message)) || 'No answer came back.';
-          thread.insertAdjacentHTML('beforeend', bubble('assistant', ans));
-          if(res && res.session_id){ state.session_id=res.session_id; state.history=[]; }
-          input.focus();
+      var acc=''; var finalText=null; var errText=null;
+      function handle(ev){
+        if(!ev || !ev.type){ return; }
+        if(ev.type==='session'){ if(ev.session_id){ state.session_id=ev.session_id; state.history=[]; } return; }
+        if(ev.type==='stage'){ if(!acc){ pend.textContent=(ev.stage||'working')+'...'; } return; }
+        if(ev.type==='delta' && ev.text){
+          acc+=ev.text;
+          pend.classList.remove('om-chat-pending');
+          pend.innerHTML=esc(acc).replace(/\\n/g,'<br>');
+          return;
+        }
+        if(ev.type==='final'){ finalText=(ev.text||ev.message||acc); return; }
+        if(ev.type==='error'){ errText=ev.error||'Something went wrong.'; return; }
+      }
+      function finish(){
+        send.disabled=false;
+        var out=errText || finalText || acc || 'No answer came back.';
+        pend.remove();
+        thread.insertAdjacentHTML('beforeend', bubble('assistant', out));
+        input.focus();
+      }
+      fetch('/api/ask/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+        .then(function(r){
+          if(!r.ok || !r.body){ throw new Error('bad response'); }
+          var reader=r.body.getReader();
+          var dec=new TextDecoder();
+          var buf='';
+          function pump(){
+            return reader.read().then(function(step){
+              if(step.done){ finish(); return; }
+              buf+=dec.decode(step.value,{stream:true});
+              var idx;
+              while((idx=buf.indexOf('\\n\\n'))!==-1){
+                var frame=buf.slice(0,idx); buf=buf.slice(idx+2);
+                if(frame.indexOf('data: ')!==0){ continue; }
+                var ev=null;
+                try{ ev=JSON.parse(frame.slice(6)); }catch(err){ ev=null; }
+                if(ev){ handle(ev); }
+              }
+              return pump();
+            });
+          }
+          return pump();
         })
         .catch(function(){
           pend.remove(); send.disabled=false;
@@ -1103,10 +1226,17 @@ def _answer_block(ctx: dict[str, object]) -> str:
 
     Generated once at capture time by ``onmymind.respond.answer_capture`` and
     stored on the note (``context['ledger_answer']``); this renders the stored
-    text with NO LLM on the read path. Empty string when the capture wasn't a
-    question (no answer stored)."""
+    text with NO LLM on the read path. While the background answer thread is
+    still working (``ledger_answer_pending``) an honest "Answering…" state
+    renders instead — the capture JS polls and swaps the card when it lands.
+    Empty string when the capture wasn't a question (no answer stored)."""
     ans = ctx.get("ledger_answer")
     if not isinstance(ans, dict):
+        if ctx.get("ledger_answer_pending"):
+            return (
+                '<div class="om-answer om-answer-pending">'
+                '<span class="om-answer-label">Answer</span>Answering…</div>'
+            )
         return ""
     text = str(cast("dict[str, object]", ans).get("text") or "").strip()
     if not text:
@@ -1210,6 +1340,12 @@ def _feed_card(item: FeedItem) -> str:
     )
 
 
+def render_feed_card(item: FeedItem) -> str:
+    """One feed card's HTML — the ``fragment=card`` read behind the card-level
+    refreshes (set-ticker, the freshly-captured prepend, the answer-poll swap)."""
+    return _feed_card(item)
+
+
 def _more_div(next_cursor: str | None) -> str:
     """The keyset 'Load more' control (empty terminal div on the last page)."""
     if not next_cursor:
@@ -1295,10 +1431,20 @@ _SET_TICKER_JS = """<script>(function(){
       headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker:ticker})})
       .then(function(r){ if(!r.ok){ throw new Error(); } return r.json(); })
       .then(function(){
-        // Refresh whichever feed is mounted (onmymind when the flag is on,
-        // else the legacy list) — same dual-target idiom as _CAPTURE_JS.
+        // Patch THIS card in place (fragment=card). A whole-list repaint here
+        // would destroy any open inline chat on a neighboring card. The legacy
+        // (flag-off) list has no per-card fragment — fall back to its refresh.
         var om=document.getElementById('onmymind-list');
-        if(om){ fetch('/api/panel/musings?fragment=onmymind').then(function(r){return r.text();}).then(function(h){ om.innerHTML=h; }); return; }
+        if(om){
+          fetch('/api/panel/musings?fragment=card&note='+encodeURIComponent(noteId))
+            .then(function(r){ return r.ok ? r.text() : ''; })
+            .then(function(h){
+              var cur=document.getElementById('om-note-'+noteId);
+              if(cur && h){ cur.outerHTML=h; return; }
+              fetch('/api/panel/musings?fragment=onmymind').then(function(r){return r.text();}).then(function(h2){ om.innerHTML=h2; });
+            });
+          return;
+        }
         var list=document.getElementById('ledger-list');
         if(list){ fetch('/api/panel/musings?fragment=list').then(function(r){return r.text();}).then(function(h){ list.innerHTML=h; }); }
       })

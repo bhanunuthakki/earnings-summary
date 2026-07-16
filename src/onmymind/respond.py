@@ -21,6 +21,7 @@ returned text. One brain, two mouths — the same discipline that keeps
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -100,6 +101,25 @@ def is_answerable_capture(text: str) -> bool:
     return low.startswith(lead_words)
 
 
+def will_answer(note_id: int, *, db_path: Path | str) -> bool:
+    """Would :func:`answer_capture` attempt an answer for this note? The same
+    gates it applies, evaluated WITHOUT the LLM call — the web route uses this
+    to decide whether to mark the note ``ledger_answer_pending`` and hand the
+    actual answer to a background thread (the capture POST must return in
+    milliseconds, not sit on a multi-second LLM round-trip)."""
+    if not answer_enabled():
+        return False
+    try:
+        note = get_note(note_id, db_path=Path(db_path))
+        if note is None or note.kind not in _ANSWERABLE_KINDS:
+            return False
+        if (note.context or {}).get("needs_ticker"):
+            return False
+        return is_answerable_capture(note.body)
+    except Exception:
+        return False
+
+
 def answer_capture(
     note_id: int,
     *,
@@ -112,6 +132,10 @@ def answer_capture(
     ``None`` when answers are disabled, the note is missing / not answerable, or
     the engine produced nothing. NEVER raises — an answer failure is
     fire-and-forget and must never affect the capture that already landed.
+
+    Always clears ``ledger_answer_pending`` on the way out (set by the web
+    route before it hands this call to a background thread), so a card can
+    never show "Answering…" forever after a failed or empty answer.
     """
     if not answer_enabled():
         return None
@@ -138,14 +162,19 @@ def answer_capture(
         text = str(folded.get("text") or folded.get("message") or "").strip()
         if folded.get("status") != "ok" or not text:
             log.info({"event": "ledger_answer_empty", "note_id": note_id})
+            patch_note_context(note_id, {"ledger_answer_pending": False}, db_path=dbp)
             return None
         patch_note_context(
-            note_id, {"ledger_answer": {"text": text, "status": "ok"}}, db_path=dbp
+            note_id,
+            {"ledger_answer": {"text": text, "status": "ok"}, "ledger_answer_pending": False},
+            db_path=dbp,
         )
         return text
     except Exception:  # an answer must never break capture
         log.warning({"event": "ledger_answer_failed", "note_id": note_id}, exc_info=True)
+        with contextlib.suppress(Exception):
+            patch_note_context(note_id, {"ledger_answer_pending": False}, db_path=Path(db_path))
         return None
 
 
-__all__ = ["answer_capture", "answer_enabled", "is_answerable_capture"]
+__all__ = ["answer_capture", "answer_enabled", "is_answerable_capture", "will_answer"]
