@@ -1891,9 +1891,7 @@ def render_ledger_panel(
         f"{count_badge}"
         '<span class="ledger-queues-hint">research · reconcile · worldview · stances</span>'
         "</summary>"
-        '<div class="ledger-queues-body">'
-        + queues_body
-        + "</div></details>"
+        '<div class="ledger-queues-body">' + queues_body + "</div></details>"
     )
     return (
         _PANEL_STYLE

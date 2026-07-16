@@ -25,12 +25,12 @@ _META_LEAD_RX = re.compile(
     r"""^(?:
         having\s |
         i\s+now\s |
-        i[’']ve\s |
-        i[’']ll\s+now\s |
+        i[\N{RIGHT SINGLE QUOTATION MARK}']ve\s |
+        i[\N{RIGHT SINGLE QUOTATION MARK}']ll\s+now\s |
         i\s+will\s+now\s |
         i\s+have\s+(?:now\s+)?(?:enough|gathered|completed|finished|exhausted|reviewed)\b |
         i\s+am\s+now\s |
-        i[’']m\s+now\s |
+        i[\N{RIGHT SINGLE QUOTATION MARK}']m\s+now\s |
         now\s+(?:that\s+)?i\s |
         writing\s+from\s |
         based\s+on\s+my\s+(?:search|research|review)
@@ -41,7 +41,10 @@ _META_LEAD_RX = re.compile(
 # "Here is the …:" / "Here's the …:" — meta only when the line ENDS with the
 # colon (announcing the artifact), so a sentence merely containing the phrase
 # survives.
-_HERE_IS_RX = re.compile(r"^here[’']?s?\s+(?:is\s+)?(?:the|your|a)\b.*:\s*$", re.IGNORECASE)
+_HERE_IS_RX = re.compile(
+    r"^here[\N{RIGHT SINGLE QUOTATION MARK}']?s?\s+(?:is\s+)?(?:the|your|a)\b.*:\s*$",
+    re.IGNORECASE,
+)
 
 # The meta lead must be short — a real paragraph is content, however it opens.
 _MAX_META_LINES = 2

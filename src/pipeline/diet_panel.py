@@ -158,7 +158,7 @@ def _freshness_line(rows: list[SignalRow]) -> str:
     if age.total_seconds() > _FRESH_MAX_AGE_HOURS * 3600:
         return (
             ' <span class="k-chip k-chip-warn" title="The newest diet signal is '
-            f"{days} days old — the upstream news/grades fetch may have stalled.\">"
+            f'{days} days old — the upstream news/grades fetch may have stalled.">'
             f"{escape(label)}</span>"
         )
     return f' <span class="diet-fresh">{escape(label)}</span>'

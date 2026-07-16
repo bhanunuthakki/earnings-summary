@@ -399,8 +399,9 @@ def test_new_grades_dirty_the_narrative_artifacts(conn: sqlite3.Connection) -> N
             ).fetchall()
         ]
 
-    assert state("ticker='MELI' AND purpose='lens:mgmt_credibility_score' "
-                 "AND superseded_by_id IS NULL") == [(1, "saydo_grades_changed")]
+    assert state(
+        "ticker='MELI' AND purpose='lens:mgmt_credibility_score' AND superseded_by_id IS NULL"
+    ) == [(1, "saydo_grades_changed")]
     assert state("scope='portfolio' AND purpose='lens:cross_portfolio_synthesis'") == [
         (1, "saydo_grades_changed")
     ]

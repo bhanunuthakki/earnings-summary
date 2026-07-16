@@ -164,9 +164,7 @@ def test_strip_renders_compact_rows(db_path: Path) -> None:
     # shell hoists into its collapsed <details> header — count in horizon +
     # the next reporter (ORCL, the soonest row).
     next_md = real.strftime("%m-%d")
-    assert (
-        f'data-up-summary="Upcoming earnings · 2 in 14d — next ORCL {next_md}"' in html
-    )
+    assert f'data-up-summary="Upcoming earnings · 2 in 14d — next ORCL {next_md}"' in html
     # Real calendar date: plain ISO date, no estimate chip on that row.
     assert f'<span class="up-date">{real.isoformat()}</span>' in html
     # Estimate fallback: ~-prefixed date + the est. chip.

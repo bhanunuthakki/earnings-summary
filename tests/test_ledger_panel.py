@@ -307,7 +307,9 @@ def test_incorporated_ladder_badge_is_a_research_doorway(db_path: Path) -> None:
     assert 'class="k-chip k-chip-btn om-ladder"' in html
     assert ">in research</button>" in html
     # A merely-saved musing keeps the inert badge — no doorway.
-    saved = render_feed_card(FeedItem(note=note, item_type="musing", ladder="saved", wondering=None))
+    saved = render_feed_card(
+        FeedItem(note=note, item_type="musing", ladder="saved", wondering=None)
+    )
     assert "data-ledger-jump" not in saved
     assert '<span class="om-ladder">saved</span>' in saved
 

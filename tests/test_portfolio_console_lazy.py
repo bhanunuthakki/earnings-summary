@@ -50,9 +50,7 @@ def test_health_console_defers_risk_and_red_team(tmp_path: Path, probe_down: Non
     assert 'id="csec-risk"' in html and 'id="csec-red_team"' in html
     assert 'data-console-jump="csec-risk"' in html
     # Heavy builders are on-reveal placeholders, not inline sections.
-    assert (
-        'hx-get="/api/panel/portfolio_risk" hx-trigger="revealed" hx-swap="outerHTML"' in html
-    )
+    assert 'hx-get="/api/panel/portfolio_risk" hx-trigger="revealed" hx-swap="outerHTML"' in html
     assert 'hx-get="/api/panel/red_team" hx-trigger="revealed" hx-swap="outerHTML"' in html
     assert html.count('class="cc-loading"') == 2
     # The risk builder itself never ran inline (its signature content is absent).

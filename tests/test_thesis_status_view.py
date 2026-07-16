@@ -166,9 +166,7 @@ def test_embedded_stub_marker_reads_false_innocent_words_do_not(tmp_path: Path) 
     db = tmp_path / "data" / "portfolio.db"
     db.parent.mkdir(parents=True)
     _build_db(db)
-    _seed_thesis_state(
-        db, "EMB", "Real sentence. STUB: needs user-authored thesis", "ok"
-    )
+    _seed_thesis_state(db, "EMB", "Real sentence. STUB: needs user-authored thesis", "ok")
     _seed_thesis_state(
         db, "SBRN", "A stubbornly durable moat; the STUBHUB comp is irrelevant.", "ok"
     )
