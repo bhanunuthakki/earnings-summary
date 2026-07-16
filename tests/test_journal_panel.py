@@ -265,3 +265,22 @@ def test_workspace_sidebar_carries_save_to_journal() -> None:
     assert '<option value="watch">' in html
     assert "/api/notes" in COMMENTS_JS
     assert "Saved to journal" in COMMENTS_JS
+
+
+def test_journal_js_has_no_window_prompt_and_uses_in_card_editor() -> None:
+    """Red-team wave B (B9): a native window.prompt is a blocking, unstyled OS
+    modal that hides the card being edited. The Journal's resolve / rec-resolve
+    / supersede actions must be the in-card textarea editor (the Ledger's
+    Rewrite/Steer idiom); the POST contracts are unchanged. Comments may
+    mention the old idiom; live calls may not."""
+    import inspect
+
+    import pipeline.journal_panel as jp
+
+    src = inspect.getsource(jp)
+    assert "window.prompt(" not in src
+    # The in-card editor: textarea + kit Save/Cancel appended to the card.
+    assert "beginEdit" in src
+    assert "jr-edit-ta" in src
+    # POST contracts unchanged: resolve / supersede still hit /api/notes/<id>/<act>.
+    assert "'/api/notes/' + id + '/' + act" in src

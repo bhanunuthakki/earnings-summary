@@ -269,3 +269,20 @@ def test_route_mirrors_comment_so_resync_does_not_revert(
     assert list_triage_notes(db_path=db_path) == []
     note = get_note(note_id, db_path=db_path)
     assert note is not None and note.kind == "decision"
+
+
+def test_triage_js_has_no_window_prompt_and_uses_in_place_editor() -> None:
+    """Red-team wave B (B9): Triage's Resolve is the in-place row editor
+    (textarea + kit Save/Cancel grown beneath the row / in the drawer), never
+    a blocking window.prompt. POST contract unchanged."""
+    import inspect
+
+    import pipeline.triage_panel as tp
+
+    src = inspect.getsource(tp)
+    assert "window.prompt(" not in src
+    assert "beginResolve" in src
+    assert "tri-resolve-ta" in src
+    assert "data-tri-resolve-save" in src and "data-tri-resolve-cancel" in src
+    # POST contract unchanged.
+    assert "/resolve'" in src
