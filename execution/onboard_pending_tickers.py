@@ -450,8 +450,20 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="[onboard_pending] %(message)s")
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    # Microsecond resolution (not just %Y%m%dT%H%M%SZ) so this stamp can never
+    # collide with cron/run_onboard_pending.bat's independently-computed %TS%
+    # (a separate `Get-Date` call, second resolution only). A same-second
+    # collision makes log_path identical to the .bat's LOGFILE, which cmd.exe
+    # already holds open via `>>` redirect for this whole process — this
+    # script's own `open(log_path, "ab")` in _run_subprocess then hits
+    # PermissionError (Windows sharing violation) and every stage after the
+    # first pending ticker crashes. Confirmed in prod: every hourly run since
+    # 2026-07-16T09:17Z died on the first ticker (FIGR) with exactly this
+    # traceback. run_id keeps the second-resolution stamp (human-readable,
+    # unaffected) — only the log filename needs the extra entropy.
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    log_path = _LOG_DIR / f"onboard_pending_{stamp}.log"
+    log_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    log_path = _LOG_DIR / f"onboard_pending_{log_stamp}.log"
 
     pending_all = find_pending_tickers(Path(args.db))
     # Back recently-IPO'd, near-zero-coverage tickers off to a daily cadence so
