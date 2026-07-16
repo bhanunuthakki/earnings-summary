@@ -303,6 +303,7 @@ class _RunSummary:
     stub_skips: int = 0
     no_candidate_skips: int = 0
     should_fire_skips: int = 0
+    no_material_skips: int = 0
     dry_run_alerts: int = 0
     errors: int = 0
     cost_cap_reached: bool = False
@@ -315,6 +316,25 @@ class _RunSummary:
 # --------------------------------------------------------------------------
 # Per-candidate processing
 # --------------------------------------------------------------------------
+
+
+def _evidence_flags_no_material(evidence_json: str) -> bool:
+    """True when the draft's own evidence says nothing material happened.
+
+    The earnings_tone LLM diff sets ``no_material_shifts_detected: true`` when
+    it found no shift worth flagging; ``draft_actions`` already respects the
+    flag (queues nothing) but the ALERT itself used to persist anyway — a
+    pending card whose memo says "nothing changed". Narrow evidence-flag
+    check, not a trigger-protocol method: any trigger whose evidence carries
+    the same flag gets the same skip.
+    """
+    try:
+        payload = json.loads(evidence_json)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    return payload.get("no_material_shifts_detected") is True
 
 
 def _alert_draft_to_json(draft: AlertDraft) -> dict[str, object]:
@@ -404,6 +424,18 @@ def _process_candidate(
             }
         )
         summary.errors += 1
+        return
+
+    if _evidence_flags_no_material(alert_draft.evidence_json):
+        _emit(
+            {
+                "event": "no_material_shifts_skip",
+                "ticker": ticker,
+                "trigger_kind": trigger.kind,
+                "signature_sha": alert_draft.signature_sha,
+            }
+        )
+        summary.no_material_skips += 1
         return
 
     if dry_run:
@@ -727,6 +759,7 @@ def main(argv: list[str] | None = None) -> int:
                 "stub_skips": summary.stub_skips,
                 "no_candidate_skips": summary.no_candidate_skips,
                 "should_fire_skips": summary.should_fire_skips,
+                "no_material_skips": summary.no_material_skips,
                 "dry_run_alerts": summary.dry_run_alerts,
                 "errors": summary.errors,
                 "cost_cap_reached": summary.cost_cap_reached,

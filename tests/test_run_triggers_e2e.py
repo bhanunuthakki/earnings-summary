@@ -488,6 +488,56 @@ def test_dry_run_persists_nothing(
 
 
 # ---------------------------------------------------------------------------
+# 3b. No-material gate: an earnings_tone draft whose own evidence says
+# nothing material happened must not persist as a pending alert.
+# ---------------------------------------------------------------------------
+
+
+def test_no_material_shifts_alert_not_persisted(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """LLM diff sets no_material_shifts_detected=true → the driver skips the
+    persist (counted as no_material_skips), instead of parking a pending card
+    whose memo says "nothing changed"."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        _ = _seed_five_quarters(conn, ticker="MELI")
+    finally:
+        conn.close()
+
+    monkeypatch.setattr(
+        "triggers.earnings_tone.call_llm", _CountingLLM([_diff_payload(no_shifts=True)])
+    )
+
+    exit_code = run_triggers.main(
+        [
+            "--tickers",
+            "MELI",
+            "--db-path",
+            str(db_path),
+            "--max-cost-usd",
+            "10",
+        ]
+    )
+    assert exit_code == 0
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        alert_count = conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0]
+        action_count = conn.execute("SELECT COUNT(*) FROM queued_actions").fetchone()[0]
+    finally:
+        conn.close()
+    assert alert_count == 0
+    assert action_count == 0
+
+    captured = capsys.readouterr()
+    summary = json.loads(captured.out)
+    assert summary["alerts_fired"] == 0
+    assert summary["no_material_skips"] == 1
+    assert '"event": "no_material_shifts_skip"' in captured.err
+
+
+# ---------------------------------------------------------------------------
 # 4. Per-ticker isolation
 # ---------------------------------------------------------------------------
 

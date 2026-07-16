@@ -45,7 +45,12 @@ from compute.thesis_evaluator import (
     evaluate_rule,
     fetch_kpi_observations,
 )
-from decision_conditions import DecisionCondition, OpenDecision, load_open_decisions
+from decision_conditions import (
+    DecisionCondition,
+    OpenDecision,
+    fetch_financial_history,
+    load_open_decisions,
+)
 from models.facts import Unit
 from models.kpis import BreachStatus
 from triggers.base import (
@@ -61,49 +66,44 @@ log = logging.getLogger(__name__)
 
 _OP_LABELS: dict[str, str] = {"lt": "<", "le": "<=", "gt": ">", "ge": ">="}
 
+# Legacy freshness fallback (conditions stamped before the baseline watermark
+# existed carry no ``baseline_period_end``): a breaching observation older than
+# this many days is history, not news — it must not push-fire. 135 days ≈ one
+# fiscal quarter plus reporting lag, so a genuinely fresh print always passes.
+_LEGACY_FRESHNESS_DAYS = 135
 
-def _fetch_financial_history(
-    conn: sqlite3.Connection,
-    ticker: str,
-    line_item: str,
-    n_periods: int,
-) -> list[KpiObservation] | None:
-    """financial_facts twin of ``fetch_kpi_observations``.
 
-    Line items are already canonical (the extraction prompt copies them
-    verbatim from the ticker's vocabulary), so no resolver pass. Coexisting
-    rows per period dedup to the latest-ingested source (MAX(source_doc_id)),
-    and one observation survives per period_end DATE — a same-date FY/Q4 pair
-    collapses rather than double-counting a consecutive-periods window.
-    Returns None when the line item has no rows at all (unresolvable),
-    matching the kpi fetcher's no-definition signal.
+def _is_portfolio_ticker(conn: sqlite3.Connection, ticker: str) -> bool:
+    """True when the ticker's active tracked_companies row is portfolio-listed.
+
+    Best-effort: a missing table (stripped-down test DB) reads as
+    not-portfolio — the push lane stays quiet rather than guessing.
     """
-    rows = conn.execute(
-        "SELECT ff.period_end, ff.value, ff.unit "
-        "FROM financial_facts ff "
-        "WHERE ff.ticker = ? AND ff.line_item = ? "
-        "  AND ff.id = ("
-        "      SELECT f2.id FROM financial_facts f2 "
-        "      WHERE f2.ticker = ff.ticker AND f2.line_item = ff.line_item "
-        "        AND f2.period_end = ff.period_end "
-        "      ORDER BY f2.source_doc_id DESC, f2.id DESC LIMIT 1) "
-        "ORDER BY ff.period_end DESC LIMIT ?",
-        (ticker.upper(), line_item, n_periods),
-    ).fetchall()
-    if not rows:
-        return None
-    out: list[KpiObservation] = []
-    for row in rows:
-        period = row["period_end"]
-        if isinstance(period, str):
-            period = datetime.fromisoformat(period)
-        try:
-            value = Decimal(str(row["value"]))
-            unit = Unit(row["unit"]) if row["unit"] else Unit.ACTUAL
-        except (InvalidOperation, ValueError):
-            continue
-        out.append(KpiObservation(period_end=period, value=value, unit=unit))
-    return out or None
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM tracked_companies "
+            "WHERE ticker = ? AND list_type = 'portfolio' AND archived_at IS NULL",
+            (ticker.upper(),),
+        ).fetchone()
+    except sqlite3.Error:
+        return False
+    return row is not None
+
+
+def _breach_is_fresh(cond: DecisionCondition, breach_period_end: datetime, now: datetime) -> bool:
+    """The breach-freshness watermark gate (fix for stale-data 'news').
+
+    With a baseline: the breaching observation must be STRICTLY AFTER the
+    latest period already observed when the condition was attached — data
+    that predates the decision can never resurface it. Legacy conditions
+    (no baseline stamped) fall back to requiring the breaching observation
+    to be a fresh print (within ``_LEGACY_FRESHNESS_DAYS`` of now).
+    """
+    breach_date = breach_period_end.date().isoformat()
+    if cond.baseline_period_end:
+        return breach_date > cond.baseline_period_end[:10]
+    age_days = (now - breach_period_end).days
+    return age_days <= _LEGACY_FRESHNESS_DAYS
 
 
 def _condition_rule(decision_id: int, index: int, cond: DecisionCondition) -> BreakRule | None:
@@ -141,16 +141,43 @@ class DecisionConditionTrigger:
 
     def scan(self, ticker: str, db: sqlite3.Connection) -> list[TriggerCandidate]:
         """Evaluate every resolvable condition on the ticker's open decisions;
-        emit a candidate per condition whose status is BREACH."""
+        emit a candidate per condition whose status is BREACH — gated so the
+        PUSH lane only carries breaches worth interrupting the owner for.
+
+        Two gates (alert-quality fix, 2026-07-15; both live here, not in the
+        generic driver — the panels that render armed falsifiers read
+        ``load_open_decisions`` directly and stay ungated):
+
+        - **Relevance**: the decision is owner-authored (their own falsifier —
+          always), or the ticker is an active portfolio holding (an advisor
+          condition guarding money at work). Advisor conditions on
+          evaluation/watchlist names stay evaluable on panels but never page.
+        - **Freshness** (:func:`_breach_is_fresh`): the breaching observation
+          must postdate the condition's attach-time baseline (legacy
+          conditions: must be a recent print) — a condition already breached
+          when it was written is display state, never news.
+        """
         # The driver opens this connection fresh per (ticker, trigger) scan and
         # closes it right after; the fetchers (fetch_kpi_observations and the
-        # local financial one) require Row access, so set it here.
+        # shared financial one) require Row access, so set it here.
         db.row_factory = sqlite3.Row
         ticker = ticker.upper()
         candidates: list[TriggerCandidate] = []
         now = datetime.now(UTC).replace(tzinfo=None)
+        is_portfolio = _is_portfolio_ticker(db, ticker)
 
         for decision in load_open_decisions(db, ticker):
+            if decision.decided_by != "owner" and not is_portfolio:
+                log.info(
+                    {
+                        "event": "decision_condition_push_gated",
+                        "ticker": ticker,
+                        "decision_id": decision.decision_id,
+                        "decided_by": decision.decided_by,
+                        "reason": "advisor decision on a non-portfolio name",
+                    }
+                )
+                continue
             for index, cond in enumerate(decision.conditions):
                 if cond.metric_source not in ("kpi", "financial"):
                     continue  # unresolved at extraction — display-only
@@ -160,13 +187,25 @@ class DecisionConditionTrigger:
                 if cond.metric_source == "kpi":
                     observations = fetch_kpi_observations(db, ticker, cond.metric, cond.for_periods)
                 else:
-                    observations = _fetch_financial_history(
+                    observations = fetch_financial_history(
                         db, ticker, cond.metric, cond.for_periods
                     )
                 evaluation = evaluate_rule(rule, observations)
                 if evaluation.status is not BreachStatus.BREACH:
                     continue
                 latest = evaluation.observations[0]
+                if not _breach_is_fresh(cond, latest.period_end, now):
+                    log.info(
+                        {
+                            "event": "decision_condition_stale_breach_gated",
+                            "ticker": ticker,
+                            "decision_id": decision.decision_id,
+                            "condition_index": index,
+                            "period_end": latest.period_end.date().isoformat(),
+                            "baseline_period_end": cond.baseline_period_end,
+                        }
+                    )
+                    continue
                 candidates.append(
                     TriggerCandidate(
                         ticker=ticker,
@@ -293,7 +332,9 @@ def _evidence(
         "recommendation_kind": decision.recommendation_kind,
         "recommendation_value": decision.recommendation_value,
         "made_at": decision.made_at,
+        "decided_by": decision.decided_by,
         "source_lens": decision.source_lens,
+        "baseline_period_end": cond.baseline_period_end,
         "metric": cond.metric,
         "metric_source": cond.metric_source,
         "op": cond.op,

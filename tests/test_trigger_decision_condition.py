@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -52,7 +52,13 @@ CREATE TABLE decisions (
     outcome_label VARCHAR(16),
     decision_conditions TEXT,
     conditions_extracted_at DATETIME,
+    decided_by VARCHAR(16),
     created_at DATETIME NOT NULL
+);
+CREATE TABLE tracked_companies (
+    ticker TEXT PRIMARY KEY,
+    list_type TEXT NOT NULL,
+    archived_at DATETIME
 );
 CREATE TABLE kpi_definitions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -90,11 +96,17 @@ _MADE_AT = "2026-04-02T08:00:00"
 def conn(tmp_path: Path) -> sqlite3.Connection:
     c = sqlite3.connect(str(tmp_path / "t.db"))
     c.executescript(_SCHEMA)
+    # NU is a held name — advisor-authored conditions on it stay push-eligible
+    # (the relevance gate; see the dedicated gate tests for the other lists).
+    c.execute("INSERT INTO tracked_companies (ticker, list_type) VALUES ('NU', 'portfolio')")
     c.commit()
     return c
 
 
 def _condition(**overrides: object) -> dict[str, object]:
+    # baseline_period_end predates every observation the tests insert, so the
+    # breach-freshness watermark passes deterministically (no dependence on
+    # the wall clock via the legacy 135-day fallback).
     base: dict[str, object] = {
         "metric": "NPL 90d+",
         "metric_source": "kpi",
@@ -103,6 +115,7 @@ def _condition(**overrides: object) -> dict[str, object]:
         "unit": "percent",
         "for_periods": 2,
         "note": "90d+ NPLs above 7% for two straight quarters",
+        "baseline_period_end": "2025-06-30",
     }
     base.update(overrides)
     return base
@@ -114,12 +127,14 @@ def _insert_decision(
     *,
     ticker: str = "NU",
     outcome_at: str | None = None,
+    decided_by: str | None = None,
 ) -> int:
     cur = conn.execute(
         "INSERT INTO decisions (ticker, recommendation_kind, recommendation_value, "
-        "source_artifact_id, source_lens, made_at, outcome_at, decision_conditions, created_at) "
-        "VALUES (?, 'trim', 20.0, 1, 'five_min_reread', ?, ?, ?, ?)",
-        (ticker, _MADE_AT, outcome_at, json.dumps(conditions), _NOW),
+        "source_artifact_id, source_lens, made_at, outcome_at, decision_conditions, "
+        "decided_by, created_at) "
+        "VALUES (?, 'trim', 20.0, 1, 'five_min_reread', ?, ?, ?, ?, ?)",
+        (ticker, _MADE_AT, outcome_at, json.dumps(conditions), decided_by, _NOW),
     )
     conn.commit()
     return int(cur.lastrowid or 0)
@@ -131,17 +146,18 @@ def _insert_kpi_series(
     name: str = "NPL 90d+",
     unit: str = "percent",
     values: list[tuple[str, float]],
+    ticker: str = "NU",
 ) -> None:
     cur = conn.execute(
-        "INSERT INTO kpi_definitions (ticker, name, unit) VALUES ('NU', ?, ?)", (name, unit)
+        "INSERT INTO kpi_definitions (ticker, name, unit) VALUES (?, ?, ?)", (ticker, name, unit)
     )
     def_id = int(cur.lastrowid or 0)
     for i, (period_end, value) in enumerate(values):
         quarter = f"Q{(i % 4) + 1}"
         conn.execute(
             "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, "
-            "kpi_definition_id, value, unit, source_doc_id) VALUES ('NU', ?, ?, ?, ?, ?, ?)",
-            (period_end, quarter, def_id, value, unit, i + 1),
+            "kpi_definition_id, value, unit, source_doc_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (ticker, period_end, quarter, def_id, value, unit, i + 1),
         )
     conn.commit()
 
@@ -262,6 +278,105 @@ def test_scan_financial_line_item_path_with_dedup(conn: sqlite3.Connection) -> N
     assert len(candidates) == 1
     assert candidates[0].evidence["decision_id"] == decision_id
     assert candidates[0].evidence["latest_value"] == 1.2  # reconciled to billions
+
+
+# ---------------------------------------------------------------------------
+# Relevance gate (alert-quality fix): owner falsifiers always push;
+# advisor conditions push only on portfolio names.
+# ---------------------------------------------------------------------------
+
+_BREACHING = [("2025-12-31", 7.2), ("2026-03-31", 7.5)]
+
+
+def test_scan_gates_advisor_decision_on_evaluation_ticker(conn: sqlite3.Connection) -> None:
+    """The 2026-07-01 sweep class: an advisor-authored decision on an
+    evaluation-list name breaches — evaluable on panels, but never a push."""
+    conn.execute("INSERT INTO tracked_companies (ticker, list_type) VALUES ('FCX', 'evaluation')")
+    _insert_decision(conn, [_condition()], ticker="FCX", decided_by="advisor")
+    _insert_kpi_series(conn, values=_BREACHING, ticker="FCX")
+    assert DecisionConditionTrigger().scan("FCX", conn) == []
+
+    # The decision is still EVALUATED — the armed-falsifiers panel reads it.
+    from decision_conditions import load_open_decisions
+
+    conn.row_factory = sqlite3.Row
+    assert len(load_open_decisions(conn, "FCX")) == 1
+
+
+def test_scan_owner_decision_fires_on_any_list(conn: sqlite3.Connection) -> None:
+    """The owner's own falsifier interrupts regardless of list membership."""
+    conn.execute("INSERT INTO tracked_companies (ticker, list_type) VALUES ('FCX', 'evaluation')")
+    _insert_decision(conn, [_condition()], ticker="FCX", decided_by="owner")
+    _insert_kpi_series(conn, values=_BREACHING, ticker="FCX")
+    candidates = DecisionConditionTrigger().scan("FCX", conn)
+    assert len(candidates) == 1
+    assert candidates[0].evidence["decided_by"] == "owner"
+
+
+def test_scan_advisor_decision_on_portfolio_ticker_fires(conn: sqlite3.Connection) -> None:
+    """Advisor conditions guarding a HELD name (the praised WIX-reeval shape)
+    still push. Legacy rows with no decided_by (pre-0130 NULL) count as
+    advisor and ride the same portfolio gate."""
+    _insert_decision(conn, [_condition()], decided_by="advisor")  # NU = portfolio (fixture)
+    _insert_kpi_series(conn, values=_BREACHING)
+    candidates = DecisionConditionTrigger().scan("NU", conn)
+    assert len(candidates) == 1
+    assert candidates[0].evidence["decided_by"] == "advisor"
+
+
+def test_scan_gates_advisor_decision_on_untracked_ticker(conn: sqlite3.Connection) -> None:
+    """No tracked_companies row at all (or an archived one) is not a
+    portfolio holding — advisor pushes stay gated."""
+    _insert_decision(conn, [_condition()], ticker="GHST", decided_by="advisor")
+    _insert_kpi_series(conn, values=_BREACHING, ticker="GHST")
+    assert DecisionConditionTrigger().scan("GHST", conn) == []
+
+
+# ---------------------------------------------------------------------------
+# Breach-freshness watermark: a condition already true at attach time is
+# display state, never news.
+# ---------------------------------------------------------------------------
+
+
+def test_scan_breach_at_or_before_baseline_never_fires(conn: sqlite3.Connection) -> None:
+    """The FCX #13 class: the breaching observation predates (or equals) the
+    attach-time baseline — the 'breach' was already known when the condition
+    was written."""
+    _insert_decision(conn, [_condition(baseline_period_end="2026-03-31")], decided_by="owner")
+    _insert_kpi_series(conn, values=_BREACHING)  # latest obs = 2026-03-31
+    assert DecisionConditionTrigger().scan("NU", conn) == []
+
+
+def test_scan_breach_strictly_after_baseline_fires(conn: sqlite3.Connection) -> None:
+    _insert_decision(conn, [_condition(baseline_period_end="2026-03-30")], decided_by="owner")
+    _insert_kpi_series(conn, values=_BREACHING)  # latest obs = 2026-03-31
+    candidates = DecisionConditionTrigger().scan("NU", conn)
+    assert len(candidates) == 1
+    assert candidates[0].evidence["baseline_period_end"] == "2026-03-30"
+
+
+def test_scan_legacy_condition_stale_observation_silent(conn: sqlite3.Connection) -> None:
+    """A pre-watermark condition (no baseline stamped) falls back to the
+    135-day freshness window: a breach observed 10 months ago is history."""
+    now = datetime.now(UTC).replace(tzinfo=None)
+    old = [
+        ((now - timedelta(days=390)).date().isoformat(), 7.2),
+        ((now - timedelta(days=300)).date().isoformat(), 7.5),
+    ]
+    _insert_decision(conn, [_condition(baseline_period_end=None)], decided_by="owner")
+    _insert_kpi_series(conn, values=old)
+    assert DecisionConditionTrigger().scan("NU", conn) == []
+
+
+def test_scan_legacy_condition_fresh_observation_fires(conn: sqlite3.Connection) -> None:
+    now = datetime.now(UTC).replace(tzinfo=None)
+    fresh = [
+        ((now - timedelta(days=120)).date().isoformat(), 7.2),
+        ((now - timedelta(days=30)).date().isoformat(), 7.5),
+    ]
+    _insert_decision(conn, [_condition(baseline_period_end=None)], decided_by="owner")
+    _insert_kpi_series(conn, values=fresh)
+    assert len(DecisionConditionTrigger().scan("NU", conn)) == 1
 
 
 # ---------------------------------------------------------------------------

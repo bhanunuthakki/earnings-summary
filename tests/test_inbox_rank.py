@@ -508,11 +508,33 @@ def test_signal_strength_orders_within_a_category() -> None:
 
 
 def test_owner_falsifier_breach_is_max_strength() -> None:
-    """A decision_condition breach (owner-authored falsifier) is the strongest
-    signal class — it takes the strength ceiling."""
-    it = _alert_item(trigger_kind="decision_condition", evidence={"detail": "NPL > 5%"})
+    """A decision_condition breach whose evidence says the OWNER authored the
+    decision is the strongest signal class — it takes the strength ceiling."""
+    it = _alert_item(
+        trigger_kind="decision_condition",
+        evidence={"detail": "NPL > 5%", "decided_by": "owner"},
+    )
     why = _rank([it])[0].score_why
     assert "strength 1.50 (owner falsifier breach)" in why
+
+
+def test_advisor_condition_breach_gets_modest_strength() -> None:
+    """An advisor-authored condition breach is informative, not screaming —
+    it never takes the owner-falsifier ceiling."""
+    it = _alert_item(
+        trigger_kind="decision_condition",
+        evidence={"detail": "NPL > 5%", "decided_by": "advisor"},
+    )
+    why = _rank([it])[0].score_why
+    assert "strength 1.15 (advisor condition breach)" in why
+
+
+def test_condition_breach_missing_decided_by_treated_as_advisor() -> None:
+    """Evidence rows written before decided_by was threaded through lack the
+    key — treated as advisor (modest), never boosted to the ceiling."""
+    it = _alert_item(trigger_kind="decision_condition", evidence={"detail": "NPL > 5%"})
+    why = _rank([it])[0].score_why
+    assert "strength 1.15 (advisor condition breach)" in why
 
 
 def test_strength_is_inert_without_a_magnitude() -> None:
