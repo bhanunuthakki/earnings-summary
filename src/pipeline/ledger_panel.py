@@ -559,8 +559,11 @@ def _proposal_group_card(group: list[ResearchProposal]) -> str:
         for c in companions
     )
     # Doorway back to the musing that seeded this run (owner feedback 2026-07-14).
-    source_ids = getattr(primary, "source_note_ids", None)
-    first_note = source_ids[0] if isinstance(source_ids, list) and source_ids else None
+    # Direct attribute read: ResearchProposal.source_note_ids is a real field
+    # now (the old getattr always returned None — the column was never mapped,
+    # so the backlink was dead by construction).
+    source_ids = primary.source_note_ids
+    first_note = source_ids[0] if source_ids else None
     backlink = (
         '<button type="button" class="k-chip k-chip-btn ledger-backlink" '
         f'data-goto-note="{first_note}" title="Jump to the note that seeded this">'

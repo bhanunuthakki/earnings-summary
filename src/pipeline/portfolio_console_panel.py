@@ -86,6 +86,15 @@ def _render_triggers(db_path: Path) -> str:
     from pipeline.analytical_dashboard import build_analytical_dashboard
     from pipeline.analytical_dashboard_html import render_panel_fragment
 
-    dash = build_analytical_dashboard(db_path, sections={"trigger_ladder"}, ticker=None)
+    # The owner's thesis'd names live on the portfolio + evaluation lists;
+    # watchlist rows are bulk-onboarded stubs — exactly the irrelevant data
+    # he flagged (2026-07-14) — so the Record console scopes them out. The
+    # standalone /api/panel/holdings route keeps the builder's default scope.
+    dash = build_analytical_dashboard(
+        db_path,
+        sections={"trigger_ladder"},
+        ticker=None,
+        list_types=("portfolio", "evaluation"),
+    )
     fragment = render_panel_fragment(dash, "holdings")
     return fragment or '<section class="panel"><p class="muted">No triggers.</p></section>'

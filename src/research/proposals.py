@@ -17,10 +17,12 @@ None).
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 from research.intent import IntentCall, classify_intent
 from user_state._db import now_iso, open_conn
@@ -242,6 +244,10 @@ class ResearchProposal:
     provenance: str
     tainted_by_proposal_id: int | None
     artifact_json: str | None = None
+    # The analyst_notes ids that seeded this proposal (the "↩ from your note"
+    # backlink). Parsed from the DB's source_note_ids JSON column; empty when
+    # absent or unparseable.
+    source_note_ids: list[int] = field(default_factory=list[int])
 
 
 def create_proposal(
@@ -292,7 +298,24 @@ def create_proposal(
         conn.close()
 
 
+def _parse_note_ids(raw: object) -> list[int]:
+    """Guarded decode of the source_note_ids JSON column: a JSON int array →
+    its ints; NULL / garbage / non-list shapes → [] (never raises — a bad row
+    must not take the Ledger panel down)."""
+    if raw is None:
+        return []
+    try:
+        decoded: object = json.loads(str(raw))
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(decoded, list):
+        return []
+    items = cast("list[object]", decoded)
+    return [v for v in items if isinstance(v, int) and not isinstance(v, bool)]
+
+
 def _row_to_proposal(row: sqlite3.Row) -> ResearchProposal:
+    keys = set(row.keys())
     return ResearchProposal(
         id=int(row["id"]),
         task_id=None if row["task_id"] is None else int(row["task_id"]),
@@ -311,6 +334,9 @@ def _row_to_proposal(row: sqlite3.Row) -> ResearchProposal:
             None if row["tainted_by_proposal_id"] is None else int(row["tainted_by_proposal_id"])
         ),
         artifact_json=None if row["artifact_json"] is None else str(row["artifact_json"]),
+        source_note_ids=(
+            _parse_note_ids(row["source_note_ids"]) if "source_note_ids" in keys else []
+        ),
     )
 
 

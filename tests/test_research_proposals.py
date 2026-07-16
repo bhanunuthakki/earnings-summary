@@ -169,3 +169,46 @@ def test_tap_audits_chip_engage_observation_and_error(db_path: Path) -> None:
 
     counts = recent_tap_counts(days=7, db_path=db_path)
     assert counts == {"chip": 1, "engage": 1, "trust_zone": 0, "observation": 1, "error": 1}
+
+
+# ---------------------------------------------------------------------------
+# Red-team wave A: source_note_ids is a real field, parsed from the DB column
+# ---------------------------------------------------------------------------
+
+
+def test_proposal_source_note_ids_round_trip(db_path: Path) -> None:
+    """The DB column was populated but never mapped — ResearchProposal had no
+    field, so the Ledger card's "from your note" backlink was dead by
+    construction. A stored JSON array must round-trip into ints."""
+    pid = proposals.create_proposal(
+        task_id=None,
+        kind="memo",
+        ticker="NU",
+        title="NU margin question",
+        body_md="Margins hold.",
+        source_note_ids="[54]",
+        db_path=db_path,
+    )
+    got = proposals.get_proposal(pid, db_path=db_path)
+    assert got is not None
+    assert got.source_note_ids == [54]
+    listed = proposals.list_proposals(status="pending", db_path=db_path)
+    assert [p.source_note_ids for p in listed] == [[54]]
+
+
+def test_proposal_source_note_ids_garbage_degrades_to_empty(db_path: Path) -> None:
+    for raw in ("not json", '{"a": 1}', '[1, "x", true]', "[]"):
+        pid = proposals.create_proposal(
+            task_id=None,
+            kind="memo",
+            ticker="NU",
+            title=f"garbage {raw!r}",
+            body_md="body",
+            source_note_ids=raw,
+            db_path=db_path,
+        )
+        got = proposals.get_proposal(pid, db_path=db_path)
+        assert got is not None
+        # Non-list / unparseable -> []; a mixed list keeps only real ints
+        # (bools are not note ids).
+        assert got.source_note_ids == ([1] if raw.startswith("[1") else [])

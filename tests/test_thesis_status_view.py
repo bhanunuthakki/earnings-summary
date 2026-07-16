@@ -96,6 +96,10 @@ def _build_db(db_path: Path) -> None:
     # still present in the view (it has a source-table footprint).
     _seed_thesis_state(db_path, "EMPT", "   ", "ok")
 
+    # STB: the bulk-onboarding placeholder (74 such rows on prod). Non-empty
+    # text, but NOT a written thesis — 0151 excludes it from the predicate.
+    _seed_thesis_state(db_path, "STB", "STUB: needs user-authored thesis", "ok")
+
 
 def test_read_thesis_status_rich_ticker(tmp_path: Path) -> None:
     db = tmp_path / "data" / "portfolio.db"
@@ -134,6 +138,22 @@ def test_empty_thesis_reads_false_but_present(tmp_path: Path) -> None:
     out = read_thesis_status(["EMPT"], db_path=db)
     assert "EMPT" in out
     assert out["EMPT"].has_written_thesis is False
+
+
+def test_stub_thesis_reads_false_but_present(tmp_path: Path) -> None:
+    """Red-team wave A: the literal "STUB: needs user-authored thesis"
+    placeholder defeated every has-a-thesis predicate. It must read
+    has_written_thesis=0 (while staying visible in the view — the row has a
+    footprint), exactly like an empty thesis."""
+    db = tmp_path / "data" / "portfolio.db"
+    db.parent.mkdir(parents=True)
+    _build_db(db)
+
+    out = read_thesis_status(["STB", "NU"], db_path=db)
+    assert "STB" in out
+    assert out["STB"].has_written_thesis is False
+    # A real thesis still reads 1 — the stub filter must not over-exclude.
+    assert out["NU"].has_written_thesis is True
 
 
 def test_unknown_ticker_absent_and_case_insensitive(tmp_path: Path) -> None:

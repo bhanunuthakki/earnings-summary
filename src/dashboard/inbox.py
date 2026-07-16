@@ -37,6 +37,7 @@ from typing import cast
 
 from alerts import (
     ACTION_STATUS_PENDING,
+    ALERT_STATUS_APPROVED,
     ALERT_STATUS_PENDING,
     AlertRow,
     QueuedActionRow,
@@ -167,10 +168,13 @@ def collect_inbox(
 ) -> list[InboxItem]:
     """Build the stream — deduped, categorized, ranked.
 
-    ``since`` windows the EVENT kinds — alerts, ledger entries, and synthesis
-    sections. Drafts and notes are STANDING items: a pending draft from ten
-    days ago is still waiting on you, so they ignore ``since`` and stay in
-    the stream (sinking on recency decay) instead of vanishing. ``until``
+    ``since`` windows the EVENT kinds — resolved alerts, ledger entries, and
+    synthesis sections. Drafts, notes, and PENDING alerts are STANDING items:
+    a pending draft (or alert) from ten days ago is still waiting on you, so
+    they ignore ``since`` and stay in the stream (sinking on recency decay)
+    instead of vanishing. The default stream (``status=None``) carries pending
+    + recently-approved alerts only — dismissed/expired rows are settled noise
+    and stay out unless explicitly requested via ``status``. ``until``
     upper-bounds everything (a stream re-built for a historical date stays
     honest). ``kinds`` filters the sources; ``status`` / ``trigger_kind`` apply
     to alerts only. ``now`` anchors recency decay (defaults to UTC now; pass a
@@ -198,19 +202,55 @@ def collect_inbox(
 
     if "alert" in kinds:
         try:
-            alerts = list_alerts(
-                user_id=user_id,
-                ticker=ticker,
-                status=status,
-                since=since,
-                limit=limit,
-                db_path=db_path,
-            )
+            if status is not None:
+                # Explicit status filter (the /feed ?status= views — including
+                # dismissed history): the plain windowed fetch, unchanged.
+                alerts = list_alerts(
+                    user_id=user_id,
+                    ticker=ticker,
+                    status=status,
+                    since=since,
+                    limit=limit,
+                    db_path=db_path,
+                )
+            else:
+                # Default stream. PENDING is the owner's queue — fetched WHOLE,
+                # no recency window or limit: the old status-blind
+                # ``limit``-newest slice (ordered fired_at DESC) let a burst of
+                # dismissed rows push old-but-still-pending alerts out of the
+                # stream entirely. Recently-approved rows ride along as
+                # windowed history; dismissed/expired rows stay OUT of the
+                # default stream (settled noise — reachable via
+                # /feed?status=dismissed etc., never ranked above the queue).
+                alerts = list_alerts(
+                    user_id=user_id,
+                    ticker=ticker,
+                    status=ALERT_STATUS_PENDING,
+                    limit=None,
+                    db_path=db_path,
+                ) + list_alerts(
+                    user_id=user_id,
+                    ticker=ticker,
+                    status=ALERT_STATUS_APPROVED,
+                    since=since,
+                    limit=limit,
+                    db_path=db_path,
+                )
         except sqlite3.Error:
             alerts = []
         if trigger_kind:
             alerts = [a for a in alerts if a.trigger_kind == trigger_kind]
-        alerts = [a for a in alerts if _in_window(_as_naive_utc(a.fired_at), windowed=True)]
+        # Pending alerts in the default stream are STANDING (like drafts/notes:
+        # a three-week-old pending alert is still waiting on you) — only
+        # ``until`` bounds them. Everything else keeps the ``since`` window.
+        alerts = [
+            a
+            for a in alerts
+            if _in_window(
+                _as_naive_utc(a.fired_at),
+                windowed=not (status is None and a.status == ALERT_STATUS_PENDING),
+            )
+        ]
         # One batched IN-query for every alert's queued actions, not one
         # connection-open + query PER alert (the GET / boot N+1).
         try:
@@ -243,14 +283,24 @@ def collect_inbox(
         except sqlite3.Error:
             pending = []
         ticker_by_alert: dict[int, str] = {}
+        status_by_alert: dict[int, str] = {}
         if pending:
             try:
                 for a in list_alerts(user_id=user_id, limit=500, db_path=db_path):
                     ticker_by_alert[a.id] = a.ticker
+                    status_by_alert[a.id] = a.status
             except sqlite3.Error:
                 pass
         for qa in pending:
             if qa.alert_id in shown_alert_ids:
+                continue
+            # A pending action whose parent alert is settled (dismissed /
+            # approved / expired) is an orphan — rendering it would put a live
+            # approve button on a decision the owner already closed. Skip it;
+            # execution/cleanup_condition_alerts.py --repair-orphans cancels
+            # the rows themselves.
+            parent_status = status_by_alert.get(qa.alert_id)
+            if parent_status is not None and parent_status != ALERT_STATUS_PENDING:
                 continue
             qa_ticker = ticker_by_alert.get(qa.alert_id)
             if ticker is not None and qa_ticker != ticker:
@@ -712,10 +762,15 @@ def _render_memo_actions(out: StringIO, it: InboxItem) -> None:
 def _pending_action(it: InboxItem) -> QueuedActionRow | None:
     """The queued action still awaiting the owner on this card, or None. Drafts
     act on their own action; alert cards act on their first still-pending queued
-    action (one action per alert is the drafter's norm)."""
+    action (one action per alert is the drafter's norm).
+
+    Safety gate (red-team wave A): an approvable action only surfaces while the
+    PARENT ALERT is itself still pending. Prod carried pending queued_actions
+    dangling under dismissed alerts — rendering their ✓/✕ put a working
+    approve button on a decision the owner had already closed."""
     if it.kind == "draft" and it.action is not None and it.action.status == ACTION_STATUS_PENDING:
         return it.action
-    if it.kind == "alert":
+    if it.kind == "alert" and it.alert is not None and it.alert.status == ALERT_STATUS_PENDING:
         for qa in it.actions:
             if qa.status == ACTION_STATUS_PENDING:
                 return qa

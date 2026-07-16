@@ -258,13 +258,16 @@ def list_alerts(
     ticker: str | None = None,
     status: str | None = None,
     since: datetime | None = None,
-    limit: int = 200,
+    limit: int | None = 200,
     db_path: Path | str | None = None,
 ) -> list[AlertRow]:
     """General-purpose alerts list — newest first. Drives the dashboard feed.
 
     Filters compose with AND. ``status=None`` returns rows in any state;
-    ``ticker=None`` returns across the user's whole portfolio.
+    ``ticker=None`` returns across the user's whole portfolio. ``limit=None``
+    returns every match — the inbox uses it to fetch the PENDING queue whole,
+    because a recency ``LIMIT`` there silently hid old pending alerts behind
+    newer dismissed ones (red-team wave A).
     """
     where: list[str] = ["user_id = ?"]
     params: list[object] = [user_id]
@@ -278,7 +281,8 @@ def list_alerts(
         where.append("fired_at >= ?")
         params.append(since.isoformat())
     where_sql = " AND ".join(where)
-    params.append(int(limit))
+    # SQLite treats a negative LIMIT as "no limit" — the documented idiom.
+    params.append(-1 if limit is None else int(limit))
 
     conn = _open(db_path)
     try:

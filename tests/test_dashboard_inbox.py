@@ -17,7 +17,7 @@ import pytest
 from alembic.config import Config
 
 from alembic import command
-from alerts import apply_action, fire_alert, queue_action
+from alerts import apply_action, dismiss_alert, fire_alert, get_action, queue_action
 from dashboard.inbox import INBOX_JS, InboxItem, collect_inbox, render_inbox_stream
 from identity import DEFAULT_USER_ID
 from user_state.ledger import append_entry
@@ -493,6 +493,94 @@ def test_quick_actions_post_by_id_via_htmx() -> None:
     assert 'hx-post="/approve"' in approve and '"action_id": "5"' in approve
     # The old JS fetch dispatcher is gone — HTMX drives the actions now.
     assert "/api/alerts/" not in INBOX_JS
+
+
+# ----------------------------------------------------------------------------
+# Pending-alert visibility + dismissed-card safety (red-team wave A)
+# ----------------------------------------------------------------------------
+
+
+def _fire(db_path: Path, *, sig: str, when: datetime, kind: str = "kpi_inflection"):
+    return fire_alert(
+        ticker="NU",
+        trigger_kind=kind,
+        fired_at=when,
+        evidence_json=json.dumps({"summary": f"probe {sig}"}),
+        signature_sha=sig,
+        db_path=db_path,
+    )
+
+
+def test_pending_alerts_surface_past_a_flood_of_newer_dismissed_rows(db_path: Path) -> None:
+    """The prod failure: collect_inbox(limit=14) truncated on recency BEFORE
+    ranking, so 14 newer dismissed rows pushed the owner's old pending alerts
+    out of the stream entirely. Pending is the QUEUE — it must always surface,
+    regardless of age or dismissed volume."""
+    now = datetime.now(UTC)
+    old_pending = [
+        _fire(db_path, sig=f"sig-pend-{i}", when=now - timedelta(days=30 + i)).id for i in range(4)
+    ]
+    for i in range(20):  # newer, already-settled noise
+        a = _fire(db_path, sig=f"sig-dis-{i}", when=now - timedelta(hours=i))
+        dismiss_alert(a.id, db_path=db_path)
+
+    items = collect_inbox(db_path, limit=14)
+    alert_ids = {it.alert.id for it in items if it.kind == "alert" and it.alert is not None}
+    assert set(old_pending) <= alert_ids
+    # ...and not one dismissed card in the default stream.
+    assert all(it.status != "dismissed" for it in items)
+
+
+def test_dismissed_alerts_absent_by_default_but_reachable_via_status_filter(
+    db_path: Path,
+) -> None:
+    a = _fire(db_path, sig="sig-dismissed-one", when=datetime.now(UTC))
+    dismiss_alert(a.id, db_path=db_path)
+
+    default_ids = {
+        it.alert.id for it in collect_inbox(db_path) if it.kind == "alert" and it.alert is not None
+    }
+    assert a.id not in default_ids
+    # The /feed ?status= filter still reaches the history.
+    filtered = collect_inbox(db_path, status="dismissed")
+    assert [it.alert.id for it in filtered if it.alert is not None] == [a.id]
+    assert filtered[0].status == "dismissed"
+
+
+def test_dismissed_alert_card_never_renders_a_live_approve(db_path: Path) -> None:
+    """Prod carried 12 pending queued_actions dangling under dismissed alerts —
+    the card rendered a working ✓ on a decision the owner already closed. A
+    non-pending parent must yield NO approvable action, on the alert card and
+    via the standalone-draft lane both."""
+    action_id = _seed_alert_with_pending_action(db_path, ticker="NU")
+    alert_id = get_action(action_id, db_path=db_path).alert_id
+    dismiss_alert(alert_id, db_path=db_path)
+    # The queued action is still pending (the dangling-orphan prod state).
+    assert get_action(action_id, db_path=db_path).status == "pending"
+
+    # The dismissed alert card (reached via the explicit status filter).
+    items = collect_inbox(db_path, status="dismissed")
+    html = render_inbox_stream(items, db_path=db_path, compact=True)
+    assert "ix-act-approve" not in html
+    assert f'href="/approve?action_id={action_id}"' not in render_inbox_stream(
+        items, db_path=db_path
+    )
+
+    # The standalone-draft lane skips orphans too.
+    drafts = collect_inbox(db_path, kinds=("draft",))
+    assert drafts == []
+
+
+def test_pending_action_helper_requires_pending_parent(db_path: Path) -> None:
+    from dashboard.inbox import _pending_action  # pyright: ignore[reportPrivateUsage]
+
+    action_id = _seed_alert_with_pending_action(db_path, ticker="NU")
+    (card,) = collect_inbox(db_path, kinds=("alert",))
+    assert _pending_action(card) is not None  # pending parent → approvable
+
+    dismiss_alert(get_action(action_id, db_path=db_path).alert_id, db_path=db_path)
+    (dismissed_card,) = collect_inbox(db_path, kinds=("alert",), status="dismissed")
+    assert _pending_action(dismissed_card) is None  # settled parent → never
 
 
 # ----------------------------------------------------------------------------

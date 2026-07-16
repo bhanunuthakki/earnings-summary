@@ -75,6 +75,10 @@ class TickerValuation:
     dcf_date: str | None
     list_type: str
     verdict: str | None
+    # True when the name's thesis_state.thesis is the bulk-onboarding
+    # placeholder ("STUB: needs user-authored thesis") — never a researched
+    # name, so the swap screen must not crown it "best alternative".
+    stub_thesis: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,6 +139,14 @@ def load_valuations(
         lists = {str(r[0]).upper(): str(r[1]) for r in cur.fetchall()}
     except sqlite3.OperationalError:
         lists = {}
+    # Stub-thesis names (74 prod thesis_state rows carry the literal
+    # "STUB: needs user-authored thesis") are unresearched by definition —
+    # flag them so screens can exclude them from the candidate pool.
+    try:
+        cur = conn.execute("SELECT UPPER(ticker) FROM thesis_state WHERE thesis LIKE 'STUB:%'")
+        stub_tickers = {str(r[0]) for r in cur.fetchall()}
+    except sqlite3.OperationalError:
+        stub_tickers = set()
     holdings: dict[str, TickerValuation] = {}
     candidates: dict[str, TickerValuation] = {}
     for ticker, (_gap, fv, px, dcf_date) in latest_dcf_runs(conn).items():
@@ -148,6 +160,7 @@ def load_valuations(
             dcf_date=dcf_date,
             list_type=list_type,
             verdict=verdicts.get(t),
+            stub_thesis=t in stub_tickers,
         )
         if list_type == "portfolio":
             holdings[t] = val
@@ -168,17 +181,20 @@ def screen_swap_candidates(
     """The deterministic swap screen: each holding's single best alternative.
 
     A candidate qualifies when its DCF is fresh (<= ``max_dcf_age_days``), its
-    thesis is not breached, and its upside is plausible (<= ``max_upside_pct``
-    — see IMPLAUSIBLE_UPSIDE_PCT); the best candidate is the one with the
-    highest upside margin over the holding. ``cleared`` marks margins >=
-    ``margin_pp`` — the discipline bar a swap must clear before an LLM memo is
-    even considered. Sorted by margin, widest first.
+    thesis is not breached AND not a stub placeholder (``stub_thesis`` — the
+    "best alternative" must never be an unresearched STUB-thesis name), and
+    its upside is plausible (<= ``max_upside_pct`` — see
+    IMPLAUSIBLE_UPSIDE_PCT); the best candidate is the one with the highest
+    upside margin over the holding. ``cleared`` marks margins >= ``margin_pp``
+    — the discipline bar a swap must clear before an LLM memo is even
+    considered. Sorted by margin, widest first.
     """
     today = now or datetime.now(UTC)
     eligible = [
         c
         for c in candidates_val.values()
         if c.verdict != "breach"
+        and not c.stub_thesis
         and c.upside_pct <= max_upside_pct
         and _dcf_age_ok(c.dcf_date, max_age_days=max_dcf_age_days, today=today)
     ]

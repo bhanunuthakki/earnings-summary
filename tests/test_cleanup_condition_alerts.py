@@ -45,6 +45,16 @@ CREATE TABLE tracked_companies (
     list_type TEXT NOT NULL,
     archived_at TEXT
 );
+CREATE TABLE queued_actions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id INTEGER NOT NULL,
+    action_kind TEXT NOT NULL,
+    payload_json TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT,
+    applied_at TEXT,
+    cancelled_at TEXT
+);
 """
 
 _NOW = datetime.now(UTC).replace(tzinfo=None)
@@ -198,3 +208,100 @@ def test_non_pending_and_other_kinds_untouched(db: Path) -> None:
 
 def test_missing_db_exits_nonzero(tmp_path: Path) -> None:
     assert cleanup.main(["--db-path", str(tmp_path / "nope.db")]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Red-team wave A: dismissed alerts must not leave live pending actions behind
+# ---------------------------------------------------------------------------
+
+
+def _insert_action(path: Path, *, alert_id: int, status: str = "pending") -> int:
+    conn = sqlite3.connect(str(path))
+    cur = conn.execute(
+        "INSERT INTO queued_actions (alert_id, action_kind, status, created_at) "
+        "VALUES (?, 'thesis_update', ?, ?)",
+        (alert_id, status, _NOW.isoformat()),
+    )
+    conn.commit()
+    action_id = int(cur.lastrowid or 0)
+    conn.close()
+    return action_id
+
+
+def _action_row(path: Path, action_id: int) -> sqlite3.Row:
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM queued_actions WHERE id = ?", (action_id,)).fetchone()
+    conn.close()
+    return row
+
+
+def test_dismissal_cancels_pending_child_actions_in_same_run(db: Path) -> None:
+    decision = _insert_decision(db, ticker="FCX", decided_by="advisor")
+    alert = _insert_alert(db, ticker="FCX", decision_id=decision, period_end=_FRESH)
+    pending_child = _insert_action(db, alert_id=alert)
+    applied_child = _insert_action(db, alert_id=alert, status="applied")
+
+    assert cleanup.main(["--db-path", str(db), "--apply"]) == 0
+    assert _alert_row(db, alert)["status"] == "dismissed"
+    child = _action_row(db, pending_child)
+    assert child["status"] == "cancelled"
+    assert child["cancelled_at"] is not None
+    # A settled child is never re-stamped.
+    assert _action_row(db, applied_child)["status"] == "applied"
+
+
+def test_dry_run_leaves_child_actions_pending(db: Path) -> None:
+    decision = _insert_decision(db, ticker="FCX", decided_by="advisor")
+    alert = _insert_alert(db, ticker="FCX", decision_id=decision, period_end=_FRESH)
+    child = _insert_action(db, alert_id=alert)
+
+    assert cleanup.main(["--db-path", str(db)]) == 0
+    assert _alert_row(db, alert)["status"] == "pending"
+    assert _action_row(db, child)["status"] == "pending"
+
+
+def test_repair_orphans_dry_run_reports_but_changes_nothing(
+    db: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    dismissed_alert = _insert_alert(
+        db, ticker="WIX", status="dismissed", trigger_kind="earnings_tone"
+    )
+    orphan = _insert_action(db, alert_id=dismissed_alert)
+
+    assert cleanup.main(["--db-path", str(db), "--repair-orphans"]) == 0
+    out = capsys.readouterr().out
+    assert f"WOULD-CANCEL queued_action {orphan}" in out
+    assert "dry-run: 1 orphaned pending queued_actions found" in out
+    assert _action_row(db, orphan)["status"] == "pending"
+
+
+def test_repair_orphans_apply_cancels_any_trigger_kind_and_is_idempotent(
+    db: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Orphans under settled parents of ANY trigger kind...
+    dismissed_alert = _insert_alert(
+        db, ticker="WIX", status="dismissed", trigger_kind="earnings_tone"
+    )
+    approved_alert = _insert_alert(
+        db, ticker="FCX", status="approved", trigger_kind="kpi_inflection"
+    )
+    orphan_a = _insert_action(db, alert_id=dismissed_alert)
+    orphan_b = _insert_action(db, alert_id=approved_alert)
+    # ...while a pending parent's action is healthy and must be kept.
+    live_alert = _insert_alert(db, ticker="WIX", period_end=_FRESH, decided_by_in_evidence="owner")
+    healthy = _insert_action(db, alert_id=live_alert)
+
+    assert cleanup.main(["--db-path", str(db), "--repair-orphans", "--apply"]) == 0
+    assert _action_row(db, orphan_a)["status"] == "cancelled"
+    assert _action_row(db, orphan_a)["cancelled_at"] is not None
+    assert _action_row(db, orphan_b)["status"] == "cancelled"
+    assert _action_row(db, healthy)["status"] == "pending"
+    # The parent alerts themselves are untouched by the repair mode.
+    assert _alert_row(db, dismissed_alert)["status"] == "dismissed"
+    assert _alert_row(db, live_alert)["status"] == "pending"
+
+    # Idempotent: a second --apply finds nothing.
+    _ = capsys.readouterr()
+    assert cleanup.main(["--db-path", str(db), "--repair-orphans", "--apply"]) == 0
+    assert "apply: 0 orphaned pending queued_actions cancelled" in capsys.readouterr().out

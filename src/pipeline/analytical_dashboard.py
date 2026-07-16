@@ -518,9 +518,11 @@ def _build_trigger_ladder(
 
     # The ladder is only relevant for names the owner has an actual thesis on
     # (owner feedback 2026-07-14: "Triggers has so much irrelevant data — it
-    # should only be for names where I have a thesis"). Require a non-empty
-    # thesis_state.thesis, the same has_written_thesis predicate the canonical
-    # v_thesis_status view uses (migration 0143). Absent the table, no ladder.
+    # should only be for names where I have a thesis"). Require a non-empty,
+    # non-placeholder thesis_state.thesis — the same has_written_thesis
+    # predicate the canonical v_thesis_status view uses (migration 0151:
+    # 74 prod rows carry the literal "STUB: needs user-authored thesis" and
+    # must not count as a thesis). Absent the table, no ladder.
     has_thesis_state = (
         conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='thesis_state'"
@@ -558,6 +560,7 @@ def _build_trigger_ladder(
         WHERE tc.archived_at IS NULL
           AND tc.list_type IN ({placeholders})
           AND TRIM(COALESCE(ts.thesis, '')) <> ''
+          AND ts.thesis NOT LIKE 'STUB:%'
         ORDER BY ABS(COALESCE(dr.over_under_pct, 0)) DESC, tc.ticker
         """,
         list_types,
