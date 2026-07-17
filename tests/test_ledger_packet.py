@@ -123,17 +123,80 @@ def test_packet_singular_copy(ctx: tuple[FlaskClient, Path, Path]) -> None:
     assert "1 needs you" in html
 
 
+def _seed_unreconciled(db: Path, n: int) -> None:
+    """N seed notes awaiting a verdict — list_unreconciled picks up any
+    ``source_ref LIKE 'seed:%'`` note with no reconcile stamp yet.
+
+    The ctx fixture stamps at 0059 then upgrades, so tables created in
+    migrations <=0059 (``decisions``) never exist — ``list_unreconciled`` also
+    queries ``decisions`` and would raise (masking the note rows), so a minimal
+    stand-in (zero inferred falsifiers) is created first."""
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS decisions "
+            "(id INTEGER PRIMARY KEY, ticker TEXT, falsifier TEXT, decided_by TEXT)"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    for i in range(1, n + 1):
+        create_note(
+            body=f"seed musing {i} — do I still believe this?",
+            kind="musing",
+            ticker=None,
+            source="capture",
+            source_ref=f"seed:musing:{i}",
+            db_path=db,
+        )
+
+
 def test_packet_reconcile_copy_drops_duplicate_id(
     ctx: tuple[FlaskClient, Path, Path],
 ) -> None:
-    """The reconcile batch item embeds render_reconcile_list's markup — the
-    packet copy must not duplicate #ledger-reconcile (the real one lives in
-    the Queues block on the same page)."""
-    _client, db, _root = ctx
-    from synthesis.seed import seed_from_json  # noqa: F401  (import guard only)
+    """Each reconcile row is its OWN pk-item — the packet must not embed the
+    #ledger-reconcile container (the real one lives in the Queues block on the
+    same page), and N unreconciled rows must count as N items, not 1 (the old
+    single-blob append made the first row-action's settle-detector skip the
+    rest of the batch)."""
+    from pipeline.ledger_panel import (
+        _packet_section,  # pyright: ignore[reportPrivateUsage]
+        _reconcile_packet_items,  # pyright: ignore[reportPrivateUsage]
+        render_reconcile_list,
+    )
+    from synthesis.reconcile import list_unreconciled
 
+    _client, db, _root = ctx
+    _seed_unreconciled(db, 2)
+    assert len(list_unreconciled(db)) == 2
+
+    # The reconcile queue becomes two SEPARATE packet fragments, each carrying
+    # its own action hooks and NONE the #ledger-reconcile container id.
+    frags = _reconcile_packet_items(db)
+    assert len(frags) == 2
+    assert all('id="ledger-reconcile"' not in f for f in frags)
+
+    packet = _packet_section(db)
+    # Two reconcile rows → two pk-items (was one blob before the fix).
+    assert packet.count('class="pk-item"') == 2
+    assert "2 need you" in packet
+    # The container id lives ONLY in the Queues block, never in the packet copy.
+    assert 'id="ledger-reconcile"' not in packet
+
+    # Whole-panel invariant: at most one #ledger-reconcile across the page.
     html = render_ledger_panel(db)
-    assert html.count('id="ledger-reconcile"') <= 1
+    assert html.count('id="ledger-reconcile"') == 1
+
+    # Regression: render_reconcile_list's own output is UNCHANGED — one
+    # #ledger-reconcile div carrying both rows' verdict buttons (the Queues-block
+    # / ?fragment=reconcile contract _RECONCILE_JS reload() swaps).
+    standalone = render_reconcile_list(db)
+    assert standalone.count('id="ledger-reconcile"') == 1
+    assert standalone.startswith('<div id="ledger-reconcile">')
+    assert standalone.endswith("</div>")
+    # 2 seed notes x the 4 reconcile verdicts = 8 verdict buttons, all inside
+    # the single container.
+    assert standalone.count("data-rec-verdict=") == 8
 
 
 # ---------------------------------------------------------------------------
