@@ -75,9 +75,7 @@ def _seed_quarters(
     Each tuple: (period_end, fiscal_period_type, revenue, ocf, capex, fcf).
     source_doc_id increments so ROW_NUMBER() dedup works correctly.
     """
-    conn.execute(
-        "INSERT OR IGNORE INTO tenants (id, created_at) VALUES ('bhanu', '2026-01-01')"
-    )
+    conn.execute("INSERT OR IGNORE INTO tenants (id, created_at) VALUES ('bhanu', '2026-01-01')")
     conn.execute(
         "INSERT OR IGNORE INTO tracked_companies "
         "(user_id, ticker, name, list_type, instrument_type) "

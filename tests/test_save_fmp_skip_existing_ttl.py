@@ -55,9 +55,9 @@ def test_old_snapshot_is_stale() -> None:
 def test_ttl_boundary_is_inclusive() -> None:
     boundary = (_NOW - timedelta(days=_SKIP_EXISTING_TTL_DAYS)).isoformat(timespec="seconds")
     assert _snapshot_is_stale(boundary, now=_NOW) is True
-    just_inside = (
-        _NOW - timedelta(days=_SKIP_EXISTING_TTL_DAYS) + timedelta(minutes=1)
-    ).isoformat(timespec="seconds")
+    just_inside = (_NOW - timedelta(days=_SKIP_EXISTING_TTL_DAYS) + timedelta(minutes=1)).isoformat(
+        timespec="seconds"
+    )
     assert _snapshot_is_stale(just_inside, now=_NOW) is False
 
 

@@ -181,7 +181,9 @@ def apply_dcf_proposal(
         raise ValueError(f"proposal {proposal_id} is not a dcf proposal")
     artifact = getattr(prop, "artifact_json", None)
     if not artifact:
-        raise ValueError(f"dcf proposal {proposal_id} carries no proposed row (artifact_json empty)")
+        raise ValueError(
+            f"dcf proposal {proposal_id} carries no proposed row (artifact_json empty)"
+        )
     data: object = json.loads(artifact)
     row = cast("dict[str, object]", data).get("proposed_row") if isinstance(data, dict) else None
     if not isinstance(row, dict):
@@ -189,7 +191,9 @@ def apply_dcf_proposal(
     row_dict = cast("dict[str, object]", row)
     npv = _as_float(row_dict.get("npv_per_share"))
     if npv is None or npv <= 0:
-        raise ValueError(f"dcf proposal {proposal_id} has no valid fair value (oracle re-check failed)")
+        raise ValueError(
+            f"dcf proposal {proposal_id} has no valid fair value (oracle re-check failed)"
+        )
     saver = persist_fn or _default_persist
     saver(row_dict, db_path=db_path)
     return f"DCF for {row_dict.get('ticker')} updated -> ${npv:,.2f}/sh (live)"
