@@ -106,6 +106,16 @@ def suggest_route(
     )
 
 
+def suggest_route_for_eval(comment_text: str, context_line: str = "") -> dict[str, object]:
+    """The eval-harness production entry point (golden_classifiers): a parked
+    comment (+ optional context) → the pinned fields the golden set grades.
+    ``intent`` is ``None`` for a park verdict — a VALID graded outcome, not a
+    failure. ``confidence`` is pinned too because a WRONG high-confidence answer
+    auto-routes and is the worst failure mode; the grader reads it to weight harm."""
+    s = suggest_route(comment_text, context_line=context_line)
+    return {"intent": s.intent, "confidence": s.confidence}
+
+
 def sweep_unsuggested(
     *,
     db_path: object = None,
@@ -170,4 +180,10 @@ def sweep_unsuggested(
     return stats
 
 
-__all__ = ["PURPOSE", "RouteSuggestion", "suggest_route", "sweep_unsuggested"]
+__all__ = [
+    "PURPOSE",
+    "RouteSuggestion",
+    "suggest_route",
+    "suggest_route_for_eval",
+    "sweep_unsuggested",
+]
