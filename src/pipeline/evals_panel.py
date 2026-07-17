@@ -73,6 +73,10 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
     # The Ledger intent tap (mode-A golden classifier) — supersedes wondering_detect
     # on the live tap; kept in sync with run_llm_evals.GOLDEN_PURPOSES.
     "capture_intent",
+    # The Ledger reply-box router + Triage second-pass route suggestion (#884,
+    # mode-A golden classifiers) — kept in sync with run_llm_evals.GOLDEN_PURPOSES.
+    "ledger_reply_intent",
+    "triage_route_suggest",
     # Position-review verdict audit (mode-B rubric) — in sync with
     # run_llm_evals.AUDIT_PURPOSES + rubric_judge.AUDIT_SPECS.
     "position_review",

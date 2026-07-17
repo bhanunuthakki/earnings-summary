@@ -108,6 +108,15 @@ def classify_reply(
     return ReplyVerdict(intent=intent, reason=str(raw.get("reason") or "")[:200])
 
 
+def classify_reply_for_eval(card_text: str, reply_text: str) -> dict[str, object]:
+    """The eval-harness production entry point (golden_classifiers): a card + the
+    owner's reply → the pinned field the golden set grades. A wrong intent routes
+    the reply to the wrong action (research/save/worldview/dismiss/question/note),
+    so ``intent`` is what's pinned."""
+    verdict = classify_reply(card_text, reply_text)
+    return {"intent": verdict.intent}
+
+
 __all__ = [
     "ACTION_INTENTS",
     "ACTION_VERB",
@@ -115,4 +124,5 @@ __all__ = [
     "REPLY_INTENTS",
     "ReplyVerdict",
     "classify_reply",
+    "classify_reply_for_eval",
 ]

@@ -65,6 +65,12 @@ GOLDEN_PURPOSES = (
     # The Ledger intent tap — supersedes wondering_detect on the live tap
     # (mode-A golden classifier: observation/wondering/brief_artifact/stress_artifact).
     "capture_intent",
+    # The Ledger reply-box router (#884) — the universal interaction that replaced
+    # per-card verb menus (mode-A: research/save/worldview/dismiss/question/note).
+    "ledger_reply_intent",
+    # Triage second-pass route suggestion (#884) — auto-routes a parked comment at
+    # high confidence (mode-A: a ROUTABLE_INTENTS member or park).
+    "triage_route_suggest",
 )
 AUDIT_PURPOSES = (
     "bear_case",

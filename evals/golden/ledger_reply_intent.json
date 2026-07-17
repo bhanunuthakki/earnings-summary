@@ -1,0 +1,28 @@
+{
+  "purpose": "ledger_reply_intent",
+  "notes": "The Ledger reply-box router (#884): one universal reply on a feed card, routed by the model instead of per-card verb menus. Six intents — research (dig in) / save (keep for later) / worldview (a durable belief about HOW I invest) / dismiss (drop/done/irrelevant) / question (converse) / note (additive context, no routing). A wrong intent routes the reply to the wrong action; question is the fail-open bucket, so the observation/question and note/question boundaries are the ones this set guards. Every enum value appears >= 2x. Exact-match intent, no partial credit.",
+  "cases": [
+    {"id": "lr-001-dig-in", "card_text": "NU Q1: NPL 90+ ticked to 4.5%, up 30bps QoQ", "reply_text": "dig into whether this is seasoning on the newer vintages or genuine deterioration", "expected": {"intent": "research"}},
+    {"id": "lr-002-look-into", "card_text": "MELI logistics capex guide raised for FY", "reply_text": "look into how much of this is 1P fulfillment vs shipping subsidy", "expected": {"intent": "research"}},
+    {"id": "lr-003-evaluate", "card_text": "VEEV announced a new Data Cloud SKU", "reply_text": "can you research the TAM and how it overlaps IQVIA?", "expected": {"intent": "research"}},
+    {"id": "lr-004-pull-thread", "card_text": "RBRK net retention slipped to 122% from 133%", "reply_text": "pull the thread on this — is it down-sell or slower new-logo expansion?", "expected": {"intent": "research"}},
+    {"id": "lr-005-keep", "card_text": "Good SemiAnalysis piece on inference cost curves", "reply_text": "keep this one, I want to come back to it this weekend", "expected": {"intent": "save"}},
+    {"id": "lr-006-save-later", "card_text": "BN Q1 DE per unit up 12% YoY", "reply_text": "save for later, not urgent", "expected": {"intent": "save"}},
+    {"id": "lr-007-bookmark", "card_text": "NOW raised subscription revenue guide", "reply_text": "park this, remind me before their next print", "expected": {"intent": "save"}},
+    {"id": "lr-008-worldview-process", "card_text": "I sold NU too early in 2023 before the credit book compounded", "reply_text": "lesson for me: I consistently underweight the power of a compounding loan book and exit winners a year too soon", "expected": {"intent": "worldview"}},
+    {"id": "lr-009-worldview-principle", "card_text": "GOOGL kept spending through the ad slowdown", "reply_text": "this is how I invest — I want founders who spend counter-cyclically, not ones who cut to protect a quarter", "expected": {"intent": "worldview"}},
+    {"id": "lr-010-worldview-rule", "card_text": "WIX SBC ran at 22% of revenue again", "reply_text": "note to self as a durable rule: I never fully trust adjusted margins when SBC is above 15% of revenue", "expected": {"intent": "worldview"}},
+    {"id": "lr-011-dismiss-irrelevant", "card_text": "Analyst on CNBC flags 'valuation concerns' on MELI", "reply_text": "irrelevant, drop it — no new information here", "expected": {"intent": "dismiss"}},
+    {"id": "lr-012-dismiss-done", "card_text": "NVO Wegovy supply headline recycled from last month", "reply_text": "clear this, already covered it", "expected": {"intent": "dismiss"}},
+    {"id": "lr-013-dismiss-noise", "card_text": "Reddit thread speculating on a NU stock split", "reply_text": "dismiss, that's noise", "expected": {"intent": "dismiss"}},
+    {"id": "lr-014-question-whatchanged", "card_text": "META Reality Labs loss widened to $4.5B", "reply_text": "what changed versus the prior quarter's loss run-rate?", "expected": {"intent": "question"}},
+    {"id": "lr-015-question-clarify", "card_text": "FLKR added to the ETF ladder at the third rung", "reply_text": "wait, why the third rung and not the second — what's the trigger?", "expected": {"intent": "question"}},
+    {"id": "lr-016-question-discuss", "card_text": "NU expanded into Colombia deposits", "reply_text": "how should I think about the CAR impact of a new-country buildout here?", "expected": {"intent": "question"}},
+    {"id": "lr-017-question-ambiguous", "card_text": "VEEV R&D reaccelerated to +18% YoY", "reply_text": "is that reacceleration guide actually credible?", "expected": {"intent": "question"}},
+    {"id": "lr-018-note-context", "card_text": "MELI take rate expanded 40bps QoQ", "reply_text": "adding context: management flagged on the call this was mostly ads mix, not a fee hike", "expected": {"intent": "note"}},
+    {"id": "lr-019-note-observation", "card_text": "RBRK guided FY billings above the Street", "reply_text": "just noting the guide was raised the same week two competitors cut — worth remembering", "expected": {"intent": "note"}},
+    {"id": "lr-020-note-annotation", "card_text": "BN closed the fundraise for its 5th flagship", "reply_text": "for the record, this is the fund I was waiting on before sizing up the carry line", "expected": {"intent": "note"}},
+    {"id": "lr-021-research-challenge", "card_text": "NOW positioned as the AI-agent platform of record", "reply_text": "research and pressure-test the bull case here, I think consensus is too optimistic on seat expansion", "expected": {"intent": "research"}},
+    {"id": "lr-022-save-shortlist", "card_text": "New S-1 filed by a LatAm neobank competitor", "reply_text": "hold onto this for the NU competitive file", "expected": {"intent": "save"}}
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "purpose": "triage_route_suggest",
+  "notes": "The Triage second pass (#884): a comment that the first classifier could not auto-route was parked; given the FULL routing menu, which ROUTABLE_INTENTS member would the owner pick, and how sure are we? intent=null is 'park' — a VALID graded outcome (leave it for the human), not a failure. The eight routable intents (ask_question / edit_thesis / edit_structured / drop_kpi / extract_kpi / curate_peers / fix_data / rewrite_section) each appear; genuine park cases are included because a WRONG high-confidence auto-route is the worst failure — the grader scores park==park a full pass and penalizes a confident wrong route hardest. Gloss source: triage_suggest._INTENT_GLOSS + notes.ROUTABLE_INTENTS. The grader reads the model's own confidence to weight harm.",
+  "cases": [
+    {"id": "tr-001-ask-question", "comment_text": "why did gross margin dip this quarter — is it FX or genuine pricing pressure?", "context_line": "MELI · financials", "expected": {"intent": "ask_question"}},
+    {"id": "tr-002-ask-question", "comment_text": "does the new deposit product actually change the funding cost math here?", "context_line": "NU", "expected": {"intent": "ask_question"}},
+    {"id": "tr-003-edit-thesis", "comment_text": "rewrite the thesis to say the moat is the two-sided logistics network, not just the marketplace", "context_line": "MELI · thesis", "expected": {"intent": "edit_thesis"}},
+    {"id": "tr-004-edit-thesis", "comment_text": "the written thesis still frames NOW as a workflow tool — update the prose to reflect the platform-of-record bet", "context_line": "NOW · thesis", "expected": {"intent": "edit_thesis"}},
+    {"id": "tr-005-edit-structured", "comment_text": "change the tier-1 break rule to NPL 90+ above 6% instead of 5%", "context_line": "NU · break rules", "expected": {"intent": "edit_structured"}},
+    {"id": "tr-006-edit-structured", "comment_text": "promote net revenue retention to a tier-1 KPI and demote gross margin to tier-2", "context_line": "RBRK · KPIs", "expected": {"intent": "edit_structured"}},
+    {"id": "tr-007-drop-kpi", "comment_text": "stop tracking DAU for this one, it's not a metric that matters to the thesis anymore", "context_line": "META", "expected": {"intent": "drop_kpi"}},
+    {"id": "tr-008-drop-kpi", "comment_text": "remove the 'stores opened' KPI, they stopped disclosing it", "context_line": "MELI · KPIs", "expected": {"intent": "drop_kpi"}},
+    {"id": "tr-009-extract-kpi", "comment_text": "deposits hit 28.9B this quarter per the earnings release, add it", "context_line": "NU · Q1 release", "expected": {"intent": "extract_kpi"}},
+    {"id": "tr-010-extract-kpi", "comment_text": "RPO was 18.2B according to the 10-Q, capture that value", "context_line": "NOW · 10-Q", "expected": {"intent": "extract_kpi"}},
+    {"id": "tr-011-curate-peers", "comment_text": "add StoneCo and drop PayPal from the comp set, they're not really comparable", "context_line": "NU · peers", "expected": {"intent": "curate_peers"}},
+    {"id": "tr-012-curate-peers", "comment_text": "the peer group should include Coupang now that logistics is the story", "context_line": "MELI · peers", "expected": {"intent": "curate_peers"}},
+    {"id": "tr-013-fix-data", "comment_text": "revenue is showing 5.6M but it should be 5.6B — that's a units error", "context_line": "MELI · financials", "expected": {"intent": "fix_data"}},
+    {"id": "tr-014-fix-data", "comment_text": "the take rate here reads 130%, that's obviously wrong, please correct it", "context_line": "MELI", "expected": {"intent": "fix_data"}},
+    {"id": "tr-015-rewrite-section", "comment_text": "the risk section reads like a wall of text — restructure it into bullets by severity", "context_line": "NU · report", "expected": {"intent": "rewrite_section"}},
+    {"id": "tr-016-rewrite-section", "comment_text": "reorganize the valuation section so the reverse-DCF leads and the multiples follow", "context_line": "VEEV · report", "expected": {"intent": "rewrite_section"}},
+    {"id": "tr-017-park-mood", "comment_text": "honestly I just feel uneasy about this whole position lately", "context_line": "WIX", "expected": {"intent": null}},
+    {"id": "tr-018-park-vague", "comment_text": "hmm, something feels off but I can't put my finger on it", "context_line": "BN", "expected": {"intent": null}},
+    {"id": "tr-019-park-offtopic", "comment_text": "remind me to call my accountant about the wash-sale rule before year end", "context_line": "", "expected": {"intent": null}},
+    {"id": "tr-020-park-meta", "comment_text": "the whole platform layout could use a rethink someday", "context_line": "", "expected": {"intent": null}},
+    {"id": "tr-021-ask-question", "comment_text": "how much of the RPO is actually long-dated vs current?", "context_line": "NOW", "expected": {"intent": "ask_question"}},
+    {"id": "tr-022-fix-data", "comment_text": "the FY2024 net income figure is double-counting the one-time gain, fix it", "context_line": "NVO · financials", "expected": {"intent": "fix_data"}},
+    {"id": "tr-023-extract-kpi", "comment_text": "Wegovy scripts were 1.2M for the quarter per the slide deck, add the number", "context_line": "NVO · IR deck", "expected": {"intent": "extract_kpi"}},
+    {"id": "tr-024-edit-structured", "comment_text": "turn off the saydo-due alert for this ticker in settings", "context_line": "GOOGL · settings", "expected": {"intent": "edit_structured"}}
+  ]
+}
