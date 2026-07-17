@@ -103,6 +103,17 @@ def _ladder_markup(result: ingest.IngestResult) -> dict[str, object] | None:
     return research_notify.onmymind_keyboard(result.note_id)
 
 
+def _message_id_of(result: object) -> int | None:
+    """The ``message_id`` of a sendMessage result (Telegram returns the sent
+    Message), or None. Used to remember which message carried a card so a later
+    reply can be routed back to its note."""
+    if isinstance(result, dict):
+        mid = cast("dict[str, object]", result).get("message_id")
+        if isinstance(mid, int):
+            return mid
+    return None
+
+
 def _confirm(
     token: str,
     update: telegram.Update,
@@ -111,21 +122,41 @@ def _confirm(
     *,
     enabled: bool,
     reply_markup: dict[str, object] | None = None,
-) -> None:
+) -> int | None:
     """Best-effort capture confirmation back into the thread. ``reply_markup``
-    carries the On My Mind ladder buttons when the feed flag is on."""
+    carries the On My Mind ladder buttons when the feed flag is on. Returns the
+    sent message's id (so the caller can stash it on the note for reply-routing),
+    or None when nothing was sent."""
     if not enabled or update.chat_id is None:
-        return
+        return None
     text = _CONFIRM.get(status)
     if status == "landed" and ticker:
         text = f"Captured. ({ticker})"
     if status == "needs_ticker" and reply_markup is not None:
         text = "Captured. Which ticker?"  # the candidate buttons carry the rest
     if not text:
-        return
+        return None
     # a failed confirmation never blocks capture
     with contextlib.suppress(telegram.TelegramError):
-        telegram.send_message(token, update.chat_id, text, reply_markup=reply_markup)
+        result = telegram.send_message(token, update.chat_id, text, reply_markup=reply_markup)
+        return _message_id_of(result)
+    return None
+
+
+def _stash_card_mid(note_id: int | None, mid: int | None, db_path: Path | str | None) -> None:
+    """Remember which Telegram message carried a note's card
+    (``context_json['telegram_message_id']``), so a later free-text REPLY to
+    that message routes back to the note through the shared reply core. Uses the
+    context_json idiom — no migration. Fire-and-forget: a stash failure never
+    affects the capture that already landed."""
+    if note_id is None or mid is None or db_path is None:
+        return
+    try:
+        from user_state.notes import patch_note_context
+
+        patch_note_context(note_id, {"telegram_message_id": mid}, db_path=db_path)
+    except Exception:  # a failed stash never blocks capture
+        return
 
 
 def _tap(result: ingest.IngestResult, db_path: Path | str | None) -> int | None:
@@ -354,6 +385,86 @@ def _dispatch_pending_reply(
     return False
 
 
+def _find_reply_target(mid: int, db_path: Path | str | None) -> int | None:
+    """The most recent OPEN note whose card was sent as Telegram message ``mid``
+    (``context_json['telegram_message_id']``). ``list_notes`` excludes
+    archived/superseded, so a dismissed card never re-captures a reply. None when
+    no live note carries that message id (an old/expired card ⇒ the caller falls
+    through to ordinary capture). Best-effort — a read failure returns None."""
+    if db_path is None:
+        return None
+    try:
+        from user_state.notes import list_notes
+
+        for note in list_notes(limit=100, db_path=db_path):
+            if (note.context or {}).get("telegram_message_id") == mid:
+                return note.id
+    except Exception:  # a failed lookup never hijacks capture
+        return None
+    return None
+
+
+def _reply_to_card(
+    token: str,
+    update: telegram.Update,
+    note_id: int,
+    result: dict[str, object],
+    db_path: Path | str | None,
+) -> None:
+    """Reply to the owner after a card-reply routed through ``handle_reply``:
+    an action / note sends its short receipt; a chat answers the reply text via
+    the SAME ask engine ``_answer`` uses at capture time (one brain). Best-effort
+    — a reply-send / answer failure never matters (the routing already happened)."""
+    if update.chat_id is None:
+        return
+    if str(result.get("mode")) == "acted":
+        receipt = str(result.get("receipt") or "").strip()
+        if receipt:
+            with contextlib.suppress(telegram.TelegramError):
+                telegram.send_message(token, update.chat_id, receipt)
+        return
+    # chat: answer the reply text in the card's ticker context.
+    if db_path is None or not update.text:
+        return
+    try:
+        from onmymind.respond import answer_text
+        from user_state.notes import get_note
+
+        note = get_note(note_id, db_path=db_path)
+        tickers = [note.ticker] if note is not None and note.ticker else []
+        repo_root = Path(db_path).parent.parent
+        answer = answer_text(update.text, tickers=tickers, repo_root=repo_root, db_path=db_path)
+    except Exception:  # answering must never break the poll loop
+        return
+    if answer:
+        with contextlib.suppress(telegram.TelegramError):
+            telegram.send_message(token, update.chat_id, answer)
+
+
+def _dispatch_card_reply(token: str, update: telegram.Update, db_path: Path | str | None) -> bool:
+    """A free-text REPLY to an On My Mind card (Telegram's ``reply_to_message``)
+    → the SAME reply core the web reply box calls (``onmymind.reply.handle_reply``
+    — one brain, two mouths). Returns True iff consumed (the caller must
+    ``continue``, never falling through to ``ingest_capture``). An unknown /
+    expired message id, or any failure, returns False so capture is never
+    hijacked (degrade-silently, like ``_answer`` / ``_pledge_and_annotate``)."""
+    if update.chat_id is None or not update.text or update.reply_to_message_id is None:
+        return False
+    if db_path is None:
+        return False
+    try:
+        note_id = _find_reply_target(update.reply_to_message_id, db_path)
+        if note_id is None:
+            return False
+        from onmymind.reply import handle_reply
+
+        result = handle_reply(note_id, update.text, db_path=db_path)
+    except Exception:  # any failure falls through to ordinary capture
+        return False
+    _reply_to_card(token, update, note_id, result, db_path)
+    return True
+
+
 def poll_once(
     token: str,
     *,
@@ -434,6 +545,12 @@ def poll_once(
             if update.chat_id is not None and _dispatch_pending_reply(token, update, db_path):
                 bump("pending_reply")
                 continue
+            # A free-text REPLY to an On My Mind card → the shared reply core
+            # (handle_reply), the SAME brain the web reply box uses. An unknown /
+            # expired card falls through to ordinary capture.
+            if _dispatch_card_reply(token, update, db_path):
+                bump("card_reply")
+                continue
             # A bare URL → land as an On My Mind reading (a link the analyst
             # found), not a musing.  Anything else is stream-of-consciousness.
             url = ingest._extract_url(update.text)
@@ -445,7 +562,7 @@ def poll_once(
                     db_path=db_path,
                 )
                 # report as "reading_landed" so _confirm sends the right reply
-                _confirm(
+                mid = _confirm(
                     token,
                     update,
                     "reading_landed" if rd.status == "landed" else rd.status,
@@ -453,6 +570,7 @@ def poll_once(
                     enabled=confirm,
                     reply_markup=_ladder_markup(rd),
                 )
+                _stash_card_mid(rd.note_id, mid, db_path)
                 bump(f"reading_{rd.status}")
             else:
                 result = ingest.ingest_capture(
@@ -464,7 +582,7 @@ def poll_once(
                     db_path=db_path,
                 )
                 bump(result.status)
-                _confirm(
+                mid = _confirm(
                     token,
                     update,
                     _confirm_status(result),
@@ -472,6 +590,7 @@ def poll_once(
                     enabled=confirm,
                     reply_markup=_needs_ticker_markup(result, db_path) or _ladder_markup(result),
                 )
+                _stash_card_mid(result.note_id, mid, db_path)
                 tid = _tap(result, db_path)
                 if tid is not None:
                     bump("wondering")
@@ -499,7 +618,7 @@ def poll_once(
             bump(result.status)
             if result.status == "landed":
                 dest.unlink(missing_ok=True)  # raw audio is transient — purge once landed
-            _confirm(
+            mid = _confirm(
                 token,
                 update,
                 _confirm_status(result),
@@ -507,6 +626,7 @@ def poll_once(
                 enabled=confirm,
                 reply_markup=_needs_ticker_markup(result, db_path) or _ladder_markup(result),
             )
+            _stash_card_mid(result.note_id, mid, db_path)
             tid = _tap(result, db_path)
             if tid is not None:
                 bump("wondering")
@@ -537,7 +657,7 @@ def poll_once(
                 external_ref=f"tg:{update.update_id}",
                 db_path=db_path,
             )
-            _confirm(
+            mid = _confirm(
                 token,
                 update,
                 "reading_landed" if rd.status == "landed" else rd.status,
@@ -545,6 +665,7 @@ def poll_once(
                 enabled=confirm,
                 reply_markup=_ladder_markup(rd),
             )
+            _stash_card_mid(rd.note_id, mid, db_path)
             bump(f"reading_{rd.status}")
         elif update.kind == "callback":
             # The Phase-1 research surface: an inline-button press (run a wondering,

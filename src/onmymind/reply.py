@@ -15,9 +15,13 @@ unroutable reply becomes a conversation, never a destructive action.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
+
+log = logging.getLogger(__name__)
 
 PURPOSE = "ledger_reply_intent"
 
@@ -117,6 +121,60 @@ def classify_reply_for_eval(card_text: str, reply_text: str) -> dict[str, object
     return {"intent": verdict.intent}
 
 
+def handle_reply(
+    note_id: int,
+    text: str,
+    *,
+    db_path: Path | str | None = None,
+) -> dict[str, object]:
+    """The ONE reply core — classify a free-text reply on a card, then route it.
+
+    One brain behind two mouths: the web reply box (``POST
+    /api/onmymind/<id>/reply``) and the Telegram reply-to-a-card path both call
+    this and get the identical JSON-shaped dict, so a reply typed at the desk
+    and one thumbed into the thread behave the same. Action intents flow through
+    the SAME ``act_on_feed_item`` core the ladder buttons call; ``note`` appends
+    to the card's owner-reply thread; ``question`` hands back ``{mode: 'chat'}``
+    (the caller answers/streams). A classifier failure fails OPEN to
+    conversation — answering is always safe, acting is not. NEVER raises.
+
+    Returns one of:
+      * action  → ``{ok, mode: 'acted', intent, removed, ladder_label, receipt}``
+      * note    → ``{ok: True, mode: 'acted', intent: 'note', receipt: 'Noted.'}``
+      * chat    → ``{ok: True, mode: 'chat', intent}``
+    Assumes the note exists (callers do the 404); a missing note degrades to
+    chat/question rather than raising.
+    """
+    from onmymind.feed import LADDER_LABELS, act_on_feed_item
+    from user_state.notes import get_note, patch_note_context
+
+    note = get_note(note_id, db_path=db_path)
+    if note is None:
+        return {"ok": False, "mode": "chat", "intent": "question"}
+    try:
+        verdict = classify_reply(note.body, text)
+    except Exception:  # classifier failure degrades to conversation
+        log.warning({"event": "ledger_reply_classify_failed", "note_id": note_id}, exc_info=True)
+        return {"ok": True, "mode": "chat", "intent": "question"}
+    if verdict.is_action:
+        res = act_on_feed_item(note_id, ACTION_VERB[verdict.intent], db_path=db_path)
+        return {
+            "ok": res.ok,
+            "mode": "acted",
+            "intent": verdict.intent,
+            "removed": res.removed,
+            "ladder_label": LADDER_LABELS.get(res.ladder or "", ""),
+            "receipt": res.message,
+        }
+    if verdict.intent == "note":
+        replies = (note.context or {}).get("owner_replies")
+        thread = list(cast("list[object]", replies)) if isinstance(replies, list) else []
+        thread.append(text)
+        patch_note_context(note_id, {"owner_replies": thread[-20:]}, db_path=db_path)
+        return {"ok": True, "mode": "acted", "intent": "note", "receipt": "Noted."}
+    return {"ok": True, "mode": "chat", "intent": verdict.intent}
+
+
 __all__ = [
     "ACTION_INTENTS",
     "ACTION_VERB",
@@ -125,4 +183,5 @@ __all__ = [
     "ReplyVerdict",
     "classify_reply",
     "classify_reply_for_eval",
+    "handle_reply",
 ]

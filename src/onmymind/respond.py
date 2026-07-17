@@ -24,6 +24,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+from collections.abc import Sequence
 from pathlib import Path
 
 from ask.context import build_portfolio_pack
@@ -177,4 +178,44 @@ def answer_capture(
         return None
 
 
-__all__ = ["answer_capture", "answer_enabled", "is_answerable_capture", "will_answer"]
+def answer_text(
+    text: str,
+    *,
+    tickers: Sequence[str] = (),
+    repo_root: Path | str,
+    db_path: Path | str,
+) -> str | None:
+    """Answer an arbitrary Ledger question through the unified ask engine and
+    return the text — no note lookup, no storage.
+
+    The card-reply *chat* path (a follow-up question thumbed under a card on
+    Telegram, or typed in the web reply box) calls this so it gets the SAME
+    engine answer :func:`answer_capture` stores at capture time — one brain. It
+    deliberately skips the answerability heuristic (:func:`is_answerable_capture`)
+    because the reply classifier already decided this reply is a question.
+    Returns ``None`` when answers are disabled or the engine produced nothing;
+    NEVER raises (an answer failure is fire-and-forget)."""
+    if not answer_enabled():
+        return None
+    try:
+        rr = Path(repo_root)
+        dbp = Path(db_path)
+        pack = build_portfolio_pack(rr, dbp)
+        turn = AskTurn(text=text, tickers=list(tickers))
+        folded = fold_events(respond_turn(turn, pack, db_path=dbp, repo_root=rr))
+        out = str(folded.get("text") or folded.get("message") or "").strip()
+        if folded.get("status") != "ok" or not out:
+            return None
+        return out
+    except Exception:  # answering must never break the caller
+        log.warning({"event": "ledger_answer_text_failed"}, exc_info=True)
+        return None
+
+
+__all__ = [
+    "answer_capture",
+    "answer_enabled",
+    "answer_text",
+    "is_answerable_capture",
+    "will_answer",
+]
