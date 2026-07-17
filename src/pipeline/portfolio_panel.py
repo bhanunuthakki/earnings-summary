@@ -967,11 +967,23 @@ def _alpha_section(pa: PositionAlpha) -> str:
 
 def _kpi_card(label: str, value: str, *, sub: str = "", tone: str = "") -> str:
     sub_html = f'<div class="kpi-sub">{escape(sub)}</div>' if sub else ""
-    cls = f" {tone}" if tone else ""
+    # A pos/neg tone colors the VALUE (green/red number) via the kit .k-num-* on
+    # the value's own span — a child rule beats .kpi-value's default color with
+    # no shell compound. A tone-* rides the card as its border rail.
+    if tone in ("pos", "neg"):
+        value_html = f'<div class="kpi-value"><span class="{_NUM_CLS[tone]}">{value}</span></div>'
+        card_cls = ""
+    else:
+        value_html = f'<div class="kpi-value">{value}</div>'
+        card_cls = f" {tone}" if tone else ""
     return (
-        f'<div class="kpi-card{cls}"><div class="kpi-label">{escape(label)}</div>'
-        f'<div class="kpi-value">{value}</div>{sub_html}</div>'
+        f'<div class="kpi-card{card_cls}"><div class="kpi-label">{escape(label)}</div>'
+        f"{value_html}{sub_html}</div>"
     )
+
+
+# Semantic pos/neg → the kit's green/red number-text classes (design_language §4).
+_NUM_CLS = {"pos": "k-num-pos", "neg": "k-num-neg", "": ""}
 
 
 def _tone(v: float | None) -> str:
@@ -984,7 +996,7 @@ def _tone(v: float | None) -> str:
 def _money_cell(v: float | None, *, colored: bool = False) -> str:
     if v is None:
         return '<td class="num muted">—</td>'
-    cls = "num" + (f" {_tone(v)}" if colored else "")
+    cls = "num" + (f" {_NUM_CLS[_tone(v)]}" if colored else "")
     return f'<td class="{cls}">{_money(v)}</td>'
 
 
@@ -2271,12 +2283,12 @@ def _tail_stress_row(r: TailStressRow) -> str:
             "</tr>"
         )
     bear_cell = (
-        f'<span class="{_tone(r.bear_return_pct)}">{r.bear_return_pct:+.0f}%</span>'
+        f'<span class="{_NUM_CLS[_tone(r.bear_return_pct)]}">{r.bear_return_pct:+.0f}%</span>'
         if r.bear_return_pct is not None
         else '<span class="muted">&mdash;</span>'
     )
     contrib_cell = (
-        f'<span class="{_tone(r.contribution_pct)}">{r.contribution_pct:+.1f}pp</span>'
+        f'<span class="{_NUM_CLS[_tone(r.contribution_pct)]}">{r.contribution_pct:+.1f}pp</span>'
         if r.contribution_pct is not None
         else '<span class="muted">&mdash;</span>'
     )
@@ -2664,7 +2676,7 @@ def _joint_latam_block(stress: EventStressResult | None) -> str:
     top_legs = sorted(stress.legs, key=lambda leg: leg.return_pct)[:5]
     legs_html = ", ".join(
         f"{ticker_label(leg.ticker, href=f'../research/{escape(leg.ticker)}/')} "
-        f'<span class="{_tone(leg.return_pct)}" title="{escape(leg.label)}">'
+        f'<span class="{_NUM_CLS[_tone(leg.return_pct)]}" title="{escape(leg.label)}">'
         f"{leg.return_pct:+.0f}%</span>"
         for leg in top_legs
     )
@@ -2876,7 +2888,7 @@ def _rrg_row(r: RiskRewardGapRow) -> str:
     ticker = ticker_label(r.ticker, href=f"../research/{escape(r.ticker)}/")
     if r.gap_pct is not None:
         gap_tone = "neg" if r.gap_pct > 0 else "pos"
-        gap_cell = f'<span class="{gap_tone}">{r.gap_pct:+.0f}pp</span>'
+        gap_cell = f'<span class="{_NUM_CLS[gap_tone]}">{r.gap_pct:+.0f}pp</span>'
     else:
         gap_cell = '<span class="muted">&mdash;</span>'
     if r.expected_return_pct is not None:
@@ -2886,7 +2898,7 @@ def _rrg_row(r: RiskRewardGapRow) -> str:
             if r.low_confidence and r.confidence_reason
             else ""
         )
-        exp_cell = f'<span class="{e_tone}">{r.expected_return_pct:+.0f}%</span>{warn}'
+        exp_cell = f'<span class="{_NUM_CLS[e_tone]}">{r.expected_return_pct:+.0f}%</span>{warn}'
     else:
         exp_cell = '<span class="muted">&mdash;</span>'
     reward_cell = (
@@ -3040,7 +3052,7 @@ def _positions_table(live: LivePortfolio) -> str:
         treat_str = ", ".join(_TAX_LABELS.get(t, t) for t in treatments) or "—"
         pnl = p.unrealized_pnl
         pnl_cell = (
-            f'<td class="num {"pos" if pnl >= 0 else "neg"}">{_money(pnl)}</td>'
+            f'<td class="num {"k-num-pos" if pnl >= 0 else "k-num-neg"}">{_money(pnl)}</td>'
             if pnl is not None
             else '<td class="num muted">—</td>'
         )
