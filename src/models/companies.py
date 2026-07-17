@@ -27,6 +27,38 @@ class FilingRegime(StrEnum):
     FORM_40F = "40-F"
 
 
+class BusinessModelClass(StrEnum):
+    """Coarse business-model bucket the metrics engine's ``applicability.py``
+    (src/compute/metrics_engine/) uses to exclude formulas that don't apply
+    to a ticker's capital structure — e.g. `gross_margin` for a bank with no
+    COGS concept. Mirrors `tracked_companies.business_model_class` (alembic
+    0156). Default is `OPERATING_COMPANY`; `INSURANCE` has no current roster
+    member but is kept as a first-class value since several formulas'
+    ``excluded_business_models`` name it explicitly (docs/design/
+    bottoms_up_metrics_engine.md §1) — extend the roster mapping, not this enum,
+    when an insurer is added.
+    """
+
+    OPERATING_COMPANY = "operating_company"
+    BANK = "bank"
+    INSURANCE = "insurance"
+    HOLDCO = "holdco"
+
+
+class AccountingStandard(StrEnum):
+    """Which line-item vocabulary a ticker's `financial_facts` rows follow.
+
+    Drives `compute.metrics_engine.inputs.resolve_concept` — US_GAAP uses the
+    identity-mapped field names already in `financial_facts.line_item`; IFRS
+    uses a per-ticker-verified mapping populated incrementally (Phase 2).
+    NOT inferred from `filing_regime` (a 20-F filer is not reliably IFRS —
+    some file US-GAAP-reconciled), so this is seeded explicitly per ticker.
+    """
+
+    US_GAAP = "us_gaap"
+    IFRS = "ifrs"
+
+
 class ListType(StrEnum):
     """How a ticker enters the tracked_companies table.
 
@@ -66,3 +98,10 @@ class Company(BaseModel):
     fiscal_year_end: str | None = None
     fmp_data_saved: bool = False
     fmp_data_upto: str | None = None
+    # Metrics-engine classification columns (alembic 0156/0157). Both default
+    # to the common case (an operating company reporting US-GAAP) so every
+    # pre-existing row is well-formed the moment the column lands; a real
+    # bank/holdco/IFRS filer is seeded explicitly by the migration's data step
+    # or via a follow-up UPDATE, never inferred at read time.
+    business_model_class: BusinessModelClass = BusinessModelClass.OPERATING_COMPANY
+    accounting_standard: AccountingStandard = AccountingStandard.US_GAAP
