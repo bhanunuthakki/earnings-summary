@@ -915,6 +915,44 @@ def create_app(
             return ({"ok": ok}, 200 if ok else 404)
         return ({"error": f"unknown action {action!r}"}, 400)
 
+    @app.route("/api/profile/fact/<int:fact_id>/affirm", methods=["POST", "OPTIONS"])
+    def profile_fact_affirm(fact_id: int):
+        """Ratify one proposed owner-profile fact (tenet-2 Phase 1 gated
+        assertion, §7.1) — the ONLY way a fact becomes 'affirmed'. CSRF-guarded
+        by the global Origin check."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from owner_profile.store import affirm_fact
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            row = affirm_fact(conn, fact_id)
+            conn.commit()
+        finally:
+            conn.close()
+        _bump_activation_count("act:profile:affirm")
+        return (
+            {"ok": row is not None, "status": row.status if row else None},
+            200 if row else 404,
+        )
+
+    @app.route("/api/profile/fact/<int:fact_id>/reject", methods=["POST", "OPTIONS"])
+    def profile_fact_reject(fact_id: int):
+        """Reject one proposed owner-profile fact — retires it without ever
+        conditioning advice. CSRF-guarded by the global Origin check."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from owner_profile.store import reject_fact
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            ok = reject_fact(conn, fact_id)
+            conn.commit()
+        finally:
+            conn.close()
+        _bump_activation_count("act:profile:reject")
+        return ({"ok": ok}, 200 if ok else 404)
+
     @app.route("/api/tenets/distill", methods=["POST", "OPTIONS"])
     def tenets_distill():
         """Owner-tapped Worldview distillation: distil the owner's flagged
