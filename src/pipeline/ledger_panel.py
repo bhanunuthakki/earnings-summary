@@ -27,6 +27,7 @@ from onmymind.feed import (
     onmymind_enabled,
 )
 from onmymind.respond import is_answerable_capture
+from owner_profile.store import OwnerProfileFactRow
 from pipeline.worldview_panel import render_worldview_section
 from research.proposals import (
     ResearchProposal,
@@ -1680,10 +1681,49 @@ _PACKET_JS = """<script>(function(){
     var settle=e.target.closest(
       '[data-verb]:not([data-verb="steer"]),[data-tenet-action],[data-rec-verdict],'
       +'[data-falsifier-action="ratify"],[data-falsifier-action="drop"],'
-      +'[data-steer-save],[data-rewrite-save]');
+      +'[data-steer-save],[data-rewrite-save],[data-profile-action]');
     if(settle){ setTimeout(function(){ advance(root); }, 900); }
   });
 })();</script>"""
+
+# Proposed owner-profile facts (tenet-2 Phase 1) as a packet item: the fact's
+# plain-English narrative + a one-tap Affirm/Reject — the gated-assertion
+# ratification surface (§7.1 of docs/design/tenet2_advisory_program.md).
+# Nothing an import stages becomes 'affirmed' without this explicit tap.
+_PROFILE_FACT_JS = """<script>(function(){
+  if(window.__ledgerProfileFactWired){ return; }
+  window.__ledgerProfileFactWired = true;
+  document.addEventListener('click', function(e){
+    var act=e.target.closest('[data-profile-action]');
+    if(!act){ return; }
+    var card=act.closest('[data-profile-fact-id]'); if(!card){ return; }
+    var id=card.getAttribute('data-profile-fact-id');
+    var verb=act.getAttribute('data-profile-action');
+    act.disabled=true;
+    fetch('/api/profile/fact/'+id+'/'+verb,{method:'POST'})
+      .then(function(r){ return r.json(); })
+      .then(function(res){ if(!res || res.ok===false){ act.disabled=false; } })
+      .catch(function(){ act.disabled=false; });
+  });
+})();</script>"""
+
+
+def _profile_fact_packet_card(fact: OwnerProfileFactRow) -> str:
+    """One proposed owner-profile fact as a packet item: narrative +
+    Affirm/Reject. Reuses the ``.ledger-musing`` card shape; kit buttons only."""
+    return (
+        f'<div class="ledger-musing" data-profile-fact-id="{fact.id}">'
+        '<div class="ledger-musing-head">'
+        f'<span class="k-chip k-chip-mono">{escape(fact.category)}</span>'
+        f'<span class="ledger-chan">{escape(fact.key)}</span></div>'
+        f'<div class="ledger-body">{escape(fact.narrative)}</div>'
+        '<div class="ledger-cap-row">'
+        '<button type="button" class="k-btn k-btn-sm k-btn-primary" '
+        'data-profile-action="affirm">Still true</button>'
+        '<button type="button" class="k-btn k-btn-sm k-btn-danger" '
+        'data-profile-action="reject">Drop</button>'
+        "</div></div>"
+    )
 
 
 def _triage_packet_card(note: AnalystNoteRow) -> str:
@@ -1762,6 +1802,18 @@ def _packet_items(db_path: Path | str | None) -> list[str]:
         items.extend(reconcile_fragments)
     except Exception:
         pass
+    try:
+        from owner_profile.store import list_facts as _list_profile_facts
+        from user_state._db import open_conn as _open_profile_conn
+
+        conn = _open_profile_conn(db_path)
+        try:
+            proposed_facts = _list_profile_facts(conn, status="proposed")
+        finally:
+            conn.close()
+        items.extend(_profile_fact_packet_card(f) for f in proposed_facts)
+    except Exception:
+        pass
     return items
 
 
@@ -1792,6 +1844,7 @@ def _packet_section(db_path: Path | str | None) -> str:
         + '<div class="pk-clear" hidden>Clear — nothing else needs you.</div>'
         + "</div></div>"
         + _PACKET_JS
+        + _PROFILE_FACT_JS
     )
 
 
