@@ -34,9 +34,12 @@ class _Bucket:
 
 
 class _Beta:
-    def __init__(self, sharpe: float | None, rf: float | None) -> None:
+    def __init__(
+        self, sharpe: float | None, rf: float | None, vol_ann: float | None = None
+    ) -> None:
         self.sharpe = sharpe
         self.risk_free_annual = rf
+        self.portfolio_volatility_annualized = vol_ann
 
 
 class _Positioning:
@@ -59,9 +62,17 @@ class _Analytics:
 
 
 class _Snapshot:
-    def __init__(self, *, sharpe=None, growth_tilt=None, captured_at="2026-06-13T04:00:00") -> None:  # type: ignore[no-untyped-def]
+    def __init__(  # type: ignore[no-untyped-def]
+        self,
+        *,
+        sharpe=None,
+        growth_tilt=None,
+        vol_ann=None,
+        captured_at="2026-06-13T04:00:00",
+    ) -> None:
         self.sharpe = sharpe
         self.growth_tilt = growth_tilt
+        self.portfolio_volatility_annualized = vol_ann
         self.captured_at = captured_at
 
 
@@ -108,7 +119,7 @@ def test_assemble_book_context_live_wins(monkeypatch: pytest.MonkeyPatch, tmp_pa
     (positioning, percent → fraction) and growth tilt (the factor roll-up)."""
     analytics = _Analytics(
         available=True,
-        beta=_Beta(sharpe=0.9, rf=0.04),
+        beta=_Beta(sharpe=0.9, rf=0.04, vol_ann=0.18),
         positioning=_Positioning(
             by_sector=[_Bucket("Technology", 35.0), _Bucket("Energy", 5.0)], correlations=[object()]
         ),
@@ -117,7 +128,7 @@ def test_assemble_book_context_live_wins(monkeypatch: pytest.MonkeyPatch, tmp_pa
         monkeypatch,
         weights={"AAA": 0.6, "BBB": 0.4},
         analytics=analytics,
-        snapshot=_Snapshot(sharpe=0.1, growth_tilt=0.1),
+        snapshot=_Snapshot(sharpe=0.1, growth_tilt=0.1, vol_ann=0.5),
         rollup_growth_tilt=0.42,
     )
     book = cfc.assemble_book_context(tmp_path, db_path=tmp_path / "x.db")
@@ -125,6 +136,7 @@ def test_assemble_book_context_live_wins(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert book.sharpe == pytest.approx(0.9)  # live beta, not the snapshot's 0.1
     assert book.risk_free_annual == pytest.approx(0.04)
     assert book.growth_tilt == pytest.approx(0.42)  # the roll-up, not the snapshot
+    assert book.vol_ann == pytest.approx(0.18)  # live beta, not the snapshot's 0.5
     assert book.sector_weights == {"Technology": pytest.approx(0.35), "Energy": pytest.approx(0.05)}
     assert book.captured_at == "2026-06-13T04:00:00"
 
@@ -139,12 +151,13 @@ def test_assemble_book_context_offline_falls_back_to_snapshot(
         monkeypatch,
         weights={"AAA": 1.0},
         analytics=_Analytics(available=False),
-        snapshot=_Snapshot(sharpe=0.7, growth_tilt=0.25),
+        snapshot=_Snapshot(sharpe=0.7, growth_tilt=0.25, vol_ann=0.22),
     )
     book = cfc.assemble_book_context(tmp_path, db_path=tmp_path / "x.db")
     assert book.sharpe == pytest.approx(0.7)  # snapshot fallback
     assert book.risk_free_annual is None  # tracker-only
     assert book.growth_tilt == pytest.approx(0.25)  # snapshot fallback
+    assert book.vol_ann == pytest.approx(0.22)  # snapshot fallback
     assert book.sector_weights == {}  # tracker-only
 
 
@@ -307,11 +320,12 @@ def test_assemble_book_context_degradation_reasons(
     assert "risk-free rate" in joined
     assert "sector weights" in joined
     assert "growth tilt" in joined
+    assert "book vol unknown" in joined
     assert "weights cache empty" in joined
     # Live-and-complete book carries no degradation reasons.
     analytics = _Analytics(
         available=True,
-        beta=_Beta(sharpe=0.9, rf=0.04),
+        beta=_Beta(sharpe=0.9, rf=0.04, vol_ann=0.16),
         positioning=_Positioning(by_sector=[_Bucket("Technology", 35.0)], correlations=[object()]),
     )
     _patch_book_sources(

@@ -87,6 +87,9 @@ class BookContext:
     sharpe: float | None = None  # book realized Sharpe (tracker /beta)
     risk_free_annual: float | None = None  # rf used for that Sharpe (tracker /beta)
     growth_tilt: float | None = None  # book qqq_beta - spy_beta (risk snapshot)
+    # book annualized vol, fraction — tracker /beta's portfolio_volatility_annualized,
+    # the same series the Risk tab's "Portfolio sigma" card reads.
+    vol_ann: float | None = None
     sector_weights: dict[str, float] = field(default_factory=dict[str, float])  # frac by sector
     captured_at: str | None = None  # snapshot freshness, for a low-confidence flag
     #: Human-readable reasons book inputs are absent ("tracker offline and no

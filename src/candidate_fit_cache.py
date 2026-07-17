@@ -118,6 +118,22 @@ def assemble_book_context(
     if risk_free_annual is None:
         degraded.append("risk-free rate is tracker-only — Marginal-Sharpe leg unscored")
 
+    # Same source + same fallback pattern as book Sharpe above — the tracker's
+    # /beta portfolio_volatility_annualized (the Risk tab's "Portfolio sigma"
+    # card), falling back to the cached risk snapshot's own copy of that figure.
+    vol_ann: float | None = None
+    if tracker_up and analytics.beta is not None:
+        vol_ann = analytics.beta.portfolio_volatility_annualized
+    if vol_ann is None and snapshot is not None:
+        vol_ann = snapshot.portfolio_volatility_annualized
+        if vol_ann is not None:
+            degraded.append(
+                f"tracker offline — book vol from the cached risk snapshot "
+                f"(as of {snapshot.captured_at or 'unknown'})"
+            )
+    if vol_ann is None:
+        degraded.append("tracker offline and no risk snapshot — book vol unknown")
+
     growth_tilt: float | None = None
     sector_weights: dict[str, float] = {}
     if tracker_up and analytics.positioning is not None:
@@ -146,6 +162,7 @@ def assemble_book_context(
         sharpe=sharpe,
         risk_free_annual=risk_free_annual,
         growth_tilt=growth_tilt,
+        vol_ann=vol_ann,
         sector_weights=sector_weights,
         captured_at=captured_at or None,
         degraded=tuple(degraded),
@@ -283,6 +300,7 @@ def materialize_candidate_fit(
             "sharpe": book.sharpe,
             "growth_tilt": book.growth_tilt,
             "risk_free_annual": book.risk_free_annual,
+            "vol_ann": book.vol_ann,
             "captured_at": book.captured_at,
             "degraded": list(book.degraded),
         },
