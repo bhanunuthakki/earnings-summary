@@ -77,9 +77,18 @@ _PANEL_STYLE = """<style>
    in-card rewrite textarea. */
 .tri-resolve-ta { width: 100%; min-height: 48px; resize: vertical;
   font-family: var(--sans); font-size: var(--fs-body); margin-bottom: var(--sp-2); }
-/* S4 drill-in: a right-side .k-overlay (look + open motion from the kit). */
-#triage-drawer { top: var(--sp-3); right: var(--sp-3); bottom: var(--sp-3);
-  width: min(460px, 92vw); display: flex; flex-direction: column;
+/* S4 drill-in: a right-side .k-overlay (look + open motion from the kit). Sized
+   to its CONTENT — a parked comment is a short disposition form, not a report —
+   with a viewport cap that only turns on scroll when a comment runs long. The
+   old rule pinned BOTH top+bottom insets, forcing a full-height rail: a ~120px
+   card stretched to ~800px left ~85% dead space under every short comment (the
+   "too much space" §3.1 never caught because drawer height is per-surface
+   layout, not guard-scoped). */
+#triage-drawer { top: var(--sp-3); right: var(--sp-3);
+  width: min(420px, 92vw);
+  max-height: calc(100vh - var(--sp-3) * 2);
+  max-height: calc(100dvh - var(--sp-3) * 2);
+  display: flex; flex-direction: column;
   padding: var(--sp-4); overflow: auto; gap: var(--sp-3); }
 .tri-d-bar { display: flex; align-items: baseline; gap: var(--sp-2); }
 .tri-d-bar h3 { font-size: var(--fs-section); font-weight: 600; margin: 0; margin-right: auto; }
@@ -93,6 +102,9 @@ _PANEL_STYLE = """<style>
 .tri-d-sel { color: var(--fg-soft); border-left: 2px solid var(--border);
   padding-left: var(--sp-3); }
 .tri-d-body { font-size: var(--fs-body); line-height: 1.6; color: var(--fg); white-space: pre-wrap; }
+/* The drawer's disposition strip is a footer: a hairline lifts it off the
+   comment body so Route/Resolve/Dismiss don't crowd the text. */
+#tri-d-acts { border-top: 1px solid var(--hairline); padding-top: var(--sp-3); }
 </style>"""
 
 
