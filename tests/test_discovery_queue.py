@@ -221,6 +221,24 @@ def test_panel_is_one_band_on_the_kit(repo: Path) -> None:
     assert "dq-sources-toggle" in html_out  # the weight-edit surface
 
 
+def test_dismiss_never_uses_window_prompt() -> None:
+    """Red-team wave B: Dismiss used to chain TWO window.prompt() calls (why
+    passed, then what would make you revisit) — blocking OS modals that hide
+    the row being dismissed. Replaced with the in-card editor idiom
+    (ledger_panel.beginRewrite / journal_panel.beginEdit): both fields swap
+    into the row's own evidence-detail cell as one form, restoring the prior
+    content on cancel or failure."""
+    import inspect
+
+    from pipeline import discovery_panel
+
+    src = inspect.getsource(discovery_panel)
+    assert "window.prompt(" not in src
+    assert "data-dismiss-save" in src and "data-dismiss-cancel" in src
+    assert "data-dismiss-reason" in src and "data-dismiss-revisit" in src
+    assert "beginDismiss" in src
+
+
 def test_render_cap_discloses_elision(repo: Path) -> None:
     from pipeline import discovery_panel
 

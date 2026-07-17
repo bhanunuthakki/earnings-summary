@@ -102,7 +102,12 @@ _PANEL_STYLE = """<style>
 .ask-actions { margin-top:8px; display:flex; gap:10px; align-items:baseline;
   justify-content:space-between; flex-wrap:wrap; }
 .ask-actions-sum { color:var(--muted); font-size:var(--fs-caption); }
-.ask-actions-btns { display:flex; gap:8px; }
+.ask-actions-btns { display:flex; gap:8px; align-items:center; }
+/* In-card "Pin as view" name editor (replaces window.prompt — the ledger's
+   PR9 idiom: ledger_panel.beginRewrite / journal_panel.beginEdit). Swaps the
+   button row's own content for a name input + kit Save/Cancel, restoring the
+   buttons on cancel or failure. */
+.ask-view-name { flex:1; min-width:120px; padding:5px 9px; }
 .ask-busy { color:var(--muted); font-size:var(--fs-body); }
 .ask-busy .dots::after { content:'…'; animation: askdots 1.2s steps(4, end) infinite; }
 .ask-cite-row { margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; }
@@ -828,14 +833,35 @@ _PANEL_JS = """
     } else if (act.getAttribute('data-ask-act') === 'peers') {
       addPeersToCard(act, holder, spec);
     } else {
-      var name = window.prompt('Save this view as…');
-      if (!name) return;
-      fetch('/api/views', {
-        method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({name: name.trim(), spec: spec})
-      }).then(function (r) { if (r.ok) refreshSaved(); });
+      beginSaveView(act, spec);
     }
   });
+  function beginSaveView(btn, spec) {
+    var row = btn.closest('.ask-actions-btns');
+    if (!row || row.getAttribute('data-editing') === '1') return;
+    row.setAttribute('data-editing', '1');
+    var original = row.innerHTML;
+    row.innerHTML =
+      '<input type="text" class="ask-view-name" placeholder="Name this view…">'
+      + '<button type="button" class="k-btn k-btn-primary k-btn-sm" data-view-save>Save</button>'
+      + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-view-cancel>Cancel</button>';
+    var input = row.querySelector('.ask-view-name');
+    if (input) input.focus();
+    function restore() {
+      row.innerHTML = original;
+      row.removeAttribute('data-editing');
+    }
+    row.querySelector('[data-view-cancel]').addEventListener('click', restore);
+    row.querySelector('[data-view-save]').addEventListener('click', function () {
+      var name = (input && input.value || '').trim();
+      if (!name) { if (input) input.focus(); return; }
+      this.disabled = true;
+      fetch('/api/views', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name: name, spec: spec})
+      }).then(function (r) { if (r.ok) refreshSaved(); restore(); });
+    });
+  }
 
   // Home-dock handoff (Ask v4): the dock stashes its thread when popping
   // out to this tab (store key askThread — legacy cc-ask-thread migrates);

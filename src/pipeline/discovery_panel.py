@@ -91,6 +91,17 @@ _PANEL_STYLE = """<style>
 .dq-log.is-on { display: block; }
 .dq-hint { color: var(--muted); font-size: var(--fs-caption); margin-top: var(--sp-3); }
 .dq-empty { color: var(--muted); padding: var(--sp-4) 0; }
+/* In-card Dismiss editor (replaces the two sequential window.prompt calls —
+   ledger_panel.beginRewrite / journal_panel.beginEdit idiom): swaps the row's
+   own evidence-detail cell for a reason + revisit-condition form, unhiding it
+   if collapsed and restoring the prior content on cancel. */
+.dq-dismiss-label { display: block; color: var(--muted); font-size: var(--fs-caption);
+  margin: var(--sp-2) 0 var(--sp-1); }
+.dq-dismiss-label:first-child { margin-top: 0; }
+.dq-dismiss-ta, .dq-dismiss-revisit { width: 100%; box-sizing: border-box;
+  font-family: var(--sans); font-size: var(--fs-body); }
+.dq-dismiss-ta { min-height: 48px; resize: vertical; }
+.dq-dismiss-row { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
 </style>"""
 
 # Plain string (not an f-string) so braces pass through untouched.
@@ -100,6 +111,9 @@ _PANEL_JS = """
   if (!root || root.dataset.wired) return;
   root.dataset.wired = '1';
   function el(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
   function currentStatus() {
     var on = root.querySelector('.dq-statusfilter.is-on');
     return on ? on.getAttribute('data-status') : 'live';
@@ -167,6 +181,55 @@ _PANEL_JS = """
       else { logLine('build rejected: ' + (res.body.error || 'unknown')); }
     });
   }
+  // In-card Dismiss editor (replaces the two sequential window.prompt calls):
+  // swaps the row's own evidence-detail cell for a reason + revisit-condition
+  // form (both optional, sent together — blank reason = queue-state-only
+  // dismiss per the server contract), unhiding the row if it was collapsed
+  // and restoring the prior content on cancel or failure.
+  function beginDismiss(holder, id, tk) {
+    if (holder.getAttribute('data-editing') === '1') return;
+    var detail = el('dq-detail-' + id);
+    var cell = detail && detail.querySelector('td:last-child');
+    if (!cell) { return; }
+    holder.setAttribute('data-editing', '1');
+    var wasHidden = detail.hidden;
+    var original = cell.innerHTML;
+    detail.hidden = false;
+    cell.innerHTML =
+      '<div class="dq-dismiss-form">'
+      + '<label class="dq-dismiss-label">Passing on ' + esc(tk) + '? Optionally note WHY — '
+      + 'records a gradeable avoid so a passed name that later triples leaves a trace '
+      + '(blank = just dismiss).</label>'
+      + '<textarea class="dq-dismiss-ta" rows="2" data-dismiss-reason></textarea>'
+      + '<label class="dq-dismiss-label">What would make you revisit ' + esc(tk) + '? '
+      + '(optional — e.g. "a credible competitor stumbles", "valuation halves below $90")</label>'
+      + '<input type="text" class="dq-dismiss-revisit" data-dismiss-revisit>'
+      + '<div class="dq-dismiss-row">'
+      + '<button type="button" class="k-btn k-btn-danger k-btn-sm" data-dismiss-save>Dismiss</button>'
+      + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-dismiss-cancel>Cancel</button>'
+      + '</div></div>';
+    function restore() {
+      cell.innerHTML = original;
+      detail.hidden = wasHidden;
+      holder.removeAttribute('data-editing');
+    }
+    var reasonTa = cell.querySelector('[data-dismiss-reason]');
+    var revisitInput = cell.querySelector('[data-dismiss-revisit]');
+    if (reasonTa) reasonTa.focus();
+    cell.querySelector('[data-dismiss-cancel]').addEventListener('click', restore);
+    cell.querySelector('[data-dismiss-save]').addEventListener('click', function () {
+      this.disabled = true;
+      var body = {status: 'dismissed'};
+      var reason = (reasonTa && reasonTa.value || '').trim();
+      var revisit = (revisitInput && revisitInput.value || '').trim();
+      if (reason) body.reason = reason;
+      if (revisit) body.revisit_if = revisit;
+      fetch('/api/discovery/candidates/' + id + '/status', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      }).then(function (r) { if (r.ok) refresh(); else restore(); });
+    });
+  }
   // Status chips behave like a radio group.
   root.addEventListener('click', function (ev) {
     var chip = ev.target.closest('.dq-statusfilter');
@@ -213,27 +276,15 @@ _PANEL_JS = """
     var id = holder.getAttribute('data-cand-id');
     var act = btn.getAttribute('data-act');
     if (act === 'build') { buildTickers([holder.getAttribute('data-cand-ticker')]); return; }
-    var status = {queue: 'queued', dismiss: 'dismissed', reopen: 'new'}[act];
-    if (!status) return;
-    var body = {status: status};
-    // Dismiss optionally becomes a first-class, gradeable AVOID decision: note
-    // WHY you passed (+ what would make you revisit). Blank = queue-state only.
     if (act === 'dismiss') {
-      var tk = holder.getAttribute('data-cand-ticker') || 'this name';
-      var reason = window.prompt('Passing on ' + tk + '? Optionally note WHY — records a '
-        + 'gradeable avoid so a passed name that later triples leaves a trace. '
-        + '(blank = just dismiss)', '');
-      if (reason && reason.trim()) {
-        body.reason = reason.trim();
-        var revisit = window.prompt('What would make you revisit ' + tk + '? (optional — e.g. '
-          + '"a credible competitor stumbles", "valuation halves below $90", '
-          + '"NPLs above 7% for 2 quarters")', '');
-        if (revisit && revisit.trim()) body.revisit_if = revisit.trim();
-      }
+      beginDismiss(holder, id, holder.getAttribute('data-cand-ticker') || 'this name');
+      return;
     }
+    var status = {queue: 'queued', reopen: 'new'}[act];
+    if (!status) return;
     fetch('/api/discovery/candidates/' + id + '/status', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body)
+      body: JSON.stringify({status: status})
     }).then(function (r) { if (r.ok) refresh(); });
   });
   el('dq-min-score').addEventListener('change', refresh);
