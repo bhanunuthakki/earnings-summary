@@ -31,8 +31,6 @@ _ATTRIB_STYLE = """<style>
 .atr-ticker { font-family:var(--mono); font-weight:600; }
 .atr-alpha { font-family:var(--mono); font-variant-numeric:tabular-nums;
   font-size:var(--fs-caption); }
-.atr-alpha.pos { color:var(--ok); }
-.atr-alpha.neg { color:var(--bad); }
 .atr-window { color:var(--muted); font-size:var(--fs-micro); font-family:var(--mono); }
 .atr-narrative { font-size:var(--fs-body); line-height:1.55; color:var(--fg-soft); margin:0; }
 .atr-sub { color:var(--muted); font-size:var(--fs-caption); margin:2px 0 10px; }
@@ -42,7 +40,7 @@ _ATTRIB_STYLE = """<style>
 def _alpha_chip(a: PositionAttribution) -> str:
     if a.alpha_usd is None:
         return '<span class="atr-alpha" style="color:var(--muted)">&alpha; &mdash;</span>'
-    tone = "pos" if a.alpha_usd >= 0 else "neg"
+    tone = "k-num-pos" if a.alpha_usd >= 0 else "k-num-neg"
     sign = "+" if a.alpha_usd >= 0 else "-"
     return f'<span class="atr-alpha {tone}">&alpha; {sign}${abs(a.alpha_usd):,.0f}</span>'
 

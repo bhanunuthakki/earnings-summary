@@ -304,12 +304,12 @@ def render_ticker_peek(
     if price is not None:
         move = ""
         if day_move is not None:
-            mtone = "pos" if day_move >= 0 else "neg"
+            mtone = "k-num-pos" if day_move >= 0 else "k-num-neg"
             move = f' <span class="{mtone}">{escape(fmt_pct(day_move, signed=True))}</span>'
         rows.append(("Price", f"${price:,.2f}{move}"))
     if fv_gap is not None:
         # > 0 — price above fair value (rich); < 0 — below (cheap).
-        gtone = "neg" if fv_gap > 0 else "pos"
+        gtone = "k-num-neg" if fv_gap > 0 else "k-num-pos"
         rows.append(
             ("vs DCF FV", f'<span class="{gtone}">{escape(fmt_pct(fv_gap, signed=True))}</span>')
         )

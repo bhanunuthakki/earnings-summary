@@ -240,6 +240,12 @@ a.k-tick-sym:hover { color: var(--accent); }
 .k-dot-bad   { color: var(--bad); }
 .k-dot-muted { color: var(--muted); }
 
+/* ---- green/red number text: the one positive/negative numeric tone
+   (P&L cells, deltas, alpha). Status green/red only — the report's .pos
+   accent-wayfinding is a separate, local concern and is NOT this. ---- */
+.k-num-pos { color: var(--ok); }
+.k-num-neg { color: var(--bad); }
+
 /* ---- overlay primitive (Law 3): one scrim + one elevated panel. S4's
    CCOverlay JS registers/dismisses these (close + Esc + scrim click-out + focus
    trap/restore); the kit owns their look + open motion. Exit is instant — the

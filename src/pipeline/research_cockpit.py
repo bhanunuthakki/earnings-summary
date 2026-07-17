@@ -1285,14 +1285,14 @@ def _sharpe_delta_cell(row: CockpitRow) -> str:
 def _signed_pct_cell(v: float | None) -> str:
     if v is None:
         return _muted()
-    tone = "pos" if v >= 0 else "neg"
+    tone = "k-num-pos" if v >= 0 else "k-num-neg"
     return f"<span class='{tone}'>{escape(fmt_pct(v, signed=True))}</span>"
 
 
 def _plain_pct_cell(v: float | None) -> str:
     if v is None:
         return _muted()
-    tone = "pos" if v >= 0 else "neg"
+    tone = "k-num-pos" if v >= 0 else "k-num-neg"
     return f"<span class='{tone}'>{escape(fmt_pct(v))}</span>"
 
 
@@ -1350,7 +1350,7 @@ def _price_cell(row: CockpitRow) -> str:
         return _muted()
     move = ""
     if row.day_move_pct is not None:
-        tone = "pos" if row.day_move_pct >= 0 else "neg"
+        tone = "k-num-pos" if row.day_move_pct >= 0 else "k-num-neg"
         move = f" <span class='{tone}'>{escape(fmt_pct(row.day_move_pct, signed=True))}</span>"
     title = (
         f" title='last FMP quote {escape(fmt_reltime(row.price_asof))}'" if row.price_asof else ""
@@ -1362,7 +1362,7 @@ def _fv_gap_cell(row: CockpitRow) -> str:
     if row.fv_gap_pct is None:
         return _muted()
     # over_under > 0 — price ABOVE fair value (rich); < 0 — below (cheap).
-    tone = "neg" if row.fv_gap_pct > 0 else "pos"
+    tone = "k-num-neg" if row.fv_gap_pct > 0 else "k-num-pos"
     bits: list[str] = []
     if row.fair_value is not None and row.dcf_price is not None:
         bits.append(f"DCF FV ${row.fair_value:,.2f} vs ${row.dcf_price:,.2f}")
@@ -1528,7 +1528,5 @@ a.k-chip:hover { color: var(--fg); border-color: var(--border-2); }
 .stale-dot { cursor: help; }
 a.stale-dot { text-decoration: none; cursor: pointer; }
 .dot-col { text-align: center; width: 28px; }
-td.pos, span.pos { color: var(--ok); }
-td.neg, span.neg { color: var(--bad); }
 </style>
 """.strip()

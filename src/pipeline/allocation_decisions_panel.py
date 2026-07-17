@@ -1188,7 +1188,7 @@ def _audit_row(r: SizingAuditRow) -> str:
         else '<span class="muted">&mdash;</span>'
     )
     if r.fv_gap_pct is not None:
-        gap_tone = "neg" if r.fv_gap_pct > 0 else "pos"
+        gap_tone = "k-num-neg" if r.fv_gap_pct > 0 else "k-num-pos"
         # When the run carries a scenario range, the cell hover spells out the
         # asymmetry the base gap hides (price vs the bear / bull fair value).
         range_bits = [
@@ -1201,7 +1201,7 @@ def _audit_row(r: SizingAuditRow) -> str:
     else:
         gap = '<span class="muted">&mdash;</span>'
     if r.alpha_usd is not None:
-        a_tone = "pos" if r.alpha_usd >= 0 else "neg"
+        a_tone = "k-num-pos" if r.alpha_usd >= 0 else "k-num-neg"
         alpha = f'<span class="{a_tone}">{_money(r.alpha_usd, signed=True)}</span>'
     else:
         alpha = '<span class="muted">&mdash;</span>'
@@ -1325,7 +1325,7 @@ def _cohort_trend_block(stats: CalibrationStats) -> str:
     else:
         pp = stats.hit_rate_delta * 100.0
         word = "improving" if stats.improving else ("flat" if abs(pp) < 0.5 else "slipping")
-        tone = "pos" if stats.improving else ("muted" if abs(pp) < 0.5 else "neg")
+        tone = "k-num-pos" if stats.improving else ("muted" if abs(pp) < 0.5 else "k-num-neg")
         headline = (
             f'Latest {grain} hit-rate is <span class="{tone}">{word} ({pp:+.0f}pp</span> '
             "vs the prior period)."
@@ -1335,7 +1335,7 @@ def _cohort_trend_block(stats: CalibrationStats) -> str:
         if c.conviction_gap is None:
             return '<span class="muted">&mdash;</span>'
         g = c.conviction_gap * 100.0
-        tone = "pos" if g >= 0 else "neg"
+        tone = "k-num-pos" if g >= 0 else "k-num-neg"
         return f'<span class="{tone}">{g:+.0f}pp</span>'
 
     rows = "".join(
@@ -1423,8 +1423,8 @@ def _calibration_section(stats: CalibrationStats) -> str:
         "<tr>"
         f"<td>{escape(b.conviction)}</td>"
         f'<td class="num">{b.graded}</td>'
-        f'<td class="num"><span class="pos">{b.correct}</span></td>'
-        f'<td class="num"><span class="neg">{b.wrong}</span></td>'
+        f'<td class="num"><span class="k-num-pos">{b.correct}</span></td>'
+        f'<td class="num"><span class="k-num-neg">{b.wrong}</span></td>'
         f'<td class="num">{b.mixed}</td>'
         f'<td class="num muted">{b.ungraded}</td>'
         f'<td class="num">{f"{b.hit_rate * 100.0:.0f}%" if b.hit_rate is not None else "&mdash;"}'
@@ -1582,8 +1582,8 @@ def _omission_block(stats: CalibrationStats) -> str:
     head = (
         '<h3 class="adc-sub">Errors of omission</h3>'
         f'<p class="adc-line">Of <b>{om.graded}</b> passed names graded, '
-        f'<span class="neg">{om.missed}</span> ran away (missed), '
-        f'<span class="pos">{om.dodged}</span> correctly dodged, {om.mixed} mixed — '
+        f'<span class="k-num-neg">{om.missed}</span> ran away (missed), '
+        f'<span class="k-num-pos">{om.dodged}</span> correctly dodged, {om.mixed} mixed — '
         f"miss rate {miss} ({escape(confidence_note(om.graded))}).</p>"
     )
     if not om.worst_misses:
@@ -1592,7 +1592,7 @@ def _omission_block(stats: CalibrationStats) -> str:
         "<tr>"
         f'<td class="when">{escape(m.made_at)}</td>'
         f'<td class="tk">{escape(m.ticker)}</td>'
-        '<td class="num"><span class="neg">'
+        '<td class="num"><span class="k-num-neg">'
         f"{f'+{m.outcome_pct * 100.0:.0f}%' if m.outcome_pct is not None else 'ran'}</span></td>"
         "</tr>"
         for m in om.worst_misses
@@ -1611,9 +1611,9 @@ def _reversal_verdict(outcome_label: str | None, vindicated: bool | None) -> str
     tone = _OUTCOME_TONE.get(outcome_label, "muted")
     badge = f'<span class="k-pill{_pill_tone(tone)}">{escape(outcome_label)}</span>'
     if vindicated is True:
-        return f'{badge} <span class="pos">reversal vindicated</span>'
+        return f'{badge} <span class="k-num-pos">reversal vindicated</span>'
     if vindicated is False:
-        return f'{badge} <span class="neg">reversal cost</span>'
+        return f'{badge} <span class="k-num-neg">reversal cost</span>'
     return badge
 
 
@@ -1643,7 +1643,7 @@ def _skill_decomposition_section(d: SkillDecomposition, beta: BetaStats | None =
 
     def kpi(label: str, v: float | None) -> str:
         body = _money(v, signed=True) if v is not None else "&mdash;"
-        tone = "" if v is None else (" pos" if v >= 0 else " neg")
+        tone = "" if v is None else (" k-num-pos" if v >= 0 else " k-num-neg")
         return (
             f'<span class="adc-kpi"><b class="sk-val{tone}">{body}</b>'
             f'<span class="sk-lbl">{label}</span></span>'
@@ -1701,7 +1701,7 @@ def _jensen_line(beta: BetaStats | None) -> str:
     if beta.alpha_significant is not None:
         t = f", t={beta.alpha_t_stat:.1f}" if beta.alpha_t_stat is not None else ""
         sig = (
-            f' &mdash; <span class="pos">statistically distinguishable from zero{t}</span>'
+            f' &mdash; <span class="k-num-pos">statistically distinguishable from zero{t}</span>'
             if beta.alpha_significant
             else f' &mdash; <span class="muted">not distinguishable from zero — '
             f"could be luck{t}</span>"
@@ -1713,7 +1713,7 @@ def _jensen_line(beta: BetaStats | None) -> str:
 
 
 def _signed_span(v: float) -> str:
-    return f'<span class="{"pos" if v >= 0 else "neg"}">{_money(v, signed=True)}</span>'
+    return f'<span class="{"k-num-pos" if v >= 0 else "k-num-neg"}">{_money(v, signed=True)}</span>'
 
 
 def _skill_read(d: SkillDecomposition) -> str:
@@ -1839,8 +1839,6 @@ _PANEL_CSS = """<style>
    (+ k-pill-bad for bear append, k-pill-ok for thesis update; every other kind
    is the neutral bare .k-pill). Tone is mapped in _TIMELINE_PILL_TONE. */
 .ad-body { font-size: var(--fs-body); line-height: 1.5; }
-td.pos, span.pos { color: var(--ok); }
-td.neg, span.neg { color: var(--bad); }
 /* Cohort trend curve (L8): sparkline + per-period table. */
 .adc-spark { width: 100%; max-width: 560px; height: 56px; display: block; margin: 2px 0 8px; }
 .adc-trend th, .adc-trend td { padding-top: 2px; padding-bottom: 2px; }
@@ -1848,8 +1846,6 @@ td.neg, span.neg { color: var(--bad); }
 /* Skill decomposition (L8): money KPIs stack a value over a label. */
 .sk-kpis .adc-kpi { display: flex; flex-direction: column; gap: 1px; }
 .sk-val { font-variant-numeric: tabular-nums; font-size: var(--fs-body); }
-.sk-val.pos { color: var(--ok); }
-.sk-val.neg { color: var(--bad); }
 .sk-lbl { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase;
   letter-spacing: 0.04em; }
 .sk-read { font-size: var(--fs-body); color: var(--fg); margin: 2px 0 10px; }

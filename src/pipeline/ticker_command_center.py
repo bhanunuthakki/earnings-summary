@@ -1272,7 +1272,7 @@ def _position_section(pos: PositionStrip) -> str:
         )
     pnl = pos.total_unrealized_pnl
     pct = pos.total_unrealized_pct
-    pnl_tone = "pos" if (pnl or 0) >= 0 else "neg"
+    pnl_tone = "k-num-pos" if (pnl or 0) >= 0 else "k-num-neg"
     rows = "".join(
         f"<tr><td>{escape(a.account_name)}</td>"
         f'<td class="num">{a.quantity:,.2f}</td>'
@@ -1290,8 +1290,8 @@ def _position_section(pos: PositionStrip) -> str:
         f'<div class="kpi-card"><div class="kpi-label">Shares</div><div class="kpi-value">{(pos.total_quantity or 0):,.2f}</div></div>'
         f'<div class="kpi-card"><div class="kpi-label">Cost basis</div><div class="kpi-value">{_money(pos.total_cost_basis)}</div></div>'
         f'<div class="kpi-card"><div class="kpi-label">Market value</div><div class="kpi-value">{_money(pos.total_market_value)}</div></div>'
-        f'<div class="kpi-card {pnl_tone}"><div class="kpi-label">Unrealized P&amp;L</div>'
-        f'<div class="kpi-value">{_money(pnl)}{f" ({pct * 100:+.1f}%)" if pct is not None else ""}</div></div>'
+        f'<div class="kpi-card"><div class="kpi-label">Unrealized P&amp;L</div>'
+        f'<div class="kpi-value {pnl_tone}">{_money(pnl)}{f" ({pct * 100:+.1f}%)" if pct is not None else ""}</div></div>'
         "</div>"
         f"{decision}"
         f'<table><thead><tr><th>Account</th><th class="num">Shares</th><th class="num">Value</th></tr></thead>'
@@ -1496,8 +1496,6 @@ _PAGE_HEAD = (
   tbody tr:hover td {{ background: var(--paper); }}
   td.num {{ text-align: right; }}
   code {{ font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }}
-  .pos .kpi-value, td.pos {{ color: var(--ok); }}
-  .neg .kpi-value, td.neg {{ color: var(--bad); }}
   .fresh-strip {{ display: flex; gap: 1px; margin-bottom: 22px; background: var(--border); border-radius: var(--radius); overflow: hidden; }}
   .fresh-cell {{ background: var(--surface); padding: 8px 14px; flex: 1; }}
   .fresh-label {{ font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}

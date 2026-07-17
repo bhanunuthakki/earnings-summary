@@ -45,6 +45,12 @@ Composition contract — ``controls_css(default)`` rides immediately after
   via ``--k-dot-size`` and adds layout only. THE replacement for the four
   duplicated dot-tone systems (``.dot-*`` / ``.fdot-*`` / ``.ch-dot-*`` /
   ``.cc-system-dot-*``).
+* ``.k-num-pos`` / ``.k-num-neg`` — the one green/red NUMBER-text tone (P&L
+  cells, deltas, alpha) → ``--ok`` / ``--bad``. THE dashboard/pipeline home for
+  the positive/negative numeric color that surfaces duplicated as ``td.pos`` /
+  ``.sk-val.pos`` etc. Status green/red only; the report's ``.pos``
+  accent-wayfinding (``--accent``/``--muted``) is a separate, LOCAL concern and
+  deliberately stays out of the kit.
 * ``.k-scrim`` + ``.k-overlay`` — the one transient-surface primitive (Law 3):
   a neutral scrim + an elevated, radiused, motion-on-open panel. ``CCOverlay``
   (S4) wires dismissal (close + Esc + scrim click-out + focus trap) on top; kit
@@ -240,6 +246,12 @@ a.k-tick-sym:hover { color: var(--accent); }
 .k-dot-warn  { color: var(--warn); }
 .k-dot-bad   { color: var(--bad); }
 .k-dot-muted { color: var(--muted); }
+
+/* ---- green/red number text: the one positive/negative numeric tone
+   (P&L cells, deltas, alpha). Status green/red only — the report's .pos
+   accent-wayfinding is a separate, local concern and is NOT this. ---- */
+.k-num-pos { color: var(--ok); }
+.k-num-neg { color: var(--bad); }
 
 /* ---- overlay primitive (Law 3): one scrim + one elevated panel. S4's
    CCOverlay JS registers/dismisses these (close + Esc + scrim click-out + focus

@@ -240,6 +240,18 @@ def test_status_dot_kit_is_currentcolor_circle_over_tokens() -> None:
         assert f"color: var({tok})" in rule
 
 
+def test_num_text_kit_is_green_red_over_tokens() -> None:
+    """``.k-num-pos`` / ``.k-num-neg`` are the one green/red NUMBER-text tone
+    (P&L cells, deltas, alpha) → --ok/--bad, so the dashboard/pipeline surfaces
+    stop duplicating td.pos/.sk-val.pos etc. Status green/red only — the report's
+    .pos accent-wayfinding (--accent/--muted) is a separate LOCAL concern."""
+    css = controls_css("dark")
+    pos = css.split(".k-num-pos {", 1)[1].split("}", 1)[0]
+    neg = css.split(".k-num-neg {", 1)[1].split("}", 1)[0]
+    assert "color: var(--ok)" in pos
+    assert "color: var(--bad)" in neg
+
+
 def test_overlay_primitive_scrim_and_elevation() -> None:
     """``.k-scrim`` + ``.k-overlay`` are the tokenized substrate S4's CCOverlay
     JS wires dismissal onto: neutral scrim, surface panel, one radius + the one
