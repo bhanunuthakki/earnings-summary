@@ -190,11 +190,21 @@ def _should_snapshot(
 SESSION = requests.Session()
 SESSION.headers["User-Agent"] = "earnings-summary/1.0"
 
-# Live HTTP-attempt counter. The cacher reads this after a run via the budget
-# file (`.tmp/cacher/budget_<YYYY-MM-DD>.json`) so the next invocation knows
-# how much daily quota is left. Counts every attempt (including 4xx) — that
-# matches FMP's billing model.
+# Live HTTP counters. The cacher reads the SERVED count after a run via the
+# budget file (`.tmp/cacher/budget_<YYYY-MM-DD>.json`) so the next invocation
+# knows how much daily quota is left.
+#   _CALL_COUNTER   — every attempt, including 429-rejected retries. Drives
+#                     the per-run --max-calls caps and the attempts printout.
+#   _SERVED_COUNTER — attempts FMP actually served (any non-429 response,
+#                     including 4xx — that matches FMP's billing model) plus,
+#                     conservatively, network errors that may have reached FMP.
+#                     A 429 is a quota REJECTION, not consumption: on the
+#                     2026-07-16 dead-quota morning the 03:00 cron logged 252
+#                     all-429 attempts into calls_made and blocked the whole
+#                     day's real drain after the provider window reset. Only
+#                     served attempts may spend the ledger.
 _CALL_COUNTER = 0
+_SERVED_COUNTER = 0
 _BUDGET_DIR = PROJECT_ROOT / ".tmp" / "cacher"
 
 # FMP starter-tier limit is 750 requests/minute. We size the token bucket at
@@ -242,19 +252,23 @@ TODAY_STR = TODAY.isoformat()
 def _http_get(url: str, params: dict) -> tuple[int, object | None, str | None]:
     full = {**params, "apikey": API_KEY}
     # 429 backoff: up to 3 retries, exponential
-    global _CALL_COUNTER
+    global _CALL_COUNTER, _SERVED_COUNTER
     for attempt in range(3):
         _BUCKET.acquire()
         _CALL_COUNTER += 1
         try:
             r = SESSION.get(url, params=full, timeout=TIMEOUT)
         except requests.RequestException as e:
+            # May or may not have reached FMP — count as served (overcounting
+            # the ledger is safe; undercounting re-breaches the provider cap).
+            _SERVED_COUNTER += 1
             return (0, None, f"network: {_redact(e)}")
         if r.status_code == 429:
             wait = 5 * (2**attempt)
             print(f"  [429 rate-limit, sleeping {wait}s]", flush=True)
             time.sleep(wait)
             continue
+        _SERVED_COUNTER += 1
         break
     code = r.status_code
     try:
@@ -1567,19 +1581,24 @@ def main():
         f"error={grand['error']} skipped={grand['skipped']} / total={grand['total']}"
     )
     print(f"  tickers processed: {len(targets)}")
-    print(f"  http attempts:     {_CALL_COUNTER}")
+    print(f"  http attempts:     {_CALL_COUNTER} (served by FMP: {_SERVED_COUNTER})")
 
-    # Append today's HTTP attempts to the daily budget ledger so the cacher
-    # can read it on the next invocation. Atomic append-or-create with read+
-    # rewrite — concurrent writers serialize through portfolio_db's busy_timeout
-    # at the consumer layer, but we don't double-write here.
+    # Append today's SERVED calls to the daily budget ledger so the cacher can
+    # read it on the next invocation. 429-rejected attempts are excluded —
+    # they never consumed provider quota, and counting them poisons the ledger
+    # on a dead-quota morning (blocks the day's real drain after the provider
+    # window resets). Raw attempts are kept in a separate key for forensics.
+    # Atomic append-or-create with read+rewrite — concurrent writers serialize
+    # through portfolio_db's busy_timeout at the consumer layer, but we don't
+    # double-write here.
     try:
         _BUDGET_DIR.mkdir(parents=True, exist_ok=True)
         budget_path = _BUDGET_DIR / f"budget_{TODAY_STR}.json"
         existing = {"calls_made": 0, "runs": 0}
         if budget_path.exists():
             existing = json.loads(budget_path.read_text(encoding="utf-8"))
-        existing["calls_made"] = existing.get("calls_made", 0) + _CALL_COUNTER
+        existing["calls_made"] = existing.get("calls_made", 0) + _SERVED_COUNTER
+        existing["attempts"] = int(existing.get("attempts", 0)) + _CALL_COUNTER
         existing["runs"] = existing.get("runs", 0) + 1
         existing["last_run_at"] = datetime.now().isoformat(timespec="seconds")
         budget_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
