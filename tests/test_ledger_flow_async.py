@@ -223,9 +223,11 @@ def test_ledger_console_renders_one_chrome(ctx: tuple[FlaskClient, Path]) -> Non
     assert 'data-console-jump="csec-journal"' in html
     # …and no second chip row or per-builder tab titles below it. (The CSS
     # class definition remains in the style block; the DIV is what's gone.
-    # The feed keeps its <h2>Ledger</h2> as the landing-section title — its
-    # chip is what's excluded from the band, per #876's merged-band design.)
+    # The feed's 'Ledger' chip is excluded from the band per #876's merged-band
+    # design; embedded it also sheds its own <h2>Ledger</h2> echo, since the
+    # band is already titled 'Ledger' and its Capture chip names the section.)
     assert '<div class="ledger-jump-toolbar">' not in html
+    assert "<h2>Ledger</h2>" not in html
     assert "<h2>Journal</h2>" not in html
     # Triage/Journal collapse to section-level h3 headings.
     assert 'class="tri-h"' in html
