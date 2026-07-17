@@ -3054,6 +3054,7 @@ def create_app(
             load_document,
             render_fallback_page,
             render_form10k_page,
+            render_statement_json_page,
             render_transcript_page,
         )
 
@@ -3062,6 +3063,16 @@ def create_app(
         if html is None:
             html = render_form10k_page(
                 repo_root, db_path, doc_id, request.args.get("section"), fragment=fragment
+            )
+        if html is None:
+            html = render_statement_json_page(
+                repo_root,
+                db_path,
+                doc_id,
+                json_path=request.args.get("json_path"),
+                row_label=request.args.get("row_label"),
+                column_header=request.args.get("column_header"),
+                fragment=fragment,
             )
         if html is not None:
             return Response(html, mimetype="text/html")
@@ -3248,6 +3259,21 @@ def create_app(
             html = render_etf_workup(conn, repo_root, db_path, ticker)
         finally:
             conn.close()
+        if html is None:
+            abort(404)
+        return Response(html, mimetype="text/html")
+
+    @app.route("/api/peek/provenance/<fact_ref>", methods=["GET"])
+    def peek_fact_provenance(fact_ref: str):
+        """The click-through behind a source chip's fmp_json_table /
+        vendor_field / transcript_span locator kinds (provenance
+        click-through Phase A). ``fact_ref`` is ``<table>:<id>``
+        (``financial_facts:40921``); 404 only when the row itself doesn't
+        exist — every row that does exist renders something (the legacy
+        floor, never a dead end)."""
+        from pipeline.peeks import render_fact_provenance_peek
+
+        html = render_fact_provenance_peek(db_path, repo_root, fact_ref)
         if html is None:
             abort(404)
         return Response(html, mimetype="text/html")

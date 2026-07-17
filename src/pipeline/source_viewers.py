@@ -42,6 +42,22 @@ from ui.tokens import FAVICON_LINK, palette_css
 
 _TRANSCRIPT_DOC_TYPES = frozenset({"earnings_call_transcript", "ir_transcript"})
 _FORM_JSON_DOC_TYPES = frozenset({"fmp_10k_json", "fmp_10q_json"})
+# Plain array-of-records FMP statement endpoints (docs/design/
+# provenance_clickthrough.md section 2.2) -- previously served by NEITHER
+# _FORM_JSON_DOC_TYPES' section reader nor any other viewer; fell through to
+# render_fallback_page. This is the highest-volume financial_facts writer
+# family, so closing this gap is Phase A's biggest-volume target.
+_STATEMENT_JSON_DOC_TYPES = frozenset(
+    {
+        "fmp_income_statement",
+        "fmp_balance_sheet",
+        "fmp_cashflow",
+        "fmp_as_reported_income",
+        "fmp_as_reported_balance",
+        "fmp_as_reported_cashflow",
+        "fmp_as_reported_financial",
+    }
+)
 
 # Lines like "Operator:" / "Brian Chesky:" / "Analyst, Morgan Stanley:" get
 # their speaker prefix bolded. Conservative: short prefix, single colon.
@@ -69,6 +85,17 @@ VIEWER_CONTENT_CSS = """
 .sv-sec-val { white-space: pre-wrap; word-break: break-word; }
 .sv-frag-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap;
   margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.sv-stmt-wrap { overflow-x: auto; }
+.sv-stmt-table { border-collapse: collapse; font-family: var(--mono);
+  font-size: var(--fs-caption); white-space: nowrap; }
+.sv-stmt-table th, .sv-stmt-table td { padding: 4px 10px; text-align: right;
+  border-bottom: 1px solid var(--hairline); }
+.sv-stmt-table th:first-child, .sv-stmt-table td:first-child {
+  text-align: left; color: var(--muted); position: sticky; left: 0; background: var(--bg); }
+.sv-stmt-table th { color: var(--muted); font-weight: 600; }
+.sv-cell-hit { background: color-mix(in srgb, var(--warn) 16%, transparent);
+  outline: 1px solid var(--warn); border-radius: var(--radius); }
+.sv-stmt-foot { margin-top: 12px; font-size: var(--fs-caption); }
 """
 
 _PAGE_CSS = (
@@ -321,6 +348,138 @@ def _render_section(raw: object) -> str:
                 f'<div class="sv-sec-row"><div class="sv-sec-val">{escape(str(entry))}</div></div>'
             )
     return "".join(rows)
+
+
+# ----------------------------------------------------------------------------
+# FMP statement-endpoint reader (fmp_json_table locators, array-of-records
+# shape -- docs/design/provenance_clickthrough.md section 2.2)
+# ----------------------------------------------------------------------------
+
+_JSON_PATH_RX = re.compile(r"^\[(\d+)\]\.(.+)$")
+
+
+def _render_statement_table(
+    doc: _DocRow,
+    records: list[dict[str, object]],
+    columns: list[str],
+    *,
+    json_path: str | None,
+    row_label: str | None,
+    column_header: str | None,
+    fragment: bool,
+) -> str:
+    """Body for render_statement_json_page: locate the cited cell (json_path
+    fast-path, else a row_label/column_header field+period match -- the
+    pointer may be stale if the source file re-shaped since extraction),
+    then render the table with that cell highlighted."""
+    hit_idx: int | None = None
+    hit_field: str | None = None
+    if json_path:
+        m = _JSON_PATH_RX.match(json_path)
+        if m is not None:
+            idx = int(m.group(1))
+            if 0 <= idx < len(records):
+                hit_idx, hit_field = idx, m.group(2)
+    if hit_idx is None and (row_label or column_header):
+        for i, rec in enumerate(records):
+            period_val = rec.get("date") or rec.get("period")
+            if column_header is not None and str(period_val) != column_header:
+                continue
+            if row_label is not None and row_label in rec:
+                hit_idx, hit_field = i, row_label
+                break
+
+    def _period_label(rec: dict[str, object]) -> str:
+        val = rec.get("date") or rec.get("period")
+        return str(val) if val is not None else "—"
+
+    def _cell_html(rec: dict[str, object], col: str, idx: int) -> str:
+        val = rec.get(col)
+        text = "" if val is None else str(val)
+        is_hit = hit_idx == idx and hit_field == col
+        cls = "sv-cell-hit" if is_hit else ""
+        cell_id = ' id="sv-hit"' if is_hit else ""
+        return f'<td class="{cls}"{cell_id}>{escape(text) or "—"}</td>'
+
+    head_row = "<tr><th>Period</th>" + "".join(f"<th>{escape(c)}</th>" for c in columns) + "</tr>"
+    body_rows = "".join(
+        f"<tr><td>{escape(_period_label(rec))}</td>"
+        + "".join(_cell_html(rec, c, i) for c in columns)
+        + "</tr>"
+        for i, rec in enumerate(records)
+    )
+    table = (
+        '<div class="sv-stmt-wrap"><table class="sv-stmt-table">'
+        f"<thead>{head_row}</thead><tbody>{body_rows}</tbody></table></div>"
+    )
+    script = (
+        '<script>(function(){var el=document.getElementById("sv-hit");'
+        'if(el&&el.scrollIntoView){el.scrollIntoView({block:"center",inline:"center"});}})();</script>'
+        if hit_idx is not None
+        else ""
+    )
+    footer = (
+        f'<div class="sv-stmt-foot"><a href="/source/{doc.id}">open full filing &rarr;</a></div>'
+    )
+    title = f"{doc.ticker} · {doc.doc_type.replace('_', ' ')}"
+    body = table + footer + script
+    if fragment:
+        return _fragment(title, _doc_meta_html(doc), body)
+    head = f'<span class="sv-title">{escape(title)}</span>{_doc_meta_html(doc)}'
+    return _page(title, head, body)
+
+
+def render_statement_json_page(
+    repo_root: Path,
+    db_path: Path,
+    doc_id: int,
+    *,
+    json_path: str | None = None,
+    row_label: str | None = None,
+    column_header: str | None = None,
+    fragment: bool = False,
+) -> str | None:
+    """Renders a plain FMP statement-endpoint JSON (income/balance/cashflow,
+    as-reported) as one table: rows = records (periods), columns = the
+    fields present in that record. None when the doc isn't one of this
+    family or the file can't be parsed as a JSON array."""
+    doc = load_document(db_path, doc_id)
+    if doc is None or doc.doc_type not in _STATEMENT_JSON_DOC_TYPES:
+        return None
+    path = repo_root / doc.file_path
+    if not path.exists():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            payload = cast("object", json.load(f))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, list):
+        return None
+
+    columns: list[str] = []
+    seen_cols: set[str] = set()
+    records: list[dict[str, object]] = []
+    for entry in cast("list[object]", payload):
+        if not isinstance(entry, dict):
+            continue
+        rec = cast("dict[str, object]", entry)
+        records.append(rec)
+        for key in rec:
+            if key not in seen_cols:
+                seen_cols.add(key)
+                columns.append(key)
+    if not records:
+        return None
+    return _render_statement_table(
+        doc,
+        records,
+        columns,
+        json_path=json_path,
+        row_label=row_label,
+        column_header=column_header,
+        fragment=fragment,
+    )
 
 
 # ----------------------------------------------------------------------------

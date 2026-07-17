@@ -59,8 +59,9 @@ from models.documents import (
     SourceType,
     tier_for_source_type,
 )
-from models.facts import Currency, FactLocator, FiscalPeriodType, Unit
+from models.facts import Currency, FiscalPeriodType, Unit
 from models.validation import Severity, ValidationRule
+from pipeline import locators
 from pipeline.confidence import score_confidence
 from pipeline.kpi_persistence import record_validation_issue
 from pipeline.restatement_detector import (
@@ -980,9 +981,16 @@ def insert_facts_from_companyfacts(
                     period_end = datetime.fromisoformat(end)
                     # Exact position of the value in the companyfacts JSON the
                     # document row's file_path points at (data_provenance.md
-                    # §7); records the winning tag for the ladder pick.
-                    locator = FactLocator(
-                        json_path=(f"facts.{namespace}.{tag_name}.units.{unit_code}[{entry_idx}]")
+                    # §7); records the winning tag for the ladder pick. Row =
+                    # the XBRL tag, column = the fact's own end date — both
+                    # already local at this call site.
+                    locator = locators.table_cell_locator(
+                        section=None,
+                        table_title=namespace,
+                        row_label=tag_name,
+                        column_header=end,
+                        json_path=f"facts.{namespace}.{tag_name}.units.{unit_code}[{entry_idx}]",
+                        cell_value_as_extracted=str(val),
                     )
                     value = Decimal(str(val))
                     if ladder.sign < 0:

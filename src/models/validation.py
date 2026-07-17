@@ -58,6 +58,13 @@ class ValidationRule(StrEnum):
     # (restatement, extraction error) — the persist-time guard REJECTS the
     # write and raises this rather than silently storing a broken series.
     NON_MONOTONIC_CUMULATIVE = "non_monotonic_cumulative"
+    # A writer explicitly opted out of a renderable FactLocator via
+    # pipeline.locators.LegacyEscapeHatch instead of populating one — logged
+    # (severity=WARN, per this module's only two levels) with the writer's
+    # grep-able reason string, so execution/provenance_coverage_report.py can
+    # count deliberate gaps separately from silent ones
+    # (docs/design/provenance_clickthrough.md §4.1).
+    LOCATOR_ESCAPE_HATCH = "locator_escape_hatch"
 
 
 class ValidationIssue(BaseModel):

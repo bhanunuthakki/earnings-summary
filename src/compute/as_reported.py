@@ -24,8 +24,9 @@ from compute._common import (
     read_records_json,
 )
 from models.documents import SourceQualityTier
-from models.facts import FactLocator, FinancialFact, FiscalPeriodType, Unit
+from models.facts import FinancialFact, FiscalPeriodType, Unit
 from models.fmp_payloads import FmpAsReportedRecord
+from pipeline import locators
 
 _AS_REPORTED_DOC_TYPES: frozenset[str] = frozenset(
     {
@@ -80,7 +81,13 @@ def extract_facts_from_record(
         if not isinstance(value, (int, float)):
             continue
         locator = (
-            FactLocator(json_path=f"[{record_index}].data.{xbrl_tag}")
+            locators.table_cell_locator(
+                section=None,
+                row_label=xbrl_tag,
+                column_header=record.date,
+                json_path=f"[{record_index}].data.{xbrl_tag}",
+                cell_value_as_extracted=str(value),
+            )
             if record_index is not None
             else None
         )

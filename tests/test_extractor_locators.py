@@ -142,7 +142,18 @@ def test_extract_facts_with_spec_builds_record_indexed_locator() -> None:
     spec: list[tuple[str, str, Unit]] = [("revenue", "revenue", Unit.ACTUAL)]
 
     with_locator = extract_facts_with_spec(record, 1, spec, record_index=3)
-    assert with_locator[0].locator == FactLocator(json_path="[3].revenue")
+    loc = with_locator[0].locator
+    assert loc is not None
+    # locator_version=2, kind=fmp_json_table -- table_cell.row_label/
+    # column_header enrich the bare v1 json_path (docs/design/
+    # provenance_clickthrough.md section 3.2's per-extractor enrichment).
+    assert loc.json_path == "[3].revenue"
+    assert loc.locator_version == 2
+    assert loc.table_cell is not None
+    assert loc.table_cell.row_label == "revenue"
+    assert loc.table_cell.column_header == "2025-12-31"
+    assert loc.table_cell.json_path == "[3].revenue"
+    assert loc.verbatim_snippet
 
     without = extract_facts_with_spec(record, 1, spec)
     assert without[0].locator is None
@@ -172,13 +183,17 @@ def test_income_statement_extractor_persists_locator(tmp_path: Path) -> None:
         "SELECT period_end, line_item, locator FROM financial_facts WHERE line_item = 'revenue' "
         "ORDER BY period_end DESC"
     ).fetchall()
-    assert [r["locator"] for r in rows] == [
-        '{"json_path":"[0].revenue"}',
-        '{"json_path":"[1].revenue"}',
-    ]
-    loc = FactLocator.from_json(rows[0]["locator"])
+    locators = [FactLocator.from_json(r["locator"]) for r in rows]
+    assert all(
+        loc is not None and loc.json_path == expected
+        for loc, expected in zip(locators, ["[0].revenue", "[1].revenue"], strict=True)
+    )
+    loc = locators[0]
     assert loc is not None
     assert loc.json_path == "[0].revenue"
+    assert loc.locator_version == 2
+    assert loc.table_cell is not None
+    assert loc.table_cell.row_label == "revenue"
     conn.close()
 
 
@@ -194,9 +209,12 @@ def test_as_reported_locator_points_into_data_dict() -> None:
     )
     facts = extract_as_reported(record, source_doc_id=9, record_index=2)
     assert facts[0].line_item == "rpo"
-    assert facts[0].locator == FactLocator(
-        json_path="[2].data.revenueremainingperformanceobligation"
-    )
+    loc = facts[0].locator
+    assert loc is not None
+    assert loc.json_path == "[2].data.revenueremainingperformanceobligation"
+    assert loc.locator_version == 2
+    assert loc.table_cell is not None
+    assert loc.table_cell.row_label == "revenueremainingperformanceobligation"
     assert extract_as_reported(record, source_doc_id=9)[0].locator is None
 
 

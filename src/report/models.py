@@ -496,6 +496,13 @@ class CellSource(BaseModel):
     # swapped to the override's so the chip honestly describes the filing the
     # displayed number came from. None for non-overridden cells.
     override: str | None = None
+    # financial_facts.id of the winning row (loaders already select it as
+    # ``fact_id``) — lets the chip build a `/api/peek/provenance/
+    # financial_facts:<id>` click-through for locator kinds that need the
+    # fact row itself, not just its source document (fmp_json_table,
+    # vendor_field — docs/design/provenance_clickthrough.md section 6.1).
+    # None on legacy loader paths that don't select it yet.
+    fact_id: int | None = None
 
 
 class QuarterlyLineItem(BaseModel):
