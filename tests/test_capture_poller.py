@@ -576,3 +576,243 @@ def test_poll_once_start_command_still_greets(
     assert len(sent) == 1
     assert "capture is live" in sent[0]
     assert "Not a command here" not in sent[0]
+
+
+# ---------------------------------------------------------------------------
+# Card-reply routing parity (a free-text REPLY to an On My Mind card → the SAME
+# handle_reply core the web reply box calls — one brain, two mouths).
+# ---------------------------------------------------------------------------
+
+
+def test_parse_update_carries_reply_to_message_id() -> None:
+    reply = telegram.parse_update(
+        {
+            "update_id": 1,
+            "message": {
+                "message_id": 9,
+                "chat": {"id": 1},
+                "text": "dig in",
+                "reply_to_message": {"message_id": 7},
+            },
+        }
+    )
+    assert reply.kind == "text" and reply.reply_to_message_id == 7
+    plain = telegram.parse_update(
+        {"update_id": 2, "message": {"message_id": 10, "chat": {"id": 1}, "text": "yo"}}
+    )
+    assert plain.kind == "text" and plain.reply_to_message_id is None
+
+
+def _seed_card(db_path: Path, body: str, mid: int, *, ticker: str | None = None) -> int:
+    """A landed card whose Telegram message id is stamped on the note — what
+    ``_stash_card_mid`` writes when the poller sends the ladder card."""
+    row = notes.create_note(
+        body=body,
+        kind="musing",
+        ticker=ticker,
+        source="capture",
+        context={"channel": "telegram", "telegram_message_id": mid},
+        db_path=db_path,
+    )
+    return row.id
+
+
+def _reply_update(update_id: int, text: str, reply_to: int) -> telegram.Update:
+    return telegram.Update(
+        update_id=update_id, kind="text", chat_id=1, text=text, reply_to_message_id=reply_to
+    )
+
+
+def _stub_reply_intent(monkeypatch: pytest.MonkeyPatch, intent: str) -> None:
+    import onmymind.reply as reply_mod
+    from onmymind.reply import ReplyVerdict
+
+    monkeypatch.setattr(reply_mod, "classify_reply", lambda c, r, **kw: ReplyVerdict(intent=intent))
+
+
+def test_poll_once_card_reply_action_routes_through_core(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    note_id = _seed_card(db_path, "RBRK monetizes data volume", 500)
+    monkeypatch.setattr(
+        telegram,
+        "get_updates",
+        lambda token, offset=None, timeout=50: [_reply_update(100, "dig into this", 500)],
+    )
+    _stub_reply_intent(monkeypatch, "research")
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert counts.get("card_reply") == 1
+    assert any("Sent to research" in s for s in sent)  # the action receipt
+    note = notes.get_note(note_id, db_path=db_path)
+    assert note is not None and (note.context or {}).get("ladder") == "incorporated"
+    # the reply text was routed, NOT re-captured as a new musing
+    assert len(notes.list_notes(kind="musing", db_path=db_path)) == 1
+
+
+def test_poll_once_card_reply_note_appends_owner_thread(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    note_id = _seed_card(db_path, "NU keeps compounding", 501)
+    monkeypatch.setattr(
+        telegram,
+        "get_updates",
+        lambda token, offset=None, timeout=50: [_reply_update(101, "context: earnings 8/12", 501)],
+    )
+    _stub_reply_intent(monkeypatch, "note")
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert counts.get("card_reply") == 1
+    assert any(s == "Noted." for s in sent)
+    note = notes.get_note(note_id, db_path=db_path)
+    assert note is not None and (note.context or {}).get("owner_replies") == [
+        "context: earnings 8/12"
+    ]
+    assert len(notes.list_notes(kind="musing", db_path=db_path)) == 1
+
+
+def test_poll_once_card_reply_chat_answers_via_shared_engine(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 'question' reply is answered in-thread through the SAME ask engine the
+    capture answer tap uses — the reply text is answered, not just filed."""
+    from collections.abc import Iterator
+
+    _seed_card(db_path, "NU keeps compounding", 502)
+    monkeypatch.setattr(
+        telegram,
+        "get_updates",
+        lambda token, offset=None, timeout=50: [_reply_update(102, "what changed since?", 502)],
+    )
+    _stub_reply_intent(monkeypatch, "question")
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+
+    def _stub(*_a: object, **_k: object) -> Iterator[dict[str, object]]:
+        yield {"type": "final", "text": "Nothing material changed.", "route": "narrative"}
+
+    monkeypatch.setattr("onmymind.respond.respond_turn", _stub)
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert counts.get("card_reply") == 1
+    assert any("Nothing material changed." in s for s in sent)
+    assert len(notes.list_notes(kind="musing", db_path=db_path)) == 1
+
+
+def test_poll_once_card_reply_unknown_message_id_falls_through(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reply pointing at a message id no live note carries is NOT a card reply
+    — it falls through to an ordinary capture (capture is never hijacked)."""
+    _seed_card(db_path, "NU keeps compounding", 503)
+    monkeypatch.setattr(
+        telegram,
+        "get_updates",
+        lambda token, offset=None, timeout=50: [
+            _reply_update(103, "Nubank looks compelling", 999)  # 999 stamped on no note
+        ],
+    )
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=False,
+    )
+    assert counts.get("card_reply") is None
+    assert counts.get("landed") == 1  # the reply became a normal capture
+    musings = notes.list_notes(kind="musing", db_path=db_path)
+    assert len(musings) == 2 and any("Nubank looks compelling" in m.body for m in musings)
+
+
+def test_poll_once_card_reply_classifier_failure_degrades(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A classifier failure fails OPEN inside handle_reply (chat mode) — the
+    reply is consumed, never re-captured, and never crashes the loop."""
+    import onmymind.reply as reply_mod
+
+    _seed_card(db_path, "NU keeps compounding", 504)
+    monkeypatch.setenv("LEDGER_ANSWER", "0")  # keep the degrade path off the engine
+
+    def _boom(*a: object, **kw: object) -> object:
+        raise RuntimeError("model down")
+
+    monkeypatch.setattr(reply_mod, "classify_reply", _boom)
+    monkeypatch.setattr(
+        telegram,
+        "get_updates",
+        lambda token, offset=None, timeout=50: [_reply_update(105, "hmm", 504)],
+    )
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert counts.get("card_reply") == 1  # consumed, not re-captured
+    assert len(notes.list_notes(kind="musing", db_path=db_path)) == 1
+
+
+def test_poll_once_card_reply_send_failure_never_propagates(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failing reply-send is suppressed — the routing already happened."""
+    note_id = _seed_card(db_path, "old thought", 506)
+    _stub_reply_intent(monkeypatch, "dismiss")
+    monkeypatch.setattr(
+        telegram,
+        "get_updates",
+        lambda token, offset=None, timeout=50: [_reply_update(107, "drop this", 506)],
+    )
+
+    def _boom_send(*a: object, **k: object) -> object:
+        raise telegram.TelegramError("network down")
+
+    monkeypatch.setattr(telegram, "send_message", _boom_send)
+    counts = poller.poll_once(  # must not raise
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert counts.get("card_reply") == 1
+    note = notes.get_note(note_id, db_path=db_path)
+    assert note is not None and note.status == "archived"  # dismiss acted before the send failed

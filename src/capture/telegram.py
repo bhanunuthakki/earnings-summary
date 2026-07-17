@@ -47,6 +47,11 @@ class Update:
     # callback handler can editMessageText with the same body plus a state
     # stamp, rather than needing a separate fetch. None for non-callback kinds.
     message_text: str | None = None
+    # message.reply_to_message.message_id — set when this text is a REPLY to an
+    # earlier bot message (the owner thumbed "reply" on an On My Mind card). The
+    # poller matches it to the note carrying that telegram_message_id and routes
+    # the text through the shared reply core. None for non-reply messages.
+    reply_to_message_id: int | None = None
 
 
 def _as_int(value: object) -> int | None:
@@ -85,6 +90,7 @@ def parse_update(raw: dict[str, object]) -> Update:
         chat = _as_dict(msg.get("chat"))
         chat_id = _as_int(chat.get("id"))
         message_id = _as_int(msg.get("message_id"))
+        reply_to = _as_int(_as_dict(msg.get("reply_to_message")).get("message_id"))
         file_id = _as_str(_as_dict(msg.get("voice")).get("file_id"))
         if file_id:
             return Update(update_id, "voice", chat_id, message_id, voice_file_id=file_id)
@@ -105,7 +111,14 @@ def parse_update(raw: dict[str, object]) -> Update:
             )
         text = _as_str(msg.get("text"))
         if text and text.strip():
-            return Update(update_id, "text", chat_id, message_id, text=text)
+            return Update(
+                update_id,
+                "text",
+                chat_id,
+                message_id,
+                text=text,
+                reply_to_message_id=reply_to,
+            )
         return Update(update_id, "other", chat_id, message_id)
 
     return Update(update_id, "other")

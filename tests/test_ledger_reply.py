@@ -26,7 +26,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import comments_server  # noqa: E402
 
-from onmymind.reply import ReplyVerdict, classify_reply  # noqa: E402
+from onmymind.reply import ReplyVerdict, classify_reply, handle_reply  # noqa: E402
 from user_state.notes import (  # noqa: E402
     TRIAGE_INTENT,
     create_note,
@@ -111,6 +111,81 @@ def test_classify_reply_action_property() -> None:
     assert ReplyVerdict(intent="research").is_action
     assert not ReplyVerdict(intent="question").is_action
     assert not ReplyVerdict(intent="note").is_action
+
+
+# ---------------------------------------------------------------------------
+# handle_reply — the shared reply core (one brain behind the web route + poller)
+# ---------------------------------------------------------------------------
+
+
+def _stub_verdict(monkeypatch: pytest.MonkeyPatch, intent: str) -> None:
+    import onmymind.reply as reply_mod
+
+    monkeypatch.setattr(reply_mod, "classify_reply", lambda c, r, **kw: ReplyVerdict(intent=intent))
+
+
+def test_handle_reply_action_routes_through_core(
+    ctx: tuple[FlaskClient, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _client, db = ctx
+    nid = _capture_note(db, "RBRK monetizes data volume")
+    _stub_verdict(monkeypatch, "research")
+    out = handle_reply(nid, "dig into this", db_path=db)
+    assert out["mode"] == "acted" and out["intent"] == "research"
+    assert out["ladder_label"] == "in research"
+    note = get_note(nid, db_path=db)
+    assert note is not None and (note.context or {}).get("ladder") == "incorporated"
+
+
+def test_handle_reply_note_appends_thread(
+    ctx: tuple[FlaskClient, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _client, db = ctx
+    nid = _capture_note(db, "NU keeps compounding")
+    _stub_verdict(monkeypatch, "note")
+    out = handle_reply(nid, "context: earnings 8/12", db_path=db)
+    assert out == {"ok": True, "mode": "acted", "intent": "note", "receipt": "Noted."}
+    note = get_note(nid, db_path=db)
+    assert note is not None and (note.context or {}).get("owner_replies") == [
+        "context: earnings 8/12"
+    ]
+
+
+def test_handle_reply_question_hands_back_chat(
+    ctx: tuple[FlaskClient, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _client, db = ctx
+    nid = _capture_note(db, "NU keeps compounding")
+    _stub_verdict(monkeypatch, "question")
+    assert handle_reply(nid, "what changed?", db_path=db) == {
+        "ok": True,
+        "mode": "chat",
+        "intent": "question",
+    }
+
+
+def test_handle_reply_classifier_failure_fails_open(
+    ctx: tuple[FlaskClient, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _client, db = ctx
+    nid = _capture_note(db, "NU keeps compounding")
+    import onmymind.reply as reply_mod
+
+    def _boom(*a: object, **kw: object) -> ReplyVerdict:
+        raise RuntimeError("model down")
+
+    monkeypatch.setattr(reply_mod, "classify_reply", _boom)
+    assert handle_reply(nid, "hm", db_path=db) == {
+        "ok": True,
+        "mode": "chat",
+        "intent": "question",
+    }
+
+
+def test_handle_reply_missing_note_degrades_to_chat(ctx: tuple[FlaskClient, Path]) -> None:
+    _client, db = ctx
+    out = handle_reply(999999, "hi", db_path=db)
+    assert out == {"ok": False, "mode": "chat", "intent": "question"}
 
 
 # ---------------------------------------------------------------------------
