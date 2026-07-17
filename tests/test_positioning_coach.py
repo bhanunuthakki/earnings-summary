@@ -9,6 +9,7 @@ and the panel's render paths.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -276,3 +277,104 @@ def test_approval_form_round_trips_proposal_values(tmp_path: Path) -> None:
     assert 'name="sector_target_0"' in html and 'value="35"' in html
     assert 'name="sleeve_intl"' in html and 'value="15"' in html
     assert "Approve" in html
+
+
+# ---------------------------------------------------------------------------
+# Appetite fields (target_vol_ann / sharpe_floor) wired into gap chips —
+# Phase 0 of the tenet-2 advisory program: display-only fields becoming
+# computationally live against the book's real vol/Sharpe.
+# ---------------------------------------------------------------------------
+
+
+def _intent_db_with_appetite(tmp_path: Path) -> Path:
+    db = tmp_path / "p2.db"
+    conn = sqlite3.connect(str(db))
+    conn.executescript(
+        """
+        CREATE TABLE positioning_intents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL DEFAULT 'bhanu',
+            narrative TEXT NOT NULL, profile_json TEXT NOT NULL,
+            source TEXT NOT NULL, coach_session_id TEXT,
+            created_at TEXT NOT NULL, is_latest INTEGER NOT NULL DEFAULT 1,
+            superseded_at TEXT, superseded_by_id INTEGER
+        );
+        """
+    )
+    profile = PositioningProfile(target_vol_ann=0.14, sharpe_floor=0.5)
+    conn.execute(
+        "INSERT INTO positioning_intents (narrative, profile_json, source, created_at) "
+        "VALUES (?, ?, 'manual', '2026-07-15T09:00:00')",
+        ("Cap risk; keep efficiency.", profile.model_dump_json()),
+    )
+    conn.commit()
+    conn.close()
+    return db
+
+
+def _write_cache(tmp_path: Path, *, sharpe: float | None, vol_ann: float | None) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    (data_dir / "candidate_fit.json").write_text(
+        json.dumps({"version": 2, "book": {"sharpe": sharpe, "vol_ann": vol_ann}, "fits": {}}),
+        encoding="utf-8",
+    )
+
+
+def test_active_target_card_shows_appetite_gap_chips_over_and_below(tmp_path: Path) -> None:
+    """Book vol/Sharpe available (materialized cache) → the target_vol_ann and
+    sharpe_floor rows carry a live over/under · above/below gap chip. Book vol
+    above target reads "over" (warn); book Sharpe under the floor reads
+    "below" (warn)."""
+    db = _intent_db_with_appetite(tmp_path)
+    _write_cache(tmp_path, sharpe=0.3, vol_ann=0.20)
+    card = render_active_target_card(db, tmp_path)
+    assert "Target vol (ann.)" in card
+    assert "book vol 20% vs target 14% (over)" in card
+    assert "k-chip-warn" in card  # vol-over chip
+    assert "Sharpe floor" in card
+    assert "book Sharpe +0.30 vs floor +0.50 (below)" in card
+
+
+def test_active_target_card_shows_appetite_gap_chips_under_and_above(tmp_path: Path) -> None:
+    """Book vol under target reads "under" (ok); book Sharpe over the floor
+    reads "above" (ok)."""
+    db = _intent_db_with_appetite(tmp_path)
+    _write_cache(tmp_path, sharpe=0.7, vol_ann=0.10)
+    card = render_active_target_card(db, tmp_path)
+    assert "book vol 10% vs target 14% (under)" in card
+    assert "book Sharpe +0.70 vs floor +0.50 (above)" in card
+
+
+def test_active_target_card_appetite_chips_at_exact_target_and_floor(tmp_path: Path) -> None:
+    """Book vol exactly at target reads "under" (satisfied, not over); book
+    Sharpe exactly at the floor reads "above" (satisfied, not below)."""
+    db = _intent_db_with_appetite(tmp_path)
+    _write_cache(tmp_path, sharpe=0.5, vol_ann=0.14)
+    card = render_active_target_card(db, tmp_path)
+    assert "book vol 14% vs target 14% (under)" in card
+    assert "book Sharpe +0.50 vs floor +0.50 (above)" in card
+
+
+def test_active_target_card_omits_appetite_chips_when_book_figures_absent(
+    tmp_path: Path,
+) -> None:
+    """No materialized cache → book vol/Sharpe unknown; the target values still
+    display (unchanged behavior) but no gap chip is fabricated."""
+    db = _intent_db_with_appetite(tmp_path)
+    card = render_active_target_card(db, tmp_path)
+    assert "Target vol (ann.)" in card
+    assert "vs target" not in card
+    assert "Sharpe floor" in card
+    assert "vs floor" not in card
+
+
+def test_active_target_card_omits_appetite_chips_when_profile_fields_null(
+    tmp_path: Path,
+) -> None:
+    """Null profile fields (the existing intent fixture sets neither) → no
+    Target vol / Sharpe floor rows at all, exactly current behavior."""
+    db = _intent_db(tmp_path)
+    card = render_active_target_card(db, tmp_path)
+    assert "Target vol (ann.)" not in card
+    assert "Sharpe floor" not in card
