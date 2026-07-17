@@ -1,13 +1,13 @@
 # Tenet-2 Advisory Program — Strategy & Phased Roadmap
 
-**Status:** strategy proposal, 2026-07-17. No code changes accompany this document.
-**Owner decisions required before build:** see §7 (the decision list). Nothing in this
-document is authorized until the owner rules on §7.
-**Scope guard (restated, non-negotiable):** this platform never executes trades and never
-gives regulated personalized financial advice from any external-facing surface. It is a
-self-owned decision-support tool for its single owner. Everything below stays inside the
-existing advisor posture: Socratic coaching, grounded facts, stances only on request,
-"the owner decides."
+**Status:** RATIFIED 2026-07-17 — all 8 decisions in §7 ruled by the owner same-day.
+Phase 0 execution authorized (subagent-prepared, owner-ratified); combined roadmap in §6.
+**Scope guard (restated, non-negotiable):** this platform never executes trades, and it
+never becomes an advice product for anyone but its single owner — no external-facing
+surface (shared link, published artifact, exported report) carries advice framing. For
+the owner it is *maximally* personalized decision support: it structures, challenges,
+and quantifies; the owner decides. This is a surface/audience guard, not a
+personalization limit.
 
 ---
 
@@ -168,7 +168,9 @@ the governor's interruption discipline. Five injection seams (all confirmed in c
 2. **Anchor slot (every governed prompt).** A 6th `owner_profile` anchor in
    `compose_anchor_block` — tight char cap, dated, spotlight-wrapped, "soft priors NOT
    rules," exactly the Worldview-anchor design. Socratic, ledger answers, coach pack,
-   position review all inherit it for free.
+   position review all inherit it for free. Only `affirmed` facts ride the anchor —
+   ambient learning feeds the distillers continuously; affirmation gates injection
+   (§3.1 principle 1).
 3. **Governor moment classes (initiated coaching).** Add classes to the existing
    deterministic governor (no new caps machinery): `profile_drift` (behavior
    contradicts an affirmed fact), `capacity_breach` (human-capital cap or cash floor
@@ -248,8 +250,9 @@ Tenet-1 waves (metrics engine, segment quarterly, comparable sets) converge on:
   CIO_CONTEXT one-way import → `proposed`) + ratification via existing packet-walk
   card type. No prompt injection yet.
 - **Phase 2 — context injection.** `owner_profile` anchor slot (spotlighted, capped,
-  dated); PreAnalysis capacity block (deterministic); next-dollar gains a cash/liquidity
-  input + owner-confirmed blend weights (kill the silent 50/30/20).
+  dated); PreAnalysis capacity block (deterministic); next-dollar gains a cash-aware
+  mode + **profile-driven blend weights** read from the appetite tier (the hardcoded
+  50/30/20 remains only as the labeled no-profile fallback).
 - **Phase 3 — initiated interventions.** Governor moment classes (`profile_drift`,
   `capacity_breach`, `life_event_checkpoint`); human-capital caps evaluated in-repo
   from Tier-A facts; weekly-packet advisory item source; owner-policy-breach alert
@@ -259,44 +262,69 @@ Tenet-1 waves (metrics engine, segment quarterly, comparable sets) converge on:
 - **Phase 5 — decision journal.** The unified view + panel section; advice-influence
   read in the calibration scorecard; next-dollar + guard-override grading.
 
-Sequencing intent: Phases 0–1 can run **during** any tenet-1 wave (disjoint files).
-Phases 2–3 prefer a quiet week on the anchor/prompt surfaces. Q3'26 bar: Phases 0–3 are
-what plausibly move a real decision before the deadline; 4–5 harden the loop.
+### 6.4 Combined roadmap — tenet-1 × tenet-2 interleaved (decision 7)
+
+Tenet-1 inputs: metrics engine (ME P1–P3), segment quarterly (SQ P1–P3), comparable
+sets (CS P1–P3) — phase definitions in their respective design docs (worktree
+`ledger-ui-overhaul-58e513/docs/design/`). Tenet-2 phases (T2 P0–P5) per §6 above.
+One PR per phase per program; waves are parallel worktrees; alembic numbers picked at
+rebase time; LLM-purpose registrations serialized within a wave.
+
+| Wave | Tenet-1 track | Tenet-2 track | Shared-surface watch |
+|---|---|---|---|
+| **A (now)** | ME P1 (engine skeleton + parity harness, no UI) | **T2 P0** (light dead machinery — subagent-prepped, owner ratifies) + **T2 P1** (profile substrate + import) | none — fully disjoint files; alembic numbering only |
+| **B** | ME P2 (full catalog + IFRS) ∥ SQ P1 (10-K-regime extraction; registers `segment_10q_period_disambiguate`) | **T2 P2** (anchor slot, capacity block, profile-driven next-dollar) | 4-registry: SQ's new purpose lands this wave; T2 P2 adds none — no contention |
+| **C** | SQ P2 (Q4 derivation + coverage) ∥ CS P1 (foundation, portfolio names) | **T2 P3** (governor moment classes, packet advisory items, policy-breach alerts) | quota windows: CS/SQ cron registrations + T2's governed pings all register in `llm_quota_scheduling.md`; keep 03:00–05:00 PT clear |
+| **D** | CS P2 (widen + drift check) ∥ ME P3 (valuation metrics — **first tenet-1 UI**) | **T2 P4** (behavioral live-derive; registers `behavior_distill` ± `profile_distill`) | 4-registry again (T2's turn); UI-kit gate starts binding tenet-1 — run `tests/test_ui_controls.py` per PR |
+| **E** | SQ P3 (FPI/MJDS, gated on spike) ∥ CS P3 (benchmark ratification + UI) | **T2 P5** (decision journal view + panel section + advice-influence read) | heaviest UI-kit convergence: three programs render in this wave — serialize the panel PRs, goldens regen per renderer touch |
+
+Q3'26 bar: T2 P0–P3 (waves A–C) are what plausibly move a real decision before the
+deadline; waves D–E harden the loop. If a wave slips, tenet-2 phases hold their wave
+assignment rather than leapfrogging — the collision-avoidance depends on the pairing.
 
 ---
 
-## 7. Decision list for the owner
+## 7. Decision list — RESOLVED 2026-07-17 (owner rulings in bold)
 
-1. **Wealthplan import boundary.** May earnings-summary snapshot household capacity
-   facts from `wealthplan/data/plan.local.json` into `data/portfolio.db`?
-   (a) full Tier-A import as specced; (b) derived summaries only (buffers, dates,
-   bucket totals — no comp figures); (c) no import, manual entry. *Recommended: (b) —
-   advice needs the shape of capacity, not the payroll detail.*
-2. **Canonical persona home.** Does `owner_profile_facts` become canonical for
-   advisory context, with `CIO_CONTEXT.local.md` remaining the tracker's own input
-   (one-way import, no sync-back)? Alternative: keep the persona in the tracker and
-   fetch over REST. *Recommended: canonical here; the tracker stays independent.*
-3. **Behavioral rules go live-derived** (Phase 4) or stay frozen prose? Live means
-   rules 2–5 can weaken/strengthen with graded evidence, after your ratification.
-   *Recommended: live-derived — a frozen self-model is the staleness rule violated.*
-4. **Governor budget for new moment classes.** Fold `profile_drift` /
-   `capacity_breach` / `life_event_checkpoint` under the existing ≤1/day ≤3/week caps
-   (advice competes with falsifier breaches for the daily slot), or grant a separate
-   ≤1/week advisory lane? *Recommended: same caps — scarcity is what makes pings read.*
-5. **Next-dollar blend weights.** Confirm 50/30/20 as your view, set your own, or make
-   it profile-driven? Also: should next-dollar gain a cash-aware absolute mode?
-6. **Freshness cadence.** Quarterly affirmation packets + event triggers as specced, or
-   event-triggered only? (Quarterly adds ~4 packet items/quarter.)
-7. **Sequencing.** Interleave Phases 0–1 into the current tenet-1 wave now, or hold
-   tenet-2 for a dedicated wave after the metrics-engine Phase 1 lands?
-8. **Phase 0 owner sessions.** Two ~20-min sittings are the critical path: the Tenet
-   seeding pass and the sizing-policy encoding pass. Schedule them?
+1. **Wealthplan import boundary.** **(b) — derived summaries only** (buffers, dates,
+   bucket totals; no comp figures enter `portfolio.db`).
+2. **Canonical persona home.** **earnings-summary's `owner_profile_facts` is
+   canonical** for advisory context; `CIO_CONTEXT.local.md` remains the tracker's own
+   input, one-way import, no sync-back.
+3. **Behavioral rules.** **Live-derived** (Phase 4): rules re-distill from graded
+   evidence, ratification-gated.
+4. **Governor budget.** **Same caps** — advisory moment classes compete under the
+   existing ≤1/day ≤3/week discipline.
+5. **Next-dollar blend.** **Profile-driven** weights from the appetite tier, **plus a
+   cash-aware mode**. Hardcoded 50/30/20 becomes the labeled no-profile fallback only.
+6. **Freshness cadence.** **Both** — quarterly affirmation packets AND event triggers
+   (pledge >$10k, drawdown >15%, life-event dates, grading batches).
+7. **Sequencing.** **Interweave with tenet-1; maintain the combined roadmap in §6.4.**
+8. **Phase 0 sittings.** **Subagent-prepared**: agents draft the Tenet seeds, the
+   sizing-policy rows, the tax-profile file, and the orphaned-field wiring; the owner's
+   sittings reduce to short ratification passes (packet walk).
+
+### 7.1 Clarified posture (owner pushback, 2026-07-17)
+
+Two §8 phrasings in the original draft were too broad and are corrected:
+
+- **"No regulated personalized advice"** is a *surface/audience* guard: no external-
+  facing surface ever carries advice framing, and the tool never advises anyone but its
+  owner. It is NOT a personalization limit — advice tailored to the owner's capacity,
+  circumstances, and psychology is the program's purpose.
+- **"No ambient data collection" is replaced by "ambient learning, gated assertion."**
+  The platform continuously learns from everything the owner produces — chats, musings,
+  journal entries, nudge annotations, dismissals, graded decisions. What it may NOT do
+  is treat an *inference about the owner* as true without affirmation: derived facts
+  land as `proposed`, and only owner-affirmed facts condition advice or get quoted back
+  ("you said X"). Learning is always-on; asserting requires a tap.
 
 ---
 
 ## 8. What this program does NOT do
 
-No trade execution, no order routing, no external-facing advice surfaces, no regulated
-personalized-advice framing, no multi-user profile machinery (single-owner invariant
-stands), no new chat personas, no new consoles, no ambient data collection, and no
-advice conditioned on facts the owner hasn't affirmed.
+No trade execution, no order routing, no advice on any external-facing surface, no
+advising anyone but the owner, no multi-user profile machinery (single-owner invariant
+stands), no new chat personas, no new consoles, and no advice conditioned on
+*inferences about the owner* the owner hasn't affirmed (ambient learning is always-on;
+assertion is affirmation-gated — see §7.1).
