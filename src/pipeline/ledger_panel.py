@@ -47,8 +47,8 @@ _DECISIONS_PANEL = "decisions_record"
 _DECISIONS_HASH = f"/#{_DECISIONS_PANEL}"
 
 _PANEL_STYLE = """<style>
-.ledger-cap { background: var(--surface); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-4); }
-.ledger-cap textarea { width: 100%; min-height: 64px; resize: vertical; font-family: var(--sans); font-size: var(--fs-body); }
+.ledger-cap { background: var(--surface); border-radius: var(--radius); padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-3); }
+.ledger-cap textarea { width: 100%; min-height: 44px; resize: vertical; font-family: var(--sans); font-size: var(--fs-body); }
 .ledger-cap-row { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
 .ledger-cap-status { font-size: var(--fs-caption); color: var(--muted); }
 .ledger-musing { background: var(--surface); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2); }
@@ -258,7 +258,7 @@ _CAPTURE_JS = _CAPTURE_JS.replace("__DECISIONS_HASH__", _DECISIONS_HASH)
 def _capture_box() -> str:
     return (
         '<div class="ledger-cap">'
-        '<textarea id="ledger-cap-text" rows="3" '
+        '<textarea id="ledger-cap-text" rows="2" '
         'placeholder="Think out loud - a musing, a wondering, a worry. Mention a name and it links itself. '
         '(Cmd/Ctrl+Enter to capture)"></textarea>'
         '<div class="ledger-cap-row">'
@@ -1844,7 +1844,16 @@ def render_ledger_panel(
     # Mind when live, else the plain Musings list — is empty); once real
     # captures exist it folds into <h2 title=> instead of repeating forever.
     front_of_funnel = onmymind or musings_block
-    if "ledger-empty" in front_of_funnel:
+    if embedded:
+        # Composite Ledger console: the merged nav band's "Capture" chip already
+        # names and jumps to this leading section (render_ledger_console drops
+        # the feed's own section chip via nav_exclude), so a "Ledger" <h2>
+        # directly under a band titled "Ledger" was a redundant repeat — the
+        # front-of-funnel space the owner flagged. Triage/Journal keep their
+        # distinct section h3s; only the leading feed sheds the echo.
+        h2 = ""
+        panel_sub = ""
+    elif "ledger-empty" in front_of_funnel:
         h2 = "<h2>Ledger</h2>"
         panel_sub = (
             '<p class="sub">Your captured stream of consciousness. Talk or type a musing - '
