@@ -140,3 +140,20 @@ def test_month_status_pill_closed() -> None:
     )
     assert "CLOSED" in html
     assert "k-pill-ok" in html
+
+
+def test_refute_reasoning_never_uses_window_prompt() -> None:
+    """Red-team wave B: REFUTE used to block on window.prompt() for the
+    required reasoning text — a single-line, unstyled OS modal that hides the
+    item card being refuted. Replaced with the in-card textarea-append idiom
+    (ledger_panel.beginRewrite / journal_panel.beginEdit): the editor lands
+    inside the same .rt-actions holder the REFUTE/ACCEPT/DEFER buttons live
+    in, with kit Save/Cancel and a restore-on-cancel path."""
+    import inspect
+
+    import redteam.brief as brief_mod
+
+    src = inspect.getsource(brief_mod)
+    assert "window.prompt(" not in src
+    assert "data-refute-save" in src and "data-refute-cancel" in src
+    assert "beginRefute" in src

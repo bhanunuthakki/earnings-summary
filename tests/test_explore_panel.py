@@ -148,6 +148,23 @@ def test_explore_panel_is_ask_first(db_path: Path) -> None:
         assert f'id="{builder_id}"' in html_out
 
 
+def test_pin_as_view_never_uses_window_prompt() -> None:
+    """Red-team wave B: "Pin as view" used to block on window.prompt() for the
+    view name — a single-line, unstyled OS modal that hides the answer card
+    being pinned. Replaced with the in-card editor idiom (ledger_panel.
+    beginRewrite / journal_panel.beginEdit): the button row swaps its own
+    content for a name input + kit Save/Cancel, restoring the buttons after
+    save or cancel."""
+    import inspect
+
+    from pipeline import explore_panel
+
+    src = inspect.getsource(explore_panel)
+    assert "window.prompt(" not in src
+    assert "data-view-save" in src and "data-view-cancel" in src
+    assert "beginSaveView" in src
+
+
 def test_explore_panel_builder_is_a_diy_popover(db_path: Path) -> None:
     """Ask v4: the builder opens from the DIY button (hidden by default,
     closable), 'Open in builder' routes through the same popover, and the

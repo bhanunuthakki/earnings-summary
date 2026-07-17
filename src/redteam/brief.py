@@ -40,7 +40,15 @@ _BRIEF_CSS = """<style>
 .rt-item-cross { color: var(--fg-soft); font-size: var(--fs-body); font-weight: 600; }
 .rt-item .prose { margin-top: var(--sp-1); }
 .rt-item .prose p { margin: 0 0 var(--sp-2); }
-.rt-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-1); }
+.rt-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-1); flex-wrap: wrap; }
+/* In-card Refute editor (replaces window.prompt — the ledger's PR9 idiom:
+   ledger_panel.beginRewrite / journal_panel.beginEdit). Appended into the
+   same .rt-actions holder the buttons live in, not a swap, so REFUTE stays
+   visible for the double-open guard's benefit. */
+.rt-refute-box { flex-basis: 100%; margin-top: var(--sp-1); }
+.rt-refute-ta { width: 100%; box-sizing: border-box; min-height: 56px; resize: vertical;
+  font-family: var(--sans); font-size: var(--fs-body); }
+.rt-refute-row { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
 </style>"""
 
 _SEVERITY_TONE: dict[str, str] = {"high": "bad", "med": "warn", "low": "ok"}
@@ -222,6 +230,43 @@ _ACTIONS_SCRIPT = """<script>
       });
     });
   }
+  // In-card Refute reasoning editor (PR-next, replaces window.prompt): appends
+  // a textarea + kit Save/Cancel into the same .rt-actions holder the REFUTE
+  // button lives in, so the item being refuted stays visible by construction
+  // (the ledger's beginRewrite / journal's beginEdit idiom).
+  function beginRefute(holder, id){
+    if (holder.getAttribute('data-editing') === '1') return;
+    holder.setAttribute('data-editing', '1');
+    var ed = document.createElement('div');
+    ed.className = 'rt-refute-box';
+    var ta = document.createElement('textarea');
+    ta.className = 'rt-refute-ta'; ta.rows = 3;
+    ta.placeholder = 'Your reasoning (required to refute)';
+    var row = document.createElement('div');
+    row.className = 'rt-refute-row';
+    var save = document.createElement('button');
+    save.type = 'button'; save.className = 'k-btn k-btn-primary k-btn-sm';
+    save.setAttribute('data-refute-save', '');
+    save.textContent = 'Save';
+    var cancel = document.createElement('button');
+    cancel.type = 'button'; cancel.className = 'k-btn k-btn-quiet k-btn-sm';
+    cancel.setAttribute('data-refute-cancel', '');
+    cancel.textContent = 'Cancel';
+    row.appendChild(save); row.appendChild(cancel);
+    ed.appendChild(ta); ed.appendChild(row);
+    holder.appendChild(ed);
+    ta.focus();
+    cancel.addEventListener('click', function () {
+      ed.remove();
+      holder.removeAttribute('data-editing');
+    });
+    save.addEventListener('click', function () {
+      var txt = ta.value.trim();
+      if (!txt) { ta.focus(); return; }
+      save.disabled = true;
+      post(id, {action: 'refute', response_md: txt});
+    });
+  }
   container.addEventListener('click', function (ev) {
     var btn = ev.target.closest('[data-rt-act]');
     if (!btn) return;
@@ -229,13 +274,9 @@ _ACTIONS_SCRIPT = """<script>
     if (!holder) return;
     var id = holder.getAttribute('data-item-id');
     var act = btn.getAttribute('data-rt-act');
+    if (act === 'refute') { beginRefute(holder, id); return; }
     var payload = {action: act};
-    if (act === 'refute') {
-      var text = window.prompt('Your reasoning (required to refute):', '');
-      if (text === null) return;
-      if (!text.trim()) { window.alert('Refute needs your reasoning.'); return; }
-      payload.response_md = text.trim();
-    } else if (act === 'defer') {
+    if (act === 'defer') {
       if (!window.confirm(
         'Defer this item? A second defer on the same item is rejected — respond next time.'
       )) return;
