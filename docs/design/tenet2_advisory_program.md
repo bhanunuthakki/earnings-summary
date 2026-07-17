@@ -145,13 +145,51 @@ key + typed value + narrative + provenance + `affirmed_at` + review-horizon):
 
 ### 3.3 Keeping it current without being creepy
 
-- Ratification-only ingestion (no ambient collection; imports are owner-initiated).
+- Ambient learning always-on; **assertion** is affirmation-gated (§7.1). Capacity
+  imports are owner-initiated snapshots, never silent crons.
 - Review horizons per category (capacity: quarterly or on life event; appetite: on
   pledge >$10k or drawdown >15%; behavioral: after each grading batch). The **monthly
   red-team** gains one standing lens: "is the profile stale or contradicted by observed
   behavior?" — surfacing drift as a packet item, not auto-editing.
 - The weekly packet is the affirmation surface: expiring facts appear as one-tap
   `[Still true / Update / Drop]` items. No new UI.
+
+### 3.4 Owner-context federation (owner directive 2026-07-17, first-class pillar)
+
+The owner-context layer is substantially **read from** the two sibling systems, not
+rebuilt here. Verified state (read-only sweep, cross-checked this session): the
+ES→wealthplan `book_cma.json` export has **zero consumers** in wealthplan's tree (dead
+leg); wealthplan's `tracker.py` reads the tracker's SQLite **directly**, bypassing the
+tracker's API (schema-drift + file-lock risk); the ES tracker client works but coerces
+via `_f()` with known pct-vs-fraction and Decimal-string hazards; the
+`PortfolioTrackerApiServer` logon task exists and is Ready (the "no persistent
+process" audit claim is stale as of 2026-07-16 — the residual issue is cold-start
+latency, already handled by the client's tiered-timeout + `probe_tracker` design).
+
+**Authority map (canonical, one owner per fact class):**
+
+| System | Authoritative for | Read by |
+|---|---|---|
+| portfolio-tracker | positions, lots, transactions, accounts + tax treatment, benchmark/return/risk math, realized gains / exit quality | ES (existing REST client), wealthplan (today: SQLite bypass → migrate to API or a versioned export) |
+| wealthplan | household model: comp/bonus/equity ×2, ContributionPolicy, ExpensePlan + COL, RetirementSettings/glide, life events (baby/house/move/work-break/startup/parent-care/exits), CMAs | ES Tier-A import (derived summaries per decision 1) + a new **capacity reader** for near-term cash-need schedules |
+| earnings-summary | theses, research, decisions/grading, advisory memos, owner profile (affirmed facts), Tenets | tracker CIO advisor (its own stack, per the 2026-06 governance decision); wealthplan via `book_cma.json` |
+
+**Read contracts & hygiene:** each leg gets a typed, versioned, units-explicit
+contract (Pydantic on both ends; pct-vs-fraction stated per field) instead of ad hoc
+coercion — formalizing, not rewriting, the existing client. Degradation semantics stay
+the proven ones: never-raises, `available=False` + reason, advice degrades to
+"capacity unknown, as of <date>" rather than guessing. Loopback-only, no auth — any
+cross-machine ambition requires auth first (out of scope).
+
+**Repair items owned by this program:** (a) ES-side **wealthplan capacity reader**
+(cash-need/expense/goal schedule) feeding the `/review` capacity block — Phase 2;
+(b) contract formalization of the tracker client's analytics payloads ES already
+fetches but doesn't join into `/review` (realized-gain/exit-quality) — Phase 2;
+(c) Tier-A import reads wealthplan's **models**, not hand-copied values — Phase 1.
+**Repair items owned by sibling repos (tracked, not built here):** wire wealthplan to
+actually consume `book_cma.json` (the red-team program built that bridge deliberately;
+the consumer was never wired), and migrate wealthplan's SQLite bypass onto the tracker
+API — both are wealthplan-side follow-ups.
 
 ---
 
@@ -245,14 +283,19 @@ Tenet-1 waves (metrics engine, segment quarterly, comparable sets) converge on:
   into the tail-stress/positioning renders (display→consume); verify `capture_poller`
   task is enabled (backlog notes it Disabled — every Telegram intervention depends on
   it). *Success: Worldview anchor non-empty; zero orphaned profile fields.*
-- **Phase 1 — profile substrate.** `owner_profile_facts` migration + store
-  (append-and-supersede) + `execution/import_owner_capacity.py` (wealthplan +
-  CIO_CONTEXT one-way import → `proposed`) + ratification via existing packet-walk
-  card type. No prompt injection yet.
-- **Phase 2 — context injection.** `owner_profile` anchor slot (spotlighted, capped,
-  dated); PreAnalysis capacity block (deterministic); next-dollar gains a cash-aware
-  mode + **profile-driven blend weights** read from the appetite tier (the hardcoded
-  50/30/20 remains only as the labeled no-profile fallback).
+- **Phase 1 — profile substrate + federation spec.** `owner_profile_facts` migration +
+  store (append-and-supersede) + `execution/import_owner_capacity.py` (reads
+  wealthplan's Pydantic models directly — derived summaries only per decision 1 — plus
+  CIO_CONTEXT; lands as `proposed`) + ratification via existing packet-walk card type.
+  Ships the §3.4 federation authority map + contract doc as part of this PR. No prompt
+  injection yet.
+- **Phase 2 — context injection + federation readers.** `owner_profile` anchor slot
+  (spotlighted, capped, dated); PreAnalysis capacity block (deterministic), fed by the
+  new **wealthplan capacity reader** (near-term cash-need/expense schedule) and by the
+  tracker realized-gain/exit-quality payloads ES already fetches but never joins into
+  `/review`; typed units-explicit contract models replace `_f()` coercion on the
+  fields advice consumes; next-dollar gains a cash-aware mode + **profile-driven blend
+  weights** from the appetite tier (hardcoded 50/30/20 = labeled no-profile fallback).
 - **Phase 3 — initiated interventions.** Governor moment classes (`profile_drift`,
   `capacity_breach`, `life_event_checkpoint`); human-capital caps evaluated in-repo
   from Tier-A facts; weekly-packet advisory item source; owner-policy-breach alert
@@ -272,8 +315,8 @@ rebase time; LLM-purpose registrations serialized within a wave.
 
 | Wave | Tenet-1 track | Tenet-2 track | Shared-surface watch |
 |---|---|---|---|
-| **A (now)** | ME P1 (engine skeleton + parity harness, no UI) | **T2 P0** (light dead machinery — subagent-prepped, owner ratifies) + **T2 P1** (profile substrate + import) | none — fully disjoint files; alembic numbering only |
-| **B** | ME P2 (full catalog + IFRS) ∥ SQ P1 (10-K-regime extraction; registers `segment_10q_period_disambiguate`) | **T2 P2** (anchor slot, capacity block, profile-driven next-dollar) | 4-registry: SQ's new purpose lands this wave; T2 P2 adds none — no contention |
+| **A (now)** | ME P1 (engine skeleton + parity harness, no UI) | **T2 P0** (light dead machinery — subagent-prepped, owner ratifies) + **T2 P1** (profile substrate + wealthplan-model import + §3.4 federation spec) | none — fully disjoint files; alembic numbering only |
+| **B** | ME P2 (full catalog + IFRS) ∥ SQ P1 (10-K-regime extraction; registers `segment_10q_period_disambiguate`) | **T2 P2** (anchor slot, capacity block + federation readers/typed contracts, profile-driven next-dollar) | 4-registry: SQ's new purpose lands this wave; T2 P2 adds none — no contention |
 | **C** | SQ P2 (Q4 derivation + coverage) ∥ CS P1 (foundation, portfolio names) | **T2 P3** (governor moment classes, packet advisory items, policy-breach alerts) | quota windows: CS/SQ cron registrations + T2's governed pings all register in `llm_quota_scheduling.md`; keep 03:00–05:00 PT clear |
 | **D** | CS P2 (widen + drift check) ∥ ME P3 (valuation metrics — **first tenet-1 UI**) | **T2 P4** (behavioral live-derive; registers `behavior_distill` ± `profile_distill`) | 4-registry again (T2's turn); UI-kit gate starts binding tenet-1 — run `tests/test_ui_controls.py` per PR |
 | **E** | SQ P3 (FPI/MJDS, gated on spike) ∥ CS P3 (benchmark ratification + UI) | **T2 P5** (decision journal view + panel section + advice-influence read) | heaviest UI-kit convergence: three programs render in this wave — serialize the panel PRs, goldens regen per renderer touch |
