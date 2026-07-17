@@ -45,7 +45,9 @@ def test_dcf_registers_itself_behind_the_gate() -> None:
 def test_draft_persists_a_dcf_proposal_with_oracle_ok() -> None:
     captured: dict[str, object] = {}
     pid = draft_dcf_proposal(
-        ticker="nu", proposed_row=dict(_PROPOSED), old_npv_per_share=18.0,
+        ticker="nu",
+        proposed_row=dict(_PROPOSED),
+        old_npv_per_share=18.0,
         create_fn=lambda **kw: captured.update(kw) or 21,
     )
     assert pid == 21
@@ -58,9 +60,17 @@ def test_draft_persists_a_dcf_proposal_with_oracle_ok() -> None:
 
 
 def test_draft_rejects_a_non_positive_or_missing_fair_value() -> None:
-    assert draft_dcf_proposal(ticker="NU", proposed_row={"npv_per_share": 0.0}, create_fn=lambda **_k: 1) is None
+    assert (
+        draft_dcf_proposal(
+            ticker="NU", proposed_row={"npv_per_share": 0.0}, create_fn=lambda **_k: 1
+        )
+        is None
+    )
     assert draft_dcf_proposal(ticker="NU", proposed_row={}, create_fn=lambda **_k: 1) is None
-    assert draft_dcf_proposal(ticker="", proposed_row=dict(_PROPOSED), create_fn=lambda **_k: 1) is None
+    assert (
+        draft_dcf_proposal(ticker="", proposed_row=dict(_PROPOSED), create_fn=lambda **_k: 1)
+        is None
+    )
 
 
 def test_draft_coerces_date_objects_so_json_survives() -> None:
@@ -68,14 +78,18 @@ def test_draft_coerces_date_objects_so_json_survives() -> None:
     row["valuation_date"] = date(2026, 6, 30)
     row["live_price_at"] = datetime(2026, 6, 30, 8, 0, 0)
     captured: dict[str, object] = {}
-    draft_dcf_proposal(ticker="NU", proposed_row=row, create_fn=lambda **kw: captured.update(kw) or 1)
+    draft_dcf_proposal(
+        ticker="NU", proposed_row=row, create_fn=lambda **kw: captured.update(kw) or 1
+    )
     art = json.loads(str(captured["artifact_json"]))  # must not raise
     assert art["proposed_row"]["valuation_date"] == "2026-06-30"
 
 
 def test_apply_reconstructs_and_upserts_via_persist(monkeypatch) -> None:
     prop = SimpleNamespace(
-        kind="dcf", ticker="NU", artifact_json=json.dumps({"proposed_row": _PROPOSED, "oracle_ok": True})
+        kind="dcf",
+        ticker="NU",
+        artifact_json=json.dumps({"proposed_row": _PROPOSED, "oracle_ok": True}),
     )
     persisted: list[dict[str, object]] = []
     note = apply_dcf_proposal(
@@ -87,7 +101,9 @@ def test_apply_reconstructs_and_upserts_via_persist(monkeypatch) -> None:
 
 def test_apply_rejects_non_dcf_and_missing_row() -> None:
     with pytest.raises(ValueError, match="not a dcf"):
-        apply_dcf_proposal(1, get_fn=lambda _pid, **_k: SimpleNamespace(kind="memo", artifact_json="{}"))
+        apply_dcf_proposal(
+            1, get_fn=lambda _pid, **_k: SimpleNamespace(kind="memo", artifact_json="{}")
+        )
     bad = SimpleNamespace(kind="dcf", ticker="NU", artifact_json=json.dumps({"oracle_ok": True}))
     with pytest.raises(ValueError, match="no proposed_row"):
         apply_dcf_proposal(1, get_fn=lambda _pid, **_k: bad, persist_fn=lambda *_a, **_k: None)
@@ -99,7 +115,9 @@ def test_apply_oracle_recheck_blocks_a_non_positive_fair_value(monkeypatch) -> N
     prop = SimpleNamespace(kind="dcf", ticker="NU", artifact_json=json.dumps({"proposed_row": row}))
     persisted: list[object] = []
     with pytest.raises(ValueError, match="fair value"):
-        apply_dcf_proposal(1, get_fn=lambda _pid, **_k: prop, persist_fn=lambda *_a, **_k: persisted.append(1))
+        apply_dcf_proposal(
+            1, get_fn=lambda _pid, **_k: prop, persist_fn=lambda *_a, **_k: persisted.append(1)
+        )
     assert not persisted  # never wrote
 
 

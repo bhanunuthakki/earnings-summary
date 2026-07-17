@@ -89,9 +89,7 @@ def render_alert_feed(
 # ----------------------------------------------------------------------------
 
 
-def _render_header(
-    body: StringIO, total: int, active: list[tuple[str, str, str]]
-) -> None:
+def _render_header(body: StringIO, total: int, active: list[tuple[str, str, str]]) -> None:
     body.write('<header class="l1-header">')
     body.write("<h1>Inbox feed</h1>")
     body.write(

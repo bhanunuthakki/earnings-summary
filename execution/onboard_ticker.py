@@ -457,9 +457,7 @@ def _run_saydo(ticker: str) -> int:
     ).returncode
 
 
-def _saydo_should_run(
-    list_type: str | None, *, force: bool, instrument: str | None = None
-) -> bool:
+def _saydo_should_run(list_type: str | None, *, force: bool, instrument: str | None = None) -> bool:
     """Say-Do generation runs for evaluation-list names (the gap this closes)
     or for any name when forced (e.g. backfilling an already-onboarded ticker).
 
