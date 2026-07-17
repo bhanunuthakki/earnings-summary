@@ -166,9 +166,15 @@ def record_call(record: LlmCallRecord, *, db_path: Path | str | None = None) -> 
                 }
             )
             return None
-        conn = sqlite3.connect(str(path), timeout=5.0)
+        # 30s busy_timeout matches db.py's writer. This telemetry row races the
+        # surrounding pipeline for portfolio.db's single WAL write lock; at 5s it
+        # lost that race in bursts (morning pipeline holds the lock longer since
+        # the #873 Diet/alert/ledger writes), logging "database is locked" and
+        # dropping cost rows. 30s clears the burst without ever blocking the LLM
+        # call itself (this runs after the call has already succeeded).
+        conn = sqlite3.connect(str(path), timeout=30.0)
         try:
-            conn.execute("PRAGMA busy_timeout = 5000")
+            conn.execute("PRAGMA busy_timeout = 30000")
             cur = conn.execute(
                 _INSERT_SQL,
                 (
