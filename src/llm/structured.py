@@ -59,6 +59,25 @@ class StructuredParseError(ValueError):
         self.raw_head = raw_head
 
 
+def _first_json_value(text: str, expect: Literal["object", "array"]) -> object:
+    """Decode the first complete JSON value of the expected shape from ``text``,
+    ignoring any trailing prose/fences the model appended after it.
+
+    ``raw_decode`` parses one value and reports where it ended, so a chatty
+    ``[]\\n```\\n\\n<explanation>`` yields ``[]``. Raises ValueError (naming the
+    problem) when no plausible opener is present or the value won't decode — the
+    loud contract is preserved."""
+    opener = "{" if expect == "object" else "["
+    idx = text.find(opener)
+    if idx == -1:
+        raise ValueError(f"not valid JSON: no {expect} opener found in response")
+    try:
+        payload, _ = json.JSONDecoder().raw_decode(text[idx:])
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"not valid JSON: {exc}") from exc
+    return payload
+
+
 def parse_json_payload(
     raw: str,
     *,
@@ -72,8 +91,14 @@ def parse_json_payload(
         text = JSON_FENCE_RX.sub("", text).strip()
     try:
         payload: object = json.loads(text)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise ValueError(f"not valid JSON: {exc}") from exc
+    except (json.JSONDecodeError, ValueError):
+        # Tolerate trailing prose/fences after an otherwise-valid JSON value: a
+        # chatty model emits ``[]\n```\n\nThe section describes ...`` which
+        # json.loads rejects as "Extra data". Decode just the first complete
+        # value from the expected opener and ignore whatever follows. Genuine
+        # garbage (no opener, or an undecodable value) still raises loudly so the
+        # retry-with-feedback layer fires.
+        payload = _first_json_value(text, expect)
     if expect == "object":
         if not isinstance(payload, dict):
             raise ValueError(f"expected a JSON object, got {type(payload).__name__}")

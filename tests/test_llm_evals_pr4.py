@@ -282,6 +282,29 @@ def test_parse_json_payload_shapes() -> None:
         parse_json_payload("prose, not json", expect="object")
 
 
+def test_parse_json_payload_tolerates_trailing_prose() -> None:
+    # A chatty model wraps the value in a fence AND appends an explanation, so
+    # the closing fence + prose trail the JSON. json.loads rejects that as
+    # "Extra data"; the parser must still recover the leading value instead of
+    # burning a retry (the qualitative_conditions_extract outage, 2026-07-16).
+    assert (
+        parse_json_payload(
+            "```json\n[]\n```\n\nThe section describes tactical trades, "
+            "not falsifiable conditions.",
+            expect="array",
+        )
+        == []
+    )
+    assert parse_json_payload(
+        '{"verdict": "hold"}\n\nRationale: nothing material changed.',
+        expect="object",
+    ) == {"verdict": "hold"}
+    # Genuine garbage (no JSON value at all) still raises loudly so the
+    # retry-with-feedback layer fires.
+    with pytest.raises(ValueError, match="not valid JSON"):
+        parse_json_payload("no json here at all", expect="array")
+
+
 def test_call_llm_structured_retries_with_feedback(monkeypatch: pytest.MonkeyPatch) -> None:
     prompts: list[str] = []
     outputs = ["I think the answer is...", '{"k": "v"}']
