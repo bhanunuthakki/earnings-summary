@@ -185,6 +185,32 @@ def test_panel_empty_state(db_path: Path) -> None:
     assert "0 open" in render_triage_panel(db_path)
 
 
+def test_triage_drawer_stays_hidden_until_opened(db_path: Path) -> None:
+    """Regression (owner 2026-07-17: "Parked comment cannot be minimized"): the
+    drill-in must honour its `hidden` attribute. The kit hides overlays with
+    `.k-overlay[hidden]{display:none}` (specificity 0,2,0); a bare
+    `#triage-drawer{display:flex}` is an ID rule (1,0,0) that outranks it, so the
+    drawer rode open+empty on every load and CCOverlay's close (toggling
+    `hidden`) could never dismiss it. The `display` MUST be scoped to
+    :not([hidden]) so the hide-when-hidden contract survives the content-sizing
+    rule."""
+    import re
+
+    from pipeline.triage_panel import render_triage_panel
+
+    html = render_triage_panel(db_path)
+    # The element ships closed.
+    tag = re.search(r"<div\b[^>]*id=\"triage-drawer\"[^>]*>", html)
+    assert tag is not None
+    assert " hidden" in tag.group(0)
+    # `display` only applies when shown…
+    assert "#triage-drawer:not([hidden])" in html
+    # …and the bare geometry rule must NOT force display (the specificity trap).
+    bare = re.search(r"#triage-drawer\s*\{([^}]*)\}", html)
+    assert bare is not None
+    assert "display" not in bare.group(1)
+
+
 def test_shell_aliases_triage_into_the_ledger_console() -> None:
     """Phase-5 aggressive IA: Triage is no longer a standalone sub-tab — it
     composes into the single Review → Ledger console (reusing the `musings`

@@ -83,13 +83,21 @@ _PANEL_STYLE = """<style>
    old rule pinned BOTH top+bottom insets, forcing a full-height rail: a ~120px
    card stretched to ~800px left ~85% dead space under every short comment (the
    "too much space" §3.1 never caught because drawer height is per-surface
-   layout, not guard-scoped). */
+   layout, not guard-scoped).
+
+   The `display:flex` MUST be scoped to :not([hidden]): an ID selector (1,0,0)
+   outranks the kit's `.k-overlay[hidden]{display:none}` (0,2,0), so a bare
+   `#triage-drawer{display:flex}` re-shows the drawer regardless of its `hidden`
+   attribute — it rode open+empty on every load and CCOverlay's close (which
+   toggles `hidden`) could never dismiss it ("Parked comment cannot be
+   minimized", owner 2026-07-17). Gating on :not([hidden]) keeps the kit's
+   hide-when-hidden contract intact while still content-sizing when shown. */
 #triage-drawer { top: var(--sp-3); right: var(--sp-3);
   width: min(420px, 92vw);
   max-height: calc(100vh - var(--sp-3) * 2);
   max-height: calc(100dvh - var(--sp-3) * 2);
-  display: flex; flex-direction: column;
   padding: var(--sp-4); overflow: auto; gap: var(--sp-3); }
+#triage-drawer:not([hidden]) { display: flex; flex-direction: column; }
 .tri-d-bar { display: flex; align-items: baseline; gap: var(--sp-2); }
 .tri-d-bar h3 { font-size: var(--fs-section); font-weight: 600; margin: 0; margin-right: auto; }
 /* Drawer close glyph — the §3 convention: top type step, muted → fg, no border
