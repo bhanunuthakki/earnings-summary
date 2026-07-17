@@ -131,9 +131,7 @@ def compare_ticker(
     results: list[ParityResult] = []
     formula_keys = sorted(_FMP_FIELD_MAP)
     for formula_key in formula_keys:
-        formula = next(
-            (f for (key, _v), f in REGISTRY.items() if key == formula_key), None
-        )
+        formula = next((f for (key, _v), f in REGISTRY.items() if key == formula_key), None)
         if formula is None:
             continue
         computed = latest_ttm_value(conn, ticker, formula_key)

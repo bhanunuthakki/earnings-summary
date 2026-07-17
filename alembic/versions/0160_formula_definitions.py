@@ -10,11 +10,11 @@ No FK on any future referencing column (repo-wide FK-poisoning invariant,
 [[reference-platform-invariants]]): `open_conn` runs `PRAGMA
 foreign_keys=ON`, so a real FK fails every child insert when a test
 fixture stamps at an earlier alembic revision. `metric_computation_attempts.
-formula_id` and `kpi_facts.formula_id` (0154/0155) are plain INTEGER with
+formula_id` and `kpi_facts.formula_id` (0161/0162) are plain INTEGER with
 code-level validation instead.
 
-Revision ID: 0153_formula_definitions
-Revises: 0152_v_thesis_status_stub_substring
+Revision ID: 0160_formula_definitions
+Revises: 0159_owner_profile_facts
 Create Date: 2026-07-17
 """
 
@@ -26,8 +26,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0153_formula_definitions"
-down_revision: str | Sequence[str] | None = "0152_v_thesis_status_stub_substring"
+revision: str = "0160_formula_definitions"
+down_revision: str | Sequence[str] | None = "0159_owner_profile_facts"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -49,7 +49,9 @@ def upgrade() -> None:
             sa.Column("period_grid", sa.String(16), nullable=False),
             sa.Column("unit", sa.String(16), nullable=False),
             sa.Column("created_at", sa.DateTime(), nullable=False),
-            sa.UniqueConstraint("formula_key", "version", name="uq_formula_definitions_key_version"),
+            sa.UniqueConstraint(
+                "formula_key", "version", name="uq_formula_definitions_key_version"
+            ),
         )
         op.create_index("ix_formula_definitions_formula_key", _TABLE, ["formula_key"])
 

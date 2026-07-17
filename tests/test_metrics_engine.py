@@ -18,7 +18,6 @@ from compute.metrics_engine.inputs import CanonicalConcept, resolve_concept
 from compute.metrics_engine.registry import REGISTRY, ReasonCode, all_latest, latest
 from models.companies import AccountingStandard, BusinessModelClass
 
-
 # ---------------------------------------------------------------------------
 # registry.py
 # ---------------------------------------------------------------------------
@@ -50,7 +49,13 @@ def test_registry_has_exactly_the_15_phase1_formulas() -> None:
 def test_registry_excludes_phase2_alt_of_metrics() -> None:
     """net_debt_*, roic_*, roce and other alt_of-grouped pairs are Phase 2 --
     explicitly out of scope per docs/design/bottoms_up_metrics_engine.md section 6."""
-    phase2_only = {"net_debt_strict", "net_debt_incl_lt_securities", "roic_strict", "roic_lease_adjusted", "roce"}
+    phase2_only = {
+        "net_debt_strict",
+        "net_debt_incl_lt_securities",
+        "roic_strict",
+        "roic_lease_adjusted",
+        "roce",
+    }
     actual = {key for key, _version in REGISTRY}
     assert actual.isdisjoint(phase2_only)
 
@@ -87,9 +92,7 @@ def test_roe_has_no_business_model_exclusion() -> None:
 
 def test_resolve_concept_us_gaap_identity_map() -> None:
     assert resolve_concept(AccountingStandard.US_GAAP, CanonicalConcept.REVENUE) == "revenue"
-    assert (
-        resolve_concept(AccountingStandard.US_GAAP, CanonicalConcept.TOTAL_DEBT) == "total_debt"
-    )
+    assert resolve_concept(AccountingStandard.US_GAAP, CanonicalConcept.TOTAL_DEBT) == "total_debt"
 
 
 def test_resolve_concept_handles_naming_mismatches() -> None:

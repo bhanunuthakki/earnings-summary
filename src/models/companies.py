@@ -32,7 +32,7 @@ class BusinessModelClass(StrEnum):
     (src/compute/metrics_engine/) uses to exclude formulas that don't apply
     to a ticker's capital structure — e.g. `gross_margin` for a bank with no
     COGS concept. Mirrors `tracked_companies.business_model_class` (alembic
-    0156). Default is `OPERATING_COMPANY`; `INSURANCE` has no current roster
+    0163). Default is `OPERATING_COMPANY`; `INSURANCE` has no current roster
     member but is kept as a first-class value since several formulas'
     ``excluded_business_models`` name it explicitly (docs/design/
     bottoms_up_metrics_engine.md §1) — extend the roster mapping, not this enum,
@@ -98,7 +98,7 @@ class Company(BaseModel):
     fiscal_year_end: str | None = None
     fmp_data_saved: bool = False
     fmp_data_upto: str | None = None
-    # Metrics-engine classification columns (alembic 0156/0157). Both default
+    # Metrics-engine classification columns (alembic 0163/0164). Both default
     # to the common case (an operating company reporting US-GAAP) so every
     # pre-existing row is well-formed the moment the column lands; a real
     # bank/holdco/IFRS filer is seeded explicitly by the migration's data step

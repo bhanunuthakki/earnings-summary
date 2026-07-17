@@ -36,14 +36,16 @@ from models.documents import SourceQualityTier, SourceType
 from pipeline.confidence import score_confidence
 from pipeline.kpi_persistence import find_or_create_kpi_definition
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
+from report.sections._common import calendar_quarter_key
 
 # Reused directly per docs/design/bottoms_up_metrics_engine.md section 0 --
 # the module docstring above explains why this private helper (not just
 # calendar_quarter_key) is still needed. Scoped suppression, not a blanket
 # type: ignore: this is the one documented, intentional cross-module reuse
 # of a private symbol.
-from report.sections.financials import _dedupe_by_calendar_quarter  # pyright: ignore[reportPrivateUsage]
-from report.sections._common import calendar_quarter_key
+from report.sections.financials import (
+    _dedupe_by_calendar_quarter,  # pyright: ignore[reportPrivateUsage]
+)
 from timeseries.loaders import reader_tier_rank_sql
 
 from .applicability import applicable_formulas
@@ -123,7 +125,7 @@ def resolve_classification(
 ) -> tuple[BusinessModelClass, AccountingStandard]:
     """Read tracked_companies.business_model_class/accounting_standard for `ticker`.
 
-    Schema-defensive (alembic 0156/0157): falls back to the default
+    Schema-defensive (alembic 0163/0164): falls back to the default
     (operating_company, us_gaap) when the columns are absent (a synthetic
     test fixture) or the ticker has no tracked_companies row.
     """
@@ -378,7 +380,11 @@ def _input_fingerprint(
 
 
 def _existing_attempt(
-    conn: sqlite3.Connection, ticker: str, period_end: datetime, fiscal_period_type: str, formula_id: int
+    conn: sqlite3.Connection,
+    ticker: str,
+    period_end: datetime,
+    fiscal_period_type: str,
+    formula_id: int,
 ) -> tuple[str, str] | None:
     row = conn.execute(
         "SELECT input_fingerprint, engine_version FROM metric_computation_attempts "
@@ -435,7 +441,9 @@ def _persist_attempt(
             unit=formula.unit,
             primary_source=SourceType.FMP,
         )
-        confidence = score_confidence(tier=SourceQualityTier.FMP_NORMALIZED, extracted_by="metrics_engine")
+        confidence = score_confidence(
+            tier=SourceQualityTier.FMP_NORMALIZED, extracted_by="metrics_engine"
+        )
         anchor_doc_id = lineage[0][2] if lineage else 0
         new_id, _superseded_id = insert_kpi_with_restatement_detection(
             conn,

@@ -1,4 +1,4 @@
-"""Round-trip tests for 0153..0157 -- the bottoms-up metrics engine's schema
+"""Round-trip tests for 0160..0164 -- the bottoms-up metrics engine's schema
 (formula_definitions, metric_computation_attempts, kpi_facts.formula_id/
 formula_version, tracked_companies.business_model_class/accounting_standard).
 
@@ -7,7 +7,7 @@ so these migrations run against the actual production tracked_companies/
 kpi_facts table shapes rather than a hand-rolled approximation -- the whole
 point being to prove the anonymous list_type CHECK on tracked_companies
 survives both the upgrade AND the downgrade (the 0073 landmine this program
-had to route around, see 0156/0157's docstrings).
+had to route around, see 0163/0164's docstrings).
 """
 
 from __future__ import annotations
@@ -25,8 +25,8 @@ from alembic import command
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-PRIOR_HEAD = "0152_v_thesis_status_stub_substring"
-NEW_HEAD = "0157_tracked_companies_accounting_standard"
+PRIOR_HEAD = "0159_owner_profile_facts"
+NEW_HEAD = "0164_tracked_companies_accounting_standard"
 
 
 def _build_config(db_path: Path) -> Config:
@@ -38,7 +38,7 @@ def _build_config(db_path: Path) -> Config:
 
 @pytest.fixture(scope="module")
 def prior_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    db = tmp_path_factory.mktemp("metrics_engine_schema_tmpl") / "at_0152.db"
+    db = tmp_path_factory.mktemp("metrics_engine_schema_tmpl") / "at_0159.db"
     import db as dbmod
 
     dbmod.set_db_path(str(db))
@@ -57,9 +57,7 @@ def db_at_prior(prior_template: Path, tmp_path: Path) -> Path:
 
 
 def _list_type_check_sql(conn: sqlite3.Connection) -> str:
-    row = conn.execute(
-        "SELECT sql FROM sqlite_master WHERE name = 'tracked_companies'"
-    ).fetchone()
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'tracked_companies'").fetchone()
     return str(row[0])
 
 
@@ -100,7 +98,10 @@ def test_upgrade_creates_new_schema_and_preserves_list_type_check(db_at_prior: P
     # byte-identical after two ADD COLUMN passes.
     check_after = _list_type_check_sql(conn)
     assert "list_type IN" in check_after
-    assert check_before.split("list_type")[1].split(",")[0] == check_after.split("list_type")[1].split(",")[0]
+    assert (
+        check_before.split("list_type")[1].split(",")[0]
+        == check_after.split("list_type")[1].split(",")[0]
+    )
     conn.close()
 
 
@@ -177,5 +178,8 @@ def test_downgrade_removes_new_schema_and_preserves_list_type_check(db_at_prior:
     assert "accounting_standard" not in tc_cols
 
     check_after = _list_type_check_sql(conn)
-    assert check_before.split("list_type")[1].split(",")[0] == check_after.split("list_type")[1].split(",")[0]
+    assert (
+        check_before.split("list_type")[1].split(",")[0]
+        == check_after.split("list_type")[1].split(",")[0]
+    )
     conn.close()

@@ -66,9 +66,7 @@ def _seed_kpi_fact(conn: sqlite3.Connection, *, ticker: str, formula_key: str, v
     conn.commit()
 
 
-def _write_fmp_cache(
-    tmp_path: Path, ticker: str, suffix: str, field: str, value: float
-) -> Path:
+def _write_fmp_cache(tmp_path: Path, ticker: str, suffix: str, field: str, value: float) -> Path:
     path = tmp_path / f"{ticker}_{suffix}.json"
     path.write_text(json.dumps([{"symbol": ticker, field: value}]), encoding="utf-8")
     return tmp_path

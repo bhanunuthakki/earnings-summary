@@ -35,9 +35,7 @@ def applicable_formulas(
     business-model check would otherwise include it.
     """
     ticker_excludes: frozenset[str] = (
-        _TICKER_EFFICIENCY_OVERRIDES.get(ticker.upper(), frozenset())
-        if ticker
-        else frozenset()
+        _TICKER_EFFICIENCY_OVERRIDES.get(ticker.upper(), frozenset()) if ticker else frozenset()
     )
     return tuple(
         f

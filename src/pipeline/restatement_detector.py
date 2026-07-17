@@ -382,9 +382,9 @@ def insert_kpi_with_restatement_detection(
     verbatim quote supporting the value (column added in 0033); both are
     dropped like the audit columns when the schema predates them.
 
-    `formula_id`/`formula_version` (alembic 0155, both nullable) tag a row
+    `formula_id`/`formula_version` (alembic 0162, both nullable) tag a row
     produced by `compute.metrics_engine` — same drop-on-legacy tolerance as
-    every other tail column; a pre-0155 `kpi_facts` (or a caller outside the
+    every other tail column; a pre-0162 `kpi_facts` (or a caller outside the
     metrics engine that never passes them) simply omits the columns.
 
     Schema tolerance: when `kpi_facts` lacks the audit columns
@@ -429,7 +429,7 @@ def insert_kpi_with_restatement_detection(
     )
     # Optional tail columns: written only when provided AND the schema has
     # them (locator: 0075; source_excerpt: 0033; computed_from: 0087;
-    # formula_id/formula_version: 0155) — same drop-on-legacy tolerance as
+    # formula_id/formula_version: 0162) — same drop-on-legacy tolerance as
     # the audit columns.
     tail_cols: list[str] = []
     tail_vals: list[str | int] = []

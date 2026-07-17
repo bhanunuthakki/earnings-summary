@@ -15,8 +15,8 @@ insert when a test fixture stamps at an earlier alembic revision (recurs in
 migrations 0086/0093/0095). Validated at the code layer instead
 (`io.py` only ever writes ids it just created/looked up itself).
 
-Revision ID: 0154_metric_computation_attempts
-Revises: 0153_formula_definitions
+Revision ID: 0161_metric_computation_attempts
+Revises: 0160_formula_definitions
 Create Date: 2026-07-17
 """
 
@@ -28,8 +28,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0154_metric_computation_attempts"
-down_revision: str | Sequence[str] | None = "0153_formula_definitions"
+revision: str = "0161_metric_computation_attempts"
+down_revision: str | Sequence[str] | None = "0160_formula_definitions"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

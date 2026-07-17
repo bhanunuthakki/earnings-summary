@@ -3,7 +3,7 @@
 `REGISTRY` is append-only in the literal sense: once a `(formula_key,
 version)` pair is committed, its `display_formula`/`method_notes`/inputs
 never change — a formula change is always a new `version` entry. A DB
-mirror (`formula_definitions`, alembic 0153) is upserted from this module at
+mirror (`formula_definitions`, alembic 0160) is upserted from this module at
 engine-startup via `io.upsert_formula_definitions`, mirroring
 `pipeline.kpi_persistence.find_or_create_kpi_definition`'s idempotency
 pattern.

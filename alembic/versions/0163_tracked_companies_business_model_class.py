@@ -16,8 +16,8 @@ Seeds the known non-default roster names per the design doc: NU -> bank,
 BN -> holdco. Extend the seed list (not the enum) as other bank/insurance/
 REIT names enter the book.
 
-Revision ID: 0156_tracked_companies_business_model_class
-Revises: 0155_kpi_facts_formula_columns
+Revision ID: 0163_tracked_companies_business_model_class
+Revises: 0162_kpi_facts_formula_columns
 Create Date: 2026-07-17
 """
 
@@ -29,8 +29,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0156_tracked_companies_business_model_class"
-down_revision: str | Sequence[str] | None = "0155_kpi_facts_formula_columns"
+revision: str = "0163_tracked_companies_business_model_class"
+down_revision: str | Sequence[str] | None = "0162_kpi_facts_formula_columns"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

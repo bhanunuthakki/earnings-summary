@@ -327,9 +327,7 @@ def test_ifrs_ticker_gets_missing_input_mapping_for_every_formula(
     rows = _attempts(conn, "IFRSCO")
     assert len(rows) > 0
     assert all(r["status"] == "not_computable" for r in rows)
-    assert all(
-        r["reason_code"] == ReasonCode.MISSING_INPUT_MAPPING.value for r in rows
-    )
+    assert all(r["reason_code"] == ReasonCode.MISSING_INPUT_MAPPING.value for r in rows)
 
 
 def test_recompute_is_idempotent_without_force(conn: sqlite3.Connection) -> None:

@@ -11,8 +11,8 @@ invariant ([[reference-platform-invariants]]): `open_conn` runs `PRAGMA
 foreign_keys=ON`, so a real FK fails every child insert when a test
 fixture stamps at an earlier alembic revision.
 
-Revision ID: 0155_kpi_facts_formula_columns
-Revises: 0154_metric_computation_attempts
+Revision ID: 0162_kpi_facts_formula_columns
+Revises: 0161_metric_computation_attempts
 Create Date: 2026-07-17
 """
 
@@ -24,8 +24,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0155_kpi_facts_formula_columns"
-down_revision: str | Sequence[str] | None = "0154_metric_computation_attempts"
+revision: str = "0162_kpi_facts_formula_columns"
+down_revision: str | Sequence[str] | None = "0161_metric_computation_attempts"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
