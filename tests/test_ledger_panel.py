@@ -241,8 +241,8 @@ def test_ledger_console_renders_one_merged_nav_band(db_path: Path) -> None:
     # internal toolbar.
     assert html.count('data-ledger-jump="ledger-jump-capture"') == 1
     assert 'class="ledger-jump-toolbar"' not in html
-    # The redundant 'Ledger' console chip is gone (its <h2> sits right below);
-    # Triage + Journal console chips stay.
+    # The redundant 'Ledger' console chip is gone; Triage + Journal console
+    # chips stay.
     assert 'data-console-jump="csec-feed"' not in html
     assert 'data-console-jump="csec-triage"' in html
     assert 'data-console-jump="csec-journal"' in html
@@ -255,8 +255,11 @@ def test_ledger_console_renders_one_merged_nav_band(db_path: Path) -> None:
     assert 'id="ledger-jump-capture"' in html
     assert 'id="ledger-jump-research"' in html
     assert "__ledgerJumpNav" in html
-    # Exactly one Ledger title on the page (the feed's own <h2>).
-    assert html.count(">Ledger</h2>") == 1
+    # No 'Ledger' <h2> on the page at all: the merged band is already titled
+    # 'Ledger' and its Capture chip names/jumps the leading feed section, so the
+    # feed sheds its own <h2>Ledger</h2> echo in embedded mode (the vertical
+    # space the owner flagged 2026-07-17). Triage/Journal keep their section h3s.
+    assert ">Ledger</h2>" not in html
 
 
 def test_standalone_ledger_panel_keeps_its_internal_toolbar(db_path: Path) -> None:
@@ -265,9 +268,13 @@ def test_standalone_ledger_panel_keeps_its_internal_toolbar(db_path: Path) -> No
     html = render_ledger_panel(db_path)
     assert 'class="ledger-jump-toolbar"' in html
     assert 'data-ledger-jump="ledger-jump-capture"' in html
-    # Embedded mode suppresses ONLY the toolbar; the sections stay.
+    # Standalone keeps its page title (no console band names it here).
+    assert ">Ledger</h2>" in html
+    # Embedded mode suppresses the toolbar AND the redundant <h2> (the console
+    # band + its Capture chip name the section); the sections themselves stay.
     embedded = render_ledger_panel(db_path, embedded=True)
     assert 'class="ledger-jump-toolbar"' not in embedded
+    assert ">Ledger</h2>" not in embedded
     assert 'id="ledger-jump-capture"' in embedded
 
 
