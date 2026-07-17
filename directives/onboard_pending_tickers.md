@@ -35,7 +35,7 @@ AND ANY of:
 | `no_instrument_type` | `instrument_type IS NULL` | `onboard_ticker` classifies this from the FMP profile (`set_instrument_type_from_fmp`); NULL means the onboard chain never ran for this ticker |
 | `no_financial_facts` | 0 `financial_facts` rows | parse stage never ran |
 | `no_dcf_run` | 0 `dcf_runs` rows | analysis stage never ran |
-| `no_commitments` | has ≥1 `transcripts` row but 0 `management_commitments` | LLM extractor never ran for this ticker's transcripts |
+| `no_commitments` | has ≥1 *extractable* `transcripts` row but 0 `management_commitments` | LLM extractor still has work to do for this ticker's transcripts |
 
 Reason precedence is the order above — first matching condition wins. Index /
 ETF / `'none'` rows are deliberately excluded.
@@ -43,6 +43,23 @@ ETF / `'none'` rows are deliberately excluded.
 A fully-onboarded ticker with NO transcripts is intentionally NOT pending —
 nothing for the extractor to chew on. The `no_commitments` signal only fires
 when transcripts exist.
+
+**"Extractable" mirrors the extractor's own target selection**
+(`compute.say_do_extractor.transcripts_pending_extraction`). Two additional
+guards, both using existing durable state:
+
+- A transcript with a `commitment_scan_log` row is done — a recorded
+  zero-commitment scan is a real outcome, not a retry candidate.
+- A ticker with an empty `kpi_definitions` catalog is excluded — the
+  extraction outcome is predetermined (zero commitments, no LLM call, no scan
+  marker), so it stays out of the queue until a catalog is seeded, at which
+  point it becomes pending again automatically.
+
+Any predicate looser than the extractor's re-queues tickers whose
+`--auto` run returns `targets=0` — an hourly no-op subprocess forever (the
+2026-07-16 MELI/AGX/DASH/FIGR eternal-churn). On a pre-0129 DB (no
+`commitment_scan_log` table) the scan-log guard is omitted, matching the
+extractor's own graceful degrade.
 
 ## Per-ticker pipeline
 

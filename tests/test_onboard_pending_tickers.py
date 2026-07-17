@@ -65,6 +65,18 @@ def _seed_minimal_schema(db_path: Path) -> None:
             period_target TEXT,
             kpi_name TEXT
         );
+        CREATE TABLE kpi_definitions (
+            id INTEGER PRIMARY KEY,
+            ticker TEXT NOT NULL,
+            name TEXT NOT NULL,
+            unit TEXT
+        );
+        CREATE TABLE commitment_scan_log (
+            transcript_id INTEGER PRIMARY KEY,
+            scanned_at TEXT NOT NULL,
+            n_extracted INTEGER NOT NULL,
+            prompt_version TEXT
+        );
         """
     )
     conn.commit()
@@ -81,8 +93,14 @@ def _add_ticker(
     dcf: int = 0,
     transcripts: int = 0,
     commitments: int = 0,
+    kpi_defs: int = 1,
+    scanned: int = 0,
     added_at: str = "2026-05-01",
 ) -> None:
+    """`scanned` marks the first N of the ticker's transcripts as already
+    scanned (a commitment_scan_log row with n_extracted=0); `kpi_defs`
+    seeds the ticker's KPI catalog (default 1 — the no_commitments arm
+    requires a non-empty catalog, mirroring the extractor)."""
     conn = sqlite3.connect(db_path)
     conn.execute(
         "INSERT INTO tracked_companies (ticker, name, list_type, instrument_type, added_at) "
@@ -99,15 +117,29 @@ def _add_ticker(
             "INSERT INTO dcf_runs (ticker, valuation_date, npv) VALUES (?, ?, ?)",
             (ticker, "2025-12-31", float(i)),
         )
+    transcript_ids: list[int] = []
     for i in range(transcripts):
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO transcripts (ticker, period_end) VALUES (?, ?)",
             (ticker, "2025-12-31"),
+        )
+        assert cur.lastrowid is not None
+        transcript_ids.append(cur.lastrowid)
+    for tid in transcript_ids[:scanned]:
+        conn.execute(
+            "INSERT INTO commitment_scan_log "
+            "(transcript_id, scanned_at, n_extracted, prompt_version) VALUES (?, ?, 0, 'v1')",
+            (tid, "2026-07-16T04:00:00"),
         )
     for i in range(commitments):
         conn.execute(
             "INSERT INTO management_commitments (ticker, period_target, kpi_name) VALUES (?, ?, ?)",
             (ticker, "2026-03-31", "Revenue YoY Growth (USD)"),
+        )
+    for i in range(kpi_defs):
+        conn.execute(
+            "INSERT INTO kpi_definitions (ticker, name, unit) VALUES (?, ?, ?)",
+            (ticker, f"KPI {i}", "percent"),
         )
     conn.commit()
     conn.close()
@@ -252,6 +284,89 @@ def test_no_commitments_pending_only_when_transcripts_exist(db: Path) -> None:
     )
     pending = mod.find_pending_tickers(db)
     assert pending == [("EXTRACT_ME", "no_commitments")]
+
+
+def test_scanned_clean_transcripts_are_not_pending(db: Path) -> None:
+    """Regression (2026-07-16 eternal-churn): a ticker whose transcripts were
+    ALL scanned with zero commitments extracted (commitment_scan_log rows)
+    must drop out of the queue — the extractor will never re-target them, so
+    flagging the ticker just re-runs a targets=0 no-op subprocess hourly."""
+    mod = _load_module()
+    _add_ticker(
+        db,
+        "MELI",
+        "portfolio",
+        instrument_type="equity",
+        facts=5,
+        dcf=1,
+        transcripts=2,
+        scanned=2,
+    )
+    assert mod.find_pending_tickers(db) == []
+
+
+def test_partially_scanned_ticker_is_still_pending(db: Path) -> None:
+    """One unscanned transcript left = the extractor still has work to do."""
+    mod = _load_module()
+    _add_ticker(
+        db,
+        "WORK",
+        "watchlist",
+        instrument_type="equity",
+        facts=5,
+        dcf=1,
+        transcripts=2,
+        scanned=1,
+    )
+    assert mod.find_pending_tickers(db) == [("WORK", "no_commitments")]
+
+
+def test_no_kpi_catalog_is_not_pending_until_seeded(db: Path) -> None:
+    """A ticker with an empty kpi_definitions catalog is excluded (the
+    extractor's outcome is predetermined: zero commitments, no LLM call, no
+    scan marker) — and becomes pending again the moment a catalog is seeded,
+    matching the extractor's no-marker-on-skip design."""
+    mod = _load_module()
+    _add_ticker(
+        db,
+        "AGX",
+        "watchlist",
+        instrument_type="equity",
+        facts=5,
+        dcf=1,
+        transcripts=1,
+        kpi_defs=0,
+    )
+    assert mod.find_pending_tickers(db) == []
+
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO kpi_definitions (ticker, name, unit) VALUES ('AGX', 'Backlog', 'actual')"
+    )
+    conn.commit()
+    conn.close()
+    assert mod.find_pending_tickers(db) == [("AGX", "no_commitments")]
+
+
+def test_selector_degrades_without_scan_log_table(db: Path) -> None:
+    """Pre-0129 DB (no commitment_scan_log): the scan-log filter is omitted
+    and any transcript-bearing ticker with zero commitments stays pending —
+    mirroring the extractor's scan_log_available degrade."""
+    mod = _load_module()
+    conn = sqlite3.connect(db)
+    conn.execute("DROP TABLE commitment_scan_log")
+    conn.commit()
+    conn.close()
+    _add_ticker(
+        db,
+        "OLD",
+        "watchlist",
+        instrument_type="equity",
+        facts=5,
+        dcf=1,
+        transcripts=1,
+    )
+    assert mod.find_pending_tickers(db) == [("OLD", "no_commitments")]
 
 
 def test_fully_onboarded_with_commitments_is_not_pending(db: Path) -> None:
