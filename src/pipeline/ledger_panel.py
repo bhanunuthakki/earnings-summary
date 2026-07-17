@@ -14,7 +14,10 @@ from __future__ import annotations
 import re
 from html import escape
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from synthesis.reconcile import ReconcileItem
 
 from identity import DEFAULT_USER_ID
 from onmymind.feed import (
@@ -770,17 +773,35 @@ _RECONCILE_JS = """<script>(function(){
 })();</script>"""
 
 
-def _missing_falsifier_line(db_path: Path | str | None) -> str:
-    """Live held positions with no falsifier — no tripwire coverage is an
-    irreducible owner ask. Each gap is its OWN ``data-rec-card`` with an empty
+def _missing_falsifier_card(gap: ReconcileItem) -> str:
+    """One 'Add falsifier' gap card — its OWN ``data-rec-card`` with an empty
     editable body, so 'Add falsifier' opens the same in-card editor the ratify
     queue uses and Save POSTs ``{action:'edit', text}`` to
-    /api/reconcile/falsifier/<decision_id>.
+    /api/reconcile/falsifier/<decision_id>. Shared by ``_missing_falsifier_line``
+    (the Queues-block list) and ``_reconcile_packet_items`` (one pk-item each).
 
     (Bug fix 2026-07-14: the old dense single line wrapped every 'add' in ONE
     div with no ``data-rec-card``, so ``beginRewrite``'s
     ``closest('[data-rec-card]')`` returned null and the button silently did
     nothing.)"""
+    return (
+        f'<div class="ledger-musing" data-rec-card="{gap.item_id}">'
+        f'<div class="ledger-musing-head">{escape(gap.label)}'
+        "<span class='ledger-chan'>needs falsifier</span></div>"
+        # Empty editable body → the in-card editor opens blank for the owner to
+        # author the tripwire in their own words (beginRewrite reads this node).
+        '<div class="ledger-body ledger-editable-body"></div>'
+        '<div class="ledger-cap-row">'
+        '<button type="button" class="k-btn k-btn-sm k-btn-primary" '
+        f'data-falsifier-action="edit" data-rec-id="{gap.item_id}">Add falsifier</button>'
+        "</div></div>"
+    )
+
+
+def _missing_falsifier_line(db_path: Path | str | None) -> str:
+    """Live held positions with no falsifier — no tripwire coverage is an
+    irreducible owner ask. Renders the lead line + one ``_missing_falsifier_card``
+    per gap (each its own ``data-rec-card``)."""
     from synthesis.reconcile import list_missing_falsifiers
 
     try:
@@ -794,25 +815,62 @@ def _missing_falsifier_line(db_path: Path | str | None) -> str:
         if len(gaps) == 1
         else f"{len(gaps)} live decisions need a falsifier"
     )
-    cards = "".join(
-        f'<div class="ledger-musing" data-rec-card="{gap.item_id}">'
-        f'<div class="ledger-musing-head">{escape(gap.label)}'
-        "<span class='ledger-chan'>needs falsifier</span></div>"
-        # Empty editable body → the in-card editor opens blank for the owner to
-        # author the tripwire in their own words (beginRewrite reads this node).
-        '<div class="ledger-body ledger-editable-body"></div>'
-        '<div class="ledger-cap-row">'
-        '<button type="button" class="k-btn k-btn-sm k-btn-primary" '
-        f'data-falsifier-action="edit" data-rec-id="{gap.item_id}">Add falsifier</button>'
-        "</div></div>"
-        for gap in gaps
-    )
+    cards = "".join(_missing_falsifier_card(gap) for gap in gaps)
     return f'<div class="ledger-missing-lead muted">{escape(lead)}:</div>{cards}'
+
+
+def _reconcile_card(item: ReconcileItem) -> str:
+    """ONE reconcile row's markup — an inferred-falsifier ratify/rewrite/drop
+    card, or a note/theme one-tap verdict card. Carries its own
+    ``data-rec-card``/``data-rec-id`` + action hooks and NO wrapping div or
+    ``id`` — shared by ``render_reconcile_list`` (inside the one
+    ``#ledger-reconcile`` container) and ``_reconcile_packet_items`` (one
+    ``pk-item`` per row). ``_RECONCILE_JS``'s document-level click delegation
+    fires for these buttons regardless of which container holds them."""
+    if item.kind == "falsifier":
+        buttons = "".join(
+            f'<button type="button" class="k-btn k-btn-sm {cls}" '
+            f'data-falsifier-action="{action}" data-rec-id="{item.item_id}">{label}</button>'
+            for action, label, cls in (
+                ("ratify", "Ratify as mine", "k-btn-primary"),
+                ("edit", "Rewrite", ""),
+                ("drop", "Drop", "k-btn-danger"),
+            )
+        )
+        head = f"{escape(item.label)}<span class='ledger-chan'>inferred falsifier</span>"
+        # data-rec-card + .ledger-editable-body: the in-card Rewrite swap
+        # (PR9) locates this exact card + the body div carrying the
+        # already-inferred text it pre-fills the textarea with.
+        return (
+            f'<div class="ledger-musing" data-rec-card="{item.item_id}">'
+            f'<div class="ledger-musing-head">{head}</div>'
+            f'<div class="ledger-body ledger-editable-body">{escape(item.body[:400])}</div>'
+            f'<div class="ledger-cap-row">{buttons}</div></div>'
+        )
+    rec_kind = "note" if item.kind == "note" else "theme"
+    buttons = "".join(
+        f'<button type="button" class="k-btn k-btn-sm {cls}" '
+        f'data-rec-kind="{rec_kind}" data-rec-id="{item.item_id}" '
+        f'data-rec-verdict="{verdict}">{label}</button>'
+        for verdict, label, cls in _RECONCILE_VERDICTS
+    )
+    tag = item.label if item.kind == "theme" else (item.source_ref or item.label)
+    head = f"<span class='ledger-chan'>{escape(tag)}</span>"
+    return (
+        '<div class="ledger-musing">'
+        f'<div class="ledger-musing-head">{head}</div>'
+        f'<div class="ledger-body">{escape(item.body[:400])}</div>'
+        f'<div class="ledger-cap-row">{buttons}</div></div>'
+    )
 
 
 def render_reconcile_list(db_path: Path | str | None) -> str:
     """The seed-reconciliation fragment — one-tap verdicts until the list is empty.
-    Degrades to the empty state on a pre-0130 DB (no decided_by column yet)."""
+    Degrades to the empty state on a pre-0130 DB (no decided_by column yet).
+
+    ONE ``#ledger-reconcile`` container wrapping the missing-falsifier gap cards
+    then a ``_reconcile_card`` per unreconciled row — this is the Queues-block /
+    ``?fragment=reconcile`` output that ``_RECONCILE_JS``'s ``reload()`` swaps."""
     from synthesis.reconcile import list_unreconciled
 
     try:
@@ -826,44 +884,37 @@ def render_reconcile_list(db_path: Path | str | None) -> str:
             "nothing awaiting a verdict.</p></div>"
         )
     cards: list[str] = [missing_line] if missing_line else []
-    for item in items:
-        if item.kind == "falsifier":
-            buttons = "".join(
-                f'<button type="button" class="k-btn k-btn-sm {cls}" '
-                f'data-falsifier-action="{action}" data-rec-id="{item.item_id}">{label}</button>'
-                for action, label, cls in (
-                    ("ratify", "Ratify as mine", "k-btn-primary"),
-                    ("edit", "Rewrite", ""),
-                    ("drop", "Drop", "k-btn-danger"),
-                )
-            )
-            head = f"{escape(item.label)}<span class='ledger-chan'>inferred falsifier</span>"
-            # data-rec-card + .ledger-editable-body: the in-card Rewrite swap
-            # (PR9) locates this exact card + the body div carrying the
-            # already-inferred text it pre-fills the textarea with.
-            cards.append(
-                f'<div class="ledger-musing" data-rec-card="{item.item_id}">'
-                f'<div class="ledger-musing-head">{head}</div>'
-                f'<div class="ledger-body ledger-editable-body">{escape(item.body[:400])}</div>'
-                f'<div class="ledger-cap-row">{buttons}</div></div>'
-            )
-            continue
-        rec_kind = "note" if item.kind == "note" else "theme"
-        buttons = "".join(
-            f'<button type="button" class="k-btn k-btn-sm {cls}" '
-            f'data-rec-kind="{rec_kind}" data-rec-id="{item.item_id}" '
-            f'data-rec-verdict="{verdict}">{label}</button>'
-            for verdict, label, cls in _RECONCILE_VERDICTS
-        )
-        tag = item.label if item.kind == "theme" else (item.source_ref or item.label)
-        head = f"<span class='ledger-chan'>{escape(tag)}</span>"
-        cards.append(
-            '<div class="ledger-musing">'
-            f'<div class="ledger-musing-head">{head}</div>'
-            f'<div class="ledger-body">{escape(item.body[:400])}</div>'
-            f'<div class="ledger-cap-row">{buttons}</div></div>'
-        )
+    cards.extend(_reconcile_card(item) for item in items)
     return f'<div id="ledger-reconcile">{"".join(cards)}</div>'
+
+
+def _reconcile_packet_items(db_path: Path | str | None) -> list[str]:
+    """The reconcile queue as ONE packet fragment PER ROW — the missing-falsifier
+    gap cards then the unreconciled verdict/falsifier cards, each its own
+    ``data-rec-card`` and NO ``id="ledger-reconcile"`` (the real container lives
+    in the Queues block on the same page; a second copy of the id would collide
+    and ``reload()`` would target the wrong one).
+
+    Splitting per row is what makes the packet walk count and settle each item
+    individually — before this the whole ``render_reconcile_list`` blob was
+    appended as a single ``pk-item``, so N rows counted as 1 and the first
+    row-action's settle-detector advanced past the rest of the batch. Each
+    source read degrades independently (a broken read drops its rows, never the
+    packet)."""
+    from synthesis.reconcile import list_missing_falsifiers, list_unreconciled
+
+    fragments: list[str] = []
+    try:
+        gaps = list_missing_falsifiers(db_path)
+    except Exception:
+        gaps = []
+    fragments.extend(_missing_falsifier_card(gap) for gap in gaps)
+    try:
+        items = list_unreconciled(db_path)
+    except Exception:
+        items = []
+    fragments.extend(_reconcile_card(item) for item in items)
+    return fragments
 
 
 def _condition_text(cond: object) -> str:
@@ -1703,9 +1754,12 @@ def _packet_items(db_path: Path | str | None) -> list[str]:
     except Exception:
         pass
     try:
-        reconcile = render_reconcile_list(db_path)
-        if "ledger-empty" not in reconcile:
-            items.append(reconcile.replace('id="ledger-reconcile"', 'data-pk-reconcile=""', 1))
+        # One pk-item PER reconcile row (gap cards + verdict/falsifier cards),
+        # NOT the whole #ledger-reconcile blob as a single item — see
+        # _reconcile_packet_items for why the old id-replace one-item hack broke
+        # the count and the settle-advance.
+        reconcile_fragments = _reconcile_packet_items(db_path)
+        items.extend(reconcile_fragments)
     except Exception:
         pass
     return items
