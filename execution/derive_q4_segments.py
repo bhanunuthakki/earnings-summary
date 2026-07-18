@@ -1,0 +1,180 @@
+"""Derive Q4 segment values (FY - Sigma Q1..Q3) into the segment_periods +
+segment_dimensions junction (docs/design/segment_quarterly_framework.md §3,
+Phase 2).
+
+Usage:
+    python execution/derive_q4_segments.py --ticker MELI --year 2025
+    python execution/derive_q4_segments.py --ticker MELI
+    python execution/derive_q4_segments.py --all
+    python execution/derive_q4_segments.py --all --year 2025
+
+Without an explicit ``--year``, discovers every fiscal year already carrying
+an FY segment_periods row for the resolved ticker(s) and attempts a
+derivation for each -- idempotent (a re-run against unchanged inputs is a
+no-op; a changed input re-derives and chains via ``supersedes_id``, §3.2).
+
+Routing: same ``tenq_10k_regime`` gate ``extract_segment_quarterly.py`` uses
+-- Q4 derivation only makes sense for tickers whose quarterly segment data
+came from the 10-Q route in the first place.
+
+Audit: each invocation writes an ``ingestion_runs`` row + per-(ticker, year)
+``stage_transitions`` rows (stage=COMPUTE), matching
+``extract_segment_quarterly.py``'s wiring.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sqlite3
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+import db  # noqa: E402
+from compute.segment_q4_derive import derive_for_ticker  # noqa: E402
+from models.runs import StageName, StageStatus  # noqa: E402
+from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
+from pipeline.source_routing import plan_for_ticker  # noqa: E402
+
+
+def main() -> int:
+    args = _parse_args()
+    repo_root = args.repo_root.resolve()
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
+        print(f"[error] no DB at {db_path}", file=sys.stderr)
+        return 1
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    tickers = _resolve_tickers(conn, args)
+    jobs = _resolve_jobs(conn, tickers, args)
+    if not jobs:
+        print("[]")
+        conn.close()
+        return 0
+
+    run_id = start_run(
+        conn, directive="derive_q4_segments", ticker_scope=sorted({j[0] for j in jobs})
+    )
+    summary: list[dict[str, object]] = []
+    final_status = StageStatus.OK
+    error_summary: str | None = None
+
+    try:
+        for ticker, year in jobs:
+            record_stage(conn, run_id, ticker, StageName.COMPUTE, StageStatus.IN_PROGRESS)
+            try:
+                result = derive_for_ticker(ticker, year, repo_root, conn)
+            except Exception as e:
+                err = f"{type(e).__name__}: {e}"
+                record_stage(
+                    conn, run_id, ticker, StageName.COMPUTE, StageStatus.FAILED, error_msg=err
+                )
+                summary.append({"ticker": ticker, "fiscal_year": year, "error": err})
+                final_status = StageStatus.FAILED
+                error_summary = err
+                continue
+            if result.skipped_reason is not None:
+                record_stage(
+                    conn,
+                    run_id,
+                    ticker,
+                    StageName.COMPUTE,
+                    StageStatus.SKIPPED,
+                    error_msg=result.skipped_reason,
+                )
+            else:
+                record_stage(conn, run_id, ticker, StageName.COMPUTE, StageStatus.OK)
+            summary.append(
+                {
+                    "ticker": ticker,
+                    "fiscal_year": year,
+                    "derived_inserted": result.derived_inserted,
+                    "superseded_count": result.superseded_count,
+                    "not_computable_count": result.not_computable_count,
+                    "tolerance_breach_count": result.tolerance_breach_count,
+                    "skipped": result.skipped_reason,
+                    "reason_counts": result.reason_counts,
+                }
+            )
+    finally:
+        end_run(conn, run_id, final_status, error_summary=error_summary)
+        conn.close()
+
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--ticker", help="Single ticker")
+    g.add_argument("--all", action="store_true", help="All 10-K-regime tracked tickers")
+    p.add_argument("--year", type=int, default=None, help="Specific fiscal year")
+    p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    return p.parse_args()
+
+
+def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:
+    if args.ticker:
+        return [args.ticker.upper()]
+    cur = conn.cursor()
+    cur.execute(
+        f"SELECT DISTINCT ticker FROM tracked_companies "
+        f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker"
+    )
+    return [r[0] for r in cur.fetchall()]
+
+
+def _fy_years_on_file(conn: sqlite3.Connection, ticker: str) -> list[int]:
+    rows = conn.execute(
+        """
+        SELECT DISTINCT CAST(strftime('%Y', period_end) AS INTEGER)
+        FROM segment_periods
+        WHERE ticker = ? AND fiscal_period_type = 'FY'
+        ORDER BY 1
+        """,
+        (ticker,),
+    ).fetchall()
+    return [int(r[0]) for r in rows if r[0] is not None]
+
+
+def _resolve_jobs(
+    conn: sqlite3.Connection, tickers: list[str], args: argparse.Namespace
+) -> list[tuple[str, int]]:
+    jobs: list[tuple[str, int]] = []
+    for ticker in tickers:
+        try:
+            plan = plan_for_ticker(conn, ticker)
+        except ValueError:
+            continue
+        if plan.segment_quarterly_pipeline != "tenq_10k_regime":
+            sys.stderr.write(
+                json.dumps(
+                    {
+                        "event": "segment_q4_derive_ticker_skipped",
+                        "reason": "not_10k_regime",
+                        "ticker": ticker,
+                        "segment_quarterly_pipeline": plan.segment_quarterly_pipeline,
+                    }
+                )
+                + "\n"
+            )
+            continue
+        if args.year is not None:
+            jobs.append((ticker, args.year))
+            continue
+        for year in _fy_years_on_file(conn, ticker):
+            jobs.append((ticker, year))
+    return jobs
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

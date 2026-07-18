@@ -25,6 +25,13 @@ Q4 derivation, recast handling, and the ``segment_quarterly_coverage`` audit
 table are Phase 2 — the one-hop Q2/Q3 discrete derivation (§2.6) IS Phase 1
 scope (it's part of the period-axis resolver's own classification algorithm,
 not the Q4-specific §3 logic).
+
+Phase 2 note: the §2.6 guard writes below (missing-anchor, sign-sanity,
+cross-check-against-consolidated) were log-only in Phase 1; Phase 2 promotes
+them to ALSO write a ``segment_quarterly_coverage`` row (``pipeline.
+segment_quarterly_coverage.record_coverage``) so they're queryable per-cell,
+not just grep-able in stderr. See ``compute.segment_q4_derive`` for the Q4
+sibling of this same guard set.
 """
 
 from __future__ import annotations
@@ -45,6 +52,7 @@ from compute.segments import RECONCILE_TOLERANCE_OVER
 from llm.structured import StructuredParseError, call_llm_structured
 from models.facts import FactLocator, FiscalPeriodType, SegmentDimension, SegmentDimType, Unit
 from pipeline.segment_junction_writer import write_segment_facts_junction
+from pipeline.segment_quarterly_coverage import record_coverage
 from table_extractors.base import iter_xbrl_table, parse_units
 from table_extractors.generic_xbrl_capture import _is_detail_section
 from table_extractors.period_axis import (
@@ -516,9 +524,10 @@ def _derive_discrete_from_cumulative(
     Q3 discrete = 9M cumulative − (Q1 discrete + Q2 discrete). Q1 never
     needs derivation (its own discrete column IS the answer).
 
-    Guards, all recorded via stderr JSON log (never silent — the
-    ``segment_quarterly_coverage`` table itself is Phase 2 scope, so Phase 1
-    logs instead of writing a coverage row):
+    Guards, all recorded via BOTH a stderr JSON log line AND a
+    ``segment_quarterly_coverage`` row (Phase 2 promoted these from
+    log-only to persisted — the stderr line stays for real-time log
+    tailing, never silent either way):
       1. missing prior anchor -> do not derive.
       2. sign sanity -> still persisted, confidence floors at 0.3.
       3. confidence decays one hop (``_DERIVE_CONFIDENCE_DECAY``).
@@ -575,6 +584,20 @@ def _derive_discrete_from_cumulative(
                     }
                 )
                 + "\n"
+            )
+            record_coverage(
+                conn,
+                ticker=ticker,
+                period_end=datetime(
+                    cell.period_end.year, cell.period_end.month, cell.period_end.day
+                ),
+                fiscal_period_type=quarter,
+                dim_type="business_unit",
+                dim_name=cell.dim_name,
+                status="not_computable",
+                reason_code="missing_prior_anchor_for_subtraction",
+                source_doc_id=source_doc_id,
+                method_version="segment_q2q3_derive_v1",
             )
             continue
 
@@ -643,6 +666,20 @@ def _derive_discrete_from_cumulative(
                 )
                 + "\n"
             )
+            record_coverage(
+                conn,
+                ticker=ticker,
+                period_end=datetime(
+                    cell.period_end.year, cell.period_end.month, cell.period_end.day
+                ),
+                fiscal_period_type=derive_quarter,
+                dim_type="business_unit",
+                dim_name=cell.dim_name,
+                status="tolerance_breach",
+                reason_code="negative_derived_value",
+                source_doc_id=source_doc_id,
+                method_version="segment_q2q3_derive_v1",
+            )
     _cross_check_consolidated(conn, ticker=ticker, year=year, quarter=quarter)
     return derived_inserted
 
@@ -672,7 +709,9 @@ def _cross_check_consolidated(
 ) -> None:
     """§2.6 point 4: Σ derived segments' Qn revenue vs. consolidated Qn
     revenue from financial_facts, same RECONCILE_TOLERANCE_OVER band
-    compute/segments.py already uses. Log-only (never blocks a write)."""
+    compute/segments.py already uses. Never blocks a write; Phase 2 promotes
+    this from log-only to ALSO a whole-filing-level (dim_type/dim_name=NULL)
+    ``segment_quarterly_coverage`` row on breach."""
     try:
         present = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='financial_facts'"
@@ -722,6 +761,22 @@ def _cross_check_consolidated(
             )
             + "\n"
         )
+        period_end = _quarter_end_for_fiscal_year(
+            conn, ticker=ticker, fiscal_year=year, quarter=FiscalPeriodType(quarter)
+        )
+        if period_end is not None:
+            record_coverage(
+                conn,
+                ticker=ticker,
+                period_end=period_end,
+                fiscal_period_type=quarter,
+                dim_type=None,
+                dim_name=None,
+                status="tolerance_breach",
+                reason_code="sum_exceeds_consolidated_revenue",
+                source_doc_id=None,
+                method_version="segment_q2q3_derive_v1",
+            )
 
 
 # ---------------------------------------------------------------------------
