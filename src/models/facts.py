@@ -12,7 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class FiscalPeriodType(StrEnum):
@@ -58,6 +58,72 @@ class Unit(StrEnum):
     COUNT = "count"
 
 
+class LocatorKind(StrEnum):
+    """Discriminant for a v2 locator."""
+
+    FMP_JSON_TABLE = "fmp_json_table"
+    PDF_SLIDE = "pdf_slide"
+    TRANSCRIPT_SPAN = "transcript_span"
+    HTML_SPAN = "html_span"
+    DERIVED = "derived"
+    VENDOR_FIELD = "vendor_field"
+
+
+class TableCellRef(BaseModel):
+    """WHERE inside a cached JSON/HTML table a value sits."""
+
+    section: str | None = None
+    table_title: str | None = None
+    row_label: str | None = None
+    row_axis_path: list[str] = Field(default_factory=list[str])
+    column_header: str | None = None
+    cell_value_as_extracted: str | None = None
+    json_path: str | None = None
+
+
+class TranscriptSpanRef(BaseModel):
+    doc_id: int | None = None
+    transcript_line: int | None = None
+    speaker_turn_index: int | None = None
+    char_start: int | None = None
+    char_end: int | None = None
+
+
+class HtmlSpanRef(BaseModel):
+    doc_id: int | None = None
+    char_start: int | None = None
+    char_end: int | None = None
+    quote: str | None = None
+
+
+class VendorFieldRef(BaseModel):
+    """The honest floor: a plain vendor endpoint value with no underlying
+    filing/document at all (a live quote, a market-cap snapshot)."""
+
+    endpoint: str
+    field: str
+    period: str | None = None
+
+
+class DerivedInputRef(BaseModel):
+    """One input to a derived value — mirrors kpi_facts.computed_from's
+    existing inputs[] shape, promoted into the typed locator union."""
+
+    ref: str
+    fact_id: int | None = None
+    item: str
+    period_end: str | None = None
+    doc_id: int | None = None
+    tier: str | None = None
+
+
+class DerivedRef(BaseModel):
+    formula_id: int | None = None
+    display: str | None = None
+    method_flags: list[str] = Field(default_factory=list[str])
+    inputs: list[DerivedInputRef] = Field(default_factory=list[DerivedInputRef])
+
+
 class FactLocator(BaseModel):
     """Sub-document locator — WHERE inside the source document a value was read.
 
@@ -80,9 +146,57 @@ class FactLocator(BaseModel):
     # plus field name within the cached endpoint response.
     json_path: str | None = None
 
+    locator_version: int = 1
+    kind: LocatorKind | None = None
+    table_cell: TableCellRef | None = None
+    pdf_bbox: tuple[float, float, float, float] | None = None
+    transcript_span: TranscriptSpanRef | None = None
+    html_span: HtmlSpanRef | None = None
+    vendor_field: VendorFieldRef | None = None
+    derived: DerivedRef | None = None
+    verbatim_snippet: str | None = Field(default=None, max_length=2000)
+
+    @model_validator(mode="after")
+    def _kind_requires_matching_ref(self) -> FactLocator:
+        """A ``kind`` set without its matching nested ref is invalid."""
+        if self.kind is None:
+            return self
+        required: dict[LocatorKind, object | None] = {
+            LocatorKind.FMP_JSON_TABLE: self.table_cell,
+            LocatorKind.PDF_SLIDE: self.pdf_page,
+            LocatorKind.TRANSCRIPT_SPAN: self.transcript_span,
+            LocatorKind.HTML_SPAN: self.html_span,
+            LocatorKind.DERIVED: self.derived,
+            LocatorKind.VENDOR_FIELD: self.vendor_field,
+        }
+        if required[self.kind] is None:
+            raise ValueError(
+                f"FactLocator(kind={self.kind.value!r}) requires its matching nested ref"
+            )
+        return self
+
+    def effective_kind(self) -> LocatorKind | None:
+        """``kind`` if set (v2); else inferred from whichever v1 scalar is
+        present. None when the locator carries nothing renderable."""
+        if self.kind is not None:
+            return self.kind
+        if self.pdf_page is not None:
+            return LocatorKind.PDF_SLIDE
+        if self.transcript_line is not None:
+            return LocatorKind.TRANSCRIPT_SPAN
+        if self.section is not None or self.json_path is not None:
+            return LocatorKind.FMP_JSON_TABLE
+        return None
+
     def to_json(self) -> str | None:
-        """Compact JSON for the DB column; None when no field is set."""
-        payload = self.model_dump(exclude_none=True)
+        """Compact JSON for the DB column; None when no field is set.
+
+        ``exclude_defaults`` (not ``exclude_none``) so ``locator_version``
+        (default 1) and every unset v2 field disappear from a v1-shaped
+        locator's JSON exactly as before this schema was extended — a
+        pre-existing row's serialized shape is byte-identical whether or not
+        the writer knows about v2 fields at all."""
+        payload = self.model_dump(exclude_defaults=True, mode="json")
         if not payload:
             return None
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))

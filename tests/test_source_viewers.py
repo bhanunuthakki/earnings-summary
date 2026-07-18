@@ -17,6 +17,7 @@ from pipeline.restatements_panel import load_restatements, render_restatements_p
 from pipeline.source_viewers import (
     render_fallback_page,
     render_form10k_page,
+    render_statement_json_page,
     render_transcript_page,
 )
 
@@ -191,6 +192,33 @@ def test_form10k_page_sections_and_deep_link(tmp_path: Path) -> None:
     assert render_form10k_page(tmp_path, db, 1) is None  # transcript, not a filing
 
 
+def test_statement_json_page_renders_table_and_highlights_cell(tmp_path: Path) -> None:
+    db = _seed_repo(tmp_path)
+    fpath = tmp_path / "data" / "historical" / "fmp" / "NU_income_statement_quarterly.json"
+    fpath.write_text(
+        json.dumps(
+            [
+                {"date": "2025-12-31", "symbol": "NU", "revenue": 1000},
+                {"date": "2025-09-30", "symbol": "NU", "revenue": 900},
+            ]
+        ),
+        encoding="utf-8",
+    )
+    html = render_statement_json_page(tmp_path, db, 4, json_path="[0].revenue")
+    assert html is not None
+    assert "sv-cell-hit" in html
+    assert "1000" in html
+    # Fallback matching by row_label/column_header when json_path is absent.
+    fallback = render_statement_json_page(
+        tmp_path, db, 4, row_label="revenue", column_header="2025-09-30"
+    )
+    assert fallback is not None
+    assert "sv-cell-hit" in fallback
+    assert "900" in fallback
+    assert render_statement_json_page(tmp_path, db, 2) is None  # not a statement-endpoint doc
+    assert render_statement_json_page(tmp_path, db, 99) is None  # unknown doc
+
+
 def test_fallback_page_lists_metadata(tmp_path: Path) -> None:
     db = _seed_repo(tmp_path)
     html = render_fallback_page(db, 4)
@@ -226,6 +254,24 @@ def test_source_route_dispatches_by_doc_type(client: FlaskClient) -> None:
     f = client.get("/source/4")
     assert f.status_code == 200
     assert "No in-app viewer" in f.data.decode()
+
+
+def test_source_route_dispatches_statement_json(tmp_path: Path) -> None:
+    """A statement-endpoint doc whose file exists renders the new
+    array-of-records table instead of falling through to the metadata card
+    (docs/design/provenance_clickthrough.md section 2.2)."""
+    _seed_repo(tmp_path)
+    fpath = tmp_path / "data" / "historical" / "fmp" / "NU_income_statement_quarterly.json"
+    fpath.write_text(
+        json.dumps([{"date": "2025-12-31", "symbol": "NU", "revenue": 1000}]),
+        encoding="utf-8",
+    )
+    client_ = comments_server.create_app(tmp_path).test_client()
+    resp = client_.get("/source/4", query_string={"json_path": "[0].revenue"})
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "sv-cell-hit" in body
+    assert "1000" in body
 
 
 def test_restatements_panel_route(client: FlaskClient) -> None:

@@ -17,7 +17,8 @@ from typing import Protocol
 
 from credibility.observations import FINANCIAL_FACTS, record_restatement_observation
 from models.documents import SourceQualityTier
-from models.facts import Currency, FactLocator, FinancialFact, FiscalPeriodType, Unit
+from models.facts import Currency, FinancialFact, FiscalPeriodType, Unit
+from pipeline import locators
 from pipeline.confidence import score_confidence
 from pipeline.restatement_detector import insert_with_restatement_detection
 
@@ -76,7 +77,17 @@ def extract_facts_with_spec(
         if value is None:
             continue
         locator = (
-            FactLocator(json_path=f"[{record_index}].{fmp_field}")
+            # record_index gives us [<i>].<field> for the fast direct-lookup
+            # path; the record's own date/field name give the peek row/column
+            # identity to highlight (docs/design/provenance_clickthrough.md
+            # §3.2 — the record dict is already in hand at this call site).
+            locators.table_cell_locator(
+                section=None,
+                row_label=canonical,
+                column_header=record.date,
+                json_path=f"[{record_index}].{fmp_field}",
+                cell_value_as_extracted=str(value),
+            )
             if record_index is not None
             else None
         )

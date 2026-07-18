@@ -25,6 +25,7 @@ import urllib.parse
 from html import escape as _esc
 from typing import cast
 
+from models.facts import FactLocator, LocatorKind
 from report.models import CellSource
 
 SOURCE_CHIP_ABBREV: dict[str, str] = {
@@ -61,30 +62,72 @@ def source_hover_title(src: CellSource) -> str:
     return " · ".join(parts)
 
 
-def viewer_href(src: CellSource) -> str | None:
-    """In-app ``/source/<doc_id>`` link for a sourced cell (P4.3).
+def _parse_locator(raw: str | None) -> FactLocator | None:
+    """Defensive FactLocator parse for chip rendering: a malformed/legacy
+    locator degrades to None (no click-through sharpening) rather than
+    raising and breaking the whole report page over one bad row."""
+    if not raw:
+        return None
+    try:
+        return FactLocator.from_json(raw)
+    except ValueError:
+        return None
 
-    The locator JSON sharpens the destination: ``transcript_line`` becomes
-    the reader's ``#L<n>`` line anchor, ``section`` the 10-K reader's
-    ``?section=`` deep link. None when the cell carries no document id —
-    the chip then falls back to the raw source_url only.
+
+_LOCATOR_SNIPPET_MAX = 160
+
+
+def _locator_row_html(raw_locator: str) -> str:
+    """Popover locator row (section 6.1): a v2-parseable locator shows a
+    compact "kind: <effective_kind>" line + a truncated verbatim snippet
+    when carried, with the raw JSON demoted into a nested <details> rather
+    than shown by default. An unparseable/legacy-shaped locator falls back
+    to the original raw-JSON dump unchanged."""
+    loc = _parse_locator(raw_locator)
+    kind = loc.effective_kind() if loc is not None else None
+    if loc is None or kind is None:
+        return f'<div class="src-pop-row mono src-pop-locator">{_esc(raw_locator)}</div>'
+    snippet = ""
+    if loc.verbatim_snippet:
+        text = loc.verbatim_snippet
+        clipped = text if len(text) <= _LOCATOR_SNIPPET_MAX else text[:_LOCATOR_SNIPPET_MAX] + "…"
+        snippet = f' &middot; "{_esc(clipped)}"'
+    return (
+        f'<div class="src-pop-row mono">kind: {_esc(kind.value)}{snippet}</div>'
+        '<details class="src-pop-locator-raw">'
+        '<summary class="src-pop-row mono">raw locator</summary>'
+        f'<div class="src-pop-row mono src-pop-locator">{_esc(raw_locator)}</div></details>'
+    )
+
+
+def viewer_href(src: CellSource) -> str | None:
+    """In-app click-through for a sourced cell (P4.3; extended for
+    ``fmp_json_table``/``vendor_field`` kinds by the provenance
+    click-through program, docs/design/provenance_clickthrough.md section
+    6.1).
+
+    ``fmp_json_table`` / ``vendor_field`` locators (when the cell carries a
+    ``fact_id``) link the peek dispatcher (``/api/peek/provenance/
+    financial_facts:<id>``) directly — the peek is the primary click target
+    for these kinds, `/source/<doc_id>` stays the "open full document"
+    escape valve. Everything else keeps the original P4.3 behavior:
+    ``transcript_line`` becomes the reader's ``#L<n>`` anchor, ``section``
+    the 10-K reader's ``?section=`` deep link. None when the cell carries
+    neither a fact_id-bearing peek target nor a document id.
     """
+    loc = _parse_locator(src.locator)
+    if loc is not None and src.fact_id is not None:
+        kind = loc.effective_kind()
+        if kind in (LocatorKind.FMP_JSON_TABLE, LocatorKind.VENDOR_FIELD):
+            return f"/api/peek/provenance/financial_facts:{src.fact_id}"
     if src.doc_id is None:
         return None
     suffix = ""
-    if src.locator:
-        try:
-            loc: object = json.loads(src.locator)
-        except (ValueError, TypeError):
-            loc = None
-        if isinstance(loc, dict):
-            loc_map = cast("dict[str, object]", loc)
-            line = loc_map.get("transcript_line")
-            section = loc_map.get("section")
-            if isinstance(line, int):
-                suffix = f"#L{line}"
-            elif isinstance(section, str) and section:
-                suffix = f"?section={urllib.parse.quote(section)}"
+    if loc is not None:
+        if loc.transcript_line is not None:
+            suffix = f"#L{loc.transcript_line}"
+        elif loc.section:
+            suffix = f"?section={urllib.parse.quote(loc.section)}"
     return f"/source/{src.doc_id}{suffix}"
 
 
@@ -179,8 +222,9 @@ def source_chip_html(src: CellSource) -> str:
         filed = f" · filed {_esc(src.filing_date)}" if src.filing_date else ""
         rows.append(f'<div class="src-pop-row mono">{acc}{filed}</div>')
     if src.locator:
-        rows.append(f'<div class="src-pop-row mono src-pop-locator">{_esc(src.locator)}</div>')
+        rows.append(_locator_row_html(src.locator))
     viewer = viewer_href(src)
+    is_peek = viewer is not None and viewer.startswith("/api/peek/")
     if viewer:
         rows.append(
             f'<div class="src-pop-row"><a href="{_esc(viewer)}" target="_blank" '
@@ -193,9 +237,14 @@ def source_chip_html(src: CellSource) -> str:
             f'rel="noopener">{label}</a></div>'
         )
     low_cls = " src-lowconf" if low_conf else ""
+    peek_attrs = (
+        f' data-peek-url="{_esc(viewer)}" data-peek-title="{_esc(source_hover_title(src))}"'
+        if is_peek and viewer is not None
+        else ""
+    )
     return (
         '<details class="src-pop">'
-        f'<summary class="src-chip src-{_esc(tier_slug)}{low_cls}" '
+        f'<summary class="src-chip src-{_esc(tier_slug)}{low_cls}"{peek_attrs} '
         f'title="{_esc(source_hover_title(src))}">{_esc(abbrev)}</summary>'
         f'<div class="src-pop-body">{"".join(rows)}</div>'
         "</details>"
@@ -234,6 +283,7 @@ SOURCE_CHIP_CSS = """
 .src-pop-row { padding: 1px 0; color: var(--fg); }
 .src-pop-row.mono { font-family: var(--mono); font-size: var(--fs-micro); color: var(--muted); }
 .src-pop-locator { word-break: break-all; }
+.src-pop-locator-raw summary { cursor: pointer; }
 .src-pop-row a { color: var(--accent); }
 /* S2 PR3: unresolved validation issues + derived-from input rows. */
 .src-pop-warn { color: var(--warn); }

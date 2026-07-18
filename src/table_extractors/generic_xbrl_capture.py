@@ -60,8 +60,9 @@ from pathlib import Path
 from typing import cast
 
 from models.documents import SourceType
-from models.facts import FactLocator, FiscalPeriodType, Unit
+from models.facts import FiscalPeriodType, Unit
 from models.kpis import DefinitionOrigin
+from pipeline import locators
 from pipeline.capture_coverage import CaptureCoverageRecord, record_coverage
 from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue, persist_manifest
 from pipeline.run_accounting import start_run
@@ -442,6 +443,8 @@ def _walk_section(
             if confidence < 1.0:
                 audit.penalized += 1
             period_end = cast("datetime", period_ends[col])
+            excerpt = _excerpt(row.label, raw, units.currency, scale)
+            column_header = row.period_labels[col] if col < len(row.period_labels) else None
             per_period[period_end].append(
                 KpiValue(
                     name=name,
@@ -452,8 +455,21 @@ def _walk_section(
                     # (see _classify_value / _RESIDUAL_RISK_*). persist_manifest
                     # folds this self-report into the stored confidence.
                     confidence=confidence,
-                    source_excerpt=_excerpt(row.label, raw, units.currency, scale),
-                    locator=FactLocator(section=section_key),
+                    source_excerpt=excerpt,
+                    # row.label / row.axis_path / the column's period label are
+                    # ALL already local variables at this call site — persisting
+                    # them into the locator (docs/design/provenance_clickthrough.md
+                    # §3.2) is pure enrichment, no new extraction logic.
+                    locator=locators.table_cell_locator(
+                        section=section_key,
+                        table_title=inner_title,
+                        row_label=row.label,
+                        row_axis_path=row.axis_path,
+                        column_header=column_header,
+                        json_path=None,
+                        cell_value_as_extracted=str(raw),
+                        verbatim_snippet=excerpt,
+                    ),
                 )
             )
 

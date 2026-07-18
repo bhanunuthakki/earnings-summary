@@ -48,6 +48,7 @@ from alerts import AlertRow, get_alert, list_alerts, list_queued_actions_for_ale
 from dashboard._card import render_alert_card
 from dashboard.evidence_drawer import load_brief_provenance
 from identity import DEFAULT_USER_ID
+from models.facts import FactLocator, LocatorKind, VendorFieldRef
 from pipeline.research_cockpit import (
     AttractivenessBreakdown,
     AttractivenessFactor,
@@ -57,6 +58,14 @@ from pipeline.research_cockpit import (
     next_earnings,
     profile_quote,
 )
+from pipeline.source_viewers import (
+    _STATEMENT_JSON_DOC_TYPES,  # pyright: ignore[reportPrivateUsage]
+    load_document,
+    render_form10k_page,
+    render_statement_json_page,
+    render_transcript_page,
+)
+from pipeline.source_viewers import _DocRow as _SourceDocRow  # pyright: ignore[reportPrivateUsage]
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_reltime
 from ui.controls import pill_tone_class, thesis_status_tone
 from ui.prose import render_prose
@@ -65,6 +74,7 @@ from ui.time import stamp_html
 __all__ = [
     "render_alert_peek",
     "render_alerts_list_peek",
+    "render_fact_provenance_peek",
     "render_fit_peek",
     "render_memo_peek",
     "render_new_docs_peek",
@@ -1369,3 +1379,217 @@ _PROV_JS = """
   });
 })();
 """.strip()
+
+
+# ----------------------------------------------------------------------------
+# Fact-provenance peek (provenance click-through Phase A, section 2) --
+# GET /api/peek/provenance/<fact_ref>, dispatched on the fact row's
+# FactLocator.effective_kind(). Every branch degrades per section 2.7 rather
+# than 404ing once the row itself is found -- a 404 means "no such fact,"
+# never "couldn't render its evidence."
+# ----------------------------------------------------------------------------
+
+_PROVENANCE_TABLES = frozenset({"financial_facts", "kpi_facts"})
+
+
+class _FactRow(NamedTuple):
+    """The slice of a financial_facts/kpi_facts row the peek needs, common
+    to both tables (kpi_facts joined to kpi_definitions for its name)."""
+
+    ticker: str
+    label: str  # line_item, or the kpi_definitions.name
+    source_doc_id: int | None
+    locator_json: str | None
+    confidence: float | None
+    extracted_by: str | None
+
+
+def _load_fact_row(db_path: Path, table: str, fact_id: int) -> _FactRow | None:
+    if not db_path.exists():
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        if table == "financial_facts":
+            row = conn.execute(
+                "SELECT ticker, line_item, source_doc_id, locator, confidence, extracted_by "
+                "FROM financial_facts WHERE id = ?",
+                (fact_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT kf.ticker, kd.name, kf.source_doc_id, kf.locator, "
+                "kf.confidence, kf.extracted_by FROM kpi_facts kf "
+                "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id WHERE kf.id = ?",
+                (fact_id,),
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    return _FactRow(
+        ticker=str(row[0]),
+        label=str(row[1]),
+        source_doc_id=int(row[2]) if row[2] is not None else None,
+        locator_json=str(row[3]) if row[3] is not None else None,
+        confidence=float(row[4]) if row[4] is not None else None,
+        extracted_by=str(row[5]) if row[5] is not None else None,
+    )
+
+
+def render_fact_provenance_peek(db_path: Path, repo_root: Path, fact_ref: str) -> str | None:
+    """Click-through behind a source chip's fmp_json_table / vendor_field /
+    transcript_span locator kinds. fact_ref is <table>:<id>."""
+    table, _, raw_id = fact_ref.partition(":")
+    if table not in _PROVENANCE_TABLES or not raw_id.isdigit():
+        return None
+    row = _load_fact_row(db_path, table, int(raw_id))
+    if row is None:
+        return None
+    return _dispatch_fact_provenance_peek(db_path, repo_root, row)
+
+
+def _dispatch_fact_provenance_peek(db_path: Path, repo_root: Path, row: _FactRow) -> str:
+    """Dispatches on FactLocator.effective_kind(); always returns something
+    -- the legacy floor (section 2.7) is the worst case, never a dead end."""
+    locator = FactLocator.from_json(row.locator_json)
+    doc = load_document(db_path, row.source_doc_id) if row.source_doc_id is not None else None
+    kind = locator.effective_kind() if locator is not None else None
+
+    if kind == LocatorKind.FMP_JSON_TABLE and locator is not None and doc is not None:
+        html = _render_fmp_json_table_peek(repo_root, db_path, doc, locator)
+        if html is not None:
+            return html
+    if kind == LocatorKind.TRANSCRIPT_SPAN and doc is not None:
+        html = render_transcript_page(repo_root, db_path, doc.id, fragment=True)
+        if html is not None:
+            return html
+    if (
+        kind == LocatorKind.VENDOR_FIELD
+        and locator is not None
+        and locator.vendor_field is not None
+    ):
+        return _render_vendor_field_peek(db_path, repo_root, row.ticker, locator.vendor_field)
+    return _render_legacy_provenance_peek(doc, row, locator)
+
+
+def _render_fmp_json_table_peek(
+    repo_root: Path, db_path: Path, doc: _SourceDocRow, locator: FactLocator
+) -> str | None:
+    """Dispatches an fmp_json_table locator to the matching renderer."""
+    cell = locator.table_cell
+    if doc.doc_type in {"fmp_10k_json", "fmp_10q_json"}:
+        section = (cell.section if cell is not None else None) or locator.section
+        return render_form10k_page(repo_root, db_path, doc.id, section, fragment=True)
+    if doc.doc_type in _STATEMENT_JSON_DOC_TYPES:
+        return render_statement_json_page(
+            repo_root,
+            db_path,
+            doc.id,
+            json_path=(cell.json_path if cell is not None else None) or locator.json_path,
+            row_label=cell.row_label if cell is not None else None,
+            column_header=cell.column_header if cell is not None else None,
+            fragment=True,
+        )
+    return None
+
+
+def _render_vendor_field_peek(
+    db_path: Path, repo_root: Path, ticker: str, vendor_field: VendorFieldRef
+) -> str:
+    """The honest floor for a vendor_field locator (section 2.6): endpoint +
+    field + period, the fetched-at timestamp (fmp_endpoint_status), and the
+    raw cached value for that field when the endpoint's cache file is
+    findable -- never a bare tier chip with nothing behind it."""
+    fetched_at: str | None = None
+    raw_value: object = None
+    if db_path.exists():
+        conn: sqlite3.Connection | None
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        except sqlite3.Error:
+            conn = None
+        if conn is not None:
+            try:
+                status_row = conn.execute(
+                    "SELECT file_path, last_pulled FROM fmp_endpoint_status "
+                    "WHERE UPPER(ticker) = ? AND endpoint = ? "
+                    "ORDER BY last_pulled DESC LIMIT 1",
+                    (ticker.upper(), vendor_field.endpoint),
+                ).fetchone()
+            except sqlite3.Error:
+                status_row = None
+            finally:
+                conn.close()
+            if status_row is not None:
+                file_path, fetched_at_raw = status_row[0], status_row[1]
+                fetched_at = str(fetched_at_raw) if fetched_at_raw else None
+                if file_path:
+                    try:
+                        payload: object = json.loads(
+                            (repo_root / str(file_path)).read_text(encoding="utf-8")
+                        )
+                    except (OSError, ValueError):
+                        payload = None
+                    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
+                        raw_value = cast("dict[str, object]", payload[0]).get(vendor_field.field)
+                    elif isinstance(payload, dict):
+                        raw_value = cast("dict[str, object]", payload).get(vendor_field.field)
+    rows = [
+        f'<div class="cc-prov-row"><span class="cc-prov-src">Endpoint</span>'
+        f'<span class="cc-prov-when">{escape(vendor_field.endpoint)}</span></div>',
+        f'<div class="cc-prov-row"><span class="cc-prov-src">Field</span>'
+        f'<span class="cc-prov-when mono">{escape(vendor_field.field)}</span></div>',
+    ]
+    if vendor_field.period:
+        rows.append(
+            f'<div class="cc-prov-row"><span class="cc-prov-src">Period</span>'
+            f'<span class="cc-prov-when">{escape(vendor_field.period)}</span></div>'
+        )
+    if fetched_at:
+        rows.append(
+            '<div class="cc-prov-row"><span class="cc-prov-src">Fetched</span>'
+            f"{stamp_html(fetched_at, css='cc-prov-age')}</div>"
+        )
+    if raw_value is not None:
+        rows.append(
+            '<div class="cc-prov-row"><span class="cc-prov-src">Value</span>'
+            f'<span class="cc-prov-when mono">{escape(json.dumps(raw_value, default=str))}</span></div>'
+        )
+    caption = (
+        '<div class="cc-peek-attest-done">Vendor field &mdash; no underlying filing; '
+        "this is the value FMP's API returned.</div>"
+    )
+    return f'<div class="cc-prov"><div class="cc-prov-rows">{"".join(rows)}</div>{caption}</div>'
+
+
+def _render_legacy_provenance_peek(
+    doc: _SourceDocRow | None, row: _FactRow, locator: FactLocator | None
+) -> str:
+    """Never a dead end (section 2.7): whichever of the document identity,
+    the /source/<doc_id> link, and the raw locator JSON exist, best-effort,
+    plus a `provenance: legacy` badge (composes the existing .k-chip
+    primitive -- no new freehand pill)."""
+    bits: list[str] = [
+        f'<div class="cc-prov-row"><b>{escape(row.label)}</b> &middot; {escape(row.ticker)}</div>'
+    ]
+    if doc is not None:
+        bits.append(f'<div class="cc-prov-row">{escape(doc.doc_type)} &middot; doc #{doc.id}</div>')
+        bits.append(
+            f'<div class="cc-prov-row"><a href="/source/{doc.id}" target="_blank" '
+            'rel="noopener">open in viewer &#8599;</a></div>'
+        )
+    if row.confidence is not None:
+        bits.append(f'<div class="cc-prov-row">confidence {round(row.confidence * 100)}%</div>')
+    if row.extracted_by:
+        bits.append(f'<div class="cc-prov-row mono">via {escape(row.extracted_by)}</div>')
+    if locator is not None:
+        raw = locator.to_json()
+        if raw:
+            bits.append(f'<div class="cc-prov-row mono src-pop-locator">{escape(raw)}</div>')
+    badge = '<span class="k-chip k-chip-warn">provenance: legacy</span>'
+    return f'<div class="cc-prov"><div class="cc-prov-rows">{"".join(bits)}</div>{badge}</div>'
