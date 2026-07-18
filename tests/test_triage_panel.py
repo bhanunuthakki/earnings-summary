@@ -203,10 +203,14 @@ def test_triage_drawer_stays_hidden_until_opened(db_path: Path) -> None:
     tag = re.search(r"<div\b[^>]*id=\"triage-drawer\"[^>]*>", html)
     assert tag is not None
     assert " hidden" in tag.group(0)
+    # Scan the actual CSS rules, not comment prose: the style block deliberately
+    # SPELLS OUT the anti-pattern `#triage-drawer{display:flex}` in a comment, so
+    # strip /* … */ first or the rule scan below matches the warning, not a rule.
+    css = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
     # `display` only applies when shown…
-    assert "#triage-drawer:not([hidden])" in html
+    assert "#triage-drawer:not([hidden])" in css
     # …and the bare geometry rule must NOT force display (the specificity trap).
-    bare = re.search(r"#triage-drawer\s*\{([^}]*)\}", html)
+    bare = re.search(r"#triage-drawer\s*\{([^}]*)\}", css)
     assert bare is not None
     assert "display" not in bare.group(1)
 
