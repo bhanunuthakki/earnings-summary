@@ -27,9 +27,12 @@ import hashlib
 import json
 import re
 import sqlite3
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import cast
+
+import requests
 
 _PERIOD_SUFFIXES = ("annual", "quarterly", "ttm")
 _DATE_RX = re.compile(r"^\d{4}-\d{2}-\d{2}")
@@ -263,6 +266,164 @@ def set_instrument_type_from_fmp(
         return None
     value = row["instrument_type"] if isinstance(row, sqlite3.Row) else row[0]
     return value if isinstance(value, str) else None
+
+
+_SEC_SUBMISSIONS_HEADERS = {
+    "User-Agent": "EarningsSummary/1.0 (research@example.com)",
+    "Accept-Encoding": "gzip, deflate",
+}
+_SEC_SUBMISSIONS_TIMEOUT_S = 15
+
+_REGIME_FORMS: dict[str, str] = {
+    "10-K": "10-K",
+    "10-K/A": "10-K",
+    "20-F": "20-F",
+    "20-F/A": "20-F",
+    "40-F": "40-F",
+    "40-F/A": "40-F",
+}
+
+
+def _classify_regime_from_forms(forms: list[str]) -> str | None:
+    """Most-recent (index-0-first) annual-report form value in `forms` ->
+    models.companies.FilingRegime str value, or None if none of the recent
+    filings is an annual-report form."""
+    for f in forms:
+        regime = _REGIME_FORMS.get(f)
+        if regime is not None:
+            return regime
+    return None
+
+
+def _fetch_sec_regime(cik: str) -> str | None:
+    """Best-effort: fetch SEC submissions.json for `cik`, return the most
+    recent annual-report form's FilingRegime str value. None on ANY failure
+    (network, 404, unexpected shape, no annual form in the recent window) —
+    the caller falls back to the FMP-profile heuristic. This is the ground-
+    truth signal (segment_quarterly_framework.md §1.3 point 1), so a failure
+    here degrades, it never raises."""
+    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+    try:
+        resp = requests.get(
+            url, headers=_SEC_SUBMISSIONS_HEADERS, timeout=_SEC_SUBMISSIONS_TIMEOUT_S
+        )
+        resp.raise_for_status()
+        payload: object = resp.json()
+    except (requests.RequestException, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    filings = cast(dict[str, object], payload).get("filings")
+    if not isinstance(filings, dict):
+        return None
+    recent = cast(dict[str, object], filings).get("recent")
+    if not isinstance(recent, dict):
+        return None
+    forms = cast(dict[str, object], recent).get("form")
+    if not isinstance(forms, list):
+        return None
+    return _classify_regime_from_forms([str(f) for f in cast(list[object], forms)])
+
+
+def classify_filing_regime_from_profile(profile: dict[str, object]) -> str:
+    """FMP-profile heuristic (fallback signal, §1.3 point 2): a Canadian ADR
+    -> ``40-F``; any other ADR -> ``20-F``; else -> ``10-K``.
+
+    A genuine approximation, not ground truth — it conflates "Canadian ADR"
+    with "MJDS 40-F filer," which is correct for the current roster
+    (BN/CNQ/FNV) but not universally true. Callers must log which branch
+    (SEC vs this heuristic) actually classified a ticker.
+    """
+    is_adr = _truthy(profile.get("isAdr"))
+    country = profile.get("country")
+    if is_adr and isinstance(country, str) and country.strip().upper() == "CA":
+        return "40-F"
+    if is_adr:
+        return "20-F"
+    return "10-K"
+
+
+def set_filing_regime_from_profile(
+    conn: sqlite3.Connection,
+    ticker: str,
+    project_root: Path,
+) -> str | None:
+    """Classify `ticker`'s filing_regime and write it to ``tracked_companies``
+    — but ONLY when the column is currently NULL.
+
+    Sibling to `set_instrument_type_from_fmp`: same write-only-when-NULL
+    contract (a re-run on an already-classified ticker is a no-op), same
+    call site (`execution/onboard_ticker.py`, right after
+    `set_instrument_type_from_fmp`). Never auto-corrects an existing
+    non-NULL value, even if the SEC signal later disagrees with a hand-
+    entered one (surfaces nothing here — a future audit can compare SEC
+    truth against the stored value; this function only ever fills a gap).
+
+    Resolution order (segment_quarterly_framework.md §1.3):
+      1. SEC submissions.json via `pipeline.sec_xbrl.CIK_MAP` (ground truth)
+         when the ticker's CIK resolves and the fetch succeeds.
+      2. FMP profile heuristic (`classify_filing_regime_from_profile`) when
+         (1) fails (no CIK, network error, no annual form found).
+
+    Logs `event: filing_regime_selfheal, method: sec_submissions|
+    fmp_profile_heuristic` to stderr so a future audit can tell a
+    ground-truth classification from a guess. Returns the regime written, or
+    None when no signal resolved (leaves the column untouched) or the
+    ticker has no `tracked_companies` row.
+    """
+    upper = ticker.upper()
+    row = conn.execute(
+        "SELECT filing_regime FROM tracked_companies WHERE ticker = ? LIMIT 1", (upper,)
+    ).fetchone()
+    if row is None:
+        return None
+    existing = row["filing_regime"] if isinstance(row, sqlite3.Row) else row[0]
+    if existing:
+        return str(existing)
+
+    # Local import: keeps a hard `pipeline.sec_xbrl` module-load dependency
+    # (and its own heavier import graph) out of every fmp_doc_index caller
+    # that never touches filing-regime self-heal.
+    from pipeline.sec_xbrl import CIK_MAP
+
+    regime: str | None = None
+    method: str | None = None
+    cik = CIK_MAP.get(upper)
+    if cik is not None:
+        regime = _fetch_sec_regime(cik)
+        if regime is not None:
+            method = "sec_submissions"
+    if regime is None:
+        path = project_root / "data" / "historical" / "fmp" / f"{upper}_profile.json"
+        if path.exists():
+            try:
+                raw: object = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                raw = None
+            profile = _first_profile_record(raw) if raw is not None else None
+            if profile is not None:
+                regime = classify_filing_regime_from_profile(profile)
+                method = "fmp_profile_heuristic"
+    if regime is None:
+        return None
+
+    sys.stderr.write(
+        json.dumps(
+            {
+                "event": "filing_regime_selfheal",
+                "ticker": upper,
+                "regime": regime,
+                "method": method,
+            }
+        )
+        + "\n"
+    )
+    conn.execute(
+        "UPDATE tracked_companies SET filing_regime = ? WHERE ticker = ? AND filing_regime IS NULL",
+        (regime, upper),
+    )
+    conn.commit()
+    return regime
 
 
 def index_fmp_files_for_ticker(

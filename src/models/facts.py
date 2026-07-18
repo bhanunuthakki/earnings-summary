@@ -22,6 +22,15 @@ class FiscalPeriodType(StrEnum):
     Q4 = "Q4"
     H1 = "H1"
     H2 = "H2"
+    # Nine-months-ended cumulative period (a Q3 10-Q's YTD column) — the
+    # missing sibling to H1/H2 (segment_quarterly_framework.md §4.2). Needed
+    # so a Q3 filing's as-filed 9-months-ended cumulative column and its
+    # derived discrete-Q3 value can coexist on the same (ticker, period_end,
+    # source_doc_id) tuple without colliding on fiscal_period_type='Q3'.
+    # Blast-radius note: any exhaustive if/elif/match over FiscalPeriodType
+    # needs a safe default arm for this new member — see the framework doc's
+    # §4.2 grep instruction before adding another exhaustive branch.
+    NINE_MONTHS = "9M"
     FY = "FY"
     TTM = "TTM"
 
@@ -286,6 +295,15 @@ class SegmentPeriod(BaseModel):
     currency: Currency | None = None
     unit: Unit
     created_at: datetime | None = None
+    # --- segment_quarterly_framework.md §4.2 additive columns (alembic 0166) ---
+    # 'discrete' | 'cumulative' | 'derived'. Default matches every pre-framework
+    # row (all reported-discrete or FY-annual today).
+    period_basis: str = "discrete"
+    # The exact as-filed column header (e.g. "Six Months Ended June 30, 2025")
+    # — audit trail back to the literal filing text. None for pre-framework rows.
+    raw_period_label: str | None = None
+    # Resolver version tag, e.g. "period_axis_v1". None for pre-framework rows.
+    method_version: str | None = None
 
 
 class SegmentDimension(BaseModel):
@@ -311,3 +329,21 @@ class SegmentDimension(BaseModel):
     value: Decimal
     metric: str
     unit: Unit | None = None
+    # --- segment_quarterly_framework.md §4.1 additive columns (alembic 0165) ---
+    # 'reported' | 'derived'. Mirrors kpi_facts/financial_facts provenance.
+    disclosure_status: str = "reported"
+    # e.g. "tenq_discrete_v1", "segment_q2q3_derive_v1", "llm:segment_crosstabs_v1".
+    method_version: str | None = None
+    # Mirrors financial_facts/kpi_facts.confidence — 1.0 for a deterministic,
+    # reported-as-filed parse; derivation haircuts this (§2.6).
+    confidence: float = Field(ge=0.0, le=1.0, default=1.0)
+    # Deterministic tag or "llm:<model>", same convention as kpi_facts.extracted_by.
+    extracted_by: str | None = None
+    # FactLocator-shaped JSON (section, json_path) — serialize via
+    # FactLocator.to_json(), do not hand-roll a second locator shape.
+    locator: str | None = None
+    # kpi_facts.computed_from-shaped JSON: {"display": ..., "inputs": [...]}.
+    derived_from: str | None = None
+    # Recast chain link — self-FK to segment_dimensions.id (code-validated,
+    # no DB-level FK per the FK-poisoning invariant).
+    supersedes_id: int | None = None

@@ -71,6 +71,10 @@ GOLDEN_PURPOSES = (
     # Triage second-pass route suggestion (#884) — auto-routes a parked comment at
     # high confidence (mode-A: a ROUTABLE_INTENTS member or park).
     "triage_route_suggest",
+    # 10-Q segment quarterly period-axis disambiguation Stage B fallback
+    # (segment_quarterly_framework.md §2.4, mode-A: per-column duration_months/
+    # is_cumulative closed-form classification).
+    "segment_10q_period_disambiguate",
 )
 AUDIT_PURPOSES = (
     "bear_case",

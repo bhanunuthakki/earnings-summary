@@ -82,6 +82,11 @@ _ALL_FACT_PERIOD_TYPES: tuple[str, ...] = (
     "Q4",
     "H1",
     "H2",
+    # 9-months-ended cumulative (segment_quarterly_framework.md §4.2) — a Q3
+    # 10-Q segment_periods row now legitimately carries this fiscal_period_type;
+    # omitting it here would silently drop it from "the genuinely latest
+    # observation" resolution this tuple exists to guarantee.
+    "9M",
     "FY",
     "TTM",
     "annual",

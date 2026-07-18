@@ -266,6 +266,12 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # execution/draft_annual_letter.py). Bump when the drafting prompt is
     # materially rewritten.
     "annual_letter": "v1",
+    # 10-Q segment quarterly period-axis disambiguation Stage B fallback
+    # (docs/design/segment_quarterly_framework.md §2.4,
+    # compute.segment_quarterly_10q._build_disambiguate_prompt). Bump when
+    # the prompt is materially rewritten, then re-run
+    # `run_llm_evals.py --purpose segment_10q_period_disambiguate`.
+    "segment_10q_period_disambiguate": "v1",
 }
 
 _DEFAULT_VERSION = "v1"
