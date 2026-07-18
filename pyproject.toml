@@ -77,6 +77,8 @@ ignore = [
 # fmp_payloads + the Protocol in compute/_common.py mirror FMP's exact JSON
 # keys (camelCase); aliasing every field would add boilerplate.
 "src/models/fmp_payloads.py" = ["N815"]
+# yf_payloads mirrors yfinance's exact column names (camelCase + vendor quirks).
+"src/models/yf_payloads.py" = ["N815"]
 "src/compute/_common.py" = ["N815"]
 # DCF forecast/valuation use the `_M` (USD millions) units convention on fields +
 # the `diluted_shares_M` argument.
