@@ -44,7 +44,7 @@ class TickerExitQuality(BaseModel):
     regret_vs_hold_usd: float | None = Field(
         default=None,
         description=(
-            "Absolute USD, signed. value_if_held − sold_proceeds; POSITIVE means "
+            "Absolute USD, signed. value_if_held - sold_proceeds; POSITIVE means "
             "selling cost the owner money vs. holding."
         ),
     )
