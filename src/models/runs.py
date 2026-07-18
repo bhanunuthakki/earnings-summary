@@ -17,6 +17,11 @@ class StageName(StrEnum):
     COMPUTE = "compute"
     SYNTHESIZE = "synthesize"
     PUBLISH = "publish"
+    # Bottoms-up comparable-set resolution/freeze (docs/design/
+    # comparable_sets_bottoms_up.md section 8) -- distinct from COMPUTE because
+    # it's a resolve-and-freeze step (membership), not a numeric derivation;
+    # the per-date aggregate math in track_comp_metrics.py uses COMPUTE.
+    COMPARABLE_SET_RESOLVE = "comparable_set_resolve"
 
 
 class StageStatus(StrEnum):
