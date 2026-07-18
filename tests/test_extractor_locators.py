@@ -18,7 +18,7 @@ from compute._common import extract_facts_with_spec
 from compute.as_reported import extract_facts_from_record as extract_as_reported
 from compute.income_statement import extract_income_statement_facts
 from compute.kpi_extract_summaries import _build_manifest  # pyright: ignore[reportPrivateUsage]
-from models.facts import FactLocator, FiscalPeriodType, Unit
+from models.facts import FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.fmp_payloads import FmpAsReportedRecord, FmpIncomeStatementRecord
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
@@ -143,7 +143,7 @@ def test_extract_facts_with_spec_builds_record_indexed_locator() -> None:
 
     with_locator = extract_facts_with_spec(record, 1, spec, record_index=3)
     loc = with_locator[0].locator
-    assert loc is not None
+    assert isinstance(loc, FactLocator)
     # locator_version=2, kind=fmp_json_table -- table_cell.row_label/
     # column_header enrich the bare v1 json_path (docs/design/
     # provenance_clickthrough.md section 3.2's per-extractor enrichment).
@@ -154,9 +154,10 @@ def test_extract_facts_with_spec_builds_record_indexed_locator() -> None:
     assert loc.table_cell.column_header == "2025-12-31"
     assert loc.table_cell.json_path == "[3].revenue"
     assert loc.verbatim_snippet
-
-    without = extract_facts_with_spec(record, 1, spec)
-    assert without[0].locator is None
+    # record_index is now a REQUIRED keyword-only argument (persist-time
+    # enforcement, docs/design/provenance_clickthrough.md §4.1) -- there is
+    # no "call it without an index and get locator=None" path left; every
+    # real call site already has the index in scope.
 
 
 def test_income_statement_extractor_persists_locator(tmp_path: Path) -> None:
@@ -210,12 +211,13 @@ def test_as_reported_locator_points_into_data_dict() -> None:
     facts = extract_as_reported(record, source_doc_id=9, record_index=2)
     assert facts[0].line_item == "rpo"
     loc = facts[0].locator
-    assert loc is not None
+    assert isinstance(loc, FactLocator)
     assert loc.json_path == "[2].data.revenueremainingperformanceobligation"
     assert loc.locator_version == 2
     assert loc.table_cell is not None
     assert loc.table_cell.row_label == "revenueremainingperformanceobligation"
-    assert extract_as_reported(record, source_doc_id=9)[0].locator is None
+    # record_index is now REQUIRED (persist-time enforcement, docs/design/
+    # provenance_clickthrough.md §4.1) -- no locator-less call path remains.
 
 
 # ----------------------------------------------------------------------------
@@ -304,7 +306,14 @@ def test_persist_manifest_writes_excerpt_and_locator() -> None:
             source_excerpt="Net interest margin reached 17.8% in the quarter",
             locator=FactLocator(pdf_page=7),
         ),
-        KpiValue(name="ARPAC", value=Decimal("11.2"), unit=Unit.ACTUAL),
+        KpiValue(
+            name="ARPAC",
+            value=Decimal("11.2"),
+            unit=Unit.ACTUAL,
+            locator=LegacyEscapeHatch(
+                reason="test fixture value -- provenance not under test here"
+            ),
+        ),
     ]
     result = persist_manifest(conn, run_id="r1", manifest=_manifest(values))
     assert result.inserted == 2
@@ -327,7 +336,17 @@ def test_persist_manifest_clips_oversized_excerpt() -> None:
     conn = _mem_conn()
     _create_kpi_schema(conn, with_p32_columns=True)
     huge = "x" * 5000
-    values = [KpiValue(name="NIM", value=Decimal("1"), unit=Unit.PERCENT, source_excerpt=huge)]
+    values = [
+        KpiValue(
+            name="NIM",
+            value=Decimal("1"),
+            unit=Unit.PERCENT,
+            source_excerpt=huge,
+            locator=LegacyEscapeHatch(
+                reason="test fixture value -- provenance not under test here"
+            ),
+        )
+    ]
     persist_manifest(conn, run_id="r1", manifest=_manifest(values))
     (stored,) = conn.execute("SELECT source_excerpt FROM kpi_facts").fetchone()
     assert len(stored) == 1024
@@ -399,7 +418,7 @@ def test_kpi_value_accepts_manifest_json_locator() -> None:
     v = manifest.values[0]
     assert v.source_excerpt == "FX-neutral revenue grew 34% YoY"
     assert v.locator == FactLocator(pdf_page=7)
-    assert v.locator is not None
+    assert isinstance(v.locator, FactLocator)
     assert v.locator.to_json() == '{"pdf_page":7}'
 
 

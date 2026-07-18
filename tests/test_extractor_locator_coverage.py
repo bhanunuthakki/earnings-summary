@@ -10,7 +10,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
-from models.facts import LocatorKind  # noqa: E402
+from models.facts import FactLocator, LocatorKind  # noqa: E402
 
 REGISTERED_EXTRACTOR_LOCATOR_VERSIONS: dict[str, int] = {
     "table_extractors.generic_xbrl_capture": 2,
@@ -23,7 +23,72 @@ REGISTERED_EXTRACTOR_LOCATOR_VERSIONS: dict[str, int] = {
     "competitive.category_share": 1,
 }
 
+# Writers that persist a kpi_facts/financial_facts row WITHOUT going through
+# a KpiValue/FinancialFact model instance (so they sit outside
+# _discover_writer_modules's regex scan above) but that this hardening pass
+# specifically requires to emit a renderable locator anyway. Currently just
+# the metrics engine's own insert_kpi_with_restatement_detection call
+# (compute.metrics_engine.io._persist_attempt writes a `derived`-kind
+# FactLocator alongside computed_from -- see
+# tests/test_metrics_engine_io.py::test_compute_for_ticker_writes_derived_locator
+# for the full functional test; the fixture test below is the CI-guard-file
+# registration Scope item 3a asks for, kept lightweight and self-contained).
+REGISTERED_DERIVED_LOCATOR_EMITTERS: frozenset[str] = frozenset({"compute.metrics_engine.io"})
+
 _WRITER_CALL_RX = re.compile(r"(?<!class )\b(KpiValue|FinancialFact)\(")
+_STRING_LITERAL_RX = re.compile(r'"((?:[^"\\]|\\.)*)"|\'((?:[^\'\\]|\\.)*)\'')
+
+
+def _iter_escape_hatch_reasons(text: str) -> list[str]:
+    """Extract every REAL ``LegacyEscapeHatch(reason="...")`` reason string
+    from ``text``, tolerating Python's implicit adjacent-string-literal
+    concatenation across multiple lines (this repo's own style for a long
+    reason, e.g. ``reason=("a " "b " "c")``) -- a single-string regex would
+    miss every multi-line reason actually used in this codebase.
+
+    Skips ``class LegacyEscapeHatch(BaseModel):`` (the class definition
+    itself) and any comment/docstring mention that merely NAMES the pattern
+    without a quoted string following (e.g. "...an explicit
+    ``LegacyEscapeHatch(reason=...)``" in prose) -- both produce zero string
+    literals inside the balanced parens, which is the actual signal used to
+    tell "a real call" from "text about the call" apart, rather than trying
+    to separately detect comments/docstrings.
+    """
+    reasons: list[str] = []
+    for m in re.finditer(r"LegacyEscapeHatch\(", text):
+        depth = 1
+        i = m.end()
+        while depth > 0 and i < len(text):
+            if text[i] == "(":
+                depth += 1
+            elif text[i] == ")":
+                depth -= 1
+            i += 1
+        call_body = text[m.end() : i - 1]
+        parts = [g1 or g2 for g1, g2 in _STRING_LITERAL_RX.findall(call_body)]
+        if parts:
+            reasons.append("".join(parts))
+    return reasons
+
+
+_BOILERPLATE_ESCAPE_HATCH_REASONS: frozenset[str] = frozenset(
+    {
+        "todo",
+        "fixme",
+        "n/a",
+        "na",
+        "tbd",
+        "reason",
+        "no reason",
+        "no reason given",
+        "...",
+        "unknown",
+        "same as above",
+        "see above",
+        "later",
+        "placeholder",
+    }
+)
 
 
 def _discover_writer_modules() -> set[str]:
@@ -60,7 +125,7 @@ def test_generic_xbrl_capture_locator_is_v2_on_fixture() -> None:
     g._walk_section("Debt - Long-Term", section, per_period, audit, fye_md=(12, 31))
     values = next(iter(per_period.values()))
     loc = values[0].locator
-    assert loc is not None
+    assert isinstance(loc, FactLocator)
     assert loc.locator_version >= 2
     assert loc.effective_kind() == LocatorKind.FMP_JSON_TABLE
     assert loc.table_cell is not None
@@ -87,7 +152,7 @@ def test_common_extract_facts_with_spec_locator_is_v2_on_fixture() -> None:
         record, 1, [("revenue", "revenue", Unit.ACTUAL)], record_index=3
     )
     loc = facts[0].locator
-    assert loc is not None
+    assert isinstance(loc, FactLocator)
     assert loc.locator_version >= 2
     assert loc.effective_kind() == LocatorKind.FMP_JSON_TABLE
     assert loc.json_path == "[3].revenue"
@@ -112,7 +177,7 @@ def test_as_reported_locator_is_v2_on_fixture() -> None:
     )
     facts = extract_facts_from_record(record, source_doc_id=9, record_index=2)
     loc = facts[0].locator
-    assert loc is not None
+    assert isinstance(loc, FactLocator)
     assert loc.locator_version >= 2
     assert loc.effective_kind() == LocatorKind.FMP_JSON_TABLE
     assert loc.json_path == "[2].data.revenueremainingperformanceobligation"
@@ -127,7 +192,6 @@ def test_sec_xbrl_locator_is_v2_on_fixture() -> None:
     import sqlite3
     from datetime import datetime
 
-    from models.facts import FactLocator
     from pipeline.sec_xbrl import insert_facts_from_companyfacts
 
     conn = sqlite3.connect(":memory:")
@@ -190,13 +254,18 @@ def test_sec_xbrl_locator_is_v2_on_fixture() -> None:
 
 
 def test_legacy_writer_stays_unenriched_by_construction() -> None:
-    """The floor=1 s1_financials entry genuinely doesn't emit a locator at
-    all today -- pinning it at 1 isn't an unverified claim."""
+    """The floor=1 s1_financials entry genuinely doesn't emit a renderable
+    locator at all today -- pinning it at 1 isn't an unverified claim.
+
+    Since the persist-time enforcement flip (docs/design/
+    provenance_clickthrough.md §4.1), the field can no longer be a bare
+    ``None`` -- the writer must make its "I genuinely have nothing" state
+    explicit via ``LegacyEscapeHatch``, which is what this asserts now."""
     from datetime import datetime
     from decimal import Decimal
 
     from compute.s1_financials import S1Datum, build_financial_facts
-    from models.facts import FiscalPeriodType, Unit
+    from models.facts import FiscalPeriodType, LegacyEscapeHatch, Unit
 
     datum = S1Datum(
         line_item="revenue",
@@ -207,4 +276,122 @@ def test_legacy_writer_stays_unenriched_by_construction() -> None:
         currency=None,
     )
     facts = build_financial_facts([datum], source_doc_id=1, ticker="TST")
-    assert facts[0].locator is None
+    assert isinstance(facts[0].locator, LegacyEscapeHatch)
+    assert facts[0].locator.reason
+
+
+# ---------------------------------------------------------------------------
+# Persist-time enforcement (section 4.1 of this pass, closing Phase A's
+# deferral): every registered writer above must supply a REQUIRED
+# FactLocator | LegacyEscapeHatch -- there is no more implicit None default.
+# The metrics engine writes kpi_facts through a different path (directly via
+# insert_kpi_with_restatement_detection, not a KpiValue instance), so it is
+# registered and fixture-tested separately from the KpiValue/FinancialFact
+# discovery scan above.
+# ---------------------------------------------------------------------------
+
+
+def test_metrics_engine_persists_derived_locator_on_fixture() -> None:
+    """compute.metrics_engine.io._persist_attempt (REGISTERED_DERIVED_LOCATOR_EMITTERS)
+    writes a canonical `derived`-kind FactLocator for every successful compute,
+    not just the pre-existing `computed_from` JSON -- see
+    docs/design/bottoms_up_metrics_engine.md section 3 /
+    provenance_clickthrough.md section 1.5. Full end-to-end coverage (real
+    compute_for_ticker run) lives in
+    tests/test_metrics_engine_io.py::test_compute_for_ticker_writes_derived_locator;
+    this is the lightweight, self-contained fixture the CI-guard file itself
+    asserts against so a future refactor of _persist_attempt can't silently
+    drop the locator write without failing HERE too."""
+    import sqlite3
+    from datetime import datetime
+    from decimal import Decimal
+
+    from compute.metrics_engine.engine import ComputedValue
+    from compute.metrics_engine.io import _persist_attempt  # pyright: ignore[reportPrivateUsage]
+    from compute.metrics_engine.registry import REGISTRY
+
+    assert "compute.metrics_engine.io" in REGISTERED_DERIVED_LOCATOR_EMITTERS
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        "CREATE TABLE kpi_definitions (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "ticker TEXT NOT NULL, name TEXT NOT NULL, unit TEXT NOT NULL, "
+        "primary_source TEXT NOT NULL, fallback_source TEXT, ir_url TEXT, "
+        "threshold_tier TEXT, threshold_low REAL, threshold_high REAL, notes TEXT, "
+        "UNIQUE(ticker, name));"
+        "CREATE TABLE kpi_facts (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "ticker TEXT NOT NULL, period_end TIMESTAMP NOT NULL, "
+        "fiscal_period_type TEXT NOT NULL, kpi_definition_id INTEGER NOT NULL, "
+        "value NUMERIC(24, 6) NOT NULL, unit TEXT NOT NULL, source_doc_id INTEGER NOT NULL, "
+        "confidence REAL DEFAULT 1.0, extracted_by VARCHAR(64), supersedes_id INTEGER, "
+        "locator TEXT, computed_from TEXT, formula_id INTEGER, formula_version INTEGER);"
+        "CREATE UNIQUE INDEX uq_kpi_facts_provenance ON kpi_facts "
+        "(ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id);"
+        "CREATE TABLE metric_computation_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "ticker TEXT NOT NULL, period_end TIMESTAMP NOT NULL, fiscal_period_type TEXT NOT NULL, "
+        "formula_id INTEGER NOT NULL, status TEXT NOT NULL, reason_code TEXT, reason_detail TEXT, "
+        "kpi_fact_id INTEGER, input_fingerprint TEXT NOT NULL, engine_version TEXT NOT NULL, "
+        "computed_at TIMESTAMP NOT NULL);"
+        "CREATE UNIQUE INDEX uq_metric_computation_attempts_logical ON metric_computation_attempts "
+        "(ticker, period_end, fiscal_period_type, formula_id);"
+    )
+
+    formula = next(iter(REGISTRY.values()))
+    period_end = datetime(2025, 12, 31)
+    result = ComputedValue(value=Decimal("42.0"))
+    lineage = [(next(iter(formula.required_inputs)), period_end, 1)]
+
+    _persist_attempt(
+        conn,
+        ticker="TST",
+        period_end=period_end,
+        fiscal_period_type="Q4",
+        formula=formula,
+        formula_id=1,
+        result=result,
+        lineage=lineage,
+    )
+    row = conn.execute("SELECT locator, computed_from FROM kpi_facts").fetchone()
+    assert row is not None
+    loc = FactLocator.from_json(row["locator"])
+    assert loc is not None
+    assert loc.locator_version >= 2
+    assert loc.effective_kind() == LocatorKind.DERIVED
+    assert loc.derived is not None
+    assert loc.derived.formula_id == 1
+    assert len(loc.derived.inputs) == 1
+    assert row["computed_from"] is not None
+    conn.close()
+
+
+def test_no_empty_or_duplicate_boilerplate_escape_hatch_reasons() -> None:
+    """Scope item 3b: a persist call site that opts out via
+    ``LegacyEscapeHatch(reason=...)`` must give an honest, specific,
+    non-recycled reason -- not an empty/placeholder string, and not the exact
+    same literal text copy-pasted at more than one call site (each opt-out is
+    justified in its own words; see docs/design/provenance_clickthrough.md
+    section 4.1's "not machine-checkable... but a reviewer can grep and ask
+    why"). Scoped to src/ only (mirrors _discover_writer_modules above) --
+    tests/ fixtures legitimately reuse one generic "not under test" reason
+    across many unrelated call sites, which is fine."""
+    from collections import defaultdict
+
+    reasons: dict[str, list[str]] = defaultdict(list)
+    for path in SRC_ROOT.rglob("*.py"):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        for raw_reason in _iter_escape_hatch_reasons(text):
+            reasons[raw_reason.strip()].append(str(path.relative_to(SRC_ROOT)))
+
+    assert reasons, "expected at least one LegacyEscapeHatch(reason=...) call site in src/"
+
+    for reason, files in reasons.items():
+        assert len(reason) >= 8, f"escape-hatch reason too short in {files}: {reason!r}"
+        assert reason.lower() not in _BOILERPLATE_ESCAPE_HATCH_REASONS, (
+            f"boilerplate escape-hatch reason in {files}: {reason!r}"
+        )
+
+    duplicates = {reason: files for reason, files in reasons.items() if len(files) > 1}
+    assert not duplicates, (
+        f"duplicate LegacyEscapeHatch reason text reused across sites: {duplicates}"
+    )

@@ -14,7 +14,7 @@ import pytest
 
 from compute._common import insert_financial_facts
 from models.documents import SourceQualityTier
-from models.facts import Currency, FinancialFact, FiscalPeriodType, Unit
+from models.facts import Currency, FinancialFact, FiscalPeriodType, LegacyEscapeHatch, Unit
 from pipeline.confidence import (
     IssueSignal,
     apply_confidence_scores,
@@ -389,6 +389,7 @@ def _fact(value: str, confidence: float = 1.0) -> FinancialFact:
         unit=Unit.ACTUAL,
         source_doc_id=1,
         confidence=confidence,
+        locator=LegacyEscapeHatch(reason="test fixture value -- provenance not under test here"),
     )
 
 

@@ -47,7 +47,8 @@ def extract_facts_with_spec(
     source_doc_id: int,
     line_item_spec: list[tuple[str, str, Unit]],
     period_type_override: FiscalPeriodType | None = None,
-    record_index: int | None = None,
+    *,
+    record_index: int,
 ) -> list[FinancialFact]:
     """Convert a record to FinancialFact rows using a (fmp_field, canonical, unit) spec.
 
@@ -59,9 +60,14 @@ def extract_facts_with_spec(
     (the latest quarter ending the trailing window) but the value is TTM —
     callers detect that via file_path and pass FiscalPeriodType.TTM here.
 
-    `record_index`: the record's position in the source JSON array. When given,
-    each fact carries a `FactLocator(json_path="[<i>].<fmp_field>")` pointing at
-    the exact cell of the cached endpoint response (data_provenance.md §7).
+    `record_index`: the record's position in the source JSON array — REQUIRED
+    (persist-time enforcement, docs/design/provenance_clickthrough.md §4.1).
+    Every real call site already has this (the extractor loop enumerates its
+    records), so there is no legitimate "don't know the index" case left for
+    the highest-volume fact writer; every fact carries a real
+    `FactLocator(json_path="[<i>].<fmp_field>")` pointing at the exact cell of
+    the cached endpoint response (data_provenance.md §7), never a
+    LegacyEscapeHatch.
     """
     period_end = datetime.fromisoformat(record.date)
     period_type = (
@@ -76,20 +82,16 @@ def extract_facts_with_spec(
         value = getattr(record, fmp_field)
         if value is None:
             continue
-        locator = (
-            # record_index gives us [<i>].<field> for the fast direct-lookup
-            # path; the record's own date/field name give the peek row/column
-            # identity to highlight (docs/design/provenance_clickthrough.md
-            # §3.2 — the record dict is already in hand at this call site).
-            locators.table_cell_locator(
-                section=None,
-                row_label=canonical,
-                column_header=record.date,
-                json_path=f"[{record_index}].{fmp_field}",
-                cell_value_as_extracted=str(value),
-            )
-            if record_index is not None
-            else None
+        # record_index gives us [<i>].<field> for the fast direct-lookup
+        # path; the record's own date/field name give the peek row/column
+        # identity to highlight (docs/design/provenance_clickthrough.md
+        # §3.2 — the record dict is already in hand at this call site).
+        locator = locators.table_cell_locator(
+            section=None,
+            row_label=canonical,
+            column_header=record.date,
+            json_path=f"[{record_index}].{fmp_field}",
+            cell_value_as_extracted=str(value),
         )
         facts.append(
             FinancialFact(
@@ -114,6 +116,7 @@ def insert_financial_facts(
     *,
     extracted_by: str,
     tier: SourceQualityTier | None = None,
+    run_id: str | None = None,
 ) -> int:
     """Bulk-insert facts. Returns rowcount actually inserted.
 
@@ -133,8 +136,15 @@ def insert_financial_facts(
     (validation-issue penalties fold in later via the backfill — issues
     can't exist yet for rows being written right now). A fact whose builder
     set an explicit non-default confidence keeps it.
+
+    `run_id` tags any LegacyEscapeHatch use logged for this batch
+    (docs/design/provenance_clickthrough.md §4.1) — this writer path has no
+    ambient run-accounting context (unlike persist_manifest's callers, which
+    always thread a real run_id through), so it defaults to a synthetic
+    `financial_facts:<extracted_by>` tag when the caller doesn't have one.
     """
     scored = score_confidence(tier=tier, extracted_by=extracted_by) if tier is not None else None
+    effective_run_id = run_id or f"financial_facts:{extracted_by}"
     inserted = 0
     for f in facts:
         confidence = scored if (scored is not None and f.confidence == 1.0) else f.confidence
@@ -150,7 +160,13 @@ def insert_financial_facts(
             source_doc_id=f.source_doc_id,
             confidence=confidence,
             extracted_by=extracted_by,
-            locator=f.locator.to_json() if f.locator is not None else None,
+            locator=locators.resolve_locator_for_persist(
+                conn,
+                locator=f.locator,
+                run_id=effective_run_id,
+                source_doc_id=f.source_doc_id,
+                ticker=f.ticker,
+            ),
         )
         if new_id is not None:
             inserted += 1

@@ -44,7 +44,19 @@ from pathlib import Path
 
 from compute._common import insert_financial_facts, load_document_row
 from models.documents import SourceQualityTier
-from models.facts import Currency, FinancialFact, FiscalPeriodType, Unit
+from models.facts import Currency, FinancialFact, FiscalPeriodType, LegacyEscapeHatch, Unit
+
+# S-1 "F-pages" text is flattened prose with no stable JSON/PDF anchor (module
+# docstring above) — a genuinely legacy writer (docs/design/
+# provenance_clickthrough.md §5.3), not a placeholder for future enrichment.
+_NO_LOCATOR = LegacyEscapeHatch(
+    reason=(
+        "S-1 F-pages are parsed from flattened, HTML-stripped prose text "
+        "(no cached JSON array or PDF page to point at) -- there is no "
+        "stable sub-document anchor to build a FactLocator from until this "
+        "extractor is rewritten against the original filing structure"
+    )
+)
 
 log = logging.getLogger(__name__)
 
@@ -470,6 +482,7 @@ def build_financial_facts(
                 unit=d.unit,
                 source_doc_id=source_doc_id,
                 confidence=1.0,
+                locator=_NO_LOCATOR,
             )
         )
     return facts

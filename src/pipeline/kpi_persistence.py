@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from compute.kpi_resolver import canonical_metric_name, normalize_kpi_name
 from credibility.observations import KPI_FACTS, record_restatement_observation
 from models.documents import SourceType, tier_for_source_type
-from models.facts import FactLocator, FiscalPeriodType, Unit
+from models.facts import FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import DefinitionOrigin, ReportingCadence, ThesisTier
 from models.unit_convert import convert_unit
 from models.validation import Severity, ValidationRule
@@ -63,7 +63,13 @@ class KpiValue(BaseModel):
     source_excerpt: str | None = None
     # Sub-document position (alembic 0075) — e.g. FactLocator(pdf_page=7) for
     # an IR-deck extraction, or transcript_line for a transcript-anchored one.
-    locator: FactLocator | None = None
+    # Required (no None default) as of the persist-time enforcement flip
+    # (docs/design/provenance_clickthrough.md §4.1): every caller supplies a
+    # real FactLocator or an explicit LegacyEscapeHatch(reason=...) — see
+    # pipeline.locators.resolve_locator_for_persist, called from
+    # persist_manifest below, for how the two branches serialize at the
+    # actual kpi_facts INSERT.
+    locator: FactLocator | LegacyEscapeHatch
 
 
 class KpiExtractionManifest(BaseModel):
@@ -573,6 +579,11 @@ def persist_manifest(
 ) -> PersistResult:
     """Apply one KpiExtractionManifest. Validates each value, inserts kpi_facts,
     emits validation_issues for failures, and returns a per-manifest tally."""
+    # Local import: pipeline.locators imports record_validation_issue FROM
+    # this module, so a module-level `from pipeline import locators` here
+    # would be circular. By call time both modules are fully loaded.
+    from pipeline.locators import resolve_locator_for_persist
+
     inserted = 0
     skipped = 0
     issues = 0
@@ -710,7 +721,13 @@ def persist_manifest(
                 self_reported=kpi.confidence,
             ),
             extracted_by=extracted_by,
-            locator=kpi.locator.to_json() if kpi.locator is not None else None,
+            locator=resolve_locator_for_persist(
+                conn,
+                locator=kpi.locator,
+                run_id=run_id,
+                source_doc_id=manifest.source_doc_id,
+                ticker=manifest.ticker,
+            ),
             source_excerpt=excerpt or None,
         )
         if was_inserted:

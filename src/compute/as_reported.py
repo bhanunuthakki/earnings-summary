@@ -61,13 +61,14 @@ _XBRL_TAG_MAP: list[tuple[str, str]] = [
 
 
 def extract_facts_from_record(
-    record: FmpAsReportedRecord, source_doc_id: int, record_index: int | None = None
+    record: FmpAsReportedRecord, source_doc_id: int, *, record_index: int
 ) -> list[FinancialFact]:
     """Walk the curated XBRL tag map; emit a FinancialFact per numeric value found.
 
-    `record_index` (the record's position in the source JSON array) makes each
-    fact carry a locator pointing at the exact tag of the cached response:
-    `[<i>].data.<xbrl_tag>` (data_provenance.md §7).
+    `record_index` (the record's position in the source JSON array) — REQUIRED
+    (persist-time enforcement, docs/design/provenance_clickthrough.md §4.1) —
+    makes each fact carry a locator pointing at the exact tag of the cached
+    response: `[<i>].data.<xbrl_tag>` (data_provenance.md §7).
     """
     period_end = datetime.fromisoformat(record.date)
     period_type = FiscalPeriodType(record.period)
@@ -80,16 +81,12 @@ def extract_facts_from_record(
             continue
         if not isinstance(value, (int, float)):
             continue
-        locator = (
-            locators.table_cell_locator(
-                section=None,
-                row_label=xbrl_tag,
-                column_header=record.date,
-                json_path=f"[{record_index}].data.{xbrl_tag}",
-                cell_value_as_extracted=str(value),
-            )
-            if record_index is not None
-            else None
+        locator = locators.table_cell_locator(
+            section=None,
+            row_label=xbrl_tag,
+            column_header=record.date,
+            json_path=f"[{record_index}].data.{xbrl_tag}",
+            cell_value_as_extracted=str(value),
         )
         facts.append(
             FinancialFact(

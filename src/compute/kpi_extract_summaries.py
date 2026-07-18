@@ -47,7 +47,7 @@ from compute.kpi_resolver import normalize_kpi_name
 from llm.untrusted import spotlight
 from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
 from models.documents import SourceType, tier_for_source_type
-from models.facts import FiscalPeriodType, Unit
+from models.facts import FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import DefinitionOrigin
 from models.unit_convert import same_family
 from pipeline.capture_coverage import CaptureCoverageRecord, record_coverage
@@ -64,6 +64,30 @@ from provenance.llm_extracted_parent import resolve_parent
 # Named `logger` (not `log`) to avoid colliding with the `TickerExtractionLog`
 # locals named `log` throughout this module.
 logger = logging.getLogger("kpi_extract_summaries")
+
+# Both extraction stages below (allowlist Stage A / enumerate Stage B) read an
+# LLM-generated summary DOCUMENT, not the original filing/transcript text --
+# there is no stable JSON/PDF/transcript-line anchor to build a FactLocator
+# from at this layer (docs/design/provenance_clickthrough.md §3.2's
+# kpi_extract_summaries.py row; the anchor-quote verification gate that would
+# let this graduate to a `transcript_span`/`html_span` locator is Phase C,
+# not yet implemented). `source_excerpt` still carries the LLM's verbatim
+# quote separately -- this escape hatch is about the locator column only.
+_NO_LOCATOR_ALLOWLIST = LegacyEscapeHatch(
+    reason=(
+        "Stage A allowlist extraction reads an LLM-generated summary "
+        "document (not the original filing/transcript) -- no stable "
+        "anchor exists until Phase C's anchor-quote verification lands"
+    )
+)
+_NO_LOCATOR_ENUMERATE = LegacyEscapeHatch(
+    reason=(
+        "Stage B capture-every-number enumeration reads the same "
+        "LLM-generated summary document as Stage A with no allowlist -- "
+        "same missing-anchor gap, tracked separately since this is the "
+        "long-tail capture path rather than the curated watchlist path"
+    )
+)
 
 # Per-source filename matchers + the documents.doc_type label written for each.
 # Earnings: per-quarter call summary (canonical) + the MELI/NU investor-update variant.
@@ -595,6 +619,7 @@ def _build_manifest(
                 unit=unit,
                 confidence=confidence,
                 source_excerpt=excerpt,
+                locator=_NO_LOCATOR_ALLOWLIST,
             )
         )
 
@@ -746,7 +771,14 @@ def _build_capture_manifest(
             else None
         )
         values.append(
-            KpiValue(name=name, value=v, unit=unit, confidence=0.85, source_excerpt=excerpt)
+            KpiValue(
+                name=name,
+                value=v,
+                unit=unit,
+                confidence=0.85,
+                source_excerpt=excerpt,
+                locator=_NO_LOCATOR_ENUMERATE,
+            )
         )
     return KpiExtractionManifest(
         ticker=ticker,

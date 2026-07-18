@@ -28,13 +28,25 @@ from pydantic import BaseModel, ConfigDict
 
 from competitive._docs import ensure_synthetic_document
 from models.documents import SourceType
-from models.facts import FiscalPeriodType, Unit
+from models.facts import FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import ReportingCadence
 from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue, persist_manifest
 from pipeline.run_accounting import start_run
 
 _DOC_TYPE = "competitive_category_share"
 _EXTRACTED_BY = "competitive_category_share"
+
+# Analyst-curated seed entries (Gartner MQ / IDC placement) cite a published
+# report by name/year (see _excerpt below) but have no JSON/PDF position in
+# this repo's document store to anchor a FactLocator to.
+_NO_LOCATOR = LegacyEscapeHatch(
+    reason=(
+        "analyst-curated competitive-share seed entry cites a published "
+        "3rd-party report (Gartner MQ / IDC) with no cached JSON/PDF "
+        "artifact in this repo to anchor a locator to -- source_excerpt "
+        "carries the citation instead"
+    )
+)
 
 
 class CategoryShareEntry(BaseModel):
@@ -133,6 +145,7 @@ def ingest_category_share(conn: sqlite3.Connection, repo_root: Path, ticker: str
                 unit=e.unit,
                 confidence=1.0,
                 source_excerpt=_excerpt(e),
+                locator=_NO_LOCATOR,
             )
             for e in entries
         ]

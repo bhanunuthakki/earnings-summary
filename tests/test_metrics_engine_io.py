@@ -15,6 +15,7 @@ import pytest
 from compute.metrics_engine.io import compute_for_ticker, resolve_classification
 from compute.metrics_engine.registry import ReasonCode
 from models.companies import AccountingStandard, BusinessModelClass
+from models.facts import FactLocator, LocatorKind
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
@@ -306,6 +307,40 @@ def test_compute_for_ticker_writes_expected_gross_margin(conn: sqlite3.Connectio
     assert Decimal(str(kpi_fact["value"])) == Decimal("40")
     assert kpi_fact["formula_id"] == row["formula_id"]
     assert kpi_fact["formula_version"] == 1
+
+
+def test_compute_for_ticker_writes_derived_locator(conn: sqlite3.Connection) -> None:
+    """Every ok computation writes a canonical `derived`-kind FactLocator
+    (docs/design/provenance_clickthrough.md §1.5, bottoms_up_metrics_engine.md
+    §3) alongside the existing computed_from JSON -- the Phase C formula-tree
+    peek needs this to render without a retrofit; see
+    tests/test_extractor_locator_coverage.py for the CI-guard registration."""
+    _seed_operating_company(conn, "TEST")
+    _set_classification(conn, "TEST", "operating_company", "us_gaap")
+    compute_for_ticker(conn, "TEST")
+
+    row = _latest_attempt(conn, "TEST", "gross_margin")
+    assert row["status"] == "ok"
+    kpi_fact = conn.execute(
+        "SELECT locator, computed_from, formula_id FROM kpi_facts WHERE id = ?",
+        (row["kpi_fact_id"],),
+    ).fetchone()
+    loc = FactLocator.from_json(kpi_fact["locator"])
+    assert loc is not None
+    assert loc.locator_version >= 2
+    assert loc.effective_kind() == LocatorKind.DERIVED
+    assert loc.derived is not None
+    assert loc.derived.formula_id == kpi_fact["formula_id"]
+    assert loc.derived.display  # display_formula carried through
+    assert len(loc.derived.inputs) > 0
+    for input_ref in loc.derived.inputs:
+        assert input_ref.ref == "financial_fact"
+        assert input_ref.doc_id is not None
+        assert input_ref.period_end is not None
+    # computed_from (the pre-existing lineage column) is still written
+    # unchanged for backward compatibility with readers that predate the
+    # locator kind (ui.source_chip._lineage_rows).
+    assert kpi_fact["computed_from"] is not None
 
 
 def test_compute_for_ticker_revenue_yoy_is_10_percent(conn: sqlite3.Connection) -> None:

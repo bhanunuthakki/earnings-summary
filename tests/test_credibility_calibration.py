@@ -31,7 +31,7 @@ from credibility.observations import (
     restatement_outcome,
 )
 from models.documents import SourceQualityTier
-from models.facts import Currency, FinancialFact, FiscalPeriodType, Unit
+from models.facts import Currency, FinancialFact, FiscalPeriodType, LegacyEscapeHatch, Unit
 from pipeline.credibility_panel import render_credibility_panel
 
 # ---------------------------------------------------------------------------
@@ -609,6 +609,9 @@ def test_insert_financial_facts_captures_supersede(db: Path) -> None:
             currency=Currency.USD,
             unit=Unit.ACTUAL,
             source_doc_id=doc1,
+            locator=LegacyEscapeHatch(
+                reason="test fixture value -- provenance not under test here"
+            ),
         )
         assert (
             insert_financial_facts(
@@ -629,6 +632,9 @@ def test_insert_financial_facts_captures_supersede(db: Path) -> None:
             currency=Currency.USD,
             unit=Unit.ACTUAL,
             source_doc_id=doc2,
+            locator=LegacyEscapeHatch(
+                reason="test fixture value -- provenance not under test here"
+            ),
         )
         assert (
             insert_financial_facts(

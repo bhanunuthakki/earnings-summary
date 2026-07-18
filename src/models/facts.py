@@ -219,6 +219,26 @@ class FactLocator(BaseModel):
         return cls.model_validate_json(raw)
 
 
+class LegacyEscapeHatch(BaseModel):
+    """Explicit, grep-able opt-out for a writer that genuinely cannot produce
+    a renderable locator yet.
+
+    Lives here (not in ``pipeline.locators``, where it originated in Phase A)
+    so it can be used as a type on ``FinancialFact.locator`` /
+    ``KpiValue.locator`` without ``models.facts`` importing ``pipeline.*`` —
+    ``pipeline.locators`` re-exports it for backward compatibility.
+
+    "I forgot" is not machine-checkable, but a reviewer can grep
+    ``LegacyEscapeHatch(`` in a diff and ask why. Every use is logged
+    (``pipeline.locators.log_escape_hatch``, rule=LOCATOR_ESCAPE_HATCH) so the
+    coverage audit (execution/provenance_coverage_report.py) can count them,
+    and ``tests/test_extractor_locator_coverage.py`` fails CI on an empty or
+    duplicated-boilerplate reason string.
+    """
+
+    reason: str = Field(min_length=8)
+
+
 class FinancialFact(BaseModel):
     """One atomic financial measurement, fully provenance-tagged."""
 
@@ -232,7 +252,13 @@ class FinancialFact(BaseModel):
     unit: Unit
     source_doc_id: int
     confidence: float = Field(ge=0.0, le=1.0, default=1.0)
-    locator: FactLocator | None = None
+    # Required (no None default) as of the persist-time enforcement flip
+    # (docs/design/provenance_clickthrough.md §4.1): a writer either supplies
+    # a real, renderable FactLocator or explicitly opts out via
+    # LegacyEscapeHatch(reason=...) — there is no silent "forgot to pass one"
+    # path anymore. See pipeline.locators.resolve_locator_for_persist for how
+    # the two branches serialize at the actual DB write.
+    locator: FactLocator | LegacyEscapeHatch
 
 
 class SegmentFact(BaseModel):

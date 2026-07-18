@@ -22,7 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from models.documents import SourceType  # noqa: E402
-from models.facts import FiscalPeriodType, Unit  # noqa: E402
+from models.facts import FiscalPeriodType, LegacyEscapeHatch, Unit  # noqa: E402
 from models.kpis import DefinitionOrigin  # noqa: E402
 from pipeline.kpi_persistence import (  # noqa: E402
     KpiExtractionManifest,
@@ -30,6 +30,12 @@ from pipeline.kpi_persistence import (  # noqa: E402
     persist_manifest,
 )
 from table_extractors import generic_xbrl_capture as g  # noqa: E402
+
+# These fixtures exercise persist_manifest's validation/canonicalization
+# behavior directly (not the real generic_xbrl_capture walker, which builds a
+# real FactLocator per tests/test_extractor_locator_coverage.py) -- provenance
+# is not under test here.
+_NO_LOCATOR = LegacyEscapeHatch(reason="test fixture value -- provenance not under test here")
 
 # ---------------------------------------------------------------------------
 # Synthetic FMP form_10k payload — mirrors the real section/period shapes.
@@ -378,7 +384,11 @@ def test_capture_mode_canonicalizes_onto_existing_analyst_def() -> None:
         conn,
         run_id="r1",
         manifest=_capture_manifest(
-            [KpiValue(name="GMV (USD)", value=Decimal("5"), unit=Unit.MILLIONS)],
+            [
+                KpiValue(
+                    name="GMV (USD)", value=Decimal("5"), unit=Unit.MILLIONS, locator=_NO_LOCATOR
+                )
+            ],
             DefinitionOrigin.CAPTURE,
         ),
     )
@@ -392,7 +402,14 @@ def test_capture_mode_mints_new_capture_origin() -> None:
         conn,
         run_id="r1",
         manifest=_capture_manifest(
-            [KpiValue(name="Brand New Long-Tail Metric", value=Decimal("9"), unit=Unit.ACTUAL)],
+            [
+                KpiValue(
+                    name="Brand New Long-Tail Metric",
+                    value=Decimal("9"),
+                    unit=Unit.ACTUAL,
+                    locator=_NO_LOCATOR,
+                )
+            ],
             DefinitionOrigin.CAPTURE,
         ),
     )
@@ -407,7 +424,14 @@ def test_analyst_mode_stores_name_verbatim() -> None:
         conn,
         run_id="r1",
         manifest=_capture_manifest(
-            [KpiValue(name="Monthly ARPAC (USD)", value=Decimal("11"), unit=Unit.ACTUAL)],
+            [
+                KpiValue(
+                    name="Monthly ARPAC (USD)",
+                    value=Decimal("11"),
+                    unit=Unit.ACTUAL,
+                    locator=_NO_LOCATOR,
+                )
+            ],
             DefinitionOrigin.ANALYST,
         ),
     )
@@ -423,8 +447,18 @@ def test_capture_within_batch_dedup() -> None:
         run_id="r1",
         manifest=_capture_manifest(
             [
-                KpiValue(name="Total bookings", value=Decimal("5"), unit=Unit.MILLIONS),
-                KpiValue(name="total   bookings (USD)", value=Decimal("5"), unit=Unit.MILLIONS),
+                KpiValue(
+                    name="Total bookings",
+                    value=Decimal("5"),
+                    unit=Unit.MILLIONS,
+                    locator=_NO_LOCATOR,
+                ),
+                KpiValue(
+                    name="total   bookings (USD)",
+                    value=Decimal("5"),
+                    unit=Unit.MILLIONS,
+                    locator=_NO_LOCATOR,
+                ),
             ],
             DefinitionOrigin.CAPTURE,
         ),
@@ -448,7 +482,11 @@ def test_persist_drops_absurd_actual_magnitude() -> None:
         conn,
         run_id="r1",
         manifest=_capture_manifest(
-            [KpiValue(name="Treasury stock", value=mis_scaled, unit=Unit.ACTUAL)],
+            [
+                KpiValue(
+                    name="Treasury stock", value=mis_scaled, unit=Unit.ACTUAL, locator=_NO_LOCATOR
+                )
+            ],
             DefinitionOrigin.CAPTURE,
         ),
     )
@@ -469,7 +507,14 @@ def test_persist_keeps_largest_plausible_actual() -> None:
         conn,
         run_id="r1",
         manifest=_capture_manifest(
-            [KpiValue(name="Gross notional", value=Decimal("60000000000000"), unit=Unit.ACTUAL)],
+            [
+                KpiValue(
+                    name="Gross notional",
+                    value=Decimal("60000000000000"),
+                    unit=Unit.ACTUAL,
+                    locator=_NO_LOCATOR,
+                )
+            ],
             DefinitionOrigin.CAPTURE,
         ),
     )

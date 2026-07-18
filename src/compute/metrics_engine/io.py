@@ -33,6 +33,8 @@ from decimal import Decimal
 
 from models.companies import AccountingStandard, BusinessModelClass
 from models.documents import SourceQualityTier, SourceType
+from models.facts import DerivedInputRef, DerivedRef
+from pipeline import locators
 from pipeline.confidence import score_confidence
 from pipeline.kpi_persistence import find_or_create_kpi_definition
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
@@ -621,6 +623,35 @@ def _persist_attempt(
             tier=SourceQualityTier.FMP_NORMALIZED, extracted_by="metrics_engine"
         )
         anchor_doc_id = lineage[0][2] if lineage else 0
+        # Canonical `derived` locator (docs/design/provenance_clickthrough.md
+        # §1.5/§3.2, bottoms_up_metrics_engine.md §3): the SAME lineage data
+        # `_lineage_json` already assembles for `computed_from`, promoted into
+        # the typed locator union so the Phase C formula-tree peek can walk
+        # it without a retrofit. `computed_from` is still written alongside
+        # (unchanged JSON shape) for existing readers
+        # (ui.source_chip._lineage_rows) -- one underlying lineage, two
+        # representations during the transition, not two divergent formats:
+        # `locator.derived` is the canonical read path going forward: a
+        # pre-existing row lacking `locator` (written by PR #904, before this
+        # kind existed) is lazily upgraded on read via
+        # `pipeline.locators.derived_locator_from_computed_from` rather than
+        # backfilled.
+        derived_loc = locators.derived_locator(
+            derived=DerivedRef(
+                formula_id=formula_id,
+                display=formula.display_formula,
+                method_flags=list(result.method_flags),
+                inputs=[
+                    DerivedInputRef(
+                        ref="financial_fact",
+                        item=concept.value,
+                        period_end=pe.date().isoformat(),
+                        doc_id=doc_id,
+                    )
+                    for concept, pe, doc_id in lineage
+                ],
+            )
+        )
         new_id, _superseded_id = insert_kpi_with_restatement_detection(
             conn,
             ticker=ticker,
@@ -632,6 +663,7 @@ def _persist_attempt(
             source_doc_id=anchor_doc_id,
             confidence=confidence,
             extracted_by="metrics_engine",
+            locator=derived_loc.to_json(),
             computed_from=_lineage_json(formula, lineage),
             formula_id=formula_id,
             formula_version=formula.version,
