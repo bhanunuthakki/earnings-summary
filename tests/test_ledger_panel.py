@@ -286,11 +286,10 @@ def test_proposal_group_card_is_div_balanced() -> None:
     On My Mind feed into a display:none stage (owner 2026-07-18: "an entire
     screen of wasted space"). A body with a markdown table exercises the inner
     table-scroll <div> that made the miscount easy to miss."""
-    from research.proposals import ResearchProposal
-
     from pipeline.ledger_panel import (
         _proposal_group_card,  # pyright: ignore[reportPrivateUsage]
     )
+    from research.proposals import ResearchProposal
 
     prop = ResearchProposal(
         id=1,
