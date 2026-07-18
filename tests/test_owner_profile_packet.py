@@ -12,6 +12,7 @@ item source + card, and the affirm/reject routes.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -168,3 +169,199 @@ def test_list_facts_excludes_affirmed_and_rejected(ctx: tuple[FlaskClient, Path,
     finally:
         conn.close()
     assert {f.key for f in proposed} == {"b"}
+
+
+# ---------------------------------------------------------------------------
+# tenet-2 Phase 3 — expiring AFFIRMED facts as packet items
+# [Still true / Update / Drop], distinct from the Phase 1 proposed-fact card.
+# ---------------------------------------------------------------------------
+
+
+def _seed_expired_fact(db: Path, *, key: str = "dry_powder_policy", horizon_days: int = 90) -> int:
+    """An AFFIRMED fact whose review horizon has already elapsed."""
+    conn = sqlite3.connect(str(db))
+    try:
+        fid = append_fact(
+            conn,
+            category="appetite",
+            key=key,
+            value={"months": 3.0},
+            narrative="Dry-powder policy: keep 3 months uninvested.",
+            provenance="owner",
+            status="affirmed",
+            review_horizon_days=horizon_days,
+        )
+        conn.execute(
+            "UPDATE owner_profile_facts SET affirmed_at = ? WHERE id = ?",
+            ("2020-01-01T00:00:00", fid),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return fid
+
+
+def test_expiring_fact_appears_in_packet_with_still_true_update_drop(
+    ctx: tuple[FlaskClient, Path, Path],
+) -> None:
+    _client, db, _root = ctx
+    _seed_expired_fact(db)
+    html = render_ledger_panel(db)
+    assert 'id="ledger-packet"' in html
+    assert "1 needs you" in html
+    assert "Dry-powder policy: keep 3 months uninvested." in html
+    assert 'data-profile-action="reaffirm"' in html
+    assert 'data-profile-action="retire"' in html
+    assert "data-profile-update-toggle" in html
+    assert "Still true" in html and "Update" in html and "Drop" in html
+
+
+def test_reaffirm_route_bumps_affirmed_at_and_clears_the_packet(
+    ctx: tuple[FlaskClient, Path, Path],
+) -> None:
+    client, db, _root = ctx
+    fid = _seed_expired_fact(db)
+    resp = client.post(f"/api/profile/fact/{fid}/reaffirm")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert body["status"] == "affirmed"
+
+    conn = sqlite3.connect(str(db))
+    try:
+        row = conn.execute(
+            "SELECT SUM(count) FROM panel_activation_counts WHERE panel_id = ?",
+            ("act:profile:reaffirm",),
+        ).fetchone()
+        affirmed_at = conn.execute(
+            "SELECT affirmed_at FROM owner_profile_facts WHERE id = ?", (fid,)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert int(row[0] or 0) == 1
+    assert affirmed_at != "2020-01-01T00:00:00"  # refreshed, no longer expired
+
+    html = render_ledger_panel(db)
+    assert "ledger-packet" not in html
+
+
+def test_reaffirm_stale_id_is_404(ctx: tuple[FlaskClient, Path, Path]) -> None:
+    """Re-tapping a fact that isn't (still) affirmed is a stale no-op, not a
+    silent 200 — mirrors the affirm route's own stale-tap contract."""
+    client, db, _root = ctx
+    fid = _seed_fact(db)  # proposed, never affirmed
+    resp = client.post(f"/api/profile/fact/{fid}/reaffirm")
+    assert resp.status_code == 404
+
+
+def test_retire_route_retires_and_bumps_activation(
+    ctx: tuple[FlaskClient, Path, Path],
+) -> None:
+    client, db, _root = ctx
+    fid = _seed_expired_fact(db)
+    resp = client.post(f"/api/profile/fact/{fid}/retire")
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True}
+
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    try:
+        status = conn.execute(
+            "SELECT status FROM owner_profile_facts WHERE id = ?", (fid,)
+        ).fetchone()["status"]
+        row = conn.execute(
+            "SELECT SUM(count) FROM panel_activation_counts WHERE panel_id = ?",
+            ("act:profile:retire",),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert status == "rejected"
+    assert int(row[0] or 0) == 1
+    html = render_ledger_panel(db)
+    assert "ledger-packet" not in html
+
+
+def test_retire_route_cannot_retire_a_proposed_fact(
+    ctx: tuple[FlaskClient, Path, Path],
+) -> None:
+    """``retire`` is the AFFIRMED-only sibling of ``reject`` — a proposed fact
+    must go through ``reject``, never ``retire``."""
+    client, db, _root = ctx
+    fid = _seed_fact(db)  # proposed
+    resp = client.post(f"/api/profile/fact/{fid}/retire")
+    assert resp.status_code == 404
+
+
+def test_update_route_lands_a_new_proposed_fact_superseding_the_old(
+    ctx: tuple[FlaskClient, Path, Path],
+) -> None:
+    """Gated assertion holds even on the owner's own edit (§7.1): Update never
+    auto-promotes — the rewritten text lands as a NEW ``proposed`` row, which
+    resurfaces via the SAME Phase 1 proposed-facts packet source."""
+    client, db, _root = ctx
+    fid = _seed_expired_fact(db)
+    resp = client.post(
+        f"/api/profile/fact/{fid}/update", json={"narrative": "Dry-powder policy: 4 months now."}
+    )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["ok"] is True
+    new_id = body["new_fact_id"]
+    assert new_id != fid
+
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    try:
+        old_status = conn.execute(
+            "SELECT status, is_latest FROM owner_profile_facts WHERE id = ?", (fid,)
+        ).fetchone()
+        new_row = conn.execute(
+            "SELECT status, is_latest, narrative, value_json FROM owner_profile_facts WHERE id = ?",
+            (new_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert old_status["status"] == "affirmed"  # untouched
+    assert old_status["is_latest"] == 0  # superseded
+    assert new_row["status"] == "proposed"
+    assert new_row["is_latest"] == 1
+    assert new_row["narrative"] == "Dry-powder policy: 4 months now."
+    assert json.loads(new_row["value_json"]) == {"months": 3.0}  # value unchanged (narrative-only)
+
+    # The expiring-fact item is gone (old row superseded); the NEW proposed
+    # fact appears via the Phase 1 source instead, with its own Affirm/Reject.
+    html = render_ledger_panel(db)
+    assert 'data-profile-action="affirm"' in html
+    assert "Dry-powder policy: 4 months now." in html
+
+
+def test_update_route_requires_a_narrative(ctx: tuple[FlaskClient, Path, Path]) -> None:
+    client, db, _root = ctx
+    fid = _seed_expired_fact(db)
+    resp = client.post(f"/api/profile/fact/{fid}/update", json={})
+    assert resp.status_code == 400
+    resp2 = client.post(f"/api/profile/fact/{fid}/update", json={"narrative": "   "})
+    assert resp2.status_code == 400
+
+
+def test_expiring_fact_not_shown_before_horizon_elapses(
+    ctx: tuple[FlaskClient, Path, Path],
+) -> None:
+    _client, db, _root = ctx
+    conn = sqlite3.connect(str(db))
+    try:
+        append_fact(
+            conn,
+            category="appetite",
+            key="dry_powder_policy",
+            value={"months": 3.0},
+            narrative="Dry-powder policy: keep 3 months uninvested.",
+            provenance="owner",
+            status="affirmed",
+            review_horizon_days=90,
+        )  # affirmed_at defaults to now — nowhere near 90 days stale
+        conn.commit()
+    finally:
+        conn.close()
+    html = render_ledger_panel(db)
+    assert "ledger-packet" not in html

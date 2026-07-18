@@ -933,6 +933,86 @@ def create_app(
         _bump_activation_count("act:profile:reject")
         return ({"ok": ok}, 200 if ok else 404)
 
+    @app.route("/api/profile/fact/<int:fact_id>/reaffirm", methods=["POST", "OPTIONS"])
+    def profile_fact_reaffirm(fact_id: int):
+        """ "Still true" on an EXPIRING affirmed fact (tenet-2 Phase 3 packet
+        walk) — refreshes ``affirmed_at``, no value change. Distinct from
+        ``affirm`` (proposed -> affirmed). CSRF-guarded by the global Origin
+        check."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from owner_profile.store import reaffirm_fact
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            row = reaffirm_fact(conn, fact_id)
+            conn.commit()
+        finally:
+            conn.close()
+        _bump_activation_count("act:profile:reaffirm")
+        return (
+            {"ok": row is not None, "status": row.status if row else None},
+            200 if row else 404,
+        )
+
+    @app.route("/api/profile/fact/<int:fact_id>/retire", methods=["POST", "OPTIONS"])
+    def profile_fact_retire(fact_id: int):
+        """ "Drop" on an EXPIRING affirmed fact — retires it (status ->
+        'rejected'). Distinct from ``reject`` (proposed-only). CSRF-guarded by
+        the global Origin check."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from owner_profile.store import retire_fact
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            ok = retire_fact(conn, fact_id)
+            conn.commit()
+        finally:
+            conn.close()
+        _bump_activation_count("act:profile:retire")
+        return ({"ok": ok}, 200 if ok else 404)
+
+    @app.route("/api/profile/fact/<int:fact_id>/update", methods=["POST", "OPTIONS"])
+    def profile_fact_update(fact_id: int):
+        """ "Update" on an EXPIRING affirmed fact — the minimal edit route
+        (§4 delivery seam 5): narrative-only (never a structured-value
+        re-entry — an actual balance/date change belongs to a fresh importer
+        run), landing a NEW ``proposed`` fact that supersedes the old via
+        ``append_fact``. Gated assertion holds even on the owner's own edit —
+        it resurfaces at the next packet walk for an explicit affirm tap, the
+        SAME proposed-facts source Phase 1 wired. CSRF-guarded by the global
+        Origin check."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from owner_profile.store import append_fact, get_fact
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        narrative = payload.get("narrative")
+        if not isinstance(narrative, str) or not narrative.strip():
+            return ({"ok": False, "error": "narrative is required"}, 400)
+        conn = sqlite3.connect(str(db_path))
+        try:
+            old = get_fact(conn, fact_id)
+            if old is None:
+                return ({"ok": False}, 404)
+            new_id = append_fact(
+                conn,
+                category=old.category,
+                key=old.key,
+                value=old.value,
+                narrative=narrative.strip(),
+                provenance="owner",
+                status="proposed",
+                review_horizon_days=old.review_horizon_days,
+                source_detail="ledger_update",
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        _bump_activation_count("act:profile:update")
+        return ({"ok": True, "new_fact_id": new_id}, 200)
+
     @app.route("/api/tenets/distill", methods=["POST", "OPTIONS"])
     def tenets_distill():
         """Owner-tapped Worldview distillation: distil the owner's flagged

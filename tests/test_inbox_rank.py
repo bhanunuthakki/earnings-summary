@@ -537,6 +537,39 @@ def test_condition_breach_missing_decided_by_treated_as_advisor() -> None:
     assert "strength 1.15 (advisor condition breach)" in why
 
 
+def test_owner_capacity_breach_is_max_strength() -> None:
+    """tenet-2 Phase 3: an owner_capacity_breach alert (human-capital cap or
+    cash-floor policy crossed) earns the SAME tier-1 ceiling as an owner
+    falsifier breach — decisive_alert_reason is the one shared definition
+    driving both ranking weight and severity color, by construction."""
+    it = _alert_item(
+        trigger_kind="owner_capacity_breach",
+        evidence={"policy_kind": "owner_capacity", "capacity_kind": "human_capital", "bucket": "x"},
+    )
+    why = _rank([it])[0].score_why
+    assert "strength 1.50 (owner policy breach)" in why
+
+
+def test_capacity_breach_missing_policy_kind_is_not_decisive() -> None:
+    """A malformed/foreign evidence row under this trigger_kind (missing the
+    policy_kind marker) is never treated as decisive — no guessing."""
+    it = _alert_item(
+        trigger_kind="owner_capacity_breach",
+        evidence={"capacity_kind": "human_capital"},
+    )
+    why = _rank([it])[0].score_why
+    assert "strength 1.00 (n/a)" in why
+
+
+def test_decisive_alert_reason_owner_capacity_breach_cases() -> None:
+    from dashboard.inbox_rank import decisive_alert_reason
+
+    ev = json.dumps({"policy_kind": "owner_capacity", "capacity_kind": "cash_floor"})
+    assert decisive_alert_reason("owner_capacity_breach", ev) == "owner policy breach"
+    assert decisive_alert_reason("owner_capacity_breach", json.dumps({})) is None
+    assert decisive_alert_reason("owner_capacity_breach", None) is None
+
+
 def test_strength_is_inert_without_a_magnitude() -> None:
     """An alert with no recognised magnitude field is neutral (1.0) — the factor
     never penalises alerts it can't score."""

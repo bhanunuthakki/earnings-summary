@@ -568,12 +568,12 @@ def _is_num(v: object) -> bool:
 
 def decisive_alert_reason(trigger_kind: str | None, evidence_json: str | None) -> str | None:
     """The tier-1/decisive reason behind an alert, or ``None`` for a routine
-    one: an OWNER-authored decision-condition (falsifier) breach, or evidence
-    showing a registered threshold crossing / thesis-breaker KPI. ONE
-    definition shared by the ranking strength factor and every surface that
-    color-codes alert severity (feed cards, the cockpit's pending-alerts
-    pill), so weight and color can never disagree about what counts as
-    tier-1.
+    one: an OWNER-authored decision-condition (falsifier) breach, an owner
+    capacity-policy breach (tenet-2 Phase 3), or evidence showing a
+    registered threshold crossing / thesis-breaker KPI. ONE definition shared
+    by the ranking strength factor and every surface that color-codes alert
+    severity (feed cards, the cockpit's pending-alerts pill), so weight and
+    color can never disagree about what counts as tier-1.
 
     Owner-gated per the #875 relevance fix: an ADVISOR-authored condition
     breach (or a pre-decided_by evidence row) is informative, not screaming —
@@ -589,6 +589,10 @@ def decisive_alert_reason(trigger_kind: str | None, evidence_json: str | None) -
     if (trigger_kind or "").lower() == "decision_condition":
         if ev.get("decided_by") == "owner":
             return "owner falsifier breach"
+        return None
+    if (trigger_kind or "").lower() == "owner_capacity_breach":
+        if ev.get("policy_kind") == "owner_capacity":
+            return "owner policy breach"
         return None
     if ev.get("threshold_crossed") or ev.get("is_thesis_breaker"):
         return "threshold crossed"

@@ -1,7 +1,7 @@
 """The nag governor — governed coach initiation (W2, 2026-07-02 grill decision #1).
 
 The grill rescinded master_build's "pull-only / never initiates": the coach MAY
-speak first, for exactly three deterministic moment classes, under a governor
+speak first, for a set of deterministic moment classes, under a governor
 that operationalizes the owner's own kill bar ("kill it if it reads as
 nagging"):
 
@@ -15,13 +15,28 @@ nagging"):
 - ``intent_followup`` — a standing ``kind='intent'`` note is still open after
   a fortnight: "still live?" (re-asked at most once per fortnight via a
   bucketed key).
+- ``capacity_breach`` (tenet-2 Phase 3) — an AFFIRMED human-capital bucket cap
+  or cash-floor policy fact is currently violated. Collection + its own
+  alerts-table episode keying live in ``research.capacity_moments``.
+- ``life_event_checkpoint`` (tenet-2 Phase 3) — an affirmed dated life event
+  enters its lookahead window; fires once, ever.
+- ``profile_drift`` (tenet-2 Phase 3) — an affirmed fact is past its review
+  horizon, or contradicted by observed state (e.g. stale tax-bucket totals
+  vs. the tracker's live read); a re-affirmation ask, never an accusation.
 
 Governor rules, all deterministic, ZERO LLM:
 
 - **freshness gate** (the owner's staleness callout): a ping fires only after
   the underlying item is verified still-open — falsifier still present and
   ratified, ticker still held, stub still unannotated, intent still open.
-  Can't verify → don't ping (recorded ``skipped_stale``).
+  Can't verify → don't ping (recorded ``skipped_stale``). Extended for
+  tenet-2 Phase 3: ANY ping grounded in an ``owner_profile_facts`` row
+  (``life_event_checkpoint``, ``profile_drift``) also requires that row to
+  still be ``status='affirmed'`` AND still the latest (not superseded) —
+  ``_profile_fact_still_affirmed`` below. A ``capacity_breach`` ping requires
+  its backing alert to still be pending AND the breach condition to still
+  hold right now (``capacity_moments.capacity_breach_still_active``). Same
+  rule either way: can't verify → don't ping.
 - **frequency caps**: ≤ ``DAILY_CAP`` sends/day, ≤ ``WEEKLY_CAP``/week across
   all classes; overflow lands ``digest`` (surfaced quietly, never pushed).
 - **auto-mute**: ``MUTE_AFTER`` consecutive dismissals of a class mutes it
@@ -45,7 +60,14 @@ from pathlib import Path
 
 from user_state._db import now_naive_utc, open_conn
 
-CLASSES: tuple[str, ...] = ("falsifier_breach", "retro_annotation", "intent_followup")
+CLASSES: tuple[str, ...] = (
+    "falsifier_breach",
+    "retro_annotation",
+    "intent_followup",
+    "capacity_breach",
+    "life_event_checkpoint",
+    "profile_drift",
+)
 DAILY_CAP = 1
 WEEKLY_CAP = 3
 MUTE_AFTER = 3
@@ -79,9 +101,20 @@ def _now(now: datetime | None) -> datetime:
 
 
 def collect_moments(
-    db_path: Path | str | None = None, *, now: datetime | None = None
+    db_path: Path | str | None = None,
+    *,
+    now: datetime | None = None,
+    repo_root: Path | str | None = None,
+    api_url: str | None = None,
 ) -> list[Moment]:
-    """Deterministic scan for initiation-worthy moments. Read-only."""
+    """Deterministic scan for initiation-worthy moments. Read-only.
+
+    ``repo_root`` is only needed by ``capacity_breach`` (the materialized
+    weights cache lives at ``<repo_root>/data/portfolio_weights.json``); when
+    omitted it is derived from ``db_path`` (``<repo_root>/data/portfolio.db``).
+    ``api_url`` is passed straight through to the tracker reads the
+    ``capacity_breach`` / ``profile_drift`` collectors make (``None`` uses
+    their own env-var / localhost default)."""
     stamp = _now(now)
     moments: list[Moment] = []
     conn = open_conn(db_path)
@@ -171,17 +204,64 @@ def collect_moments(
                     source_ref=f"note:{int(r[0])}",
                 )
             )
+
+        # tenet-2 Phase 3 — capacity_breach / life_event_checkpoint /
+        # profile_drift. Each collector degrades independently (missing
+        # owner_profile_facts table, offline tracker, unresolved repo_root) —
+        # a failure here never breaks the three moment classes above.
+        try:
+            from research.capacity_moments import (
+                collect_capacity_breach_moments,
+                collect_life_event_moments,
+                collect_profile_drift_moments,
+                repo_root_from_db_path,
+            )
+
+            root = Path(repo_root) if repo_root is not None else repo_root_from_db_path(db_path)
+            moments.extend(
+                collect_capacity_breach_moments(
+                    conn, repo_root=root, api_url=api_url, now=stamp, db_path=db_path
+                )
+            )
+            moments.extend(collect_life_event_moments(conn, now=stamp))
+            moments.extend(
+                collect_profile_drift_moments(conn, repo_root=root, api_url=api_url, now=stamp)
+            )
+        except Exception:
+            pass  # pre-0159 schema — no owner_profile_facts to scan
     finally:
         conn.close()
     return moments
 
 
-def freshness_ok(moment: Moment, db_path: Path | str | None = None) -> bool:
+def _profile_fact_still_affirmed(conn: sqlite3.Connection, fact_id: int) -> bool:
+    """tenet-2 Phase 3 freshness-gate extension: ANY ping grounded in an
+    ``owner_profile_facts`` row must re-verify that row is still
+    ``status='affirmed'`` and still the latest (not superseded) — the owner
+    may have re-affirmed, updated (superseding it), or dropped it since the
+    moment was collected. Can't verify (missing table, missing row) → False."""
+    try:
+        from owner_profile.store import get_fact
+
+        row = get_fact(conn, fact_id)
+    except Exception:
+        return False
+    return row is not None and row.is_latest and row.status == "affirmed"
+
+
+def freshness_ok(
+    moment: Moment,
+    db_path: Path | str | None = None,
+    *,
+    repo_root: Path | str | None = None,
+    api_url: str | None = None,
+) -> bool:
     """The staleness callout as a gate: verify the moment's subject is still
-    live RIGHT NOW. Can't verify → False (don't ping)."""
+    live RIGHT NOW. Can't verify → False (don't ping). ``repo_root`` /
+    ``api_url`` only matter for ``capacity_breach`` (see module docstring)."""
     conn = open_conn(db_path)
     try:
-        _kind, _, ref_id = moment.source_ref.partition(":")
+        kind, _, ref_id = moment.source_ref.partition(":")
         if moment.class_ == "falsifier_breach":
             row = conn.execute(
                 """
@@ -207,6 +287,22 @@ def freshness_ok(moment: Moment, db_path: Path | str | None = None) -> bool:
                 (int(ref_id),),
             ).fetchone()
             return row is not None
+        if moment.class_ in ("life_event_checkpoint", "profile_drift"):
+            if kind != "fact":
+                return False
+            return _profile_fact_still_affirmed(conn, int(ref_id))
+        if moment.class_ == "capacity_breach":
+            if kind != "alert":
+                return False
+            from research.capacity_moments import (
+                capacity_breach_still_active,
+                repo_root_from_db_path,
+            )
+
+            root = Path(repo_root) if repo_root is not None else repo_root_from_db_path(db_path)
+            return capacity_breach_still_active(
+                conn, int(ref_id), repo_root=root, api_url=api_url, db_path=db_path
+            )
         return False
     except Exception:
         return False
@@ -233,6 +329,8 @@ def run_governor(
     *,
     send_fn: Callable[[int, Moment], bool] | None = None,
     now: datetime | None = None,
+    repo_root: Path | str | None = None,
+    api_url: str | None = None,
 ) -> dict[str, int]:
     """One governed pass: collect → freshness-gate → cap → send/digest.
 
@@ -243,7 +341,9 @@ def run_governor(
     the row ``send_failed``: the one status the anti-nag once-forever rule
     exempts, so the next governor run re-attempts delivery instead of
     silently dropping a falsifier_breach the owner never saw.
-    Deterministic, zero LLM."""
+    ``repo_root`` / ``api_url`` (tenet-2 Phase 3) thread through to
+    ``collect_moments`` / ``freshness_ok`` for the ``capacity_breach`` class
+    only; every other class ignores them. Deterministic, zero LLM."""
     stamp = _now(now)
     tally = {
         "sent": 0,
@@ -253,7 +353,7 @@ def run_governor(
         "send_failed": 0,
         "seen": 0,
     }
-    moments = collect_moments(db_path, now=stamp)
+    moments = collect_moments(db_path, now=stamp, repo_root=repo_root, api_url=api_url)
     conn = open_conn(db_path)
     try:
         muted = {str(r[0]) for r in conn.execute("SELECT class_ FROM coach_mutes").fetchall()}
@@ -268,7 +368,7 @@ def run_governor(
             iso = stamp.isoformat()
             if moment.class_ in muted:
                 status = "skipped_muted"
-            elif not freshness_ok(moment, db_path):
+            elif not freshness_ok(moment, db_path, repo_root=repo_root, api_url=api_url):
                 status = "skipped_stale"
             else:
                 day, week = _sent_counts(conn, stamp)
