@@ -652,6 +652,279 @@ def test_same_document_replay_is_noop(fixture_db: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Same-document correction (heal a stale value for the SAME source_doc_id)
+# ---------------------------------------------------------------------------
+
+
+def _seed_ff_row(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    period_end: str,
+    fiscal_period_type: str,
+    line_item: str,
+    value: str,
+    source_doc_id: int,
+    extracted_by: str,
+    currency: str = "USD",
+    unit: str = "actual",
+) -> int:
+    """Insert one financial_facts row directly (controls extracted_by so the
+    same-extractor safety rail can be exercised). Returns id."""
+    cur = conn.execute(
+        "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, "
+        "line_item, value, currency, unit, source_doc_id, extracted_by) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            ticker.upper(),
+            period_end,
+            fiscal_period_type,
+            line_item,
+            value,
+            currency,
+            unit,
+            source_doc_id,
+            extracted_by,
+        ),
+    )
+    return int(cur.lastrowid) if cur.lastrowid is not None else 0
+
+
+def test_same_document_correction_heals_stale_value(fixture_db: Path) -> None:
+    """The MELI revenue case: the SAME 10-Q accession is re-extracted and now
+    yields the aggregate `us-gaap:Revenues` (8,845M) instead of the narrow
+    concept first pulled (6,065M). INSERT OR IGNORE would freeze the stale
+    value; the same-document correction UPDATEs the incumbent in place. No new
+    row is written and no chain link is created."""
+    conn = sqlite3.connect(str(fixture_db))
+    conn.row_factory = sqlite3.Row
+    try:
+        doc = _insert_document(
+            conn,
+            ticker="MELI",
+            source_type="sec_xbrl",
+            doc_type="sec_10q",
+            period_end="2026-03-31 00:00:00",
+            fetched_at="2026-05-01 12:00:00",
+            sha256="a" * 64,
+            tier="sec_official",
+        )
+        conn.commit()
+
+        first_id, _ = insert_with_restatement_detection(
+            conn,
+            ticker="MELI",
+            period_end=datetime.fromisoformat("2026-03-31"),
+            fiscal_period_type="Q1",
+            line_item="revenue",
+            value=Decimal("6065000000"),
+            currency="USD",
+            unit="actual",
+            source_doc_id=doc,
+            extracted_by="sec_xbrl",
+        )
+        conn.commit()
+        assert first_id is not None
+
+        # Re-extraction of the SAME accession, corrected value, SAME extractor.
+        heal_id, heal_supersedes = insert_with_restatement_detection(
+            conn,
+            ticker="MELI",
+            period_end=datetime.fromisoformat("2026-03-31"),
+            fiscal_period_type="Q1",
+            line_item="revenue",
+            value=Decimal("8845000000"),
+            currency="USD",
+            unit="actual",
+            source_doc_id=doc,
+            extracted_by="sec_xbrl",
+        )
+        conn.commit()
+
+        # No new row, no chain link — but the incumbent is healed in place.
+        assert heal_id is None
+        assert heal_supersedes is None
+        rows = conn.execute(
+            "SELECT id, value FROM financial_facts WHERE ticker=? AND line_item=?",
+            ("MELI", "revenue"),
+        ).fetchall()
+        assert len(rows) == 1
+        assert int(rows[0]["id"]) == first_id
+        assert Decimal(str(rows[0]["value"])) == Decimal("8845000000")
+    finally:
+        conn.close()
+
+
+def test_same_document_identical_replay_leaves_value_untouched(fixture_db: Path) -> None:
+    """An identical same-document replay stays a true no-op — the correction
+    path must not touch a row whose value/currency/unit are unchanged."""
+    conn = sqlite3.connect(str(fixture_db))
+    conn.row_factory = sqlite3.Row
+    try:
+        doc = _insert_document(
+            conn,
+            ticker="NU",
+            source_type="sec_xbrl",
+            doc_type="sec_10q",
+            period_end="2026-03-31 00:00:00",
+            fetched_at="2026-05-01 12:00:00",
+            sha256="a" * 64,
+            tier="sec_official",
+        )
+        conn.commit()
+        first_id, _ = insert_with_restatement_detection(
+            conn,
+            ticker="NU",
+            period_end=datetime.fromisoformat("2026-03-31"),
+            fiscal_period_type="Q1",
+            line_item="net_income",
+            value=Decimal("557000000"),
+            currency="USD",
+            unit="actual",
+            source_doc_id=doc,
+            extracted_by="sec_xbrl",
+        )
+        conn.commit()
+        replay_id, replay_supersedes = insert_with_restatement_detection(
+            conn,
+            ticker="NU",
+            period_end=datetime.fromisoformat("2026-03-31"),
+            fiscal_period_type="Q1",
+            line_item="net_income",
+            value=Decimal("557000000"),
+            currency="USD",
+            unit="actual",
+            source_doc_id=doc,
+            extracted_by="sec_xbrl",
+        )
+        conn.commit()
+        assert replay_id is None
+        assert replay_supersedes is None
+        rows = conn.execute(
+            "SELECT id, value FROM financial_facts WHERE ticker=? AND line_item=?",
+            ("NU", "net_income"),
+        ).fetchall()
+        assert len(rows) == 1
+        assert int(rows[0]["id"]) == first_id
+        assert Decimal(str(rows[0]["value"])) == Decimal("557000000")
+    finally:
+        conn.close()
+
+
+def test_same_document_correction_respects_extractor_safety_rail(fixture_db: Path) -> None:
+    """A row sharing the doc id but authored by a DIFFERENT extractor (a manual
+    override) is never clobbered. The re-extraction is dropped, the manual
+    value survives."""
+    conn = sqlite3.connect(str(fixture_db))
+    conn.row_factory = sqlite3.Row
+    try:
+        doc = _insert_document(
+            conn,
+            ticker="NVO",
+            source_type="sec_xbrl",
+            doc_type="sec_10q",
+            period_end="2026-03-31 00:00:00",
+            fetched_at="2026-05-01 12:00:00",
+            sha256="a" * 64,
+            tier="sec_official",
+        )
+        conn.commit()
+        # Incumbent authored by a manual override, sharing the doc id.
+        manual_id = _seed_ff_row(
+            conn,
+            ticker="NVO",
+            period_end="2026-03-31 00:00:00",
+            fiscal_period_type="Q1",
+            line_item="revenue",
+            value="71000000000",
+            source_doc_id=doc,
+            extracted_by="manual",
+        )
+        conn.commit()
+
+        # sec_xbrl re-extraction of the same doc with a different value.
+        heal_id, heal_supersedes = insert_with_restatement_detection(
+            conn,
+            ticker="NVO",
+            period_end=datetime.fromisoformat("2026-03-31"),
+            fiscal_period_type="Q1",
+            line_item="revenue",
+            value=Decimal("69000000000"),
+            currency="USD",
+            unit="actual",
+            source_doc_id=doc,
+            extracted_by="sec_xbrl",
+        )
+        conn.commit()
+
+        assert heal_id is None
+        assert heal_supersedes is None
+        rows = conn.execute(
+            "SELECT id, value, extracted_by FROM financial_facts WHERE ticker=? AND line_item=?",
+            ("NVO", "revenue"),
+        ).fetchall()
+        assert len(rows) == 1
+        assert int(rows[0]["id"]) == manual_id
+        # Manual value preserved — the safety rail blocked the overwrite.
+        assert Decimal(str(rows[0]["value"])) == Decimal("71000000000")
+        assert rows[0]["extracted_by"] == "manual"
+    finally:
+        conn.close()
+
+
+def test_same_document_correction_heals_unit_change(fixture_db: Path) -> None:
+    """The correction also fires when only the unit/currency changed (value
+    equal) — e.g. a mis-stamped unit corrected on re-extraction."""
+    conn = sqlite3.connect(str(fixture_db))
+    conn.row_factory = sqlite3.Row
+    try:
+        doc = _insert_document(
+            conn,
+            ticker="VEEV",
+            source_type="sec_xbrl",
+            doc_type="sec_10q",
+            period_end="2026-01-31 00:00:00",
+            fetched_at="2026-03-01 12:00:00",
+            sha256="a" * 64,
+            tier="sec_official",
+        )
+        conn.commit()
+        first_id = _seed_ff_row(
+            conn,
+            ticker="VEEV",
+            period_end="2026-01-31 00:00:00",
+            fiscal_period_type="Q4",
+            line_item="revenue",
+            value="700000000",
+            source_doc_id=doc,
+            extracted_by="sec_xbrl",
+            unit="millions",
+        )
+        conn.commit()
+        heal_id, _ = insert_with_restatement_detection(
+            conn,
+            ticker="VEEV",
+            period_end=datetime.fromisoformat("2026-01-31"),
+            fiscal_period_type="Q4",
+            line_item="revenue",
+            value=Decimal("700000000"),
+            currency="USD",
+            unit="actual",
+            source_doc_id=doc,
+            extracted_by="sec_xbrl",
+        )
+        conn.commit()
+        assert heal_id is None
+        row = conn.execute(
+            "SELECT unit FROM financial_facts WHERE id=?",
+            (first_id,),
+        ).fetchone()
+        assert row["unit"] == "actual"
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # insert_kpi_with_restatement_detection — kpi_facts side (post-0059)
 # ---------------------------------------------------------------------------
 

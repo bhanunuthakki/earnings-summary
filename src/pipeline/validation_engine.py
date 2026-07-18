@@ -5,7 +5,11 @@ Three rule families today (the ValidationRule enum lists the closed set):
   - PLAUSIBLE_RANGE: per-line-item sanity bounds (e.g., op margin in [-100, 100],
     revenue >= 0, headcount > 0). Fires on financial_facts and kpi_facts.
   - MAGNITUDE_JUMP: same (ticker, line_item, fiscal_period_type) sequential
-    values that differ by >5x signal a likely unit error or restatement.
+    values that jump implausibly signal a likely unit error or restatement.
+    Two passes: income-statement flows (revenue/operating_income/net_income)
+    at >5x, and balance-sheet stocks (cash, total assets/liabilities, current
+    assets/liabilities, total debt) at a tighter >3x — levels are stickier
+    than flows. Equity and net_debt are excluded (both cross zero).
   - SOURCE_DISAGREEMENT: same (ticker, period_end, line_item) reported by two
     distinct source_doc_ids whose values diverge by >0.5%.
 
@@ -178,26 +182,55 @@ def _check_kpi_fact_ranges(
     )
 
 
-def _check_magnitude_jumps(
+# Income-statement flows: a >5x quarter-over-quarter (or year-over-year within
+# a cadence bucket) swing is the classic unit error (thousands vs millions) or
+# a restatement worth surfacing.
+_MAGNITUDE_JUMP_INCOME_ITEMS: tuple[str, ...] = ("revenue", "operating_income", "net_income")
+_MAGNITUDE_JUMP_INCOME_MULTIPLIER = Decimal(5)
+
+# Balance-sheet stocks: levels are far stickier than P&L flows, so a tighter
+# >3x jump is already suspicious (e.g. an FMP cash row spiking one quarter well
+# above its run-rate — MELI's cash_and_equivalents 4.1x case). Equity and
+# net_debt are deliberately EXCLUDED: both legitimately cross zero (WIX carries
+# negative book equity), which would detonate the magnitude ratio into false
+# positives.
+_MAGNITUDE_JUMP_BALANCE_ITEMS: tuple[str, ...] = (
+    "cash_and_equivalents",
+    "cash_and_short_term_investments",
+    "total_assets",
+    "total_liabilities",
+    "total_current_assets",
+    "total_current_liabilities",
+    "total_debt",
+)
+_MAGNITUDE_JUMP_BALANCE_MULTIPLIER = Decimal(3)
+
+
+def _scan_series_for_jumps(
     conn: sqlite3.Connection,
     *,
     run_id: str,
     ticker: str | None,
-    multiplier: Decimal = Decimal(5),
-) -> CheckOutcome:
-    """Insert MAGNITUDE_JUMP issues for sequential same-key values that differ by > multiplier×.
+    line_items: tuple[str, ...],
+    multiplier: Decimal,
+) -> tuple[int, int]:
+    """Scan financial_facts for `line_items`, grouping into
+    (ticker, line_item, fiscal_period_type) series ordered by period_end ASC,
+    and emit a MAGNITUDE_JUMP issue whenever two sequential absolute values
+    differ by more than `multiplier`×. Returns (issues_inserted, rows_examined).
 
-    Operates on financial_facts with line_item in `revenue`, `operating_income`,
-    `net_income`. Sequential = ordered by period_end ASC within a (ticker,
-    line_item, fiscal_period_type) bucket.
+    Zero-crossing safety: values are compared on absolute magnitude and any
+    step touching 0 is skipped, so this must only be handed line_items whose
+    sign is stable (never equity or net_debt, which cross zero).
     """
-    target_line_items = ("revenue", "operating_income", "net_income")
-    placeholders = ",".join("?" for _ in target_line_items)
+    if not line_items:
+        return (0, 0)
+    placeholders = ",".join("?" for _ in line_items)
     sql = (
         f"SELECT ticker, line_item, fiscal_period_type, period_end, value, source_doc_id "
         f"FROM financial_facts WHERE line_item IN ({placeholders})"
     )
-    params: tuple[str, ...] = target_line_items
+    params: tuple[str, ...] = line_items
     if ticker is not None:
         sql += " AND ticker = ?"
         params = (*params, ticker.upper())
@@ -237,9 +270,49 @@ def _check_magnitude_jumps(
                     expected=f"sequential ratio <= {multiplier}x",
                 )
                 inserted += 1
+    return inserted, examined
+
+
+def _check_magnitude_jumps(
+    conn: sqlite3.Connection,
+    *,
+    run_id: str,
+    ticker: str | None,
+) -> CheckOutcome:
+    """Insert MAGNITUDE_JUMP issues for sequential same-key values that jump
+    implausibly, in two passes over financial_facts:
+
+      - income-statement flows (revenue/operating_income/net_income) at >5x,
+      - balance-sheet stocks (cash, total assets/liabilities, current
+        assets/liabilities, total debt) at a tighter >3x — levels are stickier
+        than flows, so a smaller jump is already suspicious. This is what
+        catches an FMP cash row spiking one quarter (MELI's cash 4.1x above its
+        run-rate) that the income-only 5x pass never looked at.
+
+    Both passes key on (ticker, line_item, fiscal_period_type) series ordered
+    by period_end ASC. Equity and net_debt are intentionally out of scope: both
+    legitimately cross zero, which would blow the magnitude ratio into false
+    positives. Everything is WARN — this flags, it never drops data.
+    """
+    income_inserted, income_examined = _scan_series_for_jumps(
+        conn,
+        run_id=run_id,
+        ticker=ticker,
+        line_items=_MAGNITUDE_JUMP_INCOME_ITEMS,
+        multiplier=_MAGNITUDE_JUMP_INCOME_MULTIPLIER,
+    )
+    balance_inserted, balance_examined = _scan_series_for_jumps(
+        conn,
+        run_id=run_id,
+        ticker=ticker,
+        line_items=_MAGNITUDE_JUMP_BALANCE_ITEMS,
+        multiplier=_MAGNITUDE_JUMP_BALANCE_MULTIPLIER,
+    )
     conn.commit()
     return CheckOutcome(
-        rule=ValidationRule.MAGNITUDE_JUMP, issues_inserted=inserted, rows_examined=examined
+        rule=ValidationRule.MAGNITUDE_JUMP,
+        issues_inserted=income_inserted + balance_inserted,
+        rows_examined=income_examined + balance_examined,
     )
 
 

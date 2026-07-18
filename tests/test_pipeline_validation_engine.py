@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime
+from decimal import Decimal
 
 import pytest
 
@@ -14,6 +15,7 @@ from pipeline.validation_engine import (
     _check_kpi_fact_ranges,
     _check_magnitude_jumps,
     _check_source_disagreement,
+    _scan_series_for_jumps,
     run_all_checks,
 )
 
@@ -236,6 +238,119 @@ def test_magnitude_jump_quiet_when_within_5x(conn: sqlite3.Connection) -> None:
     )
     outcome = _check_magnitude_jumps(conn, run_id="r1", ticker="X")
     assert outcome.issues_inserted == 0
+
+
+def test_magnitude_jump_fires_on_balance_sheet_3x(conn: sqlite3.Connection) -> None:
+    """The MELI case the old income-only 5x pass missed: FMP's cash row spikes
+    to 15,141M for one quarter against a ~3.6B run-rate (4.1x). Balance-sheet
+    stocks are scanned at the tighter 3x, so this fires."""
+    doc_id = _doc(conn, "MELI")
+    _ff(
+        conn,
+        ticker="MELI",
+        line_item="cash_and_equivalents",
+        value=3_677_000_000,
+        period_end=datetime(2025, 12, 31),
+        source_doc_id=doc_id,
+    )
+    _ff(
+        conn,
+        ticker="MELI",
+        line_item="cash_and_equivalents",
+        value=15_141_000_000,
+        period_end=datetime(2026, 3, 31),
+        source_doc_id=doc_id,
+    )
+    outcome = _check_magnitude_jumps(conn, run_id="r1", ticker="MELI")
+    assert outcome.issues_inserted == 1
+    issue = conn.execute(
+        "SELECT rule, raw_value FROM validation_issues WHERE ticker='MELI'"
+    ).fetchone()
+    assert dict(issue)["rule"] == ValidationRule.MAGNITUDE_JUMP.value
+    assert "cash_and_equivalents" in dict(issue)["raw_value"]
+
+
+def test_magnitude_jump_balance_quiet_within_3x(conn: sqlite3.Connection) -> None:
+    """A 2.5x balance-sheet move (below the 3x bar) stays quiet."""
+    doc_id = _doc(conn, "X")
+    _ff(
+        conn,
+        ticker="X",
+        line_item="total_assets",
+        value=1_000_000,
+        period_end=datetime(2025, 12, 31),
+        source_doc_id=doc_id,
+    )
+    _ff(
+        conn,
+        ticker="X",
+        line_item="total_assets",
+        value=2_500_000,
+        period_end=datetime(2026, 3, 31),
+        source_doc_id=doc_id,
+    )
+    outcome = _check_magnitude_jumps(conn, run_id="r1", ticker="X")
+    assert outcome.issues_inserted == 0
+
+
+def test_magnitude_jump_income_4x_does_not_fire_under_balance_bar(
+    conn: sqlite3.Connection,
+) -> None:
+    """The tighter 3x bar applies ONLY to balance-sheet stocks. An income flow
+    jumping 4x is under the income 5x bar and must stay quiet — proving the
+    two passes don't cross-contaminate line-item scope."""
+    doc_id = _doc(conn, "X")
+    _ff(
+        conn,
+        ticker="X",
+        line_item="revenue",
+        value=100,
+        period_end=datetime(2025, 12, 31),
+        source_doc_id=doc_id,
+    )
+    _ff(
+        conn,
+        ticker="X",
+        line_item="revenue",
+        value=400,
+        period_end=datetime(2026, 3, 31),
+        source_doc_id=doc_id,
+    )
+    outcome = _check_magnitude_jumps(conn, run_id="r1", ticker="X")
+    assert outcome.issues_inserted == 0
+
+
+def test_magnitude_jump_excludes_zero_crossing_equity(conn: sqlite3.Connection) -> None:
+    """Equity is deliberately out of scope (WIX runs negative book equity, so a
+    sign flip would explode the ratio). Even a wild equity swing must not fire."""
+    doc_id = _doc(conn, "WIX")
+    _ff(
+        conn,
+        ticker="WIX",
+        line_item="total_equity",
+        value=-100_000_000,
+        period_end=datetime(2025, 12, 31),
+        source_doc_id=doc_id,
+    )
+    _ff(
+        conn,
+        ticker="WIX",
+        line_item="total_equity",
+        value=5_000_000_000,
+        period_end=datetime(2026, 3, 31),
+        source_doc_id=doc_id,
+    )
+    outcome = _check_magnitude_jumps(conn, run_id="r1", ticker="WIX")
+    assert outcome.issues_inserted == 0
+
+
+def test_scan_series_for_jumps_empty_line_items_is_noop(conn: sqlite3.Connection) -> None:
+    """Guard: an empty line_items tuple short-circuits (no SQL with an empty
+    IN() clause)."""
+    inserted, examined = _scan_series_for_jumps(
+        conn, run_id="r1", ticker=None, line_items=(), multiplier=Decimal(1)
+    )
+    assert (inserted, examined) == (0, 0)
 
 
 def test_source_disagreement_only_across_distinct_source_types(conn: sqlite3.Connection) -> None:
