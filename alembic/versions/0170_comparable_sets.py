@@ -29,7 +29,7 @@ here are a known slow/buggy landmine); comp_set_metrics_daily is a
 materialized table written by execution/track_comp_metrics.py.
 
 Revision ID: 0170_comparable_sets
-Revises: 0167_segment_10q_disambiguate_budget
+Revises: 0168_segment_quarterly_coverage
 Create Date: 2026-07-17
 """
 
@@ -42,7 +42,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0170_comparable_sets"
-down_revision: str | Sequence[str] | None = "0167_segment_10q_disambiguate_budget"
+down_revision: str | Sequence[str] | None = "0168_segment_quarterly_coverage"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

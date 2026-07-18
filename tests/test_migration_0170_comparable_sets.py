@@ -22,7 +22,7 @@ from alembic import command
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-PRIOR_HEAD = "0167_segment_10q_disambiguate_budget"
+PRIOR_HEAD = "0168_segment_quarterly_coverage"
 NEW_HEAD = "0170_comparable_sets"
 
 _NEW_TABLES = ("comparable_sets", "comparable_set_members", "comp_set_metrics_daily")
@@ -37,7 +37,7 @@ def _build_config(db_path: Path) -> Config:
 
 @pytest.fixture(scope="module")
 def prior_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    db = tmp_path_factory.mktemp("comparable_sets_schema_tmpl") / "at_0167.db"
+    db = tmp_path_factory.mktemp("comparable_sets_schema_tmpl") / "at_0168.db"
     import db as dbmod
 
     dbmod.set_db_path(str(db))
