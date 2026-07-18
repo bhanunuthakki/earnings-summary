@@ -12,6 +12,18 @@ Three tables:
   comp_set_metrics_daily -- median + cap-weighted aggregate per (scope,
                             metric, stat_type, date, method_version)
 
+Deviation from the design doc's literal §6 DDL snippet: the doc shows
+``comparable_set_members.comparable_set_id`` with a real
+``sa.ForeignKey("comparable_sets.comparable_set_id")``. Dropped here —
+repo-wide FK-poisoning invariant (reference_platform_invariants.md, and see
+0160/0161/0162's identical deviation): ``open_conn`` runs ``PRAGMA
+foreign_keys=ON``, so a real FK fails every child insert under a test
+fixture stamped at an earlier alembic revision than the parent table. Code-
+level referential integrity only (``compute.comparable_sets`` always writes
+the parent ``comparable_sets`` row before any member row); the
+``idx_csm_member`` index still covers the lookup path a FK would have
+indexed anyway.
+
 No SQL views (repo precedent: reference_metrics_ratios_views_slow.md — views
 here are a known slow/buggy landmine); comp_set_metrics_daily is a
 materialized table written by execution/track_comp_metrics.py.
@@ -65,12 +77,9 @@ def upgrade() -> None:
     if "comparable_set_members" not in existing:
         op.create_table(
             "comparable_set_members",
-            sa.Column(
-                "comparable_set_id",
-                sa.String(64),
-                sa.ForeignKey("comparable_sets.comparable_set_id"),
-                nullable=False,
-            ),
+            # Plain column -- no REFERENCES (repo-wide FK-poisoning invariant,
+            # see module docstring). Code-level RI only.
+            sa.Column("comparable_set_id", sa.String(64), nullable=False),
             sa.Column("member_ticker", sa.String(16), nullable=False),
             sa.Column(
                 "membership_reason", sa.String(24), nullable=False
