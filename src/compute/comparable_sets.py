@@ -214,6 +214,55 @@ def _is_us_listed(profile: PoolProfile) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# §6 pool-wide industry/sector slices (Phase 2)
+# ---------------------------------------------------------------------------
+
+# Sector-scope metric-class map (Phase 2). The §3.2 keyword blob is tuned for
+# `industry` strings ("Banks - Regional", "Financial - Credit Services", ...);
+# FMP's coarse *sector* strings don't hit those keywords ("Financial
+# Services" contains none of them), so sector slices use this explicit,
+# owner-visible map instead of widening the keyword list — widening it would
+# reclassify existing per-ticker subjects and force a METHOD_VERSION bump for
+# what is purely a new-scope concern.
+SECTOR_SCOPE_METRIC_CLASS: dict[str, MetricClass] = {
+    "Financial Services": "financial",
+    "Real Estate": "reit",
+}
+
+
+def scope_metric_class(scope_type: str, scope_key: str) -> MetricClass:
+    """Metric-class for a pool-wide slice row (`scope_type` 'industry' or
+    'sector'; §6). Industry slices reuse the §3.2 keyword classifier;
+    sector slices use `SECTOR_SCOPE_METRIC_CLASS` (see its comment)."""
+    if scope_type == "industry":
+        return metric_class(None, scope_key)
+    return SECTOR_SCOPE_METRIC_CLASS.get(scope_key, "operating")
+
+
+def pool_scope_slices(pool: dict[str, PoolProfile]) -> dict[tuple[str, str], list[str]]:
+    """(scope_type, scope_key) -> sorted member tickers, for every industry
+    and sector present in the pool (§6: "the pool-wide slice — every pool
+    member in that industry/sector, not a per-ticker market-cap band").
+
+    The §3.1 US-listed + actively-trading guards still apply (§7's expected-
+    deviation notes describe the bottoms-up universe as US-listed-only; a
+    non-US listing in the pool would silently break that documented
+    comparison basis). No market-cap band and no MIN_COMPARABLE_SET_SIZE
+    floor — thin slices are written with honest coverage (§5.5), never
+    dropped.
+    """
+    slices: dict[tuple[str, str], list[str]] = {}
+    for ticker, member in pool.items():
+        if not _is_us_listed(member) or not member.is_actively_trading:
+            continue
+        if member.industry is not None:
+            slices.setdefault(("industry", member.industry), []).append(ticker)
+        if member.sector is not None:
+            slices.setdefault(("sector", member.sector), []).append(ticker)
+    return {key: sorted(tickers) for key, tickers in sorted(slices.items())}
+
+
+# ---------------------------------------------------------------------------
 # §3.1 rule ladder
 # ---------------------------------------------------------------------------
 

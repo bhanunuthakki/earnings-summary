@@ -442,11 +442,15 @@ skip a dedicated drift table entirely**).
   moment a member's `income_statement_quarterly` cache refreshes. A few days of drift
   around earnings season is expected, not an error.
 - Threshold: a documented, named constant `DRIFT_ALERT_THRESHOLD = 0.25` (25%) — beyond
-  that, without an explainable composition reason (log the two universes' member counts
-  alongside the drift number so "explainable" is a one-glance check, not a re-investigation),
-  surface it as a data-quality flag (`log.warning` + a row in the existing dashboard status
-  panel, `src/pipeline/dashboard_status.py`, not a hard failure — this is a QA signal for
-  the owner, not a pipeline-breaking assertion).
+  that, without an explainable composition reason (log the bottoms-up universe's
+  member/valid counts alongside the drift number so "explainable" is a one-glance check,
+  not a re-investigation), surface it as a data-quality flag, not a hard failure — this is
+  a QA signal for the owner, not a pipeline-breaking assertion. **Build note (Phase 2,
+  refined from the original "dashboard status panel" idea):** `dashboard_status.py` is a
+  per-ticker row registry with no cross-cutting flag surface, so the Phase 2 signal is a
+  structured stderr warning + one `validation_issues` row per alert (existing
+  `source_disagreement` rule, severity WARN — the repo's canonical data-quality ledger);
+  a rendered drift surface belongs with Phase 3's UI card, not a data-layer phase.
 
 ## 8. Pipeline CLIs, cadence, idempotency
 
@@ -534,12 +538,22 @@ nothing existing reads these new tables, so a bug here cannot regress anything s
 **Phase 2 — widen + industry scope + drift check.**
 Extend `build_comparable_sets.py` to `--all-tracked` (watchlist+evaluation, ~100 names);
 add `scope_type='industry'`/`'sector'` rows to `track_comp_metrics.py`; add
-`execution/check_comp_set_drift.py`; register both CLIs' cadence in
+`execution/check_comp_set_drift.py` (which also ingests the FMP PE snapshots as the
+`scope_type='fmp_snapshot'` reference rows); register both CLIs' cadence in
 `directives/llm_quota_scheduling.md` (even though neither has an LLM leg — keep the
 scheduling registry complete per the repo convention: "every NEW scheduled job... registers
 its window"). Blast radius: low — new cron entries, no existing stage touched; if a job
 fails it degrades per the standard per-item pattern (log + skip + retry next run), it
 does not block the existing morning pipeline.
+**Build note (Phase 2 shipped):** cron task definitions landed as
+`cron/track_comp_metrics.task.xml` (daily 07:10, after `daily_fetch_and_brief` refreshes
+the cache) + `cron/check_comp_set_drift.task.xml` (Sunday 12:15, off the eval-rung slot);
+the XML file ≠ live task — the owner imports them into Task Scheduler. The
+`directives/llm_quota_scheduling.md` registry lines are queued for owner ratification
+(directives/ edits require explicit permission) rather than shipped in the Phase 2 PR.
+Provenance was also brought current with the post-#911 locator rule: alembic 0172 adds
+`comp_set_metrics_daily.locator`; computed rows carry `derived`-kind locators, snapshot
+rows `vendor_field` ones.
 
 **Phase 3 — render consumer + benchmark ratification.**
 Ratify `sector_benchmark_map.py` entries for the pool's actual industries (run the
