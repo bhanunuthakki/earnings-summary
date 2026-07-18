@@ -17,6 +17,14 @@ class StageName(StrEnum):
     COMPUTE = "compute"
     SYNTHESIZE = "synthesize"
     PUBLISH = "publish"
+    # Bottoms-up comparable-set resolution (docs/design/
+    # comparable_sets_bottoms_up.md §8) — execution/build_comparable_sets.py's
+    # per-ticker rule-ladder resolve + freeze. Additive member; no existing
+    # StageName usage is exhaustive-matched over the enum (grepped — every
+    # caller either does `record_stage(..., StageName.X, ...)` for a specific
+    # named stage or reads/compares a stored value), so adding this cannot
+    # break an existing match.
+    COMPARABLE_SET_RESOLVE = "comparable_set_resolve"
 
 
 class StageStatus(StrEnum):
