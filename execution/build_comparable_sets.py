@@ -1,12 +1,13 @@
-"""Resolve + freeze bottoms-up comparable sets (Phase 1 CLI).
+"""Resolve + freeze bottoms-up comparable sets.
 
-docs/design/comparable_sets_bottoms_up.md §8. Phase 1 scope only:
-`--all-portfolio` (~15 names, hand-verifiable by the owner) — `--all-tracked`
-(watchlist+evaluation widen) is Phase 2, not implemented here.
+docs/design/comparable_sets_bottoms_up.md §8. Phase 1 shipped `--ticker` /
+`--all-portfolio` (~15 names, hand-verifiable); Phase 2 (§11) widens to
+`--all-tracked` (portfolio+watchlist+evaluation, ~100 names).
 
 Usage:
     python execution/build_comparable_sets.py --ticker NU
     python execution/build_comparable_sets.py --all-portfolio
+    python execution/build_comparable_sets.py --all-tracked
     python execution/build_comparable_sets.py --ticker NU --refresh
 
 Wraps the run in start_run / record_stage / end_run
@@ -36,13 +37,22 @@ from models.runs import StageName, StageStatus  # noqa: E402
 from pipeline.queries import open_db, tracked_companies_for_user  # noqa: E402
 from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
 
+# --all-tracked (Phase 2, §11): the subjects widen to watchlist+evaluation;
+# `index_member` names stay candidates-only (pool members, never subjects).
+TRACKED_SUBJECT_LIST_TYPES = frozenset(
+    {ListType.PORTFOLIO, ListType.WATCHLIST, ListType.EVALUATION}
+)
+
 
 def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:
     if args.ticker:
         return [args.ticker.upper()]
-    companies = tracked_companies_for_user(
-        conn, only_classified=False, list_types=frozenset({ListType.PORTFOLIO})
+    list_types = (
+        TRACKED_SUBJECT_LIST_TYPES
+        if getattr(args, "all_tracked", False)
+        else frozenset({ListType.PORTFOLIO})
     )
+    companies = tracked_companies_for_user(conn, only_classified=False, list_types=list_types)
     return sorted({c.ticker for c in companies})
 
 
@@ -54,6 +64,11 @@ def main() -> int:
         "--all-portfolio",
         action="store_true",
         help="Resolve for every list_type='portfolio' ticker (Phase 1 scope, ~15 names)",
+    )
+    group.add_argument(
+        "--all-tracked",
+        action="store_true",
+        help="Resolve for every portfolio+watchlist+evaluation ticker (Phase 2 scope, ~100 names)",
     )
     parser.add_argument(
         "--refresh",

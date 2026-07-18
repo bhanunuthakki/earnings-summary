@@ -244,15 +244,23 @@ def test_thin_coverage_flag(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_upsert_metric_rows_is_idempotent(tmp_path: Path) -> None:
+def _metrics_table_conn() -> sqlite3.Connection:
+    """In-memory comp_set_metrics_daily matching the post-0172 schema
+    (incl. the Phase 2 `locator` column)."""
     conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
     conn.execute(
         "CREATE TABLE comp_set_metrics_daily (id INTEGER PRIMARY KEY AUTOINCREMENT, "
         "scope_type TEXT, scope_key TEXT, as_of_date TEXT, metric TEXT, stat_type TEXT, "
         "value REAL, n_members INTEGER, n_valid INTEGER, coverage_pct REAL, "
-        "method_version INTEGER, method_flags TEXT, computed_at TEXT, "
+        "method_version INTEGER, method_flags TEXT, computed_at TEXT, locator TEXT, "
         "UNIQUE(scope_type, scope_key, as_of_date, metric, stat_type, method_version))"
     )
+    return conn
+
+
+def test_upsert_metric_rows_is_idempotent(tmp_path: Path) -> None:
+    conn = _metrics_table_conn()
     _seed_member(tmp_path, "A", market_cap=1e9, net_incomes=[1e8] * 8)
     rows = compute_comparable_set_metrics(tmp_path, _members(["A"]), "operating", AS_OF)
     n1 = upsert_metric_rows(conn, "comparable_set", "A_1", AS_OF, 1, rows)
@@ -260,3 +268,35 @@ def test_upsert_metric_rows_is_idempotent(tmp_path: Path) -> None:
     assert n1 == n2 == len(rows)
     count = conn.execute("SELECT COUNT(*) FROM comp_set_metrics_daily").fetchone()[0]
     assert count == len(rows)  # upserted, not duplicated
+
+
+# ---------------------------------------------------------------------------
+# provenance (Phase 2 — per-#911 locator rule)
+# ---------------------------------------------------------------------------
+
+
+def test_computed_rows_carry_derived_locators(tmp_path: Path) -> None:
+    _seed_member(tmp_path, "A", market_cap=1e9, net_incomes=[1e8] * 8)
+    rows = compute_comparable_set_metrics(tmp_path, _members(["A"]), "operating", AS_OF)
+    assert rows  # sanity
+    for row in rows:
+        assert row.locator is not None, f"{row.metric}:{row.stat_type} missing locator"
+        raw = row.locator.to_json()
+        assert raw is not None
+        payload = json.loads(raw)
+        assert payload.get("kind") == "derived"
+        display = payload.get("derived", {}).get("display", "")
+        assert "bottoms-up" in display
+
+
+def test_upsert_persists_locator_json(tmp_path: Path) -> None:
+    conn = _metrics_table_conn()
+    _seed_member(tmp_path, "A", market_cap=1e9, net_incomes=[1e8] * 8)
+    rows = compute_comparable_set_metrics(tmp_path, _members(["A"]), "operating", AS_OF)
+    upsert_metric_rows(conn, "comparable_set", "A_1", AS_OF, 1, rows)
+    stored = conn.execute(
+        "SELECT locator FROM comp_set_metrics_daily WHERE metric = 'pe_ttm' "
+        "AND stat_type = 'median'"
+    ).fetchone()
+    assert stored["locator"] is not None
+    assert json.loads(stored["locator"])["kind"] == "derived"
