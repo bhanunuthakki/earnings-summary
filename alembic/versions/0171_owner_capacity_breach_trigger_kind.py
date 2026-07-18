@@ -11,7 +11,7 @@ breach exactly like an owner-falsifier breach — mirroring how 0086 admitted
 No new table — purely the constraint widening, batch-recreated per 0077/0086.
 
 Revision ID: 0171_owner_capacity_breach_trigger_kind
-Revises: 0167_segment_10q_disambiguate_budget
+Revises: 0170_comparable_sets
 Create Date: 2026-07-17
 """
 
@@ -25,7 +25,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0171_owner_capacity_breach_trigger_kind"
-down_revision: str | Sequence[str] | None = "0167_segment_10q_disambiguate_budget"
+down_revision: str | Sequence[str] | None = "0170_comparable_sets"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
