@@ -15,6 +15,8 @@ from decimal import Decimal
 
 from pydantic import BaseModel
 
+from models.facts import Unit
+
 from .registry import MetricCategory
 
 
@@ -43,8 +45,13 @@ _CATEGORY_BANDS: dict[MetricCategory, ToleranceBand] = {
     MetricCategory.MARGIN: _PERCENT_BAND,
     MetricCategory.GROWTH: _PERCENT_BAND,
     MetricCategory.RETURNS: _PERCENT_BAND,
-    # sbc_pct_revenue (Phase 1's only EFFICIENCY formula) is a percentage
-    # output, so it takes the same band as the other percent metrics.
+    # Phase 1's only EFFICIENCY formula (sbc_pct_revenue) is a percentage
+    # output, so the category default is the percent band. Phase 2 adds
+    # non-percent EFFICIENCY formulas (asset/receivables/inventory_turnover,
+    # cash_conversion_cycle -- ratios/days, not percentages); `tolerance_for`
+    # below overrides to _RATIO_BAND for those via the optional `unit` arg
+    # rather than changing this category-only default (keeps the existing
+    # Phase 1 call sites, which never pass `unit`, unaffected).
     MetricCategory.EFFICIENCY: _PERCENT_BAND,
     MetricCategory.LIQUIDITY: _RATIO_BAND,
     MetricCategory.LEVERAGE: _RATIO_BAND,
@@ -53,13 +60,20 @@ _CATEGORY_BANDS: dict[MetricCategory, ToleranceBand] = {
 }
 
 
-def tolerance_for(category: MetricCategory) -> ToleranceBand:
+def tolerance_for(category: MetricCategory, *, unit: Unit | None = None) -> ToleranceBand:
+    """Category-keyed lookup, with a unit-aware override for EFFICIENCY
+    (see _CATEGORY_BANDS' comment) -- `unit=None` (the default) preserves
+    the plain category-only lookup every Phase 1 call site relies on."""
+    if category == MetricCategory.EFFICIENCY and unit is not None and unit != Unit.PERCENT:
+        return _RATIO_BAND
     return _CATEGORY_BANDS[category]
 
 
-def within_tolerance(category: MetricCategory, computed: Decimal, reference: Decimal) -> bool:
+def within_tolerance(
+    category: MetricCategory, computed: Decimal, reference: Decimal, *, unit: Unit | None = None
+) -> bool:
     """True iff `computed` clears `reference`'s tolerance band (either bound)."""
-    band = tolerance_for(category)
+    band = tolerance_for(category, unit=unit)
     diff = abs(computed - reference)
     if band.abs_bps is not None and diff <= band.abs_bps / Decimal(100):
         return True

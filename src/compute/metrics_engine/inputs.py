@@ -7,9 +7,20 @@ touching the registry. `US_GAAP_FIELD_MAP` is the identity-ish map for the
 Phase 1 catalog (confirmed against `compute.balance_sheet`,
 `compute.cashflow`, `compute.income_statement`'s `_LINE_ITEM_SPEC` tables —
 the canonical snake_case vocabulary `financial_facts.line_item` already
-uses). `IFRS_FIELD_MAP` stays empty until Phase 2 populates it per
-verified filer (NU, BN, ASML, NVO) — an unmapped concept for an IFRS ticker
-returns `None` from `resolve_concept`, never a guessed field name.
+uses). `IFRS_FIELD_MAP` is populated in Phase 2 per verified filer (NU, BN,
+ASML, NVO) — an unmapped concept for an IFRS ticker returns `None` from
+`resolve_concept`, never a guessed field name.
+
+Phase 2 addition — `OPERATING_LEASE_LIABILITY`: Phase 1 left this concept
+unmapped for US-GAAP ("no `_LINE_ITEM_SPEC` entry exists yet"), but
+`roic_lease_adjusted` (registry.py) needs it. Verified directly against a
+live `data/portfolio.db`: `financial_facts.line_item = 'operating_lease_liability'`
+is a real, populated field for MELI/META/NOW/VEEV/RBRK/WIX/UBER/BKNG/GOOG
+(and ASML among the IFRS roster) — it is written by
+`compute.as_reported._XBRL_TAG_MAP` (the XBRL capture path), not
+`compute.balance_sheet`'s `_LINE_ITEM_SPEC`, which is why Phase 1's search
+missed it. Added to `US_GAAP_FIELD_MAP` as an identity mapping now that a
+formula actually consumes it.
 """
 
 from __future__ import annotations
@@ -107,13 +118,35 @@ US_GAAP_FIELD_MAP: dict[CanonicalConcept, str] = {
     CanonicalConcept.OPERATING_CASH_FLOW: "operating_cash_flow",
     CanonicalConcept.CAPITAL_EXPENDITURE: "capital_expenditure",
     CanonicalConcept.DEPRECIATION_AND_AMORTIZATION: "depreciation_and_amortization",
+    # Phase 2: no _LINE_ITEM_SPEC entry, but the XBRL capture path (see
+    # module docstring) writes this field; roic_lease_adjusted consumes it.
+    CanonicalConcept.OPERATING_LEASE_LIABILITY: "operating_lease_liability",
 }
 
 # IFRS: only entries actually verified against a roster filer's normalized
-# facts go here. Empty in Phase 1 (US-GAAP mapping only, per doc §6 Phase 1
-# scope) — populated incrementally in Phase 2 per verified filer (NU, BN,
-# ASML, NVO).
-IFRS_FIELD_MAP: dict[CanonicalConcept, str] = {}
+# facts go here. Populated in Phase 2, verified directly against
+# `data/portfolio.db` (read-only query, not guessed) for every live IFRS
+# roster name — NU (bank), BN (holdco), ASML, NVO (both operating_company).
+#
+# Finding: FMP's normalization layer already collapses IFRS filers onto the
+# EXACT SAME `financial_facts.line_item` vocabulary as US-GAAP filers — every
+# concept below was confirmed present (non-empty, plausible-range values) for
+# all four tickers under the identical field name used in
+# `US_GAAP_FIELD_MAP`. This is a genuine per-concept verification, not a
+# blanket copy: OPERATING_LEASE_LIABILITY was checked case-by-case (see
+# below) rather than assumed to follow the same pattern.
+#
+# OPERATING_LEASE_LIABILITY is included because the field-name mapping
+# itself is verified (ASML reports real, non-null values under this exact
+# name — proving FMP's IFRS normalization uses the identical tag). NU, BN,
+# and NVO simply have no data under that name for the periods checked; that
+# is a per-period data gap (ReasonCode.MISSING_INPUT via the normal
+# resolution path), not a naming/mapping gap (ReasonCode.
+# MISSING_INPUT_MAPPING) — the two failure modes are deliberately distinct
+# per docs/design/bottoms_up_metrics_engine.md §3, and conflating them by
+# leaving the concept unmapped here would misreport a real data absence as
+# "we don't understand IFRS's vocabulary for this concept", which is false.
+IFRS_FIELD_MAP: dict[CanonicalConcept, str] = dict(US_GAAP_FIELD_MAP)
 
 _STANDARD_MAPS: dict[AccountingStandard, dict[CanonicalConcept, str]] = {
     AccountingStandard.US_GAAP: US_GAAP_FIELD_MAP,
