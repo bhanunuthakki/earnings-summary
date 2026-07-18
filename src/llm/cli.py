@@ -587,6 +587,13 @@ LLM_MODELS: dict[str, str] = {
     # The owner edits/signs the output file directly; a bad draft costs nothing
     # but a re-run.
     "annual_letter": DEFAULT_MODEL,
+    # 10-Q segment quarterly period-axis disambiguation (docs/design/
+    # segment_quarterly_framework.md §2.4, compute.segment_quarterly_10q):
+    # Stage B fallback when the deterministic column-header parser can't
+    # resolve a 10-Q period axis — a narrow, closed-schema classification
+    # task (per-column duration_months/end_date/is_cumulative), same shape
+    # and same tier as canonicalize_segments — Haiku tier.
+    "segment_10q_period_disambiguate": FAST_CLASSIFIER_MODEL,
     # NOT here by design: the 14 dynamic `lens:<name>` purposes (plus the
     # scenario-suffixed lens:macro_scenario:<id> / lens:portfolio_macro_stress:<id>)
     # resolve their model from the Lens object itself

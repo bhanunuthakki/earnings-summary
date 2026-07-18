@@ -21,17 +21,29 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from models.facts import (
     Currency,
     FiscalPeriodType,
-    SegmentDimType,
     SegmentDimension,
+    SegmentDimType,
     SegmentFact,
     Unit,
 )
+
+
+def _segment_periods_has_provenance_columns(conn: sqlite3.Connection) -> bool:
+    """True if migration 0166 has added segment_periods' period_basis /
+    raw_period_label / method_version columns (segment_quarterly_framework.md
+    §4.2). Cached-per-call PRAGMA, same pattern as
+    ``_segment_dimensions_has_unit_column``."""
+    try:
+        rows = conn.execute("PRAGMA table_info(segment_periods)").fetchall()
+    except sqlite3.Error:
+        return False
+    return any(str(r[1]) == "period_basis" for r in rows)
 
 
 def _ensure_period(
@@ -43,8 +55,17 @@ def _ensure_period(
     source_doc_id: int,
     currency: Currency | None,
     unit: Unit,
+    period_basis: str = "discrete",
+    raw_period_label: str | None = None,
+    method_version: str | None = None,
 ) -> tuple[int, bool]:
-    """Upsert a segment_periods row; return (period_id, inserted)."""
+    """Upsert a segment_periods row; return (period_id, inserted).
+
+    ``period_basis``/``raw_period_label``/``method_version`` (migration
+    0166) are written only on a FRESH insert and only when the columns
+    exist — an existing period row's provenance is never overwritten by a
+    later caller (mirrors the per-dim unit column's "write once" contract).
+    """
     cur = conn.execute(
         """
         SELECT id FROM segment_periods
@@ -63,23 +84,46 @@ def _ensure_period(
     row = cur.fetchone()
     if row is not None:
         return (int(row[0]), False)
-    cur = conn.execute(
-        """
-        INSERT INTO segment_periods
-          (ticker, period_end, fiscal_period_type, source_doc_id,
-           currency, unit, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            ticker.upper(),
-            period_end,
-            fiscal_period_type.value,
-            source_doc_id,
-            currency.value if currency is not None else None,
-            unit.value,
-            datetime.now(timezone.utc).replace(tzinfo=None),
-        ),
-    )
+
+    if _segment_periods_has_provenance_columns(conn):
+        cur = conn.execute(
+            """
+            INSERT INTO segment_periods
+              (ticker, period_end, fiscal_period_type, source_doc_id,
+               currency, unit, created_at, period_basis, raw_period_label, method_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ticker.upper(),
+                period_end,
+                fiscal_period_type.value,
+                source_doc_id,
+                currency.value if currency is not None else None,
+                unit.value,
+                datetime.now(UTC).replace(tzinfo=None),
+                period_basis,
+                raw_period_label,
+                method_version,
+            ),
+        )
+    else:
+        cur = conn.execute(
+            """
+            INSERT INTO segment_periods
+              (ticker, period_end, fiscal_period_type, source_doc_id,
+               currency, unit, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ticker.upper(),
+                period_end,
+                fiscal_period_type.value,
+                source_doc_id,
+                currency.value if currency is not None else None,
+                unit.value,
+                datetime.now(UTC).replace(tzinfo=None),
+            ),
+        )
     new_id = cur.lastrowid
     if new_id is None:
         raise RuntimeError(
@@ -133,6 +177,17 @@ def _segment_dimensions_has_unit_column(conn: sqlite3.Connection) -> bool:
     return any(str(r[1]) == "unit" for r in rows)
 
 
+def _segment_dimensions_has_provenance_columns(conn: sqlite3.Connection) -> bool:
+    """True if migration 0165 has added segment_dimensions' provenance
+    columns (disclosure_status, method_version, confidence, extracted_by,
+    locator, derived_from, supersedes_id)."""
+    try:
+        rows = conn.execute("PRAGMA table_info(segment_dimensions)").fetchall()
+    except sqlite3.Error:
+        return False
+    return any(str(r[1]) == "disclosure_status" for r in rows)
+
+
 def write_segment_facts_junction(
     conn: sqlite3.Connection,
     *,
@@ -143,6 +198,9 @@ def write_segment_facts_junction(
     currency: Currency | None,
     unit: Unit,
     dimensions: Iterable[SegmentDimension],
+    period_basis: str = "discrete",
+    raw_period_label: str | None = None,
+    period_method_version: str | None = None,
 ) -> tuple[int, int]:
     """Write one (ticker, period, source_doc) anchor + N dimension cells.
 
@@ -157,6 +215,14 @@ def write_segment_facts_junction(
     Requires migration 0057 to have added the `unit` column; on pre-0057
     schemas the writer silently omits the per-dim unit (legacy single-unit
     behavior).
+
+    Provenance columns (migration 0165/0166, segment_quarterly_framework.md
+    §4): ``period_basis``/``raw_period_label``/``period_method_version`` land
+    on the period anchor (write-once, on fresh insert only); each dimension's
+    own ``disclosure_status``/``method_version``/``confidence``/
+    ``extracted_by``/``locator``/``derived_from``/``supersedes_id`` land on
+    its segment_dimensions row. Both are silently omitted on a pre-migration
+    schema, matching the per-dim unit column's degrade-gracefully precedent.
     """
     period_id, period_inserted = _ensure_period(
         conn,
@@ -166,8 +232,12 @@ def write_segment_facts_junction(
         source_doc_id=source_doc_id,
         currency=currency,
         unit=unit,
+        period_basis=period_basis,
+        raw_period_label=raw_period_label,
+        method_version=period_method_version,
     )
     has_unit_column = _segment_dimensions_has_unit_column(conn)
+    has_provenance_columns = _segment_dimensions_has_provenance_columns(conn)
 
     dims_inserted = 0
     for dim in dimensions:
@@ -187,7 +257,41 @@ def write_segment_facts_junction(
         dim_unit_value: str | None = None
         if has_unit_column and dim.unit is not None and dim.unit != unit:
             dim_unit_value = dim.unit.value
-        if has_unit_column:
+        if has_provenance_columns:
+            columns = "period_id, dim_type, dim_name, value, metric"
+            placeholders = "?, ?, ?, ?, ?"
+            params: list[object] = [
+                period_id,
+                dim.dim_type.value,
+                dim.dim_name,
+                str(dim.value),
+                dim.metric,
+            ]
+            if has_unit_column:
+                columns += ", unit"
+                placeholders += ", ?"
+                params.append(dim_unit_value)
+            columns += (
+                ", disclosure_status, method_version, confidence, extracted_by, "
+                "locator, derived_from, supersedes_id"
+            )
+            placeholders += ", ?, ?, ?, ?, ?, ?, ?"
+            params.extend(
+                [
+                    dim.disclosure_status,
+                    dim.method_version,
+                    dim.confidence,
+                    dim.extracted_by,
+                    dim.locator,
+                    dim.derived_from,
+                    dim.supersedes_id,
+                ]
+            )
+            conn.execute(
+                f"INSERT INTO segment_dimensions ({columns}) VALUES ({placeholders})",
+                params,
+            )
+        elif has_unit_column:
             conn.execute(
                 """
                 INSERT INTO segment_dimensions

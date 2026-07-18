@@ -80,6 +80,10 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
     # Position-review verdict audit (mode-B rubric) — in sync with
     # run_llm_evals.AUDIT_PURPOSES + rubric_judge.AUDIT_SPECS.
     "position_review",
+    # 10-Q segment quarterly period-axis disambiguation Stage B fallback
+    # (mode-A golden classifier) — kept in sync with
+    # run_llm_evals.GOLDEN_PURPOSES.
+    "segment_10q_period_disambiguate",
 )
 
 CALL_HEALTH_WINDOW_DAYS = 30

@@ -206,6 +206,42 @@ def test_lowercase_ticker_normalizes(conn: sqlite3.Connection) -> None:
     assert SourceType.SEC_XBRL in plan.sources
 
 
+# --- source_routing: segment_quarterly_pipeline (segment_quarterly_framework.md §1.1) ---
+
+
+def test_segment_quarterly_pipeline_10k_regime(conn: sqlite3.Connection) -> None:
+    _add_company(conn, "AAPL", filing_regime="10-K")
+    plan = plan_for_ticker(conn, "AAPL")
+    assert plan.segment_quarterly_pipeline == "tenq_10k_regime"
+
+
+def test_segment_quarterly_pipeline_20f_regime(conn: sqlite3.Connection) -> None:
+    _add_company(conn, "NU", instrument_type="adr", filing_regime="20-F")
+    plan = plan_for_ticker(conn, "NU")
+    assert plan.segment_quarterly_pipeline == "fpi_6k"
+
+
+def test_segment_quarterly_pipeline_40f_regime(conn: sqlite3.Connection) -> None:
+    _add_company(conn, "BN", instrument_type="equity", filing_regime="40-F")
+    plan = plan_for_ticker(conn, "BN")
+    assert plan.segment_quarterly_pipeline == "mjds_ir_pdf"
+
+
+def test_segment_quarterly_pipeline_unset_regime_is_unsupported(conn: sqlite3.Connection) -> None:
+    _add_company(conn, "FRESHIPO", filing_regime=None)
+    plan = plan_for_ticker(conn, "FRESHIPO")
+    assert plan.segment_quarterly_pipeline == "unsupported"
+
+
+def test_segment_quarterly_pipeline_etf_routes_off_regime_too(conn: sqlite3.Connection) -> None:
+    # Routing keys EXCLUSIVELY off filing_regime, never instrument_type — an
+    # ETF with no filing_regime still resolves to unsupported, not a special
+    # ETF-specific bucket.
+    _add_company(conn, "FLKR", instrument_type="etf", filing_regime=None)
+    plan = plan_for_ticker(conn, "FLKR")
+    assert plan.segment_quarterly_pipeline == "unsupported"
+
+
 # --- run_accounting ---
 
 

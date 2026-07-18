@@ -62,6 +62,7 @@ from industry_classifier import (  # noqa: E402
 from models.runs import StageStatus as RunStageStatus  # noqa: E402
 from pipeline.fmp_doc_index import (  # noqa: E402
     index_fmp_files_for_ticker,
+    set_filing_regime_from_profile,
     set_fiscal_year_end_from_fmp,
     set_instrument_type_from_fmp,
 )
@@ -667,6 +668,13 @@ def main() -> int:
             ).fetchone()
             instrument = row[0] if row and row[0] else None
         print(f"[onboard] {ticker} instrument_type={instrument!s}", flush=True)
+
+        # Self-heal filing_regime the same way (write-only-when-NULL; never
+        # clobbers the hand-curated 0001 backfill). segment_quarterly_framework.md
+        # §1.3 — same call site as set_instrument_type_from_fmp above.
+        print(f"[onboard] {ticker} stage=set_filing_regime", flush=True)
+        filing_regime = set_filing_regime_from_profile(conn, ticker, PROJECT_ROOT)
+        print(f"[onboard] {ticker} filing_regime={filing_regime!s}", flush=True)
 
         # ETFs take the published-data onboarding-lite path: the remaining
         # stages (quarterly refresh, transcripts, IR, Say-Do) are all

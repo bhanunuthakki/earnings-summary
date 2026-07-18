@@ -49,13 +49,11 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import sqlite3
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import cast
 
@@ -72,6 +70,29 @@ from table_extractors.base import (
     parse_units,
 )
 
+# Extracted OUT to their own modules (segment_quarterly_framework.md §2.2) —
+# the ONE sanctioned edit to this otherwise-frozen module: import under the
+# old private names so every call site below is untouched, behavior
+# byte-identical. table_extractors.xbrl_value_classify also backs the new
+# compute.segment_quarterly_10q extractor, which needs the identical guards.
+from table_extractors.period_axis import parse_trailing_date as _parse_period
+
+# Not referenced below directly (the moved _classify_value already closes
+# over it) — kept as a module attribute because tests/test_generic_xbrl_
+# capture.py asserts against it reflectively (g._RESIDUAL_RISK_CONFIDENCE).
+from table_extractors.xbrl_value_classify import (  # noqa: F401
+    RESIDUAL_RISK_CONFIDENCE as _RESIDUAL_RISK_CONFIDENCE,  # pyright: ignore[reportUnusedImport]
+)
+from table_extractors.xbrl_value_classify import SCALE_FACTOR as _SCALE_FACTOR
+from table_extractors.xbrl_value_classify import build_name as _build_name
+from table_extractors.xbrl_value_classify import classify_value as _classify_value
+from table_extractors.xbrl_value_classify import (
+    is_unit_ambiguous_section as _is_unit_ambiguous_section,
+)
+from table_extractors.xbrl_value_classify import (
+    semantic_section_title as _semantic_section_title,
+)
+
 log = logging.getLogger(__name__)
 
 EXTRACTOR_ID = "generic_xbrl_capture_v1"
@@ -79,59 +100,6 @@ EXTRACTOR_VERSION = "1"
 TABLE_KIND = "xbrl_capture_all"
 # kpi_facts.extracted_by tag — deterministic (NOT llm) so audits don't mislabel it.
 EXTRACTED_BY = "capture_xbrl_v1"
-
-# A scale we can trust to expand a value to whole units. A section reporting in
-# "units" (no scale hint) is NOT captured — an unscaled magnitude is ambiguous
-# (already-actual dollars? a share count? a ratio?) so it's deferred to Stage B.
-_SCALE_FACTOR: dict[str, int] = {
-    "thousands": 1_000,
-    "millions": 1_000_000,
-    "billions": 1_000_000_000,
-}
-
-# Period-column header date formats (same shapes the lease ladder extractor sees:
-# 'Dec. 31, 2024', 'Jan. 31, 2025', plus ISO / US-numeric fallbacks).
-_DATE_FORMATS = ("%b. %d, %Y", "%b %d, %Y", "%B %d, %Y", "%m/%d/%Y", "%Y-%m-%d")
-
-# Row-label tokens (case-insensitive substring) that mark a NON-monetary cell.
-# A rate / percentage / ratio row in a $-scaled section is the #1 mis-scale trap.
-_RATE_TOKENS: tuple[str, ...] = (
-    "rate",
-    "percent",
-    "percentage",
-    " %",
-    "(%)",
-    "yield",
-    "ratio",
-    "basis point",
-    "per annum",
-)
-# Per-share dollar amounts — real money, but reported per-share and so NOT scaled
-# by the section's $-in-millions factor.
-_PER_SHARE_TOKENS: tuple[str, ...] = ("per share", "per diluted", "per basic")
-# Share / unit COUNT rows — a count, not a currency level; the $-scale would be
-# wrong and the true unit (COUNT) needs the share-scale, not the $-scale.
-_COUNT_TOKENS: tuple[str, ...] = (
-    "number of",
-    "shares outstanding",
-    "weighted-average number",
-    "weighted average number",
-    "shares issued",
-    "shares authorized",
-    # Explicit unit-declaration parentheticals: a row whose label declares its own
-    # unit as a share / unit COUNT — "Issued and Outstanding (in shares)",
-    # "Authorized Shares (in shares)", "Outstanding (in units)". The word-order
-    # tokens above miss these because "shares"/"units" sits in the trailing
-    # parenthetical, not adjacent to issued/outstanding/authorized. Without this the
-    # section $-scale ("USD millions") multiplies a raw share count into phantom
-    # billions/trillions (BN preferred units: 24M shares -> $24T; RBRK preferred
-    # share schedule). Parenthetical-anchored so a real dollar row that merely
-    # mentions shares ("Investments in shares of associates") is NOT deferred.
-    "(in shares)",
-    "(shares)",
-    "(in units)",
-    "(units)",
-)
 
 # Section titles we never capture even when they carry "(Details)": these hold
 # identifiers / dates / enumerations, not financial measurements.
@@ -141,61 +109,6 @@ _NONFINANCIAL_SECTION_TOKENS: tuple[str, ...] = (
     "cover page",
     "audit information",
 )
-
-# A unit suffix that declares per-share OR share-count content marks a UNIT-MIXED
-# section: it interleaves per-share dollars, share counts, and aggregate dollars
-# under one parse_units scale, and the XBRL axis grouping is too unreliable to
-# disambiguate per-row deterministically (an aggregate "Fair value of vested
-# awards" can sit under a "Grant-Date Fair Value" axis). Capturing it would
-# mis-scale the per-share rows by 1e9 or under-scale the aggregates — DEFER the
-# whole section to Stage B. ``shares in <scale>`` is included because a section
-# that declares a share-count scale carries raw share counts a $-scale would wreck.
-_PER_SHARE_SECTION_RX = re.compile(r"/\s*shares|per\s+share|shares\s+in\b", re.IGNORECASE)
-
-# The statement-of-changes-in-equity / share-rollforward family is unit-ambiguous
-# in the WORST way: FMP routinely labels the SHARE-count rollforward "$ in
-# Thousands" (NU's "Equity (Details)" lists 4,609,988,545 *shares* under a
-# "$ in Thousands" title), so a deterministic $-scale turns a share count into
-# trillions of dollars. There's no reliable per-row signal — the labels are
-# "Total as of December 31, 2021" etc. — so DEFER the whole equity family to
-# Stage B, which reads the prose ("changes in shares issued") and can tell shares
-# from amounts. Matches a bare/qualified "equity" head ("Equity", "Stockholders'
-# Equity - Narrative") but NOT "equity method/securities/investments/..." (those
-# are ordinary $ tables we keep).
-_EQUITY_HEAD_RX = re.compile(
-    r"(?:common stock,?\s+|stockholders'?\s+|shareholders'?\s+)?equity\b(.*)",
-    re.IGNORECASE,
-)
-_CHANGES_IN_EQUITY_TOKENS = (
-    "changes in equity",
-    "changes in stockholders",
-    "changes in shareholders",
-)
-
-# Strip the parse_units suffix (" - USD ($) $ in Millions") and the XBRL
-# "(Details)"/"(Tables)"/"(Parenthetical)" boilerplate from an inner section
-# title to get a clean semantic stem for the metric name.
-_UNIT_SUFFIX_RX = re.compile(r"\s+-\s+[A-Z]{3}\s*\(.*$")
-_DETAILS_SUFFIX_RX = re.compile(r"\s*\((?:Details|Tables|Parenthetical)[^)]*\)\s*$", re.IGNORECASE)
-
-# kpi_definitions.name / KpiValue.name is VARCHAR(200); clip section-qualified
-# names to fit (the canonical match key folds variants regardless).
-_NAME_MAX = 200
-
-# A monetary cell that survives every label/magnitude guard but whose pre-scale
-# magnitude sits in the percent/ratio band (>= 1, so past the sub-unit drop, and
-# below _RESIDUAL_RISK_RAW_CEILING) is a RESIDUAL mis-scale risk: a clean-labeled
-# whole-number percentage (a "Common equity tier 1 capital" 13.5 with no
-# rate/ratio/percent token) scales to a plausible-LOOKING $13.5M we can't
-# deterministically tell from a real $13.5M line item. The program's prime
-# directive is to capture every number, so we DON'T drop it — but we DON'T claim
-# full confidence either: it lands down-weighted (tallied in CaptureAudit.penalized
-# → the coverage log) so the UI/rankers flag it and Stage B / review can
-# adjudicate, instead of it sitting silently at face confidence. Per-share rows
-# return earlier and are never down-weighted — small per-share dollars (EPS, DPS)
-# are expected, not suspicious.
-_RESIDUAL_RISK_RAW_CEILING = Decimal("100")
-_RESIDUAL_RISK_CONFIDENCE = 0.5
 
 
 @dataclass(slots=True)
@@ -358,28 +271,6 @@ def _emit_coverage(
     )
 
 
-def _is_unit_ambiguous_section(inner_title: str) -> bool:
-    """True for sections whose declared scale can't be trusted per-row: per-share
-    data, share-count columns, or the equity / share-rollforward family. These
-    interleave shares, per-share dollars, and aggregate dollars (often FMP-
-    mislabeled with a single $-scale), so a deterministic scale mis-reads them —
-    they're deferred wholesale to Stage B."""
-    if _PER_SHARE_SECTION_RX.search(inner_title):
-        return True
-    s = _semantic_section_title(inner_title).lower().strip()
-    if any(tok in s for tok in _CHANGES_IN_EQUITY_TOKENS):
-        return True
-    m = _EQUITY_HEAD_RX.match(s)
-    if m is not None:
-        rest = m.group(1).lstrip()
-        # Bare "equity" / "<x> equity" followed by end-of-title or a separator
-        # (dash, en-dash, "(") is the equity note; "equity method|securities|
-        # investments|interest|income" (a word follows) is an ordinary $ table.
-        if rest == "" or not rest[:1].isalnum():
-            return True
-    return False
-
-
 def _iter_sections(payload: dict[str, object]):
     """Yield (outer_key, section_body) for every list-valued top-level section."""
     for key, value in payload.items():
@@ -474,40 +365,6 @@ def _walk_section(
             )
 
 
-def _classify_value(label: str, raw: object, factor: int) -> tuple[Decimal | None, str, float]:
-    """Decide whether a cell is a captureable monetary value.
-
-    Returns ``(scaled_value, "", confidence)`` to capture, or
-    ``(None, reason, 1.0)`` to defer. ``confidence`` is 1.0 for a normal monetary
-    magnitude and ``_RESIDUAL_RISK_CONFIDENCE`` for a percent/ratio-shaped
-    residual-risk cell (see ``_RESIDUAL_RISK_RAW_CEILING``) — captured, but
-    down-weighted rather than stored at a misleading face confidence.
-    """
-    ll = label.lower()
-    if any(tok in ll for tok in _RATE_TOKENS):
-        return None, "rate_or_percent", 1.0
-    if any(tok in ll for tok in _COUNT_TOKENS):
-        return None, "share_or_count", 1.0
-    try:
-        dv = Decimal(str(raw))
-    except (InvalidOperation, ValueError, TypeError):
-        return None, "non_numeric", 1.0
-    # Per-share amounts are dollars already — do NOT apply the $-in-millions scale,
-    # and never penalize them: small per-share dollars (EPS, DPS) are expected.
-    if any(tok in ll for tok in _PER_SHARE_TOKENS):
-        return dv, "", 1.0
-    # A "monetary" cell below 1 whole unit in a thousands/millions/billions section
-    # is almost certainly a rate/ratio that slipped the label net (a 0.0338 coupon),
-    # never a real $0.03M line item — defer rather than expand it by 1e6.
-    if abs(dv) < 1:
-        return None, "subunit_magnitude", 1.0
-    # Residual mis-scale risk: a clean-labeled value in the percent/ratio band that
-    # scales to plausible-looking dollars. Capture (program directive) but haircut
-    # the confidence so it isn't trusted blind (see _RESIDUAL_RISK_*).
-    confidence = _RESIDUAL_RISK_CONFIDENCE if abs(dv) < _RESIDUAL_RISK_RAW_CEILING else 1.0
-    return dv * factor, "", confidence
-
-
 def _inner_title(section: Sequence[object]) -> str | None:
     """First key of the section header dict — the FULL title (the outer payload
     key is truncated to ~30 chars and loses the '(Details)' + unit suffix).
@@ -525,35 +382,6 @@ def _is_detail_section(inner_title: str) -> bool:
     if "(details)" not in low:
         return False
     return not any(tok in low for tok in _NONFINANCIAL_SECTION_TOKENS)
-
-
-def _semantic_section_title(inner_title: str) -> str:
-    """Clean stem for the metric name: title minus the unit + '(Details)' suffix."""
-    t = _UNIT_SUFFIX_RX.sub("", inner_title)
-    t = _DETAILS_SUFFIX_RX.sub("", t)
-    return " ".join(t.split())
-
-
-def _build_name(section_title: str, axis_path: list[str], label: str) -> str:
-    """Section-qualified metric name: ``section — axis — row label``.
-
-    Qualification is essential — "Total" / "Additions" appear in dozens of tables;
-    without the section (and axis) prefix they'd collapse into one meaningless
-    series. Consecutive duplicate parts (a label echoing its axis) are folded.
-    """
-    parts = [section_title, *axis_path, label]
-    cleaned: list[str] = []
-    for raw in parts:
-        p = " ".join(str(raw).split())
-        if not p:
-            continue
-        # Drop XBRL taxonomy boilerplate that survives into a row/axis label.
-        if p.endswith(("[Line Items]", "[Roll Forward]", "[Abstract]", "[Member]")):
-            continue
-        if cleaned and cleaned[-1].casefold() == p.casefold():
-            continue
-        cleaned.append(p)
-    return " — ".join(cleaned)[:_NAME_MAX]
 
 
 def _excerpt(label: str, raw: object, currency: str, scale: str) -> str:
@@ -600,31 +428,6 @@ def _accept_period(parsed: datetime | None, fye_md: tuple[int, int] | None) -> d
     if fye_md is not None and (parsed.month, parsed.day) != fye_md:
         return None
     return parsed
-
-
-def _parse_period(period_label: str) -> datetime | None:
-    """Parse a column header to a period_end, or None when it isn't a date.
-
-    A trailing 'Dec. 31, 2024' is pulled out of longer headers
-    ('12 Months Ended Dec. 31, 2024') before parsing.
-    """
-    s = period_label.strip()
-    if not s:
-        return None
-    for fmt in _DATE_FORMATS:
-        try:
-            return datetime.strptime(s, fmt)
-        except ValueError:
-            continue
-    # Trailing-date fallback: '... Dec. 31, 2024'.
-    m = re.search(r"([A-Z][a-z]{2}\.?\s+\d{1,2},\s+\d{4})$", s)
-    if m:
-        for fmt in ("%b. %d, %Y", "%b %d, %Y", "%B %d, %Y"):
-            try:
-                return datetime.strptime(m.group(1), fmt)
-            except ValueError:
-                continue
-    return None
 
 
 def _resolve_doc_id(

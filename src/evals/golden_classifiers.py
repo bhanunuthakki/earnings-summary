@@ -60,6 +60,7 @@ CLASSIFIER_PURPOSES: tuple[str, ...] = (
     "capture_intent",
     "ledger_reply_intent",
     "triage_route_suggest",
+    "segment_10q_period_disambiguate",
 )
 
 _METADATA_RX = re.compile(r"^(?:[A-Z][A-Z0-9.]*_Q[1-4]_\d{4}|UNKNOWN)$")
@@ -369,6 +370,66 @@ def load_triage_route_suggest_golden(path: Path) -> list[ClassifierCase]:
         cases.append(
             ClassifierCase(
                 case_id, {"comment_text": comment_text, "context_line": context_line}, exp
+            )
+        )
+    if errors:
+        raise ValueError(f"golden file invalid at {path}: " + "; ".join(errors))
+    return cases
+
+
+def load_segment_10q_period_disambiguate_golden(path: Path) -> list[ClassifierCase]:
+    """Cases for compute.segment_quarterly_10q.disambiguate_periods_for_eval:
+    a 10-Q section's column ``labels`` list plus the resolved-context hint
+    (nominal quarter, cumulative-months expectation, current/prior-year end
+    dates); ``expected`` is ``{"columns": [{"index", "duration_months",
+    "is_cumulative"}, ...]}`` — one entry per label, by index. Deliberately
+    includes at least one genuinely-ambiguous case per the task's own
+    validation requirement (the deterministic path already resolves the
+    unambiguous cases; this golden set exists to grade the LLM fallback
+    specifically, so every case here is one the regex/duration-prefix parser
+    could NOT resolve on its own)."""
+    errors: list[str] = []
+    seen: set[str] = set()
+    cases: list[ClassifierCase] = []
+    for i, c in enumerate(_load_doc(path, "segment_10q_period_disambiguate")):
+        label = f"cases[{i}]"
+        case_id = _require_str(c, "id", label, errors)
+        if case_id in seen:
+            errors.append(f"{label}: duplicate id {case_id!r}")
+        seen.add(case_id)
+        labels_raw = c.get("labels")
+        labels = _str_list(labels_raw)
+        if labels is None or not labels:
+            errors.append(f"{label} ({case_id}): `labels` must be a non-empty list of strings")
+            labels = []
+        nominal_quarter = _require_str(c, "nominal_quarter", label, errors)
+        if nominal_quarter not in ("Q1", "Q2", "Q3"):
+            errors.append(f"{label} ({case_id}): nominal_quarter must be one of Q1/Q2/Q3")
+        cumulative_months = c.get("cumulative_months")
+        if not isinstance(cumulative_months, int) or isinstance(cumulative_months, bool):
+            errors.append(f"{label} ({case_id}): cumulative_months must be an int")
+            cumulative_months = 0
+        current_end = _require_str(c, "current_end", label, errors)
+        prior_year_end = _require_str(c, "prior_year_end", label, errors)
+        expected = c.get("expected")
+        if not isinstance(expected, dict):
+            errors.append(f"{label} ({case_id}): `expected` must be an object")
+            expected = {}
+        exp = cast("dict[str, object]", expected)
+        exp_columns = exp.get("columns")
+        if not isinstance(exp_columns, list):
+            errors.append(f"{label} ({case_id}): expected.columns must be a list")
+        cases.append(
+            ClassifierCase(
+                case_id,
+                {
+                    "labels": labels,
+                    "nominal_quarter": nominal_quarter,
+                    "cumulative_months": cumulative_months,
+                    "current_end": current_end,
+                    "prior_year_end": prior_year_end,
+                },
+                exp,
             )
         )
     if errors:
@@ -833,6 +894,86 @@ def grade_triage_route_suggest_case(
     )
 
 
+def grade_segment_10q_period_disambiguate_case(
+    case: ClassifierCase, *, fn: Callable[..., dict[str, object]]
+) -> CaseResult:
+    """Per-column duration_months + is_cumulative must both match (a wrong
+    is_cumulative flag is the classification error that matters most — it
+    decides whether a value lands as a discrete quarter or a YTD cumulative
+    fact). score = matched/n_expected; a missing index (the LLM omitted an
+    ambiguous column rather than guessing) counts as a miss, not a crash."""
+    expected = cast("dict[str, object]", case.expected)
+    exp_columns_raw = expected.get("columns")
+    exp_columns = cast("list[object]", exp_columns_raw) if isinstance(exp_columns_raw, list) else []
+    exp_by_index: dict[int, tuple[object, object]] = {}
+    for entry in exp_columns:
+        if not isinstance(entry, dict):
+            continue
+        e = cast("dict[str, object]", entry)
+        idx = e.get("index")
+        if isinstance(idx, int) and not isinstance(idx, bool):
+            exp_by_index[idx] = (e.get("duration_months"), bool(e.get("is_cumulative")))
+
+    t0 = time.monotonic()
+    try:
+        actual = fn(
+            cast("list[str]", case.inputs["labels"]),
+            nominal_quarter=cast("str", case.inputs["nominal_quarter"]),
+            cumulative_months=cast("int", case.inputs["cumulative_months"]),
+            current_end=cast("str", case.inputs["current_end"]),
+            prior_year_end=cast("str", case.inputs["prior_year_end"]),
+        )
+    except Exception as exc:
+        _abort_on_hard_stop(exc, "segment_10q_period_disambiguate", case.case_id)
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        return CaseResult(
+            case_id=case.case_id,
+            question=f"segment_10q_period_disambiguate/{case.case_id}",
+            passed=False,
+            score=0.0,
+            expected_json=dumps_compact(expected),
+            actual_json=None,
+            failure_stage="call",
+            judge_rationale=f"disambiguation raised {type(exc).__name__}: {exc}",
+            latency_ms=latency_ms,
+        )
+    latency_ms = int((time.monotonic() - t0) * 1000)
+
+    act_columns_raw = actual.get("columns")
+    act_by_index: dict[int, tuple[object, object]] = {}
+    if isinstance(act_columns_raw, list):
+        for entry in cast("list[object]", act_columns_raw):
+            if not isinstance(entry, dict):
+                continue
+            e = cast("dict[str, object]", entry)
+            idx = e.get("index")
+            if isinstance(idx, int) and not isinstance(idx, bool):
+                act_by_index[idx] = (e.get("duration_months"), bool(e.get("is_cumulative")))
+
+    misses: list[str] = []
+    matched = 0
+    for idx, exp_pair in exp_by_index.items():
+        act_pair = act_by_index.get(idx)
+        if act_pair == exp_pair:
+            matched += 1
+        else:
+            misses.append(f"col[{idx}]: expected {exp_pair}, got {act_pair}")
+    denom = len(exp_by_index)
+    score = 1.0 if denom == 0 else matched / denom
+    passed = score == 1.0
+    return CaseResult(
+        case_id=case.case_id,
+        question=f"segment_10q_period_disambiguate/{case.case_id}",
+        passed=passed,
+        score=score,
+        expected_json=dumps_compact(expected),
+        actual_json=dumps_compact(actual),
+        failure_stage=None if passed else "mismatch",
+        judge_rationale=None if passed else "; ".join(misses[:5]),
+        latency_ms=latency_ms,
+    )
+
+
 # ---------------------------------------------------------------------------
 # run orchestration
 # ---------------------------------------------------------------------------
@@ -868,6 +1009,10 @@ def _production_fn(purpose: str) -> Callable[..., object]:
         import user_state.triage_suggest as triage_suggest
 
         return cast("Callable[..., object]", triage_suggest.suggest_route_for_eval)
+    if purpose == "segment_10q_period_disambiguate":
+        import compute.segment_quarterly_10q as segment_quarterly_10q
+
+        return cast("Callable[..., object]", segment_quarterly_10q.disambiguate_periods_for_eval)
     return llm_client.structure_recent_news_json
 
 
@@ -907,6 +1052,9 @@ def run_classifier_eval(
     elif purpose == "triage_route_suggest":
         cases = load_triage_route_suggest_golden(golden_path)
         grade = grade_triage_route_suggest_case
+    elif purpose == "segment_10q_period_disambiguate":
+        cases = load_segment_10q_period_disambiguate_golden(golden_path)
+        grade = grade_segment_10q_period_disambiguate_case
     else:
         raise ValueError(
             f"no classifier eval for purpose {purpose!r} — known: {list(CLASSIFIER_PURPOSES)}"

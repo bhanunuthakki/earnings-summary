@@ -1,0 +1,45 @@
+{
+  "purpose": "segment_10q_period_disambiguate",
+  "cases": [
+    {
+      "id": "q2_six_and_three_months_no_prefix_match",
+      "labels": ["Six Months Ended", "Three Months Ended"],
+      "nominal_quarter": "Q2",
+      "cumulative_months": 6,
+      "current_end": "2025-06-30",
+      "prior_year_end": "2024-06-30",
+      "expected": {
+        "columns": [
+          {"index": 0, "duration_months": 6, "is_cumulative": true},
+          {"index": 1, "duration_months": 3, "is_cumulative": false}
+        ]
+      }
+    },
+    {
+      "id": "q3_nine_months_prose_only",
+      "labels": ["Nine Months Ended June 30"],
+      "nominal_quarter": "Q3",
+      "cumulative_months": 9,
+      "current_end": "2025-09-30",
+      "prior_year_end": "2024-09-30",
+      "expected": {
+        "columns": [
+          {"index": 0, "duration_months": 9, "is_cumulative": true}
+        ]
+      }
+    },
+    {
+      "id": "q2_prior_year_comparative_unlabeled",
+      "labels": ["As of and for the six months then ended"],
+      "nominal_quarter": "Q2",
+      "cumulative_months": 6,
+      "current_end": "2025-06-30",
+      "prior_year_end": "2024-06-30",
+      "expected": {
+        "columns": [
+          {"index": 0, "duration_months": 6, "is_cumulative": true}
+        ]
+      }
+    }
+  ]
+}

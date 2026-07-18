@@ -50,6 +50,7 @@ GOLDEN_PURPOSES: frozenset[str] = frozenset(
         "podcast_takeaway_summary",
         "key_metrics",
         "scenario_prior",
+        # segment_10q_period_disambiguate rides in via CLASSIFIER_PURPOSES below.
         *CLASSIFIER_PURPOSES,
     }
 )
