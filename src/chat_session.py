@@ -265,6 +265,24 @@ def _system_prompt(repo_root: Path, ticker: str, report_date: date) -> str:
         worldview = ""
     if worldview:
         memory_bits.append(worldview)
+    # The owner's affirmed profile facts (capacity/appetite/behavioral) —
+    # same hand-composed spotlight treatment as Worldview above, since this
+    # site doesn't route through compose_anchor_block. Inert until at least
+    # one fact is affirmed (§7.1 gated assertion) — no env flag needed.
+    try:
+        from llm.anchors import load_owner_profile_anchor
+        from llm.untrusted import spotlight
+
+        raw_owner_profile = load_owner_profile_anchor(repo_root)
+        owner_profile = (
+            spotlight(raw_owner_profile, source="the owner's affirmed profile facts")
+            if raw_owner_profile
+            else ""
+        )
+    except Exception:
+        owner_profile = ""
+    if owner_profile:
+        memory_bits.append(owner_profile)
     prior_chat = _prior_threads_context(repo_root, ticker, report_date)
     if prior_chat:
         memory_bits.append(prior_chat)

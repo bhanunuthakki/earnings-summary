@@ -21,6 +21,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from import_owner_capacity import (  # noqa: E402
     _life_event_key,  # pyright: ignore[reportPrivateUsage]
     _parse_bucket_members,  # pyright: ignore[reportPrivateUsage]
+    stage_appetite_seed_facts,
     stage_cio_context_facts,
     stage_wealthplan_facts,
 )
@@ -110,3 +111,97 @@ def test_life_event_key_disambiguates_by_person_and_date() -> None:
     assert (
         _life_event_key("work_break", d, "person_a") == "life_event.work_break_person_a_2031_01_01"
     )
+
+
+# --------------------------------------------------------------------------- #
+# --seed-appetite: stage_appetite_seed_facts (tenet-2 Phase 2, owner decision 5)
+# --------------------------------------------------------------------------- #
+
+
+def test_stage_appetite_seed_facts_matches_blend_weights_constant() -> None:
+    """The seed is read FROM allocation.model.BLEND_WEIGHTS, never hand-copied
+    — this pins the seed to the model's actual fallback so the two can never
+    drift apart."""
+    from allocation.model import BLEND_WEIGHTS
+
+    facts = stage_appetite_seed_facts()
+    assert len(facts) == 1
+    fact = facts[0]
+    assert fact.category == "appetite"
+    assert fact.key == "next_dollar.blend_weights"
+    assert fact.value == {
+        "ret": BLEND_WEIGHTS["ret"],
+        "div": BLEND_WEIGHTS["div"],
+        "macro": BLEND_WEIGHTS["macro"],
+    }
+    assert fact.provenance == "derived"
+    assert "affirm or edit" in fact.narrative
+    assert "current hardcoded house view" in fact.narrative
+    # Appetite facts review on a policy EVENT, not a fixed day-count cadence.
+    assert fact.review_horizon_days is None
+
+
+def test_seed_appetite_is_idempotent_via_the_store(tmp_path: Path) -> None:
+    """Staging the same seed twice through owner_profile.store.append_fact is
+    a no-op the second time — the same idempotency guarantee every other
+    staged fact gets."""
+    import sqlite3
+
+    from owner_profile.store import append_fact, list_facts
+
+    db_path = tmp_path / "p.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE owner_profile_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL DEFAULT 'bhanu',
+            category TEXT NOT NULL CHECK (category IN ('capacity','appetite','behavioral')),
+            key TEXT NOT NULL,
+            value_json TEXT NOT NULL,
+            narrative TEXT NOT NULL,
+            provenance TEXT NOT NULL CHECK (
+                provenance IN ('wealthplan_import','cio_context_import','owner','derived')
+            ),
+            status TEXT NOT NULL DEFAULT 'proposed' CHECK (
+                status IN ('proposed','affirmed','rejected')
+            ),
+            affirmed_at TEXT,
+            review_horizon_days INTEGER,
+            source_detail TEXT,
+            created_at TEXT NOT NULL,
+            is_latest INTEGER NOT NULL DEFAULT 1,
+            superseded_at TEXT,
+            superseded_by_id INTEGER
+        );
+        CREATE UNIQUE INDEX ux_owner_profile_facts_latest
+            ON owner_profile_facts(user_id, category, key) WHERE is_latest = 1;
+        """
+    )
+    conn.commit()
+    fact = stage_appetite_seed_facts()[0]
+    first_id = append_fact(
+        conn,
+        category=fact.category,
+        key=fact.key,
+        value=fact.value,
+        narrative=fact.narrative,
+        provenance=fact.provenance,
+        status="proposed",
+        review_horizon_days=fact.review_horizon_days,
+        source_detail=fact.source_detail,
+    )
+    second_id = append_fact(
+        conn,
+        category=fact.category,
+        key=fact.key,
+        value=fact.value,
+        narrative=fact.narrative,
+        provenance=fact.provenance,
+        status="proposed",
+        review_horizon_days=fact.review_horizon_days,
+        source_detail=fact.source_detail,
+    )
+    assert first_id == second_id  # unchanged value -> no new row
+    assert len(list_facts(conn, category="appetite")) == 1
+    conn.close()

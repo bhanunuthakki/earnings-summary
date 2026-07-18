@@ -1044,14 +1044,21 @@ def _offline_reason(error: str | None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def render_portfolio_synthesis_panel(db_path: Path, *, api_url: str | None = None) -> str:
+def render_portfolio_synthesis_panel(
+    db_path: Path, *, api_url: str | None = None, cash_to_deploy_usd: float | None = None
+) -> str:
     """The Portfolio → Synthesis tab fragment. Fetches the live book once (the
     exposure weighting and the next-dollar model prefer live position weights
     and fall back to equal-weight when the tracker is down) plus the cached
     ``cross_portfolio_synthesis`` lens memo, then assembles the page. As the
     section's LANDING tab (navigation_ia.md §2.1) it now leads with the
     tracker-offline banner when the live fetch failed — a front door must
-    say its weights are degraded, not silently show equal-weight."""
+    say its weights are degraded, not silently show equal-weight.
+
+    ``cash_to_deploy_usd`` (tenet-2 Phase 2) opts the next-dollar panel into
+    cash-aware mode — the route boundary (``execution/comments_server.py``)
+    reads it from a ``?cash_to_deploy=`` query param; omitted, the panel
+    behaves exactly as before Phase 2."""
     # Lazy imports keep the analytical builder out of this module's import graph
     # until the panel is actually requested.
     from pipeline.analytical_dashboard import build_analytical_dashboard
@@ -1069,7 +1076,7 @@ def render_portfolio_synthesis_panel(db_path: Path, *, api_url: str | None = Non
     memo = _synthesis_memo_doorway(dash.portfolio_synthesis_md) or (
         render_panel_fragment(dash, "portfolio") or ""
     )
-    return compose_synthesis_page(db_path, live, memo)
+    return compose_synthesis_page(db_path, live, memo, cash_to_deploy_usd=cash_to_deploy_usd)
 
 
 def _synthesis_memo_headline(content_md: str, cap: int = 220) -> str:
@@ -1104,13 +1111,20 @@ def _synthesis_memo_doorway(content_md: str | None) -> str:
     )
 
 
-def compose_synthesis_page(db_path: Path, live: LivePortfolio, synthesis: str) -> str:
+def compose_synthesis_page(
+    db_path: Path,
+    live: LivePortfolio,
+    synthesis: str,
+    *,
+    cash_to_deploy_usd: float | None = None,
+) -> str:
     """Page assembly over an already-fetched live book + lens-memo fragment
     (testable without network; the insight panels read the DB themselves):
     the tracker-offline banner when the live book is unavailable (landing-tab
     honesty — the exposure/next-dollar panels below are equal-weighted then),
     the rollup/exposure grid, the next-dollar distribution full-width, then
-    the memo."""
+    the memo. ``cash_to_deploy_usd`` threads through to the next-dollar panel's
+    cash-aware mode (tenet-2 Phase 2); omitted, behavior is unchanged."""
     grid = "".join(p for p in (_thesis_rollup_panel(db_path), _exposure_panel(db_path, live)) if p)
     parts: list[str] = [_INSIGHTS_CSS]
     if not live.available:
@@ -1118,7 +1132,7 @@ def compose_synthesis_page(db_path: Path, live: LivePortfolio, synthesis: str) -
         parts.append(_tracker_offline_banner(live))
     if grid:
         parts.append(f'<div class="pf-insights">{grid}</div>')
-    parts.append(render_next_dollar_panel(db_path, live))
+    parts.append(render_next_dollar_panel(db_path, live, cash_to_deploy_usd=cash_to_deploy_usd))
     parts.append(synthesis)
     return "".join(parts)
 
@@ -1243,7 +1257,12 @@ def _exposure_panel(db_path: Path, live: LivePortfolio) -> str:
     )
 
 
-def render_next_dollar_panel(db_path: Path, live: LivePortfolio | None = None) -> str:
+def render_next_dollar_panel(
+    db_path: Path,
+    live: LivePortfolio | None = None,
+    *,
+    cash_to_deploy_usd: float | None = None,
+) -> str:
     """Quantitative next-dollar allocation distribution over the holdings
     (src/allocation: DCF upside / diversification / macro tilt, z-scored,
     blended by visible weights, softmaxed — directives/next_dollar_model.md),
@@ -1251,7 +1270,11 @@ def render_next_dollar_panel(db_path: Path, live: LivePortfolio | None = None) -
     Falls back to the memo alone when the model has nothing to score; hides
     entirely when neither exists. Public for the markup-contract tests
     (UX9 peeks); ``live`` is optional so those callers don't need a tracker
-    snapshot (None means no live weights — the model goes equal-weight)."""
+    snapshot (None means no live weights — the model goes equal-weight).
+
+    ``cash_to_deploy_usd`` (tenet-2 Phase 2 cash-aware mode) opts into a
+    concrete per-holding dollar plan for that cash — omitted, the panel
+    renders the distribution only, exactly as before Phase 2."""
     if not db_path.exists():
         return ""
     try:
@@ -1278,7 +1301,13 @@ def render_next_dollar_panel(db_path: Path, live: LivePortfolio | None = None) -
         live_values: dict[str, float | None] | None = None
         if live is not None and live.available and live.positions:
             live_values = {p.ticker.upper(): p.market_value for p in live.positions if p.ticker}
-        model = build_next_dollar_model(db_path, db_path.parent.parent, tickers, live_values)
+        model = build_next_dollar_model(
+            db_path,
+            db_path.parent.parent,
+            tickers,
+            live_values,
+            cash_to_deploy_usd=cash_to_deploy_usd,
+        )
 
     model_html = _next_dollar_distribution(model) if model is not None else ""
     memo_html = _next_dollar_memo(memo, with_heading=bool(model_html))
@@ -1296,7 +1325,12 @@ def _next_dollar_distribution(model: NextDollarModel) -> str:
     # round(..., 6) first: 0.30/0.80 floats to 37.4999…, which ':.0f' alone
     # would render as 37% (and the blend line would sum to 99%).
     blend = " / ".join(f"{FACTOR_LABELS[k]} {round(w * 100.0, 6):.0f}%" for k, w in model.blend)
-    bits = [f"blend {blend}"]
+    blend_source = (
+        "your affirmed profile"
+        if model.blend_weights_source == "owner_profile"
+        else "default house view"
+    )
+    bits = [f"blend {blend} ({blend_source})"]
     bits.append("tracker-weighted" if model.weights_source == "tracker" else "equal-weighted")
     if model.prices_through is not None:
         bits.append(f"daily returns through {model.prices_through.isoformat()}")
@@ -1306,6 +1340,8 @@ def _next_dollar_distribution(model: NextDollarModel) -> str:
         bits.append(f"book vol {model.portfolio_vol_ann * 100.0:.0f}%/yr")
     if model.shrinkage is not None:
         bits.append(f"LW shrink {model.shrinkage:.2f}")
+    if model.cash_to_deploy_usd is not None:
+        bits.append(f"deploying ${model.cash_to_deploy_usd:,.0f}")
     sub = f'<p class="sub">Softmax over blended z-scores · {escape(" · ".join(bits))}.</p>'
 
     warn_lines = [
@@ -1342,13 +1378,19 @@ def _next_dollar_distribution(model: NextDollarModel) -> str:
                 f"{escape(label)} {reading.contribution:+.2f}</span>"
             )
         ticker = escape(r.ticker)
+        # Cash-aware mode (tenet-2 Phase 2): fold the dollar amount into the
+        # existing "now X%" cell rather than adding a 5th grid column — the
+        # 4-column .pf-nd-row grid is otherwise fixed-width across every row.
+        now_text = f"now {r.current_weight_pct:.1f}%"
+        if r.cash_allocation_usd is not None:
+            now_text += f" · +${r.cash_allocation_usd:,.0f}"
         items.append(
             '<div class="pf-nd-item" tabindex="0">'
             '<div class="pf-nd-row">'
             f'<a class="pf-nd-ticker ticker-link" href="../research/{ticker}/">{ticker}</a>'
             f'<span class="pf-nd-bar"><span style="width:{width:.1f}%"></span></span>'
             f'<span class="pf-nd-alloc">{r.allocation_pct:.1f}%</span>'
-            f'<span class="pf-nd-now muted">now {r.current_weight_pct:.1f}%</span>'
+            f'<span class="pf-nd-now muted">{now_text}</span>'
             "</div>"
             f'<div class="pf-nd-wf">{"".join(chips)}</div>'
             "</div>"

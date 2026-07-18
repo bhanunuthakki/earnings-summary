@@ -21,7 +21,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 FactCategory = Literal["capacity", "appetite", "behavioral"]
 FactStatus = Literal["proposed", "affirmed", "rejected"]
@@ -121,6 +121,28 @@ class ParentCareWindow(BaseModel):
     end_age: int = Field(ge=0, le=120)
 
 
+class NextDollarBlendWeights(BaseModel):
+    """Owner-authored next-dollar factor blend (appetite tier) — owner decision
+    5 (§7 of tenet2_advisory_program.md): "Profile-driven weights from the
+    appetite tier, plus a cash-aware mode. Hardcoded 50/30/20 becomes the
+    labeled no-profile fallback only." Keys mirror ``allocation.model``'s
+    factor ids exactly (``ret``/``div``/``macro``); FRACTIONS, not percentages,
+    and must sum to ~1.0 (a per-holding renormalization still happens downstream
+    when a factor is hidden model-wide for lack of data — that logic is
+    unaffected by which set of weights fed it)."""
+
+    ret: float = Field(ge=0.0, le=1.0)
+    div: float = Field(ge=0.0, le=1.0)
+    macro: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _sums_to_one(self) -> NextDollarBlendWeights:
+        total = self.ret + self.div + self.macro
+        if abs(total - 1.0) > 0.01:
+            raise ValueError(f"blend weights must sum to ~1.0, got {total:.4f}")
+        return self
+
+
 class HumanCapitalBucket(BaseModel):
     """One human-capital correlation bucket + its aggregate cap, imported from
     the tracker's CIO_CONTEXT.local.md prose table."""
@@ -150,6 +172,7 @@ __all__ = [
     "HumanCapitalBucket",
     "LifeEventFact",
     "LifeEventKind",
+    "NextDollarBlendWeights",
     "ParentCareWindow",
     "TaxBucketBalances",
 ]

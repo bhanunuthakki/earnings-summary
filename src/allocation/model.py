@@ -48,6 +48,16 @@ from macro_store import Sensitivity, fetch_sensitivities, fetch_series
 # the target weights when every factor is live. Renormalized (a) model-wide
 # when a factor is hidden for lack of data, (b) per holding over the factors
 # that holding carries.
+#
+# tenet-2 Phase 2 (owner decision 5, §7 of docs/design/tenet2_advisory_program.md):
+# this hardcoded 50/30/20 is now the LABELED NO-PROFILE FALLBACK only. When an
+# AFFIRMED appetite fact `next_dollar.blend_weights` exists in
+# `owner_profile_facts`, `build_next_dollar_model` uses it instead and stamps
+# `NextDollarModel.blend_weights_source = "owner_profile"`; otherwise this
+# constant is used and the model stamps `"default_fallback"`. The module
+# constant itself never changes shape — it stays the seed value the packet-walk
+# ratification card offers the owner (see
+# execution/import_owner_capacity.py --seed-appetite).
 BLEND_WEIGHTS: dict[str, float] = {"ret": 0.50, "div": 0.30, "macro": 0.20}
 FACTOR_LABELS: dict[str, str] = {
     "ret": "expected return",
@@ -83,6 +93,11 @@ class HoldingScore:
     div: FactorReading | None
     macro: FactorReading | None
     missing: tuple[str, ...]  # active factor ids this holding lacked
+    # Cash-aware mode (tenet-2 Phase 2, §7 decision 5b): allocation_pct x the
+    # caller's cash_to_deploy_usd, in dollars. None when no cash figure was
+    # supplied to build_next_dollar_model — the model then reads exactly as
+    # it did pre-Phase-2 (a distribution, not a dollar plan).
+    cash_allocation_usd: float | None = None
 
     def reading(self, key: str) -> FactorReading | None:
         return {"ret": self.ret, "div": self.div, "macro": self.macro}[key]
@@ -93,13 +108,56 @@ class NextDollarModel:
     rows: list[HoldingScore]  # sorted by allocation desc
     blend: list[tuple[str, float]]  # (factor id, model-wide weight) after hiding
     hidden_factors: dict[str, str]  # factor id -> why it is absent model-wide
-    weights_source: str  # "tracker" | "equal"
+    weights_source: str  # "tracker" | "equal" — CURRENT-BOOK weighting method
     prices_through: date | None  # last common trading date in the covariance
     cov_obs: int | None  # rows of the return matrix
     shrinkage: float | None  # Ledoit-Wolf delta
     portfolio_vol_ann: float | None  # modeled book vol, annualized fraction
     excluded: dict[str, str]  # ticker -> reason it has no row at all
+    # Where the BLEND (ret/div/macro target weights) came from — distinct
+    # from `weights_source` above, which is about CURRENT holding weights.
+    # "owner_profile" when an affirmed next_dollar.blend_weights fact drove
+    # the blend; "default_fallback" for the hardcoded BLEND_WEIGHTS house view.
+    blend_weights_source: str = "default_fallback"
+    # Cash-aware mode: the caller's input dollar amount, echoed back so a
+    # renderer doesn't need to thread it through separately. None in the
+    # default (distribution-only) mode.
+    cash_to_deploy_usd: float | None = None
     notes: list[str] = field(default_factory=list[str])
+
+
+def _effective_blend_weights(db_path: Path) -> tuple[dict[str, float], str]:
+    """Resolve the next-dollar blend weights: an AFFIRMED owner appetite fact
+    (``owner_profile_facts`` category='appetite', key='next_dollar.blend_weights')
+    when present and valid, else the hardcoded :data:`BLEND_WEIGHTS` house view
+    (owner decision 5 — the hardcode is now the labeled no-profile fallback).
+
+    Never raises: a missing DB / pre-0159 substrate / absent fact / a value
+    that fails :class:`owner_profile.models.NextDollarBlendWeights` validation
+    (e.g. doesn't sum to ~1.0) all degrade to the fallback, source-labeled
+    ``"default_fallback"``.
+    """
+    if not db_path.exists():
+        return dict(BLEND_WEIGHTS), "default_fallback"
+    try:
+        from owner_profile.models import NextDollarBlendWeights
+        from owner_profile.store import get_current_profile
+
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            grouped = get_current_profile(conn)
+        finally:
+            conn.close()
+        for row in grouped.get("appetite", []):
+            if row.key != "next_dollar.blend_weights":
+                continue
+            weights = NextDollarBlendWeights.model_validate(row.value)
+            return {"ret": weights.ret, "div": weights.div, "macro": weights.macro}, (
+                "owner_profile"
+            )
+    except Exception:
+        pass  # any problem (missing table, bad shape, sqlite lock) — fall back
+    return dict(BLEND_WEIGHTS), "default_fallback"
 
 
 def build_next_dollar_model(
@@ -107,6 +165,8 @@ def build_next_dollar_model(
     repo_root: Path,
     holdings: Sequence[str],
     live_values: Mapping[str, float | None] | None = None,
+    *,
+    cash_to_deploy_usd: float | None = None,
 ) -> NextDollarModel | None:
     """Score the holdings and softmax into a next-dollar distribution.
 
@@ -114,12 +174,25 @@ def build_next_dollar_model(
     None or empty falls back to equal weights, labelled via
     ``weights_source``. Returns None when no factor has enough data to score
     anything — the caller falls back to its narrative-only rendering.
+
+    ``cash_to_deploy_usd`` opts into cash-aware mode (tenet-2 Phase 2, §7
+    decision 5b): when supplied, each row's ``cash_allocation_usd`` is
+    ``allocation_pct / 100 * cash_to_deploy_usd`` — a concrete dollar plan for
+    THIS cash, not just a distribution. Omitted (the default), every row's
+    ``cash_allocation_usd`` stays ``None`` and the model behaves exactly as
+    before Phase 2.
+
+    The blend (ret/div/macro target weights) is profile-driven when the owner
+    has affirmed a ``next_dollar.blend_weights`` appetite fact
+    (:func:`_effective_blend_weights`), else the hardcoded :data:`BLEND_WEIGHTS`
+    — labeled via ``NextDollarModel.blend_weights_source``.
     """
     tickers = [t.upper() for t in dict.fromkeys(holdings) if t]
     if not tickers:
         return None
 
     weights, weights_source = _current_weights(tickers, live_values)
+    blend_weights, blend_weights_source = _effective_blend_weights(db_path)
     ret_readings = _dcf_upside(db_path, tickers)
     div = _diversification(repo_root, tickers, weights)
     macro_readings = _macro_tilt(db_path, tickers)
@@ -143,7 +216,7 @@ def build_next_dollar_model(
                 "no macro betas/series on file (run fetch_macro_series + "
                 "compute_macro_sensitivities)"
             )
-    active = [k for k in BLEND_WEIGHTS if k not in hidden]
+    active = [k for k in blend_weights if k not in hidden]
     if not active:
         return None
 
@@ -158,11 +231,11 @@ def build_next_dollar_model(
         if not have:
             excluded[t] = "no factor data"
             continue
-        weight_sum = sum(BLEND_WEIGHTS[k] for k in have)
+        weight_sum = sum(blend_weights[k] for k in have)
         readings: dict[str, FactorReading] = {}
         score = 0.0
         for k in have:
-            w_eff = BLEND_WEIGHTS[k] / weight_sum
+            w_eff = blend_weights[k] / weight_sum
             z = zscores[k][t]
             raw, detail = factor_raw[k][t]
             contribution = w_eff * z
@@ -190,10 +263,12 @@ def build_next_dollar_model(
     shares = exp / float(exp.sum())
     for row, share in zip(rows, shares, strict=True):
         row.allocation_pct = float(share) * 100.0
+        if cash_to_deploy_usd is not None:
+            row.cash_allocation_usd = row.allocation_pct / 100.0 * cash_to_deploy_usd
     rows.sort(key=lambda r: (-r.allocation_pct, r.ticker))
 
-    active_total = sum(BLEND_WEIGHTS[k] for k in active)
-    blend = [(k, BLEND_WEIGHTS[k] / active_total) for k in active]
+    active_total = sum(blend_weights[k] for k in active)
+    blend = [(k, blend_weights[k] / active_total) for k in active]
     return NextDollarModel(
         rows=rows,
         blend=blend,
@@ -204,6 +279,8 @@ def build_next_dollar_model(
         shrinkage=div.shrinkage,
         portfolio_vol_ann=div.portfolio_vol_ann,
         excluded=excluded,
+        blend_weights_source=blend_weights_source,
+        cash_to_deploy_usd=cash_to_deploy_usd,
         notes=div.notes,
     )
 

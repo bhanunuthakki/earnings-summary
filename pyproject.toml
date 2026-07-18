@@ -105,10 +105,15 @@ include = ["src", "execution", "tests"]
 # subtrees), so every wealthplan.* symbol cascades to Unknown with no real bug
 # behind it. The importer's OWN types (owner_profile.models/.store) are fully
 # typed and covered by the pyright run over that package.
+# src/integrations/wealthplan_capacity.py (tenet-2 Phase 2) joins them for the
+# IDENTICAL reason — it's a runtime reader over the same sibling-repo sys.path
+# boundary, not an importer, but the wealthplan.* symbols cascade to Unknown
+# the same way. Its OWN types (WealthplanCashNeedSummary, the band Literal)
+# are fully typed and covered normally.
 exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions",
            "execution/build_redesigned_dcf.py", "execution/build_bank_dcf.py", "execution/build_holdco_sotp.py",
            "execution/build_fintech_sotp.py", "execution/build_nu_platform_dcf.py", "execution/build_meli_platform_dcf.py", "execution/dcf_opus_assumptions.py",
-           "execution/import_owner_capacity.py"]
+           "execution/import_owner_capacity.py", "src/integrations/wealthplan_capacity.py"]
 # `execution` is an import root too: its CLIs import each other as top-level
 # modules (e.g. `import refresh_dcf`) and tests import them (`import comments_server`)
 # after a runtime sys.path.insert. Listing it here lets pyright resolve those —
@@ -139,7 +144,7 @@ include = ["src", "execution", "tests"]
 exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions",
            "execution/build_redesigned_dcf.py", "execution/build_bank_dcf.py", "execution/build_holdco_sotp.py",
            "execution/build_fintech_sotp.py", "execution/build_nu_platform_dcf.py", "execution/build_meli_platform_dcf.py", "execution/dcf_opus_assumptions.py",
-           "execution/import_owner_capacity.py"]
+           "execution/import_owner_capacity.py", "src/integrations/wealthplan_capacity.py"]
 extraPaths = ["src", "execution", "scratch", "cron"]
 pythonVersion = "3.11"
 typeCheckingMode = "all"
