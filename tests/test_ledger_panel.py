@@ -278,6 +278,40 @@ def test_standalone_ledger_panel_keeps_its_internal_toolbar(db_path: Path) -> No
     assert 'id="ledger-jump-capture"' in embedded
 
 
+def test_proposal_group_card_is_div_balanced() -> None:
+    """A research/proposal card must close its own <div>s. It was missing the
+    outer ledger-stance close — tolerated in the research list (browsers just
+    cascade-nest the siblings) but catastrophic in the bounded "N need you"
+    packet: an unclosed <div> keeps pk-stage[hidden] open and swallows the whole
+    On My Mind feed into a display:none stage (owner 2026-07-18: "an entire
+    screen of wasted space"). A body with a markdown table exercises the inner
+    table-scroll <div> that made the miscount easy to miss."""
+    from research.proposals import ResearchProposal
+
+    from pipeline.ledger_panel import (
+        _proposal_group_card,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    prop = ResearchProposal(
+        id=1,
+        task_id=7,
+        kind="memo",
+        ticker="NU",
+        title="Do NU's margins still hold?",
+        body_md="A finding.\n\n| Metric | Q1 | Q2 |\n| --- | --- | --- |\n| NIM | 1 | 2 |\n",
+        evidence_json="{}",
+        status="pending",
+        adversarial_verdict=None,
+        budget_tier="standard",
+        provenance="engine",
+        tainted_by_proposal_id=None,
+    )
+    html = _proposal_group_card([prop])
+    assert html.count("<div") == html.count("</div>"), (
+        f"unbalanced <div>s: {html.count('<div')} open vs {html.count('</div>')} close"
+    )
+
+
 def test_onmymind_js_has_no_dead_discuss_popup_branch() -> None:
     """Phase-5 verifier fix 6: no web button emits data-om-verb="discuss"
     anymore (Discuss is the inline-chat data-om-ask path), so the old
