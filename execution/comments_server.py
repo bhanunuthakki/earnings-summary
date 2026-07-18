@@ -1133,7 +1133,22 @@ def create_app(
             # card stays on Performance).
             from pipeline.portfolio_panel import render_portfolio_synthesis_panel
 
-            return Response(render_portfolio_synthesis_panel(db_path), mimetype="text/html")
+            # tenet-2 Phase 2 cash-aware mode: an optional ?cash_to_deploy=
+            # query param opts the next-dollar model into per-holding dollar
+            # allocations of that cash. Absent/unparseable -> distribution-only
+            # (unchanged pre-Phase-2 behavior).
+            cash_raw = request.args.get("cash_to_deploy")
+            cash_to_deploy_usd: float | None = None
+            if cash_raw:
+                try:
+                    cash_to_deploy_usd = float(cash_raw)
+                except ValueError:
+                    cash_to_deploy_usd = None
+
+            return Response(
+                render_portfolio_synthesis_panel(db_path, cash_to_deploy_usd=cash_to_deploy_usd),
+                mimetype="text/html",
+            )
 
         if name == "positioning":
             # Portfolio → Positioning: the owner's durable target book

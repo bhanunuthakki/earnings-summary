@@ -46,6 +46,15 @@ CLI:
     python execution/import_owner_capacity.py --dry-run
     python execution/import_owner_capacity.py
     python execution/import_owner_capacity.py --db-path .tmp/test_profile.db
+    python execution/import_owner_capacity.py --seed-appetite --dry-run
+
+``--seed-appetite`` (tenet-2 Phase 2, owner decision 5) additionally stages
+ONE ``appetite``-category fact — ``next_dollar.blend_weights`` — seeded
+verbatim from ``allocation.model.BLEND_WEIGHTS`` (the current hardcoded
+50/30/20 house view), narrated "current hardcoded house view — affirm or
+edit" so the owner can ratify or edit it via the existing packet walk. This
+reuses ``owner_profile.store.append_fact`` exactly like the capacity facts
+above — no new script, no new table.
 """
 
 from __future__ import annotations
@@ -71,6 +80,7 @@ from owner_profile.models import (  # noqa: E402
     HorizonAges,
     HumanCapitalBucket,
     LifeEventFact,
+    NextDollarBlendWeights,
     ParentCareWindow,
     TaxBucketBalances,
 )
@@ -422,6 +432,48 @@ def stage_cio_context_facts(
 
 
 # ---------------------------------------------------------------------------
+# --seed-appetite: the hardcoded next-dollar blend, staged for ratification
+# ---------------------------------------------------------------------------
+
+
+def stage_appetite_seed_facts() -> list[StagedFact]:
+    """Stage ONE ``proposed`` appetite fact — ``next_dollar.blend_weights`` —
+    seeded from the CURRENT hardcoded house view (``allocation.model.
+    BLEND_WEIGHTS``), so the owner can ratify or edit it via the existing
+    packet walk (owner decision 5, §7 of tenet2_advisory_program.md: "Hardcoded
+    50/30/20 becomes the labeled no-profile fallback only").
+
+    Reads ``BLEND_WEIGHTS`` directly (never hand-copies the numbers) so this
+    seed can never drift from the model's actual fallback. Idempotent like
+    every other staged fact: re-running this flag when ``BLEND_WEIGHTS``
+    hasn't changed and the fact hasn't been superseded is a no-op via
+    ``owner_profile.store.append_fact``'s value-equality check.
+    """
+    from allocation.model import BLEND_WEIGHTS
+
+    weights = NextDollarBlendWeights(
+        ret=BLEND_WEIGHTS["ret"], div=BLEND_WEIGHTS["div"], macro=BLEND_WEIGHTS["macro"]
+    )
+    narrative = (
+        f"Next-dollar blend weights: ret {weights.ret:.0%} / div {weights.div:.0%} / "
+        f"macro {weights.macro:.0%} — current hardcoded house view — affirm or edit."
+    )
+    return [
+        StagedFact(
+            category="appetite",
+            key="next_dollar.blend_weights",
+            value=weights.model_dump(mode="json"),
+            narrative=narrative,
+            provenance="derived",
+            source_detail="allocation.model.BLEND_WEIGHTS",
+            # Appetite facts review on a POLICY event (pledge >$10k, drawdown
+            # >15%), not a fixed day-count cadence — §3.3 of the strategy doc.
+            review_horizon_days=None,
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -481,6 +533,14 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Print what would be staged; write nothing.",
     )
+    parser.add_argument(
+        "--seed-appetite",
+        action="store_true",
+        help=(
+            "Also stage the ONE next_dollar.blend_weights appetite fact, seeded from "
+            "allocation.model.BLEND_WEIGHTS, for the owner to ratify/edit via the packet walk."
+        ),
+    )
     args = parser.parse_args(argv)
 
     repo_root: Path = args.repo_root
@@ -490,12 +550,14 @@ def main(argv: list[str] | None = None) -> int:
 
     wealthplan_facts = stage_wealthplan_facts(args.wealthplan_root)
     cio_facts = stage_cio_context_facts(args.cio_context_path)
-    facts = wealthplan_facts + cio_facts
+    appetite_facts = stage_appetite_seed_facts() if args.seed_appetite else []
+    facts = wealthplan_facts + cio_facts + appetite_facts
 
     _log(
         "staged",
         n_wealthplan=len(wealthplan_facts),
         n_cio_context=len(cio_facts),
+        n_appetite=len(appetite_facts),
         keys=[f.key for f in facts],
     )
 

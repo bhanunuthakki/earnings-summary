@@ -35,6 +35,7 @@ from llm_client import (
     generate_saydo_filter,
     load_bear_anchor,
     load_ir_anchor,
+    load_owner_profile_anchor,
     load_priors_anchor,
     load_thesis_anchor,
     load_worldview_anchor,
@@ -163,6 +164,7 @@ def filter_important_print_vs_guide(
         load_ir_anchor(repo_root, ticker),
         load_priors_anchor(repo_root, ticker),
         load_worldview_anchor(repo_root),  # inert until LEDGER_WORLDVIEW_ANCHOR
+        load_owner_profile_anchor(repo_root),  # inert until a fact is affirmed
     )
     cache_key = _saydo_filter_cache_key(card, payload, anchor_block)
     cached = _load_saydo_filter_cache(repo_root, ticker, cache_key)

@@ -82,6 +82,9 @@ from llm.anchors import (
     load_ir_anchor as load_ir_anchor,
 )
 from llm.anchors import (
+    load_owner_profile_anchor as load_owner_profile_anchor,
+)
+from llm.anchors import (
     load_priors_anchor as load_priors_anchor,
 )
 from llm.anchors import (

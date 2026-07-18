@@ -34,9 +34,11 @@ top-level ``db`` import triggers ``init_db``).
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -49,9 +51,12 @@ if TYPE_CHECKING:
     from capture.matcher import RosterIndex
     from compute.thesis_evaluator import ThesisVerdict
 
+log = logging.getLogger(__name__)
+
 __all__ = [
     "AGENT_SOURCE",
     "BAND_TOLERANCE",
+    "CAPACITY_HORIZON_DAYS",
     "CONCENTRATION_PCT",
     "CONFIDENCES",
     "DEFAULT_MOS_BAR",
@@ -62,12 +67,14 @@ __all__ = [
     "SELL_OVER_UNDER",
     "SUGGESTED_EXPRESSIONS",
     "TRIM_OVER_UNDER",
+    "CapacityContext",
     "PositionReview",
     "PreAnalysis",
     "VerdictOutput",
     "apply_behavioral_guard",
     "assemble_pre_analysis",
     "attest_review_changed",
+    "build_capacity_context",
     "build_pre_analysis",
     "classify_valuation",
     "classify_weight_band",
@@ -76,6 +83,7 @@ __all__ = [
     "mechanical_read",
     "parse_review_command",
     "parse_verdict_output",
+    "render_capacity_lines",
     "render_pre_analysis_chat",
     "render_pre_analysis_plain",
     "render_tax_lines",
@@ -101,6 +109,13 @@ DEFAULT_MOS_BAR = 0.30  # fallback initiation bar when a holding JSON omits mos_
 BAND_TOLERANCE = 0.20  # +/- 20% tolerance band around a stated target weight
 CONCENTRATION_PCT = 8.0  # single-name weight (%) at/above which we flag concentration
 
+# tenet-2 Phase 2 capacity block (§4 delivery seam 1 of
+# docs/design/tenet2_advisory_program.md): a dated life event only shows in
+# the capacity block when it falls within this many days of today — "the
+# position's horizon window (default 24mo lookahead)". A baby due in 2031
+# doesn't show on a review run today; a work-break starting in 2027 does.
+CAPACITY_HORIZON_DAYS = 730
+
 _HOLDINGS_SUBDIR: tuple[str, ...] = ("micro_thesis", "holdings")
 
 # BreachStatus.value -> the coarse label the service reasons over. Read by
@@ -111,6 +126,45 @@ _BREAK_STATUS_LABEL: dict[str, str] = {
     "breach": "breach",
     "unresolved": "unresolved",
 }
+
+
+@dataclass(frozen=True)
+class CapacityContext:
+    """Deterministic, zero-LLM read of the owner's affirmed capacity context —
+    the tenet-2 Phase 2 "capacity block" (§4 delivery seam 1). Every field is
+    ``None``/``()`` when nothing on file supports it — a fact that hasn't been
+    AFFIRMED (only ``proposed``) never populates a field here, so the block
+    renders NOTHING (not a placeholder) until the owner ratifies via the
+    packet walk. This is deliberately separate from ``PreAnalysis`` itself so
+    it can be built, tested, and reasoned about on its own."""
+
+    cash_buffer_months: float | None = None
+    tax_bucket_total_usd: float | None = None
+    tax_bucket_as_of: str | None = None  # ISO date the balances snapshot is from
+    # One rendered line per dated life event within CAPACITY_HORIZON_DAYS of
+    # today, e.g. "Work break (person_a): 2027-03-01 through 2027-09-01".
+    upcoming_life_events: tuple[str, ...] = field(default_factory=tuple)
+    # Set when `ticker` is a member of an AFFIRMED human_capital.<bucket> fact.
+    human_capital_note: str | None = None
+    # From integrations.wealthplan_capacity.read_cash_need_summary — band-level
+    # only, no amounts. Attached by build_pre_analysis (a separate I/O leg),
+    # not by build_capacity_context (which reads only owner_profile_facts).
+    wealthplan_cash_need_note: str | None = None
+    # From advisor.exit_quality.read_ticker_exit_quality — the tracker's
+    # realized exit-quality read for THIS ticker, when the tracker has one.
+    exit_quality_note: str | None = None
+
+    def is_empty(self) -> bool:
+        """True when every field is absent — the capacity block renders no
+        lines at all in this case (byte-identical to pre-Phase-2 output)."""
+        return (
+            self.cash_buffer_months is None
+            and self.tax_bucket_total_usd is None
+            and not self.upcoming_life_events
+            and self.human_capital_note is None
+            and self.wealthplan_cash_need_note is None
+            and self.exit_quality_note is None
+        )
 
 
 @dataclass(frozen=True)
@@ -153,6 +207,11 @@ class PreAnalysis:
     # None only on PreAnalysis objects built before the tax stage (tests, old
     # callers); build_pre_analysis always attaches a view, degraded or not.
     tax: PositionTaxView | None = None
+    # --- owner-context capacity (tenet-2 Phase 2, deterministic) -------------
+    # None on PreAnalysis objects built before the capacity stage (tests, old
+    # callers) — treated identically to an empty CapacityContext by the
+    # renderers. build_pre_analysis always attaches one (degraded-empty or not).
+    capacity: CapacityContext | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -355,6 +414,124 @@ def _load_holdings_json(repo_root: Path, ticker: str) -> dict[str, object] | Non
     return cast("dict[str, object]", data) if isinstance(data, dict) else None
 
 
+def build_capacity_context(
+    conn: sqlite3.Connection, ticker: str, *, today: date | None = None
+) -> CapacityContext:
+    """Deterministic, zero-LLM read of AFFIRMED ``owner_profile_facts`` rows
+    for the ``/review`` capacity block (tenet-2 Phase 2, §4 delivery seam 1).
+
+    Reads ONLY ``owner_profile.store.get_current_profile`` (capacity-category
+    facts) — the wealthplan cash-need band and the tracker exit-quality read
+    are separate I/O legs ``build_pre_analysis`` attaches afterward via
+    ``dataclasses.replace``, so this function stays conn-scoped and testable
+    against a bare fixture DB with no network/sibling-repo dependency.
+
+    Degrades to an all-empty :class:`CapacityContext` on a missing table
+    (pre-0159 substrate), a locked DB, or any row-shape surprise — never
+    raises, and never guesses: a fact that exists only as ``proposed`` simply
+    isn't in ``get_current_profile``'s output, so it contributes nothing here.
+    """
+    try:
+        from pydantic import ValidationError
+
+        from owner_profile.models import HumanCapitalBucket, LifeEventFact
+        from owner_profile.store import get_current_profile
+
+        grouped = get_current_profile(conn)
+    except Exception as exc:  # missing table / locked DB / anything — degrade
+        log.debug({"event": "capacity_context_load_failed", "ticker": ticker, "error": str(exc)})
+        return CapacityContext()
+
+    capacity_rows = grouped.get("capacity", [])
+    today_ = today or date.today()
+    horizon = today_ + timedelta(days=CAPACITY_HORIZON_DAYS)
+    ticker_upper = ticker.upper()
+
+    cash_buffer_months: float | None = None
+    tax_total: float | None = None
+    tax_as_of: str | None = None
+    life_lines: list[str] = []
+    human_capital_note: str | None = None
+
+    for row in capacity_rows:
+        if row.key == "cash_buffer_months":
+            months = row.value.get("months")
+            if isinstance(months, (int, float)) and not isinstance(months, bool):
+                cash_buffer_months = float(months)
+        elif row.key == "tax_bucket_balances":
+            balances = row.value.get("balances")
+            as_of = row.value.get("as_of")
+            if isinstance(balances, dict):
+                balances_obj = cast("dict[str, object]", balances)
+                try:
+                    tax_total = sum(
+                        float(v)
+                        for v in balances_obj.values()
+                        if isinstance(v, (int, float, str)) and not isinstance(v, bool)
+                    )
+                except (TypeError, ValueError):
+                    tax_total = None
+            if isinstance(as_of, str) and as_of.strip():
+                tax_as_of = as_of
+        elif row.key.startswith("life_event."):
+            try:
+                life = LifeEventFact.model_validate(row.value)
+            except ValidationError:
+                continue  # parent_care (age-keyed) or an unrecognized shape
+            if today_ <= life.date <= horizon:
+                who = f" ({life.person})" if life.person else ""
+                window = f" through {life.end_date.isoformat()}" if life.end_date else ""
+                life_lines.append(f"{life.label}{who}: {life.date.isoformat()}{window}")
+        elif row.key.startswith("human_capital."):
+            try:
+                bucket = HumanCapitalBucket.model_validate(row.value)
+            except ValidationError:
+                continue
+            if ticker_upper in bucket.members:
+                bucket_name = row.key.removeprefix("human_capital.")
+                human_capital_note = (
+                    f"this position stacks on your income's {bucket_name} bucket "
+                    f"(cap {bucket.cap_pct:g}%)"
+                )
+
+    return CapacityContext(
+        cash_buffer_months=cash_buffer_months,
+        tax_bucket_total_usd=tax_total,
+        tax_bucket_as_of=tax_as_of,
+        upcoming_life_events=tuple(life_lines),
+        human_capital_note=human_capital_note,
+    )
+
+
+def render_capacity_lines(capacity: CapacityContext | None) -> list[str]:
+    """Markdown bullets for the capacity block — shared by the chat reply and
+    the plain-ASCII (Telegram) reply, mirroring ``render_tax_lines``'s shape.
+
+    Empty for ``capacity=None`` or an all-empty :class:`CapacityContext`: this
+    is the common case today (no affirmed facts yet) and MUST render byte-
+    identical to the pre-Phase-2 output — no header, no placeholder line."""
+    if capacity is None or capacity.is_empty():
+        return []
+    lines: list[str] = []
+    bits: list[str] = []
+    if capacity.cash_buffer_months is not None:
+        bits.append(f"cash buffer target {capacity.cash_buffer_months:g} months")
+    if capacity.tax_bucket_total_usd is not None:
+        as_of = f" as of {capacity.tax_bucket_as_of}" if capacity.tax_bucket_as_of else ""
+        bits.append(f"tax-bucket balances ${capacity.tax_bucket_total_usd:,.0f} total{as_of}")
+    if bits:
+        lines.append(f"- Capacity: {'; '.join(bits)}")
+    for ev in capacity.upcoming_life_events:
+        lines.append(f"- Life event within horizon: {ev}")
+    if capacity.human_capital_note:
+        lines.append(f"- Human-capital: {capacity.human_capital_note}")
+    if capacity.wealthplan_cash_need_note:
+        lines.append(f"- Near-term cash need: {capacity.wealthplan_cash_need_note}")
+    if capacity.exit_quality_note:
+        lines.append(f"- {capacity.exit_quality_note}")
+    return lines
+
+
 def build_pre_analysis(
     repo_root: Path,
     ticker: str,
@@ -439,11 +616,42 @@ def build_pre_analysis(
             verdict = None  # no holdings JSON — the FLKR case
         dcf_tuple = latest_dcf_runs(conn).get(ticker)
         instrument_kind = get_instrument_kind(conn, ticker)
+        capacity = build_capacity_context(conn, ticker)
     finally:
         conn.close()
 
     break_rule_status, tripped_rules = summarize_verdict(verdict)
     is_index_instrument = instrument_kind is InstrumentType.ETF
+
+    # --- capacity block, remaining legs: wealthplan cash-need band + tracker
+    # exit-quality (both cross federation boundaries, both never-raise) -------
+    try:
+        from integrations.wealthplan_capacity import read_cash_need_summary
+
+        wp_summary = read_cash_need_summary()
+        wealthplan_note = (
+            wp_summary.band
+            if wp_summary.available and wp_summary.band == "normal"
+            else (
+                f"elevated ({', '.join(wp_summary.reasons)})"
+                if wp_summary.available and wp_summary.band == "elevated"
+                else None
+            )
+        )
+    except Exception as exc:  # never let a sibling-repo boundary break /review
+        log.debug({"event": "wealthplan_capacity_read_failed", "error": str(exc)})
+        wealthplan_note = None
+    try:
+        from advisor.exit_quality import read_ticker_exit_quality, render_exit_quality_note
+
+        eq = read_ticker_exit_quality(ticker, api_url=api_url)
+        exit_note = render_exit_quality_note(eq) if eq is not None else None
+    except Exception as exc:  # never let the tracker boundary break /review
+        log.debug({"event": "exit_quality_read_failed", "ticker": ticker, "error": str(exc)})
+        exit_note = None
+    capacity = replace(
+        capacity, wealthplan_cash_need_note=wealthplan_note, exit_quality_note=exit_note
+    )
 
     pre = assemble_pre_analysis(
         ticker,
@@ -504,7 +712,7 @@ def build_pre_analysis(
             trim_rationale=trim_rationale,
             history_truncated=history is not None and len(history) >= TRANSACTION_HISTORY_LIMIT,
         )
-    return replace(pre, tax=tax_view)
+    return replace(pre, tax=tax_view, capacity=capacity)
 
 
 # --------------------------------------------------------------------------- #
@@ -838,7 +1046,11 @@ def _convictions_block(repo_root: Path, ticker: str, db_path: Path | str | None)
 
 
 def _build_verdict_prompt(
-    pre: PreAnalysis, convictions_block: str, *, graded_line: str | None = None
+    pre: PreAnalysis,
+    convictions_block: str,
+    *,
+    graded_line: str | None = None,
+    owner_profile_anchor: str = "",
 ) -> str:
     facts = (
         f"Ticker: {pre.ticker}\n"
@@ -854,11 +1066,13 @@ def _build_verdict_prompt(
         f"ladder verdict: {pre.valuation_verdict}\n"
         f"Conviction encoded: {pre.conviction_encoded}\n"
     )
+    profile_block = f"{owner_profile_anchor}\n" if owner_profile_anchor else ""
     return (
         "You are the owner's position-review analyst. Using the GROUNDED FACTS "
         "(deterministic, computed from the platform) and the owner's OWN convictions, "
         "return a single trim/hold/add/sell verdict for this ONE position.\n\n"
         f"{_behavioral_rules(graded_line)}\n"
+        f"{profile_block}"
         f"## GROUNDED FACTS\n{facts}\n"
         f"## THE OWNER'S CONVICTIONS ON THIS NAME\n{convictions_block or '(none on file)'}\n\n"
         "## OUTPUT — return ONLY a JSON object with exactly these keys:\n"
@@ -1067,8 +1281,30 @@ def review_position(
         # always cite the same live count (never a stale hardcode, never a
         # query race between the two call sites).
         graded_line = graded_sell_record(resolve_db_path(db_path))
+        # Owner-profile anchor (§4 delivery seam 2 of tenet2_advisory_program.md).
+        # This site composes the prompt by hand rather than via
+        # compose_anchor_block, so spotlight-wrap here (same pattern as
+        # chat_session.py's hand-composed worldview block) — a load failure
+        # must never break the review, so it degrades to "" like every other
+        # anchor loader.
+        try:
+            from llm.anchors import load_owner_profile_anchor
+            from llm.untrusted import spotlight
+
+            raw_owner_profile_anchor = load_owner_profile_anchor(repo_root)
+            owner_profile_anchor = (
+                spotlight(raw_owner_profile_anchor, source="the owner's affirmed profile facts")
+                if raw_owner_profile_anchor
+                else ""
+            )
+        except Exception as exc:
+            log.debug({"event": "owner_profile_anchor_load_failed", "error": str(exc)})
+            owner_profile_anchor = ""
         prompt = _build_verdict_prompt(
-            pre, _convictions_block(repo_root, pre.ticker, db_path), graded_line=graded_line
+            pre,
+            _convictions_block(repo_root, pre.ticker, db_path),
+            graded_line=graded_line,
+            owner_profile_anchor=owner_profile_anchor,
         )
         # db_path= keeps the call's DB-backed layers (llm_calls cost ledger,
         # budget, pins) on the caller's DB — without it a library invocation
@@ -1194,6 +1430,7 @@ def render_pre_analysis_chat(pre: PreAnalysis, *, db_path: Path | str | None = N
             f"- Valuation: fair {fv} vs asked {asked} → {gap} (+ = over-valued) · "
             f"ladder: {pre.valuation_verdict}",
             *render_tax_lines(pre.tax),
+            *render_capacity_lines(pre.capacity),
             f"- Mechanical read: {mechanical_read(pre)}",
             *([f"- {graded_line}"] if graded_line is not None else []),
             f"- Full calibrated verdict (LLM + behavioral guard): "
@@ -1257,6 +1494,7 @@ def render_pre_analysis_plain(pre: PreAnalysis, *, db_path: Path | str | None = 
             f"- Valuation: fair {fv} vs asked {asked} -> {gap} (+ = over-valued) - "
             f"ladder: {pre.valuation_verdict}",
             *render_tax_lines(pre.tax, plain=True),
+            *render_capacity_lines(pre.capacity),
             f"- Mechanical read: {mechanical_read(pre)}",
             *([f"- {graded_line}"] if graded_line is not None else []),
             "- Full calibrated review: from the desk (Holding -> Review).",

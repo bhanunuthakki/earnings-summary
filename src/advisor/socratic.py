@@ -173,19 +173,23 @@ def _anchors_block(repo_root: Path, ticker: str) -> str:
         from llm.anchors import (
             compose_anchor_block,
             load_bear_anchor,
+            load_owner_profile_anchor,
             load_priors_anchor,
             load_thesis_anchor,
             load_worldview_anchor,
         )
 
-        # The owner's Worldview belongs here above all — this flow is explicitly
-        # about the OWNER's read. Inert until LEDGER_WORLDVIEW_ANCHOR is on.
+        # The owner's Worldview + affirmed profile facts belong here above all —
+        # this flow is explicitly about the OWNER's read. Worldview is inert until
+        # LEDGER_WORLDVIEW_ANCHOR is on; the profile anchor is inert until the
+        # owner has affirmed at least one fact (§7.1 gated assertion).
         return compose_anchor_block(
             load_thesis_anchor(repo_root, ticker),
             load_bear_anchor(repo_root, ticker),
             "",
             load_priors_anchor(repo_root, ticker),
             load_worldview_anchor(repo_root),
+            load_owner_profile_anchor(repo_root),
         )
     except Exception as exc:  # anchors must never block the flow
         log.debug({"event": "socratic_anchor_load_failed", "ticker": ticker, "error": str(exc)})
