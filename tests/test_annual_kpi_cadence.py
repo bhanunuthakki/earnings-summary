@@ -24,7 +24,7 @@ from compute.thesis_evaluator import (
     evaluate_rule,
 )
 from models.documents import SourceType
-from models.facts import FiscalPeriodType, Unit
+from models.facts import FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import BreachStatus, ReportingCadence
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
@@ -228,7 +228,16 @@ def test_persist_manifest_stamps_annual_cadence(conn: sqlite3.Connection) -> Non
         source_doc_id=42,
         primary_source=SourceType.IR_DOC,
         cadences={_CAR: ReportingCadence.ANNUAL},
-        values=[KpiValue(name=_CAR, value=Decimal("16.6"), unit=Unit.PERCENT)],
+        values=[
+            KpiValue(
+                name=_CAR,
+                value=Decimal("16.6"),
+                unit=Unit.PERCENT,
+                locator=LegacyEscapeHatch(
+                    reason="test fixture value -- provenance not under test here"
+                ),
+            )
+        ],
     )
     result = persist_manifest(conn, run_id="t", manifest=manifest)
     assert result.inserted == 1

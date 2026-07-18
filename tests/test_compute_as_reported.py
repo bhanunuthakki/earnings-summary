@@ -33,7 +33,7 @@ _SAMPLE = {
 def test_extract_as_reported_facts_canonical() -> None:
     """Curated XBRL tags produce one fact each; non-numeric / missing skipped."""
     record = FmpAsReportedRecord.model_validate(_SAMPLE)
-    facts = extract_facts_from_record(record, source_doc_id=300)
+    facts = extract_facts_from_record(record, source_doc_id=300, record_index=0)
 
     by_line = {f.line_item: f for f in facts}
     assert by_line["rpo"].value == Decimal("130000000000")
@@ -50,7 +50,7 @@ def test_extract_as_reported_facts_canonical() -> None:
 def test_skips_non_numeric_xbrl_values() -> None:
     """String-valued XBRL tags (documenttype, entityregistrantname) produce no facts."""
     record = FmpAsReportedRecord.model_validate(_SAMPLE)
-    facts = extract_facts_from_record(record, source_doc_id=1)
+    facts = extract_facts_from_record(record, source_doc_id=1, record_index=0)
     line_items = {f.line_item for f in facts}
     assert "documenttype" not in line_items
     assert "entityregistrantname" not in line_items
@@ -66,6 +66,6 @@ def test_skips_missing_tags() -> None:
         "data": {"revenueremainingperformanceobligation": 100},
     }
     record = FmpAsReportedRecord.model_validate(minimal)
-    facts = extract_facts_from_record(record, source_doc_id=1)
+    facts = extract_facts_from_record(record, source_doc_id=1, record_index=0)
     line_items = {f.line_item for f in facts}
     assert line_items == {"rpo"}

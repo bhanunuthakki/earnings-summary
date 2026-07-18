@@ -32,7 +32,7 @@ from pathlib import Path
 from compute.kpi_resolver import canonical_metric_name
 from ir_pipeline.config import IrConfig, SheetKpi
 from models.documents import SourceType, tier_for_source_type
-from models.facts import FiscalPeriodType, Unit
+from models.facts import FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import DefinitionOrigin
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
@@ -43,6 +43,18 @@ from pipeline.restatement_detector import _table_has_column
 from pipeline.run_accounting import start_run
 
 _DOC_TYPE = "ir_historical_spreadsheet"
+
+# A parsed spreadsheet cell has no JSON/PDF position to anchor a
+# FactLocator to (documented exception, docs/design/
+# provenance_clickthrough.md §5.3) -- the cell's (row, column) identity
+# lives in the source .xlsx, which this reader doesn't carry through.
+_NO_LOCATOR = LegacyEscapeHatch(
+    reason=(
+        "IR historical spreadsheet cells have no JSON/PDF position captured "
+        "by this reader -- the source .xlsx row/column identity is not "
+        "threaded through to persist time (documented exception)"
+    )
+)
 
 
 def _fiscal_period_type(period_end: _dt.datetime) -> FiscalPeriodType:
@@ -171,6 +183,7 @@ def ingest_spreadsheet_kpis(
                 value=Decimal(str(val)),
                 unit=unit_by_name.get(name, Unit.ACTUAL),
                 confidence=1.0,
+                locator=_NO_LOCATOR,
             )
             for name, val in kpis.items()
         ]

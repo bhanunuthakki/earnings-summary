@@ -28,7 +28,7 @@ _SAMPLE = {
 def test_extract_cashflow_facts_canonical() -> None:
     """Each FMP cashflow field maps to its canonical snake_case line_item."""
     record = FmpCashFlowRecord.model_validate(_SAMPLE)
-    facts = extract_facts_from_record(record, source_doc_id=200)
+    facts = extract_facts_from_record(record, source_doc_id=200, record_index=0)
 
     by_line = {f.line_item: f for f in facts}
     assert by_line["operating_cash_flow"].value == Decimal("40000000000")
@@ -45,7 +45,7 @@ def test_extract_cashflow_facts_canonical() -> None:
 def test_cashflow_uses_cf_suffix_for_cross_source_distinction() -> None:
     """net_income from cashflow has _cf suffix to distinguish from income statement."""
     record = FmpCashFlowRecord.model_validate(_SAMPLE)
-    facts = extract_facts_from_record(record, source_doc_id=1)
+    facts = extract_facts_from_record(record, source_doc_id=1, record_index=0)
     line_items = {f.line_item for f in facts}
     assert "net_income_cf" in line_items
     assert "net_income" not in line_items

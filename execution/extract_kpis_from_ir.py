@@ -39,10 +39,17 @@ Manifest JSON shape:
       ]
     }
 
-`source_excerpt` (verbatim quote supporting the value) and `locator`
-(sub-document position, e.g. the PDF page the value was read from — see
-data_provenance.md §7) are optional per value; populate them when reading
-the PDF so the persisted kpi_facts rows carry P3.2 provenance.
+`source_excerpt` (verbatim quote supporting the value) is optional per value.
+
+`locator` (sub-document position, e.g. the PDF page the value was read from
+— see data_provenance.md §7) is REQUIRED per value as of the persist-time
+enforcement flip (docs/design/provenance_clickthrough.md §4.1) — every
+value's JSON must carry EITHER a real locator object (e.g.
+`{"pdf_page": 7}`) when reading the PDF, OR an explicit escape hatch
+`{"reason": "<why no locator was possible>"}` (min 8 characters) when it
+genuinely wasn't -- a value with no `"locator"` key at all now fails
+`--apply`'s Pydantic validation rather than silently landing with no
+provenance.
 """
 
 from __future__ import annotations

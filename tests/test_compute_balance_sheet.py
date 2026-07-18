@@ -30,7 +30,7 @@ _SAMPLE = {
 def test_extract_balance_sheet_facts_canonical() -> None:
     """Each FMP balance field maps to its canonical snake_case line_item."""
     record = FmpBalanceSheetRecord.model_validate(_SAMPLE)
-    facts = extract_facts_from_record(record, source_doc_id=99)
+    facts = extract_facts_from_record(record, source_doc_id=99, record_index=0)
 
     by_line = {f.line_item: f for f in facts}
     assert by_line["total_assets"].value == Decimal("500000000000")
@@ -56,7 +56,7 @@ def test_extract_balance_sheet_facts_skips_none() -> None:
         "totalAssets": 1_000,
     }
     record = FmpBalanceSheetRecord.model_validate(minimal)
-    facts = extract_facts_from_record(record, source_doc_id=1)
+    facts = extract_facts_from_record(record, source_doc_id=1, record_index=0)
     line_items = {f.line_item for f in facts}
     assert "total_assets" in line_items
     assert "goodwill" not in line_items

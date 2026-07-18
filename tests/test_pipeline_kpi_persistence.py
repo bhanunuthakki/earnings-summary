@@ -9,7 +9,7 @@ from decimal import Decimal
 import pytest
 
 from models.documents import SourceType
-from models.facts import FiscalPeriodType, Unit
+from models.facts import FactLocator, FiscalPeriodType, Unit
 from models.validation import Severity, ValidationRule
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
@@ -31,6 +31,15 @@ _KPI_FACTS_PROVENANCE_UNIQUE = (
     "CREATE UNIQUE INDEX uq_kpi_facts_provenance "
     "ON kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id)"
 )
+
+# KpiValue.locator is required (persist-time enforcement, docs/design/
+# provenance_clickthrough.md §4.1) -- these fixtures exercise persist_manifest's
+# validation/restatement/definition-origin logic, not provenance rendering. A
+# trivial real FactLocator (not a LegacyEscapeHatch) is used deliberately: an
+# escape hatch logs its own validation_issues row on every successful insert
+# (see pipeline.locators.resolve_locator_for_persist), which would silently
+# inflate the exact validation_issue counts/rows many tests below assert on.
+_NO_LOCATOR = FactLocator(pdf_page=1)
 
 
 def _create_schema(conn: sqlite3.Connection, *, legacy_logical_unique: bool = False) -> None:
@@ -137,8 +146,15 @@ def test_persist_manifest_inserts_kpi_facts(conn: sqlite3.Connection) -> None:
         source_doc_id=42,
         primary_source=SourceType.IR_DOC,
         values=[
-            KpiValue(name="Revenue Growth (FXN)", value=Decimal("96"), unit=Unit.PERCENT),
-            KpiValue(name="GMV Growth (FXN)", value=Decimal("56"), unit=Unit.PERCENT),
+            KpiValue(
+                name="Revenue Growth (FXN)",
+                value=Decimal("96"),
+                unit=Unit.PERCENT,
+                locator=_NO_LOCATOR,
+            ),
+            KpiValue(
+                name="GMV Growth (FXN)", value=Decimal("56"), unit=Unit.PERCENT, locator=_NO_LOCATOR
+            ),
         ],
     )
     result = persist_manifest(conn, run_id="r1", manifest=manifest)
@@ -160,7 +176,9 @@ def test_persist_manifest_dedupes_on_rerun(conn: sqlite3.Connection) -> None:
         period_end=datetime(2024, 12, 31),
         fiscal_period_type=FiscalPeriodType.Q4,
         source_doc_id=42,
-        values=[KpiValue(name="OpMargin", value=Decimal("13.5"), unit=Unit.PERCENT)],
+        values=[
+            KpiValue(name="OpMargin", value=Decimal("13.5"), unit=Unit.PERCENT, locator=_NO_LOCATOR)
+        ],
     )
     persist_manifest(conn, run_id="r1", manifest=manifest)
     second = persist_manifest(conn, run_id="r2", manifest=manifest)
@@ -176,8 +194,10 @@ def test_persist_manifest_emits_validation_issue_on_out_of_range(conn: sqlite3.C
         fiscal_period_type=FiscalPeriodType.Q4,
         source_doc_id=99,
         values=[
-            KpiValue(name="Activity Rate", value=Decimal("83"), unit=Unit.PERCENT),
-            KpiValue(name="Bogus", value=Decimal("5000"), unit=Unit.PERCENT),
+            KpiValue(
+                name="Activity Rate", value=Decimal("83"), unit=Unit.PERCENT, locator=_NO_LOCATOR
+            ),
+            KpiValue(name="Bogus", value=Decimal("5000"), unit=Unit.PERCENT, locator=_NO_LOCATOR),
         ],
     )
     result = persist_manifest(conn, run_id="r1", manifest=manifest)
@@ -229,7 +249,11 @@ def _customers_manifest(
         period_end=period_end,
         fiscal_period_type=FiscalPeriodType.Q1,
         source_doc_id=source_doc_id,
-        values=[KpiValue(name="Total customers (millions)", value=value, unit=Unit.COUNT)],
+        values=[
+            KpiValue(
+                name="Total customers (millions)", value=value, unit=Unit.COUNT, locator=_NO_LOCATOR
+            )
+        ],
     )
 
 
@@ -343,14 +367,28 @@ def test_cumulative_guard_scoped_to_marked_kpis_only(conn: sqlite3.Connection) -
         period_end=datetime(2025, 3, 31),
         fiscal_period_type=FiscalPeriodType.Q1,
         source_doc_id=1,
-        values=[KpiValue(name="Monthly ARPAC (USD)", value=Decimal("12"), unit=Unit.ACTUAL)],
+        values=[
+            KpiValue(
+                name="Monthly ARPAC (USD)",
+                value=Decimal("12"),
+                unit=Unit.ACTUAL,
+                locator=_NO_LOCATOR,
+            )
+        ],
     )
     manifest2 = KpiExtractionManifest(
         ticker="NU",
         period_end=datetime(2025, 6, 30),
         fiscal_period_type=FiscalPeriodType.Q2,
         source_doc_id=2,
-        values=[KpiValue(name="Monthly ARPAC (USD)", value=Decimal("9"), unit=Unit.ACTUAL)],
+        values=[
+            KpiValue(
+                name="Monthly ARPAC (USD)",
+                value=Decimal("9"),
+                unit=Unit.ACTUAL,
+                locator=_NO_LOCATOR,
+            )
+        ],
     )
     persist_manifest(conn, run_id="r1", manifest=manifest1)
     result = persist_manifest(conn, run_id="r2", manifest=manifest2)
@@ -361,13 +399,19 @@ def test_cumulative_guard_scoped_to_marked_kpis_only(conn: sqlite3.Connection) -
 def test_kpi_value_rejects_invalid_confidence() -> None:
     """KpiValue.confidence must be in [0, 1]."""
     with pytest.raises(ValueError):
-        KpiValue(name="x", value=Decimal("1"), unit=Unit.PERCENT, confidence=1.5)
+        KpiValue(
+            name="x",
+            value=Decimal("1"),
+            unit=Unit.PERCENT,
+            confidence=1.5,
+            locator=_NO_LOCATOR,
+        )
 
 
 def test_kpi_value_rejects_empty_name() -> None:
     """KpiValue.name must be non-empty."""
     with pytest.raises(ValueError):
-        KpiValue(name="", value=Decimal("1"), unit=Unit.PERCENT)
+        KpiValue(name="", value=Decimal("1"), unit=Unit.PERCENT, locator=_NO_LOCATOR)
 
 
 def test_persist_manifest_keeps_both_rows_with_different_source_doc_id(
@@ -385,14 +429,24 @@ def test_persist_manifest_keeps_both_rows_with_different_source_doc_id(
         fiscal_period_type=FiscalPeriodType.Q4,
         source_doc_id=9676,
         values=[
-            KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("46.33"), unit=Unit.PERCENT)
+            KpiValue(
+                name="Revenue YoY Growth (USD)",
+                value=Decimal("46.33"),
+                unit=Unit.PERCENT,
+                locator=_NO_LOCATOR,
+            )
         ],
     )
     later = first.model_copy(
         update={
             "source_doc_id": 9705,
             "values": [
-                KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("47.10"), unit=Unit.PERCENT)
+                KpiValue(
+                    name="Revenue YoY Growth (USD)",
+                    value=Decimal("47.10"),
+                    unit=Unit.PERCENT,
+                    locator=_NO_LOCATOR,
+                )
             ],
         }
     )
@@ -426,14 +480,24 @@ def test_persist_manifest_keeps_both_rows_when_older_source_doc_id_replayed(
         fiscal_period_type=FiscalPeriodType.Q4,
         source_doc_id=9705,
         values=[
-            KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("47.10"), unit=Unit.PERCENT)
+            KpiValue(
+                name="Revenue YoY Growth (USD)",
+                value=Decimal("47.10"),
+                unit=Unit.PERCENT,
+                locator=_NO_LOCATOR,
+            )
         ],
     )
     older = newer.model_copy(
         update={
             "source_doc_id": 9676,
             "values": [
-                KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("46.33"), unit=Unit.PERCENT)
+                KpiValue(
+                    name="Revenue YoY Growth (USD)",
+                    value=Decimal("46.33"),
+                    unit=Unit.PERCENT,
+                    locator=_NO_LOCATOR,
+                )
             ],
         }
     )
@@ -576,7 +640,10 @@ def test_persist_manifest_reconciles_actual_to_canonical_millions(conn: sqlite3.
         canonical_units={"Net new subscription ARR ($)": Unit.MILLIONS},
         values=[
             KpiValue(
-                name="Net new subscription ARR ($)", value=Decimal("115000000"), unit=Unit.ACTUAL
+                name="Net new subscription ARR ($)",
+                value=Decimal("115000000"),
+                unit=Unit.ACTUAL,
+                locator=_NO_LOCATOR,
             )
         ],
     )
@@ -613,7 +680,7 @@ def test_persist_manifest_corrects_existing_wrong_definition_unit(conn: sqlite3.
         source_doc_id=10,
         primary_source=SourceType.LLM_EXTRACTED,
         canonical_units={name: Unit.PERCENT},
-        values=[KpiValue(name=name, value=Decimal("17.8"), unit=Unit.PERCENT)],
+        values=[KpiValue(name=name, value=Decimal("17.8"), unit=Unit.PERCENT, locator=_NO_LOCATOR)],
     )
     result = persist_manifest(conn, run_id="r2", manifest=manifest)
     assert result.inserted == 1
@@ -641,7 +708,11 @@ def test_persist_manifest_flags_cross_family_canonical_and_keeps_original(
         source_doc_id=1,
         primary_source=SourceType.LLM_EXTRACTED,
         canonical_units={"Some Margin": Unit.PERCENT},
-        values=[KpiValue(name="Some Margin", value=Decimal("123456"), unit=Unit.ACTUAL)],
+        values=[
+            KpiValue(
+                name="Some Margin", value=Decimal("123456"), unit=Unit.ACTUAL, locator=_NO_LOCATOR
+            )
+        ],
     )
     result = persist_manifest(conn, run_id="r3", manifest=manifest)
     assert result.inserted == 1
@@ -665,7 +736,9 @@ def test_persist_manifest_no_canonical_is_unchanged_passthrough(conn: sqlite3.Co
         fiscal_period_type=FiscalPeriodType.Q1,
         source_doc_id=1,
         primary_source=SourceType.IR_DOC,
-        values=[KpiValue(name="GMV", value=Decimal("5000000000"), unit=Unit.ACTUAL)],
+        values=[
+            KpiValue(name="GMV", value=Decimal("5000000000"), unit=Unit.ACTUAL, locator=_NO_LOCATOR)
+        ],
     )
     result = persist_manifest(conn, run_id="r4", manifest=manifest)
     assert result.inserted == 1
@@ -727,7 +800,12 @@ def test_persist_manifest_falls_back_on_legacy_logical_unique(
         fiscal_period_type=FiscalPeriodType.Q4,
         source_doc_id=9676,
         values=[
-            KpiValue(name="Revenue YoY Growth (USD)", value=Decimal("46.33"), unit=Unit.PERCENT)
+            KpiValue(
+                name="Revenue YoY Growth (USD)",
+                value=Decimal("46.33"),
+                unit=Unit.PERCENT,
+                locator=_NO_LOCATOR,
+            )
         ],
     )
     later = first.model_copy(update={"source_doc_id": 9705})

@@ -52,8 +52,9 @@ _LINE_ITEM_SPEC: list[tuple[str, str, Unit]] = [
 def extract_facts_from_record(
     record: FmpCashFlowRecord,
     source_doc_id: int,
+    *,
     period_type_override: FiscalPeriodType | None = None,
-    record_index: int | None = None,
+    record_index: int,
 ) -> list[FinancialFact]:
     """Convert one validated record to FinancialFact rows.
 

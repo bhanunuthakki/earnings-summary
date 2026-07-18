@@ -81,7 +81,7 @@ def conn() -> sqlite3.Connection:
 def test_extract_facts_from_canonical_record() -> None:
     """A clean record produces one fact row per known line item with right unit/currency."""
     record = FmpIncomeStatementRecord.model_validate(_SAMPLE_RECORD)
-    facts = extract_facts_from_record(record, source_doc_id=42)
+    facts = extract_facts_from_record(record, source_doc_id=42, record_index=0)
 
     by_line = {f.line_item: f for f in facts}
     assert by_line["revenue"].value == 402_963_000_000
@@ -110,7 +110,7 @@ def test_extract_facts_skips_none_fields() -> None:
         "revenue": 100,
     }
     record = FmpIncomeStatementRecord.model_validate(minimal)
-    facts = extract_facts_from_record(record, source_doc_id=1)
+    facts = extract_facts_from_record(record, source_doc_id=1, record_index=0)
     line_items = {f.line_item for f in facts}
     assert "revenue" in line_items
     assert "ebitda" not in line_items
@@ -121,7 +121,7 @@ def test_unknown_currency_yields_none() -> None:
     """A reportedCurrency outside our Currency enum yields currency=None (not raise)."""
     record_data = {**_SAMPLE_RECORD, "reportedCurrency": "ZZZ"}
     record = FmpIncomeStatementRecord.model_validate(record_data)
-    facts = extract_facts_from_record(record, source_doc_id=1)
+    facts = extract_facts_from_record(record, source_doc_id=1, record_index=0)
     assert all(f.currency is None for f in facts if f.unit == Unit.ACTUAL)
 
 
@@ -130,7 +130,7 @@ def test_invalid_period_raises() -> None:
     record_data = {**_SAMPLE_RECORD, "period": "X1"}
     record = FmpIncomeStatementRecord.model_validate(record_data)
     with pytest.raises(ValueError, match="X1"):
-        extract_facts_from_record(record, source_doc_id=1)
+        extract_facts_from_record(record, source_doc_id=1, record_index=0)
 
 
 def test_extract_income_statement_facts_writes_rows(

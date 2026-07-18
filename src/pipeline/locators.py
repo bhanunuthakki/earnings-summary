@@ -15,16 +15,18 @@ implements, and §1 for the schema the helpers build.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sqlite3
-
-from pydantic import BaseModel, Field
+from typing import cast
 
 from models.facts import (
+    DerivedInputRef,
     DerivedRef,
     FactLocator,
     HtmlSpanRef,
+    LegacyEscapeHatch,
     LocatorKind,
     TableCellRef,
     TranscriptSpanRef,
@@ -35,17 +37,11 @@ from pipeline.kpi_persistence import record_validation_issue
 
 log = logging.getLogger(__name__)
 
-
-class LegacyEscapeHatch(BaseModel):
-    """Explicit, grep-able opt-out for a writer that genuinely cannot produce
-    a renderable locator yet. Requires a reason — "I forgot" is not
-    machine-checkable, but a reviewer can grep ``LegacyEscapeHatch(`` in a
-    diff and ask why. Every use logged (``log_escape_hatch``,
-    rule=LOCATOR_ESCAPE_HATCH) so the coverage audit
-    (execution/provenance_coverage_report.py) can count them.
-    """
-
-    reason: str = Field(min_length=8)
+# LegacyEscapeHatch re-exported (imported above) for backward compatibility:
+# it originated here in Phase A and moved to models.facts (see that class's
+# docstring) so it can be used as a field type on FinancialFact/KpiValue
+# without models.facts importing pipeline.*. `from pipeline.locators import
+# LegacyEscapeHatch` keeps working unchanged.
 
 
 def log_escape_hatch(
@@ -82,6 +78,119 @@ def log_escape_hatch(
                 "reason": escape_hatch.reason,
             }
         )
+
+
+def resolve_locator_for_persist(
+    conn: sqlite3.Connection,
+    *,
+    locator: FactLocator | LegacyEscapeHatch,
+    run_id: str,
+    source_doc_id: int | None,
+    ticker: str | None,
+) -> str | None:
+    """Serialize a REQUIRED ``locator`` argument for a facts-table INSERT.
+
+    This is the persist-time enforcement mechanism
+    (docs/design/provenance_clickthrough.md §4.1): every writer of
+    ``financial_facts``/``kpi_facts`` now supplies one of the two union
+    members on its ``FinancialFact``/``KpiValue`` — there is no implicit
+    ``None`` default anymore, so by the time a value reaches this function the
+    writer has already made an explicit choice.
+
+    - A real ``FactLocator`` serializes via ``.to_json()`` (``None`` for an
+      all-empty locator, unchanged from pre-enforcement behavior).
+    - A ``LegacyEscapeHatch`` logs a ``validation_issues`` row
+      (``log_escape_hatch``) and serializes to ``None`` — there is nothing to
+      render, but the opt-out is never silent; the coverage audit
+      (execution/provenance_coverage_report.py) counts these separately from
+      a locator that resolved to a real (but currently un-renderable) kind.
+    """
+    if isinstance(locator, LegacyEscapeHatch):
+        log_escape_hatch(
+            conn,
+            run_id=run_id,
+            source_doc_id=source_doc_id,
+            ticker=ticker,
+            escape_hatch=locator,
+        )
+        return None
+    return locator.to_json()
+
+
+def derived_locator_from_computed_from(
+    computed_from_raw: str | None, *, formula_id: int | None = None
+) -> FactLocator | None:
+    """Lazily upgrade a pre-existing ``kpi_facts.computed_from`` JSON blob
+    (the shape ``compute.metrics_engine.io``/``compute.fmp_derived_kpis``
+    wrote before this locator kind existed) into a ``derived``-kind
+    ``FactLocator``, without touching the row on disk.
+
+    Backward-compat decision for docs/design/bottoms_up_metrics_engine.md §3
+    / provenance_clickthrough.md §3.2's ``fmp_derived_kpis.py`` row: rows
+    written by PR #904 (before this locator kind existed) carry
+    ``computed_from`` but no ``locator``. Rather than a one-time backfill
+    migration touching every historical row, a reader that finds
+    ``locator IS NULL`` and ``computed_from IS NOT NULL`` calls this to
+    synthesize the same ``derived`` locator on the fly — cheaper and just as
+    correct, since ``computed_from``'s ``{"display", "inputs": [...]}`` shape
+    already carries everything ``DerivedRef`` needs. ``formula_id`` is passed
+    separately because pre-#905 rows may have it as a real column
+    (``kpi_facts.formula_id``) even though the JSON blob itself never carried
+    it (JSON shape predates the typed union).
+
+    Returns ``None`` when ``computed_from_raw`` is absent/blank/malformed —
+    callers fall back to the existing legacy-floor peek (§2.7), never raise.
+    """
+    if computed_from_raw is None or not computed_from_raw.strip():
+        return None
+    try:
+        raw_payload = json.loads(computed_from_raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(raw_payload, dict):
+        return None
+    # JSON boundary, validated by the isinstance check above: one cast, per
+    # this repo's typing convention for a validated JSON/external-data
+    # boundary (AGENTS.md), rather than letting `Any` cascade into every
+    # downstream local as `Unknown`.
+    payload = cast("dict[str, object]", raw_payload)
+    raw_inputs = payload.get("inputs")
+    inputs: list[DerivedInputRef] = []
+    if isinstance(raw_inputs, list):
+        for raw_item in cast("list[object]", raw_inputs):
+            if not isinstance(raw_item, dict):
+                continue
+            raw_input = cast("dict[str, object]", raw_item)
+            ref = raw_input.get("ref")
+            item = raw_input.get("item")
+            if not isinstance(ref, str) or not isinstance(item, str):
+                continue
+            period_end_raw = raw_input.get("period_end")
+            doc_id_raw = raw_input.get("doc_id")
+            tier_raw = raw_input.get("tier")
+            inputs.append(
+                DerivedInputRef(
+                    ref=ref,
+                    item=item,
+                    period_end=period_end_raw if isinstance(period_end_raw, str) else None,
+                    doc_id=doc_id_raw if isinstance(doc_id_raw, int) else None,
+                    tier=tier_raw if isinstance(tier_raw, str) else None,
+                )
+            )
+    display = payload.get("display")
+    method_flags_raw = payload.get("method_flags")
+    return derived_locator(
+        derived=DerivedRef(
+            formula_id=formula_id,
+            display=display if isinstance(display, str) else None,
+            method_flags=(
+                [str(flag) for flag in cast("list[object]", method_flags_raw)]
+                if isinstance(method_flags_raw, list)
+                else []
+            ),
+            inputs=inputs,
+        )
+    )
 
 
 def table_cell_locator(
