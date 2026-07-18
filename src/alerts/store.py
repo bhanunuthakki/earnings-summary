@@ -63,8 +63,12 @@ ACTION_STATUSES: frozenset[str] = frozenset(
 # into the kpi_inflection sensor rather than shipped on its own but is still a
 # recognized alert kind the feed/drawer render. 'decision_condition' is the
 # falsifiable-conditions evaluator (0086); 'restatement' fires when a held-name
-# fact is materially superseded (L10, 0108). Keep in lockstep with the
-# ck_alerts_trigger_kind CHECK (0068, widened in 0086 + 0108).
+# fact is materially superseded (L10, 0108). 'owner_capacity_breach' (tenet-2
+# Phase 3, 0171) is the governor's capacity_breach moment class writing its own
+# alert row — a human-capital cap or cash-floor policy crossed — so the SAME
+# tier-1 severity/ranking path (decisive_alert_reason) covers an owner-policy
+# breach exactly like an owner-falsifier breach. Keep in lockstep with the
+# ck_alerts_trigger_kind CHECK (0068, widened in 0086 + 0108 + 0171).
 TRIGGER_KINDS: frozenset[str] = frozenset(
     {
         "kpi_inflection",
@@ -74,6 +78,7 @@ TRIGGER_KINDS: frozenset[str] = frozenset(
         "material_news",
         "decision_condition",
         "restatement",
+        "owner_capacity_breach",
     }
 )
 # Mirrors the QueuedActionDraft.action_kind vocabulary (src/triggers/base.py).

@@ -28,6 +28,15 @@ limit):
   * decision_stub gets [Fill in now / Defer] — Fill in now reuses the SAME
     awaited-reply mechanism + ``capture.decision_nudge.apply_fill_in_reply``
     (two-line conviction/falsifier, write-once).
+  * profile_fact_expiring (tenet-2 Phase 3) gets [Still true / Rewrite / Drop
+    / Defer] — an affirmed ``owner_profile_facts`` row past its review
+    horizon. "Still true" calls ``owner_profile.store.reaffirm_fact`` (bumps
+    ``affirmed_at``, no value change); "Drop" calls ``retire_fact`` (status ->
+    'rejected', the AFFIRMED-only sibling of ``reject_fact``); "Rewrite"
+    stashes an awaited reply the SAME way, and the applied text lands a NEW
+    ``proposed`` fact superseding the old via ``append_fact`` — gated
+    assertion holds even on the owner's own edit (it resurfaces at the next
+    packet walk for an explicit affirm tap, never auto-promoted).
   * Defer is packet-bookkeeping ONLY (no substrate write) on every kind — the
     item's verdict stays NULL, so it naturally reappears in NEXT week's
     packet (a fresh assemble() re-derives from the same still-unresolved
@@ -67,6 +76,7 @@ ITEM_KINDS: tuple[str, ...] = (
     "tenet",
     "proposal",
     "decision_stub",
+    "profile_fact_expiring",
 )
 _DRAFT_VERBS: tuple[str, ...] = ("accept", "rewrite", "drop", "defer")
 _DECISION_VERBS: tuple[str, ...] = ("fillin", "defer")
@@ -80,6 +90,16 @@ _ACT_LABELS: tuple[tuple[str, str], ...] = (
 )
 _DECISION_LABELS: tuple[tuple[str, str], ...] = (
     ("Fill in now", "fillin"),
+    ("Defer", "defer"),
+)
+# tenet-2 Phase 3 (§4 delivery seam 5 / §7 decision 6 "both"): an expiring
+# AFFIRMED owner-profile fact rides the SAME verb plumbing as every other
+# packet item (accept/rewrite/drop/defer) — only the button copy changes to
+# match "re-affirm", not "approve a new draft".
+_PROFILE_FACT_LABELS: tuple[tuple[str, str], ...] = (
+    ("Still true", "accept"),
+    ("Rewrite", "rewrite"),
+    ("Drop", "drop"),
     ("Defer", "defer"),
 )
 
@@ -223,7 +243,38 @@ def assemble_packet(db_path: Path | str | None = None) -> list[PacketItemPlan]:
     except Exception:
         log.warning({"event": "weekly_packet_assemble_failed", "substrate": "decision_stub"})
 
+    try:
+        plans.extend(_profile_fact_expiring_plans(db_path))
+    except Exception:
+        log.warning(
+            {"event": "weekly_packet_assemble_failed", "substrate": "profile_fact_expiring"}
+        )
+
     return plans
+
+
+def _profile_fact_expiring_plans(db_path: Path | str | None) -> list[PacketItemPlan]:
+    """Affirmed owner-profile facts past their review horizon (tenet-2 Phase
+    3) — the SAME ``list_expiring_facts`` predicate the governor's
+    ``profile_drift`` class and the Ledger packet walk both read, so the
+    definition of "needs re-affirmation" never drifts between surfaces."""
+    from owner_profile.store import list_expiring_facts
+    from user_state._db import open_conn
+
+    conn = open_conn(db_path)
+    try:
+        rows = list_expiring_facts(conn)
+    finally:
+        conn.close()
+    return [
+        PacketItemPlan(
+            item_kind="profile_fact_expiring",
+            ref_id=row.id,
+            ticker=None,
+            title=f"Re-affirm ({row.category}): {row.narrative.strip()[:200]}",
+        )
+        for row in rows
+    ]
 
 
 # --------------------------------------------------------------------------
@@ -461,6 +512,9 @@ _KIND_LABELS: dict[str, str] = {
     "tenet": "a machine-proposed Tenet (a belief about how the owner invests) awaiting approval",
     "proposal": "a pending research proposal awaiting approve/further/steer/reject",
     "decision_stub": "an owner decision missing its conviction or falsifier",
+    "profile_fact_expiring": (
+        "an affirmed owner-profile fact past its review horizon, awaiting re-affirmation"
+    ),
 }
 
 
@@ -532,7 +586,12 @@ def item_message_text(item: PacketItemRow, draft_text: str | None) -> str:
 
 
 def item_keyboard(item: PacketItemRow) -> dict[str, object]:
-    labels = _DECISION_LABELS if item.item_kind == "decision_stub" else _ACT_LABELS
+    if item.item_kind == "decision_stub":
+        labels = _DECISION_LABELS
+    elif item.item_kind == "profile_fact_expiring":
+        labels = _PROFILE_FACT_LABELS
+    else:
+        labels = _ACT_LABELS
     return telegram.inline_keyboard([[(label, f"wk:{verb}:{item.id}") for label, verb in labels]])
 
 
@@ -630,6 +689,16 @@ def _apply_accept(item: PacketItemRow, *, db_path: Path | str | None) -> None:
         from research.proposals import act_on_proposal
 
         act_on_proposal(item.ref_id, "approve", db_path=db_path)
+    elif item.item_kind == "profile_fact_expiring":
+        from owner_profile.store import reaffirm_fact
+        from user_state._db import open_conn
+
+        conn = open_conn(db_path)
+        try:
+            reaffirm_fact(conn, item.ref_id)
+            conn.commit()
+        finally:
+            conn.close()
 
 
 def _apply_drop(item: PacketItemRow, *, db_path: Path | str | None) -> None:
@@ -653,6 +722,16 @@ def _apply_drop(item: PacketItemRow, *, db_path: Path | str | None) -> None:
         from research.proposals import act_on_proposal
 
         act_on_proposal(item.ref_id, "reject", db_path=db_path)
+    elif item.item_kind == "profile_fact_expiring":
+        from owner_profile.store import retire_fact
+        from user_state._db import open_conn
+
+        conn = open_conn(db_path)
+        try:
+            retire_fact(conn, item.ref_id)
+            conn.commit()
+        finally:
+            conn.close()
 
 
 def _apply_rewrite(item: PacketItemRow, text: str, *, db_path: Path | str | None) -> bool:
@@ -704,6 +783,35 @@ def _apply_rewrite(item: PacketItemRow, text: str, *, db_path: Path | str | None
         from capture.decision_nudge import apply_fill_in_reply
 
         return apply_fill_in_reply(item.ref_id, text, db_path=db_path)
+    if item.item_kind == "profile_fact_expiring":
+        # An owner-typed rewrite lands a NEW proposed fact superseding the
+        # old (gated assertion holds, §7.1): even the owner's own edit needs
+        # a fresh affirm tap — it resurfaces via the SAME proposed-facts
+        # packet source (ledger_panel._packet_items) next walk, never
+        # auto-promoted here.
+        from owner_profile.store import append_fact, get_fact
+        from user_state._db import open_conn
+
+        conn = open_conn(db_path)
+        try:
+            old = get_fact(conn, item.ref_id)
+            if old is None:
+                return False
+            append_fact(
+                conn,
+                category=old.category,
+                key=old.key,
+                value=old.value,
+                narrative=text,
+                provenance="owner",
+                status="proposed",
+                review_horizon_days=old.review_horizon_days,
+                source_detail="packet_rewrite",
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return True
     return False
 
 

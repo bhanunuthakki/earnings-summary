@@ -1616,6 +1616,7 @@ _PACKET_STYLE = """<style>
 .pk-progress { display: flex; align-items: baseline; gap: var(--sp-2); font-size: var(--fs-caption); color: var(--muted); margin: var(--sp-2) 0; }
 .pk-item > .ledger-musing, .pk-item > .ledger-stance { margin-bottom: 0; }
 .pk-clear { color: var(--ok); font-weight: 600; padding: var(--sp-3) 0; }
+.ledger-profile-update-form { margin-top: var(--sp-2); }
 </style>"""
 
 _PACKET_JS = """<script>(function(){
@@ -1681,7 +1682,8 @@ _PACKET_JS = """<script>(function(){
     var settle=e.target.closest(
       '[data-verb]:not([data-verb="steer"]),[data-tenet-action],[data-rec-verdict],'
       +'[data-falsifier-action="ratify"],[data-falsifier-action="drop"],'
-      +'[data-steer-save],[data-rewrite-save],[data-profile-action]');
+      +'[data-steer-save],[data-rewrite-save],[data-profile-action],'
+      +'[data-profile-update-save]');
     if(settle){ setTimeout(function(){ advance(root); }, 900); }
   });
 })();</script>"""
@@ -1690,17 +1692,49 @@ _PACKET_JS = """<script>(function(){
 # plain-English narrative + a one-tap Affirm/Reject — the gated-assertion
 # ratification surface (§7.1 of docs/design/tenet2_advisory_program.md).
 # Nothing an import stages becomes 'affirmed' without this explicit tap.
+#
+# tenet-2 Phase 3 extends the SAME wiring to EXPIRING (already-affirmed, past
+# their review horizon) facts: [Still true / Update / Drop]. "Still true" and
+# "Drop" are still a plain no-body POST via [data-profile-action] (verbs
+# "reaffirm"/"retire" this time, routed to their own endpoints); "Update"
+# reveals an inline textarea (the "minimal route" — narrative-only, never a
+# structured-value re-entry) whose Save POSTs the edited text, landing a NEW
+# proposed fact that supersedes the old (gated assertion holds — even the
+# owner's own edit needs a fresh affirm tap next walk).
 _PROFILE_FACT_JS = """<script>(function(){
   if(window.__ledgerProfileFactWired){ return; }
   window.__ledgerProfileFactWired = true;
   document.addEventListener('click', function(e){
+    var toggle=e.target.closest('[data-profile-update-toggle]');
+    if(toggle){
+      var card=toggle.closest('[data-profile-fact-id]'); if(!card){ return; }
+      var form=card.querySelector('.ledger-profile-update-form');
+      if(form){ form.hidden=!form.hidden; }
+      return;
+    }
+    var save=e.target.closest('[data-profile-update-save]');
+    if(save){
+      var card2=save.closest('[data-profile-fact-id]'); if(!card2){ return; }
+      var id2=card2.getAttribute('data-profile-fact-id');
+      var ta=card2.querySelector('.ledger-profile-update-text');
+      var text=ta?ta.value.trim():'';
+      if(!text){ return; }
+      save.disabled=true;
+      fetch('/api/profile/fact/'+id2+'/update',{method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({narrative:text})})
+        .then(function(r){ return r.json(); })
+        .then(function(res){ if(!res || res.ok===false){ save.disabled=false; } })
+        .catch(function(){ save.disabled=false; });
+      return;
+    }
     var act=e.target.closest('[data-profile-action]');
     if(!act){ return; }
-    var card=act.closest('[data-profile-fact-id]'); if(!card){ return; }
-    var id=card.getAttribute('data-profile-fact-id');
+    var card3=act.closest('[data-profile-fact-id]'); if(!card3){ return; }
+    var id3=card3.getAttribute('data-profile-fact-id');
     var verb=act.getAttribute('data-profile-action');
     act.disabled=true;
-    fetch('/api/profile/fact/'+id+'/'+verb,{method:'POST'})
+    fetch('/api/profile/fact/'+id3+'/'+verb,{method:'POST'})
       .then(function(r){ return r.json(); })
       .then(function(res){ if(!res || res.ok===false){ act.disabled=false; } })
       .catch(function(){ act.disabled=false; });
@@ -1723,6 +1757,36 @@ def _profile_fact_packet_card(fact: OwnerProfileFactRow) -> str:
         '<button type="button" class="k-btn k-btn-sm k-btn-danger" '
         'data-profile-action="reject">Drop</button>'
         "</div></div>"
+    )
+
+
+def _expiring_profile_fact_packet_card(fact: OwnerProfileFactRow) -> str:
+    """One EXPIRING affirmed owner-profile fact (past its review horizon) as a
+    packet item: narrative + [Still true / Update / Drop] (tenet-2 Phase 3,
+    §4 delivery seam 5). Distinct from :func:`_profile_fact_packet_card`
+    (which handles brand-new PROPOSED imports) — this is the re-affirmation
+    ask, framed as a check-in, not an accusation."""
+    return (
+        f'<div class="ledger-musing" data-profile-fact-id="{fact.id}">'
+        '<div class="ledger-musing-head">'
+        f'<span class="k-chip k-chip-mono">{escape(fact.category)}</span>'
+        '<span class="ledger-chan">re-affirm — past review horizon</span></div>'
+        f'<div class="ledger-body">{escape(fact.narrative)}</div>'
+        '<div class="ledger-cap-row">'
+        '<button type="button" class="k-btn k-btn-sm k-btn-primary" '
+        'data-profile-action="reaffirm">Still true</button>'
+        '<button type="button" class="k-btn k-btn-sm" '
+        "data-profile-update-toggle>Update</button>"
+        '<button type="button" class="k-btn k-btn-sm k-btn-danger" '
+        'data-profile-action="retire">Drop</button>'
+        "</div>"
+        '<div class="ledger-profile-update-form" hidden>'
+        '<textarea class="ledger-profile-update-text ledger-rewrite-ta" rows="3">'
+        f"{escape(fact.narrative)}</textarea>"
+        '<div class="ledger-cap-row">'
+        '<button type="button" class="k-btn k-btn-sm k-btn-primary" '
+        "data-profile-update-save>Save</button>"
+        "</div></div></div>"
     )
 
 
@@ -1812,6 +1876,21 @@ def _packet_items(db_path: Path | str | None) -> list[str]:
         finally:
             conn.close()
         items.extend(_profile_fact_packet_card(f) for f in proposed_facts)
+    except Exception:
+        pass
+    try:
+        # tenet-2 Phase 3 (§4 delivery seam 5 / §7 decision 6 "both"): the
+        # SAME list_expiring_facts predicate the governor's profile_drift
+        # class and the Sunday Telegram packet both read.
+        from owner_profile.store import list_expiring_facts as _list_expiring_facts
+        from user_state._db import open_conn as _open_expiring_conn
+
+        conn = _open_expiring_conn(db_path)
+        try:
+            expiring_facts = _list_expiring_facts(conn)
+        finally:
+            conn.close()
+        items.extend(_expiring_profile_fact_packet_card(f) for f in expiring_facts)
     except Exception:
         pass
     return items

@@ -1,11 +1,15 @@
 """execution/run_coach_pings.py — the daily governed-initiation pass (W2).
 
-Collects the three deterministic coaching moments (owner-falsifier breach /
-annotation-pending stub / open standing intent), runs them through the nag
-governor (freshness gate → frequency caps → auto-mute), and pushes at most
-DAILY_CAP Telegram pings with a Dismiss button; overflow waits quietly in the
-digest. Zero LLM. Safe to run any number of times a day (a moment is
-considered exactly once).
+Collects the deterministic coaching moments (owner-falsifier breach /
+annotation-pending stub / open standing intent, plus tenet-2 Phase 3's
+capacity_breach / life_event_checkpoint / profile_drift), runs them through
+the nag governor (freshness gate → frequency caps → auto-mute), and pushes at
+most DAILY_CAP Telegram pings with a Dismiss button; overflow waits quietly in
+the digest. Zero LLM. Safe to run any number of times a day (a moment is
+considered exactly once). A ``capacity_breach`` finding also writes/refreshes
+its own ``alerts`` row (trigger_kind ``owner_capacity_breach``) so the
+morning-pipeline alert feed carries it at the same tier-1 severity as an
+owner-falsifier breach — see ``research.capacity_moments``.
 
     python execution/run_coach_pings.py
     python execution/run_coach_pings.py --dry-run   # collect + gate, no sends
@@ -87,7 +91,7 @@ def main() -> int:
 
             send_fn = _send
 
-    tally = run_governor(db_path, send_fn=send_fn)
+    tally = run_governor(db_path, send_fn=send_fn, repo_root=repo_root)
     print(f"run_coach_pings: {tally}", file=sys.stderr)
     return 0
 

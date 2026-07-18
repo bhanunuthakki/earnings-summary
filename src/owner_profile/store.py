@@ -32,7 +32,7 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import cast
 
 from identity import DEFAULT_USER_ID
@@ -138,12 +138,18 @@ def append_fact(
     """Persist a new fact version; returns its row id.
 
     No-ops (returns the existing latest id, writes nothing) when a latest row
-    already exists for this ``(user_id, category, key)`` with an
-    identical ``value`` — the idempotency guarantee an on-demand importer
-    depends on. A changed value always supersedes, regardless of the prior
-    row's status (a rejected-then-changed fact resurfaces as a fresh
-    'proposed' row for the owner to re-decide; a rejected-but-unchanged fact
-    stays rejected and quiet).
+    already exists for this ``(user_id, category, key)`` with an identical
+    ``(value, narrative)`` pair — the idempotency guarantee an on-demand
+    importer depends on (its narrative templates are deterministic over the
+    same input, so an unchanged source file still no-ops). A changed value
+    OR narrative always supersedes, regardless of the prior row's status (a
+    rejected-then-changed fact resurfaces as a fresh 'proposed' row for the
+    owner to re-decide; a rejected-and-truly-unchanged fact stays rejected
+    and quiet). Narrative is part of this check — not just value — because
+    the packet walk's Update/Rewrite path (tenet-2 Phase 3) edits ONLY the
+    narrative (the structured value is re-entered by a fresh importer run,
+    never freehand): a value-only equality check would silently swallow that
+    edit as a no-op.
     """
     if category not in CATEGORIES:
         raise ValueError(f"category must be one of {sorted(CATEGORIES)}, got {category!r}")
@@ -160,7 +166,7 @@ def append_fact(
             existing_value = json.loads(str(existing["value_json"]))
         except (ValueError, TypeError):
             existing_value = None
-        if existing_value == value:
+        if existing_value == value and str(existing["narrative"]) == narrative:
             return int(existing["id"])
 
     now = _now_iso()
@@ -228,6 +234,77 @@ def reject_fact(conn: sqlite3.Connection, fact_id: int, *, user_id: str = DEFAUL
     return cur.rowcount > 0
 
 
+def reaffirm_fact(
+    conn: sqlite3.Connection, fact_id: int, *, user_id: str = DEFAULT_USER_ID
+) -> OwnerProfileFactRow | None:
+    """Refresh ``affirmed_at`` on an already-``affirmed`` latest row — the
+    packet walk's "Still true" verb on an EXPIRING fact (tenet-2 Phase 3,
+    §4 delivery seam 5 / §7 decision 6 "both").
+
+    Distinct from :func:`affirm_fact` (proposed -> affirmed, the ratify-a-new-
+    import path): this never changes ``status`` or ``value`` — it just resets
+    the review-horizon clock on a fact the owner re-confirms unchanged. A real
+    change goes through the Update/Rewrite path instead, which supersedes via
+    :func:`append_fact` (a new version, still gated through affirmation).
+    Returns ``None`` (no-op) when the id is missing, not the latest row, or
+    not currently ``affirmed``."""
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        f"SELECT * FROM {_TABLE} WHERE id = ? AND user_id = ?", (fact_id, user_id)
+    ).fetchone()
+    if row is None or not bool(row["is_latest"]) or str(row["status"]) != "affirmed":
+        return None
+    now = _now_iso()
+    conn.execute(f"UPDATE {_TABLE} SET affirmed_at = ? WHERE id = ?", (now, fact_id))
+    row = conn.execute(f"SELECT * FROM {_TABLE} WHERE id = ?", (fact_id,)).fetchone()
+    return _decode_row(row) if row is not None else None
+
+
+def retire_fact(conn: sqlite3.Connection, fact_id: int, *, user_id: str = DEFAULT_USER_ID) -> bool:
+    """Retire an ``affirmed`` fact the owner says is no longer true (status ->
+    'rejected'). This is the packet walk's "Drop" verb on an EXPIRING fact —
+    deliberately a SEPARATE path from :func:`reject_fact` (which only ever
+    touches a ``proposed`` row, the ratify-a-new-import path): retiring a fact
+    the owner has lived with for a while is a distinct, explicit owner action,
+    never automatic. Returns True when an affirmed latest row was retired
+    (idempotent no-op otherwise)."""
+    cur = conn.execute(
+        f"UPDATE {_TABLE} SET status = 'rejected' "
+        "WHERE id = ? AND user_id = ? AND is_latest = 1 AND status = 'affirmed'",
+        (fact_id, user_id),
+    )
+    return cur.rowcount > 0
+
+
+def list_expiring_facts(
+    conn: sqlite3.Connection,
+    *,
+    now: datetime | None = None,
+    user_id: str = DEFAULT_USER_ID,
+) -> list[OwnerProfileFactRow]:
+    """Affirmed facts past their review horizon (``affirmed_at +
+    review_horizon_days`` elapsed) — the ONE shared "needs re-affirmation"
+    predicate reused by the governor's ``profile_drift`` moment class, the
+    Ledger packet walk, and the Sunday Telegram packet (tenet-2 Phase 3, §7
+    decision 6 "both": quarterly affirmation packets AND event triggers all
+    read this same list, so the expiry definition can never drift between
+    surfaces). A fact with no ``review_horizon_days`` on file never expires —
+    not every category enforces a cadence yet. Degrades to ``[]`` on a
+    missing table or an unparseable ``affirmed_at`` (never guesses)."""
+    stamp = now or datetime.now(UTC).replace(tzinfo=None)
+    out: list[OwnerProfileFactRow] = []
+    for row in list_facts(conn, status="affirmed", user_id=user_id):
+        if row.review_horizon_days is None or not row.affirmed_at:
+            continue
+        try:
+            affirmed = datetime.fromisoformat(row.affirmed_at)
+        except ValueError:
+            continue
+        if affirmed + timedelta(days=row.review_horizon_days) <= stamp:
+            out.append(row)
+    return out
+
+
 def list_facts(
     conn: sqlite3.Connection,
     *,
@@ -292,6 +369,9 @@ __all__ = [
     "append_fact",
     "get_current_profile",
     "get_fact",
+    "list_expiring_facts",
     "list_facts",
+    "reaffirm_fact",
     "reject_fact",
+    "retire_fact",
 ]
