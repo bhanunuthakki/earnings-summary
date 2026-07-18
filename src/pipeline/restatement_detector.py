@@ -39,7 +39,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 log = logging.getLogger(__name__)
 
@@ -191,6 +191,139 @@ def find_incumbent(
     return int(row["id"] if hasattr(row, "keys") else row[0])
 
 
+def _decimal_eq(stored: object, new: Decimal) -> bool:
+    """True iff the incumbent's stored value equals `new` numerically.
+
+    `financial_facts.value` is persisted as ``str(Decimal)`` (SQLite NUMERIC),
+    so a textual `3677000000` vs `3677000000.0` must compare equal. Falls back
+    to a string compare only when the stored value can't be parsed as a
+    Decimal (never expected for a real fact row)."""
+    try:
+        return Decimal(str(stored)) == new
+    except (InvalidOperation, ValueError, TypeError):
+        return str(stored) == str(new)
+
+
+def _correct_same_document_fact(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    period_end: datetime,
+    fiscal_period_type: str,
+    line_item: str,
+    value: Decimal,
+    currency: str | None,
+    unit: str,
+    source_doc_id: int,
+    extracted_by: str | None,
+) -> int | None:
+    """Heal an incumbent `financial_facts` row that shares this write's exact
+    provenance key but carries a stale value/currency/unit.
+
+    `uq_financial_facts_provenance` is UNIQUE on (ticker, period_end,
+    fiscal_period_type, line_item, source_doc_id), so a re-extraction of the
+    SAME source document is an INSERT-OR-IGNORE no-op — which silently freezes
+    the first-pulled value even when a later re-pull of that same accession
+    yields a corrected number (a tag-ladder reorder, or an aggregated SEC
+    companyfacts payload that gained a preferred concept after the first pull).
+    Supersession never fires here because it requires a *different, later*
+    filing. This UPDATEs the incumbent in place so same-document corrections
+    land instead of being dropped.
+
+    Safety rail: only a row written by the SAME extractor is overwritten. A
+    row sharing the doc id but authored by a different extractor (e.g. a manual
+    override) is left untouched — corrections never clobber a human edit.
+
+    Returns the corrected row id when a heal was applied; None when there is no
+    incumbent for the key, the incumbent already matches (identical replay — a
+    true no-op), the safety rail blocked the write, or the schema predates the
+    `extracted_by` audit column (synthetic pre-0054 fixtures)."""
+    if not _table_has_column(conn, "financial_facts", "extracted_by"):
+        # Pre-0054 fixture schema: no audit column to gate the safety rail on,
+        # and same-document correction is a prod-healing concern only. Skip.
+        return None
+    try:
+        row = conn.execute(
+            """
+            SELECT id, value, currency, unit, extracted_by
+            FROM financial_facts
+            WHERE ticker = ?
+              AND period_end = ?
+              AND fiscal_period_type = ?
+              AND line_item = ?
+              AND source_doc_id = ?
+            """,
+            (ticker.upper(), period_end, fiscal_period_type, line_item, source_doc_id),
+        ).fetchone()
+    except sqlite3.Error as exc:
+        log.warning(
+            {
+                "event": "restatement_same_doc_lookup_failed",
+                "ticker": ticker,
+                "line_item": line_item,
+                "error": str(exc),
+            }
+        )
+        return None
+    if row is None:
+        return None
+    inc_id = int(row["id"] if hasattr(row, "keys") else row[0])
+    inc_value = row["value"] if hasattr(row, "keys") else row[1]
+    inc_currency = row["currency"] if hasattr(row, "keys") else row[2]
+    inc_unit = row["unit"] if hasattr(row, "keys") else row[3]
+    inc_extracted_by = row["extracted_by"] if hasattr(row, "keys") else row[4]
+
+    # Safety rail: never overwrite a row authored by a different extractor.
+    # A NULL incumbent extractor is not the current sec_xbrl/fmp writer, so it
+    # is also left alone (it can only have come from a legacy/manual path).
+    if inc_extracted_by != extracted_by:
+        return None
+
+    unchanged = (
+        _decimal_eq(inc_value, value)
+        and (inc_currency == currency)
+        and (str(inc_unit) == str(unit))
+    )
+    if unchanged:
+        return None  # identical replay stays a true no-op
+
+    new_value_str = str(value)
+    try:
+        conn.execute(
+            "UPDATE financial_facts SET value = ?, currency = ?, unit = ? WHERE id = ?",
+            (new_value_str, currency, unit, inc_id),
+        )
+    except sqlite3.Error as exc:
+        log.warning(
+            {
+                "event": "restatement_same_doc_correction_failed",
+                "ticker": ticker,
+                "line_item": line_item,
+                "error": str(exc),
+            }
+        )
+        return None
+
+    log.info(
+        {
+            "event": "financial_fact_same_doc_correction",
+            "ticker": ticker.upper(),
+            "period_end": str(period_end),
+            "fiscal_period_type": fiscal_period_type,
+            "line_item": line_item,
+            "source_doc_id": source_doc_id,
+            "row_id": inc_id,
+            "old_value": str(inc_value),
+            "new_value": new_value_str,
+            "old_currency": inc_currency,
+            "new_currency": currency,
+            "old_unit": str(inc_unit),
+            "new_unit": str(unit),
+        }
+    )
+    return inc_id
+
+
 def insert_with_restatement_detection(
     conn: sqlite3.Connection,
     *,
@@ -210,8 +343,13 @@ def insert_with_restatement_detection(
     a restatement of an existing row from an earlier filing.
 
     Returns `(new_row_id, superseded_row_id)`:
-      - `new_row_id` is the id of the inserted row, or None if the insert
-        was a true no-op (UNIQUE conflict on the same source_doc_id).
+      - `new_row_id` is the id of the inserted row, or None when no NEW row
+        was written — either a true no-op (identical same-document replay) or
+        a same-document *correction* (the incumbent row for this exact
+        provenance key was UPDATEd in place because the re-extraction changed
+        its value/currency/unit; see `_correct_same_document_fact`). In both
+        cases the row count is unchanged, so callers that tally inserts do not
+        double-count a heal.
       - `superseded_row_id` is the id of the predecessor in the chain,
         or None if this is the first row for the logical key OR the new
         document is NOT a later filing than the incumbent (in which case
@@ -338,8 +476,25 @@ def insert_with_restatement_detection(
 
     if cur.rowcount == 0:
         # UNIQUE conflict on (ticker, period_end, fiscal_period_type,
-        # line_item, source_doc_id) — same document re-ingested, no row
-        # written. supersedes_id is irrelevant in that case.
+        # line_item, source_doc_id) — the SAME source document already has a
+        # row for this key. Usually a true no-op, but when the re-extraction
+        # yields a changed value/currency/unit (a tag-ladder reorder, or a
+        # companyfacts payload that gained a preferred concept after the first
+        # pull) the incumbent is stale — heal it in place. Identical replays
+        # stay no-ops; a row authored by a different extractor is left alone.
+        # supersedes_id is irrelevant here (that path needs a later filing).
+        _correct_same_document_fact(
+            conn,
+            ticker=ticker,
+            period_end=period_end,
+            fiscal_period_type=fiscal_period_type,
+            line_item=line_item,
+            value=value,
+            currency=currency,
+            unit=unit,
+            source_doc_id=source_doc_id,
+            extracted_by=extracted_by,
+        )
         return (None, None)
     return (
         int(cur.lastrowid) if cur.lastrowid is not None else None,
