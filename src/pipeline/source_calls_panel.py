@@ -14,6 +14,8 @@ cache avoided. Reuses the shell's dark panel / kpi-strip / table CSS vocabulary.
 
 from __future__ import annotations
 
+import sqlite3
+from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 
@@ -33,6 +35,8 @@ _PANEL_STYLE = """<style>
   border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);
   line-height:1.55; }
 .sc-note code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
+.au-strip { display:flex; flex-wrap:wrap; gap:var(--sp-2); align-items:center; }
+.au-strip .k-pill { display:inline-flex; gap:var(--sp-1); align-items:baseline; }
 </style>"""
 
 
@@ -41,12 +45,13 @@ def render_source_calls_panel(db_path: Path) -> str:
     per-(source, kind) table, followed by the shell's panel-latency readout
     (S14). Degrades to an empty-state when nothing is logged."""
     ov = cache_effectiveness_overview(db_path=db_path)
+    action_usage = render_action_usage_section(db_path)
     if ov.total_calls == 0:
         return (
             _PANEL_STYLE + '<section class="panel"><h2>Data fetch cache</h2>'
             '<p class="muted">No source-call rows yet. Adapters in <code>src/sources/</code> '
             "log to <code>source_calls</code> on every fetch attempt; the table fills as the "
-            "daily jobs run.</p></section>" + _PANEL_LATENCY_SECTION
+            "daily jobs run.</p></section>" + _PANEL_LATENCY_SECTION + action_usage
         )
     return "".join(
         [
@@ -60,6 +65,7 @@ def render_source_calls_panel(db_path: Path) -> str:
             _note(ov),
             "</section>",
             _PANEL_LATENCY_SECTION,
+            action_usage,
         ]
     )
 
@@ -205,4 +211,151 @@ def _note(ov: CacheEffectivenessOverview) -> str:
         "<code>python execution/show_source_calls.py</code> and "
         "<code>GET /api/source-calls</code>."
         "</div>"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Ledger action usage (30d) — the read-side of Phase C's instrument-first ruling
+# ("does the owner actually USE each Ledger action?"). The comments-server routes
+# UPSERT durable ``act:<family>[:<action>]`` counters into
+# ``panel_activation_counts`` on every feed action; this section is the only
+# surface that reads them back, grouped into families so the strongest-used
+# actions read first. Server-rendered (the counts live in the DB), unlike the
+# in-memory panel-latency ring next to it.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ActionUsageRow:
+    """One ``act:*`` counter, split into its family + action for grouping."""
+
+    panel_id: str
+    family: str
+    action: str
+    count: int
+
+
+def _split_family_action(panel_id: str) -> tuple[str, str]:
+    """Map an ``act:*`` panel_id to ``(family, action)``.
+
+    The family is the segment immediately after ``act:``; ``research_run`` /
+    ``research_reject`` collapse into one ``research`` family (task grouping),
+    and a single-segment id (e.g. ``act:capture``) is its own family with the
+    same word as its lone action.
+    """
+    rest = panel_id[4:] if panel_id.startswith("act:") else panel_id
+    if rest.startswith("research_"):
+        return ("research", rest[len("research_") :] or "run")
+    if ":" in rest:
+        family, action = rest.split(":", 1)
+        return (family, action)
+    return (rest, rest)
+
+
+def _read_action_usage(db_path: Path) -> list[ActionUsageRow]:
+    """Read the 30-day ``act:*`` activation totals.
+
+    Read-only and best-effort: a missing DB / table (fresh install before the
+    first feed action creates it) yields ``[]`` rather than raising, so the
+    section degrades to a clean empty-state. Mirrors the window filter the
+    ``GET /api/metrics/panel`` aggregate uses.
+    """
+    if not Path(db_path).exists():
+        return []
+    sql = (
+        "SELECT panel_id, SUM(count) AS n FROM panel_activation_counts"
+        " WHERE panel_id LIKE 'act:%' AND day >= date('now', '-30 days')"
+        " GROUP BY panel_id"
+    )
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(sql).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return []
+    out: list[ActionUsageRow] = []
+    for panel_id, n in rows:
+        family, action = _split_family_action(str(panel_id))
+        out.append(
+            ActionUsageRow(panel_id=str(panel_id), family=family, action=action, count=int(n or 0))
+        )
+    return out
+
+
+_ACTION_USAGE_EMPTY = (
+    '<section class="panel"><h2>Ledger action usage (30d)</h2>'
+    '<div class="k-well"><p class="muted">No Ledger actions recorded in the last 30 days — '
+    "the counters fill as you work the feed.</p></div></section>"
+)
+
+
+def render_action_usage_section(db_path: Path) -> str:
+    """Server-rendered ``act:*`` usage: a family-total strip + a per-action
+    table, families ordered by total desc. Degrades to a clean empty-state when
+    no Ledger actions were recorded in the window."""
+    rows = _read_action_usage(db_path)
+    if not rows:
+        return _ACTION_USAGE_EMPTY
+
+    families: dict[str, list[ActionUsageRow]] = {}
+    for r in rows:
+        families.setdefault(r.family, []).append(r)
+    fam_totals = {fam: sum(r.count for r in rs) for fam, rs in families.items()}
+    ordered = sorted(families, key=lambda f: (-fam_totals[f], f))
+    grand_total = sum(fam_totals.values())
+
+    return "".join(
+        [
+            '<section class="panel"><h2>Ledger action usage (30d)</h2>',
+            '<p class="sub">How often each Ledger action was actually fired over the last '
+            "30 days — the read-side of the instrument-first ruling. "
+            f"<strong>{grand_total:,}</strong> actions across "
+            f"<strong>{len(families)}</strong> families.</p>",
+            _family_strip(ordered, fam_totals),
+            _action_table(ordered, families, len(rows)),
+            "</section>",
+        ]
+    )
+
+
+def _family_strip(ordered: list[str], fam_totals: dict[str, int]) -> str:
+    chips = "".join(
+        f'<span class="k-pill">{escape(fam)} <strong>{fam_totals[fam]:,}</strong></span>'
+        for fam in ordered
+    )
+    return f'<div class="k-well"><div class="au-strip">{chips}</div></div>'
+
+
+def _action_table(
+    ordered: list[str], families: dict[str, list[ActionUsageRow]], n_rows: int
+) -> str:
+    body_parts: list[str] = []
+    for fam in ordered:
+        for r in sorted(families[fam], key=lambda x: (-x.count, x.action)):
+            data = (
+                lg.data_text(f"{fam} {r.action}")
+                + lg.data_text_key("family", fam)
+                + lg.data_text_key("action", r.action)
+                + lg.data_num("count", r.count)
+            )
+            body_parts.append(
+                f"<tr{data}>"
+                f'<td><span class="k-chip k-chip-mono">{escape(fam)}</span></td>'
+                f'<td><span class="k-chip">{escape(r.action)}</span></td>'
+                f'<td class="num">{r.count:,}</td>'
+                "</tr>"
+            )
+    return (
+        lg.grid_open()
+        + lg.filter_bar(n_rows, noun="actions", placeholder="Filter by family / action…")
+        + '<table class="p-table sc-table"><thead><tr>'
+        + lg.th("Family", "family", "text", num=False)
+        + lg.th("Action", "action", "text", num=False)
+        + lg.th("Activations", "count", "num")
+        + "</tr></thead><tbody>"
+        + "".join(body_parts)
+        + "</tbody></table>"
+        + lg.grid_close()
     )
