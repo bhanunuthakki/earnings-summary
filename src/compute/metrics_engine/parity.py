@@ -38,6 +38,72 @@ mapping (documented, not silently skipped):
   - `revenue_yoy` / `revenue_qoq` / `eps_diluted_yoy` -- these are
     sequential/YoY comparisons; FMP's growth files are quarterly point
     deltas on a different cadence/shape than a single snapshot comparison.
+
+Phase 2 additions, grid-matched per this module's existing rule (period_grid
+determines "_ttm" vs the plain non-TTM file, verified directly against real
+MELI cache rows for every field below -- NOT assumed from the Phase 1
+pattern): `roic_strict` -> `key_metrics_ttm.returnOnInvestedCapitalTTM`,
+`roce` -> `key_metrics_ttm.returnOnCapitalEmployedTTM`, `net_debt_to_ebitda`
+-> `key_metrics_ttm.netDebtToEBITDATTM`, `cash_conversion_cycle` ->
+`key_metrics_ttm.cashConversionCycleTTM` (all four are period_grid="ttm"
+formulas here, same TTM-grid reasoning as roe/roa; the first two are
+fractions needing the *100 rescale, the latter two are already raw
+multiples/day-counts, not rescaled). `asset_turnover` ->
+`financial_ratios_ttm.assetTurnoverTTM`, `receivables_turnover` ->
+`financial_ratios_ttm.receivablesTurnoverTTM`, `inventory_turnover` ->
+`financial_ratios_ttm.inventoryTurnoverTTM` (also period_grid="ttm",
+verified to exist as TTM-suffixed fields in the real `_financial_ratios_ttm`
+cache, not just the quarterly one). `interest_coverage` ->
+`financial_ratios_quarterly.interestCoverageRatio`, `bvps` ->
+`financial_ratios_quarterly.bookValuePerShare`, `fcf_per_share` ->
+`financial_ratios_quarterly.freeCashFlowPerShare` (these three are
+period_grid="quarterly" formulas, so -- per the existing rule -- they
+compare against the plain, non-TTM quarterly file/field, none rescaled).
+
+Six Phase-2 metrics have no direct FMP equivalent and stay unmapped
+(documented, not silently skipped): `roic_lease_adjusted` (FMP's own
+`investedCapital` does not add back operating leases, so it is not the
+"the lease-adjusted variant maps to FMP's own number" case -- unlike
+net_debt's KNOWN_MISMATCHES precedent, there is no FMP field that even
+attempts this definition), `net_debt_strict` / `net_debt_incl_lt_securities`
+(FMP's key-metrics files publish `netDebtToEBITDA`, a ratio, but never a
+raw net-debt dollar figure standalone), `eps_adjusted_ex_sbc` (FMP has no
+SBC-adjusted EPS field), and `revenue_cagr_3y` / `ebitda_cagr_3y` (FMP's
+cached files carry point-in-time snapshots, not a rolling 3-year CAGR).
+
+Real-sweep findings (Phase 2 validation, --parity run against a scratch
+copy of data/portfolio.db + the live data/historical/fmp/ cache, portfolio
++ evaluation scope, 48 tickers): a wide majority of "fail" outcomes trace
+to two STRUCTURAL causes, neither a metrics_engine defect --
+
+1. **Cache staleness, not a computation bug.** The "_ttm" cache files
+   (`key_metrics_ttm.json`, `financial_ratios_ttm.json`) carry exactly ONE
+   row with no `date` field -- there is no way to verify it reflects the
+   SAME reporting period as our latest `kpi_facts` row. Verified directly:
+   AVGO's newest computed gross_margin (period_end 2026-05-03) has no
+   counterpart yet in the cached `financial_ratios_quarterly.json` (whose
+   newest row is 2026-02-01) -- comparing period-aligned rows instead
+   (2025-11-01 computed vs the cache's 2025-11-02 row) gives 67.99 vs
+   67.99333..., an exact match. `load_fmp_reference`/`compare_ticker`
+   inherited this "latest vs latest, no date check" design unchanged from
+   Phase 1 -- a genuine harness gap (feeds a period-aware comparison as a
+   tracked follow-up), not something Phase 2 introduced or should silently
+   patch over with per-ticker KNOWN_MISMATCHES guesses.
+2. **net_debt_to_ebitda's documented strict-convention divergence, now
+   visible at scale.** For near-zero-net-debt (net-cash) names the strict
+   vs FMP-inclusive net-debt definitions can differ enough to flip the
+   sign of net_debt_to_ebitda entirely (e.g. GOOG: -0.23 computed vs +0.24
+   reference) -- exactly the AAPL-scale ambiguity registry.py's
+   NET_DEBT_TO_EBITDA method_notes already name, just showing up broadly
+   because most of the roster runs net-cash.
+
+Neither finding produced a NEW verified (ticker, formula_key) reason
+confident enough to add to KNOWN_MISMATCHES without over-claiming
+certainty per-ticker (staleness and the convention gap are entangled in
+any single observation) -- see that module's docstring: "an entry only
+after confirming the divergence is a documented method choice... never as
+a way to silence an unexplained failure." Left for the parity-harness
+follow-up (period-aware comparison) to disentangle properly.
 """
 
 from __future__ import annotations
@@ -72,6 +138,19 @@ _FMP_FIELD_MAP: dict[str, tuple[str, str, bool]] = {
     "roe": ("key_metrics_ttm", "returnOnEquityTTM", True),
     "roa": ("key_metrics_ttm", "returnOnAssetsTTM", True),
     "sbc_pct_revenue": ("key_metrics_quarterly", "stockBasedCompensationToRevenue", True),
+    # Phase 2 -- see module docstring for the per-field verification notes.
+    # period_grid="ttm" formulas -> the "_ttm" file, TTM-suffixed field.
+    "roic_strict": ("key_metrics_ttm", "returnOnInvestedCapitalTTM", True),
+    "roce": ("key_metrics_ttm", "returnOnCapitalEmployedTTM", True),
+    "net_debt_to_ebitda": ("key_metrics_ttm", "netDebtToEBITDATTM", False),
+    "cash_conversion_cycle": ("key_metrics_ttm", "cashConversionCycleTTM", False),
+    "asset_turnover": ("financial_ratios_ttm", "assetTurnoverTTM", False),
+    "receivables_turnover": ("financial_ratios_ttm", "receivablesTurnoverTTM", False),
+    "inventory_turnover": ("financial_ratios_ttm", "inventoryTurnoverTTM", False),
+    # period_grid="quarterly" formulas -> the plain non-TTM file/field.
+    "interest_coverage": ("financial_ratios_quarterly", "interestCoverageRatio", False),
+    "bvps": ("financial_ratios_quarterly", "bookValuePerShare", False),
+    "fcf_per_share": ("financial_ratios_quarterly", "freeCashFlowPerShare", False),
 }
 
 
@@ -148,7 +227,7 @@ def compare_ticker(
                 )
             )
             continue
-        if within_tolerance(formula.category, computed, reference):
+        if within_tolerance(formula.category, computed, reference, unit=formula.unit):
             results.append(
                 ParityResult(
                     ticker=ticker,

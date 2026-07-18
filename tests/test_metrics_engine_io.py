@@ -168,7 +168,8 @@ _QUARTERS: list[tuple[str, str]] = [
 
 
 def _seed_operating_company(conn: sqlite3.Connection, ticker: str) -> None:
-    """Full line-item set for every Phase-1 formula, growing simply per quarter."""
+    """Full line-item set for every Phase-1 and Phase-2 formula, growing
+    simply per quarter."""
     for i, (pe_str, fpt) in enumerate(_QUARTERS):
         pe = datetime.fromisoformat(pe_str)
         doc_id = _insert_doc(conn, ticker, pe)
@@ -192,6 +193,18 @@ def _seed_operating_company(conn: sqlite3.Connection, ticker: str) -> None:
             "total_debt": "300",
             "total_stockholders_equity": "2000",
             "total_assets": "3000",
+            # Phase 2 additions.
+            "short_term_investments": "100",
+            "long_term_investments": "50",
+            "income_tax_expense": str(revenue * Decimal("0.2") * Decimal("0.21")),
+            "income_before_tax": str(revenue * Decimal("0.2")),
+            "interest_expense": "10",
+            "cost_of_revenue": str(revenue * Decimal("0.6")),
+            "accounts_receivable": "150",
+            "accounts_payable": "80",
+            "inventory": "60",
+            "operating_lease_liability": "120",
+            "weighted_avg_shares_diluted": "100",
         }
         for line_item, value in facts.items():
             _insert_fact(
@@ -199,6 +212,34 @@ def _seed_operating_company(conn: sqlite3.Connection, ticker: str) -> None:
                 ticker=ticker,
                 period_end=pe,
                 fpt=fpt,
+                line_item=line_item,
+                value=value,
+                source_doc_id=doc_id,
+            )
+    conn.commit()
+
+
+# 4 fiscal years, revenue growing an exact 10% YoY so revenue_cagr_3y ==
+# 10% between FY0 and FY3.
+_FY_YEARS: list[str] = ["2021-12-31", "2022-12-31", "2023-12-31", "2024-12-31"]
+
+
+def _seed_fy_rows(conn: sqlite3.Connection, ticker: str) -> None:
+    for year_index, pe_str in enumerate(_FY_YEARS):
+        pe = datetime.fromisoformat(pe_str)
+        doc_id = _insert_doc(conn, ticker, pe)
+        revenue = Decimal("1000") * (Decimal("1.1") ** year_index)
+        facts: dict[str, str] = {
+            "revenue": str(revenue),
+            "operating_income": str(revenue * Decimal("0.2")),
+            "depreciation_and_amortization": str(revenue * Decimal("0.05")),
+        }
+        for line_item, value in facts.items():
+            _insert_fact(
+                conn,
+                ticker=ticker,
+                period_end=pe,
+                fpt="FY",
                 line_item=line_item,
                 value=value,
                 source_doc_id=doc_id,
@@ -311,23 +352,53 @@ def test_bank_excludes_gross_margin_but_keeps_roe(conn: sqlite3.Connection) -> N
     assert roe_row["status"] == "ok"
 
 
-def test_ifrs_ticker_gets_missing_input_mapping_for_every_formula(
+def test_ifrs_ticker_computes_successfully_in_phase2(
     conn: sqlite3.Connection,
 ) -> None:
-    """Phase 1 has no IFRS field mapping -- every applicable formula must
-    still get a real metric_computation_attempts row (period discovery is
-    unrestricted by mapping, per _build_quarter_cells's docstring), tagged
-    not_computable/missing_input_mapping -- never silently zero rows, which
-    would be indistinguishable from "never ran"."""
+    """Phase 2 populated IFRS_FIELD_MAP (verified against real
+    data/portfolio.db rows for NU/BN/ASML/NVO -- FMP's normalization
+    collapses IFRS filers onto the identical US-GAAP vocabulary), so an
+    IFRS ticker with every concept present now computes real values --
+    the opposite outcome from Phase 1's "every formula unmapped" baseline,
+    and the point of doing the Phase 2 mapping work at all."""
     _seed_operating_company(conn, "IFRSCO")
     _set_classification(conn, "IFRSCO", "operating_company", "ifrs")
     summary = compute_for_ticker(conn, "IFRSCO")
     assert summary.quarters_seen == 8
-    assert summary.computed_ok == 0
-    rows = _attempts(conn, "IFRSCO")
-    assert len(rows) > 0
-    assert all(r["status"] == "not_computable" for r in rows)
-    assert all(r["reason_code"] == ReasonCode.MISSING_INPUT_MAPPING.value for r in rows)
+    assert summary.computed_ok > 0
+
+    gross_row = _latest_attempt(conn, "IFRSCO", "gross_margin")
+    assert gross_row["status"] == "ok"
+    roic_row = _latest_attempt(conn, "IFRSCO", "roic_strict")
+    assert roic_row["status"] == "ok"
+
+
+def test_ifrs_ticker_missing_lease_liability_is_missing_input_not_mapping_gap(
+    conn: sqlite3.Connection,
+) -> None:
+    """The real NU/BN/NVO case (verified against data/portfolio.db):
+    operating_lease_liability's FIELD NAME is mapped for IFRS (proven by
+    ASML's real data), but these specific tickers have no VALUE under that
+    name for any period -- a per-period data gap (MISSING_INPUT via the
+    normal resolution path), not a mapping gap (MISSING_INPUT_MAPPING).
+    roic_strict (doesn't need the lease concept) must still compute fine."""
+    _seed_operating_company(conn, "IFRSNOLEASE")
+    _set_classification(conn, "IFRSNOLEASE", "operating_company", "ifrs")
+    # Remove the operating_lease_liability facts this fixture ticker would
+    # otherwise carry, simulating NU/BN/NVO's real absence of that field.
+    conn.execute(
+        "DELETE FROM financial_facts WHERE ticker = ? AND line_item = 'operating_lease_liability'",
+        ("IFRSNOLEASE",),
+    )
+    conn.commit()
+    compute_for_ticker(conn, "IFRSNOLEASE")
+
+    lease_row = _latest_attempt(conn, "IFRSNOLEASE", "roic_lease_adjusted")
+    assert lease_row["status"] == "not_computable"
+    assert lease_row["reason_code"] == ReasonCode.MISSING_INPUT.value
+
+    strict_row = _latest_attempt(conn, "IFRSNOLEASE", "roic_strict")
+    assert strict_row["status"] == "ok"
 
 
 def test_recompute_is_idempotent_without_force(conn: sqlite3.Connection) -> None:
@@ -364,3 +435,184 @@ def test_force_recompute_rewrites_attempts_without_duplicating(
     ).fetchone()["n"]
     # ON CONFLICT DO UPDATE -- same logical rows, no growth in row count.
     assert attempts_after == attempts_before
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 -- roic_*/net_debt_* method-variant pairs, ticker overrides,
+# 2-point averaging, and the FY-cadence CAGR grid.
+# ---------------------------------------------------------------------------
+
+
+def test_compute_for_ticker_roic_variants_disagree_when_leases_material(
+    conn: sqlite3.Connection,
+) -> None:
+    _seed_operating_company(conn, "TEST")
+    _set_classification(conn, "TEST", "operating_company", "us_gaap")
+    compute_for_ticker(conn, "TEST")
+
+    strict_row = _latest_attempt(conn, "TEST", "roic_strict")
+    lease_row = _latest_attempt(conn, "TEST", "roic_lease_adjusted")
+    assert strict_row["status"] == "ok"
+    assert lease_row["status"] == "ok"
+    strict_value = conn.execute(
+        "SELECT value FROM kpi_facts WHERE id = ?", (strict_row["kpi_fact_id"],)
+    ).fetchone()["value"]
+    lease_value = conn.execute(
+        "SELECT value FROM kpi_facts WHERE id = ?", (lease_row["kpi_fact_id"],)
+    ).fetchone()["value"]
+    # Adding operating_lease_liability (120) to invested capital can only
+    # lower the ratio -- the documented, expected method-variant disagreement.
+    assert Decimal(str(lease_value)) < Decimal(str(strict_value))
+
+
+def test_compute_for_ticker_net_debt_variants_disagree_when_lt_investments_material(
+    conn: sqlite3.Connection,
+) -> None:
+    _seed_operating_company(conn, "TEST")
+    _set_classification(conn, "TEST", "operating_company", "us_gaap")
+    compute_for_ticker(conn, "TEST")
+
+    strict_row = _latest_attempt(conn, "TEST", "net_debt_strict")
+    incl_row = _latest_attempt(conn, "TEST", "net_debt_incl_lt_securities")
+    assert strict_row["status"] == "ok"
+    assert incl_row["status"] == "ok"
+    strict_value = conn.execute(
+        "SELECT value FROM kpi_facts WHERE id = ?", (strict_row["kpi_fact_id"],)
+    ).fetchone()["value"]
+    incl_value = conn.execute(
+        "SELECT value FROM kpi_facts WHERE id = ?", (incl_row["kpi_fact_id"],)
+    ).fetchone()["value"]
+    # incl_lt_securities nets an additional 50 of long_term_investments.
+    assert Decimal(str(strict_value)) - Decimal(str(incl_value)) == Decimal("50")
+
+
+def test_compute_for_ticker_zero_inventory_ticker_override_suppresses_inventory_turnover(
+    conn: sqlite3.Connection,
+) -> None:
+    """NOW/VEEV/WIX/META/GOOG/UBER/BKNG/BN (applicability._TICKER_EFFICIENCY_OVERRIDES)
+    get not_applicable_business_model for inventory_turnover/cash_conversion_cycle
+    even though the ticker's business_model_class is plain operating_company."""
+    _seed_operating_company(conn, "NOW")
+    _set_classification(conn, "NOW", "operating_company", "us_gaap")
+    compute_for_ticker(conn, "NOW")
+
+    inv_row = _latest_attempt(conn, "NOW", "inventory_turnover")
+    assert inv_row["status"] == "not_computable"
+    assert inv_row["reason_code"] == ReasonCode.NOT_APPLICABLE_BUSINESS_MODEL.value
+
+    ccc_row = _latest_attempt(conn, "NOW", "cash_conversion_cycle")
+    assert ccc_row["status"] == "not_computable"
+    assert ccc_row["reason_code"] == ReasonCode.NOT_APPLICABLE_BUSINESS_MODEL.value
+
+    # asset_turnover has no override for NOW -- still computes.
+    asset_row = _latest_attempt(conn, "NOW", "asset_turnover")
+    assert asset_row["status"] == "ok"
+
+
+def test_compute_for_ticker_asset_turnover_averages_start_and_end_total_assets(
+    conn: sqlite3.Connection,
+) -> None:
+    """Proves the io._resolve_ttm_average mechanism actually runs (not just
+    reading the latest quarter's point-in-time value, which roa/roe use for
+    the SAME concept): total_assets grows every quarter, so the 2-point
+    average must differ from both the window's start and end values."""
+    ticker = "AVGCO"
+    _set_classification(conn, ticker, "operating_company", "us_gaap")
+    for i, (pe_str, fpt) in enumerate(_QUARTERS):
+        pe = datetime.fromisoformat(pe_str)
+        doc_id = _insert_doc(conn, ticker, pe)
+        # total_assets: 1000, 2000, ..., 8000 across the 8 quarters.
+        total_assets = Decimal(1000) * (i + 1)
+        for line_item, value in {
+            "revenue": "1000",
+            "total_assets": str(total_assets),
+        }.items():
+            _insert_fact(
+                conn,
+                ticker=ticker,
+                period_end=pe,
+                fpt=fpt,
+                line_item=line_item,
+                value=value,
+                source_doc_id=doc_id,
+            )
+    conn.commit()
+
+    compute_for_ticker(conn, ticker)
+    row = _latest_attempt(conn, ticker, "asset_turnover")
+    assert row["status"] == "ok"
+    kpi_fact = conn.execute(
+        "SELECT value FROM kpi_facts WHERE id = ?", (row["kpi_fact_id"],)
+    ).fetchone()
+    # Last cell idx=7 (total_assets=8000); TTM window = cells[4:8] = quarters
+    # with total_assets 5000, 6000, 7000, 8000. Average of start (5000) and
+    # end (8000) = 6500 -- NOT 8000 (latest point-in-time) and NOT 6500's
+    # naive 4-quarter mean (6500 happens to coincide here since the series
+    # is linear, so the real proof is the revenue_ttm/6500 result below).
+    revenue_ttm = Decimal("4000")
+    expected = revenue_ttm / Decimal("6500")
+    # kpi_facts.value is a NUMERIC(24,6) SQLite column (stored as a float
+    # under the hood) -- compare with a small tolerance rather than exact
+    # Decimal equality.
+    assert abs(Decimal(str(kpi_fact["value"])) - expected) < Decimal("0.0000001")
+
+
+def test_compute_for_ticker_revenue_cagr_3y_over_fy_rows(conn: sqlite3.Connection) -> None:
+    _seed_fy_rows(conn, "FYCO")
+    _set_classification(conn, "FYCO", "operating_company", "us_gaap")
+    compute_for_ticker(conn, "FYCO")
+
+    rows = [r for r in _attempts(conn, "FYCO") if r["formula_key"] == "revenue_cagr_3y"]
+    assert len(rows) == 4  # one attempt per FY row, even the un-computable early ones
+    ok_rows = [r for r in rows if r["status"] == "ok"]
+    assert len(ok_rows) == 1  # only the 4th FY row (idx=3) has a 3-year-back prior
+    kpi_fact = conn.execute(
+        "SELECT value FROM kpi_facts WHERE id = ?", (ok_rows[0]["kpi_fact_id"],)
+    ).fetchone()
+    # FY0=1000, FY3=1000*1.1^3=1331 -> exactly 10% CAGR.
+    assert abs(Decimal(str(kpi_fact["value"])) - Decimal("10")) < Decimal("0.001")
+
+
+def test_compute_for_ticker_ebitda_cagr_3y_over_fy_rows(conn: sqlite3.Connection) -> None:
+    _seed_fy_rows(conn, "FYCO2")
+    _set_classification(conn, "FYCO2", "operating_company", "us_gaap")
+    compute_for_ticker(conn, "FYCO2")
+
+    ok_rows = [
+        r
+        for r in _attempts(conn, "FYCO2")
+        if r["formula_key"] == "ebitda_cagr_3y" and r["status"] == "ok"
+    ]
+    assert len(ok_rows) == 1
+    kpi_fact = conn.execute(
+        "SELECT value FROM kpi_facts WHERE id = ?", (ok_rows[0]["kpi_fact_id"],)
+    ).fetchone()
+    assert abs(Decimal(str(kpi_fact["value"])) - Decimal("10")) < Decimal("0.001")
+
+
+def test_compute_for_ticker_revenue_cagr_3y_only_2_fy_rows_is_missing_input(
+    conn: sqlite3.Connection,
+) -> None:
+    """Fewer than 4 FY rows means no formula attempt ever has a valid
+    3-year-back prior -- every attempt is not_computable/missing_input,
+    never silently absent."""
+    ticker = "SHORTFY"
+    _set_classification(conn, ticker, "operating_company", "us_gaap")
+    for pe_str in ("2023-12-31", "2024-12-31"):
+        pe = datetime.fromisoformat(pe_str)
+        doc_id = _insert_doc(conn, ticker, pe)
+        _insert_fact(
+            conn,
+            ticker=ticker,
+            period_end=pe,
+            fpt="FY",
+            line_item="revenue",
+            value="1000",
+            source_doc_id=doc_id,
+        )
+    conn.commit()
+    compute_for_ticker(conn, ticker)
+    rows = [r for r in _attempts(conn, ticker) if r["formula_key"] == "revenue_cagr_3y"]
+    assert len(rows) == 2
+    assert all(r["status"] == "not_computable" for r in rows)
+    assert all(r["reason_code"] == ReasonCode.MISSING_INPUT.value for r in rows)

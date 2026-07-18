@@ -9,9 +9,14 @@ engine-startup via `io.upsert_formula_definitions`, mirroring
 pattern.
 
 Phase 1 scope (docs/design/bottoms_up_metrics_engine.md §6): the ~15
-unambiguous metrics with no method-variant ambiguity. `net_debt_*`,
-`roic_*`, `roce`, and every other `alt_of`-grouped pair are explicitly out
-of scope until Phase 2 settles the variant-surfacing convention.
+unambiguous metrics with no method-variant ambiguity.
+
+Phase 2 scope: the remaining §1 catalog — the two `alt_of`-grouped pairs
+(`roic_strict`/`roic_lease_adjusted`, `net_debt_strict`/
+`net_debt_incl_lt_securities`), `roce`, `net_debt_to_ebitda`,
+`interest_coverage`, the three turnover metrics + `cash_conversion_cycle`,
+the remaining per-share metrics, and the two 3-year CAGR metrics (the only
+`period_grid="fy"` formulas in the registry so far).
 """
 
 from __future__ import annotations
@@ -301,6 +306,356 @@ SBC_PCT_REVENUE = FormulaDef(
     unit=Unit.PERCENT,
 )
 
+# ---------------------------------------------------------------------------
+# Phase 2 catalog — docs/design/bottoms_up_metrics_engine.md §1's remaining
+# rows: the method-variant pairs, roce, net_debt_to_ebitda,
+# interest_coverage, the turnover/CCC efficiency metrics, the remaining
+# per-share metrics, and the two FY-cadence CAGR metrics. Every entry here
+# is version 1.
+# ---------------------------------------------------------------------------
+
+ROIC_STRICT = FormulaDef(
+    formula_key="roic_strict",
+    version=1,
+    category=MetricCategory.RETURNS,
+    display_formula="nopat / (total_debt + total_stockholders_equity - cash_and_equivalents) (%)",
+    method_notes=(
+        "NOPAT = operating_income * (1 - effective_tax_rate); "
+        "effective_tax_rate = clip(income_tax_expense / pretax_income, 0.0, 1.0), falling "
+        "back to a flat 21% US-federal statutory proxy (method_flag: "
+        "'statutory_tax_rate_fallback') when pretax_income <= 0 -- still a real value, not "
+        "not_computable. Invested capital (strict) excludes operating leases -- this is the "
+        "'strict' variant of the roic alt_of pair; both are stored, neither is preferred. "
+        "TTM grid: operating_income/tax legs are TTM-summed, balance-sheet legs are "
+        "period-end (matches the roe/roa convention)."
+    ),
+    required_inputs=(
+        CanonicalConcept.OPERATING_INCOME,
+        CanonicalConcept.INCOME_TAX_EXPENSE,
+        CanonicalConcept.PRETAX_INCOME,
+        CanonicalConcept.TOTAL_DEBT,
+        CanonicalConcept.TOTAL_STOCKHOLDERS_EQUITY,
+        CanonicalConcept.CASH_AND_EQUIVALENTS,
+    ),
+    alt_of="roic",
+    period_grid="ttm",
+    unit=Unit.PERCENT,
+    excluded_business_models=frozenset({BusinessModelClass.BANK, BusinessModelClass.INSURANCE}),
+)
+
+ROIC_LEASE_ADJUSTED = FormulaDef(
+    formula_key="roic_lease_adjusted",
+    version=1,
+    category=MetricCategory.RETURNS,
+    display_formula=(
+        "nopat / (total_debt + total_stockholders_equity - cash_and_equivalents + "
+        "operating_lease_liability) (%)"
+    ),
+    method_notes=(
+        "Alt of roic_strict: invested capital additionally adds back "
+        "operating_lease_liability. Same NOPAT/tax-fallback method note as roic_strict."
+    ),
+    required_inputs=(
+        CanonicalConcept.OPERATING_INCOME,
+        CanonicalConcept.INCOME_TAX_EXPENSE,
+        CanonicalConcept.PRETAX_INCOME,
+        CanonicalConcept.TOTAL_DEBT,
+        CanonicalConcept.TOTAL_STOCKHOLDERS_EQUITY,
+        CanonicalConcept.CASH_AND_EQUIVALENTS,
+        CanonicalConcept.OPERATING_LEASE_LIABILITY,
+    ),
+    alt_of="roic",
+    period_grid="ttm",
+    unit=Unit.PERCENT,
+    excluded_business_models=frozenset({BusinessModelClass.BANK, BusinessModelClass.INSURANCE}),
+)
+
+ROCE = FormulaDef(
+    formula_key="roce",
+    version=1,
+    category=MetricCategory.RETURNS,
+    display_formula="ebit / (total_assets - total_current_liabilities) (%), ebit = operating_income",
+    method_notes=(
+        "'Capital employed' = total assets minus current liabilities (the common textbook "
+        "definition); the equity + total_debt alternate definition is NOT built in v1. EBIT "
+        "is treated as equivalent to operating_income -- no separate EBIT line exists in "
+        "financial_facts, and this matches FMP's own cached ratios (ebitMargin == "
+        "operatingProfitMargin, verified directly against a real MELI cache row)."
+    ),
+    required_inputs=(
+        CanonicalConcept.OPERATING_INCOME,
+        CanonicalConcept.TOTAL_ASSETS,
+        CanonicalConcept.TOTAL_CURRENT_LIABILITIES,
+    ),
+    period_grid="ttm",
+    unit=Unit.PERCENT,
+    excluded_business_models=frozenset({BusinessModelClass.BANK, BusinessModelClass.INSURANCE}),
+)
+
+NET_DEBT_STRICT = FormulaDef(
+    formula_key="net_debt_strict",
+    version=1,
+    category=MetricCategory.LEVERAGE,
+    display_formula="total_debt - cash_and_equivalents - short_term_investments",
+    method_notes=(
+        "The AAPL-scale ambiguity the owner flagged: nets only cash + short-term "
+        "(near-cash) investments. Can be negative (a net-cash position) -- that is a valid "
+        "value, not an error."
+    ),
+    required_inputs=(
+        CanonicalConcept.TOTAL_DEBT,
+        CanonicalConcept.CASH_AND_EQUIVALENTS,
+        CanonicalConcept.SHORT_TERM_INVESTMENTS,
+    ),
+    alt_of="net_debt",
+    period_grid="quarterly",
+    unit=Unit.ACTUAL,
+)
+
+NET_DEBT_INCL_LT_SECURITIES = FormulaDef(
+    formula_key="net_debt_incl_lt_securities",
+    version=1,
+    category=MetricCategory.LEVERAGE,
+    display_formula="net_debt_strict - long_term_investments",
+    method_notes=(
+        "Alt of net_debt_strict: whether long-term marketable securities count as "
+        "cash-like is a real analyst judgment call (the ~$78B AAPL swing case), so both are "
+        "stored, neither is 'the' net debt."
+    ),
+    required_inputs=(
+        CanonicalConcept.TOTAL_DEBT,
+        CanonicalConcept.CASH_AND_EQUIVALENTS,
+        CanonicalConcept.SHORT_TERM_INVESTMENTS,
+        CanonicalConcept.LONG_TERM_INVESTMENTS,
+    ),
+    alt_of="net_debt",
+    period_grid="quarterly",
+    unit=Unit.ACTUAL,
+)
+
+NET_DEBT_TO_EBITDA = FormulaDef(
+    formula_key="net_debt_to_ebitda",
+    version=1,
+    category=MetricCategory.LEVERAGE,
+    display_formula="net_debt_strict / ebitda_ttm",
+    method_notes=(
+        "Uses the strict net-debt variant by convention (documented); a sibling using "
+        "net_debt_incl_lt_securities is not built as its own formula_id -- compute on "
+        "demand from the two already-stored components if needed. ebitda_ttm uses the same "
+        "operating_income + D&A definition as ebitda_margin."
+    ),
+    required_inputs=(
+        CanonicalConcept.TOTAL_DEBT,
+        CanonicalConcept.CASH_AND_EQUIVALENTS,
+        CanonicalConcept.SHORT_TERM_INVESTMENTS,
+        CanonicalConcept.OPERATING_INCOME,
+        CanonicalConcept.DEPRECIATION_AND_AMORTIZATION,
+    ),
+    period_grid="ttm",
+    unit=Unit.RATIO,
+    excluded_business_models=frozenset({BusinessModelClass.BANK, BusinessModelClass.INSURANCE}),
+)
+
+INTEREST_COVERAGE = FormulaDef(
+    formula_key="interest_coverage",
+    version=1,
+    category=MetricCategory.LEVERAGE,
+    display_formula="ebit / interest_expense, ebit = operating_income",
+    method_notes=(
+        "not_computable: missing_input when interest_expense is 0/absent (debt-free names) "
+        "-- never a divide-by-zero crash, never an infinite ratio silently shown."
+    ),
+    required_inputs=(CanonicalConcept.OPERATING_INCOME, CanonicalConcept.INTEREST_EXPENSE),
+    period_grid="quarterly",
+    unit=Unit.RATIO,
+    excluded_business_models=frozenset({BusinessModelClass.BANK, BusinessModelClass.INSURANCE}),
+)
+
+ASSET_TURNOVER = FormulaDef(
+    formula_key="asset_turnover",
+    version=1,
+    category=MetricCategory.EFFICIENCY,
+    display_formula="revenue_ttm / total_assets_avg",
+    method_notes=(
+        "Uses AVERAGE assets (2-point avg of the TTM window's first and last quarter-end "
+        "balances), unlike roe/roa above which use period-end -- documented per-metric, not "
+        "a blanket convention."
+    ),
+    required_inputs=(CanonicalConcept.REVENUE, CanonicalConcept.TOTAL_ASSETS),
+    period_grid="ttm",
+    unit=Unit.RATIO,
+    excluded_business_models=frozenset({BusinessModelClass.BANK}),
+)
+
+RECEIVABLES_TURNOVER = FormulaDef(
+    formula_key="receivables_turnover",
+    version=1,
+    category=MetricCategory.EFFICIENCY,
+    display_formula="revenue_ttm / accounts_receivable_avg",
+    method_notes=(
+        "not_computable: not_applicable_business_model for subscription/consumer "
+        "businesses with no material AR -- documented per-ticker via "
+        "applicability._TICKER_EFFICIENCY_OVERRIDES, not inferred. No portfolio/evaluation "
+        "roster name currently qualifies (every checked ticker carries AR that is a "
+        "material fraction of revenue) -- the override table stays empty for this formula "
+        "until a real case is verified, per the same no-guessing discipline as "
+        "IFRS_FIELD_MAP."
+    ),
+    required_inputs=(CanonicalConcept.REVENUE, CanonicalConcept.ACCOUNTS_RECEIVABLE),
+    period_grid="ttm",
+    unit=Unit.RATIO,
+    excluded_business_models=frozenset({BusinessModelClass.BANK}),
+)
+
+INVENTORY_TURNOVER = FormulaDef(
+    formula_key="inventory_turnover",
+    version=1,
+    category=MetricCategory.EFFICIENCY,
+    display_formula="cost_of_revenue_ttm / inventory_avg",
+    method_notes=(
+        "not_computable: not_applicable_business_model for services/software names -- "
+        "inventory=0 companies get this metric suppressed entirely (unlike quick_ratio, "
+        "where inventory=0 still produces a valid ratio). Per-ticker overrides in "
+        "applicability._TICKER_EFFICIENCY_OVERRIDES, verified against real "
+        "financial_facts.inventory values (a consistent $0 balance across quarters, not an "
+        "absent field)."
+    ),
+    required_inputs=(CanonicalConcept.COST_OF_REVENUE, CanonicalConcept.INVENTORY),
+    period_grid="ttm",
+    unit=Unit.RATIO,
+    excluded_business_models=frozenset({BusinessModelClass.BANK, BusinessModelClass.INSURANCE}),
+)
+
+CASH_CONVERSION_CYCLE = FormulaDef(
+    formula_key="cash_conversion_cycle",
+    version=1,
+    category=MetricCategory.EFFICIENCY,
+    display_formula="DIO + DSO - DPO (days)",
+    method_notes=(
+        "DIO = 365 * inventory_avg / cost_of_revenue_ttm; DSO = 365 * "
+        "accounts_receivable_avg / revenue_ttm; DPO = 365 * accounts_payable_avg / "
+        "cost_of_revenue_ttm. A composite of 3 already-ambiguous inputs -- not_computable "
+        "propagates if any leg is not_computable. Same business-model/ticker exclusions as "
+        "its inventory_turnover leg (the binding constraint of the three). Expressed in "
+        "days; there is no dedicated models.facts.Unit member for a day-count, so this uses "
+        "Unit.RATIO with the day-count documented here rather than in the unit itself."
+    ),
+    required_inputs=(
+        CanonicalConcept.REVENUE,
+        CanonicalConcept.COST_OF_REVENUE,
+        CanonicalConcept.INVENTORY,
+        CanonicalConcept.ACCOUNTS_RECEIVABLE,
+        CanonicalConcept.ACCOUNTS_PAYABLE,
+    ),
+    period_grid="ttm",
+    unit=Unit.RATIO,
+    excluded_business_models=frozenset({BusinessModelClass.BANK, BusinessModelClass.INSURANCE}),
+)
+
+EPS_ADJUSTED_EX_SBC = FormulaDef(
+    formula_key="eps_adjusted_ex_sbc",
+    version=1,
+    category=MetricCategory.PER_SHARE,
+    display_formula="(net_income + stock_based_compensation) / weighted_avg_shares_diluted",
+    method_notes=(
+        "method_flag: 'sbc_addback_pretax' is ALWAYS present on a successful compute -- "
+        "adding back SBC pre-tax overstates adjusted EPS versus a proper tax-effected "
+        "add-back; v1 documents this as the known simplification rather than computing a "
+        "marginal tax adjustment (Phase 3+ candidate)."
+    ),
+    required_inputs=(
+        CanonicalConcept.NET_INCOME,
+        CanonicalConcept.STOCK_BASED_COMPENSATION,
+        CanonicalConcept.WEIGHTED_AVG_SHARES_DILUTED,
+    ),
+    period_grid="quarterly",
+    unit=Unit.ACTUAL,
+)
+
+BVPS = FormulaDef(
+    formula_key="bvps",
+    version=1,
+    category=MetricCategory.PER_SHARE,
+    display_formula="total_stockholders_equity / weighted_avg_shares_diluted",
+    method_notes=(
+        "Uses period-end diluted share count, not spot shares outstanding -- documented."
+    ),
+    required_inputs=(
+        CanonicalConcept.TOTAL_STOCKHOLDERS_EQUITY,
+        CanonicalConcept.WEIGHTED_AVG_SHARES_DILUTED,
+    ),
+    period_grid="quarterly",
+    unit=Unit.ACTUAL,
+)
+
+FCF_PER_SHARE = FormulaDef(
+    formula_key="fcf_per_share",
+    version=1,
+    category=MetricCategory.PER_SHARE,
+    display_formula="free_cash_flow / weighted_avg_shares_diluted",
+    method_notes="No ambiguity.",
+    required_inputs=(
+        CanonicalConcept.FREE_CASH_FLOW,
+        CanonicalConcept.WEIGHTED_AVG_SHARES_DILUTED,
+    ),
+    period_grid="quarterly",
+    unit=Unit.ACTUAL,
+)
+
+REVENUE_CAGR_3Y = FormulaDef(
+    formula_key="revenue_cagr_3y",
+    version=1,
+    category=MetricCategory.GROWTH,
+    display_formula="(rev_FY / rev_FY-3)^(1/3) - 1 (%)",
+    method_notes=(
+        "Annual-cadence only (period_grid='fy'); requires 3 full FY gaps -- io.py guards "
+        "the actual calendar-day span between the two FY rows so a data gap can never be "
+        "silently read as 'exactly 3 years apart' (no interpolation across a stub year). "
+        "not_computable: denominator_le_zero when either endpoint is <= 0 (a sign flip "
+        "makes a CAGR percentage meaningless, same reasoning as eps_diluted_yoy)."
+    ),
+    required_inputs=(CanonicalConcept.REVENUE,),
+    period_grid="fy",
+    unit=Unit.PERCENT,
+)
+
+EBITDA_CAGR_3Y = FormulaDef(
+    formula_key="ebitda_cagr_3y",
+    version=1,
+    category=MetricCategory.GROWTH,
+    display_formula="(ebitda_FY / ebitda_FY-3)^(1/3) - 1 (%)",
+    method_notes=(
+        "Same shape as revenue_cagr_3y over EBITDA (FY); inherits the ebitda_margin "
+        "EBITDA method note (operating_income + D&A, not net_income + interest + tax + D&A)."
+    ),
+    required_inputs=(
+        CanonicalConcept.OPERATING_INCOME,
+        CanonicalConcept.DEPRECIATION_AND_AMORTIZATION,
+    ),
+    period_grid="fy",
+    unit=Unit.PERCENT,
+    excluded_business_models=frozenset({BusinessModelClass.BANK, BusinessModelClass.INSURANCE}),
+)
+
+_PHASE_2_FORMULAS: tuple[FormulaDef, ...] = (
+    ROIC_STRICT,
+    ROIC_LEASE_ADJUSTED,
+    ROCE,
+    NET_DEBT_STRICT,
+    NET_DEBT_INCL_LT_SECURITIES,
+    NET_DEBT_TO_EBITDA,
+    INTEREST_COVERAGE,
+    ASSET_TURNOVER,
+    RECEIVABLES_TURNOVER,
+    INVENTORY_TURNOVER,
+    CASH_CONVERSION_CYCLE,
+    EPS_ADJUSTED_EX_SBC,
+    BVPS,
+    FCF_PER_SHARE,
+    REVENUE_CAGR_3Y,
+    EBITDA_CAGR_3Y,
+)
+
 _PHASE_1_FORMULAS: tuple[FormulaDef, ...] = (
     GROSS_MARGIN,
     OPERATING_MARGIN,
@@ -322,7 +677,7 @@ _PHASE_1_FORMULAS: tuple[FormulaDef, ...] = (
 # dict[(formula_key, version), FormulaDef] per docs/design/
 # bottoms_up_metrics_engine.md §2's registry.py sketch.
 REGISTRY: dict[tuple[str, int], FormulaDef] = {
-    (f.formula_key, f.version): f for f in _PHASE_1_FORMULAS
+    (f.formula_key, f.version): f for f in (*_PHASE_1_FORMULAS, *_PHASE_2_FORMULAS)
 }
 
 

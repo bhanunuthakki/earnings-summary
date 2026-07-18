@@ -78,18 +78,56 @@ _FLOW_CONCEPTS: frozenset[CanonicalConcept] = frozenset(
     }
 )
 
-# Same-concept prior-period offset (in calendar quarters) each growth
-# formula compares against. 4 quarters back = same calendar quarter one
-# year prior (never a fiscal-label comparison -- the section 0 landmine).
+# Same-concept prior-period offset each growth formula compares against.
+# For the quarterly-cadence formulas this is in calendar quarters (4 back =
+# same calendar quarter one year prior, never a fiscal-label comparison --
+# the section 0 landmine); for the two period_grid="fy" CAGR formulas
+# (Phase 2) this is in fiscal years within the SEPARATE annual-cells list
+# (see _build_annual_cells) -- 3 back per docs/design/
+# bottoms_up_metrics_engine.md section 1's "3 full FY gaps" requirement.
 _PRIOR_OFFSET: dict[str, int] = {
     "revenue_yoy": 4,
     "eps_diluted_yoy": 4,
     "revenue_qoq": 1,
+    "revenue_cagr_3y": 3,
+    "ebitda_cagr_3y": 3,
 }
 
 # TTM window gap guard: reject a trailing-4-quarter window spanning more
 # than this many days (mirrors fmp_derived_kpis.py's existing ROE guard).
 _TTM_MAX_SPAN_DAYS = 400
+
+# Phase 2: FY-cadence CAGR span guard -- "requires 3 full FY gaps, no
+# interpolation across a stub year" (docs/design/
+# bottoms_up_metrics_engine.md section 1). Positional indexing into
+# _build_annual_cells' sorted-by-period_end list would silently treat a
+# missing fiscal year as "3 years apart" if we didn't also check the actual
+# calendar-day span -- this guard rejects that case explicitly rather than
+# producing a mislabeled CAGR. +/-45 days of slack absorbs ordinary
+# reporting-date drift (leap years, a shifted fiscal year-end).
+_FY_CAGR_MIN_SPAN_DAYS = 3 * 365 - 45
+_FY_CAGR_MAX_SPAN_DAYS = 3 * 365 + 45
+
+# Phase 2: formula_key -> the subset of its required_inputs that resolve as
+# a 2-point AVERAGE (mean of the TTM window's first and last quarter-end
+# balances) rather than a TTM flow-sum or a period-end point-in-time value.
+# Concept-level (not formula-level) because the SAME concept is treated
+# differently by different formulas -- e.g. TOTAL_ASSETS is period-end for
+# roa but averaged for asset_turnover (docs/design/
+# bottoms_up_metrics_engine.md section 1's asset_turnover/receivables_turnover
+# method notes).
+_AVERAGE_STOCK_FORMULAS: dict[str, frozenset[CanonicalConcept]] = {
+    "asset_turnover": frozenset({CanonicalConcept.TOTAL_ASSETS}),
+    "receivables_turnover": frozenset({CanonicalConcept.ACCOUNTS_RECEIVABLE}),
+    "inventory_turnover": frozenset({CanonicalConcept.INVENTORY}),
+    "cash_conversion_cycle": frozenset(
+        {
+            CanonicalConcept.INVENTORY,
+            CanonicalConcept.ACCOUNTS_RECEIVABLE,
+            CanonicalConcept.ACCOUNTS_PAYABLE,
+        }
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -290,6 +328,93 @@ def _build_quarter_cells(
     return cells
 
 
+def _build_annual_cells(
+    conn: sqlite3.Connection, ticker: str, standard: AccountingStandard
+) -> list[QuarterCell]:
+    """Read every Phase-2 concept's financial_facts rows for `ticker` at
+    fiscal_period_type='FY', tier-ranked per exact period_end, one
+    QuarterCell per fiscal year -- the annual-cadence sibling of
+    _build_quarter_cells, feeding the two period_grid="fy" CAGR formulas
+    (revenue_cagr_3y, ebitda_cagr_3y).
+
+    Deliberately does NOT exclude '%_annual.json'-sourced rows (unlike
+    _build_quarter_cells' filter, verified directly against a real ticker:
+    MELI's FY revenue rows are sourced from
+    `MELI_income_statement_annual.json`, exactly the file that filter would
+    drop -- reusing it here would silently starve every FMP-sourced FY row).
+    Still excludes '%_ttm.json' -- a trailing-twelve-month aggregate is not
+    the same thing as a fixed fiscal year, even for a calendar-year filer.
+
+    No calendar-quarter dedup step: an FY row's period_end IS the fiscal
+    year-end date already, so tier-ranked-per-exact-period_end is the full
+    dedup this grid needs (mirrors the same period discovery being
+    unrestricted-by-mapping rationale as _build_quarter_cells, for the same
+    IFRS-ticker-still-needs-a-metric_computation_attempts-row reason).
+    """
+    period_rows = conn.execute(
+        """
+        SELECT DISTINCT period_end, fiscal_period_type
+        FROM financial_facts
+        WHERE ticker = ? AND fiscal_period_type = 'FY'
+        """,
+        (ticker.upper(),),
+    ).fetchall()
+    if not period_rows:
+        return []
+
+    all_concepts = tuple(CanonicalConcept)
+    concept_to_field = {c: resolve_concept(standard, c) for c in all_concepts}
+    field_to_concept = {f: c for c, f in concept_to_field.items() if f is not None}
+    fields = sorted(field_to_concept)
+
+    grouped: dict[datetime, dict[str, object]] = {}
+    for row in period_rows:
+        pe_raw = row["period_end"]
+        pe = datetime.fromisoformat(pe_raw) if isinstance(pe_raw, str) else pe_raw
+        grouped[pe] = {"period_end": pe, "fiscal_period_type": "FY"}
+
+    if fields:
+        tier_rank = reader_tier_rank_sql(conn)
+        placeholders = ",".join("?" * len(fields))
+        cur = conn.execute(
+            f"""
+            SELECT ff.period_end, ff.line_item, ff.value, ff.source_doc_id
+            FROM financial_facts ff
+            JOIN documents d ON d.id = ff.source_doc_id
+            WHERE ff.ticker = ?
+              AND d.file_path NOT LIKE '%_ttm.json'
+              AND ff.line_item IN ({placeholders})
+              AND ff.fiscal_period_type = 'FY'
+            ORDER BY ff.period_end ASC, {tier_rank} ASC, ff.id ASC
+            """,
+            (ticker.upper(), *fields),
+        )
+        for row in cur.fetchall():
+            pe_raw = row["period_end"]
+            pe = datetime.fromisoformat(pe_raw) if isinstance(pe_raw, str) else pe_raw
+            bucket = grouped.setdefault(pe, {"period_end": pe, "fiscal_period_type": "FY"})
+            field_name = str(row["line_item"])
+            bucket[field_name] = Decimal(str(row["value"]))
+            bucket[f"__doc__{field_name}"] = int(row["source_doc_id"])
+
+    cells: list[QuarterCell] = []
+    for pe in sorted(grouped):
+        row = grouped[pe]
+        values: dict[CanonicalConcept, Decimal] = {}
+        doc_ids: dict[CanonicalConcept, int] = {}
+        for field_name, concept in field_to_concept.items():
+            v = row.get(field_name)
+            if isinstance(v, Decimal):
+                values[concept] = v
+                doc_id = row.get(f"__doc__{field_name}")
+                if isinstance(doc_id, int):
+                    doc_ids[concept] = doc_id
+        cells.append(
+            QuarterCell(period_end=pe, fiscal_period_type="FY", values=values, doc_ids=doc_ids)
+        )
+    return cells
+
+
 def _resolve_ttm_sum(
     cells: list[QuarterCell], idx: int, concept: CanonicalConcept
 ) -> tuple[Decimal | None, list[tuple[datetime, int]]]:
@@ -313,6 +438,35 @@ def _resolve_ttm_sum(
     return total, provenance
 
 
+def _resolve_ttm_average(
+    cells: list[QuarterCell], idx: int, concept: CanonicalConcept
+) -> tuple[Decimal | None, list[tuple[datetime, int]]]:
+    """Average `concept` over the TTM window's first and last quarter-end
+    balances (cells[idx-3] and cells[idx]) -- "average of period start/end"
+    per docs/design/bottoms_up_metrics_engine.md section 1's
+    asset_turnover/receivables_turnover/inventory_turnover method notes.
+    Same 4-quarter-window / _TTM_MAX_SPAN_DAYS gap guard as _resolve_ttm_sum
+    so the average always spans the SAME window the sibling flow-sum
+    (revenue_ttm, cost_of_revenue_ttm) uses. Returns
+    (average_or_None, [(period_end, doc_id), ...] for both endpoints)."""
+    if idx < 3:
+        return None, []
+    window_start = cells[idx - 3]
+    window_end = cells[idx]
+    if (window_end.period_end - window_start.period_end).days > _TTM_MAX_SPAN_DAYS:
+        return None, []
+    start_value = window_start.values.get(concept)
+    end_value = window_end.values.get(concept)
+    if start_value is None or end_value is None:
+        return None, []
+    provenance: list[tuple[datetime, int]] = []
+    for cell in (window_start, window_end):
+        doc_id = cell.doc_ids.get(concept)
+        if doc_id is not None:
+            provenance.append((cell.period_end, doc_id))
+    return (start_value + end_value) / Decimal(2), provenance
+
+
 def _resolve_inputs(
     cells: list[QuarterCell], idx: int, formula: FormulaDef
 ) -> tuple[
@@ -322,6 +476,11 @@ def _resolve_inputs(
 ]:
     """Build (resolved_inputs, prior_inputs, lineage_refs) for one formula at one cell.
 
+    `cells` is whichever grid matches `formula.period_grid` -- the
+    calendar-quarter list for "quarterly"/"ttm" formulas, or the annual
+    (fiscal_period_type='FY') list from _build_annual_cells for "fy"
+    formulas (compute_for_ticker picks the right one before calling this).
+
     lineage_refs is a flat list of (concept, period_end, doc_id) covering
     every input actually used (including TTM window legs) -- the raw
     material for computed_from's inputs[] list.
@@ -330,12 +489,18 @@ def _resolve_inputs(
     concepts = tuple(formula.required_inputs) + tuple(formula.optional_inputs)
     resolved: dict[CanonicalConcept, Decimal | None] = {}
     lineage: list[tuple[CanonicalConcept, datetime, int]] = []
+    average_concepts = _AVERAGE_STOCK_FORMULAS.get(formula.formula_key, frozenset())
 
     if formula.period_grid == "ttm":
         for concept in concepts:
             if concept in _FLOW_CONCEPTS:
                 total, provenance = _resolve_ttm_sum(cells, idx, concept)
                 resolved[concept] = total
+                for pe, doc_id in provenance:
+                    lineage.append((concept, pe, doc_id))
+            elif concept in average_concepts:
+                average, provenance = _resolve_ttm_average(cells, idx, concept)
+                resolved[concept] = average
                 for pe, doc_id in provenance:
                     lineage.append((concept, pe, doc_id))
             else:
@@ -345,7 +510,9 @@ def _resolve_inputs(
                     lineage.append((concept, cell.period_end, doc_id))
         return resolved, None, lineage
 
-    # quarterly grid
+    # quarterly grid, and the fy grid (period-end read directly from the
+    # cell -- an FY row already IS the full-year flow/stock value, no
+    # summing needed; only the prior-period lookback below differs by grid).
     for concept in concepts:
         resolved[concept] = cell.values.get(concept)
         doc_id = cell.doc_ids.get(concept)
@@ -360,6 +527,15 @@ def _resolve_inputs(
     if prior_idx < 0:
         return resolved, None, lineage
     prior_cell = cells[prior_idx]
+
+    if formula.period_grid == "fy":
+        span_days = (cell.period_end - prior_cell.period_end).days
+        if not (_FY_CAGR_MIN_SPAN_DAYS <= span_days <= _FY_CAGR_MAX_SPAN_DAYS):
+            # A missing fiscal year would otherwise let positional indexing
+            # silently compare non-adjacent years as if they were exactly 3
+            # apart -- reject rather than mislabel the CAGR window.
+            return resolved, None, lineage
+
     prior: dict[CanonicalConcept, Decimal | None] = {}
     for concept in concepts:
         prior[concept] = prior_cell.values.get(concept)
@@ -501,14 +677,16 @@ def _persist_attempt(
 def compute_for_ticker(
     conn: sqlite3.Connection, ticker: str, *, force: bool = False
 ) -> TickerComputeSummary:
-    """End-to-end Phase-1 compute for one ticker: resolve inputs, compute
-    every registry formula at every calendar quarter, persist. Idempotent
-    (input_fingerprint skip) unless `force`."""
+    """End-to-end compute for one ticker: resolve inputs, compute every
+    registry formula at every applicable period (calendar quarter for
+    "quarterly"/"ttm" formulas, fiscal year for "fy" formulas -- Phase 2),
+    persist. Idempotent (input_fingerprint skip) unless `force`."""
     ticker = ticker.upper()
     business_model, standard = resolve_classification(conn, ticker)
     formula_ids = upsert_formula_definitions(conn)
     applicable = {f.formula_key for f in applicable_formulas(business_model, ticker=ticker)}
-    cells = _build_quarter_cells(conn, ticker, standard)
+    quarterly_cells = _build_quarter_cells(conn, ticker, standard)
+    annual_cells = _build_annual_cells(conn, ticker, standard)
 
     attempts = 0
     computed_ok = 0
@@ -524,6 +702,7 @@ def compute_for_ticker(
         unmapped_concepts = [
             c for c in formula.required_inputs if resolve_concept(standard, c) is None
         ]
+        cells = annual_cells if formula.period_grid == "fy" else quarterly_cells
         for idx, cell in enumerate(cells):
             fiscal_period_type = "TTM" if formula.period_grid == "ttm" else cell.fiscal_period_type
 
@@ -576,7 +755,7 @@ def compute_for_ticker(
         ticker=ticker,
         business_model=business_model,
         accounting_standard=standard,
-        quarters_seen=len(cells),
+        quarters_seen=len(quarterly_cells),
         attempts_written=attempts,
         computed_ok=computed_ok,
         not_computable=not_computable,
