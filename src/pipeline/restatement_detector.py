@@ -362,6 +362,8 @@ def insert_kpi_with_restatement_detection(
     locator: str | None = None,
     source_excerpt: str | None = None,
     computed_from: str | None = None,
+    formula_id: int | None = None,
+    formula_version: int | None = None,
 ) -> tuple[int | None, int | None]:
     """kpi_facts twin of `insert_with_restatement_detection`.
 
@@ -379,6 +381,11 @@ def insert_kpi_with_restatement_detection(
     serialize via models.facts.FactLocator.to_json) and `source_excerpt` the
     verbatim quote supporting the value (column added in 0033); both are
     dropped like the audit columns when the schema predates them.
+
+    `formula_id`/`formula_version` (alembic 0162, both nullable) tag a row
+    produced by `compute.metrics_engine` — same drop-on-legacy tolerance as
+    every other tail column; a pre-0162 `kpi_facts` (or a caller outside the
+    metrics engine that never passes them) simply omits the columns.
 
     Schema tolerance: when `kpi_facts` lacks the audit columns
     (`supersedes_id`, `extracted_by`, `confidence` — all added in 0054),
@@ -421,10 +428,11 @@ def insert_kpi_with_restatement_detection(
         and _table_has_column(conn, "kpi_facts", "confidence")
     )
     # Optional tail columns: written only when provided AND the schema has
-    # them (locator: 0075; source_excerpt: 0033; computed_from: 0087) — same
-    # drop-on-legacy tolerance as the audit columns.
+    # them (locator: 0075; source_excerpt: 0033; computed_from: 0087;
+    # formula_id/formula_version: 0162) — same drop-on-legacy tolerance as
+    # the audit columns.
     tail_cols: list[str] = []
-    tail_vals: list[str] = []
+    tail_vals: list[str | int] = []
     if locator is not None and _table_has_column(conn, "kpi_facts", "locator"):
         tail_cols.append("locator")
         tail_vals.append(locator)
@@ -434,6 +442,12 @@ def insert_kpi_with_restatement_detection(
     if computed_from is not None and _table_has_column(conn, "kpi_facts", "computed_from"):
         tail_cols.append("computed_from")
         tail_vals.append(computed_from)
+    if formula_id is not None and _table_has_column(conn, "kpi_facts", "formula_id"):
+        tail_cols.append("formula_id")
+        tail_vals.append(formula_id)
+    if formula_version is not None and _table_has_column(conn, "kpi_facts", "formula_version"):
+        tail_cols.append("formula_version")
+        tail_vals.append(formula_version)
     try:
         if has_audit_cols:
             tail_names = "".join(f", {c}" for c in tail_cols)
