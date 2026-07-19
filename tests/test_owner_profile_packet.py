@@ -97,6 +97,9 @@ def test_affirm_route_promotes_and_bumps_activation(
     body = resp.get_json()
     assert body["ok"] is True
     assert body["status"] == "affirmed"
+    # Ledger UX overhaul (requirement B): the route itself carries the
+    # consequence receipt — the UI never has to guess what registering.
+    assert body["receipt"] == "Affirmed — the coach may now cite this when reviewing your trades"
 
     conn = sqlite3.connect(str(db))
     try:
@@ -120,7 +123,9 @@ def test_reject_route_retires_and_bumps_activation(
     fid = _seed_fact(db)
     resp = client.post(f"/api/profile/fact/{fid}/reject")
     assert resp.status_code == 200
-    assert resp.get_json() == {"ok": True}
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert body["receipt"] == "Dropped — never used, won't be re-proposed"
 
     conn = sqlite3.connect(str(db))
     try:
@@ -226,6 +231,7 @@ def test_reaffirm_route_bumps_affirmed_at_and_clears_the_packet(
     body = resp.get_json()
     assert body["ok"] is True
     assert body["status"] == "affirmed"
+    assert body["receipt"] == "Confirmed — good for another review cycle"
 
     conn = sqlite3.connect(str(db))
     try:
@@ -261,7 +267,9 @@ def test_retire_route_retires_and_bumps_activation(
     fid = _seed_expired_fact(db)
     resp = client.post(f"/api/profile/fact/{fid}/retire")
     assert resp.status_code == 200
-    assert resp.get_json() == {"ok": True}
+    body = resp.get_json()
+    assert body["ok"] is True
+    assert body["receipt"] == "Dropped — the coach will stop citing this fact"
 
     conn = sqlite3.connect(str(db))
     conn.row_factory = sqlite3.Row
@@ -306,6 +314,7 @@ def test_update_route_lands_a_new_proposed_fact_superseding_the_old(
     assert resp.status_code == 200
     body = resp.get_json()
     assert body["ok"] is True
+    assert body["receipt"] == "Saved — your edit awaits your affirm next walk"
     new_id = body["new_fact_id"]
     assert new_id != fid
 

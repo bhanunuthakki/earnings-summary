@@ -78,7 +78,17 @@ _WORLDVIEW_JS = """<script>(function(){
       var card=act.closest('[data-tenet-id]'); if(!card){ return; }
       act.disabled=true;
       fetch('/api/tenets/'+card.getAttribute('data-tenet-id')+'/'+act.getAttribute('data-tenet-action'),
-        {method:'POST'}).then(function(){ reload(); }).catch(function(){ act.disabled=false; });
+        {method:'POST'})
+        .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok, body:j}; }); })
+        .then(function(res){
+          var text=(res.body && res.body.receipt) || (res.ok ? 'Saved.' : "Didn't save — retry.");
+          if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(act, res.ok, text); }
+          if(res.ok){ reload(); } else { act.disabled=false; }
+        })
+        .catch(function(){
+          act.disabled=false;
+          if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(act, false, 'Could not reach the server.'); }
+        });
     }
   });
 })();</script>"""
@@ -125,11 +135,15 @@ def _proposed_card(t: InsightRow) -> str:
         f'<span class="ledger-stance-meta">{_from_n(t)}</span></div>'
         f'<div class="ledger-body">{render_prose(t.body_md)}</div>'
         f"{tension_note}"
+        '<p class="ledger-consequence"><strong>Approve -&gt;</strong> becomes a standing soft '
+        "prior in your decision prompts. <strong>Reject -&gt;</strong> retired, not adopted.</p>"
         '<div class="ledger-cap-row">'
         '<button type="button" class="k-btn k-btn-sm k-btn-primary" '
-        'data-tenet-action="approve">Approve</button>'
+        'data-tenet-action="approve" title="Adopts this as a standing Tenet — a durable belief '
+        'the coach injects into future advice.">Approve</button>'
         '<button type="button" class="k-btn k-btn-sm k-btn-danger" '
-        'data-tenet-action="reject">Reject</button>'
+        'data-tenet-action="reject" title="Retires this proposed Tenet — it will not be '
+        'adopted.">Reject</button>'
         "</div></div>"
     )
 

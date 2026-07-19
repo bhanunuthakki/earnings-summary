@@ -12,6 +12,7 @@ Pure read over the analyst_notes spine; token-only styles (guard-clean).
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -51,26 +52,39 @@ _DECISIONS_PANEL = "decisions_record"
 _DECISIONS_HASH = f"/#{_DECISIONS_PANEL}"
 
 _PANEL_STYLE = """<style>
-.ledger-cap { background: var(--surface); border-radius: var(--radius); padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-3); }
+/* ONE card shape (visual conformance pass, requirement E): every card-like
+   block on the Ledger tab — capture box, musing, stance, coach card — shares
+   the SAME background/radius/padding/margin-bottom. Before this pass
+   .ledger-cap alone carried a smaller sp-2/sp-3 padding and a sp-3 (not
+   sp-2) margin-bottom, a visible size/gap mismatch against every card below
+   it; it now shares the one card treatment via this grouped selector. */
+.ledger-cap, .ledger-musing, .ledger-stance, .ledger-coach-card {
+  background: var(--surface); border-radius: var(--radius);
+  padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2);
+}
+.ledger-stance, .ledger-coach-card { border-left: 3px solid var(--border-2); }
+.ledger-coach-card { position: relative; }
 .ledger-cap textarea { width: 100%; min-height: 44px; resize: vertical; font-family: var(--sans); font-size: var(--fs-body); }
 .ledger-cap-row { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
 .ledger-cap-status { font-size: var(--fs-caption); color: var(--muted); }
-.ledger-musing { background: var(--surface); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2); }
-.ledger-musing-head { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: var(--sp-1); }
+.ledger-musing-head, .ledger-stance-head { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: var(--sp-1); }
 .ledger-when { color: var(--muted); font-family: var(--mono); font-size: var(--fs-micro); margin-left: auto; white-space: nowrap; }
-.ledger-chan { font-size: var(--fs-micro); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+/* ONE micro-tag treatment (requirement E): every uppercase muted label chip
+   — channel tag, unattributed marker — shares this rule instead of three
+   near-identical copies. */
+.ledger-chan, .ledger-unattr { font-size: var(--fs-micro); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .ledger-needs { color: var(--warn); font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
-.ledger-unattr { color: var(--muted); font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.05em; }
 .ledger-body { font-size: var(--fs-body); line-height: 1.55; color: var(--fg-soft); overflow-wrap: anywhere; }
 .ledger-body > :first-child { margin-top: 0; }
 .ledger-body > :last-child { margin-bottom: 0; }
 .ledger-empty { color: var(--muted); font-style: italic; padding: var(--sp-3) 0; }
-.ledger-sec-h { font-size: var(--fs-section); font-weight: 600; color: var(--fg); margin: var(--sp-4) 0 var(--sp-1); }
+/* ONE heading scale for every section/sub-heading on the tab (requirement E)
+   — .ledger-armed-h used to be its own smaller, uppercase, letter-spaced
+   treatment (fs-caption vs every other section's fs-section), reading as a
+   different heading LEVEL for no reason; it now shares .ledger-sec-h. */
+.ledger-sec-h, .ledger-armed-h { font-size: var(--fs-section); font-weight: 600; color: var(--fg); margin: var(--sp-4) 0 var(--sp-1); }
 .ledger-sec-sub { font-size: var(--fs-caption); color: var(--muted); margin: 0 0 var(--sp-3); }
-.ledger-stance { background: var(--surface); border-left: 3px solid var(--border-2); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2); }
-.ledger-stance-head { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: var(--sp-1); }
 .ledger-stance-meta { color: var(--muted); font-size: var(--fs-micro); margin-left: auto; }
-.ledger-coach-card { background: var(--surface); border-left: 3px solid var(--border-2); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2); position: relative; }
 .ledger-coach-body { font-size: var(--fs-body); line-height: 1.55; color: var(--fg-soft); white-space: normal; }
 .ledger-coach-row { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
 .ledger-coach-row input { flex: 1; font-family: var(--sans); font-size: var(--fs-body); }
@@ -81,10 +95,6 @@ _PANEL_STYLE = """<style>
    reload's outerHTML swap never clobbers it before it's read. */
 .ledger-receipt { color: var(--fg-soft); font-size: var(--fs-caption);
   padding: var(--sp-2) 0; }
-/* Armed-falsifiers table — dense, token-only; no new color intent beyond
-   the existing muted/fg vocabulary. */
-.ledger-armed-h { font-size: var(--fs-caption); font-weight: 600; color: var(--fg);
-  margin: var(--sp-3) 0 var(--sp-1); text-transform: uppercase; letter-spacing: 0.05em; }
 .ledger-armed-table { width: 100%; border-collapse: collapse; font-size: var(--fs-caption); }
 .ledger-armed-table th { text-align: left; color: var(--muted); font-weight: 600;
   padding: var(--sp-1) var(--sp-2); border-bottom: 1px solid var(--border); }
@@ -350,11 +360,34 @@ def _stance_section(db_path: Path | str | None) -> str:
     )
 
 
-_RESEARCH_VERBS: tuple[tuple[str, str, str], ...] = (
-    ("approve", "Approve", "k-btn-primary"),
-    ("further", "Research further", ""),
-    ("steer", "Steer", ""),
-    ("reject", "Reject", "k-btn-danger"),
+_RESEARCH_VERBS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "approve",
+        "Approve",
+        "k-btn-primary",
+        "Marks this research approved and keeps it for reference — no live artifact is written.",
+    ),
+    (
+        "further",
+        "Research further",
+        "",
+        "Sends this back for a deeper research pass — no live effect yet.",
+    ),
+    ("steer", "Steer", "", "Redirects the research in your own words — no live effect yet."),
+    ("reject", "Reject", "k-btn-danger", "Dismisses this proposal — it won't be revisited."),
+)
+
+# The Save-view companion verbs (view-kind proposals only) — Approve actually
+# WRITES the saved view immediately (apply_approved_proposal), unlike the memo
+# verbs above, so the tooltip must say so plainly.
+_VIEW_VERBS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "approve",
+        "Save view",
+        "k-btn-primary",
+        "Saves this view now — it appears in your saved views immediately.",
+    ),
+    ("reject", "Discard", "k-btn-danger", "Discards this drafted view — it is never saved."),
 )
 
 _RESEARCH_JS = """<script>(function(){
@@ -410,8 +443,14 @@ _RESEARCH_JS = """<script>(function(){
       rej.disabled=true; rej.textContent='Dismissing...';
       fetch('/api/research/task/'+rej.getAttribute('data-reject-task')+'/reject',{method:'POST'})
         .then(function(r){ if(!r.ok){ throw new Error(); } return r.json(); })
-        .then(function(){ reload(); })
-        .catch(function(){ rej.disabled=false; rej.textContent='Dismiss'; });
+        .then(function(){
+          if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(rej, true, "Dismissed — this wondering won't be researched."); }
+          reload();
+        })
+        .catch(function(){
+          rej.disabled=false; rej.textContent='Dismiss';
+          if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(rej, false, 'Could not reach the server.'); }
+        });
       return;
     }
     var act=e.target.closest('[data-verb]');
@@ -440,10 +479,23 @@ _RESEARCH_JS = """<script>(function(){
     }
   });
   function send(pids, verb, body, src){
-    Promise.all(pids.filter(Boolean).map(function(pid){
-      return fetch('/api/research/proposal/'+pid+'/'+verb,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    })).then(function(){ reload(); })
-      .catch(function(){ if(src){ setRow(src, false); } });
+    var ids=pids.filter(Boolean);
+    Promise.all(ids.map(function(pid){
+      return fetch('/api/research/proposal/'+pid+'/'+verb,
+        {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+        .then(function(r){
+          return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok, body:j}; });
+        });
+    })).then(function(results){
+      var allOk=results.every(function(x){ return x.ok; });
+      var last=results[results.length-1];
+      var text=(last && last.body && last.body.receipt) || (allOk ? 'Saved.' : "Didn't save — retry.");
+      if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(src, allOk, text); }
+      if(allOk){ reload(); } else if(src){ setRow(src, false); }
+    }).catch(function(){
+      if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(src, false, 'Could not reach the server.'); }
+      if(src){ setRow(src, false); }
+    });
   }
   // In-card Steer (PR9, replaces window.prompt): the steering direction is an
   // owner utterance — it gets a real textarea inside the proposal card (the
@@ -485,14 +537,17 @@ def _task_chip(task: ResearchTask) -> str:
     )
     dismiss = (
         '<button type="button" class="k-btn k-btn-danger k-btn-sm" '
-        f'data-reject-task="{task.id}">Dismiss</button>'
+        f'data-reject-task="{task.id}" title="Drops this wondering — it will not be researched.">'
+        "Dismiss</button>"
     )
     # The "runs are off" state is explained ONCE at the section level (see
     # _research_section's owner-voice muted line) — no per-card env-var leak.
     if research_run_enabled():
         action = (
             '<button type="button" class="k-btn k-btn-primary k-btn-sm" '
-            f'data-run-task="{task.id}">Research it</button>' + dismiss
+            f'data-run-task="{task.id}" title="Runs the two-pass research engine in the '
+            'background (can take minutes) and drafts a proposal for you to review.">'
+            "Research it</button>" + dismiss
         )
     else:
         action = dismiss
@@ -545,18 +600,15 @@ def _proposal_group_card(group: list[ResearchProposal]) -> str:
         title, body_text = _view_words(primary)
         body = f"<p>{escape(body_text)}</p>".replace("\n\n", "</p><p>")
         meta = "saved view"
-        verbs: tuple[tuple[str, str, str], ...] = (
-            ("approve", "Save view", "k-btn-primary"),
-            ("reject", "Discard", "k-btn-danger"),
-        )
+        verbs = _VIEW_VERBS
     else:
         title, body = primary.title, render_prose(primary.body_md)
         meta = " · ".join(p for p in (primary.budget_tier, primary.kind) if p)
         verbs = _RESEARCH_VERBS
     footer = "".join(
         f'<button type="button" class="k-btn k-btn-sm {cls}" '
-        f'data-verb="{verb}" data-pids="{pids}">{escape(label)}</button>'
-        for verb, label, cls in verbs
+        f'data-verb="{verb}" data-pids="{pids}" title="{escape(hint, quote=True)}">{escape(label)}</button>'
+        for verb, label, cls, hint in verbs
     )
     rider = "".join(
         f'<p class="ledger-sec-sub">Also drafted: {escape(_view_words(c)[0]) if c.kind == "view" else escape(c.title)} '
@@ -684,11 +736,21 @@ def _research_section(db_path: Path | str | None) -> str:
     )
 
 
-_RECONCILE_VERDICTS: tuple[tuple[str, str, str], ...] = (
-    ("live", "Still live", "k-btn-primary"),
-    ("superseded", "Superseded", ""),
-    ("resolved-rejected", "Rejected", "k-btn-danger"),
-    ("done", "Played out", ""),
+_RECONCILE_VERDICTS: tuple[tuple[str, str, str, str], ...] = (
+    ("live", "Still live", "k-btn-primary", "Keeps this current — the coach can still cite it."),
+    (
+        "superseded",
+        "Superseded",
+        "",
+        "Marks this replaced by a newer view — retired from the coach's context.",
+    ),
+    (
+        "resolved-rejected",
+        "Rejected",
+        "k-btn-danger",
+        "Marks this rejected — retired from the coach's context.",
+    ),
+    ("done", "Played out", "", "Marks this played out — retired from the coach's context."),
 )
 
 _RECONCILE_JS = """<script>(function(){
@@ -736,15 +798,22 @@ _RECONCILE_JS = """<script>(function(){
     body.querySelector('[data-rewrite-save]').addEventListener('click', function(){
       var txt=(ta&&ta.value||'').trim();
       if(!txt){ if(ta){ ta.focus(); } return; }
-      this.disabled=true;
+      var saveBtn=this;
+      saveBtn.disabled=true;
       var recId=card.getAttribute('data-rec-card');
       fetch('/api/reconcile/falsifier/'+recId,
             {method:'POST',headers:{'Content-Type':'application/json'},
              body:JSON.stringify({action:'edit', text:txt})})
-        .then(function(r){ return r.json(); })
+        .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok, body:j}; }); })
         .then(function(res){
-          if(res && res.receipt){ showReceipt(res.receipt); }
-          reload();
+          var text=(res.body && res.body.receipt) || (res.ok ? 'Saved.' : "Didn't save — retry.");
+          if(res.body && res.body.receipt){ showReceipt(res.body.receipt); }
+          if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(saveBtn, res.ok, text); }
+          if(res.ok){ reload(); } else { saveBtn.disabled=false; }
+        })
+        .catch(function(){
+          saveBtn.disabled=false;
+          if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(saveBtn, false, 'Could not reach the server.'); }
         });
     });
   }
@@ -754,8 +823,16 @@ _RECONCILE_JS = """<script>(function(){
       v.disabled=true;
       fetch('/api/reconcile/'+v.getAttribute('data-rec-kind')+'/'+v.getAttribute('data-rec-id')
             +'/'+v.getAttribute('data-rec-verdict'),{method:'POST'})
-        .then(function(){ reload(); })
-        .catch(function(){ v.disabled=false; });
+        .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok, body:j}; }); })
+        .then(function(res){
+          var text=(res.body && res.body.receipt) || (res.ok ? 'Saved.' : "Didn't save — retry.");
+          if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(v, res.ok, text); }
+          if(res.ok){ reload(); } else { v.disabled=false; }
+        })
+        .catch(function(){
+          v.disabled=false;
+          if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(v, false, 'Could not reach the server.'); }
+        });
       return;
     }
     var f=e.target.closest('[data-falsifier-action]');
@@ -769,12 +846,17 @@ _RECONCILE_JS = """<script>(function(){
       f.disabled=true;
       fetch('/api/reconcile/falsifier/'+f.getAttribute('data-rec-id'),
             {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action})})
-        .then(function(r){ return r.json(); })
+        .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok, body:j}; }); })
         .then(function(res){
-          if(res && res.receipt){ showReceipt(res.receipt); }
-          reload();
+          var text=(res.body && res.body.receipt) || (res.ok ? 'Saved.' : "Didn't save — retry.");
+          if(res.body && res.body.receipt){ showReceipt(res.body.receipt); }
+          if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(f, res.ok, text); }
+          if(res.ok){ reload(); } else { f.disabled=false; }
         })
-        .catch(function(){ f.disabled=false; });
+        .catch(function(){
+          f.disabled=false;
+          if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(f, false, 'Could not reach the server.'); }
+        });
     }
   });
 })();</script>"""
@@ -798,9 +880,13 @@ def _missing_falsifier_card(gap: ReconcileItem) -> str:
         # Empty editable body → the in-card editor opens blank for the owner to
         # author the tripwire in their own words (beginRewrite reads this node).
         '<div class="ledger-body ledger-editable-body"></div>'
+        '<p class="ledger-consequence">This position has no tripwire — write the condition that '
+        "would prove the decision wrong and it arms one.</p>"
         '<div class="ledger-cap-row">'
         '<button type="button" class="k-btn k-btn-sm k-btn-primary" '
-        f'data-falsifier-action="edit" data-rec-id="{gap.item_id}">Add falsifier</button>'
+        f'data-falsifier-action="edit" data-rec-id="{gap.item_id}" '
+        'title="Write and save the falsifier condition — arms a tripwire once saved.">'
+        "Add falsifier</button>"
         "</div></div>"
     )
 
@@ -837,11 +923,27 @@ def _reconcile_card(item: ReconcileItem) -> str:
     if item.kind == "falsifier":
         buttons = "".join(
             f'<button type="button" class="k-btn k-btn-sm {cls}" '
-            f'data-falsifier-action="{action}" data-rec-id="{item.item_id}">{label}</button>'
-            for action, label, cls in (
-                ("ratify", "Ratify as mine", "k-btn-primary"),
-                ("edit", "Rewrite", ""),
-                ("drop", "Drop", "k-btn-danger"),
+            f'data-falsifier-action="{action}" data-rec-id="{item.item_id}" '
+            f'title="{escape(hint, quote=True)}">{label}</button>'
+            for action, label, cls, hint in (
+                (
+                    "ratify",
+                    "Ratify as mine",
+                    "k-btn-primary",
+                    "Arms a tripwire — the coach can quote this and you'll be alerted if it triggers.",
+                ),
+                (
+                    "edit",
+                    "Rewrite",
+                    "",
+                    "Put this falsifier in your own words before it can be ratified.",
+                ),
+                (
+                    "drop",
+                    "Drop",
+                    "k-btn-danger",
+                    "Removes this falsifier — no tripwire will watch this decision.",
+                ),
             )
         )
         head = f"{escape(item.label)}<span class='ledger-chan'>inferred falsifier</span>"
@@ -852,14 +954,16 @@ def _reconcile_card(item: ReconcileItem) -> str:
             f'<div class="ledger-musing" data-rec-card="{item.item_id}">'
             f'<div class="ledger-musing-head">{head}</div>'
             f'<div class="ledger-body ledger-editable-body">{escape(item.body[:400])}</div>'
+            '<p class="ledger-consequence"><strong>Ratify -&gt;</strong> arms a tripwire that alerts '
+            "you if it triggers. <strong>Drop -&gt;</strong> no tripwire watches this decision.</p>"
             f'<div class="ledger-cap-row">{buttons}</div></div>'
         )
     rec_kind = "note" if item.kind == "note" else "theme"
     buttons = "".join(
         f'<button type="button" class="k-btn k-btn-sm {cls}" '
         f'data-rec-kind="{rec_kind}" data-rec-id="{item.item_id}" '
-        f'data-rec-verdict="{verdict}">{label}</button>'
-        for verdict, label, cls in _RECONCILE_VERDICTS
+        f'data-rec-verdict="{verdict}" title="{escape(hint, quote=True)}">{label}</button>'
+        for verdict, label, cls, hint in _RECONCILE_VERDICTS
     )
     tag = item.label if item.kind == "theme" else (item.source_ref or item.label)
     head = f"<span class='ledger-chan'>{escape(tag)}</span>"
@@ -908,20 +1012,28 @@ def _reconcile_packet_items(db_path: Path | str | None) -> list[str]:
     row-action's settle-detector advanced past the rest of the batch. Each
     source read degrades independently (a broken read drops its rows, never the
     packet)."""
+    gaps, verdicts = _reconcile_packet_items_split(db_path)
+    return gaps + verdicts
+
+
+def _reconcile_packet_items_split(db_path: Path | str | None) -> tuple[list[str], list[str]]:
+    """Same reads as :func:`_reconcile_packet_items`, kept apart so the packet
+    walk can prioritize (requirement C): missing-falsifier GAPS are a live
+    coverage hole (class 1), one-tap verdict/falsifier-ratify cards are
+    routine housekeeping (class 3) — never the same urgency."""
     from synthesis.reconcile import list_missing_falsifiers, list_unreconciled
 
-    fragments: list[str] = []
     try:
         gaps = list_missing_falsifiers(db_path)
     except Exception:
         gaps = []
-    fragments.extend(_missing_falsifier_card(gap) for gap in gaps)
+    gap_cards = [_missing_falsifier_card(gap) for gap in gaps]
     try:
         items = list_unreconciled(db_path)
     except Exception:
         items = []
-    fragments.extend(_reconcile_card(item) for item in items)
-    return fragments
+    verdict_cards = [_reconcile_card(item) for item in items]
+    return gap_cards, verdict_cards
 
 
 def _condition_text(cond: object) -> str:
@@ -1037,8 +1149,10 @@ def _reconcile_section(db_path: Path | str | None) -> str:
 # ---------------------------------------------------------------------------
 
 _ONMYMIND_STYLE = """<style>
-.om-type { font-size: var(--fs-micro); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-.om-wondering { font-size: var(--fs-micro); font-weight: 600; color: var(--warn); text-transform: uppercase; letter-spacing: 0.05em; }
+/* Reuses the panel's own micro-tag / warn-tag treatment (.ledger-chan,
+   .ledger-needs — see _PANEL_STYLE) rather than a second copy of the same
+   rule under a card-local name; only the accent ladder badge is genuinely
+   new here. */
 .om-ladder { font-size: var(--fs-micro); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
 .om-ladder:empty { display: none; }
 .om-actions { flex-wrap: wrap; }
@@ -1421,8 +1535,8 @@ def _feed_card(item: FeedItem) -> str:
         channel = str(ctx.get("channel") or "")
         type_chip = f'<span class="ledger-chan">{escape(channel)}</span>' if channel else ""
     else:
-        type_chip = f'<span class="om-type">{escape(item.item_type)}</span>'
-    wondering = '<span class="om-wondering">wondering</span>' if item.wondering else ""
+        type_chip = f'<span class="ledger-chan">{escape(item.item_type)}</span>'
+    wondering = '<span class="ledger-needs">wondering</span>' if item.wondering else ""
     ladder_label = LADDER_LABELS.get(item.ladder or "", "")
     if item.ladder == "incorporated":
         # Wave B (B7): "in research" is a doorway, not an inert badge — the
@@ -1616,18 +1730,47 @@ def _jump_chip_counts(db_path: Path | str | None) -> dict[str, int]:
 
 _PACKET_STYLE = """<style>
 .ledger-packet { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-4); }
-.pk-band { display: flex; align-items: baseline; gap: var(--sp-3); }
+.pk-band { display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap; }
 .pk-count { font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
-.pk-hint { font-size: var(--fs-caption); color: var(--muted); }
-.pk-progress { display: flex; align-items: baseline; gap: var(--sp-2); font-size: var(--fs-caption); color: var(--muted); margin: var(--sp-2) 0; }
+.pk-hint, .pk-payoff { font-size: var(--fs-caption); color: var(--muted); }
+.pk-payoff { flex-basis: 100%; }
+.pk-progress { display: flex; align-items: baseline; gap: var(--sp-2); font-size: var(--fs-caption); color: var(--muted); margin: var(--sp-2) 0; flex-wrap: wrap; }
+.pk-tally { color: var(--accent); font-weight: 600; }
 .pk-item > .ledger-musing, .pk-item > .ledger-stance { margin-bottom: 0; }
+.pk-class-header { font-size: var(--fs-caption); font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 var(--sp-1); }
+.pk-class-why { font-size: var(--fs-caption); color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: normal; margin-left: var(--sp-2); }
 .pk-clear { color: var(--ok); font-weight: 600; padding: var(--sp-3) 0; }
+.pk-receipt { color: var(--ok); font-weight: 600; font-size: var(--fs-body); padding: var(--sp-3) var(--sp-4); }
+.pk-fail { color: var(--bad); font-size: var(--fs-caption); margin-top: var(--sp-2); }
+.ledger-consequence { font-size: var(--fs-caption); color: var(--muted); margin: var(--sp-1) 0 0; }
 .ledger-profile-update-form { margin-top: var(--sp-2); }
+/* Homogeneous bulk-affirm group card (requirement C): the same .ledger-musing
+   shape, with the individual narratives listed inside so nothing hides. */
+.ledger-group-list { margin: var(--sp-2) 0; padding-left: var(--sp-4); font-size: var(--fs-caption); color: var(--fg-soft); }
+.ledger-group-list li { margin: var(--sp-1) 0; }
 </style>"""
+
+# The DOM event bus every card-level action script emits onto after its own
+# fetch resolves (success or failure) — the ONE place "did this register?"
+# is answered. Injected once (window-guarded) by render_ledger_panel; every
+# per-section script (_RESEARCH_JS, _RECONCILE_JS, _PROFILE_FACT_JS,
+# worldview's _WORLDVIEW_JS) calls window.__ledgerEmitSettled(el, ok, text)
+# instead of assuming the packet walk will silently guess whether it worked.
+_LEDGER_BUS_JS = """<script>(function(){
+  if(window.__ledgerBus){ return; }
+  window.__ledgerBus = true;
+  window.__ledgerEmitSettled = function(el, ok, text){
+    if(!el || !el.dispatchEvent){ return; }
+    el.dispatchEvent(new CustomEvent('ledger:settled', {bubbles:true, detail:{ok: !!ok, text: text || ''}}));
+  };
+})();</script>"""
 
 _PACKET_JS = """<script>(function(){
   if(window.__ledgerPacketWired){ return; }
   window.__ledgerPacketWired = true;
+  function esc(s){
+    return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
   function items(root){ return root.querySelectorAll('.pk-item'); }
   function show(root, i){
     var list=items(root);
@@ -1637,8 +1780,8 @@ _PACKET_JS = """<script>(function(){
     var clear=root.querySelector('.pk-clear');
     if(clear){ clear.hidden=(i<list.length); }
     if(i>=list.length){
-      var prog=root.querySelector('.pk-progress');
-      if(prog){ prog.hidden=true; }
+      var prog=root.querySelector('.pk-progress'); if(prog){ prog.hidden=true; }
+      paintClear(root);
     }
     root.setAttribute('data-pk-i', String(i));
   }
@@ -1646,6 +1789,86 @@ _PACKET_JS = """<script>(function(){
     var i=parseInt(root.getAttribute('data-pk-i')||'0',10);
     show(root, i+1);
   }
+  // Session tally (requirement B): a running count of what happened this
+  // walk, client-side only — it exists for the length of this page view, not
+  // a server session. Rendered into .pk-tally in the progress row and used
+  // verbatim to build the Clear receipt.
+  var tally={};
+  function bump(root, bucket){
+    tally[bucket]=(tally[bucket]||0)+1;
+    var el=root.querySelector('.pk-tally');
+    if(!el){ return; }
+    var order=['affirmed','dropped','resolved','skipped'];
+    var bits=[];
+    for(var i=0;i<order.length;i++){
+      var k=order[i];
+      if(tally[k]){ bits.push(tally[k]+' '+k); }
+    }
+    el.textContent=bits.join(' \\u00b7 ');
+  }
+  // What actually just happened, inferred from the SAME data attributes the
+  // card already carries — no separate verb-to-bucket table to drift.
+  function bucketFor(el){
+    if(!el || !el.getAttribute){ return 'resolved'; }
+    var pa=el.getAttribute('data-profile-action');
+    if(pa==='affirm' || pa==='reaffirm'){ return 'affirmed'; }
+    if(pa==='reject' || pa==='retire'){ return 'dropped'; }
+    var ta=el.getAttribute('data-tenet-action');
+    if(ta==='approve'){ return 'affirmed'; }
+    if(ta==='reject'){ return 'dropped'; }
+    var rv=el.getAttribute('data-rec-verdict');
+    if(rv==='live'){ return 'affirmed'; }
+    if(rv){ return 'dropped'; }
+    var fa=el.getAttribute('data-falsifier-action');
+    if(fa==='ratify'){ return 'affirmed'; }
+    if(fa==='drop'){ return 'dropped'; }
+    var dv=el.getAttribute('data-verb');
+    if(dv==='approve'){ return 'affirmed'; }
+    if(dv==='reject'){ return 'dropped'; }
+    return 'resolved';
+  }
+  // The in-place receipt (requirement B): the acted-on item's content is
+  // replaced with a plain "done" line for a beat, so a click always visibly
+  // registers before the walk moves on — never a silent advance.
+  function settleItem(pkItem, root, ok, text, bucket){
+    if(!pkItem){ return; }
+    if(ok){
+      pkItem.innerHTML='<div class="pk-receipt">\\u2713 '+esc(text||'Saved.')+'</div>';
+      bump(root, bucket);
+      setTimeout(function(){ advance(root); }, 1100);
+    } else {
+      var fail=pkItem.querySelector('.pk-fail');
+      if(!fail){
+        fail=document.createElement('div');
+        fail.className='pk-fail';
+        pkItem.appendChild(fail);
+      }
+      fail.textContent='\\u2717 '+(text||"Didn't save")+' \\u2014 retry.';
+    }
+  }
+  function paintClear(root){
+    var clear=root.querySelector('.pk-clear');
+    if(!clear){ return; }
+    var order=['affirmed','dropped','resolved','skipped'];
+    var bits=[];
+    for(var i=0;i<order.length;i++){
+      var k=order[i];
+      if(tally[k]){ bits.push(tally[k]+' '+k); }
+    }
+    clear.textContent='Clear \\u2014 nothing else needs you.'+(bits.length ? ' ('+bits.join(' \\u00b7 ')+')' : '');
+  }
+  // A reused card's own script (research/reconcile/worldview/profile-fact)
+  // fetches, then calls window.__ledgerEmitSettled(el, ok, text) — this is
+  // the ONE place that turns "did the click register?" into a visible answer
+  // instead of a blind timeout that advanced regardless of success.
+  document.addEventListener('ledger:settled', function(e){
+    var root=e.target && e.target.closest ? e.target.closest('.ledger-packet') : null;
+    if(!root){ return; }
+    var pkItem=e.target.closest('.pk-item');
+    if(!pkItem){ return; }
+    var d=e.detail || {};
+    settleItem(pkItem, root, d.ok, d.text, bucketFor(e.target));
+  });
   document.addEventListener('click', function(e){
     var root=e.target && e.target.closest ? e.target.closest('.ledger-packet') : null;
     if(!root){ return; }
@@ -1655,42 +1878,84 @@ _PACKET_JS = """<script>(function(){
       show(root, 0);
       return;
     }
-    if(e.target.closest('[data-pk-skip]')){ advance(root); return; }
+    if(e.target.closest('[data-pk-skip]')){ bump(root, 'skipped'); advance(root); return; }
     if(e.target.closest('[data-pk-close]')){
       var st=root.querySelector('.pk-stage'); if(st){ st.hidden=true; }
       var bd=root.querySelector('.pk-band'); if(bd){ bd.hidden=false; }
       return;
     }
-    // Triage mini-card actions (these cards have no home-section handler).
+    // Triage mini-card actions (these cards have no home-section handler) —
+    // same registered-feedback contract as every reused card's own script.
     var tr=e.target.closest('[data-pk-route]');
     if(tr){
       tr.disabled=true;
+      var pkItemR=tr.closest('.pk-item');
       fetch('/api/notes/'+tr.getAttribute('data-note-id')+'/route',
         {method:'POST',headers:{'Content-Type':'application/json'},
          body:JSON.stringify({intent:tr.getAttribute('data-intent')})})
-        .then(function(r){ if(r.ok){ advance(root); } else { tr.disabled=false; } })
-        .catch(function(){ tr.disabled=false; });
+        .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok, body:j}; }); })
+        .then(function(res){
+          var text=(res.body && res.body.receipt) || (res.ok ? 'Routed.' : "Didn't save — retry.");
+          if(!res.ok){ tr.disabled=false; }
+          settleItem(pkItemR, root, res.ok, text, 'resolved');
+        })
+        .catch(function(){ tr.disabled=false; settleItem(pkItemR, root, false, 'Could not reach the server.', 'resolved'); });
       return;
     }
     var td=e.target.closest('[data-pk-dismiss]');
     if(td){
       td.disabled=true;
+      var pkItemD=td.closest('.pk-item');
       fetch('/api/notes/'+td.getAttribute('data-note-id')+'/archive',
         {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
-        .then(function(r){ if(r.ok){ advance(root); } else { td.disabled=false; } })
-        .catch(function(){ td.disabled=false; });
+        .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok, body:j}; }); })
+        .then(function(res){
+          var text=(res.body && res.body.receipt) || (res.ok ? 'Dismissed.' : "Didn't save — retry.");
+          if(!res.ok){ td.disabled=false; }
+          settleItem(pkItemD, root, res.ok, text, 'resolved');
+        })
+        .catch(function(){ td.disabled=false; settleItem(pkItemD, root, false, 'Could not reach the server.', 'resolved'); });
       return;
     }
-    // A settling action on a reused card (proposal verbs except the Steer
-    // opener, tenet approve/reject, reconcile verdicts, falsifier ratify/drop,
-    // the in-card Steer/Rewrite saves) advances the walk after a beat — the
-    // card's own handler runs first via the same event.
-    var settle=e.target.closest(
-      '[data-verb]:not([data-verb="steer"]),[data-tenet-action],[data-rec-verdict],'
-      +'[data-falsifier-action="ratify"],[data-falsifier-action="drop"],'
-      +'[data-steer-save],[data-rewrite-save],[data-profile-action],'
-      +'[data-profile-update-save]');
-    if(settle){ setTimeout(function(){ advance(root); }, 900); }
+    // Grouped bulk-affirm card (requirement C): Affirm all / Drop all loop the
+    // SAME single-fact route per id (no new bulk semantics in the store);
+    // Review one by one un-collapses the individual cards in place.
+    var reveal=e.target.closest('[data-pk-group-reveal]');
+    if(reveal){
+      var groupCard=reveal.closest('[data-pk-group]');
+      if(groupCard){
+        var stack=groupCard.querySelector('.ledger-group-individual');
+        if(stack){ stack.hidden=false; }
+        var summary=groupCard.querySelector('.ledger-group-summary');
+        if(summary){ summary.hidden=true; }
+      }
+      return;
+    }
+    var bulk=e.target.closest('[data-pk-group-action]');
+    if(bulk){
+      var verb=bulk.getAttribute('data-pk-group-action');
+      var ids=(bulk.getAttribute('data-fact-ids')||'').split(',').filter(Boolean);
+      var route=(verb==='affirm') ? 'reaffirm' : 'retire';
+      var groupItem=bulk.closest('.pk-item');
+      var row=bulk.closest('.ledger-cap-row');
+      if(row){ var btns=row.querySelectorAll('button'); for(var bi=0; bi<btns.length; bi++){ btns[bi].disabled=true; } }
+      Promise.all(ids.map(function(id){
+        return fetch('/api/profile/fact/'+id+'/'+route, {method:'POST'})
+          .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok, id:id}; }); });
+      })).then(function(results){
+        var okCount=results.filter(function(r){ return r.ok; }).length;
+        var failed=results.filter(function(r){ return !r.ok; });
+        if(failed.length===0){
+          var word=(verb==='affirm') ? 'Affirmed' : 'Dropped';
+          settleItem(groupItem, root, true, word+' all '+okCount+'.', (verb==='affirm') ? 'affirmed' : 'dropped');
+        } else {
+          settleItem(groupItem, root, false, okCount+' saved, '+failed.length+" didn't — retry.", 'resolved');
+        }
+      }).catch(function(){
+        settleItem(groupItem, root, false, 'Could not reach the server.', 'resolved');
+      });
+      return;
+    }
   });
 })();</script>"""
 
@@ -1729,9 +1994,16 @@ _PROFILE_FACT_JS = """<script>(function(){
       fetch('/api/profile/fact/'+id2+'/update',{method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({narrative:text})})
-        .then(function(r){ return r.json(); })
-        .then(function(res){ if(!res || res.ok===false){ save.disabled=false; } })
-        .catch(function(){ save.disabled=false; });
+        .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok && !!(j&&j.ok!==false), body:j}; }); })
+        .then(function(res){
+          var text2=(res.body && res.body.receipt) || (res.ok ? 'Saved.' : "Didn't save — retry.");
+          if(!res.ok){ save.disabled=false; }
+          if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(save, res.ok, text2); }
+        })
+        .catch(function(){
+          save.disabled=false;
+          if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(save, false, 'Could not reach the server.'); }
+        });
       return;
     }
     var act=e.target.closest('[data-profile-action]');
@@ -1741,9 +2013,16 @@ _PROFILE_FACT_JS = """<script>(function(){
     var verb=act.getAttribute('data-profile-action');
     act.disabled=true;
     fetch('/api/profile/fact/'+id3+'/'+verb,{method:'POST'})
-      .then(function(r){ return r.json(); })
-      .then(function(res){ if(!res || res.ok===false){ act.disabled=false; } })
-      .catch(function(){ act.disabled=false; });
+      .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok && !!(j&&j.ok!==false), body:j}; }); })
+      .then(function(res){
+        var text=(res.body && res.body.receipt) || (res.ok ? 'Saved.' : "Didn't save — retry.");
+        if(!res.ok){ act.disabled=false; }
+        if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(act, res.ok, text); }
+      })
+      .catch(function(){
+        act.disabled=false;
+        if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(act, false, 'Could not reach the server.'); }
+      });
   });
 })();</script>"""
 
@@ -1757,11 +2036,16 @@ def _profile_fact_packet_card(fact: OwnerProfileFactRow) -> str:
         f'<span class="k-chip k-chip-mono">{escape(fact.category)}</span>'
         f'<span class="ledger-chan">{escape(fact.key)}</span></div>'
         f'<div class="ledger-body">{escape(fact.narrative)}</div>'
+        '<p class="ledger-consequence"><strong>Still true -&gt;</strong> the coach may cite this '
+        "when reviewing your trades. <strong>Drop -&gt;</strong> never used, won't be "
+        "re-proposed.</p>"
         '<div class="ledger-cap-row">'
         '<button type="button" class="k-btn k-btn-sm k-btn-primary" '
-        'data-profile-action="affirm">Still true</button>'
+        'data-profile-action="affirm" title="Confirms this fact — the coach may now cite it '
+        'when reviewing your trades.">Still true</button>'
         '<button type="button" class="k-btn k-btn-sm k-btn-danger" '
-        'data-profile-action="reject">Drop</button>'
+        'data-profile-action="reject" title="Rejects this fact — it is never used and won\'t '
+        'be re-proposed.">Drop</button>'
         "</div></div>"
     )
 
@@ -1778,21 +2062,94 @@ def _expiring_profile_fact_packet_card(fact: OwnerProfileFactRow) -> str:
         f'<span class="k-chip k-chip-mono">{escape(fact.category)}</span>'
         '<span class="ledger-chan">re-affirm — past review horizon</span></div>'
         f'<div class="ledger-body">{escape(fact.narrative)}</div>'
+        '<p class="ledger-consequence"><strong>Still true -&gt;</strong> good for another review '
+        "cycle, no change. <strong>Update -&gt;</strong> edit the wording; it awaits your affirm "
+        "next walk. <strong>Drop -&gt;</strong> the coach stops citing this.</p>"
         '<div class="ledger-cap-row">'
         '<button type="button" class="k-btn k-btn-sm k-btn-primary" '
-        'data-profile-action="reaffirm">Still true</button>'
+        'data-profile-action="reaffirm" title="Refreshes this fact for another review cycle — '
+        'no change, still usable by the coach.">Still true</button>'
         '<button type="button" class="k-btn k-btn-sm" '
-        "data-profile-update-toggle>Update</button>"
+        'data-profile-update-toggle title="Edit the wording — your edit becomes a new fact '
+        'awaiting your affirm next walk.">Update</button>'
         '<button type="button" class="k-btn k-btn-sm k-btn-danger" '
-        'data-profile-action="retire">Drop</button>'
+        'data-profile-action="retire" title="Retires this fact — the coach stops citing it.">'
+        "Drop</button>"
         "</div>"
         '<div class="ledger-profile-update-form" hidden>'
         '<textarea class="ledger-profile-update-text ledger-rewrite-ta" rows="3">'
         f"{escape(fact.narrative)}</textarea>"
         '<div class="ledger-cap-row">'
         '<button type="button" class="k-btn k-btn-sm k-btn-primary" '
-        "data-profile-update-save>Save</button>"
+        'data-profile-update-save title="Saves your edit as a new proposed fact — it still '
+        'needs an affirm before the coach uses it.">Save</button>'
         "</div></div></div>"
+    )
+
+
+_GROUP_THRESHOLD = 3  # below this, individual cards read better than a group
+
+
+def _group_expiring_facts(
+    facts: list[OwnerProfileFactRow],
+) -> tuple[list[list[OwnerProfileFactRow]], list[OwnerProfileFactRow]]:
+    """Split expiring facts into (homogeneous groups, ungrouped singles).
+
+    Requirement C: "12 work-break dates imported from your wealthplan" reads
+    as ONE bulk-affirm card, not 12 ceremonies. Grouped by category — the
+    same coarse dimension the store already uses to segment facts — with a
+    threshold so a lone capacity fact still gets its own card rather than a
+    group of one."""
+    by_category: dict[str, list[OwnerProfileFactRow]] = {}
+    for f in facts:
+        by_category.setdefault(f.category, []).append(f)
+    groups: list[list[OwnerProfileFactRow]] = []
+    singles: list[OwnerProfileFactRow] = []
+    for bucket in by_category.values():
+        if len(bucket) >= _GROUP_THRESHOLD:
+            groups.append(bucket)
+        else:
+            singles.extend(bucket)
+    return groups, singles
+
+
+def _expiring_facts_group_card(group: list[OwnerProfileFactRow]) -> str:
+    """ONE bulk-affirm card for N homogeneous expiring facts (requirement C):
+    the list stays visible (never hidden behind the collapse), "Affirm all" /
+    "Drop all" loop the SAME single-fact reaffirm/retire route per id
+    client-side (no new bulk semantics in the store — still one explicit
+    owner affirm per fact, just batched); "Review one by one" un-collapses
+    the individual cards this same module already renders."""
+    n = len(group)
+    category = group[0].category
+    ids = ",".join(str(f.id) for f in group)
+    narratives = "".join(f"<li>{escape(f.narrative)}</li>" for f in group)
+    individual = "".join(_expiring_profile_fact_packet_card(f) for f in group)
+    return (
+        f'<div class="ledger-musing" data-pk-group="{escape(ids, quote=True)}">'
+        '<div class="ledger-musing-head">'
+        f'<span class="k-chip k-chip-mono">{escape(category)}</span>'
+        f'<span class="ledger-chan">{n} due for a check-in</span></div>'
+        '<div class="ledger-group-summary">'
+        f'<ul class="ledger-group-list">{narratives}</ul>'
+        '<p class="ledger-consequence"><strong>Affirm all -&gt;</strong> confirms every one for '
+        "another review cycle. <strong>Drop all -&gt;</strong> the coach stops citing all of "
+        "them. Not sure about one? Review them individually instead.</p>"
+        '<div class="ledger-cap-row">'
+        '<button type="button" class="k-btn k-btn-sm k-btn-primary" '
+        f'data-pk-group-action="affirm" data-fact-ids="{escape(ids, quote=True)}" '
+        f'title="Confirms all {n} for another review cycle — no change, still usable by the '
+        'coach.">Affirm all '
+        f"{n}</button>"
+        '<button type="button" class="k-btn k-btn-sm" data-pk-group-reveal '
+        'title="Shows each fact on its own so you can decide one at a time.">'
+        "Review one by one</button>"
+        '<button type="button" class="k-btn k-btn-sm k-btn-danger" '
+        f'data-pk-group-action="drop" data-fact-ids="{escape(ids, quote=True)}" '
+        f'title="Retires all {n} — the coach stops citing any of them.">Drop all {n}</button>'
+        "</div></div>"
+        f'<div class="ledger-group-individual" hidden>{individual}</div>'
+        "</div>"
     )
 
 
@@ -1810,11 +2167,14 @@ def _triage_packet_card(note: AnalystNoteRow) -> str:
             from pipeline.triage_panel import _INTENT_LABELS  # pyright: ignore[reportPrivateUsage]
 
             if si in _INTENT_LABELS:
+                label = _INTENT_LABELS[si]
                 route_btn = (
                     '<button type="button" class="k-btn k-btn-primary k-btn-sm" '
                     f'data-pk-route data-note-id="{note.id}" '
-                    f'data-intent="{escape(si, quote=True)}">'
-                    f"Route to {escape(_INTENT_LABELS[si])}</button>"
+                    f'data-intent="{escape(si, quote=True)}" '
+                    f'title="Files this comment under {escape(label, quote=True)} — it leaves '
+                    'the parked queue.">'
+                    f"Route to {escape(label)}</button>"
                 )
     ident = ticker_label(note.ticker) if note.ticker else '<span class="k-chip">PORTFOLIO</span>'
     return (
@@ -1824,22 +2184,63 @@ def _triage_packet_card(note: AnalystNoteRow) -> str:
         '<div class="ledger-cap-row">'
         f"{route_btn}"
         '<button type="button" class="k-btn k-btn-danger k-btn-sm" '
-        f'data-pk-dismiss data-note-id="{note.id}">Dismiss</button>'
+        f'data-pk-dismiss data-note-id="{note.id}" '
+        'title="Discards this parked comment — it will not be routed or revisited.">'
+        "Dismiss</button>"
         "</div></div>"
     )
 
 
-def _packet_items(db_path: Path | str | None) -> list[str]:
+@dataclass(frozen=True, slots=True)
+class _PacketBuild:
+    """The packet walk split into the three consequence classes (requirement
+    C) plus the counts :func:`_packet_payoff_line` needs — computed once so
+    the payoff line can never drift from what the walk actually contains."""
+
+    gaps: list[str]
+    proposals: list[str]
+    bulk: list[str]
+    gaps_n: int
+    research_n: int
+    tenet_n: int
+    new_fact_n: int
+    bulk_fact_n: int
+
+
+def _packet_build(db_path: Path | str | None) -> _PacketBuild:
     """Everything awaiting an owner verdict, one card per item, each reusing
-    its home section's builder. Every source degrades independently — a broken
-    read drops its items, never the packet."""
-    items: list[str] = []
+    its home section's builder, split into three consequence classes:
+
+    1. ``gaps`` — live coverage holes (a held decision with no falsifier at
+       all). The irreducible, highest-stakes ask.
+    2. ``proposals`` — new things awaiting a first verdict: research runs,
+       proposed Tenets, freshly-proposed capacity/appetite/behavioral facts.
+    3. ``bulk`` — routine, low-stakes housekeeping: one-tap reconcile
+       verdicts, parked-comment routing, and expiring (already-affirmed)
+       facts due for a re-affirm check-in — homogeneous facts are grouped
+       (:func:`_group_expiring_facts`) so N similar check-ins read as one card.
+
+    Every source degrades independently — a broken read drops its items,
+    never the packet."""
+    gaps: list[str] = []
+    proposals: list[str] = []
+    bulk: list[str] = []
+    research_n = tenet_n = new_fact_n = bulk_fact_n = 0
+
     try:
-        proposals = list_proposals(status="pending", db_path=db_path)
-        groups: dict[int, list[ResearchProposal]] = {}
-        for p in proposals:
-            groups.setdefault(p.task_id if p.task_id is not None else -p.id, []).append(p)
-        items.extend(_proposal_group_card(g) for g in groups.values())
+        gap_cards, verdict_cards = _reconcile_packet_items_split(db_path)
+    except Exception:
+        gap_cards, verdict_cards = [], []
+    gaps.extend(gap_cards)
+    bulk.extend(verdict_cards)
+
+    try:
+        research_proposals = list_proposals(status="pending", db_path=db_path)
+        research_groups: dict[int, list[ResearchProposal]] = {}
+        for p in research_proposals:
+            research_groups.setdefault(p.task_id if p.task_id is not None else -p.id, []).append(p)
+        proposals.extend(_proposal_group_card(g) for g in research_groups.values())
+        research_n = len(research_groups)
     except Exception:
         pass
     try:
@@ -1850,26 +2251,9 @@ def _packet_items(db_path: Path | str | None) -> list[str]:
         from synthesis.tenets import list_tenets
 
         if worldview_enabled():
-            items.extend(_proposed_card(t) for t in list_tenets(status="proposed", db_path=db_path))
-    except Exception:
-        pass
-    try:
-        from user_state.notes import list_triage_notes
-
-        items.extend(
-            _triage_packet_card(n)
-            for n in list_triage_notes(db_path=db_path)
-            if isinstance((n.context or {}).get("route_suggestion"), dict)
-        )
-    except Exception:
-        pass
-    try:
-        # One pk-item PER reconcile row (gap cards + verdict/falsifier cards),
-        # NOT the whole #ledger-reconcile blob as a single item — see
-        # _reconcile_packet_items for why the old id-replace one-item hack broke
-        # the count and the settle-advance.
-        reconcile_fragments = _reconcile_packet_items(db_path)
-        items.extend(reconcile_fragments)
+            proposed_tenets = list_tenets(status="proposed", db_path=db_path)
+            proposals.extend(_proposed_card(t) for t in proposed_tenets)
+            tenet_n = len(proposed_tenets)
     except Exception:
         pass
     try:
@@ -1881,7 +2265,19 @@ def _packet_items(db_path: Path | str | None) -> list[str]:
             proposed_facts = _list_profile_facts(conn, status="proposed")
         finally:
             conn.close()
-        items.extend(_profile_fact_packet_card(f) for f in proposed_facts)
+        proposals.extend(_profile_fact_packet_card(f) for f in proposed_facts)
+        new_fact_n = len(proposed_facts)
+    except Exception:
+        pass
+
+    try:
+        from user_state.notes import list_triage_notes
+
+        bulk.extend(
+            _triage_packet_card(n)
+            for n in list_triage_notes(db_path=db_path)
+            if isinstance((n.context or {}).get("route_suggestion"), dict)
+        )
     except Exception:
         pass
     try:
@@ -1896,34 +2292,119 @@ def _packet_items(db_path: Path | str | None) -> list[str]:
             expiring_facts = _list_expiring_facts(conn)
         finally:
             conn.close()
-        items.extend(_expiring_profile_fact_packet_card(f) for f in expiring_facts)
+        groups, singles = _group_expiring_facts(expiring_facts)
+        bulk.extend(_expiring_facts_group_card(g) for g in groups)
+        bulk.extend(_expiring_profile_fact_packet_card(f) for f in singles)
+        bulk_fact_n += len(expiring_facts)
     except Exception:
         pass
-    return items
+
+    return _PacketBuild(
+        gaps=gaps,
+        proposals=proposals,
+        bulk=bulk,
+        gaps_n=len(gaps),
+        research_n=research_n,
+        tenet_n=tenet_n,
+        new_fact_n=new_fact_n,
+        bulk_fact_n=bulk_fact_n,
+    )
+
+
+_PACKET_CLASSES: tuple[tuple[str, str, str], ...] = (
+    (
+        "gaps",
+        "Live gaps",
+        "held decisions with no tripwire at all — the irreducible ask",
+    ),
+    (
+        "proposals",
+        "Awaiting your verdict",
+        "new research, Tenets, and facts proposed for the first time",
+    ),
+    (
+        "bulk",
+        "Routine check-ins",
+        "low-stakes housekeeping — safe to bulk-affirm",
+    ),
+)
+
+
+def _packet_payoff_line(build: _PacketBuild) -> str:
+    """What clearing this walk actually unlocks (requirement D) — built from
+    the SAME counts the walk contains, never marketing prose."""
+    bits: list[str] = []
+    if build.gaps_n:
+        plural = "s" if build.gaps_n != 1 else ""
+        bits.append(f"arms {build.gaps_n} tripwire{plural} on decisions that currently have none")
+    if build.new_fact_n:
+        plural = "s" if build.new_fact_n != 1 else ""
+        bits.append(f"lets /review cite {build.new_fact_n} new fact{plural} about your capacity")
+    if build.tenet_n:
+        plural = "s" if build.tenet_n != 1 else ""
+        bits.append(f"adopts {build.tenet_n} Tenet{plural} into your decision prompts")
+    if build.research_n:
+        plural = "s" if build.research_n != 1 else ""
+        bits.append(f"clears {build.research_n} research proposal{plural}")
+    if build.bulk_fact_n:
+        plural = "s" if build.bulk_fact_n != 1 else ""
+        bits.append(f"confirms {build.bulk_fact_n} routine fact{plural} are still current")
+    if not bits:
+        return ""
+    return "Clearing this walk " + "; ".join(bits) + "."
 
 
 def _packet_section(db_path: Path | str | None) -> str:
     """The bounded "N need you" walk — empty string when nothing needs the
-    owner (the packet only exists when it can end in Clear)."""
-    items = _packet_items(db_path)
-    if not items:
+    owner (the packet only exists when it can end in Clear).
+
+    Requirement C (prioritization): items are ordered by consequence class —
+    live gaps first, then proposals awaiting a first verdict, then routine
+    bulk-affirmable housekeeping last — each class carries a header naming why
+    it matters, folded into the FIRST card of that class (so it shows/hides
+    with that card in the one-at-a-time walk, never a separate counted item).
+    Requirement D (payoff): the start band states what clearing the walk
+    actually unlocks, in real counts."""
+    build = _packet_build(db_path)
+    class_items: dict[str, list[str]] = {
+        "gaps": build.gaps,
+        "proposals": build.proposals,
+        "bulk": build.bulk,
+    }
+    ordered: list[str] = []
+    for key, header, why in _PACKET_CLASSES:
+        lst = class_items[key]
+        if not lst:
+            continue
+        head_html = f'<div class="pk-class-header">{escape(header)}<span class="pk-class-why">{escape(why)}</span></div>'
+        ordered.append(head_html + lst[0])
+        ordered.extend(lst[1:])
+    if not ordered:
         return ""
-    n = len(items)
+    n = len(ordered)
     noun = "needs" if n == 1 else "need"
-    cards = "".join(f'<div class="pk-item" hidden>{card}</div>' for card in items)
+    payoff = _packet_payoff_line(build)
+    payoff_html = f'<p class="pk-payoff">{escape(payoff)}</p>' if payoff else ""
+    cards = "".join(f'<div class="pk-item" hidden>{card}</div>' for card in ordered)
     return (
         _PACKET_STYLE
+        + _LEDGER_BUS_JS
         + '<div class="ledger-packet" id="ledger-packet" data-pk-i="0">'
         + '<div class="pk-band">'
         + f'<span class="pk-count">{n} {noun} you</span>'
-        + '<button type="button" class="k-btn k-btn-primary k-btn-sm" data-pk-start>Start</button>'
+        + '<button type="button" class="k-btn k-btn-primary k-btn-sm" data-pk-start '
+        'title="Walk through everything one at a time, ending in Clear.">Start</button>'
         + '<span class="pk-hint">one at a time, ends in Clear</span>'
+        + payoff_html
         + "</div>"
         + '<div class="pk-stage" hidden>'
         + '<div class="pk-progress"><span data-pk-pos>1</span>'
         + f"<span>of {n}</span>"
-        + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-pk-skip>Skip</button>'
-        + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-pk-close>Close</button>'
+        + '<span class="pk-tally"></span>'
+        + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-pk-skip '
+        'title="Leaves this item for later — no verdict recorded, not counted as dropped.">Skip</button>'
+        + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-pk-close '
+        'title="Pauses the walk here — nothing you already did is undone.">Close</button>'
         + "</div>"
         + cards
         + '<div class="pk-clear" hidden>Clear — nothing else needs you.</div>'
