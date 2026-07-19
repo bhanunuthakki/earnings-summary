@@ -138,6 +138,34 @@ def _thesis_one_liners(repo_root: Path, tickers: list[str]) -> list[str]:
     return lines
 
 
+def _owner_memory_block(repo_root: Path) -> str:
+    """The owner's standing memory — Worldview tenets + themes + affirmed
+    profile facts — for the OPEN-ENDED portfolio scope.
+
+    2026-07-19 review, gap G3: these anchors rode only the per-ticker chat, so
+    exactly the surface meant for macro/allocation/method questions ran with
+    zero knowledge of the owner's beliefs. Same hand-composed spotlight
+    treatment as chat_session (this site doesn't route through
+    compose_anchor_block); every loader degrades to "" and never raises, so a
+    bare install renders the prompt unchanged."""
+    bits: list[str] = []
+    for loader_name, source in (
+        ("load_worldview_anchor", "the investor's Worldview tenets"),
+        ("load_themes_anchor", "the investor's standing themes"),
+        ("load_owner_profile_anchor", "the owner's affirmed profile facts"),
+    ):
+        try:
+            from llm import anchors as anchors_mod
+            from llm.untrusted import spotlight
+
+            raw = getattr(anchors_mod, loader_name)(repo_root)
+            if raw:
+                bits.append(spotlight(raw, source=source))
+        except Exception:  # anchor stack must stay unkillable
+            continue
+    return ("\n\n" + "\n\n".join(bits)) if bits else ""
+
+
 def _portfolio_system_context(repo_root: Path, by_list: dict[str, list[str]]) -> str:
     """The Ask tab's narrative system prompt — the portfolio sibling of
     chat_session._system_prompt. Same read scope, same diff contract, same
@@ -157,12 +185,13 @@ def _portfolio_system_context(repo_root: Path, by_list: dict[str, list[str]]) ->
     thesis_block = (
         "\n\nPER-HOLDING THESES (one-liners):\n" + "\n".join(thesis_lines) if thesis_lines else ""
     )
+    owner_block = _owner_memory_block(repo_root)
 
     return f"""You are the analyst's portfolio research assistant, embedded in
 the command center's Ask tab. Your scope is the whole tracked universe, not
 a single report:
 
-{universe}{thesis_block}
+{universe}{thesis_block}{owner_block}
 
 Portfolio-state evidence: when the question concerns the book itself
 (sizing, weights, cost basis, valuation gaps, past decisions, the journal),
