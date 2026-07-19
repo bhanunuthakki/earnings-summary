@@ -31,6 +31,8 @@ scorecard counts as success — it is the honest output), 2 on a hard stop
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import json
 import logging
 import sys
 from datetime import UTC, datetime
@@ -68,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     from calibration_coach import build_scorecard, gate_scorecard, save_scorecard
+    from decision_calibration import compute_advice_influence
     from identity import DEFAULT_USER_ID
     from llm.cli import is_hard_stop
 
@@ -97,6 +100,28 @@ def main(argv: list[str] | None = None) -> int:
         if card.coach_quality_ok is None
         else ("passed" if card.coach_quality_ok else "SUPPRESSED")
     )
+
+    # Advice-influence read (tenet-2 Phase 5, §5.2) — a separate, purely
+    # descriptive, no-LLM partition riding this same monthly job. Computed
+    # over v_decision_journal directly (not through calibration_coach's
+    # eval-gated CalibrationScorecard machinery — there is no prose here to
+    # gate); persisted as a sibling artifact so it never has to touch that
+    # dataclass's manual encode/decode. None when the view doesn't exist yet
+    # (pre-0179 DB) — nothing is written or logged for it in that case.
+    advice = compute_advice_influence(args.repo_root / "data" / "portfolio.db")
+    advice_path: Path | None = None
+    if advice is not None:
+        advice_path = (
+            Path(args.repo_root)
+            / "data"
+            / "calibration_scorecard"
+            / f"{period}_advice_influence.json"
+        )
+        advice_path.parent.mkdir(parents=True, exist_ok=True)
+        advice_path.write_text(
+            json.dumps(dataclasses.asdict(advice), indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
     log.info(
         {
             "event": "scorecard_saved",
@@ -108,6 +133,9 @@ def main(argv: list[str] | None = None) -> int:
             "experiment": card.experiment is not None,
             "eval_gate": gate,
             "coach_quality_score": card.coach_quality_score,
+            "advice_influence_total_graded": advice.total_graded if advice else None,
+            "advice_influence_advice_before_n": advice.advice_before_n if advice else None,
+            "advice_influence_path": str(advice_path) if advice_path else None,
         }
     )
     return 0

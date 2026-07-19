@@ -36,7 +36,13 @@ from datetime import datetime
 from pathlib import Path
 from statistics import median
 
-from calibration_guard import confidence_note, wilson_interval
+from calibration_guard import (
+    MIN_CONFIDENT_N,
+    confidence_note,
+    is_confident,
+    rate_phrase,
+    wilson_interval,
+)
 from integrations.portfolio_tracker_client import ExitQuality, PositionAlpha
 
 CONVICTION_ORDER: tuple[str, ...] = ("high", "medium", "low", "unstated")
@@ -794,3 +800,140 @@ def omission_clause(om: OmissionStats | None) -> str | None:
     if misses:
         clause += f"; biggest passes that ran: {misses}"
     return clause
+
+
+# =========================================================================== #
+# Advice-influence read (tenet-2 Phase 5, §5.2, docs/design/
+# tenet2_advisory_program.md) — graded decision outcomes crossed by "advice
+# delivered before the decision vs not" x "followed vs overridden". Rides
+# ``v_decision_journal`` (alembic 0179) rather than re-deriving the
+# advice-before window join here — this module doesn't need to know the
+# lookback window or the memo-kind/agent-source exclusions; the view already
+# resolved them. Purely descriptive, per the shared min-n floor
+# (calibration_guard): below it, counts still print but no verdict/comparison
+# prose is ever synthesized here or by any caller.
+# =========================================================================== #
+
+# user_action_kind values (decisions.user_action_kind) that count as the owner
+# having overridden rather than followed the advice/recommendation.
+_OVERRIDDEN_ACTION_KINDS: frozenset[str] = frozenset({"ignored", "partial", "reversed"})
+
+# The four (advice_before, action) cells, in a fixed, stable display order.
+_ADVICE_INFLUENCE_LABELS: tuple[tuple[bool, str, str], ...] = (
+    (True, "followed", "advice-before, followed"),
+    (True, "overridden", "advice-before, overridden"),
+    (False, "followed", "no advice, followed"),
+    (False, "overridden", "no advice, overridden"),
+)
+
+
+@dataclass(frozen=True, slots=True)
+class AdviceInfluenceBucket:
+    """One cell of the advice-before x followed/overridden partition. ``phrase``
+    is the shared ``calibration_guard.rate_phrase`` rendering — descriptive
+    only, hedged below the min-n floor, never a bare assertion."""
+
+    label: str
+    n: int
+    correct: int
+    hit_rate: float | None
+    phrase: str
+
+
+@dataclass(frozen=True, slots=True)
+class AdviceInfluenceStats:
+    """The quarterly advice-influence read: graded ``decisions`` rows (correct/
+    wrong/mixed) partitioned by whether advice existed before the decision
+    (``v_decision_journal.advice_before_memo_id`` or ``linked_memo_id``) and
+    whether the owner's ``user_action_kind`` reads as followed or overridden.
+    Deliberately thin at n≈dozens — the point is a habit of asking, not
+    statistical significance (§5.2)."""
+
+    total_graded: int
+    advice_before_n: int
+    no_advice_n: int
+    # Graded rows where advice-status is known but user_action_kind isn't
+    # 'followed' or one of the overridden kinds (NULL, or an unrecognized
+    # value) — excluded from the 4 crossed cells, reported so the total
+    # accounts for every graded row honestly.
+    unknown_action_n: int
+    buckets: list[AdviceInfluenceBucket]
+    notes: list[str]
+
+
+def compute_advice_influence(
+    db_path: Path | str, *, min_n: int = MIN_CONFIDENT_N
+) -> AdviceInfluenceStats | None:
+    """Read-only partition over ``v_decision_journal``. Returns None when the
+    view doesn't exist (a DB stamped before 0179, or a hand-DDL test fixture)
+    — the caller renders/persists nothing rather than fabricating an all-zero
+    read for a substrate that was never built."""
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT outcome_label, user_action_kind, advice_before_memo_id, "
+                "linked_memo_id FROM v_decision_journal"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.OperationalError:
+        return None
+
+    cell_counts: dict[tuple[bool, str], list[int]] = {}
+    unknown_action_n = 0
+    advice_before_n = 0
+    no_advice_n = 0
+    total_graded = 0
+    for r in rows:
+        label = str(r["outcome_label"] or "")
+        if label not in GRADED_LABELS:
+            continue
+        total_graded += 1
+        has_advice = r["advice_before_memo_id"] is not None or r["linked_memo_id"] is not None
+        if has_advice:
+            advice_before_n += 1
+        else:
+            no_advice_n += 1
+        action = r["user_action_kind"]
+        if action == "followed":
+            bucket_action = "followed"
+        elif action in _OVERRIDDEN_ACTION_KINDS:
+            bucket_action = "overridden"
+        else:
+            unknown_action_n += 1
+            continue
+        counts = cell_counts.setdefault((has_advice, bucket_action), [0, 0])
+        counts[0] += 1
+        if label == "correct":
+            counts[1] += 1
+
+    buckets: list[AdviceInfluenceBucket] = []
+    for has_advice, bucket_action, display_label in _ADVICE_INFLUENCE_LABELS:
+        n, correct = cell_counts.get((has_advice, bucket_action), [0, 0])
+        hit_rate = (correct / n) if n else None
+        buckets.append(
+            AdviceInfluenceBucket(
+                label=display_label,
+                n=n,
+                correct=correct,
+                hit_rate=hit_rate,
+                phrase=rate_phrase(display_label, hit_rate, n, min_n=min_n),
+            )
+        )
+
+    notes: list[str] = []
+    if not is_confident(total_graded, min_n=min_n):
+        notes.append(
+            f"{confidence_note(total_graded, min_n=min_n)} — too thin to conclude anything "
+            "about advice influence; the counts above are the honest whole of it."
+        )
+    return AdviceInfluenceStats(
+        total_graded=total_graded,
+        advice_before_n=advice_before_n,
+        no_advice_n=no_advice_n,
+        unknown_action_n=unknown_action_n,
+        buckets=buckets,
+        notes=notes,
+    )

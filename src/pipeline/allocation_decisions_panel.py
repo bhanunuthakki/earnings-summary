@@ -74,7 +74,7 @@ from integrations.portfolio_tracker_client import (
 )
 from pipeline.research_cockpit import latest_dcf_runs, latest_dcf_scenarios
 from ui import living_grid as lg
-from ui.controls import pill_tone_class, thesis_status_tone
+from ui.controls import chip_tone_class, pill_tone_class, thesis_status_tone, ticker_label
 from ui.prose import render_prose
 from user_state.ledger import list_recent_entries
 from user_state.notes import list_notes
@@ -532,6 +532,7 @@ def render_allocation_decisions_panel(
         coach_digest_html=_coach_digest_section(db_path),
         redteam_pnl_html=_redteam_pnl_html(db_path, user_id=user_id),
         annual_letter_html=_annual_letter_html(db_path),
+        decision_journal_html=_decision_journal_section(db_path),
     )
 
 
@@ -1028,6 +1029,113 @@ def _age_str(created_at: str) -> str:
     return f"{days}d" if days else "today"
 
 
+# --------------------------------------------------------------------------- #
+# Decision journal (tenet-2 Phase 5, §5.1/§5.2) — v_decision_journal renderer.
+# --------------------------------------------------------------------------- #
+
+# outcome_label vocabulary (decisions.outcome_label, 0046): correct/wrong/mixed
+# grade to a tone; pending/unfalsifiable stay neutral (nothing to color yet).
+_OUTCOME_TONE: dict[str, str] = {"correct": "ok", "wrong": "bad", "mixed": "warn"}
+
+_DECISION_JOURNAL_LIMIT = 30
+
+
+def _decision_journal_section(db_path: Path, *, limit: int = _DECISION_JOURNAL_LIMIT) -> str:
+    """ "Decision journal" -- the unified v_decision_journal read, reverse-chron.
+    One dense row per decision: ticker, what was decided, whether advice
+    existed before it (memo kind / guard / ping / nudge markers), disposition,
+    and graded outcome. Never raises: a DB stamped before 0179 (or a hand-DDL
+    test fixture) has no view at all, which degrades to the section's empty
+    state exactly like every other coach_pings/decision_nudges reader here."""
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = _safe_rows(
+            conn,
+            "SELECT decision_id, ticker, decided_by, recommendation_kind, made_at, "
+            "linked_memo_id, linked_memo_kind, advice_before_memo_id, advice_before_memo_kind, "
+            "guard_override_flag, owner_attested_change, coach_ping_class, decision_nudge_id, "
+            "user_action_kind, outcome_label, outcome_pct, stance_verdict "
+            "FROM v_decision_journal ORDER BY made_at DESC, decision_id DESC LIMIT ?",
+            (limit,),
+        )
+    finally:
+        conn.close()
+    head = (
+        '<section class="panel"><h2>Decision journal</h2>'
+        '<p class="sub">Every recorded decision, reverse-chronological -- whether advice '
+        "existed before it (review/Socratic memo, guard override, coach ping/nudge), what "
+        "you did, and how it graded. Most historical rows predate the advice machinery -- "
+        "absent advice reads as a dash, never a fabricated match.</p>"
+    )
+    if not rows:
+        return f'{head}<p class="muted">No decisions recorded yet.</p></section>'
+    lines = "".join(_journal_row(r) for r in rows)
+    return f'{head}<div class="cpnl-list">{lines}</div></section>'
+
+
+def _journal_advice_chips(r: sqlite3.Row) -> str:
+    memo_kind = r["advice_before_memo_kind"] or r["linked_memo_kind"]
+    chips: list[str] = []
+    if memo_kind:
+        chips.append(f'<span class="k-chip k-chip-mono">{escape(str(memo_kind))}</span>')
+    if r["guard_override_flag"]:
+        chips.append(f'<span class="k-chip{chip_tone_class("bad")}">guard</span>')
+    if r["owner_attested_change"] == 1:
+        chips.append(f'<span class="k-chip{chip_tone_class("ok")}">attested</span>')
+    if r["coach_ping_class"]:
+        chips.append('<span class="k-chip">ping</span>')
+    if r["decision_nudge_id"] is not None:
+        chips.append('<span class="k-chip">nudge</span>')
+    return "".join(chips) if chips else '<span class="muted">&mdash;</span>'
+
+
+def _journal_row(r: sqlite3.Row) -> str:
+    ticker = str(r["ticker"]) if r["ticker"] else None
+    ticker_html = (
+        ticker_label(ticker, href=f"/ticker/{ticker}")
+        if ticker
+        else '<span class="muted">portfolio</span>'
+    )
+    kind = escape(str(r["recommendation_kind"]))
+    decided_by = escape(str(r["decided_by"] or "advisor"))
+    kind_chip = f'<span class="k-chip k-chip-mono">{decided_by}: {kind}</span>'
+    advice = _journal_advice_chips(r)
+    action = r["user_action_kind"]
+    disposition = (
+        f'<span class="k-pill">{escape(str(action))}</span>'
+        if action
+        else '<span class="muted">&mdash;</span>'
+    )
+    outcome_label = r["outcome_label"]
+    if outcome_label:
+        tone = _OUTCOME_TONE.get(str(outcome_label), "")
+        pct = r["outcome_pct"]
+        pct_html = (
+            f' <span class="k-num-{"pos" if (pct or 0) >= 0 else "neg"}">{pct:+.1f}%</span>'
+            if pct is not None
+            else ""
+        )
+        outcome = (
+            f'<span class="k-pill{_pill_tone(tone)}">{escape(str(outcome_label))}</span>{pct_html}'
+        )
+    else:
+        outcome = '<span class="muted">pending</span>'
+    when = str(r["made_at"])[:10]
+    memo_kind = r["advice_before_memo_kind"] or r["linked_memo_kind"]
+    doorway = (
+        f' <a href="/ticker/{escape(str(ticker))}" '
+        f'data-peek-url="/api/peek/memo/{escape(str(memo_kind))}" '
+        f'data-peek-title="Latest {escape(str(memo_kind))} memo">detail &rarr;</a>'
+        if ticker and memo_kind
+        else ""
+    )
+    return (
+        f'<p class="cpnl-line">{ticker_html} &middot; {kind_chip} &middot; {advice} &middot; '
+        f"{disposition} &middot; {outcome} &middot; {escape(when)}{doorway}</p>"
+    )
+
+
 _UNMUTE_JS = """<script>
 (function () {
   document.querySelectorAll('.cpnl-unmute-btn').forEach(function (btn) {
@@ -1068,6 +1176,7 @@ def compose_decisions_page(
     coach_digest_html: str = "",
     redteam_pnl_html: str = "",
     annual_letter_html: str = "",
+    decision_journal_html: str = "",
 ) -> str:
     """Pure page assembly (testable without network or DB). ``calibration``
     None (pre-0046 substrate) hides the section entirely; ``attribution`` None
@@ -1077,10 +1186,10 @@ def compose_decisions_page(
     decomposition (L-seam 5). The coach section is pre-rendered upstream (with
     its own <style>) so this module never imports calibration_coach (which
     imports this one). ``coach_pnl_html`` / ``coach_pings_html`` /
-    ``coach_mutes_html`` / ``coach_digest_html`` default to "" so existing
-    callers (and every hand-built test page) are unaffected; the KPI vitals
-    strip is hoisted above the sizing audit as the page's opening line when a
-    calibration section is present."""
+    ``coach_mutes_html`` / ``coach_digest_html`` / ``decision_journal_html``
+    default to "" so existing callers (and every hand-built test page) are
+    unaffected; the KPI vitals strip is hoisted above the sizing audit as the
+    page's opening line when a calibration section is present."""
     kpi_strip = _calibration_kpi_strip(calibration) if calibration is not None else ""
     return "".join(
         [
@@ -1096,6 +1205,7 @@ def compose_decisions_page(
             coach_pings_html,
             coach_mutes_html,
             coach_digest_html,
+            decision_journal_html,
             _timeline_section(timeline),
             f"<script>{_EDITOR_JS}</script>",
         ]
