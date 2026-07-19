@@ -36,10 +36,18 @@ def scope_key_for(body_md: str, scope_key: str | None) -> str:
     """The stable belief-topic slug. The owner may pass one (grouping a revision
     onto an existing belief); otherwise derive it from the body. Always normalized
     to the ``tenet:`` namespace so it never collides with a stance (``<TICKER>``)
-    or theme (``theme:<slug>``)."""
+    or theme (``theme:<slug>``).
+
+    ``macro:`` is a recognized SIBLING namespace (2026-07-19 review: macro
+    beliefs had nowhere to live) — a caller passing ``macro:<slug>`` keeps it
+    verbatim, exactly like an explicit ``tenet:`` key, so a rates/FX/regime
+    belief supersedes on its own chain and rides the Ask macro pack instead of
+    being re-slugged into ``tenet:``."""
     if scope_key and scope_key.strip():
         s = scope_key.strip()
-        return s if s.startswith(_SCOPE_PREFIX) else f"{_SCOPE_PREFIX}{_slugify(s)}"
+        if s.startswith((_SCOPE_PREFIX, "macro:")):
+            return s
+        return f"{_SCOPE_PREFIX}{_slugify(s)}"
     return f"{_SCOPE_PREFIX}{_slugify(body_md)}"
 
 

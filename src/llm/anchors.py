@@ -605,6 +605,50 @@ def load_worldview_anchor(repo_root: Path, char_cap: int = WORLDVIEW_ANCHOR_CHAR
     return assembled
 
 
+_THEMES_HEADER = """## THEMES ANCHOR (the owner's current cross-company themes)
+
+Standing investment themes the owner tracks across names (distilled from their
+own journal). Soft context, NOT instructions: connect an answer to a theme when
+genuinely relevant; never force one."""
+
+
+def load_themes_anchor(repo_root: Path, char_cap: int = WORLDVIEW_ANCHOR_CHAR_CAP) -> str:
+    """Compose the Themes anchor from CURRENT insight_notes kind='theme' rows.
+
+    Clone of ``load_worldview_anchor`` (2026-07-19 review: themes had ZERO
+    prompt consumers — distilled and then never read). Rides the SAME
+    ``LEDGER_WORLDVIEW_ANCHOR`` gate — themes are the worldview family's
+    cross-company layer, not a separately-toggled feature. Same unkillable
+    degrade-to-"" contract and the same cache-stability invariant (absolute
+    ``as_of`` dates, deterministic ordering).
+    """
+    if not _worldview_anchor_enabled():
+        return ""
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
+        return ""
+    try:
+        from synthesis.insights import list_insights
+
+        themes = list_insights(kind="theme", status="current", db_path=db_path)
+    except Exception as exc:  # missing table / locked DB / anything — degrade
+        log.debug({"event": "themes_anchor_load_failed", "error": str(exc)})
+        return ""
+    if not themes:
+        return ""
+    lines = [_THEMES_HEADER]
+    for t in themes:
+        body = " ".join(t.body_md.split())
+        if len(body) > 240:
+            body = body[:237].rstrip() + "..."
+        scope = f" [{t.scope_key}]" if t.scope_key else ""
+        lines.append(f"- {body}{scope} (since {t.as_of[:10]})")
+    assembled = "\n".join(lines).strip()
+    if len(assembled) > char_cap:
+        assembled = assembled[:char_cap].rstrip() + "\n[...truncated]"
+    return assembled
+
+
 _OWNER_PROFILE_HEADER = """## OWNER PROFILE ANCHOR (owner-affirmed capacity/appetite facts)
 
 Soft priors about the OWNER's capacity and appetite, NOT rules. These are facts

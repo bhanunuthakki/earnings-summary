@@ -152,6 +152,16 @@ PACKS: tuple[PackSpec, ...] = (
         "portfolio returns vs SPY/QQQ benchmarks, per-position dollar alpha, "
         'concentration — "how am I doing / what\'s working" questions',
     ),
+    PackSpec(
+        "macro",
+        "Macro · series + sensitivities",
+        "/#portfolio_risk",
+        900,
+        "latest macro series levels (rates, FX, VIX, commodities), per-holding "
+        "macro betas (with fit quality), and the analyst's own standing macro "
+        'stances — for "what if rates stay higher", "my BRL/FX exposure", '
+        "macro-regime and rate-sensitivity questions",
+    ),
 )
 
 PACK_KEYS: tuple[str, ...] = tuple(p.key for p in PACKS)
@@ -685,6 +695,79 @@ def _performance_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[s
     return _item(spec, "Performance (tracker window): " + _join_capped(lines, spec.char_budget))
 
 
+# ---------------------------------------------------------------------------
+# macro — series levels + per-holding sensitivities + the owner's macro stances
+# ---------------------------------------------------------------------------
+
+# Betas below this explain so little variance they are noise, not exposure —
+# same read-side floor the allocation model applies (2026-07-19 review).
+_MACRO_R2_FLOOR = 0.10
+
+
+def _macro_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[str, object] | None:
+    """Deterministic macro grounding (2026-07-19 review, gap G4/G7: 6,986
+    macro_series rows and 57 sensitivities had no conversational doorway, and
+    macro beliefs had nowhere to live). Three legs, each degrading to absence:
+    latest level per series, per-holding betas with an r² floor (weak fits are
+    reported as 'no reliable beta', never as exposure), and current
+    insight_notes under the ``macro:`` scope_key namespace — the owner's own
+    standing macro stances."""
+    lines: list[str] = []
+
+    levels = _rows(
+        db_path,
+        "SELECT series_id, value, MAX(rate_date) AS d FROM macro_series "
+        "GROUP BY series_id ORDER BY series_id",
+    )
+    if levels:
+        lines.append(
+            "levels: "
+            + ", ".join(f"{r['series_id']}={_f(r['value']):g} ({_day(r['d'])})" for r in levels)
+        )
+
+    sens = _rows(
+        db_path,
+        "SELECT ticker, series_id, beta, r_squared FROM macro_sensitivities "
+        "ORDER BY ticker, series_id",
+    )
+    strong = [r for r in sens if (_f(r["r_squared"]) or 0.0) >= _MACRO_R2_FLOOR]
+    if focus:
+        strong = [r for r in strong if str(r["ticker"]).upper() in focus] or strong
+    if strong:
+        lines.append(
+            "betas (r²≥0.10): "
+            + ", ".join(
+                f"{r['ticker']}~{r['series_id']}: β={_f(r['beta']):.2f} (r²={_f(r['r_squared']):.2f})"
+                for r in strong[:12]
+            )
+        )
+    elif sens:
+        lines.append(
+            f"betas: {len(sens)} computed but none clears the r²≥{_MACRO_R2_FLOOR:.2f} fit "
+            "floor — treat statistical macro exposure as UNKNOWN, not zero"
+        )
+
+    stances = _rows(
+        db_path,
+        "SELECT scope_key, body_md, as_of FROM insight_notes "
+        "WHERE kind IN ('stance','tenet','theme') AND status='current' "
+        "AND scope_key LIKE 'macro:%' ORDER BY as_of DESC",
+    )
+    if stances:
+        lines.append(
+            "your standing macro stances: "
+            + "; ".join(
+                f"[{r['scope_key']}] {' '.join(str(r['body_md']).split())[:160]} "
+                f"({_day(r['as_of'])})"
+                for r in stances[:5]
+            )
+        )
+
+    if not lines:
+        return _item(spec, "no macro series, sensitivities, or macro stances on file")
+    return _item(spec, _join_capped(lines, spec.char_budget))
+
+
 _LOADERS: dict[str, Callable[[PackSpec, Path, list[str]], dict[str, object] | None]] = {
     "holdings": _holdings_item,
     "conviction": _conviction_item,
@@ -693,6 +776,7 @@ _LOADERS: dict[str, Callable[[PackSpec, Path, list[str]], dict[str, object] | No
     "calibration": _calibration_item,
     "journal": _journal_item,
     "performance": _performance_item,
+    "macro": _macro_item,
 }
 
 
