@@ -104,6 +104,31 @@ any single observation) -- see that module's docstring: "an entry only
 after confirming the divergence is a documented method choice... never as
 a way to silence an unexplained failure." Left for the parity-harness
 follow-up (period-aware comparison) to disentangle properly.
+
+Phase 3 additions (valuation), field names verified directly against a real
+MELI `_financial_ratios_ttm.json` / `_key_metrics_ttm.json` cache row (not
+guessed): `pe_ttm` -> `financial_ratios_ttm.priceToEarningsRatioTTM`,
+`ps_ttm` -> `financial_ratios_ttm.priceToSalesRatioTTM`, `pb` ->
+`financial_ratios_ttm.priceToBookRatioTTM` (all three already raw multiples,
+not rescaled). `ev_ebitda` -> `key_metrics_ttm.evToEBITDATTM`, `ev_sales` ->
+`key_metrics_ttm.evToSalesTTM` (also raw multiples). `fcf_yield` ->
+`key_metrics_ttm.freeCashFlowYieldTTM`, `earnings_yield` -> `key_metrics_ttm.
+earningsYieldTTM` (both fractions -- 0.133, not 13.3 -- rescaled *100 to
+match this engine's percent-unit convention). `enterprise_value_strict` ->
+`key_metrics_ttm.enterpriseValueTTM` (a raw dollar figure; FMP's own EV may
+include minority interest/preferred equity this engine's v1 omits per
+registry.ENTERPRISE_VALUE_STRICT's method_notes -- a per-ticker divergence
+traced to that omission gets a KNOWN_MISMATCHES entry once confirmed, not
+pre-emptively).
+
+Every Phase-3 mapping is expected to diverge from the reference by MORE than
+Phase 1/2's comparisons even when both sides are "correct": FMP's cached
+ratio was computed against ITS OWN last-cycle price snapshot, while this
+engine's side is a live quote fetched at parity-run time -- the two prices
+can genuinely differ by a trading day or more. This is exactly what the
++/-5% valuation tolerance band (parity_known_mismatches._VALUATION_BAND)
+already exists to absorb; a fail outside that band is still a real
+regression, not price-snapshot noise.
 """
 
 from __future__ import annotations
@@ -151,6 +176,16 @@ _FMP_FIELD_MAP: dict[str, tuple[str, str, bool]] = {
     "interest_coverage": ("financial_ratios_quarterly", "interestCoverageRatio", False),
     "bvps": ("financial_ratios_quarterly", "bookValuePerShare", False),
     "fcf_per_share": ("financial_ratios_quarterly", "freeCashFlowPerShare", False),
+    # Phase 3 -- valuation, all period_grid="ttm" -> the "_ttm" file/field
+    # convention (see module docstring for the real-cache-verified fields).
+    "pe_ttm": ("financial_ratios_ttm", "priceToEarningsRatioTTM", False),
+    "ps_ttm": ("financial_ratios_ttm", "priceToSalesRatioTTM", False),
+    "pb": ("financial_ratios_ttm", "priceToBookRatioTTM", False),
+    "ev_ebitda": ("key_metrics_ttm", "evToEBITDATTM", False),
+    "ev_sales": ("key_metrics_ttm", "evToSalesTTM", False),
+    "fcf_yield": ("key_metrics_ttm", "freeCashFlowYieldTTM", True),
+    "earnings_yield": ("key_metrics_ttm", "earningsYieldTTM", True),
+    "enterprise_value_strict": ("key_metrics_ttm", "enterpriseValueTTM", False),
 }
 
 

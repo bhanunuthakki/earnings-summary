@@ -9,9 +9,10 @@ ticker no longer means navigating away from the panel you were on:
   card(s) (evidence drawer, queued actions with their live approve/dismiss
   links) for the inbox "review →" links and the cockpit's pending-alert pills.
 * :func:`render_ticker_peek` — the hover mini-card for ticker links: price +
-  day move, thesis verdict, DCF gap, next ER, unreviewed count, and the
-  open-the-holding link. Reuses the cockpit's own per-ticker readers so the
-  card can never disagree with the cockpit row it annotates.
+  day move, thesis verdict, DCF gap, live P/E (TTM, bottoms-up metrics
+  engine), next ER, unreviewed count, and the open-the-holding link. Reuses
+  the cockpit's own per-ticker readers so the card can never disagree with
+  the cockpit row it annotates.
 * :func:`render_memo_peek` — the latest advisor memo of a kind, for the
   portfolio insights "full memo →" link.
 * :func:`render_provenance_peek` — per-source data freshness (brief build,
@@ -45,6 +46,7 @@ from pathlib import Path
 from typing import NamedTuple, cast
 
 from alerts import AlertRow, get_alert, list_alerts, list_queued_actions_for_alert
+from compute.metrics_engine.io import latest_ttm_value
 from dashboard._card import render_alert_card
 from dashboard.evidence_drawer import load_brief_provenance
 from identity import DEFAULT_USER_ID
@@ -281,6 +283,13 @@ def render_ticker_peek(
     `next_earnings`, `latest_dcf_runs`) so the card and the cockpit row
     can't drift apart. Rows render hide-don't-stub: a missing price/DCF/ER
     drops its row rather than showing an em-dash pile.
+
+    Phase 3 (bottoms-up metrics engine): also shows the latest computed
+    ``pe_ttm`` (compute.metrics_engine, live-price-wired) when
+    ``compute_derived_metrics`` has run for this ticker — the first
+    UI-consuming surface for an engine valuation metric. Reuses the existing
+    row-tuple rendering shape (no new component); a missing/not-yet-computed
+    value simply drops the row, same as every other optional row here.
     """
     t = ticker.strip().upper()
     if not t:
@@ -323,6 +332,9 @@ def render_ticker_peek(
         rows.append(
             ("vs DCF FV", f'<span class="{gtone}">{escape(fmt_pct(fv_gap, signed=True))}</span>')
         )
+    pe_ttm = _latest_pe_ttm(conn, t)
+    if pe_ttm is not None:
+        rows.append(("P/E (TTM)", f"{pe_ttm:,.1f}x"))
     if next_er:
         days = (datetime.fromisoformat(next_er).date() - ref.date()).days
         rel = "today" if days == 0 else f"in {days}d"
@@ -338,6 +350,20 @@ def render_ticker_peek(
         f'<div class="cc-mini-open"><a href="/#holding={escape(t)}">open holding →</a></div>'
         "</div>"
     )
+
+
+def _latest_pe_ttm(conn: sqlite3.Connection, ticker: str) -> float | None:
+    """Latest computed ``pe_ttm`` (compute.metrics_engine, Phase 3 valuation)
+    for the hover mini-card. Reuses ``metrics_engine.io.latest_ttm_value`` —
+    the same reader the parity harness uses — rather than a bespoke query, so
+    this card can never disagree with what the engine actually persisted.
+    Best-effort: any error (missing table on a pre-metrics-engine DB) is a
+    silent None, same degrade contract as every other peek reader here."""
+    try:
+        value = latest_ttm_value(conn, ticker, "pe_ttm")
+    except sqlite3.Error:
+        return None
+    return float(value) if value is not None else None
 
 
 def _latest_overall_status(conn: sqlite3.Connection, ticker: str) -> str | None:

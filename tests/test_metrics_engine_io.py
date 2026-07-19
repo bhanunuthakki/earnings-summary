@@ -6,9 +6,12 @@ mirrors tests/test_compute_fmp_derived_kpis.py's _create_schema pattern).
 
 from __future__ import annotations
 
+import json
 import sqlite3
-from datetime import datetime
+from collections.abc import Callable
+from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -16,6 +19,7 @@ from compute.metrics_engine.io import compute_for_ticker, resolve_classification
 from compute.metrics_engine.registry import ReasonCode
 from models.companies import AccountingStandard, BusinessModelClass
 from models.facts import FactLocator, LocatorKind
+from sources.price import LivePrice
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
@@ -651,3 +655,140 @@ def test_compute_for_ticker_revenue_cagr_3y_only_2_fy_rows_is_missing_input(
     assert len(rows) == 2
     assert all(r["status"] == "not_computable" for r in rows)
     assert all(r["reason_code"] == ReasonCode.MISSING_INPUT.value for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 -- valuation (pe_ttm/ps_ttm/pb/ev_ebitda/ev_sales/fcf_yield/
+# earnings_yield/enterprise_value_strict), wired to a stub live-price fetch.
+# ---------------------------------------------------------------------------
+
+_VALUATION_FORMULA_KEYS = frozenset(
+    {
+        "enterprise_value_strict",
+        "pe_ttm",
+        "ps_ttm",
+        "pb",
+        "ev_ebitda",
+        "ev_sales",
+        "fcf_yield",
+        "earnings_yield",
+    }
+)
+
+
+def _stub_price_reader(
+    price: float, source_name: str = "stub"
+) -> Callable[[Path, str], LivePrice | None]:
+    def _reader(repo_root: Path, ticker: str) -> LivePrice | None:
+        return LivePrice(price=price, fetched_at=datetime.now(UTC), source_name=source_name)
+
+    return _reader
+
+
+def test_compute_for_ticker_valuation_only_attempts_latest_quarter(
+    conn: sqlite3.Connection,
+) -> None:
+    """Every valuation formula gets exactly ONE attempt row (the latest
+    calendar quarter) -- never backfilled to the 7 older quarters, and never
+    even a not_computable row for those (see io._VALUATION_FORMULA_KEYS)."""
+    _seed_operating_company(conn, "TEST")
+    _set_classification(conn, "TEST", "operating_company", "us_gaap")
+    compute_for_ticker(conn, "TEST", repo_root=Path("."), price_reader=_stub_price_reader(50.0))
+    rows = _attempts(conn, "TEST")
+    for formula_key in _VALUATION_FORMULA_KEYS:
+        matches = [r for r in rows if r["formula_key"] == formula_key]
+        assert len(matches) == 1, f"{formula_key}: expected exactly 1 attempt, got {len(matches)}"
+        assert matches[0]["status"] == "ok"
+
+
+def test_compute_for_ticker_pe_ttm_happy_path_value(conn: sqlite3.Connection) -> None:
+    _seed_operating_company(conn, "TEST")
+    _set_classification(conn, "TEST", "operating_company", "us_gaap")
+    compute_for_ticker(conn, "TEST", repo_root=Path("."), price_reader=_stub_price_reader(50.0))
+    row = _latest_attempt(conn, "TEST", "pe_ttm")
+    assert row["status"] == "ok"
+    kpi_fact = conn.execute(
+        "SELECT value, computed_from, locator FROM kpi_facts WHERE id = ?",
+        (row["kpi_fact_id"],),
+    ).fetchone()
+    # eps_diluted TTM over the last 4 seeded quarters (year_index=1, so
+    # eps_diluted = 1.1 each quarter) -> ttm = 4.4; price 50 / 4.4.
+    assert abs(Decimal(str(kpi_fact["value"])) - Decimal("50") / Decimal("4.4")) < Decimal("0.001")
+    # Staleness contract: the PRICE input's own period_end (its as-of date)
+    # is present and distinct from the row's fundamentals period_end.
+    computed_from = json.loads(kpi_fact["computed_from"])
+    price_inputs = [i for i in computed_from["inputs"] if i["item"] == "price"]
+    assert len(price_inputs) == 1
+    assert price_inputs[0]["ref"] == "vendor_field"
+    assert price_inputs[0]["doc_id"] is None
+    locator = json.loads(kpi_fact["locator"])
+    assert "price_source_stub" in locator["derived"]["method_flags"]
+
+
+def test_compute_for_ticker_valuation_missing_live_price_is_missing_input(
+    conn: sqlite3.Connection,
+) -> None:
+    def _no_price(repo_root: Path, ticker: str) -> None:
+        return None
+
+    _seed_operating_company(conn, "TEST")
+    _set_classification(conn, "TEST", "operating_company", "us_gaap")
+    compute_for_ticker(conn, "TEST", repo_root=Path("."), price_reader=_no_price)
+    row = _latest_attempt(conn, "TEST", "pe_ttm")
+    assert row["status"] == "not_computable"
+    assert row["reason_code"] == ReasonCode.MISSING_INPUT.value
+
+
+def test_compute_for_ticker_valuation_no_repo_root_degrades_gracefully(
+    conn: sqlite3.Connection,
+) -> None:
+    """Omitting repo_root (an older caller) never raises -- every valuation
+    formula just resolves MISSING_INPUT, like any other absent input."""
+    _seed_operating_company(conn, "TEST")
+    _set_classification(conn, "TEST", "operating_company", "us_gaap")
+    compute_for_ticker(conn, "TEST")  # repo_root defaults to None
+    row = _latest_attempt(conn, "TEST", "ps_ttm")
+    assert row["status"] == "not_computable"
+    assert row["reason_code"] == ReasonCode.MISSING_INPUT.value
+
+
+def test_compute_for_ticker_enterprise_value_strict_omitted_flag(
+    conn: sqlite3.Connection,
+) -> None:
+    _seed_operating_company(conn, "TEST")
+    _set_classification(conn, "TEST", "operating_company", "us_gaap")
+    compute_for_ticker(conn, "TEST", repo_root=Path("."), price_reader=_stub_price_reader(50.0))
+    row = _latest_attempt(conn, "TEST", "enterprise_value_strict")
+    kpi_fact = conn.execute(
+        "SELECT locator FROM kpi_facts WHERE id = ?", (row["kpi_fact_id"],)
+    ).fetchone()
+    locator = json.loads(kpi_fact["locator"])
+    assert "minority_interest_preferred_omitted" in locator["derived"]["method_flags"]
+
+
+def test_compute_for_ticker_bank_excludes_ev_ebitda_but_keeps_ev_sales(
+    conn: sqlite3.Connection,
+) -> None:
+    _seed_operating_company(conn, "BANKCO")
+    _set_classification(conn, "BANKCO", "bank", "us_gaap")
+    compute_for_ticker(conn, "BANKCO", repo_root=Path("."), price_reader=_stub_price_reader(50.0))
+    ev_ebitda_row = _latest_attempt(conn, "BANKCO", "ev_ebitda")
+    assert ev_ebitda_row["status"] == "not_computable"
+    assert ev_ebitda_row["reason_code"] == ReasonCode.NOT_APPLICABLE_BUSINESS_MODEL.value
+    ev_sales_row = _latest_attempt(conn, "BANKCO", "ev_sales")
+    assert ev_sales_row["status"] == "ok"
+
+
+def test_compute_for_ticker_valuation_idempotent_on_unchanged_price(
+    conn: sqlite3.Connection,
+) -> None:
+    """A rerun with the SAME (price, fetched_at) skips via input_fingerprint,
+    exactly like every other formula's idempotency contract."""
+    _seed_operating_company(conn, "TEST")
+    _set_classification(conn, "TEST", "operating_company", "us_gaap")
+    fixed_reader = _stub_price_reader(50.0)
+    first = compute_for_ticker(conn, "TEST", repo_root=Path("."), price_reader=fixed_reader)
+    second = compute_for_ticker(conn, "TEST", repo_root=Path("."), price_reader=fixed_reader)
+    assert first.computed_ok > 0
+    assert second.attempts_written == 0
+    assert second.skipped_unchanged == first.attempts_written

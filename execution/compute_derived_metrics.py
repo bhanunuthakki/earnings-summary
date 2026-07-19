@@ -1,10 +1,28 @@
-"""Compute bottoms-up derived metrics (Phase 1) from financial_facts and
+"""Compute bottoms-up derived metrics (Phase 1-3) from financial_facts and
 persist into kpi_facts + metric_computation_attempts.
 
 Modeled directly on execution/derive_kpis_from_fmp.py's shape. Idempotent:
 a re-run over unchanged data skips every (ticker, period, formula) whose
 input_fingerprint hasn't changed (--force bypasses the skip). Structured
 JSON-line events go to stderr; the only stdout is the final summary.
+
+Phase 3 adds the valuation formulas (pe_ttm/ps_ttm/pb/ev_ebitda/ev_sales/
+fcf_yield/earnings_yield/enterprise_value_strict), computed only for the
+latest calendar quarter via a live price fetch (`compute.metrics_engine.io.
+compute_for_ticker`'s `repo_root` param, passed here as `PROJECT_ROOT` so
+`sources.price.read_live_price` -- the same stack `src/dcf/reprice.py` and
+`research_cockpit.profile_quote` use -- can resolve its cache-fallback path).
+Since the live price changes daily, these formulas' input_fingerprint also
+changes daily, so they recompute every run regardless of `--force`.
+
+Live-price fetches run threaded via `compute.metrics_engine.io.
+prefetch_live_prices` (mirrors `src/dcf/reprice.py`'s `_fetch_prices`
+pattern exactly), prefetched ONCE for the whole `--all` scope before the
+per-ticker compute loop, rather than letting `compute_for_ticker` block on
+a serial network call per ticker (worst case ceil(n/workers) * timeout
+instead of n * timeout). A ticker whose fetch times out or errors degrades
+to no live price for this run -- every valuation formula resolves
+MISSING_INPUT for it, same as any other absent input, never a crash.
 
 Usage:
     python execution/compute_derived_metrics.py --ticker MELI
@@ -27,7 +45,11 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from compute.metrics_engine.io import compute_for_ticker  # noqa: E402
+from compute.metrics_engine.io import (  # noqa: E402
+    cached_price_reader,
+    compute_for_ticker,
+    prefetch_live_prices,
+)
 from compute.metrics_engine.parity import ParityOutcome, compare_ticker  # noqa: E402
 from models.companies import ListType  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
@@ -75,9 +97,22 @@ def _run_compute(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
     per_ticker: list[dict[str, object]] = []
     failed = 0
 
+    # Prefetch every ticker's live price ONCE, threaded -- see
+    # prefetch_live_prices' docstring. Each ticker's compute_for_ticker call
+    # then reads a cached, already-resolved LivePrice|None instead of
+    # blocking on its own network call, so the per-ticker loop below never
+    # touches the network.
+    prices = prefetch_live_prices(PROJECT_ROOT, tickers, log=_log_event)
+
     for ticker in tickers:
         try:
-            summary = compute_for_ticker(conn, ticker, force=args.force)
+            summary = compute_for_ticker(
+                conn,
+                ticker,
+                force=args.force,
+                repo_root=PROJECT_ROOT,
+                price_reader=cached_price_reader(prices.get(ticker)),
+            )
         except (ValueError, KeyError) as e:
             failed += 1
             record_stage(

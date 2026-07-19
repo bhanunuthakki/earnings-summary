@@ -26,6 +26,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from compute.kpi_resolver import (  # noqa: E402
     QUARTERLY_FACT_PERIOD_TYPES,
     canonical_metric_name,
+    engine_formula_definition,
     normalize_kpi_name,
     resolve_kpi_definition_name,
 )
@@ -436,3 +437,20 @@ def test_works_without_origin_column() -> None:
     )
     conn.execute("INSERT INTO kpi_definitions (ticker, name, unit) VALUES ('X', 'GMV', 'millions')")
     assert canonical_metric_name(conn, "X", "GMV (USD)", Unit.MILLIONS) == "GMV"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 (bottoms-up metrics engine) -- engine_formula_definition
+# ---------------------------------------------------------------------------
+
+
+def test_engine_formula_definition_resolves_a_registry_formula_key() -> None:
+    text = engine_formula_definition("pe_ttm")
+    assert text is not None
+    assert "price / eps_diluted_ttm" in text
+    assert "live spot quote" in text
+
+
+def test_engine_formula_definition_none_for_non_registry_name() -> None:
+    assert engine_formula_definition("Monthly ARPAC (USD)") is None
+    assert engine_formula_definition("not_a_real_formula") is None

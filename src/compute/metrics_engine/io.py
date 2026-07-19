@@ -20,6 +20,14 @@ rows reach `_dedupe_by_calendar_quarter`, there is normally nothing left to
 coalesce. It is still invoked directly (not reimplemented) as the
 documented safety net against the rare case of two distinct period_ends
 landing in the same calendar quarter.
+
+Phase 3 (valuation): MARKET_CAP/PRICE have no financial_facts equivalent --
+`_resolve_valuation_spot` fetches a live price via `sources.price.
+read_live_price` (the SAME multi-source stack `src/dcf/reprice.py` and
+`research_cockpit.profile_quote` already use, reused rather than a new
+fetcher) and derives market_cap bottoms-up (price * the latest quarter's
+weighted_avg_shares_diluted). Computed ONLY at the latest calendar quarter
+(`_VALUATION_FORMULA_KEYS`) -- a live price has no historical equivalent.
 """
 
 from __future__ import annotations
@@ -27,9 +35,11 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 
 from models.companies import AccountingStandard, BusinessModelClass
 from models.documents import SourceQualityTier, SourceType
@@ -48,6 +58,7 @@ from report.sections._common import calendar_quarter_key
 from report.sections.financials import (
     _dedupe_by_calendar_quarter,  # pyright: ignore[reportPrivateUsage]
 )
+from sources.price import LivePrice, read_live_price
 from timeseries.loaders import reader_tier_rank_sql
 
 from .applicability import applicable_formulas
@@ -130,6 +141,156 @@ _AVERAGE_STOCK_FORMULAS: dict[str, frozenset[CanonicalConcept]] = {
         }
     ),
 }
+
+
+# Phase 3: a price-reader is (repo_root, ticker) -> LivePrice | None. Defaults
+# to `sources.price.read_live_price` -- the SAME multi-source stack
+# src/dcf/reprice.py and research_cockpit.profile_quote already use, per the
+# mandate to reuse the existing live-price path rather than add a new
+# fetcher. Injected in tests to avoid the network (mirrors reprice.py's own
+# PriceReader alias).
+PriceReader = Callable[[Path, str], LivePrice | None]
+
+# One resolved input's lineage: (concept, as-of date, doc_id). doc_id is None
+# for a live-price-sourced input (MARKET_CAP/PRICE) -- there is no
+# financial_facts document backing a vendor quote, unlike every other
+# concept this engine resolves.
+LineageEntry = tuple[CanonicalConcept, datetime, int | None]
+
+# Phase 3: formula_keys whose formula consumes MARKET_CAP/PRICE. These are
+# computed ONLY at the LATEST calendar quarter (compute_for_ticker skips
+# every older cell entirely -- not even a not_computable row, since a spot
+# valuation was never attempted for a past date): a live price has no
+# historical equivalent without a separate historical price-series fetch,
+# which is out of scope per the "reuse the existing live-price path, do not
+# add a new fetcher" mandate (docs/design/bottoms_up_metrics_engine.md
+# section 6 Phase 3).
+_VALUATION_FORMULA_KEYS: frozenset[str] = frozenset(
+    {
+        "enterprise_value_strict",
+        "pe_ttm",
+        "ps_ttm",
+        "pb",
+        "ev_ebitda",
+        "ev_sales",
+        "fcf_yield",
+        "earnings_yield",
+    }
+)
+
+# Concepts with no financial_facts equivalent -- resolved only via
+# _resolve_valuation_spot's live-price fetch, never via resolve_concept's
+# per-standard field mapping. Excluded from compute_for_ticker's
+# MISSING_INPUT_MAPPING check so a valuation formula is never rejected
+# before it even reaches the per-cell compute path (resolve_concept
+# correctly returns None for these under EVERY standard -- that is the
+# documented state, not a gap to report).
+_LIVE_PRICE_CONCEPTS: frozenset[CanonicalConcept] = frozenset(
+    {CanonicalConcept.MARKET_CAP, CanonicalConcept.PRICE}
+)
+
+
+# Threaded live-price prefetch -- mirrors src/dcf/reprice.py's
+# PRICE_FETCH_WORKERS/PER_TICKER_TIMEOUT_S exactly (same yfinance-bound
+# per-ticker cost, same bounded-concurrency shape).
+PRICE_FETCH_WORKERS = 8
+PRICE_FETCH_TIMEOUT_S = 15.0
+
+
+def prefetch_live_prices(
+    repo_root: Path,
+    tickers: list[str],
+    *,
+    price_reader: PriceReader = read_live_price,
+    workers: int = PRICE_FETCH_WORKERS,
+    timeout_s: float = PRICE_FETCH_TIMEOUT_S,
+    log: Callable[..., None] | None = None,
+) -> dict[str, LivePrice | None]:
+    """Fetch every ticker's live price under bounded concurrency, ONCE, so a
+    multi-ticker compute sweep never blocks on a serial network call per
+    ticker (worst case ceil(n/workers)*timeout instead of n*timeout).
+
+    Mirrors ``src/dcf/reprice.py``'s ``_fetch_prices`` contract exactly:
+    submit-all-then-collect, per-future timeout, abandon-and-move-on on a
+    stuck ticker (the worker thread leaks until interpreter exit --
+    acceptable for a once-daily batch), ``shutdown(wait=False)`` so an
+    abandoned future can never hang this function itself. A ticker whose
+    fetch times out or raises maps to None -- its valuation formulas then
+    resolve MISSING_INPUT, same as any other absent input.
+
+    ``log`` (optional) receives ``log(event_name, ticker=..., ...)`` for the
+    timeout/error paths -- the CLI passes its JSON-line stderr logger.
+    """
+    from concurrent.futures import Future, ThreadPoolExecutor
+    from concurrent.futures import TimeoutError as FutureTimeoutError
+
+    out: dict[str, LivePrice | None] = {}
+    if not tickers:
+        return out
+    executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="metrics-engine-price")
+    try:
+        futures: dict[Future[LivePrice | None], str] = {
+            executor.submit(price_reader, repo_root, ticker): ticker for ticker in tickers
+        }
+        for future, ticker in futures.items():
+            try:
+                out[ticker] = future.result(timeout=timeout_s)
+            except FutureTimeoutError:
+                if log is not None:
+                    log("price_prefetch_timeout", ticker=ticker, timeout_s=timeout_s)
+                out[ticker] = None
+            except Exception as exc:
+                if log is not None:
+                    log("price_prefetch_error", ticker=ticker, error=str(exc)[:200])
+                out[ticker] = None
+    finally:
+        executor.shutdown(wait=False)
+    return out
+
+
+def cached_price_reader(price: LivePrice | None) -> PriceReader:
+    """Wrap an already-prefetched LivePrice as a PriceReader so
+    ``compute_for_ticker`` reads the cached quote instead of fetching."""
+
+    def _reader(_repo_root: Path, _ticker: str) -> LivePrice | None:
+        return price
+
+    return _reader
+
+
+def _resolve_valuation_spot(
+    price_reader: PriceReader,
+    repo_root: Path,
+    ticker: str,
+    latest_cell: QuarterCell,
+) -> tuple[dict[CanonicalConcept, Decimal], datetime | None, str | None]:
+    """PRICE + MARKET_CAP for the LATEST calendar quarter, from a live price fetch.
+
+    market_cap is computed bottoms-up (live price * the latest quarter's
+    weighted_avg_shares_diluted) rather than read from the cached
+    historical_market_cap.json row docs/design/bottoms_up_metrics_engine.md
+    section 1 names -- see registry.py's `_MARKET_CAP_METHOD_NOTE` for the
+    full justification (keeps the price and market-cap legs internally
+    consistent, since a cached market-cap row can be up to a day stale
+    relative to a live quote).
+
+    Returns ({}, None, None) on any miss (no live price, or no diluted share
+    count to multiply by) -- every valuation formula then resolves
+    MISSING_INPUT for MARKET_CAP/PRICE, same as any other absent input.
+    """
+    shares = latest_cell.values.get(CanonicalConcept.WEIGHTED_AVG_SHARES_DILUTED)
+    if shares is None or shares <= 0:
+        return {}, None, None
+    live = price_reader(repo_root, ticker)
+    if live is None:
+        return {}, None, None
+    price = Decimal(str(live.price))
+    market_cap = price * shares
+    return (
+        {CanonicalConcept.PRICE: price, CanonicalConcept.MARKET_CAP: market_cap},
+        live.fetched_at,
+        live.source_name,
+    )
 
 
 @dataclass(frozen=True)
@@ -474,7 +635,7 @@ def _resolve_inputs(
 ) -> tuple[
     dict[CanonicalConcept, Decimal | None],
     dict[CanonicalConcept, Decimal | None] | None,
-    list[tuple[CanonicalConcept, datetime, int]],
+    list[LineageEntry],
 ]:
     """Build (resolved_inputs, prior_inputs, lineage_refs) for one formula at one cell.
 
@@ -490,7 +651,7 @@ def _resolve_inputs(
     cell = cells[idx]
     concepts = tuple(formula.required_inputs) + tuple(formula.optional_inputs)
     resolved: dict[CanonicalConcept, Decimal | None] = {}
-    lineage: list[tuple[CanonicalConcept, datetime, int]] = []
+    lineage: list[LineageEntry] = []
     average_concepts = _AVERAGE_STOCK_FORMULAS.get(formula.formula_key, frozenset())
 
     if formula.period_grid == "ttm":
@@ -548,7 +709,7 @@ def _resolve_inputs(
 
 
 def _input_fingerprint(
-    lineage: list[tuple[CanonicalConcept, datetime, int]],
+    lineage: list[LineageEntry],
 ) -> str:
     """sha256 of the sorted (concept, period_end, doc_id) tuples that fed a
     computation -- the recompute-skip key (docs/design/
@@ -574,15 +735,20 @@ def _existing_attempt(
     return str(row["input_fingerprint"]), str(row["engine_version"])
 
 
-def _lineage_json(
-    formula: FormulaDef, lineage: list[tuple[CanonicalConcept, datetime, int]]
-) -> str:
+def _lineage_json(formula: FormulaDef, lineage: list[LineageEntry]) -> str:
     return json.dumps(
         {
             "display": formula.display_formula,
             "inputs": [
                 {
-                    "ref": "financial_fact",
+                    # Phase 3: a live-price-sourced input (MARKET_CAP/PRICE)
+                    # carries doc_id=None -- there is no financial_facts
+                    # document behind a vendor quote, so it is refed
+                    # "vendor_field" (models.facts.VendorFieldRef's category)
+                    # rather than "financial_fact". period_end doubles as the
+                    # quote's as-of date for these entries -- see
+                    # registry._MARKET_CAP_METHOD_NOTE's staleness contract.
+                    "ref": "financial_fact" if doc_id is not None else "vendor_field",
                     "item": concept.value,
                     "period_end": pe.date().isoformat(),
                     "doc_id": doc_id,
@@ -603,7 +769,7 @@ def _persist_attempt(
     formula: FormulaDef,
     formula_id: int,
     result: ComputedValue | NotComputable,
-    lineage: list[tuple[CanonicalConcept, datetime, int]],
+    lineage: list[LineageEntry],
 ) -> None:
     fingerprint = _input_fingerprint(lineage)
     kpi_fact_id: int | None = None
@@ -622,7 +788,15 @@ def _persist_attempt(
         confidence = score_confidence(
             tier=SourceQualityTier.FMP_NORMALIZED, extracted_by="metrics_engine"
         )
-        anchor_doc_id = lineage[0][2] if lineage else 0
+        # Phase 3: a live-price-sourced input (MARKET_CAP/PRICE) carries
+        # doc_id=None (no financial_facts document backs a vendor quote) --
+        # anchor on the first input that DOES have a real document instead of
+        # naively taking lineage[0], so a valuation formula's kpi_facts row
+        # still points at a genuine filing. Falls back to the pre-existing 0
+        # sentinel only when lineage is entirely empty (or entirely
+        # vendor-sourced, which cannot happen today: every valuation formula
+        # also requires at least one financial_facts-backed concept).
+        anchor_doc_id = next((doc_id for _, _, doc_id in lineage if doc_id is not None), 0)
         # Canonical `derived` locator (docs/design/provenance_clickthrough.md
         # §1.5/§3.2, bottoms_up_metrics_engine.md §3): the SAME lineage data
         # `_lineage_json` already assembles for `computed_from`, promoted into
@@ -643,7 +817,7 @@ def _persist_attempt(
                 method_flags=list(result.method_flags),
                 inputs=[
                     DerivedInputRef(
-                        ref="financial_fact",
+                        ref="financial_fact" if doc_id is not None else "vendor_field",
                         item=concept.value,
                         period_end=pe.date().isoformat(),
                         doc_id=doc_id,
@@ -707,18 +881,41 @@ def _persist_attempt(
 
 
 def compute_for_ticker(
-    conn: sqlite3.Connection, ticker: str, *, force: bool = False
+    conn: sqlite3.Connection,
+    ticker: str,
+    *,
+    force: bool = False,
+    repo_root: Path | None = None,
+    price_reader: PriceReader = read_live_price,
 ) -> TickerComputeSummary:
     """End-to-end compute for one ticker: resolve inputs, compute every
     registry formula at every applicable period (calendar quarter for
     "quarterly"/"ttm" formulas, fiscal year for "fy" formulas -- Phase 2),
-    persist. Idempotent (input_fingerprint skip) unless `force`."""
+    persist. Idempotent (input_fingerprint skip) unless `force`.
+
+    Phase 3: `repo_root` is required to fetch a live price for the valuation
+    formulas (`_VALUATION_FORMULA_KEYS`) -- when omitted (an older caller, or
+    a test with no filesystem to root against) those formulas degrade to
+    MISSING_INPUT for MARKET_CAP/PRICE, exactly like any other absent input,
+    rather than raising. `price_reader` defaults to
+    `sources.price.read_live_price` (the same stack `src/dcf/reprice.py` and
+    `research_cockpit.profile_quote` already use); tests inject a stub to
+    avoid the network.
+    """
     ticker = ticker.upper()
     business_model, standard = resolve_classification(conn, ticker)
     formula_ids = upsert_formula_definitions(conn)
     applicable = {f.formula_key for f in applicable_formulas(business_model, ticker=ticker)}
     quarterly_cells = _build_quarter_cells(conn, ticker, standard)
     annual_cells = _build_annual_cells(conn, ticker, standard)
+
+    spot_values: dict[CanonicalConcept, Decimal] = {}
+    price_asof: datetime | None = None
+    price_source: str | None = None
+    if quarterly_cells and repo_root is not None:
+        spot_values, price_asof, price_source = _resolve_valuation_spot(
+            price_reader, repo_root, ticker, quarterly_cells[-1]
+        )
 
     attempts = 0
     computed_ok = 0
@@ -728,14 +925,26 @@ def compute_for_ticker(
     for formula in all_latest():
         formula_id = formula_ids[(formula.formula_key, formula.version)]
         is_applicable = formula.formula_key in applicable
+        is_valuation = formula.formula_key in _VALUATION_FORMULA_KEYS
         # A concept `standard` has no verified field mapping for is the SAME
         # gap for every period of this ticker (resolve_concept doesn't vary
         # by period) -- checked once per formula rather than per cell.
+        # MARKET_CAP/PRICE are excluded here (Phase 3): they resolve via the
+        # live-price stack, never via resolve_concept, so their permanent
+        # per-standard "no mapping" is not a MISSING_INPUT_MAPPING gap.
         unmapped_concepts = [
-            c for c in formula.required_inputs if resolve_concept(standard, c) is None
+            c
+            for c in formula.required_inputs
+            if c not in _LIVE_PRICE_CONCEPTS and resolve_concept(standard, c) is None
         ]
         cells = annual_cells if formula.period_grid == "fy" else quarterly_cells
         for idx, cell in enumerate(cells):
+            if is_valuation and idx != len(cells) - 1:
+                # Spot-only: never attempted for a historical quarter -- not
+                # even a not_computable row, since a spot valuation was never
+                # tried for that past date (see _VALUATION_FORMULA_KEYS'
+                # module-level docstring).
+                continue
             fiscal_period_type = "TTM" if formula.period_grid == "ttm" else cell.fiscal_period_type
 
             if not is_applicable:
@@ -743,7 +952,7 @@ def compute_for_ticker(
                     reason_code=ReasonCode.NOT_APPLICABLE_BUSINESS_MODEL,
                     reason_detail=f"{business_model.value} excluded from {formula.formula_key}",
                 )
-                lineage: list[tuple[CanonicalConcept, datetime, int]] = []
+                lineage: list[LineageEntry] = []
             elif unmapped_concepts:
                 result = NotComputable(
                     reason_code=ReasonCode.MISSING_INPUT_MAPPING,
@@ -755,7 +964,18 @@ def compute_for_ticker(
                 lineage = []
             else:
                 resolved, prior, lineage = _resolve_inputs(cells, idx, formula)
+                if is_valuation:
+                    for concept, value in spot_values.items():
+                        if concept in formula.required_inputs or concept in formula.optional_inputs:
+                            resolved[concept] = value
+                            if price_asof is not None:
+                                lineage.append((concept, price_asof, None))
                 result = compute(formula, resolved, prior_inputs=prior)
+                if is_valuation and isinstance(result, ComputedValue) and price_source is not None:
+                    result = ComputedValue(
+                        value=result.value,
+                        method_flags=(*result.method_flags, f"price_source_{price_source}"),
+                    )
 
             fingerprint = _input_fingerprint(lineage)
             if not force:

@@ -19,7 +19,13 @@ from compute.metrics_engine.engine import (
     compute_nopat,
 )
 from compute.metrics_engine.inputs import CanonicalConcept, resolve_concept
-from compute.metrics_engine.registry import REGISTRY, ReasonCode, all_latest, latest
+from compute.metrics_engine.registry import (
+    ENTERPRISE_VALUE_STRICT_OMITTED_FLAG,
+    REGISTRY,
+    ReasonCode,
+    all_latest,
+    latest,
+)
 from models.companies import AccountingStandard, BusinessModelClass
 
 # ---------------------------------------------------------------------------
@@ -64,6 +70,17 @@ _PHASE_2_KEYS = {
     "ebitda_cagr_3y",
 }
 
+_PHASE_3_KEYS = {
+    "enterprise_value_strict",
+    "pe_ttm",
+    "ps_ttm",
+    "pb",
+    "ev_ebitda",
+    "ev_sales",
+    "fcf_yield",
+    "earnings_yield",
+}
+
 
 def test_registry_has_exactly_the_15_phase1_formulas() -> None:
     actual = {key for key, _version in REGISTRY}
@@ -81,16 +98,25 @@ def test_registry_has_exactly_the_16_phase2_formulas() -> None:
     assert len(_PHASE_2_KEYS) == 16
 
 
+def test_registry_has_exactly_the_8_phase3_formulas() -> None:
+    """Phase 3 (docs/design/bottoms_up_metrics_engine.md section 6): the
+    valuation table -- pe_ttm/ps_ttm/pb/ev_ebitda/ev_sales/fcf_yield/
+    earnings_yield plus enterprise_value_strict."""
+    actual = {key for key, _version in REGISTRY}
+    assert actual >= _PHASE_3_KEYS
+    assert len(_PHASE_3_KEYS) == 8
+
+
 def test_registry_has_no_other_formulas() -> None:
     actual = {key for key, _version in REGISTRY}
-    assert actual == _PHASE_1_KEYS | _PHASE_2_KEYS
-    assert len(REGISTRY) == 31
+    assert actual == _PHASE_1_KEYS | _PHASE_2_KEYS | _PHASE_3_KEYS
+    assert len(REGISTRY) == 39
 
 
 def test_all_latest_returns_one_entry_per_formula_key() -> None:
     formulas = all_latest()
     keys = [f.formula_key for f in formulas]
-    assert len(keys) == len(set(keys)) == 31
+    assert len(keys) == len(set(keys)) == 39
 
 
 def test_latest_returns_none_for_unknown_key() -> None:
@@ -162,9 +188,9 @@ def test_resolve_concept_operating_lease_liability_mapped_for_both_standards() -
 # ---------------------------------------------------------------------------
 
 
-def test_applicable_formulas_operating_company_gets_all_31() -> None:
+def test_applicable_formulas_operating_company_gets_all_39() -> None:
     formulas = applicable_formulas(BusinessModelClass.OPERATING_COMPANY)
-    assert len(formulas) == 31
+    assert len(formulas) == 39
 
 
 def test_applicable_formulas_bank_excludes_roic_and_roce() -> None:
@@ -180,6 +206,13 @@ def test_applicable_formulas_bank_excludes_roic_and_roce() -> None:
     # net_debt_strict/incl_lt_securities and the per-share metrics apply to ALL.
     assert "net_debt_strict" in keys
     assert "bvps" in keys
+    # Phase 3: ev_ebitda excludes BANK (no EBITDA concept), but ev_sales,
+    # pe_ttm, ps_ttm, pb, fcf_yield, earnings_yield, enterprise_value_strict
+    # are ALL per docs/design/bottoms_up_metrics_engine.md section 1.
+    assert "ev_ebitda" not in keys
+    assert "ev_sales" in keys
+    assert "pe_ttm" in keys
+    assert "enterprise_value_strict" in keys
 
 
 def test_applicable_formulas_ticker_override_excludes_zero_inventory_names() -> None:
@@ -847,3 +880,172 @@ def test_ebitda_cagr_3y_missing_da_propagates_not_computable() -> None:
     result = compute(formula, resolved, prior_inputs=prior)
     assert isinstance(result, NotComputable)
     assert result.reason_code == ReasonCode.MISSING_INPUT
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 -- valuation (pe_ttm/ps_ttm/pb/ev_ebitda/ev_sales/fcf_yield/
+# earnings_yield/enterprise_value_strict). MARKET_CAP/PRICE arrive here
+# pre-resolved (io._resolve_valuation_spot's job, not engine.py's) -- these
+# are pure-function tests over already-resolved Decimal inputs, same as
+# every other engine.py test in this file.
+# ---------------------------------------------------------------------------
+
+
+def test_enterprise_value_strict_always_sets_omitted_flag() -> None:
+    formula = latest("enterprise_value_strict")
+    assert formula is not None
+    resolved: ResolvedInputs = {
+        CanonicalConcept.MARKET_CAP: Decimal("5000"),
+        CanonicalConcept.TOTAL_DEBT: Decimal("1000"),
+        CanonicalConcept.CASH_AND_EQUIVALENTS: Decimal("300"),
+        CanonicalConcept.SHORT_TERM_INVESTMENTS: Decimal("200"),
+    }
+    result = compute(formula, resolved)
+    assert isinstance(result, ComputedValue)
+    # net_debt_strict = 1000 - 300 - 200 = 500; EV = 5000 + 500 = 5500.
+    assert result.value == Decimal("5500")
+    assert result.method_flags == (ENTERPRISE_VALUE_STRICT_OMITTED_FLAG,)
+
+
+def test_enterprise_value_strict_missing_market_cap_is_missing_input() -> None:
+    formula = latest("enterprise_value_strict")
+    assert formula is not None
+    resolved: ResolvedInputs = {
+        CanonicalConcept.TOTAL_DEBT: Decimal("1000"),
+        CanonicalConcept.CASH_AND_EQUIVALENTS: Decimal("300"),
+        CanonicalConcept.SHORT_TERM_INVESTMENTS: Decimal("200"),
+    }
+    result = compute(formula, resolved)
+    assert isinstance(result, NotComputable)
+    assert result.reason_code == ReasonCode.MISSING_INPUT
+
+
+def test_pe_ttm_happy_path() -> None:
+    formula = latest("pe_ttm")
+    assert formula is not None
+    resolved: ResolvedInputs = {
+        CanonicalConcept.PRICE: Decimal("50"),
+        CanonicalConcept.EPS_DILUTED: Decimal("4"),
+    }
+    result = compute(formula, resolved)
+    assert isinstance(result, ComputedValue)
+    assert result.value == Decimal("12.5")
+
+
+def test_pe_ttm_negative_eps_is_denominator_le_zero() -> None:
+    formula = latest("pe_ttm")
+    assert formula is not None
+    resolved: ResolvedInputs = {
+        CanonicalConcept.PRICE: Decimal("50"),
+        CanonicalConcept.EPS_DILUTED: Decimal("-1"),
+    }
+    result = compute(formula, resolved)
+    assert isinstance(result, NotComputable)
+    assert result.reason_code == ReasonCode.DENOMINATOR_LE_ZERO
+
+
+def test_ps_ttm_happy_path() -> None:
+    formula = latest("ps_ttm")
+    assert formula is not None
+    resolved: ResolvedInputs = {
+        CanonicalConcept.MARKET_CAP: Decimal("10000"),
+        CanonicalConcept.REVENUE: Decimal("4000"),
+    }
+    result = compute(formula, resolved)
+    assert isinstance(result, ComputedValue)
+    assert result.value == Decimal("2.5")
+
+
+def test_pb_negative_equity_is_denominator_le_zero() -> None:
+    formula = latest("pb")
+    assert formula is not None
+    resolved: ResolvedInputs = {
+        CanonicalConcept.MARKET_CAP: Decimal("10000"),
+        CanonicalConcept.TOTAL_STOCKHOLDERS_EQUITY: Decimal("-500"),
+    }
+    result = compute(formula, resolved)
+    assert isinstance(result, NotComputable)
+    assert result.reason_code == ReasonCode.DENOMINATOR_LE_ZERO
+
+
+def test_ev_ebitda_happy_path_carries_omitted_flag() -> None:
+    formula = latest("ev_ebitda")
+    assert formula is not None
+    resolved: ResolvedInputs = {
+        CanonicalConcept.MARKET_CAP: Decimal("5000"),
+        CanonicalConcept.TOTAL_DEBT: Decimal("1000"),
+        CanonicalConcept.CASH_AND_EQUIVALENTS: Decimal("300"),
+        CanonicalConcept.SHORT_TERM_INVESTMENTS: Decimal("200"),
+        CanonicalConcept.OPERATING_INCOME: Decimal("400"),
+        CanonicalConcept.DEPRECIATION_AND_AMORTIZATION: Decimal("100"),
+    }
+    result = compute(formula, resolved)
+    assert isinstance(result, ComputedValue)
+    # EV = 5500 (see test_enterprise_value_strict_always_sets_omitted_flag);
+    # ebitda = 400 + 100 = 500 -> 11.0x.
+    assert result.value == Decimal("11")
+    assert result.method_flags == (ENTERPRISE_VALUE_STRICT_OMITTED_FLAG,)
+
+
+def test_ev_sales_happy_path() -> None:
+    formula = latest("ev_sales")
+    assert formula is not None
+    resolved: ResolvedInputs = {
+        CanonicalConcept.MARKET_CAP: Decimal("5000"),
+        CanonicalConcept.TOTAL_DEBT: Decimal("1000"),
+        CanonicalConcept.CASH_AND_EQUIVALENTS: Decimal("300"),
+        CanonicalConcept.SHORT_TERM_INVESTMENTS: Decimal("200"),
+        CanonicalConcept.REVENUE: Decimal("1100"),
+    }
+    result = compute(formula, resolved)
+    assert isinstance(result, ComputedValue)
+    # EV = 5500 / revenue 1100 -> 5.0x.
+    assert result.value == Decimal("5")
+
+
+def test_fcf_yield_happy_path() -> None:
+    formula = latest("fcf_yield")
+    assert formula is not None
+    resolved: ResolvedInputs = {
+        CanonicalConcept.FREE_CASH_FLOW: Decimal("500"),
+        CanonicalConcept.MARKET_CAP: Decimal("10000"),
+    }
+    result = compute(formula, resolved)
+    assert isinstance(result, ComputedValue)
+    assert result.value == Decimal("5")  # 500/10000 * 100 = 5%
+
+
+def test_earnings_yield_happy_path() -> None:
+    formula = latest("earnings_yield")
+    assert formula is not None
+    resolved: ResolvedInputs = {
+        CanonicalConcept.NET_INCOME: Decimal("400"),
+        CanonicalConcept.MARKET_CAP: Decimal("10000"),
+    }
+    result = compute(formula, resolved)
+    assert isinstance(result, ComputedValue)
+    assert result.value == Decimal("4")  # 400/10000 * 100 = 4%
+
+
+def test_valuation_formulas_excluded_business_models_match_doc() -> None:
+    """docs/design/bottoms_up_metrics_engine.md section 1's Valuation table:
+    only ev_ebitda excludes BANK/INSURANCE; the other 6 + the EV intermediate
+    apply to ALL."""
+    excluded_only_ev_ebitda = {
+        "pe_ttm",
+        "ps_ttm",
+        "pb",
+        "ev_sales",
+        "fcf_yield",
+        "earnings_yield",
+        "enterprise_value_strict",
+    }
+    for key in excluded_only_ev_ebitda:
+        formula = latest(key)
+        assert formula is not None
+        assert formula.applies_to(BusinessModelClass.BANK) is True
+        assert formula.applies_to(BusinessModelClass.INSURANCE) is True
+    ev_ebitda = latest("ev_ebitda")
+    assert ev_ebitda is not None
+    assert ev_ebitda.applies_to(BusinessModelClass.BANK) is False
+    assert ev_ebitda.applies_to(BusinessModelClass.INSURANCE) is False
