@@ -40,6 +40,20 @@ landed and where:
 - `ThemeProvider` card is pinned `cardMode: single` / `primaryStory: DarkDocument` in config — its document-level theme flip must not ride the multi-cell grid.
 - Kit conventions confirmed during authoring: `NumText value={0}` → `.k-num-pos` (green), matching every Python call site; `Well` takes only tone/className/children (no HTML-attr passthrough); `thesisStatusTone` is importable from the package barrel; bare Input/Textarea/Select style classlessly; inputs render at intrinsic width (add `width:100%` for full-width fields).
 
+## design-sync 2026-07-19 re-sync (upload completed)
+
+- The #938 pass built+verified but could not upload (no DesignSync auth in that worktree
+  session); the project sat on the #932 state until this re-sync shipped the full delta
+  (all 16 components changed/added, bundle+styling+aux, no deletes). Upload auth DID work
+  from this worktree session — the earlier "can't upload from worktree" note was an auth
+  gap, not a structural limit.
+- `[GRID_OVERFLOW]` fired for Button (Variants) and Chip (FilterRow, ToneSweep) — wide
+  stories cropping in the product grid. Fixed with `cfg.overrides.{Button,Chip} =
+  {"cardMode": "column"}` + one targeted preview-rebuild. These overrides are permanent
+  config; don't remove them.
+- All 16 components graded good on the absolute rubric (44 cells). ThemeProvider dark/white
+  document flips, MultiSelect chips+popover, DateField kit glyph all render correctly.
+
 ## Known render warns
 - `[FONT_REMOTE] "JetBrains Mono", "Inter"` — deliberate (remote Google Fonts @import, same as the product).
 
