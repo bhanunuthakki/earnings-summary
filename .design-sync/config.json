@@ -1,0 +1,15 @@
+{
+  "projectId": "13baecb9-5399-491a-9282-9e0401cc1cfd",
+  "shape": "package",
+  "pkg": "@earnings-summary/design-system",
+  "globalName": "ESKit",
+  "buildCmd": "npm --prefix design-system run build",
+  "cssEntry": "dist/index.css",
+  "componentSrcMap": {
+    "Placeholder": null
+  },
+  "overrides": {
+    "ThemeProvider": { "cardMode": "single", "primaryStory": "DarkDocument" }
+  },
+  "readmeHeader": ".design-sync/conventions.md"
+}

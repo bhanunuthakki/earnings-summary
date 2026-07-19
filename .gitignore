@@ -59,3 +59,10 @@ Thumbs.db
 # design-system/ (React design-system prototyping sandbox, npm package)
 design-system/node_modules/
 design-system/dist/
+
+# design-sync (staged converter, build output, machine state)
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules

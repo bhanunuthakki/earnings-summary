@@ -4,8 +4,25 @@
  * kit — per docs/design_system_react_port_plan.md §2-3, §6 Phase 2 T2.0.
  */
 
+/* Brand fonts — the same Google Fonts stylesheet every Flask surface loads
+   (see e.g. command_center_shell.py's <link> tags). Remote on purpose: the
+   product never self-hosts these, so neither does the kit. */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600&display=swap");
+
 @import "./tokens/tokens.css";
 @import "./styles/controls.css";
+
+/* Base typography the Python kit leaves to each page's own CSS (every Flask
+   surface sets `body { font-family: var(--sans) }` locally — see e.g.
+   command_center_shell.py). A standalone package must carry it itself or
+   every consumer renders in the browser-default serif. :where() keeps
+   specificity at zero so any host rule wins. */
+:where(body) {
+  font-family: var(--sans);
+  font-size: var(--fs-body);
+  color: var(--fg);
+  background: var(--bg);
+}
 
 .ds-placeholder {
   color: inherit;
