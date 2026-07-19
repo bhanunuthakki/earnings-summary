@@ -1,13 +1,18 @@
 /**
  * @earnings-summary/design-system — public barrel export.
  *
- * Phase 0 stub: proves the build pipeline (esbuild bundle + tsc declaration
- * emit + CSS bundle) end-to-end with one trivial component. Real kit
- * components (Button, Pill, Chip, ...) land in later phases per
- * docs/design_system_react_port_plan.md.
+ * Phase 0 proved the build pipeline (esbuild bundle + tsc declaration emit +
+ * CSS bundle) end-to-end with a trivial placeholder. Phase 1 added the
+ * generated design tokens; Phase 2 (this export) adds the kit-core React
+ * components ported from src/ui/controls.py. See
+ * docs/design_system_react_port_plan.md for the full rollout.
  */
 import "./index.css";
 import * as React from "react";
+
+export * from "./tokens";
+export * from "./components";
+export { ThemeProvider, useTheme, type ThemeProviderProps } from "./theme/ThemeProvider";
 
 export interface PlaceholderProps {
   /** Text rendered inside the placeholder block. Defaults to a stub label. */

@@ -1,11 +1,11 @@
 /*
- * Phase 0 stub stylesheet.
- *
- * Later phases will replace this with `@import`s of the generated token
- * layer (`tokens/tokens.css`) and the ported control kit (`styles/controls.css`)
- * per docs/design_system_react_port_plan.md §2-3. For now this proves the
- * esbuild CSS bundling pipeline end-to-end with one harmless rule.
+ * Public stylesheet entry point. Tokens first (controls.css consumes the
+ * var(--*) custom properties tokens.css defines), then the ported control
+ * kit — per docs/design_system_react_port_plan.md §2-3, §6 Phase 2 T2.0.
  */
+
+@import "./tokens/tokens.css";
+@import "./styles/controls.css";
 
 .ds-placeholder {
   color: inherit;
