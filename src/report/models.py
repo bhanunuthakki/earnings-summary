@@ -496,13 +496,18 @@ class CellSource(BaseModel):
     # swapped to the override's so the chip honestly describes the filing the
     # displayed number came from. None for non-overridden cells.
     override: str | None = None
-    # financial_facts.id of the winning row (loaders already select it as
-    # ``fact_id``) — lets the chip build a `/api/peek/provenance/
-    # financial_facts:<id>` click-through for locator kinds that need the
-    # fact row itself, not just its source document (fmp_json_table,
-    # vendor_field — docs/design/provenance_clickthrough.md section 6.1).
+    # Row id of the winning fact (loaders already select it as ``fact_id``)
+    # — lets the chip build a `/api/peek/provenance/<fact_table>:<id>`
+    # click-through for locator kinds that need the fact row itself, not
+    # just its source document (fmp_json_table, vendor_field, pdf_slide —
+    # docs/design/provenance_clickthrough.md section 6.1).
     # None on legacy loader paths that don't select it yet.
     fact_id: int | None = None
+    # Which table ``fact_id`` indexes — the first segment of the peek
+    # dispatcher's ``<table>:<id>`` fact_ref. Defaults to financial_facts
+    # (the original P4.3 chip source); KPI-sourced chips set "kpi_facts"
+    # (provenance Phase B, where IR-deck pdf_slide locators live).
+    fact_table: str = "financial_facts"
 
 
 class QuarterlyLineItem(BaseModel):

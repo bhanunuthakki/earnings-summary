@@ -276,6 +276,39 @@ def test_source_chip_links_viewer_with_section_query() -> None:
     assert 'href="/source/31?section=item7_management_discussion"' in html_out
 
 
+def test_source_chip_pdf_slide_gets_peek_hook_and_hint_label() -> None:
+    """Phase B (provenance_clickthrough.md section 6.1): a pdf_slide-located
+    fact chips with the human page hint appended after the tier abbrev and
+    peeks the provenance dispatcher under its own fact table."""
+    src = CellSource(
+        source="fmp_normalized",
+        doc_type="ir_presentation",
+        doc_id=7,
+        fact_id=88213,
+        fact_table="kpi_facts",
+        locator='{"pdf_page":14,"locator_version":2,"kind":"pdf_slide",'
+        '"verbatim_snippet":"Revenue was $1.2 billion"}',
+    )
+    html_out = _source_chip_html(src)
+    assert ">FMP · IR deck p.14</summary>" in html_out
+    assert 'href="/api/peek/provenance/kpi_facts:88213"' in html_out
+    assert 'data-peek-url="/api/peek/provenance/kpi_facts:88213"' in html_out
+
+
+def test_source_chip_v1_pdf_page_deep_links_viewer_page() -> None:
+    """A bare v1 pdf_page locator on a cell without a fact_id deep-links the
+    PDF viewer's ?page= (renderable with zero data change, section 5.2)."""
+    src = CellSource(
+        source="fmp_normalized",
+        doc_type="ir_supplement",
+        doc_id=7,
+        locator='{"pdf_page":3}',
+    )
+    html_out = _source_chip_html(src)
+    assert 'href="/source/7?page=3"' in html_out
+    assert ">FMP · IR suppl p.3</summary>" in html_out
+
+
 def test_source_chip_without_doc_id_keeps_source_url_only() -> None:
     src = CellSource(source="fmp_normalized", source_url="https://fmp.example/x")
     html_out = _source_chip_html(src)

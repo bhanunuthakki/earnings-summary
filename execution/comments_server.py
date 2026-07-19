@@ -314,6 +314,21 @@ def _payload_text(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def _parse_bbox_param(raw: str | None) -> tuple[float, float, float, float] | None:
+    """``?bbox=x0,y0,x1,y1`` (PDF page coords) → tuple, or None on any
+    malformed input — the highlight is enrichment, never a 400."""
+    if not raw:
+        return None
+    parts = raw.split(",")
+    if len(parts) != 4:
+        return None
+    try:
+        x0, y0, x1, y1 = (float(p) for p in parts)
+    except ValueError:
+        return None
+    return (x0, y0, x1, y1)
+
+
 def _record_dismiss_pass(
     *,
     ticker: str,
@@ -3149,6 +3164,7 @@ def create_app(
             load_document,
             render_fallback_page,
             render_form10k_page,
+            render_pdf_page_view,
             render_statement_json_page,
             render_transcript_page,
         )
@@ -3169,6 +3185,18 @@ def create_app(
                 column_header=request.args.get("column_header"),
                 fragment=fragment,
             )
+        if html is None:
+            # PDF page-image view (pdf_slide locators, provenance Phase B):
+            # ?page= picks the page (default 1); ?bbox=x0,y0,x1,y1 (page
+            # coords) draws the highlight rectangle over the cited value.
+            html = render_pdf_page_view(
+                repo_root,
+                db_path,
+                doc_id,
+                request.args.get("page", type=int),
+                bbox=_parse_bbox_param(request.args.get("bbox")),
+                fragment=fragment,
+            )
         if html is not None:
             return Response(html, mimetype="text/html")
         doc = load_document(db_path, doc_id)
@@ -3182,6 +3210,27 @@ def create_app(
         return Response(
             render_fallback_page(db_path, doc_id, fragment=fragment), mimetype="text/html"
         )
+
+    @app.route("/source/<int:doc_id>/page/<int:page>.png", methods=["GET"])
+    def source_pdf_page_image(doc_id: int, page: int):
+        """Rendered page image behind the PDF viewer / pdf_slide peek
+        (provenance Phase B). Rasterized lazily via pipeline.pdf_render and
+        cached content-addressed (documents.sha256 + page + dpi) under
+        .tmp/pdf_pages/, so repeat requests are a filesystem check. 404 when
+        the doc isn't a renderable PDF or the page is out of range."""
+        from pipeline.pdf_render import render_page_image
+        from pipeline.source_viewers import load_document
+
+        doc = load_document(db_path, doc_id)
+        if doc is None or not doc.file_path.lower().endswith(".pdf") or not doc.sha256:
+            abort(404)
+        pdf_path = Path(doc.file_path)
+        if not pdf_path.is_absolute():
+            pdf_path = repo_root / pdf_path
+        png = render_page_image(repo_root, pdf_path=pdf_path, sha256=doc.sha256, page=page)
+        if png is None:
+            abort(404)
+        return send_file(png, mimetype="image/png")
 
     # ----- PEEK FRAGMENTS (UX9 quick-look popover) -----
     # Small head/foot-less payloads for the shell's peek primitive: review an

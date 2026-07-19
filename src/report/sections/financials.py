@@ -368,6 +368,7 @@ def _kpi_cell_sources_for(
         rows = conn.execute(
             f"""
             SELECT kf.period_end, kf.locator, kf.confidence,
+                   kf.id AS fact_id,
                    kf.source_doc_id, kf.value,
                    {extracted_by_select},
                    {computed_from_select},
@@ -412,6 +413,7 @@ def _kpi_cell_sources_for(
                 value=fact_value,
                 displayed_tier=tier,
             )
+        raw_fact_id = r["fact_id"]
         out[period_iso] = CellSource(
             source=tier,
             fetched_at=str(r["fetched_at"]) if r["fetched_at"] is not None else None,
@@ -423,6 +425,8 @@ def _kpi_cell_sources_for(
             filing_date=str(r["filing_date"]) if r["filing_date"] is not None else None,
             locator=str(r["locator"]) if r["locator"] is not None else None,
             doc_id=int(raw_doc_id) if raw_doc_id is not None else None,
+            fact_id=int(raw_fact_id) if raw_fact_id is not None else None,
+            fact_table="kpi_facts",
             confidence=float(raw_conf) if raw_conf is not None else None,
             extracted_by=str(r["extracted_by"]) if r["extracted_by"] is not None else None,
             computed_from=str(r["computed_from"]) if r["computed_from"] is not None else None,

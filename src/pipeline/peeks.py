@@ -64,6 +64,7 @@ from pipeline.source_viewers import (
     _STATEMENT_JSON_DOC_TYPES,  # pyright: ignore[reportPrivateUsage]
     load_document,
     render_form10k_page,
+    render_pdf_page_view,
     render_statement_json_page,
     render_transcript_page,
 )
@@ -1488,6 +1489,28 @@ def _dispatch_fact_provenance_peek(db_path: Path, repo_root: Path, row: _FactRow
 
     if kind == LocatorKind.FMP_JSON_TABLE and locator is not None and doc is not None:
         html = _render_fmp_json_table_peek(repo_root, db_path, doc, locator)
+        if html is not None:
+            return html
+    if (
+        kind == LocatorKind.PDF_SLIDE
+        and locator is not None
+        and locator.pdf_page is not None
+        and doc is not None
+    ):
+        # Phase B (§2.3): the page image with the bbox highlighted when the
+        # locator carries one, plus the verbatim snippet callout. Covers v1
+        # bare-pdf_page rows too (effective_kind infers PDF_SLIDE) — those
+        # became renderable the moment this capability shipped, no data
+        # change needed (§5.2).
+        html = render_pdf_page_view(
+            repo_root,
+            db_path,
+            doc.id,
+            locator.pdf_page,
+            bbox=locator.pdf_bbox,
+            snippet=locator.verbatim_snippet,
+            fragment=True,
+        )
         if html is not None:
             return html
     if kind == LocatorKind.TRANSCRIPT_SPAN and doc is not None:
