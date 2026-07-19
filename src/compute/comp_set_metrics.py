@@ -1,7 +1,17 @@
 """Bottoms-up comparable-set aggregate metrics
-(docs/design/comparable_sets_bottoms_up.md §5). Phase 1: `scope_type=
-'comparable_set'` only — no `'industry'`/`'sector'`/`'fmp_snapshot'` scope
-rows (Phase 2, §8).
+(docs/design/comparable_sets_bottoms_up.md §5).
+
+Phase 1 shipped `scope_type='comparable_set'` rows; Phase 2 reuses the same
+`compute_comparable_set_metrics` for the pool-wide `'industry'`/`'sector'`
+slice rows (§6 — callers pass `comparable_sets.pool_scope_slices` output) and
+adds the `'fmp_snapshot'` reference rows in `compute.comp_set_drift`.
+
+Provenance (Phase 2): every computed MetricRow carries a `derived`-kind
+FactLocator (construction formula + member coverage in `display`; the exact
+membership stays queryable in comparable_set_members) and every persisted row
+serializes it into comp_set_metrics_daily.locator (alembic 0172) — the
+per-#911 locator rule applied to this table; FMP snapshot rows get
+`vendor_field` locators in `comp_set_drift`.
 
 Split out from ``compute.comparable_sets`` (which owns set *resolution* —
 who's in the set) because this module owns set *measurement* — what the
@@ -67,6 +77,8 @@ from pathlib import Path
 from typing import cast
 
 from compute.comparable_sets import ComparableSetMember, MetricClass
+from models.facts import DerivedRef, FactLocator
+from pipeline.locators import derived_locator
 
 # ---------------------------------------------------------------------------
 # Per-member raw inputs
@@ -106,6 +118,11 @@ class MetricRow:
     n_valid: int
     coverage_pct: float
     method_flags: dict[str, object]
+    # Provenance (Phase 2, alembic 0172): a `derived`-kind FactLocator for
+    # computed rows, `vendor_field` for FMP snapshot rows. Attached by
+    # compute_comparable_set_metrics / comp_set_drift; serialized by
+    # upsert_metric_rows.
+    locator: FactLocator | None = None
 
 
 def _load_series(repo_root: Path, ticker: str, suffix: str) -> list[dict[str, object]]:
@@ -361,6 +378,44 @@ def _fcf_yield_row(snapshots: list[MemberSnapshot], n_members: int) -> MetricRow
     )
 
 
+# Human-legible construction formula per (metric, stat_type) — the `display`
+# of the derived locator every computed row carries. Kept next to the code
+# that implements each construction so they can't drift silently.
+_METRIC_CONSTRUCTION: dict[tuple[str, str], str] = {
+    ("pe_ttm", "median"): "median of member market_cap / TTM net income (4 reported quarters)",
+    ("pe_ttm", "aggregate"): "sum(member market_cap) / sum(member TTM net income)",
+    ("ev_ebitda_ttm", "median"): "median of member enterprise_value / TTM EBITDA",
+    ("ev_ebitda_ttm", "aggregate"): "sum(member enterprise_value) / sum(member TTM EBITDA)",
+    ("p_b", "median"): "median of member market_cap / totalStockholdersEquity",
+    ("p_b", "aggregate"): "sum(member market_cap) / sum(member totalStockholdersEquity)",
+    ("p_tbv", "median"): "median of member market_cap / (equity - goodwill - intangibles)",
+    ("p_tbv", "aggregate"): "sum(member market_cap) / sum(member tangible book)",
+    ("rev_yoy", "median"): "median of member (rev_t - rev_t-4q) / rev_t-4q",
+    ("fcf_yield_ttm", "median"): "median of member 4-quarter freeCashFlowYield sums",
+}
+
+
+def _derived_locator_for(row: MetricRow) -> FactLocator:
+    """The `derived`-kind locator for one computed row (per-#911 rule):
+    construction formula + coverage in `display`; the row's method_flags keys
+    as the locator's method_flags. Per-member DerivedInputRefs are
+    deliberately omitted — membership is already first-class queryable in
+    comparable_set_members, and duplicating up-to-dozens of refs into every
+    daily row would bloat the table for no render gain."""
+    construction = _METRIC_CONSTRUCTION.get(
+        (row.metric, row.stat_type), f"{row.stat_type} {row.metric}"
+    )
+    return derived_locator(
+        derived=DerivedRef(
+            display=(
+                f"{construction} over {row.n_valid}/{row.n_members} members "
+                "(bottoms-up from per-member FMP cache)"
+            ),
+            method_flags=sorted(str(k) for k in row.method_flags),
+        )
+    )
+
+
 def compute_comparable_set_metrics(
     repo_root: Path,
     members: list[ComparableSetMember],
@@ -388,6 +443,8 @@ def compute_comparable_set_metrics(
         rows.extend(_book_multiple_rows("p_tbv", "tangible_book", snapshots, n_members))
     rows.append(_rev_yoy_row(snapshots, n_members))
     rows.append(_fcf_yield_row(snapshots, n_members))
+    for row in rows:
+        row.locator = _derived_locator_for(row)
     return rows
 
 
@@ -413,12 +470,14 @@ def upsert_metric_rows(
         conn.execute(
             "INSERT INTO comp_set_metrics_daily "
             "(scope_type, scope_key, as_of_date, metric, stat_type, value, "
-            " n_members, n_valid, coverage_pct, method_version, method_flags, computed_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            " n_members, n_valid, coverage_pct, method_version, method_flags, computed_at, "
+            " locator) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(scope_type, scope_key, as_of_date, metric, stat_type, method_version) "
             "DO UPDATE SET value=excluded.value, n_members=excluded.n_members, "
             "n_valid=excluded.n_valid, coverage_pct=excluded.coverage_pct, "
-            "method_flags=excluded.method_flags, computed_at=excluded.computed_at",
+            "method_flags=excluded.method_flags, computed_at=excluded.computed_at, "
+            "locator=excluded.locator",
             (
                 scope_type,
                 scope_key,
@@ -432,6 +491,7 @@ def upsert_metric_rows(
                 method_version,
                 json.dumps(row.method_flags),
                 now_iso,
+                row.locator.to_json() if row.locator is not None else None,
             ),
         )
         n += 1
