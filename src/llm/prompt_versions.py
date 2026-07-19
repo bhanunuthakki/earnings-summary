@@ -192,8 +192,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "theme_synthesis": "v1",
     "theme_seed_cluster": "v1",
     # The Worldview distiller (P2). Bump when the Tenet-distillation prompt is
-    # materially rewritten.
-    "tenet_distill": "v1",
+    # materially rewritten. v2 (2026-07-19): identity-level bar, conditional
+    # phrasing over flat contradictory rules, standing Tenets ride in and
+    # overlap must revise (reuse scope_key) instead of stacking, max 3.
+    "tenet_distill": "v2",
     # The Ledger Phase-1 wondering classifier (research-loop gate). Bump when the
     # detect prompt is materially rewritten, then re-run the golden set.
     "wondering_detect": "v1",

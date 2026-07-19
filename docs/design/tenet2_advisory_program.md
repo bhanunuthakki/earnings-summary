@@ -147,9 +147,16 @@ key + typed value + narrative + provenance + `affirmed_at` + review-horizon):
 
 - Ambient learning always-on; **assertion** is affirmation-gated (§7.1). Capacity
   imports are owner-initiated snapshots, never silent crons.
-- Review horizons per category (capacity: quarterly or on life event; appetite: on
-  pledge >$10k or drawdown >15%; behavioral: after each grading batch). The **monthly
-  red-team** gains one standing lens: "is the profile stale or contradicted by observed
+- **Owner-authored sources are pre-affirmed (owner ruling 2026-07-19).** The §7.1
+  gate exists for *inferences about the owner* — wealthplan's plan file and the
+  tracker's CIO_CONTEXT are values the owner typed and vetted at the source, so the
+  importer lands them `affirmed` with **no review horizon**; freshness comes from
+  re-running the import (a changed source value supersedes as a fresh affirmed row),
+  not from quarterly "still true?" walks. Ratify-in-the-Ledger applies only to
+  machine-**derived** facts (e.g. the `--seed-appetite` blend seed).
+- Review horizons for derived/owner-typed categories (appetite: on pledge >$10k or
+  drawdown >15%; behavioral: after each grading batch). The **monthly red-team**
+  gains one standing lens: "is the profile stale or contradicted by observed
   behavior?" — surfacing drift as a packet item, not auto-editing.
 - The weekly packet is the affirmation surface: expiring facts appear as one-tap
   `[Still true / Update / Drop]` items. No new UI.
@@ -361,6 +368,12 @@ Two §8 phrasings in the original draft were too broad and are corrected:
   is treat an *inference about the owner* as true without affirmation: derived facts
   land as `proposed`, and only owner-affirmed facts condition advice or get quoted back
   ("you said X"). Learning is always-on; asserting requires a tap.
+- **Refinement (owner ruling 2026-07-19): the gate is scoped to inferences, not to
+  owner-authored data.** Facts snapshotted verbatim from files the owner writes and
+  maintains (wealthplan's plan, the tracker's CIO_CONTEXT) were already asserted by
+  the owner at the source — "if I entered it there, I looked at it; if I update it
+  there, I looked at it too." The importer lands those `affirmed` with no review
+  horizon; the packet-walk ratification applies only to machine-derived facts.
 
 ---
 

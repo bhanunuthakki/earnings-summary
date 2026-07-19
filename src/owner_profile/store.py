@@ -7,12 +7,17 @@ never destroys history — the prior latest row for the same
 ``superseded_at``/``superseded_by_id`` stamped, and the partial unique index
 guarantees exactly one authoritative row per fact.
 
-Gated assertion (§7.1): ``append_fact`` always lands the new row at whatever
-``status`` the caller passes — the CALLER decides ``'proposed'`` (imports,
-derived facts) vs ``'affirmed'`` (the owner typed it directly) — but nothing
-outside this module flips a row to ``'affirmed'`` except :func:`affirm_fact`,
-which requires an explicit call (the packet-walk approve action). There is no
-code path that auto-promotes a proposed fact.
+Gated assertion (§7.1, refined by owner ruling 2026-07-19): ``append_fact``
+always lands the new row at whatever ``status`` the caller passes — the CALLER
+decides. The policy line: ``'affirmed'`` is for facts the owner authored
+(typed directly here, OR entered in an owner-authored source file the importer
+snapshots — wealthplan's plan, the tracker's CIO_CONTEXT; the owner already
+vetted those values at the source, so re-ratifying them is manufactured work);
+``'proposed'`` is for machine-derived *inferences about the owner*, which §7.1
+still gates. Nothing outside this module flips an existing row to
+``'affirmed'`` except :func:`affirm_fact`, which requires an explicit call
+(the packet-walk approve action). There is no code path that auto-promotes a
+proposed fact.
 
 Idempotent imports: ``append_fact`` compares the new value against the current
 latest row for the same key (by parsed-dict equality, not string equality —

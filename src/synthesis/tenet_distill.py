@@ -26,8 +26,8 @@ from pathlib import Path
 from typing import cast
 
 from identity import DEFAULT_USER_ID
-from synthesis.insights import list_insights
-from synthesis.tenets import current_tenet_for_scope, record_tenet
+from synthesis.insights import InsightRow, list_insights
+from synthesis.tenets import current_tenet_for_scope, list_tenets, record_tenet
 from user_state.notes import AnalystNoteRow, list_notes
 
 # A distil call: musings -> [{"tenet","scope_key","citations"}, ...] | None.
@@ -62,19 +62,49 @@ def candidate_musings(
     return out
 
 
-def _build_prompt(musings: Sequence[AnalystNoteRow]) -> str:
+def _build_prompt(musings: Sequence[AnalystNoteRow], existing: Sequence[InsightRow]) -> str:
+    """The v2 distill prompt (owner pushback 2026-07-19: the v1 output read as
+    a pile of situational lessons, several in unflagged conflict). Three bars
+    v1 lacked: (1) IDENTITY-LEVEL — a Tenet is who the investor is, not a note
+    from one episode; (2) CONDITIONAL where the real tension lives — "default
+    X; when <condition>, Y" instead of two flat contradictory commands; (3)
+    REVISE, don't stack — the standing Worldview rides in, and an overlapping
+    or conflicting belief must reuse that Tenet's scope_key (a revision that
+    reconciles both) rather than land as a parallel sibling the same-slug
+    tension check can never see."""
     lines = [f"- [{m.id}] ({m.created_at:%Y-%m-%d}) {m.body}" for m in musings]
+    standing = (
+        "\n".join(f"- [{t.scope_key}] {' '.join(t.body_md.split())}" for t in existing)
+        or "(none yet)"
+    )
     return (
         "You are distilling an investor's OWN flagged musings into candidate "
-        "TENETS — durable beliefs about HOW they invest (their method, discipline, "
-        "biases) that generalize across holdings, NOT calls on a single name. Ground "
-        "each Tenet ONLY in the musings below and cite the musing id(s) it rests on. "
-        "Propose a Tenet only when the musings genuinely support a cross-situation "
-        "principle; if they do not, return an empty list.\n\n"
+        "TENETS — durable, identity-level beliefs about HOW they invest (their "
+        "method, discipline, temperament, known biases) that generalize across "
+        "holdings and market regimes. NOT calls on a single name, NOT a lesson "
+        "from one episode restated as a rule.\n\n"
+        "The quality bar for a Tenet:\n"
+        "- Durable: still true in five years, e.g. 'rational bull: I want to own "
+        "long-term prosperity driven by technology'.\n"
+        "- Nuanced, not absolute: when the musings pull in two directions (e.g. "
+        "'let winners run' vs 'trim concentrated winners'), do NOT emit both as "
+        "flat rules — emit ONE conditional belief that names when each side "
+        "applies ('default X; when <condition>, Y').\n"
+        "- Few: propose at most 3, and only when the musings genuinely support a "
+        "cross-situation principle. An empty list is a good answer.\n\n"
+        "STANDING TENETS (the investor's current Worldview):\n" + standing + "\n\n"
+        "If a candidate overlaps or conflicts with a standing Tenet, you MUST "
+        "reuse that Tenet's exact scope_key and write the body as a REVISION "
+        "that reconciles the standing belief with the new evidence — never "
+        "propose a parallel belief on a fresh scope_key that quietly contradicts "
+        "a standing one.\n\n"
+        "Ground each Tenet ONLY in the musings below and cite the musing id(s) "
+        "it rests on.\n\n"
         "Musings (id, date, text):\n" + "\n".join(lines) + "\n\n"
         "Return JSON ONLY: a list of objects "
-        '{"tenet": "<one sentence, the belief in the investor\'s voice>", '
-        '"scope_key": "<2-4 word kebab-case topic, e.g. exit-discipline>", '
+        '{"tenet": "<one or two sentences, the belief in the investor\'s voice>", '
+        '"scope_key": "<2-4 word kebab-case topic, e.g. exit-discipline — or the '
+        'EXACT standing scope_key when revising>", '
         '"citations": [<the musing ids this rests on>]}'
     )
 
@@ -92,12 +122,14 @@ def _coerce_ids(raw: object) -> list[int]:
     return out
 
 
-def _default_call(musings: Sequence[AnalystNoteRow]) -> list[ProposedTenet] | None:
+def _default_call(
+    musings: Sequence[AnalystNoteRow], existing: Sequence[InsightRow]
+) -> list[ProposedTenet] | None:
     from llm.structured import StructuredParseError, call_llm_structured  # lazy: CI needs no CLI
 
     try:
         obj = call_llm_structured(
-            _build_prompt(musings),
+            _build_prompt(musings, existing),
             purpose="tenet_distill",
             scope="worldview",
             expect="array",
@@ -124,7 +156,19 @@ def run_tenet_distill(
     if not musings:
         return counts  # deterministic $0 short-circuit — no LLM
 
-    distil = call or _default_call
+    distil: DistillCall
+    if call is not None:
+        distil = call
+    else:
+        # The standing Worldview rides into the prompt so the model revises
+        # (same scope_key) instead of stacking a quiet contradiction.
+        current = list_tenets(status="current", db_path=db_path)
+
+        def _distil_with_worldview(m: Sequence[AnalystNoteRow]) -> list[ProposedTenet] | None:
+            return _default_call(m, current)
+
+        distil = _distil_with_worldview
+
     try:
         proposals = distil(musings)
     except Exception:
