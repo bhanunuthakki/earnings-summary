@@ -3,9 +3,18 @@
 decision 1).
 
 Snapshots DERIVED SUMMARIES ONLY from two sibling repos' private planning
-files into ``owner_profile_facts`` as ``status='proposed'`` rows the owner
-ratifies via the Ledger packet walk (gated assertion, §7.1) — this script
-NEVER writes ``'affirmed'``.
+files into ``owner_profile_facts``.
+
+Status posture (owner ruling 2026-07-19, refining §7.1): the gated assertion
+protects against unratified *inferences about the owner* — but wealthplan and
+CIO_CONTEXT are OWNER-AUTHORED sources. The owner typed those values at the
+source and vetted them there; re-ratifying them in the Ledger walk is
+manufactured work. So facts from ``wealthplan_import`` / ``cio_context_import``
+land ``status='affirmed'`` directly, with NO review horizon — freshness comes
+from re-running this importer (a changed source value supersedes with a fresh
+affirmed row), not from quarterly "still true?" nags. Machine-DERIVED facts
+(``--seed-appetite``) remain ``status='proposed'`` and go through the packet
+walk: those are inferences, and §7.1 still gates them.
 
 Sources (read-only; this repo's ``data/portfolio.db`` is the only thing ever
 written):
@@ -90,7 +99,6 @@ _DEFAULT_WEALTHPLAN_ROOT = Path(r"C:\Users\Bhanu\.gemini\antigravity\scratch\wea
 _DEFAULT_CIO_CONTEXT_PATH = Path(
     r"C:\Users\Bhanu\.gemini\antigravity\scratch\portfolio-tracker\CIO_CONTEXT.local.md"
 )
-_CAPACITY_REVIEW_HORIZON_DAYS = 90  # §3.3: capacity facts reviewed ~quarterly
 
 
 def _log(event: str, **kwargs: object) -> None:
@@ -109,7 +117,10 @@ class StagedFact:
     narrative: str
     provenance: str
     source_detail: str | None
-    review_horizon_days: int | None = _CAPACITY_REVIEW_HORIZON_DAYS
+    # Owner-authored sources (wealthplan, CIO_CONTEXT) land affirmed with no
+    # review horizon; only machine-derived facts default to the proposed gate.
+    status: str = "affirmed"
+    review_horizon_days: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +334,7 @@ def stage_wealthplan_facts(
     # -- career-change life events, from non-generic Promotion labels ----
     # A Promotion whose label is empty/"Promotion" is just a routine comp
     # step (excluded); a distinctive label ("Quit Meta") is a career life
-    # event worth the owner ratifying — its comp fields are never read here.
+    # event worth capturing — its comp fields are never read here.
     for person_key, person in (
         ("person_a", household.person_a),
         ("person_b", household.person_b),
@@ -466,6 +477,8 @@ def stage_appetite_seed_facts() -> list[StagedFact]:
             narrative=narrative,
             provenance="derived",
             source_detail="allocation.model.BLEND_WEIGHTS",
+            # Machine-derived = an inference, so the §7.1 gate still applies.
+            status="proposed",
             # Appetite facts review on a POLICY event (pledge >$10k, drawdown
             # >15%), not a fixed day-count cadence — §3.3 of the strategy doc.
             review_horizon_days=None,
@@ -499,7 +512,7 @@ def _apply_facts(db_path: Path, facts: list[StagedFact]) -> dict[str, int]:
                 value=fact.value,
                 narrative=fact.narrative,
                 provenance=fact.provenance,
-                status="proposed",
+                status=fact.status,
                 review_horizon_days=fact.review_horizon_days,
                 source_detail=fact.source_detail,
             )

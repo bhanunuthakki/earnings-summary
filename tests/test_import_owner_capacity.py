@@ -81,6 +81,10 @@ def test_stage_cio_context_facts_from_fixture(tmp_path: Path) -> None:
     assert (
         big_tech.source_detail == "portfolio-tracker/CIO_CONTEXT.local.md last_reviewed=2026-05-27"
     )
+    # Owner-authored source (ruling 2026-07-19): lands affirmed, no re-ratify
+    # walk, no quarterly "still true?" horizon — freshness comes from re-import.
+    assert all(f.status == "affirmed" for f in facts)
+    assert all(f.review_horizon_days is None for f in facts)
     ai_infra = next(f for f in facts if f.key == "human_capital.ai_infra")
     assert ai_infra.value == {"cap_pct": 25.0, "members": ["NVDA", "AVGO"]}
     # The "Coaching outputs" section text must never leak into a bucket body.
@@ -137,6 +141,9 @@ def test_stage_appetite_seed_facts_matches_blend_weights_constant() -> None:
     assert fact.provenance == "derived"
     assert "affirm or edit" in fact.narrative
     assert "current hardcoded house view" in fact.narrative
+    # Machine-DERIVED = an inference about the owner — the §7.1 proposed gate
+    # still applies (unlike owner-authored wealthplan/CIO imports).
+    assert fact.status == "proposed"
     # Appetite facts review on a policy EVENT, not a fixed day-count cadence.
     assert fact.review_horizon_days is None
 

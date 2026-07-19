@@ -160,3 +160,26 @@ def test_distill_handles_none_result(db_path: Path) -> None:
     _flagged(db_path, "a flagged thought")
     counts = run_tenet_distill(db_path, call=lambda musings: None)
     assert counts["proposed"] == 0
+
+
+def test_build_prompt_carries_standing_tenets_and_revision_rule(db_path: Path) -> None:
+    """The v2 prompt (owner pushback 2026-07-19): standing Tenets ride in with
+    their scope_keys, and the model is told to REVISE an overlapping belief
+    (reuse the scope_key) rather than stack a parallel contradiction — plus the
+    identity-level / conditional-phrasing / max-3 quality bars."""
+    from synthesis.tenet_distill import (
+        _build_prompt,  # pyright: ignore[reportPrivateUsage]
+        candidate_musings,
+    )
+
+    record_tenet(body_md="Let winning theses run.", scope_key="exit-discipline", db_path=db_path)
+    _flagged(db_path, "maybe I should trim winners after a double")
+    musings = candidate_musings(db_path)
+    prompt = _build_prompt(musings, list_tenets(status="current", db_path=db_path))
+    assert "STANDING TENETS" in prompt
+    assert "tenet:exit-discipline" in prompt
+    assert "Let winning theses run." in prompt
+    assert "REVISION" in prompt
+    assert "at most 3" in prompt
+    assert "identity-level" in prompt
+    assert "default X; when <condition>, Y" in prompt
