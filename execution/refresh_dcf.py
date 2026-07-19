@@ -502,6 +502,38 @@ def _scenario_prior_snapshot(
     }
 
 
+def _reported_currency(repo_root: Path, ticker: str) -> str | None:
+    """The name's FMP reported currency, from the same cache the builder reads.
+
+    None when the cache file is missing/unreadable — the FX guard then stays
+    quiet (a USD reporter with no cache must not fail its refresh)."""
+    p = repo_root / "data" / "historical" / "fmp" / f"{ticker}_income_statement_quarterly.json"
+    try:
+        rows = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+        ccy = rows[0].get("reportedCurrency")
+        return str(ccy).upper() if isinstance(ccy, str) and ccy.strip() else None
+    return None
+
+
+def _unconverted_fx_reason(repo_root: Path, ticker: str, fx_to_usd: float) -> str | None:
+    """Belt-and-braces FX guard at the persist seam (the TSM defect class).
+
+    The workbook's ×FX multiplier is the FX source of truth; a non-USD reporter
+    whose workbook carries ×1.0 was built before the builder's unknown-currency
+    fail-loud (or hand-edited wrong) and would persist a local-currency fair
+    value stamped USD. Returns the failure reason, or None when consistent."""
+    ccy = _reported_currency(repo_root, ticker)
+    if ccy not in (None, "USD") and fx_to_usd == 1.0:
+        return (
+            f"unconverted workbook: reported currency {ccy} but fx_to_usd=1.0 — "
+            "rebuild the workbook (builder now fails loud on unknown currencies)"
+        )
+    return None
+
+
 def _redesign_snapshot(
     rv: redesign_mod.RedesignValuation,
     workbook_path: str,
@@ -510,6 +542,7 @@ def _redesign_snapshot(
     inp: redesign_mod.RedesignInputs | None = None,
     scenario_prior_meta: dict[str, object] | None = None,
     holdings: Mapping[str, object] | None = None,
+    reporting_currency: str | None = None,
 ) -> str:
     """Serialize the redesigned-DCF inputs/outputs into the assumption snapshot.
 
@@ -526,6 +559,7 @@ def _redesign_snapshot(
     payload: dict[str, object] = {
         "workbook_path": workbook_path,
         "format": "redesign",
+        "reporting_currency": reporting_currency,
         "wacc": rv.wacc,
         "terminal_method": rv.terminal_method,
         "terminal_basis": rv.terminal_basis,
@@ -818,6 +852,11 @@ def _refresh_redesign(
     mos_bar = holdings.get("mos_bar") if holdings else None
     mos_bar_f = float(mos_bar) if isinstance(mos_bar, (int, float)) else None
 
+    fx_reason = _unconverted_fx_reason(repo_root, ticker, rv.fx_to_usd)
+    if fx_reason is not None:
+        sys.stderr.write(f"WARNING: {ticker}: {fx_reason}\n")
+        return {"ticker": ticker, "status": "failed", "reason": fx_reason}
+
     fair_value = rv.value_per_share_usd
     # over/under is undefined for a non-positive fair value (a forecast whose
     # assumptions imply negative FCF) — the central derivation returns None
@@ -840,6 +879,7 @@ def _refresh_redesign(
         assumption_snapshot_json=_redesign_snapshot(
             rv,
             str(dest),
+            reporting_currency=_reported_currency(repo_root, ticker),
             scenarios=scenarios,
             inp=inp,
             scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
@@ -967,6 +1007,12 @@ def apply_edits(
 
     prior_price, prior_price_at = _prior_live_price(db_path, ticker)
     live_price = prior_price if prior_price is not None else inp.current_price
+
+    fx_reason = _unconverted_fx_reason(repo_root, ticker, rv.fx_to_usd)
+    if fx_reason is not None:
+        sys.stderr.write(f"WARNING: {ticker}: {fx_reason}\n")
+        return {"ticker": ticker, "status": "failed", "reason": fx_reason}
+
     fair_value = rv.value_per_share_usd
     over_under = persist_mod.derive_over_under(live_price, fair_value)
 
@@ -985,6 +1031,7 @@ def apply_edits(
         assumption_snapshot_json=_redesign_snapshot(
             rv,
             str(dest),
+            reporting_currency=_reported_currency(repo_root, ticker),
             scenarios=scenarios,
             inp=inp,
             scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),

@@ -66,7 +66,9 @@ def _ctx_reverse_dcf(ticker: str | None, repo_root: Path) -> LensContext | None:
         return None
     ticker = ticker.upper()
     dcf = load_dcf(ticker, repo_root)
-    if not dcf:
+    # A sanity-flagged model's priced_in block is polluted by the same defect that
+    # flagged it — a reverse-DCF narration over it would be confidently wrong.
+    if not dcf or dcf.get("sanity_flag"):
         return None
     summaries = load_recent_summaries(ticker, repo_root, n=1)
     assumptions = json.dumps(

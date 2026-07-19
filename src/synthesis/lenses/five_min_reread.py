@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ._shared import (
+    DCF_FLAGGED_NOTE,
     Lens,
     LensContext,
     load_dcf,
@@ -76,7 +77,9 @@ def _ctx_five_min_reread(ticker: str | None, repo_root: Path) -> LensContext | N
         return None
 
     dcf_summary = "(no DCF run)"
-    if dcf:
+    if dcf and dcf.get("sanity_flag"):
+        dcf_summary = DCF_FLAGGED_NOTE
+    elif dcf:
         ou = float(dcf.get("over_under_pct") or 0) * 100 if dcf.get("over_under_pct") else 0.0
         npv = dcf.get("npv_per_share")
         live = dcf.get("live_price")

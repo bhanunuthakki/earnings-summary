@@ -77,6 +77,25 @@ def derive_over_under(live_price: float | None, npv_per_share: float) -> float |
     return valuation.over_under_pct(live_price, npv_per_share)
 
 
+# A fair value more than 60% away from the live price is more likely a broken model
+# (stale assumptions, unit/FX defect) than a real mispricing — the 2026-07-19 review
+# found 24 such rows feeding dashboards and LLM lenses unflagged. Past this limit the
+# row is stamped 'outlier' (migration 0182): surfaces badge it "unreviewed model",
+# lenses withhold the fair value. The row still persists — flagged, never dropped.
+SANITY_OVER_UNDER_LIMIT = 0.6
+
+
+def derive_sanity_flag(over_under_pct: float | None) -> str | None:
+    """'outlier' when |over_under| exceeds SANITY_OVER_UNDER_LIMIT, else None.
+
+    Derived at the same single write chokepoint as over_under_pct itself, so no
+    writer can persist an extreme valuation unflagged.
+    """
+    if over_under_pct is not None and abs(over_under_pct) > SANITY_OVER_UNDER_LIMIT:
+        return "outlier"
+    return None
+
+
 def _has_sync_columns(conn: sqlite3.Connection) -> bool:
     cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
     return "assumptions_sync_status" in cols and "assumptions_synced_at" in cols
@@ -85,6 +104,11 @@ def _has_sync_columns(conn: sqlite3.Connection) -> bool:
 def _has_versioning_columns(conn: sqlite3.Connection) -> bool:
     cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
     return "is_latest" in cols
+
+
+def _has_sanity_column(conn: sqlite3.Connection) -> bool:
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
+    return "sanity_flag" in cols
 
 
 def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
@@ -109,6 +133,9 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
         )
     sync_cols = ", assumptions_sync_status, assumptions_synced_at" if has_sync else ""
     sync_vals = ", :assumptions_sync_status, :assumptions_synced_at" if has_sync else ""
+    has_sanity = _has_sanity_column(conn)
+    sanity_cols = ", sanity_flag" if has_sanity else ""
+    sanity_vals = ", :sanity_flag" if has_sanity else ""
     params: dict[str, object] = {
         "ticker": row.ticker.upper(),
         "valuation_date": row.valuation_date.isoformat(),
@@ -126,6 +153,10 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
         "mos_bar_used": row.mos_bar_used,
         "assumption_snapshot_json": row.assumption_snapshot_json,
     }
+    if has_sanity:
+        params["sanity_flag"] = derive_sanity_flag(
+            derive_over_under(row.live_price, row.npv_per_share)
+        )
     if has_sync:
         params["assumptions_sync_status"] = row.assumptions_sync_status
         params["assumptions_synced_at"] = (
@@ -155,8 +186,8 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
             entity_params={"ticker": params["ticker"]},
         )
         cur = conn.execute(
-            f"INSERT INTO dcf_runs ({base_cols}, is_latest{sync_cols}) "
-            f"VALUES ({base_vals}, 1{sync_vals})",
+            f"INSERT INTO dcf_runs ({base_cols}, is_latest{sync_cols}{sanity_cols}) "
+            f"VALUES ({base_vals}, 1{sync_vals}{sanity_vals})",
             params,
         )
         mark_superseded_by(
@@ -164,8 +195,8 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
         )
     else:
         conn.execute(
-            f"INSERT OR REPLACE INTO dcf_runs ({base_cols}{sync_cols}) "
-            f"VALUES ({base_vals}{sync_vals})",
+            f"INSERT OR REPLACE INTO dcf_runs ({base_cols}{sync_cols}{sanity_cols}) "
+            f"VALUES ({base_vals}{sync_vals}{sanity_vals})",
             params,
         )
     conn.commit()

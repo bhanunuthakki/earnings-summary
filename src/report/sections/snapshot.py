@@ -181,6 +181,8 @@ def _valuation_snapshot(
     cols = {str(r[1]) for r in cursor.execute("PRAGMA table_info(dcf_runs)")}
     has_sync_cols = "assumptions_sync_status" in cols and "assumptions_synced_at" in cols
     sync_select = ", assumptions_sync_status, assumptions_synced_at" if has_sync_cols else ""
+    has_sanity_col = "sanity_flag" in cols
+    sanity_select = ", sanity_flag" if has_sanity_col else ""
     # ORDER BY matters: the versioned dcf_runs schema (migration 0137) keeps
     # superseded history rows per ticker, so a bare LIMIT 1 reads an ARBITRARY
     # (in practice the oldest) run — the card would render a stale valuation and
@@ -192,7 +194,7 @@ def _valuation_snapshot(
         SELECT valuation_date, wacc, terminal_growth, npv, npv_per_share,
                shares_outstanding, breakdown_json,
                live_price, live_price_at, over_under_pct, mos_bar_used,
-               assumption_snapshot_json{sync_select}
+               assumption_snapshot_json{sync_select}{sanity_select}
         FROM dcf_runs
         WHERE ticker = ?
         ORDER BY valuation_date DESC, id DESC
@@ -235,6 +237,9 @@ def _valuation_snapshot(
         else None
     )
     synced_at = _parse_iso_datetime(row["assumptions_synced_at"]) if has_sync_cols else None
+    sanity_flag = (
+        str(row["sanity_flag"]) if has_sanity_col and row["sanity_flag"] is not None else None
+    )
 
     return ValuationSnapshot(
         consolidated_npv_per_share=cons_npv_per_share,
@@ -261,6 +266,7 @@ def _valuation_snapshot(
         scenario_skew=skew,
         assumptions_sync_status=sync_status,
         assumptions_synced_at=synced_at,
+        sanity_flag=sanity_flag,
     )
 
 

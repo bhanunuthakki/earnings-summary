@@ -151,6 +151,7 @@ class CockpitRow:
     fair_value: float | None = None  # dcf_runs.npv_per_share
     dcf_price: float | None = None  # price the gap was computed against
     dcf_date: str | None = None  # dcf_runs.valuation_date
+    dcf_unreviewed: bool = False  # dcf_runs.sanity_flag set — model failed the trust gate
     peg_ratio: float | None = None
     # Events
     next_earnings: str | None = None  # ISO date
@@ -478,6 +479,7 @@ def build_cockpit_rows(
     alerts = _pending_alert_counts(conn)
     tier1_alerts = _pending_tier1_counts(conn)
     dcf = latest_dcf_runs(conn)
+    dcf_flagged = dcf_sanity_flags(conn)
     docs = _new_doc_counts(conn)
     evals = _latest_evaluations(conn)
     kpi_facts = _tier1_kpi_deltas(conn, portfolio_tickers, as_of=ref.date())
@@ -567,6 +569,7 @@ def build_cockpit_rows(
                     fair_value=fair_value,
                     dcf_price=dcf_price,
                     dcf_date=dcf_date,
+                    dcf_unreviewed=t in dcf_flagged,
                     peg_ratio=peg,
                     next_earnings=next_er.get(t) or next_earnings(repo_root, t, ref),
                     pending_alerts=alerts.get(t, 0),
@@ -690,9 +693,10 @@ def latest_dcf_runs(
     documented ratio, and the row's own two fields are convention-proof and
     currency-consistent with each other. Public: the allocation-decisions
     panel (P2.2) reads the same gap so the two surfaces can never disagree."""
+    sanity_sel = _dcf_sanity_select(conn)
     rows = _safe_rows(
         conn,
-        "SELECT ticker, valuation_date, npv_per_share, live_price "
+        f"SELECT ticker, valuation_date, npv_per_share, live_price, {sanity_sel} "
         "FROM dcf_runs ORDER BY ticker, created_at DESC, id DESC",
     )
     out: dict[str, tuple[float | None, float | None, float | None, str | None]] = {}
@@ -703,8 +707,40 @@ def latest_dcf_runs(
         fv = float(r["npv_per_share"]) if r["npv_per_share"] is not None else None
         px = float(r["live_price"]) if r["live_price"] is not None else None
         gap = (px / fv - 1.0) * 100.0 if fv is not None and fv > 0 and px is not None else None
+        # A sanity-flagged run (dcf_runs.sanity_flag, migration 0182) keeps its
+        # values visible but emits NO gap signal — a broken model must not rank
+        # names or drive trim/add framing anywhere this map is consumed.
+        if r["sanity_flag"]:
+            gap = None
         out[t] = (gap, fv, px, str(r["valuation_date"]) if r["valuation_date"] else None)
     return out
+
+
+def _dcf_sanity_select(conn: sqlite3.Connection) -> str:
+    """`sanity_flag` when dcf_runs carries the 0182 column, else a NULL alias —
+    so the same SELECT works against pre-migration data dirs."""
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
+    return "sanity_flag" if "sanity_flag" in cols else "NULL AS sanity_flag"
+
+
+def dcf_sanity_flags(conn: sqlite3.Connection) -> set[str]:
+    """Tickers whose LATEST consolidated dcf_runs row is sanity-flagged
+    ('outlier' past the trust limit) — the cockpit badges these rows."""
+    sanity_sel = _dcf_sanity_select(conn)
+    rows = _safe_rows(
+        conn,
+        f"SELECT ticker, {sanity_sel} FROM dcf_runs ORDER BY ticker, created_at DESC, id DESC",
+    )
+    seen: set[str] = set()
+    flagged: set[str] = set()
+    for r in rows:
+        t = str(r["ticker"])
+        if t in seen:
+            continue
+        seen.add(t)
+        if r["sanity_flag"]:
+            flagged.add(t)
+    return flagged
 
 
 def latest_dcf_scenarios(
@@ -1359,6 +1395,13 @@ def _price_cell(row: CockpitRow) -> str:
 
 
 def _fv_gap_cell(row: CockpitRow) -> str:
+    if row.dcf_unreviewed:
+        # The trust gate (dcf_runs.sanity_flag): say WHY there is no gap signal —
+        # a silent "—" would read as "no model" when the truth is "broken model".
+        return (
+            "<span class='k-num-neg' title='|over/under| exceeds the sanity limit — "
+            "review the model before trusting its fair value'>unreviewed</span>"
+        )
     if row.fv_gap_pct is None:
         return _muted()
     # over_under > 0 — price ABOVE fair value (rich); < 0 — below (cheap).

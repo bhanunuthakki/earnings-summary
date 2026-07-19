@@ -540,7 +540,7 @@ if ANALYST_SEGS.valid:
 # --- Opus per-name override (if the Opus assumption pass has run for this name) ---
 OPUS_BASIS, OPUS_METHOD = "EV/EBITDA", "Exit multiple"
 CURRENCY = (inc[0].get("reportedCurrency") if inc else None) or "USD"
-FX = {
+_FX_TO_USD = {
     "USD": 1.0,
     "DKK": 0.145,
     "EUR": 1.08,
@@ -552,7 +552,20 @@ FX = {
     "JPY": 0.0067,
     "CHF": 1.12,
     "SEK": 0.095,
-}.get(CURRENCY, 1.0)
+    "TWD": 0.031,
+}
+# An unknown reported currency must fail the build, not default to 1.0 — that
+# default is how TSM persisted a TWD fair value stamped USD ("97% undervalued")
+# into every downstream surface. Failing here keeps the workbook's ×FX formula
+# (the single FX source of truth read back by dcf.redesign._read_fx) honest.
+if CURRENCY not in _FX_TO_USD:
+    print(
+        f"FAIL\t{T}\tunknown reported currency {CURRENCY!r} — add its USD rate to "
+        "_FX_TO_USD in execution/build_redesigned_dcf.py before building this name",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+FX = _FX_TO_USD[CURRENCY]
 if _opus.get("dcf_applicable") is False:
     print(f"SKIP\t{T}\t{_opus.get('business_model')}\t(FCFF DCF not the right tool)")
     raise SystemExit(0)

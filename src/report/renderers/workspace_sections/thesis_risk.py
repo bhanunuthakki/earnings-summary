@@ -562,6 +562,7 @@ def _valuation_summary_panel(body: StringIO, snap: SnapshotSection) -> None:
         )
         + '<div class="val-stack">'
     )
+    _sanity_flag_row(body, v)
     # S6: when the dcf_runs snapshot carries Bull/Bear scenario values, the
     # single-point readout becomes a bear·base·bull range with upside at each;
     # runs predating scenarios (or non-FCFF archetypes) keep the legacy row.
@@ -626,6 +627,22 @@ def _val_row(
     if muted:
         cls += " muted"
     body.write(f'<div class="{cls}"><span>{_esc(label)}</span><strong>{_esc(value)}</strong></div>')
+
+
+def _sanity_flag_row(body: StringIO, v: ValuationSnapshot) -> None:
+    """The DCF trust gate (dcf_runs.sanity_flag, migration 0182), rendered LOUD
+    at the top of the valuation stack: the persisted fair value sits past the
+    sanity limit, so every number below it is suspect until the model is
+    reviewed. Quiet (no row) for an unflagged run."""
+    if not v.sanity_flag:
+        return
+    body.write(
+        '<div class="val-row"><span>Model status</span>'
+        '<strong class="neg" title="|over/under| exceeds the sanity limit — '
+        "more likely a broken model (stale assumptions, unit/FX defect) than a real "
+        'mispricing">UNREVIEWED MODEL — fair value flagged as outlier; '
+        "review assumptions before trusting this card</strong></div>"
+    )
 
 
 def _assumptions_sync_row(body: StringIO, v: ValuationSnapshot) -> None:
