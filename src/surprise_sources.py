@@ -17,10 +17,18 @@ Source chain (priority order, first hit wins per release_date):
                         historical revenue actual-vs-estimate. ~25 quarters of
                         EPS history. Free, unauthenticated, fragile but durable.
 
-Revenue-surprise coverage degrades to "FMP-only" when FMP is unavailable. A third
-source covering historical revenue surprise (Nasdaq earnings page, Zacks, etc.)
-is a follow-up — stockanalysis.com was probed and does NOT expose a historical
-surprise table.
+Revenue widening (estimates-widening phase): Yahoo never publishes HISTORICAL
+revenue estimates, but our own point-in-time archive does — every
+`execution/fetch_yf_estimates.py` run snapshots the forward revenue consensus
+to `data/historical/yfinance_snapshots/<date>/<T>_yf_estimates.json`. For a
+reported quarter, the LAST snapshot taken after the quarter ended but before
+the release carries that quarter's final 0q revenue consensus. The yfinance
+source can therefore enrich its EPS-only hits with revenue actual (Yahoo
+quarterly income statement) vs archived estimate — all fields still Yahoo-
+sourced (`source_name="yfinance"`), no cross-vendor blending. Quarters
+released before the archive started stay revenue-None: honest gap, never
+interpolated. (Third-party historical-surprise sources remain a dead end:
+stockanalysis.com was probed and does NOT expose a historical surprise table.)
 
 Consumed by `execution/backfill_earnings_surprises.py` which merges per-ticker
 hits into `data/surprise/<TICKER>_surprises.json` and registers them downstream.
@@ -29,12 +37,15 @@ hits into `data/surprise/<TICKER>_surprises.json` and registers them downstream.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+import re
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import cast
+
+from models.yf_payloads import YfEstimatesSnapshot
 
 # --- Hit & Source dataclasses ------------------------------------------------
 
@@ -189,13 +200,167 @@ def fmp_earnings_calendar_records(ticker: str, fmp_dir: Path) -> list[SurpriseHi
 
 # --- yfinance source --------------------------------------------------------
 
+_SNAP_DATE_RX = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+YF_ESTIMATES_SUFFIX = "_yf_estimates.json"
+# A quarter's release lands ~25-45 days after period end; 110 days is a
+# generous ceiling that still rejects matching a release to the WRONG quarter.
+_MAX_RELEASE_LAG_DAYS = 110
 
-def yfinance_earnings_dates_records(ticker: str) -> list[SurpriseHit]:
+
+def archived_yf_revenue_estimate(
+    ticker: str,
+    *,
+    quarter_end: date,
+    release_date: date,
+    snapshots_dir: Path,
+) -> tuple[Decimal, int | None, str] | None:
+    """The final pre-release 0q revenue consensus from our own point-in-time
+    yfinance archive: the LATEST snapshot dated strictly after ``quarter_end``
+    and strictly before ``release_date``.
+
+    That window is the only one where Yahoo's "current quarter" (0q) row
+    unambiguously refers to the quarter being reported on ``release_date``
+    (post-quarter, pre-release). Within-quarter snapshots are deliberately NOT
+    used — around the prior release the 0q mapping is ambiguous, and a wrong
+    quarter is worse than an honest None.
+
+    Returns ``(avg_estimate, num_analysts, snapshot_date)`` or None (no
+    snapshot in the window / no usable 0q row) — never interpolates.
+    """
+    if not snapshots_dir.exists():
+        return None
+    dates = sorted(
+        (d.name for d in snapshots_dir.iterdir() if d.is_dir() and _SNAP_DATE_RX.match(d.name)),
+        reverse=True,
+    )
+    q_end_s, release_s = quarter_end.isoformat(), release_date.isoformat()
+    for snap_date in dates:
+        if not (q_end_s < snap_date < release_s):
+            continue
+        path = snapshots_dir / snap_date / f"{ticker.upper()}{YF_ESTIMATES_SUFFIX}"
+        if not path.exists():
+            continue
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            snap = YfEstimatesSnapshot.model_validate(raw)
+        except Exception:
+            continue
+        row = next((r for r in snap.revenue_estimate if r.period == "0q"), None)
+        if row is None or row.avg is None:
+            continue
+        est = _to_decimal(row.avg)
+        if est is None:
+            return None
+        return est, row.numberOfAnalysts, snap_date
+    return None
+
+
+def _yfinance_quarterly_revenue(ticker: str) -> dict[date, Decimal]:
+    """Reported quarterly Total Revenue by period end, via yfinance's
+    quarterly income statement — the durable actuals source when FMP has
+    lapsed. Degrades to {} on ANY failure (same isolation contract as
+    the EPS pull below)."""
+    try:
+        import yfinance as yf  # type: ignore[import-untyped]
+    except ImportError:
+        return {}
+    try:
+        frame = cast("object", yf.Ticker(ticker.upper()).quarterly_income_stmt)
+        loc = getattr(frame, "loc", None)
+        if loc is None:
+            return {}
+        series = cast("object", loc["Total Revenue"])
+        items = getattr(series, "items", None)
+        if not callable(items):
+            return {}
+        out: dict[date, Decimal] = {}
+        pairs = cast("list[tuple[object, object]]", list(cast("Iterable[object]", items())))
+        for ts, value in pairs:
+            ts_date = getattr(ts, "date", None)
+            if not callable(ts_date):
+                continue
+            revenue = _to_decimal(value)
+            if revenue is not None:
+                out[cast("date", ts_date())] = revenue
+        return out
+    except Exception:
+        return {}
+
+
+def quarter_end_for_release(release_date: date, period_ends: Mapping[date, Decimal]) -> date | None:
+    """Map a release date to the fiscal quarter it reported: the latest known
+    period end strictly before the release, within the normal reporting lag.
+    None when nothing matches — no guessing across long gaps."""
+    candidates = [
+        pe
+        for pe in period_ends
+        if pe < release_date and (release_date - pe).days <= _MAX_RELEASE_LAG_DAYS
+    ]
+    return max(candidates) if candidates else None
+
+
+def enrich_hits_with_yf_revenue(
+    hits: list[SurpriseHit],
+    *,
+    ticker: str,
+    snapshots_dir: Path,
+    quarterly_revenue: Mapping[date, Decimal],
+) -> list[SurpriseHit]:
+    """Fill revenue actual-vs-estimate on yfinance EPS hits from Yahoo-only
+    inputs: actual = reported quarterly revenue, estimate = the archived
+    pre-release 0q consensus (see ``archived_yf_revenue_estimate``). A hit
+    whose quarter can't be mapped, or whose release predates the archive,
+    passes through unchanged (honest gap). ``source_name`` stays "yfinance" —
+    every enriched field is still Yahoo-sourced, so this is within-vendor
+    enrichment, not a cross-source blend."""
+    enriched: list[SurpriseHit] = []
+    for hit in hits:
+        if hit.revenue_actual is not None or hit.revenue_estimate is not None:
+            enriched.append(hit)
+            continue
+        quarter_end = quarter_end_for_release(hit.release_date, quarterly_revenue)
+        if quarter_end is None:
+            enriched.append(hit)
+            continue
+        revenue_actual = quarterly_revenue.get(quarter_end)
+        archived = archived_yf_revenue_estimate(
+            ticker,
+            quarter_end=quarter_end,
+            release_date=hit.release_date,
+            snapshots_dir=snapshots_dir,
+        )
+        revenue_estimate = archived[0] if archived else None
+        num_analysts = archived[1] if archived else None
+        if revenue_actual is None and revenue_estimate is None:
+            enriched.append(hit)
+            continue
+        enriched.append(
+            replace(
+                hit,
+                revenue_estimate=revenue_estimate,
+                revenue_actual=revenue_actual,
+                revenue_surprise_pct=_surprise_pct(revenue_actual, revenue_estimate),
+                num_analysts_revenue=num_analysts,
+            )
+        )
+    return enriched
+
+
+def yfinance_earnings_dates_records(
+    ticker: str,
+    *,
+    yf_snapshots_dir: Path | None = None,
+    quarterly_revenue_loader: Callable[[str], dict[date, Decimal]] | None = None,
+) -> list[SurpriseHit]:
     """Pull historical EPS surprise via yfinance.Ticker(t).earnings_dates.
 
-    Revenue fields are left as None — yfinance does not publish historical
-    revenue actual-vs-estimate. Forward-dated rows (estimate present, actual
-    absent) are skipped so the cache only contains reported quarters.
+    Yahoo publishes no historical revenue actual-vs-estimate, so revenue
+    fields default to None. When ``yf_snapshots_dir`` (the point-in-time
+    archive written by execution/fetch_yf_estimates.py) is provided, hits are
+    enriched with revenue actual-vs-estimate where the archive allows — see
+    ``enrich_hits_with_yf_revenue``; quarters the archive never observed stay
+    None. Forward-dated rows (estimate present, actual absent) are skipped so
+    the cache only contains reported quarters.
 
     Failure-tolerant: ImportError, network errors, schema changes, and empty
     responses all return []. The dispatcher continues to the next source.
@@ -247,15 +412,25 @@ def yfinance_earnings_dates_records(ticker: str) -> list[SurpriseHit]:
                 source_url=f"https://finance.yahoo.com/quote/{ticker.upper()}/analysis",
             )
         )
+    if hits and yf_snapshots_dir is not None:
+        loader = quarterly_revenue_loader or _yfinance_quarterly_revenue
+        hits = enrich_hits_with_yf_revenue(
+            hits,
+            ticker=ticker,
+            snapshots_dir=yf_snapshots_dir,
+            quarterly_revenue=loader(ticker),
+        )
     return hits
 
 
 # --- Source registry + dispatcher -------------------------------------------
 
 
-def default_sources(fmp_dir: Path) -> list[SurpriseSource]:
+def default_sources(fmp_dir: Path, *, yf_snapshots_dir: Path | None = None) -> list[SurpriseSource]:
     """Build the standard source chain. `fmp_dir` is injected so worktree-based
-    runs can target the main repo's data dir."""
+    runs can target the main repo's data dir. `yf_snapshots_dir` (optional, the
+    yfinance point-in-time archive root) enables revenue enrichment on the
+    yfinance fallback — omitted, behavior is unchanged EPS-only."""
     return [
         SurpriseSource(
             name="fmp_calendar",
@@ -263,7 +438,9 @@ def default_sources(fmp_dir: Path) -> list[SurpriseSource]:
         ),
         SurpriseSource(
             name="yfinance",
-            fetch_all=yfinance_earnings_dates_records,
+            fetch_all=lambda t: yfinance_earnings_dates_records(
+                t, yf_snapshots_dir=yf_snapshots_dir
+            ),
         ),
     ]
 

@@ -375,6 +375,29 @@ cons_ni = {
     for y in FC_YEARS
     if (est_by_year.get(y) or {}).get("netIncomeAvg")
 }
+
+# Secondary anchor (estimates-widening): FMP Starter truncates analyst-estimates
+# to 10 rows, so the consensus horizon often ends after 2-4 forward years.
+# OPTIONALLY extend later years from the persisted yfinance growth consensus
+# (data/historical/yfinance/<T>_yf_estimates.json, written by
+# execution/fetch_yf_estimates.py — never a live call from this build).
+# Provenance discipline: FMP years pass through verbatim, extension years are
+# tagged source=yfinance in cons_src and logged as a JSON event — never
+# silently blended. Disable with DCF_YF_EXTEND=0.
+cons_src = {y: "fmp" for y in set(cons_rev) | set(cons_ni)}
+_yf_est_path = REPO / "data" / "historical" / "yfinance" / f"{T}_yf_estimates.json"
+if os.environ.get("DCF_YF_EXTEND", "1") != "0" and _yf_est_path.exists():
+    from dcf import consensus_extension as _consx
+
+    _yf_growth = _consx.load_yf_growth(_yf_est_path)
+    if _yf_growth is not None:
+        cons_rev, cons_ni, cons_src = _consx.extend_consensus(
+            cons_rev, cons_ni, list(FC_YEARS), _yf_growth
+        )
+        print(
+            json.dumps(_consx.extension_event(T, cons_src, _yf_growth)),
+            file=sys.stderr,
+        )
 cons_years = sorted(cons_rev)
 ncons = max(2, len(cons_years))
 

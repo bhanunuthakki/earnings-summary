@@ -50,32 +50,34 @@ from surprise_sources import (  # noqa: E402
 
 _SURPRISE_DIR = PROJECT_ROOT / "data" / "surprise"
 _FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
+_YF_SNAPSHOTS_DIR = PROJECT_ROOT / "data" / "historical" / "yfinance_snapshots"
 _DEFAULT_LOOKBACK = 8
 
 
-def _retarget_paths(repo_root: Path) -> tuple[Path, Path]:
+def _retarget_paths(repo_root: Path) -> tuple[Path, Path, Path]:
     """Override db module paths AND module-local dir constants for worktree runs.
 
-    Returns the resolved (surprise_dir, fmp_dir) so the caller doesn't have to
-    re-derive them.
+    Returns the resolved (surprise_dir, fmp_dir, yf_snapshots_dir) so the
+    caller doesn't have to re-derive them.
     """
-    global _SURPRISE_DIR, _FMP_DIR
+    global _SURPRISE_DIR, _FMP_DIR, _YF_SNAPSHOTS_DIR
     db.PROJECT_ROOT = str(repo_root)
     db.DATA_DIR = str(repo_root / "data")
     db.DB_PATH = str(repo_root / "data" / "portfolio.db")
     db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
     _SURPRISE_DIR = repo_root / "data" / "surprise"
     _FMP_DIR = repo_root / "data" / "historical" / "fmp"
-    return _SURPRISE_DIR, _FMP_DIR
+    _YF_SNAPSHOTS_DIR = repo_root / "data" / "historical" / "yfinance_snapshots"
+    return _SURPRISE_DIR, _FMP_DIR, _YF_SNAPSHOTS_DIR
 
 
 @dataclass
 class TickerBackfillResult:
     ticker: str
-    sources_tried: list[str] = field(default_factory=list)
+    sources_tried: list[str] = field(default_factory=list[str])
     hits_total: int = 0
     hits_written: int = 0
-    sources_per_hit: dict[str, int] = field(default_factory=dict)
+    sources_per_hit: dict[str, int] = field(default_factory=dict[str, int])
     output_path: str | None = None
     error: str | None = None
 
@@ -180,16 +182,19 @@ def main() -> int:
     args = p.parse_args()
 
     if args.repo_root.resolve() != PROJECT_ROOT:
-        surprise_dir, fmp_dir = _retarget_paths(args.repo_root.resolve())
+        surprise_dir, fmp_dir, yf_snapshots_dir = _retarget_paths(args.repo_root.resolve())
     else:
-        surprise_dir, fmp_dir = _SURPRISE_DIR, _FMP_DIR
+        surprise_dir, fmp_dir, yf_snapshots_dir = _SURPRISE_DIR, _FMP_DIR, _YF_SNAPSHOTS_DIR
 
     tickers = _resolve_tickers(args.ticker)
     if not tickers:
         print(json.dumps({"event": "no_tickers"}))
         return 0
 
-    sources = default_sources(fmp_dir=fmp_dir)
+    # yf_snapshots_dir enables revenue actual-vs-estimate on the yfinance
+    # fallback where our own point-in-time archive allows (estimates-widening);
+    # an absent/empty archive degrades to the pre-existing EPS-only behavior.
+    sources = default_sources(fmp_dir=fmp_dir, yf_snapshots_dir=yf_snapshots_dir)
     results: list[TickerBackfillResult] = []
     print(
         f"[backfill_earnings_surprises] scope={len(tickers)} tickers  "
