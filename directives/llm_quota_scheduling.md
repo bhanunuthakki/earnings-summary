@@ -47,6 +47,8 @@ registry**.
 | `run_decision_nudge` | daily 17:00 | **none** (zero-LLM — the scan and message text are both deterministic) | quota-safe at any hour, like `coach_pings`; evening slot because the owner answers Telegram in the evening; at-most-once-per-decision (UNIQUE ledger) so the daily sweep never re-pesters; task registered: `cron/decision_nudge.task.xml` → `\earnings-summary\decision_nudge` (2026-07-13) |
 | `fetch_news` follow-on: diet quality scoring | with every news fetch (stage 0 of `run_morning_pipeline`, daily 04:00; also ad-hoc fetches) | `diet_source_quality` (Haiku, batched: ≤20 rows/call, ≤5 calls/run cap) | scores unscored news-backed diet signals 0..1 at ingest (`src/signals/quality.py`) so `load_diet_signals` filters on the stored score instead of the static publisher denylist; per-item degrade (a transient CLI failure / twice-unparseable batch leaves those rows NULL → denylist fallback at read time, retried next fetch; hard stops propagate); no new cron — rides the existing protected window (2026-07-16) |
 
+| myclaw `weekly_review` (cross-repo: `scratch\myclaw\cron`) | Sun 14:00 | scorer (Haiku) + domain reviews (Sonnet) | slot chosen clear of Sun ~10:30 eval rungs and the morning fleet |
+| myclaw `monthly_curate` (cross-repo: `scratch\myclaw\cron`) | monthly, 1st Sat 14:00 | curate (Sonnet) + threads/fitter (Fable, Sonnet fallback) | per-item degrade in-prompt; deterministic git commit outside the LLM |
 Keep this table current — it is the collision surface an orchestrator checks before
 launching a wave or adding a cron.
 
