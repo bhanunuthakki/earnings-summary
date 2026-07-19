@@ -25,7 +25,8 @@ Usage:
 
 Exit status: 0 when a scorecard was generated + saved (a thin-ledger substrate
 scorecard counts as success — it is the honest output), 2 on a hard stop
-(budget block / missing CLI — see llm.cli.is_hard_stop).
+(budget block / missing CLI — see llm.cli.is_hard_stop), 3 on a TRANSIENT
+coach-LLM failure (deferred; nothing persisted; retried next run — quota rule 3).
 """
 
 from __future__ import annotations
@@ -78,6 +79,8 @@ def main(argv: list[str] | None = None) -> int:
     period = args.period or now.strftime("%Y-%m")
     user_id = args.user_id or DEFAULT_USER_ID
 
+    from calibration_coach import TransientCoachError
+
     try:
         card = build_scorecard(
             args.repo_root,
@@ -88,6 +91,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         if card.can_coach and not args.no_gate:
             card = gate_scorecard(card, code_root=args.code_root)
+    except TransientCoachError as exc:
+        # Quota rule 3: defer + tally + retry next run. NOTHING is persisted —
+        # the 2026-07 incident persisted a transient CLI failure as a confident
+        # "no biases" verdict for a month (program review 2026-07-19).
+        log.error({"event": "scorecard_deferred_transient", "error": str(exc), "period": period})
+        return 3
     except Exception as exc:
         if is_hard_stop(exc):
             log.error({"event": "scorecard_hard_stop", "error": f"{type(exc).__name__}: {exc}"})

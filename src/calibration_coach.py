@@ -375,11 +375,25 @@ def _parse_bias(raw: object) -> NamedBias | None:
     )
 
 
+class TransientCoachError(RuntimeError):
+    """The coach's LLM leg failed TRANSIENTLY (CLI error, quota-dead window,
+    parse miss) — the scorecard must NOT be persisted this run.
+
+    2026-07 incident (program review 2026-07-19): the one scorecard ever
+    generated hit a quota-exhausted window, ``synthesize_biases`` degraded the
+    ``CalledProcessError`` to ``[]``, and the card persisted a confident "No
+    biases met the grounding bar" for the month — while the ledger held a 33%
+    high-conviction hit-rate. A transient failure is a DEFERRAL (quota rule 3:
+    defer + tally + retry next run), never a finding."""
+
+
 def synthesize_biases(inputs: CoachInputs) -> list[NamedBias]:
     """The owner's 2-3 named recurring biases. Returns [] (no LLM call) when the
     graded denominator is below the shared floor — a thin ledger can't carry a
-    pattern. Transient LLM/parse failures degrade to [] (logged); hard stops
-    propagate. Tests monkeypatch ``calibration_coach.call_llm_structured``."""
+    pattern. Transient LLM/parse failures raise ``TransientCoachError`` (the
+    caller defers the whole scorecard rather than persisting a false "no
+    biases"); hard stops propagate as themselves. Tests monkeypatch
+    ``calibration_coach.call_llm_structured``."""
     if not inputs.can_coach:
         return []
     prompt = _BIAS_PROMPT.format(
@@ -389,12 +403,12 @@ def synthesize_biases(inputs: CoachInputs) -> list[NamedBias]:
         payload = call_llm_structured(prompt, purpose=COACH_PURPOSE, expect="object")
     except StructuredParseError as exc:
         log.warning({"event": "coach_biases_parse_failed", "error": str(exc)})
-        return []
+        raise TransientCoachError(f"bias synthesis parse miss: {exc}") from exc
     except Exception as exc:
         if is_hard_stop(exc):
             raise
         log.warning({"event": "coach_biases_llm_failed", "error": f"{type(exc).__name__}: {exc}"})
-        return []
+        raise TransientCoachError(f"bias synthesis LLM failure: {type(exc).__name__}") from exc
     if not isinstance(payload, dict):
         return []
     biases_raw = cast("dict[str, object]", payload).get("biases")
@@ -455,10 +469,12 @@ Return ONLY a JSON object, no fences:
 
 def propose_experiment(inputs: CoachInputs, biases: list[NamedBias]) -> BehavioralExperiment | None:
     """One falsifiable behavioural experiment for the period. None when the
-    ledger is too thin to coach, or on transient LLM/parse failure (hard stops
-    propagate). The condition is validated through decision_conditions'
-    parser so a malformed test degrades to a hypothesis with no gradeable
-    condition rather than a crash. Tests monkeypatch ``call_llm_structured``."""
+    ledger is too thin to coach. Transient LLM/parse failures raise
+    ``TransientCoachError`` (same defer-don't-persist contract as
+    ``synthesize_biases``); hard stops propagate as themselves. The condition
+    is validated through decision_conditions' parser so a malformed test
+    degrades to a hypothesis with no gradeable condition rather than a crash.
+    Tests monkeypatch ``call_llm_structured``."""
     if not inputs.can_coach:
         return None
     biases_text = (
@@ -469,12 +485,12 @@ def propose_experiment(inputs: CoachInputs, biases: list[NamedBias]) -> Behavior
         payload = call_llm_structured(prompt, purpose=COACH_PURPOSE, expect="object")
     except StructuredParseError as exc:
         log.warning({"event": "coach_experiment_parse_failed", "error": str(exc)})
-        return None
+        raise TransientCoachError(f"experiment parse miss: {exc}") from exc
     except Exception as exc:
         if is_hard_stop(exc):
             raise
         log.warning({"event": "coach_experiment_llm_failed", "error": str(exc)})
-        return None
+        raise TransientCoachError(f"experiment LLM failure: {type(exc).__name__}") from exc
     if not isinstance(payload, dict):
         return None
     obj = cast("dict[str, object]", payload)
