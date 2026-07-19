@@ -56,7 +56,7 @@ CITE_MARKS_CSS = """
   border-radius: var(--radius, 6px); padding: 0 3px;
 }
 .cite-wrap .cite-badge {
-  font-size: var(--fs-micro, 10px); line-height: 1; vertical-align: middle;
+  font-size: var(--fs-caption); line-height: 1; vertical-align: middle;
   color: var(--accent-contrast);
   background: var(--accent); border-radius: var(--radius-full, 999px);
   padding: 1px 5px; margin-left: 3px; white-space: nowrap;
@@ -80,21 +80,21 @@ CITE_MARKS_CSS = """
 }
 .cite-pop-tick { font-weight: 600; color: var(--fg); }
 .cite-pop-kind {
-  font-size: var(--fs-micro, 10px); color: var(--accent);
+  font-size: var(--fs-caption); color: var(--accent);
   background: var(--accent-soft);
   border-radius: var(--radius, 6px); padding: 1px 6px; text-transform: uppercase;
   letter-spacing: 0.03em;
 }
 .cite-pop-per { font-size: var(--fs-caption, 12px); color: var(--muted); }
 .cite-pop-value {
-  display: block; font-size: var(--fs-section, 14px); font-weight: 600;
+  display: block; font-size: var(--fs-body, 13px); font-weight: 600;
   color: var(--fg); margin-top: 3px;
 }
 .cite-pop-value-cap {
-  display: block; font-size: var(--fs-micro, 10px); color: var(--muted); margin-top: 1px;
+  display: block; font-size: var(--fs-caption); color: var(--muted); margin-top: 1px;
 }
 .cite-unverified {
-  display: inline-block; font-size: var(--fs-micro, 10px);
+  display: inline-block; font-size: var(--fs-caption);
   color: var(--warn); border: 1px dashed var(--warn);
   border-radius: var(--radius-full, 999px); padding: 1px 7px; cursor: default;
 }

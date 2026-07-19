@@ -43,7 +43,7 @@ _WORKUP_CSS = """<style>
 .etfw-table td, .etfw-table th { padding: 4px 8px 4px 0; text-align: left; }
 .etfw-table td.num { font-family: var(--mono); }
 .etfw-miss { color: var(--muted); font-size: var(--fs-body); }
-.etfw-src { color: var(--muted); font-size: var(--fs-micro); }
+.etfw-src { color: var(--muted); font-size: var(--fs-caption); }
 .etfw-verdict { margin-bottom: 6px; }
 </style>"""
 

@@ -52,7 +52,7 @@ def test_verdict_badge_greys_when_evaluation_predates_newest_quarter() -> None:
     # last evaluated back in Q3 2025 -- stale. The dot must fall back to the
     # 'pending' muted tone (honest-grey), never the verdict's own green.
     out = _verdict_badge("intact", datetime(2025, 9, 15, 0, 0, 0), "Q1 2026")
-    assert "var(--muted-2)" in out
+    assert "var(--muted)" in out
     assert "var(--ok)" not in out
     assert "predates the Q1 2026 print" in out
     # The label text itself still reports the actual verdict.
@@ -73,7 +73,7 @@ def test_verdict_badge_greys_in_the_print_gap_when_ingestion_known() -> None:
     out = _verdict_badge(
         "intact", datetime(2026, 4, 10, 9, 0, 0), "Q1 2026", datetime(2026, 5, 8, 14, 0, 0)
     )
-    assert "var(--muted-2)" in out
+    assert "var(--muted)" in out
     assert "var(--ok)" not in out
     assert "predates the Q1 2026 print (data ingested 2026-05-08)" in out
     assert "Thesis Intact" in out
@@ -84,7 +84,7 @@ def test_verdict_badge_fresh_when_evaluation_postdates_ingestion() -> None:
         "intact", datetime(2026, 5, 20, 12, 0, 0), "Q1 2026", datetime(2026, 5, 8, 14, 0, 0)
     )
     assert "var(--ok)" in out
-    assert "var(--muted-2)" not in out
+    assert "var(--muted)" not in out
     assert "predates" not in out
 
 

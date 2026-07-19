@@ -665,7 +665,8 @@ def _alarm_section(anon: list[AnonCostRow]) -> str:
         return (
             f"{head}"
             '<div class="k-well k-well-ok me-alarm">'
-            '<span class="k-prov-tick k-prov-tick-ok">clear</span>'
+            '<span class="k-prov-sev"><span class="k-dot k-dot-ok"></span>'
+            '<span class="k-label">clear</span></span>'
             "<span>No anonymous or unregistered LLM spend over "
             f"{_usd(ANON_COST_FLOOR_USD, places=0)} in the last {WINDOW_DAYS} days.</span>"
             "</div></section>"
@@ -683,7 +684,8 @@ def _alarm_section(anon: list[AnonCostRow]) -> str:
     return (
         f"{head}"
         '<div class="k-well k-well-bad me-alarm">'
-        '<span class="k-prov-tick k-prov-tick-bad">alarm</span>'
+        '<span class="k-prov-sev"><span class="k-dot k-dot-bad"></span>'
+        '<span class="k-label">alarm</span></span>'
         f"<span>{n} anonymous/unregistered line{'s' if n != 1 else ''} · "
         f"{_usd(total)}/30d ungoverned</span></div>"
         f'<div class="me-alarm-chips">{chips}</div>'

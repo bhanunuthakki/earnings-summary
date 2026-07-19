@@ -81,10 +81,10 @@ _STREAM_TYPES = (SIGNAL_GENERAL_NEWS, SIGNAL_CONSENSUS_RATING, SIGNAL_MEDIA_APPE
 _PANEL_STYLE = """<style>
 .diet-sec { margin-top: var(--sp-5); }
 .diet-sec.first { margin-top: var(--sp-3); }
-.diet-sec-h { font-size: var(--fs-section); font-weight: 600; color: var(--fg);
+.diet-sec-h { font-size: var(--fs-title); font-weight: 600; color: var(--fg);
   margin: 0 0 var(--sp-2); }
 .diet-sec-sub { font-size: var(--fs-caption); color: var(--muted); margin: 0 0 var(--sp-3); }
-.diet-fresh { color: var(--muted); font-size: var(--fs-micro); white-space: nowrap; }
+.diet-fresh { color: var(--muted); font-size: var(--fs-caption); white-space: nowrap; }
 .diet-when { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .diet-sig a { color: var(--fg); text-decoration: none; }
 .diet-sig a:hover { color: var(--accent); text-decoration: underline; }

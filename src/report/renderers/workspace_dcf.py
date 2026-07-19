@@ -155,12 +155,12 @@ CSS = """
   gap: var(--sp-4); align-items: start; }
 @media (max-width: 720px) { .dcf-edit-cols { grid-template-columns: 1fr; } }
 .dcf-edit-group { margin-bottom: var(--sp-3); }
-.dcf-edit-group-title { font-size: var(--fs-micro); font-weight: 600; color: var(--muted);
+.dcf-edit-group-title { font-size: var(--fs-caption); font-weight: 600; color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--sp-2); }
 .dcf-edit-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
   gap: var(--sp-2); }
 .dcf-edit-field { display: flex; flex-direction: column; gap: 2px; }
-.dcf-edit-field label { font-size: var(--fs-micro); color: var(--muted); }
+.dcf-edit-field label { font-size: var(--fs-caption); color: var(--muted); }
 .dcf-edit-field input, .dcf-edit-field select { font-size: var(--fs-caption);
   padding: 3px 6px; font-variant-numeric: tabular-nums; }
 .dcf-edit-field.is-derived input { color: var(--muted); font-style: italic; }
@@ -170,29 +170,29 @@ CSS = """
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dcf-seg-grid input { width: 5.5em; font-size: var(--fs-caption); padding: 3px 6px;
   font-variant-numeric: tabular-nums; }
-.dcf-seg-head { font-size: var(--fs-micro); color: var(--muted); text-transform: uppercase;
+.dcf-seg-head { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase;
   letter-spacing: 0.04em; text-align: center; }
 .dcf-edit-scenarios { display: flex; gap: var(--sp-2); margin-bottom: var(--sp-3); }
 .dcf-scn { flex: 1; border: 1px solid var(--border); border-radius: var(--radius);
   padding: var(--sp-2); text-align: center; }
-.dcf-scn-label { font-size: var(--fs-micro); color: var(--muted); text-transform: uppercase;
+.dcf-scn-label { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase;
   letter-spacing: 0.05em; }
 .dcf-scn-val { font-size: var(--fs-body); font-weight: 600; color: var(--fg);
   font-variant-numeric: tabular-nums; }
-.dcf-scn-up { font-size: var(--fs-micro); font-variant-numeric: tabular-nums; }
+.dcf-scn-up { font-size: var(--fs-caption); font-variant-numeric: tabular-nums; }
 .dcf-scn-up.pos { color: var(--ok); }
 .dcf-scn-up.neg { color: var(--bad); }
 .dcf-scn-up.muted { color: var(--muted); }
 .dcf-scn.base { border-color: var(--accent); }
 .dcf-heatmap { overflow-x: auto; }
-.dcf-hm-cap { font-size: var(--fs-micro); color: var(--muted); margin-bottom: var(--sp-1); }
-.dcf-hm-table { border-collapse: collapse; font-size: var(--fs-micro);
+.dcf-hm-cap { font-size: var(--fs-caption); color: var(--muted); margin-bottom: var(--sp-1); }
+.dcf-hm-table { border-collapse: collapse; font-size: var(--fs-caption);
   font-variant-numeric: tabular-nums; }
 .dcf-hm-table th, .dcf-hm-table td { padding: var(--sp-1) var(--sp-2); text-align: right;
   border: 1px solid var(--hairline); }
 .dcf-hm-table th { color: var(--muted); font-weight: 600; }
 .dcf-hm-table td.base { outline: 2px solid var(--accent); outline-offset: -2px; font-weight: 600; }
-.dcf-hm-axis { font-size: var(--fs-micro); color: var(--muted); }
+.dcf-hm-axis { font-size: var(--fs-caption); color: var(--muted); }
 /* Wave 5: a captured report value injected into a driver flashes; the report's
    "-> DCF" affordance is a quiet accent micro-button. */
 .dcf-edit-field input.dcf-injected { outline: 2px solid var(--accent); outline-offset: 1px;

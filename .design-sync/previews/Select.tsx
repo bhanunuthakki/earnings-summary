@@ -1,35 +1,49 @@
 /**
- * Select preview — the bare-`<select>` baseline: single mode gets the
- * `--k-chevron` custom arrow (the styled contract this wrapper guards), and
- * `multiple` mode gets its own padding/option rules.
+ * Select preview — the kit's single-choice dropdown. The default is the popover
+ * composite (`.k-trigger` button + `.k-menu` popover, full keyboard nav); the
+ * `native` escape hatch renders a plain styled `<select>`. Shown here in their
+ * resting (closed) state — the popover surface itself is in the Menu preview.
  */
 import * as React from "react";
 import { Label, Select } from "@earnings-summary/design-system";
+
+const PERIODS = [
+  { value: "Q1-2026" },
+  { value: "Q2-2026" },
+  { value: "FY-2025" },
+  { value: "FY-2024", label: "FY-2024 (restated)" },
+];
 
 export function PeriodSingle() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 200 }}>
       <Label>Period</Label>
-      <Select defaultValue="Q2-2026">
-        <option value="Q1-2026">Q1-2026</option>
-        <option value="Q2-2026">Q2-2026</option>
-        <option value="FY-2025">FY-2025</option>
-      </Select>
+      <Select options={PERIODS} defaultValue="Q2-2026" />
     </div>
   );
 }
 
-export function TickerMultiple() {
+export function Placeholder() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 200 }}>
-      <Label>Compare tickers</Label>
-      <Select multiple size={5} defaultValue={["NU", "MELI", "RBRK"]}>
-        <option value="NU">NU — Nu Holdings</option>
-        <option value="MELI">MELI — MercadoLibre</option>
-        <option value="NOW">NOW — ServiceNow</option>
-        <option value="WIX">WIX — Wix.com</option>
-        <option value="RBRK">RBRK — Rubrik</option>
-      </Select>
+      <Label>Valuation basis</Label>
+      <Select
+        options={[
+          { value: "dcf", label: "Reverse DCF" },
+          { value: "multiples", label: "Peer multiples" },
+          { value: "sotp", label: "Sum-of-the-parts" },
+        ]}
+        placeholder="Choose a basis…"
+      />
+    </div>
+  );
+}
+
+export function NativeEscapeHatch() {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: 200 }}>
+      <Label>Period (native)</Label>
+      <Select options={PERIODS} defaultValue="Q2-2026" native style={{ width: "100%" }} />
     </div>
   );
 }

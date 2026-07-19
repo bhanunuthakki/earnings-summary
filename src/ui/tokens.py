@@ -36,11 +36,11 @@ PALETTE_LIGHT: dict[str, str] = {
     "paper": "#f4f3ef",
     "fg": "#0c0d10",
     "fg-soft": "#2a2c33",
+    # The one de-emphasis gray. #6c6f78 clears WCAG AA (~4.5:1) against this bg
+    # for the real body text it backs (td.muted, crumb-sep, news-date). The old
+    # second gray (--muted-2) collapsed here (design-sync 2026-07-19): two grays
+    # of de-emphasis was one too many.
     "muted": "#6c6f78",
-    # Darkened 2026-07-18 (UX audit): #9a9da6 measured ~2.6:1 against this
-    # bg — fails WCAG AA (4.5:1) for the real body text it backs (td.muted,
-    # crumb-sep, news-date, meta-pip). #70737a clears ~4.5:1.
-    "muted-2": "#70737a",
     "border": "#e4e3dd",
     "border-2": "#d1cfc7",
     "hairline": "#ecebe5",
@@ -48,21 +48,17 @@ PALETTE_LIGHT: dict[str, str] = {
     "accent-soft": "#eef2ff",
     # Text/glyph color ON an accent-filled surface (k-btn-primary, badges).
     "accent-contrast": "#ffffff",
+    # Status: green=good, red=bad, amber=watch — the one semantic tone family.
+    # (--pos/--neg/--neu folded into --ok/--bad/--muted, design-sync 2026-07-19:
+    # they were value-identical duplicates.)
     "ok": "#15803d",
     "warn": "#b97c00",
     "bad": "#b91c1c",
-    "pos": "#15803d",
-    "neg": "#b91c1c",
-    "neu": "#6c6f78",
     "seg-1": "#0c0d10",
     "seg-2": "#43464e",
     "seg-3": "#7a7d86",
     "seg-4": "#b6b8be",
     "seg-5": "#dcdcd7",
-    "tone-pos": "#eef2ff",
-    "tone-neu": "#f4f3ef",
-    "tone-opt": "#fff8e6",
-    "tone-neg": "#fdf2f2",
     # One popover/menu elevation per theme (combobox lists, peeks, palettes).
     "shadow-pop": "0 12px 32px rgba(15, 15, 20, 0.18)",
     # The one modal scrim wash (CCOverlay / .k-scrim). A neutral black veil, not
@@ -84,11 +80,9 @@ PALETTE_DARK: dict[str, str] = {
     "paper": "#1a1d23",
     "fg": "#f4f3ef",
     "fg-soft": "#d5d6d2",
+    # The one de-emphasis gray (see PALETTE_LIGHT). #888b94 clears WCAG AA
+    # (~4.9:1) against this bg for the body text it backs; --muted-2 folded here.
     "muted": "#888b94",
-    # Lightened 2026-07-18 (UX audit): #5b5e66 measured ~3.0:1 against this
-    # bg — fails WCAG AA (4.5:1) for the real body text it backs (td.muted,
-    # crumb-sep, news-date, meta-pip). #7d8089 clears ~4.9:1.
-    "muted-2": "#7d8089",
     "border": "#2a2d35",
     "border-2": "#383b44",
     "hairline": "#1f2127",
@@ -99,18 +93,11 @@ PALETTE_DARK: dict[str, str] = {
     "ok": "#4ade80",
     "warn": "#f5c66a",
     "bad": "#f08a8a",
-    "pos": "#4ade80",
-    "neg": "#f08a8a",
-    "neu": "#888b94",
     "seg-1": "#f4f3ef",
     "seg-2": "#b6b8be",
     "seg-3": "#7a7d86",
     "seg-4": "#43464e",
     "seg-5": "#25282f",
-    "tone-pos": "#1a2238",
-    "tone-neu": "#1a1d23",
-    "tone-opt": "#2b2418",
-    "tone-neg": "#2b1a1a",
     "shadow-pop": "0 12px 32px rgba(0, 0, 0, 0.45)",
     "scrim": "rgba(0, 0, 0, 0.5)",
 }
@@ -122,21 +109,26 @@ FONT_TOKENS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
-# Semantic type scale (UI polish foundation, 2026-06-11).
+# Semantic type scale (UI polish foundation, 2026-06-11; collapsed to four
+# steps design-sync 2026-07-19).
 #
 # Size encodes IMPORTANCE, not surface. Before this scale the ten renderers
 # carried 34 distinct font sizes (8.5px-100px); the same component rendered
 # at different sizes on different surfaces (.kpi-value: 22px shell vs 18px
-# ticker page; h1: 24px shell vs 26px digest). Every rule now picks the step
+# ticker page; h1: 24px shell vs 26px digest). Every rule picks the step
 # that matches the element's importance:
 #
 #   --fs-display  the page's one dominant element: page title, hero stat
-#   --fs-title    panel / drawer / card titles (the h2 tier)
-#   --fs-section  sub-section headings inside a panel; serif reading prose
-#                 (serif sits one step above sans UI body for optical parity)
-#   --fs-body     default UI text: tables, inputs, buttons, tabs
-#   --fs-caption  secondary metadata: table headers, stamps, hints, sublabels
-#   --fs-micro    smallest annotations: chips, badges, kind tags, axis marks
+#   --fs-title    panel / drawer / card titles + real sub-section headings
+#                 (the h2/h3 tier)
+#   --fs-body     default UI text: tables, inputs, buttons, tabs, reading prose
+#   --fs-caption  everything smaller: table headers, stamps, hints, sublabels,
+#                 chips, badges, kind tags, axis marks
+#
+# Four steps, not six: --fs-section (14px) folded into --fs-body (or --fs-title
+# for real headings) and --fs-micro (10px) into --fs-caption — a six-step ramp
+# on a 13px base gave two pairs (14/13, 11.5/10) too close to read as distinct
+# tiers. --fs-caption rounded 11.5px → 11px in the same pass.
 #
 # Two sanctioned escapes, nothing else: the workspace report's 60px identity
 # ticker (a deliberate brand moment) and `font-size: 0.93em` for inline
@@ -147,10 +139,8 @@ FONT_TOKENS: dict[str, str] = {
 TYPE_SCALE: dict[str, str] = {
     "fs-display": "22px",
     "fs-title": "16px",
-    "fs-section": "14px",
     "fs-body": "13px",
-    "fs-caption": "11.5px",
-    "fs-micro": "10px",
+    "fs-caption": "11px",
 }
 
 # Spacing scale — gaps, paddings, and margins snap to these steps so density
@@ -177,6 +167,19 @@ CHROME_TOKENS: dict[str, str] = {
 
 # Rides along inside every palette_css() :root block.
 _SCALE_TOKENS: dict[str, str] = {**TYPE_SCALE, **SPACING_SCALE, **CHROME_TOKENS}
+
+# Token-kind annotations (design-sync 2026-07-19): a trailing ``/* @kind X */``
+# on the tokens whose ROLE isn't inferable from a color/px value — the three
+# font families and the motion timing. The design-sync converter reads these to
+# categorize non-color tokens; harmless CSS comments everywhere else. Colors and
+# scale-px tokens are self-describing and carry no annotation. --k-chevron (a
+# theme-dependent glyph, defined in controls.py) is annotated there.
+_TOKEN_KINDS: dict[str, str] = {
+    "sans": "font",
+    "serif": "font",
+    "mono": "font",
+    "transition": "other",
+}
 
 # ---------------------------------------------------------------------------
 # Scale introspection — the sanctioned-literal sets the opt-out conformance
@@ -227,7 +230,12 @@ CHART_SERIES: tuple[str, ...] = (
 
 
 def _vars(palette: dict[str, str], indent: str = "  ") -> str:
-    return "\n".join(f"{indent}--{name}: {value};" for name, value in palette.items())
+    def _line(name: str, value: str) -> str:
+        kind = _TOKEN_KINDS.get(name)
+        suffix = f" /* @kind {kind} */" if kind else ""
+        return f"{indent}--{name}: {value};{suffix}"
+
+    return "\n".join(_line(name, value) for name, value in palette.items())
 
 
 def palette_css(default: str = "paper") -> str:

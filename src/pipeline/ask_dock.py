@@ -127,9 +127,9 @@ body[data-ask-split="1"] .cc-panels { margin-right:440px; }
 .ask-dock-thread-row[data-active="1"] { background:var(--accent-soft); }
 .ask-dock-thread-title { flex:1; font-size:var(--fs-caption); color:var(--fg);
   overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-.ask-dock-thread-date { font-size:var(--fs-micro); color:var(--muted);
+.ask-dock-thread-date { font-size:var(--fs-caption); color:var(--muted);
   white-space:nowrap; flex-shrink:0; }
-.ask-dock-thread-del { font-size:var(--fs-micro); color:var(--muted);
+.ask-dock-thread-del { font-size:var(--fs-caption); color:var(--muted);
   background:none; border:none; cursor:pointer; padding:2px 4px;
   flex-shrink:0; line-height:1; }
 .ask-dock-thread-del:hover { color:var(--bad); }

@@ -57,19 +57,19 @@ _PANEL_STYLE = """<style>
 .ledger-cap-status { font-size: var(--fs-caption); color: var(--muted); }
 .ledger-musing { background: var(--surface); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2); }
 .ledger-musing-head { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: var(--sp-1); }
-.ledger-when { color: var(--muted); font-family: var(--mono); font-size: var(--fs-micro); margin-left: auto; white-space: nowrap; }
-.ledger-chan { font-size: var(--fs-micro); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-.ledger-needs { color: var(--warn); font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
-.ledger-unattr { color: var(--muted); font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.05em; }
+.ledger-when { color: var(--muted); font-family: var(--mono); font-size: var(--fs-caption); margin-left: auto; white-space: nowrap; }
+.ledger-chan { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.ledger-needs { color: var(--warn); font-size: var(--fs-caption); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+.ledger-unattr { color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.05em; }
 .ledger-body { font-size: var(--fs-body); line-height: 1.55; color: var(--fg-soft); overflow-wrap: anywhere; }
 .ledger-body > :first-child { margin-top: 0; }
 .ledger-body > :last-child { margin-bottom: 0; }
 .ledger-empty { color: var(--muted); font-style: italic; padding: var(--sp-3) 0; }
-.ledger-sec-h { font-size: var(--fs-section); font-weight: 600; color: var(--fg); margin: var(--sp-4) 0 var(--sp-1); }
+.ledger-sec-h { font-size: var(--fs-title); font-weight: 600; color: var(--fg); margin: var(--sp-4) 0 var(--sp-1); }
 .ledger-sec-sub { font-size: var(--fs-caption); color: var(--muted); margin: 0 0 var(--sp-3); }
 .ledger-stance { background: var(--surface); border-left: 3px solid var(--border-2); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2); }
 .ledger-stance-head { display: flex; align-items: baseline; gap: var(--sp-2); margin-bottom: var(--sp-1); }
-.ledger-stance-meta { color: var(--muted); font-size: var(--fs-micro); margin-left: auto; }
+.ledger-stance-meta { color: var(--muted); font-size: var(--fs-caption); margin-left: auto; }
 .ledger-coach-card { background: var(--surface); border-left: 3px solid var(--border-2); border-radius: var(--radius); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-2); position: relative; }
 .ledger-coach-body { font-size: var(--fs-body); line-height: 1.55; color: var(--fg-soft); white-space: normal; }
 .ledger-coach-row { display: flex; align-items: center; gap: var(--sp-2); margin-top: var(--sp-2); }
@@ -108,7 +108,7 @@ _PANEL_STYLE = """<style>
    conversation-first. Closed by default; a count on the summary surfaces pending
    work without re-inflating the wall of sections. Token-only. */
 .ledger-queues { margin-top: var(--sp-4); border-top: 1px solid var(--border); }
-.ledger-queues-sum { cursor: pointer; padding: var(--sp-3) 0; font-size: var(--fs-section); font-weight: 600; color: var(--fg); list-style: none; display: flex; align-items: baseline; gap: var(--sp-2); }
+.ledger-queues-sum { cursor: pointer; padding: var(--sp-3) 0; font-size: var(--fs-body); font-weight: 600; color: var(--fg); list-style: none; display: flex; align-items: baseline; gap: var(--sp-2); }
 .ledger-queues-sum::-webkit-details-marker { display: none; }
 .ledger-queues-sum::before { content: "\\25B8"; color: var(--muted); font-size: var(--fs-caption); }
 .ledger-queues[open] .ledger-queues-sum::before { content: "\\25BE"; }
@@ -1037,9 +1037,9 @@ def _reconcile_section(db_path: Path | str | None) -> str:
 # ---------------------------------------------------------------------------
 
 _ONMYMIND_STYLE = """<style>
-.om-type { font-size: var(--fs-micro); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-.om-wondering { font-size: var(--fs-micro); font-weight: 600; color: var(--warn); text-transform: uppercase; letter-spacing: 0.05em; }
-.om-ladder { font-size: var(--fs-micro); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
+.om-type { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.om-wondering { font-size: var(--fs-caption); font-weight: 600; color: var(--warn); text-transform: uppercase; letter-spacing: 0.05em; }
+.om-ladder { font-size: var(--fs-caption); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; }
 .om-ladder:empty { display: none; }
 .om-actions { flex-wrap: wrap; }
 /* Backlink from a research item to its source note + the brief highlight the
@@ -1056,7 +1056,7 @@ _ONMYMIND_STYLE = """<style>
 .om-brief-body { margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-left: 3px solid var(--border-2); font-size: var(--fs-caption); color: var(--fg-soft); }
 .om-brief-takeaways { margin: 0 0 var(--sp-2); padding-left: var(--sp-4); }
 .om-brief-line { margin: var(--sp-1) 0; }
-.om-brief-src { margin: var(--sp-2) 0 0; color: var(--muted); font-size: var(--fs-micro); }
+.om-brief-src { margin: var(--sp-2) 0 0; color: var(--muted); font-size: var(--fs-caption); }
 /* The inline answer (overhaul): the Ledger's response to a question-shaped
    capture, generated once at capture time and stored on the note. A quiet
    accent-bordered block under the captured thought — distinct from the thought
@@ -1064,7 +1064,7 @@ _ONMYMIND_STYLE = """<style>
 .om-answer { margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3); border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); font-size: var(--fs-caption); line-height: 1.55; color: var(--fg-soft); }
 .om-answer > :first-child { margin-top: 0; }
 .om-answer > :last-child { margin-bottom: 0; }
-.om-answer-label { display: block; font-size: var(--fs-micro); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--sp-1); }
+.om-answer-label { display: block; font-size: var(--fs-caption); font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: var(--sp-1); }
 /* The answer is being generated on a background thread — an honest quiet
    in-progress state the poll swaps for the real answer when it lands. */
 .om-answer-pending { color: var(--muted); font-style: italic; }

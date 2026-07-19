@@ -14,7 +14,6 @@
   --fg: #0c0d10;
   --fg-soft: #2a2c33;
   --muted: #6c6f78;
-  --muted-2: #70737a;
   --border: #e4e3dd;
   --border-2: #d1cfc7;
   --hairline: #ecebe5;
@@ -24,29 +23,20 @@
   --ok: #15803d;
   --warn: #b97c00;
   --bad: #b91c1c;
-  --pos: #15803d;
-  --neg: #b91c1c;
-  --neu: #6c6f78;
   --seg-1: #0c0d10;
   --seg-2: #43464e;
   --seg-3: #7a7d86;
   --seg-4: #b6b8be;
   --seg-5: #dcdcd7;
-  --tone-pos: #eef2ff;
-  --tone-neu: #f4f3ef;
-  --tone-opt: #fff8e6;
-  --tone-neg: #fdf2f2;
   --shadow-pop: 0 12px 32px rgba(15, 15, 20, 0.18);
   --scrim: rgba(0, 0, 0, 0.5);
-  --sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  --serif: 'Source Serif 4', 'Source Serif Pro', Georgia, serif;
-  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif; /* @kind font */
+  --serif: 'Source Serif 4', 'Source Serif Pro', Georgia, serif; /* @kind font */
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; /* @kind font */
   --fs-display: 22px;
   --fs-title: 16px;
-  --fs-section: 14px;
   --fs-body: 13px;
-  --fs-caption: 11.5px;
-  --fs-micro: 10px;
+  --fs-caption: 11px;
   --sp-1: 4px;
   --sp-2: 8px;
   --sp-3: 12px;
@@ -55,7 +45,7 @@
   --sp-6: 32px;
   --radius: 8px;
   --radius-full: 999px;
-  --transition: 150ms ease;
+  --transition: 150ms ease; /* @kind other */
 }
 
 :root[data-theme="white"] {
@@ -71,7 +61,6 @@
   --fg: #f4f3ef;
   --fg-soft: #d5d6d2;
   --muted: #888b94;
-  --muted-2: #7d8089;
   --border: #2a2d35;
   --border-2: #383b44;
   --hairline: #1f2127;
@@ -81,18 +70,11 @@
   --ok: #4ade80;
   --warn: #f5c66a;
   --bad: #f08a8a;
-  --pos: #4ade80;
-  --neg: #f08a8a;
-  --neu: #888b94;
   --seg-1: #f4f3ef;
   --seg-2: #b6b8be;
   --seg-3: #7a7d86;
   --seg-4: #43464e;
   --seg-5: #25282f;
-  --tone-pos: #1a2238;
-  --tone-neu: #1a1d23;
-  --tone-opt: #2b2418;
-  --tone-neg: #2b1a1a;
   --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.45);
   --scrim: rgba(0, 0, 0, 0.5);
 }

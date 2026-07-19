@@ -295,14 +295,14 @@ SOURCE_CHIP_CSS = """
   display: inline-block; font-size: 8.5px; font-weight: 600;
   letter-spacing: 0.04em; line-height: 1.4; padding: 0 3px;
   border: 1px solid var(--border-2, var(--border)); border-radius: 3px;
-  color: var(--muted-2, var(--muted)); background: transparent;
+  color: var(--muted); background: transparent;
   opacity: 0.65; user-select: none;
 }
 .src-chip:hover, .src-pop[open] .src-chip { opacity: 1; }
 .src-sec-official { color: var(--ok); border-color: var(--ok); }
 .src-fmp-normalized { color: var(--muted); border-color: var(--border-2); }
 .src-llm-extracted { color: var(--warn); border-color: var(--warn); }
-.src-yfinance-fallback, .src-s1-provisional { color: var(--muted-2, var(--muted)); }
+.src-yfinance-fallback, .src-s1-provisional { color: var(--muted); }
 /* Scored confidence below LOW_CONFIDENCE_THRESHOLD: the subtle cell
    affordance — warn-tinted dashed border, overriding the tier color. */
 .src-chip.src-lowconf { color: var(--warn); border-color: var(--warn); border-style: dashed; }
@@ -314,7 +314,7 @@ SOURCE_CHIP_CSS = """
   font-size: var(--fs-caption); text-align: left; white-space: normal;
 }
 .src-pop-row { padding: 1px 0; color: var(--fg); }
-.src-pop-row.mono { font-family: var(--mono); font-size: var(--fs-micro); color: var(--muted); }
+.src-pop-row.mono { font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted); }
 .src-pop-locator { word-break: break-all; }
 .src-pop-locator-raw summary { cursor: pointer; }
 .src-pop-row a { color: var(--accent); }

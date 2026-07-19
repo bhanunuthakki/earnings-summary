@@ -31,7 +31,7 @@ _ATTRIB_STYLE = """<style>
 .atr-ticker { font-family:var(--mono); font-weight:600; }
 .atr-alpha { font-family:var(--mono); font-variant-numeric:tabular-nums;
   font-size:var(--fs-caption); }
-.atr-window { color:var(--muted); font-size:var(--fs-micro); font-family:var(--mono); }
+.atr-window { color:var(--muted); font-size:var(--fs-caption); font-family:var(--mono); }
 .atr-narrative { font-size:var(--fs-body); line-height:1.55; color:var(--fg-soft); margin:0; }
 .atr-sub { color:var(--muted); font-size:var(--fs-caption); margin:2px 0 10px; }
 </style>"""

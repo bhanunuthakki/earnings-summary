@@ -1504,7 +1504,7 @@ _COCKPIT_CSS = """
 .cockpit-section h2 { display: flex; align-items: baseline; gap: 6px; }
 .cockpit-degraded { font-size: var(--fs-caption); color: var(--warn); margin: 2px 0 8px;
   display: flex; align-items: center; gap: 6px; }
-.cockpit-table sup { font-size: var(--fs-micro); color: var(--muted); margin-left: 1px; }
+.cockpit-table sup { font-size: var(--fs-caption); color: var(--muted); margin-left: 1px; }
 .cockpit-table td { white-space: nowrap; }
 .cockpit-table td.kpi-moves { white-space: normal; }
 /* The Evaluation table is secondary to the Portfolio table — tighter padding

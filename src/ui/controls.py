@@ -23,7 +23,7 @@ Composition contract — ``controls_css(default)`` rides immediately after
   the WHOLE button hierarchy. One solid-accent primary per view, quiet for
   everything else, danger only for destructive actions.
 * ``.k-chip`` (+ tone modifiers, + ``.k-chip-btn`` for clickable filters) —
-  the one badge/chip shape: radius-full, micro type, uppercase.
+  the one badge/chip shape: radius-full, caption type, uppercase.
 * ``.k-tick`` — the canonical ticker label: mono ticker + regular-weight
   muted company name, ellipsis-truncated with the full name in ``title``.
   Use :func:`ticker_label`; never concatenate ``f"{ticker} · {name}"`` again.
@@ -35,7 +35,8 @@ Composition contract — ``controls_css(default)`` rides immediately after
   per-panel raw-hex pill systems (``.ev-score-*``, ``.badge.b-*``, the
   calib/cockpit/memo tone pairs); never freehand a bg/fg hex pair again.
   (``.k-chip`` is the *outline* tag/filter chip; ``.k-pill`` is the *filled*
-  status pill; ``.p-pill`` stays the neutral pipeline-table pill.)
+  status pill — a neutral pill is just ``.k-pill`` with no tone modifier, so the
+  old ``.p-pill`` was folded in.)
 * ``.k-well`` (+ ``-ok/-warn/-bad/-accent``) — the soft-filled BLOCK sibling of
   ``.k-pill`` for KPI cards / callouts / tone rows: same ``color-mix`` family,
   box radius.
@@ -89,9 +90,9 @@ from models.validation import Severity
 if TYPE_CHECKING:
     from datetime import datetime
 
-# Chevron for single-selects, URL-encoded (no literal braces/quotes/#: the
-# string survives both raw f-string assembly and brace-doubled .format
-# templates). Stroke matches each theme's --muted.
+# Chevron for single-selects + the disclosure (summary) marker, URL-encoded (no
+# literal braces/quotes/#: the string survives both raw f-string assembly and
+# brace-doubled .format templates). Stroke matches each theme's --muted.
 _CHEVRON_DARK = (
     "url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 "
     "viewBox=%220 0 16 16%22%3E%3Cpath d=%22M4 6l4 4 4-4%22 stroke=%22%23888b94%22 "
@@ -99,6 +100,18 @@ _CHEVRON_DARK = (
     "stroke-linejoin=%22round%22/%3E%3C/svg%3E')"
 )
 _CHEVRON_LIGHT = _CHEVRON_DARK.replace("%23888b94", "%236c6f78")
+
+# Checkmark for the kit-drawn checkbox (:checked). Sits ON the accent fill, so
+# its ink is each theme's --accent-contrast (near-white on the light theme's
+# dark-blue accent, near-black on the dark theme's light-blue accent) — a
+# theme-dependent glyph like the chevron, for the same URL-encoding reasons.
+_CHECK_LIGHT = (
+    "url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 "
+    "viewBox=%220 0 16 16%22%3E%3Cpath d=%22M3.5 8.5l3 3 6-7%22 stroke=%22%23ffffff%22 "
+    "stroke-width=%222%22 fill=%22none%22 stroke-linecap=%22round%22 "
+    "stroke-linejoin=%22round%22/%3E%3C/svg%3E')"
+)
+_CHECK_DARK = _CHECK_LIGHT.replace("%23ffffff", "%230c0d10")
 
 # The element baseline + the component classes. Theme-independent: the two
 # theme-dependent declarations (color-scheme, chevron ink) are prepended by
@@ -121,12 +134,64 @@ select:not([multiple]) {
 }
 select[multiple] { padding: 4px; }
 select[multiple] option { padding: 3px 8px; border-radius: var(--radius); }
+textarea { resize: vertical; font-family: var(--sans); }
 select:focus-visible, textarea:focus-visible, input:focus-visible {
   outline: none; border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
-input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
-::placeholder { color: var(--muted-2); opacity: 1; }
+::placeholder { color: var(--muted); opacity: 1; }
+
+/* ---- own every pixel: no native chrome anywhere the OS would draw its own.
+   The kit draws the checkbox/radio, hides the search-cancel/number-spinner/
+   resizer widgets, themes the scrollbars, tames autofill, and owns the text
+   selection + caret — so a surface never inherits an OS accent it can't match
+   the palette to. ---- */
+
+/* themed thin scrollbars (Firefox + WebKit) */
+* { scrollbar-width: thin; scrollbar-color: var(--border-2) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border-2);
+  border-radius: var(--radius-full); border: 2px solid transparent;
+  background-clip: padding-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* kit-drawn checkbox / radio (the native accent-color box is gone) */
+input[type="checkbox"], input[type="radio"] {
+  appearance: none; -webkit-appearance: none; flex: none;
+  width: 15px; height: 15px; margin: 0; vertical-align: -2px; cursor: pointer;
+  border: 1px solid var(--border-2); background: var(--paper);
+  transition: border-color var(--transition), background var(--transition);
+}
+input[type="checkbox"] { border-radius: var(--radius); }
+input[type="radio"] { border-radius: var(--radius-full); }
+input[type="checkbox"]:checked, input[type="radio"]:checked {
+  border-color: var(--accent); background-color: var(--accent);
+}
+input[type="checkbox"]:checked {
+  background-image: var(--k-check); background-repeat: no-repeat;
+  background-position: center; background-size: 13px;
+}
+input[type="radio"]:checked { box-shadow: inset 0 0 0 2px var(--surface); }
+
+/* hide the native search-cancel, number spinners, and drag-resize handle */
+input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+::-webkit-resizer { display: none; }
+
+/* autofill: repaint the browser's yellow inset over the kit surface */
+input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:focus,
+textarea:-webkit-autofill, select:-webkit-autofill {
+  -webkit-text-fill-color: var(--fg);
+  -webkit-box-shadow: 0 0 0 1000px var(--paper) inset;
+  caret-color: var(--fg);
+}
+
+/* text selection + caret ride the accent */
+::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+input, textarea, select, [contenteditable] { caret-color: var(--accent); }
 
 /* ---- button hierarchy: primary (one per view) / quiet / danger ---- */
 .k-btn {
@@ -136,10 +201,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   border: 1px solid transparent; background: transparent; color: var(--fg);
   white-space: nowrap;
   transition: color var(--transition), border-color var(--transition),
-    background var(--transition), filter var(--transition);
+    background var(--transition);
 }
 .k-btn-primary { background: var(--accent); color: var(--accent-contrast); }
-.k-btn-primary:hover { filter: brightness(1.08); }
+/* hover deepens the accent toward the ink (color-mix), not a filter — so the
+   transition stays a plain background tween and never touches the whole box. */
+.k-btn-primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--fg)); }
 .k-btn-quiet { border-color: var(--border); color: var(--muted); }
 .k-btn-quiet:hover { color: var(--fg); border-color: var(--border-2); }
 .k-btn-danger { border-color: transparent; color: var(--bad); }
@@ -149,10 +216,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
    fs-caption + the old 3px padding measured ~23px, just under it. */
 .k-btn-sm { font-size: var(--fs-caption); padding: 3px 9px; min-height: 24px; }
 
-/* ---- chips: ONE badge shape (radius-full · micro · uppercase) ---- */
+/* ---- chips: ONE badge shape (radius-full · caption · uppercase) ---- */
 .k-chip {
   display: inline-flex; align-items: center; gap: 4px;
-  font-size: var(--fs-micro); font-weight: 600; line-height: 1.5;
+  font-size: var(--fs-caption); font-weight: 600; line-height: 1.5;
   text-transform: uppercase; letter-spacing: 0.05em;
   border-radius: var(--radius-full); padding: 1px 8px;
   border: 1px solid var(--border); color: var(--muted); background: transparent;
@@ -163,7 +230,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .k-chip-bad  { color: var(--bad);  border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
 .k-chip-accent { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .k-chip-mono { font-family: var(--mono); text-transform: none; letter-spacing: 0.02em; }
-button.k-chip, .k-chip-btn { cursor: pointer; font: inherit; font-size: var(--fs-micro);
+button.k-chip, .k-chip-btn { cursor: pointer; font: inherit; font-size: var(--fs-caption);
   font-weight: 600; transition: color var(--transition), border-color var(--transition); }
 button.k-chip:hover, .k-chip-btn:hover { color: var(--fg); border-color: var(--border-2); }
 button.k-chip.is-on, .k-chip-btn.is-on { color: var(--accent); border-color: var(--accent); }
@@ -186,7 +253,7 @@ a.k-tick-sym:hover { color: var(--accent); }
 .k-menu li.sel, .k-menu li:hover { background: var(--paper); }
 
 /* ---- field/section caption ---- */
-.k-label { font-size: var(--fs-micro); font-weight: 600; color: var(--muted);
+.k-label { font-size: var(--fs-caption); font-weight: 600; color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.06em; }
 
 /* ---- mobile: 16px floor prevents iOS from zooming on input focus ---- */
@@ -194,21 +261,20 @@ a.k-tick-sym:hover { color: var(--accent); }
   input, select, textarea { font-size: 16px; }
 }
 
-/* ---- pipeline panel table (canonical layout for command-center tabs) ---- */
+/* ---- data table: ONE cell padding (design-sync 2026-07-19 unified .p-table
+   with .prose table — both are var(--sp-2) var(--sp-3) now). .p-table is the
+   command-center layout; .prose table is rendered-prose. Same rhythm. ---- */
 .p-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
 .p-table th, .p-table td {
-  padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left;
-  vertical-align: top;
+  padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border);
+  text-align: left; vertical-align: top;
 }
 .p-table td.num, .p-table th.num {
   text-align: right; font-variant-numeric: tabular-nums;
 }
 
-/* ---- pipeline panel pill (inline semantic badge; no color — variants add it) ---- */
-.p-pill {
-  display: inline-block; padding: 1px 8px; border-radius: var(--radius-full);
-  font-size: var(--fs-caption); font-weight: 600; white-space: nowrap;
-}
+/* (The neutral .p-pill inline badge was folded into .k-pill — design-sync
+   2026-07-19: a colorless pill is just .k-pill with no tone modifier.) */
 
 /* ---- status/score pills: ONE filled badge — a soft status fill + token ink
    (design_language §3). This is the canonical replacement for the per-panel
@@ -269,8 +335,26 @@ a.k-tick-sym:hover { color: var(--accent); }
 @keyframes k-overlay-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes k-overlay-rise { from { transform: translateY(6px); opacity: 0; }
   to { transform: none; opacity: 1; } }
+
+/* ---- disclosure (details/summary): the native triangle marker is gone; the
+   kit draws the one chevron (--k-chevron), rotating 90deg on [open], and the
+   revealed body gets the same 150ms rise as an overlay. One marker, one motion,
+   everywhere a <details> appears. A surface that wants no marker (e.g. a custom
+   summary row) sets `list-style: none` and its own ::before — but by default,
+   this is the disclosure look. ---- */
+summary { cursor: pointer; list-style: none; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: ""; display: inline-block; width: 12px; height: 12px;
+  margin-right: var(--sp-1); vertical-align: -1px; flex: none;
+  background-image: var(--k-chevron); background-repeat: no-repeat;
+  background-position: center; background-size: 12px;
+  transform: rotate(-90deg); transition: transform var(--transition); }
+details[open] > summary::before { transform: rotate(0deg); }
+details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
+
 @media (prefers-reduced-motion: reduce) {
-  .k-scrim, .k-overlay { animation-duration: 0.01ms; }
+  .k-scrim, .k-overlay, details[open] > *:not(summary) { animation-duration: 0.01ms; }
+  summary::before { transition: none; }
 }
 
 /* ---- panel toolbar: the ONE operating band (design_language §6.1). Title on
@@ -293,7 +377,7 @@ a.k-tick-sym:hover { color: var(--accent); }
 .prose > :first-child { margin-top: 0; }
 .prose > :last-child { margin-bottom: 0; }
 .prose p { margin: 0 0 var(--sp-3); }
-.prose h3 { font-size: var(--fs-section); font-weight: 600; color: var(--fg);
+.prose h3 { font-size: var(--fs-title); font-weight: 600; color: var(--fg);
   margin: var(--sp-4) 0 var(--sp-2); }
 .prose h4, .prose h5, .prose h6 { font-size: var(--fs-body); font-weight: 600;
   color: var(--fg); margin: var(--sp-3) 0 var(--sp-1); }
@@ -308,8 +392,9 @@ a.k-tick-sym:hover { color: var(--accent); }
   margin: 0 0 var(--sp-3); }
 .prose th, .prose td { padding: var(--sp-2) var(--sp-3);
   border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
-.prose th { font-size: var(--fs-caption); font-weight: 600; color: var(--muted);
-  text-transform: uppercase; letter-spacing: 0.04em; }
+/* prose table headers are sentence-case (uppercase+tracking is reserved for the
+   Label / Chip / Pill kit primitives — design-sync 2026-07-19). */
+.prose th { font-size: var(--fs-caption); font-weight: 600; color: var(--muted); }
 
 /* ---- provenance / data-quality rows (design_language §10; Law: provenance is
    actionable). prov_row()/prov_drawer()/prov_case() are the ONE render boundary
@@ -329,29 +414,20 @@ a.k-tick-sym:hover { color: var(--accent); }
 .k-prov-actions { flex: none; display: inline-flex; align-items: center;
   gap: var(--sp-2); }
 
-/* severity tick: a tone dot + uppercase label. THE one place halt/warn/grey is
-   decided (prov_severity_tone) — an unknown severity degrades to a muted tick,
-   never the wrong color. */
-.k-prov-tick { display: inline-flex; align-items: center; gap: var(--sp-1);
-  font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.05em; white-space: nowrap; color: var(--muted); }
-.k-prov-tick::before { content: ""; width: 7px; height: 7px; flex: none;
-  border-radius: var(--radius-full); background: currentColor; }
-.k-prov-tick-bad   { color: var(--bad); }
-.k-prov-tick-warn  { color: var(--warn); }
-.k-prov-tick-ok    { color: var(--ok); }
-.k-prov-tick-muted { color: var(--muted); }
+/* severity tick = Dot + Label (design-sync 2026-07-19: was the bespoke
+   .k-prov-tick; now composed from the kit's .k-dot tone + .k-label — prov_
+   severity_tick() emits `<span class="k-prov-sev"><span class="k-dot k-dot-
+   {tone}"></span><span class="k-label">HALT</span></span>`). The tone rides the
+   dot (prov_severity_tone); the uppercase word is a plain .k-label. THE one
+   place halt/warn/grey is decided — an unknown severity degrades to a muted
+   dot, never the wrong color. .k-prov-sev is layout only. */
+.k-prov-sev { display: inline-flex; align-items: center; gap: var(--sp-1);
+  white-space: nowrap; }
 
-/* inline action: a small quiet control (resolve/refresh/diagnose) or a /source
-   deep-link, radius-full like a chip. */
-.k-prov-act { font: inherit; font-size: var(--fs-caption); font-weight: 600;
-  color: var(--accent); background: transparent; border: 1px solid var(--border);
-  border-radius: var(--radius-full); padding: 1px 10px; cursor: pointer;
-  text-decoration: none; white-space: nowrap;
-  transition: border-color var(--transition), color var(--transition); }
-.k-prov-act:hover { border-color: var(--accent); }
-.k-prov-act[disabled], .k-prov-act[aria-disabled="true"] { color: var(--muted);
-  border-color: var(--border); cursor: progress; }
+/* (The bespoke .k-prov-act inline action was folded into the button kit —
+   design-sync 2026-07-19: prov_action() now emits `.k-btn .k-btn-quiet
+   .k-btn-sm` (a small quiet button, or an `<a>` carrying the same classes for
+   the /source deep-link). One button shape, one hover.) */
 
 /* drill-down drawer (generalizes the evals failed-case drawer): a <details>
    whose summary toggles the body; per-case rows nest inside. */
@@ -367,9 +443,9 @@ a.k-tick-sym:hover { color: var(--accent); }
   margin: var(--sp-1) 0; }
 .k-prov-evidence { display: grid; grid-template-columns: 1fr 1fr;
   gap: var(--sp-2); margin: var(--sp-1) 0; }
-.k-prov-evidence-label { font-size: var(--fs-micro); color: var(--muted);
+.k-prov-evidence-label { font-size: var(--fs-caption); color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.04em; }
-.k-prov-evidence pre { font-family: var(--mono); font-size: var(--fs-micro);
+.k-prov-evidence pre { font-family: var(--mono); font-size: var(--fs-caption);
   color: var(--fg-soft); background: var(--paper); border: 1px solid var(--border);
   border-radius: var(--radius); padding: var(--sp-2); margin: var(--sp-1) 0 0;
   white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
@@ -385,11 +461,19 @@ def controls_css(default: str = "paper") -> str:
     the ``[data-theme="dark"]`` overrides for theme-switching surfaces.
     """
     if default == "dark":
-        head = ":root { color-scheme: dark; --k-chevron: " + _CHEVRON_DARK + "; }\n"
+        head = (
+            ":root { color-scheme: dark; "
+            "--k-chevron: " + _CHEVRON_DARK + " /* @kind other */; "
+            "--k-check: " + _CHECK_DARK + " /* @kind other */; }\n"
+        )
     elif default == "paper":
         head = (
-            ":root { color-scheme: light; --k-chevron: " + _CHEVRON_LIGHT + "; }\n"
-            ':root[data-theme="dark"] { color-scheme: dark; --k-chevron: ' + _CHEVRON_DARK + "; }\n"
+            ":root { color-scheme: light; "
+            "--k-chevron: " + _CHEVRON_LIGHT + " /* @kind other */; "
+            "--k-check: " + _CHECK_LIGHT + " /* @kind other */; }\n"
+            ':root[data-theme="dark"] { color-scheme: dark; '
+            "--k-chevron: " + _CHEVRON_DARK + " /* @kind other */; "
+            "--k-check: " + _CHECK_DARK + " /* @kind other */; }\n"
         )
     else:
         raise ValueError(f"default must be 'paper' or 'dark', got {default!r}")
@@ -548,13 +632,21 @@ def chip_tone_class(tone: str) -> str:
 
 def prov_severity_tick(severity: str | None, *, label: str | None = None) -> str:
     """The canonical data-quality severity indicator: a tone dot + short label
-    (HALT / WARN). Tone via :func:`prov_severity_tone`; ``label`` overrides the
-    text (default: the severity itself, upper-cased; blank → an em-dash)."""
+    (HALT / WARN), composed from the kit's ``.k-dot`` + ``.k-label`` (the
+    bespoke ``.k-prov-tick`` was folded into those primitives, design-sync
+    2026-07-19). Tone via :func:`prov_severity_tone` rides the dot; ``label``
+    overrides the text (default: the severity itself, upper-cased; blank → an
+    em-dash). ``.k-prov-sev`` is a layout-only inline-flex wrapper."""
     from html import escape
 
     tone = prov_severity_tone(severity)
     text = (label if label is not None else (severity or "")).strip().upper() or "—"
-    return f'<span class="k-prov-tick k-prov-tick-{tone}">{escape(text)}</span>'
+    return (
+        '<span class="k-prov-sev">'
+        f'<span class="k-dot k-dot-{tone}"></span>'
+        f'<span class="k-label">{escape(text)}</span>'
+        "</span>"
+    )
 
 
 def prov_action(
@@ -573,24 +665,27 @@ def prov_action(
     ``data-prov-body`` attributes; the consuming surface's small delegated
     listener POSTs it (the freshness peek's streaming contract, or the resolve
     fetch). ``issue_id`` rides as ``data-issue-id`` so a resolve handler can
-    target the row. Returns escaped HTML."""
+    target the row. Emits the kit button (``.k-btn .k-btn-quiet .k-btn-sm`` — a
+    small quiet control; the bespoke ``.k-prov-act`` was folded into the button
+    kit, design-sync 2026-07-19). Returns escaped HTML."""
     import json
     from html import escape
 
+    cls = "k-btn k-btn-quiet k-btn-sm"
     attrs = f' title="{escape(title, quote=True)}"' if title else ""
     if issue_id is not None:
         attrs += f' data-issue-id="{int(issue_id)}"'
     if href is not None:
-        return f'<a class="k-prov-act" href="{escape(href, quote=True)}"{attrs}>{escape(label)}</a>'
+        return f'<a class="{cls}" href="{escape(href, quote=True)}"{attrs}>{escape(label)}</a>'
     if post_url is not None:
         body = escape(json.dumps(post_body or {}), quote=True)
         return (
-            '<button type="button" class="k-prov-act" '
+            f'<button type="button" class="{cls}" '
             f'data-prov-post="{escape(post_url, quote=True)}" '
             f'data-prov-body="{body}"{attrs}>{escape(label)}</button>'
         )
     # No destination — a defensive inert marker (shouldn't happen in practice).
-    return f'<span class="k-prov-act" aria-disabled="true"{attrs}>{escape(label)}</span>'
+    return f'<span class="{cls}" aria-disabled="true"{attrs}>{escape(label)}</span>'
 
 
 def prov_row(

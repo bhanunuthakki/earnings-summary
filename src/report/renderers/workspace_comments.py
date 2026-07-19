@@ -796,7 +796,7 @@ CSS = r"""
   pointer-events: auto;
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 20px; height: 20px; padding: 0 6px;
-  font-family: var(--mono); font-size: var(--fs-micro); font-weight: 600;
+  font-family: var(--mono); font-size: var(--fs-caption); font-weight: 600;
   background: color-mix(in srgb, var(--fg) 4%, transparent);
   border: 1px solid var(--hairline);
   border-radius: 10px;
@@ -830,7 +830,7 @@ CSS = r"""
   display: flex; align-items: flex-start; justify-content: space-between;
   padding: 14px 16px; border-bottom: 1px solid var(--hairline);
 }
-.cmt-sidebar-title { font-size: var(--fs-section); font-weight: 600; color: var(--fg); }
+.cmt-sidebar-title { font-size: var(--fs-title); font-weight: 600; color: var(--fg); }
 .cmt-sidebar-sub {
   font-size: var(--fs-caption); color: var(--muted); margin-top: 2px;
   font-family: var(--mono);
@@ -847,7 +847,7 @@ CSS = r"""
    The warn tone fill lives on .k-pill-warn now, not here. */
 .cmt-outbox-badge {
   margin: 2px 8px 0 auto;
-  font-size: var(--fs-micro);
+  font-size: var(--fs-caption);
   font-family: var(--mono);
   text-transform: uppercase; letter-spacing: 0.04em;
 }
@@ -858,7 +858,7 @@ CSS = r"""
    refine only here. */
 .cmt-health-pill {
   margin: 2px 6px 0 6px;
-  font-size: var(--fs-micro);
+  font-size: var(--fs-caption);
   font-family: var(--mono);
   text-transform: uppercase; letter-spacing: 0.04em;
 }
@@ -888,7 +888,7 @@ CSS = r"""
 }
 .cmt-card-head {
   display: flex; align-items: center; gap: 6px;
-  font-size: var(--fs-micro); color: var(--muted);
+  font-size: var(--fs-caption); color: var(--muted);
   margin-bottom: 6px;
   text-transform: uppercase; letter-spacing: 0.04em;
 }

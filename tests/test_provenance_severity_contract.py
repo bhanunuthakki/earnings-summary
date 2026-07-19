@@ -69,14 +69,16 @@ def test_tone_resolution_is_enum_keyed() -> None:
 def test_halt_tick_is_not_muted() -> None:
     """The literal regression: a HALT issue must render the BAD tone, never the
     muted grey the old renderer produced."""
+    # design-sync 2026-07-19: the bespoke .k-prov-tick was folded into the kit's
+    # Dot+Label — the tone now rides the .k-dot, the word is a plain .k-label.
     halt = prov_severity_tick("halt")
-    assert "k-prov-tick-bad" in halt
-    assert "k-prov-tick-muted" not in halt
+    assert "k-dot-bad" in halt
+    assert "k-dot-muted" not in halt
     assert ">HALT<" in halt
     warn = prov_severity_tick("warn")
-    assert "k-prov-tick-warn" in warn
+    assert "k-dot-warn" in warn
     # Unknown severity still renders (degraded), it doesn't blow up or vanish.
-    assert "k-prov-tick-muted" in prov_severity_tick("legacy_value")
+    assert "k-dot-muted" in prov_severity_tick("legacy_value")
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +146,7 @@ def test_prov_row_carries_tick_stamp_note_and_action() -> None:
         actions='<button class="k-prov-act">Refresh</button>',
     )
     assert 'class="k-prov"' in html
-    assert "k-prov-tick-bad" in html
+    assert "k-dot-bad" in html
     assert "FMP endpoints" in html
     assert "k-prov-stamp" in html
     assert "12 endpoints" in html

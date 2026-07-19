@@ -390,7 +390,7 @@ CSS = (
   padding: 12px 14px; border-bottom: 1px solid var(--hairline);
 }
 .chat-title { font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
-.chat-sub { font-size: var(--fs-micro); color: var(--muted); margin-top: 2px; font-family: var(--mono); }
+.chat-sub { font-size: var(--fs-caption); color: var(--muted); margin-top: 2px; font-family: var(--mono); }
 .chat-close {
   background: transparent; border: none; color: var(--muted);
   font-size: 20px; line-height: 1; cursor: pointer; padding: 0 6px;
@@ -405,7 +405,7 @@ CSS = (
   font-size: var(--fs-body); line-height: 1.55;
 }
 .chat-role-tag {
-  font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em;
+  font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em;
   font-weight: 600;
 }
 .chat-role-user { background: color-mix(in srgb, var(--accent) 9%, transparent); border-left: 2px solid var(--accent); }

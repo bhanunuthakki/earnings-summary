@@ -1943,7 +1943,7 @@ _PANEL_CSS = """<style>
 .adc-kpi b { color: var(--fg); font-variant-numeric: tabular-nums; margin-right: 4px; }
 .adc-table { margin-bottom: 10px; }
 .adc-line { font-size: var(--fs-caption); color: var(--muted); margin: 4px 0; }
-.adc-sub { font-size: var(--fs-section); font-weight: 600; color: var(--muted);
+.adc-sub { font-size: var(--fs-body); font-weight: 600; color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.05em; margin: 12px 0 4px; }
 /* Timeline kinds: the filled status pill is now the control kit's .k-pill
    (+ k-pill-bad for bear append, k-pill-ok for thesis update; every other kind
