@@ -164,6 +164,32 @@ def resolve_kpi_definition_name(
     return best_name
 
 
+def engine_formula_definition(name: str) -> str | None:
+    """If ``name`` is a ``metrics_engine`` REGISTRY ``formula_key``, return a
+    rich "display_formula — method_notes" tooltip string; ``None`` otherwise
+    (the caller falls back to the generic kpi_definitions-derived tooltip).
+
+    Phase 3 wiring (docs/design/bottoms_up_metrics_engine.md §6): every
+    ``metrics_engine`` computed value is persisted with ``kpi_definitions.name
+    == formula.formula_key`` verbatim (``metrics_engine.io._persist_attempt``
+    calls ``find_or_create_kpi_definition(..., name=formula.formula_key,
+    ...)``), so a ``formula_key`` like ``"pe_ttm"`` or ``"gross_margin"`` IS a
+    KPI name the moment the engine has run for a ticker. Without this
+    hookup, the DIY picker / Ask tooltip would fall back to the generic
+    "Company KPI 'pe_ttm'" placeholder instead of surfacing the registry's
+    own documented formula + method notes — the read-side half of the
+    engine's provenance contract (§3: "what formula produced this number").
+    A lazy, function-local import avoids a module-load-time dependency from
+    this low-level resolver onto the higher-level metrics_engine package.
+    """
+    from compute.metrics_engine.registry import latest as latest_formula
+
+    formula = latest_formula(name)
+    if formula is None:
+        return None
+    return f"{formula.display_formula} — {formula.method_notes}"
+
+
 def reporting_cadence_for(conn: sqlite3.Connection, ticker: str, requested: str) -> str:
     """Return the reporting_cadence ('quarterly' | 'annual' | 'ttm') for the
     definition best matching ``requested``, defaulting to ``'quarterly'``.

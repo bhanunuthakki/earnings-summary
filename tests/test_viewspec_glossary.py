@@ -95,6 +95,21 @@ def test_kpi_definition_titles_carry_unit_source_notes(db: Path) -> None:
     assert kpi_definition_titles(db.parent / "nope.db", ["NIM"]) == {}
 
 
+def test_kpi_definition_titles_resolves_engine_formula_before_db(db: Path) -> None:
+    """Phase 3: a metrics_engine REGISTRY formula_key (e.g. 'pe_ttm') resolves
+    from the registry's own display_formula/method_notes -- DB-independent,
+    so it resolves even with no DB at all (unlike a plain kpi_definitions
+    name, which needs a row to exist)."""
+    titles = kpi_definition_titles(None, ["pe_ttm"])
+    assert "price / eps_diluted_ttm" in titles["pe_ttm"]
+    assert "live spot quote" in titles["pe_ttm"]
+
+    # A mix of an engine formula_key and a plain DB-backed name resolves both.
+    mixed = kpi_definition_titles(db, ["gross_margin", "NIM"], ["TST"])
+    assert "gross_profit / revenue" in mixed["gross_margin"]
+    assert "unit: percent" in mixed["NIM"]
+
+
 def test_metric_definitions_keyed_by_token(db: Path) -> None:
     refs = [
         MetricRef(domain="fin", key="revenue"),

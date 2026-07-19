@@ -119,6 +119,20 @@ _DECISION_ACTIONS_TIMEOUT_S = 120
 # Stage 0d (cockpit fundamentals) runs the financial_facts double-scan that
 # was measured at ~1.2s on prod (726k rows). 60s is generous.
 _FUNDAMENTALS_TIMEOUT_S = 60
+# Stage 0d2 (derived metrics) runs the bottoms-up metrics engine
+# (compute_derived_metrics.py --all, portfolio+evaluation scope): pure
+# SQLite compute over financial_facts (the idempotent input-fingerprint
+# skip makes a no-change morning a fast no-op) PLUS one threaded live-price
+# prefetch for the Phase-3 valuation formulas (8 workers x a 15s per-ticker
+# cap, the same budget shape as stage 0e's reprice fetch: worst case
+# ceil(~48/8) * 15s = 90s for the price leg). First-ever run over a
+# ticker's full history is the slow path (~39 formulas x ~20 quarters of
+# attempt rows); a steady-state morning rewrites only the valuation rows
+# (the live price changes daily, changing their fingerprint) plus any
+# quarter whose facts actually changed. No LLM calls -- does not compete
+# for the 04:00 window's protected Claude-CLI quota. 10 min covers a cold
+# backfill morning; a measured steady-state run is expected well under 2.
+_DERIVED_METRICS_TIMEOUT_S = 600
 # Stage 0e (DCF re-price) re-divides each persisted fair value by a fresh live
 # price (per-ticker source-stack read, no DCF rebuild) so the trim/sell ladder +
 # next-dollar "ret" factor don't run on a stale price leg. Reads only
@@ -161,6 +175,7 @@ STAGE_DECISIONS = "stage_0b_decisions"
 STAGE_LIFECYCLE = "stage_0c_lifecycle"
 STAGE_DECISION_ACTIONS = "stage_0c2_decision_actions"
 STAGE_FUNDAMENTALS = "stage_0d_fundamentals"
+STAGE_DERIVED_METRICS = "stage_0d2_derived_metrics"
 STAGE_REPRICE = "stage_0e_reprice"
 STAGE_CANDIDATE_FIT = "stage_0f_candidate_fit"
 STAGE_FACTOR_PROXIES = "stage_0g_factor_proxies"
@@ -177,6 +192,7 @@ _ALL_STAGE_KEYS = (
     STAGE_LIFECYCLE,
     STAGE_DECISION_ACTIONS,
     STAGE_FUNDAMENTALS,
+    STAGE_DERIVED_METRICS,
     STAGE_REPRICE,
     STAGE_CANDIDATE_FIT,
     STAGE_FACTOR_PROXIES,
@@ -389,6 +405,36 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
                     *fundamentals_db_args,
                 ],
                 timeout_s=_FUNDAMENTALS_TIMEOUT_S,
+            )
+        )
+        # Stage 0d2 -- bottoms-up derived metrics (metrics engine Phases 1-3):
+        # compute every registry formula (margins/growth/returns/liquidity/
+        # leverage/efficiency/per-share + the live-price-wired valuation set)
+        # into kpi_facts + metric_computation_attempts BEFORE the trigger
+        # sweep (stage 1) reads kpi_facts -- the "runs as a stage immediately
+        # after the statement-ingestion stages, before any thesis/break-rule
+        # evaluation" placement docs/design/bottoms_up_metrics_engine.md
+        # section 5 specifies (statement ingestion itself runs on its own
+        # fetch cron, so within THIS pipeline the constraint is simply
+        # "before stage 1"). Grouped with the other local-substrate compute
+        # refreshes (0d/0e/0f). Idempotent: unchanged facts skip via
+        # input_fingerprint, so a normal morning re-writes only the
+        # valuation rows. Only --db is forwarded (note: this CLI's flag is
+        # --db, not --db-path -- it predates the pipeline wiring and follows
+        # derive_kpis_from_fmp.py's flag name); not user-scoped, no LLM.
+        # Skipped on the re-render-only path (--skip-triggers).
+        derived_metrics_db_args = ["--db", str(args.db_path)] if args.db_path is not None else []
+        stages.append(
+            _Stage(
+                key=STAGE_DERIVED_METRICS,
+                label="Stage 0d2 - derived metrics (compute_derived_metrics.py)",
+                argv=[
+                    py,
+                    str(exec_dir / "compute_derived_metrics.py"),
+                    "--all",
+                    *derived_metrics_db_args,
+                ],
+                timeout_s=_DERIVED_METRICS_TIMEOUT_S,
             )
         )
         # Stage 0e -- DCF price-leg re-price (L6): re-divide each persisted fair

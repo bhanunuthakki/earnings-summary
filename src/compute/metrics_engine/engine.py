@@ -13,6 +13,12 @@ eps_diluted_yoy) needs BOTH the current and the same-concept prior-period
 value. Added a keyword-only prior_inputs parameter (default None,
 ignored by every non-growth formula) rather than overloading
 CanonicalConcept with synthetic _PRIOR members.
+
+Phase 3 (valuation): MARKET_CAP/PRICE arrive in `resolved` pre-resolved by
+`io._resolve_valuation_spot` (a live price fetch, never a financial_facts
+read) -- the dispatch functions below treat them like any other resolved
+Decimal, the same way EBITDA (itself computed upstream, never a raw input)
+is already treated by ebitda_margin/net_debt_to_ebitda.
 """
 
 from __future__ import annotations
@@ -23,7 +29,7 @@ from decimal import Decimal
 from pydantic import BaseModel
 
 from .inputs import CanonicalConcept
-from .registry import FormulaDef, ReasonCode
+from .registry import ENTERPRISE_VALUE_STRICT_OMITTED_FLAG, FormulaDef, ReasonCode
 
 ResolvedInputs = dict[CanonicalConcept, Decimal | None]
 
@@ -524,6 +530,75 @@ def _ebitda_cagr_3y(resolved: ResolvedInputs, prior: ResolvedInputs | None) -> C
     return _cagr_result("ebitda", current_ebitda, prior_ebitda)
 
 
+# ---------------------------------------------------------------------------
+# Phase 3 additions -- the valuation formulas (pe_ttm/ps_ttm/pb/ev_ebitda/
+# ev_sales/fcf_yield/earnings_yield) plus enterprise_value_strict, the shared
+# EV intermediate. MARKET_CAP/PRICE arrive in `resolved` already fully
+# resolved by io.py's live-price spot fetch (see io._resolve_valuation_spot)
+# -- these functions treat them like any other resolved Decimal, exactly as
+# EBITDA (also computed upstream of these dispatch functions, in
+# compute_ebitda) is treated by ebitda_margin/net_debt_to_ebitda above.
+# ---------------------------------------------------------------------------
+
+
+def compute_enterprise_value_strict(resolved: ResolvedInputs) -> Decimal | NotComputable:
+    """market_cap + net_debt_strict (registry.ENTERPRISE_VALUE_STRICT's
+    method_notes documents the v1 minority-interest/preferred-equity
+    omission)."""
+    market_cap = resolved.get(CanonicalConcept.MARKET_CAP)
+    if market_cap is None:
+        return _missing(CanonicalConcept.MARKET_CAP)
+    net_debt = compute_net_debt_strict(resolved)
+    if isinstance(net_debt, NotComputable):
+        return net_debt
+    return market_cap + net_debt
+
+
+def _enterprise_value_strict(
+    resolved: ResolvedInputs, _prior: ResolvedInputs | None
+) -> ComputeResult:
+    ev = compute_enterprise_value_strict(resolved)
+    if isinstance(ev, NotComputable):
+        return ev
+    return ComputedValue(value=ev, method_flags=(ENTERPRISE_VALUE_STRICT_OMITTED_FLAG,))
+
+
+def _pe_ttm(resolved: ResolvedInputs, _prior: ResolvedInputs | None) -> ComputeResult:
+    price = resolved.get(CanonicalConcept.PRICE)
+    eps = resolved.get(CanonicalConcept.EPS_DILUTED)
+    if price is None:
+        return _missing(CanonicalConcept.PRICE)
+    if eps is None:
+        return _missing(CanonicalConcept.EPS_DILUTED)
+    if eps <= 0:
+        return _denominator_le_zero(CanonicalConcept.EPS_DILUTED, eps)
+    return ComputedValue(value=price / eps)
+
+
+def _ev_ebitda(resolved: ResolvedInputs, _prior: ResolvedInputs | None) -> ComputeResult:
+    ev = compute_enterprise_value_strict(resolved)
+    if isinstance(ev, NotComputable):
+        return ev
+    ebitda = compute_ebitda(resolved)
+    if isinstance(ebitda, NotComputable):
+        return ebitda
+    if ebitda <= 0:
+        return _denominator_le_zero(CanonicalConcept.EBITDA, ebitda)
+    return ComputedValue(value=ev / ebitda, method_flags=(ENTERPRISE_VALUE_STRICT_OMITTED_FLAG,))
+
+
+def _ev_sales(resolved: ResolvedInputs, _prior: ResolvedInputs | None) -> ComputeResult:
+    ev = compute_enterprise_value_strict(resolved)
+    if isinstance(ev, NotComputable):
+        return ev
+    revenue = resolved.get(CanonicalConcept.REVENUE)
+    if revenue is None:
+        return _missing(CanonicalConcept.REVENUE)
+    if revenue <= 0:
+        return _denominator_le_zero(CanonicalConcept.REVENUE, revenue)
+    return ComputedValue(value=ev / revenue, method_flags=(ENTERPRISE_VALUE_STRICT_OMITTED_FLAG,))
+
+
 _DISPATCH: dict[str, Callable[[ResolvedInputs, ResolvedInputs | None], ComputeResult]] = {
     "gross_margin": _pct_ratio(CanonicalConcept.GROSS_PROFIT, CanonicalConcept.REVENUE),
     "operating_margin": _pct_ratio(CanonicalConcept.OPERATING_INCOME, CanonicalConcept.REVENUE),
@@ -569,6 +644,15 @@ _DISPATCH: dict[str, Callable[[ResolvedInputs, ResolvedInputs | None], ComputeRe
     "fcf_per_share": _per_share(CanonicalConcept.FREE_CASH_FLOW),
     "revenue_cagr_3y": _revenue_cagr_3y,
     "ebitda_cagr_3y": _ebitda_cagr_3y,
+    # Phase 3 -- valuation (spot price/market-cap, see io._VALUATION_FORMULA_KEYS).
+    "enterprise_value_strict": _enterprise_value_strict,
+    "pe_ttm": _pe_ttm,
+    "ps_ttm": _ratio(CanonicalConcept.MARKET_CAP, CanonicalConcept.REVENUE),
+    "pb": _ratio(CanonicalConcept.MARKET_CAP, CanonicalConcept.TOTAL_STOCKHOLDERS_EQUITY),
+    "ev_ebitda": _ev_ebitda,
+    "ev_sales": _ev_sales,
+    "fcf_yield": _pct_ratio(CanonicalConcept.FREE_CASH_FLOW, CanonicalConcept.MARKET_CAP),
+    "earnings_yield": _pct_ratio(CanonicalConcept.NET_INCOME, CanonicalConcept.MARKET_CAP),
 }
 
 

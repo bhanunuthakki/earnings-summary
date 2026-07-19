@@ -35,6 +35,7 @@ DECISIONS_SCRIPT = "record_decisions.py"
 LIFECYCLE_SCRIPT = "sync_position_lifecycle.py"
 DECISION_ACTIONS_SCRIPT = "reconcile_decision_actions.py"
 FUNDAMENTALS_SCRIPT = "refresh_cockpit_fundamentals.py"
+DERIVED_METRICS_SCRIPT = "compute_derived_metrics.py"
 REPRICE_SCRIPT = "reprice_dcf.py"
 CANDIDATE_FIT_SCRIPT = "refresh_candidate_fit.py"
 FACTOR_PROXIES_SCRIPT = "fetch_factor_proxies.py"
@@ -152,6 +153,7 @@ def test_all_stages_succeed(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
@@ -170,6 +172,7 @@ def test_all_stages_succeed(
     assert summary["stage_0c_lifecycle"] == "ok"
     assert summary["stage_0c2_decision_actions"] == "ok"
     assert summary["stage_0d_fundamentals"] == "ok"
+    assert summary["stage_0d2_derived_metrics"] == "ok"
     assert summary["stage_0e_reprice"] == "ok"
     assert summary["stage_0f_candidate_fit"] == "ok"
     assert summary["stage_0g_factor_proxies"] == "ok"
@@ -206,6 +209,7 @@ def test_stage1_failure_still_runs_feed(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
@@ -240,6 +244,7 @@ def test_feed_failure_still_runs_validation(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
@@ -259,8 +264,8 @@ def test_feed_failure_still_runs_validation(
 def test_all_stages_fail_exit_code_counts_failures(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Every stage failing (preflight included) → all fifteen still attempted,
-    exit code == 15."""
+    """Every stage failing (preflight included) → all sixteen still attempted,
+    exit code == 16."""
     fake = _RecordingRun(
         returncodes={
             PREFLIGHT_SCRIPT: 1,
@@ -270,6 +275,7 @@ def test_all_stages_fail_exit_code_counts_failures(
             LIFECYCLE_SCRIPT: 1,
             DECISION_ACTIONS_SCRIPT: 1,
             FUNDAMENTALS_SCRIPT: 1,
+            DERIVED_METRICS_SCRIPT: 1,
             REPRICE_SCRIPT: 1,
             CANDIDATE_FIT_SCRIPT: 1,
             FACTOR_PROXIES_SCRIPT: 1,
@@ -284,7 +290,7 @@ def test_all_stages_fail_exit_code_counts_failures(
 
     rc = run_morning_pipeline.main([])
 
-    assert rc == 15
+    assert rc == 16
     assert fake.scripts == [
         PREFLIGHT_SCRIPT,
         NEWS_SCRIPT,
@@ -293,6 +299,7 @@ def test_all_stages_fail_exit_code_counts_failures(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
@@ -311,6 +318,7 @@ def test_all_stages_fail_exit_code_counts_failures(
     assert summary["stage_0c_lifecycle"] == "failed"
     assert summary["stage_0c2_decision_actions"] == "failed"
     assert summary["stage_0d_fundamentals"] == "failed"
+    assert summary["stage_0d2_derived_metrics"] == "failed"
     assert summary["stage_0e_reprice"] == "failed"
     assert summary["stage_0f_candidate_fit"] == "failed"
     assert summary["stage_0g_factor_proxies"] == "failed"
@@ -346,6 +354,7 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
@@ -426,6 +435,7 @@ def test_skip_triggers_runs_only_the_feed_render(
     assert LIFECYCLE_SCRIPT not in fake.scripts
     assert DECISION_ACTIONS_SCRIPT not in fake.scripts
     assert FUNDAMENTALS_SCRIPT not in fake.scripts
+    assert DERIVED_METRICS_SCRIPT not in fake.scripts
     assert REPRICE_SCRIPT not in fake.scripts
     assert STANDUP_SCRIPT not in fake.scripts
 
@@ -436,6 +446,7 @@ def test_skip_triggers_runs_only_the_feed_render(
     assert summary["stage_0c_lifecycle"] == "skipped"
     assert summary["stage_0c2_decision_actions"] == "skipped"
     assert summary["stage_0d_fundamentals"] == "skipped"
+    assert summary["stage_0d2_derived_metrics"] == "skipped"
     assert summary["stage_0e_reprice"] == "skipped"
     assert summary["stage_1_triggers"] == "skipped"
     assert summary["stage_1b_standup"] == "skipped"
@@ -491,6 +502,7 @@ def test_validation_halt_counts_as_failed_stage_after_renders(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
@@ -523,6 +535,7 @@ def test_skip_validation_removes_only_stage3(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
@@ -674,6 +687,10 @@ def test_db_path_passed_to_all_stages_when_set(
         if _script_of(argv) == FACTOR_PROXIES_SCRIPT:
             continue  # no DB at all — takes --repo-root derived from the db
             # override instead (asserted in its own stage-0g test)
+        if _script_of(argv) == DERIVED_METRICS_SCRIPT:
+            # Its own flag name is --db (asserted in its stage-0d2 test).
+            assert _has_flag(argv, "--db", str(db_path))
+            continue
         assert _has_flag(argv, "--db-path", str(db_path))
 
 
@@ -727,6 +744,7 @@ def test_skip_news_removes_only_stage0(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
@@ -775,6 +793,7 @@ def test_news_failure_does_not_stop_triggers(
         LIFECYCLE_SCRIPT,
         DECISION_ACTIONS_SCRIPT,
         FUNDAMENTALS_SCRIPT,
+        DERIVED_METRICS_SCRIPT,
         REPRICE_SCRIPT,
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
@@ -875,6 +894,49 @@ def test_stage0e_reprice_takes_db_path_but_not_user_or_cost(
     assert _has_flag(reprice_argv, "--db-path", str(db_path))
     assert "--user-id" not in reprice_argv
     assert "--max-cost-usd" not in reprice_argv
+
+
+def test_stage0d2_derived_metrics_runs_between_fundamentals_and_triggers(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Stage 0d2 computes the bottoms-up derived metrics into kpi_facts AFTER
+    the fundamentals cache (0d) and BEFORE the trigger sweep (stage 1), which
+    reads kpi_facts — the docs/design/bottoms_up_metrics_engine.md §5
+    placement. Its failure must not block triggers: existing kpi_facts rows
+    simply stay at their last computed values."""
+    fake = _RecordingRun(returncodes={DERIVED_METRICS_SCRIPT: 1})
+    _install_fake(monkeypatch, fake)
+
+    rc = run_morning_pipeline.main([])
+    assert rc == 1  # exactly the derived-metrics stage failed
+    assert fake.scripts.index(FUNDAMENTALS_SCRIPT) < fake.scripts.index(DERIVED_METRICS_SCRIPT)
+    assert fake.scripts.index(DERIVED_METRICS_SCRIPT) < fake.scripts.index(TRIGGERS_SCRIPT)
+
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["stage_0d2_derived_metrics"] == "failed"
+    assert summary["stage_1_triggers"] == "ok"
+
+
+def test_stage0d2_derived_metrics_takes_db_flag_and_all_scope(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The derived-metrics CLI is not user-scoped and runs no LLM: --all is
+    always passed; the DB override flows through as --db (that CLI's own flag
+    name, unlike the other stages' --db-path); never --user-id /
+    --max-cost-usd."""
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+    db_path = tmp_path / "alt.db"
+
+    rc = run_morning_pipeline.main(["--db-path", str(db_path), "--user-id", "alice"])
+    assert rc == 0
+
+    argv = next(c for c in fake.calls if _script_of(c) == DERIVED_METRICS_SCRIPT)
+    assert "--all" in argv
+    assert _has_flag(argv, "--db", str(db_path))
+    assert "--db-path" not in argv
+    assert "--user-id" not in argv
+    assert "--max-cost-usd" not in argv
 
 
 def test_stage0g_factor_proxies_runs_between_candidate_fit_and_triggers(

@@ -11,6 +11,12 @@ definition tooltip:
 ``metric_definitions`` feeds ``ViewResult.definitions`` (row-label
 tooltips); ``attach_catalog_titles`` decorates the picker catalog. Both
 are best-effort: a missing DB/table simply yields fewer tooltips.
+
+Phase 3 (bottoms-up metrics engine): a ``kpi:`` name matching a
+``metrics_engine`` REGISTRY ``formula_key`` (``pe_ttm``, ``gross_margin``,
+...) resolves through ``compute.kpi_resolver.engine_formula_definition``
+first, surfacing the registry's own documented formula + method notes
+instead of the generic ``kpi_definitions``-derived fallback.
 """
 
 from __future__ import annotations
@@ -19,6 +25,8 @@ import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from compute.kpi_resolver import engine_formula_definition
 
 if TYPE_CHECKING:
     from viewspec.spec import MetricRef
@@ -76,23 +84,43 @@ def kpi_definition_titles(
 
     When several tickers define the same name, a row for one of ``tickers``
     wins, then any row with notes. Best-effort: missing DB/table → {}.
+
+    Phase 3 (bottoms-up metrics engine wiring): a name matching a
+    ``metrics_engine`` REGISTRY ``formula_key`` (``compute.kpi_resolver.
+    engine_formula_definition``) is resolved FIRST, from the registry's own
+    documented formula + method notes — richer and DB-independent, so it
+    resolves even before ``compute_derived_metrics`` has ever run for this
+    ticker. Only names the registry doesn't recognize fall through to the
+    ``kpi_definitions`` DB lookup below.
     """
     wanted = [n for n in dict.fromkeys(names) if n]
-    if not wanted or db_path is None or not db_path.exists():
+    if not wanted:
         return {}
+
+    out: dict[str, str] = {}
+    remaining: list[str] = []
+    for n in wanted:
+        engine_def = engine_formula_definition(n)
+        if engine_def is not None:
+            out[n] = engine_def
+        else:
+            remaining.append(n)
+    if not remaining or db_path is None or not db_path.exists():
+        return out
+
     try:
         conn = sqlite3.connect(str(db_path), timeout=5.0)
     except sqlite3.Error:
-        return {}
-    marks = ",".join("?" * len(wanted))
+        return out
+    marks = ",".join("?" * len(remaining))
     try:
         rows = conn.execute(
             f"SELECT name, ticker, unit, primary_source, fallback_source, notes "
             f"FROM kpi_definitions WHERE name IN ({marks})",
-            tuple(wanted),
+            tuple(remaining),
         ).fetchall()
     except sqlite3.Error:
-        return {}
+        return out
     finally:
         conn.close()
 
@@ -103,7 +131,6 @@ def kpi_definition_titles(
         has_notes = 0 if (row[5] is not None and str(row[5]).strip()) else 1
         return (ticker_hit, has_notes)
 
-    out: dict[str, str] = {}
     for row in sorted(rows, key=_rank):
         name = str(row[0])
         if name in out:

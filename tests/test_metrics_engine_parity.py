@@ -268,3 +268,59 @@ def test_compare_ticker_inventory_turnover_ratio_band_not_percent_band(
     results = compare_ticker(conn, tmp_path, "MELI")
     inv = next(r for r in results if r.formula_key == "inventory_turnover")
     assert inv.outcome == ParityOutcome.MATCH
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 -- valuation FMP field map (field names verified against a real
+# MELI _financial_ratios_ttm.json / _key_metrics_ttm.json cache row, see
+# parity.py's module docstring).
+# ---------------------------------------------------------------------------
+
+
+def test_load_fmp_reference_pe_ttm_not_rescaled(tmp_path: Path) -> None:
+    _write_fmp_cache(tmp_path, "MELI", "financial_ratios_ttm", "priceToEarningsRatioTTM", 41.875)
+    value = load_fmp_reference(tmp_path, "MELI", "pe_ttm")
+    assert value == Decimal("41.875")
+
+
+def test_load_fmp_reference_ps_ttm_uses_ratios_ttm_file(tmp_path: Path) -> None:
+    _write_fmp_cache(tmp_path, "MELI", "financial_ratios_ttm", "priceToSalesRatioTTM", 2.528)
+    value = load_fmp_reference(tmp_path, "MELI", "ps_ttm")
+    assert value == Decimal("2.528")
+
+
+def test_load_fmp_reference_ev_ebitda_uses_key_metrics_ttm_file(tmp_path: Path) -> None:
+    _write_fmp_cache(tmp_path, "MELI", "key_metrics_ttm", "evToEBITDATTM", 20.184)
+    value = load_fmp_reference(tmp_path, "MELI", "ev_ebitda")
+    assert value == Decimal("20.184")
+
+
+def test_load_fmp_reference_fcf_yield_rescales_fraction_to_percent(tmp_path: Path) -> None:
+    _write_fmp_cache(tmp_path, "MELI", "key_metrics_ttm", "freeCashFlowYieldTTM", 0.1332)
+    value = load_fmp_reference(tmp_path, "MELI", "fcf_yield")
+    assert value == Decimal("13.32")
+
+
+def test_load_fmp_reference_earnings_yield_rescales_fraction_to_percent(tmp_path: Path) -> None:
+    _write_fmp_cache(tmp_path, "MELI", "key_metrics_ttm", "earningsYieldTTM", 0.02388)
+    value = load_fmp_reference(tmp_path, "MELI", "earnings_yield")
+    assert value == Decimal("2.388")
+
+
+def test_load_fmp_reference_enterprise_value_strict_not_rescaled(tmp_path: Path) -> None:
+    _write_fmp_cache(tmp_path, "MELI", "key_metrics_ttm", "enterpriseValueTTM", 67678167906)
+    value = load_fmp_reference(tmp_path, "MELI", "enterprise_value_strict")
+    assert value == Decimal("67678167906")
+
+
+def test_compare_ticker_pe_ttm_valuation_band_5pct_relative(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """A price-snapshot-timing gap of ~4% must clear the valuation category's
+    +/-5% relative tolerance (docs/design/bottoms_up_metrics_engine.md
+    section 4's Phase 3 row) even though it fails a tighter band."""
+    _seed_kpi_fact(conn, ticker="MELI", formula_key="pe_ttm", value="41.0")
+    _write_fmp_cache(tmp_path, "MELI", "financial_ratios_ttm", "priceToEarningsRatioTTM", 42.5)
+    results = compare_ticker(conn, tmp_path, "MELI")
+    pe = next(r for r in results if r.formula_key == "pe_ttm")
+    assert pe.outcome == ParityOutcome.MATCH

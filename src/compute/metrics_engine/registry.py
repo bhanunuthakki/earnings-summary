@@ -17,6 +17,14 @@ Phase 2 scope: the remaining §1 catalog — the two `alt_of`-grouped pairs
 `interest_coverage`, the three turnover metrics + `cash_conversion_cycle`,
 the remaining per-share metrics, and the two 3-year CAGR metrics (the only
 `period_grid="fy"` formulas in the registry so far).
+
+Phase 3 scope: the §1 Valuation table — `pe_ttm`, `ps_ttm`, `pb`,
+`ev_ebitda`, `ev_sales`, `fcf_yield`, `earnings_yield`, plus
+`enterprise_value_strict` (the shared EV intermediate, also stored/queryable
+in its own right, mirroring `net_debt_strict`'s precedent). All 8 are
+`period_grid="ttm"` but computed ONLY at the latest calendar quarter — see
+`compute.metrics_engine.io._VALUATION_FORMULA_KEYS` for why a spot
+price/market-cap leg cannot be backfilled historically.
 """
 
 from __future__ import annotations
@@ -656,6 +664,192 @@ _PHASE_2_FORMULAS: tuple[FormulaDef, ...] = (
     EBITDA_CAGR_3Y,
 )
 
+# ---------------------------------------------------------------------------
+# Phase 3 catalog -- docs/design/bottoms_up_metrics_engine.md section 1's
+# Valuation table: the 7 valuation formulas wired to live price
+# (pe_ttm/ps_ttm/pb/ev_ebitda/ev_sales/fcf_yield/earnings_yield) plus
+# enterprise_value_strict, the shared intermediate they build on. Every
+# entry here is version 1, period_grid="ttm" (TTM fundamentals combined with
+# a SPOT price/market-cap leg -- see compute.metrics_engine.io's
+# _VALUATION_FORMULA_KEYS docstring for why these are computed ONLY at the
+# latest calendar quarter, never backfilled historically).
+# ---------------------------------------------------------------------------
+
+_MARKET_CAP_METHOD_NOTE = (
+    "market_cap is computed bottoms-up as a live spot price (sources.price."
+    "read_live_price -- the SAME multi-source stack src/dcf/reprice.py and "
+    "research_cockpit.profile_quote already use, per the mandate to reuse the "
+    "existing live-price path rather than add a new fetcher) times the latest "
+    "quarter's weighted_avg_shares_diluted, NOT read from the cached "
+    "historical_market_cap.json row docs/design/bottoms_up_metrics_engine.md "
+    "section 1 names. Deviation, justified: the cached file can be up to a day "
+    "stale relative to a live quote, which would otherwise silently misalign a "
+    "P/E computed from a fresh price against a P/S computed from yesterday's "
+    "cap -- computing both legs from the SAME price keeps every valuation "
+    "multiple internally consistent. Spot-only: computed ONLY for the latest "
+    "period (never backfilled to a historical calendar quarter), since a live "
+    "price has no historical equivalent without a separate price-series fetch. "
+    "Staleness is answerable without re-deriving anything: the kpi_facts row's "
+    "own period_end is the FUNDAMENTALS date (the TTM window's end); the "
+    "PRICE/MARKET_CAP inputs' own period_end inside computed_from.inputs[] is "
+    "the live quote's fetched_at date -- comparing the two tells you exactly "
+    "how stale the price leg is relative to the fundamentals leg."
+)
+
+ENTERPRISE_VALUE_STRICT_OMITTED_FLAG = "minority_interest_preferred_omitted"
+
+ENTERPRISE_VALUE_STRICT = FormulaDef(
+    formula_key="enterprise_value_strict",
+    version=1,
+    category=MetricCategory.VALUATION,
+    display_formula="market_cap + net_debt_strict",
+    method_notes=(
+        f"{_MARKET_CAP_METHOD_NOTE} Deviation from docs/design/"
+        "bottoms_up_metrics_engine.md section 1: the doc's formula additionally "
+        "adds minority_interest + preferred_equity, but neither concept has a "
+        "verified financial_facts.line_item mapping (no _LINE_ITEM_SPEC/XBRL-tag "
+        "entry exists for either, unlike net_debt_strict's constituent concepts, "
+        "which reuse Phase 1/2's already-verified fields) -- inventing an "
+        "unverified field name would break the engine's no-guessing discipline "
+        "(the same reasoning IFRS_FIELD_MAP and applicability's empty override "
+        "tables already apply). v1 ships the two-term sum and tags every "
+        f"successful compute with method_flag '{ENTERPRISE_VALUE_STRICT_OMITTED_FLAG}' "
+        "rather than silently guessing a field or blocking the whole metric; "
+        "adding the two remaining legs is a tracked follow-up once verified "
+        "against a roster filer that actually carries them."
+    ),
+    required_inputs=(
+        CanonicalConcept.MARKET_CAP,
+        CanonicalConcept.TOTAL_DEBT,
+        CanonicalConcept.CASH_AND_EQUIVALENTS,
+        CanonicalConcept.SHORT_TERM_INVESTMENTS,
+    ),
+    period_grid="ttm",
+    unit=Unit.ACTUAL,
+)
+
+PE_TTM = FormulaDef(
+    formula_key="pe_ttm",
+    version=1,
+    category=MetricCategory.VALUATION,
+    display_formula="price / eps_diluted_ttm",
+    method_notes=(
+        "price is a live spot quote (sources.price.read_live_price). "
+        "not_computable: denominator_le_zero when TTM diluted EPS <= 0 -- never "
+        "a negative or inverted P/E. Spot-only (see enterprise_value_strict's "
+        "method_notes for the shared spot-price/staleness contract)."
+    ),
+    required_inputs=(CanonicalConcept.PRICE, CanonicalConcept.EPS_DILUTED),
+    period_grid="ttm",
+    unit=Unit.RATIO,
+)
+
+PS_TTM = FormulaDef(
+    formula_key="ps_ttm",
+    version=1,
+    category=MetricCategory.VALUATION,
+    display_formula="market_cap / revenue_ttm",
+    method_notes=_MARKET_CAP_METHOD_NOTE,
+    required_inputs=(CanonicalConcept.MARKET_CAP, CanonicalConcept.REVENUE),
+    period_grid="ttm",
+    unit=Unit.RATIO,
+)
+
+PB = FormulaDef(
+    formula_key="pb",
+    version=1,
+    category=MetricCategory.VALUATION,
+    display_formula="market_cap / total_stockholders_equity",
+    method_notes=(
+        f"{_MARKET_CAP_METHOD_NOTE} not_computable: denominator_le_zero when "
+        "equity <= 0 (same reasoning as debt_to_equity)."
+    ),
+    required_inputs=(CanonicalConcept.MARKET_CAP, CanonicalConcept.TOTAL_STOCKHOLDERS_EQUITY),
+    period_grid="ttm",
+    unit=Unit.RATIO,
+)
+
+EV_EBITDA = FormulaDef(
+    formula_key="ev_ebitda",
+    version=1,
+    category=MetricCategory.VALUATION,
+    display_formula="enterprise_value_strict / ebitda_ttm",
+    method_notes=(
+        f"{_MARKET_CAP_METHOD_NOTE} Inherits enterprise_value_strict's "
+        "minority-interest/preferred-equity omission (method_flag "
+        f"'{ENTERPRISE_VALUE_STRICT_OMITTED_FLAG}' carried through) and the "
+        "same ebitda definition as ebitda_margin (operating_income + D&A)."
+    ),
+    required_inputs=(
+        CanonicalConcept.MARKET_CAP,
+        CanonicalConcept.TOTAL_DEBT,
+        CanonicalConcept.CASH_AND_EQUIVALENTS,
+        CanonicalConcept.SHORT_TERM_INVESTMENTS,
+        CanonicalConcept.OPERATING_INCOME,
+        CanonicalConcept.DEPRECIATION_AND_AMORTIZATION,
+    ),
+    period_grid="ttm",
+    unit=Unit.RATIO,
+    excluded_business_models=frozenset({BusinessModelClass.BANK, BusinessModelClass.INSURANCE}),
+)
+
+EV_SALES = FormulaDef(
+    formula_key="ev_sales",
+    version=1,
+    category=MetricCategory.VALUATION,
+    display_formula="enterprise_value_strict / revenue_ttm",
+    method_notes=(
+        f"{_MARKET_CAP_METHOD_NOTE} Inherits enterprise_value_strict's "
+        "minority-interest/preferred-equity omission (method_flag "
+        f"'{ENTERPRISE_VALUE_STRICT_OMITTED_FLAG}' carried through)."
+    ),
+    required_inputs=(
+        CanonicalConcept.MARKET_CAP,
+        CanonicalConcept.TOTAL_DEBT,
+        CanonicalConcept.CASH_AND_EQUIVALENTS,
+        CanonicalConcept.SHORT_TERM_INVESTMENTS,
+        CanonicalConcept.REVENUE,
+    ),
+    period_grid="ttm",
+    unit=Unit.RATIO,
+)
+
+FCF_YIELD = FormulaDef(
+    formula_key="fcf_yield",
+    version=1,
+    category=MetricCategory.VALUATION,
+    display_formula="free_cash_flow_ttm / market_cap (%)",
+    method_notes=_MARKET_CAP_METHOD_NOTE,
+    required_inputs=(CanonicalConcept.FREE_CASH_FLOW, CanonicalConcept.MARKET_CAP),
+    period_grid="ttm",
+    unit=Unit.PERCENT,
+)
+
+EARNINGS_YIELD = FormulaDef(
+    formula_key="earnings_yield",
+    version=1,
+    category=MetricCategory.VALUATION,
+    display_formula="net_income_ttm / market_cap (%)",
+    method_notes=(
+        f"{_MARKET_CAP_METHOD_NOTE} Inverse of trailing P/E, kept as its own "
+        "formula for direct comparability with fcf_yield (doc's own reasoning)."
+    ),
+    required_inputs=(CanonicalConcept.NET_INCOME, CanonicalConcept.MARKET_CAP),
+    period_grid="ttm",
+    unit=Unit.PERCENT,
+)
+
+_PHASE_3_FORMULAS: tuple[FormulaDef, ...] = (
+    ENTERPRISE_VALUE_STRICT,
+    PE_TTM,
+    PS_TTM,
+    PB,
+    EV_EBITDA,
+    EV_SALES,
+    FCF_YIELD,
+    EARNINGS_YIELD,
+)
+
 _PHASE_1_FORMULAS: tuple[FormulaDef, ...] = (
     GROSS_MARGIN,
     OPERATING_MARGIN,
@@ -677,7 +871,8 @@ _PHASE_1_FORMULAS: tuple[FormulaDef, ...] = (
 # dict[(formula_key, version), FormulaDef] per docs/design/
 # bottoms_up_metrics_engine.md §2's registry.py sketch.
 REGISTRY: dict[tuple[str, int], FormulaDef] = {
-    (f.formula_key, f.version): f for f in (*_PHASE_1_FORMULAS, *_PHASE_2_FORMULAS)
+    (f.formula_key, f.version): f
+    for f in (*_PHASE_1_FORMULAS, *_PHASE_2_FORMULAS, *_PHASE_3_FORMULAS)
 }
 
 
