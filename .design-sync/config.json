@@ -9,7 +9,9 @@
     "Placeholder": null
   },
   "overrides": {
-    "ThemeProvider": { "cardMode": "single", "primaryStory": "DarkDocument" }
+    "ThemeProvider": { "cardMode": "single", "primaryStory": "DarkDocument" },
+    "Button": { "cardMode": "column" },
+    "Chip": { "cardMode": "column" }
   },
   "readmeHeader": ".design-sync/conventions.md"
 }
