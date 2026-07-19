@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from decimal import Decimal
+
 from models.facts import FiscalPeriodType
 from pipeline.sec_xbrl import (
     CIK_MAP,
@@ -18,6 +20,7 @@ from pipeline.sec_xbrl import (
     _modal_currency,
     _period_span_months,
     _resolve_fiscal_period_type,
+    _same_doc_pick_key,
     insert_facts_from_companyfacts,
     upsert_accession_documents,
 )
@@ -620,3 +623,98 @@ def test_ifrs_filer_maps_parent_profit_to_net_income(conn: sqlite3.Connection) -
     )
     rows = conn.execute("SELECT value FROM financial_facts WHERE line_item='net_income'").fetchall()
     assert [int(r["value"]) for r in rows] == [100]
+
+
+# ---------------------------------------------------------------------------
+# Multi-frame same-document collision (LITE net_income @ 2016-07-02)
+# ---------------------------------------------------------------------------
+
+
+def test_same_doc_pick_key_prefers_latest_start() -> None:
+    """The tighter period (latest `start`) wins; a dated start beats an instant
+    (None), and `frame`/value only break a genuine `start` tie."""
+    own = {"start": "2015-08-02", "end": "2016-07-02", "val": 21_000_000}
+    recast = {"start": "2015-06-28", "end": "2016-07-02", "val": 9_300_000}
+    assert _same_doc_pick_key(own, Decimal(21_000_000)) > _same_doc_pick_key(
+        recast, Decimal(9_300_000)
+    )
+    # instant (no start) sorts below any dated duration
+    instant = {"end": "2016-07-02", "val": 5}
+    assert _same_doc_pick_key(recast, Decimal(9_300_000)) > _same_doc_pick_key(
+        instant, Decimal(5)
+    )
+    # equal start -> a framed entry outranks an unframed one
+    framed = {"start": "2015-08-02", "frame": "CY2016", "val": 1}
+    unframed = {"start": "2015-08-02", "val": 1}
+    assert _same_doc_pick_key(framed, Decimal(1)) > _same_doc_pick_key(
+        unframed, Decimal(1)
+    )
+
+
+def _register_10k(conn: sqlite3.Connection, accn: str) -> dict[str, int]:
+    return upsert_accession_documents(
+        conn,
+        ticker="LITE",
+        accessions={
+            accn: _AccessionRecord(
+                accession=accn, form="10-K", filed="2017-08-29", fy=2017, fp="FY"
+            )
+        },
+        project_root=Path("/tmp"),
+    )
+
+
+def _lite_multiframe_payload(recast_first: bool) -> dict[str, object]:
+    """One 10-K accession reporting net_income @ 2016-07-02 under two duration
+    contexts that both resolve FY: Lumentum's own first fiscal year (start
+    2015-08-02 -> 21.0M) and a longer recast span (start 2015-06-28 -> 9.3M).
+    Both collapse onto the same (source_doc_id, period_end, FY, net_income)
+    5-tuple, so the extractor must keep exactly one deterministic winner."""
+    accn = "0001633978-17-000095"
+    own: dict[str, object] = {
+        "accn": accn,
+        "form": "10-K",
+        "filed": "2017-08-29",
+        "fy": 2017,
+        "fp": "FY",
+        "start": "2015-08-02",
+        "end": "2016-07-02",
+        "val": 21_000_000,
+    }
+    recast: dict[str, object] = {
+        "accn": accn,
+        "form": "10-K",
+        "filed": "2017-08-29",
+        "fy": 2017,
+        "fp": "FY",
+        "start": "2015-06-28",
+        "end": "2016-07-02",
+        "val": 9_300_000,
+    }
+    entries = [recast, own] if recast_first else [own, recast]
+    return _payload_one_tag("us-gaap", "NetIncomeLoss", entries)
+
+
+@pytest.mark.parametrize("recast_first", [False, True])
+def test_multiframe_same_accession_collapses_deterministically(
+    conn: sqlite3.Connection, recast_first: bool
+) -> None:
+    """Two frames of one accession sharing a 5-tuple write exactly ONE row, and
+    the winner (own fiscal year, 21.0M) is independent of payload order — no
+    write-then-correct churn, no iteration-order dependence. Reproduces the
+    LITE flapping (rows 915064/915065/915066, source_doc_ids 10073/10074/10078)
+    that INSERT-OR-IGNORE-then-same-doc-correction produced before the dedup."""
+    accn = "0001633978-17-000095"
+    accn_to_doc = _register_10k(conn, accn)
+    payload = _lite_multiframe_payload(recast_first=recast_first)
+    inserted = insert_facts_from_companyfacts(
+        conn, ticker="LITE", payload=payload, accession_to_doc_id=accn_to_doc
+    )
+    assert inserted == 1
+    rows = conn.execute(
+        "SELECT value, source_doc_id FROM financial_facts "
+        "WHERE ticker='LITE' AND line_item='net_income' AND fiscal_period_type='FY'"
+    ).fetchall()
+    assert len(rows) == 1  # collapsed, not one row per frame
+    assert int(rows[0]["value"]) == 21_000_000  # latest-start winner, both orders
+    assert int(rows[0]["source_doc_id"]) == accn_to_doc[accn]
