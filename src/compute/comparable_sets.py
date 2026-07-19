@@ -31,6 +31,17 @@ for every checked ticker (NU, AMZN, GOOGL, META, MELI, NVO, NOW, WIX, RBRK,
 VEEV, BN) while ``exchange`` carries the real value ("NYSE"/"NASDAQ"). The
 guard below checks ``exchange`` first, falling back to ``exchangeShortName``
 if ever populated, rather than the literal (always-null) field name.
+
+Phase 2 addition (docs/design/comparable_sets_bottoms_up.md §11 Phase 2):
+``resolve_industry_scope_members``/``resolve_sector_scope_members`` build the
+pool-wide slice for a ``scope_type='industry'``/``'sector'``
+``comp_set_metrics_daily`` row (§4.1's "multiples benchmark") — every pool
+member matching the industry/sector string, not a market-cap band around one
+subject. Same US-listed + actively-trading guards as Step A/B (§3.1) — the
+doc's §6 note only says "not a per-ticker market-cap band," it doesn't say to
+drop the listing/trading-status guards, and keeping them makes the aggregate
+more comparable to FMP's own US-exchange-scoped snapshot (§7's drift-check
+reference, itself confirmed single-exchange-per-row in production).
 """
 
 from __future__ import annotations
@@ -256,6 +267,42 @@ def _step_b(subject: PoolProfile, pool: dict[str, PoolProfile]) -> list[str]:
             continue
         out.append(t)
     return sorted(out)
+
+
+def pool_industries(pool: dict[str, PoolProfile]) -> list[str]:
+    """Distinct non-empty ``industry`` strings present in the pool — the
+    ``scope_type='industry'`` keys ``track_comp_metrics.py`` iterates
+    (§8 Phase 2)."""
+    return sorted({m.industry for m in pool.values() if m.industry})
+
+
+def pool_sectors(pool: dict[str, PoolProfile]) -> list[str]:
+    """Distinct non-empty ``sector`` strings present in the pool — the
+    ``scope_type='sector'`` keys ``track_comp_metrics.py`` iterates
+    (§8 Phase 2)."""
+    return sorted({m.sector for m in pool.values() if m.sector})
+
+
+def resolve_industry_scope_members(pool: dict[str, PoolProfile], industry: str) -> list[str]:
+    """Every pool member (US-listed, actively-trading, non-ETF — pool is
+    already ETF-free) whose ``profile.industry`` matches exactly. This is the
+    pool-wide slice for a ``scope_type='industry'`` row (§4.1/§6) — no
+    market-cap band, no single subject; every qualifying pool member
+    contributes."""
+    return sorted(
+        t
+        for t, m in pool.items()
+        if m.industry == industry and _is_us_listed(m) and m.is_actively_trading
+    )
+
+
+def resolve_sector_scope_members(pool: dict[str, PoolProfile], sector: str) -> list[str]:
+    """Sector-scope counterpart to ``resolve_industry_scope_members``."""
+    return sorted(
+        t
+        for t, m in pool.items()
+        if m.sector == sector and _is_us_listed(m) and m.is_actively_trading
+    )
 
 
 def _step_c(
