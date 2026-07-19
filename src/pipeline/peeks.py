@@ -50,7 +50,7 @@ from compute.metrics_engine.io import latest_ttm_value
 from dashboard._card import render_alert_card
 from dashboard.evidence_drawer import load_brief_provenance
 from identity import DEFAULT_USER_ID
-from models.facts import FactLocator, LocatorKind, VendorFieldRef
+from models.facts import DerivedInputRef, DerivedRef, FactLocator, LocatorKind, VendorFieldRef
 from pipeline.research_cockpit import (
     AttractivenessBreakdown,
     AttractivenessFactor,
@@ -77,6 +77,7 @@ from ui.time import stamp_html
 __all__ = [
     "render_alert_peek",
     "render_alerts_list_peek",
+    "render_derived_peek",
     "render_fact_provenance_peek",
     "render_fit_peek",
     "render_memo_peek",
@@ -1416,19 +1417,43 @@ _PROV_JS = """
 # never "couldn't render its evidence."
 # ----------------------------------------------------------------------------
 
-_PROVENANCE_TABLES = frozenset({"financial_facts", "kpi_facts"})
+_PROVENANCE_TABLES = frozenset({"financial_facts", "kpi_facts", "segment_dimensions"})
+
+# DerivedInputRef.ref -> peek-dispatcher table name (docs/design/
+# provenance_clickthrough.md §1.2's DerivedInputRef.ref vocabulary is the
+# singular "financial_fact"/"kpi_fact"/"segment_fact"; the peek dispatcher's
+# fact_ref uses the plural table names -- this is the one mapping between
+# the two so render_derived_peek's recursive doorways resolve correctly).
+_DERIVED_REF_TO_TABLE: dict[str, str] = {
+    "financial_fact": "financial_facts",
+    "kpi_fact": "kpi_facts",
+    "segment_fact": "segment_dimensions",
+}
+
+# Recursion depth cap for render_derived_peek (docs/design/
+# provenance_clickthrough.md §2.5) -- mirrors source_chip._MAX_LINEAGE_INPUTS'
+# existing "a formula tree deeper than N is itself a smell" reasoning.
+_MAX_DERIVED_DEPTH = 4
 
 
 class _FactRow(NamedTuple):
-    """The slice of a financial_facts/kpi_facts row the peek needs, common
-    to both tables (kpi_facts joined to kpi_definitions for its name)."""
+    """The slice of a financial_facts/kpi_facts/segment_dimensions row the
+    peek needs, common to all three (kpi_facts joined to kpi_definitions for
+    its name; segment_dimensions joined to segment_periods for ticker/doc)."""
 
     ticker: str
-    label: str  # line_item, or the kpi_definitions.name
+    label: str  # line_item, kpi_definitions.name, or "<dim_type>: <dim_name> <metric>"
     source_doc_id: int | None
     locator_json: str | None
     confidence: float | None
     extracted_by: str | None
+    # kpi_facts only (financial_facts/segment_dimensions have no such column)
+    # -- the pre-locator `derived` lineage shape (alembic 0087). Lets
+    # render_fact_provenance_peek recover a derived-formula tree for a row
+    # written before the `derived` locator kind existed at all
+    # (pipeline.locators.derived_locator_from_computed_from).
+    computed_from_json: str | None = None
+    formula_id: int | None = None
 
 
 def _load_fact_row(db_path: Path, table: str, fact_id: int) -> _FactRow | None:
@@ -1445,13 +1470,38 @@ def _load_fact_row(db_path: Path, table: str, fact_id: int) -> _FactRow | None:
                 "FROM financial_facts WHERE id = ?",
                 (fact_id,),
             ).fetchone()
-        else:
+        elif table == "segment_dimensions":
             row = conn.execute(
-                "SELECT kf.ticker, kd.name, kf.source_doc_id, kf.locator, "
-                "kf.confidence, kf.extracted_by FROM kpi_facts kf "
-                "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id WHERE kf.id = ?",
+                "SELECT sp.ticker, "
+                " (sd.dim_type || ': ' || sd.dim_name || ' ' || sd.metric), "
+                " sp.source_doc_id, sd.locator, sd.confidence, sd.extracted_by "
+                "FROM segment_dimensions sd "
+                "JOIN segment_periods sp ON sp.id = sd.period_id "
+                "WHERE sd.id = ?",
                 (fact_id,),
             ).fetchone()
+        else:
+            try:
+                # kpi_facts.computed_from/.formula_id (alembic 0087/#905) --
+                # feature-detected rather than assumed, since several
+                # lightweight test/legacy schemas create a minimal kpi_facts
+                # without them; falling back keeps this dispatcher working
+                # against any pre-existing kpi_facts shape.
+                row = conn.execute(
+                    "SELECT kf.ticker, kd.name, kf.source_doc_id, kf.locator, "
+                    "kf.confidence, kf.extracted_by, kf.computed_from, kf.formula_id "
+                    "FROM kpi_facts kf "
+                    "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id WHERE kf.id = ?",
+                    (fact_id,),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                row = conn.execute(
+                    "SELECT kf.ticker, kd.name, kf.source_doc_id, kf.locator, "
+                    "kf.confidence, kf.extracted_by "
+                    "FROM kpi_facts kf "
+                    "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id WHERE kf.id = ?",
+                    (fact_id,),
+                ).fetchone()
     except sqlite3.Error:
         return None
     finally:
@@ -1465,27 +1515,53 @@ def _load_fact_row(db_path: Path, table: str, fact_id: int) -> _FactRow | None:
         locator_json=str(row[3]) if row[3] is not None else None,
         confidence=float(row[4]) if row[4] is not None else None,
         extracted_by=str(row[5]) if row[5] is not None else None,
+        computed_from_json=str(row[6]) if len(row) > 6 and row[6] is not None else None,
+        formula_id=int(row[7]) if len(row) > 7 and row[7] is not None else None,
     )
 
 
 def render_fact_provenance_peek(db_path: Path, repo_root: Path, fact_ref: str) -> str | None:
     """Click-through behind a source chip's fmp_json_table / vendor_field /
-    transcript_span locator kinds. fact_ref is <table>:<id>."""
+    transcript_span / derived locator kinds. fact_ref is <table>:<id>."""
     table, _, raw_id = fact_ref.partition(":")
     if table not in _PROVENANCE_TABLES or not raw_id.isdigit():
         return None
     row = _load_fact_row(db_path, table, int(raw_id))
     if row is None:
         return None
-    return _dispatch_fact_provenance_peek(db_path, repo_root, row)
+    normalized_ref = f"{table}:{raw_id}"
+    return _dispatch_fact_provenance_peek(
+        db_path, repo_root, row, visited=frozenset({normalized_ref})
+    )
 
 
-def _dispatch_fact_provenance_peek(db_path: Path, repo_root: Path, row: _FactRow) -> str:
+def _dispatch_fact_provenance_peek(
+    db_path: Path,
+    repo_root: Path,
+    row: _FactRow,
+    *,
+    depth: int = 0,
+    visited: frozenset[str] = frozenset(),
+) -> str:
     """Dispatches on FactLocator.effective_kind(); always returns something
     -- the legacy floor (section 2.7) is the worst case, never a dead end."""
     locator = FactLocator.from_json(row.locator_json)
+    if locator is None and row.computed_from_json is not None:
+        # Pre-#905 kpi_facts row: no `locator` column at all, but a
+        # `computed_from` blob in the SAME shape -- upgrade it on the fly
+        # rather than leaving a derived value stuck on the legacy floor.
+        from pipeline.locators import derived_locator_from_computed_from
+
+        locator = derived_locator_from_computed_from(
+            row.computed_from_json, formula_id=row.formula_id
+        )
     doc = load_document(db_path, row.source_doc_id) if row.source_doc_id is not None else None
     kind = locator.effective_kind() if locator is not None else None
+
+    if kind == LocatorKind.DERIVED and locator is not None and locator.derived is not None:
+        return render_derived_peek(
+            db_path, repo_root, locator.derived, depth=depth, visited=visited
+        )
 
     if kind == LocatorKind.FMP_JSON_TABLE and locator is not None and doc is not None:
         html = _render_fmp_json_table_peek(repo_root, db_path, doc, locator)
@@ -1524,6 +1600,152 @@ def _dispatch_fact_provenance_peek(db_path: Path, repo_root: Path, row: _FactRow
     ):
         return _render_vendor_field_peek(db_path, repo_root, row.ticker, locator.vendor_field)
     return _render_legacy_provenance_peek(doc, row, locator)
+
+
+# Input rows shown before truncating with a "+N more" footer -- mirrors
+# source_chip._MAX_LINEAGE_INPUTS's own reasoning (a formula carrying more
+# than this is a misbehaving writer, not a UI case).
+_MAX_DERIVED_INPUT_ROWS = 6
+
+
+def render_derived_peek(
+    db_path: Path,
+    repo_root: Path,
+    derived: DerivedRef,
+    *,
+    depth: int = 0,
+    visited: frozenset[str] = frozenset(),
+) -> str:
+    """The recursive formula-tree peek (docs/design/provenance_clickthrough.md
+    §2.5): the formula header, then one row per input.
+
+    A DERIVED input becomes a ``data-peek-url`` doorway (clicking re-fetches
+    the SAME dispatcher one level deeper — the existing self-referential peek
+    pattern ``render_fit_peek``'s footer link already uses) rather than being
+    eagerly rendered here, so a wide/deep tree costs O(inputs-at-this-level),
+    not an exponential eager walk. A LEAF input (any other concrete kind, or
+    an unresolvable/legacy reference) renders its own evidence INLINE instead
+    — the recursion terminates at whichever concrete kind actually grounds
+    the number, exactly as the design calls for.
+
+    Depth-capped at ``_MAX_DERIVED_DEPTH`` and cycle-guarded via ``visited``
+    (a set of already-rendered ``<table>:<id>`` fact_refs on this call chain)
+    — both cases degrade to an inline notice rather than recursing further.
+    """
+    header = f'<div class="cc-prov-row"><b>{escape(derived.display or "Derived value")}</b></div>'
+    meta_bits: list[str] = []
+    if derived.formula_id is not None:
+        meta_bits.append(f"formula #{derived.formula_id}")
+    if derived.method_flags:
+        meta_bits.append(", ".join(derived.method_flags))
+    meta = (
+        f'<div class="cc-prov-row mono">{escape(" · ".join(meta_bits))}</div>' if meta_bits else ""
+    )
+
+    inputs = derived.inputs[:_MAX_DERIVED_INPUT_ROWS]
+    rows_html: list[str] = []
+    for inp in inputs:
+        rows_html.append(
+            _render_derived_input_row(db_path, repo_root, inp, depth=depth, visited=visited)
+        )
+    footer = ""
+    if len(derived.inputs) > _MAX_DERIVED_INPUT_ROWS:
+        footer = (
+            '<div class="cc-prov-row mono">'
+            f"+{len(derived.inputs) - _MAX_DERIVED_INPUT_ROWS} more inputs</div>"
+        )
+
+    return (
+        '<div class="cc-prov cc-prov-derived">'
+        f'<div class="cc-prov-rows">{header}{meta}{"".join(rows_html)}{footer}</div>'
+        "</div>"
+    )
+
+
+def _render_derived_input_row(
+    db_path: Path,
+    repo_root: Path,
+    inp: DerivedInputRef,
+    *,
+    depth: int,
+    visited: frozenset[str],
+) -> str:
+    """One ``DerivedInputRef`` row: a doorway link for a deeper derived input,
+    an inline-rendered evidence blob for a leaf, or a plain (non-clickable)
+    label when the input can't be resolved to a real row at all."""
+    period_str = f" · {escape(inp.period_end)}" if inp.period_end else ""
+    tier_str = inp.tier or ""
+    label = f"{escape(inp.item)}{period_str}"
+
+    table = _DERIVED_REF_TO_TABLE.get(inp.ref)
+    if table is None or inp.fact_id is None:
+        # No fact row to resolve at all (e.g. an input predating fact_id
+        # capture) -- the honest floor, same spirit as section 2.7.
+        return f'<div class="cc-prov-row cc-prov-input">{label}{_tier_suffix(tier_str)}</div>'
+
+    fact_ref = f"{table}:{inp.fact_id}"
+    if fact_ref in visited:
+        return (
+            f'<div class="cc-prov-row cc-prov-input">{label}{_tier_suffix(tier_str)} '
+            '<span class="k-chip k-chip-warn">cycle detected</span></div>'
+        )
+
+    input_row = _load_fact_row(db_path, table, inp.fact_id)
+    if input_row is None:
+        return f'<div class="cc-prov-row cc-prov-input">{label}{_tier_suffix(tier_str)}</div>'
+
+    input_locator = FactLocator.from_json(input_row.locator_json)
+    if input_locator is None and input_row.computed_from_json is not None:
+        from pipeline.locators import derived_locator_from_computed_from
+
+        input_locator = derived_locator_from_computed_from(
+            input_row.computed_from_json, formula_id=input_row.formula_id
+        )
+    input_kind = input_locator.effective_kind() if input_locator is not None else None
+
+    if input_kind == LocatorKind.DERIVED:
+        if depth + 1 >= _MAX_DERIVED_DEPTH:
+            return (
+                f'<div class="cc-prov-row cc-prov-input">{label}{_tier_suffix(tier_str)} '
+                '<span class="k-chip k-chip-warn">max depth reached</span></div>'
+            )
+        # A doorway: clicking re-fetches this SAME dispatcher one level
+        # deeper (peek popover click convention, data-peek-url).
+        return (
+            f'<div class="cc-prov-row cc-prov-input" data-peek-url="/api/peek/provenance/{escape(fact_ref)}" '
+            f'data-peek-title="{escape(inp.item)}">{label}{_tier_suffix(tier_str)} '
+            '<span class="cc-prov-doorway">→</span></div>'
+        )
+
+    # A leaf: render its own evidence inline, terminating the recursion here.
+    inline = _dispatch_fact_provenance_peek(
+        db_path, repo_root, input_row, depth=depth + 1, visited=visited | {fact_ref}
+    )
+    return (
+        f'<div class="cc-prov-row cc-prov-input">{label}{_tier_suffix(tier_str)}</div>'
+        f'<div class="cc-prov-input-inline">{inline}</div>'
+    )
+
+
+# Mirrors ui.source_chip.SOURCE_CHIP_ABBREV -- duplicated (not imported) to
+# keep pipeline.peeks free of a ui.* import purely for a 5-entry label map;
+# ui.source_chip already documents this same abbreviation table as the
+# canonical one for the tier vocabulary.
+SOURCE_CHIP_ABBREV_FALLBACK: dict[str, str] = {
+    "sec_official": "SEC",
+    "fmp_normalized": "FMP",
+    "llm_extracted": "LLM",
+    "yfinance_fallback": "YF",
+    "s1_provisional": "S-1",
+}
+
+
+def _tier_suffix(tier_str: str) -> str:
+    if not tier_str:
+        return ""
+    abbrev = SOURCE_CHIP_ABBREV_FALLBACK.get(tier_str, tier_str[:3].upper())
+    chip_cls = f"src-chip src-{escape(tier_str.replace('_', '-'))}"
+    return f' <span class="{chip_cls}">{escape(abbrev)}</span>'
 
 
 def _render_fmp_json_table_peek(

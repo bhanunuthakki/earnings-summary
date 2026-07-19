@@ -14,18 +14,39 @@ with no network and no LLM spend —
 * ``call`` — the structured-LLM transport (default: ``llm.structured.call_llm_structured``,
   routed to the cheapest at-parity model via the ``extract_8k_overrides`` purpose).
 
-The orchestrator returns an :class:`ExtractedSegmentOverride` (the proposal); it
-never writes to the DB. ``execution/extract_8k_overrides.py --apply`` records it via
-``provenance.overrides.record_override``.
+The orchestrator (``extract_8k_segment_override``) returns an
+:class:`ExtractedSegmentOverride` (the proposal); it never writes to the DB.
+``execution/extract_8k_overrides.py --apply`` records it via
+``provenance.overrides.record_override``, after first calling
+``register_8k_exhibit_document`` (the one function in this module that DOES touch
+the DB — it needs a real ``documents.id`` for the proposal's ``html_span`` locator).
+
+Anchor-quote verification (docs/design/provenance_clickthrough.md §3.3, Phase C):
+the LLM must return a verbatim ``anchor_quote`` alongside each segment's value, and
+``pipeline.locators.verify_quote_in_source`` checks it against the ACTUAL fetched
+exhibit text before a ``FactLocator`` is ever built. Every segment's quote verifying
+earns an ``html_span`` locator (the render-side ``doc_id`` is filled in later by
+the CLI, once the exhibit is registered as a ``documents`` row); any segment whose
+returned quote does NOT verify demotes the whole override's locator to a
+``LegacyEscapeHatch`` — never a fabricated anchor, per the "never persist a
+hallucinated locator" rule. The override's VALUE is persisted either way (a bad
+anchor is a provenance-quality problem, not a reason to drop a real number).
 """
 
 from __future__ import annotations
 
+import hashlib
 import html as _htmlmod
 import re
+import sqlite3
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 from typing import cast
+
+from models.facts import FactLocator, LegacyEscapeHatch
+from pipeline.locators import html_span_locator, locate_char_span, verify_quote_in_source
 
 # SEC requires a descriptive User-Agent on every request.
 SEC_USER_AGENT = "earnings-summary provenance-override (contact: bhanunuthakthi@gmail.com)"
@@ -36,6 +57,24 @@ EIGHT_K_PURPOSE = "extract_8k_overrides"
 GetJson = Callable[[str], object]
 GetText = Callable[[str], str]
 StructuredCall = Callable[..., object]
+
+# Max chars of the verified-quote snippet carried on the override's locator
+# (mirrors FactLocator.verbatim_snippet's own cap).
+_MAX_LOCATOR_SNIPPET = 2000
+
+
+@dataclass(frozen=True, slots=True)
+class SegmentExtraction:
+    """One segment's LLM-returned value plus its grounding anchor quote.
+
+    ``anchor_quote`` is ``None`` when the LLM followed the prompt's "omit
+    rather than fabricate" instruction — an honest gap, not a hallucination;
+    it only becomes a hallucination signal once a NON-None quote fails
+    ``verify_quote_in_source`` against the real exhibit text.
+    """
+
+    value: float
+    anchor_quote: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +90,23 @@ class ExtractedSegmentOverride:
     source_exhibit: str
     source_url: str
     source_excerpt: str
+    # The full stripped exhibit text the LLM read (and every anchor_quote was
+    # verified against) -- carried so the CLI can register a `documents` row
+    # for it (register_8k_exhibit_document) without a second HTTP fetch.
+    exhibit_text: str = ""
+    # Phase C (§3.3): the anchor-verified locator, or an explicit opt-out.
+    # ``html_span.doc_id`` is None here -- edgar_8k.py never touches the DB;
+    # execution/extract_8k_overrides.py --apply patches in the real
+    # documents.id once the exhibit text is registered.
+    locator: FactLocator | LegacyEscapeHatch = field(
+        default_factory=lambda: LegacyEscapeHatch(
+            reason="extract_8k_overrides: no anchor_quote evaluated for this proposal"
+        )
+    )
+    # Segment names whose anchor_quote was present but failed verification
+    # (the hallucination signal) -- empty when every returned quote verified
+    # or none were returned at all.
+    failed_segments: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -190,10 +246,18 @@ _PROMPT = """\
 You are extracting the {dim_label} revenue table for {ticker} {fiscal_period_type} \
 (period ending {period_end}) from the text of an SEC 8-K earnings press-release exhibit.
 
-Return ONLY a JSON object mapping each segment name to its revenue for THIS reporting \
-period, expressed in FULL US DOLLARS (e.g. $17,664 million -> 17664000000). Use the \
-issuer's exact segment names. Include negative eliminations/"Other" lines as given. \
-Do NOT include totals, year-over-year %s, prior-period figures, or any non-revenue line.
+Return ONLY a JSON object mapping each segment name to an object with TWO fields:
+  - "value": the segment's revenue for THIS reporting period, expressed in FULL US \
+DOLLARS (e.g. $17,664 million -> 17664000000). Use the issuer's exact segment names. \
+Include negative eliminations/"Other" lines as given. Do NOT include totals, \
+year-over-year %s, prior-period figures, or any non-revenue line.
+  - "anchor_quote": the VERBATIM snippet (under 200 characters) copied \
+character-for-character from the exhibit text that contains this segment's reported \
+value — the exact sentence or table row you read it from. Never paraphrase or \
+reformat; if you cannot quote it exactly, omit this field for that segment rather \
+than guessing.
+
+Example shape: {{"Google Cloud": {{"value": 17664000000, "anchor_quote": "Google Cloud $17,664"}}}}
 
 If the exhibit does not contain a {dim_label} revenue breakdown for this period, return \
 an empty object {{}}.
@@ -215,12 +279,18 @@ def extract_segment_map(
     fiscal_period_type: str,
     dim_type: str,
     call: StructuredCall | None = None,
-) -> dict[str, float]:
-    """LLM-extract ``{segment_name: value_in_usd}`` from exhibit text.
+) -> dict[str, SegmentExtraction]:
+    """LLM-extract ``{segment_name: SegmentExtraction(value, anchor_quote)}``.
 
     Returns ``{}`` when no breakdown is present. ``call`` defaults to
     ``llm.structured.call_llm_structured`` (routed to the cheapest at-parity model
     via the ``extract_8k_overrides`` purpose); inject it in tests to avoid spend.
+
+    Anchor-quote grounding (docs/design/provenance_clickthrough.md §3.3, Phase C):
+    the schema requires a per-segment ``anchor_quote`` alongside ``value`` — this
+    function only PARSES what the LLM returned; ``extract_8k_segment_override``
+    is where each quote is actually verified against the real exhibit text via
+    ``pipeline.locators.verify_quote_in_source`` before any locator is built.
     """
     prompt = _PROMPT.format(
         dim_label=_DIM_LABEL.get(dim_type, dim_type),
@@ -239,12 +309,26 @@ def extract_segment_map(
         )
     if not isinstance(raw, dict):
         return {}
-    out: dict[str, float] = {}
-    for name, value in cast("dict[str, object]", raw).items():
+    out: dict[str, SegmentExtraction] = {}
+    for name, entry in cast("dict[str, object]", raw).items():
+        # Tolerate a model that ignores the nested-object instruction and
+        # returns a flat {name: value} scalar anyway -- still parseable as a
+        # value with no anchor quote, rather than dropping the whole segment.
+        if isinstance(entry, dict):
+            entry_map = cast("dict[str, object]", entry)
+            value_raw = entry_map.get("value")
+            quote_raw = entry_map.get("anchor_quote")
+        else:
+            value_raw = entry
+            quote_raw = None
         try:
-            out[str(name)] = float(str(value))
+            value = float(str(value_raw))
         except (TypeError, ValueError):
             continue
+        anchor_quote = (
+            quote_raw.strip() if isinstance(quote_raw, str) and quote_raw.strip() else None
+        )
+        out[str(name)] = SegmentExtraction(value=value, anchor_quote=anchor_quote)
     return out
 
 
@@ -309,7 +393,7 @@ def extract_8k_segment_override(
     if fetched is None:
         return None
     text, exhibit_name, url = fetched
-    segments = extract_segment_map(
+    extractions = extract_segment_map(
         text=text,
         ticker=ticker,
         period_end=period_end,
@@ -317,8 +401,10 @@ def extract_8k_segment_override(
         dim_type=dim_type,
         call=call,
     )
-    if not segments:
+    if not extractions:
         return None
+    segments = {name: sx.value for name, sx in extractions.items()}
+    locator, failed_segments = _build_verified_locator(extractions, source_text=text)
     excerpt = " ".join(f"{k}: {v:,.0f}" for k, v in list(segments.items())[:8])
     return ExtractedSegmentOverride(
         ticker=ticker.upper(),
@@ -330,4 +416,141 @@ def extract_8k_segment_override(
         source_exhibit=exhibit_name,
         source_url=url,
         source_excerpt=excerpt[:1024],
+        exhibit_text=text,
+        locator=locator,
+        failed_segments=failed_segments,
     )
+
+
+def _build_verified_locator(
+    extractions: Mapping[str, SegmentExtraction], *, source_text: str
+) -> tuple[FactLocator | LegacyEscapeHatch, tuple[str, ...]]:
+    """Verify every returned ``anchor_quote`` against the real exhibit text and
+    build the record-level locator (docs/design/provenance_clickthrough.md §3.3).
+
+    A single override row covers every segment in the table (record-level
+    ``replace``), so there is one locator slot for potentially many segments'
+    quotes. Rule:
+
+    * ANY segment whose ``anchor_quote`` was given but fails
+      ``verify_quote_in_source`` demotes the WHOLE locator to a
+      ``LegacyEscapeHatch`` -- one hallucinated quote is enough to make the
+      aggregate untrustworthy, and the failing segment names are returned so
+      the caller can log a ``validation_issues`` row (``rule=hallucinated_anchor``).
+      The extracted VALUES themselves are unaffected -- they are still
+      returned in ``segments`` and still get recorded.
+    * Otherwise, every VERIFIED quote (segments that omitted a quote simply
+      don't contribute one -- an honest gap, not a failure) is folded into one
+      ``html_span`` locator: the first verified quote anchors ``html_span``
+      itself (with a best-effort char span via
+      ``pipeline.locators.locate_char_span``), and the concatenation of every
+      verified quote becomes ``verbatim_snippet`` so the peek popover shows
+      coverage across the whole table, not just one segment.
+    * With zero verified quotes and zero failures (every segment omitted its
+      quote), there is nothing to anchor -- a ``LegacyEscapeHatch``.
+
+    ``html_span.doc_id`` is left ``None`` here; the CLI patches in the real
+    ``documents.id`` once it registers the fetched exhibit text.
+    """
+    verified_quotes: list[str] = []
+    failed_segments: list[str] = []
+    for name, sx in extractions.items():
+        if sx.anchor_quote is None:
+            continue
+        if verify_quote_in_source(sx.anchor_quote, source_text):
+            verified_quotes.append(sx.anchor_quote)
+        else:
+            failed_segments.append(name)
+
+    if failed_segments:
+        reason = (
+            "anchor_verification_failed: anchor_quote for "
+            f"{', '.join(sorted(failed_segments))} not found verbatim in the exhibit text"
+        )
+        return LegacyEscapeHatch(reason=reason[:500]), tuple(failed_segments)
+
+    if not verified_quotes:
+        return (
+            LegacyEscapeHatch(
+                reason="no anchor_quote returned for any segment in this 8-K extraction"
+            ),
+            (),
+        )
+
+    primary = verified_quotes[0]
+    span = locate_char_span(primary, source_text)
+    locator = html_span_locator(
+        doc_id=None,
+        quote=primary,
+        char_start=span[0] if span is not None else None,
+        char_end=span[1] if span is not None else None,
+    )
+    combined_snippet = "\n".join(verified_quotes)[:_MAX_LOCATOR_SNIPPET]
+    locator = locator.model_copy(update={"verbatim_snippet": combined_snippet})
+    return locator, ()
+
+
+# ---------------------------------------------------------------------------
+# Document registration (the ONE function in this module that touches the DB)
+# ---------------------------------------------------------------------------
+#
+# Every other function above is a pure fetch/extract/verify step, injectable
+# and DB-free per the module's own design contract. An `html_span` locator's
+# `doc_id` must resolve to a real `documents.id` (docs/design/
+# provenance_clickthrough.md §1.4), so the fetched exhibit text itself needs a
+# documents row -- this mirrors `pipeline.sec_6k_fetch.register_6k_document`
+# exactly (same source_type='sec_xbrl' / tier=SEC_OFFICIAL convention: this IS
+# a bona fide SEC-official primary filing; the LLM-extraction method lives on
+# the fact_overrides row's own created_by tag, not on a different document
+# source_type). Persisted under data/historical/sec/ (a deliverable, not a
+# `.tmp/` cache) since the exhibit is durable evidence, not a regenerable
+# artifact.
+
+
+def register_8k_exhibit_document(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    accession: str,
+    exhibit_name: str,
+    exhibit_text: str,
+    source_url: str,
+    period_end: str,
+    repo_root: Path,
+) -> int:
+    """Persist the fetched (stripped-text) exhibit and insert one ``documents``
+    row; returns ``documents.id``. Idempotent on sha256 -- re-running against
+    the same exhibit content returns the existing row's id rather than
+    duplicating it.
+    """
+    sha256 = hashlib.sha256(exhibit_text.encode("utf-8")).hexdigest()
+    existing = conn.execute(
+        "SELECT id FROM documents WHERE sha256 = ? LIMIT 1", (sha256,)
+    ).fetchone()
+    if existing is not None:
+        return int(existing[0])
+
+    out_dir = repo_root / "data" / "historical" / "sec"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{ticker.upper()}_8k_{_acc_nodash(accession)}_{exhibit_name}.txt"
+    out_path.write_text(exhibit_text, encoding="utf-8")
+    rel_path = str(out_path.relative_to(repo_root)).replace("\\", "/")
+
+    cur = conn.execute(
+        "INSERT INTO documents "
+        "(ticker, source_type, doc_type, period_start, period_end, file_path, "
+        " sha256, fetched_at, fetch_status, http_code, raw_bytes_size, source_url, "
+        " parent_document_id, accession_number) "
+        "VALUES (?, 'sec_xbrl', 'sec_8k', NULL, ?, ?, ?, ?, 'ok', 200, ?, ?, NULL, ?)",
+        (
+            ticker.upper(),
+            period_end[:10],
+            rel_path,
+            sha256,
+            datetime.now(),
+            len(exhibit_text.encode("utf-8")),
+            source_url,
+            accession,
+        ),
+    )
+    return int(cur.lastrowid) if cur.lastrowid is not None else 0

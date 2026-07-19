@@ -1,4 +1,5 @@
-"""CI guard for the provenance click-through program (Phase A, section 4.2)."""
+"""CI guard for the provenance click-through program (Phase A §4.2; extended
+with Phase C's §3.3 anchor-quote-verification fixtures for provenance.edgar_8k)."""
 
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
-from models.facts import FactLocator, LocatorKind  # noqa: E402
+from models.facts import FactLocator, LegacyEscapeHatch, LocatorKind  # noqa: E402
 
 REGISTERED_EXTRACTOR_LOCATOR_VERSIONS: dict[str, int] = {
     "table_extractors.generic_xbrl_capture": 2,
@@ -34,6 +35,17 @@ REGISTERED_EXTRACTOR_LOCATOR_VERSIONS: dict[str, int] = {
 # for the full functional test; the fixture test below is the CI-guard-file
 # registration Scope item 3a asks for, kept lightweight and self-contained).
 REGISTERED_DERIVED_LOCATOR_EMITTERS: frozenset[str] = frozenset({"compute.metrics_engine.io"})
+
+# Phase C (docs/design/provenance_clickthrough.md §3.3): the 8-K segment
+# override extractor builds a FactLocator directly (html_span, after
+# pipeline.locators.verify_quote_in_source passes) rather than through a
+# KpiValue/FinancialFact instance -- it writes fact_overrides, not
+# financial_facts/kpi_facts/segment_dimensions, so it sits outside BOTH the
+# discovery scan above AND that scan's declared table scope. Registered here,
+# same pattern as REGISTERED_DERIVED_LOCATOR_EMITTERS, so this hardening pass
+# still proves (fixture-tested below) that it emits a real v2 locator AND
+# that a fabricated anchor_quote is rejected, never silently trusted.
+REGISTERED_HTML_SPAN_LOCATOR_EMITTERS: frozenset[str] = frozenset({"provenance.edgar_8k"})
 
 _WRITER_CALL_RX = re.compile(r"(?<!class )\b(KpiValue|FinancialFact)\(")
 _STRING_LITERAL_RX = re.compile(r'"((?:[^"\\]|\\.)*)"|\'((?:[^\'\\]|\\.)*)\'')
@@ -363,6 +375,79 @@ def test_metrics_engine_persists_derived_locator_on_fixture() -> None:
     assert len(loc.derived.inputs) == 1
     assert row["computed_from"] is not None
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase C (§3.3): anchor-quote verification for the 8-K segment extractor.
+# provenance.edgar_8k builds FactLocator directly (REGISTERED_HTML_SPAN_
+# LOCATOR_EMITTERS above), so it is fixture-tested here rather than picked up
+# by the KpiValue/FinancialFact discovery scan.
+# ---------------------------------------------------------------------------
+
+
+def test_edgar_8k_emits_v2_html_span_locator_on_fixture() -> None:
+    """A verified anchor_quote earns a real, renderable v2 `html_span`
+    locator -- the CI-guard-file-level proof that provenance.edgar_8k (in
+    REGISTERED_HTML_SPAN_LOCATOR_EMITTERS) actually emits one, not just that
+    the module exists."""
+    from provenance import edgar_8k
+
+    assert "provenance.edgar_8k" in REGISTERED_HTML_SPAN_LOCATOR_EMITTERS
+
+    exhibit_text = "Q4 2025 Results\nGoogle Cloud revenue was $17,664 million.\n"
+    proposal = edgar_8k.extract_8k_segment_override(
+        ticker="GOOG",
+        accession="0001652044-26-000012",
+        period_end="2025-12-31",
+        fiscal_period_type="Q4",
+        get_json=lambda _u: {"0": {"cik_str": 1652044, "ticker": "GOOG"}},
+        get_text=lambda _u: exhibit_text,
+        exhibit="ex991.htm",
+        call=lambda *_a, **_k: {
+            "Google Cloud": {
+                "value": 17664000000,
+                "anchor_quote": "Google Cloud revenue was $17,664 million.",
+            }
+        },
+    )
+    assert proposal is not None
+    assert isinstance(proposal.locator, FactLocator)
+    assert proposal.locator.locator_version >= 2
+    assert proposal.locator.effective_kind() == LocatorKind.HTML_SPAN
+    assert proposal.locator.html_span is not None
+    assert proposal.failed_segments == ()
+
+
+def test_edgar_8k_rejects_fabricated_anchor_quote_on_fixture() -> None:
+    """The guard-ratchet's required proof: a fabricated (non-verbatim) quote
+    MUST NEVER produce a renderable locator -- it demotes to a
+    LegacyEscapeHatch and the specific failed segment is named, never a
+    silently-trusted html_span."""
+    from provenance import edgar_8k
+
+    exhibit_text = "Q4 2025 Results\nGoogle Cloud revenue was $17,664 million.\n"
+    proposal = edgar_8k.extract_8k_segment_override(
+        ticker="GOOG",
+        accession="0001652044-26-000012",
+        period_end="2025-12-31",
+        fiscal_period_type="Q4",
+        get_json=lambda _u: {"0": {"cik_str": 1652044, "ticker": "GOOG"}},
+        get_text=lambda _u: exhibit_text,
+        exhibit="ex991.htm",
+        call=lambda *_a, **_k: {
+            "Google Cloud": {
+                "value": 17664000000,
+                # Never appears in exhibit_text -- a hallucinated anchor.
+                "anchor_quote": "Google Cloud posted its best quarter ever at $17.7B.",
+            }
+        },
+    )
+    assert proposal is not None
+    assert isinstance(proposal.locator, LegacyEscapeHatch)
+    assert "anchor_verification_failed" in proposal.locator.reason
+    assert proposal.failed_segments == ("Google Cloud",)
+    # The value itself is NEVER dropped for a bad anchor alone.
+    assert proposal.segments["Google Cloud"] == 17664000000
 
 
 def test_no_empty_or_duplicate_boilerplate_escape_hatch_reasons() -> None:

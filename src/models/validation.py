@@ -65,6 +65,15 @@ class ValidationRule(StrEnum):
     # count deliberate gaps separately from silent ones
     # (docs/design/provenance_clickthrough.md §4.1).
     LOCATOR_ESCAPE_HATCH = "locator_escape_hatch"
+    # An LLM extractor returned a grounding ``anchor_quote``/``source_excerpt``
+    # for a persisted value that pipeline.locators.verify_quote_in_source could
+    # NOT find verbatim (whitespace/case-normalized) in the actual source
+    # document text. The value is still persisted (never dropped for this
+    # reason alone) but its locator is demoted to a LegacyEscapeHatch rather
+    # than the kind the quote would otherwise have earned — this rule makes
+    # that demotion visible rather than silent (docs/design/
+    # provenance_clickthrough.md §3.3, Phase C).
+    HALLUCINATED_ANCHOR = "hallucinated_anchor"
 
 
 class ValidationIssue(BaseModel):

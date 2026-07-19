@@ -2,12 +2,19 @@
 extractor per table (docs/design/provenance_clickthrough.md section 4.3).
 
 Modeled on execution/capture_coverage_report.py's summary-print pattern, but
-reads directly off the live financial_facts/kpi_facts tables (read-only,
-mode=ro) rather than a coverage log -- the locator column IS the ground
-truth for whether a fact's provenance is click-through-able today. "v2
+reads directly off the live financial_facts/kpi_facts/fact_overrides tables
+(read-only, mode=ro) rather than a coverage log -- the locator column IS the
+ground truth for whether a fact's provenance is click-through-able today. "v2
 renderable" means locator IS NOT NULL, locator_version >= 2, and kind IS NOT
 NULL -- i.e. FactLocator.effective_kind() resolves and the peek dispatcher
 (pipeline.peeks.render_fact_provenance_peek) has something to render.
+
+``fact_overrides`` (Phase C, alembic 0181) joined the audit the moment it
+gained its own ``locator`` column -- same shape/predicate, no special-casing
+needed, since it carries ``ticker``/``locator`` directly like the other two.
+``segment_dimensions`` is NOT included: its ``ticker`` lives one join away on
+``segment_periods``, so this generic single-table query shape doesn't fit it
+without a rework -- deferred rather than special-cased here.
 
 Usage:
     python execution/provenance_coverage_report.py
@@ -28,7 +35,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-_TABLES: tuple[str, ...] = ("financial_facts", "kpi_facts")
+_TABLES: tuple[str, ...] = ("financial_facts", "kpi_facts", "fact_overrides")
 
 
 @dataclass(slots=True)
@@ -79,6 +86,17 @@ _V2_RENDERABLE_SQL = (
 )
 
 
+#: Which column carries the "who/how produced this row" tag, per table --
+#: financial_facts/kpi_facts use `extracted_by`; fact_overrides (a company-doc
+#: override, not an extraction) uses `created_by` for the same purpose
+#: (e.g. "agent:extract_8k_overrides").
+_EXTRACTOR_COLUMN: dict[str, str] = {
+    "financial_facts": "extracted_by",
+    "kpi_facts": "extracted_by",
+    "fact_overrides": "created_by",
+}
+
+
 def audit_table(
     conn: sqlite3.Connection, table: str, *, ticker: str | None = None
 ) -> TableCoverage | None:
@@ -100,11 +118,12 @@ def audit_table(
     v2_renderable = _count(conn, table, [*base_conds, _V2_RENDERABLE_SQL], params)
     v1_only = max(total - locator_null - v2_renderable, 0)
 
-    eb_where = f"WHERE {' AND '.join([*base_conds, 'extracted_by IS NOT NULL'])}"
+    extractor_col = _EXTRACTOR_COLUMN.get(table, "extracted_by")
+    eb_where = f"WHERE {' AND '.join([*base_conds, f'{extractor_col} IS NOT NULL'])}"
     rows = conn.execute(
-        f"SELECT extracted_by, COUNT(*), "
+        f"SELECT {extractor_col}, COUNT(*), "
         f"SUM(CASE WHEN {_V2_RENDERABLE_SQL} THEN 1 ELSE 0 END) "
-        f"FROM {table} {eb_where} GROUP BY extracted_by ORDER BY 2 DESC",
+        f"FROM {table} {eb_where} GROUP BY {extractor_col} ORDER BY 2 DESC",
         params,
     ).fetchall()
     by_extractor = [

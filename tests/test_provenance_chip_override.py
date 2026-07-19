@@ -36,6 +36,7 @@ CREATE TABLE fact_overrides (
     source_accession TEXT, source_exhibit TEXT, source_url TEXT, source_excerpt TEXT,
     source_doc_id INTEGER, status TEXT NOT NULL DEFAULT 'active', confidence REAL,
     rationale TEXT, created_by TEXT NOT NULL, created_at TEXT NOT NULL, retired_at TEXT,
+    locator TEXT,
     CHECK (fact_kind IN ('financial_fact','segment','kpi')),
     CHECK (action IN ('replace','drop','qualify')),
     CHECK (status IN ('active','retired'))

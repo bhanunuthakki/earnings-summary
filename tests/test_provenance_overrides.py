@@ -89,6 +89,68 @@ def test_record_and_resolve_scalar(conn: sqlite3.Connection) -> None:
     assert ov.source_doc_type == "ir_press_release"
 
 
+def test_record_and_resolve_scalar_with_locator(conn: sqlite3.Connection) -> None:
+    """Phase C (alembic 0181): record_override's new ``locator`` kwarg
+    round-trips through fact_overrides.locator and override_provenance()
+    prefers it over the pre-Phase-C source_exhibit-string placeholder."""
+    from models.facts import FactLocator, HtmlSpanRef, LocatorKind
+
+    locator = FactLocator(
+        locator_version=2,
+        kind=LocatorKind.HTML_SPAN,
+        html_span=HtmlSpanRef(doc_id=7, quote="Google Cloud $17,664"),
+        verbatim_snippet="Google Cloud $17,664",
+    )
+    overrides.record_override(
+        conn,
+        ticker="goog",
+        period_end="2025-12-31",
+        fiscal_period_type="Q4",
+        fact_kind=overrides.SEGMENT,
+        fact_key=overrides.segment_record_key("product"),
+        action=OverrideAction.REPLACE,
+        value_json={"Google Cloud": 17664000000},
+        source_doc_type="sec_8k",
+        source_exhibit="googexhibit991q42025.htm",
+        source_doc_id=7,
+        created_by="test",
+        locator=locator.to_json(),
+    )
+    ov = overrides.get_active_overrides(conn, ticker="GOOG", fact_kind=overrides.SEGMENT)[0]
+    assert ov.locator is not None
+    round_tripped = FactLocator.from_json(ov.locator)
+    assert round_tripped is not None
+    assert round_tripped.effective_kind() == LocatorKind.HTML_SPAN
+
+    prov = overrides.override_provenance(ov)
+    assert prov["locator"] == ov.locator  # prefers the real FactLocator JSON
+    assert prov["locator"] != ov.source_exhibit
+
+
+def test_record_without_locator_falls_back_to_exhibit_string(conn: sqlite3.Connection) -> None:
+    """Pre-Phase-C behavior is unchanged when a caller doesn't pass ``locator``
+    (or the anchor-verification gate demoted it to None) -- override_provenance
+    keeps degrading to the bare exhibit filename string in the ``locator`` dict
+    key, exactly as before this column existed."""
+    overrides.record_override(
+        conn,
+        ticker="meta",
+        period_end="2025-12-31",
+        fiscal_period_type="Q4",
+        fact_kind=overrides.SEGMENT,
+        fact_key=overrides.segment_record_key("product"),
+        action=OverrideAction.REPLACE,
+        value_json={"Family of Apps": 40000000000},
+        source_doc_type="sec_8k",
+        source_exhibit="metaexhibit991q42025.htm",
+        created_by="test",
+    )
+    ov = overrides.get_active_overrides(conn, ticker="META", fact_kind=overrides.SEGMENT)[0]
+    assert ov.locator is None
+    prov = overrides.override_provenance(ov)
+    assert prov["locator"] == "metaexhibit991q42025.htm"
+
+
 def test_resolve_miss_returns_none(conn: sqlite3.Connection) -> None:
     assert (
         overrides.resolve_scalar(

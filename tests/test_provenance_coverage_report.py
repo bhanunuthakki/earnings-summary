@@ -20,6 +20,8 @@ def _seed(db: Path) -> None:
         "extracted_by TEXT, locator TEXT);"
         "CREATE TABLE kpi_facts (id INTEGER PRIMARY KEY, ticker TEXT, "
         "extracted_by TEXT, locator TEXT);"
+        "CREATE TABLE fact_overrides (id INTEGER PRIMARY KEY, ticker TEXT, "
+        "created_by TEXT, locator TEXT);"
     )
     rows = [
         ("NU", "fmp", None),
@@ -64,6 +66,36 @@ def test_audit_table_classifies_null_v1_v2(tmp_path: Path) -> None:
         assert empty.rows == 0
 
         assert audit_table(conn, "no_such_table") is None
+    finally:
+        conn.close()
+
+
+def test_audit_table_fact_overrides_uses_created_by(tmp_path: Path) -> None:
+    """fact_overrides (Phase C, alembic 0181) has no `extracted_by` column --
+    the audit must use `created_by` for its by-extractor breakdown instead of
+    raising `no such column`."""
+    db = tmp_path / "prov.db"
+    _seed(db)
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            "INSERT INTO fact_overrides (ticker, created_by, locator) VALUES "
+            "('GOOG', 'agent:extract_8k_overrides', "
+            '\'{"kind":"html_span","locator_version":2,"html_span":{"quote":"x"}}\')'
+        )
+        conn.execute(
+            "INSERT INTO fact_overrides (ticker, created_by, locator) VALUES "
+            "('META', 'agent:extract_8k_overrides', NULL)"
+        )
+        conn.commit()
+        cov = audit_table(conn, "fact_overrides")
+        assert cov is not None
+        assert cov.rows == 2
+        assert cov.locator_null == 1
+        assert cov.v2_renderable == 1
+        by_name = {e.extracted_by: e for e in cov.by_extractor}
+        assert by_name["agent:extract_8k_overrides"].rows == 2
+        assert by_name["agent:extract_8k_overrides"].v2_renderable == 1
     finally:
         conn.close()
 

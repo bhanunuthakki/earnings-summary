@@ -69,6 +69,7 @@ CREATE TABLE fact_overrides (
     created_by TEXT NOT NULL,
     created_at TEXT NOT NULL,
     retired_at TEXT,
+    locator TEXT,
     CHECK (fact_kind IN ('financial_fact', 'segment', 'kpi')),
     CHECK (action IN ('replace', 'drop', 'qualify')),
     CHECK (status IN ('active', 'retired'))
