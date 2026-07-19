@@ -388,18 +388,21 @@ LLM_MODELS: dict[str, str] = {
     # manual --propose purpose (kpi_registry_proposal) stays unregistered ->
     # Sonnet, so the two modes diverge cleanly.
     "kpi_registry_auto_proposal": "claude-opus-4-8",
-    # News LLM modules — both on Opus per the news-table plan's explicit
-    # instruction. material_news_classification is the material-news trigger's
-    # per-headline materiality veto (src/triggers/material_news.py): it was
-    # ABSENT here and so silently fell back to Sonnet; pinning it to Opus gives
-    # the noise-filtering judgment the wider knowledge and instruction-following
-    # it needs (one batched call per ticker per run, cached — cost bounded).
-    # news_structuring is the WebSearch->structured-rows fallback extractor
-    # (turning free-text news into news-table rows); registered now so it runs
-    # on Opus the moment that feed lands. Both use claude-opus-4-8, the current
-    # Opus — all the repo's Opus pins use the one id.
+    # News LLM modules. material_news_classification is the material-news
+    # trigger's per-headline materiality veto (src/triggers/material_news.py):
+    # it was ABSENT here and so silently fell back to Sonnet; pinning it to
+    # Opus gives the noise-filtering judgment the wider knowledge and
+    # instruction-following it needs (one batched call per ticker per run,
+    # cached — cost bounded).
+    # news_structuring (the WebSearch->structured-rows fallback extractor) ran
+    # on Opus while FMP news 402'd for the whole book — 1,622 calls / $416 in
+    # 30 days, over half the monthly LLM bill (2026-07-19 review), for a
+    # structure-extraction task with deterministic output-contract invariants.
+    # Downgraded to the Sonnet default (cheapest-at-parity); the golden set
+    # (evals/golden/news_structuring.json, mode-A contract grading) gates the
+    # switch, and the fallback is now portfolio-scoped in fetch_news anyway.
     "material_news_classification": "claude-opus-4-8",
-    "news_structuring": "claude-opus-4-8",
+    "news_structuring": DEFAULT_MODEL,
     # Earnings-tone diff — the earnings_tone trigger's quarter-over-quarter
     # transcript shift detector (src/triggers/earnings_tone.py): it compares the
     # latest call against prior transcripts and emits confidence-scored, cited

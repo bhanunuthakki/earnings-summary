@@ -67,8 +67,12 @@ ACTION_STATUSES: frozenset[str] = frozenset(
 # Phase 3, 0171) is the governor's capacity_breach moment class writing its own
 # alert row — a human-capital cap or cash-floor policy crossed — so the SAME
 # tier-1 severity/ranking path (decisive_alert_reason) covers an owner-policy
-# breach exactly like an owner-falsifier breach. Keep in lockstep with the
-# ck_alerts_trigger_kind CHECK (0068, widened in 0086 + 0108 + 0171).
+# breach exactly like an owner-falsifier breach. 'data_feed_stale' (0183) is
+# the dead-man switch for silently-dead data feeds (news frozen for weeks,
+# macro series 429ing daily with "populated": 0) — a feed job that produced
+# nothing fires ONE book-level row (sentinel ticker 'PORTFOLIO') so the outage
+# reaches the alert feed instead of a cron log. Keep in lockstep with the
+# ck_alerts_trigger_kind CHECK (0068, widened in 0086 + 0108 + 0171 + 0183).
 TRIGGER_KINDS: frozenset[str] = frozenset(
     {
         "kpi_inflection",
@@ -79,6 +83,7 @@ TRIGGER_KINDS: frozenset[str] = frozenset(
         "decision_condition",
         "restatement",
         "owner_capacity_breach",
+        "data_feed_stale",
     }
 )
 # Mirrors the QueuedActionDraft.action_kind vocabulary (src/triggers/base.py).
