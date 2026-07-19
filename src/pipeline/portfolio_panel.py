@@ -1879,6 +1879,12 @@ def _persist_risk_snapshot(
     then rides whatever the Risk panel last wrote)."""
     if not analytics.available:
         return
+    # A degenerate tracker response (only one section loaded) used to CLOBBER
+    # the last good snapshot with NULLs — `available` is True when ANY section
+    # loads, and the sole prod row was all-NULL (2026-07-19 review, G5). A
+    # capture must carry the sections the snapshot's substance comes from.
+    if analytics.performance is None or analytics.positioning is None:
+        return
     if drawdown is None and analytics.performance is not None:
         drawdown = compute_drawdown(analytics.performance.points)
     if factor is None and analytics.positioning is not None:
