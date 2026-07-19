@@ -17,8 +17,8 @@ NEVER ``batch_alter_table`` (the FTS-trigger landmine; not applicable here
 since comp_set_metrics_daily has no triggers, but the convention is
 repo-wide).
 
-Revision ID: 0172_comp_set_metrics_locator
-Revises: 0171_owner_capacity_breach_trigger_kind
+Revision ID: 0178_comp_set_metrics_locator
+Revises: 0174_behavior_distill_budget
 Create Date: 2026-07-18
 """
 
@@ -30,8 +30,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0172_comp_set_metrics_locator"
-down_revision: str | Sequence[str] | None = "0171_owner_capacity_breach_trigger_kind"
+revision: str = "0178_comp_set_metrics_locator"
+down_revision: str | Sequence[str] | None = "0174_behavior_distill_budget"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

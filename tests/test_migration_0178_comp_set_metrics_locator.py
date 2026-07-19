@@ -22,8 +22,8 @@ from alembic import command
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-PRIOR_HEAD = "0171_owner_capacity_breach_trigger_kind"
-NEW_HEAD = "0172_comp_set_metrics_locator"
+PRIOR_HEAD = "0174_behavior_distill_budget"
+NEW_HEAD = "0178_comp_set_metrics_locator"
 
 _TABLE = "comp_set_metrics_daily"
 _COLUMN = "locator"
