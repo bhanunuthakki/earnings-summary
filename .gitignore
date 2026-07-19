@@ -55,3 +55,7 @@ _inbox/
 # OS junk
 Thumbs.db
 .DS_Store
+
+# design-system/ (React design-system prototyping sandbox, npm package)
+design-system/node_modules/
+design-system/dist/

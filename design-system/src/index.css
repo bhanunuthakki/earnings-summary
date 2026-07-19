@@ -1,0 +1,12 @@
+/*
+ * Public stylesheet entry point. Tokens first (controls.css consumes the
+ * var(--*) custom properties tokens.css defines), then the ported control
+ * kit — per docs/design_system_react_port_plan.md §2-3, §6 Phase 2 T2.0.
+ */
+
+@import "./tokens/tokens.css";
+@import "./styles/controls.css";
+
+.ds-placeholder {
+  color: inherit;
+}

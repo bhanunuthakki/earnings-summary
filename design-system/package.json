@@ -1,0 +1,40 @@
+{
+  "name": "@earnings-summary/design-system",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Prototyping sandbox React port of the earnings-summary Python UI kit (src/ui/). NOT the canonical design system — see README.md.",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./index.css": "./dist/index.css"
+  },
+  "sideEffects": [
+    "*.css"
+  ],
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "check": "tsc --noEmit && node scripts/check-tokens.mjs",
+    "dev": "node build.mjs --watch"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "esbuild": "^0.24.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "typescript": "^5.6.0"
+  }
+}
