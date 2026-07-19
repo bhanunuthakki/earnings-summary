@@ -75,6 +75,10 @@ GOLDEN_PURPOSES = (
     # (segment_quarterly_framework.md §2.4, mode-A: per-column duration_months/
     # is_cumulative closed-form classification).
     "segment_10q_period_disambiguate",
+    # Sector-benchmark-ETF proposal (comparable_sets_bottoms_up.md §4, Phase 3):
+    # mode-A exact-match grader over a hand-picked industry->ETF golden set —
+    # deterministic, factual-lookup ground truth, no judge.
+    "sector_benchmark_proposal",
 )
 AUDIT_PURPOSES = (
     "bear_case",
@@ -234,6 +238,21 @@ def main() -> int:
 
             golden_path = (args.golden or (PROJECT_ROOT / KM_GOLDEN)).resolve()
             summary = run_key_metrics_eval(
+                golden_path=golden_path,
+                code_root=PROJECT_ROOT,
+                limit=args.limit,
+            )
+        elif args.purpose == "sector_benchmark_proposal":
+            # Mode-A exact-match over a hand-picked industry->ETF golden set,
+            # no judge — --no-judge is a no-op like the other deterministic
+            # golden purposes.
+            from evals.sector_benchmark_proposal import (
+                DEFAULT_GOLDEN_RELPATH as SBP_GOLDEN,
+            )
+            from evals.sector_benchmark_proposal import run_sector_benchmark_proposal_eval
+
+            golden_path = (args.golden or (PROJECT_ROOT / SBP_GOLDEN)).resolve()
+            summary = run_sector_benchmark_proposal_eval(
                 golden_path=golden_path,
                 code_root=PROJECT_ROOT,
                 limit=args.limit,

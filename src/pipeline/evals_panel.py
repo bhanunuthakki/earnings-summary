@@ -87,6 +87,9 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
     # Behavioral-rules distiller audit (tenet-2 Phase 4, mode-B rubric) — in
     # sync with run_llm_evals.AUDIT_PURPOSES + rubric_judge.AUDIT_SPECS.
     "behavior_distill",
+    # Sector-benchmark-ETF proposal (comparable_sets_bottoms_up.md §4, Phase 3,
+    # mode-A golden classifier) — kept in sync with run_llm_evals.GOLDEN_PURPOSES.
+    "sector_benchmark_proposal",
 )
 
 CALL_HEALTH_WINDOW_DAYS = 30

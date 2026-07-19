@@ -501,6 +501,7 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
                 suppressed_sections=frozenset(spec.suppressed_sections),
                 eval_snap=company_eval_snap,
                 peer_comp=company_peers,
+                comp_set_context=p3.comp_set_context,
             ),
         ),
         (

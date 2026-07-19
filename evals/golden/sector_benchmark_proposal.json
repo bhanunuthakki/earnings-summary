@@ -1,0 +1,58 @@
+{
+  "purpose": "sector_benchmark_proposal",
+  "version": 1,
+  "_readme": "Mode-A exact-match eval for the sector-benchmark-ETF proposal (docs/design/comparable_sets_bottoms_up.md §4, Phase 3 ratification flow, execution/propose_sector_benchmarks.py). This is a small, closed factual-lookup task -- 'which published index ETF tracks this FMP industry' -- so the ground truth is a hand-picked set of industries with a well-known, unambiguous answer. Score = mean(etf_score, sector_etf_score), each 1.0 on an exact match (or an also_valid_* alternate); a case passes at score >= 0.5. Re-run: python execution/run_llm_evals.py --purpose sector_benchmark_proposal --min-score 0.7",
+  "cases": [
+    {
+      "id": "sbp-semiconductors",
+      "industry": "Semiconductors",
+      "expected_etf": "SMH",
+      "also_valid_etf": ["SOXX"],
+      "expected_sector_etf": "XLK"
+    },
+    {
+      "id": "sbp-software-application",
+      "industry": "Software - Application",
+      "expected_etf": "IGV",
+      "expected_sector_etf": "XLK"
+    },
+    {
+      "id": "sbp-banks-regional",
+      "industry": "Banks - Regional",
+      "expected_etf": "KRE",
+      "expected_sector_etf": "XLF"
+    },
+    {
+      "id": "sbp-biotechnology",
+      "industry": "Biotechnology",
+      "expected_etf": "XBI",
+      "also_valid_etf": ["IBB"],
+      "expected_sector_etf": "XLV"
+    },
+    {
+      "id": "sbp-internet-retail",
+      "industry": "Internet Retail",
+      "expected_etf": "IBUY",
+      "expected_sector_etf": "XLY"
+    },
+    {
+      "id": "sbp-oil-gas-eundp",
+      "industry": "Oil & Gas E&P",
+      "expected_etf": "XOP",
+      "expected_sector_etf": "XLE"
+    },
+    {
+      "id": "sbp-utilities-regulated-electric",
+      "industry": "Utilities - Regulated Electric",
+      "expected_etf": null,
+      "also_valid_etf": ["XLU"],
+      "expected_sector_etf": "XLU"
+    },
+    {
+      "id": "sbp-reit-residential",
+      "industry": "REIT - Residential",
+      "expected_etf": "REZ",
+      "expected_sector_etf": "XLRE"
+    }
+  ]
+}

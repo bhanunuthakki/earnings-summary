@@ -317,6 +317,14 @@ LLM_MODELS: dict[str, str] = {
     # directives/cheapest_model_routing.md. The extract_8k_overrides golden set
     # (evals/golden/extract_8k_overrides.json) gates any cheaper backend.
     "extract_8k_overrides": FAST_CLASSIFIER_MODEL,
+    # Sector-benchmark-ETF proposal (docs/design/comparable_sets_bottoms_up.md
+    # §4, Phase 3 ratification flow, execution/propose_sector_benchmarks.py):
+    # "which published index ETF tracks this FMP industry" — a small factual
+    # lookup, not judgment, same shape as extract_8k_overrides. Proposals are
+    # cached to data/sector_benchmark_proposals/ for owner review and NEVER
+    # auto-applied into sector_benchmark_map.SECTOR_BENCHMARK_MAP. Run on
+    # demand (one call per unmapped industry, ~50-150 total) — cost bounded.
+    "sector_benchmark_proposal": FAST_CLASSIFIER_MODEL,
     # Peer selection — the generator behind the §4 peer-comp panel
     # (src/compute/peer_selection.py, directives/peer_selection_llm.md). Proposes
     # the 6-10 best business-model comparables (replacing the FMP sector/cap

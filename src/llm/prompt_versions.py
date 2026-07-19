@@ -144,6 +144,11 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # set). Bump when _build_prompt is materially rewritten, then re-run
     # `run_llm_evals.py --purpose key_metrics --min-score ...`.
     "key_metrics": "v1",
+    # Sector-benchmark-ETF proposal (src/compute/sector_benchmark_proposal.py,
+    # mode-A exact-match golden set, comparable_sets_bottoms_up.md §4). Bump
+    # when _build_prompt is materially rewritten, then re-run
+    # `run_llm_evals.py --purpose sector_benchmark_proposal --min-score ...`.
+    "sector_benchmark_proposal": "v1",
     # The eval judge itself (src/evals/judge.py + rubric_judge.py prompt
     # templates). Bump when either judge prompt is materially reworded so
     # spot-check agreement rates (execution/spot_check_eval_judge.py) stay
