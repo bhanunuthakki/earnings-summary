@@ -237,7 +237,7 @@ a.k-tick-sym:hover { color: var(--accent); }
 
 /* ---- status dot: ONE filled circular tick (design_language §4). THE single
    home of the ok/warn/bad → --ok/--warn/--bad mapping four surfaces duplicated
-   under .dot-*/.fdot-*/.ch-dot-*/.cc-system-dot-*. Fill is `currentColor`, so a
+   under .dot-*, .fdot-*, .ch-dot-*, .cc-system-dot-*. Fill is `currentColor`, so a
    tone modifier only sets `color` (mirrors the .k-prov-tick idiom): the same
    class colors a bg circle here and — where a surface still needs a neutral or
    bespoke shade — takes any local `color`. A surface sets --k-dot-size (default
