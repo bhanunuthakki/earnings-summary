@@ -156,6 +156,22 @@ def record_call(record: LlmCallRecord, *, db_path: Path | str | None = None) -> 
     pipeline has configured via ``db.DB_PATH``.
     """
     try:
+        if record.purpose is None:
+            # Attribution hygiene (2026-07-19 review: purpose=NULL rows had
+            # accumulated $150+ of unattributable spend). Name the caller so
+            # the next NULL identifies its own call site in the log — the row
+            # still lands (telemetry must not be dropped over a label).
+            import inspect
+
+            caller = "?"
+            try:
+                frame = inspect.stack()[1]
+                caller = f"{Path(frame.filename).name}:{frame.lineno}"
+            except Exception:
+                pass
+            log.warning(
+                {"event": "llm_call_missing_purpose", "model": record.model, "caller": caller}
+            )
         path = resolve_db_path(db_path)
         if path is None or not Path(path).exists():
             log.debug(
