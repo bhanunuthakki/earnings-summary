@@ -15,12 +15,14 @@ Ask pack) reuses :func:`read_latest_snapshot` to answer when the tracker is down
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 _TABLE = "portfolio_risk_snapshots"
+_HISTORY_TABLE = "portfolio_risk_snapshot_history"
 _DEFAULT_USER = "bhanu"
 
 # The metric columns, in insert order — kept in one list so write/read stay in
@@ -122,7 +124,13 @@ def write_snapshot(
     user_id: str = _DEFAULT_USER,
     db_path: Path | str | None = None,
 ) -> bool:
-    """Upsert the single last-known snapshot for ``user_id``.
+    """Upsert the single last-known snapshot for ``user_id`` AND append the
+    same capture to ``portfolio_risk_snapshot_history`` (migration 0185).
+
+    The single-row table stays the cheap latest-view the offline surfaces
+    read; the history table is the drift substrate ("exposure vs 30 days
+    ago"), which the 0105 upsert made structurally impossible. The history
+    append is best-effort — a pre-0185 DB still gets its latest-view upsert.
 
     Stamps ``captured_at`` to now (naive-UTC) — the caller's value is ignored.
     Returns ``True`` on a successful write, ``False`` when the DB / table is
@@ -141,12 +149,55 @@ def write_snapshot(
             f"ON CONFLICT(user_id) DO UPDATE SET {updates}",
             [user_id, captured_at, *values],
         )
+        with contextlib.suppress(sqlite3.Error):  # pre-0185 DB — latest-view still lands
+            conn.execute(
+                f"INSERT INTO {_HISTORY_TABLE} ({cols}) VALUES ({placeholders})",
+                [user_id, captured_at, *values],
+            )
         conn.commit()
         return True
     except sqlite3.Error:
         return False
     finally:
         conn.close()
+
+
+def read_history(
+    *,
+    user_id: str = _DEFAULT_USER,
+    since: str | None = None,
+    limit: int = 200,
+    db_path: Path | str | None = None,
+) -> list[RiskSnapshot]:
+    """History captures for ``user_id``, newest first. ``since`` (ISO string)
+    floors the window. [] on a pre-0185 DB / any failure — degrade-don't-crash
+    like every reader here. Workstream C8's drift trigger reads this."""
+    conn = _open(db_path)
+    if conn is None:
+        return []
+    try:
+        clauses = ["user_id = ?"]
+        params: list[object] = [user_id]
+        if since:
+            clauses.append("captured_at >= ?")
+            params.append(since)
+        params.append(int(limit))
+        rows = conn.execute(
+            f"SELECT captured_at, {', '.join(_METRIC_COLUMNS)} FROM {_HISTORY_TABLE} "
+            f"WHERE {' AND '.join(clauses)} ORDER BY captured_at DESC LIMIT ?",
+            params,
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+    return [
+        RiskSnapshot(
+            captured_at=str(r["captured_at"]),
+            **{col: r[col] for col in _METRIC_COLUMNS},
+        )
+        for r in rows
+    ]
 
 
 def read_latest_snapshot(

@@ -70,9 +70,13 @@ MACRO_BETA_LOOKBACK = 252  # preferred macro_sensitivities lookback_window_days
 MACRO_MOMENTUM_CAL_DAYS = 90  # macro momentum = log change over this window
 MACRO_STALE_DAYS = 45  # ignore a macro series whose latest point is older
 # Beta-quality floor (2026-07-19 review): below these, a sensitivity is
-# regression noise, not exposure — it must not tilt the blend.
+# regression noise, not exposure — it must not tilt the blend. The n floor is
+# 30, not 40: the standard 252-trading-day lookback yields ~36 aligned WEEKLY
+# observations (50 weeks minus series-alignment gaps — verified on the first
+# post-revival recompute), so 40 would floor out every standard-lookback fit
+# and turn the quality gate into "macro permanently off". r² stays primary.
 MACRO_MIN_R_SQUARED = 0.05
-MACRO_MIN_N_OBS = 40
+MACRO_MIN_N_OBS = 30
 RET_CLAMP = 1.0  # winsorize DCF upside at ±100% before z-scoring
 
 
