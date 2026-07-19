@@ -52,6 +52,10 @@ class Sensitivity:
     r_squared: float | None
     lookback_window_days: int
     computed_at: datetime
+    # Observations behind the regression (migration 0184). None on legacy rows
+    # written before the column existed — consumers treat None as "unknown"
+    # (the r² floor still applies; the n floor only when n is known).
+    n_obs: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -213,13 +217,21 @@ def upsert_sensitivity(
     beta: float,
     lookback_window_days: int,
     r_squared: float | None = None,
+    n_obs: int | None = None,
     db_path: Path | str | None = None,
 ) -> int | None:
-    """Insert or replace the (ticker, series_id, lookback) sensitivity row."""
+    """Insert or replace the (ticker, series_id, lookback) sensitivity row.
+
+    ``n_obs`` (migration 0184) persists the regression's observation count so
+    the read-side quality floor can distinguish a thin fit from a real one;
+    silently ignored on a pre-0184 schema (the write must not break old data
+    dirs)."""
     conn = _open(db_path, expect_table="macro_sensitivities")
     if conn is None:
         return None
     try:
+        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(macro_sensitivities)")}
+        has_n = "n_obs" in cols
         now = datetime.now(UTC).isoformat()
         existing = conn.execute(
             """
@@ -229,30 +241,37 @@ def upsert_sensitivity(
             (ticker.upper(), series_id, int(lookback_window_days)),
         ).fetchone()
         if existing is not None:
-            conn.execute(
-                """
-                UPDATE macro_sensitivities
-                SET beta = ?, r_squared = ?, computed_at = ?
-                WHERE id = ?
-                """,
-                (float(beta), r_squared, now, int(existing["id"])),
-            )
+            if has_n:
+                conn.execute(
+                    "UPDATE macro_sensitivities "
+                    "SET beta = ?, r_squared = ?, n_obs = ?, computed_at = ? WHERE id = ?",
+                    (float(beta), r_squared, n_obs, now, int(existing["id"])),
+                )
+            else:
+                conn.execute(
+                    "UPDATE macro_sensitivities "
+                    "SET beta = ?, r_squared = ?, computed_at = ? WHERE id = ?",
+                    (float(beta), r_squared, now, int(existing["id"])),
+                )
             conn.commit()
             return int(existing["id"])
+        n_cols = ", n_obs" if has_n else ""
+        n_vals = ", ?" if has_n else ""
+        params: list[object] = [
+            ticker.upper(),
+            series_id,
+            float(beta),
+            r_squared,
+            int(lookback_window_days),
+            now,
+        ]
+        if has_n:
+            params.append(n_obs)
         cur = conn.execute(
-            """
-            INSERT INTO macro_sensitivities(
-                ticker, series_id, beta, r_squared, lookback_window_days, computed_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                ticker.upper(),
-                series_id,
-                float(beta),
-                r_squared,
-                int(lookback_window_days),
-                now,
-            ),
+            "INSERT INTO macro_sensitivities("
+            f"ticker, series_id, beta, r_squared, lookback_window_days, computed_at{n_cols}"
+            f") VALUES (?, ?, ?, ?, ?, ?{n_vals})",
+            params,
         )
         conn.commit()
         return int(cur.lastrowid or 0)
@@ -304,6 +323,13 @@ def fetch_sensitivities(
                     r_squared=float(r["r_squared"]) if r["r_squared"] is not None else None,
                     lookback_window_days=int(r["lookback_window_days"]),
                     computed_at=ca_dt,
+                    # sqlite3.Row is a SEQUENCE: bare `in` tests VALUES, so the
+                    # column-presence probe genuinely needs .keys() here.
+                    n_obs=(
+                        int(r["n_obs"])
+                        if "n_obs" in r.keys() and r["n_obs"] is not None  # noqa: SIM118
+                        else None
+                    ),
                 )
             )
         return out

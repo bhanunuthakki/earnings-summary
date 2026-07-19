@@ -23,6 +23,8 @@ from macro_series import REGISTRY, ProviderSpec
 def test_all_registry_providers_resolve_to_stable() -> None:
     for series in REGISTRY.values():
         for provider in series.providers:
+            if provider.kind == "yfinance":
+                continue  # not an FMP URL — path is a Yahoo symbol
             url = fms._resolve_url(provider)
             assert url.startswith(fms.FMP_STABLE), (series.series_id, provider.path, url)
             assert "/api/v3" not in url and "/api/v4" not in url
@@ -54,5 +56,42 @@ def test_stable_flat_list_round_trip_parses(monkeypatch: pytest.MonkeyPatch) -> 
         return payload
 
     monkeypatch.setattr(fms, "_fetch_json", fake_fetch)
+    # The yfinance candidate now sits FIRST (2026-07-19 revival); fail it so
+    # the FMP fallback path under test is actually exercised — and so this
+    # suite never touches the network.
+    monkeypatch.setattr(fms, "_yfinance_rows", lambda *_a, **_k: 0)
     n = fms._populate_one_series(vix, dry_run=True, sleep_seconds=0.0)
     assert n == 2  # both rows parsed (date + close present)
+
+
+def test_yfinance_provider_is_first_for_revived_series() -> None:
+    """The five never-populated series (usd_brl foremost — the most thesis-
+    relevant factor for a MELI+NU book) and the frozen ones lead with the free
+    yfinance provider; fed_funds stays FMP-only (no Yahoo source)."""
+    for sid in ("usd_brl", "usd_eur", "usd_twd", "copper", "sox", "vix", "us_10y"):
+        first = REGISTRY[sid].providers[0]
+        assert first.kind == "yfinance", (sid, first.kind)
+    assert all(p.kind != "yfinance" for p in REGISTRY["fed_funds"].providers)
+
+
+def test_yfinance_rows_apply_provider_scale(monkeypatch: pytest.MonkeyPatch) -> None:
+    """^TNX quotes yield × 10 — the provider's scale must land the persisted
+    series in percent, matching the FMP feed it replaces."""
+    from datetime import date
+
+    import factor_proxies
+
+    monkeypatch.setattr(
+        factor_proxies, "fetch_proxy_series", lambda _sym, **_k: [(date(2026, 7, 18), 42.5)]
+    )
+    written: list[tuple[str, float]] = []
+
+    def fake_upsert(*, series_id: str, rate_date: object, value: float, source: str) -> int:
+        written.append((series_id, value))
+        return 1
+
+    monkeypatch.setattr(fms, "upsert_series_value", fake_upsert)
+    spec = REGISTRY["us_10y"].providers[0]
+    n = fms._yfinance_rows(spec, dry_run=False, series_id="us_10y")
+    assert n == 1
+    assert written == [("us_10y", pytest.approx(4.25))]

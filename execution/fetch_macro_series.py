@@ -85,7 +85,7 @@ def _fetch_json(provider: ProviderSpec, *, sleep_seconds: float = 0.0) -> object
         time.sleep(sleep_seconds)
     try:
         resp = requests.get(url, params=params, timeout=30)
-    except Exception as exc:  # noqa: BLE001 — fail-soft per spec; covers ConnectionError, timeout, ...
+    except Exception as exc:
         log.info({"event": "macro_fetch_error", "url": url, "error": _redact(exc)})
         return None
     if resp.status_code == 429:
@@ -104,7 +104,7 @@ def _fetch_json(provider: ProviderSpec, *, sleep_seconds: float = 0.0) -> object
             }
         )
         return None
-    except Exception as exc:  # noqa: BLE001 — JSON decode + other parse failures
+    except Exception as exc:
         log.info({"event": "macro_parse_error", "url": url, "error": _redact(exc)})
         return None
 
@@ -154,10 +154,51 @@ def _parse_float(raw: object) -> float | None:
     return f
 
 
+def _yfinance_rows(provider: ProviderSpec, *, dry_run: bool, series_id: str) -> int:
+    """Fetch a yfinance provider (2026-07-19 review: FMP had been 429ing all
+    12 series daily). Reuses factor_proxies.fetch_proxy_series — the repo's
+    established offline-degrade yfinance reader — and applies the provider's
+    scale (e.g. ^TNX yield×10 → percent). Returns rows persisted; 0 = failed
+    (next candidate tried)."""
+    from factor_proxies import fetch_proxy_series
+
+    rows = fetch_proxy_series(provider.path)
+    n_written = 0
+    for d, v in rows:
+        value = v * provider.scale
+        if dry_run:
+            n_written += 1
+            continue
+        row_id = upsert_series_value(
+            series_id=series_id,
+            rate_date=d,
+            value=value,
+            source=provider.source,
+        )
+        if row_id is not None:
+            n_written += 1
+    return n_written
+
+
 def _populate_one_series(series: SeriesSpec, *, dry_run: bool, sleep_seconds: float) -> int:
     """Try each provider in order. Returns the number of rows persisted (0
     means every candidate failed for this series)."""
     for provider in series.providers:
+        if provider.kind == "yfinance":
+            n_yf = _yfinance_rows(provider, dry_run=dry_run, series_id=series.series_id)
+            if n_yf > 0:
+                log.info(
+                    {
+                        "event": "macro_series_populated",
+                        "series_id": series.series_id,
+                        "provider": provider.path,
+                        "source": provider.source,
+                        "rows": n_yf,
+                        "dry_run": dry_run,
+                    }
+                )
+                return n_yf
+            continue
         payload = _fetch_json(provider, sleep_seconds=sleep_seconds)
         if payload == "RATE_LIMITED":
             # Spec: switch to single-threaded with sleeps if rate limited.
@@ -253,7 +294,42 @@ def main() -> int:
     populated = sum(1 for n in summary.values() if n > 0)
     total = len(summary)
     print(json.dumps({"populated": populated, "total": total, "per_series": summary}, indent=2))
+    if populated == 0 and not args.dry_run:
+        _fire_deadman(args.repo_root.resolve(), tried=total)
     return 0 if populated > 0 else 1
+
+
+def _fire_deadman(repo_root: Path, *, tried: int) -> None:
+    """The 'data_feed_stale' dead-man (0183): a full run that populated ZERO
+    series is an outage, not a quiet day — the 2026-07 incident had every FMP
+    series 429ing daily with "populated": 0 in a cron log nobody reads while
+    betas silently recomputed off frozen series. One book-level alert per day,
+    signature-deduped; never raises into the run it watches."""
+    try:
+        from datetime import UTC, datetime
+
+        from alerts import store as alerts_store
+
+        db_path = repo_root / "data" / "portfolio.db"
+        now = datetime.now(UTC).replace(tzinfo=None)
+        sig = alerts_store.compute_signature_sha(
+            "data_feed_stale", "PORTFOLIO", {"feed": "macro_series", "date": now.date().isoformat()}
+        )
+        if alerts_store.find_by_signature(signature_sha=sig, db_path=db_path) is not None:
+            return
+        alerts_store.fire_alert(
+            ticker="PORTFOLIO",
+            trigger_kind="data_feed_stale",
+            fired_at=now,
+            evidence_json=json.dumps(
+                {"feed": "macro_series", "series_tried": tried, "populated": 0}
+            ),
+            signature_sha=sig,
+            db_path=db_path,
+        )
+        log.warning({"event": "macro_deadman_fired", "series_tried": tried})
+    except Exception as exc:
+        log.warning({"event": "macro_deadman_failed", "error": _redact(exc)})
 
 
 if __name__ == "__main__":
