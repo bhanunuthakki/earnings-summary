@@ -35,8 +35,11 @@ failure mode.
   disagrees with market >2x → attack the model), `behavioral_consistency`, `missed_upside` (PR9 —
   the one lens that inverts direction: attacks the owner's CAUTION, not the position, surfacing
   positions capped below fair value, high-conviction names with no add-rung, or bear deltas more
-  severe than the thesis justifies). Rotation state persisted; the same name must not get the same
-  lens twice in a row.
+  severe than the thesis justifies), `profile_drift` (tenet-2 Phase 4 — attacks the owner's
+  AFFIRMED profile/behavioral record instead of the position: is it stale (past its review
+  horizon) or contradicted by graded decisions since affirmation, surfacing an expiring fact
+  nobody re-ratified, or — with nothing affirmed at all — the empty-profile gap itself).
+  Rotation state persisted; the same name must not get the same lens twice in a row.
 - **Cross-book passes**: factor-block detection (e.g. the MELI+NU Brazil-credit pair), style drift
   vs stated strategy (value/size/momentum loadings vs the owner's GARP+index+momentum-sleeve
   statement), human-capital overlay (owner income is tech/AI-correlated; flag book bets that

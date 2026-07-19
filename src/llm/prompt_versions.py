@@ -272,6 +272,11 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # the prompt is materially rewritten, then re-run
     # `run_llm_evals.py --purpose segment_10q_period_disambiguate`.
     "segment_10q_period_disambiguate": "v1",
+    # Behavioral-rules distiller (tenet-2 Phase 4,
+    # synthesis.behavior_distill._build_prompt). Bump when the distill prompt
+    # is materially rewritten, then re-run
+    # `run_llm_evals.py --purpose behavior_distill`.
+    "behavior_distill": "v1",
 }
 
 _DEFAULT_VERSION = "v1"

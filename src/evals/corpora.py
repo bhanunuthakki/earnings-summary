@@ -590,6 +590,63 @@ def load_position_review_corpus(repo_root: Path) -> list[AuditItem]:
     return out
 
 
+def load_behavior_distill_corpus(repo_root: Path) -> list[AuditItem]:
+    """Every staged behavioral rule (``owner_profile_facts`` rows with
+    ``category='behavioral'`` and ``provenance='derived'``, latest-row-only),
+    newest id first.
+
+    Distinct from ``load_position_review_corpus``'s live-memo shape: a
+    behavioral rule's graded citations ARE its evidence, so the judged content
+    is the rule's narrative (which already carries the wrong/total tally
+    computed from validated citations) -- the rubric grades whether the rule
+    reads as a real, falsifiable, second-person pattern grounded in that
+    evidence, not a vague truism. Missing DB / missing table -> empty corpus
+    (nothing distilled yet), mirroring every other loader here.
+    """
+    out: list[AuditItem] = []
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
+        return out
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5.0)
+    except sqlite3.Error as exc:
+        log.warning({"event": "eval_corpus_db_open_failed", "error": str(exc)})
+        return out
+    try:
+        present = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='owner_profile_facts'"
+        ).fetchone()
+        if present is None:
+            log.info({"event": "eval_corpus_no_owner_profile_facts_table"})
+            return out
+        rows = conn.execute(
+            """
+            SELECT id, key, narrative, created_at
+            FROM owner_profile_facts
+            WHERE category = 'behavioral' AND provenance = 'derived' AND is_latest = 1
+            ORDER BY id DESC
+            """
+        ).fetchall()
+    except sqlite3.Error as exc:
+        log.warning({"event": "eval_corpus_behavior_distill_read_failed", "error": str(exc)})
+        return out
+    finally:
+        conn.close()
+    for fact_id, key, narrative, created_at in rows:
+        if not narrative:
+            continue
+        out.append(
+            AuditItem(
+                item_id=f"owner_profile_fact:{fact_id}",
+                label=f"behavior_distill/{key} (fact:{fact_id})",
+                ticker=None,
+                content=_clip(str(narrative)),
+                produced_at=_parse_naive_utc(created_at),
+            )
+        )
+    return out
+
+
 # purpose -> loader. The rubric runner resolves its corpus here; adding an
 # audit purpose = one rubric file + one loader + one entry (+ registry/model
 # wiring asserted by tests).
@@ -603,6 +660,7 @@ CORPUS_LOADERS: dict[str, CorpusLoader] = {
     "earnings_themes_split": load_earnings_themes_corpus,
     "qa_topics": load_qa_topics_corpus,
     "position_review": load_position_review_corpus,
+    "behavior_distill": load_behavior_distill_corpus,
 }
 
 

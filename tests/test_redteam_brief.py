@@ -11,9 +11,16 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from redteam.brief import render_red_team_brief  # noqa: E402
+from redteam.brief import LENS_LABEL, render_red_team_brief  # noqa: E402
 from redteam.gate import MonthStatus  # noqa: E402
-from redteam.models import Kind, RedTeamItemRow, Severity, Status  # noqa: E402
+from redteam.models import (  # noqa: E402
+    CROSS_BOOK_LENS_NAMES,
+    LENS_NAMES,
+    Kind,
+    RedTeamItemRow,
+    Severity,
+    Status,
+)
 
 
 def _row(
@@ -41,6 +48,15 @@ def _row(
         responded_at=None,
         created_at=datetime(2026, 8, 1, 10, 0, 0),
     )
+
+
+def test_every_lens_has_a_display_label() -> None:
+    # A lens rendering as its own raw slug (the LENS_LABEL.get fallback) is a
+    # drift signal — every rotation member (per-name + cross-book) should
+    # have a proper label, including the newest (profile_drift, tenet-2
+    # Phase 4).
+    for lens in (*LENS_NAMES, *CROSS_BOOK_LENS_NAMES):
+        assert lens in LENS_LABEL, f"{lens!r} has no display label in redteam.brief.LENS_LABEL"
 
 
 def test_empty_state_renders_no_items_message() -> None:

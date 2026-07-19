@@ -1,5 +1,8 @@
 @echo off
-REM Weekly Sun 03:30 - feed the prompt-calibration loop.
+REM Weekly Sun 10:30 America/Los_Angeles - feed the prompt-calibration loop.
+REM (Re-registered from a drifted 03:30 on 2026-07-13 -- see
+REM directives/llm_quota_scheduling.md's incident note; this comment had
+REM gone stale relative to the live Task Scheduler entry.)
 REM
 REM run_calibration_grading.py runs the three calibration graders in sequence
 REM (predictions -> decisions -> bear_cases), each scoring matured LLM outputs

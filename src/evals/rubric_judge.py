@@ -112,6 +112,15 @@ AUDIT_SPECS: dict[str, AuditSpec] = {
     # Q&A topic labels: the JSON array of per-question topic/tag pairs
     # produced by generate_qa_topics per quarter. Corpus = data/qa_topics/<T>.json.
     "qa_topics": AuditSpec("qa_topics", RUBRICS_DIR / "qa_topics.md"),
+    # Behavioral-rules distiller (tenet-2 Phase 4): grades staged
+    # owner_profile_facts rows (category='behavioral', provenance='derived')
+    # on grounding, second-person falsifiability, and non-redundancy. Chosen
+    # over the mode-A golden-classifier harness (evals.golden_classifiers) —
+    # distillation over a growing, non-fixed corpus with no single "right"
+    # rule set doesn't fit a checked-in expected-output comparison, the same
+    # reason synthesis.tenet_distill (its closest precedent) carries no golden
+    # set either. Corpus = evals.corpora.load_behavior_distill_corpus.
+    "behavior_distill": AuditSpec("behavior_distill", RUBRICS_DIR / "behavior_distill.md"),
 }
 
 _THRESHOLD_RX = re.compile(r"^Pass threshold:\s*([0-9.]+)\s*$", re.MULTILINE)

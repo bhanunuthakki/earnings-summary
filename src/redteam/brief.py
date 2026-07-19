@@ -59,13 +59,14 @@ _STATUS_TONE: dict[str, str] = {
     "deferred": "warn",
     "closed": "",
 }
-_LENS_LABEL: dict[str, str] = {
+LENS_LABEL: dict[str, str] = {
     "shared_factor": "Shared Factor",
     "fx_translation": "FX Translation",
     "competitive_encroachment": "Competitive Encroachment",
     "model_vs_market": "Model vs Market",
     "behavioral_consistency": "Behavioral Consistency",
     "missed_upside": "Missed Upside",
+    "profile_drift": "Profile Drift",
     "factor_block": "Factor Block",
     "style_drift": "Style Drift",
     "human_capital": "Human Capital",
@@ -78,7 +79,7 @@ _ANSWERABLE_STATUSES: frozenset[str] = frozenset({"open", "deferred"})
 
 
 def _lens_chip(lens: str) -> str:
-    label = escape(_LENS_LABEL.get(lens, lens))
+    label = escape(LENS_LABEL.get(lens, lens))
     return f'<span class="k-chip k-chip-mono">{label}</span>'
 
 

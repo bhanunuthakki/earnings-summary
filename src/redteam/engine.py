@@ -194,6 +194,11 @@ def _run_per_name(
         log.debug({"event": "red_team_bear_lint_failed", "error": str(exc)})
         bear_by_ticker = {}
 
+    # profile_drift lens evidence (tenet-2 Phase 4): book-wide, computed ONCE
+    # per run (like bear_by_ticker above), not one read per name — every
+    # ticker that lands on this lens this month shares the same evidence.
+    profile_drift_evidence = lenses.build_profile_drift_evidence(conn)
+
     for ticker in tickers:
         lens = lenses.lens_for(ticker, month_index)
         pack: NameEvidencePack | None = lenses.build_name_evidence_pack(
@@ -202,6 +207,7 @@ def _run_per_name(
             ticker=ticker,
             weight_pct=weights[ticker],
             bear_finding=bear_by_ticker.get(ticker),
+            profile_drift_evidence=profile_drift_evidence,
         )
         if pack is None:
             _bump(result.tally, "no_thesis")

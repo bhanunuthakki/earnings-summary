@@ -1,4 +1,4 @@
-"""The six rotating per-name attack lenses (monthly_red_team.md Phase 2).
+"""The seven rotating per-name attack lenses (monthly_red_team.md Phase 2).
 
 Lens rotation is DETERMINISTIC, not stateful: ``lens_for(ticker, month_index)``
 derives the lens from a stable hash of the ticker plus the calendar month
@@ -11,20 +11,25 @@ guaranteed because +1 mod N is never 0 for any N > 1, where N =
 (``PYTHONHASHSEED``) and would NOT be reproducible across runs, so this uses a
 fixed ``sha256``-derived seed instead.
 
-PR9 (Bull-side symmetry) grew ``LENS_NAMES`` from 5 to 6 — the rotation
-modulus below follows ``len(LENS_NAMES)`` automatically, so this needed no
-code change beyond the new name in ``redteam.models``. Safe to change:
-``red_team_items`` carried zero rows in prod at PR9 time (no persisted run
-has ever depended on the old mod-5 assignment), so there is no historical
-rotation state to preserve continuity with.
+PR9 (Bull-side symmetry) grew ``LENS_NAMES`` from 5 to 6, and tenet-2 Phase 4
+grew it again from 6 to 7 (``profile_drift``) — the rotation modulus below
+follows ``len(LENS_NAMES)`` automatically, so neither change needed any code
+change beyond the new name in ``redteam.models``. Safe to change: ``red_team_
+items`` carried zero rows in prod at both PR9 and Phase-4 time (no persisted
+run has ever depended on the prior modulus's assignment), so there is no
+historical rotation state to preserve continuity with.
 
 Evidence is assembled entirely in CODE (thesis anchor, verdict, weight, latest
-DCF over/under, downside/add-rung presence — Layer-3 discipline: no business
-logic riding in the prompt that code can compute). The LLM's only job is the
-adversarial judgment. ``missed_upside`` (PR9) is the one lens that inverts
-attack direction: the other five attack the POSITION (find why the thesis is
-wrong); ``missed_upside`` attacks the owner's CAUTION (find where the thesis
-is being under-expressed) — see ``build_missed_upside_prompt``.
+DCF over/under, downside/add-rung presence, affirmed-profile/expiring-fact
+reads — Layer-3 discipline: no business logic riding in the prompt that code
+can compute). The LLM's only job is the adversarial judgment. Two lenses
+depart from the shared "attack the position" framing and get their own
+dispatch + evidence shape: ``missed_upside`` (PR9) inverts direction and
+attacks the owner's CAUTION instead (find where the thesis is being
+under-expressed) — see ``build_missed_upside_prompt``; ``profile_drift``
+(tenet-2 Phase 4) attacks the owner's PROFILE/BEHAVIORAL RECORD instead of
+the thesis (is it still true, or stale/contradicted by observed behavior) —
+see ``build_profile_drift_prompt``.
 """
 
 from __future__ import annotations
@@ -104,6 +109,88 @@ class NameEvidencePack:
     # existing "degrade to omitted/false rather than fabricate" posture.
     has_downside_rung: bool = False
     has_add_rung: bool = False
+    # Profile-drift lens (tenet-2 Phase 4) evidence — BOOK-WIDE, not
+    # per-ticker: the same pack for every name assigned this lens in a given
+    # run (mirrors bear_by_ticker being computed once). None when unavailable
+    # (--dry-run with no connection, or the read failed) — the lens degrades
+    # to attacking the empty-profile case itself rather than fabricating.
+    profile_drift: ProfileDriftEvidence | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class ProfileDriftEvidence:
+    """Deterministic, book-wide evidence for the ``profile_drift`` lens
+    (tenet-2 Phase 4): does the owner's AFFIRMED profile / behavioral record
+    still match observed behavior? Every field is assembled from existing
+    reads — ``owner_profile.store`` (affirmed facts, expiring facts) and the
+    graded ``decisions`` corpus since the earliest behavioral affirmation —
+    never re-derived or LLM-inferred."""
+
+    # "key: narrative (affirmed YYYY-MM-DD)" for every currently-AFFIRMED
+    # fact across all three tiers (capacity/appetite/behavioral).
+    affirmed_lines: tuple[str, ...]
+    # "category/key: narrative" for every fact past its review horizon
+    # (owner_profile.store.list_expiring_facts) — the direct, deterministic
+    # "stale" signal §3.3 defines.
+    expiring_lines: tuple[str, ...]
+    # One honest sentence on whether GRADED owner decisions since the
+    # earliest behavioral-fact affirmation still confirm the pattern, or
+    # None when there is nothing behavioral affirmed yet to check against.
+    graded_since_summary: str | None
+
+
+def build_profile_drift_evidence(conn: object) -> ProfileDriftEvidence | None:
+    """Assemble :class:`ProfileDriftEvidence` over an open connection.
+    ``None`` when ``conn`` isn't a live ``sqlite3.Connection`` (e.g.
+    --dry-run) or the read fails for any reason (missing pre-0159 substrate,
+    locked DB) — best-effort, never blocks the per-name pass."""
+    import sqlite3
+
+    if not isinstance(conn, sqlite3.Connection):
+        return None
+    try:
+        from owner_profile.store import get_current_profile, list_expiring_facts
+
+        grouped = get_current_profile(conn)
+        expiring = list_expiring_facts(conn)
+    except Exception as exc:  # best-effort — never blocks the pass
+        log.debug({"event": "red_team_profile_drift_evidence_failed", "error": str(exc)})
+        return None
+
+    affirmed_rows = [row for rows in grouped.values() for row in rows]
+    affirmed_lines = tuple(
+        f"{row.key}: {row.narrative} (affirmed {(row.affirmed_at or row.created_at)[:10]})"
+        for row in sorted(affirmed_rows, key=lambda r: r.id)
+    )
+    expiring_lines = tuple(
+        f"{row.category}/{row.key}: {row.narrative}" for row in sorted(expiring, key=lambda r: r.id)
+    )
+
+    behavioral_affirmed = [r for r in grouped.get("behavioral", []) if r.affirmed_at]
+    graded_since_summary: str | None = None
+    if behavioral_affirmed:
+        earliest = min(r.affirmed_at for r in behavioral_affirmed if r.affirmed_at)
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*), SUM(CASE WHEN outcome_label = 'wrong' THEN 1 ELSE 0 END) "
+                "FROM decisions WHERE decided_by = 'owner' AND outcome_label != 'pending' "
+                "AND made_at >= ?",
+                (earliest,),
+            ).fetchone()
+        except sqlite3.Error:
+            row = None
+        if row is not None and row[0]:
+            total, wrong = int(row[0]), int(row[1] or 0)
+            graded_since_summary = (
+                f"{wrong} of {total} owner decisions graded since the earliest behavioral "
+                f"affirmation ({earliest[:10]}) came back wrong"
+            )
+
+    return ProfileDriftEvidence(
+        affirmed_lines=affirmed_lines,
+        expiring_lines=expiring_lines,
+        graded_since_summary=graded_since_summary,
+    )
 
 
 def build_name_evidence_pack(
@@ -113,13 +200,16 @@ def build_name_evidence_pack(
     ticker: str,
     weight_pct: float,
     bear_finding: BearLintFinding | None = None,
+    profile_drift_evidence: ProfileDriftEvidence | None = None,
 ) -> NameEvidencePack | None:
     """Assemble one held name's evidence pack. ``None`` when there is no
     holdings JSON on file at all (nothing to attack — the caller skips and
     tallies it, it never fabricates a thesis). ``bear_finding`` is the
     caller's pre-computed ``bear_lint.build_bear_lint`` row for this ticker
     (one book-wide lint pass, not one per name) — omitted when the caller has
-    none (a DB without ``dcf_runs``, or bear_lint unavailable)."""
+    none (a DB without ``dcf_runs``, or bear_lint unavailable).
+    ``profile_drift_evidence`` is likewise book-wide (computed ONCE per run,
+    not per name) — see :func:`build_profile_drift_evidence`."""
     import sqlite3
 
     payload = load_holdings_json(repo_root, ticker)
@@ -175,6 +265,7 @@ def build_name_evidence_pack(
         bear_return_pct=(bear_finding.bear_return_pct if bear_finding is not None else None),
         has_downside_rung=has_downside_rung,
         has_add_rung=has_add_rung,
+        profile_drift=profile_drift_evidence,
     )
 
 
@@ -306,10 +397,14 @@ def _evidence_lines(pack: NameEvidencePack) -> _EvidenceLines:
 
 def build_prompt(pack: NameEvidencePack, lens: str, *, other_holdings_line: str) -> str:
     """Compose the one-shot adversarial prompt for ``lens`` over ``pack``.
-    Dispatches to :func:`build_missed_upside_prompt` for the one lens
-    (``missed_upside``, PR9) whose attack direction inverts."""
+    Dispatches to :func:`build_missed_upside_prompt` (``missed_upside``, PR9)
+    and :func:`build_profile_drift_prompt` (``profile_drift``, tenet-2 Phase
+    4) — the two lenses whose evidence shape and attack target depart from
+    the shared position-attack framing below."""
     if lens == "missed_upside":
         return build_missed_upside_prompt(pack, other_holdings_line=other_holdings_line)
+    if lens == "profile_drift":
+        return build_profile_drift_prompt(pack, other_holdings_line=other_holdings_line)
     framing = _LENS_FRAMING.get(lens, _LENS_FRAMING["shared_factor"])
     ev = _evidence_lines(pack)
 
@@ -356,6 +451,63 @@ def build_missed_upside_prompt(pack: NameEvidencePack, *, other_holdings_line: s
         "express. Propose a concrete bull-side pre-commitment: an add-rung "
         "(price level + size + thesis-intact condition) or a bear-delta "
         "revision.\n\n"
+        f"Other names currently held in the same book (for context): "
+        f"{other_holdings_line or '(none on file)'}\n\n"
+        f"{_ITEM_SCHEMA_INSTRUCTIONS}"
+    )
+
+
+def build_profile_drift_prompt(pack: NameEvidencePack, *, other_holdings_line: str) -> str:
+    """The ``profile_drift`` lens (tenet-2 Phase 4, docs/design/
+    tenet2_advisory_program.md §3.3): attacks whether the owner's AFFIRMED
+    profile facts and behavioral rules still match observed behavior, not
+    ``pack.ticker``'s thesis — a third departure from the shared
+    position-attack framing (``pack.ticker`` anchors the attack in a concrete
+    name's context, same as every other lens, but the claim under attack is
+    about the OWNER, not the position).
+
+    Zero evidence (no affirmed facts, no expiring facts, no graded record
+    since affirmation — ``pack.profile_drift`` is ``None`` or entirely empty)
+    pivots the attack to the empty-profile case itself: the platform has run
+    for months on graded decisions with NOTHING ratified, which is its own
+    falsifiable drift claim, never fabricated evidence."""
+    ev = _evidence_lines(pack)
+    pd = pack.profile_drift
+    if pd is None or not (pd.affirmed_lines or pd.expiring_lines or pd.graded_since_summary):
+        profile_block = (
+            "No owner_profile_facts are currently AFFIRMED (whether because none has "
+            "ever been ratified, or the read failed) despite graded decisions "
+            "accumulating in the platform's ledger."
+        )
+    else:
+        lines = ["Currently AFFIRMED owner profile / behavioral facts:"]
+        if pd.affirmed_lines:
+            lines.extend(f"- {line}" for line in pd.affirmed_lines)
+        else:
+            lines.append("- (none affirmed)")
+        if pd.expiring_lines:
+            lines.append(
+                "Facts already past their review horizon (stale by the platform's own rule):"
+            )
+            lines.extend(f"- {line}" for line in pd.expiring_lines)
+        if pd.graded_since_summary:
+            lines.append(f"Graded record since affirmation: {pd.graded_since_summary}.")
+        profile_block = "\n".join(lines)
+
+    return (
+        f"You are the monthly adversarial Red Team reviewing a long-only equity "
+        f"book. You are attacking the OWNER'S PROFILE AND BEHAVIORAL RECORD, not "
+        f"{pack.ticker}'s thesis — the opposite target of every other lens, which "
+        f"attacks the position itself.\n\n"
+        f"{profile_block}\n\n"
+        f"For grounding context, one held position: {pack.ticker}. {ev.weight} "
+        f"{ev.verdict} {ev.driver}\n\n"
+        "ATTACK ANGLE: identify the SINGLE most dangerous way the owner's affirmed "
+        "profile/behavioral facts are stale or contradicted by observed behavior — "
+        "an expiring fact nobody has re-ratified, a behavioral rule whose graded "
+        "record since affirmation no longer confirms it, or (if nothing is "
+        "affirmed at all) the empty-profile gap itself. Propose a concrete "
+        "re-affirmation or supersede action the owner should take.\n\n"
         f"Other names currently held in the same book (for context): "
         f"{other_holdings_line or '(none on file)'}\n\n"
         f"{_ITEM_SCHEMA_INSTRUCTIONS}"
