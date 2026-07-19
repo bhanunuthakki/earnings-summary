@@ -126,7 +126,12 @@ def test_approve_route(client: FlaskClient, db_file: Path) -> None:
     )
     r = client.post(f"/api/tenets/{prop.id}/approve")
     assert r.status_code == 200
-    assert r.get_json() == {"ok": True, "status": "current"}
+    body = r.get_json()
+    assert body["ok"] is True
+    assert body["status"] == "current"
+    # Ledger UX overhaul (requirement B): the route itself carries the
+    # consequence receipt.
+    assert body["receipt"] == "Adopted — now a standing Tenet in your decision prompts"
 
 
 def test_reject_route(client: FlaskClient, db_file: Path) -> None:

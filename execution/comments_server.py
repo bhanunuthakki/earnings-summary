@@ -775,7 +775,18 @@ def create_app(
                 applied = apply_approved_proposal(proposal_id, db_path=db_path)
             except Exception as exc:  # a bad apply must not 500 the action
                 applied = f"apply failed: {exc}"
-        return {"status": status, "applied": applied}
+        # Consequence receipt (Ledger UX overhaul): a plain-English line of what
+        # just happened, built from the SAME status/applied values above — never
+        # a second query. 'approve' echoes the live write when there was one
+        # (a saved view); memo/dcf/thesis/code approvals write nothing here.
+        receipts = {
+            "approved": f"Approved — {applied}" if applied else "Approved — marked for follow-up",
+            "researching": "Sent back for deeper research",
+            "steered": "Steered — your direction was recorded",
+            "rejected": "Rejected — this proposal won't be revisited",
+        }
+        receipt = receipts.get(status, "Saved")
+        return {"status": status, "applied": applied, "receipt": receipt}
 
     @app.route("/api/reconcile/<kind>/<int:item_id>/<verdict>", methods=["POST", "OPTIONS"])
     def reconcile_verdict(kind: str, item_id: int, verdict: str):
@@ -793,7 +804,17 @@ def create_app(
         fn = reconcile_note if kind == "note" else reconcile_theme
         _bump_activation_count(f"act:reconcile:{verdict}")
         ok = fn(item_id, verdict, db_path=db_path)
-        return ({"ok": ok}, 200 if ok else 404)
+        if not ok:
+            return ({"ok": False}, 404)
+        # Consequence receipt: what the verdict means for whether the coach can
+        # still cite this item — built from the verdict tapped, no extra query.
+        receipts = {
+            "live": "Kept live — the coach can still cite this",
+            "superseded": "Marked superseded — retired from the coach's context",
+            "resolved-rejected": "Marked rejected — retired from the coach's context",
+            "done": "Marked played out — retired from the coach's context",
+        }
+        return ({"ok": True, "receipt": receipts.get(verdict, "Saved")}, 200)
 
     @app.route("/api/reconcile/falsifier/<int:decision_id>", methods=["POST", "OPTIONS"])
     def reconcile_falsifier(decision_id: int):
@@ -836,6 +857,10 @@ def create_app(
                 if status == "armed"
                 else "ratified — queued for arming (next extraction pass)"
             )
+        elif action == "edit":
+            result["receipt"] = "Saved — falsifier rewritten in your words"
+        else:  # drop
+            result["receipt"] = "Dropped — no tripwire will watch this decision"
         return (result, 200)
 
     @app.route("/api/onmymind/<int:note_id>/<verb>", methods=["POST", "OPTIONS"])
@@ -901,13 +926,21 @@ def create_app(
 
         if action == "approve":
             row = approve_tenet(tenet_id, db_path=db_path)
+            if row is None:
+                return ({"ok": False}, 404)
             return (
-                {"ok": row is not None, "status": row.status if row else None},
-                200 if row else 404,
+                {
+                    "ok": True,
+                    "status": row.status,
+                    "receipt": "Adopted — now a standing Tenet in your decision prompts",
+                },
+                200,
             )
         if action == "reject":
             ok = reject_tenet(tenet_id, db_path=db_path)
-            return ({"ok": ok}, 200 if ok else 404)
+            if not ok:
+                return ({"ok": False}, 404)
+            return ({"ok": True, "receipt": "Retired — this Tenet was not adopted"}, 200)
         return ({"error": f"unknown action {action!r}"}, 400)
 
     @app.route("/api/profile/fact/<int:fact_id>/affirm", methods=["POST", "OPTIONS"])
@@ -926,9 +959,15 @@ def create_app(
         finally:
             conn.close()
         _bump_activation_count("act:profile:affirm")
+        if row is None:
+            return ({"ok": False}, 404)
         return (
-            {"ok": row is not None, "status": row.status if row else None},
-            200 if row else 404,
+            {
+                "ok": True,
+                "status": row.status,
+                "receipt": "Affirmed — the coach may now cite this when reviewing your trades",
+            },
+            200,
         )
 
     @app.route("/api/profile/fact/<int:fact_id>/reject", methods=["POST", "OPTIONS"])
@@ -946,7 +985,9 @@ def create_app(
         finally:
             conn.close()
         _bump_activation_count("act:profile:reject")
-        return ({"ok": ok}, 200 if ok else 404)
+        if not ok:
+            return ({"ok": False}, 404)
+        return ({"ok": True, "receipt": "Dropped — never used, won't be re-proposed"}, 200)
 
     @app.route("/api/profile/fact/<int:fact_id>/reaffirm", methods=["POST", "OPTIONS"])
     def profile_fact_reaffirm(fact_id: int):
@@ -965,9 +1006,15 @@ def create_app(
         finally:
             conn.close()
         _bump_activation_count("act:profile:reaffirm")
+        if row is None:
+            return ({"ok": False}, 404)
         return (
-            {"ok": row is not None, "status": row.status if row else None},
-            200 if row else 404,
+            {
+                "ok": True,
+                "status": row.status,
+                "receipt": "Confirmed — good for another review cycle",
+            },
+            200,
         )
 
     @app.route("/api/profile/fact/<int:fact_id>/retire", methods=["POST", "OPTIONS"])
@@ -986,7 +1033,9 @@ def create_app(
         finally:
             conn.close()
         _bump_activation_count("act:profile:retire")
-        return ({"ok": ok}, 200 if ok else 404)
+        if not ok:
+            return ({"ok": False}, 404)
+        return ({"ok": True, "receipt": "Dropped — the coach will stop citing this fact"}, 200)
 
     @app.route("/api/profile/fact/<int:fact_id>/update", methods=["POST", "OPTIONS"])
     def profile_fact_update(fact_id: int):
@@ -1026,7 +1075,14 @@ def create_app(
         finally:
             conn.close()
         _bump_activation_count("act:profile:update")
-        return ({"ok": True, "new_fact_id": new_id}, 200)
+        return (
+            {
+                "ok": True,
+                "new_fact_id": new_id,
+                "receipt": "Saved — your edit awaits your affirm next walk",
+            },
+            200,
+        )
 
     @app.route("/api/tenets/distill", methods=["POST", "OPTIONS"])
     def tenets_distill():
@@ -2365,7 +2421,18 @@ def create_app(
                     mimetype="text/html",
                 )
             return Response(restored_note_button(note_id), mimetype="text/html")
-        return {"note": _note_to_json(updated)}
+        result: dict[str, object] = {"note": _note_to_json(updated)}
+        # Consequence receipts (Ledger UX overhaul) for the packet-walk's
+        # triage mini-cards, which read this same JSON response.
+        if action == "route":
+            from pipeline.triage_panel import _INTENT_LABELS  # pyright: ignore[reportPrivateUsage]
+
+            result["receipt"] = (
+                f"Routed to {_INTENT_LABELS.get(route_intent, route_intent) or 'the suggested category'}"
+            )
+        elif action == "archive":
+            result["receipt"] = "Dismissed"
+        return result
 
     @app.route("/api/viewspec/catalog", methods=["GET"])
     def viewspec_catalog_api():
