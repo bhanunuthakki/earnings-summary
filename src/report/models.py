@@ -184,6 +184,11 @@ class ValuationSnapshot(BaseModel):
     assumptions_sync_status: str | None = None
     assumptions_synced_at: datetime | None = None
 
+    # DCF trust gate (dcf_runs.sanity_flag, migration 0182): 'outlier' when the
+    # persisted |over_under_pct| exceeded the sanity limit — the model needs review
+    # before its fair value can be trusted. None = within bounds / predates the gate.
+    sanity_flag: str | None = None
+
 
 class KpiSnapshotRow(BaseModel):
     name: str

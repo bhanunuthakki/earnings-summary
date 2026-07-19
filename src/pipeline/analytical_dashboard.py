@@ -32,10 +32,14 @@ class TriggerLadderRow:
     list_type: str
     over_under_pct: float | None
     mos_bar: float | None
-    trigger_status: str | None  # 'sell' | 'trim' | 'hold' | 'initiate_candidate'
+    trigger_status: str | None  # 'sell' | 'trim' | 'hold' | 'initiate_candidate' | 'unreviewed'
     live_price: float | None
     dcf_fair_value: float | None
     verdict: str | None  # from thesis_state
+    # dcf_runs.sanity_flag (migration 0182): 'outlier' = the model failed the trust
+    # gate; the row renders with an explicit unreviewed badge and never a sell/trim
+    # signal (a broken model must not trigger an action).
+    sanity_flag: str | None = None
 
 
 @dataclass(slots=True)
@@ -534,6 +538,8 @@ def _build_trigger_ladder(
         return []
 
     # Subquery: each ticker's latest dcf_runs row (segment_name = NULL = consolidated)
+    dcf_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
+    sanity_sel = "dr.sanity_flag" if "sanity_flag" in dcf_cols else "NULL AS sanity_flag"
     rows = conn.execute(
         f"""
         WITH latest_dcf AS (
@@ -545,6 +551,7 @@ def _build_trigger_ladder(
         SELECT tc.ticker, tc.list_type,
                dr.over_under_pct, dr.mos_bar_used, dr.live_price,
                dr.npv_per_share AS fair_value, ts.breach_status as verdict,
+               {sanity_sel},
                CASE
                  WHEN dr.over_under_pct IS NULL THEN 'unknown'
                  WHEN dr.over_under_pct > 0.20 THEN 'sell'
@@ -573,10 +580,13 @@ def _build_trigger_ladder(
             list_type=r["list_type"],
             over_under_pct=_f(r["over_under_pct"]),
             mos_bar=_f(r["mos_bar_used"]),
-            trigger_status=r["trigger_status"],
+            # A sanity-flagged model must not emit an action signal — the ladder
+            # shows 'unreviewed' instead of sell/trim/hold for that row.
+            trigger_status="unreviewed" if r["sanity_flag"] else r["trigger_status"],
             live_price=_f(r["live_price"]),
             dcf_fair_value=_f(r["fair_value"]),
             verdict=r["verdict"],
+            sanity_flag=r["sanity_flag"],
         )
         for r in rows
     ]

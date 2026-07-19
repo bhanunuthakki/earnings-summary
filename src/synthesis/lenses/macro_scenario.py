@@ -26,6 +26,7 @@ from llm_artifact_store import (
 from llm_client import call_llm
 
 from ._shared import (
+    DCF_FLAGGED_NOTE,
     LensContext,
     format_sensitivities,
     format_shocks,
@@ -115,7 +116,9 @@ def _ctx_macro_scenario(
         for s in sens_objs
     ]
     dcf = load_dcf(ticker, repo_root)
-    if dcf:
+    if dcf and dcf.get("sanity_flag"):
+        dcf_summary = DCF_FLAGGED_NOTE
+    elif dcf:
         ou_raw = cast("float | None", dcf.get("over_under_pct"))
         npv_raw = cast("float | None", dcf.get("npv_per_share"))
         live_raw = cast("float | None", dcf.get("live_price"))

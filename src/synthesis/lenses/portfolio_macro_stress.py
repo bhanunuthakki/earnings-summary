@@ -106,15 +106,22 @@ def _ctx_portfolio_macro_stress(*, scenario_obj: object, repo_root: Path) -> Len
         ]
         port_lines: list[str] = []
         grid_lines: list[str] = []
+        dcf_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
+        sanity_sel = ", sanity_flag" if "sanity_flag" in dcf_cols else ", NULL AS sanity_flag"
         for t in tickers:
             dcf = conn.execute(
-                "SELECT npv_per_share, live_price, over_under_pct FROM dcf_runs "
+                f"SELECT npv_per_share, live_price, over_under_pct{sanity_sel} FROM dcf_runs "
                 "WHERE ticker = ? AND (segment_name IS NULL OR segment_name = '') "
                 "ORDER BY valuation_date DESC LIMIT 1",
                 (t,),
             ).fetchone()
-            dcf_ou = cast("float | None", dcf[2]) if dcf is not None else None
-            ou_str = f"{(dcf_ou or 0.0) * 100:+.1f}%" if dcf_ou is not None else "-"
+            flagged = dcf is not None and bool(dcf["sanity_flag"])
+            dcf_ou = cast("float | None", dcf[2]) if dcf is not None and not flagged else None
+            ou_str = (
+                "flagged unreviewed (valuation withheld)"
+                if flagged
+                else (f"{(dcf_ou or 0.0) * 100:+.1f}%" if dcf_ou is not None else "-")
+            )
             h = read_holdings_json(t, repo_root)
             thesis = str(h.get("thesis") or "")[:200]
             port_lines.append(f"### {t}\n- Thesis: {thesis}\n- DCF over/under: {ou_str}")

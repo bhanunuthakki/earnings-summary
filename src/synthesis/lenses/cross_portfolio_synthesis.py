@@ -100,9 +100,11 @@ def _ctx_cross_portfolio(ticker: str | None, repo_root: Path) -> LensContext | N
         # Per-ticker snapshot: thesis, dcf, latest bear case head, recent insider count
         live_by_ticker = _live_position_sizing(tickers)
         port_lines: list[str] = []
+        dcf_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
+        sanity_sel = ", sanity_flag" if "sanity_flag" in dcf_cols else ", NULL AS sanity_flag"
         for t in tickers:
             dcf = conn.execute(
-                "SELECT npv_per_share, live_price, over_under_pct FROM dcf_runs "
+                f"SELECT npv_per_share, live_price, over_under_pct{sanity_sel} FROM dcf_runs "
                 "WHERE ticker = ? AND (segment_name IS NULL OR segment_name = '') "
                 "ORDER BY valuation_date DESC LIMIT 1",
                 (t,),
@@ -122,7 +124,10 @@ def _ctx_cross_portfolio(ticker: str | None, repo_root: Path) -> LensContext | N
             ).fetchone()
             h = read_holdings_json(t, repo_root)
             thesis = str(h.get("thesis") or "")[:200]
-            ou_str = f"{float(dcf[2]) * 100:+.1f}%" if dcf and dcf[2] is not None else "-"
+            if dcf is not None and dcf["sanity_flag"]:
+                ou_str = "flagged unreviewed (valuation withheld)"
+            else:
+                ou_str = f"{float(dcf[2]) * 100:+.1f}%" if dcf and dcf[2] is not None else "-"
             bear_head = (
                 str(bear[0] or "")[:300].replace("\n", " ") if bear else "(no bear case cached)"
             )

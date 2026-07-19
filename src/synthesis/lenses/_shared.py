@@ -386,6 +386,10 @@ def load_predictions(ticker: str, repo_root: Path) -> list[dict[str, object]]:
         conn.close()
 
 
+# What a lens prompt says instead of numbers when the latest run is sanity-flagged.
+DCF_FLAGGED_NOTE = "(DCF model flagged as unreviewed outlier — fair value withheld pending model review)"
+
+
 def load_dcf(ticker: str, repo_root: Path) -> dict[str, object] | None:
     db = repo_root / "data" / "portfolio.db"
     if not db.exists():
@@ -393,18 +397,31 @@ def load_dcf(ticker: str, repo_root: Path) -> dict[str, object] | None:
     conn = sqlite3.connect(str(db))
     try:
         conn.row_factory = sqlite3.Row
+        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
+        sanity_select = ", sanity_flag" if "sanity_flag" in cols else ""
         row = conn.execute(
-            """
+            f"""
             SELECT npv_per_share, live_price, over_under_pct, mos_bar_used,
                    wacc, terminal_growth, fcf_margin, base_revenue, revenue_growths_json,
-                   valuation_date
+                   valuation_date{sanity_select}
             FROM dcf_runs
             WHERE ticker = ? AND (segment_name IS NULL OR segment_name = '')
             ORDER BY valuation_date DESC LIMIT 1
             """,
             (ticker.upper(),),
         ).fetchone()
-        return dict(row) if row else None
+        if row is None:
+            return None
+        out = dict(row)
+        out.setdefault("sanity_flag", None)
+        # A sanity-flagged run (migration 0182: |over_under| past the trust limit —
+        # more likely a broken model than a mispricing) must not put numbers in an
+        # LLM prompt: null the valuation fields centrally so no lens can quote them,
+        # and keep the flag so formatters can say WHY the numbers are withheld.
+        if out.get("sanity_flag"):
+            for k in ("npv_per_share", "over_under_pct", "mos_bar_used"):
+                out[k] = None
+        return out
     finally:
         conn.close()
 

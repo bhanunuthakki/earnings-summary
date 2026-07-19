@@ -37,6 +37,9 @@ _TRIGGER_TONE: dict[str, str] = {
     "hold": "tone-hold",
     "initiate_candidate": "tone-init",
     "unknown": "tone-muted",
+    # DCF trust gate (dcf_runs.sanity_flag): a flagged model gets a loud tone, no
+    # action signal — the number behind the row needs review before it means anything.
+    "unreviewed": "tone-bad",
 }
 
 
