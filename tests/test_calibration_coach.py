@@ -216,12 +216,17 @@ def test_synthesize_biases_drops_unevidenced(monkeypatch: pytest.MonkeyPatch) ->
     assert [b.name for b in biases] == ["grounded"]  # the no-evidence bias is rejected
 
 
-def test_synthesize_biases_transient_failure_degrades(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_synthesize_biases_transient_failure_defers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A transient LLM failure must DEFER the scorecard, never persist as a
+    confident "no biases" — the 2026-07 incident (program review 2026-07-19)
+    degraded a quota-dead-window CalledProcessError to [] and saved it."""
+
     def _raise(*_a: object, **_k: object) -> object:
         raise RuntimeError("transient")
 
     monkeypatch.setattr(cc, "call_llm_structured", _raise)
-    assert synthesize_biases(_inputs()) == []  # degrade, not crash
+    with pytest.raises(cc.TransientCoachError):
+        synthesize_biases(_inputs())
 
 
 def test_synthesize_biases_hard_stop_propagates(monkeypatch: pytest.MonkeyPatch) -> None:

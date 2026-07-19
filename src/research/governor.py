@@ -67,6 +67,9 @@ CLASSES: tuple[str, ...] = (
     "capacity_breach",
     "life_event_checkpoint",
     "profile_drift",
+    # A conviction cohort graded below its bar (zero-LLM, receipts-first) —
+    # research.calibration_moments; fires once per period per cohort.
+    "calibration_finding",
 )
 DAILY_CAP = 1
 WEEKLY_CAP = 3
@@ -229,6 +232,21 @@ def collect_moments(
             )
         except Exception:
             pass  # pre-0159 schema — no owner_profile_facts to scan
+
+        # calibration_finding (2026-07-19 review) — a conviction cohort graded
+        # below its bar, computed straight off the decisions ledger with no
+        # LLM. Same independent-degrade contract as the tenet-2 collectors.
+        try:
+            from research.calibration_moments import collect_calibration_finding_moments
+
+            if db_path is not None:
+                moments.extend(
+                    m
+                    for m in collect_calibration_finding_moments(db_path, now=stamp)
+                    if isinstance(m, Moment)
+                )
+        except Exception:
+            pass  # missing decisions substrate — nothing to confront
     finally:
         conn.close()
     return moments
@@ -303,6 +321,16 @@ def freshness_ok(
             return capacity_breach_still_active(
                 conn, int(ref_id), repo_root=root, api_url=api_url, db_path=db_path
             )
+        if moment.class_ == "calibration_finding":
+            # Still-true check = recompute the deterministic finding and require
+            # the SAME key to re-emerge — grades landing since collection can
+            # heal the cohort, and a healed cohort must not be confronted.
+            if db_path is None:
+                return False
+            from research.calibration_moments import collect_calibration_finding_moments
+
+            fresh = collect_calibration_finding_moments(db_path, now=now_naive_utc())
+            return any(isinstance(m, Moment) and m.key == moment.key for m in fresh)
         return False
     except Exception:
         return False
