@@ -103,6 +103,13 @@ INGEST ──┬── FMP fetchers ────┼── SEC XBRL fetcher ─�
 | `data/portfolio.db` | SQLite store — facts, KPIs, segments, transcripts, validation issues, thesis evaluations, DCF runs, comments. Migrations in `alembic/versions/` (run `alembic heads` for the current revision) |
 | `cron/` | Windows Task Scheduler XMLs + `.bat` wrappers for the scheduled tasks (28 `*.task.xml` — the authoritative set) |
 | `tests/` | Pytest suite — compute modules + pipeline contracts |
+| `evals/` | LLM eval harness — rubrics, goldens, weekly rung configs (see `directives/model_eval_loop.md`) |
+| `templates/industry/` | Industry onboarding templates (`bank`, `software_saas`, `pharma`, …) consumed by `execution/onboard_ticker.py` |
+| `examples/` | Reference artifacts and seed data (e.g. `seed_ir_urls.sql`) |
+| `docs/` | Design docs (`docs/design/`), hardening audit reports (`docs/hardening/`), guided tour + QA walkthrough |
+| `design-system/`, `.design-sync/` | The extracted design-system package + its claude.ai/design sync state |
+| `scripts/` | Repo tooling (design-token codegen) |
+| `scratch/` | Ad-hoc analysis scripts and one-offs, excluded from CI gates: `archive/` (completed one-offs, see its README), `plans/` (historical plan docs still cited by code comments), `proposals/` (KPI-seeder YAML flow), `reports/` (one-off deep-dive memos), plus the still-referenced seeder/backfill scripts and the `sweep.py` ops driver |
 | `transcripts/raw/`, `transcripts/processed/` | Earnings transcript flow (gitignored) |
 | `ir_documents/` | IR PDFs filed by ticker × period (gitignored) |
 | `output/research/<TICKER>/` | Generated brief artifacts (`<DATE>_workspace.html` etc.) — primary deliverable |
