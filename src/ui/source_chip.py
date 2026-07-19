@@ -102,7 +102,15 @@ def _locator_row_html(raw_locator: str) -> str:
 
 # Locator kinds whose primary click target is the provenance peek dispatcher
 # (/api/peek/provenance/<table>:<id>) rather than a raw /source link.
-_PEEK_KINDS = (LocatorKind.FMP_JSON_TABLE, LocatorKind.VENDOR_FIELD, LocatorKind.PDF_SLIDE)
+# `derived` (Phase C, §2.5/§6.1) joins this family: the peek is what renders
+# the recursive formula tree -- a raw /source link has nothing to open (a
+# derived value has no source_doc_id of its own worth linking to).
+_PEEK_KINDS = (
+    LocatorKind.FMP_JSON_TABLE,
+    LocatorKind.VENDOR_FIELD,
+    LocatorKind.PDF_SLIDE,
+    LocatorKind.DERIVED,
+)
 
 
 def viewer_href(src: CellSource) -> str | None:
@@ -153,12 +161,17 @@ _PDF_HINT_NOUN: dict[str, str] = {
 
 def _locator_hint(src: CellSource, loc: FactLocator | None) -> str | None:
     """Compact chip-label hint for locator kinds with a human-readable
-    position (Phase B: pdf_slide → "IR deck p.14"). None = bare abbrev."""
+    position (Phase B: pdf_slide → "IR deck p.14"; Phase C: derived →
+    "derived · N inputs"). None = bare abbrev."""
     if loc is None:
         return None
-    if loc.effective_kind() == LocatorKind.PDF_SLIDE and loc.pdf_page is not None:
+    kind = loc.effective_kind()
+    if kind == LocatorKind.PDF_SLIDE and loc.pdf_page is not None:
         noun = _PDF_HINT_NOUN.get(src.doc_type or "", "PDF")
         return f"{noun} p.{loc.pdf_page}"
+    if kind == LocatorKind.DERIVED and loc.derived is not None:
+        n = len(loc.derived.inputs)
+        return f"derived · {n} input{'s' if n != 1 else ''}"
     return None
 
 

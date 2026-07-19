@@ -1,4 +1,5 @@
-"""CI guard for the provenance click-through program (Phase A, section 4.2)."""
+"""CI guard for the provenance click-through program (Phase A §4.2; extended
+with Phase C's §3.3 anchor-quote-verification fixtures for provenance.edgar_8k)."""
 
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
-from models.facts import FactLocator, LocatorKind  # noqa: E402
+from models.facts import FactLocator, LegacyEscapeHatch, LocatorKind  # noqa: E402
 
 REGISTERED_EXTRACTOR_LOCATOR_VERSIONS: dict[str, int] = {
     "table_extractors.generic_xbrl_capture": 2,
@@ -34,6 +35,33 @@ REGISTERED_EXTRACTOR_LOCATOR_VERSIONS: dict[str, int] = {
 # for the full functional test; the fixture test below is the CI-guard-file
 # registration Scope item 3a asks for, kept lightweight and self-contained).
 REGISTERED_DERIVED_LOCATOR_EMITTERS: frozenset[str] = frozenset({"compute.metrics_engine.io"})
+
+# Phase C (docs/design/provenance_clickthrough.md §3.3): the 8-K segment
+# override extractor builds a FactLocator directly (html_span, after
+# pipeline.locators.verify_quote_in_source passes) rather than through a
+# KpiValue/FinancialFact instance -- it writes fact_overrides, not
+# financial_facts/kpi_facts/segment_dimensions, so it sits outside BOTH the
+# discovery scan above AND that scan's declared table scope. Registered here,
+# same pattern as REGISTERED_DERIVED_LOCATOR_EMITTERS, so this hardening pass
+# still proves (fixture-tested below) that it emits a real v2 locator AND
+# that a fabricated anchor_quote is rejected, never silently trusted.
+REGISTERED_HTML_SPAN_LOCATOR_EMITTERS: frozenset[str] = frozenset({"provenance.edgar_8k"})
+
+# compute.segments writes segment_dimensions rows via SegmentDimension(...)
+# instances (through pipeline.segment_junction_writer), not a
+# FinancialFact/KpiValue instance -- it sits outside BOTH the discovery scan
+# above AND that scan's declared table scope, same as the two frozensets
+# above. compute.segments.extract_segment_facts is the writer used for legacy
+# per-ticker quarterly FMP segment JSON ingest (e.g. data/historical/fmp/
+# MELI_product_segments_quarterly.json / MELI_geo_segments_quarterly.json);
+# it predates the locator contract, so every row it wrote before this
+# registration landed with segment_dimensions.locator NULL. Registered here so
+# this pass proves (fixture-tested below) it now emits a real v2
+# `fmp_json_table` locator per dimension row, AND that re-ingesting over an
+# already-landed locator-NULL row (the pre-fix shape) heals it in place
+# rather than duplicating the row -- see tests/test_compute_segments.py for
+# the full functional coverage of both cases.
+REGISTERED_FMP_JSON_TABLE_LOCATOR_EMITTERS: frozenset[str] = frozenset({"compute.segments"})
 
 _WRITER_CALL_RX = re.compile(r"(?<!class )\b(KpiValue|FinancialFact)\(")
 _STRING_LITERAL_RX = re.compile(r'"((?:[^"\\]|\\.)*)"|\'((?:[^\'\\]|\\.)*)\'')
@@ -362,6 +390,200 @@ def test_metrics_engine_persists_derived_locator_on_fixture() -> None:
     assert loc.derived.formula_id == 1
     assert len(loc.derived.inputs) == 1
     assert row["computed_from"] is not None
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase C (§3.3): anchor-quote verification for the 8-K segment extractor.
+# provenance.edgar_8k builds FactLocator directly (REGISTERED_HTML_SPAN_
+# LOCATOR_EMITTERS above), so it is fixture-tested here rather than picked up
+# by the KpiValue/FinancialFact discovery scan.
+# ---------------------------------------------------------------------------
+
+
+def test_edgar_8k_emits_v2_html_span_locator_on_fixture() -> None:
+    """A verified anchor_quote earns a real, renderable v2 `html_span`
+    locator -- the CI-guard-file-level proof that provenance.edgar_8k (in
+    REGISTERED_HTML_SPAN_LOCATOR_EMITTERS) actually emits one, not just that
+    the module exists."""
+    from provenance import edgar_8k
+
+    assert "provenance.edgar_8k" in REGISTERED_HTML_SPAN_LOCATOR_EMITTERS
+
+    exhibit_text = "Q4 2025 Results\nGoogle Cloud revenue was $17,664 million.\n"
+    proposal = edgar_8k.extract_8k_segment_override(
+        ticker="GOOG",
+        accession="0001652044-26-000012",
+        period_end="2025-12-31",
+        fiscal_period_type="Q4",
+        get_json=lambda _u: {"0": {"cik_str": 1652044, "ticker": "GOOG"}},
+        get_text=lambda _u: exhibit_text,
+        exhibit="ex991.htm",
+        call=lambda *_a, **_k: {
+            "Google Cloud": {
+                "value": 17664000000,
+                "anchor_quote": "Google Cloud revenue was $17,664 million.",
+            }
+        },
+    )
+    assert proposal is not None
+    assert isinstance(proposal.locator, FactLocator)
+    assert proposal.locator.locator_version >= 2
+    assert proposal.locator.effective_kind() == LocatorKind.HTML_SPAN
+    assert proposal.locator.html_span is not None
+    assert proposal.failed_segments == ()
+
+
+def test_edgar_8k_rejects_fabricated_anchor_quote_on_fixture() -> None:
+    """The guard-ratchet's required proof: a fabricated (non-verbatim) quote
+    MUST NEVER produce a renderable locator -- it demotes to a
+    LegacyEscapeHatch and the specific failed segment is named, never a
+    silently-trusted html_span."""
+    from provenance import edgar_8k
+
+    exhibit_text = "Q4 2025 Results\nGoogle Cloud revenue was $17,664 million.\n"
+    proposal = edgar_8k.extract_8k_segment_override(
+        ticker="GOOG",
+        accession="0001652044-26-000012",
+        period_end="2025-12-31",
+        fiscal_period_type="Q4",
+        get_json=lambda _u: {"0": {"cik_str": 1652044, "ticker": "GOOG"}},
+        get_text=lambda _u: exhibit_text,
+        exhibit="ex991.htm",
+        call=lambda *_a, **_k: {
+            "Google Cloud": {
+                "value": 17664000000,
+                # Never appears in exhibit_text -- a hallucinated anchor.
+                "anchor_quote": "Google Cloud posted its best quarter ever at $17.7B.",
+            }
+        },
+    )
+    assert proposal is not None
+    assert isinstance(proposal.locator, LegacyEscapeHatch)
+    assert "anchor_verification_failed" in proposal.locator.reason
+    assert proposal.failed_segments == ("Google Cloud",)
+    # The value itself is NEVER dropped for a bad anchor alone.
+    assert proposal.segments["Google Cloud"] == 17664000000
+
+
+def _segments_schema() -> str:
+    return """
+    CREATE TABLE documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticker TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        doc_type TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        fetched_at TIMESTAMP NOT NULL,
+        fetch_status TEXT NOT NULL,
+        raw_bytes_size INTEGER NOT NULL
+    );
+    CREATE TABLE segment_periods (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticker VARCHAR(16) NOT NULL,
+        period_end DATETIME NOT NULL,
+        fiscal_period_type VARCHAR(8) NOT NULL,
+        source_doc_id INTEGER NOT NULL REFERENCES documents(id),
+        currency VARCHAR(8),
+        unit VARCHAR(16) NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        period_basis VARCHAR(16) NOT NULL DEFAULT 'discrete',
+        raw_period_label TEXT,
+        method_version VARCHAR(32),
+        CONSTRAINT uq_segment_periods_provenance UNIQUE
+          (ticker, period_end, fiscal_period_type, source_doc_id)
+    );
+    CREATE TABLE segment_dimensions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        period_id INTEGER NOT NULL REFERENCES segment_periods(id),
+        dim_type VARCHAR(16) NOT NULL,
+        dim_name VARCHAR(128) NOT NULL,
+        value NUMERIC(20, 4) NOT NULL,
+        metric VARCHAR(32) NOT NULL,
+        unit VARCHAR(16),
+        disclosure_status VARCHAR(16) NOT NULL DEFAULT 'reported',
+        method_version VARCHAR(32),
+        confidence REAL NOT NULL DEFAULT 1.0,
+        extracted_by VARCHAR(64),
+        locator TEXT,
+        derived_from TEXT,
+        supersedes_id INTEGER
+    );
+    CREATE TABLE financial_facts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticker TEXT NOT NULL,
+        period_end TIMESTAMP NOT NULL,
+        fiscal_period_type TEXT NOT NULL,
+        line_item TEXT NOT NULL,
+        value NUMERIC(24, 6) NOT NULL,
+        currency TEXT,
+        unit TEXT NOT NULL,
+        source_doc_id INTEGER NOT NULL,
+        confidence REAL NOT NULL DEFAULT 1.0
+    );
+    """
+
+
+def test_compute_segments_emits_v2_fmp_json_table_locator_on_fixture() -> None:
+    """compute.segments (REGISTERED_FMP_JSON_TABLE_LOCATOR_EMITTERS) now
+    stamps a real v2 `fmp_json_table` locator per segment_dimensions row.
+
+    Full functional coverage (including the re-ingest locator-backfill proof)
+    lives in tests/test_compute_segments.py; this is the lightweight,
+    self-contained CI-guard-file fixture the registration above asks for."""
+    import json
+    import sqlite3
+    import tempfile
+    from datetime import datetime
+    from pathlib import Path
+
+    from compute.segments import extract_segment_facts
+
+    assert "compute.segments" in REGISTERED_FMP_JSON_TABLE_LOCATOR_EMITTERS
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(_segments_schema())
+    conn.execute(
+        "INSERT INTO documents "
+        "(id, ticker, source_type, doc_type, file_path, sha256, fetched_at, "
+        " fetch_status, raw_bytes_size) "
+        "VALUES (1, 'MELI', 'fmp', 'fmp_segment_product', "
+        "'data/historical/fmp/MELI_product_segments_quarterly.json', "
+        "'0000000000000000000000000000000000000000000000000000000000000000', "
+        "?, 'ok', 1)",
+        (datetime.now(),),
+    )
+    conn.commit()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project_root = Path(tmp)
+        fmp_dir = project_root / "data" / "historical" / "fmp"
+        fmp_dir.mkdir(parents=True)
+        record = {
+            "date": "2025-12-31",
+            "symbol": "MELI",
+            "reportedCurrency": "USD",
+            "period": "Q4",
+            "fiscalYear": 2025,
+            "data": {"Commerce": 4_000_000_000},
+        }
+        (fmp_dir / "MELI_product_segments_quarterly.json").write_text(
+            json.dumps([record]), encoding="utf-8"
+        )
+        inserted = extract_segment_facts(conn, 1, project_root)
+
+    assert inserted == 1
+    row = conn.execute("SELECT locator FROM segment_dimensions").fetchone()
+    loc = FactLocator.from_json(row["locator"])
+    assert loc is not None
+    assert loc.locator_version >= 2
+    assert loc.effective_kind() == LocatorKind.FMP_JSON_TABLE
+    assert loc.table_cell is not None
+    assert loc.table_cell.row_label == "Commerce"
+    assert loc.table_cell.column_header == "2025-12-31"
+    assert loc.json_path == "[0].data.Commerce"
     conn.close()
 
 

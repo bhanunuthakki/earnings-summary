@@ -16,8 +16,17 @@ from compute.segments import (
     extract_segment_facts,
     insert_segment_facts,
 )
-from models.facts import Currency, FiscalPeriodType, Unit
+from models.facts import (
+    Currency,
+    FactLocator,
+    FiscalPeriodType,
+    LocatorKind,
+    SegmentDimension,
+    SegmentDimType,
+    Unit,
+)
 from models.fmp_payloads import FmpSegmentRecord
+from pipeline.segment_junction_writer import write_segment_facts_junction
 
 _PRODUCT_SAMPLE = {
     "date": "2025-12-31",
@@ -304,3 +313,214 @@ def test_reconciliation_at_tolerance_boundary(conn: sqlite3.Connection) -> None:
         }
     )
     assert _passes_reconciliation(conn, record_over, "revenue_by_product", source_doc_id=1) is False
+
+
+# ---------------------------------------------------------------------------
+# Locator provenance — this extractor is the writer used for legacy per-ticker
+# quarterly segment JSON ingest (e.g. data/historical/fmp/MELI_product_
+# segments_quarterly.json / MELI_geo_segments_quarterly.json). It predates the
+# locator contract (migration 0165), so every row it ever wrote landed with
+# segment_dimensions.locator NULL. These tests prove (a) a fresh ingest now
+# stamps a renderable v2 `fmp_json_table` locator, and (b) re-ingesting over
+# an already-landed pre-fix row (locator NULL) heals it in place rather than
+# duplicating the row — the actual point of this change, per
+# docs/design/provenance_clickthrough.md's "do not invent a second locator
+# shape for segments" and its segment_dimensions.locator gap.
+# ---------------------------------------------------------------------------
+
+_PROVENANCE_SCHEMA = """
+CREATE TABLE documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    doc_type TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    fetched_at TIMESTAMP NOT NULL,
+    fetch_status TEXT NOT NULL,
+    raw_bytes_size INTEGER NOT NULL
+);
+CREATE TABLE segment_periods (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker VARCHAR(16) NOT NULL,
+    period_end DATETIME NOT NULL,
+    fiscal_period_type VARCHAR(8) NOT NULL,
+    source_doc_id INTEGER NOT NULL REFERENCES documents(id),
+    currency VARCHAR(8),
+    unit VARCHAR(16) NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    period_basis VARCHAR(16) NOT NULL DEFAULT 'discrete',
+    raw_period_label TEXT,
+    method_version VARCHAR(32),
+    CONSTRAINT uq_segment_periods_provenance UNIQUE
+      (ticker, period_end, fiscal_period_type, source_doc_id)
+);
+CREATE TABLE segment_dimensions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    period_id INTEGER NOT NULL REFERENCES segment_periods(id),
+    dim_type VARCHAR(16) NOT NULL,
+    dim_name VARCHAR(128) NOT NULL,
+    value NUMERIC(20, 4) NOT NULL,
+    metric VARCHAR(32) NOT NULL,
+    unit VARCHAR(16),
+    disclosure_status VARCHAR(16) NOT NULL DEFAULT 'reported',
+    method_version VARCHAR(32),
+    confidence REAL NOT NULL DEFAULT 1.0,
+    extracted_by VARCHAR(64),
+    locator TEXT,
+    derived_from TEXT,
+    supersedes_id INTEGER
+);
+CREATE TABLE financial_facts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    period_end TIMESTAMP NOT NULL,
+    fiscal_period_type TEXT NOT NULL,
+    line_item TEXT NOT NULL,
+    value NUMERIC(24, 6) NOT NULL,
+    currency TEXT,
+    unit TEXT NOT NULL,
+    source_doc_id INTEGER NOT NULL,
+    confidence REAL NOT NULL DEFAULT 1.0
+);
+"""
+
+
+@pytest.fixture
+def prov_conn() -> sqlite3.Connection:
+    """A post-0165/0166 schema (segment_periods + segment_dimensions carry
+    the full provenance column set) — distinct from the module-level `conn`
+    fixture, whose schema predates those migrations and is kept as-is so the
+    existing pre-provenance-column tests above keep exercising the writer's
+    graceful-degrade path."""
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    c.executescript(_PROVENANCE_SCHEMA)
+    c.commit()
+    return c
+
+
+def _write_meli_cache(project_root: Path, record: dict[str, object]) -> None:
+    fmp_dir = project_root / "data" / "historical" / "fmp"
+    fmp_dir.mkdir(parents=True, exist_ok=True)
+    (fmp_dir / "MELI_product_segments_quarterly.json").write_text(
+        json.dumps([record]), encoding="utf-8"
+    )
+
+
+def _insert_meli_document(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "INSERT INTO documents "
+        "(id, ticker, source_type, doc_type, file_path, sha256, fetched_at, "
+        " fetch_status, raw_bytes_size) "
+        "VALUES (1, 'MELI', 'fmp', 'fmp_segment_product', "
+        "'data/historical/fmp/MELI_product_segments_quarterly.json', "
+        "'0000000000000000000000000000000000000000000000000000000000000000', "
+        "?, 'ok', 1)",
+        (datetime.now(),),
+    )
+    conn.commit()
+
+
+_MELI_RECORD: dict[str, object] = {
+    "date": "2025-12-31",
+    "symbol": "MELI",
+    "reportedCurrency": "USD",
+    "period": "Q4",
+    "fiscalYear": 2025,
+    "data": {"Commerce": 4_000_000_000, "Fintech": 2_000_000_000},
+}
+
+
+def test_extract_segment_facts_emits_v2_fmp_json_table_locator(
+    prov_conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """A fresh ingest stamps a renderable `fmp_json_table` locator on every
+    dim row -- `json_path` points at the exact cell of the cached FMP
+    response, same convention as `compute.as_reported.extract_facts_from_record`
+    for the identical `data: {name -> value}` envelope shape."""
+    conn = prov_conn
+    _insert_meli_document(conn)
+    _write_meli_cache(tmp_path, _MELI_RECORD)
+
+    inserted = extract_segment_facts(conn, 1, tmp_path)
+    assert inserted == 2
+
+    rows = conn.execute(
+        "SELECT dim_name, locator, extracted_by FROM segment_dimensions ORDER BY dim_name"
+    ).fetchall()
+    assert len(rows) == 2
+    for row in rows:
+        assert row["extracted_by"] == "fmp_segment_quarterly_v1"
+        loc = FactLocator.from_json(row["locator"])
+        assert loc is not None
+        assert loc.locator_version >= 2
+        assert loc.effective_kind() == LocatorKind.FMP_JSON_TABLE
+        assert loc.table_cell is not None
+        assert loc.table_cell.row_label == row["dim_name"]
+        assert loc.table_cell.column_header == "2025-12-31"
+        assert loc.json_path == f"[0].data.{row['dim_name']}"
+        assert loc.verbatim_snippet
+
+
+def test_extract_segment_facts_backfills_null_locator_on_reingest(
+    prov_conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """The point of this change: a row landed by the PRE-fix version of this
+    same extractor (locator NULL — the legacy-ingested shape the bug report
+    described) gets healed in place the next time the source document is
+    re-ingested. No duplicate row is created (`inserted == 0`, since the
+    natural key already matches), and a locator that already exists is never
+    clobbered by a later write."""
+    conn = prov_conn
+    _insert_meli_document(conn)
+    _write_meli_cache(tmp_path, _MELI_RECORD)
+
+    # Simulate the PRE-fix legacy state directly: same (ticker, period,
+    # source_doc, dim) natural key the real extractor will compute below, but
+    # written with no locator at all -- exactly what every row this extractor
+    # ever wrote before this change looked like.
+    write_segment_facts_junction(
+        conn,
+        ticker="MELI",
+        period_end=datetime(2025, 12, 31),
+        fiscal_period_type=FiscalPeriodType.Q4,
+        source_doc_id=1,
+        currency=Currency.USD,
+        unit=Unit.ACTUAL,
+        dimensions=[
+            SegmentDimension(
+                dim_type=SegmentDimType.PRODUCT,
+                dim_name="Commerce",
+                value=Decimal("4000000000"),
+                metric="revenue",
+            ),
+            SegmentDimension(
+                dim_type=SegmentDimType.PRODUCT,
+                dim_name="Fintech",
+                value=Decimal("2000000000"),
+                metric="revenue",
+            ),
+        ],
+    )
+    conn.commit()
+    pre_rows = conn.execute(
+        "SELECT dim_name, locator FROM segment_dimensions ORDER BY dim_name"
+    ).fetchall()
+    assert len(pre_rows) == 2
+    assert all(r["locator"] is None for r in pre_rows), "precondition: legacy rows carry no locator"
+
+    # Re-ingest the SAME source document through the (now-fixed) extractor.
+    inserted = extract_segment_facts(conn, 1, tmp_path)
+    assert inserted == 0, "no NEW dim rows -- the natural key already existed"
+
+    post_rows = conn.execute(
+        "SELECT dim_name, locator FROM segment_dimensions ORDER BY dim_name"
+    ).fetchall()
+    assert len(post_rows) == 2, "re-ingest must not duplicate rows"
+    for row in post_rows:
+        loc = FactLocator.from_json(row["locator"])
+        assert loc is not None, f"{row['dim_name']} locator was not backfilled"
+        assert loc.effective_kind() == LocatorKind.FMP_JSON_TABLE
+        assert loc.table_cell is not None
+        assert loc.table_cell.row_label == row["dim_name"]

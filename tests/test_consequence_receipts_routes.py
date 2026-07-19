@@ -161,16 +161,23 @@ def test_ratify_receipt_armed_when_already_extracted(client: FlaskClient, db_pat
     assert payload["receipt"] == "armed — now watched by the tripwire engine"
 
 
-def test_edit_and_drop_actions_carry_no_receipt(client: FlaskClient, db_path: Path) -> None:
-    """Only 'ratify' produces an arming receipt — edit/drop don't touch the
-    falsifier's ratification-readiness in a way that needs one."""
+def test_edit_and_drop_actions_carry_their_own_receipt(client: FlaskClient, db_path: Path) -> None:
+    """Ledger UX overhaul (requirement B — registered feedback): every
+    falsifier action now carries SOME receipt so the UI always has something
+    to paint, not just 'ratify'. edit/drop get a plain confirmation distinct
+    from ratify's arming-status receipt."""
     decision_id = _seed_owner_decision(db_path)
     resp = client.post(
         f"/api/reconcile/falsifier/{decision_id}",
         json={"action": "edit", "text": "My own words"},
     )
     assert resp.status_code == 200
-    assert "receipt" not in resp.get_json()
+    assert resp.get_json()["receipt"] == "Saved — falsifier rewritten in your words"
+
+    decision_id2 = _seed_owner_decision(db_path)
+    resp2 = client.post(f"/api/reconcile/falsifier/{decision_id2}", json={"action": "drop"})
+    assert resp2.status_code == 200
+    assert resp2.get_json()["receipt"] == "Dropped — no tripwire will watch this decision"
 
 
 def test_ratify_unknown_decision_404s(client: FlaskClient) -> None:

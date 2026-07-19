@@ -132,7 +132,7 @@ def _ensure_period(
     return (int(new_id), True)
 
 
-def _dimension_exists(
+def _find_existing_dimension(
     conn: sqlite3.Connection,
     *,
     period_id: int,
@@ -140,17 +140,26 @@ def _dimension_exists(
     dim_name: str,
     metric: str,
     value: Decimal,
-) -> bool:
+    has_provenance_columns: bool,
+) -> tuple[int, str | None] | None:
     """A dim row is considered a duplicate when (period_id, dim_type, dim_name,
-    metric, value) all match. Re-running the writer on the same source is a no-op.
+    metric, value) all match. Re-running the writer on the same source is a no-op
+    for the row itself — but see ``write_segment_facts_junction`` for the
+    locator-backfill it now performs on a matched row.
 
     The per-dim `unit` column is intentionally NOT part of the dedup key —
     a metric's unit is determined by the metric itself (capex → actual,
     headcount → count, etc.), so a unit flip on a re-run would indicate a
-    bug upstream rather than legitimate new data."""
+    bug upstream rather than legitimate new data.
+
+    Returns ``(id, locator)`` for the matching row, or ``None`` when no row
+    matches yet. ``locator`` is always ``None`` when
+    ``has_provenance_columns`` is False (pre-0165 schema — no such column to
+    read)."""
+    columns = "id, locator" if has_provenance_columns else "id"
     cur = conn.execute(
-        """
-        SELECT 1 FROM segment_dimensions
+        f"""
+        SELECT {columns} FROM segment_dimensions
         WHERE period_id = ?
           AND dim_type = ?
           AND dim_name = ?
@@ -160,7 +169,12 @@ def _dimension_exists(
         """,
         (period_id, dim_type.value, dim_name, metric, str(value)),
     )
-    return cur.fetchone() is not None
+    row = cur.fetchone()
+    if row is None:
+        return None
+    if has_provenance_columns:
+        return (int(row[0]), row[1])
+    return (int(row[0]), None)
 
 
 def _segment_dimensions_has_unit_column(conn: sqlite3.Connection) -> bool:
@@ -223,6 +237,17 @@ def write_segment_facts_junction(
     ``extracted_by``/``locator``/``derived_from``/``supersedes_id`` land on
     its segment_dimensions row. Both are silently omitted on a pre-migration
     schema, matching the per-dim unit column's degrade-gracefully precedent.
+
+    Locator backfill on re-ingest: when a dimension row already exists for the
+    natural key (``_find_existing_dimension``), no new row is written — but if
+    the existing row's ``locator`` is NULL and the incoming ``dim.locator`` is
+    not, the existing row is UPDATEd in place. This closes the provenance gap
+    left by writers that predate the locator contract (e.g. the legacy FMP
+    segment-JSON ingest, ``compute.segments``): re-running the same ingest
+    after the writer learns to build a locator heals every already-ingested
+    row instead of requiring a one-off migration/backfill script. An existing
+    non-NULL locator is never overwritten — a row that already recorded
+    provenance is not second-guessed by a later, possibly different source.
     """
     period_id, period_inserted = _ensure_period(
         conn,
@@ -241,14 +266,25 @@ def write_segment_facts_junction(
 
     dims_inserted = 0
     for dim in dimensions:
-        if _dimension_exists(
+        existing = _find_existing_dimension(
             conn,
             period_id=period_id,
             dim_type=dim.dim_type,
             dim_name=dim.dim_name,
             metric=dim.metric,
             value=dim.value,
-        ):
+            has_provenance_columns=has_provenance_columns,
+        )
+        if existing is not None:
+            existing_id, existing_locator = existing
+            # Backfill-on-reingest: heal a stale NULL locator in place rather
+            # than silently leaving a pre-locator-contract row unprovenanced
+            # forever. Never clobbers a locator the row already has.
+            if has_provenance_columns and existing_locator is None and dim.locator is not None:
+                conn.execute(
+                    "UPDATE segment_dimensions SET locator = ? WHERE id = ?",
+                    (dim.locator, existing_id),
+                )
             continue
         # Store the dim's unit only when (a) the column exists and (b) it
         # differs from the period's unit — keeps the column NULL when the

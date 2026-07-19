@@ -787,7 +787,7 @@ def _apply_rewrite(item: PacketItemRow, text: str, *, db_path: Path | str | None
         # An owner-typed rewrite lands a NEW proposed fact superseding the
         # old (gated assertion holds, §7.1): even the owner's own edit needs
         # a fresh affirm tap — it resurfaces via the SAME proposed-facts
-        # packet source (ledger_panel._packet_items) next walk, never
+        # packet source (ledger_panel._packet_build) next walk, never
         # auto-promoted here.
         from owner_profile.store import append_fact, get_fact
         from user_state._db import open_conn

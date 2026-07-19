@@ -85,6 +85,12 @@ class FactOverride:
     created_by: str
     created_at: str
     status: str
+    # FactLocator JSON (Phase C, alembic 0181) -- the SAME shape/contract as
+    # financial_facts.locator / kpi_facts.locator, not a new locator concept.
+    # None on overrides recorded before this column existed, or when the
+    # writer had nothing renderable to offer (see edgar_8k.py's anchor
+    # verification gate). Decode with FactLocator.from_json.
+    locator: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -161,13 +167,14 @@ def _row_to_override(row: sqlite3.Row) -> FactOverride:
         created_by=str(row["created_by"]),
         created_at=str(row["created_at"]),
         status=str(row["status"]),
+        locator=None if row["locator"] is None else str(row["locator"]),
     )
 
 
 _SELECT_COLS = (
     "id, user_id, ticker, period_end, fiscal_period_type, fact_kind, fact_key, action, "
     "value, unit, value_json, source_doc_type, source_accession, source_exhibit, source_url, "
-    "source_excerpt, source_doc_id, status, confidence, rationale, created_by, created_at"
+    "source_excerpt, source_doc_id, status, confidence, rationale, created_by, created_at, locator"
 )
 
 
@@ -199,6 +206,7 @@ def record_override(
     rationale: str | None = None,
     user_id: str = DEFAULT_USER_ID,
     observed_at: str | None = None,
+    locator: str | None = None,
 ) -> int:
     """Record an active override, retiring any prior active one for the same key.
 
@@ -206,6 +214,13 @@ def record_override(
     (``replace`` requires a ``value`` or ``value_json``). Retire-then-insert keeps
     the single-active partial-unique invariant intact within one transaction.
     Does NOT commit — the caller owns the transaction (so a CLI can ``--dry-run``).
+
+    ``locator`` (Phase C, alembic 0181): pre-serialized ``FactLocator.to_json()``
+    output (or ``None``) -- the SAME shape financial_facts/kpi_facts carry, not a
+    new concept. Callers with a real, verified anchor (e.g.
+    ``execution/extract_8k_overrides.py`` after ``pipeline.locators.
+    verify_quote_in_source`` passes) pass it here; a caller with nothing
+    renderable leaves it ``None`` (today's behavior, unchanged).
     """
     action_str = str(action)
     if fact_kind not in FACT_KINDS:
@@ -240,8 +255,8 @@ def record_override(
         "(user_id, ticker, period_end, fiscal_period_type, fact_kind, fact_key, action, "
         " value, unit, value_json, source_doc_type, source_accession, source_exhibit, "
         " source_url, source_excerpt, source_doc_id, status, confidence, rationale, "
-        " created_by, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " created_by, created_at, locator) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             user_id,
             ticker.upper(),
@@ -264,6 +279,7 @@ def record_override(
             rationale,
             created_by,
             stamp,
+            locator,
         ),
     )
     return int(cur.lastrowid) if cur.lastrowid is not None else -1
@@ -582,6 +598,16 @@ def override_provenance(ov: FactOverride) -> dict[str, object]:
     and ``created_by`` audit tag), and an ``override`` label row — not the FMP row
     whose value was superseded. FMP-derivation lineage / fetched_at are cleared since
     they no longer describe the displayed value.
+
+    ``locator``: ``CellSource.locator`` is documented as "raw locator JSON off the
+    fact row" (``FactLocator.to_json()`` shape) everywhere else it's populated — so
+    when this override carries a real one (Phase C, alembic 0181), prefer it here
+    too, rather than the pre-Phase-C placeholder of the bare exhibit filename
+    string. An override recorded before this column existed (or with nothing
+    renderable) falls back to that filename string exactly as before — still not
+    valid FactLocator JSON, but ``source_chip._parse_locator`` already degrades a
+    malformed/legacy locator string to plain-text display rather than raising, so
+    this preserves today's rendered behavior unchanged for pre-Phase-C rows.
     """
     return {
         "source": ov.source_doc_type,
@@ -589,7 +615,7 @@ def override_provenance(ov: FactOverride) -> dict[str, object]:
         "accession_number": ov.source_accession,
         "source_url": ov.source_url,
         "filing_date": None,
-        "locator": ov.source_exhibit,
+        "locator": ov.locator if ov.locator else ov.source_exhibit,
         "confidence": ov.confidence,
         "extracted_by": ov.created_by,
         "computed_from": None,

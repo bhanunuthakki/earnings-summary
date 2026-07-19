@@ -107,7 +107,8 @@ CREATE TABLE fact_overrides (
     rationale TEXT,
     created_by TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    retired_at TEXT
+    retired_at TEXT,
+    locator TEXT
 );
 """
 

@@ -6,7 +6,7 @@ For a ticker, gather FMP + thesis context and ask claude-opus-4-8 to set the
 basis/multiple, business-model applicability, and a narrative. Cache the result
 under data/dcf_assumptions/<T>.json (key "redesign") so the renderer can read it.
 
-Usage:  DCF_TICKER=AMZN python scratch/opus_dcf_assumptions.py
+Usage:  DCF_TICKER=AMZN python execution/dcf_opus_assumptions.py
 """
 
 from __future__ import annotations

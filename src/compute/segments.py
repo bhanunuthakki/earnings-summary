@@ -41,10 +41,16 @@ from models.facts import (
     Unit,
 )
 from models.fmp_payloads import FmpSegmentRecord
+from pipeline import locators
 from pipeline.segment_junction_writer import (
     write_segment_facts_junction,
     write_segment_facts_via_junction,
 )
+
+# Tag for SegmentDimension.extracted_by — mirrors the convention other segment
+# writers use (e.g. segment_quarterly_10q.py's EXTRACTOR_ID) so a row's origin
+# is grep-able straight from the DB.
+_EXTRACTOR_ID = "fmp_segment_quarterly_v1"
 
 _DOC_TYPE_TO_METRIC: dict[str, str] = {
     "fmp_segment_product": "revenue_by_product",
@@ -217,7 +223,7 @@ def extract_segment_facts(conn: sqlite3.Connection, document_id: int, project_ro
     records = apply_overrides(records, ticker=_ticker, dim_type=dim_type.value, conn=conn)
 
     inserted = 0
-    for rec_data in records:
+    for record_index, rec_data in enumerate(records):
         rec = FmpSegmentRecord.model_validate(rec_data)
         if not _passes_reconciliation(conn, rec, metric, document_id):
             continue
@@ -226,6 +232,7 @@ def extract_segment_facts(conn: sqlite3.Connection, document_id: int, project_ro
             rec,
             source_doc_id=document_id,
             dim_type=dim_type,
+            record_index=record_index,
             junction_metric="revenue",
         )
     conn.commit()
@@ -238,6 +245,7 @@ def _write_record_to_junction(
     *,
     source_doc_id: int,
     dim_type: SegmentDimType,
+    record_index: int,
     junction_metric: str = "revenue",
 ) -> int:
     """Persist one FMP segment record into segment_periods + segment_dimensions.
@@ -245,6 +253,17 @@ def _write_record_to_junction(
     Returns the number of NEW dimension rows inserted. Replaces the previous
     additive `insert_segment_facts` + `_mirror_record_to_junction` pair —
     only the junction is written now.
+
+    ``record_index`` (the record's position in the source JSON array) makes
+    each dimension carry a renderable `fmp_json_table` locator pointing at
+    the exact cell of the cached response — `[<i>].data.<segment_name>` —
+    mirroring `compute.as_reported.extract_facts_from_record`'s locator for
+    the same `data: {name -> value}` envelope shape. This is the fix for the
+    "segment_dimensions.locator = 0 for legacy-ingested rows" provenance gap:
+    this extractor predates the locator contract, so every row it ever wrote
+    landed with locator NULL; from here on every ingest (fresh or re-run)
+    emits one, and `write_segment_facts_junction`'s backfill-on-reingest heals
+    already-ingested rows in place.
     """
     period_end = datetime.fromisoformat(record.date)
     period_type = FiscalPeriodType(record.period)
@@ -255,6 +274,14 @@ def _write_record_to_junction(
             dim_name=segment_name,
             value=Decimal(str(value)),
             metric=junction_metric,
+            extracted_by=_EXTRACTOR_ID,
+            locator=locators.table_cell_locator(
+                section=None,
+                row_label=segment_name,
+                column_header=record.date,
+                json_path=f"[{record_index}].data.{segment_name}",
+                cell_value_as_extracted=str(value),
+            ).to_json(),
         )
         for segment_name, value in record.data.items()
     ]
