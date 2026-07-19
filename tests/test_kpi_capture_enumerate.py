@@ -129,6 +129,32 @@ def test_build_capture_manifest_is_capture_origin_and_parses_rows() -> None:
     assert names["Take rate"].unit is Unit.ACTUAL  # bad token fell back
 
 
+def test_build_capture_manifest_verifies_excerpt_against_source_text() -> None:
+    """Phase C (§3.3): passing `source_text` upgrades a verbatim excerpt to a
+    real `html_span` locator; without it (today's default), the escape hatch
+    is unchanged."""
+    from models.facts import FactLocator, LegacyEscapeHatch, LocatorKind
+
+    rows: list[dict[str, object]] = [
+        {"label": "GMV", "value": 1200000000, "unit": "actual", "source_excerpt": "GMV was $1.2B"},
+    ]
+    no_text = _build_capture_manifest("NU", datetime(2025, 3, 31), FiscalPeriodType.Q1, 42, rows)
+    assert isinstance(no_text.values[0].locator, LegacyEscapeHatch)
+
+    with_text = _build_capture_manifest(
+        "NU",
+        datetime(2025, 3, 31),
+        FiscalPeriodType.Q1,
+        42,
+        rows,
+        source_text="Key Business Metrics\nGMV was $1.2B this quarter.\n",
+    )
+    loc = with_text.values[0].locator
+    assert isinstance(loc, FactLocator)
+    assert loc.effective_kind() == LocatorKind.HTML_SPAN
+    assert loc.html_span is not None and loc.html_span.doc_id == 42
+
+
 # ---------------------------------------------------------------------------
 # capture_for_ticker — end-to-end against a file DB + a .tmp brief
 # ---------------------------------------------------------------------------

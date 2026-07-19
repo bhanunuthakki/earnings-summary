@@ -371,3 +371,23 @@ def verify_quote_in_source(quote: str, source_text: str) -> bool:
     if not quote.strip():
         return False
     return _normalize(quote) in _normalize(source_text)
+
+
+def locate_char_span(quote: str, source_text: str) -> tuple[int, int] | None:
+    """Best-effort ``(char_start, char_end)`` of ``quote`` inside ``source_text``.
+
+    An EXACT (non-normalized) substring find -- the common case, since most
+    LLM-returned anchors reproduce the source's literal whitespace/case.
+    Returns ``None`` when the quote only matches after
+    ``verify_quote_in_source``'s whitespace/case normalization (or not at
+    all) -- offsets are an enhancement on ``HtmlSpanRef``/
+    ``TranscriptSpanRef``, never a requirement for the locator to be valid;
+    a verified-but-unlocatable-by-exact-offset quote still carries the quote
+    text itself, which is enough for the legacy-floor peek (§2.7) to show.
+    """
+    if not quote:
+        return None
+    idx = source_text.find(quote)
+    if idx < 0:
+        return None
+    return (idx, idx + len(quote))

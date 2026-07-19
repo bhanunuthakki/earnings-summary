@@ -51,13 +51,16 @@ from models.documents import SourceType, tier_for_source_type
 from models.facts import FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import DefinitionOrigin
 from models.unit_convert import same_family
+from models.validation import Severity, ValidationRule
 from pipeline.capture_coverage import CaptureCoverageRecord, record_coverage
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
     KpiValue,
     guard_llm_extracted_parent,
     persist_manifest,
+    record_validation_issue,
 )
+from pipeline.locators import html_span_locator, locate_char_span, verify_quote_in_source
 from pipeline.restatement_detector import _table_has_column
 from pipeline.run_accounting import start_run
 from provenance.llm_extracted_parent import resolve_parent
@@ -70,23 +73,30 @@ logger = logging.getLogger("kpi_extract_summaries")
 # LLM-generated summary DOCUMENT, not the original filing/transcript text --
 # there is no stable JSON/PDF/transcript-line anchor to build a FactLocator
 # from at this layer (docs/design/provenance_clickthrough.md §3.2's
-# kpi_extract_summaries.py row; the anchor-quote verification gate that would
-# let this graduate to a `transcript_span`/`html_span` locator is Phase C,
-# not yet implemented). `source_excerpt` still carries the LLM's verbatim
-# quote separately -- this escape hatch is about the locator column only.
+# kpi_extract_summaries.py row). Phase C's anchor-quote verification gate
+# (§3.3, `_locator_for_excerpt`) now runs `pipeline.locators.
+# verify_quote_in_source` against THIS summary document's own text (the one
+# thing actually available at this layer) and upgrades to an `html_span`
+# locator when the LLM's `source_excerpt` verifies -- these
+# `_NO_LOCATOR_*` constants are now the FLOOR: what a value falls back to
+# when it carries no excerpt at all, or when the excerpt fails verification
+# (a hallucinated-anchor `validation_issues` row is logged in that second
+# case; see `_locator_for_excerpt`), not the unconditional locator every
+# value got before Phase C.
 _NO_LOCATOR_ALLOWLIST = LegacyEscapeHatch(
     reason=(
-        "Stage A allowlist extraction reads an LLM-generated summary "
-        "document (not the original filing/transcript) -- no stable "
-        "anchor exists until Phase C's anchor-quote verification lands"
+        "Stage A allowlist extraction: no source_excerpt was returned, or "
+        "the excerpt failed anchor-quote verification against the summary "
+        "document (docs/design/provenance_clickthrough.md §3.3)"
     )
 )
 _NO_LOCATOR_ENUMERATE = LegacyEscapeHatch(
     reason=(
-        "Stage B capture-every-number enumeration reads the same "
-        "LLM-generated summary document as Stage A with no allowlist -- "
-        "same missing-anchor gap, tracked separately since this is the "
-        "long-tail capture path rather than the curated watchlist path"
+        "Stage B capture-every-number enumeration: no source_excerpt was "
+        "returned, or the excerpt failed anchor-quote verification -- same "
+        "gate as Stage A's _NO_LOCATOR_ALLOWLIST, tracked separately since "
+        "this is the long-tail capture path rather than the curated "
+        "watchlist path"
     )
 )
 
@@ -247,6 +257,8 @@ def extract_for_ticker(
                 doc_id,
                 extracted,
                 canonical_units,
+                conn=conn,
+                source_text=text,
             )
             run_id = start_run(
                 conn,
@@ -584,6 +596,70 @@ def parse_decimal_value(raw: object) -> Decimal | None:
         return None
 
 
+def _locator_for_excerpt(
+    *,
+    excerpt: str | None,
+    doc_id: int,
+    source_text: str | None,
+    conn: sqlite3.Connection | None,
+    ticker: str,
+    period_end: datetime,
+    kpi_name: str,
+    default: LegacyEscapeHatch,
+) -> FactLocator | LegacyEscapeHatch:
+    """Phase C anchor-quote verification gate (docs/design/
+    provenance_clickthrough.md §3.3), shared by Stage A's allowlist path and
+    Stage B's on-disk-summary enumerate path.
+
+    ``source_text`` is the SAME LLM-generated summary document the excerpt was
+    read from (registered as ``doc_id`` by ``_ensure_summary_document_row``) --
+    not the original filing/transcript, per this module's own long-documented
+    gap (see the module-level ``_NO_LOCATOR_*`` docstrings). Verifying against
+    THAT document is still a real, non-fabricated anchor: the peek can open
+    ``doc_id`` and show the reader the exact sentence, even though it's one
+    hop removed from the primary source.
+
+    - No excerpt at all -> ``default`` (today's behavior, unchanged: an
+      honest gap, not a hallucination).
+    - Excerpt present and verified -> an ``html_span`` locator (best-effort
+      char span via ``pipeline.locators.locate_char_span``).
+    - Excerpt present but NOT found verbatim -> ``default``, PLUS a
+      ``validation_issues`` row (``rule=hallucinated_anchor``) when ``conn``
+      is given -- the hallucination signal this gate exists to surface.
+    """
+    if excerpt is None or source_text is None:
+        return default
+    if verify_quote_in_source(excerpt, source_text):
+        span = locate_char_span(excerpt, source_text)
+        return html_span_locator(
+            doc_id=doc_id,
+            quote=excerpt,
+            char_start=span[0] if span is not None else None,
+            char_end=span[1] if span is not None else None,
+        )
+    if conn is not None:
+        try:
+            record_validation_issue(
+                conn,
+                run_id=f"kpi_extract_summaries:{ticker}:{period_end.date().isoformat()}",
+                source_doc_id=doc_id,
+                ticker=ticker,
+                severity=Severity.WARN,
+                rule=ValidationRule.HALLUCINATED_ANCHOR,
+                raw_value=excerpt,
+                expected=kpi_name,
+            )
+        except sqlite3.Error:
+            logger.warning(
+                {
+                    "event": "hallucinated_anchor_log_failed",
+                    "ticker": ticker,
+                    "kpi_name": kpi_name,
+                }
+            )
+    return default
+
+
 def _build_manifest(
     ticker: str,
     period_end: datetime,
@@ -591,6 +667,9 @@ def _build_manifest(
     doc_id: int,
     extracted: dict[str, dict[str, object]],
     canonical_units: dict[str, Unit] | None = None,
+    *,
+    conn: sqlite3.Connection | None = None,
+    source_text: str | None = None,
 ) -> KpiExtractionManifest:
     values: list[KpiValue] = []
     for name, payload in extracted.items():
@@ -613,6 +692,16 @@ def _build_manifest(
             if isinstance(excerpt_raw, str) and excerpt_raw.strip()
             else None
         )
+        locator = _locator_for_excerpt(
+            excerpt=excerpt,
+            doc_id=doc_id,
+            source_text=source_text,
+            conn=conn,
+            ticker=ticker,
+            period_end=period_end,
+            kpi_name=name,
+            default=_NO_LOCATOR_ALLOWLIST,
+        )
         values.append(
             KpiValue(
                 name=name,
@@ -620,7 +709,7 @@ def _build_manifest(
                 unit=unit,
                 confidence=confidence,
                 source_excerpt=excerpt,
-                locator=_NO_LOCATOR_ALLOWLIST,
+                locator=locator,
             )
         )
 
@@ -743,6 +832,8 @@ def _build_capture_manifest(
     *,
     primary_source: SourceType = SourceType.LLM_EXTRACTED,
     locate_quote: Callable[[str | None], FactLocator | None] | None = None,
+    conn: sqlite3.Connection | None = None,
+    source_text: str | None = None,
 ) -> KpiExtractionManifest:
     """Convert enumerated rows to a CAPTURE manifest. Names are passed verbatim;
     persist_manifest (origin=CAPTURE) canonicalizes them on write.
@@ -758,9 +849,15 @@ def _build_capture_manifest(
     PDF path passes a ``pipeline.locators.PdfQuoteLocator`` so each value whose
     ``source_excerpt`` is found verbatim in the source PDF persists with a
     renderable ``pdf_slide`` locator (page number + bbox where
-    ``page.search_for`` derives one) instead of the escape hatch. An excerpt
-    that can't be located verbatim keeps the escape hatch — an honest legacy
-    row beats a fabricated anchor.
+    ``page.search_for`` derives one) instead of the escape hatch.
+
+    ``source_text``/``conn`` (Phase C, §3.3): when ``locate_quote`` is absent
+    or returns nothing for a given row, ``_locator_for_excerpt`` verifies the
+    excerpt against ``source_text`` (the on-disk brief itself) instead — the
+    on-disk-summary enumerate path (``capture_for_ticker``) passes these; the
+    PDF-supplement path leaves them ``None`` since ``locate_quote`` already
+    covers it. An excerpt that can't be located/verified by EITHER path keeps
+    the escape hatch — an honest legacy row beats a fabricated anchor.
     """
     values: list[KpiValue] = []
     for row in rows:
@@ -781,6 +878,19 @@ def _build_capture_manifest(
             else None
         )
         located = locate_quote(excerpt) if locate_quote is not None else None
+        if located is None:
+            located_or_hatch = _locator_for_excerpt(
+                excerpt=excerpt,
+                doc_id=doc_id,
+                source_text=source_text,
+                conn=conn,
+                ticker=ticker,
+                period_end=period_end,
+                kpi_name=name,
+                default=_NO_LOCATOR_ENUMERATE,
+            )
+        else:
+            located_or_hatch = located
         values.append(
             KpiValue(
                 name=name,
@@ -788,7 +898,7 @@ def _build_capture_manifest(
                 unit=unit,
                 confidence=0.85,
                 source_excerpt=excerpt,
-                locator=located if located is not None else _NO_LOCATOR_ENUMERATE,
+                locator=located_or_hatch,
             )
         )
     return KpiExtractionManifest(
@@ -858,7 +968,13 @@ def capture_for_ticker(
             if not rows:
                 continue
             manifest = _build_capture_manifest(
-                ticker, period_end, FiscalPeriodType(f"Q{quarter}"), doc_id, rows
+                ticker,
+                period_end,
+                FiscalPeriodType(f"Q{quarter}"),
+                doc_id,
+                rows,
+                conn=conn,
+                source_text=text,
             )
             run_id = start_run(
                 conn,

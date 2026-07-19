@@ -302,6 +302,98 @@ def test_build_manifest_canonical_units_default_empty() -> None:
     assert manifest.canonical_units == {}
 
 
+# --- Phase C: anchor-quote verification gate (§3.3) --------------------------
+
+
+def test_build_manifest_without_source_text_keeps_legacy_locator() -> None:
+    """Back-compat: no `source_text` passed (today's every-other-caller shape)
+    -> the escape hatch, unchanged from before Phase C."""
+    from models.facts import LegacyEscapeHatch
+
+    extracted: dict[str, dict[str, object]] = {
+        "GMV": {"value": 5, "source_excerpt": "GMV was $5 this quarter."}
+    }
+    manifest = _build_manifest("YY", datetime(2026, 3, 31), FiscalPeriodType.Q1, 1, extracted)
+    assert isinstance(manifest.values[0].locator, LegacyEscapeHatch)
+
+
+def test_build_manifest_verified_excerpt_upgrades_to_html_span() -> None:
+    """A `source_excerpt` that IS verbatim in the summary text earns a real,
+    click-through-able `html_span` locator anchored on the summary doc_id."""
+    from models.facts import FactLocator, LocatorKind
+
+    source_text = "Financial Highlights\nGMV reached $1.2 billion this quarter.\n"
+    extracted: dict[str, dict[str, object]] = {
+        "GMV": {
+            "value": 1200000000,
+            "source_excerpt": "GMV reached $1.2 billion this quarter.",
+        }
+    }
+    manifest = _build_manifest(
+        "MELI",
+        datetime(2026, 3, 31),
+        FiscalPeriodType.Q1,
+        42,
+        extracted,
+        source_text=source_text,
+    )
+    loc = manifest.values[0].locator
+    assert isinstance(loc, FactLocator)
+    assert loc.effective_kind() == LocatorKind.HTML_SPAN
+    assert loc.html_span is not None
+    assert loc.html_span.doc_id == 42
+    assert loc.verbatim_snippet == "GMV reached $1.2 billion this quarter."
+
+
+def test_build_manifest_fabricated_excerpt_rejected_and_logged() -> None:
+    """A `source_excerpt` that does NOT appear verbatim in the summary text
+    (the hallucination case) must NEVER produce a renderable locator -- it
+    demotes to the escape hatch AND logs a validation_issues row
+    (rule=hallucinated_anchor). This is the guard-ratchet's required
+    'a fabricated quote MUST be rejected' proof for the on-disk-summary path."""
+    from models.facts import LegacyEscapeHatch
+
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        "CREATE TABLE validation_issues (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "run_id TEXT NOT NULL, source_doc_id INTEGER, ticker TEXT, "
+        "severity TEXT NOT NULL, rule TEXT NOT NULL, raw_value TEXT, expected TEXT, "
+        "raised_at TIMESTAMP NOT NULL, resolved_at TIMESTAMP);"
+    )
+    source_text = "Financial Highlights\nGMV reached $1.2 billion this quarter.\n"
+    extracted: dict[str, dict[str, object]] = {
+        "GMV": {
+            "value": 1200000000,
+            # Plausible but NOT a verbatim substring of source_text.
+            "source_excerpt": "GMV surged past $1.2 billion, a new all-time record.",
+        }
+    }
+    manifest = _build_manifest(
+        "MELI",
+        datetime(2026, 3, 31),
+        FiscalPeriodType.Q1,
+        42,
+        extracted,
+        conn=conn,
+        source_text=source_text,
+    )
+    # The VALUE is still extracted -- never dropped for a bad anchor alone.
+    assert manifest.values[0].value == Decimal("1200000000")
+    assert isinstance(manifest.values[0].locator, LegacyEscapeHatch)
+
+    issue = conn.execute(
+        "SELECT source_doc_id, ticker, severity, rule, raw_value, expected FROM validation_issues"
+    ).fetchone()
+    assert issue is not None
+    assert issue[0] == 42
+    assert issue[1] == "MELI"
+    assert issue[2] == Severity.WARN.value
+    assert issue[3] == ValidationRule.HALLUCINATED_ANCHOR.value
+    assert issue[4] == "GMV surged past $1.2 billion, a new all-time record."
+    assert issue[5] == "GMV"
+    conn.close()
+
+
 # --- _ensure_summary_document_row: parent_document_id resolution + guard -----
 
 

@@ -28,7 +28,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
+from pathlib import Path
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -36,7 +38,57 @@ SRC_DIR = os.path.join(PROJECT_ROOT, "src")
 sys.path.append(SRC_DIR)
 
 import db  # noqa: E402
+from models.facts import LegacyEscapeHatch  # noqa: E402
+from models.validation import Severity, ValidationRule  # noqa: E402
+from pipeline.kpi_persistence import record_validation_issue  # noqa: E402
+from pipeline.locators import log_escape_hatch  # noqa: E402
 from provenance import edgar_8k, overrides  # noqa: E402
+
+
+def _resolve_locator_json(
+    conn: sqlite3.Connection,
+    *,
+    proposal: edgar_8k.ExtractedSegmentOverride,
+    doc_id: int | None,
+    run_id: str,
+) -> str | None:
+    """Patch the proposal's locator ``doc_id`` (edgar_8k.py never has one) and
+    serialize it for the ``fact_overrides.locator`` column.
+
+    Anchor-verification failures (docs/design/provenance_clickthrough.md §3.3)
+    get their OWN ``validation_issues`` row (``rule=hallucinated_anchor``) so
+    they're distinguishable from a plain "writer had nothing to offer"
+    escape hatch (``rule=locator_escape_hatch``, logged via
+    ``pipeline.locators.log_escape_hatch`` for every other
+    ``LegacyEscapeHatch`` case).
+    """
+    locator = proposal.locator
+    if isinstance(locator, LegacyEscapeHatch):
+        if proposal.failed_segments:
+            record_validation_issue(
+                conn,
+                run_id=run_id,
+                source_doc_id=doc_id,
+                ticker=proposal.ticker,
+                severity=Severity.WARN,
+                rule=ValidationRule.HALLUCINATED_ANCHOR,
+                raw_value=", ".join(proposal.failed_segments),
+                expected=locator.reason,
+            )
+        else:
+            log_escape_hatch(
+                conn,
+                run_id=run_id,
+                source_doc_id=doc_id,
+                ticker=proposal.ticker,
+                escape_hatch=locator,
+            )
+        return None
+    if doc_id is not None and locator.html_span is not None:
+        locator = locator.model_copy(
+            update={"html_span": locator.html_span.model_copy(update={"doc_id": doc_id})}
+        )
+    return locator.to_json()
 
 
 def main() -> int:
@@ -80,6 +132,15 @@ def main() -> int:
     )
     print(f"    {json.dumps(proposal.segments, indent=2)}")
     print(f"    source: {proposal.source_url}")
+    if proposal.failed_segments:
+        print(
+            f"  [warn] anchor_quote failed verification for: "
+            f"{', '.join(proposal.failed_segments)} -- locator demoted to legacy"
+        )
+    elif isinstance(proposal.locator, LegacyEscapeHatch):
+        print(f"  [warn] no renderable locator: {proposal.locator.reason}")
+    else:
+        print("  [ok] anchor_quote verified -- html_span locator ready")
 
     if not args.apply:
         print("  [dry-run] pass --apply to record this override")
@@ -89,6 +150,18 @@ def main() -> int:
         db.set_db_path(args.db_path)
     conn = db.get_connection()
     try:
+        doc_id = edgar_8k.register_8k_exhibit_document(
+            conn,
+            ticker=proposal.ticker,
+            accession=proposal.source_accession,
+            exhibit_name=proposal.source_exhibit,
+            exhibit_text=proposal.exhibit_text,
+            source_url=proposal.source_url,
+            period_end=proposal.period_end,
+            repo_root=Path(PROJECT_ROOT),
+        )
+        run_id = f"extract_8k_overrides:{proposal.ticker}:{proposal.source_accession}"
+        locator_json = _resolve_locator_json(conn, proposal=proposal, doc_id=doc_id, run_id=run_id)
         new_id = overrides.record_override(
             conn,
             ticker=proposal.ticker,
@@ -103,11 +176,13 @@ def main() -> int:
             source_exhibit=proposal.source_exhibit,
             source_url=proposal.source_url,
             source_excerpt=proposal.source_excerpt,
+            source_doc_id=doc_id,
             rationale=f"Auto-extracted from 8-K exhibit {proposal.source_exhibit}",
             created_by="agent:extract_8k_overrides",
+            locator=locator_json,
         )
         conn.commit()
-        print(f"  [ok] recorded override id={new_id}")
+        print(f"  [ok] recorded override id={new_id} (documents.id={doc_id})")
     finally:
         conn.close()
     return 0
