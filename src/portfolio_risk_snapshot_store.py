@@ -15,6 +15,7 @@ Ask pack) reuses :func:`read_latest_snapshot` to answer when the tracker is down
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -148,13 +149,11 @@ def write_snapshot(
             f"ON CONFLICT(user_id) DO UPDATE SET {updates}",
             [user_id, captured_at, *values],
         )
-        try:
+        with contextlib.suppress(sqlite3.Error):  # pre-0185 DB — latest-view still lands
             conn.execute(
                 f"INSERT INTO {_HISTORY_TABLE} ({cols}) VALUES ({placeholders})",
                 [user_id, captured_at, *values],
             )
-        except sqlite3.Error:
-            pass  # pre-0185 DB — latest-view still lands
         conn.commit()
         return True
     except sqlite3.Error:
