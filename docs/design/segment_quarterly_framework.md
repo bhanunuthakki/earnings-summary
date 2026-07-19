@@ -650,29 +650,169 @@ real exercise), `segment_q4_derive.py` + `derive_q4_segments.py`,
 landed in Phase 1) + 0 further model/enum changes (Phase 1's `9M` addition and
 `derived_from`/`supersedes_id` columns already cover what Phase 2 needs).
 
-### Phase 3 — FPI (20-F) / MJDS (40-F) route
+### Phase 3 — FPI (20-F) / MJDS (40-F) route — SPIKE COMPLETE, PARTIALLY BUILT
 
-**Scope**: §1.1's Phase-3 spike (does `financial-reports-json` return anything
-useful for `period=Q1..Q3` on a 20-F/40-F filer — a half-day empirical check,
-**do this first**, before writing any extraction code, since it determines
-whether §1.1's "primary source" column is real or the fallback is actually
-primary), then whichever of `segment_quarterly_6k.py` /
-`segment_quarterly_ir_pdf.py` the spike result calls for. BN's Supplemental PDF
-route and NU's untouched IR-spreadsheet pipeline are the two most concrete,
-already-scoped sub-paths (per `per_ticker_segment_extraction_notes.md`); ASML/
-BHP/RIO/VALE/HDB/WIX/NVO/CNQ/FNV follow per-ticker per that same directive's
-existing inventory (do not re-derive their per-ticker shape notes — they're
-already written down).
+**Status (2026-07-18)**: the §1.1 spike ran first, per this section's own
+mandate, against real filings for the three sample 20-F names (NU, ASML, NVO)
+read-only (MAIN's `data/historical/fmp/` cache + a handful of live SEC EDGAR
+fetches, respecting rate limits). The verdict is a clean, evidenced **NO** on
+the `financial-reports-json` route and a **mixed, per-ticker** result on the
+6-K narrative-extraction fallback — exactly the shape §1.1's own framing
+anticipated ("Assume no until the spike proves otherwise").
 
-**Blast radius**: highest uncertainty of the three phases — contingent on the
-spike result. Rough estimate assuming the spike is negative (financial-reports-json
-has nothing for 20-F/40-F, the expected outcome): 2 new extraction modules + 1
-new IR-doc fetch/categorization wiring for BN's Supplemental PDF specifically
-(reusing `extract_kpis_from_ir.py`'s pattern, not the financial-reports-json path
-at all) + 0 new migrations (reuses Phase 1/2's schema — an IR-doc-sourced segment
-cell is still a `segment_dimensions` row with `source_doc_id` pointing at an
-`ir_doc` document instead of an `fmp_10q_json` one) + LLM 4-registry additions for
-whatever new purpose(s) the 6-K/IR-PDF prompts need.
+#### Spike finding 1 — `financial-reports-json` has NO interim (Q1-Q3) data for 20-F filers, full stop
+
+Two independent, mutually-confirming signals, checked against all three
+sample tickers:
+
+1. **FMP's own catalog is empty of interim periods.** `{T}_financial_reports_dates.json`
+   — the `linkJson` manifest §5.2 already treats as ground truth for "which
+   (fiscalYear, period) combos exist" — lists **only `FY`/`Q4` entries** for
+   ASML (back to fiscal 2011), NU (back to fiscal 2021, its IPO year), and
+   NVO (back to fiscal 2021), across every fiscal year on file. Zero `Q1`/`Q2`/`Q3`
+   entries, ever, for any of the three.
+2. **The "quarterly" as-reported cache is the same annual document re-tagged.**
+   Every row in `{T}_as_reported_financial_quarterly.json` for all three
+   tickers carries `data.documenttype == '20-F'` and
+   `data.documentfiscalperiodfocus == 'FY'` — i.e. even the endpoint FMP
+   labels "quarterly" is just the as-filed annual 20-F, bucketed under a
+   synthetic `period='Q4'` tag for cross-comparability with 10-K filers, never
+   a real interim filing.
+
+A live-call cross-check (`financial-reports-json?symbol=NU&year=2025&period=Q1`,
+and the same for ASML/NVO) returned HTTP 402 ("Premium Query Parameter...
+not available under your current subscription") — but a control call against
+GOOG's own Q1 (a Phase-1, 10-K-regime, already-working ticker) returned the
+**same 402**, while META's Q1 returned 200 with real data. This shows the 402
+is a per-symbol FMP subscription-tier gate, **not** evidence about 20-F
+interim availability one way or the other — the catalog-manifest gap (finding
+1 above) is the decisive, subscription-independent signal, and it is
+unambiguous: **this is a structural fact** (20-F filers do not file a
+10-Q-equivalent structured document for SEC/FMP to index — they file 6-Ks
+instead), not a quota artifact. §1.1's "primary source" column for the 20-F/40-F
+row is retired; the 6-K/IR-doc fallback is the *only* primary source, exactly
+as the design doc's own default assumption predicted.
+
+#### Spike finding 2 — 6-K narrative disclosure: per-ticker verdict
+
+| Ticker | Quarterly disclosure? | Shape | Extraction method | Verdict |
+|---|---|---|---|---|
+| **NU** | YES | Plain HTML text. 6-K "Financial Statements" exhibit (`nufs{q}q{yy}_6k.htm`, e.g. accession 0001292814-26-003053 for 1Q26) carries a "SEGMENT INFORMATION" note: geography-only (Brazil/Mexico/Other countries), revenue **and** non-current assets, single reportable segment — same shape as the annual 20-F's own segment note (`per_ticker_segment_extraction_notes.md`), just at quarterly cadence. | LLM narrative extraction over the exhibit's plain text (`compute.segment_quarterly_6k`) | **GO — built** |
+| **NVO** | YES, richer than annual | Plain HTML text. 6-K "Company announcement" exhibit (`caq{q}{yyyy}.htm`, e.g. accession 0000353278-26-000018 for 1Q26) carries "Adjusted sales split per therapy" (Wegovy/Ozempic/Rybelsus/insulins/rare disease, etc.) **and** "Adjusted sales per geographical area" tables, both at quarterly cadence — finer-grained than the annual 20-F's own drug-revenue table. | LLM narrative extraction over the exhibit's plain text (`compute.segment_quarterly_6k`) | **GO — built** |
+| **ASML** | NO | The 6-K "Financial statements US GAAP" exhibit (`financialstatementsusgaa.htm`, accession 0001628280-26-025147 for 1Q26) is a **12-slide image-scanned deck** (`<img src="...00N.jpg" title="slideN">`, no OCR-able text at all — verified by fetching and viewing the actual slide images). Its one-sentence "Notes" slide explicitly defers *all* segment/policy detail to the annual 20-F ("these unaudited Summary Consolidated Financial Statements should be read in conjunction with the Consolidated Financial Statements and Notes included within our 2025 Annual Report"). Also checked the earnings press-release and investor-presentation exhibits of the same filing — same image-only shape, no "New/Used systems" breakdown text anywhere. | N/A — no extractable text exists at any cadence beyond annual | **NO-GO — confirmed negative, marked `fpi_annual_only`** |
+
+BN/CNQ/FNV (the 40-F/MJDS names) were **not** re-spiked here beyond the
+grounding check the task specified: `tracked_companies.filing_regime` is
+currently NULL for every tracked ticker in the production DB (a pre-existing
+self-heal gap — see the note below — not something this session introduced or
+fixed), so the *hand-curated* roster from migration `0001_companies_provenance.py`
+remains the source of truth: BN/CNQ/FNV are `40-F`. Per `per_ticker_segment_extraction_notes.md`
+(already written, not re-derived here), BN's quarterly Supplemental
+Information PDF is the richer, already-scoped sub-path
+(`segment_quarterly_ir_pdf.py`) — a different route from `fpi_6k` entirely,
+out of this session's build scope. WIX/BHP/RIO/VALE/HDB are 20-F names on the
+roster this spike did **not** sample; they are left exactly where Phase 2's
+audit script already puts them (`fpi_route_unproven`), not assumed either
+way.
+
+**Operational note surfaced by this pass (not a Phase-3 finding, filed here
+for visibility)**: `tracked_companies.filing_regime` is NULL for every row in
+the production DB as of 2026-07-18, including the 28 names migration `0001`
+hand-seeded — the `set_filing_regime_from_profile()` self-heal (§1.3) appears
+never to have been run against the live DB, or a schema reset since dropped
+the values. `source_routing.segment_pipeline_for_regime` and this Phase's own
+CLI orchestrator both key off that column, so until it's backfilled,
+`execution/extract_segment_quarterly_6k.py --all` resolves zero jobs (silently
+correct, not a bug — `plan_for_ticker` returns `segment_quarterly_pipeline=
+"unsupported"` for a NULL regime) and `audit_segment_quarterly_coverage.py`
+reports `filing_regime_unresolved` instead of the FPI-specific reason codes
+this phase adds. Running `set_filing_regime_from_profile()` (or a one-time
+backfill matching migration 0001's table) against the live DB is a
+prerequisite for this phase's `--all` mode to do anything on the tracked
+book — flagged, not fixed, here (outside this phase's scope; a data-hygiene
+action against a live table, not a code change).
+
+#### What was built (Stage 2)
+
+- `src/pipeline/sec_6k_fetch.py` (new): CIK resolution (reuses the existing
+  `pipeline.sec_xbrl.CIK_MAP`, no new resolver — §7 risk #2 resolved), 6-K
+  accession discovery + per-ticker exhibit-filename matching within an
+  expected post-quarter-end filing window, image-only-exhibit detection (the
+  ASML shape, guarded generically so a future ticker degrades honestly rather
+  than silently mis-feeding a slide deck to the LLM), and `documents` row
+  registration (`doc_type=sec_6k`, `source_type=sec_xbrl`, tier
+  `SEC_OFFICIAL` — same source_type `upsert_accession_documents` already uses
+  for every SEC-EDGAR-origin document).
+- `src/compute/segment_quarterly_6k.py` (new): per-ticker spike classification
+  table (`NU`/`NVO` = `"supported"`, `ASML` = `"confirmed_annual_only"`, every
+  other ticker = untested/left alone), LLM narrative extraction (reuses
+  `compute.segment_crosstabs_llm`'s pure parsing helpers by cross-module
+  import — the same established convention `segment_quarterly_10q.py`
+  documents for its own reuse of `generic_xbrl_capture._is_detail_section` —
+  but defines its own `SixKBreakdown`/`SixKCell` shape with an explicit
+  `metric` field, since NU's table reports two metrics (revenue AND
+  non-current assets) per cell and the annual crosstab contract only ever
+  writes `metric='revenue'`/`'{subject}_revenue'`), and persistence via the
+  existing `write_segment_facts_junction` writer with full §4.1 provenance
+  (`disclosure_status='reported'`, `method_version='segment_quarterly_6k_v1'`,
+  `extracted_by='llm:<model>'`, `locator`).
+- `execution/extract_segment_quarterly_6k.py` (new): orchestrator CLI, same
+  `ingestion_runs`/`stage_transitions` wiring as `extract_segment_quarterly.py`.
+- **No new LLM purpose registered** (a deliberate, evidence-based choice, not
+  an oversight): the extraction task — turn filing narrative text into a JSON
+  cross-tab — is structurally identical to what `compute.segment_crosstabs_llm`
+  already does for annual 10-K/20-F text via a raw (non-4-registry) Haiku
+  call. Rather than fork a second, near-duplicate LLM-governance surface for
+  the same shape of call, this module reuses that exact mechanism
+  (`llm_client._call_claude`, `FAST_CLASSIFIER_MODEL`) with its own prompt.
+  If this route's usage grows past the two spike-validated tickers, revisit
+  whether it warrants promotion to a `call_llm_structured` purpose with full
+  4-registry lockstep (`run_llm_evals.PURPOSES`, `evals_panel.RUNNABLE_PURPOSES`,
+  `coverage`, `prompt_versions`, `LLM_MODELS`, `llm_budgets`) — deferred, not
+  forgotten.
+- **No new migrations.** Reuses Phase 1/2's `segment_periods`/`segment_dimensions`/
+  `segment_quarterly_coverage` schema verbatim — a 6-K-sourced segment cell is
+  still a `segment_dimensions` row, just with `source_doc_id` pointing at a
+  `sec_6k` document instead of an `fmp_10q_json` one.
+- New `segment_quarterly_coverage` reason codes: `fpi_annual_only` (ASML —
+  confirmed no quarterly disclosure exists, ever, at any format), plus three
+  operational-failure codes for the "supported" route (`fpi_6k_exhibit_not_located`,
+  `fpi_6k_fetch_failed`, `fpi_6k_image_only_exhibit`) so a future quarter's
+  fetch failure or exhibit-naming drift for NU/NVO shows up as an honest
+  `not_computable` row in the audit matrix rather than silently doing
+  nothing. `fpi_route_unproven` (Phase 2's existing default) is left
+  untouched as the answer for every 20-F/40-F ticker this spike didn't
+  sample.
+
+#### What was explicitly NOT built
+
+- **ASML segment/system-type quarterly extraction** — the evidence says it
+  doesn't exist to extract. `segment_quarterly_6k.py`'s classification table
+  marks it `"confirmed_annual_only"`; `extract_for_ticker("ASML", ...)`
+  short-circuits before any network call and records `not_disclosed`/
+  `fpi_annual_only` — a well-evidenced NO-GO, per the task's own framing, is a
+  fully successful outcome here, not a partial one.
+- **`segment_quarterly_ir_pdf.py` (the 40-F/MJDS route)** — out of this
+  session's scope; BN/CNQ/FNV's path was already concretely scoped by
+  `per_ticker_segment_extraction_notes.md` before this session and doesn't
+  route through `financial-reports-json`/6-K at all (IR Supplemental PDF
+  instead), so this spike's findings don't change its design. Left for a
+  dedicated pass.
+- **WIX/BHP/RIO/VALE/HDB 6-K extraction** — untested by this spike. Adding a
+  ticker to `segment_quarterly_6k._TICKER_6K_STATUS` as `"supported"` requires
+  the same live-filing confirmation this spike did for NU/NVO (fetch one real
+  6-K, confirm the exhibit is real narrative/table HTML and not an
+  image-scanned deck) — not assumed from the 20-F filing regime alone (ASML
+  is the counter-example: same regime, opposite outcome).
+
+**Blast radius (actual)**: 3 new files (`sec_6k_fetch.py`,
+`segment_quarterly_6k.py`, `extract_segment_quarterly_6k.py`) + 2 new test
+files + 0 migrations + 0 new LLM purposes + 3 new coverage reason codes
+(`fpi_annual_only`, `fpi_6k_exhibit_not_located`, `fpi_6k_fetch_failed`,
+`fpi_6k_image_only_exhibit` — four, not three; corrected count) — smaller
+than the doc's own pre-spike estimate, because the spike's negative finding
+on `financial-reports-json` and BN's already-scoped IR-PDF path both narrowed
+scope before any code was written.
 
 ---
 
