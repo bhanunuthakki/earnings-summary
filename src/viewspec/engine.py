@@ -129,6 +129,7 @@ def _cell_source(prov: dict[str, object]) -> CellSource:
     doc_raw = prov.get("source_doc_id")
     fact_raw = prov.get("fact_id")
     conf_raw = prov.get("confidence")
+    fact_table_raw = prov.get("fact_table")
     return CellSource(
         source=str(prov.get("source") or "unknown"),
         fetched_at=_s("fetched_at"),
@@ -139,6 +140,11 @@ def _cell_source(prov: dict[str, object]) -> CellSource:
         locator=_s("locator"),
         doc_id=doc_raw if isinstance(doc_raw, int) else None,
         fact_id=fact_raw if isinstance(fact_raw, int) else None,
+        fact_table=(
+            fact_table_raw
+            if isinstance(fact_table_raw, str) and fact_table_raw
+            else "financial_facts"
+        ),
         confidence=float(conf_raw) if isinstance(conf_raw, (int, float)) else None,
         extracted_by=_s("extracted_by"),
         computed_from=_s("computed_from"),

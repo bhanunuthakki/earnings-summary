@@ -461,3 +461,64 @@ def test_capture_for_ir_pdf_docs_skips_non_pdf_and_missing(
     assert calls == []  # xlsx filtered out; missing PDF skipped — no model call
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
     conn.close()
+
+
+def test_capture_for_ir_pdf_docs_emits_pdf_slide_locators(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase B (provenance_clickthrough.md section 3.2): a supplement capture
+    over a REAL PDF attributes each located source_excerpt to its page and
+    persists a renderable v2 pdf_slide locator; an excerpt that can't be
+    found verbatim keeps the escape hatch (locator stays NULL)."""
+    fitz = pytest.importorskip("fitz", reason="PyMuPDF (fitz) not installed")
+    from models.facts import FactLocator, LocatorKind
+
+    db = tmp_path / "data" / "portfolio.db"
+    db.parent.mkdir(parents=True)
+    _make_capture_db(db)
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+
+    # A real 2-page supplement whose page 2 carries two of the three excerpts.
+    pdf = tmp_path / "ir_documents" / "NU" / "2025-12-31" / "ir_supplement__cafe0001.pdf"
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    doc = fitz.open()
+    doc.new_page().insert_text((72, 72), "Q4 2025 data pack")
+    page2 = doc.new_page()
+    page2.insert_text((72, 100), "Revenue was $1.2 billion")
+    page2.insert_text((72, 140), "NIM of 17.8%")
+    doc.save(str(pdf))
+    doc.close()
+    conn.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, period_end, file_path, "
+        "sha256, fetched_at, fetch_status, raw_bytes_size) "
+        "VALUES ('NU', 'ir_doc', 'ir_supplement', '2025-12-31 00:00:00', ?, 'e', "
+        "'2026-01-15 00:00:00', 'ok', 1)",
+        (str(pdf).replace("\\", "/"),),
+    )
+    conn.commit()
+
+    monkeypatch.setattr(kes, "_call_claude", _const_caller(_ENUMERATE_JSON))
+
+    log = capture_for_ir_pdf_docs("NU", tmp_path, conn)
+    assert log.kpis_inserted_total == 3
+
+    rows = {
+        str(r["name"]): r["locator"]
+        for r in conn.execute(
+            "SELECT kd.name, kf.locator FROM kpi_facts kf "
+            "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id"
+        ).fetchall()
+    }
+    # "Revenue was $1.2 billion" and "NIM of 17.8%" are on page 2 verbatim.
+    for name in ("Revenue", "Net interest margin"):
+        loc = FactLocator.from_json(str(rows[name]))
+        assert loc is not None, name
+        assert loc.locator_version == 2
+        assert loc.kind == LocatorKind.PDF_SLIDE
+        assert loc.pdf_page == 2
+        assert loc.verbatim_snippet
+    # "118 million customers" is NOT in the PDF text -> honest escape hatch,
+    # locator column stays NULL (never a fabricated anchor).
+    assert rows["Customers"] is None
+    conn.close()

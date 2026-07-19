@@ -19,6 +19,7 @@ import json
 import logging
 import re
 import sqlite3
+from pathlib import Path
 from typing import cast
 
 from models.facts import (
@@ -242,6 +243,52 @@ def pdf_slide_locator(
         pdf_bbox=bbox,
         verbatim_snippet=verbatim_snippet,
     )
+
+
+class PdfQuoteLocator:
+    """Callable quote → ``pdf_slide`` ``FactLocator`` for ONE PDF.
+
+    Phase B's extraction-time capture helper (§3.2's extract_kpis_from_ir
+    row): the IR-supplement enumerate pass gets a verbatim ``source_excerpt``
+    per value from the LLM but reads the PDF as one undifferentiated text
+    blob — this object attributes each excerpt to its page (and, where
+    ``page.search_for`` finds it, a bounding box) so the value persists with
+    a renderable locator instead of an escape hatch.
+
+    The per-page text index is built once, lazily, on first call (a supplement
+    capture makes up to _CAPTURE_MAX_FACTS lookups against the same PDF).
+    Returns None when the excerpt can't be found verbatim — the caller keeps
+    its escape hatch; a fabricated page is worse than an honest legacy row.
+    """
+
+    def __init__(self, pdf_path: Path) -> None:
+        self._pdf_path = pdf_path
+        self._page_texts: list[str] | None = None
+        self._indexed = False
+
+    def _index(self) -> list[str] | None:
+        if not self._indexed:
+            # Local import: pdf_render is a soft-dependency (fitz) seam;
+            # importing it lazily keeps locators importable everywhere.
+            from pipeline.pdf_render import extract_page_texts
+
+            self._page_texts = extract_page_texts(self._pdf_path)
+            self._indexed = True
+        return self._page_texts
+
+    def __call__(self, quote: str | None) -> FactLocator | None:
+        if quote is None or not quote.strip():
+            return None
+        page_texts = self._index()
+        if not page_texts:
+            return None
+        from pipeline.pdf_render import find_page_for_quote
+
+        hit = find_page_for_quote(self._pdf_path, quote, page_texts=page_texts)
+        if hit is None:
+            return None
+        page, bbox = hit
+        return pdf_slide_locator(pdf_page=page, verbatim_snippet=quote.strip(), bbox=bbox)
 
 
 def transcript_span_locator(

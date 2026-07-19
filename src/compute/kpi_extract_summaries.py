@@ -36,6 +36,7 @@ import logging
 import re
 import sqlite3
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -47,7 +48,7 @@ from compute.kpi_resolver import normalize_kpi_name
 from llm.untrusted import spotlight
 from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
 from models.documents import SourceType, tier_for_source_type
-from models.facts import FiscalPeriodType, LegacyEscapeHatch, Unit
+from models.facts import FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import DefinitionOrigin
 from models.unit_convert import same_family
 from pipeline.capture_coverage import CaptureCoverageRecord, record_coverage
@@ -741,6 +742,7 @@ def _build_capture_manifest(
     rows: list[dict[str, object]],
     *,
     primary_source: SourceType = SourceType.LLM_EXTRACTED,
+    locate_quote: Callable[[str | None], FactLocator | None] | None = None,
 ) -> KpiExtractionManifest:
     """Convert enumerated rows to a CAPTURE manifest. Names are passed verbatim;
     persist_manifest (origin=CAPTURE) canonicalizes them on write.
@@ -751,6 +753,14 @@ def _build_capture_manifest(
     is the issuer's own document, so its enumerated values outrank the LLM brief
     long tail on read (the tier-aware loader prefers IR_DOC over LLM_EXTRACTED for
     the same definition+period), exactly as the audited IR spreadsheet does.
+
+    ``locate_quote`` (provenance click-through Phase B, §3.2): the supplement
+    PDF path passes a ``pipeline.locators.PdfQuoteLocator`` so each value whose
+    ``source_excerpt`` is found verbatim in the source PDF persists with a
+    renderable ``pdf_slide`` locator (page number + bbox where
+    ``page.search_for`` derives one) instead of the escape hatch. An excerpt
+    that can't be located verbatim keeps the escape hatch — an honest legacy
+    row beats a fabricated anchor.
     """
     values: list[KpiValue] = []
     for row in rows:
@@ -770,6 +780,7 @@ def _build_capture_manifest(
             if isinstance(excerpt_raw, str) and excerpt_raw.strip()
             else None
         )
+        located = locate_quote(excerpt) if locate_quote is not None else None
         values.append(
             KpiValue(
                 name=name,
@@ -777,7 +788,7 @@ def _build_capture_manifest(
                 unit=unit,
                 confidence=0.85,
                 source_excerpt=excerpt,
-                locator=_NO_LOCATOR_ENUMERATE,
+                locator=located if located is not None else _NO_LOCATOR_ENUMERATE,
             )
         )
     return KpiExtractionManifest(
@@ -1023,6 +1034,12 @@ def capture_for_ir_pdf_docs(
             rows = _llm_extract_enumerate(ticker, period_label, text, max_facts=max_facts_per_doc)
             if not rows:
                 continue
+            # Phase B (provenance_clickthrough.md §3.2): attribute each
+            # LLM-returned excerpt to its PDF page (+ bbox where findable) so
+            # the value persists with a renderable pdf_slide locator; an
+            # unlocatable excerpt keeps the escape hatch.
+            from pipeline.locators import PdfQuoteLocator
+
             manifest = _build_capture_manifest(
                 ticker,
                 period_end,
@@ -1030,6 +1047,7 @@ def capture_for_ir_pdf_docs(
                 doc_id,
                 rows,
                 primary_source=SourceType.IR_DOC,
+                locate_quote=PdfQuoteLocator(pdf_path),
             )
             run_id = start_run(
                 conn,

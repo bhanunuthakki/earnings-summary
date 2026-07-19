@@ -96,6 +96,20 @@ VIEWER_CONTENT_CSS = """
 .sv-cell-hit { background: color-mix(in srgb, var(--warn) 16%, transparent);
   outline: 1px solid var(--warn); border-radius: var(--radius); }
 .sv-stmt-foot { margin-top: 12px; font-size: var(--fs-caption); }
+/* PDF page-image view (pdf_slide locators — provenance click-through Phase B).
+   The stage is position:relative so the bbox highlight overlays the rendered
+   page image in percentage coordinates (layout only; highlight tones reuse the
+   same warn color-mix treatment as .sv-cell-hit / .sv-lines li:target). */
+.sv-pdf-stage { position: relative; display: inline-block; max-width: 100%; }
+.sv-pdf-stage img { display: block; max-width: 100%; height: auto;
+  border: 1px solid var(--border); border-radius: var(--radius); }
+.sv-pdf-hit { position: absolute; pointer-events: none;
+  outline: 2px solid var(--warn); border-radius: var(--radius);
+  background: color-mix(in srgb, var(--warn) 18%, transparent); }
+.sv-pdf-pager { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+  margin: 10px 0; font-size: var(--fs-caption); }
+.sv-pdf-pager .sv-pdf-page-n { color: var(--muted); font-family: var(--mono); }
+.sv-pdf-snippet { margin-top: 10px; }
 """
 
 _PAGE_CSS = (
@@ -124,6 +138,9 @@ class _DocRow:
     source_url: str | None
     accession_number: str | None
     filing_date: str | None
+    # Content hash off the documents row — the PDF page-image cache key
+    # (pipeline.pdf_render). "" on schema-tolerant reads of pre-sha256 DBs.
+    sha256: str = ""
 
 
 def load_document(db_path: Path, doc_id: int) -> _DocRow | None:
@@ -142,9 +159,10 @@ def load_document(db_path: Path, doc_id: int) -> _DocRow | None:
             if "accession_number" in cols
             else "NULL AS accession_number, NULL AS filing_date"
         )
+        sha_select = "sha256" if "sha256" in cols else "NULL AS sha256"
         row = conn.execute(
-            f"SELECT id, ticker, doc_type, file_path, fetched_at, source_url, {identity} "
-            "FROM documents WHERE id = ?",
+            f"SELECT id, ticker, doc_type, file_path, fetched_at, source_url, {identity}, "
+            f"{sha_select} FROM documents WHERE id = ?",
             (doc_id,),
         ).fetchone()
     except sqlite3.Error:
@@ -164,6 +182,7 @@ def load_document(db_path: Path, doc_id: int) -> _DocRow | None:
             str(row["accession_number"]) if row["accession_number"] is not None else None
         ),
         filing_date=str(row["filing_date"]) if row["filing_date"] is not None else None,
+        sha256=str(row["sha256"]) if row["sha256"] is not None else "",
     )
 
 
@@ -480,6 +499,100 @@ def render_statement_json_page(
         column_header=column_header,
         fragment=fragment,
     )
+
+
+# ----------------------------------------------------------------------------
+# PDF page-image viewer (pdf_slide locators — provenance click-through
+# Phase B, docs/design/provenance_clickthrough.md section 2.3)
+# ----------------------------------------------------------------------------
+
+
+def render_pdf_page_view(
+    repo_root: Path,
+    db_path: Path,
+    doc_id: int,
+    page: int | None = None,
+    *,
+    bbox: tuple[float, float, float, float] | None = None,
+    snippet: str | None = None,
+    fragment: bool = False,
+) -> str | None:
+    """One rendered PDF page as an image, with an optional bbox highlight.
+
+    The destination a ``pdf_slide`` locator points at: the page image (via
+    the ``/source/<doc_id>/page/<n>.png`` route, rendered+cached lazily by
+    ``pipeline.pdf_render``), a highlight rectangle when the locator carries
+    a ``pdf_bbox`` (percentage-positioned over the image so it survives
+    responsive scaling), and the ``verbatim_snippet`` as a callout below so
+    the reader isn't hunting blind on a bbox-less page.
+
+    None when the doc isn't a renderable PDF (wrong suffix, missing file,
+    PyMuPDF unavailable) — the dispatcher's fallback page takes over, never
+    a dead end. In ``fragment`` mode the pager uses absolute
+    ``/source/<id>?page=`` hrefs (same reasoning as render_form10k_page's
+    section nav).
+    """
+    from pipeline.pdf_render import page_count, page_dimensions
+
+    doc = load_document(db_path, doc_id)
+    if doc is None or not doc.file_path.lower().endswith(".pdf"):
+        return None
+    path = Path(doc.file_path)
+    if not path.is_absolute():
+        path = repo_root / path
+    n_pages = page_count(path)
+    if n_pages is None or n_pages < 1:
+        return None
+    active = min(max(page if page is not None else 1, 1), n_pages)
+
+    img_src = f"/source/{doc.id}/page/{active}.png"
+    overlay = ""
+    if bbox is not None:
+        dims = page_dimensions(path, active)
+        if dims is not None and dims[0] > 0 and dims[1] > 0:
+            w, h = dims
+            x0, y0, x1, y1 = bbox
+            left = max(0.0, min(100.0, x0 / w * 100))
+            top = max(0.0, min(100.0, y0 / h * 100))
+            width = max(0.0, min(100.0 - left, (x1 - x0) / w * 100))
+            height = max(0.0, min(100.0 - top, (y1 - y0) / h * 100))
+            overlay = (
+                f'<div class="sv-pdf-hit" style="left:{left:.2f}%;top:{top:.2f}%;'
+                f'width:{width:.2f}%;height:{height:.2f}%"></div>'
+            )
+
+    def _page_href(n: int) -> str:
+        return f"/source/{doc.id}?page={n}" if fragment else f"?page={n}"
+
+    pager_bits: list[str] = []
+    if active > 1:
+        pager_bits.append(
+            f'<a class="k-chip k-chip-btn" href="{_page_href(active - 1)}">&larr; p.{active - 1}</a>'
+        )
+    pager_bits.append(f'<span class="sv-pdf-page-n">page {active} / {n_pages}</span>')
+    if active < n_pages:
+        pager_bits.append(
+            f'<a class="k-chip k-chip-btn" href="{_page_href(active + 1)}">p.{active + 1} &rarr;</a>'
+        )
+    pager = f'<div class="sv-pdf-pager">{"".join(pager_bits)}</div>'
+
+    caption = ""
+    if snippet:
+        note = "" if bbox is not None else "cited value is on this page &mdash; "
+        caption = (
+            f'<div class="k-well sv-pdf-snippet">{note}&ldquo;{escape(snippet)}&rdquo;</div>'
+        )
+
+    stage = (
+        f'<div class="sv-pdf-stage"><img src="{img_src}" '
+        f'alt="{escape(doc.ticker)} {escape(doc.doc_type)} page {active}">{overlay}</div>'
+    )
+    body = pager + stage + caption
+    title = f"{doc.ticker} · {doc.doc_type.replace('_', ' ')} · p.{active}"
+    if fragment:
+        return _fragment(title, _doc_meta_html(doc), body)
+    head = f'<span class="sv-title">{escape(title)}</span>{_doc_meta_html(doc)}'
+    return _page(title, head, body)
 
 
 # ----------------------------------------------------------------------------

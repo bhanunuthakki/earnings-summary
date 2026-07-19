@@ -811,11 +811,17 @@ def load_financial_cell_provenance(
         conn.close()
 
 
-def _sourced_rows(rows: Iterable[sqlite3.Row]) -> list[SourcedObservation]:
+def _sourced_rows(
+    rows: Iterable[sqlite3.Row], *, fact_table: str = "financial_facts"
+) -> list[SourcedObservation]:
     """Rows carrying (period_end, value, unit, + provenance columns) → an
     ascending SourcedObservation list, deduplicating by period_end with the
     last row winning (the SQL has already chosen the canonical row per
-    logical key via tier/id ordering)."""
+    logical key via tier/id ordering).
+
+    ``fact_table`` names the table ``fact_id`` indexes (financial_facts vs
+    kpi_facts) so the chip's provenance peek can build the right
+    ``<table>:<id>`` fact_ref (provenance click-through Phase B)."""
     by_period: dict[datetime, SourcedObservation] = {}
     for r in rows:
         pe = _parse_period_end(r["period_end"])
@@ -828,6 +834,7 @@ def _sourced_rows(rows: Iterable[sqlite3.Row]) -> list[SourcedObservation]:
         prov: dict[str, object] = {
             "source": str(r["source"]) if r["source"] is not None else "unknown",
             "fact_id": int(r["fact_id"]),
+            "fact_table": fact_table,
             "source_doc_id": int(r["source_doc_id"]),
             "fetched_at": str(r["fetched_at"]) if r["fetched_at"] is not None else None,
             "source_url": str(r["source_url"]) if r["source_url"] is not None else None,
@@ -1071,7 +1078,7 @@ def load_kpi_series_with_provenance(
             fact_kind=KPI,
             fact_key=kpi_name,
             period_types=period_list,
-            series=_sourced_rows(rows),
+            series=_sourced_rows(rows, fact_table="kpi_facts"),
         )
     except sqlite3.Error as exc:
         log.warning(

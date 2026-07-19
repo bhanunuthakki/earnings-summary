@@ -100,26 +100,31 @@ def _locator_row_html(raw_locator: str) -> str:
     )
 
 
+# Locator kinds whose primary click target is the provenance peek dispatcher
+# (/api/peek/provenance/<table>:<id>) rather than a raw /source link.
+_PEEK_KINDS = (LocatorKind.FMP_JSON_TABLE, LocatorKind.VENDOR_FIELD, LocatorKind.PDF_SLIDE)
+
+
 def viewer_href(src: CellSource) -> str | None:
     """In-app click-through for a sourced cell (P4.3; extended for
     ``fmp_json_table``/``vendor_field`` kinds by the provenance
-    click-through program, docs/design/provenance_clickthrough.md section
-    6.1).
+    click-through program's Phase A and ``pdf_slide`` by Phase B,
+    docs/design/provenance_clickthrough.md section 6.1).
 
-    ``fmp_json_table`` / ``vendor_field`` locators (when the cell carries a
-    ``fact_id``) link the peek dispatcher (``/api/peek/provenance/
-    financial_facts:<id>``) directly — the peek is the primary click target
-    for these kinds, `/source/<doc_id>` stays the "open full document"
-    escape valve. Everything else keeps the original P4.3 behavior:
-    ``transcript_line`` becomes the reader's ``#L<n>`` anchor, ``section``
-    the 10-K reader's ``?section=`` deep link. None when the cell carries
-    neither a fact_id-bearing peek target nor a document id.
+    ``fmp_json_table`` / ``vendor_field`` / ``pdf_slide`` locators (when the
+    cell carries a ``fact_id``) link the peek dispatcher (``/api/peek/
+    provenance/<fact_table>:<id>``) directly — the peek is the primary click
+    target for these kinds, `/source/<doc_id>` stays the "open full
+    document" escape valve. Everything else keeps the original P4.3
+    behavior: ``transcript_line`` becomes the reader's ``#L<n>`` anchor,
+    ``section`` the 10-K reader's ``?section=`` deep link, and a bare
+    ``pdf_page`` on a cell WITHOUT a fact_id the PDF viewer's ``?page=``
+    deep link (Phase B). None when the cell carries neither a
+    fact_id-bearing peek target nor a document id.
     """
     loc = _parse_locator(src.locator)
-    if loc is not None and src.fact_id is not None:
-        kind = loc.effective_kind()
-        if kind in (LocatorKind.FMP_JSON_TABLE, LocatorKind.VENDOR_FIELD):
-            return f"/api/peek/provenance/financial_facts:{src.fact_id}"
+    if loc is not None and src.fact_id is not None and loc.effective_kind() in _PEEK_KINDS:
+        return f"/api/peek/provenance/{src.fact_table}:{src.fact_id}"
     if src.doc_id is None:
         return None
     suffix = ""
@@ -128,7 +133,33 @@ def viewer_href(src: CellSource) -> str | None:
             suffix = f"#L{loc.transcript_line}"
         elif loc.section:
             suffix = f"?section={urllib.parse.quote(loc.section)}"
+        elif loc.pdf_page is not None:
+            suffix = f"?page={loc.pdf_page}"
     return f"/source/{src.doc_id}{suffix}"
+
+
+# Human noun for the pdf_slide chip hint, by the source document's doc_type
+# (section 6.1: the tier abbreviation stays first — color-coding by trust
+# tier is load-bearing — and the locator hint is appended, e.g.
+# "FMP · IR deck p.14").
+_PDF_HINT_NOUN: dict[str, str] = {
+    "ir_presentation": "IR deck",
+    "ir_event": "IR deck",
+    "ir_supplement": "IR suppl",
+    "ir_investor_update": "IR update",
+    "ir_press_release": "IR release",
+}
+
+
+def _locator_hint(src: CellSource, loc: FactLocator | None) -> str | None:
+    """Compact chip-label hint for locator kinds with a human-readable
+    position (Phase B: pdf_slide → "IR deck p.14"). None = bare abbrev."""
+    if loc is None:
+        return None
+    if loc.effective_kind() == LocatorKind.PDF_SLIDE and loc.pdf_page is not None:
+        noun = _PDF_HINT_NOUN.get(src.doc_type or "", "PDF")
+        return f"{noun} p.{loc.pdf_page}"
+    return None
 
 
 # Inputs shown in a "derived from" popover before truncating with "+N more"
@@ -194,6 +225,8 @@ def source_chip_html(src: CellSource) -> str:
     in-app /source viewer (P4.3) plus the original document URL.
     """
     abbrev = SOURCE_CHIP_ABBREV.get(src.source, src.source[:3].upper() or "?")
+    hint = _locator_hint(src, _parse_locator(src.locator))
+    chip_label = f"{abbrev} · {hint}" if hint else abbrev
     tier_slug = src.source.replace("_", "-")
     pct = confidence_pct(src)
     low_conf = (
@@ -245,7 +278,7 @@ def source_chip_html(src: CellSource) -> str:
     return (
         '<details class="src-pop">'
         f'<summary class="src-chip src-{_esc(tier_slug)}{low_cls}"{peek_attrs} '
-        f'title="{_esc(source_hover_title(src))}">{_esc(abbrev)}</summary>'
+        f'title="{_esc(source_hover_title(src))}">{_esc(chip_label)}</summary>'
         f'<div class="src-pop-body">{"".join(rows)}</div>'
         "</details>"
     )

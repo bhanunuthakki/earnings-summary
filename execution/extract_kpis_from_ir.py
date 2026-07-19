@@ -50,6 +50,13 @@ value's JSON must carry EITHER a real locator object (e.g.
 genuinely wasn't -- a value with no `"locator"` key at all now fails
 `--apply`'s Pydantic validation rather than silently landing with no
 provenance.
+
+Phase B pairing rule (§3.2): a value citing `{"pdf_page": N}` MUST also carry
+a non-empty `source_excerpt` — the verbatim quote is what the pdf_slide peek
+renders under the page image. `--apply` upgrades every pdf_page locator to
+the v2 `pdf_slide` shape on persist, deriving a bounding box via PyMuPDF's
+`page.search_for(excerpt)` when the source PDF is on disk (an optional
+`"pdf_bbox": [x0, y0, x1, y1]` in the manifest is honored as-is).
 """
 
 from __future__ import annotations
@@ -66,11 +73,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from compute.kpi_extract_summaries import capture_for_ir_pdf_docs, write_log  # noqa: E402
+from models.facts import FactLocator, LocatorKind  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
 from pipeline.kpi_persistence import (  # noqa: E402
     KpiExtractionManifest,
+    KpiValue,
     persist_manifest,
 )
+from pipeline.locators import pdf_slide_locator  # noqa: E402
+from pipeline.pdf_render import find_quote_bbox  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 from pipeline.refresh_eval import refresh_for_tickers  # noqa: E402
 from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
@@ -92,7 +103,7 @@ class ManifestFile(BaseModel):
     manifests: list[KpiExtractionManifest]
 
 
-def _list_pending(conn, ticker: str | None) -> list[dict[str, object]]:
+def _list_pending(conn: sqlite3.Connection, ticker: str | None) -> list[dict[str, object]]:
     """Return IR docs that have no kpi_facts rows tied to them yet.
 
     `kpi_facts.source_doc_id` provenance is the join key. A document is
@@ -125,8 +136,83 @@ def _list_pending(conn, ticker: str | None) -> list[dict[str, object]]:
     return out
 
 
+def _source_pdf_path(
+    conn: sqlite3.Connection, doc_id: int, *, repo_root: Path = PROJECT_ROOT
+) -> Path | None:
+    """Resolve the manifest's source document to an on-disk PDF, else None."""
+    row = conn.execute("SELECT file_path FROM documents WHERE id = ?", (doc_id,)).fetchone()
+    if row is None or not row["file_path"]:
+        return None
+    raw = str(row["file_path"])
+    if not raw.lower().endswith(".pdf"):
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        path = repo_root / path
+    return path if path.exists() else None
+
+
+def _upgrade_pdf_locators(
+    conn: sqlite3.Connection, manifest: KpiExtractionManifest, *, repo_root: Path = PROJECT_ROOT
+) -> KpiExtractionManifest:
+    """Promote v1 ``{"pdf_page": N}`` manifest locators to renderable v2
+    ``pdf_slide`` locators before persist (provenance click-through Phase B,
+    docs/design/provenance_clickthrough.md §3.2's extract_kpis_from_ir row).
+
+    Schema pairing rule: a value citing a ``pdf_page`` MUST carry a non-empty
+    ``source_excerpt`` (a page without a quote is a weaker locator — the peek
+    would have nothing to show the reader beyond the raw page). Violations
+    raise ValueError, failing that one manifest loudly in --apply's
+    per-manifest error accounting rather than landing a hollow locator.
+
+    Bbox enrichment is best-effort: when the source PDF is on disk and
+    PyMuPDF finds the excerpt on the cited page, the locator also carries the
+    bounding box; otherwise page + snippet alone (still fully renderable).
+    """
+    upgraded: list[KpiValue] = []
+    changed = False
+    pdf_path: Path | None | bool = False  # False = not yet resolved (resolve lazily, once)
+    for value in manifest.values:
+        loc = value.locator
+        if (
+            not isinstance(loc, FactLocator)
+            or loc.effective_kind() != LocatorKind.PDF_SLIDE
+            or loc.pdf_page is None
+        ):
+            upgraded.append(value)
+            continue
+        excerpt = (value.source_excerpt or "").strip()
+        if loc.kind is None and not excerpt:
+            raise ValueError(
+                f"value {value.name!r}: locator.pdf_page={loc.pdf_page} requires a "
+                "non-empty source_excerpt (the verbatim quote the peek renders)"
+            )
+        if loc.kind is not None and loc.pdf_bbox is not None:
+            upgraded.append(value)  # already fully-enriched v2
+            continue
+        if pdf_path is False:
+            pdf_path = _source_pdf_path(conn, manifest.source_doc_id, repo_root=repo_root)
+        bbox = loc.pdf_bbox
+        if bbox is None and isinstance(pdf_path, Path) and excerpt:
+            bbox = find_quote_bbox(pdf_path, loc.pdf_page, excerpt)
+        snippet = excerpt or (loc.verbatim_snippet or "")
+        upgraded.append(
+            value.model_copy(
+                update={
+                    "locator": pdf_slide_locator(
+                        pdf_page=loc.pdf_page, verbatim_snippet=snippet, bbox=bbox
+                    )
+                }
+            )
+        )
+        changed = True
+    if not changed:
+        return manifest
+    return manifest.model_copy(update={"values": upgraded})
+
+
 def _apply_manifest(
-    conn, manifest_file: ManifestFile, *, with_eval: bool = False
+    conn: sqlite3.Connection, manifest_file: ManifestFile, *, with_eval: bool = False
 ) -> dict[str, object]:
     """Apply each KpiExtractionManifest under one ingestion run."""
     if not manifest_file.manifests:
@@ -141,7 +227,7 @@ def _apply_manifest(
     failed = 0
     for m in manifest_file.manifests:
         try:
-            result = persist_manifest(conn, run_id=run_id, manifest=m)
+            result = persist_manifest(conn, run_id=run_id, manifest=_upgrade_pdf_locators(conn, m))
         except (ValueError, KeyError) as e:
             record_stage(
                 conn,
