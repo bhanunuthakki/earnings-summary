@@ -47,6 +47,22 @@ REGISTERED_DERIVED_LOCATOR_EMITTERS: frozenset[str] = frozenset({"compute.metric
 # that a fabricated anchor_quote is rejected, never silently trusted.
 REGISTERED_HTML_SPAN_LOCATOR_EMITTERS: frozenset[str] = frozenset({"provenance.edgar_8k"})
 
+# compute.segments writes segment_dimensions rows via SegmentDimension(...)
+# instances (through pipeline.segment_junction_writer), not a
+# FinancialFact/KpiValue instance -- it sits outside BOTH the discovery scan
+# above AND that scan's declared table scope, same as the two frozensets
+# above. compute.segments.extract_segment_facts is the writer used for legacy
+# per-ticker quarterly FMP segment JSON ingest (e.g. data/historical/fmp/
+# MELI_product_segments_quarterly.json / MELI_geo_segments_quarterly.json);
+# it predates the locator contract, so every row it wrote before this
+# registration landed with segment_dimensions.locator NULL. Registered here so
+# this pass proves (fixture-tested below) it now emits a real v2
+# `fmp_json_table` locator per dimension row, AND that re-ingesting over an
+# already-landed locator-NULL row (the pre-fix shape) heals it in place
+# rather than duplicating the row -- see tests/test_compute_segments.py for
+# the full functional coverage of both cases.
+REGISTERED_FMP_JSON_TABLE_LOCATOR_EMITTERS: frozenset[str] = frozenset({"compute.segments"})
+
 _WRITER_CALL_RX = re.compile(r"(?<!class )\b(KpiValue|FinancialFact)\(")
 _STRING_LITERAL_RX = re.compile(r'"((?:[^"\\]|\\.)*)"|\'((?:[^\'\\]|\\.)*)\'')
 
@@ -448,6 +464,127 @@ def test_edgar_8k_rejects_fabricated_anchor_quote_on_fixture() -> None:
     assert proposal.failed_segments == ("Google Cloud",)
     # The value itself is NEVER dropped for a bad anchor alone.
     assert proposal.segments["Google Cloud"] == 17664000000
+
+
+def _segments_schema() -> str:
+    return """
+    CREATE TABLE documents (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticker TEXT NOT NULL,
+        source_type TEXT NOT NULL,
+        doc_type TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        fetched_at TIMESTAMP NOT NULL,
+        fetch_status TEXT NOT NULL,
+        raw_bytes_size INTEGER NOT NULL
+    );
+    CREATE TABLE segment_periods (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticker VARCHAR(16) NOT NULL,
+        period_end DATETIME NOT NULL,
+        fiscal_period_type VARCHAR(8) NOT NULL,
+        source_doc_id INTEGER NOT NULL REFERENCES documents(id),
+        currency VARCHAR(8),
+        unit VARCHAR(16) NOT NULL,
+        created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        period_basis VARCHAR(16) NOT NULL DEFAULT 'discrete',
+        raw_period_label TEXT,
+        method_version VARCHAR(32),
+        CONSTRAINT uq_segment_periods_provenance UNIQUE
+          (ticker, period_end, fiscal_period_type, source_doc_id)
+    );
+    CREATE TABLE segment_dimensions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        period_id INTEGER NOT NULL REFERENCES segment_periods(id),
+        dim_type VARCHAR(16) NOT NULL,
+        dim_name VARCHAR(128) NOT NULL,
+        value NUMERIC(20, 4) NOT NULL,
+        metric VARCHAR(32) NOT NULL,
+        unit VARCHAR(16),
+        disclosure_status VARCHAR(16) NOT NULL DEFAULT 'reported',
+        method_version VARCHAR(32),
+        confidence REAL NOT NULL DEFAULT 1.0,
+        extracted_by VARCHAR(64),
+        locator TEXT,
+        derived_from TEXT,
+        supersedes_id INTEGER
+    );
+    CREATE TABLE financial_facts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticker TEXT NOT NULL,
+        period_end TIMESTAMP NOT NULL,
+        fiscal_period_type TEXT NOT NULL,
+        line_item TEXT NOT NULL,
+        value NUMERIC(24, 6) NOT NULL,
+        currency TEXT,
+        unit TEXT NOT NULL,
+        source_doc_id INTEGER NOT NULL,
+        confidence REAL NOT NULL DEFAULT 1.0
+    );
+    """
+
+
+def test_compute_segments_emits_v2_fmp_json_table_locator_on_fixture() -> None:
+    """compute.segments (REGISTERED_FMP_JSON_TABLE_LOCATOR_EMITTERS) now
+    stamps a real v2 `fmp_json_table` locator per segment_dimensions row.
+
+    Full functional coverage (including the re-ingest locator-backfill proof)
+    lives in tests/test_compute_segments.py; this is the lightweight,
+    self-contained CI-guard-file fixture the registration above asks for."""
+    import json
+    import sqlite3
+    import tempfile
+    from datetime import datetime
+    from pathlib import Path
+
+    from compute.segments import extract_segment_facts
+
+    assert "compute.segments" in REGISTERED_FMP_JSON_TABLE_LOCATOR_EMITTERS
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(_segments_schema())
+    conn.execute(
+        "INSERT INTO documents "
+        "(id, ticker, source_type, doc_type, file_path, sha256, fetched_at, "
+        " fetch_status, raw_bytes_size) "
+        "VALUES (1, 'MELI', 'fmp', 'fmp_segment_product', "
+        "'data/historical/fmp/MELI_product_segments_quarterly.json', "
+        "'0000000000000000000000000000000000000000000000000000000000000000', "
+        "?, 'ok', 1)",
+        (datetime.now(),),
+    )
+    conn.commit()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        project_root = Path(tmp)
+        fmp_dir = project_root / "data" / "historical" / "fmp"
+        fmp_dir.mkdir(parents=True)
+        record = {
+            "date": "2025-12-31",
+            "symbol": "MELI",
+            "reportedCurrency": "USD",
+            "period": "Q4",
+            "fiscalYear": 2025,
+            "data": {"Commerce": 4_000_000_000},
+        }
+        (fmp_dir / "MELI_product_segments_quarterly.json").write_text(
+            json.dumps([record]), encoding="utf-8"
+        )
+        inserted = extract_segment_facts(conn, 1, project_root)
+
+    assert inserted == 1
+    row = conn.execute("SELECT locator FROM segment_dimensions").fetchone()
+    loc = FactLocator.from_json(row["locator"])
+    assert loc is not None
+    assert loc.locator_version >= 2
+    assert loc.effective_kind() == LocatorKind.FMP_JSON_TABLE
+    assert loc.table_cell is not None
+    assert loc.table_cell.row_label == "Commerce"
+    assert loc.table_cell.column_header == "2025-12-31"
+    assert loc.json_path == "[0].data.Commerce"
+    conn.close()
 
 
 def test_no_empty_or_duplicate_boilerplate_escape_hatch_reasons() -> None:
