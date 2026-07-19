@@ -579,9 +579,7 @@ def render_pdf_page_view(
     caption = ""
     if snippet:
         note = "" if bbox is not None else "cited value is on this page &mdash; "
-        caption = (
-            f'<div class="k-well sv-pdf-snippet">{note}&ldquo;{escape(snippet)}&rdquo;</div>'
-        )
+        caption = f'<div class="k-well sv-pdf-snippet">{note}&ldquo;{escape(snippet)}&rdquo;</div>'
 
     stage = (
         f'<div class="sv-pdf-stage"><img src="{img_src}" '
