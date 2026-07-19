@@ -156,11 +156,40 @@ class HumanCapitalBucket(BaseModel):
         return [t.strip().upper() for t in v if t.strip()]
 
 
+class BehavioralRule(BaseModel):
+    """One distilled behavioral rule (Tier C, Phase 4,
+    ``synthesis.behavior_distill``) — the second-person rule text plus the
+    graded ``decisions`` ids it rests on and the wrong/total tally computed
+    IN CODE from those validated citations (never the LLM's own arithmetic;
+    see ``behavior_distill._validate_citations``). ``citations`` are always
+    real, currently-graded ``decisions.id`` values by the time this model is
+    constructed — the producer drops uncited/miscited candidates before
+    validating against this model, mirroring ``thesis_collision``'s
+    hallucinated-ticker guard."""
+
+    rule_text: str = Field(min_length=1)
+    citations: list[int] = Field(default_factory=list[int])
+    wrong: int = Field(ge=0)
+    total: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def _tallies_are_consistent(self) -> BehavioralRule:
+        if self.wrong > self.total:
+            raise ValueError(f"wrong ({self.wrong}) cannot exceed total ({self.total})")
+        if self.total != len(set(self.citations)):
+            raise ValueError(
+                f"total ({self.total}) must equal the distinct citation count "
+                f"({len(set(self.citations))})"
+            )
+        return self
+
+
 __all__ = [
     "CATEGORIES",
     "PROVENANCES",
     "STATUSES",
     "TAX_BUCKET_KEYS",
+    "BehavioralRule",
     "CashBufferMonths",
     "EquityFraction",
     "FactCategory",

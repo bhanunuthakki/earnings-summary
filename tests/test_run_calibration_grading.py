@@ -1,9 +1,10 @@
 """Tests for execution/run_calibration_grading.py — the calibration-grader orchestrator.
 
-It runs seven rungs (predictions -> decisions -> bear_cases -> four eval-audit
-rungs, llm_evals_plan PR 3) as subprocesses. Its load-bearing contract mirrors
-run_morning_pipeline: attempt every non-skipped rung even when an earlier one
-fails or times out, and report the count of failed rungs as the exit code.
+It runs nine rungs (predictions -> decisions -> bear_cases -> five eval-audit
+rungs, llm_evals_plan PR 3 -> the tenet-2 Phase 4 behavior-distill cadence hook,
+LAST) as subprocesses. Its load-bearing contract mirrors run_morning_pipeline:
+attempt every non-skipped rung even when an earlier one fails or times out, and
+report the count of failed rungs as the exit code.
 
 ``subprocess.run`` is monkeypatched throughout — no real processes are spawned.
 Tests assert structural properties (call order, exit codes, summary statuses),
@@ -25,9 +26,11 @@ PREDICTIONS = "grade_predictions.py"
 DECISIONS = "grade_decisions.py"
 BEAR = "grade_bear_cases.py"
 EVALS = "run_llm_evals.py"
+BEHAVIOR_DISTILL = "run_behavior_distill.py"
 
-# The full run order: outcome graders, then the four eval-audit rungs.
-ALL_SCRIPTS = [PREDICTIONS, DECISIONS, BEAR, EVALS, EVALS, EVALS, EVALS, EVALS]
+# The full run order: outcome graders, then the four eval-audit rungs, then
+# the tenet-2 Phase 4 behavioral-rules distiller (always last).
+ALL_SCRIPTS = [PREDICTIONS, DECISIONS, BEAR, EVALS, EVALS, EVALS, EVALS, EVALS, BEHAVIOR_DISTILL]
 
 
 class _FakeCompleted:
@@ -99,6 +102,7 @@ def test_all_graders_run_in_order(
     assert summary["predictions"] == "ok"
     assert summary["decisions"] == "ok"
     assert summary["bear_cases"] == "ok"
+    assert summary["behavior_distill"] == "ok"
 
 
 def test_bear_grader_runs_over_whole_portfolio(
@@ -163,7 +167,16 @@ def test_skip_omits_a_grader(
 
     rc = run_calibration_grading.main(["--skip", "bear_cases"])
     assert rc == 0
-    assert fake.scripts == [PREDICTIONS, DECISIONS, EVALS, EVALS, EVALS, EVALS, EVALS]
+    assert fake.scripts == [
+        PREDICTIONS,
+        DECISIONS,
+        EVALS,
+        EVALS,
+        EVALS,
+        EVALS,
+        EVALS,
+        BEHAVIOR_DISTILL,
+    ]
     assert BEAR not in fake.scripts
 
     summary = _parse_summary(capsys.readouterr().out)
@@ -211,6 +224,39 @@ def test_eval_audit_rungs_scope_to_fresh_artifacts(
     assert summary["eval_advisor_next_dollar"] == "ok"
     assert summary["eval_ask_advisory_answer"] == "ok"
     assert summary["eval_calibration_coach"] == "ok"
+
+
+def test_behavior_distill_runs_last_and_a_hard_failure_is_counted(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The behavioral-rules distiller (tenet-2 Phase 4) must run AFTER every
+    grading rung, and a hard failure (e.g. a propagated LLMBudgetExceeded ->
+    non-zero exit) is caught and counted, never crashing the orchestrator —
+    mirroring how bear_cases/predictions failures are handled."""
+    fake = _RecordingRun(returncodes={BEHAVIOR_DISTILL: 1})
+    _install_fake(monkeypatch, fake)
+
+    rc = run_calibration_grading.main([])
+    assert rc == 1
+    assert fake.scripts == ALL_SCRIPTS
+    assert fake.scripts[-1] == BEHAVIOR_DISTILL
+
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["behavior_distill"] == "failed"
+
+
+def test_skip_behavior_distill(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+
+    rc = run_calibration_grading.main(["--skip", "behavior_distill"])
+    assert rc == 0
+    assert BEHAVIOR_DISTILL not in fake.scripts
+
+    summary = _parse_summary(capsys.readouterr().out)
+    assert summary["behavior_distill"] == "skipped"
 
 
 def test_skip_an_eval_rung(

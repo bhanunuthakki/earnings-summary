@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from advisor.position_tax import PositionTaxView
     from capture.matcher import RosterIndex
     from compute.thesis_evaluator import ThesisVerdict
+    from owner_profile.store import OwnerProfileFactRow
 
 log = logging.getLogger(__name__)
 
@@ -65,6 +66,7 @@ __all__ = [
     "REVIEW_SOURCES",
     "REVIEW_SOURCE_KEY",
     "SELL_OVER_UNDER",
+    "SELL_WINNERS_KEY",
     "SUGGESTED_EXPRESSIONS",
     "TRIM_OVER_UNDER",
     "CapacityContext",
@@ -74,6 +76,7 @@ __all__ = [
     "apply_behavioral_guard",
     "assemble_pre_analysis",
     "attest_review_changed",
+    "behavioral_rules_block",
     "build_capacity_context",
     "build_pre_analysis",
     "classify_valuation",
@@ -90,6 +93,7 @@ __all__ = [
     "resolve_review_target",
     "review_position",
     "review_reply_text",
+    "seed_behavioral_rules",
     "summarize_verdict",
 ]
 
@@ -827,12 +831,25 @@ def _sell_pattern_phrase(graded_line: str | None) -> str:
     return f"sell-winners-too-early pattern ({match.group(1)})" if match else graded_line
 
 
-def _behavioral_rules(graded_line: str | None) -> str:
-    """The owner's documented decision-making, baked into the prompt as hard
-    constraints (from data/ledger_seed/seed.json), with rule 1's evidence
-    interpolated from the LIVE graded record rather than a stale hardcode.
-    The deterministic guardrail (:func:`apply_behavioral_guard`) is the backstop
-    that ENFORCES rule 1 regardless of what the model does."""
+# The canonical key for the seed's rule 1 (sell-winners-too-early) — the ONE
+# behavioral fact whose evidence clause re-interpolates the LIVE
+# graded_sell_record on every render, matching what the frozen seed text
+# always did. Any OTHER affirmed behavioral fact renders its own affirmed
+# narrative verbatim (tenet-2 Phase 4, §3.2 Tier C: "evidence counts still
+# interpolated live... where the fact's slug matches").
+SELL_WINNERS_KEY = "behavior.sell_winners_early"
+
+
+def seed_behavioral_rules(graded_line: str | None) -> str:
+    """The ORIGINAL frozen five-rule seed text (distilled once from
+    ``data/ledger_seed/seed.json``), rendered byte-for-byte identical to
+    before :func:`behavioral_rules_block` became a renderer. This is the
+    fallback the renderer falls back to while zero behavioral
+    ``owner_profile_facts`` are AFFIRMED — today's default, nothing has been
+    ratified yet — so every existing prompt-hash/cache invariant over this
+    block survives untouched. Rule 1's evidence still interpolates from the
+    LIVE graded record rather than a stale hardcode, exactly as before this
+    module split the renderer out."""
     sell_evidence = (
         f"his live graded record: {graded_line}"
         if graded_line is not None
@@ -856,6 +873,68 @@ Calibrate the verdict to THIS owner's documented decision-making:
    overvalued, and it is not oversized, the answer is HOLD even if the position feels
    uncomfortable after a big run.
 """
+
+
+def _affirmed_behavioral_rows(db_path: Path | str | None) -> list[OwnerProfileFactRow]:
+    """AFFIRMED ``owner_profile_facts`` (category='behavioral'), oldest id
+    first — the live rows the renderer switches to once the owner ratifies at
+    least one (§7.1 gated assertion: nothing else may condition the prompt).
+    Degrades to ``[]`` on no ``db_path``, a missing DB, a pre-0159 substrate,
+    or any read error — never raises, matching every other anchor/profile
+    reader in this codebase (e.g. ``llm.anchors.load_owner_profile_anchor``)."""
+    if db_path is None or not Path(db_path).exists():
+        return []
+    try:
+        from owner_profile.store import get_current_profile
+
+        conn = sqlite3.connect(str(db_path))
+        try:
+            grouped = get_current_profile(conn)
+        finally:
+            conn.close()
+    except Exception as exc:  # missing table / locked DB / anything — degrade
+        log.debug({"event": "behavioral_rules_profile_load_failed", "error": str(exc)})
+        return []
+    rows = grouped.get("behavioral", [])
+    return sorted(rows, key=lambda r: r.id)
+
+
+def behavioral_rules_block(graded_line: str | None, *, db_path: Path | str | None = None) -> str:
+    """The behavioral-rules prompt block — a RENDERER over the owner's
+    AFFIRMED behavioral ``owner_profile_facts``, not a frozen constant
+    (tenet-2 Phase 4, ``docs/design/tenet2_advisory_program.md`` §3.2 Tier C /
+    §7 ruling 3: "Live-derived, ratification-gated"). The deterministic
+    guardrail (:func:`apply_behavioral_guard`) remains the backstop that
+    ENFORCES the sell-winners rule regardless of what the model does or which
+    rows are currently affirmed — only the PROMPT TEXT goes live here.
+
+    Zero affirmed behavioral facts (today's default) renders
+    :func:`seed_behavioral_rules` byte-for-byte identical to the original
+    frozen string. The FIRST affirmed behavioral fact switches the entire
+    block over to the live rows: each affirmed fact's narrative becomes one
+    numbered rule, except :data:`SELL_WINNERS_KEY`, whose evidence
+    re-interpolates the LIVE ``graded_sell_record`` line on every call rather
+    than the snapshot baked into the fact at affirmation time.
+    """
+    rows = _affirmed_behavioral_rows(db_path)
+    if not rows:
+        return seed_behavioral_rules(graded_line)
+
+    lines = [
+        "Calibrate the verdict to THIS owner's documented decision-making "
+        "(live, owner-ratified behavioral rules):"
+    ]
+    for i, row in enumerate(rows, start=1):
+        if row.key == SELL_WINNERS_KEY:
+            sell_evidence = (
+                f"his live graded record: {graded_line}"
+                if graded_line is not None
+                else "his self-diagnosed sell-winners-too-early flaw"
+            )
+            lines.append(f"{i}. SELL-WINNERS-TOO-EARLY is his dominant flaw — {sell_evidence}.")
+        else:
+            lines.append(f"{i}. {row.narrative}")
+    return "\n".join(lines) + "\n"
 
 
 @dataclass(frozen=True)
@@ -1051,6 +1130,7 @@ def _build_verdict_prompt(
     *,
     graded_line: str | None = None,
     owner_profile_anchor: str = "",
+    db_path: Path | str | None = None,
 ) -> str:
     facts = (
         f"Ticker: {pre.ticker}\n"
@@ -1071,7 +1151,7 @@ def _build_verdict_prompt(
         "You are the owner's position-review analyst. Using the GROUNDED FACTS "
         "(deterministic, computed from the platform) and the owner's OWN convictions, "
         "return a single trim/hold/add/sell verdict for this ONE position.\n\n"
-        f"{_behavioral_rules(graded_line)}\n"
+        f"{behavioral_rules_block(graded_line, db_path=db_path)}\n"
         f"{profile_block}"
         f"## GROUNDED FACTS\n{facts}\n"
         f"## THE OWNER'S CONVICTIONS ON THIS NAME\n{convictions_block or '(none on file)'}\n\n"
@@ -1279,8 +1359,11 @@ def review_position(
         # Built ONCE per review and threaded into both the prompt and the guard
         # override, so the model's rationale and the deterministic backstop
         # always cite the same live count (never a stale hardcode, never a
-        # query race between the two call sites).
-        graded_line = graded_sell_record(resolve_db_path(db_path))
+        # query race between the two call sites). Also reused for the
+        # behavioral-rules renderer's affirmed-facts read (§3.2 Tier C) — one
+        # resolved DB path, one live count, everywhere it's needed this review.
+        resolved_db_path = resolve_db_path(db_path)
+        graded_line = graded_sell_record(resolved_db_path)
         # Owner-profile anchor (§4 delivery seam 2 of tenet2_advisory_program.md).
         # This site composes the prompt by hand rather than via
         # compose_anchor_block, so spotlight-wrap here (same pattern as
@@ -1305,6 +1388,7 @@ def review_position(
             _convictions_block(repo_root, pre.ticker, db_path),
             graded_line=graded_line,
             owner_profile_anchor=owner_profile_anchor,
+            db_path=resolved_db_path,
         )
         # db_path= keeps the call's DB-backed layers (llm_calls cost ledger,
         # budget, pins) on the caller's DB — without it a library invocation

@@ -86,6 +86,11 @@ AUDIT_PURPOSES = (
     "earnings_themes_split",
     "qa_topics",
     "position_review",
+    # Behavioral-rules distiller (tenet-2 Phase 4) — grades staged
+    # owner_profile_facts rows (category='behavioral') on grounding,
+    # falsifiability, and non-redundancy (mode-B rubric; corpus =
+    # evals.corpora.load_behavior_distill_corpus).
+    "behavior_distill",
 )
 PURPOSES = GOLDEN_PURPOSES + AUDIT_PURPOSES
 

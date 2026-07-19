@@ -34,6 +34,16 @@ LENS_NAMES: tuple[str, ...] = (
     # for "no repeat in a row" — safe to change the modulus because no
     # red_team_items rows exist in prod yet (verified 2026-07-11).
     "missed_upside",
+    # Profile-drift lens (tenet-2 Phase 4, docs/design/tenet2_advisory_program.md
+    # §3.3): attacks whether the owner's AFFIRMED owner_profile_facts and
+    # behavioral rules still match observed behavior — graded decisions since
+    # each fact's affirmation, and facts already past their review horizon
+    # (owner_profile.store.list_expiring_facts). Grown into the SAME rotation
+    # (mod-7, not a special-cased mod-6) — same safety argument as
+    # missed_upside: the monthly red-team program is young (missed_upside's
+    # own mod-6 change cited zero prod red_team_items rows as of 2026-07-11),
+    # so growing the modulus again carries no historical-assignment risk.
+    "profile_drift",
 )
 
 CROSS_BOOK_LENS_NAMES: tuple[str, ...] = (

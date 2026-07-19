@@ -84,6 +84,9 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
     # (mode-A golden classifier) — kept in sync with
     # run_llm_evals.GOLDEN_PURPOSES.
     "segment_10q_period_disambiguate",
+    # Behavioral-rules distiller audit (tenet-2 Phase 4, mode-B rubric) — in
+    # sync with run_llm_evals.AUDIT_PURPOSES + rubric_judge.AUDIT_SPECS.
+    "behavior_distill",
 )
 
 CALL_HEALTH_WINDOW_DAYS = 30

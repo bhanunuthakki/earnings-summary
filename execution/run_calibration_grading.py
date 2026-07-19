@@ -19,6 +19,23 @@ rubric audits over the week's fresh artifacts (``--since-days``):
 scorecard prose — close_the_loops L8). Each also writes an ``eval_runs`` row with
 per-case judge evidence; a week with no fresh artifacts is a clean no-op.
 
+A final rung (tenet-2 Phase 4, docs/design/tenet2_advisory_program.md §3.3:
+"behavioral: after each grading batch") runs LAST, AFTER every grader above has
+had a chance to write fresh ``outcome_label``/``process_quality`` rows: the
+behavioral-rules distiller (``execution/run_behavior_distill.py`` ->
+``synthesis.behavior_distill.run_behavior_distill``) re-derives candidate
+behavioral ``owner_profile_facts`` from the now-freshly-graded corpus. Its own
+internals already implement the per-item degrade pattern (a transient LLM
+failure defers the whole distill run + tallies it, retried for free next week;
+a hard stop -- LLMBudgetExceeded / LLMSetupError -- propagates as a non-zero
+exit, which this orchestrator's always-attempt/never-raise ``_run_grader``
+wrapper reports as FAILED rather than crashing the batch), mirroring the
+post-#814 ``attach_conditions`` reference pattern. Window registered in
+``directives/llm_quota_scheduling.md`` (runs inside this job's existing Sun
+10:30 America/Los_Angeles window -- the daytime slot the weekly eval rung
+was re-registered to on 2026-07-13 after the 03:30 registry-drift incident,
+well clear of the 03:00-05:00 PT protected band).
+
 These were manual CLIs that nothing ran, so ``prompt_calibration_scores`` stayed
 empty even though the machinery was correct (v6 re-grade, LLM pass-through: "the
 loop has never produced a score"). This orchestrator runs all of them on a
@@ -123,6 +140,14 @@ _GRADERS: tuple[_Grader, ...] = (
         _BEAR_TIMEOUT_S,
         ("--purpose", "calibration_coach", "--since-days", _EVAL_AUDIT_SINCE_DAYS),
     ),
+    # Behavioral-rules distiller (tenet-2 Phase 4) -- LAST, so it re-derives
+    # from the corpus AFTER every grader above has had a chance to write
+    # fresh outcome_label/process_quality rows this batch (§3.3: "behavioral:
+    # after each grading batch"). Its own internals implement the per-item
+    # degrade pattern (transient LLM failure -> defer + tally, retried next
+    # week; a hard stop propagates as a non-zero exit, reported FAILED here
+    # rather than crashing the batch) -- see synthesis.behavior_distill.
+    _Grader("behavior_distill", "run_behavior_distill.py", _FAST_TIMEOUT_S),
 )
 _GRADER_KEYS = tuple(g.key for g in _GRADERS)
 

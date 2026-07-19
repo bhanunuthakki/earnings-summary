@@ -594,6 +594,17 @@ LLM_MODELS: dict[str, str] = {
     # task (per-column duration_months/end_date/is_cumulative), same shape
     # and same tier as canonicalize_segments — Haiku tier.
     "segment_10q_period_disambiguate": FAST_CLASSIFIER_MODEL,
+    # The behavioral-rules distiller (tenet-2 Phase 4, docs/design/
+    # tenet2_advisory_program.md §3.2 Tier C / §7 ruling 3): distils the
+    # owner's graded decisions corpus into candidate behavioral rules with
+    # citations, deterministically validated before staging (mirrors
+    # thesis_collision's hallucination guard). Per the phase spec this is
+    # pinned to the FAST/cheap tier rather than tenet_distill's Sonnet pin —
+    # a narrower, more structurally-constrained citation task (decision ids +
+    # a claimed outcome label per citation) than tenet_distill's freer belief
+    # synthesis; re-evaluate via the model-downgrade eval loop if quality
+    # regresses once a golden/audit corpus accrues.
+    "behavior_distill": FAST_CLASSIFIER_MODEL,
     # NOT here by design: the 14 dynamic `lens:<name>` purposes (plus the
     # scenario-suffixed lens:macro_scenario:<id> / lens:portfolio_macro_stress:<id>)
     # resolve their model from the Lens object itself
