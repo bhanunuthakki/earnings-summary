@@ -1595,8 +1595,23 @@ ul.flag-list li.flag-positive {
 .customer-concentration-panel,
 .lease-ladder-panel,
 .saydo-verdicts-panel,
-.peer-comp-panel {
+.peer-comp-panel,
+.comp-set-context-panel {
   margin-top: var(--gap);
+}
+/* Phase 3 (comparable_sets_bottoms_up.md §11) — Sector context card: the
+   industry/sector/benchmark-proxy chip row. Layout only (flex/gap/padding);
+   the .k-well/.k-chip fills are the kit's, not re-skinned here. */
+.comp-set-benchmark-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--panel-pad-x);
+}
+.comp-set-benchmark-row .k-well {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .decision-chips {
   display: flex;

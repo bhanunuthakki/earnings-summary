@@ -780,6 +780,10 @@ def quarter_short(label: str) -> str:
 # data movement.
 
 
+from report.sections.comp_set_context import (  # noqa: E402  (kept near use site)
+    CompSetContextSection,
+    load_comp_set_context,
+)
 from report.sections.p3_data import (  # noqa: E402  (kept near use site)
     CustomerConcentrationRow,
     DecisionHistorySummary,
@@ -797,6 +801,19 @@ from report.sections.p3_data import (  # noqa: E402  (kept near use site)
     load_strategic_targets,
 )
 from user_state.notes import AnalystNoteRow, list_notes  # noqa: E402
+
+
+def _load_comp_set_context_safe(
+    ticker: str, db_path: Path, repo_root: Path
+) -> CompSetContextSection | None:
+    """Best-effort wrapper (Phase 3, comparable_sets_bottoms_up.md §11):
+    missing table / no frozen set / any read failure all degrade to None —
+    the Company tab card hides entirely, never crashes the build. Mirrors
+    ``_load_open_notes_safe``'s degrade contract."""
+    try:
+        return load_comp_set_context(ticker, db_path=db_path, repo_root=repo_root)
+    except (sqlite3.Error, OSError, ValueError, KeyError):
+        return None
 
 
 def _new_open_notes() -> list[AnalystNoteRow]:
@@ -833,6 +850,12 @@ class WorkspaceP3Panels:
     # (the block hides, hide-don't-stub). StandingRulesPanel is defined later
     # in this module — fine under `from __future__ import annotations`.
     standing_rules: StandingRulesPanel | None = None
+    # Phase 3 (comparable_sets_bottoms_up.md §11): the Company tab's "Sector
+    # context" card — subject vs comp-set median/aggregate vs pool-wide
+    # industry/sector benchmark, reading comp_set_metrics_daily. None = no
+    # frozen comparable set for this ticker yet (hide-don't-stub — most of
+    # the pool, on a phased rollout).
+    comp_set_context: CompSetContextSection | None = None
 
     @classmethod
     def empty(cls) -> WorkspaceP3Panels:
@@ -1075,6 +1098,7 @@ def load_workspace_p3_panels(ticker: str, repo_root: Path) -> WorkspaceP3Panels:
         open_notes=_load_open_notes_safe(ticker, db_path),
         position_review_count=_load_position_review_count_safe(ticker, db_path),
         standing_rules=load_standing_rules(ticker, db_path, repo_root),
+        comp_set_context=_load_comp_set_context_safe(ticker, db_path, repo_root),
     )
 
 

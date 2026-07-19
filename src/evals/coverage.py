@@ -50,6 +50,8 @@ GOLDEN_PURPOSES: frozenset[str] = frozenset(
         "podcast_takeaway_summary",
         "key_metrics",
         "scenario_prior",
+        # Sector-benchmark-ETF proposal (comparable_sets_bottoms_up.md §4, Phase 3).
+        "sector_benchmark_proposal",
         # segment_10q_period_disambiguate rides in via CLASSIFIER_PURPOSES below.
         *CLASSIFIER_PURPOSES,
     }

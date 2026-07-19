@@ -37,6 +37,7 @@ from report.renderers.workspace_sections.eval_screen import (
     _eval_screen_panels,
     _peer_comp_panel,
 )
+from report.sections.comp_set_context import CompSetContextSection, CompSetMetricLine
 from report.sections.p3_data import (
     CustomerConcentrationRow,
     LeaseLadderRow,
@@ -44,8 +45,10 @@ from report.sections.p3_data import (
     StrategicTargetRow,
 )
 from ui import living_grid as lg
+from ui.controls import ticker_label
 
 __all__ = [
+    "_comp_set_context_panel",
     "_company_tab",
     "_customer_concentration_panel",
     "_lease_bucket_label",
@@ -67,6 +70,7 @@ def _company_tab(
     suppressed_sections: frozenset[str] | None = None,
     eval_snap: EvaluationSnapshotSection | None = None,
     peer_comp: list[PeerCompRow] | None = None,
+    comp_set_context: CompSetContextSection | None = None,
 ) -> None:
     body.write('<div class="tab-body">')
     body.write('<div class="row-split"><div>')
@@ -95,6 +99,9 @@ def _company_tab(
         # still gets the comparable-company panel on its own —
         # `_peer_comp_panel` already hides itself when empty.
         _peer_comp_panel(body, peer_comp)
+
+    if comp_set_context is not None:
+        _comp_set_context_panel(body, comp_set_context)
 
     if cd.business_overview or cd.revenue_model:
         body.write('<div class="grid-2col">')
@@ -279,6 +286,160 @@ def _render_filing_intelligence(body: StringIO, section: FilingIntelligenceSecti
             body.write(f'<td class="saydo-guide">{_esc(sig.description)}</td>')
             body.write("</tr>")
         body.write("</tbody></table></div>")
+
+
+def _fmt_metric_value(line: CompSetMetricLine, value: float | None) -> str:
+    """Render one metric's number per its display kind (§11 card): a bare
+    multiple ("15.2x") or a percentage. ``fcf_yield_ttm`` is a raw FMP
+    fraction (scale by 100); ``rev_yoy`` is already percent-scaled by the
+    compute layer (compute.comp_set_metrics.load_member_snapshot)."""
+    if value is None:
+        return '<span class="muted">—</span>'
+    if line.is_pct:
+        pct = value * 100.0 if line.metric == "fcf_yield_ttm" else value
+        return f"{pct:+.1f}%" if line.metric == "rev_yoy" else f"{pct:.1f}%"
+    return f"{value:.1f}x"
+
+
+def _comp_set_metric_row(line: CompSetMetricLine) -> str:
+    flag_chips = "".join(
+        f'<span class="k-chip k-chip-mono k-chip-warn">{_esc(f.upper())}</span> '
+        for f in line.flags
+        if f in ("coverage", "ev_daily_approximated", "excluded_non_usd_n")
+    )
+    row_cls = ' class="muted"' if line.secondary else ""
+    coverage_tone = " k-chip-warn" if line.coverage_pct_median < 0.5 else ""
+    no_flags = '<span class="muted">—</span>'
+    return (
+        f"<tr{row_cls}>"
+        f"<td>{_esc(line.label)}</td>"
+        f'<td class="num">{_fmt_metric_value(line, line.subject_value)}</td>'
+        f'<td class="num">{_fmt_metric_value(line, line.median_value)} '
+        f'<span class="k-chip k-chip-mono{coverage_tone}">{line.n_valid_median}/{line.n_members}</span></td>'
+        f'<td class="num">{_fmt_metric_value(line, line.aggregate_value)}</td>'
+        f"<td>{flag_chips or no_flags}</td>"
+        "</tr>"
+    )
+
+
+_MEMBERSHIP_LABEL: dict[str, str] = {
+    "industry_seed": "industry",
+    "sector_widened": "sector",
+    "llm_ratified": "LLM-ratified",
+    "pinned_override": "owner pin",
+    "industry_slice": "industry",
+    "sector_slice": "sector",
+}
+
+
+def _comp_set_context_panel(body: StringIO, section: CompSetContextSection) -> None:
+    """Company tab "Sector context" card (docs/design/
+    comparable_sets_bottoms_up.md §11, Phase 3) — the first render consumer
+    of ``comp_set_metrics_daily``: subject vs comp-set median/aggregate vs
+    pool-wide industry/sector benchmark, with honest coverage/staleness
+    chips (never hidden per §5.5 — thin/stale is shown, not suppressed).
+
+    ``ui.controls`` kit primitives only (k-chip/k-well/ticker_label);
+    layout-only local CSS classes (``.comp-set-*``) live in
+    ``workspace_styles.py``.
+    """
+    stale_chip = (
+        '<span class="k-chip k-chip-warn">STALE</span>'
+        if section.stale
+        else '<span class="k-chip k-chip-ok">CURRENT</span>'
+    )
+    as_of_label = section.as_of_date.isoformat() if section.as_of_date else "no metrics run yet"
+    sub_text = (
+        f"{section.n_members} comparable{'s' if section.n_members != 1 else ''} · "
+        f"{section.metric_class} · as of {as_of_label}"
+    )
+    body.write(
+        _panel_head(
+            "Sector context",
+            sub_html=f'<span class="panel-sub">{_esc(sub_text)}</span> {stale_chip}',
+            classes="comp-set-context-panel",
+        )
+    )
+
+    if section.as_of_date is None:
+        body.write(
+            '<div class="prose-pad muted">Comparable set resolved but no metrics computed '
+            "yet — run <code>execution/track_comp_metrics.py</code>.</div></div>"
+        )
+        return
+
+    if section.metric_class == "reit":
+        body.write(
+            '<div class="prose-pad muted">P/FFO-proxy metric deferred (§10/§13 of the design '
+            "doc) — not yet computed for REIT-class comp sets.</div>"
+        )
+    else:
+        body.write(
+            '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
+            "<th>Metric</th>"
+            '<th class="num">Subject</th>'
+            '<th class="num">Comp-set median</th>'
+            '<th class="num">Comp-set aggregate</th>'
+            "<th>Flags</th>"
+            "</tr></thead><tbody>"
+        )
+        for line in section.primary_metrics:
+            body.write(_comp_set_metric_row(line))
+        for line in section.secondary_metrics:
+            body.write(_comp_set_metric_row(line))
+        body.write("</tbody></table></div>")
+
+    # Pool-wide industry/sector benchmark (§4.1 point 2 — bottoms-up, not
+    # derived from the ETF's holdings) + the ratified ETF performance proxy.
+    body.write('<div class="comp-set-benchmark-row">')
+    for scope, label in ((section.industry_scope, "Industry"), (section.sector_scope, "Sector")):
+        if scope is None:
+            continue
+        tone = " k-chip-warn" if scope.stale else ""
+        pe = f"{scope.pe_ttm_median:.1f}x" if scope.pe_ttm_median is not None else "—"
+        as_of_txt = scope.as_of_date.isoformat() if scope.as_of_date is not None else "—"
+        body.write(
+            f'<span class="k-well"><strong>{_esc(label)}</strong> {_esc(scope.scope_key)}: '
+            f"P/E {pe} · {scope.n_members} names · {as_of_txt}"
+            f'<span class="k-chip{tone}">{"STALE" if scope.stale else "CURRENT"}</span></span>'
+        )
+    if section.benchmark_etf or section.benchmark_sector_etf:
+        proxy_bits = " / ".join(
+            ticker_label(t, href=f"/reports/{t}")
+            for t in (section.benchmark_etf, section.benchmark_sector_etf)
+            if t
+        )
+        body.write(f'<span class="k-well k-well-accent">Benchmark proxy: {proxy_bits}</span>')
+    else:
+        body.write(
+            f'<span class="k-chip">No ratified benchmark — {_esc(section.benchmark_note)}</span>'
+        )
+    body.write("</div>")
+
+    # Roster — every row a doorway (feed-density standard): dense table,
+    # ticker links to that member's own report. context_only members (§3.1
+    # Step C: market-cap-only LLM-suggested peers) are visibly tagged, never
+    # silently mixed into the contributing count.
+    if section.members:
+        body.write(
+            '<div class="table-scroll"><table class="tbl tbl-nowrap"><thead><tr>'
+            "<th>Member</th><th>Basis</th><th>Contributes</th>"
+            "</tr></thead><tbody>"
+        )
+        for m in section.members:
+            reason = _MEMBERSHIP_LABEL.get(m.membership_reason, m.membership_reason)
+            contributes = (
+                '<span class="k-chip k-chip-mono">context only</span>'
+                if m.context_only
+                else '<span class="k-chip k-chip-mono k-chip-ok">yes</span>'
+            )
+            body.write(
+                f"<tr><td>{ticker_label(m.ticker, m.name, href=f'/reports/{m.ticker}')}</td>"
+                f"<td>{_esc(reason)}</td><td>{contributes}</td></tr>"
+            )
+        body.write("</tbody></table></div>")
+
+    body.write("</div>")
 
 
 def _strategic_targets_panel(body: StringIO, rows: list[StrategicTargetRow]) -> None:
