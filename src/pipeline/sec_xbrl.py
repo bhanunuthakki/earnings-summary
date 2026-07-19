@@ -44,11 +44,12 @@ import json
 import logging
 import sqlite3
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, NamedTuple, cast
 
 import requests
 
@@ -895,6 +896,51 @@ def _flag_non_actual_unit(
         )
 
 
+class _PendingFact(NamedTuple):
+    """One resolved SEC fact ready to write, with the tiebreak key used to
+    collapse multi-frame same-document collisions (see
+    ``_same_doc_pick_key``)."""
+
+    pick_key: tuple[str, int, Decimal]
+    period_end: datetime
+    fiscal_period_type: str
+    value: Decimal
+    currency: str | None
+    unit: str
+    source_doc_id: int
+    locator_json: str | None
+
+
+def _same_doc_pick_key(
+    entry: Mapping[str, object], signed_value: Decimal
+) -> tuple[str, int, Decimal]:
+    """Deterministic, order-independent tiebreak for two companyfacts entries
+    that collapse onto the SAME write 5-tuple (ticker, period_end,
+    fiscal_period_type, line_item, source_doc_id).
+
+    A single SEC accession can report the same fiscal-period-end under more than
+    one duration context — e.g. LITE (Lumentum) net_income @ 2016-07-02 appears
+    in one 10-K both as the company's own first fiscal year (``start``
+    2015-08-02 → 21.0M) and as a longer recast period (``start`` 2015-06-28 →
+    9.3M). Both resolve to ``FY @ 2016-07-02`` because the logical key carries no
+    duration, so the extractor would otherwise write one then INSERT-OR-IGNORE
+    the other, and ``_correct_same_document_fact`` would UPDATE-churn it on every
+    ingest — a value that flipped with companyfacts iteration order.
+
+    The winning entry (MAX pick_key) is the one with the latest ``start`` — the
+    tightest period ending at that fiscal-year-end, i.e. the company's own
+    reported figure rather than a recast super-annual span. Instant
+    (balance-sheet) facts have no ``start`` (all sort equal on the first
+    component) and repeat the same value across contexts, so this is a no-op for
+    them — which is why the churn only ever surfaced on a flow line item.
+    Remaining components (``frame`` presence, then the value itself) only break a
+    genuine ``start`` tie, keeping the order a total one."""
+    start_raw = entry.get("start")
+    start_key = start_raw if isinstance(start_raw, str) else ""
+    has_frame = 1 if entry.get("frame") else 0
+    return (start_key, has_frame, signed_value)
+
+
 def insert_facts_from_companyfacts(
     conn: sqlite3.Connection,
     *,
@@ -919,6 +965,14 @@ def insert_facts_from_companyfacts(
         # A key claimed by an earlier rung is invisible to later rungs, so the
         # pick is deterministic regardless of payload ordering.
         claimed: dict[tuple[str, str], int] = {}
+        # (source_doc_id, period_end, fiscal_period_type) -> the single fact we
+        # will write for that exact provenance 5-tuple. Multiple companyfacts
+        # entries can collapse onto one 5-tuple (a SEC accession reporting the
+        # same fiscal-period-end under two duration contexts); we keep only the
+        # deterministic winner (`_same_doc_pick_key`) instead of writing both and
+        # letting the second INSERT-OR-IGNORE trigger same-document correction
+        # churn. Inserts are deferred to after the ladder walk.
+        chosen: dict[tuple[int, str, str], _PendingFact] = {}
         for rung_idx, (namespace, tag_name) in enumerate(ladder.rungs):
             namespace_facts_raw = facts_block.get(namespace)
             if not isinstance(namespace_facts_raw, dict):
@@ -1023,35 +1077,56 @@ def insert_facts_from_companyfacts(
                         claimed_by = claimed.setdefault(key, rung_idx)
                         if claimed_by != rung_idx:
                             continue  # an earlier rung already owns this period
-                        new_id, superseded_id = insert_with_restatement_detection(
-                            conn,
-                            ticker=ticker,
+                        source_doc_id = accession_to_doc_id[accn]
+                        pick_key = _same_doc_pick_key(entry, value)
+                        wkey = (source_doc_id, end, fpt_out.value)
+                        prev = chosen.get(wkey)
+                        if prev is not None and pick_key <= prev.pick_key:
+                            continue  # a tighter-period frame already won this 5-tuple
+                        chosen[wkey] = _PendingFact(
+                            pick_key=pick_key,
                             period_end=period_end,
                             fiscal_period_type=fpt_out.value,
-                            line_item=ladder.line_item,
                             value=value,
                             currency=chosen_currency or None,
                             unit=resolved_unit,
-                            source_doc_id=accession_to_doc_id[accn],
-                            confidence=score_confidence(
-                                tier=tier_for_source_type(SourceType.SEC_XBRL),
-                                extracted_by="sec_xbrl",
-                            ),
-                            extracted_by="sec_xbrl",
-                            locator=locator.to_json(),
+                            source_doc_id=source_doc_id,
+                            locator_json=locator.to_json(),
                         )
-                        if new_id is not None:
-                            inserted += 1
-                        # L10: a SEC restatement of an earlier filing grades
-                        # the old fact's confidence — capture it (best-effort),
-                        # don't discard.
-                        if superseded_id is not None:
-                            _ = record_restatement_observation(
-                                conn,
-                                fact_table=FINANCIAL_FACTS,
-                                superseded_id=superseded_id,
-                                new_value=value,
-                            )
+        # Ladder walk complete: emit each provenance 5-tuple's deterministic
+        # winner exactly once. sorted() fixes the insertion order independent of
+        # dict/payload iteration, so row ids and restatement observations are
+        # reproducible run to run.
+        for wkey in sorted(chosen):
+            pf = chosen[wkey]
+            new_id, superseded_id = insert_with_restatement_detection(
+                conn,
+                ticker=ticker,
+                period_end=pf.period_end,
+                fiscal_period_type=pf.fiscal_period_type,
+                line_item=ladder.line_item,
+                value=pf.value,
+                currency=pf.currency,
+                unit=pf.unit,
+                source_doc_id=pf.source_doc_id,
+                confidence=score_confidence(
+                    tier=tier_for_source_type(SourceType.SEC_XBRL),
+                    extracted_by="sec_xbrl",
+                ),
+                extracted_by="sec_xbrl",
+                locator=pf.locator_json,
+            )
+            if new_id is not None:
+                inserted += 1
+            # L10: a SEC restatement of an earlier filing grades the old fact's
+            # confidence — capture it (best-effort), don't discard.
+            if superseded_id is not None:
+                _ = record_restatement_observation(
+                    conn,
+                    fact_table=FINANCIAL_FACTS,
+                    superseded_id=superseded_id,
+                    new_value=pf.value,
+                )
     conn.commit()
     return inserted
 
