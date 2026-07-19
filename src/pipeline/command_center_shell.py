@@ -2981,6 +2981,7 @@ _DOC_HEAD = (
 </head>
 <body>
 <a class="cc-skip" href="#cc-main">Skip to content</a>
+<h1 class="cc-sr-only">Portfolio &middot; command center</h1>
 <div id="cc-live" class="cc-sr-only" aria-live="polite" aria-atomic="true"></div>
 <div id="cc-offline-banner" class="cc-offline-banner" hidden aria-live="polite">Offline — data panels cannot reload until you reconnect</div>
 """.replace("{css}", SHELL_CSS)

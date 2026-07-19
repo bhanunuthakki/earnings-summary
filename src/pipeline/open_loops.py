@@ -34,12 +34,18 @@ _DECISIONS_HASH = f"/#{_DECISIONS_PANEL}"
 _RED_TEAM_HASH = "/#red_team"
 
 STYLE = """<style>
+/* Promoted 2026-07-18 (UX audit): this is the page's one "what needs you
+   today" line — it was rendering at --fs-caption with no fill, the same
+   visual weight as table-header/timestamp metadata, so the intended entry
+   point read as a footnote. Now a .k-well block (kit) at --fs-body, with
+   each count a .k-pill-warn (kit) instead of plain mono text. */
 .cc-open-loops { display: flex; flex-wrap: wrap; align-items: baseline;
-  gap: 4px 18px; margin: 0 0 10px; font-size: var(--fs-caption); }
-.cc-ol-head { color: var(--muted); }
-.cc-ol-line { color: var(--text); text-decoration: none; }
+  gap: 6px 18px; margin: 0 0 10px; font-size: var(--fs-body); }
+.cc-ol-head { color: var(--fg); font-weight: 600; }
+.cc-ol-line { color: var(--fg); text-decoration: none; display: inline-flex;
+  align-items: baseline; gap: 6px; }
 .cc-ol-line:hover { color: var(--accent); }
-.cc-ol-count { font-family: var(--mono); }
+.cc-ol-line:hover .cc-ol-count { color: var(--accent); }
 .cc-ol-clear { color: var(--muted); }
 .cc-ol-escalation { margin: 0 0 8px; }
 .cc-ol-escalation a { color: inherit; text-decoration: underline; }
@@ -113,7 +119,7 @@ def _digest_ping_debt(db_path: Path | str | None) -> tuple[int, str]:
 def _line(href: str, label: str, count: int, suffix: str = "") -> str:
     return (
         f'<a class="cc-ol-line" href="{href}">{label}: '
-        f'<span class="cc-ol-count">{count}</span>{suffix}</a>'
+        f'<span class="k-pill k-pill-warn">{count}</span>{suffix}</a>'
     )
 
 
@@ -187,13 +193,13 @@ def render_open_loops_band(db_path: Path | str | None = None) -> str:
 
     if not lines:
         return (
-            STYLE + banner + '<div class="cc-open-loops">'
+            STYLE + banner + '<div class="cc-open-loops k-well">'
             '<span class="cc-ol-clear">Ritual clear - nothing waiting on you.</span></div>'
         )
     return (
         STYLE
         + banner
-        + '<div class="cc-open-loops"><span class="cc-ol-head">Open loops</span>'
+        + '<div class="cc-open-loops k-well"><span class="cc-ol-head">Open loops</span>'
         + "".join(lines)
         + "</div>"
     )

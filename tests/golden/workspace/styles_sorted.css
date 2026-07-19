@@ -10,86 +10,86 @@
 .chart-empty { font-size: 12px; color: var(--muted); padding: 8px 12px; background: var(--subheader-bg); border-radius: 4px; margin: 8px 0; }
 .chart-grid-1col { display: grid; grid-template-columns: 1fr; gap: 16px; margin: 12px 0; }
 .chart-wrap { padding: 6px var(--panel-pad-x); color: var(--fg-soft); overflow-x: auto; }
-.chat-cite { font-size: var(--fs-caption); color: var(--link); border: 1px solid var(--hairline); border-radius: var(--radius-full); padding: 2px 9px; text-decoration: none; }
+.chat-cite { font-size: var(--fs-caption); color: var(--accent); border: 1px solid var(--hairline); border-radius: var(--radius-full); padding: 2px 9px; text-decoration: none; }
 .chat-cite-row { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
-.chat-cite:hover { border-color: var(--link); }
-.chat-close { background: transparent; border: none; color: var(--ink-muted); font-size: 20px; line-height: 1; cursor: pointer; padding: 0 6px; }
+.chat-cite:hover { border-color: var(--accent); }
+.chat-close { background: transparent; border: none; color: var(--muted); font-size: 20px; line-height: 1; cursor: pointer; padding: 0 6px; }
 .chat-diff { margin-top: 8px; padding: 8px 10px; background: color-mix(in srgb, var(--ok) 7%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent); border-radius: var(--radius); font-size: var(--fs-caption); }
 .chat-diff-actions button[data-action="apply"] { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
-.chat-diff-note { margin-top: 6px; font-size: var(--fs-caption); color: var(--ink-muted); }
+.chat-diff-note { margin-top: 6px; font-size: var(--fs-caption); color: var(--muted); }
 .chat-diff-path code { background: transparent; padding: 0; color: var(--muted); }
-.chat-diff-summary { color: var(--ink); margin-bottom: 4px; }
+.chat-diff-summary { color: var(--fg); margin-bottom: 4px; }
 .chat-diff.applied { background: color-mix(in srgb, var(--ok) 15%, transparent); }
-.chat-form textarea { width: 100%; box-sizing: border-box; background: var(--panel-alt); color: var(--ink); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 8px 10px; font-size: var(--fs-body); font-family: var(--sans); resize: vertical; }
+.chat-form textarea { width: 100%; box-sizing: border-box; background: var(--paper); color: var(--fg); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 8px 10px; font-size: var(--fs-body); font-family: var(--sans); resize: vertical; }
 .chat-form { padding: 10px 14px; border-top: 1px solid var(--hairline); }
 .chat-form-row { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
 .chat-fragment { margin-top: 8px; overflow-x: auto; max-width: 100%; border-top: 1px solid var(--hairline); padding-top: 8px; }
 .chat-head { display: flex; align-items: flex-start; justify-content: space-between; padding: 12px 14px; border-bottom: 1px solid var(--hairline); }
 .chat-hint { font-size: var(--fs-caption); color: var(--muted); }
-.chat-role-assistant .chat-role-tag { color: var(--ink-muted); }
-.chat-role-assistant { background: var(--panel-alt); border-left: 2px solid var(--hairline); }
+.chat-role-assistant .chat-role-tag { color: var(--muted); }
+.chat-role-assistant { background: var(--paper); border-left: 2px solid var(--hairline); }
 .chat-role-system .chat-role-tag { color: var(--warn); }
 .chat-role-system { background: color-mix(in srgb, var(--warn) 7%, transparent); border-left: 2px solid color-mix(in srgb, var(--warn) 50%, transparent); }
 .chat-role-tag { font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
 .chat-role-user .chat-role-tag { color: var(--accent); }
 .chat-role-user { background: color-mix(in srgb, var(--accent) 9%, transparent); border-left: 2px solid var(--accent); }
-.chat-sidebar.open { width: 460px; border-left-width: 1px; transition: width 0.2s ease, border-left-width 0s; box-shadow: -4px 0 20px rgba(0, 0, 0, 0.35); }
+.chat-sidebar.open { width: 460px; border-left-width: 1px; transition: width 0.2s ease, border-left-width 0s; box-shadow: var(--shadow-pop); }
 .chat-sub { font-size: var(--fs-micro); color: var(--muted); margin-top: 2px; font-family: var(--mono); }
-.chat-text code { font-family: var(--mono); font-size: 0.93em; background: rgba(255, 255, 255, 0.04); padding: 1px 4px; border-radius: var(--radius); }
+.chat-text code { font-family: var(--mono); font-size: 0.93em; background: color-mix(in srgb, var(--fg) 4%, transparent); padding: 1px 4px; border-radius: var(--radius); }
 .chat-text li { margin: 2px 0; }
 .chat-text p { margin: 0 0 6px; }
-.chat-text pre.chat-code { background: rgba(0, 0, 0, 0.3); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 8px 10px; overflow-x: auto; font-family: var(--mono); font-size: 0.93em; margin: 6px 0; }
+.chat-text pre.chat-code { background: color-mix(in srgb, var(--fg) 6%, transparent); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 8px 10px; overflow-x: auto; font-family: var(--mono); font-size: 0.93em; margin: 6px 0; }
 .chat-text ul { margin: 4px 0 4px 18px; padding: 0; }
 .chat-thread { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
-.chat-title { font-size: var(--fs-body); font-weight: 600; color: var(--ink); }
+.chat-title { font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
 .chat-toggle-icon { font-family: var(--mono); }
-.chat-toggle.open { background: var(--ink-muted); }
+.chat-toggle.open { background: var(--muted); }
 .chat-turn { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: var(--radius); font-size: var(--fs-body); line-height: 1.55; }
 .cite-pop-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 4px; }
-.cite-pop-kind { font-size: var(--fs-micro, 10px); color: var(--accent, var(--link)); background: var(--accent-soft, var(--bg-elev, var(--panel))); border-radius: var(--radius, 6px); padding: 1px 6px; text-transform: uppercase; letter-spacing: 0.03em; }
-.cite-pop-label { display: block; font-weight: 600; color: var(--fg, var(--ink)); }
+.cite-pop-kind { font-size: var(--fs-micro, 10px); color: var(--accent); background: var(--accent-soft); border-radius: var(--radius, 6px); padding: 1px 6px; text-transform: uppercase; letter-spacing: 0.03em; }
+.cite-pop-label { display: block; font-weight: 600; color: var(--fg); }
 .cite-pop-meta { display: block; color: var(--muted); margin-top: 2px; }
 .cite-pop-per { font-size: var(--fs-caption, 12px); color: var(--muted); }
-.cite-pop-tick { font-weight: 600; color: var(--fg, var(--ink)); }
-.cite-pop-value { display: block; font-size: var(--fs-section, 14px); font-weight: 600; color: var(--fg, var(--ink)); margin-top: 3px; }
+.cite-pop-tick { font-weight: 600; color: var(--fg); }
+.cite-pop-value { display: block; font-size: var(--fs-section, 14px); font-weight: 600; color: var(--fg); margin-top: 3px; }
 .cite-pop-value-cap { display: block; font-size: var(--fs-micro, 10px); color: var(--muted); margin-top: 1px; }
 .cite-unverified { display: inline-block; font-size: var(--fs-micro, 10px); color: var(--warn); border: 1px dashed var(--warn); border-radius: var(--radius-full, 999px); padding: 1px 7px; cursor: default; }
-.cite-wrap .cite-badge { font-size: var(--fs-micro, 10px); line-height: 1; vertical-align: middle; color: var(--accent-contrast, var(--surface, var(--panel))); background: var(--accent, var(--link)); border-radius: var(--radius-full, 999px); padding: 1px 5px; margin-left: 3px; white-space: nowrap; }
-.cite-wrap .cite-mark { color: var(--link, var(--accent)); text-decoration: none; font-size: 0.8em; vertical-align: super; cursor: pointer; white-space: nowrap; }
-.cite-wrap .cite-pop { display: none; position: absolute; z-index: 60; bottom: calc(100% + 4px); left: 0; min-width: 170px; max-width: 260px; padding: 7px 9px; background: var(--surface, var(--bg-elev, var(--panel))); border: 1px solid var(--border, var(--hairline)); border-radius: var(--radius, 6px); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); font-size: var(--fs-caption, 12px); font-weight: 400; line-height: 1.45; white-space: normal; text-align: left; }
+.cite-wrap .cite-badge { font-size: var(--fs-micro, 10px); line-height: 1; vertical-align: middle; color: var(--accent-contrast); background: var(--accent); border-radius: var(--radius-full, 999px); padding: 1px 5px; margin-left: 3px; white-space: nowrap; }
+.cite-wrap .cite-mark { color: var(--accent); text-decoration: none; font-size: 0.8em; vertical-align: super; cursor: pointer; white-space: nowrap; }
+.cite-wrap .cite-pop { display: none; position: absolute; z-index: 60; bottom: calc(100% + 4px); left: 0; min-width: 170px; max-width: 260px; padding: 7px 9px; background: var(--surface); border: 1px solid var(--border, var(--hairline)); border-radius: var(--radius, 6px); box-shadow: var(--shadow-pop, 0 8px 24px rgba(0, 0, 0, 0.45)); font-size: var(--fs-caption, 12px); font-weight: 400; line-height: 1.45; white-space: normal; text-align: left; }
 .cite-wrap { position: relative; display: inline; }
 .cite-wrap:hover .cite-pop, .cite-wrap:focus-within .cite-pop { display: block; }
-.cmt-body { color: var(--ink); line-height: 1.5; white-space: pre-wrap; }
-.cmt-card { background: var(--panel-alt); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 10px; font-size: var(--fs-body); }
+.cmt-body { color: var(--fg); line-height: 1.5; white-space: pre-wrap; }
+.cmt-card { background: var(--paper); border: 1px solid var(--hairline); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 10px; font-size: var(--fs-body); }
 .cmt-card-head { display: flex; align-items: center; gap: 6px; font-size: var(--fs-micro); color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.04em; }
-.cmt-close { background: transparent; border: none; color: var(--ink-muted); font-size: 20px; line-height: 1; padding: 0 6px; cursor: pointer; }
-.cmt-close:hover { color: var(--ink); }
+.cmt-close { background: transparent; border: none; color: var(--muted); font-size: 20px; line-height: 1; padding: 0 6px; cursor: pointer; }
+.cmt-close:hover { color: var(--fg); }
 .cmt-empty { color: var(--muted); font-size: var(--fs-caption); padding: 8px 0; }
-.cmt-floater-btn { border-radius: var(--radius-full); box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35); }
+.cmt-floater-btn { border-radius: var(--radius-full); box-shadow: var(--shadow-pop); }
 .cmt-form select { flex: 1; font-size: var(--fs-caption); }
-.cmt-form { padding: 12px 14px; border-top: 1px solid var(--hairline); background: var(--bg, var(--panel)); }
+.cmt-form { padding: 12px 14px; border-top: 1px solid var(--hairline); background: var(--bg); }
 .cmt-form-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
-.cmt-intent { background: rgba(255, 255, 255, 0.05); padding: 1px 6px; border-radius: 3px; }
+.cmt-intent { background: color-mix(in srgb, var(--fg) 5%, transparent); padding: 1px 6px; border-radius: 3px; }
 .cmt-list { flex: 1; overflow-y: auto; padding: 12px 14px; }
-.cmt-pin { pointer-events: auto; display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; font-family: var(--mono); font-size: var(--fs-micro); font-weight: 600; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--hairline); border-radius: 10px; color: var(--ink-muted); cursor: pointer; opacity: 0.45; transition: opacity 0.15s, background 0.15s, border-color 0.15s; }
+.cmt-pin { pointer-events: auto; display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; font-family: var(--mono); font-size: var(--fs-micro); font-weight: 600; background: color-mix(in srgb, var(--fg) 4%, transparent); border: 1px solid var(--hairline); border-radius: 10px; color: var(--muted); cursor: pointer; opacity: 0.45; transition: opacity 0.15s, background 0.15s, border-color 0.15s; }
 .cmt-pin-host { position: absolute; top: 4px; right: 4px; pointer-events: none; z-index: 5; }
 .cmt-pin.all-addressed { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: color-mix(in srgb, var(--ok) 40%, transparent); color: var(--ok); opacity: 0.9; }
 .cmt-pin.has-open { background: color-mix(in srgb, var(--warn) 18%, transparent); border-color: color-mix(in srgb, var(--warn) 55%, transparent); color: var(--warn); opacity: 1; }
-.cmt-pin:hover { background: rgba(255, 255, 255, 0.1); border-color: var(--ink-muted); color: var(--ink); }
-.cmt-resolution { margin-top: 8px; padding: 8px 10px; background: color-mix(in srgb, var(--ok) 8%, transparent); border-left: 2px solid var(--ok); border-radius: 3px; font-size: var(--fs-caption); color: var(--ink-muted); }
+.cmt-pin:hover { background: color-mix(in srgb, var(--fg) 10%, transparent); border-color: var(--muted); color: var(--fg); }
+.cmt-resolution { margin-top: 8px; padding: 8px 10px; background: color-mix(in srgb, var(--ok) 8%, transparent); border-left: 2px solid var(--ok); border-radius: 3px; font-size: var(--fs-caption); color: var(--muted); }
 .cmt-role-assistant .cmt-thread-role { color: var(--accent); }
-.cmt-sidebar { /* True push-sidebar: flex sibling to .l1-root */ flex-shrink: 0; width: 0; height: 100vh; overflow: hidden; background: var(--bg-elev, var(--panel)); border-left: 0 solid var(--hairline); transition: width 0.2s ease, border-left-width 0s 0.2s; display: flex; flex-direction: column; position: sticky; top: 0; }
+.cmt-sidebar { /* True push-sidebar: flex sibling to .l1-root */ flex-shrink: 0; width: 0; height: 100vh; overflow: hidden; background: var(--surface); border-left: 0 solid var(--hairline); transition: width 0.2s ease, border-left-width 0s 0.2s; display: flex; flex-direction: column; position: sticky; top: 0; }
 .cmt-sidebar-head { display: flex; align-items: flex-start; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--hairline); }
 .cmt-sidebar-sub { font-size: var(--fs-caption); color: var(--muted); margin-top: 2px; font-family: var(--mono); }
-.cmt-sidebar-title { font-size: var(--fs-section); font-weight: 600; color: var(--ink); }
-.cmt-sidebar.open { width: 380px; border-left-width: 1px; transition: width 0.2s ease, border-left-width 0s; box-shadow: -4px 0 20px rgba(0, 0, 0, 0.35); }
+.cmt-sidebar-title { font-size: var(--fs-section); font-weight: 600; color: var(--fg); }
+.cmt-sidebar.open { width: 380px; border-left-width: 1px; transition: width 0.2s ease, border-left-width 0s; box-shadow: var(--shadow-pop); }
 .cmt-status { font-weight: 600; }
 .cmt-status-addressed { color: var(--ok); }
 .cmt-status-dismissed { color: var(--muted); }
 .cmt-status-open { color: var(--warn); }
 .cmt-thread { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--hairline); }
 .cmt-thread-role { font-family: var(--sans); color: var(--muted); width: 60px; flex-shrink: 0; }
-.cmt-thread-text { color: var(--ink); }
+.cmt-thread-text { color: var(--fg); }
 .cmt-thread-turn { display: flex; gap: 8px; padding: 4px 0; font-size: var(--fs-caption); }
 .cmt-time { margin-left: auto; font-family: var(--mono); }
 .comp-set-benchmark-row .k-well { display: inline-flex; align-items: center; gap: 6px; }
@@ -231,7 +231,6 @@
 .k-btn-primary:hover { filter: brightness(1.08); }
 .k-btn-quiet { border-color: var(--border); color: var(--muted); }
 .k-btn-quiet:hover { color: var(--fg); border-color: var(--border-2); }
-.k-btn-sm { font-size: var(--fs-caption); padding: 3px 9px; }
 .k-btn[disabled] { opacity: 0.5; cursor: default; pointer-events: none; }
 .k-chip-accent { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .k-chip-bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
@@ -302,7 +301,7 @@
 .l1-reread p { margin: 0; flex: 1; font-size: 13.5px; line-height: 1.55; color: var(--fg-soft); }
 .l1-thesis .thesis-label { font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent, var(--ok)); font-weight: 600; margin-right: 10px; }
 .l1-thesis p { margin: 0; font-size: 13.5px; line-height: 1.65; max-width: 1180px; color: var(--fg-soft); }
-.l1-thesis p { margin: 4px 0 0; font-family: var(--serif); font-size: 14px; line-height: 1.55; color: var(--ink); /* Override the 1180px cap from the earlier .l1-thesis p rule — the thesis paragraph should span the full available width of the workspace shell so dense theses don't break across short, awkward lines. */ max-width: none; }
+.l1-thesis p { margin: 4px 0 0; font-family: var(--serif); font-size: 14px; line-height: 1.55; color: var(--fg); /* Override the 1180px cap from the earlier .l1-thesis p rule — the thesis paragraph should span the full available width of the workspace shell so dense theses don't break across short, awkward lines. */ max-width: none; }
 .l1-thesis { display: flex; gap: 22px; padding: 18px var(--pad-x); border-bottom: 1px solid var(--border); background: var(--paper); }
 .lede { font-size: 15px; color: var(--fg-soft); margin: 0; line-height: 1.6; /* No max-width — the thesis lede should fill the tab's content area so dense, structured theses don't wrap at awkwardly narrow column widths. Originally capped at 760px for legibility on wide monitors; that turned out to be too narrow for theses that name multiple break rules + KPI tiers inline. The parent panel still provides outer padding. */ }
 .ledger-def { margin-top: 3px; font-weight: 400; white-space: normal; max-width: 300px; }
@@ -589,20 +588,20 @@
 .val-stat-label { font-size: var(--fs-micro); color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
 .val-stat-value { font-family: var(--mono); font-size: 24px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -0.015em; color: var(--fg); }
 .val-stat-value.mono-sm { font-size: 18px; }
-.valuation-band { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--ink-muted); }
-.valuation-band-row .mono { font-family: var(--mono); color: var(--ink); }
+.valuation-band { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--muted); }
+.valuation-band-row .mono { font-family: var(--mono); color: var(--fg); }
 .valuation-band-row { display: flex; gap: 6px; }
 .valuation-current { display: flex; flex-direction: column; gap: 2px; }
 .valuation-current-label { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
-.valuation-current-value { font-family: var(--mono); font-size: 36px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
+.valuation-current-value { font-family: var(--mono); font-size: 36px; font-weight: 600; letter-spacing: -0.02em; color: var(--fg); }
 .valuation-headline-row { display: flex; align-items: baseline; gap: 28px; padding: 8px 0 14px; border-bottom: 1px dashed var(--hairline); flex-wrap: wrap; }
 .valuation-peg { display: flex; flex-direction: column; gap: 2px; }
 .valuation-peg-label { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
-.valuation-peg-sub { font-size: var(--fs-caption); color: var(--ink-muted); font-family: var(--mono); }
-.valuation-peg-value { font-family: var(--mono); font-size: 22px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+.valuation-peg-sub { font-size: var(--fs-caption); color: var(--muted); font-family: var(--mono); }
+.valuation-peg-value { font-family: var(--mono); font-size: 22px; font-weight: 600; letter-spacing: -0.01em; color: var(--fg); }
 .valuation-spark { padding: 12px 0 4px; }
 .valuation-spark-axis { display: flex; justify-content: space-between; font-size: var(--fs-caption); color: var(--muted); padding-bottom: 6px; }
-.valuation-verdict { margin-left: auto; padding: 6px 10px; background: var(--panel-alt); border: 1px solid var(--hairline); border-radius: var(--radius); font-size: var(--fs-caption); color: var(--ink); font-style: italic; }
+.valuation-verdict { margin-left: auto; padding: 6px 10px; background: var(--paper); border: 1px solid var(--hairline); border-radius: var(--radius); font-size: var(--fs-caption); color: var(--fg); font-style: italic; }
 .ws-kbd-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-pop); padding: 18px 22px; min-width: 280px; }
 .ws-kbd-help.is-open { display: flex; }
 .ws-kbd-hint { margin-top: 12px; font-size: var(--fs-micro); color: var(--muted); }
@@ -629,7 +628,7 @@
 /* ---- status/score pills: ONE filled badge — a soft status fill + token ink (design_language §3). This is the canonical replacement for the per-panel raw-hex pill systems (.ev-score-*, .badge.b-*, the calib/cockpit/memo tone pairs): a status pill never freehands a background/foreground hex pair. ---- */ .k-pill { display: inline-flex; align-items: center; gap: 4px; padding: 1px 9px; border-radius: var(--radius-full); font-size: var(--fs-caption); font-weight: 600; line-height: 1.5; white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--paper); color: var(--fg-soft); }
 /* ---- the canonical ticker label: mono symbol + muted truncated name ---- */ .k-tick { display: inline-flex; align-items: baseline; gap: 7px; min-width: 0; max-width: 100%; }
 /* .lens-warn / .lens-stale migrated to the control kit's .k-pill (+ k-pill-warn for DIRTY; neutral bare for STALE) — see workspace_sections/synthesis.py. */ .lens-five_min_reread .lens-body h2 { color: var(--accent); font-size: 16px; margin-top: 1em; }
-/* ============================================================ "What changed" hoist (five_min_reread lens lede) ============================================================ */ /* Mirrors .l1-thesis's card treatment (same inset, same density) with a distinct accent so the two ledes read as separate registers — the thesis is the standing read, this is the latest delta. */ .l1-reread { display: flex; gap: 22px; align-items: baseline; margin: 0 var(--pad-x) 8px; padding: 12px 16px; background: var(--panel); border-left: 3px solid var(--warn); border-radius: var(--radius); }
+/* ============================================================ "What changed" hoist (five_min_reread lens lede) ============================================================ */ /* Mirrors .l1-thesis's card treatment (same inset, same density) with a distinct accent so the two ledes read as separate registers — the thesis is the standing read, this is the latest delta. */ .l1-reread { display: flex; gap: 22px; align-items: baseline; margin: 0 var(--pad-x) 8px; padding: 12px 16px; background: var(--surface); border-left: 3px solid var(--warn); border-radius: var(--radius); }
 /* ============================================================ Chat drawer ============================================================ */ .chat-drawer { position: fixed; bottom: 16px; right: calc(var(--sidebar-open-width, 0px) + 16px); z-index: 95; transition: right 0.2s ease; }
 /* ============================================================ Company tab ============================================================ */ .elevator-block { border: 1px solid var(--border-2); background: linear-gradient(180deg, var(--paper), var(--surface)); padding: 22px 26px; border-radius: var(--radius); font-family: var(--serif); font-size: 17px; line-height: 1.55; color: var(--fg); }
 /* ============================================================ Cross-quarter themes — prepared remarks vs Q&A rollup (§5 split) ============================================================ */ .theme-bucket { margin-top: 14px; }
@@ -648,9 +647,9 @@
 /* ============================================================ Sources tab ============================================================ */ /* Coverage matrix modifiers on .tbl: mono cells + centered dot columns. */ .coverage-table th.cov-cell { text-align: center; }
 /* ============================================================ Synthesis tab — lens artifact panels ============================================================ */ .lens-panel { margin-bottom: 16px; }
 /* ============================================================ Tabs ============================================================ */ .l1-tabs-wrap { padding: var(--section-gap) var(--pad-x) 0; }
-/* ============================================================ Thesis lede prominence (top of report, below identity) ============================================================ */ .l1-thesis { /* Align side margins to the shell's standard inset so the thesis card spans the full content width (matched edges with the KPI strip / tabs below it) instead of inset further. */ margin: 0 var(--pad-x) 8px; padding: 12px 16px; background: var(--panel); border-left: 3px solid var(--accent, var(--ok)); border-radius: var(--radius); }
+/* ============================================================ Thesis lede prominence (top of report, below identity) ============================================================ */ .l1-thesis { /* Align side margins to the shell's standard inset so the thesis card spans the full content width (matched edges with the KPI strip / tabs below it) instead of inset further. */ margin: 0 var(--pad-x) 8px; padding: 12px 16px; background: var(--surface); border-left: 3px solid var(--accent, var(--ok)); border-radius: var(--radius); }
 /* ============================================================ Thesis tab: hygiene panels + ledger collapsible + underweighted ============================================================ */ .grid-thesis-hygiene { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--gap); }
-/* ============================================================ Tokens — shared palette (single source: src/ui/tokens.py) + the shared control kit (src/ui/controls.py) + workspace-local layout/density tokens. 3 themes (paper · white · dark) · 2 densities. ============================================================ */ :root { --bg: #fafaf7; --surface: #ffffff; --paper: #f4f3ef; --fg: #0c0d10; --fg-soft: #2a2c33; --muted: #6c6f78; --muted-2: #9a9da6; --border: #e4e3dd; --border-2: #d1cfc7; --hairline: #ecebe5; --accent: #1d4ed8; --accent-soft: #eef2ff; --accent-contrast: #ffffff; --ok: #15803d; --warn: #b97c00; --bad: #b91c1c; --pos: #15803d; --neg: #b91c1c; --neu: #6c6f78; --seg-1: #0c0d10; --seg-2: #43464e; --seg-3: #7a7d86; --seg-4: #b6b8be; --seg-5: #dcdcd7; --tone-pos: #eef2ff; --tone-neu: #f4f3ef; --tone-opt: #fff8e6; --tone-neg: #fdf2f2; --shadow-pop: 0 12px 32px rgba(15, 15, 20, 0.18); --scrim: rgba(0, 0, 0, 0.5); --sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif; --serif: 'Source Serif 4', 'Source Serif Pro', Georgia, serif; --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; --fs-display: 22px; --fs-title: 16px; --fs-section: 14px; --fs-body: 13px; --fs-caption: 11.5px; --fs-micro: 10px; --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px; --radius: 8px; --radius-full: 999px; --transition: 150ms ease; }
+/* ============================================================ Tokens — shared palette (single source: src/ui/tokens.py) + the shared control kit (src/ui/controls.py) + workspace-local layout/density tokens. 3 themes (paper · white · dark) · 2 densities. ============================================================ */ :root { --bg: #fafaf7; --surface: #ffffff; --paper: #f4f3ef; --fg: #0c0d10; --fg-soft: #2a2c33; --muted: #6c6f78; --muted-2: #70737a; --border: #e4e3dd; --border-2: #d1cfc7; --hairline: #ecebe5; --accent: #1d4ed8; --accent-soft: #eef2ff; --accent-contrast: #ffffff; --ok: #15803d; --warn: #b97c00; --bad: #b91c1c; --pos: #15803d; --neg: #b91c1c; --neu: #6c6f78; --seg-1: #0c0d10; --seg-2: #43464e; --seg-3: #7a7d86; --seg-4: #b6b8be; --seg-5: #dcdcd7; --tone-pos: #eef2ff; --tone-neu: #f4f3ef; --tone-opt: #fff8e6; --tone-neg: #fdf2f2; --shadow-pop: 0 12px 32px rgba(15, 15, 20, 0.18); --scrim: rgba(0, 0, 0, 0.5); --sans: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif; --serif: 'Source Serif 4', 'Source Serif Pro', Georgia, serif; --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; --fs-display: 22px; --fs-title: 16px; --fs-section: 14px; --fs-body: 13px; --fs-caption: 11.5px; --fs-micro: 10px; --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 24px; --sp-6: 32px; --radius: 8px; --radius-full: 999px; --transition: 150ms ease; }
 /* ============================================================ Tweaks panel ============================================================ */ .twk-toggle-btn { appearance: none; border: 1px solid var(--border); background: var(--surface); width: 30px; height: 30px; border-radius: var(--radius); cursor: pointer; color: var(--fg-soft); font-size: 14px; }
 /* ============================================================ Valuation tab ============================================================ */ .valuation-headline { padding: 14px 16px; }
 /* ============================================================ Workspace shell ============================================================ */ .l1-root { flex: 1; min-width: 0; height: 100vh; height: 100dvh; overflow-y: auto; background: var(--bg); color: var(--fg); font-family: var(--sans); display: flex; flex-direction: column; padding-bottom: 32px; }
@@ -685,7 +684,7 @@
 /* Pillbox warn variant — used by the Validation panel chip. */ .pill-warn-cell { color: var(--warn); }
 /* Position tab — decision brief link + outcome notes block. */ .decision-brief-link { font-size: var(--fs-caption); color: var(--accent); text-decoration: none; font-family: var(--mono); padding: 1px 6px; border: 1px solid var(--accent); border-radius: var(--radius-full); }
 /* Preview/Apply are the kit's quiet small buttons (.k-btn.k-btn-quiet.k-btn-sm, added in the JS markup); this rule keeps only the row layout + the Apply button's ok-tint affordance (a positive-action hint, token-routed). */ .chat-diff-actions { display: flex; gap: 6px; margin-top: 6px; }
-/* Push-sidebar — flex sibling to .l1-root, mirrors .cmt-sidebar so chat slides the document aside instead of floating over it. The floating .chat-drawer above keeps only the launcher toggle. Width matches CHAT_WIDTH in the JS so the toggle rides the sidebar's left edge. */ .chat-sidebar { flex-shrink: 0; width: 0; height: 100vh; overflow: hidden; background: var(--bg-elev, var(--panel)); border-left: 0 solid var(--hairline); transition: width 0.2s ease, border-left-width 0s 0.2s; display: flex; flex-direction: column; position: sticky; top: 0; }
+/* Push-sidebar — flex sibling to .l1-root, mirrors .cmt-sidebar so chat slides the document aside instead of floating over it. The floating .chat-drawer above keeps only the launcher toggle. Width matches CHAT_WIDTH in the JS so the toggle rides the sidebar's left edge. */ .chat-sidebar { flex-shrink: 0; width: 0; height: 100vh; overflow: hidden; background: var(--surface); border-left: 0 solid var(--hairline); transition: width 0.2s ease, border-left-width 0s 0.2s; display: flex; flex-direction: column; position: sticky; top: 0; }
 /* Q&A rows: <details class="qa-row"> per question (P4.1 — the canonical <details> collapse idiom; the +/- chevron is CSS-driven). */ .qa-list { display: flex; flex-direction: column; }
 /* S2 PR3: unresolved validation issues + derived-from input rows. */ .src-pop-warn { color: var(--warn); }
 /* S6 — Bear · Base · Bull scenario range on the valuation card */ .scenario-range { display: flex; border-bottom: 1px solid var(--hairline); }
@@ -695,19 +694,20 @@
 /* Textarea/select: skinned by the shared control kit (ui/controls.py). */ .cmt-form textarea { width: 100%; box-sizing: border-box; resize: vertical; }
 /* The Post submit + Save-to-journal buttons are the kit's .k-btn primary/quiet (added in the boot.py markup) — no freehand button skin here. */ .cmt-form-hint { font-size: var(--fs-caption); color: var(--muted); margin-top: 6px; min-height: 14px; }
 /* The Send submit button is the kit's .k-btn.k-btn-primary (added in the boot.py markup) — no freehand button skin here. */ .dcf-edit { margin-top: var(--sp-3); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--sp-3); background: var(--surface); }
-/* The launcher is the kit's primary button (.k-btn.k-btn-primary, added in the boot.py markup); only the pill radius, larger launcher padding, and the floating drop shadow are surface-specific. */ .chat-toggle { padding: 8px 14px; border-radius: var(--radius-full); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); }
+/* The launcher is the kit's primary button (.k-btn.k-btn-primary, added in the boot.py markup); only the pill radius, larger launcher padding, and the floating drop shadow are surface-specific. */ .chat-toggle { padding: 8px 14px; border-radius: var(--radius-full); box-shadow: var(--shadow-pop); }
 /* The outcome chip now rides the control kit's .k-pill (shape + tone fill); this selector adds only its uppercase-micro typographic refinement. Tone is routed in Python (_OUTCOME_PILL_TONE in workspace_sections/thesis_risk.py): correct -> k-pill-ok, wrong -> k-pill-bad, mixed -> k-pill-warn, pending/unfalsifiable -> neutral bare .k-pill. */ .decision-badge .decision-outcome { font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; }
 /* The report's parallel .pill / .pill-ok/-neutral/-warn/-bad/-muted badge system was removed (2026-06-14): an outline mono micro chip that duplicated the kit. Every consumer migrated to .k-chip.k-chip-mono (+ k-chip-ok/-warn/ -bad tones) from src/ui/controls.py. (.pill-warn-cell further below is a separate table-cell text color, not part of that system, and stays.) */ /* P3.3 per-number source chips: <details class="src-pop"> wrapping a tiny tier-colored <summary class="src-chip"> badge; the open panel is an absolutely-positioned popover with the document identity + source link. */ .src-pop { display: inline-block; position: relative; vertical-align: baseline; }
 /* Thesis */ .val-stack { display: flex; flex-direction: column; }
 /* UX9 grouped tabs: the top bar swaps .tab-group-pane wrappers; inside a multi-section group a slim pill row swaps the section panes. Section panes stay .tab-pane (display + print + comment-anchor scoping reuse the rules above). */ .tab-group-pane { display: none; }
 /* Wave 5: a captured report value injected into a driver flashes; the report's "-> DCF" affordance is a quiet accent micro-button. */ .dcf-edit-field input.dcf-injected { outline: 2px solid var(--accent); outline-offset: 1px; background: color-mix(in srgb, var(--accent) 12%, transparent); }
-/* When a [n] marker sits right after a financial value, the value itself gets the accent-tinted "this is cited" wash and the marker becomes a small round badge. Accent (interactive), NOT green — green = a positive number here. */ .cite-wrap .cite-val { background: color-mix(in srgb, var(--accent, var(--link)) 14%, transparent); border-radius: var(--radius, 6px); padding: 0 3px; }
+/* When a [n] marker sits right after a financial value, the value itself gets the accent-tinted "this is cited" wash and the marker becomes a small round badge. Accent (interactive), NOT green — green = a positive number here. */ .cite-wrap .cite-val { background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: var(--radius, 6px); padding: 0 3px; }
 /* drill-down drawer (generalizes the evals failed-case drawer): a <details> whose summary toggles the body; per-case rows nest inside. */ .k-prov-drawer { margin: var(--sp-1) 0; }
 /* inline action: a small quiet control (resolve/refresh/diagnose) or a /source deep-link, radius-full like a chip. */ .k-prov-act { font: inherit; font-size: var(--fs-caption); font-weight: 600; color: var(--accent); background: transparent; border: 1px solid var(--border); border-radius: var(--radius-full); padding: 1px 10px; cursor: pointer; text-decoration: none; white-space: nowrap; transition: border-color var(--transition), color var(--transition); }
+/* min-height 24px (UX audit 2026-07-18): the WCAG/repo hit-target floor — fs-caption + the old 3px padding measured ~23px, just under it. */ .k-btn-sm { font-size: var(--fs-caption); padding: 3px 9px; min-height: 24px; }
 /* severity tick: a tone dot + uppercase label. THE one place halt/warn/grey is decided (prov_severity_tone) — an unknown severity degrades to a muted tick, never the wrong color. */ .k-prov-tick { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; color: var(--muted); }
 /* §3.5 signal cards — severity via token-backed classes (P6.1; these previously carried hardcoded inline rgba colors + a literal font stack). */ .signal-card { border: 1px solid var(--hairline); border-left: 3px solid var(--hairline); border-radius: var(--radius); padding: 10px 12px; font-size: 12.5px; }
 ::placeholder { color: var(--muted-2); opacity: 1; }
-:root { --pad-x: 28px; --pad-y: 18px; --panel-pad-x: 18px; --panel-pad-y: 14px; --row-pad-y: 11px; --gap: 18px; --gap-lg: 24px; --section-gap: 28px; --kpi-pad: 22px; --table-pad-y: 10px; /* Aliases used by chat/comments modules */ --bg-elev: var(--surface); --panel: var(--surface); --panel-alt: var(--paper); --ink: var(--fg); --ink-muted: var(--muted); }
+:root { --pad-x: 28px; --pad-y: 18px; --panel-pad-x: 18px; --panel-pad-y: 14px; --row-pad-y: 11px; --gap: 18px; --gap-lg: 24px; --section-gap: 28px; --kpi-pad: 22px; --table-pad-y: 10px; }
 :root { color-scheme: light; --k-chevron: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M4 6l4 4 4-4%22 stroke=%22%236c6f78%22 stroke-width=%221.6%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E'); }
 :root[data-density="compact"] { --pad-x: 22px; --pad-y: 13px; --panel-pad-x: 14px; --panel-pad-y: 10px; --row-pad-y: 7px; --gap: 12px; --gap-lg: 16px; --section-gap: 20px; --kpi-pad: 16px; --table-pad-y: 6.5px; }
 :root[data-theme="dark"] .cv2-matrix th, :root[data-theme="dark"] .cv2-matrix td { border-color: var(--border) !important; }
@@ -716,7 +716,7 @@
 :root[data-theme="dark"] .cv2-matrix-label, :root[data-theme="dark"] .cv2-matrix-q, :root[data-theme="dark"] .cv2-matrix-cagr { color: var(--fg) !important; background: var(--paper) !important; }
 :root[data-theme="dark"] .cv2-matrix-noisy { color: var(--muted-2) !important; background: var(--paper) !important; }
 :root[data-theme="dark"] .cv2-matrix-title { color: var(--fg); }
-:root[data-theme="dark"] { --bg: #0c0d10; --surface: #14161b; --paper: #1a1d23; --fg: #f4f3ef; --fg-soft: #d5d6d2; --muted: #888b94; --muted-2: #5b5e66; --border: #2a2d35; --border-2: #383b44; --hairline: #1f2127; --accent: #8aa8ff; --accent-soft: #1c2138; --accent-contrast: #0c0d10; --ok: #4ade80; --warn: #f5c66a; --bad: #f08a8a; --pos: #4ade80; --neg: #f08a8a; --neu: #888b94; --seg-1: #f4f3ef; --seg-2: #b6b8be; --seg-3: #7a7d86; --seg-4: #43464e; --seg-5: #25282f; --tone-pos: #1a2238; --tone-neu: #1a1d23; --tone-opt: #2b2418; --tone-neg: #2b1a1a; --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.45); --scrim: rgba(0, 0, 0, 0.5); }
+:root[data-theme="dark"] { --bg: #0c0d10; --surface: #14161b; --paper: #1a1d23; --fg: #f4f3ef; --fg-soft: #d5d6d2; --muted: #888b94; --muted-2: #7d8089; --border: #2a2d35; --border-2: #383b44; --hairline: #1f2127; --accent: #8aa8ff; --accent-soft: #1c2138; --accent-contrast: #0c0d10; --ok: #4ade80; --warn: #f5c66a; --bad: #f08a8a; --pos: #4ade80; --neg: #f08a8a; --neu: #888b94; --seg-1: #f4f3ef; --seg-2: #b6b8be; --seg-3: #7a7d86; --seg-4: #43464e; --seg-5: #25282f; --tone-pos: #1a2238; --tone-neu: #1a1d23; --tone-opt: #2b2418; --tone-neg: #2b1a1a; --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.45); --scrim: rgba(0, 0, 0, 0.5); }
 :root[data-theme="dark"] { color-scheme: dark; --k-chevron: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M4 6l4 4 4-4%22 stroke=%22%23888b94%22 stroke-width=%221.6%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E'); }
 :root[data-theme="white"] { --bg: #ffffff; --paper: #fafaf7; --hairline: #efeeea; }
 @keyframes k-overlay-fade { from { opacity: 0; } to { opacity: 1; } }

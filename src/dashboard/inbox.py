@@ -49,6 +49,7 @@ from dashboard.inbox_rank import (
     ADVISOR_MEMO_TITLE,
     CATEGORY_LABELS,
     CATEGORY_ORDER,
+    CATEGORY_THESIS,
     SEMANTIC_ADVISOR_MEMO,
     annotate_and_rank,
     decisive_alert_reason,
@@ -616,8 +617,17 @@ def _render_item(
             f'data-peek-ticker="{_esc(it.ticker)}">{_esc(it.ticker)}</a>'
         )
     why_attr = f' title="ranked: {_esc(it.score_why)}"' if it.score_why else ""
+    # The kind label is a kit chip (controls.py .k-chip), not bare text — four
+    # visually-identical kinds (earnings tone / thesis update / prep-note /
+    # KPI inflection) were unreadable at a glance without the chip boundary.
+    # Tone stays restrained: only CATEGORY_THESIS gets -warn, matching the
+    # warn semantics thesis-status pills already carry elsewhere; every other
+    # category is the plain (untoned) chip — accent is reserved for
+    # interactive/unread state (design_language §2), not a category palette.
+    kind_tone = " k-chip-warn" if it.category == CATEGORY_THESIS else ""
     out.write(
-        f'<span class="ix-kind ix-kind-{_esc(it.kind)}"{why_attr}>{_esc(_chip_label(it))}</span>'
+        f'<span class="ix-kind ix-kind-{_esc(it.kind)} k-chip{kind_tone}"{why_attr}>'
+        f"{_esc(_chip_label(it))}</span>"
     )
     if decisive:
         # The kit outline chip in bad tone — the same red the cockpit's
@@ -1049,8 +1059,8 @@ INBOX_CSS = """
 .ix-ticker { font-family: var(--mono); font-weight: 600; font-size: var(--fs-caption);
   color: var(--fg); text-decoration: none; }
 .ix-ticker:hover { color: var(--accent); }
-.ix-kind { font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.05em; color: var(--muted); }
+/* Kind label = the kit .k-chip (controls.py); .ix-kind carries no local
+   shape/color of its own now, only the "why ranked" help-cursor below. */
 /* Status badge = the kit .k-pill (controls.py §3); .ix-status is now only the
    JS hook INBOX_JS swaps the tone on — no local skin. */
 .ix-when { margin-left: auto; color: var(--muted); font-size: var(--fs-micro);

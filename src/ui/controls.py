@@ -145,7 +145,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .k-btn-danger { border-color: transparent; color: var(--bad); }
 .k-btn-danger:hover { border-color: var(--bad); }
 .k-btn[disabled] { opacity: 0.5; cursor: default; pointer-events: none; }
-.k-btn-sm { font-size: var(--fs-caption); padding: 3px 9px; }
+/* min-height 24px (UX audit 2026-07-18): the WCAG/repo hit-target floor —
+   fs-caption + the old 3px padding measured ~23px, just under it. */
+.k-btn-sm { font-size: var(--fs-caption); padding: 3px 9px; min-height: 24px; }
 
 /* ---- chips: ONE badge shape (radius-full · micro · uppercase) ---- */
 .k-chip {

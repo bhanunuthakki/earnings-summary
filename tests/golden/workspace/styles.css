@@ -12,7 +12,7 @@
   --fg: #0c0d10;
   --fg-soft: #2a2c33;
   --muted: #6c6f78;
-  --muted-2: #9a9da6;
+  --muted-2: #70737a;
   --border: #e4e3dd;
   --border-2: #d1cfc7;
   --hairline: #ecebe5;
@@ -69,7 +69,7 @@
   --fg: #f4f3ef;
   --fg-soft: #d5d6d2;
   --muted: #888b94;
-  --muted-2: #5b5e66;
+  --muted-2: #7d8089;
   --border: #2a2d35;
   --border-2: #383b44;
   --hairline: #1f2127;
@@ -138,7 +138,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .k-btn-danger { border-color: transparent; color: var(--bad); }
 .k-btn-danger:hover { border-color: var(--bad); }
 .k-btn[disabled] { opacity: 0.5; cursor: default; pointer-events: none; }
-.k-btn-sm { font-size: var(--fs-caption); padding: 3px 9px; }
+/* min-height 24px (UX audit 2026-07-18): the WCAG/repo hit-target floor —
+   fs-caption + the old 3px padding measured ~23px, just under it. */
+.k-btn-sm { font-size: var(--fs-caption); padding: 3px 9px; min-height: 24px; }
 
 /* ---- chips: ONE badge shape (radius-full · micro · uppercase) ---- */
 .k-chip {
@@ -376,13 +378,6 @@ a.k-tick-sym:hover { color: var(--accent); }
   --section-gap: 28px;
   --kpi-pad: 22px;
   --table-pad-y: 10px;
-
-  /* Aliases used by chat/comments modules */
-  --bg-elev: var(--surface);
-  --panel: var(--surface);
-  --panel-alt: var(--paper);
-  --ink: var(--fg);
-  --ink-muted: var(--muted);
 }
 
 :root[data-density="compact"] {
@@ -1661,23 +1656,23 @@ a.peer:hover { background: var(--paper); }
 .valuation-current { display: flex; flex-direction: column; gap: 2px; }
 .valuation-current-value {
   font-family: var(--mono); font-size: 36px; font-weight: 600;
-  letter-spacing: -0.02em; color: var(--ink);
+  letter-spacing: -0.02em; color: var(--fg);
 }
 .valuation-current-label { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
-.valuation-band { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--ink-muted); }
+.valuation-band { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--muted); }
 .valuation-band-row { display: flex; gap: 6px; }
-.valuation-band-row .mono { font-family: var(--mono); color: var(--ink); }
+.valuation-band-row .mono { font-family: var(--mono); color: var(--fg); }
 .valuation-peg { display: flex; flex-direction: column; gap: 2px; }
 .valuation-peg-value {
   font-family: var(--mono); font-size: 22px; font-weight: 600;
-  letter-spacing: -0.01em; color: var(--ink);
+  letter-spacing: -0.01em; color: var(--fg);
 }
 .valuation-peg-label { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
-.valuation-peg-sub { font-size: var(--fs-caption); color: var(--ink-muted); font-family: var(--mono); }
+.valuation-peg-sub { font-size: var(--fs-caption); color: var(--muted); font-family: var(--mono); }
 .valuation-verdict {
   margin-left: auto; padding: 6px 10px;
-  background: var(--panel-alt); border: 1px solid var(--hairline); border-radius: var(--radius);
-  font-size: var(--fs-caption); color: var(--ink); font-style: italic;
+  background: var(--paper); border: 1px solid var(--hairline); border-radius: var(--radius);
+  font-size: var(--fs-caption); color: var(--fg); font-style: italic;
 }
 .valuation-spark { padding: 12px 0 4px; }
 .valuation-spark-axis {
@@ -1694,7 +1689,7 @@ a.peer:hover { background: var(--paper); }
      below it) instead of inset further. */
   margin: 0 var(--pad-x) 8px;
   padding: 12px 16px;
-  background: var(--panel);
+  background: var(--surface);
   border-left: 3px solid var(--accent, var(--ok));
   border-radius: var(--radius);
 }
@@ -1704,7 +1699,7 @@ a.peer:hover { background: var(--paper); }
 }
 .l1-thesis p {
   margin: 4px 0 0; font-family: var(--serif);
-  font-size: 14px; line-height: 1.55; color: var(--ink);
+  font-size: 14px; line-height: 1.55; color: var(--fg);
   /* Override the 1180px cap from the earlier .l1-thesis p rule — the thesis
      paragraph should span the full available width of the workspace shell
      so dense theses don't break across short, awkward lines. */
@@ -1721,7 +1716,7 @@ a.peer:hover { background: var(--paper); }
   display: flex; gap: 22px; align-items: baseline;
   margin: 0 var(--pad-x) 8px;
   padding: 12px 16px;
-  background: var(--panel);
+  background: var(--surface);
   border-left: 3px solid var(--warn);
   border-radius: var(--radius);
 }
@@ -2057,14 +2052,14 @@ ul.flag-list li.flag-positive {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 20px; height: 20px; padding: 0 6px;
   font-family: var(--mono); font-size: var(--fs-micro); font-weight: 600;
-  background: rgba(255, 255, 255, 0.04);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
   border: 1px solid var(--hairline);
   border-radius: 10px;
-  color: var(--ink-muted); cursor: pointer; opacity: 0.45;
+  color: var(--muted); cursor: pointer; opacity: 0.45;
   transition: opacity 0.15s, background 0.15s, border-color 0.15s;
 }
 [data-commentable="true"]:hover .cmt-pin { opacity: 1; }
-.cmt-pin:hover { background: rgba(255, 255, 255, 0.1); border-color: var(--ink-muted); color: var(--ink); }
+.cmt-pin:hover { background: color-mix(in srgb, var(--fg) 10%, transparent); border-color: var(--muted); color: var(--fg); }
 .cmt-pin.has-open { background: color-mix(in srgb, var(--warn) 18%, transparent); border-color: color-mix(in srgb, var(--warn) 55%, transparent); color: var(--warn); opacity: 1; }
 .cmt-pin.all-addressed { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: color-mix(in srgb, var(--ok) 40%, transparent); color: var(--ok); opacity: 0.9; }
 
@@ -2074,7 +2069,7 @@ ul.flag-list li.flag-positive {
   width: 0;
   height: 100vh;
   overflow: hidden;
-  background: var(--bg-elev, var(--panel));
+  background: var(--surface);
   border-left: 0 solid var(--hairline);
   transition: width 0.2s ease, border-left-width 0s 0.2s;
   display: flex; flex-direction: column;
@@ -2084,22 +2079,22 @@ ul.flag-list li.flag-positive {
   width: 380px;
   border-left-width: 1px;
   transition: width 0.2s ease, border-left-width 0s;
-  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-pop);
 }
 .cmt-sidebar-head {
   display: flex; align-items: flex-start; justify-content: space-between;
   padding: 14px 16px; border-bottom: 1px solid var(--hairline);
 }
-.cmt-sidebar-title { font-size: var(--fs-section); font-weight: 600; color: var(--ink); }
+.cmt-sidebar-title { font-size: var(--fs-section); font-weight: 600; color: var(--fg); }
 .cmt-sidebar-sub {
   font-size: var(--fs-caption); color: var(--muted); margin-top: 2px;
   font-family: var(--mono);
 }
 .cmt-close {
-  background: transparent; border: none; color: var(--ink-muted);
+  background: transparent; border: none; color: var(--muted);
   font-size: 20px; line-height: 1; padding: 0 6px; cursor: pointer;
 }
-.cmt-close:hover { color: var(--ink); }
+.cmt-close:hover { color: var(--fg); }
 
 /* Outbox status badge — shown in the sidebar header when the local queue is
    non-empty. Rides the control kit's .k-pill (k-pill-warn = "pending recovery",
@@ -2139,7 +2134,7 @@ ul.flag-list li.flag-positive {
 .cmt-list { flex: 1; overflow-y: auto; padding: 12px 14px; }
 .cmt-empty { color: var(--muted); font-size: var(--fs-caption); padding: 8px 0; }
 .cmt-card {
-  background: var(--panel-alt);
+  background: var(--paper);
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
   padding: 10px 12px;
@@ -2156,24 +2151,24 @@ ul.flag-list li.flag-positive {
 .cmt-status-open { color: var(--warn); }
 .cmt-status-addressed { color: var(--ok); }
 .cmt-status-dismissed { color: var(--muted); }
-.cmt-intent { background: rgba(255, 255, 255, 0.05); padding: 1px 6px; border-radius: 3px; }
+.cmt-intent { background: color-mix(in srgb, var(--fg) 5%, transparent); padding: 1px 6px; border-radius: 3px; }
 .cmt-time { margin-left: auto; font-family: var(--mono); }
-.cmt-body { color: var(--ink); line-height: 1.5; white-space: pre-wrap; }
+.cmt-body { color: var(--fg); line-height: 1.5; white-space: pre-wrap; }
 .cmt-resolution {
   margin-top: 8px; padding: 8px 10px;
   background: color-mix(in srgb, var(--ok) 8%, transparent); border-left: 2px solid var(--ok);
-  border-radius: 3px; font-size: var(--fs-caption); color: var(--ink-muted);
+  border-radius: 3px; font-size: var(--fs-caption); color: var(--muted);
 }
 .cmt-thread { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--hairline); }
 .cmt-thread-turn { display: flex; gap: 8px; padding: 4px 0; font-size: var(--fs-caption); }
 .cmt-thread-role { font-family: var(--sans); color: var(--muted); width: 60px; flex-shrink: 0; }
-.cmt-thread-text { color: var(--ink); }
+.cmt-thread-text { color: var(--fg); }
 .cmt-role-assistant .cmt-thread-role { color: var(--accent); }
 /* Action buttons are the kit's quiet small button (.k-btn.k-btn-quiet.k-btn-sm,
    added in the JS markup); this layout-only rule keeps the row spacing. */
 .cmt-actions { margin-top: 8px; display: flex; gap: 6px; }
 
-.cmt-form { padding: 12px 14px; border-top: 1px solid var(--hairline); background: var(--bg, var(--panel)); }
+.cmt-form { padding: 12px 14px; border-top: 1px solid var(--hairline); background: var(--bg); }
 /* Textarea/select: skinned by the shared control kit (ui/controls.py). */
 .cmt-form textarea { width: 100%; box-sizing: border-box; resize: vertical; }
 .cmt-form-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
@@ -2189,7 +2184,7 @@ ul.flag-list li.flag-positive {
 .cmt-floater { position: absolute; z-index: 110; pointer-events: auto; }
 .cmt-floater-btn {
   border-radius: var(--radius-full);
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-pop);
 }
 
 /* Free-text highlight (the underlined excerpt the user commented on). Open =
@@ -2214,50 +2209,50 @@ mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24
 
 .cite-wrap { position: relative; display: inline; }
 .cite-wrap .cite-mark {
-  color: var(--link, var(--accent)); text-decoration: none;
+  color: var(--accent); text-decoration: none;
   font-size: 0.8em; vertical-align: super; cursor: pointer; white-space: nowrap;
 }
 /* When a [n] marker sits right after a financial value, the value itself gets
    the accent-tinted "this is cited" wash and the marker becomes a small round
    badge. Accent (interactive), NOT green — green = a positive number here. */
 .cite-wrap .cite-val {
-  background: color-mix(in srgb, var(--accent, var(--link)) 14%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   border-radius: var(--radius, 6px); padding: 0 3px;
 }
 .cite-wrap .cite-badge {
   font-size: var(--fs-micro, 10px); line-height: 1; vertical-align: middle;
-  color: var(--accent-contrast, var(--surface, var(--panel)));
-  background: var(--accent, var(--link)); border-radius: var(--radius-full, 999px);
+  color: var(--accent-contrast);
+  background: var(--accent); border-radius: var(--radius-full, 999px);
   padding: 1px 5px; margin-left: 3px; white-space: nowrap;
 }
 .cite-wrap .cite-pop {
   display: none; position: absolute; z-index: 60;
   bottom: calc(100% + 4px); left: 0;
   min-width: 170px; max-width: 260px; padding: 7px 9px;
-  background: var(--surface, var(--bg-elev, var(--panel)));
+  background: var(--surface);
   border: 1px solid var(--border, var(--hairline));
   border-radius: var(--radius, 6px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-pop, 0 8px 24px rgba(0, 0, 0, 0.45));
   font-size: var(--fs-caption, 12px); font-weight: 400; line-height: 1.45;
   white-space: normal; text-align: left;
 }
 .cite-wrap:hover .cite-pop, .cite-wrap:focus-within .cite-pop { display: block; }
-.cite-pop-label { display: block; font-weight: 600; color: var(--fg, var(--ink)); }
+.cite-pop-label { display: block; font-weight: 600; color: var(--fg); }
 .cite-pop-meta { display: block; color: var(--muted); margin-top: 2px; }
 .cite-pop-head {
   display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 4px;
 }
-.cite-pop-tick { font-weight: 600; color: var(--fg, var(--ink)); }
+.cite-pop-tick { font-weight: 600; color: var(--fg); }
 .cite-pop-kind {
-  font-size: var(--fs-micro, 10px); color: var(--accent, var(--link));
-  background: var(--accent-soft, var(--bg-elev, var(--panel)));
+  font-size: var(--fs-micro, 10px); color: var(--accent);
+  background: var(--accent-soft);
   border-radius: var(--radius, 6px); padding: 1px 6px; text-transform: uppercase;
   letter-spacing: 0.03em;
 }
 .cite-pop-per { font-size: var(--fs-caption, 12px); color: var(--muted); }
 .cite-pop-value {
   display: block; font-size: var(--fs-section, 14px); font-weight: 600;
-  color: var(--fg, var(--ink)); margin-top: 3px;
+  color: var(--fg); margin-top: 3px;
 }
 .cite-pop-value-cap {
   display: block; font-size: var(--fs-micro, 10px); color: var(--muted); margin-top: 1px;
@@ -2283,9 +2278,9 @@ mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24
 .chat-toggle {
   padding: 8px 14px;
   border-radius: var(--radius-full);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-pop);
 }
-.chat-toggle.open { background: var(--ink-muted); }
+.chat-toggle.open { background: var(--muted); }
 .chat-toggle-icon { font-family: var(--mono); }
 /* Push-sidebar — flex sibling to .l1-root, mirrors .cmt-sidebar so chat
    slides the document aside instead of floating over it. The floating
@@ -2296,7 +2291,7 @@ mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24
   width: 0;
   height: 100vh;
   overflow: hidden;
-  background: var(--bg-elev, var(--panel));
+  background: var(--surface);
   border-left: 0 solid var(--hairline);
   transition: width 0.2s ease, border-left-width 0s 0.2s;
   display: flex; flex-direction: column;
@@ -2306,16 +2301,16 @@ mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24
   width: 460px;
   border-left-width: 1px;
   transition: width 0.2s ease, border-left-width 0s;
-  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-pop);
 }
 .chat-head {
   display: flex; align-items: flex-start; justify-content: space-between;
   padding: 12px 14px; border-bottom: 1px solid var(--hairline);
 }
-.chat-title { font-size: var(--fs-body); font-weight: 600; color: var(--ink); }
+.chat-title { font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
 .chat-sub { font-size: var(--fs-micro); color: var(--muted); margin-top: 2px; font-family: var(--mono); }
 .chat-close {
-  background: transparent; border: none; color: var(--ink-muted);
+  background: transparent; border: none; color: var(--muted);
   font-size: 20px; line-height: 1; cursor: pointer; padding: 0 6px;
 }
 .chat-thread {
@@ -2333,8 +2328,8 @@ mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24
 }
 .chat-role-user { background: color-mix(in srgb, var(--accent) 9%, transparent); border-left: 2px solid var(--accent); }
 .chat-role-user .chat-role-tag { color: var(--accent); }
-.chat-role-assistant { background: var(--panel-alt); border-left: 2px solid var(--hairline); }
-.chat-role-assistant .chat-role-tag { color: var(--ink-muted); }
+.chat-role-assistant { background: var(--paper); border-left: 2px solid var(--hairline); }
+.chat-role-assistant .chat-role-tag { color: var(--muted); }
 .chat-role-system { background: color-mix(in srgb, var(--warn) 7%, transparent); border-left: 2px solid color-mix(in srgb, var(--warn) 50%, transparent); }
 .chat-role-system .chat-role-tag { color: var(--warn); }
 .chat-text p { margin: 0 0 6px; }
@@ -2342,10 +2337,10 @@ mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24
 .chat-text li { margin: 2px 0; }
 .chat-text code {
   font-family: var(--mono); font-size: 0.93em;
-  background: rgba(255, 255, 255, 0.04); padding: 1px 4px; border-radius: var(--radius);
+  background: color-mix(in srgb, var(--fg) 4%, transparent); padding: 1px 4px; border-radius: var(--radius);
 }
 .chat-text pre.chat-code {
-  background: rgba(0, 0, 0, 0.3); border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--fg) 6%, transparent); border: 1px solid var(--hairline);
   border-radius: var(--radius); padding: 8px 10px; overflow-x: auto;
   font-family: var(--mono); font-size: 0.93em; margin: 6px 0;
 }
@@ -2355,17 +2350,17 @@ mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24
 }
 .chat-cite-row { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
 .chat-cite {
-  font-size: var(--fs-caption); color: var(--link); border: 1px solid var(--hairline);
+  font-size: var(--fs-caption); color: var(--accent); border: 1px solid var(--hairline);
   border-radius: var(--radius-full); padding: 2px 9px; text-decoration: none;
 }
-.chat-cite:hover { border-color: var(--link); }
+.chat-cite:hover { border-color: var(--accent); }
 .chat-diff {
   margin-top: 8px; padding: 8px 10px;
   background: color-mix(in srgb, var(--ok) 7%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent);
   border-radius: var(--radius); font-size: var(--fs-caption);
 }
 .chat-diff.applied { background: color-mix(in srgb, var(--ok) 15%, transparent); }
-.chat-diff-summary { color: var(--ink); margin-bottom: 4px; }
+.chat-diff-summary { color: var(--fg); margin-bottom: 4px; }
 .chat-diff-path code { background: transparent; padding: 0; color: var(--muted); }
 /* Preview/Apply are the kit's quiet small buttons (.k-btn.k-btn-quiet.k-btn-sm,
    added in the JS markup); this rule keeps only the row layout + the Apply
@@ -2374,12 +2369,12 @@ mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24
 .chat-diff-actions button[data-action="apply"] {
   background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent);
 }
-.chat-diff-note { margin-top: 6px; font-size: var(--fs-caption); color: var(--ink-muted); }
+.chat-diff-note { margin-top: 6px; font-size: var(--fs-caption); color: var(--muted); }
 
 .chat-form { padding: 10px 14px; border-top: 1px solid var(--hairline); }
 .chat-form textarea {
   width: 100%; box-sizing: border-box;
-  background: var(--panel-alt); color: var(--ink);
+  background: var(--paper); color: var(--fg);
   border: 1px solid var(--hairline); border-radius: var(--radius);
   padding: 8px 10px; font-size: var(--fs-body); font-family: var(--sans);
   resize: vertical;

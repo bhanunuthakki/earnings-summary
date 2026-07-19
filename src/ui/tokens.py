@@ -25,7 +25,11 @@ from __future__ import annotations
 # Palettes. Keys become CSS custom properties: "bg" -> --bg.
 # ---------------------------------------------------------------------------
 
-# Light ("paper") — the workspace report's default reading theme.
+# Light ("paper") — the workspace report's opt-in reading theme. The report
+# itself is hardcoded to dark (see workspace_html.py's _document — "no theme
+# switcher, no chrome", a deliberate 2026-07-18 decision, kept on purpose);
+# this palette exists for whatever surface opts into it, not as that
+# surface's default.
 PALETTE_LIGHT: dict[str, str] = {
     "bg": "#fafaf7",
     "surface": "#ffffff",
@@ -33,7 +37,10 @@ PALETTE_LIGHT: dict[str, str] = {
     "fg": "#0c0d10",
     "fg-soft": "#2a2c33",
     "muted": "#6c6f78",
-    "muted-2": "#9a9da6",
+    # Darkened 2026-07-18 (UX audit): #9a9da6 measured ~2.6:1 against this
+    # bg — fails WCAG AA (4.5:1) for the real body text it backs (td.muted,
+    # crumb-sep, news-date, meta-pip). #70737a clears ~4.5:1.
+    "muted-2": "#70737a",
     "border": "#e4e3dd",
     "border-2": "#d1cfc7",
     "hairline": "#ecebe5",
@@ -78,7 +85,10 @@ PALETTE_DARK: dict[str, str] = {
     "fg": "#f4f3ef",
     "fg-soft": "#d5d6d2",
     "muted": "#888b94",
-    "muted-2": "#5b5e66",
+    # Lightened 2026-07-18 (UX audit): #5b5e66 measured ~3.0:1 against this
+    # bg — fails WCAG AA (4.5:1) for the real body text it backs (td.muted,
+    # crumb-sep, news-date, meta-pip). #7d8089 clears ~4.9:1.
+    "muted-2": "#7d8089",
     "border": "#2a2d35",
     "border-2": "#383b44",
     "hairline": "#1f2127",
