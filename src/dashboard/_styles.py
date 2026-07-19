@@ -82,7 +82,7 @@ button { transition: color var(--transition), border-color var(--transition),
   border-left: 3px solid var(--border-2);
   border-radius: 0 var(--radius) var(--radius) 0;
   font-family: var(--serif);
-  font-size: var(--fs-section);
+  font-size: var(--fs-body);
   color: var(--fg-soft);
 }
 .alert-memo-pending { color: var(--muted); }
@@ -123,7 +123,7 @@ button { transition: color var(--transition), border-color var(--transition),
   cursor: pointer;
   padding: 8px 12px;
   color: var(--muted);
-  font-size: var(--fs-micro); font-weight: 600;
+  font-size: var(--fs-caption); font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   user-select: none;
@@ -135,14 +135,14 @@ button { transition: color var(--transition), border-color var(--transition),
 .evidence-section { margin-bottom: 10px; }
 .evidence-section:last-child { margin-bottom: 0; }
 .evidence-section-title {
-  font-size: var(--fs-micro);
+  font-size: var(--fs-caption);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
   margin-bottom: 4px;
 }
-.evidence-summary-text { color: var(--fg-soft); font-family: var(--serif); font-size: var(--fs-section); }
+.evidence-summary-text { color: var(--fg-soft); font-family: var(--serif); font-size: var(--fs-body); }
 /* P4.4 — the owner's open notes attached to the alert's evidence. */
 .evidence-notes-list { list-style: none; margin: 0; padding: 0; }
 .evidence-notes-list li { padding: 3px 0; font-size: var(--fs-body); color: var(--fg-soft); }
@@ -168,7 +168,7 @@ button { transition: color var(--transition), border-color var(--transition),
   padding: 4px 8px 4px 0;
   color: var(--muted);
   font-weight: 600;
-  font-size: var(--fs-micro);
+  font-size: var(--fs-caption);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   border-bottom: 1px solid var(--hairline);
@@ -182,14 +182,14 @@ button { transition: color var(--transition), border-color var(--transition),
 .cite-kind { color: var(--fg-soft); white-space: nowrap; }
 .cite-locator { color: var(--muted); word-break: break-all; }
 .cite-excerpt { color: var(--fg-soft); }
-.cite-prov { color: var(--muted); font-family: var(--mono); font-size: var(--fs-micro); white-space: nowrap; }
+.cite-prov { color: var(--muted); font-family: var(--mono); font-size: var(--fs-caption); white-space: nowrap; }
 .prov-source { color: var(--accent); }
 .prov-fetched { color: var(--muted); }
 .evidence-raw { margin-top: 4px; }
 .evidence-raw > summary {
   cursor: pointer;
   color: var(--muted);
-  font-size: var(--fs-micro); font-weight: 600;
+  font-size: var(--fs-caption); font-weight: 600;
   letter-spacing: 0.05em;
 }
 .evidence-raw-pre {
@@ -197,7 +197,7 @@ button { transition: color var(--transition), border-color var(--transition),
   padding: 8px 10px;
   background: var(--bg);
   border-radius: var(--radius);
-  font-family: var(--mono); font-size: var(--fs-micro);
+  font-family: var(--mono); font-size: var(--fs-caption);
   color: var(--fg-soft);
   white-space: pre-wrap;
   word-break: break-all;
@@ -224,7 +224,7 @@ button { transition: color var(--transition), border-color var(--transition),
   align-items: center;
   color: var(--muted);
   font-family: var(--mono);
-  font-size: var(--fs-micro);
+  font-size: var(--fs-caption);
   letter-spacing: 0.04em;
 }
 """

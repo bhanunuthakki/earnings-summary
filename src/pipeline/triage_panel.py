@@ -57,7 +57,7 @@ _INTENT_LABELS: dict[str, str] = {
 _PANEL_STYLE = """<style>
 .tri-sub { color: var(--muted); font-size: var(--fs-caption); margin: 0 0 var(--sp-3);
   line-height: 1.55; max-width: 70ch; }
-.tri-anchor { font-family: var(--mono); font-size: var(--fs-micro); color: var(--muted);
+.tri-anchor { font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted);
   white-space: nowrap; }
 .tri-when { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .tri-text { background: none; border: none; padding: 0; text-align: left; cursor: pointer;
@@ -70,7 +70,7 @@ _PANEL_STYLE = """<style>
 .tri-empty { color: var(--muted); padding: var(--sp-4) 0; }
 /* Embedded (composite-console) section heading — the console band owns the
    tab title, so the panel_toolbar collapses to a section-level h3. */
-.tri-h { font-size: var(--fs-section); font-weight: 600; color: var(--fg);
+.tri-h { font-size: var(--fs-title); font-weight: 600; color: var(--fg);
   margin: var(--sp-4) 0 var(--sp-1); display: flex; align-items: baseline; gap: var(--sp-2); }
 /* In-row Resolve editor (replaces window.prompt — the blocking OS modal the
    ledger banned in PR9 survived here). Same sizing family as the ledger's
@@ -99,7 +99,7 @@ _PANEL_STYLE = """<style>
   padding: var(--sp-4); overflow: auto; gap: var(--sp-3); }
 #triage-drawer:not([hidden]) { display: flex; flex-direction: column; }
 .tri-d-bar { display: flex; align-items: baseline; gap: var(--sp-2); }
-.tri-d-bar h3 { font-size: var(--fs-section); font-weight: 600; margin: 0; margin-right: auto; }
+.tri-d-bar h3 { font-size: var(--fs-title); font-weight: 600; margin: 0; margin-right: auto; }
 /* Drawer close glyph — the §3 convention: top type step, muted → fg, no border
    (CCOverlay owns the dismissal wiring). */
 .tri-d-close { background: none; border: none; cursor: pointer; color: var(--muted);

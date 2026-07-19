@@ -1020,7 +1020,7 @@ button { transition: color var(--transition), border-color var(--transition),
 .cc-brand { font-size: var(--fs-title); font-weight: 600; letter-spacing: 0.2px;
   margin-right: 18px; white-space: nowrap; }
 .cc-topnav { display: flex; gap: 2px; margin-right: auto; overflow-x: auto; }
-.cc-topnav .cc-tab { padding: 8px 13px; font-size: var(--fs-section); }
+.cc-topnav .cc-tab { padding: 8px 13px; font-size: var(--fs-body); }
 .cc-links { display: flex; gap: 14px; margin: 0 14px 0 16px; }
 .cc-links a { color: var(--muted); text-decoration: none; font-size: var(--fs-body); }
 .cc-links a:hover { color: var(--accent); }
@@ -1055,7 +1055,7 @@ button { transition: color var(--transition), border-color var(--transition),
 .cc-home-rail { position: sticky; top: 64px; min-width: 0; }
 .cc-home-rail-head { display: flex; align-items: baseline; justify-content: space-between;
   margin-bottom: var(--sp-2); }
-.cc-home-rail-head h2 { font-size: var(--fs-section); text-transform: uppercase;
+.cc-home-rail-head h2 { font-size: var(--fs-title); text-transform: uppercase;
   letter-spacing: 0.5px; margin: 0; }
 .cc-home-rail-links { font-size: var(--fs-caption); color: var(--muted); }
 .cc-home-rail-links a { color: var(--muted); text-decoration: none; }
@@ -1066,7 +1066,7 @@ button { transition: color var(--transition), border-color var(--transition),
    own head is redundant with the summary, so hide it). */
 .cc-rail-upcoming { margin-bottom: var(--sp-3); }
 .cc-rail-upcoming > summary { cursor: pointer; list-style: none; padding: var(--sp-1) 0;
-  font-size: var(--fs-section); text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
+  font-size: var(--fs-body); text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); }
 .cc-rail-upcoming > summary::-webkit-details-marker { display: none; }
 /* NB: SHELL_CSS is a non-raw Python string — a single backslash before "25B8"
    would be eaten by Python as an OCTAL escape (0x15) and render literal "B8 "
@@ -1131,7 +1131,7 @@ button { transition: color var(--transition), border-color var(--transition),
    ============================================================ */
 h1 { font-size: var(--fs-display); margin: 0 0 8px; font-weight: 600; }
 h2 { font-size: var(--fs-title); margin: 0 0 6px; font-weight: 600; }
-h3 { font-size: var(--fs-section); margin: 0; font-weight: 600; }
+h3 { font-size: var(--fs-title); margin: 0; font-weight: 600; }
 /* Panels are elevation, not boxes: surface-on-bg with the one radius. */
 .panel { margin-bottom: 28px; background: var(--surface);
   border-radius: var(--radius); padding: 18px 20px; }
@@ -1145,7 +1145,7 @@ th { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border)
 td { padding: 8px 10px; border-bottom: 1px solid var(--hairline); vertical-align: top; }
 tbody tr:hover td { background: var(--paper); }
 td.num { text-align: right; }
-td.muted { color: var(--muted-2); }
+td.muted { color: var(--muted); }
 .ticker-link { color: var(--fg); text-decoration: none; font-weight: 600; }
 .ticker-link:hover { color: var(--accent); }
 tr.tone-sell { background: color-mix(in srgb, var(--bad) 6%, transparent); }
@@ -1167,15 +1167,15 @@ code { font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }
 .cli-hint { font-family: var(--mono); font-size: var(--fs-caption); padding: 10px 12px;
   background: var(--paper); border-radius: var(--radius); color: var(--ok);
   overflow-x: auto; margin: 6px 0 0; }
-.panel-h3 { font-size: var(--fs-section); margin: 18px 0 8px; font-weight: 600;
+.panel-h3 { font-size: var(--fs-title); margin: 18px 0 8px; font-weight: 600;
   color: var(--fg); }
 /* Synthesis — a plain surface panel; no decorative left rail (rails are
    reserved for value status: tone-*/sig-* using --ok/--warn/--bad). */
-.synthesis-body { font-size: var(--fs-section); line-height: 1.65; }
+.synthesis-body { font-size: var(--fs-body); line-height: 1.65; }
 .synthesis-body h2, .synthesis-body h3, .synthesis-body h4,
 .synthesis-body h5, .synthesis-body h6 { color: var(--fg); margin-top: 1.2em; margin-bottom: 6px; }
 .synthesis-body h2 { font-size: var(--fs-title); }
-.synthesis-body h3 { font-size: var(--fs-section); }
+.synthesis-body h3 { font-size: var(--fs-title); }
 /* h4-h6 share the body size: the one prose boundary maps deep markdown headings
    (###/####) here, and panels already own the h2/h3 levels above them. */
 .synthesis-body h4, .synthesis-body h5, .synthesis-body h6 { font-size: var(--fs-body); color: var(--fg); }
@@ -1194,7 +1194,7 @@ code { font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }
 .reread-stamp { color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono); font-weight: 400; }
 .reread-body { font-size: var(--fs-body); line-height: 1.55; margin-top: 10px; }
 .reread-body h2, .reread-body h3, .reread-body h4 { color: var(--fg); margin: 10px 0 4px; }
-.reread-body h2 { font-size: var(--fs-section); color: var(--fg); }
+.reread-body h2 { font-size: var(--fs-title); color: var(--fg); }
 .reread-body h3 { font-size: var(--fs-body); }
 .reread-body strong { color: var(--fg); }
 .reread-body ul { padding-left: 18px; }
@@ -1205,12 +1205,12 @@ code { font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }
 .kpi-card.tone-good { border-left: 3px solid var(--ok); }
 .kpi-card.tone-warn { border-left: 3px solid var(--warn); }
 .kpi-card.tone-bad { border-left: 3px solid var(--bad); }
-.kpi-card.tone-muted { border-left: 3px solid var(--muted-2); }
+.kpi-card.tone-muted { border-left: 3px solid var(--muted); }
 .kpi-label { font-size: var(--fs-caption); color: var(--muted); letter-spacing: 0.06em;
   text-transform: uppercase; }
 .kpi-value { font-size: var(--fs-display); font-weight: 600; margin: 2px 0; color: var(--fg);
   font-variant-numeric: tabular-nums; }
-.kpi-sub { font-size: var(--fs-micro); color: var(--muted); font-family: var(--sans); }
+.kpi-sub { font-size: var(--fs-caption); color: var(--muted); font-family: var(--sans); }
 .calib-strip { display: flex; flex-direction: column; gap: 6px; margin: 8px 0 18px; }
 .calib-row { display: grid; grid-template-columns: 80px 1fr 110px; gap: 12px; align-items: center; font-size: var(--fs-caption); }
 .calib-label { color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
@@ -1251,7 +1251,7 @@ a.k-chip { text-decoration: none; }
    Overview status tables + action blocks (re-themed dark)
    ============================================================ */
 .list-section { margin-bottom: var(--sp-5); }
-.list-section h2 { font-size: var(--fs-section); text-transform: uppercase; letter-spacing: 0.5px; margin: 18px 0 10px; }
+.list-section h2 { font-size: var(--fs-title); text-transform: uppercase; letter-spacing: 0.5px; margin: 18px 0 10px; }
 .list-section h2 .count { font-weight: 400; color: var(--muted); margin-left: 4px; }
 .list-section table { background: var(--surface); border-radius: var(--radius); overflow: hidden; }
 .list-section th { padding-top: 10px; }
@@ -1275,9 +1275,9 @@ td.ticker a:hover { color: var(--accent); }
 .fresh-strip { display: flex; gap: 10px; margin-bottom: 22px; flex-wrap: wrap; }
 .fresh-cell { background: var(--surface); border-radius: var(--radius);
   padding: 8px 14px; flex: 1; min-width: 140px; }
-.fresh-label { font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em;
+.fresh-label { font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--muted); }
-.fresh-val { font-size: var(--fs-section); font-variant-numeric: tabular-nums; }
+.fresh-val { font-size: var(--fs-body); font-variant-numeric: tabular-nums; }
 /* .tcc-refresh buttons compose the kit (.k-btn .k-btn-primary / .k-btn-quiet) at
    their emitter; only the inter-button spacing stays local. */
 .tcc-refresh { margin-right: 4px; }
@@ -1297,7 +1297,7 @@ td.ticker a:hover { color: var(--accent); }
 .cc-holding-rail { display: flex; flex-direction: column; gap: 18px;
   max-height: calc(100vh - 150px); max-height: calc(100dvh - 150px); overflow-y: auto; position: sticky; top: 88px; }
 .cc-rail-panel { margin-bottom: 0; padding: 14px 16px; }
-.cc-rail-panel h2 { font-size: var(--fs-section); }
+.cc-rail-panel h2 { font-size: var(--fs-title); }
 @media (max-width: 1100px) {
   .cc-holding-split { grid-template-columns: 1fr; }
   .cc-holding-rail { position: static; max-height: none; overflow-y: visible; }
@@ -1314,12 +1314,12 @@ td.ticker a:hover { color: var(--accent); }
 .rail-note.nk-assumption { border-left-color: var(--fg-soft); }
 .rail-note.nk-observation { border-left-color: var(--muted); }
 .rail-note-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.rail-note-kind { font-size: var(--fs-micro); text-transform: uppercase; font-weight: 600;
+.rail-note-kind { font-size: var(--fs-caption); text-transform: uppercase; font-weight: 600;
   letter-spacing: 0.05em; color: var(--muted); }
 .rail-note.nk-question .rail-note-kind { color: var(--fg-soft); }
 .rail-note.nk-decision .rail-note-kind { color: var(--ok); }
 .rail-note.nk-watch .rail-note-kind { color: var(--warn); }
-.rail-note-when { font-family: var(--mono); font-size: var(--fs-micro); color: var(--muted); }
+.rail-note-when { font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted); }
 .rail-note-body { font-size: var(--fs-body); line-height: 1.5; margin: 4px 0; color: var(--fg-soft);
   overflow-wrap: anywhere; }
 /* Rail note bodies render through ui.prose (markdown -> block HTML); collapse
@@ -1328,8 +1328,8 @@ td.ticker a:hover { color: var(--accent); }
 .rail-note-body > :last-child { margin-bottom: 0; }
 .rail-note-body p { margin: 0 0 6px; }
 .rail-note-body ul { margin: 0 0 6px; padding-left: 20px; }
-.rail-note-meta { font-size: var(--fs-micro); color: var(--muted); overflow-wrap: anywhere; }
-.rail-note-meta code { font-size: var(--fs-micro); }
+.rail-note-meta { font-size: var(--fs-caption); color: var(--muted); overflow-wrap: anywhere; }
+.rail-note-meta code { font-size: var(--fs-caption); }
 
 /* Alert cards + evidence drawer inside the rail — same class vocabulary the
    feed renders (src/dashboard/_card.py + evidence_drawer.py); rules
@@ -1340,7 +1340,7 @@ td.ticker a:hover { color: var(--accent); }
 .alert-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
 /* Alert-card identity marks ride the shared kit (.k-tick-sym / .k-chip / .k-pill),
    emitted by src/dashboard/_card.py — no per-surface badge CSS. */
-.fired-at { color: var(--muted); font-family: var(--mono); font-size: var(--fs-micro);
+.fired-at { color: var(--muted); font-family: var(--mono); font-size: var(--fs-caption);
   margin-left: auto; }
 .alert-memo { margin: 4px 0 8px; padding: 7px 9px; background: var(--paper);
   border-left: 3px solid var(--border-2); border-radius: 0 var(--radius) var(--radius) 0;
@@ -1354,7 +1354,7 @@ td.ticker a:hover { color: var(--accent); }
   border-radius: var(--radius); margin-bottom: 5px; }
 .qa-body { flex: 1; min-width: 140px; color: var(--fg-soft); font-size: var(--fs-caption); }
 .qa-actions { display: flex; gap: 6px; align-items: center; font-family: var(--mono);
-  font-size: var(--fs-micro); }
+  font-size: var(--fs-caption); }
 .qa-actions a { display: inline-flex; padding: 2px 7px; border: 1px solid var(--border-2);
   border-radius: var(--radius); color: var(--accent); text-decoration: none; }
 .qa-actions .qa-cli { color: var(--muted); overflow-wrap: anywhere; }
@@ -1363,13 +1363,13 @@ td.ticker a:hover { color: var(--accent); }
 .evidence-drawer { margin-top: 8px; background: var(--paper);
   border-radius: var(--radius); }
 .evidence-drawer > summary { cursor: pointer; padding: 6px 10px; color: var(--muted);
-  font-size: var(--fs-micro); font-weight: 600; letter-spacing: 0.05em;
+  font-size: var(--fs-caption); font-weight: 600; letter-spacing: 0.05em;
   text-transform: uppercase; user-select: none; }
 .evidence-drawer[open] > summary { border-bottom: 1px solid var(--hairline); }
 .evidence-body { padding: 8px 10px; }
 .evidence-section { margin-bottom: 8px; }
 .evidence-section:last-child { margin-bottom: 0; }
-.evidence-section-title { font-size: var(--fs-micro); text-transform: uppercase;
+.evidence-section-title { font-size: var(--fs-caption); text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--muted); margin-bottom: 3px; }
 .evidence-summary-text { color: var(--fg-soft); font-size: var(--fs-body); }
 .evidence-malformed { padding: 8px; background: color-mix(in srgb, var(--bad) 8%, transparent);
@@ -1377,29 +1377,29 @@ td.ticker a:hover { color: var(--accent); }
   margin-bottom: 8px; font-size: var(--fs-caption); }
 .evidence-citations-table { width: 100%; border-collapse: collapse; font-size: var(--fs-caption); }
 .evidence-citations-table th { text-align: left; padding: 3px 6px 3px 0; color: var(--muted);
-  font-weight: 500; font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.05em;
+  font-weight: 500; font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.05em;
   border-bottom: 1px solid var(--hairline); font-family: var(--sans); }
 .evidence-citations-table td { padding: 4px 6px 4px 0; vertical-align: top;
   border-bottom: 1px solid var(--hairline); }
 .evidence-citations-table tr:last-child td { border-bottom: none; }
 .cite-kind { color: var(--fg-soft); white-space: nowrap; }
 .cite-locator { color: var(--muted); word-break: break-all; font-family: var(--mono);
-  font-size: var(--fs-micro); }
+  font-size: var(--fs-caption); }
 .cite-excerpt { color: var(--fg-soft); }
-.cite-prov { color: var(--muted); font-family: var(--mono); font-size: var(--fs-micro); }
+.cite-prov { color: var(--muted); font-family: var(--mono); font-size: var(--fs-caption); }
 .prov-source { color: var(--accent); }
 .evidence-raw { margin-top: 4px; }
 .evidence-raw > summary { cursor: pointer; color: var(--muted);
-  font-size: var(--fs-micro); font-weight: 600; letter-spacing: 0.05em; }
+  font-size: var(--fs-caption); font-weight: 600; letter-spacing: 0.05em; }
 .evidence-raw-pre { margin: 5px 0 0; padding: 7px 9px; background: var(--bg);
   border-radius: var(--radius); font-family: var(--mono);
-  font-size: var(--fs-micro); color: var(--fg-soft); white-space: pre-wrap; word-break: break-all;
+  font-size: var(--fs-caption); color: var(--fg-soft); white-space: pre-wrap; word-break: break-all;
   max-height: 260px; overflow: auto; }
 
 /* Three-theme nav (master build P1.1): primary theme row + per-theme sub-tab
    rows. Sub-tab rows reuse .cc-tab styling at a smaller size. */
 .cc-theme-row { padding-top: 2px; }
-.cc-theme-tab { font-size: var(--fs-section); font-weight: 600; letter-spacing: 0.01em; }
+.cc-theme-tab { font-size: var(--fs-body); font-weight: 600; letter-spacing: 0.01em; }
 .cc-subtabs { z-index: 19; }
 .cc-subtabs .cc-tab { font-size: var(--fs-body); }
 
@@ -1427,11 +1427,11 @@ td.ticker a:hover { color: var(--accent); }
   display: flex; flex-direction: column; box-shadow: var(--shadow-pop);
   animation: cc-slide-in-right var(--transition); }
 .cc-drawer[hidden] { display: none; }
-/* Panel/drawer/peek head titles share one tier (--fs-section): a drawer head
+/* Panel/drawer/peek head titles share one tier (--fs-title): a drawer head
    must not render below a peek/rail head when you click into depth (§6.1). */
 .cc-drawer-head { display: flex; justify-content: space-between; align-items: center;
   padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 600;
-  font-size: var(--fs-section); }
+  font-size: var(--fs-title); }
 .cc-drawer-close { background: transparent; border: none; color: var(--muted);
   font-size: var(--fs-display); cursor: pointer; line-height: 1; padding: 2px 6px; }
 .cc-drawer-close:hover { color: var(--fg); }
@@ -1439,7 +1439,7 @@ td.ticker a:hover { color: var(--accent); }
 .cc-drawer-sec { margin-bottom: 14px; border-radius: var(--radius);
   background: var(--surface); }
 .cc-drawer-sec > summary { cursor: pointer; list-style: none; padding: 11px 14px;
-  font-size: var(--fs-section); font-weight: 600; }
+  font-size: var(--fs-body); font-weight: 600; }
 .cc-drawer-sec > summary::-webkit-details-marker { display: none; }
 .cc-drawer-sec > summary::before { content: '▸ '; color: var(--muted); font-family: var(--mono); }
 .cc-drawer-sec[open] > summary::before { content: '▾ '; }
@@ -1463,7 +1463,7 @@ td.ticker a:hover { color: var(--accent); }
 .cc-palette-close:hover { color: var(--fg); }
 .cc-palette input { width: 100%; box-sizing: border-box; background: transparent;
   border: none; border-bottom: 1px solid var(--border); border-radius: 0; color: var(--fg);
-  padding: 13px 40px 13px 16px; font-size: var(--fs-section); font-family: var(--sans); outline: none; }
+  padding: 13px 40px 13px 16px; font-size: var(--fs-body); font-family: var(--sans); outline: none; }
 /* The palette field is the dialog's own chrome — no kit focus ring. */
 .cc-palette input:focus-visible { border-color: var(--border); border-bottom-color: var(--accent);
   box-shadow: none; }
@@ -1473,7 +1473,7 @@ td.ticker a:hover { color: var(--accent); }
   padding: 8px 16px; font-size: var(--fs-body); cursor: pointer; color: var(--fg);
   transition: background var(--transition); }
 .cc-palette-list li.sel, .cc-palette-list li:hover { background: var(--paper); }
-.cc-palette-list li .cc-pal-hint { color: var(--muted); font-size: var(--fs-micro);
+.cc-palette-list li .cc-pal-hint { color: var(--muted); font-size: var(--fs-caption);
   font-family: var(--mono); }
 .cc-palette-list .k-tick-name { max-width: 36ch; }
 .cc-palette-list li.cc-pal-none { color: var(--muted); cursor: default; }
@@ -1505,7 +1505,7 @@ td.ticker a:hover { color: var(--accent); }
 .cc-peek-foot a { color: var(--muted); text-decoration: none; }
 .cc-peek-foot a:hover { color: var(--accent); }
 .cc-peek-memo-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
-.cc-peek-memo-head h2 { font-size: var(--fs-section); margin: 0; }
+.cc-peek-memo-head h2 { font-size: var(--fs-title); margin: 0; }
 /* JS-applied stand-in for the full page's :target highlight (#L<n>). */
 .cc-peek-target { background: color-mix(in srgb, var(--warn) 14%, transparent);
   outline: 1px solid var(--warn); border-radius: var(--radius); }
@@ -1515,7 +1515,7 @@ td.ticker a:hover { color: var(--accent); }
   border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px;
   box-shadow: var(--shadow-pop); font-size: var(--fs-body); }
 .cc-mini-head { display: flex; align-items: center; gap: 8px; }
-.cc-mini-ticker { font-family: var(--mono); font-weight: 600; font-size: var(--fs-section); }
+.cc-mini-ticker { font-family: var(--mono); font-weight: 600; font-size: var(--fs-body); }
 .cc-mini-name { color: var(--muted); font-size: var(--fs-caption); margin: 1px 0 6px; }
 .cc-mini-row { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
 .cc-mini-row > span { color: var(--muted); }
@@ -1535,7 +1535,7 @@ td.ticker a:hover { color: var(--accent); }
   padding: 14px 16px; animation: cc-pop-in var(--transition); }
 .cc-capture-tray[hidden] { display: none; }
 .cc-capture-tray-head { display: flex; align-items: center; gap: 8px;
-  font-size: var(--fs-section); font-weight: 600; margin-bottom: 8px;
+  font-size: var(--fs-title); font-weight: 600; margin-bottom: 8px;
   padding-right: 20px; /* keep the title clear of the corner close */ }
 .cc-capture-tray-ticker { font-family: var(--mono); font-size: var(--fs-caption);
   font-weight: 400; }
@@ -1569,7 +1569,7 @@ td.ticker a:hover { color: var(--accent); }
   display: inline-flex; align-items: center; justify-content: center;
   width: 32px; height: 32px; border-radius: var(--radius);
   border: 1px solid var(--border); background: transparent;
-  color: var(--muted); cursor: pointer; font-size: var(--fs-section);
+  color: var(--muted); cursor: pointer; font-size: var(--fs-body);
   transition: var(--transition);
 }
 .cc-theme-toggle:hover { border-color: var(--border-2); color: var(--fg); }

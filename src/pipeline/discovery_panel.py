@@ -7,7 +7,7 @@ What changed from the P5.4 original (the owner's feedback → the Discovery rule
 two stacked chrome bands (a title block over a filter block) collapse onto ONE
 ``panel_toolbar`` band; the native ``<select>`` status filter becomes ``.k-chip``
 toggles; tall multi-line evidence rows become a ``.p-table`` with the weighted
-``score`` as a ``.p-pill``, ``ticker_label`` for ticker+name, the one-line
+``score`` as a ``.k-pill``, ``ticker_label`` for ticker+name, the one-line
 ``score_evidence_line`` inline and the full per-signal breakdown behind a peek;
 and the print-all-500 list is capped to a ranked top-N. A collapsible Sources
 editor exposes the ``discovery_sources`` weight registry (the POST weight route

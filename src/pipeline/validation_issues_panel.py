@@ -257,7 +257,7 @@ def _resolve_button(issue_id: int, severity: str) -> str:
     ``data-severity`` lets the listener decrement the matching open-count KPI on
     success."""
     return (
-        '<button type="button" class="k-prov-act" '
+        '<button type="button" class="k-btn k-btn-quiet k-btn-sm" '
         f'data-resolve-issue="{int(issue_id)}" '
         f'data-severity="{escape(severity, quote=True)}" '
         'title="Mark this issue resolved">Resolve</button>'

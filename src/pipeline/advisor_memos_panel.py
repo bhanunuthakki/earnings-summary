@@ -357,7 +357,7 @@ _PANEL_CSS = """<style>
   font-family: var(--mono); }
 .am-body { font-size: var(--fs-body); line-height: 1.6; margin-top: 10px; }
 .am-body h2, .am-body h3, .am-body h4 { color: var(--fg); margin: 12px 0 4px; }
-.am-body h3 { font-size: var(--fs-section); }
+.am-body h3 { font-size: var(--fs-title); }
 .am-body ul { padding-left: 20px; }
 .am-sep { width: 1px; height: 20px; background: var(--border); display: inline-block; }
 .am-runbar select { padding: 4px 28px 4px 8px; font-size: var(--fs-caption);
@@ -365,7 +365,7 @@ _PANEL_CSS = """<style>
 /* Stance pill rides the kit's neutral .k-pill; .am-stance adds only its
    typographic refinement (uppercase micro, help cursor) — no color. */
 .am-stance { text-transform: uppercase; letter-spacing: 0.06em;
-  font-size: var(--fs-micro); cursor: help; }
+  font-size: var(--fs-caption); cursor: help; }
 .soc-q { margin: 12px 0; }
 .soc-q label { display: block; font-size: var(--fs-body); color: var(--fg); margin-bottom: 6px; }
 .soc-q textarea { width: 100%; resize: vertical; }

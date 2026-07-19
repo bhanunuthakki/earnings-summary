@@ -1063,7 +1063,7 @@ INBOX_CSS = """
    shape/color of its own now, only the "why ranked" help-cursor below. */
 /* Status badge = the kit .k-pill (controls.py §3); .ix-status is now only the
    JS hook INBOX_JS swaps the tone on — no local skin. */
-.ix-when { margin-left: auto; color: var(--muted); font-size: var(--fs-micro);
+.ix-when { margin-left: auto; color: var(--muted); font-size: var(--fs-caption);
   font-family: var(--mono); white-space: nowrap; }
 .ix-body { margin-top: 5px; font-size: var(--fs-body); line-height: 1.45; color: var(--fg);
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
@@ -1100,7 +1100,7 @@ INBOX_CSS = """
 .ix-act-dismiss:hover { color: var(--bad); border-color: var(--bad); }
 .ix-act[disabled] { opacity: 0.5; cursor: default; }
 .ix-act-fail { color: var(--bad); border-color: var(--bad); }
-.ix-acted { margin-left: auto; font-size: var(--fs-micro); font-weight: 600;
+.ix-acted { margin-left: auto; font-size: var(--fs-caption); font-weight: 600;
   white-space: nowrap; color: var(--muted); }
 .ix-acted-applied { color: var(--ok); }
 .ix-dismissed { opacity: 0.55; transition: opacity var(--transition); }
@@ -1116,7 +1116,7 @@ INBOX_CSS = """
 .ix-badge { display: inline-block; min-width: 14px; text-align: center;
   margin-left: 6px; padding: 1px 5px; border-radius: var(--radius-full);
   background: var(--accent); color: var(--accent-contrast);
-  font-family: var(--mono); font-size: var(--fs-micro); font-weight: 600;
+  font-family: var(--mono); font-size: var(--fs-caption); font-weight: 600;
   line-height: 1.4; vertical-align: 2px; }
 .ix-badge[hidden] { display: none; }
 /* Category filter chips (Inbox v2) — client-side, scoped per stream. */
@@ -1137,7 +1137,7 @@ INBOX_CSS = """
 .ix-dismiss-why { margin-left: 4px; }
 .ix-why-toggle { font-weight: 400; opacity: 0.7; }
 .ix-why-toggle:hover { opacity: 1; }
-.ix-why-input { margin-left: 4px; width: 7em; font-size: var(--fs-micro);
+.ix-why-input { margin-left: 4px; width: 7em; font-size: var(--fs-caption);
   font-family: inherit; background: var(--surface); color: var(--fg);
   border: 1px solid var(--border); border-radius: var(--radius); padding: 1px 5px; }
 """.strip()

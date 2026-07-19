@@ -42,12 +42,14 @@ def test_white_overrides_are_a_subset_of_light() -> None:
 
 
 def test_semantic_unification() -> None:
-    """Green=good / red=bad in BOTH themes; ok==pos and bad==neg; the accent
-    is reserved for interactive elements (must differ from ok)."""
+    """Green=good / red=bad in BOTH themes; the accent is reserved for
+    interactive elements (must differ from ok). The old --pos/--neg/--neu
+    status aliases and the second gray --muted-2 were folded into
+    --ok/--bad/--muted (design-sync 2026-07-19), so they must be GONE."""
     for palette in (PALETTE_LIGHT, PALETTE_DARK):
-        assert palette["ok"] == palette["pos"]
-        assert palette["bad"] == palette["neg"]
         assert palette["accent"] != palette["ok"]
+        for gone in ("pos", "neg", "neu", "muted-2"):
+            assert gone not in palette
     assert PALETTE_DARK["ok"] == "#4ade80"
     assert PALETTE_LIGHT["ok"] == "#15803d"
 
@@ -76,15 +78,16 @@ def test_palette_css_rejects_unknown_default() -> None:
         palette_css("sepia")
 
 
-def test_type_scale_is_the_six_step_importance_ladder() -> None:
-    """The semantic scale is a public contract for every renderer (and the
-    queued UI sessions building on this one): six steps, strictly descending,
-    named by importance — display > title > section > body > caption > micro."""
-    order = ["fs-display", "fs-title", "fs-section", "fs-body", "fs-caption", "fs-micro"]
+def test_type_scale_is_the_four_step_importance_ladder() -> None:
+    """The semantic scale is a public contract for every renderer: four steps,
+    strictly descending, named by importance — display > title > body > caption
+    (collapsed from six in the design-sync 2026-07-19 pass: --fs-section folded
+    into --fs-body/--fs-title, --fs-micro into --fs-caption)."""
+    order = ["fs-display", "fs-title", "fs-body", "fs-caption"]
     assert list(TYPE_SCALE) == order
     sizes = [float(TYPE_SCALE[k].removesuffix("px")) for k in order]
     assert sizes == sorted(sizes, reverse=True)
-    assert len(set(sizes)) == 6
+    assert len(set(sizes)) == 4
 
 
 def test_spacing_scale_ascends() -> None:

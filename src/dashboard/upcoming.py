@@ -224,7 +224,7 @@ UPCOMING_CSS = """
 .up-strip { background: var(--surface); border-radius: var(--radius);
   padding: 9px 12px; margin-bottom: var(--sp-2); }
 .up-strip-head { display: flex; justify-content: space-between; align-items: baseline;
-  color: var(--muted); font-size: var(--fs-micro); font-weight: 600;
+  color: var(--muted); font-size: var(--fs-caption); font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 3px; }
 .up-strip-sub { font-weight: 400; letter-spacing: 0; text-transform: none;
   font-family: var(--mono, monospace); }
@@ -233,7 +233,7 @@ UPCOMING_CSS = """
 .up-row { display: flex; align-items: baseline; gap: 8px; }
 .up-ticker { font-family: var(--mono, monospace); font-weight: 600;
   color: var(--fg); }
-.up-est { color: var(--muted); font-size: var(--fs-micro); font-weight: 600;
+.up-est { color: var(--muted); font-size: var(--fs-caption); font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.05em; }
 .up-date { margin-left: auto; font-family: var(--mono, monospace);
   color: var(--muted); white-space: nowrap; }
@@ -243,11 +243,11 @@ UPCOMING_CSS = """
   display: flex; flex-direction: column; gap: 1px; }
 .up-watch-item { display: flex; align-items: baseline; gap: 6px; width: 100%;
   text-align: left; background: transparent; border: 0; padding: 1px 0;
-  cursor: pointer; color: var(--muted); font: inherit; font-size: var(--fs-micro);
+  cursor: pointer; color: var(--muted); font: inherit; font-size: var(--fs-caption);
   min-width: 0; }
 .up-watch-item:hover { color: var(--accent); }
 .up-watch-item:hover .up-watch-body { text-decoration: underline; }
 .up-watch-kind { flex: none; }
 .up-watch-body { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.up-watch-more { font-size: var(--fs-micro); color: var(--muted); padding-left: 2px; }
+.up-watch-more { font-size: var(--fs-caption); color: var(--muted); padding-left: 2px; }
 """.strip()

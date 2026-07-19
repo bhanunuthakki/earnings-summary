@@ -525,14 +525,14 @@ _SCORE_CSS = """
 .cc-score-fill { display: block; height: 100%; border-radius: var(--radius-full); }
 .cc-score-fill.bar-pos { background: var(--ok); }
 .cc-score-fill.bar-neg { background: var(--bad); }
-.cc-score-fill.bar-mid { background: var(--muted-2); }
+.cc-score-fill.bar-mid { background: var(--muted); }
 .cc-score-mult { font-family: var(--mono); font-weight: 600; text-align: right; }
 .cc-score-mult.mult-pos { color: var(--ok); }
 .cc-score-mult.mult-neg { color: var(--bad); }
 .cc-score-mult.mult-mid { color: var(--muted); }
 .cc-score-formula { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft);
   margin-top: 4px; }
-.cc-score-legend { color: var(--muted); font-size: var(--fs-micro); margin-top: 6px; }
+.cc-score-legend { color: var(--muted); font-size: var(--fs-caption); margin-top: 6px; }
 .cc-fit-degraded { color: var(--warn); font-size: var(--fs-caption); margin-top: 6px; }
 .cc-fit-group { color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase;
   letter-spacing: 0.05em; margin-top: 10px; }
@@ -855,8 +855,8 @@ def _memo_attest_foot(kind: str, memo_id: int, context_raw: object) -> str:
 _ATTEST_CSS = """
 .cc-peek-attest { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline);
   display: flex; align-items: center; gap: 10px; }
-.cc-peek-attest-done { color: var(--fg-soft); font-size: var(--fs-micro); }
-.cc-attest-msg { font-size: var(--fs-micro); color: var(--fg-soft); }
+.cc-peek-attest-done { color: var(--fg-soft); font-size: var(--fs-caption); }
+.cc-attest-msg { font-size: var(--fs-caption); color: var(--fg-soft); }
 """.strip()
 
 # POSTs {memo_id} to /api/coach/attest-change (the same Origin-guarded action
@@ -937,7 +937,7 @@ _REVIEW_CSS = """
 .cc-review-peek .synthesis-body { font-size: var(--fs-body); }
 .cc-review-foot { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--hairline);
   display: flex; flex-direction: column; gap: 8px; }
-.cc-review-log { font-family: var(--mono); font-size: var(--fs-micro); color: var(--fg-soft);
+.cc-review-log { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft);
   background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 8px 10px; margin: 0; max-height: 200px; overflow-y: auto;
   white-space: pre-wrap; word-break: break-word; }
@@ -1342,7 +1342,7 @@ _PROV_CSS = """
    only the flex-child layout stays local. */
 .cc-prov-cron { flex: none; }
 .cc-prov-btn { flex: none; }
-.cc-prov-log { font-family: var(--mono); font-size: var(--fs-micro); color: var(--fg-soft);
+.cc-prov-log { font-family: var(--mono); font-size: var(--fs-caption); color: var(--fg-soft);
   background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 8px 10px; margin: 10px 0 0; max-height: 200px; overflow-y: auto;
   white-space: pre-wrap; word-break: break-word; }

@@ -194,7 +194,7 @@ def _verdict_badge(
         "intact": ("Thesis Intact", "var(--ok)"),
         "watch": ("Watch", "var(--warn)"),
         "broken": ("Broken", "var(--bad)"),
-        "pending": ("Pending", "var(--muted-2)"),
+        "pending": ("Pending", "var(--muted)"),
     }
     label, dot = mapping.get(verdict, mapping["pending"])
     is_stale = False

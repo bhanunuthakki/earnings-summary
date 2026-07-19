@@ -1478,7 +1478,7 @@ _PAGE_HEAD = (
   body {{ margin: 0; padding: 24px; font-family: var(--sans); background: var(--bg); color: var(--fg); line-height: 1.5; font-size: var(--fs-body); }}
   header {{ margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-start; }}
   h1 {{ font-size: var(--fs-display); margin: 0 0 4px; font-weight: 600; }}
-  h1 .k-tick-name {{ font-size: var(--fs-section); }}
+  h1 .k-tick-name {{ font-size: var(--fs-body); }}
   h2 {{ font-size: var(--fs-title); margin: 0 0 8px; font-weight: 600; }}
   a {{ transition: color var(--transition); }}
   .top-nav {{ font-size: var(--fs-caption); }}
@@ -1488,7 +1488,7 @@ _PAGE_HEAD = (
   /* identity badges → the kit (.k-chip list_type + .k-pill breach status). */
   .panel {{ margin-bottom: 24px; background: var(--surface); border-radius: var(--radius); padding: 16px 18px; }}
   .panel .sub {{ color: var(--muted); font-size: var(--fs-caption); margin: 0 0 12px; }}
-  .panel-h3 {{ font-size: var(--fs-section); margin: 16px 0 6px; color: var(--fg); font-weight: 600; }}
+  .panel-h3 {{ font-size: var(--fs-title); margin: 16px 0 6px; color: var(--fg); font-weight: 600; }}
   .muted {{ color: var(--muted); }}
   table {{ width: 100%; border-collapse: collapse; font-size: var(--fs-body); font-variant-numeric: tabular-nums; }}
   th {{ text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }}
@@ -1498,11 +1498,11 @@ _PAGE_HEAD = (
   code {{ font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }}
   .fresh-strip {{ display: flex; gap: 1px; margin-bottom: 22px; background: var(--border); border-radius: var(--radius); overflow: hidden; }}
   .fresh-cell {{ background: var(--surface); padding: 8px 14px; flex: 1; }}
-  .fresh-label {{ font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
+  .fresh-label {{ font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
   .fresh-val {{ font-size: var(--fs-body); font-variant-numeric: tabular-nums; }}
   .kpi-strip {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1px; margin-bottom: 12px; background: var(--border); border-radius: var(--radius); overflow: hidden; }}
   .kpi-card {{ background: var(--surface); padding: 10px 12px; }}
-  .kpi-label {{ font-size: var(--fs-micro); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
+  .kpi-label {{ font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
   .kpi-value {{ font-size: var(--fs-title); font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }}
   ul {{ margin: 6px 0; padding-left: 20px; }}
   li {{ margin-bottom: 3px; }}

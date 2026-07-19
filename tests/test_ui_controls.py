@@ -83,7 +83,15 @@ def test_one_focus_ring_from_tokens() -> None:
 
 
 def test_checkboxes_ride_the_accent() -> None:
-    assert "accent-color: var(--accent)" in controls_css("dark")
+    """The native accent-color box is gone; the kit DRAWS checkbox/radio
+    (appearance:none) and a checked one fills the accent (design-sync
+    2026-07-19 own-every-pixel kill list)."""
+    css = controls_css("dark")
+    assert "appearance: none" in css
+    checked = css.split('input[type="checkbox"]:checked', 1)[1].split("}", 1)[0]
+    assert "background-color: var(--accent)" in checked
+    # the checkmark glyph is a theme-dependent data-URI var, like the chevron
+    assert "--k-check:" in css
 
 
 def test_form_baseline_typesets_from_the_scale() -> None:
@@ -110,11 +118,12 @@ def test_button_hierarchy_is_three_intents_from_tokens() -> None:
     assert "var(--bad)" in danger
 
 
-def test_chips_are_full_radius_micro_uppercase() -> None:
+def test_chips_are_full_radius_caption_uppercase() -> None:
     css = controls_css("dark")
     chip = css.split(".k-chip {", 1)[1].split("}", 1)[0]
     assert "border-radius: var(--radius-full)" in chip
-    assert "font-size: var(--fs-micro)" in chip
+    # design-sync 2026-07-19: --fs-micro folded into --fs-caption (4-step scale)
+    assert "font-size: var(--fs-caption)" in chip
     assert "text-transform: uppercase" in chip
     for tone in ("ok", "warn", "bad", "accent"):
         assert f".k-chip-{tone}" in css
@@ -381,10 +390,11 @@ _TRANSITION_ALL = re.compile(r"transition:\s*all\b")
 # { color-mix fill }``) because the SELECTOR NAME, not the fill rule, carries the
 # badge intent. The token guard passed every reinvented pill this whole sweep
 # removed — this is the dimension that finally fails them. ``.k-pill`` /
-# ``.k-chip`` / ``.k-well`` / ``.p-pill`` are the kit and are excluded. ---
+# ``.k-chip`` / ``.k-well`` are the kit and are excluded (``.p-pill`` was folded
+# into ``.k-pill`` — design-sync 2026-07-19). ---
 _CSS_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _NAMED_BADGE = re.compile(r"[.#][\w-]*(?:pill|badge|chip|tag)\b", re.IGNORECASE)
-_KIT_BADGE = re.compile(r"\b(?:k-pill|k-chip|k-well|p-pill)\b")
+_KIT_BADGE = re.compile(r"\b(?:k-pill|k-chip|k-well)\b")
 _STATUS_FILL = re.compile(r"background(?:-color)?:\s*color-mix\(in srgb, var\(--(?:ok|warn|bad)\)")
 
 DIMENSIONS = (
@@ -819,7 +829,7 @@ def test_font_weight_and_transition_dimensions() -> None:
 _BUTTON_TAG = re.compile(r"<button\b[^>]*>", re.IGNORECASE)
 _CLASS_ATTR = re.compile(r'class="([^"]*)"')
 #: A button is kit-composed if any of its classes is one of these.
-_KIT_BUTTON = frozenset({"k-btn", "k-chip", "k-prov-act"})
+_KIT_BUTTON = frozenset({"k-btn", "k-chip"})
 #: Sanctioned + grandfathered bespoke button classes — the QUARANTINE analogue
 #: for §4 buttons (seeded from the current emitted set). Close glyphs (§3), tabs,
 #: the icon theme-toggle / ⌘K launcher, and the §4.1 doorway are sanctioned

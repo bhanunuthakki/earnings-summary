@@ -71,7 +71,7 @@ VIEWER_CONTENT_CSS = """
 .sv-meta { color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono); }
 .sv-lines { list-style: none; margin: 0; padding: 0; counter-reset: ln; }
 .sv-lines li { counter-increment: ln; padding: 1px 8px 1px 0; display: flex; gap: 14px; }
-.sv-lines li::before { content: counter(ln); color: var(--muted-2); width: 42px;
+.sv-lines li::before { content: counter(ln); color: var(--muted); width: 42px;
   flex: none; text-align: right; font-family: var(--mono); font-size: var(--fs-caption);
   padding-top: 2px; user-select: none; }
 .sv-lines li:target { background: color-mix(in srgb, var(--warn) 14%, transparent);
@@ -115,7 +115,7 @@ VIEWER_CONTENT_CSS = """
 _PAGE_CSS = (
     """
 body { margin: 0; font-family: var(--sans); background: var(--bg); color: var(--fg);
-  font-size: var(--fs-section); line-height: 1.55; }
+  font-size: var(--fs-body); line-height: 1.55; }
 a { color: var(--accent); }
 .sv-head { padding: 14px 22px; border-bottom: 1px solid var(--border);
   display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;

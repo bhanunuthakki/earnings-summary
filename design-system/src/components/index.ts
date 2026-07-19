@@ -18,4 +18,6 @@ export * from "./Toolbar";
 
 export { Input, type InputProps, type KitInputType } from "./Input";
 export { Textarea, type TextareaProps } from "./Textarea";
-export { Select, type SelectProps } from "./Select";
+export { Select, type SelectProps, type SelectOption } from "./Select";
+export { MultiSelect, type MultiSelectProps, type MultiSelectOption } from "./MultiSelect";
+export { DateField, type DateFieldProps } from "./DateField";

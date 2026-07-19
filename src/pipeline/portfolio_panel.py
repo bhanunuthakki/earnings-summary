@@ -328,7 +328,7 @@ _ANALYTICS_CSS = (
    is reference detail, surfaced on demand (the heading carries it on hover). */
 .pf-info { position: relative; display: inline-flex; align-items: center;
   justify-content: center; width: 15px; height: 15px; border-radius: var(--radius-full);
-  border: 1px solid var(--border); color: var(--muted); font-size: var(--fs-micro);
+  border: 1px solid var(--border); color: var(--muted); font-size: var(--fs-caption);
   font-weight: 600; cursor: help; margin-left: 7px;
   vertical-align: middle; transition: color var(--transition), border-color var(--transition); }
 .pf-info:hover, .pf-info:focus { color: var(--fg); border-color: var(--border-2); outline: none; }
@@ -1451,7 +1451,7 @@ _RISK_CSS = """<style>
    crowding signal); negative correlation (a true diversifier) reads cool.
    color-mix over the shared tone tokens — the analytical-dashboard idiom. */
 .pfc-scroll { overflow-x: auto; margin-top: 8px; }
-.pfc-table { border-collapse: collapse; font-family: var(--mono); font-size: var(--fs-micro); }
+.pfc-table { border-collapse: collapse; font-family: var(--mono); font-size: var(--fs-caption); }
 .pfc-table th { font-weight: 600; color: var(--muted); padding: 2px 5px; text-align: center; }
 .pfc-table th.pfc-row-h { text-align: right; }
 .pfc-cell { padding: 2px 5px; text-align: center; font-variant-numeric: tabular-nums;

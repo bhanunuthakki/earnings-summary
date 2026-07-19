@@ -1,52 +1,31 @@
 /*
- * Hand-port of `src/ui/controls.py`'s `_CONTROLS_BODY` / `controls_css()`.
+ * Port of `src/ui/controls.py`'s `controls_css("paper")` output — the "paper"
+ * default (light `:root` + `[data-theme="dark"]` override for chevron/check/
+ * color-scheme), followed by the theme-independent `_CONTROLS_BODY`.
  *
- * Python is canonical — this file is a ONE-TIME hand port
- * (docs/design_system_react_port_plan.md §3 "Scope note", §6 Phase 2 T2.0).
- * Resync manually when `src/ui/controls.py` changes; Phase 5's
- * `check-css-parity` script will make drift-detection mechanical, but for
- * now there is no automated diff against the Python source — re-read
- * `_CONTROLS_BODY` and reconcile by eye.
+ * Python is canonical. Regenerate from it with
+ * `python -c "import sys; sys.path.insert(0,'src'); from ui.controls import
+ * controls_css; print(controls_css('paper'))"` and re-apply the ONE deliberate
+ * React divergence below.
  *
- * What was ported verbatim: every selector/declaration in `_CONTROLS_BODY`
- * (form-control baseline, `.k-btn*`, `.k-chip*`, `.k-tick*`, `.k-menu`,
- * `.k-label`, the mobile 16px-floor media query, `.p-table`/`.p-pill`,
- * `.k-pill*`, `.k-well*`, `.k-dot*`, `.k-num-*`, `.k-scrim`/`.k-overlay` +
- * keyframes, `.k-toolbar*`, `.prose*`, and the full `.k-prov*` provenance
- * kit) — same selectors, same property values, same `color-mix()`/`var()`
- * usage, same comments (lightly re-wrapped).
+ * DIVERGENCE (design-sync 2026-07-19): the two `select[multiple]` rules are
+ * dropped here — the React package replaces the native multi-select with the
+ * `<MultiSelect>` composite (trigger + `.k-menu` popover + kit checkboxes +
+ * `<Chip>` summary), so a bare `<select multiple>` never renders in a design.
+ * The single `<select>` baseline, the native-chrome kill list, the kit-drawn
+ * checkbox/radio, the disclosure chevron marker, and everything else are a
+ * byte-for-byte carry from the canonical output. A small React-composite block
+ * (`.k-trigger` / `.k-pop` / `.k-date*`) is APPENDED at the very end — it backs
+ * the `<Select>` / `<MultiSelect>` / `<DateField>` popover composites that have
+ * no Python counterpart (the Flask app server-renders a native `<select>`).
  *
- * What was adapted (Python-templating-specific, not a CSS value change):
- *   - `controls_css(default)` in Python prepends a theme-conditional head
- *     (`:root { color-scheme; --k-chevron: <svg data-uri>; }` for the
- *     default theme, plus a `[data-theme="dark"]` override block when
- *     `default == "paper"`). That head is resolved here for the "paper"
- *     default only, matching how `tokens.css` was generated
- *     (`palette_css("paper")`): light color-scheme + light chevron at
- *     `:root`, dark color-scheme + dark chevron under
- *     `:root[data-theme="dark"]`. The `default == "dark"` branch (a page
- *     pinning dark unconditionally, no override block) is NOT represented
- *     here — no such page exists in this sandbox; if one is ever needed,
- *     add a second `:root[color-scheme=dark]`-style block rather than
- *     re-templating this file.
- *   - The two `_CHEVRON_DARK` / `_CHEVRON_LIGHT` data-URI constants are
- *     inlined literally (they were Python string constants, not CSS-side
- *     templating) — byte-identical SVG data URIs, just spelled as CSS
- *     custom-property values instead of Python string concatenation.
- *
- * Nothing was dropped: `_CONTROLS_BODY` is plain CSS already (no Jinja/
- * f-string placeholders inside the body itself), so every rule carried
- * straight across.
+ * Regenerated in full for the design-sync 2026-07-19 pass: four-step type
+ * scale, `--pos/--neg/--neu` + `--muted-2` + `--tone-*` token deletions, the
+ * native-chrome kill list, `.p-pill`/`.k-prov-tick`/`.k-prov-act` folded into
+ * `.k-pill`/(Dot+Label)/`.k-btn-sm`, and the color-mix button hover.
  */
-
-:root {
-  color-scheme: light;
-  --k-chevron: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M4 6l4 4 4-4%22 stroke=%22%236c6f78%22 stroke-width=%221.6%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E');
-}
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --k-chevron: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M4 6l4 4 4-4%22 stroke=%22%23888b94%22 stroke-width=%221.6%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E');
-}
+:root { color-scheme: light; --k-chevron: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M4 6l4 4 4-4%22 stroke=%22%236c6f78%22 stroke-width=%221.6%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E') /* @kind other */; --k-check: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M3.5 8.5l3 3 6-7%22 stroke=%22%23ffffff%22 stroke-width=%222%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E') /* @kind other */; }
+:root[data-theme="dark"] { color-scheme: dark; --k-chevron: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M4 6l4 4 4-4%22 stroke=%22%23888b94%22 stroke-width=%221.6%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E') /* @kind other */; --k-check: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M3.5 8.5l3 3 6-7%22 stroke=%22%230c0d10%22 stroke-width=%222%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E') /* @kind other */; }
 
 /* ---- form-control baseline (kit): kill the native look everywhere ---- */
 select, textarea, input[type="text"], input[type="search"], input[type="number"],
@@ -63,14 +42,64 @@ select:not([multiple]) {
   background-position: right 9px center; background-size: 14px;
   padding-right: 28px;
 }
-select[multiple] { padding: 4px; }
-select[multiple] option { padding: 3px 8px; border-radius: var(--radius); }
+textarea { resize: vertical; font-family: var(--sans); }
 select:focus-visible, textarea:focus-visible, input:focus-visible {
   outline: none; border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
-input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
-::placeholder { color: var(--muted-2); opacity: 1; }
+::placeholder { color: var(--muted); opacity: 1; }
+
+/* ---- own every pixel: no native chrome anywhere the OS would draw its own.
+   The kit draws the checkbox/radio, hides the search-cancel/number-spinner/
+   resizer widgets, themes the scrollbars, tames autofill, and owns the text
+   selection + caret — so a surface never inherits an OS accent it can't match
+   the palette to. ---- */
+
+/* themed thin scrollbars (Firefox + WebKit) */
+* { scrollbar-width: thin; scrollbar-color: var(--border-2) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border-2);
+  border-radius: var(--radius-full); border: 2px solid transparent;
+  background-clip: padding-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+/* kit-drawn checkbox / radio (the native accent-color box is gone) */
+input[type="checkbox"], input[type="radio"] {
+  appearance: none; -webkit-appearance: none; flex: none;
+  width: 15px; height: 15px; margin: 0; vertical-align: -2px; cursor: pointer;
+  border: 1px solid var(--border-2); background: var(--paper);
+  transition: border-color var(--transition), background var(--transition);
+}
+input[type="checkbox"] { border-radius: var(--radius); }
+input[type="radio"] { border-radius: var(--radius-full); }
+input[type="checkbox"]:checked, input[type="radio"]:checked {
+  border-color: var(--accent); background-color: var(--accent);
+}
+input[type="checkbox"]:checked {
+  background-image: var(--k-check); background-repeat: no-repeat;
+  background-position: center; background-size: 13px;
+}
+input[type="radio"]:checked { box-shadow: inset 0 0 0 2px var(--surface); }
+
+/* hide the native search-cancel, number spinners, and drag-resize handle */
+input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+::-webkit-resizer { display: none; }
+
+/* autofill: repaint the browser's yellow inset over the kit surface */
+input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:focus,
+textarea:-webkit-autofill, select:-webkit-autofill {
+  -webkit-text-fill-color: var(--fg);
+  -webkit-box-shadow: 0 0 0 1000px var(--paper) inset;
+  caret-color: var(--fg);
+}
+
+/* text selection + caret ride the accent */
+::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+input, textarea, select, [contenteditable] { caret-color: var(--accent); }
 
 /* ---- button hierarchy: primary (one per view) / quiet / danger ---- */
 .k-btn {
@@ -80,10 +109,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   border: 1px solid transparent; background: transparent; color: var(--fg);
   white-space: nowrap;
   transition: color var(--transition), border-color var(--transition),
-    background var(--transition), filter var(--transition);
+    background var(--transition);
 }
 .k-btn-primary { background: var(--accent); color: var(--accent-contrast); }
-.k-btn-primary:hover { filter: brightness(1.08); }
+/* hover deepens the accent toward the ink (color-mix), not a filter — so the
+   transition stays a plain background tween and never touches the whole box. */
+.k-btn-primary:hover { background: color-mix(in srgb, var(--accent) 88%, var(--fg)); }
 .k-btn-quiet { border-color: var(--border); color: var(--muted); }
 .k-btn-quiet:hover { color: var(--fg); border-color: var(--border-2); }
 .k-btn-danger { border-color: transparent; color: var(--bad); }
@@ -93,10 +124,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
    fs-caption + the old 3px padding measured ~23px, just under it. */
 .k-btn-sm { font-size: var(--fs-caption); padding: 3px 9px; min-height: 24px; }
 
-/* ---- chips: ONE badge shape (radius-full · micro · uppercase) ---- */
+/* ---- chips: ONE badge shape (radius-full · caption · uppercase) ---- */
 .k-chip {
   display: inline-flex; align-items: center; gap: 4px;
-  font-size: var(--fs-micro); font-weight: 600; line-height: 1.5;
+  font-size: var(--fs-caption); font-weight: 600; line-height: 1.5;
   text-transform: uppercase; letter-spacing: 0.05em;
   border-radius: var(--radius-full); padding: 1px 8px;
   border: 1px solid var(--border); color: var(--muted); background: transparent;
@@ -107,7 +138,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .k-chip-bad  { color: var(--bad);  border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
 .k-chip-accent { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .k-chip-mono { font-family: var(--mono); text-transform: none; letter-spacing: 0.02em; }
-button.k-chip, .k-chip-btn { cursor: pointer; font: inherit; font-size: var(--fs-micro);
+button.k-chip, .k-chip-btn { cursor: pointer; font: inherit; font-size: var(--fs-caption);
   font-weight: 600; transition: color var(--transition), border-color var(--transition); }
 button.k-chip:hover, .k-chip-btn:hover { color: var(--fg); border-color: var(--border-2); }
 button.k-chip.is-on, .k-chip-btn.is-on { color: var(--accent); border-color: var(--accent); }
@@ -130,7 +161,7 @@ a.k-tick-sym:hover { color: var(--accent); }
 .k-menu li.sel, .k-menu li:hover { background: var(--paper); }
 
 /* ---- field/section caption ---- */
-.k-label { font-size: var(--fs-micro); font-weight: 600; color: var(--muted);
+.k-label { font-size: var(--fs-caption); font-weight: 600; color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.06em; }
 
 /* ---- mobile: 16px floor prevents iOS from zooming on input focus ---- */
@@ -138,21 +169,20 @@ a.k-tick-sym:hover { color: var(--accent); }
   input, select, textarea { font-size: 16px; }
 }
 
-/* ---- pipeline panel table (canonical layout for command-center tabs) ---- */
+/* ---- data table: ONE cell padding (design-sync 2026-07-19 unified .p-table
+   with .prose table — both are var(--sp-2) var(--sp-3) now). .p-table is the
+   command-center layout; .prose table is rendered-prose. Same rhythm. ---- */
 .p-table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
 .p-table th, .p-table td {
-  padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left;
-  vertical-align: top;
+  padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--border);
+  text-align: left; vertical-align: top;
 }
 .p-table td.num, .p-table th.num {
   text-align: right; font-variant-numeric: tabular-nums;
 }
 
-/* ---- pipeline panel pill (inline semantic badge; no color — variants add it) ---- */
-.p-pill {
-  display: inline-block; padding: 1px 8px; border-radius: var(--radius-full);
-  font-size: var(--fs-caption); font-weight: 600; white-space: nowrap;
-}
+/* (The neutral .p-pill inline badge was folded into .k-pill — design-sync
+   2026-07-19: a colorless pill is just .k-pill with no tone modifier.) */
 
 /* ---- status/score pills: ONE filled badge — a soft status fill + token ink
    (design_language §3). This is the canonical replacement for the per-panel
@@ -182,7 +212,7 @@ a.k-tick-sym:hover { color: var(--accent); }
 /* ---- status dot: ONE filled circular tick (design_language §4). THE single
    home of the ok/warn/bad → --ok/--warn/--bad mapping four surfaces duplicated
    under .dot-*, .fdot-*, .ch-dot-*, .cc-system-dot-*. Fill is `currentColor`, so a
-   tone modifier only sets `color` (mirrors the .k-prov-tick idiom): the same
+   tone modifier only sets `color` (the severity Dot+Label idiom): the same
    class colors a bg circle here and — where a surface still needs a neutral or
    bespoke shade — takes any local `color`. A surface sets --k-dot-size (default
    8px) and adds layout only (margin, position, a ring border), never a fill. ---- */
@@ -213,8 +243,26 @@ a.k-tick-sym:hover { color: var(--accent); }
 @keyframes k-overlay-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes k-overlay-rise { from { transform: translateY(6px); opacity: 0; }
   to { transform: none; opacity: 1; } }
+
+/* ---- disclosure (details/summary): the native triangle marker is gone; the
+   kit draws the one chevron (--k-chevron), rotating 90deg on [open], and the
+   revealed body gets the same 150ms rise as an overlay. One marker, one motion,
+   everywhere a <details> appears. A surface that wants no marker (e.g. a custom
+   summary row) sets `list-style: none` and its own ::before — but by default,
+   this is the disclosure look. ---- */
+summary { cursor: pointer; list-style: none; }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: ""; display: inline-block; width: 12px; height: 12px;
+  margin-right: var(--sp-1); vertical-align: -1px; flex: none;
+  background-image: var(--k-chevron); background-repeat: no-repeat;
+  background-position: center; background-size: 12px;
+  transform: rotate(-90deg); transition: transform var(--transition); }
+details[open] > summary::before { transform: rotate(0deg); }
+details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
+
 @media (prefers-reduced-motion: reduce) {
-  .k-scrim, .k-overlay { animation-duration: 0.01ms; }
+  .k-scrim, .k-overlay, details[open] > *:not(summary) { animation-duration: 0.01ms; }
+  summary::before { transition: none; }
 }
 
 /* ---- panel toolbar: the ONE operating band (design_language §6.1). Title on
@@ -237,7 +285,7 @@ a.k-tick-sym:hover { color: var(--accent); }
 .prose > :first-child { margin-top: 0; }
 .prose > :last-child { margin-bottom: 0; }
 .prose p { margin: 0 0 var(--sp-3); }
-.prose h3 { font-size: var(--fs-section); font-weight: 600; color: var(--fg);
+.prose h3 { font-size: var(--fs-title); font-weight: 600; color: var(--fg);
   margin: var(--sp-4) 0 var(--sp-2); }
 .prose h4, .prose h5, .prose h6 { font-size: var(--fs-body); font-weight: 600;
   color: var(--fg); margin: var(--sp-3) 0 var(--sp-1); }
@@ -252,8 +300,9 @@ a.k-tick-sym:hover { color: var(--accent); }
   margin: 0 0 var(--sp-3); }
 .prose th, .prose td { padding: var(--sp-2) var(--sp-3);
   border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
-.prose th { font-size: var(--fs-caption); font-weight: 600; color: var(--muted);
-  text-transform: uppercase; letter-spacing: 0.04em; }
+/* prose table headers are sentence-case (uppercase+tracking is reserved for the
+   Label / Chip / Pill kit primitives — design-sync 2026-07-19). */
+.prose th { font-size: var(--fs-caption); font-weight: 600; color: var(--muted); }
 
 /* ---- provenance / data-quality rows (design_language §10; Law: provenance is
    actionable). prov_row()/prov_drawer()/prov_case() are the ONE render boundary
@@ -273,29 +322,20 @@ a.k-tick-sym:hover { color: var(--accent); }
 .k-prov-actions { flex: none; display: inline-flex; align-items: center;
   gap: var(--sp-2); }
 
-/* severity tick: a tone dot + uppercase label. THE one place halt/warn/grey is
-   decided (prov_severity_tone) — an unknown severity degrades to a muted tick,
-   never the wrong color. */
-.k-prov-tick { display: inline-flex; align-items: center; gap: var(--sp-1);
-  font-size: var(--fs-micro); font-weight: 600; text-transform: uppercase;
-  letter-spacing: 0.05em; white-space: nowrap; color: var(--muted); }
-.k-prov-tick::before { content: ""; width: 7px; height: 7px; flex: none;
-  border-radius: var(--radius-full); background: currentColor; }
-.k-prov-tick-bad   { color: var(--bad); }
-.k-prov-tick-warn  { color: var(--warn); }
-.k-prov-tick-ok    { color: var(--ok); }
-.k-prov-tick-muted { color: var(--muted); }
+/* severity tick = Dot + Label (design-sync 2026-07-19: was the bespoke
+   .k-prov-tick; now composed from the kit's .k-dot tone + .k-label — prov_
+   severity_tick() emits `<span class="k-prov-sev"><span class="k-dot k-dot-
+   {tone}"></span><span class="k-label">HALT</span></span>`). The tone rides the
+   dot (prov_severity_tone); the uppercase word is a plain .k-label. THE one
+   place halt/warn/grey is decided — an unknown severity degrades to a muted
+   dot, never the wrong color. .k-prov-sev is layout only. */
+.k-prov-sev { display: inline-flex; align-items: center; gap: var(--sp-1);
+  white-space: nowrap; }
 
-/* inline action: a small quiet control (resolve/refresh/diagnose) or a /source
-   deep-link, radius-full like a chip. */
-.k-prov-act { font: inherit; font-size: var(--fs-caption); font-weight: 600;
-  color: var(--accent); background: transparent; border: 1px solid var(--border);
-  border-radius: var(--radius-full); padding: 1px 10px; cursor: pointer;
-  text-decoration: none; white-space: nowrap;
-  transition: border-color var(--transition), color var(--transition); }
-.k-prov-act:hover { border-color: var(--accent); }
-.k-prov-act[disabled], .k-prov-act[aria-disabled="true"] { color: var(--muted);
-  border-color: var(--border); cursor: progress; }
+/* (The bespoke .k-prov-act inline action was folded into the button kit —
+   design-sync 2026-07-19: prov_action() now emits `.k-btn .k-btn-quiet
+   .k-btn-sm` (a small quiet button, or an `<a>` carrying the same classes for
+   the /source deep-link). One button shape, one hover.) */
 
 /* drill-down drawer (generalizes the evals failed-case drawer): a <details>
    whose summary toggles the body; per-case rows nest inside. */
@@ -311,9 +351,60 @@ a.k-tick-sym:hover { color: var(--accent); }
   margin: var(--sp-1) 0; }
 .k-prov-evidence { display: grid; grid-template-columns: 1fr 1fr;
   gap: var(--sp-2); margin: var(--sp-1) 0; }
-.k-prov-evidence-label { font-size: var(--fs-micro); color: var(--muted);
+.k-prov-evidence-label { font-size: var(--fs-caption); color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.04em; }
-.k-prov-evidence pre { font-family: var(--mono); font-size: var(--fs-micro);
+.k-prov-evidence pre { font-family: var(--mono); font-size: var(--fs-caption);
   color: var(--fg-soft); background: var(--paper); border: 1px solid var(--border);
   border-radius: var(--radius); padding: var(--sp-2); margin: var(--sp-1) 0 0;
   white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
+
+/* ==== React composite additions (design-sync 2026-07-19) — NOT in the
+   canonical Python kit (the Flask app server-renders a native <select>). These
+   back the <Select> / <MultiSelect> / <DateField> popover composites: one
+   trigger look, one popover surface (reuses .k-menu + the k-overlay-rise
+   motion), one chevron, one focus ring. ==== */
+
+/* trigger: reads like the <select> baseline (paper field + right chevron) but
+   is a <button> that opens a .k-menu popover. Used by Select + MultiSelect. */
+.k-trigger {
+  display: inline-flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-2); width: 100%; font: inherit; font-size: var(--fs-body);
+  color: var(--fg); background-color: var(--paper); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 6px 10px; cursor: pointer; text-align: left;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+.k-trigger:focus-visible { outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft); }
+.k-trigger[aria-expanded="true"] { border-color: var(--accent); }
+.k-trigger[disabled] { opacity: 0.5; cursor: default; pointer-events: none; }
+.k-trigger-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k-trigger-placeholder { color: var(--muted); }
+.k-trigger-chevron { flex: none; width: 14px; height: 14px;
+  background-image: var(--k-chevron); background-repeat: no-repeat;
+  background-position: center; background-size: 14px;
+  transition: transform var(--transition); }
+.k-trigger[aria-expanded="true"] .k-trigger-chevron { transform: rotate(180deg); }
+
+/* popover anchor: a relative wrapper so the .k-menu drops under the trigger.
+   The menu itself is the shared .k-menu surface (one shadow, one radius). */
+.k-pop { position: relative; }
+.k-pop > .k-menu { position: absolute; top: calc(100% + var(--sp-1)); left: 0;
+  right: 0; z-index: 41; max-height: 260px; overflow-y: auto;
+  animation: k-overlay-rise var(--transition); }
+.k-menu li[aria-disabled="true"] { color: var(--muted); cursor: default; }
+
+/* multiselect: kit-checkbox rows in the menu, .k-chip summary in the trigger */
+.k-ms-summary { display: inline-flex; flex-wrap: wrap; align-items: center;
+  gap: var(--sp-1); min-width: 0; }
+.k-ms-row { display: flex; align-items: center; gap: var(--sp-2); }
+
+/* datefield: the baseline <input type=date> with the native calendar indicator
+   hidden and a kit glyph in its place (a calendar popover can replace it
+   later; the input stays fully functional today). */
+.k-date { position: relative; display: inline-flex; align-items: center; width: 100%; }
+.k-date input[type="date"] { width: 100%; padding-right: 30px; }
+.k-date input[type="date"]::-webkit-calendar-picker-indicator {
+  position: absolute; right: 0; width: 30px; height: 100%; margin: 0;
+  opacity: 0; cursor: pointer; }
+.k-date-icon { position: absolute; right: 9px; pointer-events: none; flex: none;
+  width: 15px; height: 15px; color: var(--muted); }

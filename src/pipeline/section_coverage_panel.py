@@ -232,16 +232,16 @@ _PANEL_STYLE = """<style>
 .sc-scroll { overflow-x:auto; }
 .sc-matrix.p-table th, .sc-matrix.p-table td {
   padding:5px 7px; text-align:center; white-space:nowrap; }
-.sc-matrix.p-table th { font-size:var(--fs-micro); letter-spacing:.05em; }
+.sc-matrix.p-table th { font-size:var(--fs-caption); letter-spacing:.05em; }
 .sc-matrix.p-table td { font-size:var(--fs-caption); }
 .sc-matrix.p-table th:first-child, .sc-matrix.p-table td:first-child,
 .sc-matrix.p-table th:nth-child(2), .sc-matrix.p-table td:nth-child(2) { text-align:left; }
 .sc-tkr { font-family:var(--mono); font-weight:600; }
-.sc-list { color:var(--muted); font-size:var(--fs-micro); }
+.sc-list { color:var(--muted); font-size:var(--fs-caption); }
 .sc-filled { color:var(--ok); }
-.sc-empty { color:var(--muted-2); }
+.sc-empty { color:var(--muted); }
 .sc-na { color:var(--border-2); }
-.sc-noreport { color:var(--warn); font-size:var(--fs-micro); }
+.sc-noreport { color:var(--warn); font-size:var(--fs-caption); }
 .sc-gaps { font-variant-numeric:tabular-nums; color:var(--muted); }
 .sc-note { margin-top:14px; padding:10px 13px; background:var(--paper);
   border:1px solid var(--border); border-radius:var(--radius); font-size:var(--fs-body);

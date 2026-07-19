@@ -697,7 +697,7 @@ _PAGE_HEAD = (
   td {{ padding: 8px 10px; border-bottom: 1px solid var(--hairline); vertical-align: top; }}
   tbody tr:hover td {{ background: var(--paper); }}
   td.num {{ text-align: right; }}
-  td.muted {{ color: var(--muted-2); }}
+  td.muted {{ color: var(--muted); }}
   .ticker-link {{ color: var(--fg); text-decoration: none; font-weight: 600; transition: color var(--transition); }}
   .ticker-link:hover {{ color: var(--accent); }}
   tr.tone-sell {{ background: color-mix(in srgb, var(--bad) 6%, transparent); }}
@@ -714,11 +714,11 @@ _PAGE_HEAD = (
   td.signal-weak {{ color: var(--muted); }}
   /* Synthesis panel — lead panel distinguished by placement + panel anatomy,
      not a decorative status rail (status color is reserved for value status). */
-  .synthesis-body {{ font-size: var(--fs-section); line-height: 1.65; }}
+  .synthesis-body {{ font-size: var(--fs-body); line-height: 1.65; }}
   .synthesis-body h2, .synthesis-body h3, .synthesis-body h4,
   .synthesis-body h5, .synthesis-body h6 {{ color: var(--fg); margin-top: 1.2em; margin-bottom: 6px; }}
   .synthesis-body h2 {{ font-size: var(--fs-title); }}
-  .synthesis-body h3 {{ font-size: var(--fs-section); }}
+  .synthesis-body h3 {{ font-size: var(--fs-title); }}
   /* h4-h6 share the body size: the one prose boundary maps deep markdown
      headings (###/####) here, and panels own the h2/h3 levels above them. */
   .synthesis-body h4, .synthesis-body h5, .synthesis-body h6 {{ font-size: var(--fs-body); color: var(--fg); }}
@@ -737,23 +737,23 @@ _PAGE_HEAD = (
   .reread-stamp {{ color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono); font-weight: 400; }}
   .reread-body {{ font-size: var(--fs-body); line-height: 1.55; margin-top: 10px; }}
   .reread-body h2, .reread-body h3, .reread-body h4 {{ color: var(--fg); margin: 10px 0 4px; }}
-  .reread-body h2 {{ font-size: var(--fs-section); color: var(--fg); }}
+  .reread-body h2 {{ font-size: var(--fs-title); color: var(--fg); }}
   .reread-body h3 {{ font-size: var(--fs-body); }}
   .reread-body strong {{ color: var(--fg); }}
   .reread-body ul {{ padding-left: 18px; }}
   .reread-body hr {{ border: none; border-top: 1px solid var(--border); margin: 10px 0; }}
   .cli-hint {{ font-family: var(--mono); font-size: var(--fs-caption); padding: 10px 12px; background: var(--paper); border-radius: var(--radius); color: var(--fg-soft); overflow-x: auto; margin: 6px 0 0; }}
   /* Decisions panel */
-  .panel-h3 {{ font-size: var(--fs-section); margin: 18px 0 8px; font-weight: 600; color: var(--fg); }}
+  .panel-h3 {{ font-size: var(--fs-title); margin: 18px 0 8px; font-weight: 600; color: var(--fg); }}
   .kpi-strip {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 8px 0 12px; }}
   .kpi-card {{ background: var(--paper); border-radius: var(--radius); padding: 10px 12px; text-align: center; }}
   .kpi-card.tone-good {{ border-left: 3px solid var(--ok); }}
   .kpi-card.tone-warn {{ border-left: 3px solid var(--warn); }}
   .kpi-card.tone-bad {{ border-left: 3px solid var(--bad); }}
-  .kpi-card.tone-muted {{ border-left: 3px solid var(--muted-2); }}
+  .kpi-card.tone-muted {{ border-left: 3px solid var(--muted); }}
   .kpi-label {{ font-size: var(--fs-caption); color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }}
   .kpi-value {{ font-size: var(--fs-display); font-weight: 600; margin: 2px 0; color: var(--fg); font-variant-numeric: tabular-nums; }}
-  .kpi-sub {{ font-size: var(--fs-micro); color: var(--muted); font-family: var(--sans); }}
+  .kpi-sub {{ font-size: var(--fs-caption); color: var(--muted); font-family: var(--sans); }}
   .calib-strip {{ display: flex; flex-direction: column; gap: 6px; margin: 8px 0 18px; }}
   .calib-row {{ display: grid; grid-template-columns: 80px 1fr 110px; gap: 12px; align-items: center; font-size: var(--fs-caption); }}
   .calib-label {{ color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }}

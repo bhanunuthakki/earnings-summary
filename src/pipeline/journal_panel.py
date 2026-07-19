@@ -58,11 +58,11 @@ _PANEL_STYLE = """<style>
 .jr-head { display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; margin-bottom:6px; }
 /* kind tag → quiet .k-chip (dashboards stay category-quiet, §2); ticker →
    .k-tick-sym; the linked-object chip → .k-chip-mono. All from the shared kit. */
-.jr-status { font-size:var(--fs-micro); text-transform:uppercase; letter-spacing:.04em; }
+.jr-status { font-size:var(--fs-caption); text-transform:uppercase; letter-spacing:.04em; }
 .jr-status-open { color:var(--warn); }
 .jr-status-resolved { color:var(--ok); }
 .jr-status-superseded, .jr-status-archived { color:var(--muted); }
-.jr-when, .jr-src { color:var(--muted); font-size:var(--fs-micro); font-family:var(--mono); }
+.jr-when, .jr-src { color:var(--muted); font-size:var(--fs-caption); font-family:var(--mono); }
 .jr-body { font-size:var(--fs-body); line-height:1.5; color:var(--fg-soft); }
 /* Note bodies render through ui.prose (markdown → block HTML); collapse the
    first/last paragraph margins so a one-line note keeps its old tight box. */
@@ -72,7 +72,7 @@ _PANEL_STYLE = """<style>
 .jr-body ul { margin:0 0 8px; padding-left:20px; }
 .jr-body li { margin-bottom:3px; }
 .jr-resolution { margin-top:6px; font-size:var(--fs-caption); color:var(--muted); }
-.jr-anchor { color:var(--muted); font-size:var(--fs-micro); font-family:var(--mono); }
+.jr-anchor { color:var(--muted); font-size:var(--fs-caption); font-family:var(--mono); }
 .jr-actions { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; align-items:center; }
 .jr-actions select { padding:3px 9px; }
 .jr-note-new { margin:0 0 16px; }
@@ -82,7 +82,7 @@ _PANEL_STYLE = """<style>
 .jr-hint { color:var(--muted); font-size:var(--fs-caption); margin-top:10px; }
 /* Embedded (composite-console) section heading — the console band owns the
    tab title, so the <h2> collapses to a section-level h3. */
-.jr-h { font-size:var(--fs-section); font-weight:600; color:var(--fg);
+.jr-h { font-size:var(--fs-title); font-weight:600; color:var(--fg);
   margin:var(--sp-4) 0 var(--sp-1); }
 /* In-card Resolve / Supersede editor (replaces window.prompt — the blocking
    OS modal the ledger banned in PR9 survived here). */
@@ -93,7 +93,7 @@ _PANEL_STYLE = """<style>
 .jr-link-box { display:inline-flex; align-items:center; gap:6px; }
 .jr-link-box select { max-width:300px; }
 .jr-auto { display:inline-flex; align-items:center; gap:4px;
-  font-size:var(--fs-micro); color:var(--muted); }
+  font-size:var(--fs-caption); color:var(--muted); }
 /* Pending reconciliation strip. */
 .jr-rec-sec { margin:0 0 16px; }
 .jr-rec-head { display:flex; align-items:baseline; gap:8px; margin-bottom:8px; }
