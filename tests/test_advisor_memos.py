@@ -338,10 +338,50 @@ def test_next_dollar_persists_memo_note_and_backlinks(
     assert memo.kind == "next_dollar" and memo.ticker is None
     assert memo.horizon_days == 90
     assert memo.context is not None and "holding_upsides" in memo.context
+    # §5.3a: the deterministic top-allocation ranking scoring.py mechanically
+    # grades — TSM (candidate, 45% upside) ranks above NU (holding, 30%).
+    assert memo.context["model_rows"] == [
+        {"ticker": "TSM", "upside_pct": 45.0},
+        {"ticker": "NU", "upside_pct": 30.0},
+    ]
     # Memory: a portfolio-level advisor note exists and backlinks resolve.
     assert memo.note_id is not None and memo.ledger_entry_id is None
     notes = list_notes(user_id="bhanu", db_path=db)
     assert any(n.id == memo.note_id and n.source == "advisor" for n in notes)
+
+
+def test_next_dollar_model_rows_excludes_breach_and_stub_and_implausible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A breached-thesis or stub-placeholder name, and an implausibly-huge
+    upside (data-quality artifact per IMPLAUSIBLE_UPSIDE_PCT), must never be
+    crowned the mechanically-graded "top pick"."""
+    db = _build_db(tmp_path)
+
+    def fake_llm(prompt: str, **kwargs: object) -> str:
+        return "## Section\nBody.\n\nDone."
+
+    monkeypatch.setattr(memos_mod, "call_llm", fake_llm)
+    ctx = _ctx(
+        tmp_path,
+        {
+            "NU": _val("NU", 30.0, list_type="portfolio"),
+            "BROKEN": _val("BROKEN", 90.0, list_type="portfolio", verdict="breach"),
+        },
+        {
+            "STUB": _val("STUB", 80.0, stub=True),
+            "TSM": _val("TSM", 200.0),  # > IMPLAUSIBLE_UPSIDE_PCT (100.0)
+            "REAL": _val("REAL", 25.0),
+        },
+    )
+    result = generate_next_dollar_memo(tmp_path, user_id="bhanu", ctx=ctx)
+    assert result.ok and result.memo_id is not None
+    memo = get_memo(result.memo_id, db_path=db)
+    assert memo is not None and memo.context is not None
+    rows = memo.context["model_rows"]
+    # BROKEN (breach), STUB (stub_thesis), and TSM (200% > IMPLAUSIBLE_UPSIDE_PCT)
+    # are all excluded — only NU (30%) and REAL (25%) remain, ranked descending.
+    assert rows == [{"ticker": "NU", "upside_pct": 30.0}, {"ticker": "REAL", "upside_pct": 25.0}]
 
 
 def test_swap_checks_gate_on_screen_and_write_ledger(

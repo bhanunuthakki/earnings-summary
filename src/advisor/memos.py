@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from advisor.context import (
+    IMPLAUSIBLE_UPSIDE_PCT,
     AdvisorContext,
     SwapCandidate,
     book_block,
@@ -254,6 +255,32 @@ def persist_memo(
     )
 
 
+def _next_dollar_model_rows(context: AdvisorContext) -> list[dict[str, object]]:
+    """Deterministic top-allocation ranking, persisted so ``advisor.scoring``
+    can mechanically grade the memo's top-ranked pick (§5.3a) without
+    re-deriving it or re-reading LLM prose. Every ticker the memo's own prompt
+    reasons from (candidates_block/holdings_block draw on the same
+    ``candidates_val``/``holdings_val``), ranked by DCF upside_pct descending
+    -- the same valuation gap the memo argues from. A stub-thesis or
+    thesis-breach name is excluded from contention (mirrors
+    ``screen_swap_candidates``'s eligibility guard): the mechanical grade must
+    never crown a data-quality artifact or an unresearched name as the "top
+    pick". Candidates take priority over an already-held ticker at the same
+    upside (a next-dollar memo argues where NEW capital goes first).
+    """
+    eligible: dict[str, float] = {}
+    for t, v in context.candidates_val.items():
+        if v.stub_thesis or v.verdict == "breach" or v.upside_pct > IMPLAUSIBLE_UPSIDE_PCT:
+            continue
+        eligible[t] = v.upside_pct
+    for t, v in context.holdings_val.items():
+        if t in eligible or v.stub_thesis or v.verdict == "breach":
+            continue
+        eligible[t] = v.upside_pct
+    ranked = sorted(eligible.items(), key=lambda kv: kv[1], reverse=True)
+    return [{"ticker": t, "upside_pct": u} for t, u in ranked]
+
+
 def generate_next_dollar_memo(
     repo_root: Path,
     *,
@@ -305,6 +332,10 @@ def generate_next_dollar_memo(
         ],
         "candidate_upsides": {t: v.upside_pct for t, v in sorted(context.candidates_val.items())},
         "holding_upsides": {t: v.upside_pct for t, v in sorted(context.holdings_val.items())},
+        # §5.3a: the deterministic top-allocation ranking scoring.py mechanically
+        # grades — absent on any memo generated before this field existed, which
+        # scoring.py must treat as legacy/unscoreable, never a guess-fill.
+        "model_rows": _next_dollar_model_rows(context),
     }
     return persist_memo(
         db_path=db_path,

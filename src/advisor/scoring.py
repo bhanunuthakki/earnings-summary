@@ -19,9 +19,17 @@ what actually happened:
   minus the holding's over the horizon (``screen_validated`` /
   ``screen_refuted`` with the realized margin). The memo never directed a
   swap, so no stance is imputed.
-* **Next-dollar** — ``unscoreable`` in v1: its candidate picks live in
-  prose, not structure. Marked immediately so the pending queue stays
-  meaningful.
+* **Next-dollar** (§5.3a, tenet-2 Phase 5) — mechanical, mirroring swap
+  check's style: the top-ranked pick in the memo's persisted
+  ``context_json.model_rows`` (``advisor.memos._next_dollar_model_rows``)
+  graded against SPY/absolute (``screen_validated``/``screen_refuted``). A
+  memo persisted before ``model_rows`` existed is ``unscoreable`` with an
+  explicit "legacy" reason — never guessed from prose.
+* **Position review / guard override** (§5.3b) — a ``position_review`` memo
+  whose ``context_json.verdict_source == 'guard_override'`` is graded as its
+  own explicit hold at the horizon (``detail.guard_override = True``), so the
+  behavioral guard's forced holds accrue a separately identifiable track
+  record rather than being folded, unmarked, into the generic Socratic path.
 
 A memo the run cannot grade YET — horizon immature, the price cache not
 covering the window end, tracker down for a tracker-basis grade — simply
@@ -159,6 +167,100 @@ def _window(memo: AdvisorMemoRow) -> tuple[str, str, int]:
     return start.isoformat(), end.isoformat(), horizon
 
 
+def _next_dollar_model_rows_of(memo: AdvisorMemoRow) -> list[object] | None:
+    """The persisted ``model_rows`` list off a next_dollar memo's context, or
+    None when absent/empty/malformed — a legacy memo (persisted before
+    ``advisor.memos._next_dollar_model_rows`` existed) has nothing structured
+    to grade."""
+    raw_rows = (memo.context or {}).get("model_rows")
+    if isinstance(raw_rows, list) and raw_rows:
+        return cast("list[object]", raw_rows)
+    return None
+
+
+def _score_next_dollar(
+    repo_root: Path,
+    memo: AdvisorMemoRow,
+    raw_rows: list[object],
+    *,
+    start_date: str,
+    end_date: str,
+    horizon: int,
+    api_url: str | None,
+    db: Path,
+) -> ScoreOutcome:
+    """Mechanical grade for a next_dollar memo (§5.3a): the top-ranked pick's
+    (``context_json.model_rows[0]``, persisted by
+    ``advisor.memos._next_dollar_model_rows``) realized return vs SPY
+    (``tracker_spy``) or absolute, mirroring ``swap_check``'s pair-relative
+    style — ``screen_validated`` when the pick cleared the basis,
+    ``screen_refuted`` otherwise. Caller (``score_memo``) has already verified
+    ``raw_rows`` is a non-empty list and that the horizon has matured.
+    """
+    top_raw = raw_rows[0]
+    top_ticker: str | None = None
+    top_upside: float | None = None
+    if isinstance(top_raw, dict):
+        top = cast("dict[str, object]", top_raw)
+        ticker_val = top.get("ticker")
+        if isinstance(ticker_val, str) and ticker_val:
+            top_ticker = ticker_val
+        upside_val = top.get("upside_pct")
+        if isinstance(upside_val, (int, float)) and not isinstance(upside_val, bool):
+            top_upside = float(upside_val)
+
+    if top_ticker is None:
+        insert_stance_score(
+            memo_id=memo.id,
+            user_id=memo.user_id,
+            verdict="unscoreable",
+            benchmark_basis="none",
+            horizon_days=horizon,
+            start_date=start_date,
+            end_date=end_date,
+            detail={"reason": "top model_rows entry has no ticker"},
+            db_path=db,
+        )
+        mark_scored(memo.id, status="unscoreable", db_path=db)
+        return ScoreOutcome(memo_id=memo.id, scored=True, verdict="unscoreable")
+
+    top_ret = price_return_from_cache(repo_root, top_ticker, start_date, end_date)
+    if top_ret is None:
+        return ScoreOutcome(
+            memo_id=memo.id,
+            scored=False,
+            defer_reason=f"price cache doesn't cover {top_ticker} {start_date}->{end_date}",
+        )
+    spy_ret = spy_return_from_tracker(start_date, end_date, api_url=api_url)
+    if spy_ret is not None:
+        basis, margin = "tracker_spy", top_ret - spy_ret
+    else:
+        basis, margin = "absolute", top_ret
+    verdict = "screen_validated" if margin > 0 else "screen_refuted"
+    insert_stance_score(
+        memo_id=memo.id,
+        user_id=memo.user_id,
+        verdict=verdict,
+        benchmark_basis=basis,
+        horizon_days=horizon,
+        start_date=start_date,
+        end_date=end_date,
+        ticker=top_ticker,
+        ticker_return_pct=top_ret,
+        benchmark_return_pct=spy_ret,
+        excess_return_pct=(top_ret - spy_ret) if spy_ret is not None else None,
+        detail={
+            "reason": "top-ranked next_dollar pick vs SPY/absolute",
+            "top_ticker": top_ticker,
+            "margin_pp": round(margin, 2),
+            "upside_pct": top_upside,
+        },
+        db_path=db,
+    )
+    mark_scored(memo.id, status="scored", db_path=db)
+    return ScoreOutcome(memo_id=memo.id, scored=True, verdict=verdict)
+
+
 def score_memo(
     repo_root: Path,
     memo: AdvisorMemoRow,
@@ -173,23 +275,44 @@ def score_memo(
     today = (now or datetime.now(UTC)).date().isoformat()
 
     if memo.kind == "next_dollar":
-        insert_stance_score(
-            memo_id=memo.id,
-            user_id=memo.user_id,
-            verdict="unscoreable",
-            benchmark_basis="none",
-            horizon_days=memo.horizon_days or 90,
-            detail={"reason": "next_dollar picks live in prose; not graded in v1"},
-            db_path=db,
-        )
-        mark_scored(memo.id, status="unscoreable", db_path=db)
-        return ScoreOutcome(memo_id=memo.id, scored=True, verdict="unscoreable")
+        raw_rows = _next_dollar_model_rows_of(memo)
+        if raw_rows is None:
+            # Legacy memo, persisted before model_rows existed — nothing ever
+            # becomes gradeable for it, so (matching the pre-§5.3a posture)
+            # it's marked unscoreable immediately rather than sitting in the
+            # pending queue until a horizon that will never help it matures.
+            insert_stance_score(
+                memo_id=memo.id,
+                user_id=memo.user_id,
+                verdict="unscoreable",
+                benchmark_basis="none",
+                horizon_days=memo.horizon_days or 90,
+                detail={
+                    "reason": (
+                        "legacy next_dollar memo predates the persisted model_rows "
+                        "structure (§5.3a) — nothing structured to grade"
+                    )
+                },
+                db_path=db,
+            )
+            mark_scored(memo.id, status="unscoreable", db_path=db)
+            return ScoreOutcome(memo_id=memo.id, scored=True, verdict="unscoreable")
+        start_date, end_date, horizon = _window(memo)
+        if end_date > today:
+            return ScoreOutcome(
+                memo_id=memo.id, scored=False, defer_reason=f"horizon matures {end_date}"
+            )
+        return _score_next_dollar(
+            repo_root, memo, raw_rows, start_date=start_date, end_date=end_date,
+            horizon=horizon, api_url=api_url, db=db,
+        )  # fmt: skip
 
     start_date, end_date, horizon = _window(memo)
     if end_date > today:
         return ScoreOutcome(
             memo_id=memo.id, scored=False, defer_reason=f"horizon matures {end_date}"
         )
+
     if not memo.ticker:
         insert_stance_score(
             memo_id=memo.id,
@@ -248,6 +371,46 @@ def score_memo(
         mark_scored(
             memo.id, status="scored" if verdict != "unscoreable" else "unscoreable", db_path=db
         )
+        return ScoreOutcome(memo_id=memo.id, scored=True, verdict=verdict)
+
+    # position_review / guard_override (§5.3b): the behavioral guard's forced
+    # hold IS a stance — score it exactly like any hold, at its horizon, but
+    # tag the detail so this memo's grade is separately identifiable as the
+    # guard's OWN track record (never silently folded, indistinguishable, into
+    # the generic Socratic path below). Without this explicit branch a
+    # guard_override review is graded correctly by luck of stance="hold" being
+    # set at persist time, but with no marker letting a downstream reader
+    # (the decision journal, the calibration scorecard) single out "how has
+    # the guard's hold actually done" as its own question.
+    memo_context = memo.context or {}
+    if memo.kind == "position_review" and memo_context.get("verdict_source") == "guard_override":
+        spy_ret = spy_return_from_tracker(start_date, end_date, api_url=api_url)
+        if spy_ret is not None:
+            basis, graded = "tracker_spy", ticker_ret - spy_ret
+        else:
+            basis, graded = "absolute", ticker_ret
+        verdict = grade_directional("hold", graded)
+        insert_stance_score(
+            memo_id=memo.id,
+            user_id=memo.user_id,
+            verdict=verdict,
+            benchmark_basis=basis,
+            horizon_days=horizon,
+            start_date=start_date,
+            end_date=end_date,
+            ticker=memo.ticker,
+            ticker_return_pct=ticker_ret,
+            benchmark_return_pct=spy_ret,
+            excess_return_pct=(ticker_ret - spy_ret) if spy_ret is not None else None,
+            detail={
+                "stance": "hold",
+                "graded_return_pp": round(graded, 2),
+                "guard_override": True,
+                "reason": "behavioral guard forced hold — graded as the guard's own track record",
+            },
+            db_path=db,
+        )
+        mark_scored(memo.id, status="scored", db_path=db)
         return ScoreOutcome(memo_id=memo.id, scored=True, verdict=verdict)
 
     # Socratic: stance vs (excess over tracker-SPY, else absolute).

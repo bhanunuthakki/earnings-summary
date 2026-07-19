@@ -133,6 +133,7 @@ def _memo(
     stance: str | None = "add",
     horizon: int = 90,
     created: str = "2026-06-01T12:00:00+00:00",
+    context: dict[str, object] | None = None,
 ) -> AdvisorMemoRow:
     return AdvisorMemoRow(
         id=memo_id,
@@ -142,7 +143,7 @@ def _memo(
         counter_ticker=counter,
         title="t",
         body_md="b",
-        context=None,
+        context=context,
         stance=stance,
         horizon_days=horizon,
         score_status="pending",
@@ -227,6 +228,138 @@ def test_next_dollar_marks_unscoreable_immediately(tmp_path: Path) -> None:
         db_path=db,
     )
     assert outcome.scored and outcome.verdict == "unscoreable"
+    score = list_scores_for_memos([1], db_path=db)[1]
+    assert score.detail is not None
+    assert "legacy" in str(score.detail["reason"])
+
+
+def test_next_dollar_with_model_rows_defers_until_mature(tmp_path: Path) -> None:
+    """A next_dollar memo persisted WITH model_rows now waits for its horizon
+    (like every other gradeable kind) instead of being marked unscoreable
+    immediately — the whole point of persisting model_rows is that it CAN
+    eventually be graded."""
+    db = _build_db(tmp_path)
+    memo = _memo(
+        kind="next_dollar",
+        ticker=None,
+        stance=None,
+        context={"model_rows": [{"ticker": "NU", "upside_pct": 20.0}]},
+    )
+    outcome = score_memo(tmp_path, memo, now=datetime(2026, 6, 11, tzinfo=UTC), db_path=db)
+    assert not outcome.scored
+    assert "matures" in (outcome.defer_reason or "")
+
+
+def test_next_dollar_with_model_rows_grades_top_pick_mechanically(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = _build_db(tmp_path)
+    # NU (the top-ranked pick) +20%; SPY +5% -> beats the basis -> validated.
+    _write_price_cache(tmp_path, "NU", [("2026-06-01", 10.0), ("2026-08-30", 12.0)])
+    monkeypatch.setattr(scoring_mod, "spy_return_from_tracker", _spy_stub(5.0))
+    memo = _memo(
+        kind="next_dollar",
+        ticker=None,
+        stance=None,
+        context={
+            "model_rows": [
+                {"ticker": "NU", "upside_pct": 20.0},
+                {"ticker": "WIX", "upside_pct": 10.0},
+            ]
+        },
+    )
+    outcome = score_memo(tmp_path, memo, now=_NOW, db_path=db)
+    assert outcome.scored and outcome.verdict == "screen_validated"
+    score = list_scores_for_memos([1], db_path=db)[1]
+    assert score.ticker == "NU"
+    assert score.benchmark_basis == "tracker_spy"
+    assert score.detail is not None
+    assert score.detail["top_ticker"] == "NU"
+
+
+def test_next_dollar_top_pick_below_basis_is_refuted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = _build_db(tmp_path)
+    _write_price_cache(tmp_path, "NU", [("2026-06-01", 10.0), ("2026-08-30", 10.2)])  # +2%
+    monkeypatch.setattr(scoring_mod, "spy_return_from_tracker", _spy_stub(5.0))
+    memo = _memo(
+        kind="next_dollar",
+        ticker=None,
+        stance=None,
+        context={"model_rows": [{"ticker": "NU", "upside_pct": 20.0}]},
+    )
+    outcome = score_memo(tmp_path, memo, now=_NOW, db_path=db)
+    assert outcome.scored and outcome.verdict == "screen_refuted"
+
+
+def test_next_dollar_top_row_missing_ticker_is_unscoreable(tmp_path: Path) -> None:
+    db = _build_db(tmp_path)
+    memo = _memo(
+        kind="next_dollar", ticker=None, stance=None, context={"model_rows": [{"upside_pct": 20.0}]}
+    )
+    outcome = score_memo(tmp_path, memo, now=_NOW, db_path=db)
+    assert outcome.scored and outcome.verdict == "unscoreable"
+    score = list_scores_for_memos([1], db_path=db)[1]
+    assert score.detail is not None
+    assert "no ticker" in str(score.detail["reason"])
+
+
+def test_guard_override_position_review_scored_as_hold_with_track_record_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """§5.3b: a guard_override review is graded as an explicit hold at its
+    horizon, with a distinguishing ``detail.guard_override`` marker so its
+    track record is separately queryable (the decision journal / calibration
+    scorecard partition on it) rather than folded, unmarked, into the generic
+    Socratic path."""
+    db = _build_db(tmp_path)
+    _write_price_cache(tmp_path, "NU", [("2026-06-01", 10.0), ("2026-08-30", 9.0)])  # -10%
+    monkeypatch.setattr(scoring_mod, "spy_return_from_tracker", _spy_stub(None))
+    memo = _memo(
+        kind="position_review",
+        stance="hold",
+        context={"verdict_source": "guard_override"},
+    )
+    outcome = score_memo(tmp_path, memo, now=_NOW, db_path=db)
+    # -10% absolute is below HOLD_FLOOR_PP (-5.0) -> wrong.
+    assert outcome.scored and outcome.verdict == "wrong"
+    score = list_scores_for_memos([1], db_path=db)[1]
+    assert score.detail is not None
+    assert score.detail["guard_override"] is True
+    assert score.detail["stance"] == "hold"
+
+
+def test_guard_override_position_review_correct_when_hold_paid_off(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = _build_db(tmp_path)
+    _write_price_cache(tmp_path, "NU", [("2026-06-01", 10.0), ("2026-08-30", 11.0)])  # +10%
+    monkeypatch.setattr(scoring_mod, "spy_return_from_tracker", _spy_stub(None))
+    memo = _memo(
+        kind="position_review",
+        stance="hold",
+        context={"verdict_source": "guard_override"},
+    )
+    outcome = score_memo(tmp_path, memo, now=_NOW, db_path=db)
+    assert outcome.scored and outcome.verdict == "correct"
+
+
+def test_non_guard_position_review_unaffected_by_new_branch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A position_review memo with no verdict_source (or an 'llm' one) still
+    falls through to the ordinary Socratic grading path — the new
+    guard_override branch must not swallow genuine LLM-authored reviews."""
+    db = _build_db(tmp_path)
+    _write_price_cache(tmp_path, "NU", [("2026-06-01", 10.0), ("2026-08-30", 12.0)])  # +20%
+    monkeypatch.setattr(scoring_mod, "spy_return_from_tracker", _spy_stub(5.0))
+    memo = _memo(kind="position_review", stance="add", context={"verdict_source": "llm"})
+    outcome = score_memo(tmp_path, memo, now=_NOW, db_path=db)
+    assert outcome.scored and outcome.verdict == "correct"
+    score = list_scores_for_memos([1], db_path=db)[1]
+    assert score.detail is not None
+    assert "guard_override" not in score.detail
 
 
 # --------------------------------------------------------------------------- #
