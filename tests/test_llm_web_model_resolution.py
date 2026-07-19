@@ -81,9 +81,13 @@ def _model_arg(cmd: list[str]) -> str:
 def test_web_resolves_opus_pinned_purpose_when_model_omitted(
     capture_web_cmd: dict[str, Any],
 ) -> None:
-    """A purpose with an Opus pin (news_structuring) resolves to Opus when no
-    explicit model is passed — the PR 3 plumbing enhancement."""
-    cli.call_llm_with_web("prompt", purpose="news_structuring", force_budget_bypass=True)
+    """A purpose with an Opus pin resolves to Opus when no explicit model is
+    passed — the PR 3 plumbing enhancement. (material_news_classification is
+    the exemplar since news_structuring's 2026-07-19 downgrade to the Sonnet
+    default.)"""
+    cli.call_llm_with_web(
+        "prompt", purpose="material_news_classification", force_budget_bypass=True
+    )
     cmd = capture_web_cmd["cmd"]
     assert cmd is not None
     assert _model_arg(cmd) == "claude-opus-4-8"
@@ -99,7 +103,7 @@ def test_web_explicit_model_overrides_purpose(
     cli.call_llm_with_web(
         "prompt",
         model="claude-sonnet-4-6",
-        purpose="news_structuring",  # Opus-pinned, but the explicit model wins
+        purpose="material_news_classification",  # Opus-pinned, but the explicit model wins
         force_budget_bypass=True,
     )
     cmd = capture_web_cmd["cmd"]

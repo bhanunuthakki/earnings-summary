@@ -43,8 +43,10 @@ import json
 import sqlite3
 import sys
 import time
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -119,9 +121,16 @@ def _safe_websearch(ticker: str, *, days: int, db_path: str) -> list[NewsRow]:
 
 
 def _collect_for_ticker(
-    ticker: str, *, source: str, db_path: str, days: int, limit: int
+    ticker: str, *, source: str, db_path: str, days: int, limit: int, websearch_ok: bool = True
 ) -> list[NewsRow]:
-    """Collect (do not persist) one ticker's NewsRows under the source policy."""
+    """Collect (do not persist) one ticker's NewsRows under the source policy.
+
+    ``websearch_ok`` gates the costly WebSearch+LLM fallback per ticker: with
+    FMP news fully 402ing, an ungated `auto` sweep burned an LLM web call for
+    EVERY active-book name (~90/day, >$400/30d — 2026-07-19 review) mostly on
+    evaluation/watchlist names whose news nobody reads daily. The portfolio
+    names keep the fallback; everyone else still gets FMP (if it ever returns)
+    plus the additive EDGAR/grades feeds."""
     rows: list[NewsRow] = []
 
     if source in ("fmp", "auto"):
@@ -131,15 +140,37 @@ def _collect_for_ticker(
         rows.extend(res.rows)
         if source == "fmp":
             return rows
-        # auto: fall back to WebSearch+Opus only when FMP actually refused.
+        # auto: fall back to WebSearch+LLM only when FMP actually refused AND
+        # this ticker is fallback-eligible under the scope policy.
         if fmp_refused(res.status, res.body):
-            _log("news_fmp_refused_falling_back", ticker=ticker, status=res.status)
-            rows.extend(_safe_websearch(ticker, days=days, db_path=db_path))
+            if websearch_ok:
+                _log("news_fmp_refused_falling_back", ticker=ticker, status=res.status)
+                rows.extend(_safe_websearch(ticker, days=days, db_path=db_path))
+            else:
+                _log("news_fmp_refused_no_fallback", ticker=ticker, status=res.status)
         return rows
 
-    # source == "websearch"
+    # source == "websearch" (explicit manual policy — the scope gate does not apply)
     rows.extend(_safe_websearch(ticker, days=days, db_path=db_path))
     return rows
+
+
+def portfolio_tickers(db_path: str) -> frozenset[str]:
+    """Held names (list_type='portfolio', not archived) — the websearch-fallback
+    eligibility set under the default 'portfolio' scope. Empty set if the table
+    is absent (then NO ticker gets the costly fallback, the safe direction)."""
+    conn = sqlite3.connect(db_path)
+    try:
+        try:
+            rows = conn.execute(
+                "SELECT ticker FROM tracked_companies "
+                "WHERE list_type = 'portfolio' AND archived_at IS NULL"
+            ).fetchall()
+        except sqlite3.Error:
+            return frozenset()
+        return frozenset(str(r[0]).upper() for r in rows)
+    finally:
+        conn.close()
 
 
 def _safe_edgar(ticker: str, *, days: int) -> list[NewsRow]:
@@ -207,6 +238,8 @@ def collect_primary(
     limit: int,
     workers: int = _PRIMARY_WORKERS,
     per_ticker_timeout_s: float = _TICKER_TIMEOUT_S,
+    websearch_eligible: frozenset[str] | None = None,
+    on_rows: Callable[[str, list[NewsRow]], None] | None = None,
 ) -> list[NewsRow]:
     """Collect every ticker's primary-policy rows (FMP, or its WebSearch+Opus
     fallback on refusal) under bounded concurrency and a hard per-ticker time
@@ -245,6 +278,7 @@ def collect_primary(
                 db_path=db_path,
                 days=days,
                 limit=limit,
+                websearch_ok=(websearch_eligible is None or ticker.upper() in websearch_eligible),
             ): ticker.upper()
             for ticker in tickers
         }
@@ -263,6 +297,12 @@ def collect_primary(
                 ticker_rows = []
             done += 1
             rows.extend(ticker_rows)
+            # Persist AS WE GO (2026-07-19 review): the old collect-everything-
+            # then-one-upsert shape meant the daily stage kill discarded the
+            # whole (LLM-billed) haul — the news table froze for weeks while the
+            # calls kept billing. A stage kill now loses only in-flight tickers.
+            if on_rows is not None and ticker_rows:
+                on_rows(ticker, ticker_rows)
             _log(
                 "news_primary_ticker_done",
                 ticker=ticker,
@@ -277,6 +317,78 @@ def collect_primary(
     return rows
 
 
+def _score_diet_quality(db_path: str) -> None:
+    """LLM information-quality scoring of the mirrored diet signals. Batched
+    Haiku calls over rows WHERE quality_score IS NULL, capped per run; the pass
+    degrades per-batch internally (transient failures leave rows NULL — retried
+    on the next fetch) and this wrapper only lets HARD stops (budget cap /
+    missing CLI — llm.cli.is_hard_stop) propagate."""
+    try:
+        quality_tally = score_unscored_signals(db_path)
+        _log("news_diet_quality_scored", **quality_tally)
+    except Exception as exc:
+        if is_hard_stop(exc):
+            raise
+        _log("news_diet_quality_deferred", error=f"{type(exc).__name__}: {str(exc)[:200]}")
+
+
+# A book sweep whose freshest persisted story is older than this is a dead
+# feed, not a quiet week — fire the dead-man alert (0183).
+_NEWS_STALE_DAYS = 3
+
+
+def _fire_deadman_if_stale(db_path: str, *, tickers_n: int, inserted_total: int) -> None:
+    """The 'data_feed_stale' dead-man (2026-07-19 review: the news table sat
+    frozen at 2026-07-03 for weeks while the stage was killed daily and nothing
+    told the owner). After a full-book sweep, if the table's freshest
+    published_at is older than _NEWS_STALE_DAYS the outage fires ONE book-level
+    alert row per day into the feed the owner actually reads. Targeted
+    --tickers runs don't judge feed health. Never raises — the dead-man must
+    not break the run it is watching."""
+    if tickers_n < 5:
+        return
+    try:
+        conn = sqlite3.connect(db_path, timeout=30.0)
+        try:
+            row = conn.execute("SELECT MAX(published_at) FROM news").fetchone()
+        finally:
+            conn.close()
+        max_pub = str(row[0]) if row and row[0] else None
+        now = datetime.now(UTC).replace(tzinfo=None)
+        stale = True
+        if max_pub:
+            newest = datetime.strptime(max_pub[:10], "%Y-%m-%d")
+            stale = (now - newest).days > _NEWS_STALE_DAYS
+        if not stale:
+            return
+        from alerts import store as alerts_store
+
+        sig = alerts_store.compute_signature_sha(
+            "data_feed_stale", "PORTFOLIO", {"feed": "news", "date": now.date().isoformat()}
+        )
+        if alerts_store.find_by_signature(signature_sha=sig, db_path=db_path) is not None:
+            return
+        alerts_store.fire_alert(
+            ticker="PORTFOLIO",  # book-level sentinel, the 0171 capacity convention
+            trigger_kind="data_feed_stale",
+            fired_at=now,
+            evidence_json=json.dumps(
+                {
+                    "feed": "news",
+                    "max_published_at": max_pub,
+                    "inserted_this_run": inserted_total,
+                    "tickers_swept": tickers_n,
+                    "stale_days_limit": _NEWS_STALE_DAYS,
+                }
+            ),
+            signature_sha=sig,
+            db_path=db_path,
+        )
+        _log("news_deadman_fired", max_published_at=max_pub)
+    except Exception as exc:
+        _log("news_deadman_failed", error=f"{type(exc).__name__}: {str(exc)[:200]}")
+
+
 def run(
     tickers: list[str],
     *,
@@ -287,38 +399,79 @@ def run(
     skip_edgar: bool = False,
     skip_grades: bool = False,
     skip_s1_watch: bool = False,
+    websearch_scope: str = "portfolio",
 ) -> int:
     """Collect every ticker under the source policy, add the additive feeds,
-    and persist through one connection. Returns 0 normally; 1 only on a
+    persisting INCREMENTALLY throughout. Returns 0 normally; 1 only on a
     structural failure (the `news` table absent) — per-ticker feed hiccups are
-    logged and degraded, so the morning pipeline's trigger stage still runs."""
+    logged and degraded, so the morning pipeline's trigger stage still runs.
+
+    Shape (2026-07-19 review): the old collect-everything-then-one-upsert run
+    was killed daily at the stage budget BEFORE its single persist — weeks of
+    LLM-billed output discarded, the news table frozen, and the follow-on diet
+    scoring never reached (0 calls ever despite correct wiring). Now every
+    ticker's rows land as they arrive, diet scoring runs right after the
+    primary sweep (the bulk of the value; additive rows score on the next
+    run), and a dead-man alert fires if the table is still stale after a full
+    sweep."""
     if not tickers:
         _log("news_no_tickers")
         return 0
 
-    all_rows = collect_primary(tickers, source=source, db_path=db_path, days=days, limit=limit)
+    eligible: frozenset[str] | None = None
+    if source == "auto" and websearch_scope == "portfolio":
+        eligible = portfolio_tickers(db_path)
+        _log("news_websearch_scope", scope="portfolio", eligible=len(eligible))
 
-    additive = _collect_additive(
-        tickers,
-        days=days,
-        skip_edgar=skip_edgar,
-        skip_grades=skip_grades,
-        skip_s1_watch=skip_s1_watch,
-    )
-
-    # 30s busy timeout: this single persist lands AFTER the whole (potentially
-    # Opus-billed) collection — a brief concurrent writer must stall it, not
-    # throw the entire haul away with "database is locked" (sqlite's default
-    # busy wait is 5s; lock contention observed live 2026-07-03).
+    # 30s busy timeout: persists interleave with (potentially LLM-billed)
+    # collection — a brief concurrent writer must stall a write, not throw a
+    # ticker's rows away with "database is locked" (default busy wait is 5s;
+    # lock contention observed live 2026-07-03).
     conn = sqlite3.connect(db_path, timeout=30.0)
+    inserted_total = 0
+    deduped_total = 0
+    persist_failures = 0
+
+    def _persist(label: str, rows: list[NewsRow]) -> None:
+        nonlocal inserted_total, deduped_total, persist_failures
+        try:
+            ins, dup = upsert_news_rows(conn, rows)
+            inserted_total += ins
+            deduped_total += dup
+        except sqlite3.OperationalError as exc:
+            persist_failures += 1
+            _log("news_persist_failed", batch=label, error=str(exc))
+
     try:
+        all_rows = collect_primary(
+            tickers,
+            source=source,
+            db_path=db_path,
+            days=days,
+            limit=limit,
+            websearch_eligible=eligible,
+            on_rows=_persist,
+        )
+
+        # Diet scoring runs HERE — after the primary rows are safe but before
+        # the additive sweep — so a stage kill during EDGAR/grades can no
+        # longer starve it (it had 0 calls ever before this reordering).
+        # It is resumable (WHERE quality_score IS NULL), so additive rows it
+        # misses this run are scored next run.
+        _score_diet_quality(db_path)
+
+        additive = _collect_additive(
+            tickers,
+            days=days,
+            skip_edgar=skip_edgar,
+            skip_grades=skip_grades,
+            skip_s1_watch=skip_s1_watch,
+        )
         # Additive feeds supplement, never duplicate: drop any story the policy
         # rows (or the table) already carry under another url.
         additive = drop_duplicate_stories(conn, additive, against=all_rows)
-        inserted, deduped = upsert_news_rows(conn, all_rows + additive)
-    except sqlite3.OperationalError as exc:
-        _log("news_persist_failed", error=str(exc))
-        return 1
+        if additive:
+            _persist("additive", additive)
     finally:
         conn.close()
 
@@ -328,25 +481,12 @@ def run(
         tickers=len(tickers),
         fetched_rows=len(all_rows),
         additive_rows=len(additive),
-        inserted=inserted,
-        deduped=deduped,
+        inserted=inserted_total,
+        deduped=deduped_total,
+        persist_failures=persist_failures,
     )
-
-    # Follow-on: LLM information-quality scoring of the freshly-mirrored diet
-    # signals (upsert_news_rows ran sync_news_to_signals). Batched Haiku calls
-    # over rows WHERE quality_score IS NULL, capped per run; the pass degrades
-    # per-batch internally (transient failures leave rows NULL — retried on
-    # the next fetch) and this wrapper only lets HARD stops (budget cap /
-    # missing CLI — llm.cli.is_hard_stop) fail the run loudly. The news rows
-    # themselves are already persisted either way.
-    try:
-        quality_tally = score_unscored_signals(db_path)
-        _log("news_diet_quality_scored", **quality_tally)
-    except Exception as exc:
-        if is_hard_stop(exc):
-            raise
-        _log("news_diet_quality_deferred", error=f"{type(exc).__name__}: {str(exc)[:200]}")
-    return 0
+    _fire_deadman_if_stale(db_path, tickers_n=len(tickers), inserted_total=inserted_total)
+    return 1 if persist_failures and not inserted_total else 0
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -386,6 +526,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="Skip the additive competitor IPO S-1 watch (EDGAR full-text search).",
     )
+    parser.add_argument(
+        "--websearch-scope",
+        choices=("portfolio", "all"),
+        default="portfolio",
+        help="Which tickers may use the WebSearch+LLM fallback under --source auto: "
+        "'portfolio' (default — held names only; everyone else degrades to the "
+        "additive feeds) or 'all' (the pre-2026-07 behavior, ~$14/day at current "
+        "book size).",
+    )
     return parser.parse_args(argv)
 
 
@@ -413,6 +562,7 @@ def main(argv: list[str] | None = None) -> int:
         skip_edgar=cast("bool", args.skip_edgar),
         skip_grades=cast("bool", args.skip_grades),
         skip_s1_watch=cast("bool", args.skip_s1_watch),
+        websearch_scope=cast("str", args.websearch_scope),
     )
 
 

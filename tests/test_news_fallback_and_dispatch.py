@@ -368,7 +368,13 @@ def test_auto_falls_back_when_fmp_refused(news_db: Path, monkeypatch: pytest.Mon
     ws = _WsRecorder([_ws_row()])
     monkeypatch.setattr(fetch_news, "fetch_websearch_news_for_ticker", ws)
 
-    rc = fetch_news.run(["AAPL"], source="auto", db_path=str(news_db), days=2, limit=50)
+    # websearch_scope="all": this test exercises the refusal ROUTING, not the
+    # portfolio scope gate (covered in test_news_pipeline_repair.py); the
+    # fixture DB has no tracked_companies so the default 'portfolio' scope
+    # would correctly gate the fallback off.
+    rc = fetch_news.run(
+        ["AAPL"], source="auto", db_path=str(news_db), days=2, limit=50, websearch_scope="all"
+    )
     assert rc == 0
     assert ws.calls == 1
     assert _news_rows(news_db) == [("AAPL", "https://news.example/ws1", "websearch_opus")]

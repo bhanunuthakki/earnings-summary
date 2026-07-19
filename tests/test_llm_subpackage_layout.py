@@ -97,13 +97,15 @@ def test_kpi_registry_auto_proposal_routes_to_opus() -> None:
     assert resolve("kpi_registry_proposal") == cli.DEFAULT_MODEL
 
 
-def test_news_purposes_route_to_opus() -> None:
-    """The two news LLM modules resolve to Opus via LLM_MODELS, per the
-    news-table plan's explicit Opus instruction:
+def test_news_purpose_pins() -> None:
+    """The news LLM purpose pins, post the 2026-07-19 review:
       * material_news_classification — the material-news trigger's per-headline
-        materiality veto (was absent -> silently Sonnet; now pinned to Opus).
-      * news_structuring — the WebSearch->rows fallback extractor (registered
-        now, consumed once that feed lands).
+        materiality veto stays on Opus (judgment-heavy noise filtering, one
+        batched cached call per ticker per run).
+      * news_structuring — the WebSearch->rows fallback extractor was
+        DOWNGRADED to the Sonnet default: 1,622 calls / $416 in 30 days (over
+        half the monthly LLM bill) for a structure-extraction task with
+        deterministic output-contract invariants; the golden set gates the pin.
     The recent-developments web brief stays on Sonnet (DEFAULT_MODEL), pinned
     explicitly so call_llm_with_web's purpose resolution keeps it there."""
     from llm import cli
@@ -112,9 +114,9 @@ def test_news_purposes_route_to_opus() -> None:
     # rule-scoped pyright pragma (see test_etf_instrument_mvp.py).
     resolve = cli._model_for  # pyright: ignore[reportPrivateUsage]
     assert cli.LLM_MODELS["material_news_classification"] == "claude-opus-4-8"
-    assert cli.LLM_MODELS["news_structuring"] == "claude-opus-4-8"
+    assert cli.LLM_MODELS["news_structuring"] == cli.DEFAULT_MODEL
     assert resolve("material_news_classification") == "claude-opus-4-8"
-    assert resolve("news_structuring") == "claude-opus-4-8"
+    assert resolve("news_structuring") == cli.DEFAULT_MODEL
     # Recent-developments is pinned to Sonnet, not Opus.
     assert cli.LLM_MODELS["recent_developments"] == cli.DEFAULT_MODEL
     assert resolve("recent_developments") == cli.DEFAULT_MODEL
