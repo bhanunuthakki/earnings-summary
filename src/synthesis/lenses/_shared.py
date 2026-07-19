@@ -387,7 +387,9 @@ def load_predictions(ticker: str, repo_root: Path) -> list[dict[str, object]]:
 
 
 # What a lens prompt says instead of numbers when the latest run is sanity-flagged.
-DCF_FLAGGED_NOTE = "(DCF model flagged as unreviewed outlier — fair value withheld pending model review)"
+DCF_FLAGGED_NOTE = (
+    "(DCF model flagged as unreviewed outlier — fair value withheld pending model review)"
+)
 
 
 def load_dcf(ticker: str, repo_root: Path) -> dict[str, object] | None:

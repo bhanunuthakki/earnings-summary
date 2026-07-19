@@ -639,7 +639,7 @@ def _sanity_flag_row(body: StringIO, v: ValuationSnapshot) -> None:
     body.write(
         '<div class="val-row"><span>Model status</span>'
         '<strong class="neg" title="|over/under| exceeds the sanity limit — '
-        'more likely a broken model (stale assumptions, unit/FX defect) than a real '
+        "more likely a broken model (stale assumptions, unit/FX defect) than a real "
         'mispricing">UNREVIEWED MODEL — fair value flagged as outlier; '
         "review assumptions before trusting this card</strong></div>"
     )
