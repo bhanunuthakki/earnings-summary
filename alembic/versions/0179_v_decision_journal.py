@@ -63,14 +63,14 @@ upgrade idempotent); a DB stamped before 0159 (owner_profile_facts) or 0149
 nothing for it to read.
 
 Revision ID: 0179_v_decision_journal
-Revises: 0174_behavior_distill_budget
+Revises: 0178_comp_set_metrics_locator
 Create Date: 2026-07-18
 
-Note (alembic renumbering-at-rebase, tenet2_advisory_program.md §6.4): this
-program (tenet-2 Phase 5, wave E) claims 0179; parallel waves are expected to
-claim 0175-0178. At authoring time none had landed, so ``down_revision`` below
-repoints to the actual head (0174) -- repoint again at rebase if 0175-0178
-land in the meantime, per the standing gotcha.
+Note (alembic renumbering-at-rebase, tenet2_advisory_program.md §6.4):
+repointed at rebase (2026-07-18) — the parallel comparable-sets/metrics-engine
+wave landed ``0178_comp_set_metrics_locator`` (also chained off 0174) before
+this PR merged. This program (tenet-2 Phase 5, wave E) keeps its claimed
+number 0179; ``down_revision`` now repoints to the actual head (0178).
 """
 
 from __future__ import annotations
@@ -82,7 +82,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0179_v_decision_journal"
-down_revision: str | Sequence[str] | None = "0174_behavior_distill_budget"
+down_revision: str | Sequence[str] | None = "0178_comp_set_metrics_locator"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
