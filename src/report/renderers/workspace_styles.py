@@ -60,13 +60,6 @@ CSS = (
   --section-gap: 28px;
   --kpi-pad: 22px;
   --table-pad-y: 10px;
-
-  /* Aliases used by chat/comments modules */
-  --bg-elev: var(--surface);
-  --panel: var(--surface);
-  --panel-alt: var(--paper);
-  --ink: var(--fg);
-  --ink-muted: var(--muted);
 }
 
 :root[data-density="compact"] {
@@ -1345,23 +1338,23 @@ a.peer:hover { background: var(--paper); }
 .valuation-current { display: flex; flex-direction: column; gap: 2px; }
 .valuation-current-value {
   font-family: var(--mono); font-size: 36px; font-weight: 600;
-  letter-spacing: -0.02em; color: var(--ink);
+  letter-spacing: -0.02em; color: var(--fg);
 }
 .valuation-current-label { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
-.valuation-band { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--ink-muted); }
+.valuation-band { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; color: var(--muted); }
 .valuation-band-row { display: flex; gap: 6px; }
-.valuation-band-row .mono { font-family: var(--mono); color: var(--ink); }
+.valuation-band-row .mono { font-family: var(--mono); color: var(--fg); }
 .valuation-peg { display: flex; flex-direction: column; gap: 2px; }
 .valuation-peg-value {
   font-family: var(--mono); font-size: 22px; font-weight: 600;
-  letter-spacing: -0.01em; color: var(--ink);
+  letter-spacing: -0.01em; color: var(--fg);
 }
 .valuation-peg-label { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
-.valuation-peg-sub { font-size: var(--fs-caption); color: var(--ink-muted); font-family: var(--mono); }
+.valuation-peg-sub { font-size: var(--fs-caption); color: var(--muted); font-family: var(--mono); }
 .valuation-verdict {
   margin-left: auto; padding: 6px 10px;
-  background: var(--panel-alt); border: 1px solid var(--hairline); border-radius: var(--radius);
-  font-size: var(--fs-caption); color: var(--ink); font-style: italic;
+  background: var(--paper); border: 1px solid var(--hairline); border-radius: var(--radius);
+  font-size: var(--fs-caption); color: var(--fg); font-style: italic;
 }
 .valuation-spark { padding: 12px 0 4px; }
 .valuation-spark-axis {
@@ -1378,7 +1371,7 @@ a.peer:hover { background: var(--paper); }
      below it) instead of inset further. */
   margin: 0 var(--pad-x) 8px;
   padding: 12px 16px;
-  background: var(--panel);
+  background: var(--surface);
   border-left: 3px solid var(--accent, var(--ok));
   border-radius: var(--radius);
 }
@@ -1388,7 +1381,7 @@ a.peer:hover { background: var(--paper); }
 }
 .l1-thesis p {
   margin: 4px 0 0; font-family: var(--serif);
-  font-size: 14px; line-height: 1.55; color: var(--ink);
+  font-size: 14px; line-height: 1.55; color: var(--fg);
   /* Override the 1180px cap from the earlier .l1-thesis p rule — the thesis
      paragraph should span the full available width of the workspace shell
      so dense theses don't break across short, awkward lines. */
@@ -1405,7 +1398,7 @@ a.peer:hover { background: var(--paper); }
   display: flex; gap: 22px; align-items: baseline;
   margin: 0 var(--pad-x) 8px;
   padding: 12px 16px;
-  background: var(--panel);
+  background: var(--surface);
   border-left: 3px solid var(--warn);
   border-radius: var(--radius);
 }

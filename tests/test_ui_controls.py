@@ -519,27 +519,35 @@ QUARANTINE: dict[str, frozenset[str]] = {
     # workspace_chat / workspace_comments / workspace_styles graduated their
     # font-family dimension when the legacy --font-* alias layer was unforked onto
     # the canonical --sans/--serif/--mono tokens (every font-family decl now reads
-    # a real token). Their `alias` dimension stays quarantined — those modules
-    # still consume the non-font aliases (--ink/--panel/--link/…) the same :root
-    # defines — as do their font-size / radius dimensions, untouched here.
+    # a real token).
     # workspace_chat's lone off-scale 3px code corner moved to var(--radius) in
-    # the 2026-06-14 sweep; alias/font-size stay quarantined (report unfork).
-    # The report surfaces' `color` dimension is quarantined for the raw rgba the
-    # NEW func-color check now sees (drop-shadows -> --shadow-pop, white washes ->
-    # color-mix, the Tweaks-panel neutral micro-shadows): pre-existing drift, part
-    # of the same report-unfork backlog as their alias/radius/font-size entries —
-    # not touched here to keep the report HTML goldens frozen.
-    "report/renderers/workspace_chat.py": frozenset({"alias", "font-size", "color"}),
+    # the 2026-06-14 sweep; font-size stays quarantined (report unfork).
+    # UX audit (2026-07-18): workspace_chat / workspace_comments / workspace_styles
+    # / ui/cite_marks graduated their `alias` dimension — the shared legacy
+    # --panel/--panel-alt/--ink/--ink-muted/--bg-elev/--link :root block in
+    # workspace_styles was deleted and every consumer repointed at the canonical
+    # tokens (--surface/--paper/--fg/--muted/--accent). Same pass graduated
+    # `color` on workspace_chat / workspace_comments / cite_marks: their raw
+    # rgba() drop-shadows/washes moved onto var(--shadow-pop) / color-mix(var(--fg) …).
+    "report/renderers/workspace_chat.py": frozenset({"font-size"}),
     # workspace_comments graduated its kit-badge dimension in the deferred-items
     # pass: .cmt-outbox-badge / .cmt-health-pill now ride the kit's .k-pill (tone
-    # set in JS) with layout/mono-micro refine only. alias/font-size/radius stay
+    # set in JS) with layout/mono-micro refine only. font-size/radius stay
     # quarantined (report unfork — unrelated to the pill migration).
-    "report/renderers/workspace_comments.py": frozenset({"alias", "font-size", "radius", "color"}),
+    "report/renderers/workspace_comments.py": frozenset({"font-size", "radius"}),
     # workspace_styles graduated its kit-badge dimension in the same pass: the
     # .decision-badge.outcome-* filled chips moved onto .k-pill + tone (routed in
-    # thesis_risk.py). alias/radius stay quarantined (report unfork).
-    "report/renderers/workspace_styles.py": frozenset({"alias", "radius", "color"}),
-    "ui/cite_marks.py": frozenset({"alias", "radius", "color"}),
+    # thesis_risk.py). radius/color stay quarantined (report unfork — untouched
+    # by the 2026-07-18 alias sweep, which only fixed the valuation/l1-thesis/
+    # l1-reread panel backgrounds and ink text colors).
+    "report/renderers/workspace_styles.py": frozenset({"radius", "color"}),
+    # cite_marks graduated `alias` in the same 2026-07-18 sweep (its --panel/--ink/
+    # --link fallback chains repointed at the canonical tokens as sole values).
+    # color/radius stay quarantined: its `var(--radius, 6px)` / `var(--shadow-pop,
+    # 0 8px 24px rgba(...))` literal fallbacks (defensive — this CSS may render on
+    # a minimal-token host with no --radius/--shadow-pop defined) still read as a
+    # raw 6px radius / raw rgba to the scanner; pre-existing, not touched here.
+    "ui/cite_marks.py": frozenset({"color", "radius"}),
     # --- kit-badge (the 2026-06-15 component dimension): all seeded surfaces have
     #     now GRADUATED onto .k-pill — the command-center two (allocation .ad-pill,
     #     position_lifecycle .plc-pill) and the report two (workspace_comments

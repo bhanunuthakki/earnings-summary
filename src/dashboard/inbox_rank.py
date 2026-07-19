@@ -57,6 +57,7 @@ __all__ = [
     "ADVISOR_MEMO_TITLE",
     "CATEGORY_LABELS",
     "CATEGORY_ORDER",
+    "CATEGORY_THESIS",
     "SEMANTIC_ADVISOR_MEMO",
     "annotate_and_rank",
     "decisive_alert_reason",

@@ -30,9 +30,9 @@ snippet so neither depends on the other having loaded):
     unverifiedChipHtml(claims)       — '' or the warn chip for claims with
                                        supported === false
 
-``CITE_MARKS_CSS`` keys off whichever theme the host sets, with fallback
-chains across the shell vocabulary (--surface/--fg/--border/--accent) and
-the report vocabulary (--panel/--ink/--hairline/--link).
+``CITE_MARKS_CSS`` keys off whichever theme the host sets and consumes only
+the canonical tokens (--surface/--fg/--border/--accent/--hairline/…,
+src/ui/tokens.py) — no legacy report-vocabulary aliases (2026-07-18 sweep).
 """
 
 from __future__ import annotations
@@ -45,50 +45,50 @@ from typing import cast
 CITE_MARKS_CSS = """
 .cite-wrap { position: relative; display: inline; }
 .cite-wrap .cite-mark {
-  color: var(--link, var(--accent)); text-decoration: none;
+  color: var(--accent); text-decoration: none;
   font-size: 0.8em; vertical-align: super; cursor: pointer; white-space: nowrap;
 }
 /* When a [n] marker sits right after a financial value, the value itself gets
    the accent-tinted "this is cited" wash and the marker becomes a small round
    badge. Accent (interactive), NOT green — green = a positive number here. */
 .cite-wrap .cite-val {
-  background: color-mix(in srgb, var(--accent, var(--link)) 14%, transparent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   border-radius: var(--radius, 6px); padding: 0 3px;
 }
 .cite-wrap .cite-badge {
   font-size: var(--fs-micro, 10px); line-height: 1; vertical-align: middle;
-  color: var(--accent-contrast, var(--surface, var(--panel)));
-  background: var(--accent, var(--link)); border-radius: var(--radius-full, 999px);
+  color: var(--accent-contrast);
+  background: var(--accent); border-radius: var(--radius-full, 999px);
   padding: 1px 5px; margin-left: 3px; white-space: nowrap;
 }
 .cite-wrap .cite-pop {
   display: none; position: absolute; z-index: 60;
   bottom: calc(100% + 4px); left: 0;
   min-width: 170px; max-width: 260px; padding: 7px 9px;
-  background: var(--surface, var(--bg-elev, var(--panel)));
+  background: var(--surface);
   border: 1px solid var(--border, var(--hairline));
   border-radius: var(--radius, 6px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-pop, 0 8px 24px rgba(0, 0, 0, 0.45));
   font-size: var(--fs-caption, 12px); font-weight: 400; line-height: 1.45;
   white-space: normal; text-align: left;
 }
 .cite-wrap:hover .cite-pop, .cite-wrap:focus-within .cite-pop { display: block; }
-.cite-pop-label { display: block; font-weight: 600; color: var(--fg, var(--ink)); }
+.cite-pop-label { display: block; font-weight: 600; color: var(--fg); }
 .cite-pop-meta { display: block; color: var(--muted); margin-top: 2px; }
 .cite-pop-head {
   display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 4px;
 }
-.cite-pop-tick { font-weight: 600; color: var(--fg, var(--ink)); }
+.cite-pop-tick { font-weight: 600; color: var(--fg); }
 .cite-pop-kind {
-  font-size: var(--fs-micro, 10px); color: var(--accent, var(--link));
-  background: var(--accent-soft, var(--bg-elev, var(--panel)));
+  font-size: var(--fs-micro, 10px); color: var(--accent);
+  background: var(--accent-soft);
   border-radius: var(--radius, 6px); padding: 1px 6px; text-transform: uppercase;
   letter-spacing: 0.03em;
 }
 .cite-pop-per { font-size: var(--fs-caption, 12px); color: var(--muted); }
 .cite-pop-value {
   display: block; font-size: var(--fs-section, 14px); font-weight: 600;
-  color: var(--fg, var(--ink)); margin-top: 3px;
+  color: var(--fg); margin-top: 3px;
 }
 .cite-pop-value-cap {
   display: block; font-size: var(--fs-micro, 10px); color: var(--muted); margin-top: 1px;

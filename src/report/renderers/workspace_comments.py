@@ -797,14 +797,14 @@ CSS = r"""
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 20px; height: 20px; padding: 0 6px;
   font-family: var(--mono); font-size: var(--fs-micro); font-weight: 600;
-  background: rgba(255, 255, 255, 0.04);
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
   border: 1px solid var(--hairline);
   border-radius: 10px;
-  color: var(--ink-muted); cursor: pointer; opacity: 0.45;
+  color: var(--muted); cursor: pointer; opacity: 0.45;
   transition: opacity 0.15s, background 0.15s, border-color 0.15s;
 }
 [data-commentable="true"]:hover .cmt-pin { opacity: 1; }
-.cmt-pin:hover { background: rgba(255, 255, 255, 0.1); border-color: var(--ink-muted); color: var(--ink); }
+.cmt-pin:hover { background: color-mix(in srgb, var(--fg) 10%, transparent); border-color: var(--muted); color: var(--fg); }
 .cmt-pin.has-open { background: color-mix(in srgb, var(--warn) 18%, transparent); border-color: color-mix(in srgb, var(--warn) 55%, transparent); color: var(--warn); opacity: 1; }
 .cmt-pin.all-addressed { background: color-mix(in srgb, var(--ok) 12%, transparent); border-color: color-mix(in srgb, var(--ok) 40%, transparent); color: var(--ok); opacity: 0.9; }
 
@@ -814,7 +814,7 @@ CSS = r"""
   width: 0;
   height: 100vh;
   overflow: hidden;
-  background: var(--bg-elev, var(--panel));
+  background: var(--surface);
   border-left: 0 solid var(--hairline);
   transition: width 0.2s ease, border-left-width 0s 0.2s;
   display: flex; flex-direction: column;
@@ -824,22 +824,22 @@ CSS = r"""
   width: 380px;
   border-left-width: 1px;
   transition: width 0.2s ease, border-left-width 0s;
-  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-pop);
 }
 .cmt-sidebar-head {
   display: flex; align-items: flex-start; justify-content: space-between;
   padding: 14px 16px; border-bottom: 1px solid var(--hairline);
 }
-.cmt-sidebar-title { font-size: var(--fs-section); font-weight: 600; color: var(--ink); }
+.cmt-sidebar-title { font-size: var(--fs-section); font-weight: 600; color: var(--fg); }
 .cmt-sidebar-sub {
   font-size: var(--fs-caption); color: var(--muted); margin-top: 2px;
   font-family: var(--mono);
 }
 .cmt-close {
-  background: transparent; border: none; color: var(--ink-muted);
+  background: transparent; border: none; color: var(--muted);
   font-size: 20px; line-height: 1; padding: 0 6px; cursor: pointer;
 }
-.cmt-close:hover { color: var(--ink); }
+.cmt-close:hover { color: var(--fg); }
 
 /* Outbox status badge — shown in the sidebar header when the local queue is
    non-empty. Rides the control kit's .k-pill (k-pill-warn = "pending recovery",
@@ -879,7 +879,7 @@ CSS = r"""
 .cmt-list { flex: 1; overflow-y: auto; padding: 12px 14px; }
 .cmt-empty { color: var(--muted); font-size: var(--fs-caption); padding: 8px 0; }
 .cmt-card {
-  background: var(--panel-alt);
+  background: var(--paper);
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
   padding: 10px 12px;
@@ -896,24 +896,24 @@ CSS = r"""
 .cmt-status-open { color: var(--warn); }
 .cmt-status-addressed { color: var(--ok); }
 .cmt-status-dismissed { color: var(--muted); }
-.cmt-intent { background: rgba(255, 255, 255, 0.05); padding: 1px 6px; border-radius: 3px; }
+.cmt-intent { background: color-mix(in srgb, var(--fg) 5%, transparent); padding: 1px 6px; border-radius: 3px; }
 .cmt-time { margin-left: auto; font-family: var(--mono); }
-.cmt-body { color: var(--ink); line-height: 1.5; white-space: pre-wrap; }
+.cmt-body { color: var(--fg); line-height: 1.5; white-space: pre-wrap; }
 .cmt-resolution {
   margin-top: 8px; padding: 8px 10px;
   background: color-mix(in srgb, var(--ok) 8%, transparent); border-left: 2px solid var(--ok);
-  border-radius: 3px; font-size: var(--fs-caption); color: var(--ink-muted);
+  border-radius: 3px; font-size: var(--fs-caption); color: var(--muted);
 }
 .cmt-thread { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--hairline); }
 .cmt-thread-turn { display: flex; gap: 8px; padding: 4px 0; font-size: var(--fs-caption); }
 .cmt-thread-role { font-family: var(--sans); color: var(--muted); width: 60px; flex-shrink: 0; }
-.cmt-thread-text { color: var(--ink); }
+.cmt-thread-text { color: var(--fg); }
 .cmt-role-assistant .cmt-thread-role { color: var(--accent); }
 /* Action buttons are the kit's quiet small button (.k-btn.k-btn-quiet.k-btn-sm,
    added in the JS markup); this layout-only rule keeps the row spacing. */
 .cmt-actions { margin-top: 8px; display: flex; gap: 6px; }
 
-.cmt-form { padding: 12px 14px; border-top: 1px solid var(--hairline); background: var(--bg, var(--panel)); }
+.cmt-form { padding: 12px 14px; border-top: 1px solid var(--hairline); background: var(--bg); }
 /* Textarea/select: skinned by the shared control kit (ui/controls.py). */
 .cmt-form textarea { width: 100%; box-sizing: border-box; resize: vertical; }
 .cmt-form-row { display: flex; gap: 8px; margin-top: 8px; align-items: center; }
@@ -929,7 +929,7 @@ CSS = r"""
 .cmt-floater { position: absolute; z-index: 110; pointer-events: auto; }
 .cmt-floater-btn {
   border-radius: var(--radius-full);
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-pop);
 }
 
 /* Free-text highlight (the underlined excerpt the user commented on). Open =

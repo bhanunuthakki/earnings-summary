@@ -360,9 +360,9 @@ CSS = (
 .chat-toggle {
   padding: 8px 14px;
   border-radius: var(--radius-full);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-pop);
 }
-.chat-toggle.open { background: var(--ink-muted); }
+.chat-toggle.open { background: var(--muted); }
 .chat-toggle-icon { font-family: var(--mono); }
 /* Push-sidebar — flex sibling to .l1-root, mirrors .cmt-sidebar so chat
    slides the document aside instead of floating over it. The floating
@@ -373,7 +373,7 @@ CSS = (
   width: 0;
   height: 100vh;
   overflow: hidden;
-  background: var(--bg-elev, var(--panel));
+  background: var(--surface);
   border-left: 0 solid var(--hairline);
   transition: width 0.2s ease, border-left-width 0s 0.2s;
   display: flex; flex-direction: column;
@@ -383,16 +383,16 @@ CSS = (
   width: 460px;
   border-left-width: 1px;
   transition: width 0.2s ease, border-left-width 0s;
-  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--shadow-pop);
 }
 .chat-head {
   display: flex; align-items: flex-start; justify-content: space-between;
   padding: 12px 14px; border-bottom: 1px solid var(--hairline);
 }
-.chat-title { font-size: var(--fs-body); font-weight: 600; color: var(--ink); }
+.chat-title { font-size: var(--fs-body); font-weight: 600; color: var(--fg); }
 .chat-sub { font-size: var(--fs-micro); color: var(--muted); margin-top: 2px; font-family: var(--mono); }
 .chat-close {
-  background: transparent; border: none; color: var(--ink-muted);
+  background: transparent; border: none; color: var(--muted);
   font-size: 20px; line-height: 1; cursor: pointer; padding: 0 6px;
 }
 .chat-thread {
@@ -410,8 +410,8 @@ CSS = (
 }
 .chat-role-user { background: color-mix(in srgb, var(--accent) 9%, transparent); border-left: 2px solid var(--accent); }
 .chat-role-user .chat-role-tag { color: var(--accent); }
-.chat-role-assistant { background: var(--panel-alt); border-left: 2px solid var(--hairline); }
-.chat-role-assistant .chat-role-tag { color: var(--ink-muted); }
+.chat-role-assistant { background: var(--paper); border-left: 2px solid var(--hairline); }
+.chat-role-assistant .chat-role-tag { color: var(--muted); }
 .chat-role-system { background: color-mix(in srgb, var(--warn) 7%, transparent); border-left: 2px solid color-mix(in srgb, var(--warn) 50%, transparent); }
 .chat-role-system .chat-role-tag { color: var(--warn); }
 .chat-text p { margin: 0 0 6px; }
@@ -419,10 +419,10 @@ CSS = (
 .chat-text li { margin: 2px 0; }
 .chat-text code {
   font-family: var(--mono); font-size: 0.93em;
-  background: rgba(255, 255, 255, 0.04); padding: 1px 4px; border-radius: var(--radius);
+  background: color-mix(in srgb, var(--fg) 4%, transparent); padding: 1px 4px; border-radius: var(--radius);
 }
 .chat-text pre.chat-code {
-  background: rgba(0, 0, 0, 0.3); border: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--fg) 6%, transparent); border: 1px solid var(--hairline);
   border-radius: var(--radius); padding: 8px 10px; overflow-x: auto;
   font-family: var(--mono); font-size: 0.93em; margin: 6px 0;
 }
@@ -432,17 +432,17 @@ CSS = (
 }
 .chat-cite-row { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
 .chat-cite {
-  font-size: var(--fs-caption); color: var(--link); border: 1px solid var(--hairline);
+  font-size: var(--fs-caption); color: var(--accent); border: 1px solid var(--hairline);
   border-radius: var(--radius-full); padding: 2px 9px; text-decoration: none;
 }
-.chat-cite:hover { border-color: var(--link); }
+.chat-cite:hover { border-color: var(--accent); }
 .chat-diff {
   margin-top: 8px; padding: 8px 10px;
   background: color-mix(in srgb, var(--ok) 7%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent);
   border-radius: var(--radius); font-size: var(--fs-caption);
 }
 .chat-diff.applied { background: color-mix(in srgb, var(--ok) 15%, transparent); }
-.chat-diff-summary { color: var(--ink); margin-bottom: 4px; }
+.chat-diff-summary { color: var(--fg); margin-bottom: 4px; }
 .chat-diff-path code { background: transparent; padding: 0; color: var(--muted); }
 /* Preview/Apply are the kit's quiet small buttons (.k-btn.k-btn-quiet.k-btn-sm,
    added in the JS markup); this rule keeps only the row layout + the Apply
@@ -451,12 +451,12 @@ CSS = (
 .chat-diff-actions button[data-action="apply"] {
   background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent);
 }
-.chat-diff-note { margin-top: 6px; font-size: var(--fs-caption); color: var(--ink-muted); }
+.chat-diff-note { margin-top: 6px; font-size: var(--fs-caption); color: var(--muted); }
 
 .chat-form { padding: 10px 14px; border-top: 1px solid var(--hairline); }
 .chat-form textarea {
   width: 100%; box-sizing: border-box;
-  background: var(--panel-alt); color: var(--ink);
+  background: var(--paper); color: var(--fg);
   border: 1px solid var(--hairline); border-radius: var(--radius);
   padding: 8px 10px; font-size: var(--fs-body); font-family: var(--sans);
   resize: vertical;

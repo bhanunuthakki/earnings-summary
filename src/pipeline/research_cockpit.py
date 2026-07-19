@@ -1481,6 +1481,7 @@ def _staleness_dot(row: CockpitRow, now: datetime) -> str:
         f"<a class='stale-dot' href='/#system' "
         f"data-peek-url='/api/peek/provenance?ticker={t}' "
         f"data-peek-title='Data provenance · {t}' "
+        f"aria-label='Data provenance for {t}' "
         f"title='{escape(' · '.join(detail))}'><span class='k-dot k-dot-{tone}'></span></a>"
     )
 
