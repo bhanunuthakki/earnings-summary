@@ -95,8 +95,8 @@ def test_series_providers_well_formed() -> None:
         assert spec.providers, f"{sid}: no providers configured"
         assert get_series(sid) is spec
         for prov in spec.providers:
-            assert prov.kind.startswith("fmp_"), (
-                f"{sid} provider kind {prov.kind!r} should start with fmp_"
+            assert prov.kind == "yfinance" or prov.kind.startswith("fmp_"), (
+                f"{sid} provider kind {prov.kind!r} should be yfinance or fmp_*"
             )
             assert prov.path, f"{sid} provider has empty path"
             assert prov.date_key

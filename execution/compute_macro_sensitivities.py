@@ -133,7 +133,7 @@ def _run_one_ticker(
         )
         return {}
     series_data: dict[str, list[tuple[date, float]]] = {}
-    for sid in REGISTRY.keys():
+    for sid in REGISTRY:
         rows = _load_macro_series(sid, lookback_days)
         if rows:
             series_data[sid] = rows
@@ -149,12 +149,13 @@ def _run_one_ticker(
     )
     if not results or dry_run:
         return results
-    for sid, (beta, r_sq, _n) in results.items():
+    for sid, (beta, r_sq, n) in results.items():
         upsert_sensitivity(
             ticker=ticker,
             series_id=sid,
             beta=beta,
             r_squared=r_sq,
+            n_obs=n,
             lookback_window_days=lookback_days,
         )
     return results

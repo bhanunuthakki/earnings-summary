@@ -37,7 +37,16 @@ def _empty_params() -> dict[str, str]:
 
 @dataclass(slots=True, frozen=True)
 class ProviderSpec:
-    """One candidate endpoint for a series. Tried in order, first hit wins."""
+    """One candidate endpoint for a series. Tried in order, first hit wins.
+
+    ``kind="yfinance"`` (2026-07-19 review) is the free non-FMP provider: the
+    daily FMP fetch had been 429ing on ALL 12 series for weeks ("populated": 0
+    logged daily) while betas silently recomputed off frozen series — and five
+    series (usd_brl among them, the single most thesis-relevant factor for a
+    MELI+NU book) had ZERO rows ever. For yfinance providers ``path`` is the
+    Yahoo symbol and ``scale`` multiplies each close (e.g. ^TNX quotes yield
+    × 10, so scale=0.1 lands the series in percent like the FMP feed did).
+    """
 
     kind: str
     path: str
@@ -46,6 +55,13 @@ class ProviderSpec:
     date_key: str = "date"
     value_key: str = "close"
     source: str = "FMP"
+    scale: float = 1.0
+
+
+def _yf(symbol: str, *, scale: float = 1.0) -> ProviderSpec:
+    """A yfinance provider candidate — listed FIRST so the free, working feed
+    wins and FMP demotes to fallback."""
+    return ProviderSpec(kind="yfinance", path=symbol, source="yfinance", scale=scale)
 
 
 @dataclass(slots=True, frozen=True)
@@ -109,6 +125,7 @@ REGISTRY: dict[str, SeriesSpec] = {
         units="pct",
         category="rates",
         providers=(
+            _yf("^TNX", scale=0.1),  # CBOE 10y-yield index quotes yield x 10
             ProviderSpec(
                 kind="fmp_treasury",
                 path="treasury-rates",
@@ -123,6 +140,7 @@ REGISTRY: dict[str, SeriesSpec] = {
         units="level",
         category="index",
         providers=(
+            _yf("^VIX"),
             ProviderSpec(
                 kind="fmp_historical",
                 path="historical-price-eod/full",
@@ -136,6 +154,7 @@ REGISTRY: dict[str, SeriesSpec] = {
         units="fx_rate",
         category="fx",
         providers=(
+            _yf("BRL=X"),  # yf "<CCY>=X" = CCY per USD, matching USDBRL
             ProviderSpec(
                 kind="fmp_fx",
                 path="historical-price-eod/full",
@@ -149,6 +168,7 @@ REGISTRY: dict[str, SeriesSpec] = {
         units="fx_rate",
         category="fx",
         providers=(
+            _yf("INR=X"),
             ProviderSpec(
                 kind="fmp_fx",
                 path="historical-price-eod/full",
@@ -162,6 +182,7 @@ REGISTRY: dict[str, SeriesSpec] = {
         units="fx_rate",
         category="fx",
         providers=(
+            _yf("EUR=X"),
             ProviderSpec(
                 kind="fmp_fx",
                 path="historical-price-eod/full",
@@ -175,6 +196,7 @@ REGISTRY: dict[str, SeriesSpec] = {
         units="fx_rate",
         category="fx",
         providers=(
+            _yf("CAD=X"),
             ProviderSpec(
                 kind="fmp_fx",
                 path="historical-price-eod/full",
@@ -188,6 +210,7 @@ REGISTRY: dict[str, SeriesSpec] = {
         units="fx_rate",
         category="fx",
         providers=(
+            _yf("TWD=X"),
             ProviderSpec(
                 kind="fmp_fx",
                 path="historical-price-eod/full",
@@ -201,6 +224,7 @@ REGISTRY: dict[str, SeriesSpec] = {
         units="usd_per_bbl",
         category="commodity",
         providers=(
+            _yf("BZ=F"),
             ProviderSpec(
                 kind="fmp_historical",
                 path="historical-price-eod/full",
@@ -214,6 +238,7 @@ REGISTRY: dict[str, SeriesSpec] = {
         units="usd_per_lb",
         category="commodity",
         providers=(
+            _yf("HG=F"),
             ProviderSpec(
                 kind="fmp_historical",
                 path="historical-price-eod/full",
@@ -227,6 +252,7 @@ REGISTRY: dict[str, SeriesSpec] = {
         units="usd_per_oz",
         category="commodity",
         providers=(
+            _yf("GC=F"),
             ProviderSpec(
                 kind="fmp_historical",
                 path="historical-price-eod/full",
@@ -240,6 +266,7 @@ REGISTRY: dict[str, SeriesSpec] = {
         units="level",
         category="index",
         providers=(
+            _yf("^SOX"),  # no working FMP source on the current tier (402/403)
             ProviderSpec(
                 kind="fmp_historical",
                 path="historical-price-eod/full",

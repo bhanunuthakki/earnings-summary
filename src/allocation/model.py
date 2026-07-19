@@ -69,6 +69,10 @@ SOFTMAX_TEMPERATURE = 1.0  # z-scale scores; ~e^3 spread between best and worst
 MACRO_BETA_LOOKBACK = 252  # preferred macro_sensitivities lookback_window_days
 MACRO_MOMENTUM_CAL_DAYS = 90  # macro momentum = log change over this window
 MACRO_STALE_DAYS = 45  # ignore a macro series whose latest point is older
+# Beta-quality floor (2026-07-19 review): below these, a sensitivity is
+# regression noise, not exposure — it must not tilt the blend.
+MACRO_MIN_R_SQUARED = 0.05
+MACRO_MIN_N_OBS = 40
 RET_CLAMP = 1.0  # winsorize DCF upside at ±100% before z-scoring
 
 
@@ -435,6 +439,15 @@ def _macro_tilt(db_path: Path, tickers: Sequence[str]) -> dict[str, tuple[float,
         for s in sens:
             mom = momentum.get(s.series_id)
             if mom is None:
+                continue
+            # Beta-quality floor (2026-07-19 review): a fit explaining <5% of
+            # variance — or regressed on <40 observations when n is known — is
+            # noise, not exposure; MELI/NU/NVO carried indistinguishable
+            # usd_cad betas at r² 0.01-0.10 tilting 20% of the blend. Unknown
+            # n (pre-0184 rows) passes on the r² gate alone until recompute.
+            if s.r_squared is None or s.r_squared < MACRO_MIN_R_SQUARED:
+                continue
+            if s.n_obs is not None and s.n_obs < MACRO_MIN_N_OBS:
                 continue
             contributions.append((s.series_id, s.beta * mom))
         if not contributions:
