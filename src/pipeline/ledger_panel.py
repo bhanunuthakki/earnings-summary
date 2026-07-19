@@ -779,9 +779,19 @@ _RECONCILE_JS = """<script>(function(){
   function beginRewrite(card){
     var body=card.querySelector('.ledger-editable-body');
     if(!body || card.getAttribute('data-editing')==='1'){ return; }
+    // The card's OWN action row (Ratify/Rewrite/Drop, or the lone "Add
+    // falsifier" trigger) is a sibling of .ledger-editable-body, never
+    // touched by the body swap below — captured BEFORE the swap so it can't
+    // be confused with the new Save/Cancel row the swap injects INSIDE body
+    // (same .ledger-cap-row class, different node). Left visible, it stayed
+    // clickable-but-inert mid-edit (e.g. re-clicking "Add falsifier" no-ops
+    // on the data-editing guard) — indistinguishable from "nothing happened"
+    // to the owner, who has no way to tell Save from the dead duplicate.
+    var triggerRow=card.querySelector('.ledger-cap-row');
     card.setAttribute('data-editing','1');
     var original=body.innerHTML;
     var current=body.textContent||'';
+    if(triggerRow){ triggerRow.hidden=true; }
     body.innerHTML=
       '<textarea class="ledger-rewrite-ta" rows="3">'+esc(current)+'</textarea>'
       +'<div class="ledger-cap-row">'
@@ -791,6 +801,7 @@ _RECONCILE_JS = """<script>(function(){
     function restore(){
       body.innerHTML=original;
       card.removeAttribute('data-editing');
+      if(triggerRow){ triggerRow.hidden=false; }
     }
     var ta=body.querySelector('.ledger-rewrite-ta');
     if(ta){ ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
