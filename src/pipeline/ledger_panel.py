@@ -583,7 +583,13 @@ def _proposal_group_card(group: list[ResearchProposal]) -> str:
         f'<div class="ledger-body ledger-editable-body"><strong>{escape(title)}</strong>'
         f"{body}"
         f"{rider}"
-        f'<div class="ledger-cap-row">{footer}</div></div>'
+        # Three closes: cap-row, ledger-body, then the outer ledger-stance card
+        # itself. The stance-close was missing — tolerated in the research list
+        # (browsers just cascade-nest the sibling cards) but catastrophic in the
+        # bounded packet, where the unclosed <div> keeps pk-stage[hidden] open
+        # and swallows the whole On My Mind feed into a display:none stage
+        # (owner 2026-07-18: "an entire screen of wasted space").
+        f'<div class="ledger-cap-row">{footer}</div></div></div>'
     )
 
 
