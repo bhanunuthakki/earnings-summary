@@ -75,8 +75,8 @@ def render_css() -> str:
         "/*\n"
         f" * {_GENERATED_WARNING}\n"
         " *\n"
-        ' * palette_css("paper"): light `:root` + `[data-theme=\"white\"]` +\n'
-        ' * `[data-theme=\"dark\"]` override blocks. Identical by construction to\n'
+        ' * palette_css("paper"): light `:root` + `[data-theme="white"]` +\n'
+        ' * `[data-theme="dark"]` override blocks. Identical by construction to\n'
         " * what the Python Flask surfaces inline via ui.tokens.palette_css.\n"
         " */\n\n"
     )
@@ -104,11 +104,7 @@ def render_ts() -> str:
     """Typed TS mirrors of the Python token dicts, plus derived ``Theme`` and
     ``Tone`` types (plan §3.3). Every value is emitted verbatim from the
     Python dicts — nothing here is invented."""
-    banner = (
-        "/**\n"
-        f" * {_GENERATED_WARNING}\n"
-        " */\n\n"
-    )
+    banner = f"/**\n * {_GENERATED_WARNING}\n */\n\n"
 
     blocks = [
         _ts_object_literal("PALETTE_LIGHT", PALETTE_LIGHT),
