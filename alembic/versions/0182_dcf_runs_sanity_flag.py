@@ -57,12 +57,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    insp = sa.inspect(bind)
-    if "dcf_runs" not in insp.get_table_names():
-        return
-    existing_cols = {c["name"] for c in insp.get_columns("dcf_runs")}
-    if "sanity_flag" not in existing_cols:
-        return
-    with op.batch_alter_table("dcf_runs") as batch_op:
-        batch_op.drop_column("sanity_flag")  # SQLite DROP COLUMN needs the batch rebuild
+    # Deliberate no-op. Dropping the column needs a batch_alter_table rebuild,
+    # and SQLite refuses to rebuild a table that dependent VIEWS reference
+    # (v_decision_freshness, 0137 lineage, selects from dcf_runs) — the exact
+    # failure test_decision_journal_view's downgrade walk exposed. A nullable
+    # additive column is harmless to keep on downgrade (the 0171 non-destructive
+    # precedent); pre-0182 code never mentions it.
+    return
