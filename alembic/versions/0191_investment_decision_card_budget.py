@@ -18,7 +18,7 @@ portfolio-wide Incremental Dollar Recommendation). Mirrors 0188's/0132's
 idempotent ``ON CONFLICT DO NOTHING`` seed pattern.
 
 Revision ID: 0191_investment_decision_card_budget
-Revises: 0189_merge_0188_heads
+Revises: 0190_session_distill
 Create Date: 2026-07-23
 """
 
@@ -32,7 +32,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0191_investment_decision_card_budget"
-down_revision: str | Sequence[str] | None = "0189_merge_0188_heads"
+down_revision: str | Sequence[str] | None = "0190_session_distill"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
