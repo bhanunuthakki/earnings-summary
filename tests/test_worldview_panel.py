@@ -166,6 +166,77 @@ def test_adopted_strip_empty_renders_nothing(db_file: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Accountability chip (B5, 2026-07-19 program overhaul)
+# ---------------------------------------------------------------------------
+
+
+def test_current_card_shows_accountability_chip_from_seeded_meta(db_file: Path) -> None:
+    import json
+    import sqlite3
+
+    tenet = record_tenet(
+        body_md="I let a working thesis run.", scope_key="exit-discipline", db_path=db_file
+    )
+    conn = sqlite3.connect(str(db_file))
+    try:
+        meta = {
+            "accountability": {
+                "as_of_run": "2026-07-20T00:00:00",
+                "upheld": [1, 2, 3, 4],
+                "violated": [5, 6],
+                "est_cost_usd": -4200.0,
+                "one_liner": "verdict",
+            }
+        }
+        conn.execute(
+            "UPDATE insight_notes SET meta_json = ? WHERE id = ?", (json.dumps(meta), tenet.id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    html = render_worldview_body(db_file)
+    assert "upheld 4 / violated 2" in html
+    assert "4.2k" in html
+    assert "k-chip-warn" in html  # violated > 0 -> warn tone
+
+
+def test_current_card_no_accountability_meta_no_chip(db_file: Path) -> None:
+    record_tenet(body_md="A belief with no verdict yet.", db_path=db_file)
+    html = render_worldview_body(db_file)
+    assert "upheld" not in html
+    assert "k-chip-warn" not in html
+
+
+def test_current_card_all_upheld_gets_ok_tone_chip(db_file: Path) -> None:
+    import json
+    import sqlite3
+
+    tenet = record_tenet(body_md="A disciplined belief.", scope_key="discipline", db_path=db_file)
+    conn = sqlite3.connect(str(db_file))
+    try:
+        meta = {
+            "accountability": {
+                "as_of_run": "2026-07-20T00:00:00",
+                "upheld": [1],
+                "violated": [],
+                "est_cost_usd": None,
+                "one_liner": "verdict",
+            }
+        }
+        conn.execute(
+            "UPDATE insight_notes SET meta_json = ? WHERE id = ?", (json.dumps(meta), tenet.id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    html = render_worldview_body(db_file)
+    assert "upheld 1 / violated 0" in html
+    assert "k-chip-ok" in html
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 

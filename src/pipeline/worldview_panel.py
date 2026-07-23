@@ -21,6 +21,7 @@ from typing import cast
 
 from synthesis.insights import InsightRow, list_insights
 from synthesis.tenets import list_tenets
+from ui.controls import chip_tone_class
 from ui.prose import render_prose
 from user_state._db import now_naive_utc, parse_dt
 
@@ -112,14 +113,47 @@ def _tenets_in_tension(t: InsightRow) -> list[int]:
     return [x for x in items if isinstance(x, int)]
 
 
+def _accountability_chip(t: InsightRow) -> str:
+    """Compact receipts chip on a current Tenet's card — "upheld 4 / violated
+    2 · ~-$4.2k" — when the weekly accountability pass
+    (``synthesis.tenet_accountability``) has a persisted verdict for this
+    Tenet. Warn tone when at least one violation is recorded; empty string
+    (no chip at all) when there's no verdict yet, or the verdict cites
+    neither upheld nor violated decisions — "nothing to receipt yet" is not
+    a status worth a chip."""
+    acc_raw = t.meta.get("accountability")
+    if not isinstance(acc_raw, dict):
+        return ""
+    acc = cast("dict[str, object]", acc_raw)
+    upheld_raw = acc.get("upheld")
+    violated_raw = acc.get("violated")
+    upheld = len(upheld_raw) if isinstance(upheld_raw, list) else 0
+    violated = len(violated_raw) if isinstance(violated_raw, list) else 0
+    if not upheld and not violated:
+        return ""
+    tone = "warn" if violated > 0 else "ok"
+    cost_txt = ""
+    cost_raw = acc.get("est_cost_usd")
+    if isinstance(cost_raw, (int, float)) and not isinstance(cost_raw, bool) and cost_raw != 0:
+        cost = float(cost_raw)
+        mag_txt = f"{abs(cost) / 1000:.1f}k" if abs(cost) >= 1000 else f"{abs(cost):,.0f}"
+        cost_txt = f" &middot; ~{'-' if cost < 0 else '+'}${mag_txt}"
+    return (
+        f'<span class="k-chip{chip_tone_class(tone)}">upheld {upheld} / '
+        f"violated {violated}{cost_txt}</span>"
+    )
+
+
 def _current_card(t: InsightRow) -> str:
     prov = "you" if t.provenance == "owner" else "distilled"
+    chip = _accountability_chip(t)
     return (
         '<div class="ledger-stance">'
         '<div class="ledger-stance-head">'
         f'<span class="wv-scope">{escape(t.scope_key)}</span>'
         f'<span class="wv-prov">{prov}</span>'
-        f'<span class="ledger-stance-meta">{_from_n(t)}</span></div>'
+        f'<span class="ledger-stance-meta">{_from_n(t)}</span>'
+        f"{chip}</div>"
         f'<div class="ledger-body">{render_prose(t.body_md)}</div>'
         "</div>"
     )

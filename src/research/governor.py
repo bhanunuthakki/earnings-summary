@@ -23,6 +23,16 @@ nagging"):
 - ``profile_drift`` (tenet-2 Phase 3) — an affirmed fact is past its review
   horizon, or contradicted by observed state (e.g. stale tax-bucket totals
   vs. the tracker's live read); a re-affirmation ask, never an accusation.
+- ``tenet_challenge`` (B5, 2026-07-19 program overhaul) — a standing Worldview
+  Tenet's WEEKLY accountability pass (``synthesis.tenet_accountability``, run
+  by ``execution/run_tenet_accountability.py`` off the Sat 09:00 PT cron) has
+  a persisted verdict with at least one VIOLATED owner decision. This
+  collector makes NO LLM call of its own — it only reads the verdict the
+  weekly pass already wrote onto the Tenet's ``insight_notes.meta_json``
+  (key ``"accountability"``) — and raises AT MOST ONE such moment per
+  CURRENT iso-week: the Tenet with the highest ``est_cost_usd`` (ties: most
+  violations), across every current Tenet carrying a violation. See
+  ``_tenet_challenge_moments`` below.
 
 Governor rules, all deterministic, ZERO LLM:
 
@@ -52,13 +62,18 @@ button routes back through ``research_notify`` (``cp:dismiss:<id>``).
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 from user_state._db import now_naive_utc, open_conn
+
+if TYPE_CHECKING:
+    from synthesis.insights import InsightRow
 
 CLASSES: tuple[str, ...] = (
     "falsifier_breach",
@@ -70,6 +85,10 @@ CLASSES: tuple[str, ...] = (
     # A conviction cohort graded below its bar (zero-LLM, receipts-first) —
     # research.calibration_moments; fires once per period per cohort.
     "calibration_finding",
+    # B5 (2026-07-19 program overhaul) — a Worldview Tenet whose weekly
+    # accountability pass found a violated owner decision; zero-LLM (reads a
+    # persisted verdict). See _tenet_challenge_moments below.
+    "tenet_challenge",
 )
 DAILY_CAP = 1
 WEEKLY_CAP = 3
@@ -101,6 +120,103 @@ class PingRow:
 
 def _now(now: datetime | None) -> datetime:
     return (now or now_naive_utc()).replace(tzinfo=None)
+
+
+def _tenet_accountability_meta(t: InsightRow) -> dict[str, object] | None:
+    """The persisted ``"accountability"`` verdict on a Tenet's meta, or None."""
+    acc_raw = t.meta.get("accountability")
+    return cast("dict[str, object]", acc_raw) if isinstance(acc_raw, dict) else None
+
+
+def _violated_ids(acc: dict[str, object]) -> list[int]:
+    violated_raw = acc.get("violated")
+    if not isinstance(violated_raw, list):
+        return []
+    return [v for v in cast("list[object]", violated_raw) if isinstance(v, int)]
+
+
+def _tenet_challenge_moments(db_path: Path | str | None, *, now: datetime) -> list[Moment]:
+    """Zero-LLM: read the ``"accountability"`` verdict
+    ``synthesis.tenet_accountability`` persists onto each CURRENT Tenet's
+    ``insight_notes.meta_json``, and emit AT MOST ONE ``tenet_challenge``
+    moment for the current iso-week — the Tenet carrying a violation with the
+    highest-MAGNITUDE ``est_cost_usd`` (a violation's cost is typically
+    negative — a loss — so priority is by ``abs(cost)``, not the signed
+    value; ties broken by most violations; a missing/None cost always loses
+    to any real number)."""
+    try:
+        from synthesis.tenets import list_tenets
+    except Exception:
+        return []
+    try:
+        tenets = list_tenets(status="current", db_path=db_path)
+    except Exception:
+        return []
+
+    iso = now.isocalendar()
+    week_key = f"{iso[0]}-W{iso[1]:02d}"
+    # magnitude, n_violated, id, one_liner, as_of, raw_cost_or_None
+    best: tuple[float, int, int, str, str, float | None] | None = None
+    for t in tenets:
+        acc = _tenet_accountability_meta(t)
+        if acc is None:
+            continue
+        violated = _violated_ids(acc)
+        if not violated:
+            continue
+        cost_raw = acc.get("est_cost_usd")
+        cost = (
+            float(cast("float | int", cost_raw))
+            if isinstance(cost_raw, (int, float)) and not isinstance(cost_raw, bool)
+            else None
+        )
+        magnitude = abs(cost) if cost is not None else -1.0
+        one_liner = str(acc.get("one_liner") or "").strip()
+        candidate = (magnitude, len(violated), int(t.id), one_liner, t.as_of, cost)
+        if best is None or (candidate[0], candidate[1]) > (best[0], best[1]):
+            best = candidate
+    if best is None:
+        return []
+
+    _magnitude, n_violated, tenet_id, one_liner, as_of, cost = best
+    cost_txt = f", est. -${abs(cost):,.0f}" if cost is not None else ""
+    body = (
+        f"{one_liner or 'A standing Tenet is under tension.'} — violated "
+        f"{n_violated}x since {as_of[:10]}{cost_txt}."
+    )
+    return [
+        Moment(
+            class_="tenet_challenge",
+            key=f"tenet_challenge:{tenet_id}:{week_key}",
+            ticker=None,
+            body=body,
+            source_ref=f"tenet:{tenet_id}",
+        )
+    ]
+
+
+def _tenet_still_has_violation(db_path: Path | str | None, tenet_id: int) -> bool:
+    """Freshness re-verification for a ``tenet_challenge`` moment: does the
+    REFERENCED Tenet still carry at least one violated decision in its
+    persisted accountability meta, right now? Deliberately independent of
+    the iso-week/ranking selection in :func:`_tenet_challenge_moments` (which
+    depends on the collection-time ``now``) — freshness only needs to know
+    the SPECIFIC referenced Tenet's condition still holds, exactly like every
+    other class's freshness check (``falsifier_breach`` re-checks that one
+    decision's falsifier, not the whole alert queue). Can't verify (missing
+    table, tenet no longer current) → False."""
+    try:
+        from synthesis.tenets import list_tenets
+
+        tenets = list_tenets(status="current", db_path=db_path)
+    except Exception:
+        return False
+    for t in tenets:
+        if t.id != tenet_id:
+            continue
+        acc = _tenet_accountability_meta(t)
+        return acc is not None and bool(_violated_ids(acc))
+    return False  # tenet not found (reverted / no longer current)
 
 
 def collect_moments(
@@ -247,6 +363,12 @@ def collect_moments(
                 )
         except Exception:
             pass  # missing decisions substrate — nothing to confront
+
+        # tenet_challenge (B5) — same independent-degrade contract as the
+        # collectors above; a missing/malformed accountability meta never
+        # breaks the other moment classes.
+        with contextlib.suppress(Exception):
+            moments.extend(_tenet_challenge_moments(db_path, now=stamp))
     finally:
         conn.close()
     return moments
@@ -331,6 +453,10 @@ def freshness_ok(
 
             fresh = collect_calibration_finding_moments(db_path, now=now_naive_utc())
             return any(isinstance(m, Moment) and m.key == moment.key for m in fresh)
+        if moment.class_ == "tenet_challenge":
+            if kind != "tenet":
+                return False
+            return _tenet_still_has_violation(db_path, int(ref_id))
         return False
     except Exception:
         return False

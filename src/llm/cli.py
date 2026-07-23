@@ -659,6 +659,19 @@ LLM_MODELS: dict[str, str] = {
     # synthesis; re-evaluate via the model-downgrade eval loop if quality
     # regresses once a golden/audit corpus accrues.
     "behavior_distill": FAST_CLASSIFIER_MODEL,
+    # Semantic tenet-tension detection (B5, synthesis.semantic_tension): a
+    # closed "restate/contradict which ONE shown tenet, or null" classification
+    # over <=15 rendered tenets, deterministically grounded before use (a
+    # fabricated token never resolves) — short, closed-schema, same shape as
+    # capture_triage's own contradiction classification -> the cheap FAST tier.
+    "tenet_semantic_tension": FAST_CLASSIFIER_MODEL,
+    # Tenet accountability ledger (B5, synthesis.tenet_accountability — the
+    # sibling B5 workstream's file; registered here since this file is the one
+    # source of truth for LLM_MODELS/prompt_versions per the B5 PR split).
+    # Analytical judgment over a Tenet + the decisions it should have governed
+    # -> the default analytical tier (Sonnet), matching tenet_distill /
+    # session_distill's own tier for belief-level synthesis.
+    "tenet_accountability": DEFAULT_MODEL,
     # NOT here by design: the 14 dynamic `lens:<name>` purposes (plus the
     # scenario-suffixed lens:macro_scenario:<id> / lens:portfolio_macro_stress:<id>)
     # resolve their model from the Lens object itself

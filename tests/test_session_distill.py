@@ -385,6 +385,97 @@ def test_tenet_revision_with_unshown_scope_key_is_skipped_groundless(db_path: Pa
     assert counts["skipped_groundless"] == 1
 
 
+def test_new_tenet_with_semantic_match_lands_with_tension_with(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B5: a brand-new tenet_revision candidate (no shown scope_key reused)
+    whose derived scope doesn't slug-match anything, but the semantic probe
+    finds an overlap — it still auto-adopts (owner ruling), just carrying
+    tension_with so the worldview tension badge shows."""
+    live = record_tenet(
+        body_md="Let winning theses run.", scope_key="exit-discipline", db_path=db_path
+    )
+    sess = _ask_session_with_turns(db_path, user_turns=2)
+    ref = SessionRef(source="ask", session_id=sess.id)
+
+    import synthesis.session_distill as sd
+
+    def fake_semantic(
+        body_md: str, *, exclude_scope_key: str | None = None, db_path=None, call=None
+    ):
+        return live
+
+    monkeypatch.setattr(sd, "detect_semantic_tension", fake_semantic)
+
+    def call(_prompt: str) -> list[Candidate]:
+        return [
+            {
+                "type": "tenet_revision",
+                "text": "I let my winners compound instead of trimming on strength.",
+                "scope_key": None,
+                "citations": ["U1"],
+            }
+        ]
+
+    counts = distill_session(ref, db_path=db_path, call=call)
+    assert counts["adopted_tenets"] == 1
+    assert counts["tenet_tensions"] == 1
+    assert counts["tensions_semantic"] == 1
+
+    from synthesis.insights import get_insight
+
+    current = [
+        t
+        for t in list_tenets(status="current", db_path=db_path)
+        if t.provenance == "session_distill"
+    ]
+    assert len(current) == 1
+    assert current[0].meta.get("tensions") == [live.id]
+    # the pre-existing tenet is on a DIFFERENT scope_key — untouched, not superseded
+    refreshed_live = get_insight(live.id, db_path=db_path)
+    assert refreshed_live is not None
+    assert refreshed_live.status == "current"
+
+
+def test_new_tenet_lands_even_when_semantic_detection_raises(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Defense in depth: even a call-site tension-detection failure (on top of
+    detect_semantic_tension's own fail-open contract) must never skip the
+    landing — the belief adopts with no tension_with, not a dropped candidate."""
+    record_tenet(body_md="Let winning theses run.", scope_key="exit-discipline", db_path=db_path)
+    sess = _ask_session_with_turns(db_path, user_turns=2)
+    ref = SessionRef(source="ask", session_id=sess.id)
+
+    import synthesis.session_distill as sd
+
+    def boom(body_md: str, *, exclude_scope_key: str | None = None, db_path=None, call=None):
+        raise RuntimeError("simulated failure")
+
+    monkeypatch.setattr(sd, "detect_semantic_tension", boom)
+
+    def call(_prompt: str) -> list[Candidate]:
+        return [
+            {
+                "type": "tenet_revision",
+                "text": "I want to own long-term prosperity driven by technology.",
+                "scope_key": None,
+                "citations": ["U1"],
+            }
+        ]
+
+    counts = distill_session(ref, db_path=db_path, call=call)
+    assert counts["adopted_tenets"] == 1
+    assert counts["tenet_tensions"] == 0
+    new_current = [
+        t
+        for t in list_tenets(status="current", db_path=db_path)
+        if t.provenance == "session_distill"
+    ]
+    assert len(new_current) == 1
+    assert new_current[0].meta.get("tensions") is None
+
+
 def test_new_tenet_auto_adopts_as_current(db_path: Path) -> None:
     sess = _ask_session_with_turns(db_path, user_turns=2)
     ref = SessionRef(source="ask", session_id=sess.id)
