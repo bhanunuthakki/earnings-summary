@@ -1,6 +1,7 @@
 # Personal Investment Partner — Product Requirements Document
 
 **Status:** Product requirements ratified by the owner on 2026-07-23; implementation not started.
+**Revision:** 2026-07-23 cross-session reconciliation — Discovery freeze lift, Workstream-B sequencing, brief/tenet-2 ownership, wealth context snapshots, surface parity, Ask allocation intelligence (§3.3, §7.6, §19).
 **Audience:** Repository owner and implementation agents.
 **Scope:** Umbrella PRD. P0 and P1 are implementation-ready; P2 and P3 define the intended direction and acceptance boundary.
 **Document authority:** This is a design artifact, not a Layer-1 directive. It does not authorize edits to `directives/`. Any directive patch identified here requires separate owner authorization, validation, and commit authorization under the repository rules.
@@ -41,7 +42,11 @@ The primary changes are:
 - Replace the global 8% concentration flag with Concentration Zones and an explicit
   hold-versus-trim assessment beginning at 12%.
 - Put one Investment Decision Card at the top of every evaluation workspace.
-- Reduce Discovery to a focused research queue instead of a 300-name firehose.
+- Rebuild Discovery ranking around current portfolio needs — evaluation-list sourcing,
+  diversifier value, and GARP consistency — surfaced as a focused research queue instead
+  of a 300-name firehose.
+- Maintain an aggregates-only wealth context snapshot history for capacity trend,
+  drift alerts, and aged fallback.
 - Consolidate proactive advice into one Senior Partner Brief.
 - Make the journal owner-first and make Telegram/phone capture flexible, asynchronous,
   and confirmation-gated.
@@ -161,6 +166,32 @@ This program does not build:
 - a new owner-memory store that duplicates `owner_profile_facts`, `positioning_intents`,
   Worldview, or the decision journal; or
 - a recommendation based on stale, outlier, or silently missing required data.
+
+### 3.3 Relationship to the 2026-07-19 program-review rulings
+
+The 2026-07-19 seven-agent program review produced binding owner rulings (recorded in
+the review session and agent memory). This PRD is the product-layer articulation of the
+review's workstreams C (risk) and D (UX consolidation). Four reconciliations were ruled
+by the owner on 2026-07-23 during cross-session assessment of this PRD:
+
+1. **Discovery freeze lifted, conditionally.** The 2026-07-19 kill list froze the
+   Discovery + ETF lane as a dead circuit. The owner lifted the freeze for P1-B on the
+   condition that Discovery earns attention through portfolio-need-driven ranking:
+   evaluation-list sourcing, diversifier/Sharpe value against the current book, and
+   GARP-consistent screening (§8.2). Scope is a ranking/read-model/UX layer only — no
+   new ingestion investment. The ETF lane remains frozen.
+2. **Ruling 4 (live-read wealth federation) amended.** "Nothing balance-shaped
+   persisted" is relaxed to permit an aggregates-only, append-only wealth context
+   snapshot history (§7.6). Item-level holdings and compensation figures remain
+   excluded; ratification-walk wealth facts remain rejected; advice-time reads remain
+   live.
+3. **Ruling 5 (consolidate advisor lanes) is implemented by the Senior Partner Brief.**
+   The brief owns delivery; the tenet-2 machinery owns detection (§9.1). Only tier-1
+   `decisive_alert_reason` events deliver outside the brief.
+4. **Sequencing around the in-flight Workstream B overhaul.** P0 and P1 proceed in
+   parallel with Workstream B. P2 is blocked until Workstream B items B3 (LLM capture
+   triage) and B4 (session distillation) merge, and the Decision Draft parser is
+   specified as a consumer of B3's capture triage (§9.2).
 
 ---
 
@@ -284,7 +315,7 @@ No new top-level navigation is introduced.
 | **Portfolio → Allocation** | Incremental Dollar Recommendation, Risk Budget, Portfolio Posture, what-if, then Performance. |
 | **Portfolio → Record** | Historical advice artifacts, advanced audit views, and operational records. |
 | **Review → Ledger** | Owner-first decision journal, lessons, unresolved confirmation drafts, and calibration. |
-| **Ask** | Conversational continuation for every recommendation/card/brief. |
+| **Ask** | Conversational continuation for every recommendation/card/brief, plus on-demand allocation intelligence: future-savings and portfolio-positioning questions invoke the same eligibility/frontier/recommendation engine and typed context (§7.4). |
 | **Mobile Inbox** | Compact Tailscale-protected review and confirmation surface; no full mobile redesign. |
 | **Telegram** | Fast capture, voice, concise recommendations, callbacks, and deep links; no total portfolio value or tax-lot detail. |
 
@@ -505,7 +536,10 @@ Inputs include:
 - current portfolio weights and risk snapshot;
 - Concentration Zones;
 - current Portfolio Posture;
-- affirmed capacity and appetite facts;
+- affirmed capacity and appetite facts, with capacity context read live from the
+  tracker and wealthplan APIs at advice time (federation); the wealth context snapshot
+  history (§7.6) supplies trend/fallback context only, never current truth when the
+  source APIs are available;
 - relevant Worldview/Tenets;
 - prior Owner Decisions and behavioral patterns; and
 - cash as a candidate.
@@ -630,6 +664,33 @@ Portfolio → Allocation leads with:
 The primary card does not expose a weighted-factor spreadsheet. A details expansion
 shows component scores, data freshness, frontier construction, and provenance.
 
+#### Surface parity (P0.4 exit gate)
+
+Surface parity is an exit criterion of P0.4, not an end-state metric. The current
+artifact (same artifact ID) renders on:
+
+- **Today** — compact card: preferred plan, staleness, one-tap Why;
+- **Telegram** — the concise summary under the §11.4 privacy rules;
+- **Ask** — as point-in-time conversational context.
+
+Portfolio → Allocation is the full-control surface for working a decision; Today,
+Telegram, and Ask are the daily surfaces where the current answer is visible without a
+console visit.
+
+#### Ask allocation intelligence
+
+Ask must be able to answer future-savings-allocation and portfolio-positioning
+questions, not merely discuss the latest artifact:
+
+- a hypothetical or forward amount ("where should next month's savings go?") invokes
+  the same eligibility/frontier/governed pipeline via the recommendation action core;
+  §7.4's explicit-amount rule applies — an omitted amount yields a labeled preview,
+  never a deployable plan;
+- positioning questions ("how am I positioned; how should I be?") ground in the same
+  typed context: Portfolio Posture, Risk Budget, Concentration Zones, and the frontier;
+- the household savings schedule and goals remain wealthplan's authority, read live via
+  federation; this platform answers the security/weight/risk question.
+
 Compare opens a consistent, deterministic view for up to three securities across:
 
 - expected-return/valuation inputs;
@@ -669,6 +730,41 @@ Example shape:
 - Keep target volatility, Sharpe floor, sleeve, and sector controls under Advanced.
 - Do not require a maintained target for every holding.
 - Propose a position range only when an active decision needs one.
+
+### 7.6 P0-F: wealth context snapshot history
+
+#### Purpose
+
+Give trend, drift, and fallback context for household capacity without persisting the
+balance-shaped facts the owner rejected in the 2026-07-19 rulings. Snapshots are
+observations, not facts: they are never ratified, never quoted by the LLM as owner
+statements, and never substitute for a live read when the source APIs are available.
+
+#### Requirements
+
+1. Add `execution/refresh_wealth_context_snapshot.py`, scheduled daily after tracker
+   and wealthplan data are available, honoring the shared run lock.
+2. Pull aggregates only, via the live tracker and wealthplan APIs:
+   - total net worth;
+   - liquid/investable balances;
+   - allocation by account class;
+   - a cash-need/savings-cadence summary from wealthplan's schedule.
+   No item-level holdings, no transaction detail, no compensation figures.
+3. Validate a `WealthContextSnapshot` Pydantic model before writing: as-of present,
+   currency explicit on every amount, per-field source provenance, totals finite and
+   plausible.
+4. Append idempotently to `wealth_context_snapshot_history` with key
+   `{user_id}_{source_as_of}_{input_sha}`. An invalid pull never clobbers the last
+   valid row and logs an explicit failed-ingestion event.
+5. Consumers:
+   - trend/delta context in the Risk Budget and Senior Partner Brief (for example,
+     investable cash materially changed since the last recommendation);
+   - drift alerts (the Workstream C substrate);
+   - aged fallback when tracker/wealthplan are unreachable, always labeled with age.
+6. Advice-time reads remain live: when the source APIs are up, the recommendation and
+   position review read them directly; the snapshot supplies history, not current
+   truth.
+7. Telegram redaction continues to exclude everything in this table.
 
 ---
 
@@ -815,16 +911,27 @@ showing a long undifferentiated queue.
 
 #### Ranking
 
-Augment existing discovery scoring with decision-useful annotations:
+Discovery ranking becomes portfolio-need-driven. The 2026-07-19 freeze on the
+Discovery lane was lifted by owner ruling on 2026-07-23 conditional on exactly this:
+Discovery earns attention only by corroborating names the owner is already evaluating
+and by surfacing candidates that measurably improve this portfolio.
 
-- source signal strength and corroboration;
-- recency;
-- basic portfolio adjacency/overlap;
-- evidence readiness;
-- likely research effort; and
-- first rejection reason.
+Rank inputs, in priority order:
+
+1. **Evaluation-list adjacency** — names on the active evaluation/watchlist that
+   Discovery signals corroborate rank above cold names.
+2. **Diversifier value** — estimated marginal diversification/Sharpe contribution
+   against the current book, reusing the candidate-fit/ΔSR machinery at coarse
+   precision, labeled preliminary.
+3. **GARP consistency** — a growth-at-a-reasonable-price screen consistent with the
+   owner's positioning; a great business at an indefensible multiple ranks below a
+   good business at a fair price.
+4. Source signal strength, corroboration, and recency.
+5. Evidence readiness and likely research effort.
+6. First rejection reason, stated up front.
 
 Do not pretend a raw Discovery name has full candidate-fit or valuation precision.
+The ETF lane remains frozen and out of scope.
 
 The primary view shows at most ten candidates. The rest remain preserved in the
 database and available under “More candidates”; they do not require disposition.
@@ -881,6 +988,13 @@ the evaluation workspace.
 #### Product behavior
 
 The Senior Partner Brief becomes the one primary proactive advisory experience.
+
+**Ownership rule: the brief owns delivery; the tenet-2 machinery owns detection.**
+Governor moment classes (`calibration_finding`, `capacity_breach`, `profile_drift`,
+`life_event_checkpoint`) stop delivering as standalone pings and instead feed brief
+sections 4 and 5. Only tier-1 `decisive_alert_reason` events may still deliver
+immediately outside the brief. Governor caps, cooldowns, and dismiss/mute learning are
+retained and now govern brief admission rather than ping frequency.
 
 It has five ordered sections:
 
@@ -976,6 +1090,16 @@ Ask:
 - corrections flow back through typed actions rather than free-form hidden mutation.
 
 ### 9.2 P2-B: flexible Telegram and mobile Inbox
+
+#### Precondition: Workstream B3/B4
+
+P2.1 does not start until Workstream B items B3 (LLM capture triage replacing the
+regex `is_answerable_capture`, ledger-answer resurrection, Telegram coach free-text
+replies) and B4 (session distillation) are merged. The Decision Draft parser is a
+consumer of B3's capture triage: triage classifies each inbound capture
+(musing / question / decision-shaped), and only decision-shaped captures spawn a
+`DecisionDraft`. One triage pass per message — no second parallel classifier on the
+same capture path.
 
 #### Existing transport to retain
 
@@ -1096,7 +1220,8 @@ Owner Decisions include:
 - explicit Watch; and
 - explicit Promote.
 
-Fix `src/research/decision_capture.py`:
+Fix `src/research/decision_capture.py` (cross-check against Workstream B3 before
+implementing — B3 may land parts of this fix first):
 
 - remove the hard-coded `_ROSTER`;
 - resolve valid tickers from active `tracked_companies` and instrument aliases;
@@ -1436,6 +1561,14 @@ Rebuild the view to expose:
 The SQL view remains neutral. Owner-first behavior belongs in the renderer/query default,
 not in a view that makes advisor history inaccessible.
 
+#### `wealth_context_snapshot_history`
+
+Create an append-only aggregates table per §7.6: identity, `as_of`, per-source as-of
+stamps, currency-explicit aggregate fields (or a `json_valid`-constrained
+`snapshot_json` validated by `WealthContextSnapshot`), a unique `input_sha`-based
+idempotency key, and `created_at`. No item-level holdings and no compensation columns.
+Validation, clobber protection, and consumer rules are defined in §7.6.
+
 #### Existing tables reused without duplication
 
 - `llm_artifacts` — Incremental Dollar Recommendation, Investment Decision Card, and
@@ -1571,6 +1704,7 @@ incentivize more aggressive advice.
 | --- | --- | --- | --- |
 | Incremental Dollar Recommendation | Separate final rankings in next-dollar memo and evaluation attractiveness; primary next-dollar panel in Health | `src/allocation/model.py`, candidate fit, what-if, thesis/KPI/DCF/risk/owner context | `src/allocation/eligibility.py`, `src/allocation/recommendation.py`, structured artifact purpose |
 | Risk Budget | Render-triggered persistence as authoritative writer | `portfolio_risk_snapshot_store.py`, morning pipeline, risk renderers | `execution/refresh_portfolio_risk_snapshot.py`, typed validation model |
+| Wealth context history | — | Tracker/wealthplan federation reads | `execution/refresh_wealth_context_snapshot.py`, `wealth_context_snapshot_history`, `WealthContextSnapshot` model |
 | Concentration Zones | `CONCENTRATION_PCT = 8.0`; implicit trim-to-8 behavior; what-if cap | Position review, tax comparison, behavioral guard, what-if | `src/allocation/concentration.py` as the shared policy module |
 | Portfolio Posture | Detailed positioning form as default | `positioning_intents`, owner profile, current portfolio | Lightweight derivation/confirmation read model |
 | Investment Decision Card | Disconnected diligence conclusion/gate | Report builders, thesis, DCF, candidate fit, provenance | `src/research/investment_decision_card.py`, artifact purpose |
@@ -1581,10 +1715,16 @@ incentivize more aggressive advice.
 
 ### 14.2 Proposed delivery order
 
-#### P0.1 — Risk truth
+P0 and P1 proceed in parallel with the in-flight Workstream B overhaul (they do not
+share files). P2 starts only after Workstream B3/B4 merge (§9.2). P1.2 is sequenced
+last within P1.
+
+#### P0.1 — Risk and wealth truth
 
 - Snapshot validation.
-- Scheduled writer.
+- Scheduled writer (builds on the shipped append-only history + NULL-clobber gate
+  from PR #948; the remaining gap is the render-independent scheduled writer).
+- Wealth context snapshot history (§7.6): schema, daily pull, validation.
 - Last-good/staleness UI.
 - Historical delta tests.
 
@@ -1631,6 +1771,7 @@ No LLM dependency.
 
 #### P2.1 — Decision Draft and mobile Inbox
 
+- Precondition: Workstream B3/B4 merged (§9.2).
 - Raw-first capture.
 - Async parser.
 - Confirmation state machine.
@@ -1773,6 +1914,7 @@ Additional required coverage:
 | --- | --- |
 | Tracker unavailable | Use last valid portfolio/risk state with age; do not call it current. |
 | Partial tracker payload | Fail snapshot validation; preserve last valid. |
+| Wealthplan unavailable | Use the last valid wealth context snapshot with explicit age; label capacity context as aged; never present it as current. |
 | No Decision-ready Security | Prefer retain cash and list the highest-value blockers. |
 | DCF outlier | Block preferred allocation; allow research/card discussion with warning. |
 | Missing candidate fit | Block preferred allocation, not the whole evaluation workspace. |
@@ -1866,3 +2008,20 @@ without new evidence:
 - Position ranges are proposed only when a live decision needs them.
 - No new top-level navigation.
 - Redundant workflows are demoted before dead code is removed.
+
+Rulings added 2026-07-23 (cross-session reconciliation revision):
+
+- The Discovery freeze is lifted for P1-B only, conditional on portfolio-need-driven
+  ranking (evaluation-list sourcing, diversifier value, GARP consistency); the ETF
+  lane remains frozen.
+- The Senior Partner Brief owns proactive delivery; tenet-2 governor classes own
+  detection; only tier-1 `decisive_alert_reason` events bypass the brief.
+- An aggregates-only wealth context snapshot history is permitted, amending the
+  2026-07-19 "nothing balance-shaped persisted" ruling; item-level holdings and
+  compensation figures remain excluded; advice-time reads remain live.
+- Ask answers future-savings-allocation and portfolio-positioning questions by
+  invoking the same recommendation engine and typed context; wealthplan remains the
+  authority on household goals and the savings schedule.
+- Surface parity (same artifact on Today, Telegram, Ask, and Allocation) is a P0.4
+  exit gate.
+- P2 implementation is sequenced after Workstream B items B3 and B4.
