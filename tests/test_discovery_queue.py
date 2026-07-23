@@ -426,12 +426,15 @@ def test_build_one_success_ladder(repo: Path) -> None:
 
     ok = discovery_build.build_one("wdc", repo_root=repo, runner=runner)
     assert ok is True
-    assert len(seen) == 2
+    # Three steps since P1.1 (#963): onboard -> artifacts -> Investment
+    # Decision Card (runs last so its deterministic inputs are fresh).
+    assert len(seen) == 3
     assert any("onboard_ticker.py" in a for a in seen[0])
     assert any("build_artifacts.py" in a for a in seen[1])
     assert "--flavor" in seen[1] and "evaluation" in seen[1]
     assert "--enable-llm" in seen[1]
-    assert statuses == ["building", "building"]  # in-flight while steps run
+    assert any("build_investment_decision_card.py" in a for a in seen[2])
+    assert statuses == ["building", "building", "building"]  # in-flight while steps run
     wdc = next(c for c in list_candidates(db_path=db) if c.ticker == "WDC")
     assert wdc.status == "built"
     conn = sqlite3.connect(db)
