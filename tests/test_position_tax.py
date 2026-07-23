@@ -244,30 +244,43 @@ def test_recent_buys_span_all_accounts_for_wash_window() -> None:
 
 
 def test_propose_trim_fraction_ladder() -> None:
+    # Above the target band -> trim to the band top (unchanged by P0.2).
     frac, why = propose_trim_fraction(
         weight_pct=10.0,
         target_band=(3.2, 4.8),
         weight_vs_band="above_band",
-        concentration_flag=True,
-        concentration_pct=8.0,
+        zone="meaningful",
     )
     assert frac == pytest.approx((10.0 - 4.8) / 10.0)
     assert "top of band" in why
+    # No band, but the zone is concentrated-or-higher and the weight clears
+    # the 12% trim-assessment threshold -> comparison-framed trim TO that
+    # threshold, not the old flat 8% concentration bar.
     frac, why = propose_trim_fraction(
-        weight_pct=10.0,
+        weight_pct=13.4,
         target_band=None,
         weight_vs_band="no_band",
-        concentration_flag=True,
-        concentration_pct=8.0,
+        zone="concentrated",
     )
-    assert frac == pytest.approx(0.2)
-    assert "concentration bar" in why
+    assert frac == pytest.approx((13.4 - 12.0) / 13.4)
+    assert "12% trim-assessment threshold" in why
+    assert "soft zone, not a required target" in why
+    # No band, zone below "concentrated" (or weight under the threshold) ->
+    # the illustrative default tranche.
     frac, why = propose_trim_fraction(
         weight_pct=5.0,
         target_band=None,
         weight_vs_band="no_band",
-        concentration_flag=False,
-        concentration_pct=8.0,
+        zone="ordinary",
+    )
+    assert frac == pytest.approx(DEFAULT_TRIM_FRACTION)
+    assert "illustrative" in why
+    # zone=None (weight unknown) also falls through to the default tranche.
+    frac, why = propose_trim_fraction(
+        weight_pct=None,
+        target_band=None,
+        weight_vs_band="no_band",
+        zone=None,
     )
     assert frac == pytest.approx(DEFAULT_TRIM_FRACTION)
     assert "illustrative" in why

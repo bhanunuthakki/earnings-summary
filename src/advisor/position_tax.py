@@ -35,6 +35,8 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from allocation.concentration import TRIM_ASSESSMENT_THRESHOLD_PCT, zone_at_least
+
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
@@ -377,16 +379,18 @@ def propose_trim_fraction(
     weight_pct: float | None,
     target_band: tuple[float, float] | None,
     weight_vs_band: str,
-    concentration_flag: bool,
-    concentration_pct: float,
+    zone: str | None,
     default_fraction: float = DEFAULT_TRIM_FRACTION,
 ) -> tuple[float, str]:
     """The deterministic trim size the tax block prices, with its rationale.
 
     Above the target band -> trim back to the band top (the guard's own
-    trim-to-target case). No band but concentration-flagged -> trim back to
-    the concentration bar. Otherwise a standard ``default_fraction`` tranche —
-    the estimate is illustrative, and says so in the rationale.
+    trim-to-target case). No band but the zone is concentrated-or-higher
+    (PRD §7.2, P0.2) -> price the trim as a COMPARISON to the 12%
+    trim-assessment threshold — a soft reference point, never a forced
+    target (a zone never forces a trim). Otherwise a standard
+    ``default_fraction`` tranche — the estimate is illustrative, and says so
+    in the rationale.
     """
     if (
         weight_vs_band == "above_band"
@@ -397,9 +401,15 @@ def propose_trim_fraction(
         return (weight_pct - target_band[1]) / weight_pct, (
             f"to top of band ({target_band[1]:.1f}%)"
         )
-    if concentration_flag and weight_pct is not None and weight_pct > concentration_pct > 0:
-        return (weight_pct - concentration_pct) / weight_pct, (
-            f"to the {concentration_pct:.0f}% concentration bar"
+    if (
+        zone is not None
+        and zone_at_least(zone, "concentrated")
+        and weight_pct is not None
+        and weight_pct > TRIM_ASSESSMENT_THRESHOLD_PCT > 0
+    ):
+        return (weight_pct - TRIM_ASSESSMENT_THRESHOLD_PCT) / weight_pct, (
+            f"for comparison, to the {TRIM_ASSESSMENT_THRESHOLD_PCT:.0f}% trim-assessment "
+            "threshold (soft zone, not a required target)"
         )
     return default_fraction, f"illustrative {default_fraction * 100:.0f}% tranche"
 

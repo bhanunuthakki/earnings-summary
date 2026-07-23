@@ -196,13 +196,51 @@ def test_guard_overrides_price_only_trim_when_no_band_and_not_concentrated() -> 
     assert guarded.verdict_source == "guard_override"
 
 
-def test_guard_allows_trim_when_concentrated_sizing_reason() -> None:
-    # RBRK case: intact + fair + no target band, but a flagged single-name
-    # concentration IS a legitimate (sizing) reason to trim — not overridden.
-    pre = _pre(weight_vs_band="no_band", concentration_flag=True, weight_pct=10.0)
+def test_guard_allows_trim_when_concentrated_via_intentional_add() -> None:
+    # RBRK case: intact + fair + no target band, but a concentrated-or-higher
+    # zone REACHED THROUGH AN INTENTIONAL ADD is a legitimate (sizing) reason
+    # to trim — not overridden (PRD §7.2, P0.2 rule 6).
+    pre = _pre(
+        weight_vs_band="no_band",
+        weight_pct=13.4,
+        concentration_flag=True,
+        concentration_zone="concentrated",
+        entry_method="intentional_add",
+    )
     guarded = apply_behavioral_guard(pre, _out(verdict="trim"))
     assert guarded.verdict == "trim"
     assert guarded.verdict_source == "llm"
+
+
+def test_guard_overrides_trim_when_concentrated_via_appreciation_drift() -> None:
+    # Same zone, same weight — but the position got here by appreciating, not
+    # by an intentional add. Zone status ALONE must not bypass winner
+    # protection (PRD §7.2, P0.2 rule 6): the guard still overrides to hold.
+    pre = _pre(
+        weight_vs_band="no_band",
+        weight_pct=13.4,
+        concentration_flag=True,
+        concentration_zone="concentrated",
+        entry_method="appreciation_drift",
+    )
+    guarded = apply_behavioral_guard(pre, _out(verdict="trim"))
+    assert guarded.verdict == "hold"
+    assert guarded.verdict_source == "guard_override"
+
+
+def test_guard_overrides_trim_when_concentrated_with_unknown_entry_method() -> None:
+    # entry_method=None (no transaction history) must not be treated as an
+    # intentional add either — fails closed, same as appreciation drift.
+    pre = _pre(
+        weight_vs_band="no_band",
+        weight_pct=13.4,
+        concentration_flag=True,
+        concentration_zone="concentrated",
+        entry_method=None,
+    )
+    guarded = apply_behavioral_guard(pre, _out(verdict="trim"))
+    assert guarded.verdict == "hold"
+    assert guarded.verdict_source == "guard_override"
 
 
 def test_guard_allows_trim_when_above_target_band() -> None:
@@ -352,7 +390,16 @@ def test_persisted_memo_carries_tax_block_when_trim_survives(
     captured: dict[str, object] = {}
 
     def _fake_pre(*_a: object, **_k: object) -> PreAnalysis:
-        return _pre(weight_vs_band="no_band", concentration_flag=True, tax=_tax_view())
+        # Zone concentrated-or-higher AND an intentional add — the sizing
+        # reason that survives the guard under PRD §7.2, P0.2 rule 6.
+        return _pre(
+            weight_vs_band="no_band",
+            weight_pct=13.4,
+            concentration_flag=True,
+            concentration_zone="concentrated",
+            entry_method="intentional_add",
+            tax=_tax_view(),
+        )
 
     def _fake_persist(**kwargs: object) -> SimpleNamespace:
         captured.update(kwargs)

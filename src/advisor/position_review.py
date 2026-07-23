@@ -43,6 +43,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from advisor.store import STANCES
+from allocation.concentration import (
+    ENTRY_INTENTIONAL,
+    classify_entry_method,
+    classify_zone,
+    zone_at_least,
+)
 from calibration_guard import confidence_note, is_confident
 from identity import DEFAULT_USER_ID
 
@@ -50,6 +56,7 @@ if TYPE_CHECKING:
     from advisor.position_tax import PositionTaxView
     from capture.matcher import RosterIndex
     from compute.thesis_evaluator import ThesisVerdict
+    from integrations.portfolio_tracker_client import LiveTransaction
     from owner_profile.store import OwnerProfileFactRow
 
 log = logging.getLogger(__name__)
@@ -58,7 +65,6 @@ __all__ = [
     "AGENT_SOURCE",
     "BAND_TOLERANCE",
     "CAPACITY_HORIZON_DAYS",
-    "CONCENTRATION_PCT",
     "CONFIDENCES",
     "DEFAULT_MOS_BAR",
     "OWNER_ATTESTED_KEY",
@@ -111,7 +117,11 @@ TRIM_OVER_UNDER = 0.10  # over_under (decimal) above which the ladder says "trim
 SELL_OVER_UNDER = 0.20  # ... "sell"
 DEFAULT_MOS_BAR = 0.30  # fallback initiation bar when a holding JSON omits mos_bar
 BAND_TOLERANCE = 0.20  # +/- 20% tolerance band around a stated target weight
-CONCENTRATION_PCT = 8.0  # single-name weight (%) at/above which we flag concentration
+# NOTE: the old flat 8% single-name concentration bar is gone (PRD §7.2,
+# P0.2) — single-name sizing is now read through allocation.concentration's soft
+# zones (ordinary/meaningful/concentrated/highly_concentrated/exceptional).
+# `concentration_flag` on PreAnalysis now means "zone >= concentrated"
+# (weight >= allocation.concentration.TRIM_ASSESSMENT_THRESHOLD_PCT).
 
 # tenet-2 Phase 2 capacity block (§4 delivery seam 1 of
 # docs/design/tenet2_advisory_program.md): a dated life event only shows in
@@ -187,7 +197,7 @@ class PreAnalysis:
     target_band: tuple[float, float] | None  # (lo, hi) percent, when a target is set
     weight_vs_band: str  # "above_band" | "in_band" | "below_band" | "no_band"
     conviction_1_5: int | None
-    concentration_flag: bool  # single-name weight >= CONCENTRATION_PCT
+    concentration_flag: bool  # zone >= "concentrated" (weight >= TRIM_ASSESSMENT_THRESHOLD_PCT)
     # --- fundamentals --------------------------------------------------------
     thesis_present: bool  # micro_thesis/holdings/<T>.json exists
     verdict_label: str | None  # holdings JSON "verdict" (e.g. "Intact")
@@ -216,6 +226,14 @@ class PreAnalysis:
     # callers) — treated identically to an empty CapacityContext by the
     # renderers. build_pre_analysis always attaches one (degraded-empty or not).
     capacity: CapacityContext | None = None
+    # --- concentration zones (PRD §7.2, P0.2) --------------------------------
+    # allocation.concentration.Zone name, or None when weight_pct is unknown.
+    concentration_zone: str | None = None
+    # allocation.concentration.ENTRY_INTENTIONAL / ENTRY_APPRECIATION, or None
+    # when the entry method couldn't be derived (no transaction history).
+    entry_method: str | None = None
+    # One-line human text for concentration_zone (PRD §7.2 table), or None.
+    zone_treatment: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -335,6 +353,7 @@ def assemble_pre_analysis(
     has_decision_note: bool,
     is_index_instrument: bool,
     at_price: float | None,
+    entry_method: str | None = None,
 ) -> PreAnalysis:
     """Compose primitives into a :class:`PreAnalysis`. Pure — no I/O.
 
@@ -342,6 +361,13 @@ def assemble_pre_analysis(
     as returned by ``research_cockpit.latest_dcf_runs``. When ``at_price`` is
     supplied AND a positive NPV is on file, the over/under gap is RECOMPUTED at
     that level so "above $70" is answered against $70, not the stored close.
+
+    ``entry_method`` (:data:`allocation.concentration.ENTRY_INTENTIONAL` /
+    ``ENTRY_APPRECIATION`` / ``None``) is the caller's pre-derived read of
+    whether the position reached its current size through a recent
+    intentional buy or pure price appreciation — ``build_pre_analysis``
+    derives it from the tracker's transaction history; this function is pure
+    and never fetches it itself.
     """
     thesis_present = holdings_json is not None
     verdict_label = _opt_str(holdings_json, "verdict") if holdings_json is not None else None
@@ -366,7 +392,10 @@ def assemble_pre_analysis(
     valuation_verdict = classify_valuation(over_under_dec, mos_bar)
 
     weight_vs_band, target_band = classify_weight_band(weight_pct, target_weight_pct)
-    concentration_flag = weight_pct is not None and weight_pct >= CONCENTRATION_PCT
+    zone_assessment = classify_zone(weight_pct)
+    concentration_flag = zone_assessment is not None and zone_assessment.trim_assessment_required
+    concentration_zone = zone_assessment.zone if zone_assessment is not None else None
+    zone_treatment = zone_assessment.treatment if zone_assessment is not None else None
     conviction_encoded = thesis_present and (has_stance or has_decision_note)
 
     return PreAnalysis(
@@ -396,6 +425,9 @@ def assemble_pre_analysis(
         has_stance=has_stance,
         has_decision_note=has_decision_note,
         is_index_instrument=is_index_instrument,
+        concentration_zone=concentration_zone,
+        entry_method=entry_method,
+        zone_treatment=zone_treatment,
     )
 
 
@@ -657,6 +689,29 @@ def build_pre_analysis(
         capacity, wealthplan_cash_need_note=wealthplan_note, exit_quality_note=exit_note
     )
 
+    # --- transaction history: fetched ONCE (only when the tracker holds a
+    # live position — otherwise there is no tax leg to price either) and
+    # reused for BOTH the entry-method zone classification below AND the
+    # FIFO tax-lot reconstruction further down — never a second network
+    # round-trip over the same window (PRD §7.2, P0.2 seam).
+    history: list[LiveTransaction] | None = None
+    entry_method: str | None = None
+    if pos is not None:
+        from integrations.portfolio_tracker_client import fetch_transaction_history
+
+        history = fetch_transaction_history(api_url=api_url)
+        if history is not None:
+            buy_dates = [
+                t.date
+                for t in history
+                if (t.ticker or "").strip().upper() == ticker
+                and (
+                    "buy" in (t.type or "").strip().lower()
+                    or "buy" in (t.subtype or "").strip().lower()
+                )
+            ]
+            entry_method = classify_entry_method(buy_dates, as_of=date.today())
+
     pre = assemble_pre_analysis(
         ticker,
         weight_pct=weight_pct,
@@ -673,9 +728,11 @@ def build_pre_analysis(
         has_decision_note=has_decision_note,
         is_index_instrument=is_index_instrument,
         at_price=at_price,
+        entry_method=entry_method,
     )
 
-    # --- tax view: lots from the tracker feed, honest degrade otherwise ------
+    # --- tax view: lots from the SAME tracker history fetched above, honest
+    # degrade otherwise ---------------------------------------------------
     from advisor.position_tax import (
         build_position_tax_view,
         load_tax_profile,
@@ -694,19 +751,14 @@ def build_pre_analysis(
         )
         tax_view = unavailable_tax_view(reason)
     else:
-        from integrations.portfolio_tracker_client import (
-            TRANSACTION_HISTORY_LIMIT,
-            fetch_transaction_history,
-        )
+        from integrations.portfolio_tracker_client import TRANSACTION_HISTORY_LIMIT
 
         trim_fraction, trim_rationale = propose_trim_fraction(
             weight_pct=pre.weight_pct,
             target_band=pre.target_band,
             weight_vs_band=pre.weight_vs_band,
-            concentration_flag=pre.concentration_flag,
-            concentration_pct=CONCENTRATION_PCT,
+            zone=pre.concentration_zone,
         )
-        history = fetch_transaction_history(api_url=api_url)
         tax_view = build_position_tax_view(
             pos,
             history,
@@ -1021,11 +1073,18 @@ def apply_behavioral_guard(
     """Enforce the sell-winners-too-early rule deterministically.
 
     A ``trim``/``sell`` on a thesis that is intact-or-warn, NOT over-valued, and
-    NOT oversized (not above its band, and not a flagged single-name
-    concentration) is a price-only trim on a healthy name — the owner's signature
+    NOT oversized is a price-only trim on a healthy name — the owner's signature
     mistake. Override it to ``hold`` and say why. Legitimate trims survive
     untouched: a breached thesis, an over-valued name (ladder trim/sell), an
     above-band weight, or an oversized concentration all justify trimming.
+
+    "Oversized" (PRD §7.2, P0.2, rule 6) requires BOTH a concentrated-or-higher
+    zone AND an intentional add — reaching a zone through price appreciation
+    alone is explicitly NOT a sizing justification, so the guard's winner
+    protection still applies to a name that simply ran. This is the reason
+    zone status can never bypass the guard on its own: a zone only signals
+    that a hold-vs-trim assessment is due (:data:`allocation.concentration
+    .ZoneAssessment.trim_assessment_required`), not that a trim is justified.
 
     ``graded_line`` is the caller-supplied output of :func:`graded_sell_record`
     (built ONCE per review, not re-queried here) — the override text names the
@@ -1041,7 +1100,10 @@ def apply_behavioral_guard(
     thesis_healthy = pre.break_rule_status in ("intact", "warn")
     not_overvalued = pre.valuation_verdict in ("fair", "buy", "n/a")
     sizing_justified = pre.weight_vs_band == "above_band" or (
-        pre.weight_vs_band == "no_band" and pre.concentration_flag
+        pre.weight_vs_band == "no_band"
+        and pre.concentration_zone is not None
+        and zone_at_least(pre.concentration_zone, "concentrated")
+        and pre.entry_method == ENTRY_INTENTIONAL
     )
     if thesis_healthy and not_overvalued and not sizing_justified:
         cost = _tax_cost_phrase(pre.tax)
@@ -1132,12 +1194,19 @@ def _build_verdict_prompt(
     owner_profile_anchor: str = "",
     db_path: Path | str | None = None,
 ) -> str:
+    zone_facts = (
+        f"concentration_zone={pre.concentration_zone or 'n/a'} (weight {pre.weight_pct}%; "
+        f"{pre.zone_treatment or 'n/a'}; entry: {pre.entry_method or 'unknown'})\n"
+        "A zone never forces a trim; a trim needs an additional reason (thesis impairment, "
+        "poor forward risk/reward, correlation/capacity pressure, an affirmed limit, or a "
+        "superior alternative).\n"
+    )
     facts = (
         f"Ticker: {pre.ticker}\n"
         f"Weight: {pre.weight_pct}% of book (source: {pre.weight_source}); "
         f"market value {pre.market_value_usd}; unrealized P&L {pre.unrealized_pnl_usd}\n"
-        f"Target band: {pre.target_band} -> {pre.weight_vs_band}; "
-        f"concentration_flag={pre.concentration_flag} (single name >= {CONCENTRATION_PCT}%)\n"
+        f"Target band: {pre.target_band} -> {pre.weight_vs_band}\n"
+        f"{zone_facts}"
         f"Break-rule status: {pre.break_rule_status}; "
         f"tripped/watch: {list(pre.tripped_rules) or 'none'}\n"
         f"Thesis verdict label: {pre.verdict_label}; key driver: {pre.key_driver}\n"
@@ -1490,6 +1559,14 @@ def render_tax_lines(tax: PositionTaxView | None, *, plain: bool = False) -> lis
     return lines
 
 
+def _render_zone(pre: PreAnalysis) -> str:
+    """The concentration-zone read for the /review renders (PRD §7.2, P0.2) —
+    e.g. ``"concentrated (13.4%)"``. ``"n/a"`` when no weight is known."""
+    if pre.concentration_zone and pre.weight_pct is not None:
+        return f"{pre.concentration_zone} ({pre.weight_pct:.1f}%)"
+    return pre.concentration_zone or "n/a"
+
+
 def render_pre_analysis_chat(pre: PreAnalysis, *, db_path: Path | str | None = None) -> str:
     """Compact Markdown reply for the ``/review`` chat command — the grounded
     facts plus the mechanical read, the tax block, the live graded-sells base
@@ -1497,7 +1574,7 @@ def render_pre_analysis_chat(pre: PreAnalysis, *, db_path: Path | str | None = N
     calibrated verdict. ``db_path`` is optional — omitted, the base-rate line
     simply doesn't render (same degrade as a fresh/ungraded DB)."""
     wt = f"{pre.weight_pct:.1f}%" if pre.weight_pct is not None else "—"
-    conc = f"FLAGGED (>= {CONCENTRATION_PCT:.0f}% single name)" if pre.concentration_flag else "no"
+    conc = _render_zone(pre)
     fv = f"${pre.npv_per_share:,.2f}" if pre.npv_per_share is not None else "—"
     asked = f"${pre.at_price:,.2f}" if pre.at_price is not None else "—"
     gap = f"{pre.dcf_gap_pct:+.1f}%" if pre.dcf_gap_pct is not None else "—"
@@ -1562,7 +1639,7 @@ def render_pre_analysis_plain(pre: PreAnalysis, *, db_path: Path | str | None = 
     ``·``) so the whole reply is plain-ASCII, and ``render_tax_lines(plain=True)``
     drops the one Markdown marker that pass can't (the ``_footnote_`` italics)."""
     wt = f"{pre.weight_pct:.1f}%" if pre.weight_pct is not None else "-"
-    conc = f"FLAGGED (>= {CONCENTRATION_PCT:.0f}% single name)" if pre.concentration_flag else "no"
+    conc = _render_zone(pre)
     fv = f"${pre.npv_per_share:,.2f}" if pre.npv_per_share is not None else "-"
     asked = f"${pre.at_price:,.2f}" if pre.at_price is not None else "-"
     gap = f"{pre.dcf_gap_pct:+.1f}%" if pre.dcf_gap_pct is not None else "-"

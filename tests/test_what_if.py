@@ -21,10 +21,11 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from allocation.what_if import (  # noqa: E402
     ALLOWED_WEIGHTS,
+    FUNDING_MODES,
     WhatIfResult,
-    clamp_weight,
     clear_caches,
     compute_what_if,
+    validate_weight,
 )
 
 _START = date(2024, 1, 1)
@@ -53,12 +54,38 @@ def market() -> list[float]:
     return [0.012 * math.sin(i / 6.0) + 0.0005 for i in range(200)]
 
 
-def test_clamp_weight_snaps_to_menu() -> None:
-    assert clamp_weight(0.03) == 0.03
-    assert clamp_weight(0.031) == 0.03
-    assert clamp_weight(0.0) == 0.01
-    assert clamp_weight(0.5) == 0.08
-    assert all(clamp_weight(w) == w for w in ALLOWED_WEIGHTS)
+def test_validate_weight_passes_through_with_rounding() -> None:
+    assert validate_weight(0.03) == 0.03
+    assert validate_weight(0.031234) == pytest.approx(0.0312)  # rounded to 4 decimals
+    assert validate_weight(0.25) == 0.25  # top of the allowed range, inclusive
+    assert validate_weight(0.001) == pytest.approx(0.001)  # no silent clamp to a preset
+    assert all(validate_weight(w) == w for w in ALLOWED_WEIGHTS)
+
+
+def test_validate_weight_menu_extends_through_zone_boundaries() -> None:
+    # PRD §7.2, P0.2 extends the UI preset menu through the concentration-zone
+    # boundaries (10/12/15/20/25%), on top of the original 1/2/3/5/8%.
+    assert ALLOWED_WEIGHTS == (0.01, 0.02, 0.03, 0.05, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25)
+
+
+def test_validate_weight_rejects_zero() -> None:
+    with pytest.raises(ValueError, match="1%"):
+        validate_weight(0.0)
+
+
+def test_validate_weight_rejects_above_25pct_and_lists_presets() -> None:
+    with pytest.raises(ValueError) as exc_info:
+        validate_weight(0.5)
+    msg = str(exc_info.value)
+    assert "25%" in msg
+    # Every preset percentage is named in the error.
+    for w in ALLOWED_WEIGHTS:
+        assert f"{w * 100:g}%" in msg
+
+
+def test_validate_weight_rejects_negative() -> None:
+    with pytest.raises(ValueError):
+        validate_weight(-0.01)
 
 
 def test_candidate_identical_to_book_is_a_no_op(tmp_path: Path, market: list[float]) -> None:
@@ -193,3 +220,100 @@ def test_result_cache_hit_returns_same_object(tmp_path: Path, market: list[float
         tmp_path, "CCC", 0.05, book_weights=weights, risk_free_annual=0.02, book_growth_tilt=None
     )
     assert r3 is not r1 and r3.weight == 0.05
+
+
+def test_result_cache_keys_on_funding_mode(tmp_path: Path, market: list[float]) -> None:
+    """The two funding modes are mathematically identical (same book blend)
+    but must never share a cache slot — each is its own result object,
+    tagged with its own ``funding_mode`` (PRD §7.2, P0.2)."""
+    _write_chart(tmp_path, "AAA", list(market))
+    _write_chart(tmp_path, "CCC", [0.01 * math.cos(i / 5.0) for i in range(200)])
+    weights = {"AAA": 1.0}
+    r_cash = compute_what_if(
+        tmp_path,
+        "CCC",
+        0.03,
+        book_weights=weights,
+        risk_free_annual=0.02,
+        book_growth_tilt=None,
+        funding_mode="new_cash",
+    )
+    r_pro_rata = compute_what_if(
+        tmp_path,
+        "CCC",
+        0.03,
+        book_weights=weights,
+        risk_free_annual=0.02,
+        book_growth_tilt=None,
+        funding_mode="pro_rata_reallocation",
+    )
+    assert r_cash is not r_pro_rata
+    assert r_cash.funding_mode == "new_cash"
+    assert r_pro_rata.funding_mode == "pro_rata_reallocation"
+    # Same math regardless of framing.
+    assert r_cash.vol_after_ann == pytest.approx(r_pro_rata.vol_after_ann)
+    assert r_cash.sharpe_delta_bps == pytest.approx(r_pro_rata.sharpe_delta_bps)
+
+
+def test_funding_modes_contents() -> None:
+    assert FUNDING_MODES == ("new_cash", "pro_rata_reallocation")
+
+
+def test_compute_what_if_rejects_unknown_funding_mode(tmp_path: Path, market: list[float]) -> None:
+    _write_chart(tmp_path, "AAA", list(market))
+    _write_chart(tmp_path, "CCC", list(market))
+    with pytest.raises(ValueError, match="funding_mode"):
+        compute_what_if(
+            tmp_path,
+            "CCC",
+            0.03,
+            book_weights={"AAA": 1.0},
+            risk_free_annual=0.02,
+            book_growth_tilt=None,
+            funding_mode="cash_out_a_kidney",
+        )
+
+
+# --------------------------------------------------------------------------- #
+# resulting_weight_pct + zone (PRD §7.2, P0.2)
+# --------------------------------------------------------------------------- #
+
+
+def test_resulting_weight_pct_for_a_new_name_is_just_the_add(
+    tmp_path: Path, market: list[float]
+) -> None:
+    """CCC isn't in the book at all: resulting weight is simply w*100 (0 blend)."""
+    _write_chart(tmp_path, "AAA", list(market))
+    _write_chart(tmp_path, "CCC", [0.01 * math.cos(i / 5.0) for i in range(200)])
+    r = compute_what_if(
+        tmp_path,
+        "CCC",
+        0.05,
+        book_weights={"AAA": 1.0},
+        risk_free_annual=0.02,
+        book_growth_tilt=None,
+    )
+    assert r.resulting_weight_pct == pytest.approx(5.0)
+    assert r.zone == "ordinary"  # 5% < 10%
+
+
+def test_resulting_weight_pct_blends_an_existing_holdings_weight(
+    tmp_path: Path, market: list[float]
+) -> None:
+    """AAA is already 20% of the book (w0=0.20); adding 5% more blends to
+    w0*(1-w) + w = 0.20*0.95 + 0.05 = 0.24 -> 24%, the "exceptional" zone
+    (>= 20%)."""
+    _write_chart(tmp_path, "AAA", list(market))
+    _write_chart(tmp_path, "BBB", [0.008 * math.sin(i / 4.0) for i in range(200)])
+    r = compute_what_if(
+        tmp_path,
+        "AAA",
+        0.05,
+        book_weights={"AAA": 0.20, "BBB": 0.80},
+        risk_free_annual=0.02,
+        book_growth_tilt=None,
+    )
+    expected_pct = (0.20 * (1.0 - 0.05) + 0.05) * 100.0
+    assert r.resulting_weight_pct == pytest.approx(expected_pct)
+    assert expected_pct == pytest.approx(24.0)
+    assert r.zone == "exceptional"  # 24% >= 20%
