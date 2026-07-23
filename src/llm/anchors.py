@@ -78,11 +78,13 @@ IR_ANCHOR_CHAR_CAP = 2000
 PRIORS_ANCHOR_CHAR_CAP = 2000
 
 # Worldview anchor (the owner's standing Tenets) — deliberately the tightest cap
-# in the stack (~1200 vs 2-3.5K). It rides every decision-point prompt as a SOFT
-# prior, so it must stay small: a few durable beliefs, not an essay. Portfolio-
-# level (cross-company), gated by LEDGER_WORLDVIEW_ANCHOR, dated for cache
-# stability. See directives/thought_partner_build_plan.md P3.
-WORLDVIEW_ANCHOR_CHAR_CAP = 1200
+# in the stack (~1500 vs 2-3.5K). It rides every decision-point prompt as a SOFT
+# prior, so it must stay small: a few durable beliefs, not an essay. Sized so the
+# owner's consolidated ~6-tenet Worldview renders whole — the header alone is
+# ~330 chars, and a silently truncated belief list is worse than a longer one.
+# Portfolio-level (cross-company), gated by LEDGER_WORLDVIEW_ANCHOR, dated for
+# cache stability. See directives/thought_partner_build_plan.md P3.
+WORLDVIEW_ANCHOR_CHAR_CAP = 1500
 
 _WORLDVIEW_ANCHOR_ON = frozenset({"1", "true", "yes", "on"})
 
