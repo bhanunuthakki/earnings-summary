@@ -292,6 +292,17 @@
 .l1-chrome { display: flex; align-items: center; justify-content: space-between; padding: 14px var(--pad-x); border-bottom: 1px solid var(--border); background: var(--surface); }
 .l1-chrome-left { display: flex; align-items: center; gap: 32px; }
 .l1-chrome-right { display: flex; align-items: center; gap: 10px; }
+.l1-decision-card .dc-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--gap); margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--hairline); }
+.l1-decision-card .dc-blockers ul { margin: 4px 0 0; padding-left: 18px; }
+.l1-decision-card .dc-blockers { margin-top: var(--sp-3); font-size: var(--fs-caption); color: var(--warn); }
+.l1-decision-card .dc-cell h4 { margin: 0 0 4px; font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.l1-decision-card .dc-cell p { margin: 0; font-size: var(--fs-body); line-height: 1.5; color: var(--fg); }
+.l1-decision-card .dc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--gap-lg); }
+.l1-decision-card .dc-head { display: flex; align-items: center; gap: var(--gap); margin-bottom: var(--sp-3); }
+.l1-decision-card .dc-label { font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); font-weight: 600; }
+.l1-decision-card .dc-status { font-size: var(--fs-caption); color: var(--fg-soft); margin-top: 4px; }
+.l1-decision-card .dc-suggested { font-size: var(--fs-caption); color: var(--fg-soft); margin-left: auto; }
+.l1-decision-card .dc-uncertainty { margin-top: var(--sp-3); font-size: var(--fs-caption); color: var(--fg-soft); }
 .l1-identity { display: flex; align-items: flex-end; justify-content: space-between; padding: 32px var(--pad-x) 24px; border-bottom: 1px solid var(--border); gap: 32px; flex-wrap: wrap; }
 .l1-reread .panel-xlink { flex-shrink: 0; white-space: nowrap; }
 .l1-reread .reread-label { font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.08em; color: var(--warn); font-weight: 600; flex-shrink: 0; }
@@ -634,6 +645,7 @@
 /* ============================================================ Financials line-item drill-down + charts_v2 dark overrides ============================================================ */ .fin-row.drillable { cursor: pointer; }
 /* ============================================================ Footer ============================================================ */ .l1-footer { display: flex; justify-content: space-between; gap: 16px; padding: 28px var(--pad-x) 0; margin-top: 32px; border-top: 1px solid var(--border); font-size: var(--fs-caption); color: var(--fg-soft); align-items: baseline; flex-wrap: wrap; }
 /* ============================================================ Inline comments — pin markers + sidebar + form ============================================================ */ [data-commentable="true"] { position: relative; }
+/* ============================================================ Investment Decision Card strip (PRD §8.1, P1.1) ============================================================ */ .l1-decision-card { margin: 0 var(--pad-x) 8px; padding: var(--panel-pad-y) var(--panel-pad-x); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
 /* ============================================================ P3 panels (P4-A1) — macro sensitivities, strategic targets, customer concentrations, lease ladder, decision history full ledger, say-do verdicts, peer comp. Most reuse the canonical .tbl class; the styles below are for the Decisions tab's summary-chip ribbon + small layout tweaks. ============================================================ */ .macro-sens-panel, .strategic-targets-panel, .customer-concentration-panel, .lease-ladder-panel, .saydo-verdicts-panel, .peer-comp-panel, .comp-set-context-panel { margin-top: var(--gap); }
 /* ============================================================ Panels ============================================================ */ .panel { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
 /* ============================================================ Peer row ============================================================ */ .peer-row { margin: var(--section-gap) var(--pad-x) 0; padding-top: 22px; border-top: 1px solid var(--border); }

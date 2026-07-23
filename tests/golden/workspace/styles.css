@@ -1779,6 +1779,53 @@ a.peer:hover { background: var(--paper); }
 .l1-reread .panel-xlink { flex-shrink: 0; white-space: nowrap; }
 
 /* ============================================================
+   Investment Decision Card strip (PRD §8.1, P1.1)
+   ============================================================ */
+.l1-decision-card {
+  margin: 0 var(--pad-x) 8px;
+  padding: var(--panel-pad-y) var(--panel-pad-x);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.l1-decision-card .dc-head {
+  display: flex; align-items: center; gap: var(--gap);
+  margin-bottom: var(--sp-3);
+}
+.l1-decision-card .dc-label {
+  font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted); font-weight: 600;
+}
+.l1-decision-card .dc-suggested {
+  font-size: var(--fs-caption); color: var(--fg-soft); margin-left: auto;
+}
+.l1-decision-card .dc-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--gap-lg);
+}
+.l1-decision-card .dc-cell h4 {
+  margin: 0 0 4px; font-size: var(--fs-caption); text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--muted);
+}
+.l1-decision-card .dc-cell p {
+  margin: 0; font-size: var(--fs-body); line-height: 1.5; color: var(--fg);
+}
+.l1-decision-card .dc-blockers {
+  margin-top: var(--sp-3); font-size: var(--fs-caption); color: var(--warn);
+}
+.l1-decision-card .dc-blockers ul { margin: 4px 0 0; padding-left: 18px; }
+.l1-decision-card .dc-uncertainty {
+  margin-top: var(--sp-3); font-size: var(--fs-caption); color: var(--fg-soft);
+}
+.l1-decision-card .dc-actions {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--gap);
+  margin-top: var(--sp-3); padding-top: var(--sp-3); border-top: 1px solid var(--hairline);
+}
+.l1-decision-card .dc-status {
+  font-size: var(--fs-caption); color: var(--fg-soft); margin-top: 4px;
+}
+
+/* ============================================================
    Print
    ============================================================ */
 @media print {

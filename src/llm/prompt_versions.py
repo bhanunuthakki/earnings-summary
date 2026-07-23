@@ -103,6 +103,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # personal_investment_partner_prd.md §7.4/§10). Bump when
     # allocation.recommendation_artifact._build_prompt is materially rewritten.
     "incremental_dollar_recommendation": "v1",
+    # Investment Decision Card (P1.1, mode-B rubric,
+    # personal_investment_partner_prd.md §8.1/§10). Bump when
+    # research.investment_decision_card._build_prompt is materially rewritten.
+    "investment_decision_card": "v1",
     # Ask advisory answer (mode-B rubric, close_the_loops L3). The audit run
     # records this version, so bump when the conversational ANSWER prompt (the
     # system context + evidence + thread assembly in src/ask/engine.py /

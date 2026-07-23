@@ -1159,6 +1159,91 @@ class SynthesisSection(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Investment Decision Card (P1.1, personal_investment_partner_prd.md §8.1)
+#
+# Deliberately NOT the same class as research.investment_decision_card's
+# InvestmentDecisionCard — report/models.py carries zero imports outside the
+# stdlib/pydantic (every other section here follows that same self-contained
+# convention), so this is a parallel, render-facing shape. The section
+# builder (report/sections/investment_decision_card.py) re-validates the
+# persisted artifact's content_json dict into these models at the JSON
+# boundary — the repo's accepted duplicate-simple-shared-logic pattern
+# (mirrors allocation.recommendation_schema vs. the artifact's own
+# persisted JSON shape elsewhere in the codebase).
+# ---------------------------------------------------------------------------
+
+
+class DecisionCardHypothesis(BaseModel):
+    directional_thesis: str = ""
+    operating_mechanism: str = ""
+    key_kpis: list[str] = Field(default_factory=list[str])
+    confirming_evidence: list[str] = Field(default_factory=list[str])
+    disconfirming_evidence: list[str] = Field(default_factory=list[str])
+
+
+class DecisionCardSecuritySetup(BaseModel):
+    current_price: float | None = None
+    price_as_of: str | None = None
+    valuation_range: str = ""
+    appears_priced_in: str = ""
+    caveats: list[str] = Field(default_factory=list[str])
+
+
+class DecisionCardPortfolioFit(BaseModel):
+    expected_role: str = ""
+    candidate_fit_summary: str = ""
+    correlated_exposure: str = ""
+    expected_zone_if_funded: str | None = None
+
+
+class DecisionCardDisconfirmingCase(BaseModel):
+    bear_hypothesis: str = ""
+    evidence_that_would_confirm_it: str = ""
+    next_proof_point: str = ""
+
+
+class DecisionCardEvidenceReadiness(BaseModel):
+    available_source_classes: list[str] = Field(default_factory=list[str])
+    stale_or_missing: list[str] = Field(default_factory=list[str])
+    decision_ready: bool = False
+    blockers: list[str] = Field(default_factory=list[str])
+
+
+class DecisionCardUncertainty(BaseModel):
+    confidence_verbal: Literal["low", "moderate", "high"] = "low"
+    justification: str = ""
+    what_would_change_it: str = ""
+
+
+class InvestmentDecisionCardSection(BaseModel):
+    """Read-only render shape for the current ``investment_decision_card``
+    llm_artifacts row (report.sections.investment_decision_card.build never
+    generates — generation is execution/build_investment_decision_card.py's
+    job). ``None`` at the ``ReportSpec`` level (not this class's ``status``)
+    means "hide the strip entirely" — mirrors the ``SynthesisSection``
+    convention of an absent lens rather than a stub panel.
+    """
+
+    status: SectionStatus
+    ticker: str
+    artifact_id: int | None = None
+    generated_at: datetime | None = None
+    dirty: bool = False
+    dirty_reason: str | None = None
+    is_stale: bool = False
+    as_of: str | None = None
+    hypothesis_origin: str | None = None
+    suggested_disposition: str | None = None
+    source_refs: list[str] = Field(default_factory=list[str])
+    company_hypothesis: DecisionCardHypothesis | None = None
+    security_setup: DecisionCardSecuritySetup | None = None
+    portfolio_fit: DecisionCardPortfolioFit | None = None
+    disconfirming_case: DecisionCardDisconfirmingCase | None = None
+    evidence_readiness: DecisionCardEvidenceReadiness | None = None
+    uncertainty: DecisionCardUncertainty | None = None
+
+
+# ---------------------------------------------------------------------------
 # Top-level
 # ---------------------------------------------------------------------------
 
@@ -1391,3 +1476,4 @@ class ReportSpec(BaseModel):
     filing_intelligence: FilingIntelligenceSection | None = None
     exec_compensation: ExecCompSectionModel | None = None
     synthesis: SynthesisSection | None = None
+    investment_decision_card: InvestmentDecisionCardSection | None = None

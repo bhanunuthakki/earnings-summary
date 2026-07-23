@@ -465,6 +465,17 @@ LLM_MODELS: dict[str, str] = {
     # unavailability (a labeled deterministic-fallback artifact), never a
     # silent downgrade to a cheaper model.
     "incremental_dollar_recommendation": "claude-opus-4-8",
+    # Investment Decision Card (P1.1, personal_investment_partner_prd.md
+    # §8.1/§10): the governed synthesis of company hypothesis, security setup,
+    # portfolio fit, and disconfirming case over deterministic inputs
+    # (research.investment_decision_card.generate_card) — a per-ticker
+    # judgment with the same "evidence_readiness is NEVER LLM-authored" hard
+    # gate as Incremental Dollar Recommendation's frontier-grounding gate.
+    # Same Opus tier: the prompt embeds an explicit VALIDATION CONSTRAINTS
+    # block the model must actually honor. Budget-capped at $8/mo,
+    # on_exceed='skip' (migration 0190) — per-ticker batch build work should
+    # degrade one card at a time, not block the whole evaluation build.
+    "investment_decision_card": "claude-opus-4-8",
     # Socratic think-through (P2.4): question generation is a short grounded
     # task (Sonnet); the decision memo weighs the owner's answers against the
     # evidence and commits to a scoreable stance — Opus judgment tier.

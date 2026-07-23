@@ -93,6 +93,11 @@ AUDIT_PURPOSES = (
     # Dollar frontier. Mode-B rubric; corpus =
     # evals.corpora.load_incremental_dollar_recommendation_corpus.
     "incremental_dollar_recommendation",
+    # Investment Decision Card (P1.1, personal_investment_partner_prd.md
+    # §8.1/§10.5) — the per-ticker synthesis over deterministic inputs.
+    # Mode-B rubric; corpus =
+    # evals.corpora.load_investment_decision_card_corpus.
+    "investment_decision_card",
     "ask_advisory_answer",
     "calibration_coach",
     "peer_selection",

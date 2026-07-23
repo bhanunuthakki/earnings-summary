@@ -14,6 +14,7 @@ from io import StringIO
 from report.models import (
     BudgetSkip,
     FinancialsSection,
+    InvestmentDecisionCardSection,
     KpiLedgerRow,
     RecentDevelopmentsSection,
     ReportSpec,
@@ -40,10 +41,11 @@ from report.renderers.workspace_sections._shared import (
 )
 from report.renderers.workspace_sections.earnings import _ws_period_sort_key
 from report.renderers.workspace_sections.synthesis import _LENS_LABELS
-from ui.controls import fact_anchor_attrs
+from ui.controls import fact_anchor_attrs, pill_tone_class
 from user_state.notes import AnalystNoteRow
 
 __all__ = [
+    "_decision_card_strip",
     "_footer",
     "_forgone_strip",
     "_identity",
@@ -58,6 +60,17 @@ __all__ = [
     "_val_stat",
     "_verdict_badge",
 ]
+
+# suggested_disposition -> which verb button gets the primary treatment;
+# every other verb renders quiet. All four verbs always render — the card's
+# suggestion only styles the row, it never hides a verb (PRD §8.1: the owner
+# picks; the model suggests).
+_DISPOSITION_VERBS: tuple[tuple[str, str], ...] = (
+    ("promote", "Promote"),
+    ("watch", "Watch"),
+    ("research_further", "Research further"),
+    ("pass", "Pass"),
+)
 
 
 def _identity(body: StringIO, spec: ReportSpec) -> None:
@@ -253,6 +266,90 @@ def _first_reread_line(content_md: str) -> str | None:
             continue
         return line.lstrip("-*").strip()
     return None
+
+
+def _decision_card_strip(
+    body: StringIO, card: InvestmentDecisionCardSection | None, *, ticker: str
+) -> None:
+    """The Investment Decision Card strip (PRD §8.1, P1.1) — renders before
+    the tab bar, between the KPI strip and l1-tabs-wrap. Hidden entirely (not
+    stubbed) when no card has been generated for this ticker yet; that build
+    ran the LLM leg and hit a hard stop, or the artifact failed to decode
+    (report.sections.investment_decision_card.build already degrades all
+    three to ``None``)."""
+    if card is None:
+        return
+    ready = bool(card.evidence_readiness and card.evidence_readiness.decision_ready)
+    ready_tone = "ok" if ready else "warn"
+    body.write('<div class="l1-decision-card" data-anchor-type="decision_card">')
+    body.write('<div class="dc-head">')
+    body.write('<span class="dc-label">Investment Decision Card</span>')
+    body.write(
+        f'<span class="k-pill{pill_tone_class(ready_tone)}">'
+        f"{'Decision-ready' if ready else 'Not decision-ready'}</span>"
+    )
+    if card.dirty:
+        body.write('<span class="k-pill k-pill-warn">stale — inputs changed</span>')
+    elif card.is_stale:
+        body.write('<span class="k-pill">aging</span>')
+    if card.suggested_disposition:
+        body.write(
+            f'<span class="dc-suggested">suggests: {_esc(card.suggested_disposition)}</span>'
+        )
+    body.write("</div>")  # /dc-head
+
+    body.write('<div class="dc-grid">')
+    if card.company_hypothesis:
+        body.write(
+            '<div class="dc-cell"><h4>Company hypothesis</h4>'
+            f"<p>{_esc(card.company_hypothesis.directional_thesis) or '—'}</p></div>"
+        )
+    if card.security_setup:
+        body.write(
+            '<div class="dc-cell"><h4>Security setup</h4>'
+            f"<p>{_esc(card.security_setup.appears_priced_in) or '—'}</p></div>"
+        )
+    if card.portfolio_fit:
+        body.write(
+            '<div class="dc-cell"><h4>Portfolio fit</h4>'
+            f"<p>{_esc(card.portfolio_fit.expected_role) or '—'}</p></div>"
+        )
+    if card.disconfirming_case:
+        body.write(
+            '<div class="dc-cell"><h4>Disconfirming case</h4>'
+            f"<p>{_esc(card.disconfirming_case.bear_hypothesis) or '—'}</p></div>"
+        )
+    body.write("</div>")  # /dc-grid
+
+    if card.evidence_readiness and card.evidence_readiness.blockers:
+        blockers = "".join(f"<li>{_esc(b)}</li>" for b in card.evidence_readiness.blockers)
+        body.write(
+            f'<div class="dc-blockers"><strong>Blocked on:</strong><ul>{blockers}</ul></div>'
+        )
+
+    if card.uncertainty:
+        body.write(
+            '<div class="dc-uncertainty">'
+            f"<strong>Confidence ({_esc(card.uncertainty.confidence_verbal)}):</strong> "
+            f"{_esc(card.uncertainty.justification) or '—'}</div>"
+        )
+
+    artifact_id = card.artifact_id or 0
+    body.write('<div class="dc-actions">')
+    for verb, label in _DISPOSITION_VERBS:
+        cls = "k-btn-primary" if verb == card.suggested_disposition else "k-btn-quiet"
+        body.write(
+            f'<button type="button" class="dc-act k-btn {cls} k-btn-sm" '
+            f'data-verb="{_esc(verb)}" data-artifact-id="{artifact_id}">{_esc(label)}</button>'
+        )
+    body.write(
+        f'<a class="panel-xlink" href="/chat/{_esc(ticker)}" target="_blank" '
+        'rel="noopener">Ask the Senior Partner &rarr;</a>'
+    )
+    body.write(_xlink_html("thesis", "Edit hypothesis →"))
+    body.write("</div>")  # /dc-actions
+    body.write(f'<div class="dc-status" id="dc-status-{artifact_id}" aria-live="polite"></div>')
+    body.write("</div>")  # /l1-decision-card
 
 
 def _reread_strip(body: StringIO, synthesis: SynthesisSection | None) -> None:

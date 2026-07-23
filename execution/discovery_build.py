@@ -131,6 +131,18 @@ def build_one(
             "--repo-root",
             str(repo_root),
         ],
+        # Investment Decision Card (PRD §8.1, P1.1) — every new evaluation
+        # build ends with a card or an explicit failed step (never silently
+        # skipped). Runs last so the deterministic inputs it reads (thesis,
+        # DCF, candidate fit) are already fresh from the steps above.
+        [
+            sys.executable,
+            str(repo_root / "execution" / "build_investment_decision_card.py"),
+            "--ticker",
+            symbol,
+            "--repo-root",
+            str(repo_root),
+        ],
     ]
     if ok:
         for argv in steps:
