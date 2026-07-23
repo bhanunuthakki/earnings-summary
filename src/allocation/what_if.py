@@ -17,14 +17,27 @@ Modeling choices (stated in the UI footnote, pinned by tests):
   reported Sharpe — the two must never be mixed in one delta.
 * **Log-return blend** — the after series blends log returns linearly, the
   same approximation ``candidate_fit`` and ``book_risk`` already make.
+* **funding_mode is FRAMING, not different math** (PRD §7.2, P0.2) — the
+  book-level return blend ``(1-w)·book + w·candidate`` is mathematically
+  IDENTICAL under both ``"new_cash"`` and ``"pro_rata_reallocation"``: the
+  old book's post-trade weight becomes ``1-w`` either way, so
+  :func:`compute_what_if` runs the same computation regardless. The two
+  modes differ only in how the result is EXPLAINED to the owner:
+  ``"new_cash"`` implies depositing ``T*w/(1-w)`` new dollars and no implied
+  sales; ``"pro_rata_reallocation"`` implies selling ``w`` of every existing
+  holding to fund the add. Pick the mode that matches how the owner actually
+  intends to fund the position — it changes the narrative, never the vol/
+  Sharpe/tilt numbers.
 
 Costs and caching: one call is a covariance-grade price read (every holding +
 the candidate). The peek route is user-initiated, so a cold ~100-300 ms
 compute is fine; module-level LRU caches (aligned bundle per candidate+book,
-result per (ticker, weight, prices-through)) make repeat weight-clicks
-instant. Weights are restricted to :data:`ALLOWED_WEIGHTS` so the cache
-converges. Never call this on the GET / render path for a whole table — the
-materializer persists the default-weight ΔSR per candidate instead.
+result per (ticker, weight, funding_mode, prices-through)) make repeat
+weight-clicks instant. Weights must be in ``(0, 0.25]`` (validated by
+:func:`validate_weight`, rounded to 4 decimals for cache-key stability);
+:data:`ALLOWED_WEIGHTS` is the UI's preset chip menu, not an input
+restriction. Never call this on the GET / render path for a whole table —
+the materializer persists the default-weight ΔSR per candidate instead.
 """
 
 from __future__ import annotations
@@ -41,6 +54,7 @@ from typing import TypeVar
 import numpy as np
 
 from allocation.candidate_fit import ANNUALIZE, TRADING_DAYS, mean_var, ols_beta, series_cov
+from allocation.concentration import classify_zone
 from allocation.price_history import (
     AlignedReturns,
     build_aligned_returns,
@@ -48,9 +62,31 @@ from allocation.price_history import (
     load_daily_closes,
 )
 
-#: The discrete weight menu the peek offers. Keys the result cache.
-ALLOWED_WEIGHTS: tuple[float, ...] = (0.01, 0.02, 0.03, 0.05, 0.08)
+#: The UI's preset weight-chip menu (PRD §7.2, P0.2 extends this through the
+#: concentration-zone boundaries: 10/12/15/20/25%). This is a UI convenience,
+#: NOT an input restriction — :func:`validate_weight` accepts any weight in
+#: ``(0, 0.25]``, not just these presets.
+ALLOWED_WEIGHTS: tuple[float, ...] = (
+    0.01,
+    0.02,
+    0.03,
+    0.05,
+    0.08,
+    0.10,
+    0.12,
+    0.15,
+    0.20,
+    0.25,
+)
 DEFAULT_WEIGHT = 0.03
+
+#: Cache-key rounding precision for a validated weight (see validate_weight).
+_WEIGHT_KEY_DECIMALS = 4
+
+#: The two ways the UI can frame funding an add — see the module docstring
+#: ("funding_mode is FRAMING, not different math").
+FUNDING_MODES: tuple[str, ...] = ("new_cash", "pro_rata_reallocation")
+DEFAULT_FUNDING_MODE = "new_cash"
 
 _SPY, _QQQ = "SPY", "QQQ"
 
@@ -64,6 +100,15 @@ class WhatIfResult:
 
     ticker: str
     weight: float
+    funding_mode: str = DEFAULT_FUNDING_MODE
+    # Post-trade single-name weight (PERCENT, 0-100) — the book's existing
+    # weight for ``ticker`` (if any) blended with ``weight`` the same way the
+    # book-level return series is: w0*(1-w) + w. Zero when ``ticker`` is not
+    # currently in ``book_weights``.
+    resulting_weight_pct: float = 0.0
+    # allocation.concentration.Zone for resulting_weight_pct, or None (should
+    # not happen — resulting_weight_pct is always a float here, never None).
+    zone: str | None = None
     vol_before_ann: float | None = None
     vol_after_ann: float | None = None
     sharpe_before: float | None = None  # modeled book, realized window
@@ -78,9 +123,23 @@ class WhatIfResult:
     degraded: tuple[str, ...] = ()  # human-readable reasons; empty when clean
 
 
-def clamp_weight(raw: float) -> float:
-    """Snap an arbitrary weight to the nearest allowed step (cache discipline)."""
-    return min(ALLOWED_WEIGHTS, key=lambda w: abs(w - raw))
+def validate_weight(raw: float) -> float:
+    """Validate an owner-chosen add weight (fraction of book, e.g. 0.03 = 3%).
+
+    Accepts any weight in ``(0, 0.25]`` — NOT restricted to
+    :data:`ALLOWED_WEIGHTS` (that tuple is the UI's preset chip menu, not an
+    input bound; PRD §7.2, P0.2 explicitly ends the old silent-clamp
+    behavior). Returns ``raw`` rounded to :data:`_WEIGHT_KEY_DECIMALS`
+    decimals — the precision the module's result cache key uses, so a
+    validated weight is already cache-stable. Raises ``ValueError`` (naming
+    the preset percentages) for anything outside the allowed range.
+    """
+    if not (0.0 < raw <= 0.25):
+        presets = ", ".join(f"{w * 100:g}%" for w in ALLOWED_WEIGHTS)
+        raise ValueError(
+            f"weight must be > 0% and <= 25% (got {raw * 100:g}%); preset menu: {presets}"
+        )
+    return round(raw, _WEIGHT_KEY_DECIMALS)
 
 
 # --------------------------------------------------------------------------- #
@@ -90,9 +149,12 @@ def clamp_weight(raw: float) -> float:
 _lock = threading.Lock()
 _bundle_cache: OrderedDict[tuple[str, int], AlignedReturns] = OrderedDict()
 # Result key carries the book identity (weights hash + rf) alongside the
-# prices-through date — a weights refresh mid-session must miss, not serve
-# yesterday's book.
-_result_cache: OrderedDict[tuple[str, float, str, int, float | None], WhatIfResult] = OrderedDict()
+# prices-through date and funding_mode — a weights refresh mid-session must
+# miss, not serve yesterday's book, and the two funding framings (identical
+# math, different narrative) must never collide in the same cache slot.
+_result_cache: OrderedDict[tuple[str, float, str, str, int, float | None], WhatIfResult] = (
+    OrderedDict()
+)
 
 
 def _weights_key(book_weights: Mapping[str, float]) -> int:
@@ -178,18 +240,42 @@ def compute_what_if(
     book_sector_weights: Mapping[str, float] | None = None,
     lookback_obs: int = 252,
     min_overlap_obs: int = 120,
+    funding_mode: str = DEFAULT_FUNDING_MODE,
 ) -> WhatIfResult:
     """One candidate at one weight against the passed book. Never raises on
-    data absence — missing legs populate ``degraded`` and stay None."""
+    data absence — missing legs populate ``degraded`` and stay None.
+
+    ``funding_mode`` (one of :data:`FUNDING_MODES`) is FRAMING ONLY — see the
+    module docstring: the book-level blend is identical math under either
+    mode, so it changes the result's narrative fields (and the cache key)
+    but never the vol/Sharpe/tilt numbers. Raises ``ValueError`` for an
+    unknown mode (the same fail-loud contract ``validate_weight`` uses for an
+    out-of-range weight — a typo'd query param must never silently degrade
+    to a mode the caller didn't ask for).
+    """
+    if funding_mode not in FUNDING_MODES:
+        raise ValueError(f"funding_mode must be one of {FUNDING_MODES} (got {funding_mode!r})")
     upper = ticker.upper()
-    w = clamp_weight(weight)
+    w = validate_weight(weight)
     degraded: list[str] = []
+
+    w0 = next((v for t, v in book_weights.items() if t.upper() == upper), 0.0)
+    resulting_weight_pct = (w0 * (1.0 - w) + w) * 100.0
+    zone_assessment = classify_zone(resulting_weight_pct)
+    zone = zone_assessment.zone if zone_assessment is not None else None
 
     aligned = _aligned_bundle(
         repo_root, upper, book_weights, lookback_obs=lookback_obs, min_overlap_obs=min_overlap_obs
     )
     prices_through = aligned.dates[-1].isoformat() if aligned is not None else None
-    result_key = (upper, w, prices_through or "", _weights_key(book_weights), risk_free_annual)
+    result_key = (
+        upper,
+        w,
+        funding_mode,
+        prices_through or "",
+        _weights_key(book_weights),
+        risk_free_annual,
+    )
     if prices_through is not None:
         cached = _cache_get(_result_cache, result_key)
         if cached is not None:
@@ -263,6 +349,9 @@ def compute_what_if(
     result = WhatIfResult(
         ticker=upper,
         weight=w,
+        funding_mode=funding_mode,
+        resulting_weight_pct=resulting_weight_pct,
+        zone=zone,
         vol_before_ann=vol_before,
         vol_after_ann=vol_after,
         sharpe_before=sharpe_before,

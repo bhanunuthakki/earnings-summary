@@ -669,14 +669,44 @@ def render_fit_peek(repo_root: Path, ticker: str) -> str | None:
 # ----------------------------------------------------------------------------
 
 
-def render_what_if_peek(repo_root: Path, ticker: str, weight: float) -> str | None:
+# funding_mode query-param shorthand <-> allocation.what_if.FUNDING_MODES full
+# name, shared by the chip links (built here) and the route (comments_server
+# ``peek_whatif``) that parses them back — one mapping, never duplicated.
+_FUNDING_PARAM_TO_MODE: dict[str, str] = {
+    "new_cash": "new_cash",
+    "pro_rata": "pro_rata_reallocation",
+}
+_MODE_TO_FUNDING_PARAM: dict[str, str] = {v: k for k, v in _FUNDING_PARAM_TO_MODE.items()}
+
+
+def _whatif_error_html(message: str) -> str:
+    """Small inline error snippet for a rejected weight/funding_mode — never a
+    500; the peek just shows why the request didn't compute."""
+    return (
+        '<div class="cc-score">'
+        f'<div class="cc-fit-degraded">&#9888; {escape(message)}</div>'
+        f"</div><style>{_SCORE_CSS}</style>"
+    )
+
+
+def render_what_if_peek(
+    repo_root: Path, ticker: str, weight: float, *, funding_mode: str = "new_cash"
+) -> str | None:
     """The book BEFORE → AFTER adding one name at a chosen weight — vol, Sharpe
-    (Δ in bps), growth tilt, and the candidate's top correlations to individual
+    (Δ in bps), growth tilt, resulting post-trade weight + concentration zone
+    (PRD §7.2, P0.2), and the candidate's top correlations to individual
     holdings, from ``allocation.what_if`` (module-cached; a cold compute is a
     user-initiated click, never the table render). The weight selector chips
-    are peek doorways themselves — clicking 5% re-renders the popover at 5%.
-    None when the weights cache is empty (the route 404s)."""
-    from allocation.what_if import ALLOWED_WEIGHTS, clamp_weight, compute_what_if
+    are peek doorways themselves — clicking a preset re-renders the popover at
+    that weight, carrying the current ``funding_mode`` along.
+
+    ``funding_mode`` (``"new_cash"`` | ``"pro_rata_reallocation"``) is FRAMING
+    ONLY — see ``allocation.what_if``'s module docstring: it never changes the
+    modeled vol/Sharpe/tilt numbers, only how the add is explained. An
+    out-of-range weight, or an unknown funding mode, renders a small inline
+    error naming the preset menu instead of raising. ``None`` when the
+    weights cache is empty (the route 404s)."""
+    from allocation.what_if import ALLOWED_WEIGHTS, compute_what_if, validate_weight
     from candidate_fit_cache import read_materialized_fit_meta
     from portfolio_weights import read_materialized_weights
 
@@ -691,22 +721,33 @@ def render_what_if_peek(repo_root: Path, ticker: str, weight: float) -> str | No
         v = book_block.get(key)
         return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
-    w = clamp_weight(weight)
-    r = compute_what_if(
-        repo_root,
-        t,
-        w,
-        book_weights=weights,
-        risk_free_annual=_opt("risk_free_annual"),
-        book_growth_tilt=_opt("growth_tilt"),
-    )
+    try:
+        w = validate_weight(weight)
+    except ValueError as exc:
+        return _whatif_error_html(str(exc))
+
+    try:
+        r = compute_what_if(
+            repo_root,
+            t,
+            w,
+            book_weights=weights,
+            risk_free_annual=_opt("risk_free_annual"),
+            book_growth_tilt=_opt("growth_tilt"),
+            funding_mode=funding_mode,
+        )
+    except ValueError as exc:
+        return _whatif_error_html(str(exc))
+
     tq = escape(t, quote=True)
+    funding_param = _MODE_TO_FUNDING_PARAM.get(funding_mode, "new_cash")
     selector = "".join(
         (
             f'<span class="k-chip k-chip-mono cc-wi-w-on">{aw * 100:g}%</span>'
             if aw == w
             else f'<a class="k-chip k-chip-mono k-chip-btn" '
-            f'data-peek-url="/api/peek/whatif?ticker={tq}&amp;w={aw}" '
+            f'data-peek-url="/api/peek/whatif?ticker={tq}&amp;w={aw}'
+            f'&amp;funding={funding_param}" '
             f'data-peek-title="What-if · {tq}" href="/ticker/{tq}">{aw * 100:g}%</a>'
         )
         for aw in ALLOWED_WEIGHTS
@@ -741,6 +782,14 @@ def render_what_if_peek(repo_root: Path, ticker: str, weight: float) -> str | No
         if r.sharpe_delta_bps is not None
         else ""
     )
+    # Resulting post-trade single-name weight + its PRD §7.2 concentration
+    # zone — the P0.2 seam this peek adds on top of the before/after stats.
+    zone_html = (
+        '<div class="cc-score-formula">resulting weight '
+        f"<b>{r.resulting_weight_pct:.1f}%</b>"
+        + (f" &mdash; <b>{escape(r.zone)}</b>" if r.zone else "")
+        + "</div>"
+    )
     corr_html = ""
     if r.top_correlations:
         chips = " ".join(
@@ -758,8 +807,13 @@ def render_what_if_peek(repo_root: Path, ticker: str, weight: float) -> str | No
     )
     obs = f" · {r.obs} common days" if r.obs else ""
     through = f" · prices through {escape(r.prices_through)}" if r.prices_through else ""
+    funding_note = (
+        "funded via a new-cash deposit (no implied sales)"
+        if r.funding_mode == "new_cash"
+        else "funded via pro-rata reallocation (selling this fraction of every holding)"
+    )
     legend = (
-        '<div class="cc-score-legend">modeled book (local price caches), pro-rata funded '
+        f'<div class="cc-score-legend">modeled book (local price caches); {funding_note} '
         f"((1&minus;w)&middot;book + w&middot;{escape(t)}){obs}{through}</div>"
     )
     foot = (
@@ -769,7 +823,7 @@ def render_what_if_peek(repo_root: Path, ticker: str, weight: float) -> str | No
     return (
         f'<div class="cc-score">{head}{degraded_html}'
         f'<div class="cc-score-rows">{"".join(rows)}</div>'
-        f"{delta}{corr_html}{legend}</div>{foot}<style>{_SCORE_CSS}</style>"
+        f"{delta}{zone_html}{corr_html}{legend}</div>{foot}<style>{_SCORE_CSS}</style>"
     )
 
 

@@ -3434,10 +3434,14 @@ def create_app(
     def peek_whatif():
         """The before/after what-if for one name at a chosen weight — the
         click-through behind the cockpit's ΔSR chip and the fit peek's doorway.
-        ``?w=`` snaps to the allowed weight menu (default 3%); the compute is
-        user-initiated and module-cached (allocation/what_if.py), never a
-        table-render cost. 404 for an untracked ticker or an empty weights
-        cache."""
+        ``?w=`` is any weight in (0, 25%] (default 3%; a value outside that
+        range or a malformed number renders an inline error, not a 500 —
+        validation stays in ``allocation.what_if.validate_weight`` /
+        ``pipeline.peeks.render_what_if_peek``, this route stays thin). ``?
+        funding=`` is ``new_cash`` (default) or ``pro_rata`` — shorthand for
+        ``allocation.what_if.FUNDING_MODES``' ``pro_rata_reallocation``;
+        framing only, never changes the modeled numbers (PRD §7.2, P0.2). 404
+        for an untracked ticker or an empty weights cache."""
         from pipeline.peeks import render_what_if_peek
 
         try:
@@ -3448,7 +3452,9 @@ def create_app(
             w = float(request.args.get("w") or 0.03)
         except (TypeError, ValueError):
             w = 0.03
-        html = render_what_if_peek(repo_root, ticker, w)
+        funding_param = (request.args.get("funding") or "new_cash").strip().lower()
+        funding_mode = "pro_rata_reallocation" if funding_param == "pro_rata" else "new_cash"
+        html = render_what_if_peek(repo_root, ticker, w, funding_mode=funding_mode)
         if html is None:
             abort(404)
         return Response(html, mimetype="text/html")

@@ -122,7 +122,10 @@ def test_rbrk_intact_undervalued_is_a_sizing_only_decision() -> None:
     assert pre.thesis_present is True
     assert pre.verdict_label == "Intact"
     assert pre.break_rule_status == "warn"
-    assert pre.concentration_flag is True  # 10% >= 8%
+    # 10% is the "meaningful" zone (PRD §7.2) — below the 12% trim-assessment
+    # threshold, so concentration_flag (now "zone >= concentrated") is False.
+    assert pre.concentration_flag is False
+    assert pre.concentration_zone == "meaningful"
     assert pre.weight_vs_band == "no_band"  # no target recorded
     assert pre.conviction_encoded is True  # JSON + a decision note
     assert pre.valuation_verdict == "fair"  # ~-10% vs fair: no trim/sell, not initiation-grade
@@ -155,7 +158,8 @@ def test_flkr_unencoded_conviction_degrades_cleanly() -> None:
     assert pre.valuation_verdict == "n/a"
     assert pre.conviction_encoded is False  # no JSON -> not encoded, note notwithstanding
     assert pre.is_index_instrument is True
-    assert pre.concentration_flag is False  # 7.6% < 8%
+    assert pre.concentration_flag is False  # 7.6% < 12% trim-assessment threshold
+    assert pre.concentration_zone == "ordinary"  # 7.6% < 10%
     assert pre.verdict_label is None
 
 
@@ -205,3 +209,61 @@ def test_at_price_recompute_overrides_stored_gap() -> None:
     )
     assert pre.valuation_verdict == "sell"
     assert pre.dcf_gap_pct is not None and pre.dcf_gap_pct > 20
+
+
+# --------------------------------------------------------------------------- #
+# Concentration zones (PRD §7.2, P0.2) — assemble_pre_analysis's threading
+# --------------------------------------------------------------------------- #
+
+
+def test_assemble_computes_zone_and_threads_entry_method() -> None:
+    """A 13.4% weight is the "concentrated" zone (>= 12%, < 15%):
+    concentration_flag flips True, zone_treatment renders, and the caller-
+    supplied entry_method passes through untouched (assemble is pure — it
+    never derives entry_method itself, only classifies the zone)."""
+    pre = assemble_pre_analysis(
+        "RBRK",
+        weight_pct=13.4,
+        weight_source="live",
+        market_value_usd=None,
+        unrealized_pnl_usd=None,
+        target_weight_pct=None,
+        conviction_1_5=None,
+        break_rule_status="intact",
+        tripped_rules=(),
+        holdings_json=None,
+        dcf_tuple=None,
+        has_stance=False,
+        has_decision_note=False,
+        is_index_instrument=False,
+        at_price=None,
+        entry_method="intentional_add",
+    )
+    assert pre.concentration_zone == "concentrated"
+    assert pre.concentration_flag is True
+    assert pre.zone_treatment == "triggers an explicit hold-versus-trim assessment"
+    assert pre.entry_method == "intentional_add"
+
+
+def test_assemble_zone_and_entry_method_none_with_no_weight() -> None:
+    pre = assemble_pre_analysis(
+        "RBRK",
+        weight_pct=None,
+        weight_source="unknown",
+        market_value_usd=None,
+        unrealized_pnl_usd=None,
+        target_weight_pct=None,
+        conviction_1_5=None,
+        break_rule_status="no_thesis",
+        tripped_rules=(),
+        holdings_json=None,
+        dcf_tuple=None,
+        has_stance=False,
+        has_decision_note=False,
+        is_index_instrument=False,
+        at_price=None,
+    )
+    assert pre.concentration_zone is None
+    assert pre.concentration_flag is False
+    assert pre.zone_treatment is None
+    assert pre.entry_method is None

@@ -44,7 +44,6 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from advisor.position_review import (  # noqa: E402
     AGENT_SOURCE,
-    CONCENTRATION_PCT,
     REVIEW_SOURCES,
     PositionReview,
     PreAnalysis,
@@ -69,7 +68,11 @@ def _render(pre: PreAnalysis) -> str:
         else "no target recorded"
     )
     tripped = "\n".join(f"      • {r}" for r in pre.tripped_rules) or "      (none)"
-    conc = f"YES (>= {CONCENTRATION_PCT:.0f}% single name)" if pre.concentration_flag else "no"
+    conc = (
+        f"{pre.concentration_zone} ({pre.weight_pct:.1f}%)"
+        if pre.concentration_zone and pre.weight_pct is not None
+        else (pre.concentration_zone or "n/a")
+    )
     mos = f"{pre.mos_bar * 100:.0f}%" if pre.mos_bar is not None else "—"
     lines = [
         f"Position review - {pre.ticker}",
