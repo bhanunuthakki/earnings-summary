@@ -752,6 +752,10 @@ def render_what_if_peek(
         )
         for aw in ALLOWED_WEIGHTS
     )
+    if w not in ALLOWED_WEIGHTS:
+        # An exact off-menu weight (validate_weight allows any (0, 25%]) still
+        # gets an active chip so the current evaluation is visible.
+        selector = f'<span class="k-chip k-chip-mono cc-wi-w-on">{w * 100:g}%</span>' + selector
     head = (
         '<div class="cc-score-head">'
         f'<span class="cc-score-cap">What-if: add {escape(t)} at</span>'

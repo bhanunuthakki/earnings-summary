@@ -819,23 +819,37 @@ def test_peek_whatif_renders_before_after(client: FlaskClient, repo: Path) -> No
     assert "Vol (ann.)" in body and "Sharpe" in body
     assert "top correlations to holdings" in body
     assert "AAA" in body and "BBB" in body
-    # The weight selector: the active 3% is a chip, the others peek doorways.
+    # The weight selector: the active 3% is a chip, the others peek doorways
+    # that carry the funding mode along (P0.2: zone-extended menu + new_cash
+    # default framing).
     assert "cc-wi-w-on" in body and ">3%<" in body
-    assert 'data-peek-url="/api/peek/whatif?ticker=DLO&amp;w=0.05"' in body
-    assert "pro-rata funded" in body
+    assert 'data-peek-url="/api/peek/whatif?ticker=DLO&amp;w=0.05&amp;funding=new_cash"' in body
+    assert "new-cash deposit" in body
+    # The pro-rata framing is retained as an explicit mode, not the default.
+    pro = client.get("/api/peek/whatif?ticker=DLO&funding=pro_rata")
+    assert pro.status_code == 200
+    assert "pro-rata reallocation" in pro.data.decode()
 
 
-def test_peek_whatif_clamps_weight_and_404s(client: FlaskClient, repo: Path) -> None:
+def test_peek_whatif_rejects_out_of_range_weight_and_404s(client: FlaskClient, repo: Path) -> None:
     from allocation.what_if import clear_caches
 
     clear_caches()
     # No weights cache → 404 (nothing to blend against).
     assert client.get("/api/peek/whatif?ticker=DLO").status_code == 404
     _seed_whatif_substrate(repo)
-    # A wild weight snaps to the allowed menu (0.5 → 8%).
+    _write_fit_cache(repo, ticker="DLO")
+    # P0.2 ended the silent clamp: a wild weight renders an inline error
+    # naming the preset menu instead of snapping to 8%.
     resp = client.get("/api/peek/whatif?ticker=DLO&w=0.5")
     assert resp.status_code == 200
-    assert ">8%<" in resp.data.decode()
+    body = resp.data.decode()
+    assert "cc-fit-degraded" in body
+    assert "25%" in body and "preset" in body.lower()
+    # An off-menu but in-range weight evaluates EXACTLY (no snapping).
+    exact = client.get("/api/peek/whatif?ticker=DLO&w=0.11")
+    assert exact.status_code == 200
+    assert ">11%<" in exact.data.decode()
     # Bad ticker rejected by validation.
     assert client.get("/api/peek/whatif?ticker=..%2Fetc").status_code == 404
 
