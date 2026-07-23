@@ -145,6 +145,99 @@ This is the correct search order for `cheaper_candidates()`.
 
 ---
 
+## 2a. 2026-07-21 price refresh + Sonnet 5 / Haiku 4.5 registration
+
+**Status: PARTIAL — infra updated, promotions BLOCKED this round (see below).**
+The §2 table above is the 2026-06-13 shipping snapshot, kept for history. Verified
+current prices (source: the dated cross-provider frontier reference,
+`C:\Users\Bhanu\.gemini\procedures\model-frontier.REFERENCE.md`, last-verified
+2026-07-21 for Anthropic rows):
+
+| Model id (in code) | Public equivalent | in $/MTok | out $/MTok | Blended | Note |
+|---|---|---:|---:|---:|---|
+| `claude-haiku-4-5-20251001` | Claude Haiku 4.5 (dated snapshot) | $0.80 | $4.00 | $1.26 | unchanged; still the `FAST_CLASSIFIER_MODEL` code pin |
+| `claude-haiku-4-5` | Claude Haiku 4.5 (rolling alias) | $1.00 | $5.00 | $1.57 | **NEW** — registered as an eval candidate for the dated pin |
+| `claude-sonnet-4-6` | Claude Sonnet 4.6 | $3.00 | $15.00 | $4.71 | unchanged; still the `DEFAULT_MODEL` code pin |
+| `claude-sonnet-5` | Claude Sonnet 5 | $2.00 | $10.00 | $3.14 | **NEW** — registered as an eval candidate for `claude-sonnet-4-6`. **Launch pricing through 2026-08-31**, then $3.00/$15.00 ($4.71 blended) — restamp `model_ladder.py` at that date |
+| `claude-opus-4-8` | Claude Opus 4.8 | $5.00 | $25.00 | $7.86 | **CORRECTED** — same id (no model swap), the old $15/$75 entry was stale |
+| `claude-opus-4-7` | Claude Opus 4.7 (superseded) | $15.00 | $75.00 | $18.21 | unchanged — not in the current frontier reference, no verified 2026-07 price exists; historical replay only |
+| `claude-fable-5` | Claude Fable 5 | $10.00 | $50.00 | $15.71 | **NEW** — registered for completeness (no in-app purpose is pinned to it; it's the interactive-session orchestration tier, not an application model) |
+| `gemini-2.5-flash` / `gemini-3.1-pro-preview` | (unchanged) | — | — | — | not re-verified this round; §2 prices stand |
+
+Corrected ladder order (cheapest → priciest, Claude tiers only):
+```
+claude-haiku-4-5-20251001 ($1.26) < claude-haiku-4-5 ($1.57)
+  < claude-sonnet-5 ($3.14) < claude-sonnet-4-6 ($4.71)
+  < claude-opus-4-8 ($7.86) < claude-fable-5 ($15.71)
+```
+Note the Opus correction is large (was $18.21 blended, now $7.86) — every
+purpose pinned to `claude-opus-4-8` (`valuation_basis`, `saydo_importance`,
+`kpi_registry_auto_proposal`, `material_news_classification`,
+`earnings_tone_diff`, `dcf_assumptions`, `advisor_next_dollar`,
+`incremental_dollar_recommendation`, `advisor_socratic_memo`,
+`calibration_coach`, `exec_comp_alignment`, `exec_comp_extraction`,
+`backend_compare_judge`) now costs roughly 43% of what the stale table implied
+— no id change, just a materially better annualized-cost picture for the same
+model/quality.
+
+### Per-purpose promotion status (2026-07 eval-gated migration attempt)
+
+`claude-sonnet-5` and `claude-haiku-4-5` are now **registered candidates**
+(`src/llm/model_ladder.py`) so `execution/eval_model_downgrade.py` and the
+standing weekly sweep (`execution/run_weekly_model_eval.py`) can discover and
+eval-gate them. Per hard rule (no mechanical rename — every promotion needs a
+real `SWITCH_DOWN` verdict from the brand-blind pairwise judge), **zero
+purposes were promoted this round.** The attempt to run real evals hit a hard
+blocker before any candidate/judge comparison could execute:
+
+```
+$ echo hi | claude -p --model claude-sonnet-5 --output-format json --no-session-persistence
+{"...","is_error":true,"api_error_status":401,...,
+ "result":"Failed to authenticate. API Error: 401 {\"type\":\"error\",
+ \"error\":{\"type\":\"authentication_error\",
+ \"message\":\"OAuth access token has expired. Re-authenticate to continue.\"}
+ ...}"}
+```
+
+Confirmed with `claude-sonnet-4-6` too (identical 401) — this is the local
+Claude CLI's OAuth session, not a model-availability or quota-exhaustion
+issue (`claude auth status` reports `loggedIn: true`, `subscriptionType: max`,
+so the on-disk token needs a refresh the non-interactive `-p` path isn't
+triggering). Per the global `AGENTS.md` bounded-self-annealing policy, a 401
+is a hard stop requiring operator action (`claude auth login` or equivalent
+token refresh), not a retryable transient failure — no further eval attempts
+were made once this was confirmed twice.
+
+**Ready to run as soon as auth is restored** — a merged capture corpus (55
+cases across 9 purposes from `data/llm_capture/*.jsonl`, 2026-06-11 through
+2026-07-19) already covers 6 `DEFAULT_MODEL` purposes at `n >= min_n(4)`:
+
+| Purpose | Incumbent | Candidate | Captured n | 30d prod cost | Status |
+|---|---|---|---:|---:|---|
+| `qa_topics` | claude-sonnet-4-6 | claude-sonnet-5 | 10 | $1.67 | eval-ready, blocked |
+| `saydo_filter` | claude-sonnet-4-6 | claude-sonnet-5 | 9 | $4.16 | eval-ready, blocked |
+| `company_description` | claude-sonnet-4-6 | claude-sonnet-5 | 9 | $3.44 | eval-ready, blocked |
+| `recent_developments` | claude-sonnet-4-6 | claude-sonnet-5 | 7 | $35.04 | eval-ready, blocked |
+| `bear_case` | claude-sonnet-4-6 | claude-sonnet-5 | 6 | $16.25 | eval-ready, blocked |
+| `peer_selection` | claude-sonnet-4-6 | claude-sonnet-5 | 6 | $11.29 | eval-ready, blocked |
+| `earnings_themes_split` | claude-sonnet-4-6 | claude-sonnet-5 | 2 | $39.00 | below min_n; needs 2+ more harvested cases |
+| `valuation_basis` | claude-opus-4-8 | — | 4 | — | not a candidate this round (already-current opus id; no swap to eval) |
+| `exec_comp_alignment` | claude-opus-4-8 | — | 2 | — | not a candidate this round (opus id unchanged) |
+| all `FAST_CLASSIFIER_MODEL` purposes (haiku tier) | claude-haiku-4-5-20251001 | claude-haiku-4-5 | 0 | — | **blocked — no captured prompt corpus.** `run_weekly_model_eval.py`'s `_HARVEST_STEPS` only wires `bear_case`/`company_description`; no haiku-tier purpose has a harvest step, so `--from-capture` has nothing to load. Needs a harvest step added (or a manual `LLM_CAPTURE_DIR`-wrapped run of the purpose's real call site) before any haiku promotion can be eval-gated. |
+
+Run command once auth is restored (per purpose, from the repo root):
+```
+python execution/eval_model_downgrade.py --purpose <p> \
+  --from-capture data/llm_capture/<merged-or-single-file>.jsonl \
+  --candidates claude-sonnet-5 --repo-root .
+```
+A `SWITCH_DOWN` verdict promotes that purpose's `LLM_MODELS` entry from
+`DEFAULT_MODEL` to the literal `"claude-sonnet-5"` string (never reassign the
+`DEFAULT_MODEL` constant itself — that would silently re-promote every
+un-evaluated purpose sharing the symbol).
+
+---
+
 ## 3. Token efficiency — add to eval recording
 
 A model that produces the same quality output in fewer tokens is strictly better:

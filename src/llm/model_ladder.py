@@ -9,10 +9,26 @@ Cost basis is **public API marginal $/MTok**, output-weighted to reflect these
 prompts' roughly 6:1 input:output ratio. The eval loop is what decides whether
 the cheaper model's *quality* holds; this module only orders them by price.
 
-Blended ladder order (cheapest → most expensive, 2026-06 API list prices):
-  Gemini 3.5 Flash ($0.30/$2.50) → Haiku 4.5 ($0.80/$4.00)
-  → Gemini 3.1 Pro ($1.25/$10.00) → Sonnet 4.6 ($3.00/$15.00)
-  → Opus 4.7/4.8 ($15.00/$75.00)
+Blended ladder order (cheapest → most expensive, 2026-07-21 API list prices —
+see ``C:\\Users\\Bhanu\\.gemini\\procedures\\model-frontier.REFERENCE.md``, the
+dated cross-provider authority; verify there before editing prices below):
+  Gemini 2.5 Flash ($0.30/$2.50) → Haiku 4.5 ($1.00/$5.00)
+  → Gemini 3.1 Pro ($1.25/$10.00) → Sonnet 5 ($2.00/$10.00, launch price
+  through 2026-08-31, then $3.00/$15.00) → Opus 4.8 ($5.00/$25.00)
+  → Fable 5 ($10.00/$50.00).
+
+2026-07 migration note: ``claude-sonnet-5`` and the rolling ``claude-haiku-4-5``
+alias are newly REGISTERED here as candidates so the standing weekly sweep
+(``execution/run_weekly_model_eval.py``) and ``execution/eval_model_downgrade.py``
+can discover and eval-gate them per purpose — registration alone does NOT
+promote anything. ``claude-sonnet-4-6`` and the dated
+``claude-haiku-4-5-20251001`` snapshot remain the ``LLM_MODELS`` incumbent
+pins in ``src/llm/cli.py`` (unchanged) until a real per-purpose SWITCH_DOWN
+verdict lands — see ``directives/cheapest_model_routing.md`` §4 for the
+2026-07 attempt's status (blocked on an expired Claude CLI OAuth session, no
+promotions shipped this round). ``claude-opus-4-8`` keeps its id (no swap,
+already the incumbent) but its price corrects sharply downward from the
+stale $15/$75 entry to the verified 2026-07-21 $5/$25.
 """
 
 from __future__ import annotations
@@ -45,11 +61,30 @@ class ModelCost:
 # src/llm/gemini_backend.py. Unknown models (not here) are treated as unrankable
 # by the helpers below — the loop skips a purpose whose incumbent isn't ranked.
 MODEL_LADDER: dict[str, ModelCost] = {
-    # Claude tiers (public API prices, $/MTok in/out, 2026-06).
+    # Claude tiers (public API list prices, $/MTok in/out; verified against
+    # model-frontier.REFERENCE.md 2026-07-21 unless noted).
+    # Dated Haiku snapshot — the CURRENT LLM_MODELS incumbent pin
+    # (FAST_CLASSIFIER_MODEL). Price is its historical, still-accurate value.
     "claude-haiku-4-5-20251001": ModelCost("claude-haiku-4-5-20251001", CLAUDE, 0.80, 4.00),
+    # Rolling alias of the same Haiku 4.5 model family — NEWLY REGISTERED
+    # 2026-07 as an eval candidate for the dated snapshot above. Not yet an
+    # LLM_MODELS pin; promote only after a per-purpose SWITCH_DOWN verdict.
+    "claude-haiku-4-5": ModelCost("claude-haiku-4-5", CLAUDE, 1.00, 5.00),
+    # The CURRENT LLM_MODELS incumbent pin (DEFAULT_MODEL).
     "claude-sonnet-4-6": ModelCost("claude-sonnet-4-6", CLAUDE, 3.00, 15.00),
+    # NEWLY REGISTERED 2026-07 as an eval candidate for claude-sonnet-4-6 (see
+    # directives/cheapest_model_routing.md §4). Launch pricing through
+    # 2026-08-31; becomes $3.00/$15.00 after — restamp this row when that date
+    # passes (frontier reference notes). Not yet an LLM_MODELS pin.
+    "claude-sonnet-5": ModelCost("claude-sonnet-5", CLAUDE, 2.00, 10.00),
+    # Superseded tier, not in the current frontier reference — no verified
+    # 2026-07 price exists for it, so it's left at its last-known value
+    # (historical replay only; no purpose pins this id).
     "claude-opus-4-7": ModelCost("claude-opus-4-7", CLAUDE, 15.00, 75.00),
-    "claude-opus-4-8": ModelCost("claude-opus-4-8", CLAUDE, 15.00, 75.00),
+    # Same id as the incumbent purpose pins (no model swap) — price corrected
+    # from the stale $15/$75 entry to the verified 2026-07-21 $5/$25.
+    "claude-opus-4-8": ModelCost("claude-opus-4-8", CLAUDE, 5.00, 25.00),
+    "claude-fable-5": ModelCost("claude-fable-5", CLAUDE, 10.00, 50.00),
     # Gemini API tiers (public API prices, $/MTok in/out, 2026-06).
     # Matches GEMINI_BACKEND_FAST_MODEL / _DEFAULT_MODEL in src/llm/gemini_backend.py
     # (the Gemini Developer API backend — see directives/gemini_backend.md for the

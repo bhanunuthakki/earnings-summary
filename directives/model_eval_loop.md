@@ -95,3 +95,20 @@ under both judges (REJECT) — analytical reasoning needs the incumbent. `viewsp
 (Haiku) showed Gemini at parity (PROMOTE_CANDIDATE, n=2). The point of the loop is
 exactly this purpose-dependence: it finds the cheapest model that holds *per
 purpose*, rather than one global choice.
+
+## 6. 2026-07 attempt: Sonnet 5 / Haiku 4.5 registered, promotions blocked on auth
+
+`claude-sonnet-5` and `claude-haiku-4-5` were added to `src/llm/model_ladder.py`
+as eval candidates (current-generation replacements for the `DEFAULT_MODEL` /
+`FAST_CLASSIFIER_MODEL` pins, per the 2026-07-21 frontier price refresh — see
+`directives/cheapest_model_routing.md` §2a for full detail). Six `DEFAULT_MODEL`
+purposes had a sufficient captured corpus (`n >= 4`, merged across
+`data/llm_capture/*.jsonl`) to run `execution/eval_model_downgrade.py` against:
+`qa_topics`, `saydo_filter`, `company_description`, `recent_developments`,
+`bear_case`, `peer_selection`. The attempt was aborted before any real
+candidate/judge comparison ran: the local `claude` CLI's OAuth session was
+expired (`api_error_status: 401`, confirmed identically for both the incumbent
+and candidate model ids — not model-specific, not quota exhaustion). No
+purpose was promoted; `LLM_MODELS` in `src/llm/cli.py` is unchanged. Re-run the
+eval command in cheapest_model_routing.md §2a once `claude auth login` (or
+equivalent token refresh) restores a working session.
