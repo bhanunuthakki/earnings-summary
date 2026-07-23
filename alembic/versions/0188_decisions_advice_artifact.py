@@ -296,10 +296,17 @@ def downgrade() -> None:
     bind = op.get_bind()
     insp = sa.inspect(bind)
 
-    # The view must be dropped BEFORE any batch_alter_table("decisions") —
-    # SQLite's batch rebuild renames the table mid-flight, and a live view
-    # referencing it makes that rename fail ("no such table: main.decisions").
+    # EVERY view referencing `decisions` must be dropped BEFORE any
+    # batch_alter_table("decisions") — SQLite's batch rebuild renames the
+    # table mid-flight, and a live view referencing it makes that rename fail
+    # ("no such table: main.decisions"). v_decision_journal is rebuilt below;
+    # v_decision_freshness (0137) is captured verbatim and restored after the
+    # batch (found live by #959's merge-head CI, 2026-07-23).
+    freshness_sql_row = bind.execute(
+        sa.text("SELECT sql FROM sqlite_master WHERE type='view' AND name='v_decision_freshness'")
+    ).fetchone()
     op.execute("DROP VIEW IF EXISTS v_decision_journal")
+    op.execute("DROP VIEW IF EXISTS v_decision_freshness")
 
     if _has_table(insp, "decisions"):
         have = _columns(insp, "decisions")
@@ -314,6 +321,12 @@ def downgrade() -> None:
                 )
             with op.batch_alter_table("decisions") as batch:
                 batch.drop_column("advice_artifact_id")
+
+        # Restore v_decision_freshness verbatim (its SQL doesn't reference
+        # the dropped column — it only needed to be out of the way during
+        # the batch rename).
+        if freshness_sql_row is not None and freshness_sql_row[0]:
+            op.execute(str(freshness_sql_row[0]))
 
         # Restore the pre-0188 v_decision_journal (0179's shape, minus the
         # advice columns) when its source tables are present.
