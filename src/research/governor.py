@@ -496,6 +496,51 @@ def unmute(class_: str, *, db_path: Path | str | None = None) -> bool:
         conn.close()
 
 
+def record_ping_message_id(
+    ping_id: int, message_id: int, *, db_path: Path | str | None = None
+) -> bool:
+    """Best-effort: remember which Telegram message carried this ping (B3), so a
+    later free-text REPLY can route back to the finding (``capture.coach_reply``)
+    the same way a note-card reply routes via
+    ``context_json['telegram_message_id']`` (``poller._stash_card_mid``) —
+    ``coach_pings`` has no JSON column, hence a real ``telegram_message_id``
+    column (migration 0188). Swallows ``sqlite3.OperationalError`` so an
+    un-migrated DB (column missing) never breaks a send; returns whether the
+    write happened."""
+    stamp = now_naive_utc().isoformat()
+    conn = open_conn(db_path)
+    try:
+        conn.execute(
+            "UPDATE coach_pings SET telegram_message_id = ?, updated_at = ? WHERE id = ?",
+            (message_id, stamp, ping_id),
+        )
+        conn.commit()
+        return True
+    except sqlite3.OperationalError:
+        return False  # pre-0188 schema — no telegram_message_id column yet
+    finally:
+        conn.close()
+
+
+def mark_ping_acted(ping_id: int, *, db_path: Path | str | None = None) -> bool:
+    """Owner's reply resolved this ping (acknowledge / annotate_decision outcome
+    in ``capture.coach_reply``) — flip it to ``acted`` from ``sent``/``digest``
+    only, mirroring ``record_dismissal``'s status-guard shape. Returns whether a
+    row was updated."""
+    stamp = now_naive_utc().isoformat()
+    conn = open_conn(db_path)
+    try:
+        cur = conn.execute(
+            "UPDATE coach_pings SET status = 'acted', updated_at = ? "
+            "WHERE id = ? AND status IN ('sent', 'digest')",
+            (stamp, ping_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def get_ping(ping_id: int, db_path: Path | str | None = None) -> PingRow | None:
     """One ``coach_pings`` row by id, or None. Backs the ``cp:review`` callback
     (the Answer button on a falsifier_breach ping) — it needs the ticker to

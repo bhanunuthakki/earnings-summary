@@ -61,6 +61,7 @@ CLASSIFIER_PURPOSES: tuple[str, ...] = (
     "ledger_reply_intent",
     "triage_route_suggest",
     "segment_10q_period_disambiguate",
+    "capture_triage",
 )
 
 _METADATA_RX = re.compile(r"^(?:[A-Z][A-Z0-9.]*_Q[1-4]_\d{4}|UNKNOWN)$")
@@ -372,6 +373,54 @@ def load_triage_route_suggest_golden(path: Path) -> list[ClassifierCase]:
                 case_id, {"comment_text": comment_text, "context_line": context_line}, exp
             )
         )
+    if errors:
+        raise ValueError(f"golden file invalid at {path}: " + "; ".join(errors))
+    return cases
+
+
+def load_capture_triage_golden(path: Path) -> list[ClassifierCase]:
+    """Cases for capture.triage.classify_capture_triage_for_eval: a case dict
+    carrying its own ``text`` + ``context`` (tenets/stances/musings/decisions —
+    the same shape ``capture.triage._gather_from_case`` renders), so the golden
+    set never needs a fixture DB. ``expected`` is ``{route: <one of ROUTES>,
+    conflicts_with: <token or null>}`` — a wrong route OR a wrong/fabricated
+    citation IS the failure mode this classifier exists to prevent."""
+    from capture.triage import ROUTES
+
+    errors: list[str] = []
+    seen: set[str] = set()
+    cases: list[ClassifierCase] = []
+    for i, c in enumerate(_load_doc(path, "capture_triage")):
+        label = f"cases[{i}]"
+        case_id = _require_str(c, "id", label, errors)
+        if case_id in seen:
+            errors.append(f"{label}: duplicate id {case_id!r}")
+        seen.add(case_id)
+        text = _require_str(c, "text", label, errors)
+        context_raw = c.get("context")
+        if not isinstance(context_raw, dict):
+            errors.append(f"{label} ({case_id}): `context` must be an object")
+        context: dict[str, object] = (
+            cast("dict[str, object]", context_raw) if isinstance(context_raw, dict) else {}
+        )
+        expected = c.get("expected")
+        if not isinstance(expected, dict):
+            errors.append(f"{label} ({case_id}): `expected` must be an object")
+            expected = {}
+        exp = cast("dict[str, object]", expected)
+        route = exp.get("route")
+        if not isinstance(route, str) or route not in ROUTES:
+            errors.append(f"{label} ({case_id}): expected.route must be one of {list(ROUTES)}")
+        if "conflicts_with" not in exp:
+            errors.append(f"{label} ({case_id}): expected.conflicts_with missing (use null)")
+        else:
+            conflicts_with = exp.get("conflicts_with")
+            if conflicts_with is not None and not isinstance(conflicts_with, str):
+                errors.append(
+                    f"{label} ({case_id}): expected.conflicts_with must be a string or null"
+                )
+        case_payload: dict[str, object] = {"text": text, "context": context}
+        cases.append(ClassifierCase(case_id, {"case": case_payload}, exp))
     if errors:
         raise ValueError(f"golden file invalid at {path}: " + "; ".join(errors))
     return cases
@@ -828,6 +877,55 @@ def grade_ledger_reply_intent_case(
     )
 
 
+def grade_capture_triage_case(
+    case: ClassifierCase, *, fn: Callable[..., dict[str, object]]
+) -> CaseResult:
+    """The capture->answer primary gate: ``route`` must match exactly (each of
+    the three routes fires a completely different downstream — answer via the
+    engine, a deterministic challenge, or nothing at all). When the expected
+    route is ``contradiction``, a route match with the WRONG (or a fabricated/
+    missing) ``conflicts_with`` token drops to partial credit — the grounding
+    gate is what stops a hallucinated citation, so route-right/citation-wrong
+    is a real miss, not a full pass."""
+    expected = cast("dict[str, object]", case.expected)
+    exp_route = str(expected.get("route") or "")
+    exp_token = expected.get("conflicts_with")
+    t0 = time.monotonic()
+    try:
+        actual = fn(cast("dict[str, object]", case.inputs["case"]))
+    except Exception as exc:
+        _abort_on_hard_stop(exc, "capture_triage", case.case_id)
+        raise
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    act = actual  # fn is typed dict[str, object]; classify_capture_triage_for_eval returns one
+    act_route = str(act.get("route") or "")
+    route_ok = act_route == exp_route
+    token_ok = True
+    if (
+        route_ok
+        and exp_route == "contradiction"
+        and isinstance(exp_token, str)
+        and exp_token.strip()
+    ):
+        act_token = act.get("conflicts_with")
+        token_ok = isinstance(act_token, str) and act_token.strip() == exp_token.strip()
+    passed = route_ok and token_ok
+    score = 1.0 if passed else (0.5 if route_ok else 0.0)
+    return CaseResult(
+        case_id=case.case_id,
+        question=f"capture_triage/{case.case_id}",
+        passed=passed,
+        score=score,
+        expected_json=dumps_compact({"route": exp_route, "conflicts_with": exp_token}),
+        actual_json=dumps_compact(act),
+        failure_stage=None if passed else ("conflicts_with" if route_ok else "route"),
+        judge_rationale=None
+        if passed
+        else f"expected route={exp_route!r} conflicts_with={exp_token!r}, got {act_route!r}",
+        latency_ms=latency_ms,
+    )
+
+
 def grade_triage_route_suggest_case(
     case: ClassifierCase, *, fn: Callable[..., dict[str, object]]
 ) -> CaseResult:
@@ -1013,6 +1111,10 @@ def _production_fn(purpose: str) -> Callable[..., object]:
         import compute.segment_quarterly_10q as segment_quarterly_10q
 
         return cast("Callable[..., object]", segment_quarterly_10q.disambiguate_periods_for_eval)
+    if purpose == "capture_triage":
+        import capture.triage as triage
+
+        return cast("Callable[..., object]", triage.classify_capture_triage_for_eval)
     return llm_client.structure_recent_news_json
 
 
@@ -1055,6 +1157,9 @@ def run_classifier_eval(
     elif purpose == "segment_10q_period_disambiguate":
         cases = load_segment_10q_period_disambiguate_golden(golden_path)
         grade = grade_segment_10q_period_disambiguate_case
+    elif purpose == "capture_triage":
+        cases = load_capture_triage_golden(golden_path)
+        grade = grade_capture_triage_case
     else:
         raise ValueError(
             f"no classifier eval for purpose {purpose!r} — known: {list(CLASSIFIER_PURPOSES)}"

@@ -1,0 +1,138 @@
+{
+  "purpose": "capture_triage",
+  "notes": "The primary gate on the capture->answer path (B3), superseding the question-shaped-text regex is_answerable_capture. Three routes: answer_now (the note asks something the platform can answer), contradiction (the note cuts against a SHOWN tenet/stance/open-decision/recent musing — cites exactly one shown id token), plain (everything else). ct-001/ct-002 are the two real production notes (54/55) that motivated the B3 overhaul. ct-090 tests the grounding discipline at the data level: a contradiction-flavored musing where the conflicting belief is NOT shown must grade plain, not contradiction.",
+  "cases": [
+    {
+      "id": "ct-001-cost-basis-verbatim",
+      "text": "What's my cost basis on MELI?",
+      "context": {"tenets": [], "stances": [], "musings": [], "decisions": []},
+      "expected": {"route": "answer_now", "conflicts_with": null}
+    },
+    {
+      "id": "ct-002-why-cant-you-tell-me-verbatim",
+      "text": "Why can't you tell me my cost basis? The project has this detail",
+      "context": {"tenets": [], "stances": [], "musings": [], "decisions": []},
+      "expected": {"route": "answer_now", "conflicts_with": null}
+    },
+    {
+      "id": "ct-003-should-i-trim-borderline",
+      "text": "should I trim NU here given how far it has run",
+      "context": {"tenets": [], "stances": [], "musings": [], "decisions": []},
+      "expected": {"route": "answer_now", "conflicts_with": null}
+    },
+    {
+      "id": "ct-010-doubling-meli-vs-concentration-tenet",
+      "text": "thinking of doubling down on MELI here, it's my best idea by far",
+      "context": {
+        "tenets": [
+          {"id": 12, "scope_key": "tenet:position-sizing-concentration", "body": "I cap any single name at 15% of the book — conviction doesn't override the concentration ceiling.", "as_of": "2026-03-14"}
+        ],
+        "stances": [],
+        "musings": [],
+        "decisions": []
+      },
+      "expected": {"route": "contradiction", "conflicts_with": "T12"}
+    },
+    {
+      "id": "ct-011-nu-credit-loosening-vs-stance",
+      "text": "NU should loosen underwriting into the cycle — the growth is worth the risk",
+      "context": {
+        "tenets": [],
+        "stances": [
+          {"id": 7, "scope_key": "NU", "body": "NU's edge is disciplined underwriting through the credit cycle, not chasing growth into it.", "as_of": "2026-05-02"}
+        ],
+        "musings": [],
+        "decisions": []
+      },
+      "expected": {"route": "contradiction", "conflicts_with": "S7"}
+    },
+    {
+      "id": "ct-012-add-more-vs-open-trim-decision",
+      "text": "actually I want to add more BN right here, not sit on my hands",
+      "context": {
+        "tenets": [],
+        "stances": [],
+        "musings": [],
+        "decisions": [
+          {"id": 3, "ticker": "BN", "direction": "trim", "falsifier": "if fee-related earnings growth reaccelerates above 10% for two straight quarters"}
+        ]
+      },
+      "expected": {"route": "contradiction", "conflicts_with": "D3"}
+    },
+    {
+      "id": "ct-013-reverses-recent-musing",
+      "text": "actually never mind, RBRK's net retention story looks solid to me now, no real risk left",
+      "context": {
+        "tenets": [],
+        "stances": [],
+        "musings": [
+          {"id": 54, "body": "RBRK's net retention deceleration is the one thing that would break my thesis here."}
+        ],
+        "decisions": []
+      },
+      "expected": {"route": "contradiction", "conflicts_with": "N54"}
+    },
+    {
+      "id": "ct-020-watchlist-add-plain",
+      "text": "Add to watchlist: Dassault Systemes",
+      "context": {"tenets": [], "stances": [], "musings": [], "decisions": []},
+      "expected": {"route": "plain", "conflicts_with": null}
+    },
+    {
+      "id": "ct-021-neutral-observation-plain",
+      "text": "NU's NPL formation ticked up to 4.5% this quarter",
+      "context": {"tenets": [], "stances": [], "musings": [], "decisions": []},
+      "expected": {"route": "plain", "conflicts_with": null}
+    },
+    {
+      "id": "ct-022-todo-plain",
+      "text": "remember to re-read the MELI logistics 10-K section before next earnings",
+      "context": {"tenets": [], "stances": [], "musings": [], "decisions": []},
+      "expected": {"route": "plain", "conflicts_with": null}
+    },
+    {
+      "id": "ct-023-market-comment-plain",
+      "text": "the macro tape feels heavy today and rates keep grinding higher",
+      "context": {"tenets": [], "stances": [], "musings": [], "decisions": []},
+      "expected": {"route": "plain", "conflicts_with": null}
+    },
+    {
+      "id": "ct-024-consistent-with-shown-tenet-plain",
+      "text": "staying disciplined on position sizing even though MELI is tempting here",
+      "context": {
+        "tenets": [
+          {"id": 12, "scope_key": "tenet:position-sizing-concentration", "body": "I cap any single name at 15% of the book — conviction doesn't override the concentration ceiling.", "as_of": "2026-03-14"}
+        ],
+        "stances": [],
+        "musings": [],
+        "decisions": []
+      },
+      "expected": {"route": "plain", "conflicts_with": null}
+    },
+    {
+      "id": "ct-090-conflict-not-shown-grounding",
+      "text": "thinking of doubling down on MELI here, it's my best idea by far",
+      "context": {"tenets": [], "stances": [], "musings": [], "decisions": []},
+      "expected": {"route": "plain", "conflicts_with": null}
+    },
+    {
+      "id": "ct-004-how-does-compare-answer-now",
+      "text": "how does NOW's rule of 40 compare to CRM right now?",
+      "context": {"tenets": [], "stances": [], "musings": [], "decisions": []},
+      "expected": {"route": "answer_now", "conflicts_with": null}
+    },
+    {
+      "id": "ct-014-holdco-nav-vs-tenet",
+      "text": "I'd pay up well past NAV for BN if the fee business keeps compounding like this",
+      "context": {
+        "tenets": [
+          {"id": 21, "scope_key": "tenet:holdco-discount-discipline", "body": "I never pay above a mid-single-digit premium to NAV for a holdco — the discount is the whole reason to own it.", "as_of": "2026-02-01"}
+        ],
+        "stances": [],
+        "musings": [],
+        "decisions": []
+      },
+      "expected": {"route": "contradiction", "conflicts_with": "T21"}
+    }
+  ]
+}

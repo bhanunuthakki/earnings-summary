@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -26,6 +28,24 @@ from capture import poller, token_store  # noqa: E402
 from capture.matcher import load_roster  # noqa: E402
 
 
+def _version_stamp(repo_root: Path) -> str:
+    """The running git short SHA, or ``"unknown"`` on any failure — a stale
+    long-running poller process (cron restarts it, but a hung/zombie instance
+    survives on an old checkout) is otherwise invisible in cron logs until its
+    behavior diverges from what's on disk. Best-effort: never blocks startup."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=True,
+        )
+        return result.stdout.strip() or "unknown"
+    except (subprocess.SubprocessError, OSError):
+        return "unknown"
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
@@ -35,6 +55,11 @@ def main() -> int:
     args = parser.parse_args()
 
     repo_root = args.repo_root.resolve()
+    print(
+        f"capture_poller: version={_version_stamp(repo_root)} "
+        f"started={datetime.now(UTC).isoformat()}",
+        file=sys.stderr,
+    )
     db_path = repo_root / "data" / "portfolio.db"
     offset_path = repo_root / "data" / "capture" / "telegram_offset.json"
     audio_dir = repo_root / "data" / "capture" / "audio"

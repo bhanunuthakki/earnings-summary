@@ -103,13 +103,37 @@ def test_capture_question_answers_on_background_thread(
     assert note is not None and (note.context or {}).get("ledger_answer_pending") is True
 
 
-def test_capture_non_question_never_marks_pending(ctx: tuple[FlaskClient, Path]) -> None:
+def test_capture_non_question_pends_then_triage_clears(
+    ctx: tuple[FlaskClient, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B3: ``will_answer`` no longer pre-screens on question-shaped text — the
+    thread spawns for every answerable-kind capture and ``capture_triage``
+    decides INSIDE ``answer_capture``. A 'plain' verdict clears the pending
+    flag with no stored answer (the card shows 'Answering…' only for the
+    triage round-trip, never forever)."""
     client, db = ctx
+    import onmymind.respond as respond_mod
+    from capture.triage import TriageVerdict
+
+    monkeypatch.setattr(
+        respond_mod,
+        "classify_capture_triage",
+        lambda body, **kw: TriageVerdict(route="plain"),
+    )
     resp = client.post("/api/capture/text", json={"text": "NU keeps compounding quietly."})
     body = resp.get_json()
-    assert body["answering"] is False
-    note = get_note(body["note_id"], db_path=db)
-    assert note is not None and not (note.context or {}).get("ledger_answer_pending")
+    assert body["answering"] is True  # thread spawned; triage decides, not a regex
+    note_id = body["note_id"]
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        note = get_note(note_id, db_path=db)
+        assert note is not None
+        if not (note.context or {}).get("ledger_answer_pending"):
+            break
+        time.sleep(0.05)
+    ctx_json = (note.context or {}) if note else {}
+    assert ctx_json.get("ledger_answer_pending") is False
+    assert "ledger_answer" not in ctx_json  # plain -> no stored answer, no failure crumb
 
 
 def test_capture_sync_env_restores_inline_answer(

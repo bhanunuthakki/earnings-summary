@@ -18,9 +18,10 @@ owner-falsifier breach — see ``research.capacity_moments``.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -28,6 +29,19 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 if TYPE_CHECKING:
     from research.governor import Moment
+
+
+def _message_id_of(result: object) -> int | None:
+    """The ``message_id`` of a sendMessage result (Telegram returns the sent
+    Message), or None. Same isinstance-dict extraction as
+    ``capture.poller._message_id_of`` — duplicated locally per the repo's
+    "duplicate simple shared logic, don't modularize" convention (one 6-line
+    helper isn't worth a cross-module dependency)."""
+    if isinstance(result, dict):
+        mid = cast("dict[str, object]", result).get("message_id")
+        if isinstance(mid, int):
+            return mid
+    return None
 
 
 def ping_buttons(ping_id: int, moment: Moment) -> list[list[tuple[str, str]]]:
@@ -79,15 +93,25 @@ def main() -> int:
 
             def _send(ping_id: int, moment: Moment) -> bool:
                 try:
-                    telegram.send_message(
+                    result = telegram.send_message(
                         bot_token,
                         owner_chat,
                         moment.body,
                         reply_markup=telegram.inline_keyboard(ping_buttons(ping_id, moment)),
                     )
-                    return True
                 except Exception:
                     return False
+                mid = _message_id_of(result)
+                if mid is not None:
+                    # Best-effort (B3): remember the message id so a later
+                    # free-text reply routes back to this finding
+                    # (capture.coach_reply). A stash failure never affects the
+                    # send that already succeeded.
+                    from research.governor import record_ping_message_id
+
+                    with contextlib.suppress(Exception):
+                        record_ping_message_id(ping_id, mid, db_path=db_path)
+                return True
 
             send_fn = _send
 
