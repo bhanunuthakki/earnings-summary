@@ -160,6 +160,17 @@ _FACTOR_PROXIES_TIMEOUT_S = 300
 # data/dashboard/position_guard.json — a handful of read-only SQLite queries
 # plus small holdings-JSON file reads, no network, no LLM. 2 min is generous.
 _POSITION_GUARD_TIMEOUT_S = 120
+# Stage 0i (risk snapshot, PRD §7.1 P0-A) is the AUTHORITATIVE Risk Budget
+# writer: one tracker analytics fetch, drawdown + full factor roll-up
+# (including the rate leg), RiskBudgetSnapshot validation, then the
+# latest-view upsert + content-hash-deduped history append. No LLM. 3 min
+# covers a slow tracker.
+_RISK_SNAPSHOT_TIMEOUT_S = 180
+# Stage 0j (wealth context, PRD §7.6 P0-F) appends one aggregates-only
+# household balance-sheet observation per day (tracker live total +
+# wealthplan cash/illiquid/home-equity + label-only cash-need band). Pure
+# HTTP loopback + sibling-checkout file read, no LLM. 2 min is generous.
+_WEALTH_CONTEXT_TIMEOUT_S = 120
 # Stage 1b (proactive standup, L9) composes a grounded brief through the Ask
 # engine + an eval-judge pass per surviving trip. Rate limits cap it at a few
 # deliveries/day, but each is a streamed `claude -p` answer plus ≤2 follow-ups
@@ -180,6 +191,8 @@ STAGE_REPRICE = "stage_0e_reprice"
 STAGE_CANDIDATE_FIT = "stage_0f_candidate_fit"
 STAGE_FACTOR_PROXIES = "stage_0g_factor_proxies"
 STAGE_POSITION_GUARD = "stage_0h_position_guard"
+STAGE_RISK_SNAPSHOT = "stage_0i_risk_snapshot"
+STAGE_WEALTH_CONTEXT = "stage_0j_wealth_context"
 STAGE_TRIGGERS = "stage_1_triggers"
 STAGE_STANDUP = "stage_1b_standup"
 STAGE_FEED = "stage_2_feed"
@@ -197,6 +210,8 @@ _ALL_STAGE_KEYS = (
     STAGE_CANDIDATE_FIT,
     STAGE_FACTOR_PROXIES,
     STAGE_POSITION_GUARD,
+    STAGE_RISK_SNAPSHOT,
+    STAGE_WEALTH_CONTEXT,
     STAGE_TRIGGERS,
     STAGE_STANDUP,
     STAGE_FEED,
@@ -523,6 +538,44 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
                     *position_guard_db_args,
                 ],
                 timeout_s=_POSITION_GUARD_TIMEOUT_S,
+            )
+        )
+        # Stage 0i -- risk snapshot (PRD §7.1 P0-A): the authoritative Risk
+        # Budget writer. Runs after 0g factor proxies so the factor roll-up's
+        # local stores are fresh; validation failures write nothing and fire
+        # the data_feed_stale dead-man (the render path keeps serving the
+        # last valid snapshot with its age). Only --db-path is forwarded
+        # (single-user; tracker URL comes from the env). Skipped on the
+        # re-render-only path (--skip-triggers).
+        risk_snapshot_db_args = ["--db-path", str(args.db_path)] if args.db_path is not None else []
+        stages.append(
+            _Stage(
+                key=STAGE_RISK_SNAPSHOT,
+                label="Stage 0i - risk snapshot (refresh_portfolio_risk_snapshot.py)",
+                argv=[
+                    py,
+                    str(exec_dir / "refresh_portfolio_risk_snapshot.py"),
+                    *risk_snapshot_db_args,
+                ],
+                timeout_s=_RISK_SNAPSHOT_TIMEOUT_S,
+            )
+        )
+        # Stage 0j -- wealth context (PRD §7.6 P0-F): one aggregates-only
+        # balance-sheet observation per day (idempotent re-runs dedupe on the
+        # content hash). One source down degrades with a warning; both down
+        # writes nothing and fires the dead-man. Skipped on the
+        # re-render-only path (--skip-triggers).
+        wealth_db_args = ["--db-path", str(args.db_path)] if args.db_path is not None else []
+        stages.append(
+            _Stage(
+                key=STAGE_WEALTH_CONTEXT,
+                label="Stage 0j - wealth context (refresh_wealth_context_snapshot.py)",
+                argv=[
+                    py,
+                    str(exec_dir / "refresh_wealth_context_snapshot.py"),
+                    *wealth_db_args,
+                ],
+                timeout_s=_WEALTH_CONTEXT_TIMEOUT_S,
             )
         )
 
