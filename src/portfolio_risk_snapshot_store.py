@@ -16,10 +16,15 @@ Ask pack) reuses :func:`read_latest_snapshot` to answer when the tracker is down
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
+import math
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+
+from pydantic import BaseModel, Field
 
 _TABLE = "portfolio_risk_snapshots"
 _HISTORY_TABLE = "portfolio_risk_snapshot_history"
@@ -98,6 +103,59 @@ class RiskSnapshot:
     names_total: int | None = None
 
 
+def snapshot_input_sha(snap: RiskSnapshot) -> str:
+    """Deterministic content hash over the metric columns (not ``captured_at``,
+    which is a write-time stamp). Two captures of the same analytics input
+    hash identically, which is what makes the history append idempotent
+    (PRD §7.1.8: the `{user_id}_{portfolio_as_of}_{analytics_input_sha}` key —
+    ``portfolio_as_of`` rides inside via ``window_start``/``window_end``)."""
+    payload = {col: getattr(snap, col) for col in _METRIC_COLUMNS}
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+class RiskBudgetSnapshot(BaseModel):
+    """PRD §7.1.5 validation gate for the AUTHORITATIVE (scheduled) writer.
+
+    Wraps a built :class:`RiskSnapshot` plus the context only the refresh run
+    knows (per-name weights, per-endpoint fetch errors) and answers "is this
+    capture fit to become the latest truth?" — the render-path opportunistic
+    write keeps its simpler performance+positioning gate, but the scheduled
+    writer must not persist anything that fails here."""
+
+    as_of: str  # window_end of the analytics fetch (portfolio as-of)
+    num_positions: int = Field(gt=0)
+    weights_pct: tuple[float, ...] = ()  # per-name weights, percent units
+    source_freshness: dict[str, str] = Field(default_factory=dict)
+    source_errors: tuple[str, ...] = ()
+
+    def validate_against(self, snap: RiskSnapshot) -> list[str]:
+        """Reasons the capture is invalid; empty list = fit to persist."""
+        reasons: list[str] = []
+        if not self.as_of:
+            reasons.append("as_of missing")
+        for w in self.weights_pct:
+            if not math.isfinite(w):
+                reasons.append("non-finite position weight")
+                break
+        if self.weights_pct:
+            total = sum(self.weights_pct)
+            # Long-only book in percent units; partial pricing shrinks the sum,
+            # so the floor is loose — the point is catching fraction-vs-percent
+            # mixups (sum≈1) and doubled payloads (sum≈200), not enforcing 100.
+            if not 25.0 <= total <= 130.0:
+                reasons.append(f"weights implausibly normalized (sum={total:.1f})")
+        concentration = (snap.top1_weight_pct, snap.hhi, snap.effective_holdings)
+        if all(v is None for v in concentration):
+            reasons.append("core concentration fields all null")
+        downside = (snap.max_drawdown_pct, snap.current_drawdown_pct)
+        if all(v is None for v in downside):
+            reasons.append("core downside fields all null")
+        if not self.source_freshness:
+            reasons.append("source freshness not explicit")
+        return reasons
+
+
 def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
     """Open the DB read-write if it exists and carries the snapshot table."""
     if db_path is None or not Path(db_path).exists():
@@ -143,6 +201,7 @@ def write_snapshot(
     cols = ", ".join(("user_id", "captured_at", *_METRIC_COLUMNS))
     placeholders = ", ".join(["?"] * (2 + len(_METRIC_COLUMNS)))
     updates = ", ".join(f"{col}=excluded.{col}" for col in ("captured_at", *_METRIC_COLUMNS))
+    sha = snapshot_input_sha(snap)
     try:
         conn.execute(
             f"INSERT INTO {_TABLE} ({cols}) VALUES ({placeholders}) "
@@ -150,10 +209,20 @@ def write_snapshot(
             [user_id, captured_at, *values],
         )
         with contextlib.suppress(sqlite3.Error):  # pre-0185 DB — latest-view still lands
-            conn.execute(
-                f"INSERT INTO {_HISTORY_TABLE} ({cols}) VALUES ({placeholders})",
-                [user_id, captured_at, *values],
-            )
+            try:
+                # 0186+: content-hash dedup — a re-run on the same analytics
+                # input (or the render path re-persisting what the scheduled
+                # writer already captured) is a no-op, not a duplicate row.
+                conn.execute(
+                    f"INSERT OR IGNORE INTO {_HISTORY_TABLE} ({cols}, input_sha) "
+                    f"VALUES ({placeholders}, ?)",
+                    [user_id, captured_at, *values, sha],
+                )
+            except sqlite3.OperationalError:  # pre-0186 DB — legacy append
+                conn.execute(
+                    f"INSERT INTO {_HISTORY_TABLE} ({cols}) VALUES ({placeholders})",
+                    [user_id, captured_at, *values],
+                )
         conn.commit()
         return True
     except sqlite3.Error:
@@ -198,6 +267,30 @@ def read_history(
         )
         for r in rows
     ]
+
+
+def history_has_sha(
+    sha: str,
+    *,
+    user_id: str = _DEFAULT_USER,
+    db_path: Path | str | None = None,
+) -> bool:
+    """True when the history already carries a capture with this content hash
+    — the scheduled writer's "already done" check (PRD §7.1: re-running the
+    same input does not duplicate history). False on pre-0186 DBs / failure."""
+    conn = _open(db_path)
+    if conn is None:
+        return False
+    try:
+        row = conn.execute(
+            f"SELECT 1 FROM {_HISTORY_TABLE} WHERE user_id = ? AND input_sha = ? LIMIT 1",
+            (user_id, sha),
+        ).fetchone()
+        return row is not None
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
 
 
 def read_latest_snapshot(

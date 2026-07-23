@@ -40,6 +40,8 @@ REPRICE_SCRIPT = "reprice_dcf.py"
 CANDIDATE_FIT_SCRIPT = "refresh_candidate_fit.py"
 FACTOR_PROXIES_SCRIPT = "fetch_factor_proxies.py"
 POSITION_GUARD_SCRIPT = "refresh_position_guard.py"
+RISK_SNAPSHOT_SCRIPT = "refresh_portfolio_risk_snapshot.py"
+WEALTH_CONTEXT_SCRIPT = "refresh_wealth_context_snapshot.py"
 TRIGGERS_SCRIPT = "run_triggers.py"
 STANDUP_SCRIPT = "run_standup.py"
 FEED_SCRIPT = "build_alert_feed.py"
@@ -158,6 +160,8 @@ def test_all_stages_succeed(
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
         POSITION_GUARD_SCRIPT,
+        RISK_SNAPSHOT_SCRIPT,
+        WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -214,6 +218,8 @@ def test_stage1_failure_still_runs_feed(
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
         POSITION_GUARD_SCRIPT,
+        RISK_SNAPSHOT_SCRIPT,
+        WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -249,6 +255,8 @@ def test_feed_failure_still_runs_validation(
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
         POSITION_GUARD_SCRIPT,
+        RISK_SNAPSHOT_SCRIPT,
+        WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -304,6 +312,8 @@ def test_all_stages_fail_exit_code_counts_failures(
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
         POSITION_GUARD_SCRIPT,
+        RISK_SNAPSHOT_SCRIPT,
+        WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -359,6 +369,8 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
         POSITION_GUARD_SCRIPT,
+        RISK_SNAPSHOT_SCRIPT,
+        WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -507,6 +519,8 @@ def test_validation_halt_counts_as_failed_stage_after_renders(
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
         POSITION_GUARD_SCRIPT,
+        RISK_SNAPSHOT_SCRIPT,
+        WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -540,6 +554,8 @@ def test_skip_validation_removes_only_stage3(
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
         POSITION_GUARD_SCRIPT,
+        RISK_SNAPSHOT_SCRIPT,
+        WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -749,6 +765,8 @@ def test_skip_news_removes_only_stage0(
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
         POSITION_GUARD_SCRIPT,
+        RISK_SNAPSHOT_SCRIPT,
+        WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
@@ -798,6 +816,8 @@ def test_news_failure_does_not_stop_triggers(
         CANDIDATE_FIT_SCRIPT,
         FACTOR_PROXIES_SCRIPT,
         POSITION_GUARD_SCRIPT,
+        RISK_SNAPSHOT_SCRIPT,
+        WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
         FEED_SCRIPT,
