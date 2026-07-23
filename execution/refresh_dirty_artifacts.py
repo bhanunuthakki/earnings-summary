@@ -114,6 +114,16 @@ _PURPOSE_TO_REGENERATOR: dict[str, list[str]] = {
         "{ticker}",
         "--refresh",
     ],
+    # Investment Decision Card (PRD §8.1, P1.1). generate_card is already
+    # input-sha cache-keyed, so no --refresh/--force flag is needed here — a
+    # dirty artifact means the inputs changed, which is exactly what
+    # invalidates the cache key.
+    "investment_decision_card": [
+        "python",
+        "execution/build_investment_decision_card.py",
+        "--ticker",
+        "{ticker}",
+    ],
 }
 
 

@@ -88,6 +88,16 @@ AUDIT_SPECS: dict[str, AuditSpec] = {
     "incremental_dollar_recommendation": AuditSpec(
         "incremental_dollar_recommendation", RUBRICS_DIR / "incremental_dollar_recommendation.md"
     ),
+    # Investment Decision Card (P1.1, personal_investment_partner_prd.md
+    # §8.1/§10.5): the per-ticker synthesis of company hypothesis, security
+    # setup, portfolio fit, disconfirming case, and uncertainty over
+    # deterministic inputs. Graded on hypothesis clarity, priced-in
+    # reasoning, strength of opposing case, decision usefulness, and
+    # uncertainty honesty. Corpus = ticker-scope llm_artifacts rows for this
+    # purpose (evals.corpora.load_investment_decision_card_corpus).
+    "investment_decision_card": AuditSpec(
+        "investment_decision_card", RUBRICS_DIR / "investment_decision_card.md"
+    ),
     # Position-review verdict (src/advisor/position_review.py, the /review service):
     # grades the persisted position_review memos on whether the trim/hold/add call
     # follows from the grounded facts, respects the owner's sell-winners-too-early

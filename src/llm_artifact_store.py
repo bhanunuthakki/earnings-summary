@@ -354,6 +354,13 @@ FACT_DEPENDENT_PURPOSES: tuple[str, ...] = (
     # thesis anchor proactively dirties the cached extraction rather than waiting
     # for the next day's date-key rollover.
     "news_structuring",
+    # Investment Decision Card (P1.1, personal_investment_partner_prd.md
+    # §8.1): the per-ticker synthesis over the thesis, DCF, bear case, and
+    # candidate fit. A fact-side restatement of any of those should
+    # invalidate the cached card, so it joins the mark-dirty chain here.
+    # Regenerator: execution/build_investment_decision_card.py (see
+    # execution/refresh_dirty_artifacts.py's _PURPOSE_TO_REGENERATOR).
+    "investment_decision_card",
 )
 
 

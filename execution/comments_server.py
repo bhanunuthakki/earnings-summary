@@ -2855,6 +2855,77 @@ def create_app(
         return {"cash_usd": cash_usd, "tickers": rows}
 
     # ------------------------------------------------------------------
+    # Investment Decision Card (P1.1, personal_investment_partner_prd.md §8.1).
+    # Generation is a build-time step (execution/discovery_build.py,
+    # execution/refresh_dirty_artifacts.py) — this POST route is the explicit
+    # owner-triggered refresh, synchronous like the allocation recommendation
+    # POST route above (the governed call is retry-capped and falls back
+    # deterministically, so it never hangs the request indefinitely).
+    # ------------------------------------------------------------------
+
+    @app.route("/api/research/card/<ticker>/refresh", methods=["POST", "OPTIONS"])
+    def investment_decision_card_refresh(ticker: str):
+        """Generate/refresh the Investment Decision Card for ``ticker`` and
+        re-render today's static workspace HTML so the strip reflects it
+        immediately, without waiting for the next full build."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from llm.cli import is_hard_stop
+        from research.investment_decision_card import generate_card
+
+        symbol = ticker.strip().upper()
+        if not symbol:
+            return ({"error": "ticker required"}, 400)
+        try:
+            result = generate_card(db_path, repo_root, symbol)
+        except Exception as exc:
+            if is_hard_stop(exc):
+                raise
+            return ({"error": f"card generation failed: {exc}"}, 502)
+        if result.failure_reason is not None:
+            return (
+                {
+                    "error": result.failure_reason,
+                    "degraded_reasons": list(result.degraded_reasons),
+                },
+                502,
+            )
+        try:
+            from build_investment_decision_card import (
+                rerender_workspace,  # sibling execution/ module
+            )
+
+            rerender_workspace(symbol, repo_root)
+        except Exception:
+            pass  # the card itself is persisted; a stale workspace HTML self-heals on the next build
+        return {
+            "artifact_id": result.artifact_id,
+            "cache_hit": result.cache_hit,
+            "selection_mode": result.selection_mode,
+            "degraded_reasons": list(result.degraded_reasons),
+            "card": result.card.model_dump(mode="json") if result.card is not None else None,
+        }
+
+    @app.route("/api/research/card/<int:artifact_id>/<verb>", methods=["POST", "OPTIONS"])
+    def investment_decision_card_disposition(artifact_id: int, verb: str):
+        """Owner disposition on a card artifact — pass|watch|research_further|
+        promote. Delegates entirely to
+        ``research.investment_decision_card.act_on_card`` (the ONE action
+        core), so a future Telegram dispatcher reaches the same write path."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from research.investment_decision_card import CardActionError, act_on_card
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        raw_notes = body.get("notes")
+        notes = str(raw_notes).strip() if isinstance(raw_notes, str) and raw_notes.strip() else None
+        try:
+            status = act_on_card(artifact_id, verb, db_path=db_path, notes=notes)
+        except CardActionError as exc:
+            return ({"error": str(exc)}, 400)
+        return {"status": status}
+
+    # ------------------------------------------------------------------
     # Ask session management (S3 thread list / rename / delete)
     # ------------------------------------------------------------------
 

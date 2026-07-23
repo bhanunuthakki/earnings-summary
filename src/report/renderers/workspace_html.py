@@ -40,6 +40,7 @@ from report.renderers.workspace_data import (
 )
 from report.renderers.workspace_dcf import CSS as DCF_CSS
 from report.renderers.workspace_dcf import JS as DCF_JS
+from report.renderers.workspace_decision_card import JS as DECISION_CARD_JS
 from report.renderers.workspace_script import JS
 
 # Section renderers + shared helpers: moved to workspace_sections/ in the
@@ -71,6 +72,7 @@ from report.renderers.workspace_sections.boot import (
     _comment_sidebar_shell,
 )
 from report.renderers.workspace_sections.chrome import (
+    _decision_card_strip,
     _footer,
     _forgone_strip,
     _identity,
@@ -208,6 +210,7 @@ __all__ = [
     "_comment_sidebar_shell",
     "_company_tab",
     "_customer_concentration_panel",
+    "_decision_card_strip",
     "_decision_conviction_outcome_panel",
     "_decision_history_panel",
     "_decisions_tab",
@@ -334,6 +337,7 @@ def render(spec: ReportSpec) -> str:
 
     _open_items_strip(body, p3.open_notes)
     _kpi_strip(body, spec.thesis.kpi_ledger, spec.ticker)
+    _decision_card_strip(body, spec.investment_decision_card, ticker=spec.ticker)
 
     body.write('<div class="l1-tabs-wrap">')
     groups = _tab_groups(spec, p3)
@@ -404,6 +408,7 @@ def _document(spec: ReportSpec, body: str) -> str:
 <script>{COMMENTS_JS}</script>
 <script>{CHAT_JS}</script>
 <script>{DCF_JS}</script>
+<script>{DECISION_CARD_JS}</script>
 </body>
 </html>
 """

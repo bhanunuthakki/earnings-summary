@@ -699,6 +699,60 @@ def load_incremental_dollar_recommendation_corpus(repo_root: Path) -> list[Audit
     return out
 
 
+def load_investment_decision_card_corpus(repo_root: Path) -> list[AuditItem]:
+    """Every current (non-superseded) ``investment_decision_card`` artifact,
+    newest first (P1.1, personal_investment_partner_prd.md §8.1/§10.5).
+    Graded content is the artifact's ``content_md`` — scope='ticker', so
+    ``ticker`` is populated (unlike the portfolio-scope Incremental Dollar
+    Recommendation). Missing DB/table ⇒ empty corpus, mirroring the other
+    llm_artifacts-backed loaders."""
+    out: list[AuditItem] = []
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
+        return out
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5.0)
+    except sqlite3.Error as exc:
+        log.warning({"event": "eval_corpus_db_open_failed", "error": str(exc)})
+        return out
+    try:
+        present = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_artifacts'"
+        ).fetchone()
+        if present is None:
+            log.info({"event": "eval_corpus_no_llm_artifacts_table"})
+            return out
+        rows = conn.execute(
+            """
+            SELECT id, ticker, content_md, generated_at
+            FROM llm_artifacts
+            WHERE purpose = 'investment_decision_card'
+              AND scope = 'ticker'
+              AND superseded_by_id IS NULL
+              AND content_md IS NOT NULL AND content_md != ''
+            ORDER BY id DESC
+            """
+        ).fetchall()
+    except sqlite3.Error as exc:
+        log.warning(
+            {"event": "eval_corpus_investment_decision_card_read_failed", "error": str(exc)}
+        )
+        return out
+    finally:
+        conn.close()
+    for artifact_id, ticker, content_md, generated_at in rows:
+        out.append(
+            AuditItem(
+                item_id=f"artifact:{artifact_id}",
+                label=f"investment_decision_card/{ticker}/artifact:{artifact_id}",
+                ticker=str(ticker) if ticker else None,
+                content=_clip(str(content_md)),
+                produced_at=_parse_naive_utc(generated_at),
+            )
+        )
+    return out
+
+
 # purpose -> loader. The rubric runner resolves its corpus here; adding an
 # audit purpose = one rubric file + one loader + one entry (+ registry/model
 # wiring asserted by tests).
@@ -707,6 +761,7 @@ CORPUS_LOADERS: dict[str, CorpusLoader] = {
     "transcript_summary": load_transcript_summary_corpus,
     "advisor_next_dollar": load_advisor_next_dollar_corpus,
     "incremental_dollar_recommendation": load_incremental_dollar_recommendation_corpus,
+    "investment_decision_card": load_investment_decision_card_corpus,
     "ask_advisory_answer": load_ask_advisory_answer_corpus,
     "calibration_coach": load_calibration_coach_corpus,
     "peer_selection": load_peer_selection_corpus,
