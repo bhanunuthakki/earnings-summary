@@ -176,6 +176,18 @@ LLM_MODELS: dict[str, str] = {
     # comment, and how sure are we? high → auto-route, low → one-tap suggestion,
     # park/failure → unchanged. Closed enum → the cheap FAST tier.
     "triage_route_suggest": FAST_CLASSIFIER_MODEL,
+    # The capture->answer primary gate (capture.triage, B3). A closed 3-way
+    # route — answer_now/contradiction/plain — over one short musing plus its
+    # rendered Worldview/decisions/recent-musings context; NEVER raises (any
+    # LLM-layer failure degrades to the regex fallback). Closed enum, short
+    # input → the cheap FAST tier; the golden set
+    # (evals/golden/capture_triage.json) is its bar.
+    "capture_triage": FAST_CLASSIFIER_MODEL,
+    # The Ledger reply-box coach follow-up router (src/capture/coach_reply.py,
+    # B3 — sibling PR). Registered here (this file's LLM_MODELS is the one
+    # source of truth) even though the classifying module is owned by the
+    # parallel B3 workstream. Closed enum, short input → the cheap FAST tier.
+    "coach_reply_intent": FAST_CLASSIFIER_MODEL,
     # The Sunday packet's per-item verdict pre-draft (pipeline.weekly_packet,
     # PR2 — navigation_ia.md §3.1). A short, closed-shape suggestion
     # ("ratify|drop|defer - <reason>") grounded ONLY in the item text it's

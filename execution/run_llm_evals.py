@@ -79,6 +79,10 @@ GOLDEN_PURPOSES = (
     # mode-A exact-match grader over a hand-picked industry->ETF golden set —
     # deterministic, factual-lookup ground truth, no judge.
     "sector_benchmark_proposal",
+    # The capture->answer primary gate (capture.triage, B3) — supersedes the
+    # question-shaped-text regex is_answerable_capture (mode-A: answer_now/
+    # contradiction/plain, grounded citations).
+    "capture_triage",
 )
 AUDIT_PURPOSES = (
     "bear_case",

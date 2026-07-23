@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -816,3 +817,138 @@ def test_poll_once_card_reply_send_failure_never_propagates(
     assert counts.get("card_reply") == 1
     note = notes.get_note(note_id, db_path=db_path)
     assert note is not None and note.status == "archived"  # dismiss acted before the send failed
+
+
+# ---------------------------------------------------------------------------
+# coach_reply routing (B3) — a free-text reply to a governed coach ping
+# ---------------------------------------------------------------------------
+
+
+def _seed_coach_ping(db_path: Path, *, mid: int, class_: str = "calibration_finding") -> int:
+    """A ``sent`` coach ping whose Telegram message id is stamped — what
+    ``run_coach_pings._send`` -> ``governor.record_ping_message_id`` writes
+    once B3's ``_send`` fix lands (migration 0188)."""
+    from user_state._db import now_naive_utc
+
+    stamp = now_naive_utc().isoformat()
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.execute(
+            "INSERT INTO coach_pings (class_, key, ticker, body, status, source_ref, "
+            "telegram_message_id, created_at, updated_at) VALUES (?, ?, NULL, ?, 'sent', ?, ?, ?, ?)",
+            (
+                class_,
+                f"key:{mid}",
+                "a finding worth a look",
+                "calibration:2026-07",
+                mid,
+                stamp,
+                stamp,
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+    finally:
+        conn.close()
+
+
+def _stub_coach_classify(monkeypatch: pytest.MonkeyPatch, intent: str) -> None:
+    from capture import coach_reply
+
+    monkeypatch.setattr(
+        coach_reply,
+        "classify_reply",
+        lambda ping, text, **kw: coach_reply.ReplyVerdict(intent=intent),
+    )
+
+
+def test_poll_once_coach_ping_reply_routes_and_never_double_lands(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reply-to-message pointing at a coach ping's stashed mid (NOT a note's
+    card mid — ``_dispatch_card_reply`` finds nothing there) routes through
+    ``capture.coach_reply``, not ordinary capture. The musing lands exactly
+    once, linked to the ping via ``context_json['coach_ping_id']``."""
+    ping_id = _seed_coach_ping(db_path, mid=800)
+    _stub_coach_classify(monkeypatch, "note")
+    monkeypatch.setattr(
+        telegram,
+        "get_updates",
+        lambda token, offset=None, timeout=50: [_reply_update(200, "thanks, seen it", 800)],
+    )
+    sent: list[str] = []
+    monkeypatch.setattr(
+        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
+    )
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=True,
+    )
+    assert counts.get("coach_reply") == 1
+    assert counts.get("card_reply") is None
+    assert counts.get("landed") is None  # never re-counted as an ORDINARY capture
+    musings = notes.list_notes(kind="musing", db_path=db_path)
+    assert len(musings) == 1
+    assert (musings[0].context or {}).get("coach_ping_id") == ping_id
+    assert sent == ["Noted — linked to the calibration_finding finding."]
+
+
+def test_poll_once_ordinary_musing_with_no_recent_ping_untouched(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No coach ping in play at all (empty ``coach_pings``) — a plain musing
+    must flow through the unchanged ordinary-capture path; ``coach_reply``
+    dispatch is a pure no-op here (neither direct nor window mode matches)."""
+    monkeypatch.setattr(
+        telegram,
+        "get_updates",
+        lambda token, offset=None, timeout=50: [
+            telegram.Update(update_id=201, kind="text", chat_id=1, text="MELI still cheap")
+        ],
+    )
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=False,
+    )
+    assert counts.get("coach_reply") is None
+    assert counts.get("landed") == 1
+    assert len(notes.list_notes(kind="musing", db_path=db_path)) == 1
+
+
+def test_poll_once_pending_reply_wins_over_coach_reply(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An active awaited-reply stash (decision-nudge fill-in / weekly-packet
+    rewrite) is checked BEFORE coach_reply in the dispatch order — a live
+    coach ping in the same window must never steal a pending fill-in."""
+    from capture import decision_nudge, pending_replies
+
+    _seed_coach_ping(db_path, mid=810)  # a live coach ping is ALSO in play
+    pending_replies.stash(1, decision_nudge.FILL_IN_KIND, 1, db_path=db_path)
+    monkeypatch.setattr(
+        telegram,
+        "get_updates",
+        lambda token, offset=None, timeout=50: [
+            telegram.Update(update_id=202, kind="text", chat_id=1, text="conviction: high")
+        ],
+    )
+    monkeypatch.setattr(decision_nudge, "handle_fill_in_reply", lambda *a, **k: None)
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=False,
+    )
+    assert counts.get("pending_reply") == 1
+    assert counts.get("coach_reply") is None
+    assert len(notes.list_notes(kind="musing", db_path=db_path)) == 0

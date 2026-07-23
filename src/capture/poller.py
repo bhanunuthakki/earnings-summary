@@ -551,6 +551,19 @@ def poll_once(
             if _dispatch_card_reply(token, update, db_path):
                 bump("card_reply")
                 continue
+            # A free-text reply to a governed COACH PING (B3) — either a direct
+            # Telegram reply-to-message, or a fresh message inside the
+            # short window after the ping went out. Consumed replies never
+            # fall through to ordinary capture; a bug here must never break
+            # plain capture, hence the blanket except.
+            try:
+                from capture import coach_reply
+
+                if coach_reply.dispatch(token, update, roster=roster, db_path=db_path):
+                    bump("coach_reply")
+                    continue
+            except Exception:
+                log.warning({"event": "coach_reply_dispatch_error"}, exc_info=True)
             # A bare URL → land as an On My Mind reading (a link the analyst
             # found), not a musing.  Anything else is stream-of-consciousness.
             url = ingest._extract_url(update.text)

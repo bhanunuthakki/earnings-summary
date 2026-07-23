@@ -209,6 +209,14 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # The Triage second-pass router (user_state.triage_suggest._build_prompt).
     # Bump when the route-suggest prompt is materially rewritten.
     "triage_route_suggest": "v1",
+    # The capture->answer primary gate (capture.triage._build_prompt, B3).
+    # Bump when the triage prompt is materially rewritten, then re-run
+    # `run_llm_evals.py --purpose capture_triage`.
+    "capture_triage": "v1",
+    # The Ledger reply-box coach follow-up router (B3 sibling PR). Registered
+    # here alongside capture_triage since this file is the one source of
+    # truth for prompt versions.
+    "coach_reply_intent": "v1",
     # The Ledger artifact brief (research.brief._build_prompt). Bump when the brief /
     # stress prompt is materially rewritten.
     "artifact_brief": "v1",

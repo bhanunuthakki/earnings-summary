@@ -90,6 +90,9 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
     # Sector-benchmark-ETF proposal (comparable_sets_bottoms_up.md §4, Phase 3,
     # mode-A golden classifier) — kept in sync with run_llm_evals.GOLDEN_PURPOSES.
     "sector_benchmark_proposal",
+    # The capture->answer primary gate (capture.triage, B3, mode-A golden
+    # classifier) — kept in sync with run_llm_evals.GOLDEN_PURPOSES.
+    "capture_triage",
 )
 
 CALL_HEALTH_WINDOW_DAYS = 30
