@@ -433,6 +433,18 @@ LLM_MODELS: dict[str, str] = {
     # deterministic screen; Sonnet keeps the marginal cost proportionate.
     "advisor_next_dollar": "claude-opus-4-8",
     "advisor_swap_check": DEFAULT_MODEL,
+    # Incremental Dollar Recommendation (P0.4a, personal_investment_partner_prd.md
+    # §7.4/§10): the governed selection over the deterministic frontier
+    # (allocation.recommendation.build_frontier) — a cross-portfolio allocation
+    # judgment with a hard frontier-grounding gate (invented tickers/weights/
+    # probabilities are rejected and force a deterministic fallback). Same tier
+    # as advisor_next_dollar / cross_portfolio_synthesis: Opus's wider
+    # instruction-following matters when the prompt embeds an explicit
+    # VALIDATION CONSTRAINTS block the model must actually honor. Budget-capped
+    # at $10/mo, on_exceed='block' (migration 0188) — a blown cap is explicit
+    # unavailability (a labeled deterministic-fallback artifact), never a
+    # silent downgrade to a cheaper model.
+    "incremental_dollar_recommendation": "claude-opus-4-8",
     # Socratic think-through (P2.4): question generation is a short grounded
     # task (Sonnet); the decision memo weighs the owner's answers against the
     # evidence and commits to a scoreable stance — Opus judgment tier.

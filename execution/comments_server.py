@@ -2636,6 +2636,165 @@ def create_app(
         return Response(render_active_target_card(db_path, repo_root), mimetype="text/html")
 
     # ------------------------------------------------------------------
+    # Incremental Dollar Recommendation (P0.4a, PRD §11.6) — BACKEND ONLY.
+    # No UI panel here; the Allocation console/Today/Telegram/Ask surfaces
+    # for this are a separate later PR.
+    # ------------------------------------------------------------------
+
+    @app.route("/api/allocation/recommendation", methods=["GET"])
+    def allocation_recommendation_get():
+        """The current governed Incremental Dollar Recommendation artifact,
+        or a 404-shaped JSON body when none has been generated yet."""
+        import llm_artifact_store
+        from allocation.recommendation_artifact import PURPOSE
+
+        artifact = llm_artifact_store.read_current(
+            ticker=None, purpose=PURPOSE, scope="portfolio", db_path=db_path
+        )
+        if artifact is None:
+            return ({"error": "no recommendation generated yet"}, 404)
+        stale = bool(
+            artifact.expires_at and artifact.expires_at < datetime.now(UTC).replace(tzinfo=None)
+        )
+        return {
+            "artifact_id": artifact.id,
+            "content_json": artifact.content_json,
+            "created_at": artifact.generated_at.isoformat(),
+            "dirty": artifact.dirty,
+            "stale": stale,
+        }
+
+    @app.route("/api/allocation/recommendation", methods=["POST", "OPTIONS"])
+    def allocation_recommendation_post():
+        """Generate (or cache-hit) a governed Incremental Dollar Recommendation
+        for ``{"cash_usd": <num>, "horizon": <str, optional>}``. Synchronous —
+        the governed call is retry-capped and falls back deterministically, so
+        it never hangs the request indefinitely."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from allocation.recommendation_artifact import generate_recommendation
+        from llm.cli import is_hard_stop
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        raw_cash = body.get("cash_usd")
+        try:
+            cash_usd = float(cast("str | float | int", raw_cash))
+        except (TypeError, ValueError):
+            return ({"error": "cash_usd (number > 0) required"}, 400)
+        if not (cash_usd > 0):
+            return ({"error": "cash_usd must be > 0"}, 400)
+        raw_horizon = body.get("horizon")
+        horizon = str(raw_horizon).strip() if isinstance(raw_horizon, str) and raw_horizon else None
+
+        try:
+            result = generate_recommendation(db_path, repo_root, cash_usd=cash_usd, horizon=horizon)
+        except Exception as exc:
+            if is_hard_stop(exc):
+                raise
+            return ({"error": f"recommendation generation failed: {exc}"}, 502)
+        return {
+            "artifact_id": result.artifact_id,
+            "selection_mode": result.selection_mode,
+            "degraded_reasons": list(result.degraded_reasons),
+            "recommendation": result.recommendation.model_dump(mode="json"),
+        }
+
+    @app.route(
+        "/api/allocation/recommendation/<int:artifact_id>/adopt", methods=["POST", "OPTIONS"]
+    )
+    def allocation_recommendation_adopt(artifact_id: int):
+        """Owner disposition on a recommendation artifact —
+        ``{"verb": "save_intent"|"hold_accountable"|"dismiss", "notes": <str, optional>}``.
+        Delegates entirely to ``allocation.actions.act_on_recommendation`` (the
+        ONE action core), so a future Telegram dispatcher reaches the same
+        write path."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from allocation.actions import RecommendationActionError, act_on_recommendation
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        verb = str(body.get("verb") or "").strip()
+        raw_notes = body.get("notes")
+        notes = str(raw_notes).strip() if isinstance(raw_notes, str) and raw_notes.strip() else None
+        try:
+            status = act_on_recommendation(artifact_id, verb, db_path=db_path, notes=notes)
+        except RecommendationActionError as exc:
+            return ({"error": str(exc)}, 400)
+        return {"status": status}
+
+    @app.route("/api/allocation/compare", methods=["POST", "OPTIONS"])
+    def allocation_compare():
+        """Deterministic, NO-LLM comparison of up to 3 tickers (or 'CASH') for
+        a given cash amount — eligibility, current weight, concentration
+        zone, and diversification read, assembled from the same components
+        ``allocation.recommendation.build_frontier`` uses (PRD §7.4 Compare)."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from allocation.concentration import classify_zone
+        from allocation.eligibility import assess_universe, cash_assessment
+        from candidate_fit_cache import read_materialized_candidate_fit
+        from integrations.portfolio_tracker_client import fetch_live_portfolio
+        from portfolio_weights import read_materialized_weights
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        raw_tickers = body.get("tickers")
+        if not isinstance(raw_tickers, list) or not raw_tickers:
+            return ({"error": "tickers (list of 1-3 symbols) required"}, 400)
+        ticker_list = cast("list[object]", raw_tickers)
+        tickers = [str(t).strip().upper() for t in ticker_list if str(t).strip()]
+        if not tickers or len(tickers) > 3:
+            return ({"error": "tickers must be a non-empty list of at most 3 symbols"}, 400)
+        raw_cash = body.get("cash_usd")
+        try:
+            cash_usd = float(cast("str | float | int", raw_cash))
+        except (TypeError, ValueError):
+            return ({"error": "cash_usd (number > 0) required"}, 400)
+        if not (cash_usd > 0):
+            return ({"error": "cash_usd must be > 0"}, 400)
+
+        assessments = assess_universe(db_path, repo_root)
+        weights = read_materialized_weights(repo_root)
+        fit_cache = read_materialized_candidate_fit(repo_root)
+        live = fetch_live_portfolio()
+        total_value = (
+            live.total_market_value if live.available and live.total_market_value > 0 else None
+        )
+
+        rows: list[dict[str, object]] = []
+        for ticker in tickers:
+            assessment = cash_assessment() if ticker == "CASH" else assessments.get(ticker)
+            if assessment is None:
+                rows.append(
+                    {
+                        "ticker": ticker,
+                        "eligible": False,
+                        "blocking_reasons": ["not on the tracked-companies universe"],
+                    }
+                )
+                continue
+            current_weight_pct = None
+            zone = None
+            if total_value is not None and ticker != "CASH":
+                current_weight_pct = weights.get(ticker, 0.0) * 100.0
+                za = classify_zone(current_weight_pct)
+                zone = za.zone if za is not None else None
+            fit = fit_cache.get(ticker)
+            rows.append(
+                {
+                    "ticker": ticker,
+                    "eligible": assessment.eligible,
+                    "list_type": assessment.list_type,
+                    "blocking_reasons": list(assessment.blocking_reasons),
+                    "warning_reasons": list(assessment.warning_reasons),
+                    "portfolio_fit_status": assessment.portfolio_fit_status,
+                    "current_weight_pct": current_weight_pct,
+                    "zone": zone,
+                    "sharpe_delta_bps": fit.sharpe_delta_bps if fit is not None else None,
+                }
+            )
+        return {"cash_usd": cash_usd, "tickers": rows}
+
+    # ------------------------------------------------------------------
     # Ask session management (S3 thread list / rename / delete)
     # ------------------------------------------------------------------
 

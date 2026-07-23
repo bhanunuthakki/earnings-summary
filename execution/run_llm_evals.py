@@ -84,6 +84,11 @@ AUDIT_PURPOSES = (
     "bear_case",
     "transcript_summary",
     "advisor_next_dollar",
+    # Incremental Dollar Recommendation (P0.4a, personal_investment_partner_prd.md
+    # §7.4/§10.5) — the governed selection over the deterministic Incremental
+    # Dollar frontier. Mode-B rubric; corpus =
+    # evals.corpora.load_incremental_dollar_recommendation_corpus.
+    "incremental_dollar_recommendation",
     "ask_advisory_answer",
     "calibration_coach",
     "peer_selection",

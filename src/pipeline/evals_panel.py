@@ -57,6 +57,9 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
     "bear_case",
     "transcript_summary",
     "advisor_next_dollar",
+    # Incremental Dollar Recommendation (P0.4a) — in sync with
+    # run_llm_evals.AUDIT_PURPOSES + rubric_judge.AUDIT_SPECS.
+    "incremental_dollar_recommendation",
     "ask_advisory_answer",
     # Calibration coach scorecard audit (close_the_loops L8) — keeps this run
     # bar in sync with run_llm_evals.AUDIT_PURPOSES.
