@@ -88,6 +88,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db-path", type=Path, default=None, help="portfolio.db override")
     parser.add_argument("--api-url", type=str, default=None, help="tracker API base URL override")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=45.0,
+        help="per-endpoint tracker read timeout in seconds. This is a batch "
+        "writer, not a render path: the beta/position-alpha endpoints take "
+        "~22s warm on prod (measured 2026-07-23), which is exactly why the "
+        "render path's 6s budget left the snapshot NULL for weeks.",
+    )
     return parser.parse_args(argv)
 
 
@@ -98,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         _log("halt", reason="DB path not configured")
         return 1
 
-    analytics = fetch_portfolio_analytics(api_url=args.api_url)
+    analytics = fetch_portfolio_analytics(api_url=args.api_url, timeout=args.timeout)
     fetch_errors = tuple(f"{k}: {v}" for k, v in analytics.errors.items())
     if not analytics.available:
         reason = "tracker unavailable"
