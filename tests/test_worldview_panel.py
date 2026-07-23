@@ -100,6 +100,72 @@ def test_note_staged_tenet_surfaces_in_panel(db_file: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# "Adopted this week" strip (B4)
+# ---------------------------------------------------------------------------
+
+
+def test_adopted_strip_shows_recent_session_distill_tenet(db_file: Path) -> None:
+    from synthesis.insights import record_insight
+
+    record_insight(
+        scope_key="tenet:exit-discipline",
+        kind="tenet",
+        body_md="Let a working thesis run — distilled from this week's session.",
+        source_note_ids=[1],
+        watermark_id=1,
+        provenance="session_distill",
+        db_path=db_file,
+    )
+    html = render_worldview_body(db_file)
+    assert "Adopted this week" in html
+    assert "Let a working thesis run" in html
+    assert 'data-tenet-action="revert"' in html
+    assert "from session" in html
+
+
+def test_adopted_strip_excludes_old_adoption(db_file: Path) -> None:
+    import sqlite3
+
+    from synthesis.insights import record_insight
+
+    # kind='stance' (not 'tenet') so an un-excluded row would show ONLY in the
+    # strip, not also in the tenet-only "Your Worldview" list below it — an
+    # unambiguous probe of the 7-day cutoff.
+    insight_id = record_insight(
+        scope_key="NU",
+        kind="stance",
+        body_md="An old auto-adopted stance.",
+        source_note_ids=[1],
+        watermark_id=1,
+        provenance="session_distill",
+        db_path=db_file,
+    )
+    conn = sqlite3.connect(str(db_file))
+    try:
+        conn.execute(
+            "UPDATE insight_notes SET as_of = '2026-01-01T00:00:00' WHERE id = ?",
+            (insight_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    html = render_worldview_body(db_file)
+    assert "Adopted this week" not in html
+    assert "An old auto-adopted stance." not in html
+
+
+def test_adopted_strip_excludes_owner_provenance(db_file: Path) -> None:
+    record_tenet(body_md="I state my own beliefs.", provenance="owner", db_path=db_file)
+    html = render_worldview_body(db_file)
+    assert "Adopted this week" not in html
+
+
+def test_adopted_strip_empty_renders_nothing(db_file: Path) -> None:
+    html = render_worldview_body(db_file)
+    assert "Adopted this week" not in html
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -145,6 +211,34 @@ def test_reject_route(client: FlaskClient, db_file: Path) -> None:
 def test_unknown_action_route(client: FlaskClient, db_file: Path) -> None:
     t = record_tenet(body_md="Circle of competence.", db_path=db_file)
     assert client.post(f"/api/tenets/{t.id}/bogus").status_code == 400
+
+
+def test_revert_route_restores_predecessor(client: FlaskClient, db_file: Path) -> None:
+    from synthesis.tenets import supersede_tenet
+
+    old = record_tenet(body_md="Let winners run.", scope_key="exit-discipline", db_path=db_file)
+    new = supersede_tenet(old.id, body_md="Trim on a double.", db_path=db_file)
+    assert new is not None
+    r = client.post(f"/api/tenets/{new.id}/revert")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["ok"] is True
+    assert body["status"] == "current"
+    assert body["receipt"] == "Reverted — restores your prior belief"
+
+
+def test_revert_route_brand_new_retires(client: FlaskClient, db_file: Path) -> None:
+    t = record_tenet(body_md="Circle of competence.", db_path=db_file)
+    r = client.post(f"/api/tenets/{t.id}/revert")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["ok"] is True
+    assert body["status"] == "superseded"
+    assert body["receipt"] == "Reverted — retired, no longer live"
+
+
+def test_revert_route_missing_is_404(client: FlaskClient) -> None:
+    assert client.post("/api/tenets/999999/revert").status_code == 404
 
 
 def test_distill_route_zero_triage_no_llm(client: FlaskClient) -> None:

@@ -917,12 +917,14 @@ def create_app(
 
     @app.route("/api/tenets/<int:tenet_id>/<action>", methods=["POST", "OPTIONS"])
     def tenets_act(tenet_id: int, action: str):
-        """Approve or reject a machine-distilled ``proposed`` Tenet. Approve promotes
-        it to ``current`` (superseding the prior belief on that topic); reject retires
-        it. CSRF-guarded."""
+        """Approve, reject, or revert a Tenet/stance insight. Approve promotes a
+        ``proposed`` Tenet to ``current`` (superseding the prior belief on that
+        topic); reject retires a ``proposed`` Tenet; revert (B4) undoes an
+        auto-adopted ``current`` row — restoring the prior belief on a
+        revision, or simply retiring a brand-new adoption. CSRF-guarded."""
         if request.method == "OPTIONS":
             return ("", 204)
-        from synthesis.tenets import approve_tenet, reject_tenet
+        from synthesis.tenets import approve_tenet, reject_tenet, revert_tenet
 
         if action == "approve":
             row = approve_tenet(tenet_id, db_path=db_path)
@@ -941,6 +943,16 @@ def create_app(
             if not ok:
                 return ({"ok": False}, 404)
             return ({"ok": True, "receipt": "Retired — this Tenet was not adopted"}, 200)
+        if action == "revert":
+            reverted = revert_tenet(tenet_id, db_path=db_path)
+            if reverted is None:
+                return ({"ok": False}, 404)
+            receipt = (
+                "Reverted — restores your prior belief"
+                if reverted.status == "current"
+                else "Reverted — retired, no longer live"
+            )
+            return ({"ok": True, "status": reverted.status, "receipt": receipt}, 200)
         return ({"error": f"unknown action {action!r}"}, 400)
 
     @app.route("/api/profile/fact/<int:fact_id>/affirm", methods=["POST", "OPTIONS"])
@@ -2922,6 +2934,51 @@ def create_app(
         if not ok:
             return ({"error": "not found"}, 404)
         return ("", 204)
+
+    @app.route("/api/ask/sessions/<session_id>/distill", methods=["POST"])
+    def ask_session_distill(session_id: str):
+        """The explicit "Distill now" tap (B4): run the session-distillation
+        pass on ONE Ask thread immediately, skipping the 4h-idle gate the
+        18:00 sweep applies. Consequence (owner ruling 2026-07-19): distilled
+        belief revisions AUTO-ADOPT — live immediately, announced with a
+        one-tap Revert. Returns the per-session counts dict. 409 when the
+        thread was already distilled (re-running would double-land the same
+        candidates — the sweep's own idempotency comes from ``distilled_at``,
+        which this route must therefore honor too)."""
+        sid = session_id.strip()
+        if not sid:
+            return ({"error": "session_id required"}, 400)
+        sess = get_session(sid, db_path=db_path)
+        if sess is None:
+            return ({"error": "not found"}, 404)
+        import sqlite3 as _sqlite3
+
+        try:
+            conn = _sqlite3.connect(str(db_path))
+            try:
+                row = conn.execute(
+                    "SELECT distilled_at FROM ask_sessions WHERE id = ?", (sid,)
+                ).fetchone()
+            finally:
+                conn.close()
+            if row is not None and row[0]:
+                return ({"error": "already distilled", "distilled_at": row[0]}, 409)
+        except _sqlite3.OperationalError:
+            return ({"error": "distillation substrate not migrated (0190)"}, 503)
+        from synthesis.session_distill import SessionRef, distill_session
+
+        try:
+            counts = distill_session(
+                SessionRef(source="ask", session_id=sid),
+                db_path=db_path,
+                repo_root=repo_root,
+            )
+        except Exception:
+            # comments_server has no logger; the route contract (like its
+            # siblings) is an error tuple — session_distill already logged
+            # the failure with full context on its own logger.
+            return ({"error": "distillation failed — nothing landed"}, 500)
+        return {"counts": counts}
 
     @app.route("/api/peers/<ticker>", methods=["GET"])
     def peers_api(ticker: str):

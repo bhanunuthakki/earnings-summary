@@ -26,6 +26,12 @@ from user_state._db import now_iso, open_conn
 TENET_KIND = "tenet"
 _SCOPE_PREFIX = "tenet:"
 
+# The insight kinds a Revert tap may act on (B4, auto-adopt substrate): a
+# brand-new Tenet OR stance auto-adopted straight from a session distill. A
+# 'theme' or 'digest' insight is never owner-facing in this way, so it is not
+# revertible through this path.
+_REVERTIBLE_KINDS = (TENET_KIND, "stance")
+
 
 def _slugify(text: str) -> str:
     words = re.findall(r"[a-z0-9]+", text.lower())
@@ -183,6 +189,62 @@ def reject_tenet(tenet_id: int, *, db_path: Path | str | None = None) -> bool:
         return cur.rowcount > 0
     finally:
         conn.close()
+
+
+def revert_tenet(insight_id: int, *, db_path: Path | str | None = None) -> InsightRow | None:
+    """Undo an auto-adopted insight row (Tenet OR stance) — the inverse of the
+    auto-adopt supersede (B4). Named ``revert_tenet`` for discoverability
+    alongside the rest of this module's Tenet verbs, but it operates on any
+    revertible ``insight_notes`` row regardless of kind (validated against
+    :data:`_REVERTIBLE_KINDS`) — a stance auto-adopted from a session distill
+    reverts through the exact same chain.
+
+    The row must be ``status='current'`` — a second tap on an already-reverted
+    (or never-current) row is an idempotent no-op, returning None so the
+    Telegram/HTTP caller can answer "Already handled." rather than erroring.
+
+    * A REVISION (``supersedes_id`` points at a still-existing predecessor):
+      flip this row back to ``superseded`` and restore the predecessor to
+      ``current`` — the supersede chain run in reverse. Returns the restored
+      predecessor.
+    * A brand-new adoption (no predecessor, or it's gone): flip this row to
+      ``superseded`` (retire; nothing to restore). Returns the retired row.
+
+    One connection, one commit — mirrors :func:`approve_tenet`'s bespoke-SQL
+    shape."""
+    conn = open_conn(db_path)
+    try:
+        row = conn.execute("SELECT * FROM insight_notes WHERE id = ?", (insight_id,)).fetchone()
+        if (
+            row is None
+            or str(row["status"]) != "current"
+            or str(row["kind"]) not in _REVERTIBLE_KINDS
+        ):
+            return None
+        now = now_iso()
+        supersedes_id = row["supersedes_id"]
+        predecessor_id: int | None = None
+        if supersedes_id is not None:
+            predecessor = conn.execute(
+                "SELECT id FROM insight_notes WHERE id = ?", (int(supersedes_id),)
+            ).fetchone()
+            if predecessor is not None:
+                predecessor_id = int(predecessor[0])
+        conn.execute(
+            "UPDATE insight_notes SET status = 'superseded', updated_at = ? WHERE id = ?",
+            (now, insight_id),
+        )
+        if predecessor_id is not None:
+            conn.execute(
+                "UPDATE insight_notes SET status = 'current', updated_at = ? WHERE id = ?",
+                (now, predecessor_id),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return get_insight(
+        predecessor_id if predecessor_id is not None else insight_id, db_path=db_path
+    )
 
 
 def supersede_tenet(

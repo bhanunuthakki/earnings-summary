@@ -3,6 +3,7 @@ action core) + the poller routing the callback branch."""
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from alembic.config import Config
 from alembic import command
 from capture import research_notify, telegram
 from research.proposals import ResearchTask, create_proposal, get_proposal
+from synthesis.insights import InsightRow
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0059_kpi_facts_restatement"
@@ -619,6 +621,48 @@ def test_dispatch_al_unknown_verb_is_acknowledged(db_path: Path) -> None:
     assert spy.answers and spy.answers[0][1] == "Unrecognized action."
 
 
+# --------------------------------------------------------------------------- #
+# tr:revert:<insight_id> — undo an auto-adopted Tenet/stance (B4)
+# --------------------------------------------------------------------------- #
+
+
+def test_dispatch_tr_revert_stamps_card(db_path: Path) -> None:
+    from synthesis.tenets import record_tenet, supersede_tenet
+
+    old = record_tenet(body_md="Let winners run.", scope_key="exit-discipline", db_path=db_path)
+    new = supersede_tenet(old.id, body_md="Trim on a double.", db_path=db_path)
+    assert new is not None
+
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok",
+        _cb(f"tr:revert:{new.id}", message_id=4, message_text="Adopted: Trim on a double."),
+        db_path=db_path,
+        send=spy.send,
+        answer=spy.answer,
+        edit=spy.edit,
+    )
+    assert status == "tr_reverted"
+    assert spy.answers and spy.answers[0][1] == "Reverted - prior belief restored."
+    assert len(spy.edits) == 1
+    assert "- reverted" in spy.edits[0][2]
+    assert spy.edits[0][3] is None
+
+    from synthesis.insights import get_insight
+
+    restored = get_insight(old.id, db_path=db_path)
+    assert restored is not None and restored.status == "current"
+
+
+def test_dispatch_tr_revert_unknown_id_is_already_handled(db_path: Path) -> None:
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok", _cb("tr:revert:999999"), db_path=db_path, send=spy.send, answer=spy.answer
+    )
+    assert status == "tr_stale"
+    assert spy.answers and spy.answers[0][1] == "Already handled."
+
+
 def test_poller_routes_callback_to_dispatch(
     tmp_path: Path, db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -640,3 +684,104 @@ def test_poller_routes_callback_to_dispatch(
     )
     assert counts.get("callback") == 1
     assert seen == ["rp:approve:1"]
+
+
+# --------------------------------------------------------------------------- #
+# synthesis.adoption_notify.announce_adoption (B4)
+# --------------------------------------------------------------------------- #
+
+
+def _write_telegram_config(repo_root: Path, *, token: str = "tok", chat_id: int = 42) -> None:
+    secrets = repo_root / "data" / "secrets"
+    secrets.mkdir(parents=True, exist_ok=True)
+    (secrets / "telegram_bot_token").write_text(token, encoding="utf-8")
+    capture_dir = repo_root / "data" / "capture"
+    capture_dir.mkdir(parents=True, exist_ok=True)
+    (capture_dir / "telegram_chat_id.json").write_text(
+        f'{{"chat_id": {chat_id}}}', encoding="utf-8"
+    )
+
+
+def _insight_row(**overrides: object) -> InsightRow:
+    base = InsightRow(
+        id=5,
+        scope_key="tenet:exit-discipline",
+        kind="tenet",
+        body_md="Let a working thesis run.",
+        source_note_ids=[1],
+        meta={},
+        as_of="2026-07-20T00:00:00",
+        watermark_id=1,
+        status="current",
+        esi=None,
+        provenance="session_distill",
+    )
+    return dataclasses.replace(base, **overrides)
+
+
+def test_announce_adoption_sends_with_revert_keyboard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from synthesis import adoption_notify
+
+    _write_telegram_config(tmp_path)
+    sent: list[tuple[str, int, str, object]] = []
+
+    def _fake_send(token: str, chat_id: int, text: str, *, reply_markup: object = None) -> object:
+        sent.append((token, chat_id, text, reply_markup))
+        return {}
+
+    monkeypatch.setattr(telegram, "send_message", _fake_send)
+    row = _insight_row()
+    adoption_notify.announce_adoption(
+        row, kind="tenet", db_path=tmp_path / "data" / "portfolio.db", repo_root=tmp_path
+    )
+    assert len(sent) == 1
+    token, chat_id, text, reply_markup = sent[0]
+    assert token == "tok"
+    assert chat_id == 42
+    assert "Adopted (from your session)" in text
+    assert "Let a working thesis run." in text
+    assert "Revert" in text or "Tap Revert" in text
+    assert "tr:revert:5" in str(reply_markup)
+
+
+def test_announce_adoption_skips_silently_without_token_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from synthesis import adoption_notify
+
+    sent: list[object] = []
+
+    def _fake_send(*a: object, **k: object) -> object:
+        sent.append((a, k))
+        return {}
+
+    monkeypatch.setattr(telegram, "send_message", _fake_send)
+    row = _insight_row()
+    # No data/secrets/telegram_bot_token, no data/capture/telegram_chat_id.json
+    adoption_notify.announce_adoption(
+        row, kind="tenet", db_path=tmp_path / "data" / "portfolio.db", repo_root=tmp_path
+    )
+    assert sent == []
+
+
+def test_announce_adoption_never_raises_on_bad_kind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from synthesis import adoption_notify
+
+    _write_telegram_config(tmp_path)
+    sent: list[object] = []
+
+    def _fake_send(*a: object, **k: object) -> object:
+        sent.append((a, k))
+        return {}
+
+    monkeypatch.setattr(telegram, "send_message", _fake_send)
+    row = _insight_row()
+    # kind="theme" is not a revertible/announceable kind — must degrade quietly.
+    adoption_notify.announce_adoption(
+        row, kind="theme", db_path=tmp_path / "data" / "portfolio.db", repo_root=tmp_path
+    )
+    assert sent == []

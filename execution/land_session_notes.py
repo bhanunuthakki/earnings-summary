@@ -7,7 +7,7 @@ script is the landing pad the ``/ledger-land`` skill drives at session end:
 distilled items land through the SAME LLM-free capture pipeline as Telegram,
 with ``channel='claude_session'``.
 
-Three item kinds, one invocation each (the skill loops):
+Four item kinds, one invocation each (the skill loops):
 
     # a musing / thought worth keeping
     python execution/land_session_notes.py musing --text "..." [--session-ref <id>]
@@ -20,6 +20,14 @@ Three item kinds, one invocation each (the skill loops):
     python execution/land_session_notes.py decision --ticker NVO --direction buy \\
         --conviction high --falsifier "GLP-1 share loss 2Q" --size-usd 31000
 
+    # a WHOLE deep-session transcript bridged for later distillation (B4) — the
+    # 18:00 session_distill sweep reads it, NOT this script (LLM-free at land
+    # time, same invariant as every other kind here)
+    python execution/land_session_notes.py transcript --file transcript.txt \\
+        [--session-ref <id>]
+    # or via stdin:
+    python execution/land_session_notes.py transcript --session-ref <id> < transcript.txt
+
 Words land durably before any fallible step; nothing here fires an LLM.
 """
 
@@ -27,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import timedelta
 from pathlib import Path
 from typing import cast
 
@@ -37,9 +46,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("kind", choices=("musing", "close-intent", "decision"))
+    parser.add_argument("kind", choices=("musing", "close-intent", "decision", "transcript"))
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     parser.add_argument("--text", default=None)
+    parser.add_argument(
+        "--file", type=Path, default=None, help="transcript kind: path to the transcript text"
+    )
     parser.add_argument("--session-ref", default=None, help="originating session id/slug")
     parser.add_argument("--ref", default=None, help="intent source_ref to close")
     parser.add_argument("--verdict", default="resolved-rejected")
@@ -71,6 +83,39 @@ def main() -> int:
             file=sys.stderr,
         )
         return 0 if result.status == "landed" else 1
+
+    if args.kind == "transcript":
+        if args.file is not None:
+            text = args.file.read_text(encoding="utf-8", errors="replace")
+        else:
+            text = sys.stdin.read()
+        text = text.strip()
+        if not text:
+            print("transcript requires --file <path> or non-empty stdin", file=sys.stderr)
+            return 2
+        from capture import sessions
+        from clock import now_naive_utc
+
+        purge_after = (now_naive_utc() + timedelta(days=30)).isoformat()
+        session_id = sessions.new_session(
+            channel="claude_session",
+            media_kind="text",
+            transcript=text,
+            external_ref=args.session_ref,
+            purge_after=purge_after,
+            db_path=db_path,
+        )
+        if session_id is None:
+            print(
+                "land_session_notes: transcript duplicate (session-ref already bridged)",
+                file=sys.stderr,
+            )
+            return 1
+        # LLM-free at land time (this script never fires an LLM): the 18:00
+        # session_distill sweep (execution/run_session_distill.py) reads this
+        # row later and does the actual distillation + auto-adopt.
+        print(f"land_session_notes: transcript captured session={session_id}", file=sys.stderr)
+        return 0
 
     if args.kind == "close-intent":
         if not args.ref or not (args.reason or "").strip():

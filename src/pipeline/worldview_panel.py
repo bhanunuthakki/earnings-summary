@@ -14,15 +14,22 @@ Pure render + token-only styles (guard-clean). All writes go through the
 from __future__ import annotations
 
 import os
+from datetime import timedelta
 from html import escape
 from pathlib import Path
 from typing import cast
 
-from synthesis.insights import InsightRow
+from synthesis.insights import InsightRow, list_insights
 from synthesis.tenets import list_tenets
 from ui.prose import render_prose
+from user_state._db import now_naive_utc, parse_dt
 
 _ON = frozenset({"1", "true", "yes", "on"})
+
+# The "Adopted this week" strip (B4): a Tenet/stance that landed 'current'
+# straight from a session distill (no owner tap) within this trailing window.
+_ADOPTED_PROVENANCE = "session_distill"
+_ADOPTED_WINDOW_DAYS = 7
 
 
 def worldview_enabled() -> bool:
@@ -148,6 +155,47 @@ def _proposed_card(t: InsightRow) -> str:
     )
 
 
+def _excerpt(text: str, limit: int = 140) -> str:
+    text = text.strip()
+    return text if len(text) <= limit else text[:limit].rstrip() + "..."
+
+
+def _adopted_this_week(db_path: Path | str | None) -> list[InsightRow]:
+    """Current Tenet/stance rows auto-adopted from a session distill within
+    the trailing window — the "receipts, not surprises" strip that pairs
+    every silent auto-adopt with a visible, revertible card. A row with an
+    unparseable ``as_of`` is skipped rather than crashing the panel."""
+    cutoff = now_naive_utc() - timedelta(days=_ADOPTED_WINDOW_DAYS)
+    found: list[InsightRow] = []
+    for kind in ("tenet", "stance"):
+        for row in list_insights(kind=kind, status="current", db_path=db_path):
+            if row.provenance != _ADOPTED_PROVENANCE:
+                continue
+            try:
+                as_of = parse_dt(row.as_of)
+            except (ValueError, TypeError):
+                continue
+            if as_of >= cutoff:
+                found.append(row)
+    found.sort(key=lambda r: r.as_of, reverse=True)
+    return found
+
+
+def _adopted_card(t: InsightRow) -> str:
+    return (
+        f'<div class="ledger-stance" data-tenet-id="{t.id}">'
+        '<div class="ledger-stance-head">'
+        f'<span class="wv-scope">{escape(t.scope_key)}</span>'
+        '<span class="k-chip k-chip-mono">from session</span>'
+        f'<span class="ledger-stance-meta">since {escape(t.as_of[:10])}</span></div>'
+        f'<div class="ledger-body">{render_prose(_excerpt(t.body_md))}</div>'
+        '<div class="ledger-cap-row">'
+        '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-tenet-action="revert" '
+        'title="Revert — restores your prior belief">Revert</button>'
+        "</div></div>"
+    )
+
+
 def _add_box() -> str:
     return (
         '<div class="wv-add">'
@@ -169,7 +217,11 @@ def render_worldview_body(db_path: Path | str | None) -> str:
     """The inner Worldview content (re-fetched after every action)."""
     proposed = list_tenets(status="proposed", db_path=db_path)
     current = list_tenets(status="current", db_path=db_path)
+    adopted = _adopted_this_week(db_path)
     parts: list[str] = ['<div id="worldview">', _add_box()]
+    if adopted:
+        parts.append('<h4 class="ledger-sec-h">Adopted this week</h4>')
+        parts.append("".join(_adopted_card(t) for t in adopted))
     if proposed:
         parts.append('<h4 class="ledger-sec-h">Proposed — approve to adopt</h4>')
         parts.append("".join(_proposed_card(t) for t in proposed))

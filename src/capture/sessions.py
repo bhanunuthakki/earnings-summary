@@ -33,9 +33,16 @@ class SessionRow:
     note_id: int | None
     external_ref: str | None
     total_llm_cost: float
+    distilled_at: str | None = None
 
 
 def _row_to_session(row: sqlite3.Row) -> SessionRow:
+    # distilled_at (0190) is decoded defensively — a pre-0190 DB has no such
+    # column, and this store must not crash reading an older fixture.
+    keys = row.keys() if hasattr(row, "keys") else ()
+    distilled_at = None
+    if "distilled_at" in keys and row["distilled_at"] is not None:
+        distilled_at = str(row["distilled_at"])
     return SessionRow(
         id=int(row["id"]),
         channel=str(row["channel"]),
@@ -45,6 +52,7 @@ def _row_to_session(row: sqlite3.Row) -> SessionRow:
         note_id=None if row["note_id"] is None else int(row["note_id"]),
         external_ref=None if row["external_ref"] is None else str(row["external_ref"]),
         total_llm_cost=float(row["total_llm_cost"]),
+        distilled_at=distilled_at,
     )
 
 
@@ -138,5 +146,40 @@ def get_session(session_id: int, *, db_path: Path | str | None = None) -> Sessio
             "SELECT * FROM raw_capture_sessions WHERE id = ?", (session_id,)
         ).fetchone()
         return None if row is None else _row_to_session(row)
+    finally:
+        conn.close()
+
+
+def list_undistilled_captured(*, db_path: Path | str | None = None) -> list[SessionRow]:
+    """Captured sessions (raw transcript still landed, e.g. a bridged Claude
+    session — ``channel='claude_session'``) eligible for the session-distill
+    sweep (B4): ``status='captured'``, never distilled, non-empty transcript."""
+    conn = open_conn(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT * FROM raw_capture_sessions "
+            "WHERE status = 'captured' AND distilled_at IS NULL "
+            "AND transcript != '' ORDER BY created_at ASC"
+        ).fetchall()
+        return [_row_to_session(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def mark_distilled(session_id: int, *, db_path: Path | str | None = None) -> None:
+    """The session-distill sweep finished with this session: stamp
+    ``distilled_at`` and BLANK the transcript (the same privacy floor as
+    ``mark_landed`` — raw words are transient once the durable artifact
+    exists). ``status``/``note_id`` are left untouched: a bridged transcript
+    session was never headed for its own musing note, so 'captured' stays the
+    terminal status rather than borrowing 'landed' semantics that imply one."""
+    conn = open_conn(db_path)
+    try:
+        conn.execute(
+            "UPDATE raw_capture_sessions SET distilled_at = ?, transcript = '', "
+            "updated_at = ? WHERE id = ?",
+            (now_iso(), now_iso(), session_id),
+        )
+        conn.commit()
     finally:
         conn.close()

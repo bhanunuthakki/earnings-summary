@@ -200,6 +200,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # phrasing over flat contradictory rules, standing Tenets ride in and
     # overlap must revise (reuse scope_key) instead of stacking, max 3.
     "tenet_distill": "v2",
+    # The session-distill tap (B4 keystone). Bump when _build_prompt in
+    # synthesis.session_distill is materially rewritten.
+    "session_distill": "v1",
     # The Ledger Phase-1 wondering classifier (research-loop gate). Bump when the
     # detect prompt is materially rewritten, then re-run the golden set.
     "wondering_detect": "v1",
