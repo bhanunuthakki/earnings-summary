@@ -479,7 +479,17 @@ _COACH_JS = """<script>
 
 
 def render_positioning_panel(db_path: Path, repo_root: Path) -> str:
-    """The Positioning tab fragment."""
+    """The Positioning tab fragment.
+
+    P0.4b (PRD §7.5): the detailed active-target card — every quantitative
+    dimension (growth tilt, vol posture, sector/sleeve targets, Sharpe
+    floor, max position) — is now demoted into a collapsed "Advanced" well.
+    Portfolio Posture (``allocation_recommendation_panel.
+    render_portfolio_posture_section``) is the new default entry point: a
+    short correctable paragraph, one section up the Allocation console.
+    ``render_active_target_card`` itself is unchanged (still the fragment
+    ``/api/positioning/approve`` swaps back in by id on save) — only its
+    wrapper here changed."""
     return "".join(
         [
             _PANEL_STYLE,
@@ -488,10 +498,12 @@ def render_positioning_panel(db_path: Path, repo_root: Path) -> str:
             "evaluation-list fit math scores against. The coach pushes back and grounds the "
             "conversation in the live book; nothing persists until you approve the encoded "
             "targets (your edits win). The prior saved state stays authoritative until you "
-            "express new views.</p>",
+            "express new views. For the short at-a-glance read, see Portfolio Posture above.</p>",
             '<div class="pos-grid">',
+            '<details class="pos-span"><summary>Advanced — active target detail</summary>',
             render_active_target_card(db_path, repo_root),
-            _history_well(db_path),
+            "</details>",
+            f'<div class="pos-span">{_history_well(db_path)}</div>',
             # "Positioning coach" (wave B B6) — disambiguates from Record's
             # Calibration coach; a bare "Coach" read as the same product twice.
             '<div class="k-well pos-span"><h3>Positioning coach</h3>',

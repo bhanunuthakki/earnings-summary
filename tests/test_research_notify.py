@@ -469,6 +469,156 @@ def test_dispatch_cp_review_unknown_ping(db_path: Path) -> None:
     assert spy.answers and spy.answers[0][1] == "Unrecognized action."
 
 
+# --------------------------------------------------------------------------- #
+# al:<verb>:<artifact_id> — the Incremental Dollar Recommendation card (P0.4b)
+# --------------------------------------------------------------------------- #
+
+
+def _insert_allocation_artifact(db_path: Path, *, content: dict[str, object]) -> int:
+    """``db_path`` (this file's fixture) stamps straight to a post-0059
+    revision, so migration 0035 (which creates ``llm_artifacts``) never
+    actually ran — create the table here if it's missing, same hand-rolled
+    pattern as tests/test_allocation_actions.py / test_recommendation_artifact.py."""
+    import json
+    import sqlite3
+
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS llm_artifacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker VARCHAR(16),
+            scope VARCHAR(64) NOT NULL DEFAULT 'ticker',
+            purpose VARCHAR(64) NOT NULL,
+            fiscal_period VARCHAR(10),
+            content_md TEXT,
+            content_json TEXT,
+            input_sha256 VARCHAR(64) NOT NULL,
+            output_sha256 VARCHAR(64),
+            model VARCHAR(64),
+            prompt_version VARCHAR(32) NOT NULL DEFAULT 'v1',
+            generated_at DATETIME NOT NULL,
+            expires_at DATETIME,
+            superseded_by_id INTEGER,
+            dirty BOOLEAN NOT NULL DEFAULT 0,
+            dirty_reason VARCHAR(128),
+            source_doc_ids TEXT,
+            parent_artifact_ids TEXT,
+            llm_call_id INTEGER
+        )
+        """
+    )
+    cur = conn.execute(
+        "INSERT INTO llm_artifacts (scope, purpose, content_json, input_sha256, generated_at) "
+        "VALUES ('portfolio', 'incremental_dollar_recommendation', ?, 'sha', "
+        "'2026-07-22T09:00:00')",
+        (json.dumps(content),),
+    )
+    conn.commit()
+    artifact_id = int(cur.lastrowid or 0)
+    conn.close()
+    return artifact_id
+
+
+_ALLOC_PAYLOAD: dict[str, object] = {
+    "as_of_date": "2026-07-22",
+    "input_sha": "sha_al",
+    "status": "deploy_partial",
+    "preferred_plan": {
+        "allocations": [
+            {
+                "ticker": "NU",
+                "dollars": 6000.0,
+                "pct_of_cash": 60.0,
+                "resulting_weight_pct": 5.5,
+                "zone": "ordinary",
+            }
+        ],
+        "cash_retained_usd": 4000.0,
+    },
+    "best_alternative": None,
+    "best_diversifier": None,
+    "central_hypothesis": "NU has the best blended next-dollar score right now.",
+    "personalization_why": "This deploys 60% of your new cash into the top-ranked name.",
+    "supporting_evidence": [],
+    "main_unknowns": ["how NU's next print reads on credit quality"],
+    "disconfirming_evidence": ["a weak macro print could compress the multiple further"],
+    "scenario_reasoning": "",
+    "confidence_verbal": "moderate",
+    "confidence_basis": "The main reason I could be wrong is a macro shock hitting credit names.",
+    "followup_research": [],
+    "frontier_plan_ids": ["balanced"],
+    "source_refs": ["dcf"],
+    "risk_snapshot_ref": None,
+    "engine_version": "v1",
+    "prompt_version": "v1",
+    "selection_mode": "llm",
+}
+
+
+def test_dispatch_al_why_sends_uncertainty_and_disconfirmers(db_path: Path) -> None:
+    artifact_id = _insert_allocation_artifact(db_path, content=_ALLOC_PAYLOAD)
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok", _cb(f"al:why:{artifact_id}"), db_path=db_path, send=spy.send, answer=spy.answer
+    )
+    assert status == "al_why"
+    assert spy.sends
+    text = spy.sends[0][1]
+    assert "credit quality" in text
+    assert "macro print could compress" in text
+
+
+def test_dispatch_al_why_no_artifact_is_acknowledged(db_path: Path) -> None:
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok", _cb("al:why:999999"), db_path=db_path, send=spy.send, answer=spy.answer
+    )
+    assert status == "al_stale"
+    assert spy.answers and spy.answers[0][1] == "No recommendation on file."
+    assert not spy.sends
+
+
+def test_dispatch_al_open_answers_with_deep_link(db_path: Path) -> None:
+    artifact_id = _insert_allocation_artifact(db_path, content=_ALLOC_PAYLOAD)
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok", _cb(f"al:open:{artifact_id}"), db_path=db_path, send=spy.send, answer=spy.answer
+    )
+    assert status == "al_open"
+    assert spy.answers and "portfolio_allocation" in (spy.answers[0][1] or "")
+    assert not spy.sends
+
+
+def test_dispatch_al_dismiss_uses_the_same_action_core(db_path: Path) -> None:
+    """Mirrors the web route's /adopt call — SAME action core
+    (allocation.actions.act_on_recommendation), never a duplicate write path."""
+    artifact_id = _insert_allocation_artifact(db_path, content=_ALLOC_PAYLOAD)
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok",
+        _cb(f"al:dismiss:{artifact_id}", message_id=9, message_text="card text"),
+        db_path=db_path,
+        send=spy.send,
+        answer=spy.answer,
+        edit=spy.edit,
+    )
+    assert status == "al_dismissed"
+    assert spy.answers and spy.answers[0][1] == "Dismissed."
+    assert len(spy.edits) == 1
+    assert "- dismissed" in spy.edits[0][2]
+
+
+def test_dispatch_al_unknown_verb_is_acknowledged(db_path: Path) -> None:
+    artifact_id = _insert_allocation_artifact(db_path, content=_ALLOC_PAYLOAD)
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok", _cb(f"al:bogus:{artifact_id}"), db_path=db_path, send=spy.send, answer=spy.answer
+    )
+    assert status is None
+    assert spy.answers and spy.answers[0][1] == "Unrecognized action."
+
+
 def test_poller_routes_callback_to_dispatch(
     tmp_path: Path, db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

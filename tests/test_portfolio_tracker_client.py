@@ -36,6 +36,7 @@ from pipeline.portfolio_panel import (
     compose_risk_page,
     compose_synthesis_page,
     render_live_portfolio_section,
+    render_next_dollar_panel,
     render_portfolio_analytics_sections,
     render_portfolio_risk_panel,
     validated_window,
@@ -1185,16 +1186,13 @@ def test_synthesis_page_rollup_and_next_dollar(tmp_path: Path) -> None:
     assert "2 OK" in html and "1 flagged" in html
     assert 'href="#holding=WIX"' in html
     assert "WIX" in html
-    # Next-dollar memo excerpted with markdown stripped + Memos deep link.
-    # No DCF/price/macro substrate in this fixture -> the quantitative model
-    # has nothing to score and the panel falls back to the memo alone.
-    assert "Where the next dollar goes" in html
-    assert "MELI" in html
-    assert "##" not in html.split("Where the next dollar goes")[1][:300]
-    assert 'href="#advisor_memos"' in html
-    # class= (not the bare token): the fragment's <style> block names the
-    # selector even when no distribution row renders.
+    # P0.4b: Health no longer renders the next-dollar distribution/memo at
+    # all — it points to the governed Incremental Dollar Recommendation on
+    # Portfolio -> Allocation instead (PRD §6/§7.4).
+    assert "Where the next dollar goes" not in html
     assert 'class="pf-nd-row"' not in html
+    assert "Incremental Dollar Recommendation" in html
+    assert 'href="/#portfolio_allocation"' in html
 
 
 def _next_dollar_fixture(tmp_path: Path) -> tuple[Path, Path]:
@@ -1273,6 +1271,10 @@ def _position(ticker: str, value: float) -> LivePosition:
 
 
 def test_next_dollar_distribution_with_tracker_weights(tmp_path: Path) -> None:
+    """P0.4b: ``render_next_dollar_panel`` no longer renders inside
+    ``compose_synthesis_page`` (Health), but the function itself — and this
+    coverage of its quantitative distribution model — is unchanged; it is
+    called directly here (as the peek/markup-contract tests already do)."""
     import re
 
     _repo_root, db = _next_dollar_fixture(tmp_path)
@@ -1281,7 +1283,7 @@ def test_next_dollar_distribution_with_tracker_weights(tmp_path: Path) -> None:
         api_url="http://x",
         positions=[_position("AAA", 5000.0), _position("BBB", 3000.0), _position("CCC", 2000.0)],
     )
-    html = compose_synthesis_page(db, live, "")
+    html = render_next_dollar_panel(db, live)
 
     # Distribution bars render, weighted by the tracker's live values.
     assert 'class="pf-nd-row"' in html
@@ -1310,9 +1312,10 @@ def test_next_dollar_distribution_with_tracker_weights(tmp_path: Path) -> None:
 
 
 def test_next_dollar_equal_weight_when_tracker_down(tmp_path: Path) -> None:
+    """P0.4b: called directly (see the sibling test's note above)."""
     _repo_root, db = _next_dollar_fixture(tmp_path)
     live = LivePortfolio(available=False, api_url="http://x", error="down")
-    html = compose_synthesis_page(db, live, "")
+    html = render_next_dollar_panel(db, live)
     assert 'class="pf-nd-row"' in html
     assert "equal-weighted" in html
     assert "now 33.3%" in html
@@ -1320,16 +1323,17 @@ def test_next_dollar_equal_weight_when_tracker_down(tmp_path: Path) -> None:
 
 def test_synthesis_page_layout_order(tmp_path: Path) -> None:
     """The Synthesis tab's shape: the rollup/exposure insights grid first, the
-    next-dollar distribution full-width below it (NOT a grid cell — the grid
-    wrapper closes before the section opens), the lens memo last."""
+    next-dollar POINTER (P0.4b — the full distribution moved to Portfolio ->
+    Allocation) below it (NOT a grid cell — the grid wrapper closes before
+    the section opens), the lens memo last."""
     _repo_root, db = _next_dollar_fixture(tmp_path)
     live = LivePortfolio(available=False, api_url="http://x", error="down")
     memo = '<section class="panel synthesis-panel">MEMO</section>'
     html = compose_synthesis_page(db, live, memo)
     grid = html.index('class="pf-insights"')  # exposure renders (equal-weight)
-    nd = html.index("Where the next dollar goes")
+    nd = html.index("Incremental Dollar Recommendation")
     assert grid < nd < html.index("synthesis-panel")
-    assert '</div><section class="panel"><h2>Where the next dollar goes</h2>' in html
+    assert '</div><section class="panel"><h2>Next dollar</h2>' in html
 
 
 # ----- Portfolio → Risk tab (L5): drawdown · factor exposure · macro stress -----

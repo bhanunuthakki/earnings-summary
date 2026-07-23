@@ -8,6 +8,8 @@ Callback data is a compact ``kind:verb:id`` triple:
   ``wk:<verb>:<item_id>``     the Sunday packet's per-item verdict (PR2; item_id is a
                               weekly_packet_items row id) — accept / rewrite / drop / defer
   ``dn:<verb>:<decision_id>`` the point-of-intent decision nudge (PR2) — fill / skip
+  ``al:<verb>:<artifact_id>`` the Incremental Dollar Recommendation card (P0.4b,
+                              ``allocation.telegram_summary``) — why / open / dismiss
 
 Free-text in the thread stays a musing (the capture path); the buttons are the
 Wave-1 steering surface. A button 'steer' marks the proposal steered (the web inbox
@@ -413,6 +415,67 @@ def dispatch_callback(
             with contextlib.suppress(Exception):
                 maybe_send_receipt(token, chat_id, item.run_id, db_path=db_path, send=send)
         return f"wk_{result}"
+
+    if kind == "al":
+        # The Incremental Dollar Recommendation's Telegram card (P0.4b, PRD
+        # §7.4 surface parity / §11.4 privacy). "why" answers inline with the
+        # stored disconfirmers/uncertainty (no re-generation, no LLM call);
+        # "open" answers with the deep-link path (the web surface is
+        # Tailscale-only, so there is no public URL button to open);
+        # "dismiss" calls the SAME action core the web route uses
+        # (allocation.actions.act_on_recommendation) so a button press and a
+        # web click behave identically.
+        if verb == "why":
+            from allocation.recommendation_artifact import PURPOSE
+            from llm_artifact_store import read_current
+
+            artifact = read_current(
+                ticker=None, purpose=PURPOSE, scope="portfolio", db_path=db_path
+            )
+            if artifact is None or not isinstance(artifact.content_json, dict):
+                if cqid:
+                    answer(token, cqid, text="No recommendation on file.")
+                return "al_stale"
+            from allocation.recommendation_schema import IncrementalDollarRecommendation
+
+            try:
+                rec = IncrementalDollarRecommendation.model_validate(artifact.content_json)
+            except Exception:
+                if cqid:
+                    answer(token, cqid, text="Could not read the recommendation.")
+                return "al_stale"
+            if cqid:
+                answer(token, cqid, text="Sending why...")
+            if chat_id is not None:
+                unknowns = "; ".join(rec.main_unknowns[:3]) or "none stated"
+                disconfirm = "; ".join(rec.disconfirming_evidence[:3]) or "none stated"
+                send(
+                    token,
+                    chat_id,
+                    f"Main uncertainty: {unknowns}\n\nDisconfirming evidence: {disconfirm}\n\n"
+                    f"{rec.confidence_basis}",
+                )
+            return "al_why"
+        if verb == "open":
+            if cqid:
+                answer(token, cqid, text="Open /#portfolio_allocation on the web dashboard.")
+            return "al_open"
+        if verb == "dismiss":
+            from allocation.actions import RecommendationActionError, act_on_recommendation
+
+            try:
+                status = act_on_recommendation(obj_id, "dismiss", db_path=db_path)
+            except RecommendationActionError:
+                if cqid:
+                    answer(token, cqid, text="Unrecognized action.")
+                return None
+            if cqid:
+                answer(token, cqid, text="Dismissed.")
+            _stamp_card(token, update, _state_stamp(status), edit=edit)
+            return "al_dismissed"
+        if cqid:
+            answer(token, cqid, text="Unrecognized action.")
+        return None
 
     if kind == "dn":
         # The point-of-intent decision nudge (PR2, Deliverable 2) — Fill in

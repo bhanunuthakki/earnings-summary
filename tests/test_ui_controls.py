@@ -418,6 +418,7 @@ REGISTERED: frozenset[str] = frozenset(
         "dashboard/upcoming.py",
         "pipeline/advisor_memos_panel.py",
         "pipeline/allocation_decisions_panel.py",
+        "pipeline/allocation_recommendation_panel.py",
         "pipeline/analytical_dashboard_html.py",
         "pipeline/ask_dock.py",
         "pipeline/attribution_panel.py",
