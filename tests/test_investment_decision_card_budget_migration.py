@@ -1,4 +1,4 @@
-"""Round-trip test for ``0190_investment_decision_card_budget``.
+"""Round-trip test for ``0191_investment_decision_card_budget``.
 
 Mirrors the repo alembic-test pattern (tests/test_decisions_advice_link_migration.py):
 hand-create the minimal ``llm_budgets`` shape, stamp the prior head, run the
@@ -21,7 +21,7 @@ from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0189_merge_0188_heads"
-HEAD = "0190_investment_decision_card_budget"
+HEAD = "0191_investment_decision_card_budget"
 
 _PRE_DDL = """
 CREATE TABLE llm_budgets (
