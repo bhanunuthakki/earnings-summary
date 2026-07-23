@@ -162,6 +162,19 @@ PACKS: tuple[PackSpec, ...] = (
         'stances — for "what if rates stay higher", "my BRL/FX exposure", '
         "macro-regime and rate-sensitivity questions",
     ),
+    PackSpec(
+        "allocation",
+        "Incremental Dollar Recommendation",
+        "/#portfolio_allocation",
+        900,
+        "the current governed Incremental Dollar Recommendation (preferred plan, "
+        "resulting weights/zones, central hypothesis, main uncertainty, "
+        'disconfirming evidence) — for "where should next month\'s savings go", '
+        '"how should I be positioned", "why this plan" and any forward/hypothetical '
+        "cash-allocation question; a hypothetical amount still routes here as point-"
+        "in-time context — a NEW deployable plan for a different amount requires the "
+        "recommendation action core, not this pack alone",
+    ),
 )
 
 PACK_KEYS: tuple[str, ...] = tuple(p.key for p in PACKS)
@@ -768,6 +781,70 @@ def _macro_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[str, ob
     return _item(spec, _join_capped(lines, spec.char_budget))
 
 
+# ---------------------------------------------------------------------------
+# allocation — the current Incremental Dollar Recommendation artifact (P0.4b)
+# ---------------------------------------------------------------------------
+
+# Mirrors allocation.recommendation_artifact.PURPOSE — kept as a local literal
+# (like thesis_collision's own PURPOSE constant) so this lightweight, broadly-
+# imported module never pulls in the heavier LLM-call machinery that module
+# imports (llm.cli / llm.structured / llm_budget).
+_ALLOCATION_PURPOSE = "incremental_dollar_recommendation"
+
+
+def _allocation_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[str, object] | None:
+    """The current governed Incremental Dollar Recommendation, summarized
+    with citations to its own ``source_refs`` (PRD §7.4 Ask allocation
+    intelligence). Absence-explicit: no artifact on file is itself citeable
+    evidence for "no recommendation has been generated yet", not silence."""
+    del focus  # portfolio-wide by nature — the recommendation is not per-ticker
+    import llm_artifact_store
+
+    try:
+        artifact = llm_artifact_store.read_current(
+            ticker=None, purpose=_ALLOCATION_PURPOSE, scope="portfolio", db_path=db_path
+        )
+    except Exception:
+        return None
+    if artifact is None or not isinstance(artifact.content_json, dict):
+        return _item(spec, "no Incremental Dollar Recommendation has been generated yet")
+
+    from allocation.recommendation_schema import IncrementalDollarRecommendation
+
+    try:
+        rec = IncrementalDollarRecommendation.model_validate(artifact.content_json)
+    except Exception:
+        return _item(spec, "a recommendation is on file but failed to read back — regenerate it")
+
+    lines: list[str] = [
+        f"artifact #{artifact.id}, as of {_day(artifact.generated_at)}, status={rec.status}"
+    ]
+    if rec.preferred_plan.allocations:
+        lines.append(
+            "preferred plan: "
+            + ", ".join(
+                f"{a.ticker} {a.pct_of_cash:.0f}% of cash -> {a.resulting_weight_pct:.1f}% "
+                f"of book" + (f" (zone={a.zone})" if a.zone else "")
+                for a in rec.preferred_plan.allocations
+            )
+        )
+    else:
+        lines.append(f"preferred plan: retain ${rec.preferred_plan.cash_retained_usd:,.2f} in cash")
+    lines.append(f"central hypothesis: {rec.central_hypothesis}")
+    if rec.main_unknowns:
+        lines.append("main unknowns: " + "; ".join(rec.main_unknowns[:3]))
+    if rec.disconfirming_evidence:
+        lines.append("disconfirming evidence: " + "; ".join(rec.disconfirming_evidence[:3]))
+    lines.append(
+        f"confidence: {rec.confidence_verbal} ({rec.selection_mode})"
+        if rec.selection_mode != "deterministic_fallback"
+        else "confidence: none — mechanical fallback, no governed judgment applied"
+    )
+    if rec.source_refs:
+        lines.append("source refs: " + "; ".join(rec.source_refs[:6]))
+    return _item(spec, _join_capped(lines, spec.char_budget))
+
+
 _LOADERS: dict[str, Callable[[PackSpec, Path, list[str]], dict[str, object] | None]] = {
     "holdings": _holdings_item,
     "conviction": _conviction_item,
@@ -777,6 +854,7 @@ _LOADERS: dict[str, Callable[[PackSpec, Path, list[str]], dict[str, object] | No
     "journal": _journal_item,
     "performance": _performance_item,
     "macro": _macro_item,
+    "allocation": _allocation_item,
 }
 
 

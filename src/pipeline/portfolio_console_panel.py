@@ -68,14 +68,43 @@ def render_portfolio_health_panel(db_path: Path, *, user_id: str = DEFAULT_USER_
 def render_portfolio_allocation_panel(
     db_path: Path, repo_root: Path | None = None, *, user_id: str = DEFAULT_USER_ID
 ) -> str:
-    """Portfolio → Allocation: where capital goes and how it's doing. Composes
-    the durable target book (Positioning) and the tracker-fed Performance page —
-    Performance defers to an on-reveal HTMX fragment (B4a) so the local-DB
-    Positioning landing never waits on tracker round-trips."""
+    """Portfolio → Allocation: where capital goes and how it's doing (P0.4b,
+    PRD §7.4/§7.5). Section order: the Incremental Dollar Recommendation
+    (eager — the primary next-dollar answer, moved OUT of Health's synthesis
+    page per PRD §6) → the decision-facing Risk Budget (eager, §7.1) →
+    Portfolio Posture (eager, §7.5) → a what-if/compare pointer line →
+    Positioning (the existing durable-target panel; its detailed target form
+    lives inside a collapsed Advanced well now — see
+    ``positioning_panel.render_positioning_panel``) → Performance, still
+    deferred to an on-reveal HTMX fragment (B4a) so nothing here waits on a
+    tracker round-trip."""
+    from pipeline.allocation_recommendation_panel import (
+        render_allocation_recommendation_section,
+        render_portfolio_posture_section,
+        render_risk_budget_section,
+    )
     from pipeline.positioning_panel import render_positioning_panel
 
+    root = repo_root or db_path.parent.parent
+
+    def _whatif_pointer() -> str:
+        return (
+            '<section class="panel"><h2>What-if / Compare</h2>'
+            '<p class="sub">Simulate a weight change or compare candidates from the '
+            "Incremental Dollar Recommendation above &mdash; its Compare and Simulate "
+            "weight actions open the same deterministic views used here.</p></section>"
+        )
+
     sections: list[ConsoleSection] = [
-        ("positioning", "Positioning", lambda: render_positioning_panel(db_path, repo_root)),
+        (
+            "allocation_recommendation",
+            "Next dollar",
+            lambda: render_allocation_recommendation_section(db_path, root),
+        ),
+        ("risk_budget", "Risk Budget", lambda: render_risk_budget_section(db_path, root)),
+        ("posture", "Posture", lambda: render_portfolio_posture_section(db_path, root)),
+        ("whatif_pointer", "What-if", _whatif_pointer),
+        ("positioning", "Positioning", lambda: render_positioning_panel(db_path, root)),
         (
             "performance",
             "Performance",

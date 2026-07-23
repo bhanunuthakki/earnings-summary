@@ -1133,6 +1133,16 @@ def create_app(
         from pipeline.open_loops import render_open_loops_band
 
         open_loops_html = render_open_loops_band(db_path)
+        # The Incremental Dollar Recommendation's compact Today doorway
+        # (P0.4b, PRD §7.4 surface-parity exit gate): quiet when there is no
+        # current recommendation, isolated so a read failure can never break
+        # Home (matches open_loops' own per-queue try/except discipline).
+        try:
+            from pipeline.allocation_recommendation_panel import render_allocation_today_card
+
+            open_loops_html += render_allocation_today_card(db_path)
+        except Exception:
+            pass
         overview = render_overview_panel(
             rows,
             coverage,
@@ -1309,6 +1319,19 @@ def create_app(
             from pipeline.positioning_panel import render_positioning_panel
 
             return Response(render_positioning_panel(db_path, repo_root), mimetype="text/html")
+
+        if name == "allocation_recommendation":
+            # Portfolio → Allocation's Incremental Dollar Recommendation card
+            # (P0.4b, PRD §7.4). A pure read over the current llm_artifacts
+            # row — no tracker call, no LLM call. Fetched by the card's own
+            # JS after a generate/refresh POST to swap itself in place.
+            from pipeline.allocation_recommendation_panel import (
+                render_allocation_recommendation_section,
+            )
+
+            return Response(
+                render_allocation_recommendation_section(db_path, repo_root), mimetype="text/html"
+            )
 
         if name == "portfolio_risk":
             # Portfolio → Risk (L5): the whole-book risk cockpit — book drawdown
@@ -2635,10 +2658,47 @@ def create_app(
             conn.close()
         return Response(render_active_target_card(db_path, repo_root), mimetype="text/html")
 
+    @app.route("/api/positioning/confirm-posture", methods=["POST", "OPTIONS"])
+    def positioning_confirm_posture():
+        """Portfolio Posture's "Mostly right" action (P0.4b, PRD §7.5): persist
+        the owner's confirmation of the DERIVED posture narrative as an
+        affirmed ``behavioral`` owner-profile fact — through the existing
+        ``owner_profile.store`` (no parallel profile table). This is an
+        explicit owner click confirming a machine-derived characterization,
+        not a machine inference, so it lands directly as ``status='affirmed'``
+        (mirrors the packet-walk's approve action, not an auto-promotion)."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from datetime import UTC, datetime
+
+        from owner_profile.store import append_fact
+
+        body = cast("dict[str, object]", request.get_json(silent=True) or {})
+        narrative = str(body.get("narrative") or "").strip()
+        if not narrative:
+            return ({"error": "narrative required"}, 400)
+        now = datetime.now(UTC).replace(tzinfo=None).isoformat()
+        conn = sqlite3.connect(str(db_path))
+        try:
+            fact_id = append_fact(
+                conn,
+                category="behavioral",
+                key="portfolio_posture_confirmation",
+                value={"narrative": narrative, "confirmed_at": now},
+                narrative=narrative,
+                provenance="owner",
+                status="affirmed",
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return {"ok": True, "fact_id": fact_id}
+
     # ------------------------------------------------------------------
-    # Incremental Dollar Recommendation (P0.4a, PRD §11.6) — BACKEND ONLY.
-    # No UI panel here; the Allocation console/Today/Telegram/Ask surfaces
-    # for this are a separate later PR.
+    # Incremental Dollar Recommendation (P0.4a backend, P0.4b UI — PRD §7.4
+    # frontend/§11.6). The Allocation console, Today card, Telegram summary,
+    # and Ask allocation pack (P0.4b) all read the SAME artifact via the
+    # routes below.
     # ------------------------------------------------------------------
 
     @app.route("/api/allocation/recommendation", methods=["GET"])

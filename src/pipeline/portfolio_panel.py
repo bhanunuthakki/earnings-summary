@@ -1121,10 +1121,20 @@ def compose_synthesis_page(
     """Page assembly over an already-fetched live book + lens-memo fragment
     (testable without network; the insight panels read the DB themselves):
     the tracker-offline banner when the live book is unavailable (landing-tab
-    honesty — the exposure/next-dollar panels below are equal-weighted then),
-    the rollup/exposure grid, the next-dollar distribution full-width, then
-    the memo. ``cash_to_deploy_usd`` threads through to the next-dollar panel's
-    cash-aware mode (tenet-2 Phase 2); omitted, behavior is unchanged."""
+    honesty — the exposure panel below is equal-weighted then), the
+    rollup/exposure grid, a one-line pointer to the primary next-dollar
+    answer, then the memo.
+
+    P0.4b (PRD §6/§7.4): Health no longer owns the primary next-dollar
+    answer — the full ``render_next_dollar_panel`` distribution moved to
+    Portfolio → Allocation as the governed Incremental Dollar Recommendation
+    (``pipeline.allocation_recommendation_panel``). This page now shows only
+    a doorway line; ``render_next_dollar_panel`` itself is unchanged and
+    still public (peek/markup-contract tests call it directly).
+    ``cash_to_deploy_usd`` is accepted for backward-compatible call sites but
+    no longer affects this page's output (the cash-aware mode lives on the
+    Allocation console's cash form now)."""
+    del cash_to_deploy_usd  # kept for callers; no longer threaded here (see docstring)
     grid = "".join(p for p in (_thesis_rollup_panel(db_path), _exposure_panel(db_path, live)) if p)
     parts: list[str] = [_INSIGHTS_CSS]
     if not live.available:
@@ -1132,7 +1142,13 @@ def compose_synthesis_page(
         parts.append(_tracker_offline_banner(live))
     if grid:
         parts.append(f'<div class="pf-insights">{grid}</div>')
-    parts.append(render_next_dollar_panel(db_path, live, cash_to_deploy_usd=cash_to_deploy_usd))
+    parts.append(
+        '<section class="panel"><h2>Next dollar</h2>'
+        '<p class="sub">The Incremental Dollar Recommendation now lives on '
+        '<a class="k-chip k-chip-btn" href="/#portfolio_allocation">Portfolio &rarr; '
+        "Allocation</a> &mdash; a governed plan for new cash, with Risk Budget impact "
+        "and owner actions.</p></section>"
+    )
     parts.append(synthesis)
     return "".join(parts)
 
