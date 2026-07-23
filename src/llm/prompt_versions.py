@@ -99,6 +99,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # spotlighted as untrusted data.
     "transcript_summary": "v2",
     "advisor_next_dollar": "v1",
+    # Incremental Dollar Recommendation (P0.4a, mode-B rubric,
+    # personal_investment_partner_prd.md §7.4/§10). Bump when
+    # allocation.recommendation_artifact._build_prompt is materially rewritten.
+    "incremental_dollar_recommendation": "v1",
     # Ask advisory answer (mode-B rubric, close_the_loops L3). The audit run
     # records this version, so bump when the conversational ANSWER prompt (the
     # system context + evidence + thread assembly in src/ask/engine.py /
