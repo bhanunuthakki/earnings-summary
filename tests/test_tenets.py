@@ -137,3 +137,84 @@ def test_current_tenet_for_scope(db_path: Path) -> None:
     )
     found = tenets.current_tenet_for_scope("tenet:exit-discipline", db_path=db_path)
     assert found is not None and found.id == t.id
+
+
+# --------------------------------------------------------------------------- #
+# revert_tenet (B4) — the inverse of auto-adopt
+# --------------------------------------------------------------------------- #
+
+
+def test_revert_of_a_revision_restores_predecessor(db_path: Path) -> None:
+    old = tenets.record_tenet(
+        body_md="Let winners run.", scope_key="exit-discipline", db_path=db_path
+    )
+    new = tenets.supersede_tenet(
+        old.id, body_md="Let winners run, but trim on a double.", db_path=db_path
+    )
+    assert new is not None
+    restored = tenets.revert_tenet(new.id, db_path=db_path)
+    assert restored is not None
+    assert restored.id == old.id
+    assert restored.status == "current"
+    reverted_new = get_insight(new.id, db_path=db_path)
+    assert reverted_new is not None and reverted_new.status == "superseded"
+
+
+def test_revert_of_brand_new_adoption_retires_it(db_path: Path) -> None:
+    t = tenets.record_tenet(body_md="Circle of competence first.", db_path=db_path)
+    result = tenets.revert_tenet(t.id, db_path=db_path)
+    assert result is not None
+    assert result.id == t.id
+    assert result.status == "superseded"
+    assert tenets.list_tenets(status="current", db_path=db_path) == []
+
+
+def test_double_revert_is_a_noop(db_path: Path) -> None:
+    old = tenets.record_tenet(
+        body_md="Let winners run.", scope_key="exit-discipline", db_path=db_path
+    )
+    new = tenets.supersede_tenet(
+        old.id, body_md="Let winners run, but trim on a double.", db_path=db_path
+    )
+    assert new is not None
+    first = tenets.revert_tenet(new.id, db_path=db_path)
+    assert first is not None and first.id == old.id
+    # the revision row is now superseded — a second tap finds nothing current
+    second = tenets.revert_tenet(new.id, db_path=db_path)
+    assert second is None
+
+
+def test_revert_works_on_a_stance_row(db_path: Path) -> None:
+    from synthesis.insights import record_insight
+
+    old_id = record_insight(
+        scope_key="NU",
+        kind="stance",
+        body_md="Bullish on take rate expansion.",
+        source_note_ids=[1],
+        watermark_id=1,
+        provenance="derived",
+        db_path=db_path,
+    )
+    new_id = record_insight(
+        scope_key="NU",
+        kind="stance",
+        body_md="Cooling on take rate given competitive pressure.",
+        source_note_ids=[2],
+        watermark_id=2,
+        provenance="session_distill",
+        db_path=db_path,
+    )
+    restored = tenets.revert_tenet(new_id, db_path=db_path)
+    assert restored is not None
+    assert restored.id == old_id
+    assert restored.status == "current"
+    assert get_insight(new_id, db_path=db_path).status == "superseded"  # type: ignore[union-attr]
+
+
+def test_revert_of_proposed_row_returns_none(db_path: Path) -> None:
+    prop = tenets.record_tenet(
+        body_md="Chase momentum.", status="proposed", source_note_ids=[1], db_path=db_path
+    )
+    assert tenets.revert_tenet(prop.id, db_path=db_path) is None
+    assert tenets.revert_tenet(999999, db_path=db_path) is None

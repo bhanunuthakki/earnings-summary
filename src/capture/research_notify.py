@@ -10,6 +10,7 @@ Callback data is a compact ``kind:verb:id`` triple:
   ``dn:<verb>:<decision_id>`` the point-of-intent decision nudge (PR2) — fill / skip
   ``al:<verb>:<artifact_id>`` the Incremental Dollar Recommendation card (P0.4b,
                               ``allocation.telegram_summary``) — why / open / dismiss
+  ``tr:revert:<insight_id>``  (B4) undo an auto-adopted Tenet/stance receipt
 
 Free-text in the thread stays a musing (the capture path); the buttons are the
 Wave-1 steering surface. A button 'steer' marks the proposal steered (the web inbox
@@ -385,6 +386,24 @@ def dispatch_callback(
             send(token, chat_id, reply)
         _stamp_card(token, update, _state_stamp(f"reviewed {ping.ticker}"), edit=edit)
         return "cp_reviewed"
+
+    if kind == "tr" and verb == "revert":
+        # An adoption Revert tap (B4) — the inverse of session-distill
+        # auto-adopt. revert_tenet is idempotent: a stale/second tap on an
+        # already-reverted (or never-current) row returns None, so a
+        # re-press of a handled card just answers "Already handled." rather
+        # than erroring.
+        from synthesis.tenets import revert_tenet
+
+        result = revert_tenet(obj_id, db_path=db_path)
+        if result is None:
+            if cqid:
+                answer(token, cqid, text="Already handled.")
+            return "tr_stale"
+        if cqid:
+            answer(token, cqid, text="Reverted - prior belief restored.")
+        _stamp_card(token, update, _state_stamp("reverted"), edit=edit)
+        return "tr_reverted"
 
     if kind == "wk":
         # PR2 — the Sunday packet's action core (weekly_packet.apply_verdict).

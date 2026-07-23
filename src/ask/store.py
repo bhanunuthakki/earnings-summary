@@ -17,6 +17,7 @@ import json
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
@@ -176,6 +177,56 @@ def touch_session(session_id: str, *, db_path: Path) -> None:
         conn.close()
 
 
+def list_undistilled_sessions(
+    *,
+    idle_hours: int = 4,
+    min_user_turns: int = 2,
+    now: datetime | None = None,
+    db_path: Path,
+) -> list[AskSession]:
+    """Ask sessions eligible for the session-distill sweep (B4): idle for at
+    least ``idle_hours`` (the conversation has settled — no more turns coming),
+    never distilled (``distilled_at IS NULL``), and with at least
+    ``min_user_turns`` user-role turns (a one-line question-and-answer isn't
+    worth a distill call). The idle cutoff is computed in Python against the
+    naive-UTC convention rather than SQLite ``datetime()`` so the comparison
+    stays exact against the ``now_iso()`` strings every row already carries.
+    ``now`` is injectable (defaults to the real clock) so a caller/test can
+    simulate "N hours have passed" without backdating rows via raw SQL."""
+    from datetime import timedelta
+
+    from clock import now_naive_utc
+
+    cutoff = ((now or now_naive_utc()) - timedelta(hours=idle_hours)).isoformat()
+    conn = _open(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT s.* FROM ask_sessions s "
+            "WHERE s.updated_at < ? AND s.distilled_at IS NULL "
+            "AND (SELECT COUNT(*) FROM ask_turns t "
+            "     WHERE t.session_id = s.id AND t.role = 'user') >= ? "
+            "ORDER BY s.updated_at ASC",
+            (cutoff, int(min_user_turns)),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [_row_to_session(r) for r in rows]
+
+
+def mark_session_distilled(session_id: str, *, db_path: Path) -> None:
+    """Stamp ``distilled_at`` so a swept Ask session never re-enters the
+    candidate query on the next run."""
+    conn = _open(db_path)
+    try:
+        conn.execute(
+            "UPDATE ask_sessions SET distilled_at = ? WHERE id = ?",
+            (_now_iso(), session_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Turn CRUD
 # ---------------------------------------------------------------------------
@@ -285,8 +336,10 @@ __all__ = [
     "ensure_session",
     "get_session",
     "list_sessions",
+    "list_undistilled_sessions",
     "load_recent_history",
     "load_turns",
+    "mark_session_distilled",
     "rename_session",
     "touch_session",
 ]

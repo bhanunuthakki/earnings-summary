@@ -157,6 +157,14 @@ LLM_MODELS: dict[str, str] = {
     # Tenet is proposed). Analytical synthesis-with-citations, batch/optional +
     # owner-tapped (never automatic), budget-capped skip-mode (0132) → Sonnet.
     "tenet_distill": DEFAULT_MODEL,
+    # The session-distill tap (B4 keystone, 2026-07-19 program overhaul). One
+    # conversation (a thin Ask thread or a bridged deep Claude session) in,
+    # at most 5 deterministically-grounded candidates out — the same
+    # analytical synthesis-with-citations shape as tenet_distill, just fed by
+    # the FULL conversational stream (idle Ask threads + landed transcripts)
+    # rather than owner-flagged musings alone. Batch (daily 18:00 cron), not
+    # latency-sensitive → Sonnet; budget-capped warn-mode (0190).
+    "session_distill": DEFAULT_MODEL,
     # The Ledger Phase-1 wondering classifier (the research-loop gate). A short
     # closed binary+extraction behind a deterministic regex pre-gate → the cheap
     # FAST tier; the golden set (evals/golden/wondering_detect.json) is its bar.

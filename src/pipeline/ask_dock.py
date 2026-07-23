@@ -365,14 +365,44 @@ _DOCK_JS = r"""
     delBtn.title = 'Delete thread';
     delBtn.innerHTML = '&#x2715;';
 
+    // "Distill now" (B4): consequence-first — distilled belief revisions go
+    // LIVE immediately (announced with one-tap revert), so the title says so.
+    var distillBtn = document.createElement('button');
+    distillBtn.className = 'ask-dock-thread-del ask-dock-thread-distill';
+    distillBtn.type = 'button';
+    distillBtn.title = 'Distill now — beliefs from this thread go live (one-tap revert)';
+    distillBtn.innerHTML = '&#x2697;';
+
     row.appendChild(titleEl);
     row.appendChild(dateEl);
+    row.appendChild(distillBtn);
     row.appendChild(delBtn);
 
-    // Resume on click (but not on the delete button).
+    // Resume on click (but not on the action buttons).
     row.addEventListener('click', function (ev) {
-      if (ev.target === delBtn) return;
+      if (ev.target === delBtn || ev.target === distillBtn) return;
       resumeThread(sess.id);
+    });
+
+    distillBtn.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      distillBtn.disabled = true;
+      distillBtn.innerHTML = '&#8230;';
+      fetch('/api/ask/sessions/' + encodeURIComponent(sess.id) + '/distill', {method: 'POST'})
+        .then(function (r) { return r.json().then(function (j) { return {ok: r.ok, status: r.status, body: j}; }); })
+        .then(function (res) {
+          var c = (res.body && res.body.counts) || {};
+          var adopted = (c.adopted_tenets || 0) + (c.adopted_stances || 0);
+          dateEl.textContent = res.ok
+            ? ('distilled: ' + adopted + ' adopted, ' + (c.musings || 0) + ' filed')
+            : (res.status === 409 ? 'already distilled' : 'distill failed');
+          distillBtn.remove();
+        })
+        .catch(function () {
+          dateEl.textContent = 'distill failed';
+          distillBtn.disabled = false;
+          distillBtn.innerHTML = '&#x2697;';
+        });
     });
 
     // Inline rename on double-click.

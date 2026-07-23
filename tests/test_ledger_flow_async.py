@@ -354,10 +354,19 @@ def test_background_answer_lands_on_the_note(
 ) -> None:
     """End-to-end through the route with the REAL answer core (engine stubbed):
     the answer lands on the note and clears pending, exactly what the panel's
-    poll observes."""
+    poll observes. The triage gate is stubbed too — on a machine with a live
+    claude CLI the real classifier would otherwise fire an actual LLM call
+    from inside the background thread (CI never sees it; locally it races the
+    wait window and spends real tokens)."""
     client, db = ctx
+    from capture.triage import TriageVerdict
     from onmymind import respond
 
+    monkeypatch.setattr(
+        respond,
+        "classify_capture_triage",
+        lambda body, **kw: TriageVerdict(route="answer_now"),
+    )
     monkeypatch.setattr(
         respond,
         "respond_turn",

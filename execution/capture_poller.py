@@ -32,7 +32,20 @@ def _version_stamp(repo_root: Path) -> str:
     """The running git short SHA, or ``"unknown"`` on any failure — a stale
     long-running poller process (cron restarts it, but a hung/zombie instance
     survives on an old checkout) is otherwise invisible in cron logs until its
-    behavior diverges from what's on disk. Best-effort: never blocks startup."""
+    behavior diverges from what's on disk. Best-effort: never blocks startup.
+
+    Reads ``.git/HEAD`` directly before shelling out — the Windows service
+    context this runs under (es-poller) resolved ``git`` as unavailable on
+    first deploy, and a plain file read has no PATH dependency."""
+    try:
+        head = (repo_root / ".git" / "HEAD").read_text(encoding="utf-8").strip()
+        if head.startswith("ref: "):
+            ref_path = repo_root / ".git" / head.removeprefix("ref: ")
+            head = ref_path.read_text(encoding="utf-8").strip()
+        if head:
+            return head[:8]
+    except OSError:
+        pass
     try:
         result = subprocess.run(
             ["git", "-C", str(repo_root), "rev-parse", "--short", "HEAD"],
