@@ -194,6 +194,41 @@ def test_fill_in_reply_writes_conviction_and_falsifier_write_once(db_path: Path)
     assert row2[1] == "NPL exceeds 5% for 2Q"  # unchanged
 
 
+def test_fill_in_single_line_fills_the_only_missing_field(db_path: Path) -> None:
+    """Regression (RBRK #95, 2026-07-19): a decision that already has its
+    conviction and needs ONLY the falsifier must take a single-line reply as
+    that falsifier — not misfile it into the already-set conviction slot and
+    dead-end at 'couldn't parse that'."""
+    made_at = now_naive_utc().isoformat()
+    conn = _conn(db_path)
+    try:
+        cur = conn.execute(
+            "INSERT INTO decisions (ticker, recommendation_kind, decided_by, made_at, "
+            "conviction, falsifier, outcome_label, created_at) VALUES "
+            "('RBRK', 'trim', 'owner', ?, 'high', NULL, 'pending', ?)",
+            (made_at, made_at),
+        )
+        conn.commit()
+        did = int(cur.lastrowid)
+    finally:
+        conn.close()
+
+    wrote = decision_nudge.apply_fill_in_reply(
+        did, "NPL ratio climbs past 3% for 2 quarters", db_path=db_path
+    )
+    assert wrote is True
+
+    conn = _conn(db_path)
+    try:
+        row = conn.execute(
+            "SELECT conviction, falsifier FROM decisions WHERE id = ?", (did,)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row[0] == "high"  # write-once: untouched
+    assert row[1] == "NPL ratio climbs past 3% for 2 quarters"  # the lone line landed as falsifier
+
+
 def test_expiry_restores_default_capture(db_path: Path) -> None:
     """An expired await must never permanently hijack capture — the poller's
     own gate (``poller._dispatch_pending_reply``) must return False so the

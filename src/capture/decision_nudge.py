@@ -19,9 +19,11 @@ Flow:
      text handler intercepts the OWNER's next free-text message (within the
      24h default expiry) and routes it to :func:`handle_fill_in_reply`
      instead of the default musing-capture route.
-  4. The reply is parsed as two lines — conviction, then falsifier — and
-     written WRITE-ONCE (a set field is never overwritten), mirroring
-     ``research.pledge.annotate_latest_pending``'s own write-once contract.
+  4. The reply's lines are mapped onto the fields that are actually MISSING
+     (conviction→falsifier order), written WRITE-ONCE (a set field is never
+     overwritten), mirroring ``research.pledge.annotate_latest_pending``'s own
+     write-once contract. A stub needing only the falsifier takes a single-line
+     reply as that falsifier — never a misfile into the already-set conviction.
      An expired/consumed-elsewhere await simply falls through to normal
      capture — the owner's words are never dropped.
 """
@@ -170,16 +172,24 @@ def start_fill_in(
 
 
 def apply_fill_in_reply(decision_id: int, text: str, *, db_path: Path | str | None = None) -> bool:
-    """Parse a two-line reply (conviction, then falsifier) and WRITE-ONCE fill
-    the decision's NULL fields. Returns True iff at least one field was
-    written. A single-line reply fills conviction only; an empty/unparseable
-    reply writes nothing (the fields stay NULL for the standing open-loops
-    band to keep chasing)."""
+    """WRITE-ONCE fill the decision's NULL conviction/falsifier from a reply,
+    mapping the reply's lines onto the fields that are ACTUALLY missing (in
+    canonical order conviction→falsifier), not onto fixed positions. Returns
+    True iff at least one field was written.
+
+    Why by-missing, not by-position: a decision that already has its conviction
+    (write-once) and needs only the falsifier takes a *single-line* reply as the
+    falsifier — the owner types the one thing the ledger lacks, never a throwaway
+    conviction line to hit slot 2. (Positional parsing misfiled that lone
+    falsifier into the already-set conviction slot, wrote nothing, and dead-ended
+    at 'couldn't parse that' — decision #95 RBRK, 2026-07-19.) When both fields
+    are missing the reply is still conviction-then-falsifier: one line fills
+    conviction, two lines fill both. An empty reply, or one whose lines all map
+    to already-set fields, writes nothing (the fields stay NULL for the standing
+    open-loops band to keep chasing)."""
     lines = [ln.strip() for ln in (text or "").strip().splitlines() if ln.strip()]
     if not lines:
         return False
-    conviction = lines[0] if lines else None
-    falsifier = lines[1] if len(lines) >= 2 else None
     conn = open_conn(db_path)
     try:
         row = conn.execute(
@@ -187,11 +197,13 @@ def apply_fill_in_reply(decision_id: int, text: str, *, db_path: Path | str | No
         ).fetchone()
         if row is None:
             return False
-        sets: dict[str, str] = {}
-        if row[0] is None and conviction:
-            sets["conviction"] = conviction
-        if row[1] is None and falsifier:
-            sets["falsifier"] = falsifier
+        pairs = (("conviction", row[0]), ("falsifier", row[1]))
+        missing = [col for col, val in pairs if val is None]
+        # strict=False on purpose: a reply may carry fewer lines than missing
+        # fields (fill one, leave the other) or more (extras ignored).
+        sets: dict[str, str] = {
+            col: line for col, line in zip(missing, lines, strict=False) if line
+        }
         if not sets:
             return False
         assignments = ", ".join(f"{col} = ?" for col in sets)
@@ -225,7 +237,8 @@ def handle_fill_in_reply(
         msg = (
             f"Recorded on decision #{decision_id}."
             if wrote
-            else "Couldn't parse that — reply with conviction on one line, falsifier on the next."
+            else "Didn't catch that — send the missing piece as text "
+            "(conviction, and/or what would prove you wrong)."
         )
         with contextlib.suppress(telegram.TelegramError):
             send(token, chat_id, msg)
