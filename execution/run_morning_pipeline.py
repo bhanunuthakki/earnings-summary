@@ -163,9 +163,11 @@ _POSITION_GUARD_TIMEOUT_S = 120
 # Stage 0i (risk snapshot, PRD §7.1 P0-A) is the AUTHORITATIVE Risk Budget
 # writer: one tracker analytics fetch, drawdown + full factor roll-up
 # (including the rate leg), RiskBudgetSnapshot validation, then the
-# latest-view upsert + content-hash-deduped history append. No LLM. 3 min
-# covers a slow tracker.
-_RISK_SNAPSHOT_TIMEOUT_S = 180
+# latest-view upsert + content-hash-deduped history append. No LLM. The
+# tracker's beta/position-alpha endpoints measured ~22s warm each on prod
+# (2026-07-23) and the script's per-endpoint budget is 45s, so 5 min keeps
+# honest headroom over a cold sequential fetch.
+_RISK_SNAPSHOT_TIMEOUT_S = 300
 # Stage 0j (wealth context, PRD §7.6 P0-F) appends one aggregates-only
 # household balance-sheet observation per day (tracker live total +
 # wealthplan cash/illiquid/home-equity + label-only cash-need band). Pure
