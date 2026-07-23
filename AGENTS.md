@@ -14,12 +14,15 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 - **Function**: Defines goals, required inputs, authorized tools, expected outputs, schemas, constraints, and known edge cases (API limits, rate limits, fallback behavior)
 - **Rule**: Immutable baseline for a task. Do not modify without explicit user authorization.
 - **Each directive must specify**: target source, output schema, refresh cadence, idempotency key, rate-limit budget, failure-mode policy.
+- Operational discoveries become a proposed directive patch with evidence. Authorization to edit a directive and authorization to commit that edit are separate; do not infer either from permission to run the pipeline.
 
 ### Layer 2: Orchestration (Routing & Decision)
 
 - **Function**: Core agent operating layer. Read directives, verify inputs, sequence `execution/` script calls, process stdout/stderr, hand off to next step.
 - **Rule**: Do not implement business logic in this layer. If you find yourself writing transformations in the agent's reasoning, that logic belongs in an `execution/` script.
 - **State management**: On multi-step failure, check `.tmp/` for intermediate state and resume from the last successful checkpoint. Do not restart from step one unless data integrity requires it.
+- **Ownership**: Fable/Sol retains routing, exception decisions, and final synthesis. Use one to three Sonnet/Terra workers only for independent, bounded reads or implementations with explicit file ownership; use Haiku/Luna only for mechanical extraction. Delegation depth stays at one.
+- **Concurrency**: One process owns each mutable pipeline state, database write set, cursor, or output artifact. Parallelize read-only discovery, never competing writers. Scheduled and interactive runs must acquire or honor the same run lock before mutation.
 
 ### Layer 3: Execution (Deterministic Action)
 
@@ -51,8 +54,8 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 
 ### Directive Maintenance
 
-- Directives must be refined, not bloated. When you learn something new (an API quirk, a rate limit, a date format), update the directive — but consolidate, don't append endlessly.
-- Request permission before committing changes to anything in `directives/`.
+- Directives must be refined, not bloated. When you learn something new (an API quirk, a rate limit, a date format), propose a consolidated edit rather than appending a running diary.
+- Request permission before editing a directive, validate the resulting procedure, then request separate permission before committing it.
 
 ## File Organization & State
 
@@ -116,7 +119,7 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 
 ## Session & Agent Model Selection — repo scope note
 
-The per-session AGENT model-selection rule (Opus/Sonnet/Haiku-class by task nature) lives in the global `AGENTS.md` → "Session & Agent Model Selection (Token Discipline)" and applies here unchanged.
+The per-session rule in the global `AGENTS.md` applies unchanged: Fable/Sol is the primary orchestrator, Sonnet/Terra is the execution tier, and Haiku/Luna is reserved for mechanical work. Skip delegation for small cohesive tasks.
 
 Repo-specific scope: that rule governs **coding/session** model choice. The application's **in-app per-purpose LLM routing** is a separate concern, governed by `LLM_MODELS` in `src/llm/cli.py`, the model-downgrade eval loop (`directives/model_eval_loop.md`), and the cheapest-at-parity routing design (`directives/cheapest_model_routing.md`).
 
