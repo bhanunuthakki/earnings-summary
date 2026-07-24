@@ -319,6 +319,11 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # prompt is materially rewritten, then re-run any golden-set eval added
     # for this purpose.
     "exit_postmortem_draft": "v1",
+    # Business-factor taxonomy (C3, 2026-07-19 program overhaul Workstream C
+    # keystone, src/risk_factors.py). IS the llm_artifacts cache key
+    # alongside the per-ticker mix+thesis input hash — bumping it (e.g. after
+    # a TAXONOMY definition rewrite) forks every cached derivation cleanly.
+    "business_factor_taxonomy": "v1",
 }
 
 _DEFAULT_VERSION = "v1"

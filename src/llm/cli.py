@@ -305,6 +305,16 @@ LLM_MODELS: dict[str, str] = {
     # thesis set changes rarely), never on the render path (cached in
     # llm_artifacts, keyed by a thesis-set hash).
     "thesis_collision": DEFAULT_MODEL,
+    # Business-factor taxonomy (src/risk_factors.py, C3 — 2026-07-19 program
+    # plan Workstream C keystone): per-holding loadings onto a small
+    # controlled taxonomy ("Brazil consumer credit", "digital ad spend", …),
+    # grounded in the C2 revenue mix + micro_thesis thesis text. Nuance-
+    # sensitive judgment over natural-language + disclosed-mix inputs, same
+    # tier as thesis_collision/scenario_prior/position_review -> Sonnet-tier
+    # reasoning. Per-ticker, on-demand/weekly-cron call, never on the render
+    # path (cached in llm_artifacts, keyed by a mix+thesis input hash; see
+    # that module's compute_input_sha).
+    "business_factor_taxonomy": DEFAULT_MODEL,
     # Long-context analytical writing
     "transcript_summary": DEFAULT_MODEL,
     "press_release_summary": DEFAULT_MODEL,
