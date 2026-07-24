@@ -195,9 +195,7 @@ def render_decision_journal_panel(
     # `.k-toolbar` band (test_ledger_console_renders_one_chrome pins it), so
     # the filter chips ride a plain layout row. Standalone keeps the kit
     # toolbar.
-    chip_row = (
-        f'<div class="dj-chips">{chips}</div>' if embedded else panel_toolbar(filters=chips)
-    )
+    chip_row = f'<div class="dj-chips">{chips}</div>' if embedded else panel_toolbar(filters=chips)
     return f"""{_PANEL_STYLE}
 {heading}
 <div id="dj-root" data-active-filter="{filter_}">
