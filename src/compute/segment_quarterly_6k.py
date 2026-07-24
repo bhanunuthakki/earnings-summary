@@ -131,6 +131,17 @@ _SECTION_KEYWORDS = (
 )
 _MAX_TEXT_BUDGET = 60000
 
+# Deterministic backstop for the prompt's no-subtotal instruction: a "Total"
+# row persisted alongside its components double-counts every consumer that
+# sums a dimension (observed in prod: NU 3Q24's "Total" geography rows,
+# 2026-07 audit). Label-prefix match only -- a genuine segment named
+# "Total..." would be a subtotal by construction in these filings.
+_SUBTOTAL_NAME_PREFIXES = ("total", "subtotal", "consolidated")
+
+
+def _is_subtotal_name(name: str) -> bool:
+    return name.strip().lower().startswith(_SUBTOTAL_NAME_PREFIXES)
+
 
 @dataclass
 class SixKCell:
@@ -435,7 +446,9 @@ For each breakdown found, return:
 Do NOT include prior-year comparative columns as separate cells -- only the current
 quarter's column. Do NOT manufacture a breakdown that isn't explicitly presented as a
 table in the text. If a table only presents Total/annual figures with no sub-group
-breakdown, skip it.
+breakdown, skip it. Do NOT include "Total"/subtotal rows as cells (e.g. "Total",
+"Total revenue", a regional rollup that just sums other listed rows) -- only the
+individual sub-group rows; a subtotal alongside its components double-counts.
 
 Return STRICT JSON, no markdown fence, no commentary:
 
@@ -561,6 +574,9 @@ def _persist_breakdowns(
                 continue
             name = cell.name.strip()
             if not name:
+                cells_skipped += 1
+                continue
+            if _is_subtotal_name(name):
                 cells_skipped += 1
                 continue
             currency = _parse_currency(cell.currency)

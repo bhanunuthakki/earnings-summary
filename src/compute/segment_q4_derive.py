@@ -65,6 +65,13 @@ _QUARTERS: tuple[FiscalPeriodType, ...] = (
     FiscalPeriodType.Q3,
 )
 
+# Point-in-time balance metrics: "Q4 = FY - (Q1+Q2+Q3)" is only meaningful
+# for flow metrics; subtracting three balance-sheet snapshots from a year-end
+# snapshot produces a large negative artifact, not a quarter. The fpi_6k
+# route's geography tables carry non_current_assets alongside revenue
+# (IAS 34 / IFRS 8 disclosure shape), so these must be refused, not derived.
+_BALANCE_METRICS = frozenset({"non_current_assets"})
+
 
 @dataclass(slots=True)
 class Q4DeriveResult:
@@ -346,6 +353,26 @@ def derive_for_ticker(
         return result
 
     for fy_cell in fy_cells:
+        if fy_cell.metric in _BALANCE_METRICS:
+            # A balance snapshot has no Q4 flow to derive -- refuse with an
+            # honest coverage row rather than writing a negative artifact.
+            result.reason_counts["balance_metric_not_derivable"] = (
+                result.reason_counts.get("balance_metric_not_derivable", 0) + 1
+            )
+            result.not_computable_count += 1
+            record_coverage(
+                conn,
+                ticker=ticker,
+                period_end=fy_period_end,
+                fiscal_period_type="Q4",
+                dim_type=fy_cell.dim_type,
+                dim_name=fy_cell.dim_name,
+                status="not_computable",
+                reason_code="balance_metric_not_derivable",
+                source_doc_id=fy_source_doc_id,
+                method_version=METHOD_VERSION,
+            )
+            continue
         # §3.1 point 3: whether the segment identity itself appears in ANY
         # quarter (even if not the one currently missing a match) decides
         # the reason code -- "unmatched_segment_identity" means the segment

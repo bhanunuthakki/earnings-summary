@@ -300,6 +300,41 @@ def test_clean_derivation_is_idempotent(tmp_path: Path, conn: sqlite3.Connection
     assert n_q4 == 1
 
 
+def test_balance_metric_is_refused_not_derived(tmp_path: Path, conn: sqlite3.Connection) -> None:
+    """A point-in-time balance metric (non_current_assets, the fpi_6k
+    geography-table companion column) must never be run through the
+    FY - (Q1+Q2+Q3) subtraction -- three quarter-end snapshots subtracted
+    from a year-end snapshot is a large negative artifact, not a Q4."""
+    _seed_clean_fy2025(conn)
+    # Add matching non_current_assets anchors on all four periods.
+    for period_id in (1, 2, 3, 4):
+        _insert_dim(
+            conn,
+            period_id=period_id,
+            dim_name="North America",
+            value="800000000",
+            metric="non_current_assets",
+        )
+    result = q4.derive_for_ticker("TESTCO", 2025, tmp_path, conn)
+
+    # Revenue still derives; the balance metric is refused with a coverage row.
+    assert result.derived_inserted == 1
+    assert result.reason_counts.get("balance_metric_not_derivable") == 1
+    derived_metrics = {
+        r["metric"]
+        for r in conn.execute(
+            "SELECT metric FROM segment_dimensions WHERE method_version = 'segment_q4_derive_v1'"
+        ).fetchall()
+    }
+    assert derived_metrics == {"revenue"}
+    cov = conn.execute(
+        "SELECT status, reason_code FROM segment_quarterly_coverage "
+        "WHERE reason_code = 'balance_metric_not_derivable'"
+    ).fetchone()
+    assert cov is not None
+    assert cov["status"] == "not_computable"
+
+
 # ---------------------------------------------------------------------------
 # Missing-quarter guard
 # ---------------------------------------------------------------------------

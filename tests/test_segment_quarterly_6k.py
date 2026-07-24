@@ -311,3 +311,68 @@ def test_image_only_exhibit_records_not_computable_coverage(
     ).fetchone()
     assert row["status"] == "not_computable"
     assert row["reason_code"] == "fpi_6k_image_only_exhibit"
+
+
+def test_subtotal_rows_are_skipped_deterministically(
+    conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A "Total" cell emitted despite the prompt's no-subtotal instruction is
+    dropped by the persist guard, never written -- a subtotal alongside its
+    components double-counts every consumer that sums a dimension (the prod
+    NU 3Q24 shape that motivated the guard)."""
+    fetched = FetchedExhibit(
+        located=_NU_LOCATED,
+        raw_html="<html>34. SEGMENT INFORMATION geographical area</html>",
+        plain_text=(
+            "34. SEGMENT INFORMATION Information about geographical area. "
+            "Brazil 2,124,441 Mexico 141,540 Total 2,296,212"
+        ),
+        is_image_only=False,
+    )
+    response_with_total = json.dumps(
+        {
+            "breakdowns": [
+                {
+                    "axis": "geography",
+                    "metric": "revenue",
+                    "cells": [
+                        {
+                            "name": "Brazil",
+                            "value": 2124441000,
+                            "period_end": "2024-09-30",
+                            "fiscal_period_type": "Q3",
+                            "currency": "USD",
+                        },
+                        {
+                            "name": "Total",
+                            "value": 2296212000,
+                            "period_end": "2024-09-30",
+                            "fiscal_period_type": "Q3",
+                            "currency": "USD",
+                        },
+                        {
+                            "name": "Total fee and commission income",
+                            "value": 469381000,
+                            "period_end": "2024-09-30",
+                            "fiscal_period_type": "Q3",
+                            "currency": "USD",
+                        },
+                    ],
+                }
+            ]
+        }
+    )
+
+    monkeypatch.setattr(segment_quarterly_6k, "locate_6k_exhibit", lambda *a, **k: _NU_LOCATED)
+    monkeypatch.setattr(segment_quarterly_6k, "fetch_6k_exhibit_text", lambda *a, **k: fetched)
+    monkeypatch.setattr(segment_quarterly_6k, "_call_claude", lambda *a, **k: response_with_total)
+
+    result = extract_for_ticker("NU", 2024, "Q3", tmp_path, conn)
+
+    assert result.skipped_reason is None
+    assert result.dimensions_inserted == 1
+    assert result.cells_skipped == 2
+    names = {
+        r["dim_name"] for r in conn.execute("SELECT dim_name FROM segment_dimensions").fetchall()
+    }
+    assert names == {"Brazil"}
