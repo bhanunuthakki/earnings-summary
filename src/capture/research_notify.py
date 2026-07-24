@@ -11,6 +11,9 @@ Callback data is a compact ``kind:verb:id`` triple:
   ``al:<verb>:<artifact_id>`` the Incremental Dollar Recommendation card (P0.4b,
                               ``allocation.telegram_summary``) — why / open / dismiss
   ``tr:revert:<insight_id>``  (B4) undo an auto-adopted Tenet/stance receipt
+  ``rx:<verb>:<task_id>``     (B7) the weekly packet's "expiring research"
+                              line — run / session / drop a research_tasks
+                              row before it silently expires
 
 Free-text in the thread stays a musing (the capture path); the buttons are the
 Wave-1 steering surface. A button 'steer' marks the proposal steered (the web inbox
@@ -519,6 +522,67 @@ def dispatch_callback(
                 answer(token, cqid, text="Skipped.")
             _stamp_card(token, update, _state_stamp("skipped"), edit=edit)
             return "dn_skipped"
+        if cqid:
+            answer(token, cqid, text="Unrecognized action.")
+        return None
+
+    if kind == "rx":
+        # B7 — the weekly packet's "expiring research" line, the action core
+        # that kills silent expiry: a wondering that became a research task
+        # nobody touched must never just vanish. 'run' respects the SAME
+        # LEDGER_RESEARCH_RUN gate as rt:run (a RUN button never spends
+        # unless research is explicitly turned on); 'session' hands back the
+        # stored session_prompt for the B8 Claude-session bridge (no status
+        # change — the task stays 'proposed' until a human closes the loop,
+        # either by running it or dropping it, so it can still reappear next
+        # week); 'drop' IS the "packet-acknowledged drop" that expires a task
+        # immediately, independent of the weekly sweep's own
+        # second-unanswered-week rule (execution/expire_stale_research.py).
+        from research.proposals import get_task, set_task_status
+
+        task = get_task(obj_id, db_path=db_path)
+        if task is None or task.status != "proposed":
+            if cqid:
+                answer(token, cqid, text="Already handled.")
+            return "rx_stale"
+
+        if verb == "run":
+            if not research_run_enabled():
+                if cqid:
+                    answer(token, cqid, text="Research is off.")
+                return "run_disabled"
+            runner = run or _default_runner
+            try:
+                proposal_id = runner(obj_id, db_path=db_path, repo_root=repo_root)
+            except Exception:  # a run failure reverts the task; never break the loop
+                if cqid:
+                    answer(token, cqid, text="Research failed; try again.")
+                return "run_failed"
+            if cqid:
+                answer(token, cqid, text="Researching...")
+            if proposal_id is not None and chat_id is not None:
+                proposal = get_proposal(proposal_id, db_path=db_path)
+                if proposal is not None:
+                    send_proposal_card(token, chat_id, proposal, send=send)
+            _stamp_card(token, update, _state_stamp("researched"), edit=edit)
+            return "rx_ran"
+
+        if verb == "session":
+            prompt = str(task.meta.get("session_prompt") or "").strip()
+            if cqid:
+                answer(token, cqid, text="Sending the session prompt...")
+            if chat_id is not None:
+                send(token, chat_id, prompt or "(no session prompt on file for this task)")
+            _stamp_card(token, update, _state_stamp("sent to session"), edit=edit)
+            return "rx_session"
+
+        if verb == "drop":
+            set_task_status(obj_id, "expired", db_path=db_path)
+            if cqid:
+                answer(token, cqid, text="Dropped.")
+            _stamp_card(token, update, _state_stamp("dropped"), edit=edit)
+            return "rx_dropped"
+
         if cqid:
             answer(token, cqid, text="Unrecognized action.")
         return None

@@ -45,6 +45,14 @@ def _yes(text: str) -> dict[str, object]:
     return {"intent": "wondering", "claim": "do NU margins hold?", "ticker": "NU"}
 
 
+def _triage_research_task(_prompt: str) -> dict[str, object]:
+    """B7: the routing triage's default test stub — routes every wondering to
+    'research_task' (today's pre-B7 behavior), so the pre-B7 task-creation
+    tests below stay unchanged in outcome while still exercising the real
+    (now two-call) tap pipeline."""
+    return {"route": "research_task", "why": "test"}
+
+
 def test_create_list_and_status(db_path: Path) -> None:
     tid = proposals.create_task(note_id=1, claim="do margins hold?", ticker="NU", db_path=db_path)
     assert tid > 0
@@ -59,13 +67,18 @@ def test_create_list_and_status(db_path: Path) -> None:
 
 def test_tap_creates_task_for_wondering(db_path: Path) -> None:
     note_id = _land(db_path, "do NU's margins still hold up here?")
-    tid = proposals.detect_and_create_task(note_id, db_path=db_path, call=_yes)
+    tid = proposals.detect_and_create_task(
+        note_id, db_path=db_path, call=_yes, triage_call=_triage_research_task
+    )
     assert tid is not None
     task = proposals.get_task(tid, db_path=db_path)
     assert task is not None
     assert task.status == "proposed"
     assert task.note_id == note_id
     assert task.ticker == "NU"
+    # B7: the research_task route stamps a stated cost + a session-bridge prompt.
+    assert task.cost_usd is not None and task.cost_usd > 0
+    assert "do NU margins hold?" in str(task.meta.get("session_prompt", ""))
 
 
 def test_tap_no_task_for_observation(db_path: Path) -> None:
@@ -126,7 +139,9 @@ def _tap_audit_rows(db_path: Path) -> list[tuple[str, str | None, str | None]]:
 def test_tap_audits_chip_engage_observation_and_error(db_path: Path) -> None:
     # 1. wondering → chip: detail task:<id>, purpose recorded (LLM ran)
     note_id = _land(db_path, "do NU's margins still hold up here?")
-    tid = proposals.detect_and_create_task(note_id, db_path=db_path, call=_yes, channel="tray")
+    tid = proposals.detect_and_create_task(
+        note_id, db_path=db_path, call=_yes, triage_call=_triage_research_task, channel="tray"
+    )
     # 2. artifact intent → engage:<mode>, no task (routed to the artifact pipeline)
     art_id = _land(db_path, "curious about the takeaways here, take a look")
     assert (
@@ -194,6 +209,125 @@ def test_proposal_source_note_ids_round_trip(db_path: Path) -> None:
     assert got.source_note_ids == [54]
     listed = proposals.list_proposals(status="pending", db_path=db_path)
     assert [p.source_note_ids for p in listed] == [[54]]
+
+
+# ---------------------------------------------------------------------------
+# B7 — routing triage over a positive wondering verdict
+# ---------------------------------------------------------------------------
+
+
+def test_wondering_answer_now_creates_no_task(db_path: Path) -> None:
+    note_id = _land(db_path, "what's my cost basis on NU again?")
+    result = proposals.detect_and_create_task(
+        note_id,
+        db_path=db_path,
+        call=_yes,
+        triage_call=lambda _p: {"route": "answer_now", "why": "owned data"},
+    )
+    assert result is None
+    assert proposals.list_tasks(db_path=db_path) == []
+    from user_state.notes import get_note
+
+    note = get_note(note_id, db_path=db_path)
+    assert note is not None
+    assert (note.context or {}).get("research_route") == "answer_now"
+
+
+def test_wondering_belief_candidate_creates_no_task_and_flags_ladder(db_path: Path) -> None:
+    note_id = _land(db_path, "I think NU's credit discipline is the real moat here")
+    result = proposals.detect_and_create_task(
+        note_id,
+        db_path=db_path,
+        call=_yes,
+        triage_call=lambda _p: {"route": "belief_candidate", "why": "not a question"},
+    )
+    assert result is None
+    assert proposals.list_tasks(db_path=db_path) == []
+    from user_state.notes import get_note
+
+    note = get_note(note_id, db_path=db_path)
+    assert note is not None
+    ctx = note.context or {}
+    assert ctx.get("ladder") == "saved"
+    assert ctx.get("research_route") == "belief_candidate"
+
+
+def test_wondering_research_task_route_creates_task_with_cost_and_prompt(db_path: Path) -> None:
+    note_id = _land(db_path, "what's driving NU's NIM this quarter?")
+    tid = proposals.detect_and_create_task(
+        note_id,
+        db_path=db_path,
+        call=_yes,
+        triage_call=lambda _p: {"route": "research_task", "why": "needs a live look"},
+    )
+    assert tid is not None
+    task = proposals.get_task(tid, db_path=db_path)
+    assert task is not None
+    assert task.cost_usd == pytest.approx(0.40)  # ticker-scoped estimate (NU)
+    assert str(task.meta.get("session_prompt", "")).startswith("# Research this wondering")
+
+
+def test_wondering_triage_call_failure_fails_open_to_research_task(db_path: Path) -> None:
+    """A triage outage must NEVER make a wondering vanish silently — the exact
+    bug this PR fixes. It degrades to the pre-B7 default: create the task."""
+
+    def boom(_prompt: str) -> dict[str, object]:
+        raise RuntimeError("triage llm down")
+
+    note_id = _land(db_path, "do NU's margins still hold up here?")
+    tid = proposals.detect_and_create_task(note_id, db_path=db_path, call=_yes, triage_call=boom)
+    assert tid is not None
+    task = proposals.get_task(tid, db_path=db_path)
+    assert task is not None and task.status == "proposed"
+
+
+def test_wondering_tap_audits_new_b7_routes(db_path: Path) -> None:
+    note_id = _land(db_path, "what's my cost basis on NU again?")
+    proposals.detect_and_create_task(
+        note_id,
+        db_path=db_path,
+        call=_yes,
+        triage_call=lambda _p: {"route": "answer_now"},
+        channel="tray",
+    )
+    rows = _tap_audit_rows(db_path)
+    assert rows == [("tray", "answer_now", "capture_intent")]
+
+
+# ---------------------------------------------------------------------------
+# B7 — set_task_extras (the repurposed cost_usd / run_id-as-JSON-meta columns)
+# ---------------------------------------------------------------------------
+
+
+def test_set_task_extras_merges_without_clobbering(db_path: Path) -> None:
+    tid = proposals.create_task(note_id=None, claim="c", ticker="NU", db_path=db_path)
+    proposals.set_task_extras(tid, cost_usd=0.40, session_prompt="prompt v1", db_path=db_path)
+    task = proposals.get_task(tid, db_path=db_path)
+    assert task is not None
+    assert task.cost_usd == 0.40
+    assert task.meta == {"session_prompt": "prompt v1"}
+
+    # A second call only touching packeted_at must NOT clobber session_prompt
+    # or cost_usd — read-merge-write, like patch_note_context.
+    proposals.set_task_extras(tid, packeted_at="2026-07-20T00:00:00", db_path=db_path)
+    task2 = proposals.get_task(tid, db_path=db_path)
+    assert task2 is not None
+    assert task2.cost_usd == 0.40
+    assert task2.meta["session_prompt"] == "prompt v1"
+    assert task2.meta["packeted_at"] == "2026-07-20T00:00:00"
+
+
+def test_set_task_extras_unanswered_weeks_accumulates(db_path: Path) -> None:
+    tid = proposals.create_task(note_id=None, claim="c", ticker=None, db_path=db_path)
+    proposals.set_task_extras(tid, unanswered_weeks=1, db_path=db_path)
+    proposals.set_task_extras(tid, unanswered_weeks=2, db_path=db_path)
+    task = proposals.get_task(tid, db_path=db_path)
+    assert task is not None
+    assert task.meta["unanswered_weeks"] == 2
+
+
+def test_set_task_extras_missing_task_is_a_noop(db_path: Path) -> None:
+    proposals.set_task_extras(999999, cost_usd=1.0, db_path=db_path)  # must not raise
 
 
 def test_proposal_source_note_ids_garbage_degrades_to_empty(db_path: Path) -> None:

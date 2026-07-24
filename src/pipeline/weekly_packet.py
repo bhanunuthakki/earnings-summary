@@ -54,12 +54,15 @@ import contextlib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from capture import pending_replies, telegram
 from user_state._db import now_iso, now_naive_utc, open_conn
+
+if TYPE_CHECKING:
+    from research.proposals import ResearchTask
 
 log = logging.getLogger(__name__)
 
@@ -155,6 +158,10 @@ class PacketSendReport:
     predrafted: int = 0
     degraded: int = 0
     cleared: bool = False
+    # B7 — expiring-research cards delivered this send (separate from the
+    # ITEM_KINDS substrates above: these ride research_tasks directly, not
+    # weekly_packet_items, so they get their own counter).
+    expiring_research_sent: int = 0
 
 
 # --------------------------------------------------------------------------
@@ -576,6 +583,146 @@ def predraft(item: PacketItemRow, *, call: PredraftCall | None = None) -> str | 
 
 
 # --------------------------------------------------------------------------
+# B7 — expiring research (kill silent expiry). These ride ``research_tasks``
+# directly rather than the ``weekly_packet_items`` table above: a proposed
+# task the owner never ran is the SUBSTRATE (research.proposals owns it), so
+# "packeted"/"unanswered weeks" state lands on ITS OWN row (the repurposed
+# ``cost_usd`` / ``run_id`` columns — see research.proposals' module
+# docstring) instead of duplicating tracking here. Deterministic — no LLM
+# call in this section (unlike the ITEM_KINDS predraft above).
+# --------------------------------------------------------------------------
+
+# A 'proposed' research task this many days old is "about to expire" and
+# earns its own packet line every week it stays proposed. The actual expiry
+# (execution/expire_stale_research.py) fires only after a packet-acknowledged
+# Drop tap or a SECOND unanswered week (unanswered_weeks >= 2) — this constant
+# is just the warn threshold for the FIRST appearance.
+RESEARCH_EXPIRING_WARN_DAYS = 7
+
+
+def _expiring_research_tasks(*, warn_days: int, db_path: Path | str | None) -> list[ResearchTask]:
+    """'proposed' research_tasks rows old enough to warrant a packet line.
+    A task already packeted once and STILL proposed is exactly a recurring
+    (second, third, ...) unanswered week — no separate query needed, since
+    ``list_tasks(status='proposed')`` already excludes anything run/dropped/
+    expired. Never raises (matches ``assemble_packet``'s per-substrate
+    try/except discipline) — a lookup failure just yields no lines this
+    week, never blocks the rest of the packet."""
+    from research.proposals import list_tasks
+
+    cutoff = (now_naive_utc() - timedelta(days=warn_days)).isoformat()
+    try:
+        tasks = list_tasks(status="proposed", db_path=db_path)
+    except Exception:
+        log.warning({"event": "weekly_packet_assemble_failed", "substrate": "research_expiring"})
+        return []
+    return [t for t in tasks if t.created_at and t.created_at < cutoff]
+
+
+def _already_packeted_this_week(task: ResearchTask, *, iso_year: int, iso_week: int) -> bool:
+    """True when the task's stored ``packeted_at`` (meta JSON) already falls in
+    THIS run's ISO week — guards ``send_packet`` being invoked more than once
+    in the same week (it is safe to re-run generally) against double-bumping
+    ``unanswered_weeks`` or re-sending the same card twice in one week."""
+    packeted_at = task.meta.get("packeted_at")
+    if not isinstance(packeted_at, str) or not packeted_at:
+        return False
+    try:
+        dt = datetime.fromisoformat(packeted_at)
+    except ValueError:
+        return False
+    y, w, _ = dt.isocalendar()
+    return (y, w) == (iso_year, iso_week)
+
+
+def _resolved_cost_usd(task: ResearchTask) -> float:
+    """The task's stored cost estimate, falling back to the SAME deterministic
+    table the B7 triage tap stamped it with at detection time (a pre-B7 task
+    that predates the column being used has ``cost_usd IS NULL``)."""
+    from research.triage import estimate_cost_usd
+
+    return task.cost_usd if task.cost_usd is not None else estimate_cost_usd(task.ticker)
+
+
+def expiring_research_message_text(task: ResearchTask) -> str:
+    """Render the card. ``task.meta['unanswered_weeks']`` is read AS-IS — the
+    caller (:func:`_send_expiring_research`) passes a task snapshot already
+    carrying THIS send's incremented count, so the number shown always
+    matches what gets persisted right after, never a stale pre-increment
+    value. The note is suppressed on a task's first-ever appearance (weeks
+    <= 1) — "unanswered 1 week" reads oddly for something surfacing for the
+    first time; it only means something once it recurs."""
+    head = f"{task.ticker + ' - ' if task.ticker else ''}{task.claim.strip()}"
+    weeks = task.meta.get("unanswered_weeks")
+    weeks_n = int(weeks) if isinstance(weeks, int) else 0
+    age_note = f" (unanswered {weeks_n} weeks)" if weeks_n >= 2 else ""
+    return (
+        f"Expiring research: {head}{age_note}\n\n"
+        f"Run (~${_resolved_cost_usd(task):.2f}) / -> session / Drop"
+    )
+
+
+def expiring_research_keyboard(task: ResearchTask) -> dict[str, object]:
+    labels: tuple[tuple[str, str], ...] = (
+        (f"Run (~${_resolved_cost_usd(task):.2f})", "run"),
+        ("-> session", "session"),
+        ("Drop", "drop"),
+    )
+    return telegram.inline_keyboard([[(label, f"rx:{verb}:{task.id}")] for label, verb in labels])
+
+
+def _send_expiring_research(
+    token: str,
+    chat_id: int,
+    *,
+    run: WeeklyPacketRun,
+    warn_days: int = RESEARCH_EXPIRING_WARN_DAYS,
+    db_path: Path | str | None,
+    send: SendFn,
+) -> int:
+    """Deliver one card per about-to-expire research task, and stamp each
+    task's ``packeted_at`` + bump ``unanswered_weeks`` (B7 — kill silent
+    expiry). Per-item degrade: a failed send for one task never blocks the
+    others; never raises out to ``send_packet``."""
+    import dataclasses
+
+    from research.proposals import set_task_extras
+
+    tasks = _expiring_research_tasks(warn_days=warn_days, db_path=db_path)
+    sent = 0
+    for task in tasks:
+        if _already_packeted_this_week(task, iso_year=run.iso_year, iso_week=run.iso_week):
+            continue
+        try:
+            weeks_raw = task.meta.get("unanswered_weeks")
+            weeks = (int(weeks_raw) if isinstance(weeks_raw, int) else 0) + 1
+            # Render from a snapshot ALREADY carrying this send's incremented
+            # count, so the card the owner sees matches what gets persisted
+            # right after — never a stale pre-increment number.
+            outgoing = dataclasses.replace(task, meta={**task.meta, "unanswered_weeks": weeks})
+            with contextlib.suppress(telegram.TelegramError):
+                send(
+                    token,
+                    chat_id,
+                    expiring_research_message_text(outgoing),
+                    reply_markup=expiring_research_keyboard(outgoing),
+                )
+            set_task_extras(
+                task.id,
+                cost_usd=_resolved_cost_usd(task),
+                packeted_at=now_iso(),
+                unanswered_weeks=weeks,
+                db_path=db_path,
+            )
+            sent += 1
+        except Exception:
+            log.warning(
+                {"event": "weekly_packet_expiring_research_send_failed", "task_id": task.id}
+            )
+    return sent
+
+
+# --------------------------------------------------------------------------
 # Rendering
 # --------------------------------------------------------------------------
 
@@ -619,17 +766,29 @@ def send_packet(
 ) -> PacketSendReport:
     """Assemble + sync + deliver. Never sends a card twice (``sent_at`` gate)
     and never re-sends the receipt for an already-``complete`` run — safe to
-    invoke repeatedly across a day (or a week) of partial progress."""
+    invoke repeatedly across a day (or a week) of partial progress.
+
+    B7: the expiring-research section (research_tasks-backed, not an
+    ITEM_KINDS substrate) is delivered FIRST, unconditionally — it has its
+    own per-week idempotency (:func:`_already_packeted_this_week`), so it is
+    safe alongside the ``items``-empty early return below (that return is
+    about the OTHER substrates; a "Ritual clear" while expiring-research
+    cards were just sent above it would read as contradictory, so it is
+    suppressed whenever this section sent anything)."""
     plans = assemble_packet(db_path=db_path)
     run = ensure_run(now=now, db_path=db_path)
     items = sync_items(run.id, plans, db_path=db_path)
     report = PacketSendReport(run_id=run.id, iso_year=run.iso_year, iso_week=run.iso_week)
+    report.expiring_research_sent = _send_expiring_research(
+        token, chat_id, run=run, db_path=db_path, send=send
+    )
 
     if not items:
-        with contextlib.suppress(telegram.TelegramError):
-            send(token, chat_id, "Ritual clear - nothing waiting on you.")
-        _mark_run_status(run.id, "clear", db_path=db_path)
-        report.cleared = True
+        if not report.expiring_research_sent:
+            with contextlib.suppress(telegram.TelegramError):
+                send(token, chat_id, "Ritual clear - nothing waiting on you.")
+            _mark_run_status(run.id, "clear", db_path=db_path)
+            report.cleared = True
         return report
 
     report.total_items = len(items)
@@ -901,6 +1060,7 @@ __all__ = [
     "ITEM_KINDS",
     "PACKET_VERBS",
     "PREDRAFT_PURPOSE",
+    "RESEARCH_EXPIRING_WARN_DAYS",
     "REWRITE_KIND",
     "PacketItemPlan",
     "PacketItemRow",
@@ -909,6 +1069,8 @@ __all__ = [
     "apply_verdict",
     "assemble_packet",
     "ensure_run",
+    "expiring_research_keyboard",
+    "expiring_research_message_text",
     "get_item",
     "get_run",
     "handle_awaited_reply",
