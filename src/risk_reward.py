@@ -335,6 +335,42 @@ def _latest_convictions(db_path: Path, tickers: Sequence[str], user_id: str) -> 
     return out
 
 
+# C6 (2026-07-19 plan): the conviction leg starved when position_sizing_intent
+# was empty even though the owner ALREADY typed a conviction at decision time
+# (position_entries.entry_conviction). Owner-authored text maps to the 1-5
+# scale and backfills any name without a sizing intent — a live read labeled
+# "entry record", never an import (per the owner-authored-pre-affirmed ruling
+# a copy would be redundant state, and per this module's honesty bar the flag
+# text must say which source fired).
+_ENTRY_CONVICTION_SCALE: dict[str, float] = {"high": 4.0, "medium": 3.0, "low": 2.0}
+
+
+def _entry_convictions(db_path: Path, tickers: Sequence[str]) -> dict[str, float]:
+    """entry_conviction (text) → 1-5 scale for OPEN position_entries rows.
+    Unknown/NULL text and closed positions are skipped; DB errors degrade to
+    an empty map (the leg simply stays starved for those names)."""
+    want = {t.upper() for t in tickers}
+    out: dict[str, float] = {}
+    try:
+        conn = sqlite3.connect(str(db_path))
+        try:
+            rows = conn.execute(
+                "SELECT ticker, entry_conviction FROM position_entries "
+                "WHERE exit_date IS NULL AND entry_conviction IS NOT NULL "
+                "ORDER BY id DESC"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return {}
+    for ticker, text in rows:
+        t = str(ticker or "").upper()
+        value = _ENTRY_CONVICTION_SCALE.get(str(text or "").strip().lower())
+        if t in want and t not in out and value is not None:
+            out[t] = value
+    return out
+
+
 def build_risk_reward_gap(
     db_path: Path,
     repo_root: Path,
@@ -364,10 +400,19 @@ def build_risk_reward_gap(
             hidden_reason=book.hidden_reason,
         )
     rewards = _dcf_reward_legs(db_path, book.tickers, today)
-    convictions = _latest_convictions(db_path, book.tickers, user_id)
+    intents = _latest_convictions(db_path, book.tickers, user_id)
+    entry_fallback = _entry_convictions(db_path, book.tickers)
+    # A recorded sizing intent always outranks the entry-time text; the
+    # fallback only fills names the intent table has never seen (C6).
+    convictions = {**entry_fallback, **intents}
     rows, valued = build_gap_rows(book, rewards, convictions)
 
     notes: list[str] = []
+    fallback_named = sorted(t for t in entry_fallback if t not in intents and t in convictions)
+    if fallback_named:
+        notes.append(
+            "conviction from entry record (no sizing intent yet): " + ", ".join(fallback_named)
+        )
     if book.dropped:
         notes.append(
             "outside the covariance: "
