@@ -50,6 +50,7 @@ from portfolio_risk_snapshot_store import (  # noqa: E402
     snapshot_input_sha,
     write_snapshot,
 )
+from triggers.risk_drift import append_factor_vector, scan_and_fire  # noqa: E402
 
 
 def _log(event: str, **kwargs: object) -> None:
@@ -165,6 +166,23 @@ def main(argv: list[str] | None = None) -> int:
         _log("invalid", reason=reason)
         _fire_deadman(db_path, reason=reason)
         return 1
+
+    # C8 post-write hook: stamp the current C3 book-level factor vector onto
+    # the capture just written, then scan the drift substrate. Both are
+    # best-effort and must never turn a successful write into a failed run —
+    # any exception here is logged, not raised (see triggers.risk_drift for
+    # the internal degrade-don't-crash contract each function already keeps).
+    try:
+        append_factor_vector(db_path, PROJECT_ROOT)
+    except Exception as exc:
+        _log("risk_drift_factor_vector_failed", error=type(exc).__name__)
+    try:
+        fired = scan_and_fire(db_path)
+        if fired:
+            _log("risk_drift_fired", alert_ids=fired)
+    except Exception as exc:
+        _log("risk_drift_scan_failed", error=type(exc).__name__)
+
     print(
         json.dumps(
             {
