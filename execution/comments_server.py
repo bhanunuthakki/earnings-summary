@@ -1645,10 +1645,12 @@ def create_app(
             )
             return Response(t_renderer(db_path, user_id=user_id), mimetype="text/html")
 
-        if name == "decisions":
+        if name == "ledger_decisions":
             # Review -> Ledger -> Decisions (P2.1, PRD §9.3): the owner-first
             # v_decision_journal reader. ``?fragment=list`` returns just the
             # filtered row list the panel's own JS swaps after a chip click.
+            # NOT "decisions" — that id is RETIRED (superseded by
+            # decisions_record; test_retired_panel_fragments_404 pins the 404).
             from pipeline.decision_journal_panel import (
                 render_decision_journal_list,
                 render_decision_journal_panel,

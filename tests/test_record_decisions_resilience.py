@@ -303,26 +303,40 @@ def test_main_propagates_hard_stop(
 
 
 def test_main_default_skips_machine_recommendation_rungs(
-    repo_root: Path, db_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    repo_root: Path,
+    db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     module = _load_record_decisions_module()
     calls: list[str] = []
     monkeypatch.setattr(
         module,
         "record_decisions_from_artifacts",
-        lambda **kw: calls.append("from_artifacts")
-        or {"inserted": 0, "skipped_existing": 0, "no_recommendation": 0, "db_unavailable": 0},
+        lambda **kw: (
+            calls.append("from_artifacts")
+            or {"inserted": 0, "skipped_existing": 0, "no_recommendation": 0, "db_unavailable": 0}
+        ),
     )
     monkeypatch.setattr(
         module,
         "record_socratic_decisions",
-        lambda **kw: calls.append("socratic")
-        or {"inserted": 0, "skipped_existing": 0, "skipped_no_stance": 0, "db_unavailable": 0},
+        lambda **kw: (
+            calls.append("socratic")
+            or {"inserted": 0, "skipped_existing": 0, "skipped_no_stance": 0, "db_unavailable": 0}
+        ),
     )
     monkeypatch.setattr(
         module.sys,
         "argv",
-        ["record_decisions.py", "--repo-root", str(repo_root), "--db-path", str(db_path), "--no-conditions"],
+        [
+            "record_decisions.py",
+            "--repo-root",
+            str(repo_root),
+            "--db-path",
+            str(db_path),
+            "--no-conditions",
+        ],
     )
     exit_code = module.main()
     assert exit_code == 0
@@ -339,14 +353,18 @@ def test_main_include_advisor_runs_machine_recommendation_rungs(
     monkeypatch.setattr(
         module,
         "record_decisions_from_artifacts",
-        lambda **kw: calls.append("from_artifacts")
-        or {"inserted": 0, "skipped_existing": 0, "no_recommendation": 0, "db_unavailable": 0},
+        lambda **kw: (
+            calls.append("from_artifacts")
+            or {"inserted": 0, "skipped_existing": 0, "no_recommendation": 0, "db_unavailable": 0}
+        ),
     )
     monkeypatch.setattr(
         module,
         "record_socratic_decisions",
-        lambda **kw: calls.append("socratic")
-        or {"inserted": 0, "skipped_existing": 0, "skipped_no_stance": 0, "db_unavailable": 0},
+        lambda **kw: (
+            calls.append("socratic")
+            or {"inserted": 0, "skipped_existing": 0, "skipped_no_stance": 0, "db_unavailable": 0}
+        ),
     )
     monkeypatch.setattr(
         module.sys,

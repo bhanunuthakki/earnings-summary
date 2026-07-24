@@ -150,7 +150,7 @@ def _row_html(r: sqlite3.Row) -> str:
 
 
 def render_decision_journal_list(db_path: Path, *, filter_: str = "owner", limit: int = 100) -> str:
-    """Just the filtered row list (the fragment /api/panel/decisions?fragment=list
+    """Just the filtered row list (the fragment /api/panel/ledger_decisions?fragment=list
     swaps in place). Best-effort empty state on any read failure / pre-0195 schema."""
     if filter_ not in _FILTERS:
         filter_ = "owner"
@@ -191,10 +191,17 @@ def render_decision_journal_panel(
     )
     heading = '<h3 class="dj-h">Decisions</h3>' if embedded else "<h2>Decisions</h2>"
     body = render_decision_journal_list(db_path, filter_=filter_)
+    # Embedded (inside the Ledger console): the console owns the ONE
+    # `.k-toolbar` band (test_ledger_console_renders_one_chrome pins it), so
+    # the filter chips ride a plain layout row. Standalone keeps the kit
+    # toolbar.
+    chip_row = (
+        f'<div class="dj-chips">{chips}</div>' if embedded else panel_toolbar(filters=chips)
+    )
     return f"""{_PANEL_STYLE}
 {heading}
 <div id="dj-root" data-active-filter="{filter_}">
-{panel_toolbar(filters=chips)}
+{chip_row}
 <div id="dj-list">{body}</div>
 </div>
 <script>
@@ -206,7 +213,7 @@ def render_decision_journal_panel(
     var chip = ev.target.closest('[data-dj-filter]');
     if (chip) {{
       var qs = new URLSearchParams({{fragment: 'list', filter: chip.getAttribute('data-dj-filter')}});
-      fetch('/api/panel/decisions?' + qs).then(function (r) {{ return r.text(); }})
+      fetch('/api/panel/ledger_decisions?' + qs).then(function (r) {{ return r.text(); }})
         .then(function (html) {{
           document.getElementById('dj-list').innerHTML = html;
           root.querySelectorAll('[data-dj-filter]').forEach(function (b) {{

@@ -56,8 +56,8 @@ same decision id). The view SQL otherwise stays byte-identical to 0188's.
 exception; see the poller tap docstring), never a block that would need an
 operator to notice before captures keep landing.
 
-Revision ID: 0195_decision_drafts
-Revises: 0194_research_triage
+Revision ID: 0197_decision_drafts
+Revises: 0196_risk_drift_trigger_kind
 Create Date: 2026-07-23
 """
 
@@ -70,8 +70,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0195_decision_drafts"
-down_revision: str | Sequence[str] | None = "0194_research_triage"
+revision: str = "0197_decision_drafts"
+down_revision: str | Sequence[str] | None = "0196_risk_drift_trigger_kind"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
