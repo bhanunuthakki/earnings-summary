@@ -121,6 +121,7 @@ from position_guard_cache import (
     PositionGuardRowModel,
     read_position_guard_cache,
 )
+from risk_factors import BookFactorVector, book_factor_vector
 from risk_reward import RiskRewardGap, RiskRewardGapRow, build_risk_reward_gap
 from thesis_collision import CachedReport, read_cached_report
 from ui import living_grid as lg
@@ -1597,6 +1598,7 @@ def render_portfolio_risk_panel(
     bear_lint = _build_bear_lint(db_path)
     position_guard = _read_position_guard(db_path)
     collision = _read_thesis_collision(analytics.positioning, db_path)
+    factors = _read_business_factor_vector(db_path)
     scenarios = _scenario_options()
     digest = _cached_macro_digest_html(db_path) if db_path is not None else ""
     # On a successful read, refresh the last-known snapshot; when the tracker is
@@ -1620,6 +1622,7 @@ def render_portfolio_risk_panel(
         bear_lint=bear_lint,
         position_guard=position_guard,
         collision=collision,
+        factors=factors,
         scenarios=scenarios,
         digest=digest,
         snapshot=snapshot,
@@ -1765,6 +1768,17 @@ def _read_thesis_collision(pos: Positioning | None, db_path: Path | None) -> Cac
     return read_cached_report(db_path, list(weights))
 
 
+def _read_business_factor_vector(db_path: Path | None) -> BookFactorVector | None:
+    """The C3 business-factor book vector (weights x persisted ``is_latest``
+    loadings) — a pure local DB + materialized-weights-cache read, zero LLM,
+    so it renders with the tracker DOWN like the other local Risk-tab
+    sections. ``None`` when there is no DB (the caller renders the empty
+    state that names the refresh command)."""
+    if db_path is None:
+        return None
+    return book_factor_vector(db_path, db_path.parent.parent)
+
+
 def compose_risk_page(
     analytics: PortfolioAnalytics,
     *,
@@ -1782,6 +1796,7 @@ def compose_risk_page(
     bear_lint: BearLintReport | None = None,
     position_guard: PositionGuardCacheModel | None = None,
     collision: CachedReport | None = None,
+    factors: BookFactorVector | None = None,
 ) -> str:
     """Pure assembly of the Risk page (testable without network or DB). The
     ``#pfr-root`` wrapper is the re-inject target the run-scenario script swaps
@@ -1795,9 +1810,10 @@ def compose_risk_page(
     + ``joint_latam`` (its companion event-correlation stress), ``bear_lint``
     (the bear-realism lint, Monthly Red Team Phase 1 guard 2 — rides right
     alongside tail stress), ``position_guard`` (the naked-position gate,
-    guard 7 — the nightly-materialized cache, never recomputed here), and
-    ``collision`` (the cached thesis-collision audit) are computed from local
-    disk/DB, so they render in BOTH branches —
+    guard 7 — the nightly-materialized cache, never recomputed here),
+    ``collision`` (the cached thesis-collision audit), and ``factors`` (the
+    C3 business-factor book vector — persisted loadings x book weights) are
+    computed from local disk/DB, so they render in BOTH branches —
     tracker up or down."""
     parts: list[str] = [_RISK_CSS, '<div id="pfr-root">']
     if analytics.available:
@@ -1813,6 +1829,7 @@ def compose_risk_page(
         parts.append(_bear_lint_section(bear_lint))
         parts.append(_position_guard_section(position_guard))
         parts.append(_thesis_collision_section(collision))
+        parts.append(_business_factor_section(factors))
         if gap is not None:
             parts.append(_risk_reward_gap_section(gap))
     else:
@@ -1827,6 +1844,7 @@ def compose_risk_page(
         parts.append(_bear_lint_section(bear_lint))
         parts.append(_position_guard_section(position_guard))
         parts.append(_thesis_collision_section(collision))
+        parts.append(_business_factor_section(factors))
     parts.append(_macro_stress_section(scenarios, digest))
     parts.append("</div>")
     return "".join(parts)
@@ -2894,6 +2912,46 @@ def _thesis_collision_section(cached: CachedReport | None) -> str:
         f"clusters · {len(report.contradictions)} contradictions · {stamp}.</p>"
     )
     return f'{head}{stale_note}<div class="ptc-findings">{"".join(findings)}</div>{note}</section>'
+
+
+def _business_factor_section(factors: BookFactorVector | None) -> str:
+    """C3: the book's business-factor exposure vector — book weight x
+    persisted loading, summed per taxonomy factor, with each factor's top-3
+    contributing tickers. Reuses the ``.pf-exp-*`` bar vocabulary the sector
+    Exposure section already established (same visual need: a labeled bar +
+    a percent). Empty/None gets the empty state naming the refresh command,
+    matching the thesis-collision section's convention."""
+    head = (
+        '<section class="panel"><h2>Business-factor exposure</h2>'
+        '<p class="sub">What the book is actually a bet on, independent of ticker or '
+        "sector — LLM loadings onto a small controlled taxonomy, grounded in each "
+        "holding's disclosed revenue mix or thesis. Cached; regenerated on demand, "
+        "not on every page load.</p>"
+    )
+    if factors is None or not factors.vector:
+        return (
+            f"{head}"
+            '<p class="muted">No business-factor exposures on file yet — run '
+            "<code>python execution/refresh_business_factors.py</code> "
+            "(re-running is free once no holding's mix/thesis has changed).</p></section>"
+        )
+    top = sorted(factors.vector.items(), key=lambda kv: kv[1], reverse=True)
+    rows: list[str] = []
+    for factor, share in top:
+        contributors = factors.top_contributors.get(factor, ())
+        chips = " ".join(
+            f'<span class="k-chip k-chip-mono">{escape(t)} {c * 100:.0f}%</span>'
+            for t, c in contributors
+        )
+        rows.append(
+            '<div class="pf-exp-row">'
+            f'<span class="pf-exp-label">{escape(factor)}</span>'
+            f'<span class="pf-exp-bar"><span style="width:{min(share, 1.0) * 100:.0f}%"></span></span>'
+            f'<span class="pf-exp-pct">{share * 100:.0f}%</span>'
+            f"</div>"
+            f'<p class="muted pfr-top ptc-finding-rationale">{chips}</p>'
+        )
+    return f'{head}<div class="pf-exp">{"".join(rows)}</div></section>'
 
 
 def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
