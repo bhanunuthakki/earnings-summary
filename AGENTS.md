@@ -21,7 +21,7 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 - **Function**: Core agent operating layer. Read directives, verify inputs, sequence `execution/` script calls, process stdout/stderr, hand off to next step.
 - **Rule**: Do not implement business logic in this layer. If you find yourself writing transformations in the agent's reasoning, that logic belongs in an `execution/` script.
 - **State management**: On multi-step failure, check `.tmp/` for intermediate state and resume from the last successful checkpoint. Do not restart from step one unless data integrity requires it.
-- **Ownership**: Fable/Sol retains routing, exception decisions, and final synthesis. Use one to three Sonnet/Terra workers only for independent, bounded reads or implementations with explicit file ownership; use Haiku/Luna only for mechanical extraction. Delegation depth stays at one.
+- **Ownership**: the orchestrator retains routing, exception decisions, and final synthesis; workers take independent, bounded reads or implementations with explicit file ownership, per the global delegation policy.
 - **Concurrency**: One process owns each mutable pipeline state, database write set, cursor, or output artifact. Parallelize read-only discovery, never competing writers. Scheduled and interactive runs must acquire or honor the same run lock before mutation.
 
 ### Layer 3: Execution (Deterministic Action)
@@ -39,8 +39,7 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 
 ### Tool Prioritization
 
-- Query `execution/` for an existing script before writing new code. Most pipelines reuse the same primitives (HTTP client, HTML parser, transcript fetcher, financial-data adapter, S3/Drive uploader).
-- If a new script is genuinely needed, it goes in `execution/` — never inline in agent reasoning.
+- The shared pipeline primitives (HTTP client, HTML parser, transcript fetcher, financial-data adapter, S3/Drive uploader) already live in `execution/` — reuse them; a genuinely new script also goes in `execution/`, never inline in agent reasoning.
 
 ### Bounded Self-Annealing
 
@@ -83,10 +82,8 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 
 ### Network & Scraping
 
-- Default to a configured `requests.Session` with a sane User-Agent, timeout (10s connect, 30s read), and retry adapter for 5xx/429.
-- Respect `robots.txt` and any documented rate limits. Build the rate-limit budget into the directive.
-- Never scrape behind authenticated sessions unless the directive explicitly authorizes it and credentials are properly loaded.
-- For JS-rendered pages, prefer the underlying API (check the network tab) over headless browser automation. Headless is a last resort.
+- Respect `robots.txt` and documented rate limits (the budget lives in the directive); never scrape behind authenticated sessions unless the directive explicitly authorizes it.
+- Prefer a page's underlying API over headless browser automation; headless is a last resort.
 
 ### Financial Data
 
@@ -97,9 +94,7 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 
 ### Transcripts
 
-- Speaker attribution must be preserved. Never strip or collapse speaker tags.
-- Time codes (if available) preserved.
-- Source URL and pull timestamp stored alongside transcript text.
+- Preserve speaker attribution and time codes; store source URL and pull timestamp alongside the transcript text.
 
 ### Schema Drift Defense
 
@@ -113,13 +108,11 @@ LLMs are probabilistic, business logic is deterministic. The 3-layer architectur
 
 ## Security
 
-- Credentials live in `.env`, `credentials.json`, `token.json`. Never log, output, or commit these (also in global rules).
-- API keys passed to scripts via environment variables only — never as CLI args (they leak into shell history and process lists).
-- Secrets used in URL query strings get redacted in any logged output.
+- Repo credential files: `.env`, `credentials.json`, `token.json` (global no-log/no-commit rules apply). Pass keys to scripts via environment variables, never CLI args; `src/log_redact.py` is the canonical redaction helper.
 
 ## Session & Agent Model Selection — repo scope note
 
-The per-session rule in the global `AGENTS.md` applies unchanged: Fable/Sol is the primary orchestrator, Sonnet/Terra is the execution tier, and Haiku/Luna is reserved for mechanical work. Skip delegation for small cohesive tasks.
+The per-session rule in the global `AGENTS.md` §Session & Agent Model Selection applies unchanged (delegation is the default for execution-shaped work; inline execution needs a named exemption).
 
 Repo-specific scope: that rule governs **coding/session** model choice. The application's **in-app per-purpose LLM routing** is a separate concern, governed by `LLM_MODELS` in `src/llm/cli.py`, the model-downgrade eval loop (`directives/model_eval_loop.md`), and the cheapest-at-parity routing design (`directives/cheapest_model_routing.md`).
 
@@ -134,20 +127,3 @@ The app's in-app LLM transport (`src/llm/cli.py` → subscription `claude` CLI) 
 
 The full backend/code standards (typing, the NEVER/ALWAYS lists, classification, testing discipline, the pre-push checklist, PR conventions, Deep Modules) live in the global `AGENTS.md` and apply here unchanged — do not duplicate them in this file. The one repo nuance: a single `cast(...)` at a validated JSON / external-data boundary (right after an `isinstance`/schema check) is the accepted pattern here; never `# type: ignore` (this matches the global NEVER list's JSON-boundary exception). See `src/log_redact.py` for the canonical credential-redaction helper the global secret-handling rules reference.
 
-## Infrastructure as Code
-
-All cloud resource changes must be made via IaC (Terraform, Pulumi, CDK, etc.) so they are auditable and reproducible. Do not create, modify, or delete cloud resources using the CLI, console, or SDKs directly.
-
-- Always run `plan` (or equivalent dry-run) and review the diff before `apply`.
-- Use remote state with locking for any shared environment.
-- Use `import` blocks only as a one-time migration step to adopt existing resources into state — not part of day-to-day workflow.
-- Never commit credentials. Use environment variables or a secrets manager.
-
-## Debugging Production
-
-When debugging a production issue from a trace ID, log link, or error report:
-
-1. Pull the full trace/log context first — don't guess from symptoms.
-2. Walk the call tree end-to-end: inputs, intermediate state, outputs, latencies, errors.
-3. Reproduce locally before patching when feasible.
-4. Fix the root cause, not the symptom. If a defensive `try/except` would hide the bug, that's a signal you haven't found it yet.
