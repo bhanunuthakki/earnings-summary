@@ -1,0 +1,130 @@
+{
+  "accounts": [
+    {
+      "account_id": 3,
+      "active": true,
+      "canonical_account_id": 3,
+      "exclusion_reason": null,
+      "holdings_as_of": "2026-07-22",
+      "included_in_totals": true,
+      "institution": "Example Broker B",
+      "last_successful_sync_at": "2026-07-22T12:00:00",
+      "mask": null,
+      "name": "Example Brokerage",
+      "official_name": null,
+      "provider": "snaptrade",
+      "subtype": "brokerage",
+      "tax_treatment": "taxable",
+      "tax_treatment_confidence": "high",
+      "tax_treatment_evidence": "subtype:brokerage",
+      "type": "brokerage",
+      "value": "6800.000000",
+      "value_currency": "USD",
+      "warnings": []
+    },
+    {
+      "account_id": 4,
+      "active": false,
+      "canonical_account_id": null,
+      "exclusion_reason": "operator_excluded",
+      "holdings_as_of": "2026-06-23",
+      "included_in_totals": false,
+      "institution": "Example Broker B (retired link)",
+      "last_successful_sync_at": "2026-07-22T12:00:00",
+      "mask": null,
+      "name": "Example Brokerage (retired link)",
+      "official_name": null,
+      "provider": "plaid",
+      "subtype": "brokerage",
+      "tax_treatment": "taxable",
+      "tax_treatment_confidence": "high",
+      "tax_treatment_evidence": "subtype:brokerage",
+      "type": "brokerage",
+      "value": "5500.000000",
+      "value_currency": "USD",
+      "warnings": [
+        {
+          "code": "NO_CANONICAL_LINK",
+          "message": "Excluded account has no modeled cross-provider counterpart link; do not re-add its value to totals.",
+          "scope": "account:4"
+        }
+      ]
+    },
+    {
+      "account_id": 2,
+      "active": true,
+      "canonical_account_id": 2,
+      "exclusion_reason": null,
+      "holdings_as_of": "2026-07-22",
+      "included_in_totals": true,
+      "institution": "Example Broker A",
+      "last_successful_sync_at": "2026-07-22T12:00:00",
+      "mask": null,
+      "name": "Example HSA",
+      "official_name": null,
+      "provider": "plaid",
+      "subtype": "hsa",
+      "tax_treatment": "hsa",
+      "tax_treatment_confidence": "high",
+      "tax_treatment_evidence": "subtype:hsa",
+      "type": "investment",
+      "value": "1200.000000",
+      "value_currency": "USD",
+      "warnings": []
+    },
+    {
+      "account_id": 1,
+      "active": true,
+      "canonical_account_id": 1,
+      "exclusion_reason": null,
+      "holdings_as_of": "2026-07-22",
+      "included_in_totals": true,
+      "institution": "Example Broker A",
+      "last_successful_sync_at": "2026-07-22T12:00:00",
+      "mask": null,
+      "name": "Example Roth IRA",
+      "official_name": null,
+      "provider": "plaid",
+      "subtype": "roth ira",
+      "tax_treatment": "roth",
+      "tax_treatment_confidence": "high",
+      "tax_treatment_evidence": "subtype:roth ira",
+      "type": "investment",
+      "value": "12000.000000",
+      "value_currency": "USD",
+      "warnings": []
+    }
+  ],
+  "meta": {
+    "account_coverage": {
+      "excluded_account_ids": [
+        4
+      ],
+      "included_account_ids": [
+        1,
+        2,
+        3
+      ],
+      "lagging_account_ids": []
+    },
+    "as_of": "2026-07-22",
+    "currency": "USD",
+    "generated_at": "2026-07-23T06:00:00Z",
+    "is_partial": false,
+    "is_stale": false,
+    "last_successful_sync_at": "2026-07-22T12:00:00",
+    "links": {
+      "portfolio_snapshot": "/api/v1/portfolio-snapshot",
+      "positioning": "/api/v1/analytics/positioning",
+      "positions": "/api/v1/portfolio/positions"
+    },
+    "methodology": null,
+    "methodology_version": null,
+    "schema_version": "1.0.0",
+    "source_providers": [
+      "plaid",
+      "snaptrade"
+    ],
+    "warnings": []
+  }
+}

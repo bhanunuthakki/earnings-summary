@@ -1,0 +1,33 @@
+{
+  "active_account_count": 3,
+  "database_ok": true,
+  "generated_at": "2026-07-23T06:00:00Z",
+  "is_stale": false,
+  "latest_snapshot_date": "2026-07-22",
+  "links": {
+    "accounts": "/api/v1/accounts",
+    "openapi": "/openapi.json",
+    "portfolio_snapshot": "/api/v1/portfolio-snapshot",
+    "positioning": "/api/v1/analytics/positioning",
+    "positions": "/api/v1/portfolio/positions"
+  },
+  "migration_version": "0000example",
+  "providers": [
+    {
+      "configured": true,
+      "items_active": 1,
+      "items_linked": 2,
+      "last_successful_sync_at": "2026-07-22T12:00:00Z",
+      "name": "plaid"
+    },
+    {
+      "configured": true,
+      "items_active": 1,
+      "items_linked": 1,
+      "last_successful_sync_at": "2026-07-22T12:00:00Z",
+      "name": "snaptrade"
+    }
+  ],
+  "schema_version": "1.0.0",
+  "status": "ok"
+}
