@@ -100,6 +100,19 @@ class WealthContextSnapshot(BaseModel):
         return reasons
 
 
+def _module_matches_root(wealthplan_root: Path) -> bool:
+    """True when the in-process ``wealthplan`` package either came from
+    ``wealthplan_root`` or is a file-less injected fake (test seam)."""
+    mod = sys.modules.get("wealthplan")
+    mod_file = getattr(mod, "__file__", None) if mod is not None else None
+    if mod_file is None:
+        return True
+    try:
+        return Path(mod_file).resolve().is_relative_to((wealthplan_root / "src").resolve())
+    except OSError:
+        return False
+
+
 def load_wealthplan_starting(
     wealthplan_root: Path = DEFAULT_WEALTHPLAN_ROOT,
 ) -> tuple[dict[str, float], float, str] | None:
@@ -115,6 +128,13 @@ def load_wealthplan_starting(
             load_plan,  # pyright: ignore[reportUnknownVariableType]
         )
     except ImportError:
+        return None
+    if not _module_matches_root(wealthplan_root):
+        # sys.modules caching can satisfy the import with a module loaded from
+        # a DIFFERENT root (the real sibling, once anything imported it) — the
+        # reader would then answer from the wrong root's plan. File-less
+        # injected fakes (tests) are exempt. Found as an order-dependent
+        # full-suite failure, 2026-07-24.
         return None
     try:
         plan = cast("tuple[object, object] | None", load_plan())
