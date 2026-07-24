@@ -71,8 +71,14 @@ ACTION_STATUSES: frozenset[str] = frozenset(
 # the dead-man switch for silently-dead data feeds (news frozen for weeks,
 # macro series 429ing daily with "populated": 0) — a feed job that produced
 # nothing fires ONE book-level row (sentinel ticker 'PORTFOLIO') so the outage
-# reaches the alert feed instead of a cron log. Keep in lockstep with the
-# ck_alerts_trigger_kind CHECK (0068, widened in 0086 + 0108 + 0171 + 0183).
+# reaches the alert feed instead of a cron log. 'risk_drift' (Workstream C8,
+# 0197) is the drift sensor over the append-only
+# ``portfolio_risk_snapshot_history`` (0185/0186): latest capture vs a
+# trailing-30d baseline mean across spy_beta / growth_tilt / top1 / top5
+# concentration and the C3 book-level business-factor legs, one book-level row
+# (sentinel ticker 'PORTFOLIO', same convention as data_feed_stale) per
+# breached metric. Keep in lockstep with the ck_alerts_trigger_kind CHECK
+# (0068, widened in 0086 + 0108 + 0171 + 0183 + 0197).
 TRIGGER_KINDS: frozenset[str] = frozenset(
     {
         "kpi_inflection",
@@ -84,6 +90,7 @@ TRIGGER_KINDS: frozenset[str] = frozenset(
         "restatement",
         "owner_capacity_breach",
         "data_feed_stale",
+        "risk_drift",
     }
 )
 # Mirrors the QueuedActionDraft.action_kind vocabulary (src/triggers/base.py).
