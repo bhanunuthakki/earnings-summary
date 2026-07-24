@@ -422,6 +422,48 @@ EVENT_SCENARIOS: tuple[EventScenarioDef, ...] = (
         fallback_returns_pct={"MELI": -38.0, "NU": -52.0},
         other_equity_return_pct=-15.0,
     ),
+    # C5 (2026-07-19 program plan): three more event correlations the
+    # correlation matrix can't see — policy, multiple-regime, and ad-cycle
+    # shocks hit these clusters together regardless of trailing price co-moves.
+    EventScenarioDef(
+        id="glp1_pricing_shock",
+        title="GLP-1 pricing/reimbursement shock",
+        description=(
+            "US policy compresses GLP-1 net pricing (IRA-style negotiation, "
+            "compounding carve-outs, or payer pushback): NVO falls to its "
+            "persisted bear-case DCF fair value; other holdings take a mild "
+            "-5% sympathy drag (the shock is sector-specific, not systemic)."
+        ),
+        named_tickers=("NVO",),
+        fallback_returns_pct={"NVO": -45.0},
+        other_equity_return_pct=-5.0,
+    ),
+    EventScenarioDef(
+        id="saas_multiple_compression",
+        title="SaaS multiple compression",
+        description=(
+            "Enterprise-software multiples re-rate (rate spike or an "
+            "AI-cannibalizes-seats scare): NOW, VEEV, WIX and RBRK hit their "
+            "persisted bear-case DCF fair values together — the same-factor "
+            "stack tenet's cluster — while the rest of the book takes a "
+            "generic -10% risk-off drag."
+        ),
+        named_tickers=("NOW", "VEEV", "WIX", "RBRK"),
+        fallback_returns_pct={"NOW": -35.0, "VEEV": -30.0, "WIX": -40.0, "RBRK": -45.0},
+        other_equity_return_pct=-10.0,
+    ),
+    EventScenarioDef(
+        id="ad_recession",
+        title="Digital-ad recession",
+        description=(
+            "Ad budgets contract hard (recession or attribution regression): "
+            "META and GOOGL hit their persisted bear-case DCF fair values; "
+            "other holdings take a -10% cyclical drag."
+        ),
+        named_tickers=("META", "GOOGL"),
+        fallback_returns_pct={"META": -30.0, "GOOGL": -25.0},
+        other_equity_return_pct=-10.0,
+    ),
 )
 
 

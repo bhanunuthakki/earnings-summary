@@ -312,3 +312,21 @@ def test_build_event_stress_directly_with_scenario_def(tmp_path: Path) -> None:
     result = build_event_stress(scenario, db_path, {"MELI": 1.0})
     assert result is not None
     assert result.scenario_id == scenario.id
+
+
+def test_event_scenario_registry_c5_additions() -> None:
+    """C5 (2026-07-19 plan): the three event correlations the price matrix
+    can't see — policy, multiple-regime, and ad-cycle clusters — with every
+    named ticker carrying a labeled fallback (no silent substitution)."""
+    by_id = {s.id: s for s in EVENT_SCENARIOS}
+    assert set(by_id["glp1_pricing_shock"].named_tickers) == {"NVO"}
+    assert set(by_id["saas_multiple_compression"].named_tickers) == {
+        "NOW",
+        "VEEV",
+        "WIX",
+        "RBRK",
+    }
+    assert set(by_id["ad_recession"].named_tickers) == {"META", "GOOGL"}
+    for scenario in by_id.values():
+        assert set(scenario.fallback_returns_pct) == set(scenario.named_tickers)
+        assert all(v < 0 for v in scenario.fallback_returns_pct.values())
