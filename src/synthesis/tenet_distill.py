@@ -27,6 +27,7 @@ from typing import cast
 
 from identity import DEFAULT_USER_ID
 from synthesis.insights import InsightRow, list_insights
+from synthesis.semantic_tension import detect_semantic_tension
 from synthesis.tenets import current_tenet_for_scope, list_tenets, record_tenet
 from user_state.notes import AnalystNoteRow, list_notes
 
@@ -149,8 +150,21 @@ def run_tenet_distill(
 ) -> dict[str, int]:
     """Distil owner-flagged musings into ``proposed`` Tenets. Returns counts.
     $0 when nothing is flagged/undistilled; degrade-safe (a failed/empty call
-    proposes nothing and leaves the Worldview untouched)."""
-    counts = {"candidates": 0, "proposed": 0, "tensions": 0, "skipped_groundless": 0}
+    proposes nothing and leaves the Worldview untouched).
+
+    ``tensions`` counts EVERY overlap detected while landing a proposal — the
+    free slug probe (``current_tenet_for_scope``) plus, when that finds
+    nothing, the semantic probe (B5, ``synthesis.semantic_tension`` — catches
+    a same-belief tenet under a DIFFERENT scope_key slug, e.g. the prod 20/31
+    duplicate). ``tensions_semantic`` is the semantic-only subset, kept
+    distinct so the two detection sources stay independently observable."""
+    counts = {
+        "candidates": 0,
+        "proposed": 0,
+        "tensions": 0,
+        "tensions_semantic": 0,
+        "skipped_groundless": 0,
+    }
     musings = candidate_musings(db_path, user_id=user_id)
     counts["candidates"] = len(musings)
     if not musings:
@@ -193,6 +207,22 @@ def run_tenet_distill(
 
         resolved = scope_key_for(body, scope_key)
         tension = current_tenet_for_scope(resolved, db_path=db_path)
+        if tension is None:
+            # The free slug probe found nothing — try the semantic probe
+            # (B5) before concluding there's no overlap: two tenets can be
+            # the same underlying belief under different scope_key slugs.
+            # detect_semantic_tension is itself fail-open (never raises),
+            # but the call is wrapped again here as defense in depth — a
+            # tension-detection failure must never skip the landing.
+            try:
+                semantic = detect_semantic_tension(
+                    body, exclude_scope_key=resolved, db_path=db_path
+                )
+            except Exception:
+                semantic = None
+            if semantic is not None:
+                counts["tensions_semantic"] += 1
+            tension = semantic
         record_tenet(
             body_md=body,
             scope_key=resolved,

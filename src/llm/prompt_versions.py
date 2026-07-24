@@ -303,6 +303,14 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # is materially rewritten, then re-run
     # `run_llm_evals.py --purpose behavior_distill`.
     "behavior_distill": "v1",
+    # Semantic tenet-tension detection (B5, synthesis.semantic_tension._build_prompt).
+    # Bump when the restate/contradict prompt is materially rewritten, then
+    # re-run any golden-set eval added for this purpose.
+    "tenet_semantic_tension": "v1",
+    # Tenet accountability ledger (B5, synthesis.tenet_accountability — the
+    # sibling B5 workstream's file). Registered here since this file is the
+    # one source of truth for prompt versions.
+    "tenet_accountability": "v1",
 }
 
 _DEFAULT_VERSION = "v1"

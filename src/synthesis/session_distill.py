@@ -67,7 +67,8 @@ from capture.sessions import get_session as _get_raw_session
 from capture.sessions import list_undistilled_captured as _raw_list_undistilled
 from capture.sessions import mark_distilled as _raw_mark_distilled
 from synthesis.insights import InsightRow, get_insight, list_insights, record_insight
-from synthesis.tenets import list_tenets, record_tenet
+from synthesis.semantic_tension import detect_semantic_tension
+from synthesis.tenets import current_tenet_for_scope, list_tenets, record_tenet, scope_key_for
 from user_state.notes import AnalystNoteRow, list_notes, patch_note_context, resolve_note
 
 log = logging.getLogger(__name__)
@@ -285,6 +286,16 @@ def distill_session(
         "musings": 0,
         "resolved": 0,
         "tensions": 0,
+        # B5: overlap detected while auto-landing a brand-new tenet_revision
+        # candidate (no shown scope_key reused) — distinct from `tensions`
+        # above, which is the "contradiction" candidate TYPE's counter and
+        # means something different (the model itself flagged conflict with
+        # a shown item). `tenet_tensions` is the slug-or-semantic probe run
+        # on every NEW tenet landing; `tensions_semantic` is its
+        # semantic-only subset, kept observable separately (mirrors
+        # tenet_distill's tensions/tensions_semantic pair).
+        "tenet_tensions": 0,
+        "tensions_semantic": 0,
         "adopted_tenets": 0,
         "adopted_stances": 0,
         "skipped_groundless": 0,
@@ -399,12 +410,42 @@ def distill_session(
             if landed.note_id is None:
                 counts["skipped_groundless"] += 1
                 continue
+            tension_id: int | None = None
+            if scope_key is None:
+                # A genuinely NEW tenet (no shown scope_key reused) — run the
+                # same slug-then-semantic tension probe tenet_distill runs
+                # before landing (B5): the derived scope might collide with a
+                # standing tenet outright (free), else check semantically —
+                # the gap that let prod tenets 20/31 land as silent
+                # duplicates under different slugs. A detected tension still
+                # lands (auto-adopt per the owner ruling); it just carries
+                # tension_with so the worldview tension badge shows. Wrapped
+                # again here as defense in depth (on top of
+                # detect_semantic_tension's own fail-open contract) — a
+                # tension-detection failure must never skip the landing.
+                resolved_scope = scope_key_for(text, None)
+                slug_match = current_tenet_for_scope(resolved_scope, db_path=db_path)
+                if slug_match is not None:
+                    tension_id = slug_match.id
+                    counts["tenet_tensions"] += 1
+                else:
+                    try:
+                        semantic_match = detect_semantic_tension(
+                            text, exclude_scope_key=resolved_scope, db_path=db_path
+                        )
+                    except Exception:
+                        semantic_match = None
+                    if semantic_match is not None:
+                        tension_id = semantic_match.id
+                        counts["tenet_tensions"] += 1
+                        counts["tensions_semantic"] += 1
             tenet_row = record_tenet(
                 body_md=text,
                 scope_key=scope_key,
                 source_note_ids=(landed.note_id,),
                 status="current",
                 provenance="session_distill",
+                tension_with=tension_id,
                 db_path=db_path,
             )
             counts["adopted_tenets"] += 1
@@ -462,6 +503,8 @@ def run_session_distill(
         "musings": 0,
         "resolved": 0,
         "tensions": 0,
+        "tenet_tensions": 0,
+        "tensions_semantic": 0,
         "adopted_tenets": 0,
         "adopted_stances": 0,
         "skipped_groundless": 0,

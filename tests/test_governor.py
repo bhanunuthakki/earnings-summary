@@ -318,3 +318,170 @@ def test_falsifier_breach_ping_gets_the_two_button_keyboard() -> None:
         class_="intent_followup", key="intent:1:0", ticker=None, body="x", source_ref="note:1"
     )
     assert ping_buttons(10, intent) == [[("Dismiss", "cp:dismiss:10")]]
+
+
+# ---------------------------------------------------------------------------
+# tenet_challenge (B5, 2026-07-19 program overhaul)
+#
+# collect_moments touches decisions/alerts/analyst_notes UNCONDITIONALLY
+# (only the falsifier_breach block has its own try/except) — those tables
+# are created by migrations 0046/0063/0074, all BELOW 0130 (the `db` fixture
+# above's PRIOR_HEAD) and even below 0059. A stamp-past-a-mid-chain-revision
+# fixture would silently skip creating them for real, so this fixture instead
+# bootstraps the pre-alembic base tables and runs EVERY migration from 0001
+# (verbatim pattern: tests/test_decision_journal_view.py) — the only way to
+# get a real decisions/alerts/analyst_notes/insight_notes/v_decision_journal
+# schema in one DB. These tests get their OWN fixture and never touch the
+# `db` fixture other tests in this file rely on.
+# ---------------------------------------------------------------------------
+
+_GOV_BOOTSTRAP_DDL = """
+CREATE TABLE IF NOT EXISTS tracked_companies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT DEFAULT 'bhanu',
+    ticker TEXT NOT NULL,
+    name TEXT NOT NULL,
+    list_type TEXT NOT NULL CHECK(list_type IN (
+        'portfolio', 'watchlist', 'evaluation', 'none', 'etf', 'index_member'
+    )),
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    sec_validated BOOLEAN DEFAULT 0,
+    ir_url TEXT DEFAULT NULL,
+    model_url TEXT DEFAULT NULL,
+    publishes_release BOOLEAN DEFAULT 0,
+    publishes_slides BOOLEAN DEFAULT 0,
+    publishes_transcript BOOLEAN DEFAULT 0,
+    fmp_data_upto TEXT DEFAULT NULL,
+    manual_data_quarters TEXT DEFAULT '[]',
+    fmp_data_saved BOOLEAN DEFAULT 0,
+    UNIQUE(user_id, ticker)
+);
+CREATE TABLE IF NOT EXISTS quarterly_artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    year INTEGER NOT NULL,
+    quarter TEXT NOT NULL,
+    has_release_file    BOOLEAN DEFAULT 0,
+    has_slides_file     BOOLEAN DEFAULT 0,
+    has_transcript_file BOOLEAN DEFAULT 0,
+    has_audio_file      BOOLEAN DEFAULT 0,
+    step_audio_transcribed BOOLEAN DEFAULT 0,
+    step_llm_summarized    BOOLEAN DEFAULT 0,
+    step_saydo_analyzed    BOOLEAN DEFAULT 0,
+    step_thesis_updated    BOOLEAN DEFAULT 0,
+    UNIQUE(ticker, year, quarter)
+);
+CREATE TABLE IF NOT EXISTS fmp_endpoint_status (
+    ticker         TEXT    NOT NULL,
+    endpoint       TEXT    NOT NULL,
+    period         TEXT    NOT NULL DEFAULT '',
+    status         TEXT    NOT NULL,
+    http_code      INTEGER,
+    record_count   INTEGER,
+    earliest_date  TEXT,
+    latest_date    TEXT,
+    file_path      TEXT,
+    file_bytes     INTEGER,
+    error_msg      TEXT,
+    last_pulled    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (ticker, endpoint, period)
+);
+"""
+
+
+@pytest.fixture
+def db_head(tmp_path: Path) -> Path:
+    path = tmp_path / "gov_head.db"
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.executescript(_GOV_BOOTSTRAP_DDL)
+        conn.commit()
+    finally:
+        conn.close()
+    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
+    command.upgrade(cfg, "head")
+    return path
+
+
+def _seed_tenet_with_accountability(
+    db_head: Path,
+    *,
+    scope_key: str,
+    violated: list[int],
+    est_cost_usd: float | None,
+    one_liner: str = "verdict",
+) -> int:
+    from synthesis.tenets import record_tenet
+
+    tenet = record_tenet(body_md=f"belief: {scope_key}", scope_key=scope_key, db_path=db_head)
+    conn = sqlite3.connect(str(db_head))
+    try:
+        meta = {
+            "accountability": {
+                "as_of_run": "2026-07-09T00:00:00",
+                "upheld": [],
+                "violated": violated,
+                "est_cost_usd": est_cost_usd,
+                "one_liner": one_liner,
+            }
+        }
+        conn.execute(
+            "UPDATE insight_notes SET meta_json = ? WHERE id = ?", (json.dumps(meta), tenet.id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return tenet.id
+
+
+def test_tenet_challenge_moment_from_seeded_meta_highest_cost_wins(db_head: Path) -> None:
+    _seed_tenet_with_accountability(
+        db_head, scope_key="low-cost", violated=[1], est_cost_usd=-100.0
+    )
+    high_id = _seed_tenet_with_accountability(
+        db_head, scope_key="high-cost", violated=[2, 3], est_cost_usd=-9000.0
+    )
+    moments = collect_moments(db_head, now=_NOW)
+    challenge = [m for m in moments if m.class_ == "tenet_challenge"]
+    assert len(challenge) == 1
+    m = challenge[0]
+    assert m.source_ref == f"tenet:{high_id}"
+    iso = _NOW.isocalendar()
+    assert m.key == f"tenet_challenge:{high_id}:{iso[0]}-W{iso[1]:02d}"
+    assert "violated 2x" in m.body
+    assert "9,000" in m.body
+
+
+def test_tenet_challenge_ties_prefer_most_violations(db_head: Path) -> None:
+    _seed_tenet_with_accountability(db_head, scope_key="a", violated=[1], est_cost_usd=-500.0)
+    high_v = _seed_tenet_with_accountability(
+        db_head, scope_key="b", violated=[1, 2], est_cost_usd=-500.0
+    )
+    moments = collect_moments(db_head, now=_NOW)
+    challenge = [m for m in moments if m.class_ == "tenet_challenge"]
+    assert len(challenge) == 1
+    assert challenge[0].source_ref == f"tenet:{high_v}"
+
+
+def test_tenet_challenge_ignores_tenets_with_no_violations(db_head: Path) -> None:
+    from synthesis.tenets import record_tenet
+
+    record_tenet(body_md="a clean tenet", scope_key="clean", db_path=db_head)
+    _seed_tenet_with_accountability(db_head, scope_key="also-clean", violated=[], est_cost_usd=None)
+    moments = collect_moments(db_head, now=_NOW)
+    assert [m for m in moments if m.class_ == "tenet_challenge"] == []
+
+
+def test_tenet_challenge_run_governor_once_per_week(db_head: Path) -> None:
+    _seed_tenet_with_accountability(db_head, scope_key="x", violated=[1], est_cost_usd=-100.0)
+    tally1 = run_governor(db_head, now=_NOW)
+    assert tally1["seen"] == 1
+    # No send_fn configured — the ping still lands (quietly) in the digest.
+    assert tally1["digest"] == 1
+
+    tally2 = run_governor(db_head, now=_NOW)
+    # anti-nag: same class+key (same iso-week) already has a non-send_failed
+    # row — the second run must not re-collect it at all.
+    assert tally2["seen"] == 0

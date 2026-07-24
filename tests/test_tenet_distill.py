@@ -162,6 +162,80 @@ def test_distill_handles_none_result(db_path: Path) -> None:
     assert counts["proposed"] == 0
 
 
+def test_semantic_tension_stamps_meta_for_paraphrase_under_different_slug(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The prod 20/31 regression: two tenets on the SAME underlying belief but
+    DIFFERENT scope_key slugs. The free slug probe (current_tenet_for_scope)
+    can't see the overlap — B5's semantic probe (stubbed here) closes the gap
+    and stamps meta.tensions exactly as the slug path already did."""
+    live = record_tenet(
+        body_md="I hold retirement-account positions through drawdowns without exception.",
+        scope_key="retirement-account-hold-discipline",
+        db_path=db_path,
+    )
+    a = _flagged(db_path, "thinking about my tax-advantaged accounts again")
+
+    def call(musings: Sequence[AnalystNoteRow]) -> list[ProposedTenet]:
+        return [
+            {
+                "tenet": "I hold my tax-advantaged accounts through drawdowns without exception.",
+                "scope_key": "tax-account-holding-discipline",
+                "citations": [a],
+            }
+        ]
+
+    import synthesis.tenet_distill as td
+
+    def fake_semantic(
+        body_md: str, *, exclude_scope_key: str | None = None, db_path=None, call=None
+    ):
+        return live
+
+    monkeypatch.setattr(td, "detect_semantic_tension", fake_semantic)
+    counts = run_tenet_distill(db_path, call=call)
+
+    assert counts["tensions"] == 1
+    assert counts["tensions_semantic"] == 1
+    props = list_tenets(status="proposed", db_path=db_path)
+    assert props[0].meta.get("tensions") == [live.id]
+
+
+def test_slug_match_wins_without_semantic_call(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A slug match is free — the semantic probe (an LLM call) must never run
+    when the cheap slug probe already found the overlap."""
+    live = record_tenet(
+        body_md="Let winning theses run.", scope_key="exit-discipline", db_path=db_path
+    )
+    a = _flagged(db_path, "maybe I should trim winners after a double")
+
+    calls = {"n": 0}
+
+    import synthesis.tenet_distill as td
+
+    def spy_semantic(
+        body_md: str, *, exclude_scope_key: str | None = None, db_path=None, call=None
+    ):
+        calls["n"] += 1
+        return
+
+    monkeypatch.setattr(td, "detect_semantic_tension", spy_semantic)
+
+    def call(musings: Sequence[AnalystNoteRow]) -> list[ProposedTenet]:
+        return [
+            {"tenet": "Trim winners on a double.", "scope_key": "exit-discipline", "citations": [a]}
+        ]
+
+    counts = run_tenet_distill(db_path, call=call)
+    assert counts["tensions"] == 1
+    assert counts["tensions_semantic"] == 0
+    assert calls["n"] == 0  # slug probe found it first — semantic probe never ran
+    props = list_tenets(status="proposed", db_path=db_path)
+    assert props[0].meta.get("tensions") == [live.id]
+
+
 def test_build_prompt_carries_standing_tenets_and_revision_rule(db_path: Path) -> None:
     """The v2 prompt (owner pushback 2026-07-19): standing Tenets ride in with
     their scope_keys, and the model is told to REVISE an overlapping belief
