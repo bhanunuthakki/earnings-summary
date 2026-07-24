@@ -63,6 +63,21 @@ def test_downgrade_to_0119_drops_them(db_path: Path) -> None:
         assert table not in names
 
 
+def test_research_tasks_cost_usd_and_run_id_columns_present(db_path: Path) -> None:
+    """B7 repurposes these two columns (dead since 0120 — never read/written
+    by any code path until this PR) as the triage's stated cost estimate and
+    a JSON meta blob (session_prompt/packeted_at/unanswered_weeks) — see
+    research.proposals' module docstring. This locks the columns' presence
+    and NULL-ability so a future migration can't silently drop them."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cols = {r[1]: r[3] for r in conn.execute("PRAGMA table_info(research_tasks)")}
+    finally:
+        conn.close()
+    assert "cost_usd" in cols and cols["cost_usd"] == 0  # nullable
+    assert "run_id" in cols and cols["run_id"] == 0  # nullable
+
+
 def test_status_and_provenance_defaults(db_path: Path) -> None:
     conn = sqlite3.connect(str(db_path))
     try:

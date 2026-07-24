@@ -67,6 +67,11 @@ CREATE TABLE research_tasks (
     claim TEXT NOT NULL,
     ticker TEXT,
     status TEXT NOT NULL,
+    -- cost_usd/run_id exist on the real table since 0120 and create_task
+    -- writes both since B7 (stated cost + JSON meta) — the hand DDL must
+    -- track the real schema or every disposition test breaks on INSERT.
+    cost_usd FLOAT,
+    run_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
