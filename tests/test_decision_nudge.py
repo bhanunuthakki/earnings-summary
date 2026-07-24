@@ -136,6 +136,50 @@ def test_send_nudges_one_message_per_stub_then_never_again(db_path: Path) -> Non
     assert spy2.sends == []
 
 
+def test_send_nudges_prefills_from_rationale_excerpt(db_path: Path) -> None:
+    """P2.1 demotion (PRD §9.2): when the decision carries a rationale
+    (the raw-capture fallback), the nudge message PREFILLS it instead of
+    demanding a rigid two-line conviction/falsifier form — the owner is
+    asked to confirm/correct, not compose from nothing."""
+    conn = _conn(db_path)
+    try:
+        conn.execute("ALTER TABLE decisions ADD COLUMN rationale_excerpt TEXT")
+        conn.execute("ALTER TABLE decisions ADD COLUMN advice_artifact_id INTEGER")
+        conn.commit()
+    finally:
+        conn.close()
+    did = _seed_stub(db_path, ticker="NU")
+    conn = _conn(db_path)
+    try:
+        conn.execute(
+            "UPDATE decisions SET rationale_excerpt = ? WHERE id = ?",
+            ("NPL formation is decelerating faster than guided", did),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    spy = _Spy()
+    sent = decision_nudge.send_nudges("tok", 5, db_path=db_path, send=spy.send)
+    assert sent == 1
+    text = spy.sends[0][1]
+    assert "NPL formation is decelerating faster than guided" in text
+    assert "Skip is fine" in text
+    # not the old rigid two-line form
+    assert "one line each" not in text.lower()
+
+
+def test_send_nudges_prefill_absent_degrades_to_optional_ask(db_path: Path) -> None:
+    """No rationale/advice on file -> the soft no-pressure ask, never a
+    compulsory field (falsifier is requested, never demanded)."""
+    _seed_stub(db_path, ticker="BN")
+    spy = _Spy()
+    decision_nudge.send_nudges("tok", 5, db_path=db_path, send=spy.send)
+    text = spy.sends[0][1]
+    assert "no pressure" in text.lower()
+    assert "Skip is fine" in text
+
+
 def test_skip_never_re_nudges(db_path: Path) -> None:
     did = _seed_stub(db_path)
     decision_nudge._record_nudge(did, chat_id=5, db_path=db_path)  # simulate already-sent

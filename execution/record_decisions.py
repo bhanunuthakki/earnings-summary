@@ -1,17 +1,21 @@
 """Record decisions from memo artifacts + extract their falsifiable conditions.
 
-Three idempotent rungs, in dependency order:
+Three idempotent rungs, in dependency order. Rungs 1-2 are MACHINE-RECOMMENDATION
+rungs, OFF BY DEFAULT since P2.1 (PRD personal_investment_partner_prd.md §9.3:
+"stop turning every machine recommendation into a decision by default") — pass
+``--include-advisor`` to run them. Rung 3 always runs; it only annotates
+EXISTING decision rows (owner-authored included), never creates new ones.
 
   1. ``record_decisions_from_artifacts`` — parse the "Recommended action"
      verdicts out of recent five-min-reread artifacts into the ``decisions``
-     ledger (UNIQUE on source_artifact_id).
+     ledger (UNIQUE on source_artifact_id). Gated behind ``--include-advisor``.
   2. ``record_socratic_decisions`` — give Socratic advisor memos (which live
      in advisor_memos, not llm_artifacts) their decisions rows (partial
-     UNIQUE on source_memo_id, alembic 0086).
+     UNIQUE on source_memo_id, alembic 0086). Gated behind ``--include-advisor``.
   3. ``attach_conditions`` — extract each new decision's "What would change
      my mind" section into structured ``decision_conditions`` JSON (Haiku via
      the ``decision_conditions_extract`` purpose) so the decision_condition
-     trigger can evaluate them against incoming facts.
+     trigger can evaluate them against incoming facts. Always runs.
 
 Re-running is a no-op on already-processed rows. Runs as a morning-pipeline
 stage (before triggers, so same-run satisfaction checks see fresh conditions)
@@ -19,9 +23,10 @@ and standalone:
 
 Usage:
     python execution/record_decisions.py
+    python execution/record_decisions.py --include-advisor  # also run rungs 1-2
     python execution/record_decisions.py --since-days 90
     python execution/record_decisions.py --llm-fallback  # try Haiku on ambiguous
-    python execution/record_decisions.py --no-conditions # ledger rungs only
+    python execution/record_decisions.py --no-conditions # skip rung 3
 """
 
 from __future__ import annotations
@@ -71,6 +76,19 @@ def main() -> int:
         "a present 'Recommended action' section.",
     )
     parser.add_argument(
+        "--include-advisor",
+        action="store_true",
+        help="Also run the machine-recommendation rungs (record_decisions_from_artifacts "
+        "over lens:five_min_reread artifacts, record_socratic_decisions over Socratic "
+        "memos) — OFF by default (PRD personal_investment_partner_prd.md §9.3: "
+        "'stop turning every machine recommendation into a decision by default'; "
+        "an unadopted advisor view stays a plain llm_artifacts/advisor_memos row until "
+        "the owner adopts it, reconciles a matching executed action to it, or explicitly "
+        "selects Hold this view accountable). The falsifiable-condition extraction rungs "
+        "below always run — they only annotate EXISTING decision rows (owner-authored "
+        "included), never create new ones.",
+    )
+    parser.add_argument(
         "--no-conditions",
         action="store_true",
         help="Skip the falsifiable-condition extraction rung (ledger rungs only).",
@@ -105,29 +123,35 @@ def main() -> int:
 
         db.DB_PATH = str(args.db_path)
 
-    tally = record_decisions_from_artifacts(
-        repo_root=repo_root,
-        since_days=args.since_days,
-        llm_fallback=args.llm_fallback,
-    )
-    log.info({"event": "record_decisions_done", **tally})
-    print(
-        "Decision recorder complete · "
-        f"inserted={tally['inserted']} · "
-        f"skipped_existing={tally['skipped_existing']} · "
-        f"no_recommendation={tally['no_recommendation']} · "
-        f"db_unavailable={tally['db_unavailable']}"
-    )
+    if args.include_advisor:
+        tally = record_decisions_from_artifacts(
+            repo_root=repo_root,
+            since_days=args.since_days,
+            llm_fallback=args.llm_fallback,
+        )
+        log.info({"event": "record_decisions_done", **tally})
+        print(
+            "Decision recorder complete · "
+            f"inserted={tally['inserted']} · "
+            f"skipped_existing={tally['skipped_existing']} · "
+            f"no_recommendation={tally['no_recommendation']} · "
+            f"db_unavailable={tally['db_unavailable']}"
+        )
 
-    socratic = record_socratic_decisions(db_path=db_path, since_days=args.since_days)
-    log.info({"event": "record_socratic_decisions_done", **socratic})
-    print(
-        "Socratic memo recorder complete · "
-        f"inserted={socratic['inserted']} · "
-        f"skipped_existing={socratic['skipped_existing']} · "
-        f"skipped_no_stance={socratic['skipped_no_stance']} · "
-        f"db_unavailable={socratic['db_unavailable']}"
-    )
+        socratic = record_socratic_decisions(db_path=db_path, since_days=args.since_days)
+        log.info({"event": "record_socratic_decisions_done", **socratic})
+        print(
+            "Socratic memo recorder complete · "
+            f"inserted={socratic['inserted']} · "
+            f"skipped_existing={socratic['skipped_existing']} · "
+            f"skipped_no_stance={socratic['skipped_no_stance']} · "
+            f"db_unavailable={socratic['db_unavailable']}"
+        )
+    else:
+        print(
+            "Machine-recommendation rungs skipped (pass --include-advisor to run them) — "
+            "PRD §9.3: unadopted advisor views stay artifacts, not decisions."
+        )
 
     if args.no_conditions:
         return 0

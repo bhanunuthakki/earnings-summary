@@ -137,7 +137,7 @@ def detect_and_capture_pledge(
         from research.decision_capture import capture_decision, extract_decision
         from research.decision_feed import link_decision_to_note, persist_owner_decision
 
-        extracted = extract_decision(body, call=extract_call)  # type: ignore[arg-type]
+        extracted = extract_decision(body, call=extract_call, db_path=db_path)  # type: ignore[arg-type]
         direction = str(extracted.get("direction") or "").lower()
         ticker = str(extracted.get("ticker") or "").upper() or None
         if direction not in _PLEDGE_DIRECTIONS or not ticker:
@@ -294,7 +294,7 @@ def annotate_latest_pending(
     from research.decision_capture import extract_decision
 
     try:
-        extracted = extract_decision(text, call=extract_call)  # type: ignore[arg-type]
+        extracted = extract_decision(text, call=extract_call, db_path=db_path)  # type: ignore[arg-type]
     except Exception:
         return None
     sets: dict[str, str] = {}

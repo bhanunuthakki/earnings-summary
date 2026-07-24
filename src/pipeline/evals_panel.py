@@ -99,6 +99,9 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
     # The capture->answer primary gate (capture.triage, B3, mode-A golden
     # classifier) — kept in sync with run_llm_evals.GOLDEN_PURPOSES.
     "capture_triage",
+    # Decision Draft parse (P2.1, mode-A golden classifier) — kept in sync
+    # with run_llm_evals.GOLDEN_PURPOSES.
+    "decision_draft_parse",
 )
 
 CALL_HEALTH_WINDOW_DAYS = 30

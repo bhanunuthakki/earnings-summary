@@ -3,6 +3,7 @@ outcome grading, and the batch recorder over llm_artifacts."""
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -75,6 +76,28 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         CREATE INDEX idx_decisions_ticker ON decisions(ticker);
         CREATE INDEX idx_decisions_made_at ON decisions(made_at);
         CREATE INDEX idx_decisions_outcome_label ON decisions(outcome_label);
+        CREATE TABLE decision_drafts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL DEFAULT 'bhanu',
+            source_note_id INTEGER,
+            source_channel TEXT NOT NULL,
+            source_external_id TEXT,
+            idempotency_key TEXT NOT NULL UNIQUE,
+            original_text TEXT NOT NULL,
+            transcription_json TEXT,
+            draft_json TEXT,
+            parse_confidence REAL,
+            status TEXT NOT NULL,
+            prompt_version TEXT,
+            model TEXT,
+            llm_call_id INTEGER,
+            decision_id INTEGER,
+            expires_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            confirmed_at TEXT,
+            dismissed_at TEXT
+        );
         """
     )
     conn.commit()
@@ -696,6 +719,63 @@ def test_reconcile_tracker_offline_no_writes(db: Path) -> None:
 def test_reconcile_missing_db_is_flagged(tmp_path: Path) -> None:
     tally = reconcile_decision_actions(db_path=tmp_path / "missing.db", now=_NOW)
     assert tally["db_unavailable"] == 1
+
+
+# ---------------------------------------------------------------------------
+# tracker-fill -> decision_drafts (P2.1, PRD §13.1 capture-coverage measure):
+# a fill with NO candidate decision anywhere in the lookback window drafts a
+# confirmable decision_drafts row instead of being silently dropped.
+# ---------------------------------------------------------------------------
+
+
+def test_reconcile_drafts_unmatched_fill(db: Path) -> None:
+    # No decisions row for RBRK at all — this fill has no candidate anywhere.
+    pf = _portfolio([("2026-02-20", "RBRK", "buy")])
+    tally = reconcile_decision_actions(db_path=db, portfolio=pf, now=_NOW)
+    assert tally["tracker_fill_drafted"] == 1
+    assert tally["tracker_fill_matched"] == 0
+
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT source_channel, status, draft_json FROM decision_drafts "
+            "WHERE source_channel = 'tracker'"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert row["status"] == "awaiting_confirmation"
+    draft = json.loads(row["draft_json"])
+    assert draft["proposed_ticker"] == "RBRK"
+    assert draft["proposed_action"] == "buy"
+
+
+def test_reconcile_does_not_draft_when_a_candidate_decision_exists(db: Path) -> None:
+    # A decision exists for NU in-window (even though it's already actioned
+    # and excluded from the `rows` scan above) — the fill has a candidate.
+    _insert_decision(db, ticker="NU", kind="add", made_at="2026-01-10T00:00:00", action="ignored")
+    pf = _portfolio([("2026-01-15", "NU", "buy")])
+    tally = reconcile_decision_actions(db_path=db, portfolio=pf, now=_NOW)
+    assert tally["tracker_fill_matched"] == 1
+    assert tally["tracker_fill_drafted"] == 0
+
+
+def test_reconcile_tracker_fill_draft_is_idempotent(db: Path) -> None:
+    pf = _portfolio([("2026-02-20", "RBRK", "buy")])
+    reconcile_decision_actions(db_path=db, portfolio=pf, now=_NOW)
+    tally2 = reconcile_decision_actions(db_path=db, portfolio=pf, now=_NOW)
+    # second run still "drafts" (create_draft_row is idempotent — it just
+    # returns the existing row's id), but never inserts a duplicate row.
+    conn = sqlite3.connect(str(db))
+    try:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM decision_drafts WHERE source_channel = 'tracker'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert n == 1
+    assert tally2["tracker_fill_drafted"] == 1  # idempotent create, not a failure
 
 
 # ---------------------------------------------------------------------------

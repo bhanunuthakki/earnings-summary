@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
+
 import pytest
 
 from research.decision_capture import capture_decision, extract_decision
@@ -149,6 +152,64 @@ def test_extract_wires_into_capture_decision_as_extract_fn() -> None:
     )
     assert did == 55
     assert persisted[0]["ticker"] == "NU" and persisted[0]["direction"] == "trim"
+
+
+def _seed_tracked_companies(db_path: Path, rows: list[tuple[str, str, str]]) -> None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE tracked_companies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT DEFAULT 'bhanu',
+                ticker TEXT NOT NULL,
+                name TEXT NOT NULL,
+                list_type TEXT NOT NULL,
+                archived_at TEXT
+            );
+            """
+        )
+        conn.executemany(
+            "INSERT INTO tracked_companies (user_id, ticker, name, list_type) "
+            "VALUES ('bhanu', ?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_extract_roster_is_dynamic_not_hardcoded(tmp_path: Path) -> None:
+    """PRD personal_investment_partner_prd.md §9.3: the known-ticker list is no
+    longer a hard-coded 14-symbol frozenset — an evaluation-list name entirely
+    absent from that old list (FLKR) must be capturable the moment it's
+    tracked, with zero code changes here."""
+    db_path = tmp_path / "portfolio.db"
+    _seed_tracked_companies(db_path, [("FLKR", "Flikr Inc", "evaluation")])
+
+    out = extract_decision(
+        "started a small position in FLKR today",
+        call=lambda _t: {"ticker": "FLKR", "direction": "buy"},
+        db_path=db_path,
+    )
+    assert out == {"ticker": "FLKR", "direction": "buy"}
+
+
+def test_extract_roster_still_rejects_untracked_ticker(tmp_path: Path) -> None:
+    """An off-roster ticker is dropped even though the roster is now dynamic
+    -- ticker validity and direction validity are independent checks (the
+    pre-existing behavior; direction alone is still a confidently-extractable
+    field even when the ticker guess is untrusted)."""
+    db_path = tmp_path / "portfolio.db"
+    _seed_tracked_companies(db_path, [("FLKR", "Flikr Inc", "evaluation")])
+
+    out = extract_decision(
+        "bought some ACME",
+        call=lambda _t: {"ticker": "ACME", "direction": "buy"},
+        db_path=db_path,
+    )
+    assert out == {"direction": "buy"}
+    assert "ticker" not in out
 
 
 def test_extract_default_path_degrades_on_a_parse_error(monkeypatch: pytest.MonkeyPatch) -> None:

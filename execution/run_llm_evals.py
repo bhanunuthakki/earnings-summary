@@ -83,6 +83,10 @@ GOLDEN_PURPOSES = (
     # question-shaped-text regex is_answerable_capture (mode-A: answer_now/
     # contradiction/plain, grounded citations).
     "capture_triage",
+    # Decision Draft parse (P2.1, personal_investment_partner_prd.md §9.2) —
+    # the async capture tap that turns a landed musing into a confirmable
+    # decision draft (mode-A: intent/ticker/action + the prefer-ambiguous bar).
+    "decision_draft_parse",
 )
 AUDIT_PURPOSES = (
     "bear_case",

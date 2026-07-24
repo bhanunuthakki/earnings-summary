@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from sqlite3 import IntegrityError
+from typing import cast
 
 from capture import pending_replies, telegram
 from user_state._db import now_iso, now_naive_utc, open_conn
@@ -244,6 +245,53 @@ def handle_fill_in_reply(
             send(token, chat_id, msg)
 
 
+def _prefill_hint(stub: DecisionStub, *, db_path: Path | str | None) -> str | None:
+    """Rationale/disconfirmer hint for the demoted nudge, in priority order:
+    the linked advice artifact's content_json, else the decision's own
+    rationale_excerpt. Best-effort None on any failure."""
+    import json as _json
+
+    conn = open_conn(db_path)
+    try:
+        row = conn.execute(
+            "SELECT advice_artifact_id, rationale_excerpt FROM decisions WHERE id = ?",
+            (stub.id,),
+        ).fetchone()
+        if row is None:
+            return None
+        artifact_id, rationale_excerpt = row[0], row[1]
+        if artifact_id is not None:
+            art = conn.execute(
+                "SELECT content_json FROM llm_artifacts WHERE id = ?", (artifact_id,)
+            ).fetchone()
+            if art is not None and art[0]:
+                try:
+                    content_raw: object = _json.loads(art[0])
+                except (ValueError, TypeError):
+                    content_raw = None
+                if isinstance(content_raw, dict):
+                    content = cast("dict[str, object]", content_raw)
+                    for key in (
+                        "disconfirming_case",
+                        "bear_case",
+                        "risks",
+                        "directional_thesis",
+                        "thesis",
+                    ):
+                        val = content.get(key)
+                        if isinstance(val, str) and val.strip():
+                            return val.strip()[:280]
+                        if isinstance(val, list) and val and isinstance(val[0], str):
+                            return str(val[0]).strip()[:280]
+        if isinstance(rationale_excerpt, str) and rationale_excerpt.strip():
+            return rationale_excerpt.strip()[:280]
+        return None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
 def send_nudges(
     token: str,
     chat_id: int,
@@ -253,14 +301,30 @@ def send_nudges(
     send: SendFn = telegram.send_message,
 ) -> int:
     """Send one nudge per un-nudged stub decision. Returns the count sent
-    (best-effort per item — a single send failure never blocks the rest)."""
+    (best-effort per item — a single send failure never blocks the rest).
+
+    Demoted (PRD §9.2): no longer a rigid two-line form. When a hint is
+    resolvable, the message PREFILLS it and asks the owner to correct it
+    only if material; absent a hint, the ask is a single soft optional line.
+    Existing falsifiers stay valuable and are still requested when genuinely
+    missing, but never as a compulsory field to preserve the decision."""
     stubs = find_stub_decisions(lookback_days=lookback_days, db_path=db_path)
     sent = 0
     for stub in stubs:
-        text = (
-            f"You logged {stub.ticker} {stub.recommendation_kind.upper()} on "
-            f"{stub.made_at[:10]} — one line each: conviction? what would prove you wrong?"
+        head = (
+            f"You logged {stub.ticker} {stub.recommendation_kind.upper()} on {stub.made_at[:10]}."
         )
+        hint = _prefill_hint(stub, db_path=db_path)
+        if hint:
+            text = (
+                f'{head} On file: "{hint}" — reply to confirm this as your conviction/what '
+                "would prove you wrong, or correct it in one line. Skip is fine too."
+            )
+        else:
+            text = (
+                f"{head} One optional line if you have a quick take on conviction or what "
+                "would change your mind — no pressure, Skip is fine."
+            )
         try:
             send(token, chat_id, text, reply_markup=_nudge_keyboard(stub.id))
         except telegram.TelegramError:

@@ -227,6 +227,17 @@ LLM_MODELS: dict[str, str] = {
     # tier, like the sibling wondering_detect classifier.
     "musing_decision_extract": FAST_CLASSIFIER_MODEL,
     "drift_narrate": FAST_CLASSIFIER_MODEL,
+    # Decision Draft parse (P2.1, personal_investment_partner_prd.md §9.2) — the
+    # async tap that turns a landed free-text/voice capture into a confirmable
+    # Owner Decision draft. Pinned to Opus (not the FAST tier): the input is
+    # untrusted owner-channel text (spotlighted, llm.untrusted.spotlight) and a
+    # wrong extraction can propose a consequential financial mutation, so this
+    # purpose gets the strongest available model rather than the cheap
+    # closed-classification default. Own golden set (evals/golden/
+    # decision_draft_parse.json); budget seeded by migration 0195 ($8/mo, warn,
+    # on_exceed='skip' — a blown cap degrades the tap to no-draft, never blocks
+    # the already-landed capture).
+    "decision_draft_parse": "claude-opus-4-8",
     # Meta-eval steering (meta_eval_governance.md §2): classifies a CAPTURED
     # prompt's difficulty (easy/moderate/hard) so the sweep sampler oversamples
     # hard cases. Reads the prompt only (never a response); cached forever per

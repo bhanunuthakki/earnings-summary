@@ -19,6 +19,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+from capture.matcher import load_roster
+
 
 def _as_float(value: object) -> float | None:
     if isinstance(value, bool):
@@ -92,24 +94,6 @@ def capture_decision(
 
 DecisionExtractCall = Callable[[str], "dict[str, object]"]
 
-_ROSTER: frozenset[str] = frozenset(
-    {
-        "NU",
-        "MELI",
-        "NOW",
-        "VEEV",
-        "RBRK",
-        "WIX",
-        "NVO",
-        "GOOGL",
-        "META",
-        "BN",
-        "BKNG",
-        "UBER",
-        "HDB",
-        "SOFI",
-    }
-)
 _DIRECTIONS: frozenset[str] = frozenset({"add", "trim", "buy", "sell", "hold"})
 _CONVICTIONS: frozenset[str] = frozenset({"high", "medium", "low"})
 
@@ -117,14 +101,22 @@ _CONVICTIONS: frozenset[str] = frozenset({"high", "medium", "low"})
 # adjacent, similarly-named ``decision_extraction`` (memo-paragraph extractor,
 # src/decision_extractor.py) and ``decision_conditions_extract`` (falsifier prose).
 # This one parses a free-text OWNER MUSING -- do not conflate them in the registries.
-_EXTRACT_PROMPT = (
+#
+# The known-ticker list used to be a hard-coded frozenset (14 names, dead the day
+# the roster grew or an evaluation/watchlist name needed capturing — PRD
+# personal_investment_partner_prd.md §9.3). It is now built from
+# ``capture.matcher.load_roster`` at CALL time (active tracked_companies +
+# instrument aliases, same source the deterministic capture-time ticker match
+# uses), so a name added to the roster is capturable the same day, with no
+# code change here. The matcher's own ambiguity discipline is preserved: this
+# extractor only ever accepts a ticker the roster resolves to, never a guess.
+_EXTRACT_PROMPT_TEMPLATE = (
     "You extract the structured fields of an investing DECISION from a short "
     "first-person note the portfolio owner wrote about a position change. Fill ONLY "
     "what the note states or clearly implies; leave anything unstated as null. Do NOT "
     "invent numbers or reasons.\n\n"
     "Known tickers (map company names/obvious aliases to these EXACT symbols; use null "
-    "if none is clearly referenced): NU MELI NOW VEEV RBRK WIX NVO GOOGL META BN BKNG "
-    "UBER HDB SOFI.\n\n"
+    "if none is clearly referenced): {roster}\n\n"
     "Fields:\n"
     "- ticker: one symbol from the list above, or null.\n"
     '- direction: exactly one of "add" | "trim" | "buy" | "sell" | "hold" '
@@ -137,14 +129,29 @@ _EXTRACT_PROMPT = (
     '- falsifier: a ONE-LINE paraphrase of any "what would change my mind" / exit '
     "condition the note states, else null.\n\n"
     "Return JSON ONLY, exactly:\n"
-    '{"ticker": "<SYMBOL or null>", "direction": "<add|trim|buy|sell|hold or null>", '
+    '{{"ticker": "<SYMBOL or null>", "direction": "<add|trim|buy|sell|hold or null>", '
     '"size_pct": <number or null>, "conviction": "<high|medium|low or null>", '
-    '"falsifier": "<one line or null>"}\n\n'
+    '"falsifier": "<one line or null>"}}\n\n'
     "Note: "
 )
 
 
-def extract_decision(text: str, *, call: DecisionExtractCall | None = None) -> dict[str, object]:
+def _active_roster_tickers(db_path: Path | str | None) -> frozenset[str]:
+    """The known-ticker universe for this call: active ``tracked_companies``
+    plus the distinctive-alias seed's targets — the SAME set
+    ``capture.matcher.load_roster`` builds for deterministic capture-time
+    matching. Degrades to the alias seed alone on a missing/pre-migration DB
+    (matcher's own degrade contract), never raises."""
+    roster = load_roster(db_path)
+    return frozenset(roster.symbol_to_ticker.values()) | frozenset(roster.phrase_to_ticker.values())
+
+
+def extract_decision(
+    text: str,
+    *,
+    call: DecisionExtractCall | None = None,
+    db_path: Path | str | None = None,
+) -> dict[str, object]:
     """The governed ``musing_decision_extract`` gap-filler for ``capture_decision``'s
     ``extract_fn`` seam: parse a free-text musing into the confidently-set subset of
     ``{ticker, direction, size_pct, conviction, falsifier}``. Fills only what the note
@@ -154,17 +161,21 @@ def extract_decision(text: str, *, call: DecisionExtractCall | None = None) -> d
 
     ``call`` is the injected structured caller (tests); the default runs the governed
     purpose via ``call_llm_structured`` -- WEB-LESS, no writer in context (off the
-    lethal-trifecta path; the sole input is the owner's own musing text).
+    lethal-trifecta path; the sole input is the owner's own musing text). ``db_path``
+    scopes the roster read (:func:`_active_roster_tickers`); pass the caller's own
+    explicit db_path whenever one is available, same convention as every other
+    store in this repo.
     """
     text = (text or "").strip()
     if not text:
         return {}
-    caller = call or _default_extract_call
-    obj = caller(text)  # contract: a dict (the default coerces non-dict/parse-fail to {})
+    roster_tickers = _active_roster_tickers(db_path)
+    # contract: a dict (the default coerces non-dict/parse-fail to {})
+    obj = call(text) if call is not None else _default_extract_call(text, roster_tickers)
 
     out: dict[str, object] = {}
     ticker = obj.get("ticker")
-    if isinstance(ticker, str) and ticker.strip().upper() in _ROSTER:
+    if isinstance(ticker, str) and ticker.strip().upper() in roster_tickers:
         out["ticker"] = ticker.strip().upper()
     direction = obj.get("direction")
     if isinstance(direction, str) and direction.strip().lower() in _DIRECTIONS:
@@ -181,7 +192,7 @@ def extract_decision(text: str, *, call: DecisionExtractCall | None = None) -> d
     return out
 
 
-def _default_extract_call(text: str) -> dict[str, object]:
+def _default_extract_call(text: str, roster_tickers: frozenset[str]) -> dict[str, object]:
     """Default structured caller: the governed ``musing_decision_extract`` purpose.
 
     Lazily imports ``llm.structured`` so importing this module stays LLM-free. A
@@ -190,9 +201,12 @@ def _default_extract_call(text: str) -> dict[str, object]:
     LLM exception policy."""
     from llm.structured import StructuredParseError, call_llm_structured
 
+    prompt = _EXTRACT_PROMPT_TEMPLATE.format(
+        roster=" ".join(sorted(roster_tickers)) or "(none tracked)"
+    )
     try:
         obj = call_llm_structured(
-            _EXTRACT_PROMPT + text,
+            prompt + text,
             purpose="musing_decision_extract",
             expect="object",
             required_keys=("ticker", "direction"),

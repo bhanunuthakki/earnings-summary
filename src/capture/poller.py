@@ -257,6 +257,32 @@ def _answer(
             telegram.send_message(token, update.chat_id, answer)
 
 
+def _decision_draft_tap(result: ingest.IngestResult, db_path: Path | str | None) -> None:
+    """Fire-and-forget Decision Draft parse tap (P2.1 — PRD §9.2). Rides the
+    already-landed musing note; its OWN governed purpose
+    (``decision_draft_parse``), not a branch inside ``capture.triage``.
+
+    Dispatch-ladder position: this call site lives in ``poll_once``'s
+    ordinary-capture branch, which only runs once
+    ``capture.coach_reply.dispatch`` has already returned False for this
+    update — i.e. strictly AFTER coach-reply, matching the agreed ladder
+    order (slash-commands -> pending-awaits -> card-reply -> coach-reply ->
+    ordinary capture -> this tap).
+
+    Blanket-except, like the coach_reply dispatch call site and every other
+    sibling tap (_pledge_and_annotate / _artifact_brief / _answer): a
+    draft-parser failure — or a propagated LLM hard stop — must NEVER block
+    plain capture, which has already landed by the time this runs."""
+    if result.status != "landed" or result.note_id is None:
+        return
+    try:
+        from capture.decision_draft import parse_note
+
+        parse_note(result.note_id, db_path=db_path)
+    except Exception:
+        log.warning({"event": "decision_draft_tap_error"}, exc_info=True)
+
+
 _BRIEF_OFF = frozenset({"0", "false", "no", ""})
 
 
@@ -611,6 +637,7 @@ def poll_once(
                 _pledge_and_annotate(token, update, result, db_path, enabled=confirm)
                 _artifact_brief(token, update, result, roster, db_path, enabled=confirm)
                 _answer(token, update, result, db_path, enabled=confirm)
+                _decision_draft_tap(result, db_path)
         elif update.kind == "voice" and update.voice_file_id:
             dest = Path(audio_dir) / f"tg_{update.update_id}.oga"
             try:
@@ -647,6 +674,7 @@ def poll_once(
             _pledge_and_annotate(token, update, result, db_path, enabled=confirm)
             _artifact_brief(token, update, result, roster, db_path, enabled=confirm)
             _answer(token, update, result, db_path, enabled=confirm)
+            _decision_draft_tap(result, db_path)
         elif update.kind == "document" and update.document_file_id:
             # A PDF, deck, or any document file → land as an On My Mind reading.
             # The file is downloaded and stored locally so future text extraction
