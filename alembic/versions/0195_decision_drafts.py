@@ -381,11 +381,20 @@ def downgrade() -> None:
     op.execute("DROP VIEW IF EXISTS v_decision_journal")
 
     if _has_table(insp, "decision_drafts"):
-        linked = bind.execute(
-            sa.text(
-                "SELECT COUNT(*) FROM decisions d JOIN decision_drafts dd ON dd.decision_id = d.id"
-            )
-        ).scalar()
+        # Guard on `decisions` too: mid-chain-stamped test fixtures (0069/
+        # 0074/0119 round-trips) never created it, and the linked-count JOIN
+        # would raise "no such table: decisions" (found in P2.1's full-suite
+        # run). No decisions table => nothing can be linked.
+        linked = (
+            bind.execute(
+                sa.text(
+                    "SELECT COUNT(*) FROM decisions d "
+                    "JOIN decision_drafts dd ON dd.decision_id = d.id"
+                )
+            ).scalar()
+            if _has_table(insp, "decisions")
+            else 0
+        )
         if linked:
             raise RuntimeError(
                 f"cannot downgrade 0195: {linked} decisions row(s) are linked from a "
