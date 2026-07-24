@@ -13,9 +13,13 @@ an FY segment_periods row for the resolved ticker(s) and attempts a
 derivation for each -- idempotent (a re-run against unchanged inputs is a
 no-op; a changed input re-derives and chains via ``supersedes_id``, §3.2).
 
-Routing: same ``tenq_10k_regime`` gate ``extract_segment_quarterly.py`` uses
--- Q4 derivation only makes sense for tickers whose quarterly segment data
-came from the 10-Q route in the first place.
+Routing: tickers on either quarterly segment route -- ``tenq_10k_regime``
+(the 10-Q gate ``extract_segment_quarterly.py`` uses) or ``fpi_6k`` (FPIs
+whose Q1-Q3 come from 6-K interim reports via
+``extract_segment_quarterly_6k.py`` and whose FY comes from the annual
+20-F; foreign filers publish no Q4 interim, so FY - (Q1+Q2+Q3) is the only
+way their Q4 exists at all). Tickers with no quarterly segment route are
+skipped with an honest reason.
 
 Audit: each invocation writes an ``ingestion_runs`` row + per-(ticker, year)
 ``stage_transitions`` rows (stage=COMPUTE), matching
@@ -116,7 +120,9 @@ def _parse_args() -> argparse.Namespace:
     )
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--ticker", help="Single ticker")
-    g.add_argument("--all", action="store_true", help="All 10-K-regime tracked tickers")
+    g.add_argument(
+        "--all", action="store_true", help="All tracked tickers with a quarterly segment route"
+    )
     p.add_argument("--year", type=int, default=None, help="Specific fiscal year")
     p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     return p.parse_args()
@@ -155,12 +161,12 @@ def _resolve_jobs(
             plan = plan_for_ticker(conn, ticker)
         except ValueError:
             continue
-        if plan.segment_quarterly_pipeline != "tenq_10k_regime":
+        if plan.segment_quarterly_pipeline not in ("tenq_10k_regime", "fpi_6k"):
             sys.stderr.write(
                 json.dumps(
                     {
                         "event": "segment_q4_derive_ticker_skipped",
-                        "reason": "not_10k_regime",
+                        "reason": "no_quarterly_segment_route",
                         "ticker": ticker,
                         "segment_quarterly_pipeline": plan.segment_quarterly_pipeline,
                     }

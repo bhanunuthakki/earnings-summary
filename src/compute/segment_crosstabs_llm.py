@@ -64,6 +64,16 @@ _SECTION_KEYWORDS = (
 )
 _MAX_TEXT_BUDGET = 60000
 
+# Deterministic backstop for the prompt's no-subtotal instruction: a "Total"
+# cell persisted alongside its components double-counts every consumer that
+# sums a dimension. Deliberately a local copy of segment_quarterly_6k's
+# equivalent (simple shared logic stays duplicated in this repo).
+_SUBTOTAL_NAME_PREFIXES = ("total", "subtotal", "consolidated")
+
+
+def _is_subtotal_name(name: str) -> bool:
+    return name.strip().lower().startswith(_SUBTOTAL_NAME_PREFIXES)
+
 
 # Map LLM-returned axis strings to the SegmentDimType enum. The contract asks
 # for the enum value verbatim ("product", "geography", "channel",
@@ -301,6 +311,9 @@ def _persist_cross_tabs(
                 continue
             secondary_name = cell.secondary_name.strip()
             if not secondary_name:
+                cells_skipped += 1
+                continue
+            if _is_subtotal_name(secondary_name):
                 cells_skipped += 1
                 continue
             currency = _parse_currency(cell.currency)
@@ -624,6 +637,10 @@ We accept TWO shapes of output, both encoded in the same JSON:
 DO NOT manufacture a cross-tab by inferring product-in-region from separate
 product-only and region-only tables. The filing must present each emitted breakdown
 explicitly. If unsure, prefer (B) over (A).
+
+DO NOT emit "Total"/subtotal rows or columns as cells (e.g. "Total", "Total net
+sales", a regional rollup column that just sums other listed columns) -- only the
+individual sub-group entries; a subtotal alongside its components double-counts.
 
 Axis values must be one of: "geography", "channel", "customer_segment", "product",
 "business_unit".
