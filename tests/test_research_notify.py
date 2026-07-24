@@ -11,7 +11,7 @@ from alembic.config import Config
 
 from alembic import command
 from capture import research_notify, telegram
-from research.proposals import ResearchTask, create_proposal, get_proposal
+from research.proposals import ResearchTask, create_proposal, create_task, get_proposal, get_task
 from synthesis.insights import InsightRow
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -661,6 +661,137 @@ def test_dispatch_tr_revert_unknown_id_is_already_handled(db_path: Path) -> None
     )
     assert status == "tr_stale"
     assert spy.answers and spy.answers[0][1] == "Already handled."
+
+
+# --------------------------------------------------------------------------- #
+# rx:<verb>:<task_id> — the weekly packet's "expiring research" line (B7)
+# --------------------------------------------------------------------------- #
+
+
+def test_dispatch_rx_run_respects_the_run_flag(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LEDGER_RESEARCH_RUN", raising=False)
+    tid = create_task(note_id=None, claim="do margins hold?", ticker="NU", db_path=db_path)
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok", _cb(f"rx:run:{tid}"), db_path=db_path, send=spy.send, answer=spy.answer
+    )
+    assert status == "run_disabled"
+    assert not spy.sends
+    task = get_task(tid, db_path=db_path)
+    assert task is not None and task.status == "proposed"  # untouched
+
+
+def test_dispatch_rx_run_enabled_runs_and_sends_proposal(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LEDGER_RESEARCH_RUN", "1")
+    tid = create_task(note_id=None, claim="do margins hold?", ticker="NU", db_path=db_path)
+    pid = create_proposal(
+        task_id=tid, kind="memo", ticker="NU", title="NU memo", body_md="body", db_path=db_path
+    )
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok",
+        _cb(f"rx:run:{tid}"),
+        db_path=db_path,
+        send=spy.send,
+        answer=spy.answer,
+        run=lambda task_id, **kw: pid,
+    )
+    assert status == "rx_ran"
+    assert spy.sends and "NU memo" in spy.sends[0][1]
+
+
+def test_dispatch_rx_run_failure_is_reported(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LEDGER_RESEARCH_RUN", "1")
+    tid = create_task(note_id=None, claim="do margins hold?", ticker="NU", db_path=db_path)
+    spy = _Spy()
+
+    def _boom(task_id: int, **kw: object) -> int:
+        raise RuntimeError("web fetch failed")
+
+    status = research_notify.dispatch_callback(
+        "tok", _cb(f"rx:run:{tid}"), db_path=db_path, send=spy.send, answer=spy.answer, run=_boom
+    )
+    assert status == "run_failed"
+
+
+def test_dispatch_rx_session_sends_stored_prompt(db_path: Path) -> None:
+    tid = create_task(
+        note_id=None,
+        claim="do margins hold?",
+        ticker="NU",
+        meta={"session_prompt": "# Research this wondering\n\nNU margins"},
+        db_path=db_path,
+    )
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok", _cb(f"rx:session:{tid}"), db_path=db_path, send=spy.send, answer=spy.answer
+    )
+    assert status == "rx_session"
+    assert spy.sends and "NU margins" in spy.sends[0][1]
+    # session hand-off never changes task status — it can still be run/dropped.
+    task = get_task(tid, db_path=db_path)
+    assert task is not None and task.status == "proposed"
+
+
+def test_dispatch_rx_session_no_prompt_on_file(db_path: Path) -> None:
+    tid = create_task(note_id=None, claim="do margins hold?", ticker="NU", db_path=db_path)
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok", _cb(f"rx:session:{tid}"), db_path=db_path, send=spy.send, answer=spy.answer
+    )
+    assert status == "rx_session"
+    assert spy.sends and "no session prompt" in spy.sends[0][1].lower()
+
+
+def test_dispatch_rx_drop_expires_immediately(db_path: Path) -> None:
+    """The packet-ACKNOWLEDGED drop — expires a task right away, independent
+    of the weekly sweep's second-unanswered-week rule."""
+    tid = create_task(note_id=None, claim="do margins hold?", ticker="NU", db_path=db_path)
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok", _cb(f"rx:drop:{tid}"), db_path=db_path, send=spy.send, answer=spy.answer
+    )
+    assert status == "rx_dropped"
+    assert spy.answers and spy.answers[0][1] == "Dropped."
+    task = get_task(tid, db_path=db_path)
+    assert task is not None and task.status == "expired"
+
+
+def test_dispatch_rx_stale_task_is_acknowledged(db_path: Path) -> None:
+    tid = create_task(note_id=None, claim="do margins hold?", ticker="NU", db_path=db_path)
+    from research.proposals import set_task_status
+
+    set_task_status(tid, "drafted", db_path=db_path)
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok", _cb(f"rx:drop:{tid}"), db_path=db_path, send=spy.send, answer=spy.answer
+    )
+    assert status == "rx_stale"
+    assert spy.answers and spy.answers[0][1] == "Already handled."
+
+
+def test_dispatch_rx_unknown_task_is_acknowledged(db_path: Path) -> None:
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok", _cb("rx:drop:999999"), db_path=db_path, send=spy.send, answer=spy.answer
+    )
+    assert status == "rx_stale"
+
+
+def test_dispatch_rx_unrecognized_verb(db_path: Path) -> None:
+    tid = create_task(note_id=None, claim="do margins hold?", ticker="NU", db_path=db_path)
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok", _cb(f"rx:bogus:{tid}"), db_path=db_path, send=spy.send, answer=spy.answer
+    )
+    assert status is None
+    assert spy.answers and spy.answers[0][1] == "Unrecognized action."
 
 
 def test_poller_routes_callback_to_dispatch(
