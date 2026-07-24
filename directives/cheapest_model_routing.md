@@ -208,24 +208,35 @@ is a hard stop requiring operator action (`claude auth login` or equivalent
 token refresh), not a retryable transient failure — no further eval attempts
 were made once this was confirmed twice.
 
-**Ready to run as soon as auth is restored** — a merged capture corpus (55
-cases across 9 purposes from `data/llm_capture/*.jsonl`, 2026-06-11 through
-2026-07-19) already covers 6 `DEFAULT_MODEL` purposes at `n >= min_n(4)`:
+**Round 2 update (2026-07-24, after `claude auth login` restored the CLI):**
+a merged capture corpus (55 cases across 9 purposes from
+`data/llm_capture/*.jsonl`, 2026-06-11 through 2026-07-19) covers 6
+`DEFAULT_MODEL` purposes at `n >= min_n(4)`. One diagnostic call confirmed
+the CLI worked, then `recent_developments` (highest 30d spend) was run for
+real. Result: **`KEEP_INCUMBENT`**, but under a **broken judge pool** —
+`GEMINI_API_KEY` in `.env` is invalid (`400 API_KEY_INVALID`, confirmed
+independently outside the harness), so the required dual-judge agreement was
+mechanically stuck at 0% for every case. See `model_eval_loop.md` §6 for the
+full evidence and real cost ($3.4575, `run_id`
+`04ca2f7c9a0446cc98c0d9437a852ae8`). The remaining 5 purposes were
+**deliberately not run** this round — the broken Gemini judge makes
+`SWITCH_DOWN` unreachable for any of them, so running them would only spend
+another ~$10-16 for the same non-answer.
 
 | Purpose | Incumbent | Candidate | Captured n | 30d prod cost | Status |
 |---|---|---|---:|---:|---|
-| `qa_topics` | claude-sonnet-4-6 | claude-sonnet-5 | 10 | $1.67 | eval-ready, blocked |
-| `saydo_filter` | claude-sonnet-4-6 | claude-sonnet-5 | 9 | $4.16 | eval-ready, blocked |
-| `company_description` | claude-sonnet-4-6 | claude-sonnet-5 | 9 | $3.44 | eval-ready, blocked |
-| `recent_developments` | claude-sonnet-4-6 | claude-sonnet-5 | 7 | $35.04 | eval-ready, blocked |
-| `bear_case` | claude-sonnet-4-6 | claude-sonnet-5 | 6 | $16.25 | eval-ready, blocked |
-| `peer_selection` | claude-sonnet-4-6 | claude-sonnet-5 | 6 | $11.29 | eval-ready, blocked |
+| `recent_developments` | claude-sonnet-4-6 | claude-sonnet-5 | 7 | $35.04 | **evaluated 2026-07-24 — `KEEP_INCUMBENT`, agreement 0% (broken Gemini judge, not a quality signal). Not promoted. Re-run once `GEMINI_API_KEY` is rotated.** |
+| `bear_case` | claude-sonnet-4-6 | claude-sonnet-5 | 6 | $16.25 | eval-ready, blocked — Gemini judge key invalid (not run, to conserve spend) |
+| `peer_selection` | claude-sonnet-4-6 | claude-sonnet-5 | 6 | $11.29 | eval-ready, blocked — Gemini judge key invalid (not run, to conserve spend) |
+| `saydo_filter` | claude-sonnet-4-6 | claude-sonnet-5 | 9 | $4.16 | eval-ready, blocked — Gemini judge key invalid (not run, to conserve spend) |
+| `company_description` | claude-sonnet-4-6 | claude-sonnet-5 | 9 | $3.44 | eval-ready, blocked — Gemini judge key invalid (not run, to conserve spend) |
+| `qa_topics` | claude-sonnet-4-6 | claude-sonnet-5 | 10 | $1.67 | eval-ready, blocked — Gemini judge key invalid (not run, to conserve spend) |
 | `earnings_themes_split` | claude-sonnet-4-6 | claude-sonnet-5 | 2 | $39.00 | below min_n; needs 2+ more harvested cases |
 | `valuation_basis` | claude-opus-4-8 | — | 4 | — | not a candidate this round (already-current opus id; no swap to eval) |
 | `exec_comp_alignment` | claude-opus-4-8 | — | 2 | — | not a candidate this round (opus id unchanged) |
 | all `FAST_CLASSIFIER_MODEL` purposes (haiku tier) | claude-haiku-4-5-20251001 | claude-haiku-4-5 | 0 | — | **blocked — no captured prompt corpus.** `run_weekly_model_eval.py`'s `_HARVEST_STEPS` only wires `bear_case`/`company_description`; no haiku-tier purpose has a harvest step, so `--from-capture` has nothing to load. Needs a harvest step added (or a manual `LLM_CAPTURE_DIR`-wrapped run of the purpose's real call site) before any haiku promotion can be eval-gated. |
 
-Run command once auth is restored (per purpose, from the repo root):
+Run command once `GEMINI_API_KEY` is rotated (per purpose, from the repo root):
 ```
 python execution/eval_model_downgrade.py --purpose <p> \
   --from-capture data/llm_capture/<merged-or-single-file>.jsonl \

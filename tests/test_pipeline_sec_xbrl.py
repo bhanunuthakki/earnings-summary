@@ -640,15 +640,11 @@ def test_same_doc_pick_key_prefers_latest_start() -> None:
     )
     # instant (no start) sorts below any dated duration
     instant = {"end": "2016-07-02", "val": 5}
-    assert _same_doc_pick_key(recast, Decimal(9_300_000)) > _same_doc_pick_key(
-        instant, Decimal(5)
-    )
+    assert _same_doc_pick_key(recast, Decimal(9_300_000)) > _same_doc_pick_key(instant, Decimal(5))
     # equal start -> a framed entry outranks an unframed one
     framed = {"start": "2015-08-02", "frame": "CY2016", "val": 1}
     unframed = {"start": "2015-08-02", "val": 1}
-    assert _same_doc_pick_key(framed, Decimal(1)) > _same_doc_pick_key(
-        unframed, Decimal(1)
-    )
+    assert _same_doc_pick_key(framed, Decimal(1)) > _same_doc_pick_key(unframed, Decimal(1))
 
 
 def _register_10k(conn: sqlite3.Connection, accn: str) -> dict[str, int]:
