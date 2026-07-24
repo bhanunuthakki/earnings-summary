@@ -13,8 +13,9 @@ Where this fits:
 
 Per-ticker pipeline:
   1. Locate latest ``data/historical/fmp/{TICKER}_form_10k_{YEAR}.json``.
-  2. Find sections whose key matches segment / geographic / disaggregation
-     keywords; flatten + cap at the prompt budget.
+  2. Find sections whose key OR content head matches segment / geographic /
+     disaggregation keywords (FMP truncates keys to ~31 chars, so the key
+     alone is not enough); rank best-first and cap at the prompt budget.
   3. Single Haiku call with a strict-JSON contract returning a list of
      cross-tabs, each one a (subject_axis, subject_name) anchor with N cells
      keyed on (period_end, fiscal_period_type, secondary_name).
@@ -55,14 +56,31 @@ from models.facts import (
 )
 from pipeline.segment_junction_writer import write_segment_facts_junction
 
-_SECTION_KEYWORDS = (
+# Two keyword tiers: priority keywords are the actual cross-tab signals;
+# generic ones ("revenue", "sales") match half the filing and only fill
+# whatever budget the priority sections leave over. Stems ("geograph",
+# "disaggregat") so "geographical areas" / "disaggregated" also match.
+_PRIORITY_KEYWORDS = (
     "segment",
-    "geographic",
-    "disaggregation",
+    "geograph",
+    "disaggregat",
+)
+_GENERIC_KEYWORDS = (
     "revenue",
     "sales",
 )
+_SECTION_KEYWORDS = _PRIORITY_KEYWORDS + _GENERIC_KEYWORDS
 _MAX_TEXT_BUDGET = 60000
+# FMP truncates top-level section keys to ~31 chars (deduped with _1/_2
+# suffixes), but each section's first row repeats the full untruncated title —
+# so keyword-match the key PLUS the section's first serialized line. Only the
+# title row: scanning deeper content admits 40-88KB narrative sections that
+# merely mention "segment" in passing (Income Taxes, PP&E, accounting
+# policies) and they crowd out the real tables.
+_TITLE_SCAN_CHARS = 500
+# Per-section cap so one huge narrative section (e.g. a 69KB "Results for the
+# year" prose dump) can't starve the actual segment/geography tables.
+_MAX_SECTION_CHARS = 45000
 
 # Deterministic backstop for the prompt's no-subtotal instruction: a "Total"
 # cell persisted alongside its components double-counts every consumer that
@@ -482,7 +500,8 @@ def _relative_file_path(source_path: Path, repo_root: Path | None) -> str | None
 
 
 def _extract_relevant_text(payload: dict[str, object]) -> str:
-    """Concatenate JSON-serialized rows from every section whose key matches a keyword.
+    """Concatenate JSON-serialized rows from every keyword-matching section,
+    best sections first.
 
     FMP's 10-K JSON is structured tabular data: each section is a list of
     small dicts like ``{"Net sales": [716924, 637959, 574785]}``. The labels
@@ -491,26 +510,48 @@ def _extract_relevant_text(payload: dict[str, object]) -> str:
     for narrative prose, which is the wrong tool here).
 
     So we serialize each section as one JSON line per child item, preserving
-    the table's label/value structure for the LLM to read. The budget cap
-    still applies — large sections get truncated rather than dropped, so the
-    LLM at least sees the header rows.
+    the table's label/value structure for the LLM to read.
+
+    Selection is title-aware: FMP truncates top-level keys to ~31 chars
+    (``"Results for the year - Segmen_2"``), so keywords are matched against
+    the key PLUS the section's first serialized row — which carries the full
+    untruncated title. Matching sections are ranked by how many distinct
+    priority keywords they hit (a segment-AND-geography table outranks a
+    segment-only one, which outranks generic revenue/sales sections), ties
+    in document order, and the budget is filled in rank order with a
+    per-section cap so one huge matching section can't crowd out the
+    actual tables.
     """
-    parts: list[str] = []
-    total_chars = 0
-    for key, value in payload.items():
-        key_lower = str(key).lower()
-        if not any(kw in key_lower for kw in _SECTION_KEYWORDS):
-            continue
+    # (rank, doc_order, key, section_text) — rank is -#priority-hits for
+    # priority sections, +1 for generic-only ones, so sort() puts richer
+    # sections first and stable doc order breaks ties.
+    candidates: list[tuple[int, int, str, str]] = []
+    for doc_order, (key, value) in enumerate(payload.items()):
         section_lines = _serialize_section(value)
         section_text = "\n".join(section_lines).strip()
         if not section_text:
             continue
-        if total_chars + len(section_text) > _MAX_TEXT_BUDGET:
-            section_text = section_text[: _MAX_TEXT_BUDGET - total_chars]
-        parts.append(f"=== {key} ===\n{section_text}")
-        total_chars += len(section_text)
+        title_row = section_lines[0][:_TITLE_SCAN_CHARS]
+        scan = f"{key}\n{title_row}".lower()
+        priority_hits = sum(1 for kw in _PRIORITY_KEYWORDS if kw in scan)
+        if priority_hits:
+            rank = -priority_hits
+        elif any(kw in scan for kw in _GENERIC_KEYWORDS):
+            rank = 1
+        else:
+            continue
+        candidates.append((rank, doc_order, str(key), section_text))
+    candidates.sort()
+
+    parts: list[str] = []
+    total_chars = 0
+    for _rank, _doc_order, key, section_text in candidates:
         if total_chars >= _MAX_TEXT_BUDGET:
             break
+        allowed = min(_MAX_SECTION_CHARS, _MAX_TEXT_BUDGET - total_chars)
+        section_text = section_text[:allowed]
+        parts.append(f"=== {key} ===\n{section_text}")
+        total_chars += len(section_text)
     return "\n\n".join(parts)
 
 

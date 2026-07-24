@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -451,6 +453,73 @@ def test_extract_one_axis_fallback_writes_revenue_metric(
     assert metrics == {"revenue"}, (
         f"1-axis breakdowns must land with metric='revenue' (not subject-prefixed); got {metrics}"
     )
+
+
+# Typed handle on the private selection helper; getattr keeps the pyright
+# strict ratchet clean (a direct ``module._name`` access is a new
+# reportPrivateUsage error per call site).
+_extract_relevant_text = cast(
+    "Callable[[dict[str, object]], str]",
+    getattr(segment_crosstabs_llm, "_extract_relevant_text"),
+)
+
+
+class TestExtractRelevantText:
+    """Section selection: truncated FMP keys, ranking, budget starvation.
+
+    FMP truncates top-level section keys to ~31 chars (dedupes with _1/_2
+    suffixes) but repeats the full untruncated title as the first row of
+    each section — the NVO FY2025 geography crosstab lives under the key
+    ``"Results for the year - Segmen_2"`` and was invisible to key-only
+    matching (0 cross_tabs extracted on 2026-07-23).
+    """
+
+    def test_truncated_key_matched_via_title_row(self) -> None:
+        """The NVO shape: key truncated mid-'Segment', full title in row 1."""
+        payload: dict[str, object] = {
+            "Results for the year - Segmen_2": [
+                {
+                    "Results for the year - Segment information - Net sales - "
+                    "Business segments and geographical areas (Details) - DKK (kr) "
+                    "kr in Millions": ["12 Months Ended"]
+                },
+                {"North America Operations": [143257, 126259, 101613]},
+            ],
+        }
+        text = _extract_relevant_text(payload)
+        assert "geographical areas" in text
+        assert "North America Operations" in text
+
+    def test_priority_sections_fill_budget_before_generic(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A huge generic sales narrative earlier in doc order must not starve
+        a later segment/geography table (the NVO failure mode)."""
+        monkeypatch.setattr(segment_crosstabs_llm, "_MAX_TEXT_BUDGET", 2000)
+        monkeypatch.setattr(segment_crosstabs_llm, "_MAX_SECTION_CHARS", 1500)
+        payload: dict[str, object] = {
+            "Cost of sales narrative": ["net sales discussion " * 200],
+            "Segment information - geographical areas": [
+                {"EMEA": [111, 222]},
+            ],
+        }
+        text = _extract_relevant_text(payload)
+        # The priority table is complete; the generic narrative is capped to
+        # the leftover budget instead of consuming it all first.
+        assert '"EMEA"' in text
+        assert text.index("Segment information") < text.index("Cost of sales narrative")
+
+    def test_deep_content_mention_does_not_match(self) -> None:
+        """Only the key + title row are scanned — a narrative that mentions
+        'segment' in a later row (Income Taxes, PP&E, accounting policies)
+        stays excluded, so 40-88KB false positives can't crowd the budget."""
+        payload: dict[str, object] = {
+            "Income Taxes": [
+                {"Income Taxes": ["12 Months Ended"]},
+                {"Provision discussion": ["allocated across each operating segment"]},
+            ],
+        }
+        assert _extract_relevant_text(payload) == ""
 
 
 def test_build_secondary_expansions_multi_word_subject(
