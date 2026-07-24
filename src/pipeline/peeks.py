@@ -70,7 +70,7 @@ from pipeline.source_viewers import (
 )
 from pipeline.source_viewers import _DocRow as _SourceDocRow  # pyright: ignore[reportPrivateUsage]
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_reltime
-from ui.controls import pill_tone_class, thesis_status_tone
+from ui.controls import pill_tone_class, thesis_status_tone, ticker_label
 from ui.prose import render_prose
 from ui.time import stamp_html
 
@@ -78,6 +78,7 @@ __all__ = [
     "render_alert_peek",
     "render_alerts_list_peek",
     "render_derived_peek",
+    "render_discovery_compare_peek",
     "render_fact_provenance_peek",
     "render_fit_peek",
     "render_memo_peek",
@@ -1922,3 +1923,115 @@ def _render_legacy_provenance_peek(
             bits.append(f'<div class="cc-prov-row mono src-pop-locator">{escape(raw)}</div>')
     badge = '<span class="k-chip k-chip-warn">provenance: legacy</span>'
     return f'<div class="cc-prov"><div class="cc-prov-rows">{"".join(bits)}</div>{badge}</div>'
+
+
+# ----------------------------------------------------------------------------
+# Discovery compare peek (PRD §8.2, P1-B) — up to 3 candidates side by side
+# ----------------------------------------------------------------------------
+
+# TickerMetrics field -> row label. Kept as a plain tuple (not the dataclass
+# itself) so the row order is the display order, independent of field order.
+_COMPARE_METRIC_ROWS: tuple[tuple[str, str], ...] = (
+    ("sector", "Sector"),
+    ("industry", "Industry"),
+    ("market_cap", "Market cap"),
+    ("rev_yoy", "Revenue YoY"),
+    ("roic_ttm", "ROIC (TTM)"),
+    ("fcf_yield_ttm", "FCF yield (TTM, proxy — no P/E cached)"),
+    ("nd_to_ebitda_ttm", "ND / EBITDA (TTM)"),
+    ("gross_margin_ttm", "Gross margin (TTM)"),
+    ("op_margin_ttm", "Op margin (TTM)"),
+)
+
+# need_rank blob key -> row label (mirrors discovery.need_rank.NeedRank).
+_COMPARE_NEED_RANK_ROWS: tuple[tuple[str, str], ...] = (
+    ("eval_adjacency", "Evaluation-list adjacency"),
+    ("diversifier", "Diversifier (coarse, preliminary)"),
+    ("garp", "GARP"),
+    ("signal", "Source signal strength"),
+    ("effort", "Estimated effort"),
+    ("first_rejection_reason", "First rejection risk"),
+    ("composite", "Composite"),
+)
+
+_COMPARE_PCT_FIELDS: frozenset[str] = frozenset(
+    {"rev_yoy", "roic_ttm", "fcf_yield_ttm", "gross_margin_ttm", "op_margin_ttm"}
+)
+
+
+def _compare_metric_cell(metrics: object, key: str) -> str:
+    v = getattr(metrics, key, None)
+    if v is None:
+        return "&mdash;"
+    if key == "market_cap":
+        return escape(f"${float(cast('float', v)) / 1e9:.1f}B")
+    if key in _COMPARE_PCT_FIELDS:
+        return escape(fmt_pct(float(cast("float", v))))
+    if key == "nd_to_ebitda_ttm":
+        return escape(f"{float(cast('float', v)):.1f}x")
+    return escape(str(v))
+
+
+def _compare_rank_cell(rank: dict[str, object] | None, key: str) -> str:
+    if rank is None:
+        return "&mdash;"
+    v = rank.get(key)
+    if v is None:
+        return "clean" if key == "first_rejection_reason" else "&mdash;"
+    if isinstance(v, bool):
+        return "yes" if v else "no"
+    if isinstance(v, float):
+        return f"{v:.2f}"
+    return escape(str(v))
+
+
+def render_discovery_compare_peek(repo_root: Path, db_path: Path, tickers: list[str]) -> str:
+    """Side-by-side deterministic table for up to 3 Discovery candidates
+    (PRD §8.2's Compare action): the cached ``TickerMetrics`` bundle plus the
+    ``need_rank`` breakdown when the ticker carries a ``discovery_candidates``
+    row (any status, including dismissed — Compare is a lookup, not a queue
+    filter). Always renders (degrades per missing metric/candidate); the
+    route's ``safe_ticker`` + 1..3-count validation is what 404s, this
+    renderer never does."""
+    from discovery.screens import load_ticker_metrics
+    from discovery.store import get_candidate_by_ticker
+
+    fmp_dir = repo_root / "data" / "historical" / "fmp"
+    cols = [t.strip().upper() for t in tickers if t.strip()][:3]
+    metrics_by_t = {t: load_ticker_metrics(fmp_dir, t, None) for t in cols}
+    ranks_by_t: dict[str, dict[str, object] | None] = {}
+    for t in cols:
+        cand = get_candidate_by_ticker(t, db_path=db_path)
+        rank: dict[str, object] | None = None
+        if cand is not None and isinstance(cand.score_json, dict):
+            raw = cand.score_json.get("need_rank")
+            if isinstance(raw, dict):
+                rank = cast("dict[str, object]", raw)
+        ranks_by_t[t] = rank
+
+    if not cols:
+        return '<p class="cc-score-legend">No tickers to compare.</p>'
+
+    head_cells = "".join(f"<th>{ticker_label(t, metrics_by_t[t].name)}</th>" for t in cols)
+    body_rows: list[str] = []
+    for key, label in _COMPARE_METRIC_ROWS:
+        cells = "".join(f"<td>{_compare_metric_cell(metrics_by_t[t], key)}</td>" for t in cols)
+        body_rows.append(f"<tr><td>{escape(label)}</td>{cells}</tr>")
+    body_rows.append(f'<tr><td colspan="{len(cols) + 1}"><b>Portfolio-need ranking</b></td></tr>')
+    for key, label in _COMPARE_NEED_RANK_ROWS:
+        cells = "".join(f"<td>{_compare_rank_cell(ranks_by_t[t], key)}</td>" for t in cols)
+        body_rows.append(f"<tr><td>{escape(label)}</td>{cells}</tr>")
+
+    table = (
+        f'<table class="p-table"><thead><tr><th></th>{head_cells}</tr></thead>'
+        f"<tbody>{''.join(body_rows)}</tbody></table>"
+    )
+    foot = (
+        '<p class="cc-score-legend">FCF yield stands in for a P/E/PEG multiple '
+        "(not cached); the diversifier leg is a coarse, preliminary reuse of the "
+        "candidate-fit machinery, never full evaluation-grade precision.</p>"
+    )
+    # cc-score-legend is defined in _SCORE_CSS; include it so the Compare peek
+    # renders correctly even when opened without a prior Score/Fit peek on the
+    # page (repeated <style> blocks are harmless — same rules, later wins).
+    return f"{table}{foot}<style>{_SCORE_CSS}</style>"

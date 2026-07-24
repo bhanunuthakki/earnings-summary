@@ -40,7 +40,13 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from discovery.adjacency import AdjacencyHit, mine_adjacency  # noqa: E402
+from discovery.need_rank import (  # noqa: E402
+    NeedRank,
+    compute_need_rank,
+    need_rank_to_json,
+)
 from discovery.scoring import (  # noqa: E402
+    ScoreResult,
     Signal,
     adjacency_signal,
     score_candidate,
@@ -56,6 +62,12 @@ from discovery.store import (  # noqa: E402
     upsert_candidate,
 )
 from identity import DEFAULT_USER_ID  # noqa: E402
+
+#: How many interim-ranked candidates get the (heavier, price-history-reading)
+#: coarse diversifier leg each run — the PRD's "reusing the candidate-fit/ΔSR
+#: machinery at coarse precision" for the names that matter, not every
+#: candidate the screens/adjacency turned up.
+NEED_RANK_DIVERSIFIER_TOP_N = 25
 
 # The screen+adjacency run owns exactly these signal classes; the 13F miner
 # owns 'investor_13f'. replace_signals refreshes only the classes a producer
@@ -173,28 +185,117 @@ def discover(
     _attach_investor_signals(by_ticker, _slot, source_map, db_path, user_id)
 
     existing = existing_candidate_tickers(user_id=user_id, db_path=db_path)
-    signal_writes: list[SignalWrite] = []
-    results: list[tuple[str, float, int]] = []
+    qualifying: list[tuple[str, _Acc, ScoreResult]] = []
     for ticker, acc in by_ticker.items():
         result = score_candidate(acc.signals)
         # A NEW name must clear the entry bar; an existing candidate is always
         # refreshed (its score/lifecycle stays current even if it slips below).
         if ticker in existing or result.passes_entry:
-            upsert_candidate(
-                ticker=ticker,
-                name=acc.name,
-                score=result.score,
-                evidence=acc.evidence,
-                score_json=result.why,
-                user_id=user_id,
-                db_path=db_path,
-            )
-            signal_writes.extend(_to_signal_writes(ticker, acc.signals))
-            results.append((ticker, result.score, len(acc.evidence)))
+            qualifying.append((ticker, acc, result))
+
+    need_ranks = _compute_need_ranks(
+        repo_root,
+        db_path,
+        {t: r.score for t, _a, r in qualifying},
+        user_id=user_id,
+    )
+
+    signal_writes: list[SignalWrite] = []
+    results: list[tuple[str, float, int]] = []
+    for ticker, acc, result in qualifying:
+        why = dict(result.why)
+        rank = need_ranks.get(ticker)
+        if rank is not None:
+            why["need_rank"] = need_rank_to_json(rank)
+        upsert_candidate(
+            ticker=ticker,
+            name=acc.name,
+            score=result.score,
+            evidence=acc.evidence,
+            score_json=why,
+            user_id=user_id,
+            db_path=db_path,
+        )
+        signal_writes.extend(_to_signal_writes(ticker, acc.signals))
+        results.append((ticker, result.score, len(acc.evidence)))
 
     replace_signals(signal_writes, classes=_FUNDAMENTAL_CLASSES, user_id=user_id, db_path=db_path)
     results.sort(key=lambda r: (-r[1], r[0]))
     return results
+
+
+def _compute_need_ranks(
+    repo_root: Path,
+    db_path: Path,
+    base_scores: dict[str, float],
+    *,
+    user_id: str,
+) -> dict[str, NeedRank]:
+    """P1-B (PRD §8.2): portfolio-need ranking for every qualifying candidate.
+
+    Two passes so the (heavier, per-name price-history read) diversifier leg
+    only runs for the interim top ``NEED_RANK_DIVERSIFIER_TOP_N`` — cheap legs
+    (adjacency, GARP, effort, first-rejection) for everyone, then one shared
+    ``BookContext`` assembly reused across the coarse-fit recompute for the
+    names that actually matter. Never raises: an import/compute failure here
+    must not take down the discovery run — a candidate simply keeps its cheap
+    (diversifier=None) NeedRank."""
+    from discovery.need_rank import load_eval_names
+
+    fmp_dir = repo_root / "data" / "historical" / "fmp"
+    eval_names = load_eval_names(db_path, fmp_dir, user_id=user_id)
+
+    interim: dict[str, NeedRank] = {
+        ticker: compute_need_rank(
+            repo_root,
+            db_path,
+            ticker,
+            base_score,
+            eval_names=eval_names,
+            coarse_fit=False,
+            user_id=user_id,
+        )
+        for ticker, base_score in base_scores.items()
+    }
+    if not interim:
+        return interim
+
+    top = sorted(interim.items(), key=lambda kv: -kv[1].composite)[:NEED_RANK_DIVERSIFIER_TOP_N]
+    top_tickers = {t for t, _r in top}
+    if not top_tickers:
+        return interim
+
+    book = _assemble_book_context_safe(repo_root, db_path)
+    if book is None:
+        return interim
+
+    for ticker in top_tickers:
+        interim[ticker] = compute_need_rank(
+            repo_root,
+            db_path,
+            ticker,
+            base_scores[ticker],
+            book=book,
+            eval_names=eval_names,
+            coarse_fit=True,
+            user_id=user_id,
+        )
+    return interim
+
+
+def _assemble_book_context_safe(repo_root: Path, db_path: Path) -> object | None:
+    """The one shared ``BookContext`` the coarse diversifier pass reuses across
+    every top-N candidate — assembled once (a tracker round-trip + cache
+    reads), never a crash: a tracker outage or missing cache degrades to
+    ``None`` (the diversifier leg then stays unset for this run, not faked)."""
+    try:
+        from candidate_fit_cache import assemble_book_context
+    except ImportError:
+        return None
+    try:
+        return assemble_book_context(repo_root, db_path=db_path)
+    except Exception:  # a network/cache edge case must not take down discovery
+        return None
 
 
 def _to_signal_writes(ticker: str, signals: list[Signal]) -> list[SignalWrite]:

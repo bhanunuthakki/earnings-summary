@@ -206,6 +206,31 @@ def get_candidate(candidate_id: int, *, db_path: Path | str | None = None) -> Ca
         conn.close()
 
 
+def get_candidate_by_ticker(
+    ticker: str, *, user_id: str = DEFAULT_USER_ID, db_path: Path | str | None = None
+) -> CandidateRow | None:
+    """One candidate by ticker (any status, including dismissed) — the
+    Compare peek's need_rank lookup, where a name might not be in the live
+    inbox at all. ``None`` on an unknown ticker or a missing DB (never a
+    crash — the peek degrades to "not computed" for that column)."""
+    symbol = ticker.strip().upper()
+    clause, params = _user_in(user_id)
+    try:
+        conn = open_conn(db_path)
+    except (FileNotFoundError, RuntimeError):
+        return None
+    try:
+        row = conn.execute(
+            f"SELECT * FROM discovery_candidates WHERE {clause} AND ticker = ?",
+            [*params, symbol],
+        ).fetchone()
+        return None if row is None else _row_to_dc(row)
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+
+
 def set_status(
     candidate_id: int,
     status: str,
@@ -229,6 +254,55 @@ def set_status(
             "SELECT * FROM discovery_candidates WHERE id = ?", (candidate_id,)
         ).fetchone()
         return None if row is None else _row_to_dc(row)
+    finally:
+        conn.close()
+
+
+def promote_to_watchlist(
+    *,
+    ticker: str,
+    name: str | None,
+    user_id: str = DEFAULT_USER_ID,
+    db_path: Path | str | None = None,
+) -> bool:
+    """The Watch action (PRD §8.2, P1-B): index_member/none -> watchlist.
+
+    Mirrors ``discovery_build._promote_to_evaluation``'s shape (a direct
+    ``tracked_companies`` UPDATE, not ``db.track_company`` — Watch is a
+    lightweight "keep an eye on this", not a full onboard) with one addition:
+    a raw Discovery name that has never been tracked (investor-only 13F
+    surface, no screen/adjacency hit) gets a minimal INSERT rather than a
+    no-op UPDATE. Already-active names (portfolio/watchlist/evaluation) pass
+    through untouched — Watch never downgrades a name already ahead of it.
+    The discovery candidate's own status/lifecycle is NEVER touched here;
+    the queue disposition and the tracked-universe membership are separate
+    concerns. Returns False only on a missing/unreadable DB."""
+    symbol = ticker.strip().upper()
+    try:
+        conn = open_conn(db_path)
+    except (FileNotFoundError, RuntimeError):
+        return False
+    try:
+        row = conn.execute(
+            "SELECT list_type FROM tracked_companies WHERE user_id = ? AND ticker = ?",
+            (user_id, symbol),
+        ).fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT INTO tracked_companies (user_id, ticker, name, list_type) "
+                "VALUES (?, ?, ?, 'watchlist')",
+                (user_id, symbol, name or symbol),
+            )
+        elif str(row[0]) not in ("portfolio", "watchlist", "evaluation"):
+            conn.execute(
+                "UPDATE tracked_companies SET list_type = 'watchlist' "
+                "WHERE user_id = ? AND ticker = ?",
+                (user_id, symbol),
+            )
+        conn.commit()
+        return True
+    except sqlite3.Error:
+        return False
     finally:
         conn.close()
 

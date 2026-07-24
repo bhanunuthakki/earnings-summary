@@ -203,15 +203,15 @@ def test_shell_carries_discovery_tab() -> None:
 
 def test_panel_is_one_band_on_the_kit(repo: Path) -> None:
     """The rebuilt panel: ONE toolbar band (no title band over a filter band),
-    chip status filters, .p-table rows, ticker_label, score pill, and a
-    collapsed score peek (design_language §6.1 + §10)."""
+    chip status filters, top-ten .k-well cards (PRD §8.2, P1-B), ticker_label,
+    score pill, and a collapsed score peek (design_language §6.1 + §10)."""
     html_out = render_discovery_panel(repo / "data" / "portfolio.db")
     assert "k-toolbar" in html_out  # the single operating band
     assert "<h2>Discovery</h2>" not in html_out  # nav owns the title
     assert "dq-statusfilter" in html_out and "k-chip-btn" in html_out  # chip filters
-    assert 'class="p-table"' in html_out  # kit table, not the bespoke .dq-table
+    assert 'class="dq-card k-well"' in html_out  # kit card, not the bespoke .dq-table
     assert "k-tick-sym" in html_out  # ticker_label, not a concatenated string
-    assert "k-pill" in html_out  # the score pill
+    assert "k-pill" in html_out  # the score/composite pill
     assert 'class="dq-peek"' in html_out  # evidence behind a peek
     # WDC's score_json drives the inline evidence line; the verbatim detail is
     # in the (hidden) peek row.
@@ -219,6 +219,19 @@ def test_panel_is_one_band_on_the_kit(repo: Path) -> None:
     detail_marker = 'id="dq-detail-'
     assert detail_marker in html_out and "ROIC 27.3% TTM" in html_out
     assert "dq-sources-toggle" in html_out  # the weight-edit surface
+
+
+def test_panel_more_candidates_uses_the_kit_table(repo: Path) -> None:
+    """Beyond the top ten, the "More candidates" bucket still renders the
+    compact .p-table (unchanged design) inside a collapsed <details>."""
+    db = repo / "data" / "portfolio.db"
+    for i in range(15):
+        upsert_candidate(ticker=f"MORE{i}", name=None, score=0.5 + i, evidence=[], db_path=db)
+    out = render_discovery_list(db)
+    assert "dq-cards" in out  # the top-ten card section
+    assert '<details class="dq-more">' in out
+    assert "More candidates (" in out
+    assert 'class="p-table"' in out  # the overflow table survives
 
 
 def test_dismiss_never_uses_window_prompt() -> None:
@@ -247,6 +260,35 @@ def test_render_cap_discloses_elision(repo: Path) -> None:
         upsert_candidate(ticker=f"CAND{i}", name=None, score=float(i), evidence=[], db_path=db)
     out = render_discovery_list(db)
     assert f"top {discovery_panel.RENDER_TOP_N} of" in out  # the cap is disclosed, not silent
+
+
+def test_top_ten_ranks_by_need_rank_composite_with_legacy_fallback(repo: Path) -> None:
+    """The primary (``live``) view's top ten sorts by ``need_rank.composite``
+    when present; a candidate never re-scored (no need_rank key at all) falls
+    back to the legacy weighted ``score`` rather than sorting last."""
+    db = repo / "data" / "portfolio.db"
+    # LOWSIG: legacy score is low, but a strong need_rank composite must still
+    # put it ahead of a high-legacy-score name that has no need_rank at all.
+    upsert_candidate(
+        ticker="LOWSIG",
+        name="Low signal, high need",
+        score=1.6,
+        evidence=[],
+        score_json={"terms": {}, "need_rank": {"composite": 9.5, "v": 1}},
+        db_path=db,
+    )
+    upsert_candidate(
+        ticker="NORANK",
+        name="High legacy score, never re-scored",
+        score=8.0,
+        evidence=[],
+        db_path=db,  # no score_json at all — legacy-score fallback path
+    )
+    out = render_discovery_list(db)
+    low_pos = out.index("LOWSIG")
+    high_pos = out.index("NORANK")
+    assert low_pos < high_pos  # composite 9.5 outranks the legacy-only 8.0
+    assert "need 9.5" in out  # the composite pill renders for the ranked name
 
 
 # ----------------------------------------------------------------------------
@@ -313,6 +355,100 @@ def test_status_transitions(client: FlaskClient, repo: Path) -> None:
     assert (
         client.post("/api/discovery/candidates/99999/status", json={"status": "queued"})
     ).status_code == 404
+
+
+# ----------------------------------------------------------------------------
+# watch action (PRD §8.2, P1-B)
+# ----------------------------------------------------------------------------
+
+
+def test_watch_action_promotes_and_leaves_candidate_status_alone(
+    client: FlaskClient, repo: Path
+) -> None:
+    db = repo / "data" / "portfolio.db"
+    wdc = next(c for c in list_candidates(db_path=db) if c.ticker == "WDC")
+    res = client.post(f"/api/discovery/candidates/{wdc.id}/watch")
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["watch"] == {"ticker": "WDC", "ok": True}
+    assert body["candidate"]["status"] == "new"  # untouched — Watch != a queue move
+
+    conn = sqlite3.connect(db)
+    list_type = conn.execute(
+        "SELECT list_type FROM tracked_companies WHERE ticker = 'WDC'"
+    ).fetchone()[0]
+    conn.close()
+    assert list_type == "watchlist"
+
+    # Idempotent: watching an already-watched name is a no-op 200, not an error.
+    again = client.post(f"/api/discovery/candidates/{wdc.id}/watch")
+    assert again.status_code == 200
+    conn = sqlite3.connect(db)
+    still = conn.execute("SELECT list_type FROM tracked_companies WHERE ticker = 'WDC'").fetchone()[
+        0
+    ]
+    conn.close()
+    assert still == "watchlist"
+
+
+def test_watch_action_never_downgrades_a_more_active_name(client: FlaskClient, repo: Path) -> None:
+    db = repo / "data" / "portfolio.db"
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE tracked_companies SET list_type = 'evaluation' WHERE ticker = 'WDC'")
+    conn.commit()
+    conn.close()
+    wdc = next(c for c in list_candidates(db_path=db) if c.ticker == "WDC")
+    res = client.post(f"/api/discovery/candidates/{wdc.id}/watch")
+    assert res.status_code == 200
+    conn = sqlite3.connect(db)
+    list_type = conn.execute(
+        "SELECT list_type FROM tracked_companies WHERE ticker = 'WDC'"
+    ).fetchone()[0]
+    conn.close()
+    assert list_type == "evaluation"  # not downgraded to watchlist
+
+
+def test_watch_action_unknown_candidate_404s(client: FlaskClient) -> None:
+    assert client.post("/api/discovery/candidates/99999/watch").status_code == 404
+
+
+# ----------------------------------------------------------------------------
+# compare peek (PRD §8.2, P1-B)
+# ----------------------------------------------------------------------------
+
+
+def test_compare_peek_single_ticker(client: FlaskClient) -> None:
+    res = client.get("/api/peek/discovery-compare?tickers=WDC")
+    assert res.status_code == 200
+    body = res.get_data(as_text=True)
+    assert "WDC" in body
+    assert 'class="p-table"' in body
+
+
+def test_compare_peek_up_to_three_columns(client: FlaskClient) -> None:
+    res = client.get("/api/peek/discovery-compare?tickers=WDC,EVR,OLD")
+    assert res.status_code == 200
+    body = res.get_data(as_text=True)
+    assert body.count("<th>") - 1 == 3  # one blank corner th + one per ticker
+    for t in ("WDC", "EVR", "OLD"):
+        assert t in body
+
+
+def test_compare_peek_needs_rank_when_present(client: FlaskClient) -> None:
+    # WDC's seeded score_json carries no need_rank (pre-P1-B row) — the peek
+    # must degrade those cells, not crash.
+    res = client.get("/api/peek/discovery-compare?tickers=WDC")
+    assert res.status_code == 200
+
+
+def test_compare_peek_rejects_empty_or_too_many(client: FlaskClient) -> None:
+    assert client.get("/api/peek/discovery-compare?tickers=").status_code == 404
+    assert client.get("/api/peek/discovery-compare").status_code == 404
+    assert client.get("/api/peek/discovery-compare?tickers=A,B,C,D").status_code == 404
+
+
+def test_compare_peek_rejects_bad_ticker(client: FlaskClient) -> None:
+    assert client.get("/api/peek/discovery-compare?tickers=..%2F..%2Fetc").status_code == 404
 
 
 # ----------------------------------------------------------------------------

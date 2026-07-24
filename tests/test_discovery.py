@@ -460,6 +460,38 @@ def test_discover_end_to_end(repo: Path) -> None:
     assert len(mrvl.evidence) == 2
 
 
+def test_discover_populates_need_rank(repo: Path) -> None:
+    """P1-B (PRD §8.2): every persisted candidate carries a ``need_rank``
+    augmentation in ``score_json`` — a sibling of the existing scoring
+    ``terms``/``total`` keys, never replacing them."""
+    db = repo / "data" / "portfolio.db"
+    run_discovery.discover(repo)
+    by_ticker = {c.ticker: c for c in list_candidates(db_path=db)}
+
+    goodco_why = by_ticker["GOODCO"].score_json
+    assert goodco_why is not None
+    # The legacy shape survives untouched (test_discover_end_to_end pins the
+    # exact "terms" value; here we just confirm need_rank sits alongside it).
+    assert "terms" in goodco_why and "need_rank" in goodco_why
+    rank = goodco_why["need_rank"]
+    assert isinstance(rank, dict)
+    # GOODCO clears every GARP leg (rev YoY 30%, FCF yield 8%, ROIC 20%).
+    assert rank["garp"] == pytest.approx(2.0)
+    assert "growth at a reasonable FCF yield" in rank["garp_reason"]
+    assert rank["effort"] in ("light", "medium", "heavy")
+    assert rank["first_rejection_reason"] is None  # GOODCO fails no gate
+    assert isinstance(rank["composite"], (int, float))
+
+    # MRVL has no FMP cache (adjacency-only) — GARP degrades to 0, never a
+    # crash, and the composite still computes.
+    mrvl_why = by_ticker["MRVL"].score_json
+    assert mrvl_why is not None
+    mrvl_rank = mrvl_why["need_rank"]
+    assert isinstance(mrvl_rank, dict)
+    assert mrvl_rank["garp"] == 0.0
+    assert "no cached fundamentals" in mrvl_rank["garp_reason"]
+
+
 def test_discover_existing_below_threshold_is_refreshed(repo: Path) -> None:
     """A NEW weak name stays out, but a name already IN the queue is always
     refreshed (its score/lifecycle stays current even below the entry bar)."""
