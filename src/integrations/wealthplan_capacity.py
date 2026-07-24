@@ -106,6 +106,21 @@ def read_cash_need_summary(
         return WealthplanCashNeedSummary(
             available=False, reason=f"wealthplan import failed: {type(exc).__name__}"
         )
+    # sys.modules caching can satisfy the import with a module from a DIFFERENT
+    # root (the real sibling, once anything imported it) — this reader would
+    # then answer from the wrong root's plan. File-less injected fakes (the
+    # test seam) are exempt. Order-dependent full-suite failure, 2026-07-24.
+    mod = sys.modules.get("wealthplan")
+    mod_file = getattr(mod, "__file__", None) if mod is not None else None
+    if mod_file is not None:
+        try:
+            in_root = Path(mod_file).resolve().is_relative_to((wealthplan_root / "src").resolve())
+        except OSError:
+            in_root = False
+        if not in_root:
+            return WealthplanCashNeedSummary(
+                available=False, reason="wealthplan import resolved outside the requested root"
+            )
 
     try:
         plan = load_plan()
