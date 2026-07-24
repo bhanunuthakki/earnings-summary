@@ -23,7 +23,7 @@ from pipeline.model_eval_panel import (
 )
 
 # Real ladder ids so estimated_call_usd/model_rank resolve (src/llm/model_ladder.py).
-_OPUS = "claude-opus-4-8"  # in 15.0 / out 75.0 $/MTok
+_OPUS = "claude-opus-4-8"  # in 5.0 / out 25.0 $/MTok (2026-07-21 verified price)
 _SONNET = "claude-sonnet-4-6"  # in 3.0 / out 15.0 $/MTok
 _GEMINI_PRO = "gemini-3.1-pro-preview"
 _GEMINI_FLASH = "gemini-2.5-flash"
@@ -276,9 +276,9 @@ def test_active_overrides_savings_and_incumbent(tmp_path: Path) -> None:
     assert o.incumbent == _OPUS  # read from the latest verdict for the pair
     # Prod token volume excludes the eval-scope call (else it would be ~18M).
     assert o.prod_input_tokens == 1_000_000 and o.prod_output_tokens == 200_000
-    # Opus (15/75) vs Sonnet (3/15) on 1.0M in / 0.2M out = $30 - $6 = $24/mo.
+    # Opus (5/25) vs Sonnet (3/15) on 1.0M in / 0.2M out = $10 - $6 = $4/mo.
     assert o.monthly_savings_usd is not None
-    assert round(o.monthly_savings_usd, 2) == 24.00
+    assert round(o.monthly_savings_usd, 2) == 4.00
 
 
 def test_override_savings_none_when_model_unranked(tmp_path: Path) -> None:
@@ -341,8 +341,8 @@ def test_render_full_panel(tmp_path: Path) -> None:
     assert "k-well-bad" in html and "purpose=NULL" in html
     assert "me-alarm-chip" in html and "ghost_purpose" in html
     assert "2 anonymous/unregistered lines" in html
-    # Overrides: the realized-savings rollup + the $24/mo per-row estimate.
-    assert "24.00/mo" in html
+    # Overrides: the realized-savings rollup + the $4/mo per-row estimate.
+    assert "4.00/mo" in html
     assert "saved by 1 downgrade" in html
     assert _OPUS in html and _SONNET in html  # incumbent → override
     # Verdict history: the switch pill + the CANDIDATE_ERRORED infra flag (an

@@ -27,7 +27,9 @@ from llm.model_eval import (
 )
 
 HAIKU = "claude-haiku-4-5-20251001"
+HAIKU_ALIAS = "claude-haiku-4-5"  # rolling alias, registered 2026-07 as an eval candidate
 SONNET = "claude-sonnet-4-6"
+SONNET5 = "claude-sonnet-5"  # registered 2026-07 as an eval candidate for SONNET
 OPUS = "claude-opus-4-8"
 GFLASH = "gemini-2.5-flash"
 GFLASH3 = "gemini-3-flash-preview"
@@ -66,10 +68,11 @@ def test_is_cheaper_unknown_model() -> None:
 
 def test_cheaper_candidates_sonnet() -> None:
     cands = model_ladder.cheaper_candidates(SONNET)
-    assert set(cands) == {GFLASH, GFLASH3, GPRO, HAIKU}
-    # Cheapest-first: both Flash ids tie at the bottom, then Haiku, then Pro.
+    assert set(cands) == {GFLASH, GFLASH3, GPRO, HAIKU, HAIKU_ALIAS, SONNET5}
+    # Cheapest-first: both Flash ids tie at the bottom, then Haiku, then Pro,
+    # then the newly-registered claude-sonnet-5 (priciest of the cheaper options).
     assert set(cands[:2]) == {GFLASH, GFLASH3}
-    assert cands[-1] == GPRO  # priciest of the cheaper options
+    assert cands[-1] == SONNET5
     assert OPUS not in cands  # opus is dearer, not a downgrade
 
 
@@ -80,7 +83,12 @@ def test_cheaper_candidates_haiku_has_only_gemini() -> None:
 
 
 def test_cheaper_candidates_opus_same_family() -> None:
-    assert model_ladder.cheaper_candidates(OPUS, include_gemini=False) == [HAIKU, SONNET]
+    assert model_ladder.cheaper_candidates(OPUS, include_gemini=False) == [
+        HAIKU,
+        HAIKU_ALIAS,
+        SONNET5,
+        SONNET,
+    ]
 
 
 def test_cheaper_candidates_unknown_incumbent() -> None:

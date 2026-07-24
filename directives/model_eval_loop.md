@@ -95,3 +95,58 @@ under both judges (REJECT) — analytical reasoning needs the incumbent. `viewsp
 (Haiku) showed Gemini at parity (PROMOTE_CANDIDATE, n=2). The point of the loop is
 exactly this purpose-dependence: it finds the cheapest model that holds *per
 purpose*, rather than one global choice.
+
+## 6. 2026-07 attempt: Sonnet 5 / Haiku 4.5 registered, promotions blocked
+
+`claude-sonnet-5` and `claude-haiku-4-5` were added to `src/llm/model_ladder.py`
+as eval candidates (current-generation replacements for the `DEFAULT_MODEL` /
+`FAST_CLASSIFIER_MODEL` pins, per the 2026-07-21 frontier price refresh — see
+`directives/cheapest_model_routing.md` §2a for full detail). Six `DEFAULT_MODEL`
+purposes had a sufficient captured corpus (`n >= 4`, merged across
+`data/llm_capture/*.jsonl`) to run `execution/eval_model_downgrade.py` against:
+`qa_topics`, `saydo_filter`, `company_description`, `recent_developments`,
+`bear_case`, `peer_selection`.
+
+**Round 1** was aborted before any real candidate/judge comparison ran: the
+local `claude` CLI's OAuth session was expired (`api_error_status: 401`,
+confirmed identically for both the incumbent and candidate model ids — not
+model-specific, not quota exhaustion).
+
+**Round 2** (same day, after `claude auth login` restored the CLI session):
+confirmed the CLI worked with one cheap diagnostic call, then ran
+`recent_developments` (highest 30d spend, $35.04) for real —
+`claude-sonnet-5` vs `claude-sonnet-4-6`, `n=7`, dual judge (`claude`=Opus,
+`gemini`=Pro). Result: **`KEEP_INCUMBENT`** — cand 0 / inc 7 / tie 7, parity
+50%, agreement **0%**. The 0% agreement was NOT a quality signal: the
+`GEMINI_API_KEY` in `.env` is invalid (`400 API_KEY_INVALID`, confirmed
+independently via a direct `google.generativeai` call outside the harness,
+same error). Every Gemini-side judge call in the run failed operationally
+(`backend_judge_call_failed`), so `judge_agreement` — which requires >=2
+judges from distinct families to concur — was mechanically stuck at 0%,
+permanently below the 0.6 switch-conservative floor. `decide_switch` still
+did its job correctly (a broken second judge can only ever produce
+`KEEP_INCUMBENT`/`HOLD`, never a false `SWITCH_DOWN` — the Claude/Opus judge
+alone showed the incumbent winning a case, so `incumbent_majority` tripped),
+but **no verdict produced under this condition should be read as a genuine
+quality comparison** — it's a single-judge result wearing a dual-judge label.
+
+**Real cost of round 2** (verified via the `llm_calls` ledger, `run_id`
+`04ca2f7c9a0446cc98c0d9437a852ae8`): 35 calls, **$3.4575** — 7
+`claude-sonnet-5` candidate calls + 28 `claude-opus-4-8` judge calls (14 of
+which were the failed Gemini-side attempts, billed at the Opus label but
+routed to the broken Gemini backend). The remaining 5 eval-ready purposes
+(`bear_case`, `peer_selection`, `saydo_filter`, `company_description`,
+`qa_topics`) were **deliberately NOT run** — every one would hit the
+identical broken judge and cost another ~$2-4 each for a result that can
+never legally reach `SWITCH_DOWN`. This is an infra-broken stop (hard rule:
+don't promote on vibes, don't burn quota on a run that structurally can't
+produce a valid verdict), not a per-purpose transient-failure defer.
+
+No purpose was promoted; `LLM_MODELS` in `src/llm/cli.py` is unchanged.
+**Blocker for the next attempt: rotate `GEMINI_API_KEY` in `.env`** (get a
+new key at https://aistudio.google.com/app/apikey; the same key backs
+`src/llm/fallback.py`'s emergency path, so that's also silently degraded
+until it's rotated). Once a valid key is in place, re-run
+`execution/eval_model_downgrade.py` for all 6 purposes listed above — the
+merged capture corpus and the `--candidates claude-sonnet-5` command in
+cheapest_model_routing.md §2a are unchanged and ready to go.
