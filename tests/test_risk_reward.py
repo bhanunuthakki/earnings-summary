@@ -374,3 +374,71 @@ def test_build_risk_reward_gap_end_to_end(tmp_path: Path) -> None:
     # → it carries the mismatch and ranks first.
     assert aaa.mismatch_score > 0
     assert gap.rows[0].ticker == "AAA"
+
+
+def test_entry_conviction_fallback_fills_names_without_intents(tmp_path: Path) -> None:
+    """C6: the conviction leg falls back to owner-typed entry_conviction for
+    names position_sizing_intent has never seen — a recorded intent always
+    wins, closed entries never count, and the table note names the source."""
+    repo_root = tmp_path
+    db = repo_root / "data" / "portfolio.db"
+    _seed_prices(repo_root)
+    today = date.today()
+    ts = today.isoformat()
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE dcf_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL, valuation_date TEXT,
+                npv_per_share NUMERIC, live_price FLOAT, live_price_at TEXT,
+                assumption_snapshot_json TEXT, created_at DATETIME
+            );
+            CREATE TABLE position_sizing_intent (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL DEFAULT 'bhanu',
+                ticker TEXT NOT NULL, intent_kind TEXT NOT NULL,
+                intent_value REAL, narrative TEXT,
+                created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE position_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL, entry_conviction TEXT, exit_date TEXT
+            );
+            """
+        )
+        conn.executemany(
+            "INSERT INTO dcf_runs (ticker, valuation_date, npv_per_share, live_price,"
+            " live_price_at, assumption_snapshot_json, created_at) VALUES (?,?,?,?,?,?,?)",
+            [
+                ("AAA", ts, 90.0, 100.0, ts, None, f"{ts} 00:00:00"),
+                ("BBB", ts, 150.0, 100.0, ts, None, f"{ts} 00:00:00"),
+                ("CCC", ts, 130.0, 100.0, ts, None, f"{ts} 00:00:00"),
+            ],
+        )
+        # AAA has BOTH: the recorded intent (2) must beat the entry text (high).
+        conn.execute(
+            "INSERT INTO position_sizing_intent (user_id, ticker, intent_kind, intent_value,"
+            " created_at, updated_at) VALUES ('bhanu','AAA','conviction',2,?,?)",
+            (f"{ts} 00:00:00", f"{ts} 00:00:00"),
+        )
+        conn.executemany(
+            "INSERT INTO position_entries (ticker, entry_conviction, exit_date) VALUES (?,?,?)",
+            [
+                ("AAA", "high", None),
+                ("BBB", "medium", None),  # no intent → fallback 3.0
+                ("CCC", "high", "2026-06-01"),  # closed → never counts
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    weights = {"AAA": 0.5, "BBB": 0.3, "CCC": 0.2}
+    gap = build_risk_reward_gap(db, repo_root, weights, weights_source="tracker", today=today)
+    by_ticker = {r.ticker: r for r in gap.rows}
+    assert by_ticker["AAA"].conviction == 2.0  # intent outranks entry text
+    assert by_ticker["BBB"].conviction == 3.0  # medium → 3, from the entry record
+    assert by_ticker["CCC"].conviction is None  # closed entry ignored
+    assert any("conviction from entry record" in n and "BBB" in n for n in gap.notes)
