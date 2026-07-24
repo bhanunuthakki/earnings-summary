@@ -370,3 +370,40 @@ def test_dcf_upside_uses_scenario_asymmetry(tmp_path: Path) -> None:
     flat_raw, flat_detail = out["FLAT"]
     assert flat_raw == pytest.approx(0.20)
     assert flat_detail == "fair $120.00 vs $100.00 (2026-06-08)"
+
+
+def test_low_r_squared_sensitivity_excluded_from_macro_tilt(repo_root: Path) -> None:
+    """C4 pin (A3's read-side floor): a sensitivity with r_squared below
+    MACRO_MIN_R_SQUARED never enters the tilt — statistically indistinguishable
+    betas (the MELI/NU/NVO usd_cad case from the 2026-07 review) must not
+    manufacture a macro preference between names."""
+    from allocation.model import MACRO_MIN_R_SQUARED
+
+    _seed_prices(repo_root)
+    _seed_dcf(
+        repo_root,
+        [
+            ("AAA", 150.0, 100.0, "2026-06-08"),
+            ("BBB", 90.0, 100.0, "2026-06-08"),
+            ("CCC", 120.0, 100.0, "2026-06-08"),
+        ],
+    )
+    _seed_macro(repo_root, {"AAA": 2.0, "BBB": -1.0})
+    # CCC's beta is huge but statistically meaningless — below the floor.
+    conn = sqlite3.connect(str(_db(repo_root)))
+    try:
+        conn.execute(
+            "INSERT INTO macro_sensitivities"
+            " (ticker, series_id, beta, r_squared, lookback_window_days, computed_at)"
+            " VALUES ('CCC', 'usd_brl', 50.0, ?, 252, '2026-06-09')",
+            (MACRO_MIN_R_SQUARED - 0.02,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    model = build_next_dollar_model(_db(repo_root), repo_root, TICKERS, None)
+    assert model is not None
+    by_ticker = {r.ticker: r for r in model.rows}
+    assert by_ticker["AAA"].macro is not None  # the floor passes real signal
+    assert by_ticker["CCC"].macro is None  # below-floor beta never tilts
