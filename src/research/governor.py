@@ -61,6 +61,13 @@ Governor rules, all deterministic, ZERO LLM:
   rule either way: can't verify → don't ping.
 - **frequency caps**: ≤ ``DAILY_CAP`` sends/day, ≤ ``WEEKLY_CAP``/week across
   all classes; overflow lands ``digest`` (surfaced quietly, never pushed).
+  Competing moments contend in ``CLASS_PRIORITY`` order (money-at-risk first).
+- **budget scope (B9 audit)**: the caps govern INITIATIONS only. Exempt by
+  owner ruling (2026-07-19): capture replies (``capture.coach_reply``
+  receipts), adoption announcements (``synthesis.adoption_notify``), and the
+  one-off post-mortem backfill summary — all responses/receipts, not asks.
+  The alert feed's gating (#873-876) is a SEPARATE budget entirely: alerts
+  are market events, coach items are behavioral asks — never pooled.
 - **auto-mute**: ``MUTE_AFTER`` consecutive dismissals of a class mutes it
   until explicitly cleared — dismissals train the coach; it never argues.
 - one row per moment forever (UNIQUE class+key) — a moment is never re-pushed.
@@ -107,11 +114,32 @@ CLASSES: tuple[str, ...] = (
     # drafted-and-unpinged set deterministically. See _post_mortem_moments.
     "post_mortem",
 )
-DAILY_CAP = 1
-WEEKLY_CAP = 3
+# B9 (2026-07-19 program overhaul, owner ruling: 1-2 durable items/day total):
+# raised from 1/3 now that B1-B6 classes exist — one slot was starving every
+# class behind falsifier_breach. Overflow still lands digest, never pushed.
+DAILY_CAP = 2
+WEEKLY_CAP = 8
 MUTE_AFTER = 3
 ANNOTATION_AGE_HOURS = 24
 INTENT_FOLLOWUP_DAYS = 14
+
+# B9: when moments COMPETE for the day's slots, money-at-risk speaks first and
+# coaching speaks last — an explicit total order, not collection order.
+# life_event_checkpoint sits with the capacity family (a changed circumstance
+# can invalidate sizing today); the plan's published ordering omitted it.
+# Unknown classes sort last (a future class must claim its rank explicitly).
+CLASS_PRIORITY: tuple[str, ...] = (
+    "falsifier_breach",
+    "capacity_breach",
+    "life_event_checkpoint",
+    "post_mortem",
+    "calibration_finding",
+    "tenet_challenge",
+    "retro_annotation",
+    "intent_followup",
+    "profile_drift",
+)
+_PRIORITY_RANK: dict[str, int] = {c: i for i, c in enumerate(CLASS_PRIORITY)}
 
 
 @dataclass(frozen=True, slots=True)
@@ -574,6 +602,10 @@ def run_governor(
         "seen": 0,
     }
     moments = collect_moments(db_path, now=stamp, repo_root=repo_root, api_url=api_url)
+    # B9: competing moments contend for DAILY_CAP slots in priority order
+    # (money-at-risk first, coaching last) — stable within a class, so each
+    # collector's own ordering survives.
+    moments.sort(key=lambda m: _PRIORITY_RANK.get(m.class_, len(CLASS_PRIORITY)))
     conn = open_conn(db_path)
     try:
         muted = {str(r[0]) for r in conn.execute("SELECT class_ FROM coach_mutes").fetchall()}

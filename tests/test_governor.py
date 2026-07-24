@@ -152,8 +152,10 @@ def test_freshness_gate_blocks_stale_and_inferred(db: Path) -> None:
 
 
 def test_daily_cap_overflows_to_digest(db: Path) -> None:
+    # B9 raised DAILY_CAP to 2 — one more moment than the cap must overflow.
     _seed_breach(db)
-    _seed_stub(db)  # a second moment the same day
+    _seed_breach(db, falsifier="a second live breach")
+    _seed_stub(db)
     tally = run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
     assert tally["sent"] == DAILY_CAP
     assert tally["digest"] == 1
@@ -580,3 +582,70 @@ def test_post_mortem_run_governor_once_ever(db_head: Path) -> None:
     # second run must not re-collect it at all (post_mortem has no
     # week-bucketing, unlike tenet_challenge -- once-ever, full stop).
     assert tally2["seen"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# B9: priority ordering + raised caps
+# --------------------------------------------------------------------------- #
+
+
+def test_competing_moments_send_in_class_priority_order(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Money-at-risk speaks first, coaching last: with DAILY_CAP=2 and three
+    competing moments collected in the WRONG order, the two highest-priority
+    classes send and the coaching class lands digest."""
+    import research.governor as governor_mod
+
+    fabricated = [
+        Moment("profile_drift", "pd:1", None, "profile drifted", "fact:1"),
+        Moment("falsifier_breach", "alert:901", "NU", "falsifier broke", "decision:1"),
+        Moment("calibration_finding", "cal:2026-07:x", None, "cohort under bar", "calibration:x"),
+    ]
+    monkeypatch.setattr(governor_mod, "collect_moments", lambda *a, **kw: list(fabricated))
+    monkeypatch.setattr(governor_mod, "freshness_ok", lambda *a, **kw: True)
+
+    sent: list[str] = []
+    tally = governor_mod.run_governor(
+        db, send_fn=lambda pid, m: sent.append(m.class_) or True, now=_NOW
+    )
+    assert tally["sent"] == 2 and tally["digest"] == 1
+    assert sent == ["falsifier_breach", "calibration_finding"]
+    assert [str(p[1]) for p in digest_pings(db)] == ["profile_drift"]
+
+
+def test_weekly_cap_is_eight(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """WEEKLY_CAP 3 -> 8 (B9): the 9th send of the week digests even on a
+    fresh day. Seed 8 already-sent rows spread earlier in the same week."""
+    import sqlite3 as _sqlite3
+
+    import research.governor as governor_mod
+
+    conn = _sqlite3.connect(str(db))
+    try:
+        for i in range(8):
+            # Inside the rolling 7-day window (week_cut = _NOW - 7d =
+            # 07-03T12:00) but outside the 1-day window (day_cut 07-09T12:00).
+            stamp = f"2026-07-0{4 + (i % 6)}T09:00:00"
+            conn.execute(
+                "INSERT INTO coach_pings (class_, key, ticker, body, status, source_ref, "
+                "created_at, updated_at) VALUES ('intent_followup', ?, NULL, 'x', 'sent', "
+                "NULL, ?, ?)",
+                (f"wk:{i}", stamp, stamp),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    fabricated = [Moment("falsifier_breach", "alert:902", "NU", "b", "decision:2")]
+    monkeypatch.setattr(governor_mod, "collect_moments", lambda *a, **kw: list(fabricated))
+    monkeypatch.setattr(governor_mod, "freshness_ok", lambda *a, **kw: True)
+    tally = governor_mod.run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
+    assert tally["sent"] == 0 and tally["digest"] == 1
+
+
+def test_class_priority_covers_every_class() -> None:
+    """A class missing from CLASS_PRIORITY silently sorts last — force every
+    registered class to claim an explicit rank."""
+    from research.governor import CLASS_PRIORITY, CLASSES
+
+    assert set(CLASSES) == set(CLASS_PRIORITY)

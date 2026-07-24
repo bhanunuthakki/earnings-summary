@@ -1155,6 +1155,14 @@ def create_app(
             open_loops_html += render_allocation_today_card(db_path)
         except Exception:
             pass
+        # B9: the Coach strip — brief + Telegram show the SAME 1-2 governed
+        # items (sent today + digest queue). Isolated like its siblings.
+        try:
+            from pipeline.coach_strip import render_coach_strip
+
+            open_loops_html += render_coach_strip(db_path)
+        except Exception:
+            pass
         overview = render_overview_panel(
             rows,
             coverage,
