@@ -1645,6 +1645,27 @@ def create_app(
             )
             return Response(t_renderer(db_path, user_id=user_id), mimetype="text/html")
 
+        if name == "ledger_decisions":
+            # Review -> Ledger -> Decisions (P2.1, PRD §9.3): the owner-first
+            # v_decision_journal reader. ``?fragment=list`` returns just the
+            # filtered row list the panel's own JS swaps after a chip click.
+            # NOT "decisions" — that id is RETIRED (superseded by
+            # decisions_record; test_retired_panel_fragments_404 pins the 404).
+            from pipeline.decision_journal_panel import (
+                render_decision_journal_list,
+                render_decision_journal_panel,
+            )
+
+            dj_filter = (request.args.get("filter") or "owner").strip()
+            if request.args.get("fragment") == "list":
+                return Response(
+                    render_decision_journal_list(db_path, filter_=dj_filter),
+                    mimetype="text/html",
+                )
+            return Response(
+                render_decision_journal_panel(db_path, filter_=dj_filter), mimetype="text/html"
+            )
+
         if name == "ticker_settings":
             # Settings-drawer section (P3.4): per-ticker persistent overrides
             # (bypass_budget) listed + editable via /api/ticker-settings/<T>.
@@ -3372,6 +3393,81 @@ def create_app(
         if not ok:
             return ({"error": "decisions ledger unavailable (run alembic upgrade)"}, 500)
         return {"decision_id": decision_id, "process_quality": quality}
+
+    @app.route("/api/decision-drafts", methods=["GET"])
+    def decision_drafts_api():
+        """Pending Decision Drafts for the Inbox (PRD §11.6). Thin — the
+        typed read lives in ``capture.decision_draft.list_pending_drafts``."""
+        from capture.decision_draft import list_pending_drafts
+
+        drafts = list_pending_drafts(db_path=db_path)
+        return {
+            "drafts": [
+                {
+                    "id": d.id,
+                    "source_channel": d.source_channel,
+                    "status": d.status,
+                    "original_text": d.original_text,
+                    "draft": d.draft.model_dump() if d.draft is not None else None,
+                    "parse_confidence": d.parse_confidence,
+                    "created_at": d.created_at,
+                }
+                for d in drafts
+            ]
+        }
+
+    @app.route("/api/decision-drafts/<int:draft_id>/confirm", methods=["POST", "OPTIONS"])
+    def decision_draft_confirm_api(draft_id: int):
+        """Confirm a draft and create/link one Owner Decision idempotently —
+        thin wrapper over ``capture.decision_draft_actions.confirm_draft``
+        (the SAME action core Telegram callbacks and the mobile Inbox call)."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from capture.decision_draft_actions import DraftActionError, confirm_draft
+
+        try:
+            result = confirm_draft(draft_id, db_path=db_path)
+        except DraftActionError as exc:
+            return ({"error": str(exc)}, 400)
+        return result
+
+    @app.route("/api/decision-drafts/<int:draft_id>/correct", methods=["POST", "OPTIONS"])
+    def decision_draft_correct_api(draft_id: int):
+        """Validate owner-supplied corrected fields, then apply the same
+        resolution ``confirm`` uses — ``capture.decision_draft_actions.
+        correct_draft``."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from capture.decision_draft_actions import DraftActionError, correct_draft
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        try:
+            result = correct_draft(draft_id, payload, db_path=db_path)
+        except DraftActionError as exc:
+            return ({"error": str(exc)}, 400)
+        return result
+
+    @app.route("/api/decision-drafts/<int:draft_id>/dismiss", methods=["POST", "OPTIONS"])
+    def decision_draft_dismiss_api(draft_id: int):
+        """Dismiss the draft without deleting the raw capture."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from capture.decision_draft_actions import DraftActionError, dismiss_draft
+
+        try:
+            result = dismiss_draft(draft_id, db_path=db_path)
+        except DraftActionError as exc:
+            return ({"error": str(exc)}, 400)
+        return result
+
+    @app.route("/mobile/inbox", methods=["GET"])
+    def mobile_inbox_page():
+        """The compact private mobile review surface (PRD §9.2/§11.6) — same
+        Tailscale/private-host posture as every other route on this server
+        (the global CORS/security-header/CSRF-origin hooks apply unchanged)."""
+        from pipeline.mobile_inbox_panel import render_mobile_inbox
+
+        return Response(render_mobile_inbox(db_path), mimetype="text/html")
 
     @app.route("/api/discovery/sources", methods=["GET"])
     def discovery_sources_api():

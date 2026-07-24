@@ -625,8 +625,8 @@ def reconcile_decision_actions(
         ).fetchall()
     finally:
         conn.close()
-    if not rows:
-        return tally
+    # No early return on empty `rows` -- the tracker-fill draft pass below
+    # must still run even with zero NULL-action decisions.
 
     if portfolio is None:
         try:
@@ -701,7 +701,104 @@ def reconcile_decision_actions(
             db_path=db_path,
         )
         tally[action if ok else "skipped_undetermined"] += 1
+
+    tally.update(
+        _draft_unmatched_fills(portfolio.transactions, window_days=window_days, db_path=db_path)
+    )
     return tally
+
+
+def _fill_identity_key(
+    ticker: str, day: date, direction: str, quantity: float | None, amount: float | None
+) -> str:
+    """Deterministic idempotency key for one tracker fill (PRD §13.1 "capture
+    coverage" measure) — ticker+date+type+quantity+amount, hashed so a
+    same-day duplicate fill (a split buy) still gets a distinct key when its
+    size differs, and re-running the sweep never redrafts the same fill."""
+    import hashlib
+
+    raw = f"{ticker}|{day.isoformat()}|{direction}|{quantity}|{amount}"
+    return "tracker:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def _draft_unmatched_fills(
+    transactions: object,
+    *,
+    window_days: int,
+    db_path: Path | str | None,
+) -> dict[str, int]:
+    """PRD §13.1's capture-coverage gap: a tracker fill with NO ``decisions``
+    row for that ticker anywhere in a ``window_days`` lookback around it was
+    silently dropped by the reconciliation above (it only ever touches
+    NULL-action decision rows, never fills that have no candidate decision at
+    all). Every such fill gets an explicit, confirmable
+    ``decision_drafts`` row (source_channel='tracker') instead — the
+    "confirmable draft or explicit unmatched status" the measure requires.
+    Idempotent via :func:`_fill_identity_key`; best-effort against a missing
+    decision_drafts table (pre-0195 DB)."""
+    counts = {"tracker_fill_matched": 0, "tracker_fill_drafted": 0, "tracker_fill_draft_failed": 0}
+    conn = _open(db_path)
+    if conn is None:
+        return counts
+    seen_keys: set[str] = set()
+    try:
+        for txn in cast("list[object]", transactions):
+            ticker = str(getattr(txn, "ticker", None) or "").upper()
+            direction = str(getattr(txn, "type", "") or "").lower()
+            day = _date_prefix(getattr(txn, "date", None))
+            if not ticker or direction not in ("buy", "sell") or day is None:
+                continue
+            key = _fill_identity_key(
+                ticker, day, direction, getattr(txn, "quantity", None), getattr(txn, "amount", None)
+            )
+            if key in seen_keys:
+                continue  # a duplicate fill signature this run — already handled above
+            seen_keys.add(key)
+
+            lo = (day - timedelta(days=window_days)).isoformat()
+            hi = day.isoformat()
+            has_candidate = (
+                conn.execute(
+                    "SELECT 1 FROM decisions WHERE UPPER(ticker) = ? "
+                    "AND substr(made_at, 1, 10) BETWEEN ? AND ? LIMIT 1",
+                    (ticker, lo, hi),
+                ).fetchone()
+                is not None
+            )
+            if has_candidate:
+                counts["tracker_fill_matched"] += 1
+                continue
+            try:
+                from capture.decision_draft import DecisionDraft, create_draft_row
+
+                amount = getattr(txn, "amount", None)
+                draft = DecisionDraft(
+                    intent="executed_change",
+                    proposed_ticker=ticker,
+                    proposed_action=direction,
+                    proposed_amount_usd=float(amount) if amount else None,
+                    parse_confidence=1.0,
+                )
+                create_draft_row(
+                    source_note_id=None,
+                    source_channel="tracker",
+                    source_external_id=f"{ticker}:{day.isoformat()}:{direction}",
+                    idempotency_key=key,
+                    original_text=(
+                        f"Tracker-detected {direction} fill: {ticker} on {day.isoformat()} "
+                        "(no candidate decision on record)"
+                    ),
+                    draft=draft,
+                    status="awaiting_confirmation",
+                    db_path=db_path,
+                )
+                counts["tracker_fill_drafted"] += 1
+            except Exception:  # a draft-write failure must not abort the reconcile sweep
+                log.warning({"event": "tracker_fill_draft_failed", "ticker": ticker}, exc_info=True)
+                counts["tracker_fill_draft_failed"] += 1
+    finally:
+        conn.close()
+    return counts
 
 
 def pending_for_grading(

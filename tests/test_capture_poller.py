@@ -952,3 +952,60 @@ def test_poll_once_pending_reply_wins_over_coach_reply(
     assert counts.get("pending_reply") == 1
     assert counts.get("coach_reply") is None
     assert len(notes.list_notes(kind="musing", db_path=db_path)) == 0
+
+
+def test_poll_once_decision_draft_tap_failure_never_blocks_capture(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import capture.decision_draft as decision_draft_mod
+
+    def boom(note_id: int, *, db_path: object) -> None:
+        raise RuntimeError("decision_draft_parse blew up")
+
+    monkeypatch.setattr(decision_draft_mod, "parse_note", boom)
+    monkeypatch.setattr(
+        telegram,
+        "get_updates",
+        lambda token, offset=None, timeout=50: [
+            telegram.Update(update_id=300, kind="text", chat_id=1, text="added to NU today")
+        ],
+    )
+    counts = poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=False,
+    )
+    assert counts.get("landed") == 1
+    assert len(notes.list_notes(kind="musing", db_path=db_path)) == 1
+
+
+def test_poll_once_decision_draft_tap_runs_after_landing(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import capture.decision_draft as decision_draft_mod
+
+    seen: list[int] = []
+    monkeypatch.setattr(
+        decision_draft_mod, "parse_note", lambda note_id, *, db_path: seen.append(note_id)
+    )
+    monkeypatch.setattr(
+        telegram,
+        "get_updates",
+        lambda token, offset=None, timeout=50: [
+            telegram.Update(update_id=301, kind="text", chat_id=1, text="added to MELI today")
+        ],
+    )
+    poller.poll_once(
+        "tok",
+        db_path=db_path,
+        offset_path=tmp_path / "offset.json",
+        audio_dir=tmp_path / "audio",
+        roster=ROSTER,
+        confirm=False,
+    )
+    musings = notes.list_notes(kind="musing", db_path=db_path)
+    assert len(musings) == 1
+    assert seen == [musings[0].id]

@@ -33,22 +33,31 @@ def render_ledger_console(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> s
     jump chips to the console band via ``extra_nav`` — ``data-ledger-jump``
     behavior included, since the chips ship with their own nav listener. The
     feed's own "Ledger" chip is dropped from the band (``nav_exclude``): its
-    ``<h2>Ledger</h2>`` sits directly below; Triage + Journal chips stay."""
+    ``<h2>Ledger</h2>`` sits directly below; Triage + Journal + Decisions chips
+    stay. Decisions (P2.1, PRD §9.3) is a FOURTH section — a separate
+    ``v_decision_journal`` reader, not the ``analyst_notes`` lifecycle Journal
+    above it."""
+    from pipeline.decision_journal_panel import render_decision_journal_panel
     from pipeline.journal_panel import render_journal_panel
     from pipeline.ledger_panel import render_ledger_jump_chips, render_ledger_panel
     from pipeline.triage_panel import render_triage_panel
 
     sections: list[ConsoleSection] = [
         ("feed", "Ledger", lambda: render_ledger_panel(db_path, user_id=user_id, embedded=True)),
-        # Triage/Journal render embedded too: their tab-level chrome (a
-        # panel_toolbar / an <h2>) collapses to a section h3 — the band's chip
-        # names the section, and a second tab title under it was the remaining
-        # sliver of the double-chrome defect.
+        # Triage/Journal/Decisions render embedded too: their tab-level chrome
+        # (a panel_toolbar / an <h2>) collapses to a section h3 — the band's
+        # chip names the section, and a second tab title under it was the
+        # remaining sliver of the double-chrome defect.
         ("triage", "Triage", lambda: render_triage_panel(db_path, user_id=user_id, embedded=True)),
         (
             "journal",
             "Journal",
             lambda: render_journal_panel(db_path, user_id=user_id, embedded=True),
+        ),
+        (
+            "decisions",
+            "Decisions",
+            lambda: render_decision_journal_panel(db_path, embedded=True),
         ),
     ]
     return render_console(

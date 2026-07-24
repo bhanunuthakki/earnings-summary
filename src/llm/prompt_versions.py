@@ -227,6 +227,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # Bump when the triage prompt is materially rewritten, then re-run
     # `run_llm_evals.py --purpose capture_triage`.
     "capture_triage": "v1",
+    # The async Decision Draft parser riding the landed capture note
+    # (capture.decision_draft, P2.1 — PRD §9.2/§10.1). Bump with its prompt;
+    # re-run `run_llm_evals.py --purpose decision_draft_parse`.
+    "decision_draft_parse": "v1",
     # The Ledger reply-box coach follow-up router (B3 sibling PR). Registered
     # here alongside capture_triage since this file is the one source of
     # truth for prompt versions.

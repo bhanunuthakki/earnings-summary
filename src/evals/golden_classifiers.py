@@ -62,6 +62,14 @@ CLASSIFIER_PURPOSES: tuple[str, ...] = (
     "triage_route_suggest",
     "segment_10q_period_disambiguate",
     "capture_triage",
+    # Decision Draft parse (P2.1, personal_investment_partner_prd.md §9.2/§10.5)
+    # — the async capture-triage tap that turns a landed free-text/voice
+    # musing into a confirmable decision draft. Golden set covers the PRD's
+    # own list verbatim: executed buy/sell, pass/watch/promote, ticker
+    # ambiguity, question-vs-decision, voice noise, $-vs-%, correction,
+    # musing false positives, and prompt-injection — the parser must prefer
+    # an ambiguous draft over a false consequential mutation.
+    "decision_draft_parse",
 )
 
 _METADATA_RX = re.compile(r"^(?:[A-Z][A-Z0-9.]*_Q[1-4]_\d{4}|UNKNOWN)$")
@@ -1072,6 +1080,116 @@ def grade_segment_10q_period_disambiguate_case(
     )
 
 
+def load_decision_draft_parse_golden(path: Path) -> list[ClassifierCase]:
+    """Cases for ``capture.decision_draft.parse_note_for_eval``: a case dict
+    carrying its own ``text`` + ``roster`` (tracked symbols) -> the pinned
+    intent/ticker/action fields. ``expected`` is either
+    ``{"intent", "proposed_ticker", "proposed_action"}`` (a null field means
+    "don't check this one") or ``{"prefer_ambiguous": true}`` for the
+    ambiguity/injection/voice-noise cases — the parser must leave BOTH
+    ``proposed_ticker`` and ``proposed_action`` null (or emit an ambiguity
+    note) rather than force a consequential guess on those."""
+    from capture.decision_draft import INTENTS
+
+    errors: list[str] = []
+    seen: set[str] = set()
+    cases: list[ClassifierCase] = []
+    for i, c in enumerate(_load_doc(path, "decision_draft_parse")):
+        label = f"cases[{i}]"
+        case_id = _require_str(c, "id", label, errors)
+        if case_id in seen:
+            errors.append(f"{label}: duplicate id {case_id!r}")
+        seen.add(case_id)
+        text = _require_str(c, "text", label, errors)
+        roster_raw = c.get("roster")
+        roster = (
+            [str(t) for t in cast("list[object]", roster_raw)]
+            if isinstance(roster_raw, list)
+            else []
+        )
+        expected = c.get("expected")
+        if not isinstance(expected, dict):
+            errors.append(f"{label} ({case_id}): `expected` must be an object")
+            expected = {}
+        exp = cast("dict[str, object]", expected)
+        if not exp.get("prefer_ambiguous"):
+            intent = exp.get("intent")
+            if intent is not None and (not isinstance(intent, str) or intent not in INTENTS):
+                errors.append(
+                    f"{label} ({case_id}): expected.intent must be null or one of {list(INTENTS)}"
+                )
+        cases.append(ClassifierCase(case_id, {"text": text, "roster": roster}, exp))
+    if errors:
+        raise ValueError(f"golden file invalid at {path}: " + "; ".join(errors))
+    return cases
+
+
+def grade_decision_draft_parse_case(
+    case: ClassifierCase, *, fn: Callable[..., dict[str, object]]
+) -> CaseResult:
+    """Intent + ticker + action correctness, EXCEPT for ``prefer_ambiguous``
+    cases (ticker ambiguity, prompt-injection, voice noise) where the only
+    thing graded is that the parser did NOT force a consequential
+    ticker+action pair — the PRD's own bar ("the parser must prefer an
+    ambiguous draft over a false consequential mutation")."""
+    expected = cast("dict[str, object]", case.expected)
+    t0 = time.monotonic()
+    try:
+        actual = fn(case.inputs)
+    except Exception as exc:
+        _abort_on_hard_stop(exc, "decision_draft_parse", case.case_id)
+        raise
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    act_ticker = actual.get("proposed_ticker")
+    act_action = actual.get("proposed_action")
+
+    if expected.get("prefer_ambiguous"):
+        safe = act_ticker is None and act_action is None
+        return CaseResult(
+            case_id=case.case_id,
+            question=f"decision_draft_parse/{case.case_id}",
+            passed=safe,
+            score=1.0 if safe else 0.0,
+            expected_json=dumps_compact({"prefer_ambiguous": True}),
+            actual_json=dumps_compact(actual),
+            failure_stage=None if safe else "false_consequential_mutation",
+            judge_rationale=(
+                None if safe else "parser forced a ticker/action on ambiguous/adversarial input"
+            ),
+            latency_ms=latency_ms,
+        )
+
+    exp_intent = expected.get("intent")
+    exp_ticker = expected.get("proposed_ticker")
+    exp_action = expected.get("proposed_action")
+    act_intent = actual.get("intent")
+    intent_ok = exp_intent is None or act_intent == exp_intent
+    ticker_ok = exp_ticker is None or act_ticker == exp_ticker
+    action_ok = exp_action is None or act_action == exp_action
+    passed = intent_ok and ticker_ok and action_ok
+    score = (
+        (0.5 if intent_ok else 0.0) + (0.25 if ticker_ok else 0.0) + (0.25 if action_ok else 0.0)
+    )
+    return CaseResult(
+        case_id=case.case_id,
+        question=f"decision_draft_parse/{case.case_id}",
+        passed=passed,
+        score=score,
+        expected_json=dumps_compact(expected),
+        actual_json=dumps_compact(actual),
+        failure_stage=None if passed else "mismatch",
+        judge_rationale=(
+            None
+            if passed
+            else (
+                f"expected intent={exp_intent!r} ticker={exp_ticker!r} action={exp_action!r}, "
+                f"got {act_intent!r}/{act_ticker!r}/{act_action!r}"
+            )
+        ),
+        latency_ms=latency_ms,
+    )
+
+
 # ---------------------------------------------------------------------------
 # run orchestration
 # ---------------------------------------------------------------------------
@@ -1115,6 +1233,10 @@ def _production_fn(purpose: str) -> Callable[..., object]:
         import capture.triage as triage
 
         return cast("Callable[..., object]", triage.classify_capture_triage_for_eval)
+    if purpose == "decision_draft_parse":
+        import capture.decision_draft as decision_draft
+
+        return cast("Callable[..., object]", decision_draft.parse_note_for_eval)
     return llm_client.structure_recent_news_json
 
 
@@ -1160,6 +1282,9 @@ def run_classifier_eval(
     elif purpose == "capture_triage":
         cases = load_capture_triage_golden(golden_path)
         grade = grade_capture_triage_case
+    elif purpose == "decision_draft_parse":
+        cases = load_decision_draft_parse_golden(golden_path)
+        grade = grade_decision_draft_parse_case
     else:
         raise ValueError(
             f"no classifier eval for purpose {purpose!r} — known: {list(CLASSIFIER_PURPOSES)}"
