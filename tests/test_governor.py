@@ -485,3 +485,98 @@ def test_tenet_challenge_run_governor_once_per_week(db_head: Path) -> None:
     # anti-nag: same class+key (same iso-week) already has a non-send_failed
     # row — the second run must not re-collect it at all.
     assert tally2["seen"] == 0
+
+
+# ---------------------------------------------------------------------------
+# post_mortem (B6, 2026-07-19 program overhaul)
+#
+# Reuses the db_head fixture above (position_entries is 0088, well below
+# head; analyst_notes.position_entry_id is 0093) — never the `db` fixture.
+# ---------------------------------------------------------------------------
+
+
+def _seed_drafted_postmortem(db_head: Path, *, ticker: str = "NU", outcome: str = "broke") -> int:
+    """A closed position_entries row drafted via the REAL
+    synthesis.exit_postmortem.apply_draft path (not raw SQL) — so the
+    llm_draft provenance note lands exactly the way the 18:00 sweep would
+    write it."""
+    from position_lifecycle import get_entry
+    from synthesis.exit_postmortem import Draft, apply_draft
+
+    now = "2026-07-09T00:00:00"
+    conn = sqlite3.connect(str(db_head))
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO position_entries
+                (user_id, ticker, entry_date, entry_price, exit_date, exit_price,
+                 source, created_at, updated_at)
+            VALUES ('bhanu', ?, '2026-01-01', 10.0, '2026-06-01', 12.0,
+                    'reconciler', ?, ?)
+            """,
+            (ticker, now, now),
+        )
+        entry_id = int(cur.lastrowid or 0)
+        conn.commit()
+    finally:
+        conn.close()
+
+    entry = get_entry(entry_id, db_path=db_head)
+    assert entry is not None
+    draft = Draft(
+        exit_reason="Funding costs eroded the margin thesis.",
+        lessons="Watch deposit beta earlier.",
+        outcome_vs_thesis=outcome,
+    )
+    assert apply_draft(entry, draft, db_path=db_head) is True
+    return entry_id
+
+
+def test_post_mortem_moment_from_drafted_entry(db_head: Path) -> None:
+    entry_id = _seed_drafted_postmortem(db_head, ticker="NU", outcome="broke")
+    moments = collect_moments(db_head, now=_NOW)
+    pm = [m for m in moments if m.class_ == "post_mortem"]
+    assert len(pm) == 1
+    m = pm[0]
+    assert m.key == f"post_mortem:{entry_id}"
+    assert m.ticker == "NU"
+    assert m.source_ref == f"position_entry:{entry_id}"
+    assert "NU" in m.body
+    assert "broke" in m.body
+
+
+def test_post_mortem_ignores_owner_graded_entries(db_head: Path) -> None:
+    # A manually-graded row -- no linked llm_draft provenance note -- must
+    # never fire a post_mortem moment.
+    now = "2026-07-09T00:00:00"
+    conn = sqlite3.connect(str(db_head))
+    try:
+        conn.execute(
+            """
+            INSERT INTO position_entries
+                (user_id, ticker, entry_date, exit_date, exit_reason, lessons,
+                 outcome_vs_thesis, source, created_at, updated_at)
+            VALUES ('bhanu', 'WIX', '2026-01-01', '2026-06-01', 'owner reason',
+                    'owner lesson', 'played_out', 'reconciler', ?, ?)
+            """,
+            (now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    moments = collect_moments(db_head, now=_NOW)
+    assert [m for m in moments if m.class_ == "post_mortem"] == []
+
+
+def test_post_mortem_run_governor_once_ever(db_head: Path) -> None:
+    _seed_drafted_postmortem(db_head, ticker="NU")
+    tally1 = run_governor(db_head, now=_NOW)
+    assert tally1["seen"] == 1
+    # No send_fn configured -- the ping still lands (quietly) in the digest.
+    assert tally1["digest"] == 1
+
+    tally2 = run_governor(db_head, now=_NOW)
+    # anti-nag: same class+key already has a non-send_failed row -- the
+    # second run must not re-collect it at all (post_mortem has no
+    # week-bucketing, unlike tenet_challenge -- once-ever, full stop).
+    assert tally2["seen"] == 0

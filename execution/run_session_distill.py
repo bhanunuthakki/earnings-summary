@@ -8,9 +8,21 @@ the aggregate tally. Belief revisions (tenet/stance) AUTO-ADOPT with a
 one-tap Telegram Revert — see the module docstring for the owner-ruling
 rationale.
 
+A SECOND leg (B6, 2026-07-19 program overhaul) rides the same 18:00 rung
+right after session distillation: ``synthesis.exit_postmortem.run_postmortem_drafts``
+drafts a FEW pending exit post-mortems per night (nightly pacing — see that
+module's docstring) for closed ``position_entries`` rows still missing their
+``exit_reason``/``lessons``/``outcome_vs_thesis``. ``--postmortem-backfill``
+runs ONLY that leg, but for EVERY pending entry in one batch with a single
+Telegram summary — the deliberate one-time exception for the pre-existing
+all-NULL closed rows (owner ruling: one burst, receipts visible, no drip
+nagging).
+
 Usage:
     python execution/run_session_distill.py
     python execution/run_session_distill.py --dry-run   # list candidates, zero LLM
+    python execution/run_session_distill.py --postmortem-backfill  # ONE-TIME: draft ALL
+                                                                    # pending post-mortems
 
 Exit status: 0 on a normal sweep (including "nothing to distil" and "some
 candidates skipped groundless" — those are honest, non-error outcomes), 2 on
@@ -45,6 +57,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="list candidate sessions + counts only — zero LLM calls",
     )
+    parser.add_argument(
+        "--postmortem-backfill",
+        action="store_true",
+        help=(
+            "draft ALL pending exit post-mortems in ONE batch + a single Telegram "
+            "summary (the pre-existing all-NULL closed rows) instead of the nightly "
+            "few-per-run pacing; runs ONLY this leg, not session distillation"
+        ),
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -68,6 +89,28 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     from llm.cli import is_hard_stop
+
+    if args.postmortem_backfill:
+        # ONE-TIME mode (B6): runs ONLY the post-mortem drafting leg, over the
+        # FULL pending set, with a single batched Telegram summary -- not the
+        # nightly few-per-run pacing, and never touches session distillation.
+        from synthesis.exit_postmortem import run_postmortem_drafts
+
+        try:
+            pm_tally = run_postmortem_drafts(db_path, batch=True, repo_root=repo_root)
+        except Exception as exc:
+            if is_hard_stop(exc):
+                log.error(
+                    {
+                        "event": "postmortem_backfill_hard_stop",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                return 2
+            raise
+        print(f"run_session_distill --postmortem-backfill: {pm_tally}", file=sys.stderr)
+        return 0
+
     from synthesis.session_distill import run_session_distill
 
     try:
@@ -81,6 +124,25 @@ def main(argv: list[str] | None = None) -> int:
         raise
 
     print(f"run_session_distill: {tally}", file=sys.stderr)
+
+    # B6 second leg: a FEW pending exit post-mortems per night (nightly
+    # pacing -- see synthesis.exit_postmortem's docstring). A hard stop here
+    # exits loudly on its own, same contract as the session-distill leg above
+    # -- one systemic failure should not be swallowed just because it landed
+    # in the second leg.
+    from synthesis.exit_postmortem import run_postmortem_drafts
+
+    try:
+        pm_tally = run_postmortem_drafts(db_path, repo_root=repo_root)
+    except Exception as exc:
+        if is_hard_stop(exc):
+            log.error(
+                {"event": "postmortem_draft_hard_stop", "error": f"{type(exc).__name__}: {exc}"}
+            )
+            return 2
+        raise
+
+    print(f"run_session_distill (postmortem leg): {pm_tally}", file=sys.stderr)
 
     sessions = tally.get("sessions", 0)
     deferred = tally.get("deferred_transient", 0)

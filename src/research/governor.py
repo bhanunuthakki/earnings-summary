@@ -33,6 +33,18 @@ nagging"):
   CURRENT iso-week: the Tenet with the highest ``est_cost_usd`` (ties: most
   violations), across every current Tenet carrying a violation. See
   ``_tenet_challenge_moments`` below.
+- ``post_mortem`` (B6, 2026-07-19 program overhaul) — an exit post-mortem the
+  18:00 sweep auto-drafted (``synthesis.exit_postmortem.run_postmortem_drafts``)
+  has landed live on a closed ``position_entries`` row. This class makes NO
+  LLM call of its own — it only reads whether the row's three grading fields
+  are filled AND carry the ``llm_draft`` provenance marker
+  (``synthesis.exit_postmortem.drafted_awaiting_glance``) — and, unlike
+  ``tenet_challenge``, has no extra "once per week" cap of its own: the
+  anti-nag UNIQUE ``class_``+``key`` ledger (``coach_pings``) IS the
+  acknowledgment memory (see ``_post_mortem_moments`` below) — a moment is
+  collected on every governor pass for every drafted-and-unpinged entry, but
+  ``run_governor`` only ever inserts+sends the first time a given key is
+  seen, exactly like every other class here.
 
 Governor rules, all deterministic, ZERO LLM:
 
@@ -89,6 +101,11 @@ CLASSES: tuple[str, ...] = (
     # accountability pass found a violated owner decision; zero-LLM (reads a
     # persisted verdict). See _tenet_challenge_moments below.
     "tenet_challenge",
+    # B6 (2026-07-19 program overhaul) — an LLM-drafted exit post-mortem
+    # landed live on a closed position_entries row (the 18:00 sweep,
+    # synthesis.exit_postmortem). Zero-LLM here too — reads the
+    # drafted-and-unpinged set deterministically. See _post_mortem_moments.
+    "post_mortem",
 )
 DAILY_CAP = 1
 WEEKLY_CAP = 3
@@ -193,6 +210,43 @@ def _tenet_challenge_moments(db_path: Path | str | None, *, now: datetime) -> li
             source_ref=f"tenet:{tenet_id}",
         )
     ]
+
+
+def _post_mortem_moments(db_path: Path | str | None, *, now: datetime) -> list[Moment]:
+    """Zero-LLM: read llm-drafted exit post-mortems that have landed live
+    (``synthesis.exit_postmortem.drafted_awaiting_glance`` — closed
+    ``position_entries`` rows whose three grading fields are all filled AND
+    carry the ``llm_draft`` provenance note) and emit ONE ``post_mortem``
+    moment per drafted entry, keyed ``post_mortem:<entry_id>``. ``now`` is
+    unused (no weekly/period bucketing here, unlike ``tenet_challenge`` — a
+    drafted post-mortem is a one-shot receipt, not a recurring verdict) but
+    kept for signature symmetry with the other collectors in this module."""
+    del now
+    try:
+        from synthesis.exit_postmortem import drafted_awaiting_glance
+    except Exception:
+        return []
+    try:
+        drafted = drafted_awaiting_glance(db_path)
+    except Exception:
+        return []
+    moments: list[Moment] = []
+    for entry in drafted:
+        lessons_excerpt = (entry.lessons or "").strip()[:80]
+        body = (
+            f"Drafted post-mortem for {entry.ticker}: {entry.outcome_vs_thesis}, "
+            f'"{lessons_excerpt}" — reply or revert.'
+        )
+        moments.append(
+            Moment(
+                class_="post_mortem",
+                key=f"post_mortem:{entry.id}",
+                ticker=entry.ticker,
+                body=body,
+                source_ref=f"position_entry:{entry.id}",
+            )
+        )
+    return moments
 
 
 def _tenet_still_has_violation(db_path: Path | str | None, tenet_id: int) -> bool:
@@ -369,6 +423,12 @@ def collect_moments(
         # breaks the other moment classes.
         with contextlib.suppress(Exception):
             moments.extend(_tenet_challenge_moments(db_path, now=stamp))
+
+        # post_mortem (B6) — same independent-degrade contract; a missing or
+        # malformed synthesis.exit_postmortem module never breaks the
+        # collectors above.
+        with contextlib.suppress(Exception):
+            moments.extend(_post_mortem_moments(db_path, now=stamp))
     finally:
         conn.close()
     return moments
@@ -457,6 +517,12 @@ def freshness_ok(
             if kind != "tenet":
                 return False
             return _tenet_still_has_violation(db_path, int(ref_id))
+        if moment.class_ == "post_mortem":
+            if kind != "position_entry":
+                return False
+            from synthesis.exit_postmortem import is_awaiting_glance
+
+            return is_awaiting_glance(int(ref_id), db_path=db_path)
         return False
     except Exception:
         return False
