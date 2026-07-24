@@ -3285,6 +3285,35 @@ def create_app(
             out["pass_decision"] = recorded
         return out
 
+    @app.route("/api/discovery/candidates/<int:cand_id>/watch", methods=["POST", "OPTIONS"])
+    def discovery_watch_api(cand_id: int):
+        """The Watch action (PRD §8.2, P1-B): promote the candidate's ticker
+        into the watchlist (``tracked_companies.list_type = 'watchlist'``,
+        mirroring ``discovery_build._promote_to_evaluation``'s direct-UPDATE
+        shape — no onboard subprocess, unlike ``db.track_company``). The
+        discovery candidate's own status is NEVER touched: Watch is a
+        tracked-universe move, not a queue disposition. Idempotent — watching
+        an already-watched (or better: portfolio/evaluation) name is a no-op
+        that still returns 200."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from discovery.store import get_candidate, promote_to_watchlist
+
+        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
+        user_id = str(payload.get("user_id") or DEFAULT_USER_ID)
+        try:
+            cand = get_candidate(cand_id, db_path=db_path)
+        except sqlite3.Error:
+            return ({"error": "discovery_candidates table missing (run alembic upgrade)"}, 500)
+        if cand is None:
+            return ({"error": f"candidate {cand_id} not found"}, 404)
+        ok = promote_to_watchlist(
+            ticker=cand.ticker, name=cand.name, user_id=user_id, db_path=db_path
+        )
+        if not ok:
+            return ({"error": "tracked_companies unavailable (run alembic upgrade)"}, 500)
+        return {"candidate": _candidate_to_json(cand), "watch": {"ticker": cand.ticker, "ok": True}}
+
     @app.route("/api/decisions/pass", methods=["POST"])
     def record_pass_api():
         """Manual entry path for an error-of-omission (L11): record "I passed on
@@ -3825,6 +3854,27 @@ def create_app(
             conn.close()
         if html is None:
             abort(404)
+        return Response(html, mimetype="text/html")
+
+    @app.route("/api/peek/discovery-compare", methods=["GET"])
+    def peek_discovery_compare():
+        """The Compare action (PRD §8.2, P1-B): a side-by-side deterministic
+        table (TickerMetrics + need_rank) for ``?tickers=A,B,C`` — 1 to 3
+        names, each ``safe_ticker``-validated. 404 on an empty list, more
+        than 3, or any malformed ticker (mirrors the other peek routes'
+        bad-input convention); the renderer itself never 404s — a name with
+        no cache/candidate just renders "&mdash;" cells."""
+        from pipeline.peeks import render_discovery_compare_peek
+
+        raw = request.args.get("tickers") or ""
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        if not parts or len(parts) > 3:
+            abort(404)
+        try:
+            tickers = [ticker_validation.safe_ticker(p) for p in parts]
+        except ValueError:
+            abort(404)
+        html = render_discovery_compare_peek(repo_root, db_path, tickers)
         return Response(html, mimetype="text/html")
 
     @app.route("/api/peek/provenance/<fact_ref>", methods=["GET"])

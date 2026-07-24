@@ -64,9 +64,9 @@ _PANEL_STYLE = """<style>
    onto the toolbar band (#dq-count) so it never costs its own row. Hidden inside
    the list so it never flashes there before the lift. */
 #dq-list .dq-count { display: none; }
-/* A candidate row is click-to-expand: clicking the score / status / "why" cells
-   reveals its evidence (interactive children opt out in the JS handler). */
-#dq-list tr[data-cand-id] { cursor: pointer; }
+/* A candidate row/card is click-to-expand: clicking the score / status / "why"
+   area reveals its evidence (interactive children opt out in the JS handler). */
+#dq-list [data-cand-id] { cursor: pointer; }
 #dq-list tr[data-cand-id]:hover > td { background: var(--paper); }
 .dq-why { color: var(--fg-soft); }
 .dq-why-line { display: flex; align-items: baseline; gap: var(--sp-2); }
@@ -79,8 +79,20 @@ _PANEL_STYLE = """<style>
   font-variant-numeric: tabular-nums; color: var(--muted); }
 .dq-evtable td { padding: 2px var(--sp-2); border: none; }
 .dq-evtable .dq-src { font-family: var(--mono); color: var(--fg-soft); }
-.dq-acts { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
+.dq-acts { display: flex; gap: var(--sp-1); flex-wrap: wrap; align-items: center; }
 .dq-srcwt { width: 4.5rem; }
+/* Top-ten candidate cards (PRD §8.2, P1-B) — the primary view's richer unit,
+   one .k-well per name; the "More candidates" bucket stays the compact table. */
+.dq-cards { display: flex; flex-direction: column; gap: var(--sp-3); }
+.dq-card-head { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.dq-card-head .dq-peek { margin-left: auto; }
+.dq-card-row { display: flex; gap: var(--sp-2); align-items: baseline; margin-top: var(--sp-2);
+  font-size: var(--fs-body); }
+.dq-card-label { color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase;
+  letter-spacing: 0.05em; min-width: 6.5rem; flex-shrink: 0; }
+.dq-card .dq-detail { margin-top: var(--sp-2); }
+.dq-more { margin-top: var(--sp-3); }
+.dq-more > summary { cursor: pointer; color: var(--muted); font-size: var(--fs-caption); }
 .dq-sources { margin-top: var(--sp-3); }
 .dq-saved { color: var(--ok); font-size: var(--fs-caption); margin-left: var(--sp-2);
   opacity: 0; transition: opacity var(--transition); }
@@ -189,7 +201,11 @@ _PANEL_JS = """
   function beginDismiss(holder, id, tk) {
     if (holder.getAttribute('data-editing') === '1') return;
     var detail = el('dq-detail-' + id);
-    var cell = detail && detail.querySelector('td:last-child');
+    // [data-dismiss-target] is structure-agnostic: the compact table's last
+    // <td> and a card's detail <div> both carry it, so this works for either
+    // rendering without assuming a table row (a bare <tr> outside a <table>
+    // is invalid HTML and browsers mangle it).
+    var cell = detail && detail.querySelector('[data-dismiss-target]');
     if (!cell) { return; }
     holder.setAttribute('data-editing', '1');
     var wasHidden = detail.hidden;
@@ -259,13 +275,15 @@ _PANEL_JS = """
       });
       return;
     }
-    // Click-to-expand: a click anywhere on a candidate row — the score pill, the
-    // status chip, the "why" text — reveals its evidence, EXCEPT on a link /
-    // button / input / label (the ticker link, action buttons and checkbox keep
-    // their own behavior). The explicit "details" peek stays for keyboard users.
-    var rowTr = ev.target.closest('tr[data-cand-id]');
-    if (rowTr && !ev.target.closest('a, button, input, label')) {
-      var rowDetail = el('dq-detail-' + rowTr.getAttribute('data-cand-id'));
+    // Click-to-expand: a click anywhere on a candidate row/card — the score
+    // pill, the status chip, the "why" text — reveals its evidence, EXCEPT on
+    // a link / button / input / label (the ticker link, action buttons and
+    // checkbox keep their own behavior). The explicit "evidence" peek stays
+    // for keyboard users. [data-cand-id] covers both the compact table row
+    // and the top-ten card.
+    var candHolder = ev.target.closest('[data-cand-id]');
+    if (candHolder && !ev.target.closest('a, button, input, label')) {
+      var rowDetail = el('dq-detail-' + candHolder.getAttribute('data-cand-id'));
       if (rowDetail) rowDetail.hidden = !rowDetail.hidden;
       return;
     }
@@ -278,6 +296,15 @@ _PANEL_JS = """
     if (act === 'build') { buildTickers([holder.getAttribute('data-cand-ticker')]); return; }
     if (act === 'dismiss') {
       beginDismiss(holder, id, holder.getAttribute('data-cand-ticker') || 'this name');
+      return;
+    }
+    if (act === 'watch') {
+      btn.disabled = true;
+      postAction('/api/discovery/candidates/' + id + '/watch', {}).then(function (res) {
+        btn.disabled = false;
+        if (res.ok) { logLine('Watching ' + (holder.getAttribute('data-cand-ticker') || '')); }
+        else { logLine('watch failed: ' + (res.body.error || 'unknown')); }
+      });
       return;
     }
     var status = {queue: 'queued', reopen: 'new'}[act];
@@ -348,6 +375,201 @@ def _why_line(cand: CandidateRow) -> str:
     return escape(" · ".join(s for s in srcs if s)) or "—"
 
 
+# ----------------------------------------------------------------------------
+# need_rank (PRD §8.2, P1-B) — the top-ten cards' portfolio-need read
+# ----------------------------------------------------------------------------
+
+#: Effort chip tone — light (well-cached, quick to evaluate) reads OK, heavy
+#: (thin/no cache) reads as a warning about the owner's next click.
+_EFFORT_TONE: dict[str, str] = {
+    "light": "k-chip-ok",
+    "medium": "k-chip-warn",
+    "heavy": "k-chip-bad",
+}
+
+
+def _need_rank(cand: CandidateRow) -> dict[str, object] | None:
+    """The ``score_json['need_rank']`` blob, or ``None`` for a pre-P1-B row
+    (never scored) — every card function below degrades gracefully on None."""
+    if not isinstance(cand.score_json, dict):
+        return None
+    raw = cand.score_json.get("need_rank")
+    return cast("dict[str, object]", raw) if isinstance(raw, dict) else None
+
+
+def _rank_composite(cand: CandidateRow) -> float | None:
+    rank = _need_rank(cand)
+    if rank is None:
+        return None
+    v = rank.get("composite")
+    return float(v) if isinstance(v, (int, float)) else None
+
+
+def _rank_sort_key(cand: CandidateRow) -> tuple[float, float, str]:
+    """Descending sort key for the primary (``live``) view: the need_rank
+    composite when present, falling back to the legacy weighted score — an
+    old row (scored before this rank existed) still sorts sanely instead of
+    collapsing to the bottom of the queue."""
+    composite = _rank_composite(cand)
+    primary = composite if composite is not None else cand.score
+    return (-primary, -cand.score, cand.ticker)
+
+
+def _hypothesis_html(cand: CandidateRow, rank: dict[str, object] | None) -> str:
+    """ONE deterministic sentence: the strongest adjacency reason + the GARP
+    read + the strongest raw signal (``score_evidence_line``) — no LLM."""
+    parts: list[str] = []
+    if rank is not None:
+        reasons = rank.get("adjacency_reasons")
+        if isinstance(reasons, list) and reasons:
+            parts.append(str(cast("list[object]", reasons)[0]))
+        garp_reason = rank.get("garp_reason")
+        if (
+            isinstance(garp_reason, str)
+            and garp_reason
+            and "no cached fundamentals" not in garp_reason
+        ):
+            parts.append(garp_reason)
+    if isinstance(cand.score_json, dict):
+        parts.append(score_evidence_line(cand.score_json))
+    if not parts:
+        return "No corroborating evidence yet — a raw screen/adjacency surface only."
+    sentence = "; ".join(parts)
+    return escape(sentence[:1].upper() + sentence[1:]) + "."
+
+
+def _role_overlap_html(rank: dict[str, object] | None) -> str:
+    """Likely portfolio role: adjacency reasons + the diversifier note, with a
+    ``preliminary`` chip whenever the diversifier leg ran (it is ALWAYS coarse
+    — the PRD's "never full evaluation-grade precision")."""
+    if rank is None:
+        return '<span class="dq-src">not yet ranked — run discovery</span>'
+    bits: list[str] = []
+    reasons = rank.get("adjacency_reasons")
+    if isinstance(reasons, list) and reasons:
+        bits.append(escape("; ".join(str(r) for r in cast("list[object]", reasons))))
+    note = rank.get("diversifier_note")
+    if isinstance(note, str) and note:
+        prelim = (
+            ' <span class="k-chip k-chip-warn">preliminary</span>'
+            if rank.get("preliminary")
+            else ""
+        )
+        bits.append(escape(note) + prelim)
+    if not bits:
+        return (
+            '<span class="dq-src">no portfolio-role read yet (not in the coarse-fit top 25)</span>'
+        )
+    return " · ".join(bits)
+
+
+def _first_rejection_html(rank: dict[str, object] | None) -> str:
+    if rank is None:
+        return '<span class="dq-src">not yet ranked</span>'
+    reason = rank.get("first_rejection_reason")
+    if isinstance(reason, str) and reason:
+        return f'<span class="k-chip k-chip-bad">{escape(reason)}</span>'
+    return '<span class="k-chip k-chip-ok">no obvious red flag</span>'
+
+
+def _effort_chip_html(rank: dict[str, object] | None) -> str:
+    if rank is None:
+        return ""
+    effort = rank.get("effort")
+    if not isinstance(effort, str):
+        return ""
+    tone = _EFFORT_TONE.get(effort, "")
+    return f'<span class="k-chip {tone}">{escape(effort)} effort</span>'
+
+
+def _next_workflow_hint(rank: dict[str, object] | None) -> str:
+    if rank is None:
+        return "Run discovery to compute a portfolio-need read for this name."
+    reason = rank.get("first_rejection_reason")
+    if isinstance(reason, str) and reason:
+        return "Confirm or refute the flagged risk before building."
+    reasons = rank.get("adjacency_reasons")
+    if isinstance(reasons, list) and reasons:
+        return "Corroborates active diligence — Build to formalize, or Watch to track passively."
+    return "Build for a full evaluation brief, or Watch to keep an eye on it."
+
+
+def _candidate_card_html(cand: CandidateRow) -> str:
+    """One top-ten card (PRD §8.2's Candidate card): why-surfaced-now,
+    hypothesis, likely role, first-rejection risk, effort, next workflow, and
+    the five actions (Build · Compare · Dismiss · Watch · Open evidence)."""
+    rank = _need_rank(cand)
+    status = cand.status
+    chip = _STATUS_TONE.get(status, "")
+    composite = _rank_composite(cand)
+    rank_pill = (
+        f'<span class="k-pill k-pill-accent">need {composite:.1f}</span>'
+        if composite is not None
+        else _score_pill(cand.score)
+    )
+    tq = escape(cand.ticker, quote=True)
+    acts: list[str] = []
+    if status in ("new", "queued"):
+        if status == "new":
+            acts.append(
+                '<button type="button" class="k-btn k-btn-sm k-btn-quiet" data-act="queue">Queue</button>'
+            )
+        acts.append(
+            '<button type="button" class="k-btn k-btn-sm k-btn-primary" data-act="build">Build</button>'
+        )
+        acts.append(
+            '<button type="button" class="k-btn k-btn-sm k-btn-quiet" data-act="watch">Watch</button>'
+        )
+        acts.append(
+            f'<a class="k-chip k-chip-btn" data-peek-url="/api/peek/discovery-compare?tickers={tq}" '
+            f'data-peek-title="Compare · {escape(cand.ticker)}" href="/ticker/{tq}">Compare</a>'
+        )
+        acts.append(
+            '<button type="button" class="k-btn k-btn-sm k-btn-danger" data-act="dismiss">Dismiss</button>'
+        )
+    elif status in ("dismissed", "built"):
+        acts.append(
+            '<button type="button" class="k-btn k-btn-sm k-btn-quiet" data-act="reopen">Re-open</button>'
+        )
+        acts.append(
+            f'<a class="k-chip k-chip-btn" data-peek-url="/api/peek/discovery-compare?tickers={tq}" '
+            f'data-peek-title="Compare · {escape(cand.ticker)}" href="/ticker/{tq}">Compare</a>'
+        )
+    pick = (
+        f'<input type="checkbox" data-pick="{escape(cand.ticker)}">'
+        if status in ("new", "queued")
+        else ""
+    )
+    href = f"/api/panel/holding?ticker={tq}"
+    head = (
+        '<div class="dq-card-head">'
+        f"{pick}{ticker_label(cand.ticker, cand.name, href=href)}"
+        f'<span class="k-chip {chip}">{escape(status)}</span>'
+        f"{rank_pill}{_effort_chip_html(rank)}"
+        f'<button type="button" class="dq-peek" data-cand="{cand.id}">Open evidence</button>'
+        "</div>"
+    )
+    rows = (
+        f'<div class="dq-card-row"><span class="dq-card-label">Why now</span>'
+        f"<span>{_why_line(cand)}</span></div>"
+        f'<div class="dq-card-row"><span class="dq-card-label">Hypothesis</span>'
+        f"<span>{_hypothesis_html(cand, rank)}</span></div>"
+        f'<div class="dq-card-row"><span class="dq-card-label">Portfolio role</span>'
+        f"<span>{_role_overlap_html(rank)}</span></div>"
+        f'<div class="dq-card-row"><span class="dq-card-label">First risk</span>'
+        f"<span>{_first_rejection_html(rank)}</span></div>"
+        f'<div class="dq-card-row"><span class="dq-card-label">Next</span>'
+        f"<span>{escape(_next_workflow_hint(rank))}</span></div>"
+    )
+    return (
+        f'<div class="dq-card k-well" data-cand-id="{cand.id}" data-cand-ticker="{escape(cand.ticker)}">'
+        f'{head}{rows}<div class="dq-acts">{"".join(acts)}</div>'
+        "</div>"
+        f'<div class="dq-detail" id="dq-detail-{cand.id}" hidden>'
+        f"<div data-dismiss-target>{_evidence_detail_html(cand)}</div></div>"
+    )
+
+
 def _row_html(cand: CandidateRow) -> str:
     status = cand.status
     chip = _STATUS_TONE.get(status, "")
@@ -359,6 +581,9 @@ def _row_html(cand: CandidateRow) -> str:
             )
         acts.append(
             '<button type="button" class="k-btn k-btn-sm k-btn-primary" data-act="build">Build</button>'
+        )
+        acts.append(
+            '<button type="button" class="k-btn k-btn-sm k-btn-quiet" data-act="watch">Watch</button>'
         )
         acts.append(
             '<button type="button" class="k-btn k-btn-sm k-btn-danger" data-act="dismiss">Dismiss</button>'
@@ -386,8 +611,22 @@ def _row_html(cand: CandidateRow) -> str:
         f'<td><div class="dq-acts">{"".join(acts)}</div></td>'
         "</tr>"
         f'<tr class="dq-detail" id="dq-detail-{cand.id}" hidden>'
-        f'<td></td><td colspan="5">{_evidence_detail_html(cand)}</td></tr>'
+        f'<td></td><td colspan="5" data-dismiss-target>{_evidence_detail_html(cand)}</td></tr>'
     )
+
+
+#: The primary (``live``) view's card count (PRD §8.2: "at most ten candidates").
+TOP_CARD_N = 10
+
+_TABLE_HEAD = (
+    '<tr><th></th><th>Ticker</th><th class="num">Score</th><th>Status</th>'
+    "<th>Why surfaced</th><th>Actions</th></tr>"
+)
+
+
+def _table_html(rows: list[CandidateRow]) -> str:
+    body = "".join(_row_html(c) for c in rows)
+    return f'<table class="p-table"><thead>{_TABLE_HEAD}</thead><tbody>{body}</tbody></table>'
 
 
 def render_discovery_list(
@@ -397,8 +636,12 @@ def render_discovery_list(
     status: str = "live",
     min_score: float = 0.0,
 ) -> str:
-    """Just the candidates table (the ``?fragment=list`` fragment), capped to a
-    ranked top-N."""
+    """The candidates fragment (the ``?fragment=list`` fragment), capped to a
+    ranked top-N. The primary (``live``) view shows the top ten by need_rank
+    composite as cards (PRD §8.2, P1-B) — falling back to the legacy weighted
+    score for a candidate never re-scored — with the rest collapsed under
+    "More candidates"; any other explicit status bucket (a lifecycle-bucket
+    browse, not the ranked queue) keeps the original compact table."""
     list_status = None if status == "live" else status
     if list_status is not None and list_status not in CANDIDATE_STATUSES:
         list_status = None
@@ -413,15 +656,26 @@ def render_discovery_list(
             '<div class="dq-empty">No candidates match. Run discovery (button above) to '
             "sweep the screens + adjacency miners, or relax the filter.</div>"
         )
-    shown = rows[:RENDER_TOP_N]
-    head = (
-        '<tr><th></th><th>Ticker</th><th class="num">Score</th><th>Status</th>'
-        "<th>Why surfaced</th><th>Actions</th></tr>"
+
+    if status != "live":
+        shown = rows[:RENDER_TOP_N]
+        elided = f" (top {RENDER_TOP_N} of {total})" if total > RENDER_TOP_N else ""
+        count = f'<div class="dq-count">{len(shown)} candidate(s){elided}</div>'
+        return f"{count}{_table_html(shown)}"
+
+    ranked = sorted(rows, key=_rank_sort_key)
+    shown = ranked[:RENDER_TOP_N]
+    top, rest = shown[:TOP_CARD_N], shown[TOP_CARD_N:]
+    cards = f'<div class="dq-cards">{"".join(_candidate_card_html(c) for c in top)}</div>'
+    more = (
+        f'<details class="dq-more"><summary>More candidates ({len(rest)})</summary>'
+        f"{_table_html(rest)}</details>"
+        if rest
+        else ""
     )
-    body = "".join(_row_html(c) for c in shown)
     elided = f" (top {RENDER_TOP_N} of {total})" if total > RENDER_TOP_N else ""
     count = f'<div class="dq-count">{len(shown)} candidate(s){elided}</div>'
-    return f'{count}<table class="p-table"><thead>{head}</thead><tbody>{body}</tbody></table>'
+    return f"{count}{cards}{more}"
 
 
 def _source_row_html(src: SourceRow) -> str:
