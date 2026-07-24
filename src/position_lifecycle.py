@@ -186,6 +186,22 @@ def list_entries(
         conn.close()
 
 
+def get_entry(entry_id: int, *, db_path: Path | str) -> PositionEntry | None:
+    """One ``position_entries`` row by id, or None. Backs freshness
+    re-verification for the B6 ``post_mortem`` governor moment (it re-checks
+    ONE specific referenced entry, not the whole ticker timeline) — mirrors
+    ``list_entries``'s decode path but keyed by primary id, which
+    ``list_entries`` has no filter for."""
+    conn = _open(db_path)
+    if conn is None:
+        return None
+    try:
+        row = conn.execute("SELECT * FROM position_entries WHERE id = ?", (entry_id,)).fetchone()
+        return None if row is None else _row_to_entry(row)
+    finally:
+        conn.close()
+
+
 def update_exit_fields(
     *,
     db_path: Path | str,
@@ -500,6 +516,26 @@ def sync_position_lifecycle(
                 ),
             )
             closed += 1
+
+        if closed:
+            # B6 (2026-07-19 program overhaul): every freshly-closed row above
+            # left exit_reason/lessons/outcome_vs_thesis NULL or PREFILLED
+            # (seam 9) — never the LLM-drafted grading itself. That drafting
+            # is NEVER inline here (this reconciler runs on the protected
+            # 04:00 morning pipeline window and must stay zero/near-zero-LLM);
+            # it is the 18:00 sweep's job
+            # (synthesis.exit_postmortem.run_postmortem_drafts, wired in
+            # execution/run_session_distill.py). This is just the structured
+            # breadcrumb that closes happened this run — pending drafts are
+            # DERIVED at read time (closed + all three grading fields NULL),
+            # no stamp column needed.
+            log.info(
+                {
+                    "event": "postmortem_pending",
+                    "closed_this_run": closed,
+                    "user_id": user_id,
+                }
+            )
 
         # Enrichment pass: an open row missing entry_price gains the tracker's
         # avg cost once the tracker comes back online.

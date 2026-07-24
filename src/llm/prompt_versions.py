@@ -214,6 +214,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # wondering_detect on the live tap. Bump when the intent prompt is materially
     # rewritten, then re-run `run_llm_evals.py --purpose capture_intent`.
     "capture_intent": "v1",
+    # The B7 routing triage (research.triage._build_prompt). Bump when the
+    # triage prompt is materially rewritten.
+    "research_triage": "v1",
     # The Ledger reply router (onmymind.reply._build_prompt). Bump when the
     # reply-intent prompt is materially rewritten.
     "ledger_reply_intent": "v1",
@@ -311,6 +314,11 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # sibling B5 workstream's file). Registered here since this file is the
     # one source of truth for prompt versions.
     "tenet_accountability": "v1",
+    # Exit post-mortem drafting (B6, 2026-07-19 program overhaul,
+    # synthesis.exit_postmortem._build_prompt). Bump when the drafting
+    # prompt is materially rewritten, then re-run any golden-set eval added
+    # for this purpose.
+    "exit_postmortem_draft": "v1",
 }
 
 _DEFAULT_VERSION = "v1"

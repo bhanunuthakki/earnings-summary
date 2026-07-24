@@ -57,6 +57,12 @@ def test_trigger_and_prediction_purposes_registered() -> None:
         assert prompt_version_for(trigger_purpose) == "v2"
 
 
+def test_research_triage_is_registered() -> None:
+    # B7 — the routing triage behind a positive wondering verdict.
+    assert "research_triage" in prompt_versions.registered_purposes()
+    assert prompt_version_for("research_triage") == "v1"
+
+
 def test_triggers_source_prompt_version_from_registry() -> None:
     """Each trigger sensor's artifact ``_PROMPT_VERSION`` is sourced from the
     registry keyed by its own ``_ARTIFACT_PURPOSE`` — not a hardcoded literal —

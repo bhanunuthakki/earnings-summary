@@ -174,6 +174,12 @@ LLM_MODELS: dict[str, str] = {
     # run on EVERY owner musing (no lexical pre-gate) → the cheap FAST tier; the
     # golden set (evals/golden/capture_intent.json) is its bar.
     "capture_intent": FAST_CLASSIFIER_MODEL,
+    # The B7 routing triage behind a positive wondering verdict (research.triage,
+    # called from research.proposals.detect_and_create_task). A closed 3-way
+    # route — answer_now/belief_candidate/research_task — over one short musing;
+    # fails OPEN to research_task (today's pre-B7 behavior) on any failure →
+    # the cheap FAST tier. Budget-capped, warn mode (0194).
+    "research_triage": FAST_CLASSIFIER_MODEL,
     # The Ledger reply router (onmymind.reply). A closed enum classification —
     # research/save/worldview/dismiss/question/note — over one owner reply to a
     # feed card (the reply box replaced the per-card verb buttons). Fails open
@@ -672,6 +678,13 @@ LLM_MODELS: dict[str, str] = {
     # -> the default analytical tier (Sonnet), matching tenet_distill /
     # session_distill's own tier for belief-level synthesis.
     "tenet_accountability": DEFAULT_MODEL,
+    # Exit post-mortem drafting (B6, 2026-07-19 program overhaul,
+    # synthesis.exit_postmortem — a sibling B-workstream file; registered
+    # here since this file is the one source of truth for LLM_MODELS).
+    # Narrating why a closed position exited and what it taught from the
+    # ticker's own decision trail is judgment-heavy synthesis in the owner's
+    # voice, same shape as tenet_accountability/session_distill -> Sonnet.
+    "exit_postmortem_draft": DEFAULT_MODEL,
     # NOT here by design: the 14 dynamic `lens:<name>` purposes (plus the
     # scenario-suffixed lens:macro_scenario:<id> / lens:portfolio_macro_stress:<id>)
     # resolve their model from the Lens object itself
