@@ -1,0 +1,162 @@
+{
+  "equity_fraction": {
+    "cash_equivalent_policy": "Cash = securities classified as Cash by broker type code or the is_cash_equivalent flag (money-market funds such as FDRXX/SPAXX count as cash). Everything else \u2014 stocks, ETFs, mutual funds, crypto, other \u2014 counts as equity exposure in the numerator. No ticker allowlist.",
+    "denominator_value": "20000.000000",
+    "equity_fraction": "0.950000",
+    "equity_value": "19000.000000",
+    "excluded_account_ids": [
+      4
+    ],
+    "holdings_as_of": "2026-07-22",
+    "included_account_ids": [
+      1,
+      2,
+      3
+    ],
+    "is_partial": false,
+    "is_stale": false,
+    "methodology": "equity_fraction.cash_equivalent",
+    "methodology_version": "1",
+    "unit": "fraction",
+    "warnings": []
+  },
+  "meta": {
+    "account_coverage": {
+      "excluded_account_ids": [
+        4
+      ],
+      "included_account_ids": [
+        1,
+        2,
+        3
+      ],
+      "lagging_account_ids": []
+    },
+    "as_of": "2026-07-22",
+    "currency": "USD",
+    "generated_at": "2026-07-23T06:00:00Z",
+    "is_partial": false,
+    "is_stale": false,
+    "last_successful_sync_at": "2026-07-22T12:00:00",
+    "links": {
+      "accounts": "/api/v1/accounts",
+      "portfolio_snapshot": "/api/v1/portfolio-snapshot",
+      "positions": "/api/v1/portfolio/positions"
+    },
+    "methodology": "positioning.value_weighted_cuts",
+    "methodology_version": "1",
+    "schema_version": "1.0.0",
+    "source_providers": [
+      "plaid",
+      "snaptrade"
+    ],
+    "warnings": []
+  },
+  "positioning": {
+    "by_account_type": [
+      {
+        "count": 2,
+        "label": "Retirement / tax-advantaged",
+        "value": "13200.000000",
+        "weight_pct": "66.00"
+      },
+      {
+        "count": 2,
+        "label": "Taxable",
+        "value": "6800.000000",
+        "weight_pct": "34.00"
+      }
+    ],
+    "by_asset_type": [
+      {
+        "count": 3,
+        "label": "Stock",
+        "value": "19000.000000",
+        "weight_pct": "95.00"
+      },
+      {
+        "count": 1,
+        "label": "Cash",
+        "value": "1000.000000",
+        "weight_pct": "5.00"
+      }
+    ],
+    "by_region": [
+      {
+        "count": 3,
+        "label": "Unknown",
+        "value": "19000.000000",
+        "weight_pct": "95.00"
+      },
+      {
+        "count": 1,
+        "label": "Cash",
+        "value": "1000.000000",
+        "weight_pct": "5.00"
+      }
+    ],
+    "by_sector": [
+      {
+        "count": 3,
+        "label": "Unclassified",
+        "value": "19000.000000",
+        "weight_pct": "95.00"
+      },
+      {
+        "count": 1,
+        "label": "Cash",
+        "value": "1000.000000",
+        "weight_pct": "5.00"
+      }
+    ],
+    "concentration": {
+      "effective_holdings": 1.9149751053236308,
+      "hhi": 5222.0,
+      "num_positions": 3,
+      "top10_weight_pct": "100",
+      "top1_weight_pct": "66.00",
+      "top5_weight_pct": "100"
+    },
+    "correlations": [
+      {
+        "beta_policy": null,
+        "beta_qqq": null,
+        "beta_spy": null,
+        "correlation_policy": null,
+        "correlation_qqq": null,
+        "correlation_spy": null,
+        "name": "Alpha Corp",
+        "sample_size": 0,
+        "security_id": 1,
+        "ticker": "AAAA",
+        "value": "13200.000000",
+        "weight_pct": "66.00"
+      },
+      {
+        "beta_policy": null,
+        "beta_qqq": null,
+        "beta_spy": null,
+        "correlation_policy": null,
+        "correlation_qqq": null,
+        "correlation_spy": null,
+        "name": "Beta Corp",
+        "sample_size": 0,
+        "security_id": 2,
+        "ticker": "BBBB",
+        "value": "5800.000000",
+        "weight_pct": "29.00"
+      }
+    ],
+    "end_date": "2026-07-23",
+    "has_policy": false,
+    "notes": [
+      "Funds/ETFs are shown as their own 'ETF/Fund' sector bucket (no single GICS sector); cash is excluded from the correlation table.",
+      "2 position(s) lack enough price history in the window for a correlation estimate.",
+      "No policy weights set \u2014 the policy correlation column is empty."
+    ],
+    "snapshot_date": "2026-07-22",
+    "start_date": "2025-07-23",
+    "total_value": "20000.000000",
+    "weighted_avg_correlation_spy": null
+  }
+}

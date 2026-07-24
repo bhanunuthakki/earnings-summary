@@ -1,0 +1,85 @@
+{
+  "end_date": "2026-07-23",
+  "meta": {
+    "account_coverage": {
+      "excluded_account_ids": [
+        4
+      ],
+      "included_account_ids": [
+        1,
+        2,
+        3
+      ],
+      "lagging_account_ids": []
+    },
+    "as_of": "2026-07-23",
+    "currency": "USD",
+    "generated_at": "2026-07-23T06:00:00Z",
+    "is_partial": false,
+    "is_stale": false,
+    "last_successful_sync_at": "2026-07-22T12:00:00",
+    "links": {
+      "positions": "/api/v1/portfolio/positions"
+    },
+    "methodology": "position_snapshots.observed",
+    "methodology_version": "1",
+    "schema_version": "1.0.0",
+    "source_providers": [
+      "plaid",
+      "snaptrade"
+    ],
+    "warnings": []
+  },
+  "next_cursor": null,
+  "snapshots": [
+    {
+      "account_id": 1,
+      "account_name": "Example Roth IRA",
+      "currency": "USD",
+      "institution_price": null,
+      "institution_value": "12000.000000",
+      "origin": "broker",
+      "quantity": "100.0000000000",
+      "security_id": 1,
+      "snapshot_date": "2026-07-22",
+      "ticker": "AAAA"
+    },
+    {
+      "account_id": 2,
+      "account_name": "Example HSA",
+      "currency": "USD",
+      "institution_price": null,
+      "institution_value": "1200.000000",
+      "origin": "broker",
+      "quantity": "10.0000000000",
+      "security_id": 1,
+      "snapshot_date": "2026-07-22",
+      "ticker": "AAAA"
+    },
+    {
+      "account_id": 3,
+      "account_name": "Example Brokerage",
+      "currency": "USD",
+      "institution_price": null,
+      "institution_value": "5800.000000",
+      "origin": "broker",
+      "quantity": "50.0000000000",
+      "security_id": 2,
+      "snapshot_date": "2026-07-22",
+      "ticker": "BBBB"
+    },
+    {
+      "account_id": 3,
+      "account_name": "Example Brokerage",
+      "currency": "USD",
+      "institution_price": null,
+      "institution_value": "1000.000000",
+      "origin": "broker",
+      "quantity": "1000.0000000000",
+      "security_id": 3,
+      "snapshot_date": "2026-07-22",
+      "ticker": "CCCC"
+    }
+  ],
+  "start_date": "2026-04-24"
+}

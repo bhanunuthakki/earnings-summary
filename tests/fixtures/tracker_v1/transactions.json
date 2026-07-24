@@ -1,0 +1,110 @@
+{
+  "end_date": "2026-07-23",
+  "meta": {
+    "account_coverage": {
+      "excluded_account_ids": [
+        4
+      ],
+      "included_account_ids": [
+        1,
+        2,
+        3
+      ],
+      "lagging_account_ids": []
+    },
+    "as_of": "2026-07-23",
+    "currency": "USD",
+    "generated_at": "2026-07-23T06:00:00Z",
+    "is_partial": false,
+    "is_stale": false,
+    "last_successful_sync_at": "2026-07-22T12:00:00",
+    "links": {
+      "accounts": "/api/v1/accounts",
+      "cash_flows": "/api/v1/cash-flows"
+    },
+    "methodology": "transactions.normalized",
+    "methodology_version": "1",
+    "schema_version": "1.0.0",
+    "source_providers": [
+      "plaid",
+      "snaptrade"
+    ],
+    "warnings": []
+  },
+  "next_cursor": null,
+  "start_date": "2026-06-23",
+  "transactions": [
+    {
+      "account_id": 3,
+      "account_name": "Example Brokerage",
+      "amount": "1000.000000",
+      "currency": "USD",
+      "date": "2026-07-22",
+      "effective_classification": "external_in",
+      "fees": null,
+      "name": "ACH deposit",
+      "override_classification": null,
+      "price": null,
+      "quantity": "0E-10",
+      "security_id": null,
+      "subtype": "deposit",
+      "ticker": null,
+      "transaction_id": "fx-t4",
+      "type": "cash"
+    },
+    {
+      "account_id": 3,
+      "account_name": "Example Brokerage",
+      "amount": "250.000000",
+      "currency": "USD",
+      "date": "2026-07-19",
+      "effective_classification": "external_out",
+      "fees": null,
+      "name": "ACH withdrawal",
+      "override_classification": null,
+      "price": null,
+      "quantity": "0E-10",
+      "security_id": null,
+      "subtype": "withdrawal",
+      "ticker": null,
+      "transaction_id": "fx-t3",
+      "type": "cash"
+    },
+    {
+      "account_id": 3,
+      "account_name": "Example Brokerage",
+      "amount": "12.000000",
+      "currency": "USD",
+      "date": "2026-07-17",
+      "effective_classification": "internal",
+      "fees": null,
+      "name": "cash - DIVIDEND USD",
+      "override_classification": null,
+      "price": null,
+      "quantity": "0E-10",
+      "security_id": null,
+      "subtype": "withdrawal",
+      "ticker": null,
+      "transaction_id": "fx-t2",
+      "type": "cash"
+    },
+    {
+      "account_id": 3,
+      "account_name": "Example Brokerage",
+      "amount": "-580.000000",
+      "currency": "USD",
+      "date": "2026-07-15",
+      "effective_classification": null,
+      "fees": null,
+      "name": "Buy Beta Corp",
+      "override_classification": null,
+      "price": null,
+      "quantity": "5.0000000000",
+      "security_id": 2,
+      "subtype": "buy",
+      "ticker": "BBBB",
+      "transaction_id": "fx-t1",
+      "type": "buy"
+    }
+  ]
+}

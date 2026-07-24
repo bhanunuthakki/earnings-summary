@@ -1,0 +1,41 @@
+{
+  "meta": {
+    "account_coverage": {
+      "excluded_account_ids": [
+        4
+      ],
+      "included_account_ids": [
+        1,
+        2,
+        3
+      ],
+      "lagging_account_ids": []
+    },
+    "as_of": "2026-07-22",
+    "currency": "USD",
+    "generated_at": "2026-07-23T06:00:00Z",
+    "is_partial": false,
+    "is_stale": false,
+    "last_successful_sync_at": "2026-07-22T12:00:00",
+    "links": {
+      "transactions": "/api/v1/transactions"
+    },
+    "methodology": "exit_quality.repricing",
+    "methodology_version": "1",
+    "schema_version": "1.0.0",
+    "source_providers": [
+      "plaid",
+      "snaptrade"
+    ],
+    "warnings": []
+  },
+  "result": {
+    "end_date": "2026-07-23",
+    "rows": [],
+    "start_date": "2025-07-23",
+    "total_exit_alpha_vs_spy": "0",
+    "total_regret_vs_hold": "0",
+    "total_sold_proceeds": "0",
+    "total_value_if_held": "0"
+  }
+}

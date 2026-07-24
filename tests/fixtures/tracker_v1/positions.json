@@ -1,0 +1,89 @@
+{
+  "by_tax_treatment": {
+    "hsa": "1200.000000",
+    "pretax": "0",
+    "roth": "12000.000000",
+    "taxable": "6800.000000",
+    "unknown": "0"
+  },
+  "notes": [
+    "percent_of_portfolio is market_value / total book \u00d7 100 (percent), over the latest snapshot's positions; a position with no market value is omitted from the total and reports null.",
+    "tax_treatment is the detailed five-way value (taxable / pretax / roth / hsa / unknown) inferred from each account's type + subtype; a bare 'individual' / 'joint' subtype with no 'brokerage' token is 'unknown'."
+  ],
+  "positions": [
+    {
+      "accounts": [
+        {
+          "account_id": 2,
+          "account_name": "Example HSA",
+          "cost_basis": "1200.000000",
+          "cost_basis_source": null,
+          "market_value": "1200.000000",
+          "quantity": "10.0000000000",
+          "tax_treatment": "hsa"
+        },
+        {
+          "account_id": 1,
+          "account_name": "Example Roth IRA",
+          "cost_basis": "12000.000000",
+          "cost_basis_source": null,
+          "market_value": "12000.000000",
+          "quantity": "100.0000000000",
+          "tax_treatment": "roth"
+        }
+      ],
+      "cost_basis": "13200.000000",
+      "market_value": "13200.000000",
+      "name": "Alpha Corp",
+      "percent_of_portfolio": "66.0000",
+      "quantity": "110.0000000000",
+      "security_id": 1,
+      "ticker": "AAAA",
+      "unrealized_pnl": "0.000000"
+    },
+    {
+      "accounts": [
+        {
+          "account_id": 3,
+          "account_name": "Example Brokerage",
+          "cost_basis": "5800.000000",
+          "cost_basis_source": null,
+          "market_value": "5800.000000",
+          "quantity": "50.0000000000",
+          "tax_treatment": "taxable"
+        }
+      ],
+      "cost_basis": "5800.000000",
+      "market_value": "5800.000000",
+      "name": "Beta Corp",
+      "percent_of_portfolio": "29.0000",
+      "quantity": "50.0000000000",
+      "security_id": 2,
+      "ticker": "BBBB",
+      "unrealized_pnl": "0.000000"
+    },
+    {
+      "accounts": [
+        {
+          "account_id": 3,
+          "account_name": "Example Brokerage",
+          "cost_basis": "1000.000000",
+          "cost_basis_source": null,
+          "market_value": "1000.000000",
+          "quantity": "1000.0000000000",
+          "tax_treatment": "taxable"
+        }
+      ],
+      "cost_basis": "1000.000000",
+      "market_value": "1000.000000",
+      "name": "Cash Reserves Fund",
+      "percent_of_portfolio": "5.0000",
+      "quantity": "1000.0000000000",
+      "security_id": 3,
+      "ticker": "CCCC",
+      "unrealized_pnl": "0.000000"
+    }
+  ],
+  "snapshot_date": "2026-07-22",
+  "total_market_value": "20000.000000"
+}

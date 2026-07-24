@@ -1,0 +1,67 @@
+{
+  "cash_flows": [
+    {
+      "account_id": 3,
+      "account_name": "Example Brokerage",
+      "amount": "1000.000000",
+      "classification": "external_in",
+      "classification_source": "heuristic",
+      "currency": "USD",
+      "date": "2026-07-22",
+      "name": "ACH deposit",
+      "signed_external_amount": "1000.000000",
+      "subtype": "deposit",
+      "transaction_id": "fx-t4",
+      "type": "cash"
+    },
+    {
+      "account_id": 3,
+      "account_name": "Example Brokerage",
+      "amount": "250.000000",
+      "classification": "external_out",
+      "classification_source": "heuristic",
+      "currency": "USD",
+      "date": "2026-07-19",
+      "name": "ACH withdrawal",
+      "signed_external_amount": "-250.000000",
+      "subtype": "withdrawal",
+      "transaction_id": "fx-t3",
+      "type": "cash"
+    }
+  ],
+  "end_date": "2026-07-23",
+  "include_internal": false,
+  "meta": {
+    "account_coverage": {
+      "excluded_account_ids": [
+        4
+      ],
+      "included_account_ids": [
+        1,
+        2,
+        3
+      ],
+      "lagging_account_ids": []
+    },
+    "as_of": "2026-07-23",
+    "currency": "USD",
+    "generated_at": "2026-07-23T06:00:00Z",
+    "is_partial": false,
+    "is_stale": false,
+    "last_successful_sync_at": "2026-07-22T12:00:00",
+    "links": {
+      "transactions": "/api/v1/transactions"
+    },
+    "methodology": "cash_flow.twr_classification",
+    "methodology_version": "1",
+    "schema_version": "1.0.0",
+    "source_providers": [
+      "plaid",
+      "snaptrade"
+    ],
+    "warnings": []
+  },
+  "net_external_cashflow_in": "750.000000",
+  "next_cursor": null,
+  "start_date": "2026-06-23"
+}
