@@ -78,6 +78,7 @@ __all__ = [
     "CapacityContext",
     "PositionReview",
     "PreAnalysis",
+    "RiskContext",
     "VerdictOutput",
     "apply_behavioral_guard",
     "assemble_pre_analysis",
@@ -95,6 +96,7 @@ __all__ = [
     "render_capacity_lines",
     "render_pre_analysis_chat",
     "render_pre_analysis_plain",
+    "render_risk_lines",
     "render_tax_lines",
     "resolve_review_target",
     "review_position",
@@ -182,6 +184,57 @@ class CapacityContext:
 
 
 @dataclass(frozen=True)
+class RiskContext:
+    """Deterministic, zero-LLM read of a position's portfolio-risk footprint —
+    the C7 risk-aware ``/review`` block. Mirrors :class:`CapacityContext`'s
+    contract EXACTLY: every field is ``None``/``()`` when that sub-leg had
+    nothing to report or failed to compute, and the WHOLE block renders
+    nothing (not a placeholder) when every field is empty. Built by
+    :func:`_build_risk_context`, which independently try/excepts each leg so
+    one broken input (e.g. a pre-migration DB missing
+    ``business_factor_exposures``) never blocks the others."""
+
+    # Share of TOTAL BOOK RISK this holding carries (0-100), from
+    # allocation.book_risk.build_book_risk's Euler risk-contribution split —
+    # NOT the same as its portfolio weight (a volatile/correlated name can
+    # carry more risk share than dollar share).
+    risk_share_pct: float | None = None
+    # This holding's correlation to the REST OF THE BOOK (marginal_risk's
+    # corr_to_book), from the SAME build_book_risk call above — reused, not a
+    # second covariance build.
+    corr_to_book: float | None = None
+    # Human-readable crowding-cluster membership (portfolio_correlation's
+    # connected-components clusters at >=0.70 pairwise correlation), e.g.
+    # "co-moves with NU (avg corr 0.75, 22% combined weight)" — None when the
+    # ticker isn't in any multi-name cluster, or the read degraded.
+    crowding_cluster: str | None = None
+    # This ticker's OWN top business-factor loadings (C3
+    # business_factor_exposures, is_latest rows only), highest first, capped
+    # at 3 — e.g. (("Brazil consumer credit", 0.9), ("LatAm consumer/FX", 0.7)).
+    top_factors: tuple[tuple[str, float], ...] = ()
+    # EVENT_SCENARIOS (src/portfolio_montecarlo.py) ids where this ticker is a
+    # NAMED member — e.g. ("joint_latam",). Membership only; the modeled
+    # book-level stress return is the Risk tab's job, not this one-line read.
+    event_scenarios: tuple[str, ...] = ()
+    # Human-readable reasons any sub-leg above came back empty (network/DB
+    # error, missing table, thin price history) — never surfaced to the
+    # owner, logged for debugging only.
+    degraded_reasons: tuple[str, ...] = ()
+
+    def is_empty(self) -> bool:
+        """True when every substantive field is absent — mirrors
+        ``CapacityContext.is_empty()``; the renderer treats this identically
+        to ``risk=None``."""
+        return (
+            self.risk_share_pct is None
+            and self.corr_to_book is None
+            and self.crowding_cluster is None
+            and not self.top_factors
+            and not self.event_scenarios
+        )
+
+
+@dataclass(frozen=True)
 class PreAnalysis:
     """Grounded, LLM-free snapshot of a position — the input to the reasoning
     stage. Every field is a fact read from a store (or ``None`` when that store
@@ -234,6 +287,12 @@ class PreAnalysis:
     entry_method: str | None = None
     # One-line human text for concentration_zone (PRD §7.2 table), or None.
     zone_treatment: str | None = None
+    # --- risk context (C7, deterministic) ------------------------------------
+    # None on PreAnalysis objects built before the risk stage (tests, old
+    # callers) — treated identically to an empty RiskContext by the
+    # renderers. build_pre_analysis always attaches one (degraded-empty/None
+    # or not); byte-identical to today's output when every sub-leg degrades.
+    risk: RiskContext | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -568,6 +627,164 @@ def render_capacity_lines(capacity: CapacityContext | None) -> list[str]:
     return lines
 
 
+def render_risk_lines(risk: RiskContext | None) -> list[str]:
+    """Markdown bullets for the C7 risk block — shared by the chat reply and
+    the plain-ASCII (Telegram) reply, mirroring ``render_capacity_lines``'s
+    shape exactly.
+
+    Empty for ``risk=None`` or an all-empty :class:`RiskContext` — the common
+    degrade case (a pre-migration DB, an empty weights cache, or a thin price
+    history) MUST render byte-identical to the pre-C7 output — no header, no
+    placeholder line."""
+    if risk is None or risk.is_empty():
+        return []
+    lines: list[str] = []
+    bits: list[str] = []
+    if risk.risk_share_pct is not None:
+        bits.append(f"{risk.risk_share_pct:.0f}% of book risk")
+    if risk.corr_to_book is not None:
+        bits.append(f"corr-to-book {risk.corr_to_book:+.2f}")
+    if bits:
+        lines.append(f"- Risk: {'; '.join(bits)}")
+    if risk.crowding_cluster:
+        lines.append(f"- Crowding: {risk.crowding_cluster}")
+    if risk.top_factors:
+        factors = ", ".join(f"{factor} {loading:.1f}" for factor, loading in risk.top_factors)
+        lines.append(f"- Business factors: {factors}")
+    if risk.event_scenarios:
+        lines.append(f"- Event scenarios: {', '.join(risk.event_scenarios)}")
+    return lines
+
+
+def _build_risk_context(
+    ticker: str, db_path: Path | str | None, repo_root: Path
+) -> RiskContext | None:
+    """Assemble the C7 risk block for ``ticker`` (§ plan: "risk-aware
+    /review"). Every sub-leg below is independently try/excepted into
+    ``degraded_reasons`` — a broken/absent ``business_factor_exposures``
+    table (pre-migration substrate: ``sqlite3.OperationalError``), an offline
+    price cache, or a weights-cache miss each degrade THEIR OWN leg only, and
+    never propagate to the others or raise out of this function.
+
+    Returns ``None`` (leg absent — ``/review`` renders exactly as it did
+    before this block existed) when EVERY leg above came back empty. This is
+    the plan's explicit degrade test: an empty/absent
+    ``business_factor_exposures`` table combined with an empty weights cache
+    yields ``None`` here, and ``render_risk_lines(None)`` / the verdict
+    prompt's risk block both render nothing.
+    """
+    ticker = ticker.upper()
+    degraded: list[str] = []
+
+    # --- leg 1+2: book risk share + corr-to-book (one build_book_risk call,
+    # allocation.book_risk — the SAME assembly the next-dollar model and the
+    # L7 risk-budget allocator share, so this never disagrees with the Risk
+    # tab about "the book's risk") ---------------------------------------
+    risk_share_pct: float | None = None
+    corr_to_book: float | None = None
+    weights: dict[str, float] = {}
+    try:
+        from portfolio_weights import read_materialized_weights
+
+        weights = read_materialized_weights(repo_root)
+        if not weights:
+            degraded.append("materialized weights cache empty or unavailable")
+    except Exception as exc:  # never let a cache-read glitch break /review
+        log.debug({"event": "risk_context_weights_failed", "ticker": ticker, "error": str(exc)})
+        degraded.append(f"weights cache read failed: {type(exc).__name__}")
+
+    if weights:
+        try:
+            from allocation.book_risk import build_book_risk
+
+            book = build_book_risk(repo_root, list(weights), weights)
+            if book.hidden_reason is not None:
+                degraded.append(f"book risk unavailable: {book.hidden_reason}")
+            elif ticker not in book.risk_share:
+                degraded.append(f"{ticker} not in the priced book-risk matrix")
+            else:
+                risk_share_pct = book.risk_share[ticker] * 100.0
+                corr_to_book = book.corr_to_book.get(ticker)
+        except Exception as exc:
+            log.debug(
+                {"event": "risk_context_book_risk_failed", "ticker": ticker, "error": str(exc)}
+            )
+            degraded.append(f"book-risk leg failed: {type(exc).__name__}")
+
+    # --- leg 3: crowding-cluster membership (portfolio_correlation's
+    # connected-components clusters — Portfolio Risk v2's crowding read) -----
+    crowding_cluster: str | None = None
+    if weights:
+        try:
+            from portfolio_correlation import build_holdings_correlation_from_disk
+
+            corr_read = build_holdings_correlation_from_disk(repo_root, list(weights), weights)
+            if corr_read is None:
+                degraded.append("crowding-cluster read unavailable (thin/absent price history)")
+            else:
+                cluster = next((c for c in corr_read.clusters if ticker in c.tickers), None)
+                if cluster is not None:
+                    others = ", ".join(t for t in cluster.tickers if t != ticker)
+                    crowding_cluster = (
+                        f"co-moves with {others} (avg corr {cluster.avg_corr:.2f}, "
+                        f"{cluster.combined_weight_pct:.0f}% combined weight)"
+                    )
+        except Exception as exc:
+            log.debug(
+                {"event": "risk_context_crowding_failed", "ticker": ticker, "error": str(exc)}
+            )
+            degraded.append(f"crowding-cluster leg failed: {type(exc).__name__}")
+
+    # --- leg 4: this ticker's own top business-factor loadings (C3) ---------
+    top_factors: tuple[tuple[str, float], ...] = ()
+    try:
+        from db_paths import resolve_db_path
+
+        resolved = resolve_db_path(db_path)
+        if resolved is None or not Path(resolved).exists():
+            degraded.append("no database on file for business-factor exposures")
+        else:
+            conn = sqlite3.connect(f"file:{resolved}?mode=ro", uri=True)
+            try:
+                rows = conn.execute(
+                    "SELECT factor, loading FROM business_factor_exposures "
+                    "WHERE ticker = ? AND is_latest = 1 ORDER BY loading DESC LIMIT 3",
+                    (ticker,),
+                ).fetchall()
+                top_factors = tuple((str(f), float(loading)) for f, loading in rows)
+            finally:
+                conn.close()
+    except sqlite3.OperationalError as exc:
+        # Pre-migration substrate: business_factor_exposures doesn't exist yet.
+        log.debug(
+            {"event": "risk_context_factors_table_absent", "ticker": ticker, "error": str(exc)}
+        )
+        degraded.append("business_factor_exposures table not on this substrate")
+    except Exception as exc:
+        log.debug({"event": "risk_context_factors_failed", "ticker": ticker, "error": str(exc)})
+        degraded.append(f"business-factor leg failed: {type(exc).__name__}")
+
+    # --- leg 5: event-scenario membership (C5, src.portfolio_montecarlo) ----
+    event_scenarios: tuple[str, ...] = ()
+    try:
+        from portfolio_montecarlo import EVENT_SCENARIOS
+
+        event_scenarios = tuple(s.id for s in EVENT_SCENARIOS if ticker in s.named_tickers)
+    except Exception as exc:
+        log.debug({"event": "risk_context_scenarios_failed", "ticker": ticker, "error": str(exc)})
+        degraded.append(f"event-scenario leg failed: {type(exc).__name__}")
+
+    risk = RiskContext(
+        risk_share_pct=risk_share_pct,
+        corr_to_book=corr_to_book,
+        crowding_cluster=crowding_cluster,
+        top_factors=top_factors,
+        event_scenarios=event_scenarios,
+        degraded_reasons=tuple(degraded),
+    )
+    return None if risk.is_empty() else risk
+
+
 def build_pre_analysis(
     repo_root: Path,
     ticker: str,
@@ -768,7 +985,18 @@ def build_pre_analysis(
             trim_rationale=trim_rationale,
             history_truncated=history is not None and len(history) >= TRANSACTION_HISTORY_LIMIT,
         )
-    return replace(pre, tax=tax_view, capacity=capacity)
+    # --- risk context (C7): a separate I/O leg, wrapped defensively even
+    # though _build_risk_context already guards every sub-leg internally —
+    # matching this function's paranoid style for every cross-cutting block
+    # (capacity's wealthplan/exit-quality legs above do the same) so a bug in
+    # a NEW leg can never break /review.
+    try:
+        risk_ctx = _build_risk_context(ticker, db_path, repo_root)
+    except Exception as exc:
+        log.debug({"event": "risk_context_build_failed", "ticker": ticker, "error": str(exc)})
+        risk_ctx = None
+
+    return replace(pre, tax=tax_view, capacity=capacity, risk=risk_ctx)
 
 
 # --------------------------------------------------------------------------- #
@@ -1186,6 +1414,31 @@ def _convictions_block(repo_root: Path, ticker: str, db_path: Path | str | None)
     return spotlight(raw, source="the owner's own captured convictions (the Ledger)")
 
 
+def _risk_prompt_block(risk: RiskContext | None) -> str:
+    """Compact ``RISK: ...`` line for the verdict prompt — mirrors the tax/
+    capacity legs' degrade contract: ``risk=None`` or an all-empty
+    :class:`RiskContext` renders nothing (``""``), never a placeholder line,
+    so a fully-degraded risk leg leaves the prompt byte-identical to before
+    C7."""
+    if risk is None or risk.is_empty():
+        return ""
+    bits: list[str] = []
+    if risk.risk_share_pct is not None:
+        bits.append(f"{risk.risk_share_pct:.0f}% of book risk")
+    if risk.corr_to_book is not None:
+        bits.append(f"corr-to-book {risk.corr_to_book:+.2f}")
+    if risk.crowding_cluster:
+        bits.append(f"cluster: {risk.crowding_cluster}")
+    if risk.top_factors:
+        bits.append(
+            "factors: "
+            + ", ".join(f"{factor} {loading:.1f}" for factor, loading in risk.top_factors)
+        )
+    if risk.event_scenarios:
+        bits.append("scenarios: " + ", ".join(risk.event_scenarios))
+    return f"RISK: {'; '.join(bits)}\n" if bits else ""
+
+
 def _build_verdict_prompt(
     pre: PreAnalysis,
     convictions_block: str,
@@ -1214,6 +1467,7 @@ def _build_verdict_prompt(
         f"over/under {pre.dcf_gap_pct}% (+ = over-valued), mos_bar {pre.mos_bar}; "
         f"ladder verdict: {pre.valuation_verdict}\n"
         f"Conviction encoded: {pre.conviction_encoded}\n"
+        f"{_risk_prompt_block(pre.risk)}"
     )
     profile_block = f"{owner_profile_anchor}\n" if owner_profile_anchor else ""
     return (
@@ -1592,6 +1846,7 @@ def render_pre_analysis_chat(pre: PreAnalysis, *, db_path: Path | str | None = N
             f"ladder: {pre.valuation_verdict}",
             *render_tax_lines(pre.tax),
             *render_capacity_lines(pre.capacity),
+            *render_risk_lines(pre.risk),
             f"- Mechanical read: {mechanical_read(pre)}",
             *([f"- {graded_line}"] if graded_line is not None else []),
             f"- Full calibrated verdict (LLM + behavioral guard): "
@@ -1656,6 +1911,7 @@ def render_pre_analysis_plain(pre: PreAnalysis, *, db_path: Path | str | None = 
             f"ladder: {pre.valuation_verdict}",
             *render_tax_lines(pre.tax, plain=True),
             *render_capacity_lines(pre.capacity),
+            *render_risk_lines(pre.risk),
             f"- Mechanical read: {mechanical_read(pre)}",
             *([f"- {graded_line}"] if graded_line is not None else []),
             "- Full calibrated review: from the desk (Holding -> Review).",

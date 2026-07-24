@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import sqlite3
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -317,3 +318,157 @@ def test_resulting_weight_pct_blends_an_existing_holdings_weight(
     assert r.resulting_weight_pct == pytest.approx(expected_pct)
     assert expected_pct == pytest.approx(24.0)
     assert r.zone == "exceptional"  # 24% >= 20%
+
+
+# --------------------------------------------------------------------------- #
+# C7 — factor_vector_before/after (src.risk_factors, C3 business-factor
+# exposures, pro-rata blended the same way sector_mix_after already is)
+# --------------------------------------------------------------------------- #
+
+_FACTOR_DDL = """
+CREATE TABLE business_factor_exposures (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL,
+    factor TEXT NOT NULL,
+    loading REAL NOT NULL,
+    rationale TEXT,
+    provenance TEXT NOT NULL,
+    input_sha TEXT,
+    owner_edited INTEGER NOT NULL DEFAULT 0,
+    is_latest INTEGER NOT NULL DEFAULT 1,
+    superseded_by INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+
+def _write_factor_exposures(db_path: Path, rows: list[tuple[str, str, float, bool]]) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(_FACTOR_DDL)
+    now = "2026-07-24T00:00:00"
+    for ticker, factor, loading, is_latest in rows:
+        conn.execute(
+            "INSERT INTO business_factor_exposures "
+            "(ticker, factor, loading, provenance, is_latest, created_at, updated_at) "
+            "VALUES (?, ?, ?, 'segment_derived', ?, ?, ?)",
+            (ticker, factor, loading, int(is_latest), now, now),
+        )
+    conn.commit()
+    conn.close()
+
+
+def _write_weights_cache(repo_root: Path, weights: dict[str, float]) -> None:
+    cache = repo_root / "data" / "portfolio_weights.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(
+        json.dumps({"computed_at": "2026-07-24T00:00:00", "weights": weights}), encoding="utf-8"
+    )
+
+
+def test_factor_vector_before_after_pro_rata_blend(tmp_path: Path, market: list[float]) -> None:
+    _write_chart(tmp_path, "AAA", list(market))
+    _write_chart(tmp_path, "CCC", [0.01 * math.cos(i / 5.0) for i in range(200)])
+    _write_weights_cache(tmp_path, {"AAA": 1.0})
+    db_path = tmp_path / "data" / "portfolio.db"
+    _write_factor_exposures(
+        db_path,
+        [
+            ("AAA", "Brazil consumer credit", 0.8, True),
+            ("CCC", "Brazil consumer credit", 0.6, True),
+            ("CCC", "digital ad spend", 0.4, True),
+            ("CCC", "STALE_FACTOR", 0.99, False),  # superseded — must be excluded
+        ],
+    )
+    w = 0.10
+    r = compute_what_if(
+        tmp_path,
+        "CCC",
+        w,
+        book_weights={"AAA": 1.0},
+        risk_free_annual=0.02,
+        book_growth_tilt=None,
+        db_path=db_path,
+    )
+    assert r.factor_vector_before == pytest.approx({"Brazil consumer credit": 0.8})
+    expected_after = {
+        "Brazil consumer credit": (1.0 - w) * 0.8 + w * 0.6,
+        "digital ad spend": (1.0 - w) * 0.0 + w * 0.4,
+    }
+    assert r.factor_vector_after == pytest.approx(expected_after)
+
+
+def test_factor_vector_absent_without_db_path(tmp_path: Path, market: list[float]) -> None:
+    """db_path defaults to None (today's only caller, pipeline.peeks, doesn't
+    pass one) -> the factor legs are absent, never raising, never computed."""
+    _write_chart(tmp_path, "AAA", list(market))
+    _write_chart(tmp_path, "CCC", list(market))
+    r = compute_what_if(
+        tmp_path,
+        "CCC",
+        0.05,
+        book_weights={"AAA": 1.0},
+        risk_free_annual=0.02,
+        book_growth_tilt=None,
+    )
+    assert r.factor_vector_before is None
+    assert r.factor_vector_after is None
+
+
+def test_factor_vector_absent_table_degrades_cleanly(tmp_path: Path, market: list[float]) -> None:
+    """A db_path pointing at a real DB that predates the C3 migration (no
+    business_factor_exposures table) must degrade to an absent section, never
+    raise and never appear in ``degraded`` (a missing table is a clean
+    absence, not a failure — book_factor_vector already treats it that way)."""
+    _write_chart(tmp_path, "AAA", list(market))
+    _write_chart(tmp_path, "CCC", list(market))
+    _write_weights_cache(tmp_path, {"AAA": 1.0})
+    db_path = tmp_path / "data" / "portfolio.db"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    sqlite3.connect(str(db_path)).close()  # a real, empty DB file — no tables
+
+    r = compute_what_if(
+        tmp_path,
+        "CCC",
+        0.05,
+        book_weights={"AAA": 1.0},
+        risk_free_annual=0.02,
+        book_growth_tilt=None,
+        db_path=db_path,
+    )
+    assert r.factor_vector_before is None
+    assert r.factor_vector_after is None
+    assert not any("business-factor" in d for d in r.degraded)
+
+
+def test_factor_vector_result_cache_distinguishes_db_path(
+    tmp_path: Path, market: list[float]
+) -> None:
+    """A call WITH db_path must never be served from a cache entry populated
+    by an earlier call WITHOUT one (or vice versa) — the result cache key
+    must include db_path."""
+    _write_chart(tmp_path, "AAA", list(market))
+    _write_chart(tmp_path, "CCC", [0.01 * math.cos(i / 5.0) for i in range(200)])
+    _write_weights_cache(tmp_path, {"AAA": 1.0})
+    db_path = tmp_path / "data" / "portfolio.db"
+    _write_factor_exposures(
+        db_path,
+        [("AAA", "digital ad spend", 0.3, True), ("CCC", "digital ad spend", 0.5, True)],
+    )
+
+    weights = {"AAA": 1.0}
+    r_without = compute_what_if(
+        tmp_path, "CCC", 0.05, book_weights=weights, risk_free_annual=0.02, book_growth_tilt=None
+    )
+    r_with = compute_what_if(
+        tmp_path,
+        "CCC",
+        0.05,
+        book_weights=weights,
+        risk_free_annual=0.02,
+        book_growth_tilt=None,
+        db_path=db_path,
+    )
+    assert r_without.factor_vector_after is None
+    assert r_with.factor_vector_after is not None

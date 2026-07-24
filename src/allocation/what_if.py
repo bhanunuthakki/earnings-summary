@@ -43,6 +43,7 @@ the materializer persists the default-weight ΔSR per candidate instead.
 from __future__ import annotations
 
 import math
+import sqlite3
 import threading
 from collections import OrderedDict
 from collections.abc import Mapping
@@ -118,6 +119,14 @@ class WhatIfResult:
     growth_tilt_after: float | None = None
     sector_mix_after: dict[str, float] | None = None
     top_correlations: tuple[tuple[str, float], ...] = ()  # candidate vs holding, |corr| desc
+    # C7 — book-level business-factor exposure (src.risk_factors, C3) before
+    # and after pro-rata folding in the candidate at ``weight``, the SAME
+    # ``(1-w)*before + w*candidate`` blend ``sector_mix_after`` already uses.
+    # Both None when ``db_path`` wasn't passed, the book has no persisted
+    # loadings yet, or the substrate predates the C3 migration (absent table
+    # -> absent section, never a fabricated zero vector).
+    factor_vector_before: dict[str, float] | None = None
+    factor_vector_after: dict[str, float] | None = None
     obs: int | None = None
     prices_through: str | None = None  # last aligned date, ISO
     degraded: tuple[str, ...] = ()  # human-readable reasons; empty when clean
@@ -151,8 +160,11 @@ _bundle_cache: OrderedDict[tuple[str, int], AlignedReturns] = OrderedDict()
 # Result key carries the book identity (weights hash + rf) alongside the
 # prices-through date and funding_mode — a weights refresh mid-session must
 # miss, not serve yesterday's book, and the two funding framings (identical
-# math, different narrative) must never collide in the same cache slot.
-_result_cache: OrderedDict[tuple[str, float, str, str, int, float | None], WhatIfResult] = (
+# math, different narrative) must never collide in the same cache slot. The
+# trailing ``str`` is the (possibly empty) ``db_path`` string — C7's
+# factor-vector legs are keyed off it too, so a cache hit from a call WITHOUT
+# ``db_path`` (peeks.py today) never masquerades as one WITH it.
+_result_cache: OrderedDict[tuple[str, float, str, str, int, float | None, str], WhatIfResult] = (
     OrderedDict()
 )
 
@@ -241,6 +253,7 @@ def compute_what_if(
     lookback_obs: int = 252,
     min_overlap_obs: int = 120,
     funding_mode: str = DEFAULT_FUNDING_MODE,
+    db_path: Path | str | None = None,
 ) -> WhatIfResult:
     """One candidate at one weight against the passed book. Never raises on
     data absence — missing legs populate ``degraded`` and stay None.
@@ -252,6 +265,17 @@ def compute_what_if(
     unknown mode (the same fail-loud contract ``validate_weight`` uses for an
     out-of-range weight — a typo'd query param must never silently degrade
     to a mode the caller didn't ask for).
+
+    ``db_path`` (C7, new — optional, defaults to ``None``) unlocks the
+    ``factor_vector_before``/``factor_vector_after`` legs (src.risk_factors,
+    C3): the book's persisted business-factor exposure vector before and
+    after pro-rata folding in the candidate at ``weight``, the SAME
+    ``(1-w)*before + w*candidate`` blend already used for
+    ``sector_mix_after``. Omitted (today's only caller,
+    ``pipeline.peeks.render_what_if_peek``, doesn't pass it) or a substrate
+    predating the C3 migration -> both fields stay ``None``, never raising —
+    wiring the peek route to pass a live ``db_path`` is tracked as a
+    follow-up, not part of this change.
     """
     if funding_mode not in FUNDING_MODES:
         raise ValueError(f"funding_mode must be one of {FUNDING_MODES} (got {funding_mode!r})")
@@ -275,6 +299,7 @@ def compute_what_if(
         prices_through or "",
         _weights_key(book_weights),
         risk_free_annual,
+        str(db_path) if db_path is not None else "",
     )
     if prices_through is not None:
         cached = _cache_get(_result_cache, result_key)
@@ -346,6 +371,28 @@ def compute_what_if(
         label = sector or "(unclassified)"
         sector_mix[label] = sector_mix.get(label, 0.0) + w
 
+    # C7 factor-vector before/after: pure arithmetic over C3's persisted
+    # is_latest loadings, the same pro-rata blend sector_mix_after uses.
+    # book_factor_vector already never raises (a missing/pre-migration table
+    # degrades to an empty vector), so this leg only needs to guard the
+    # candidate's OWN loadings read and never let either failure escape.
+    factor_vector_before: dict[str, float] | None = None
+    factor_vector_after: dict[str, float] | None = None
+    if db_path is not None:
+        try:
+            from risk_factors import book_factor_vector
+
+            book_vector = book_factor_vector(db_path, repo_root).vector
+            if book_vector:
+                cand_loadings = _ticker_factor_loadings(db_path, upper)
+                factor_vector_before = dict(book_vector)
+                after: dict[str, float] = {f: (1.0 - w) * v for f, v in book_vector.items()}
+                for factor, loading in cand_loadings.items():
+                    after[factor] = after.get(factor, 0.0) + w * loading
+                factor_vector_after = after
+        except Exception as exc:
+            degraded.append(f"business-factor deltas unavailable: {type(exc).__name__}")
+
     result = WhatIfResult(
         ticker=upper,
         weight=w,
@@ -361,6 +408,8 @@ def compute_what_if(
         growth_tilt_after=tilt_after,
         sector_mix_after=sector_mix,
         top_correlations=top_corr,
+        factor_vector_before=factor_vector_before,
+        factor_vector_after=factor_vector_after,
         obs=obs,
         prices_through=prices_through,
         degraded=tuple(degraded),
@@ -368,6 +417,38 @@ def compute_what_if(
     if prices_through is not None:
         _cache_put(_result_cache, result_key, result, _RESULT_CACHE_MAX)
     return result
+
+
+def _ticker_factor_loadings(db_path: Path | str | None, ticker: str) -> dict[str, float]:
+    """This ticker's OWN latest business-factor loadings (C3
+    ``business_factor_exposures``), ``factor -> loading``. ``{}`` on a
+    missing ``db_path``, a missing DB file, a pre-migration substrate
+    (``sqlite3.OperationalError`` — the table doesn't exist), or any other
+    read error — never raises, matching ``risk_factors._open``'s degrade
+    contract (this module can't import that private helper directly, so the
+    connection-open logic is duplicated here at the same defensiveness)."""
+    if db_path is None:
+        return {}
+    try:
+        from db_paths import resolve_db_path
+
+        resolved = resolve_db_path(db_path)
+        if resolved is None or not Path(resolved).exists():
+            return {}
+        conn = sqlite3.connect(f"file:{resolved}?mode=ro", uri=True)
+    except (sqlite3.Error, OSError):
+        return {}
+    try:
+        rows = conn.execute(
+            "SELECT factor, loading FROM business_factor_exposures "
+            "WHERE ticker = ? AND is_latest = 1",
+            (ticker.upper(),),
+        ).fetchall()
+        return {str(factor): float(loading) for factor, loading in rows}
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
 
 
 def _candidate_growth_tilt(repo_root: Path, ticker: str, *, min_overlap_obs: int) -> float | None:
