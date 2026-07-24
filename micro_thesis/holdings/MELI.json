@@ -276,6 +276,15 @@
       "unit": "percent",
       "consecutive_periods": 2,
       "narrative": "ROE <20% for 2Q - the PM's return floor (revised up from ~15%); MELI runs ~30%+, so sub-20 means spread compression + credit-book capital intensity are overwhelming returns."
+    },
+    {
+      "rule_id": "meli_early_npl_above_10",
+      "kpi_name": "Credit portfolio 15-90 day NPL",
+      "comparator": "gt",
+      "threshold": 10,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Owner ruling 2026-07-24: the market misprices MELI's early credit provisioning - the seasoning unlock is real IF realized losses track underwriting as the 87%-YoY-growth book stays young; current margin compression (NIMAL 17.8% Q1'26 vs 22.7% a year ago) partly cuts against it. This rule operationalizes the 'realized losses track underwriting' half via the 15-90d early-stage bucket, the leading indicator that would move 1-2Q before the already-gated 90+ bucket (meli_90plus_npl_above_21, >21%). Early-bucket NPL >10% for 2 consecutive Qs. Current 8.0% Q1'26, oscillating 6.7-8.2% over the last 8 quarters with no uptrend despite the portfolio scaling 87% YoY to $14.6B - the credit fear has not shown up in realized delinquency yet. Threshold sits ~1.8pp above the 8-quarter historical ceiling (8.2%) so normal quarter-to-quarter noise (seen swings up to 1.5pp) doesn't false-trip, while still catching a genuine seasoning failure before it migrates into the 90+ bucket."
     }
   ]
 }
