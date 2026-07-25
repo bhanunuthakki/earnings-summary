@@ -641,7 +641,9 @@ def test_gate_marks_judge_failed_on_call_exception(rubric: object) -> None:
 
     outcome = gate_message(sig, composed, rubric=rubric, min_score=0.75, caller=raising_caller)  # type: ignore[arg-type]
     assert outcome.judge_failed is True
-    assert outcome.score == pytest.approx(0.0)
+    # score=None, not 0.0: a failed judge CALL measured nothing (the
+    # judge_infra contract from the July-2026 transport hardening).
+    assert outcome.score is None
     assert not outcome.passed
 
 
