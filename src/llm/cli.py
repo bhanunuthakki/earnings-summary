@@ -746,6 +746,15 @@ LLM_MODELS: dict[str, str] = {
     # ticker's own decision trail is judgment-heavy synthesis in the owner's
     # voice, same shape as tenet_accountability/session_distill -> Sonnet.
     "exit_postmortem_draft": DEFAULT_MODEL,
+    # P3 boilerplate-vs-substance triage (filings.boilerplate_triage,
+    # docs/design/disclosure_change_build_stack.md §P3). Deterministic
+    # specificity scoring (filings.specificity) already resolves the
+    # confidently-boilerplate and confidently-substantive extremes in plain
+    # code; this purpose only sees the ambiguous middle, ONE batched call per
+    # ticker over diff hunks (never whole documents) — the same narrow,
+    # closed-vocab classification shape as metric_lifecycle_triage -> Haiku
+    # tier.
+    "disclosure_item_specificity_triage": FAST_CLASSIFIER_MODEL,
     # NOT here by design: the 14 dynamic `lens:<name>` purposes (plus the
     # scenario-suffixed lens:macro_scenario:<id> / lens:portfolio_macro_stress:<id>)
     # resolve their model from the Lens object itself
