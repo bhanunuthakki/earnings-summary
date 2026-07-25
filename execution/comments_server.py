@@ -3934,7 +3934,7 @@ def create_app(
             w = 0.03
         funding_param = (request.args.get("funding") or "new_cash").strip().lower()
         funding_mode = "pro_rata_reallocation" if funding_param == "pro_rata" else "new_cash"
-        html = render_what_if_peek(repo_root, ticker, w, funding_mode=funding_mode)
+        html = render_what_if_peek(repo_root, ticker, w, funding_mode=funding_mode, db_path=db_path)
         if html is None:
             abort(404)
         return Response(html, mimetype="text/html")

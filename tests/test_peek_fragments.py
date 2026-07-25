@@ -831,6 +831,66 @@ def test_peek_whatif_renders_before_after(client: FlaskClient, repo: Path) -> No
     assert "pro-rata reallocation" in pro.data.decode()
 
 
+def _seed_factor_exposures(repo: Path, rows: list[tuple[str, str, float]]) -> None:
+    """(ticker, factor, loading) rows into business_factor_exposures (C3),
+    is_latest=1 — the shape ``book_factor_vector``/``_ticker_factor_loadings``
+    read back. No LLM, no artifact cache — direct substrate seed."""
+    import sqlite3
+
+    conn = sqlite3.connect(str(repo / "data" / "portfolio.db"))
+    try:
+        now = "2026-07-24T00:00:00"
+        for ticker, factor, loading in rows:
+            conn.execute(
+                "INSERT INTO business_factor_exposures "
+                "(ticker, factor, loading, provenance, owner_edited, is_latest, "
+                "created_at, updated_at) VALUES (?, ?, ?, 'segment_derived', 0, 1, ?, ?)",
+                (ticker, factor, loading, now, now),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_peek_whatif_renders_business_factor_shifts(client: FlaskClient, repo: Path) -> None:
+    """C7: passing a live db_path (the route's default now) surfaces the
+    book's top business-factor movers when the C3 substrate has loadings."""
+    from allocation.what_if import clear_caches
+
+    clear_caches()
+    _seed_whatif_substrate(repo)
+    _write_fit_cache(repo, ticker="DLO")
+    _seed_factor_exposures(
+        repo,
+        [
+            ("AAA", "digital ad spend", 0.8),
+            ("BBB", "digital ad spend", 0.2),
+            ("DLO", "LatAm consumer/FX", 0.9),
+        ],
+    )
+    resp = client.get("/api/peek/whatif?ticker=DLO")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "top business-factor shifts" in body
+    assert "LatAm consumer/FX" in body  # DLO's own factor enters the blend
+
+
+def test_peek_whatif_no_factor_substrate_renders_no_shift_section(
+    client: FlaskClient, repo: Path
+) -> None:
+    """Degrade path: an empty business_factor_exposures table (the normal
+    state until the first weekly refresh runs) renders exactly as before C7
+    — no fabricated section, no error."""
+    from allocation.what_if import clear_caches
+
+    clear_caches()
+    _seed_whatif_substrate(repo)
+    _write_fit_cache(repo, ticker="DLO")
+    resp = client.get("/api/peek/whatif?ticker=DLO")
+    assert resp.status_code == 200
+    assert "top business-factor shifts" not in resp.data.decode()
+
+
 def test_peek_whatif_rejects_out_of_range_weight_and_404s(client: FlaskClient, repo: Path) -> None:
     from allocation.what_if import clear_caches
 

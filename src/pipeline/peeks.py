@@ -691,22 +691,35 @@ def _whatif_error_html(message: str) -> str:
 
 
 def render_what_if_peek(
-    repo_root: Path, ticker: str, weight: float, *, funding_mode: str = "new_cash"
+    repo_root: Path,
+    ticker: str,
+    weight: float,
+    *,
+    funding_mode: str = "new_cash",
+    db_path: Path | str | None = None,
 ) -> str | None:
     """The book BEFORE → AFTER adding one name at a chosen weight — vol, Sharpe
     (Δ in bps), growth tilt, resulting post-trade weight + concentration zone
-    (PRD §7.2, P0.2), and the candidate's top correlations to individual
-    holdings, from ``allocation.what_if`` (module-cached; a cold compute is a
-    user-initiated click, never the table render). The weight selector chips
-    are peek doorways themselves — clicking a preset re-renders the popover at
-    that weight, carrying the current ``funding_mode`` along.
+    (PRD §7.2, P0.2), the candidate's top correlations to individual
+    holdings, and (C7, when ``db_path`` is given) the book's top-3 C3
+    business-factor movers, from ``allocation.what_if`` (module-cached; a cold
+    compute is a user-initiated click, never the table render). The weight
+    selector chips are peek doorways themselves — clicking a preset re-renders
+    the popover at that weight, carrying the current ``funding_mode`` along.
 
     ``funding_mode`` (``"new_cash"`` | ``"pro_rata_reallocation"``) is FRAMING
     ONLY — see ``allocation.what_if``'s module docstring: it never changes the
     modeled vol/Sharpe/tilt numbers, only how the add is explained. An
     out-of-range weight, or an unknown funding mode, renders a small inline
     error naming the preset menu instead of raising. ``None`` when the
-    weights cache is empty (the route 404s)."""
+    weights cache is empty (the route 404s).
+
+    ``db_path`` is optional (defaults ``None``, matching every caller before
+    C7): omitting it keeps this peek exactly as it rendered before the C3
+    factor substrate existed — no business-factor section, same cache
+    behavior. Passing it degrades cleanly to the same absent section on a
+    pre-migration DB or an empty ``business_factor_exposures`` table
+    (``compute_what_if`` never raises on that path)."""
     from allocation.what_if import ALLOWED_WEIGHTS, compute_what_if, validate_weight
     from candidate_fit_cache import read_materialized_fit_meta
     from portfolio_weights import read_materialized_weights
@@ -736,6 +749,7 @@ def render_what_if_peek(
             risk_free_annual=_opt("risk_free_annual"),
             book_growth_tilt=_opt("growth_tilt"),
             funding_mode=funding_mode,
+            db_path=db_path,
         )
     except ValueError as exc:
         return _whatif_error_html(str(exc))
@@ -805,6 +819,31 @@ def render_what_if_peek(
             '<div class="cc-fit-group">top correlations to holdings</div>'
             f'<div class="cc-wi-corrs">{chips}</div>'
         )
+    # C7 — the book's top-3 C3 business-factor movers (by |delta|), same
+    # doorway shape as top_correlations above; absent whenever db_path wasn't
+    # passed, the substrate predates 0195, or no holding has a loading yet.
+    factor_html = ""
+    if r.factor_vector_before is not None and r.factor_vector_after is not None:
+        factors = set(r.factor_vector_before) | set(r.factor_vector_after)
+        deltas = sorted(
+            (
+                (f, r.factor_vector_after.get(f, 0.0) - r.factor_vector_before.get(f, 0.0))
+                for f in factors
+            ),
+            key=lambda kv: abs(kv[1]),
+            reverse=True,
+        )[:3]
+        if deltas:
+            chips = " ".join(
+                f'<span class="k-chip k-chip-mono">{escape(f)} {d * 100:+.1f}pp</span>'
+                for f, d in deltas
+                if abs(d) > 1e-6
+            )
+            if chips:
+                factor_html = (
+                    '<div class="cc-fit-group">top business-factor shifts</div>'
+                    f'<div class="cc-wi-corrs">{chips}</div>'
+                )
     degraded_html = (
         '<div class="cc-fit-degraded">&#9888; ' + escape(" · ".join(r.degraded)) + "</div>"
         if r.degraded
@@ -828,7 +867,8 @@ def render_what_if_peek(
     return (
         f'<div class="cc-score">{head}{degraded_html}'
         f'<div class="cc-score-rows">{"".join(rows)}</div>'
-        f"{delta}{zone_html}{corr_html}{legend}</div>{foot}<style>{_SCORE_CSS}</style>"
+        f"{delta}{zone_html}{corr_html}{factor_html}{legend}</div>{foot}"
+        f"<style>{_SCORE_CSS}</style>"
     )
 
 

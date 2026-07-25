@@ -266,16 +266,15 @@ def compute_what_if(
     out-of-range weight — a typo'd query param must never silently degrade
     to a mode the caller didn't ask for).
 
-    ``db_path`` (C7, new — optional, defaults to ``None``) unlocks the
+    ``db_path`` (C7 — optional, defaults to ``None``) unlocks the
     ``factor_vector_before``/``factor_vector_after`` legs (src.risk_factors,
     C3): the book's persisted business-factor exposure vector before and
     after pro-rata folding in the candidate at ``weight``, the SAME
     ``(1-w)*before + w*candidate`` blend already used for
-    ``sector_mix_after``. Omitted (today's only caller,
-    ``pipeline.peeks.render_what_if_peek``, doesn't pass it) or a substrate
-    predating the C3 migration -> both fields stay ``None``, never raising —
-    wiring the peek route to pass a live ``db_path`` is tracked as a
-    follow-up, not part of this change.
+    ``sector_mix_after``. Omitted, or a substrate predating the C3
+    migration, or an empty ``business_factor_exposures`` table -> both
+    fields stay ``None``, never raising. ``pipeline.peeks.render_what_if_peek``
+    passes a live ``db_path`` through from its Flask app closure.
     """
     if funding_mode not in FUNDING_MODES:
         raise ValueError(f"funding_mode must be one of {FUNDING_MODES} (got {funding_mode!r})")
