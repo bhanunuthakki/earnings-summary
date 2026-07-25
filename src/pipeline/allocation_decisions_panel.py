@@ -1828,12 +1828,21 @@ def _verdict_line(d: SkillDecomposition, beta: BetaStats | None) -> str:
     made = "made" if d.total_alpha_usd >= 0 else "gave up"
     luck = ""
     if beta is not None and beta.alpha_significant is not None:
-        t = f" (t={beta.alpha_t_stat:.1f})" if beta.alpha_t_stat is not None else ""
+        t = f", t={beta.alpha_t_stat:.1f}" if beta.alpha_t_stat is not None else ""
+        pct = (
+            f" {beta.alpha_annualized_pct:+.1f}% annualized"
+            if beta.alpha_annualized_pct is not None
+            else ""
+        )
+        # The Jensen number stays VISIBLE inside the verdict (it used to be its
+        # own line; subsuming it must not lose the value).
         luck = (
-            f" — and the process reads as real skill, not luck{t}"
+            f" — Jensen &alpha;{pct} is statistically distinguishable from zero{t}: "
+            "real skill, not luck"
             if beta.alpha_significant
-            else f" — but at n={d.n_names} the process is not yet statistically "
-            f"distinguishable from luck{t}; treat the split as directional"
+            else f" — but Jensen &alpha;{pct} is not distinguishable from zero{t}: "
+            f"at n={d.n_names} this is not yet statistically distinguishable from "
+            "luck; treat the split as directional"
         )
     elif not d.confident:
         luck = f" — thin book (n={d.n_names}); treat the split as directional"

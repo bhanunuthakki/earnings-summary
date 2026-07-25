@@ -1088,6 +1088,7 @@ def test_skill_verdict_reconciles_dollars_with_luck_test() -> None:
     assert "you made" in html[v_start : v_start + 400]
     assert "not yet statistically distinguishable from luck" in html[v_start : v_start + 400]
     assert "t=-0.7" in html
+    assert "Jensen &alpha; -41.8% annualized" in html
     # The verdict leads: it appears before the KPI strip.
     assert html.index("sk-verdict") < html.index("sk-kpis")
 
