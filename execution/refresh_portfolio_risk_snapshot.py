@@ -165,6 +165,14 @@ def main(argv: list[str] | None = None) -> int:
         rebase_basis = "observed"
     else:
         rebase_basis = "modeled_backfill"
+    # Store the two raw dates the basis came from. NOT redundant with the
+    # snapshot's window_start/window_end — those are the BETA endpoint's
+    # window (live 2026-07-24: beta starts 2025-07-24, performance starts
+    # 2026-05-09), so a reader who sanity-checks the basis against
+    # window_start gets the opposite answer. These make the classification
+    # recomputable from the row instead of trusted.
+    perf_window_start = perf.start_date
+    perf_observed_from = observed_from
 
     weights = tuple(
         float(r.weight_pct) for r in analytics.positioning.correlations if r.weight_pct is not None
@@ -199,7 +207,12 @@ def main(argv: list[str] | None = None) -> int:
     sha = snapshot_input_sha(snap)
     deduped = history_has_sha(sha, db_path=db_path)
     if not write_snapshot(
-        snap, db_path=db_path, metric_version=METRIC_VERSION, rebase_basis=rebase_basis
+        snap,
+        db_path=db_path,
+        metric_version=METRIC_VERSION,
+        rebase_basis=rebase_basis,
+        perf_window_start=perf_window_start,
+        perf_observed_from=perf_observed_from,
     ):
         reason = "snapshot write failed"
         _log("invalid", reason=reason)
@@ -232,6 +245,8 @@ def main(argv: list[str] | None = None) -> int:
                 "history_deduped": deduped,
                 "metric_version": METRIC_VERSION,
                 "rebase_basis": rebase_basis,
+                "perf_window_start": perf_window_start,
+                "perf_observed_from": perf_observed_from,
                 "source_errors": list(fetch_errors),
             }
         )

@@ -89,7 +89,8 @@ def _make_db(tmp_path: Path) -> Path:
             spy_beta REAL, qqq_beta REAL, growth_tilt REAL,
             avg_correlation_spy REAL, rate_beta_10y REAL,
             names_priced INTEGER, names_total INTEGER,
-            metric_version TEXT, rebase_basis TEXT
+            metric_version TEXT, rebase_basis TEXT,
+            perf_window_start TEXT, perf_observed_from TEXT
         );
         CREATE TABLE portfolio_risk_snapshot_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -108,7 +109,8 @@ def _make_db(tmp_path: Path) -> Path:
             avg_correlation_spy REAL, rate_beta_10y REAL,
             names_priced INTEGER, names_total INTEGER,
             input_sha TEXT,
-            metric_version TEXT, rebase_basis TEXT
+            metric_version TEXT, rebase_basis TEXT,
+            perf_window_start TEXT, perf_observed_from TEXT
         );
         CREATE TABLE wealth_context_snapshot_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

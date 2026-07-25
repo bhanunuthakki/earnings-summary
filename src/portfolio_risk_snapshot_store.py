@@ -142,6 +142,15 @@ class RiskSnapshot:
     # Provenance (migration 0199) — kept out of _METRIC_COLUMNS on purpose.
     metric_version: str | None = None
     rebase_basis: str | None = None
+    # The two raw dates rebase_basis was derived FROM, so a reader can
+    # recompute the classification rather than trust it. MIXED PROVENANCE
+    # WARNING: window_start/window_end above come from the BETA endpoint;
+    # these two and all four drawdown_* columns come from the PERFORMANCE
+    # endpoint, and the two default to different windows (measured live
+    # 2026-07-24: beta 2025-07-24, performance 2026-05-09). Checking the
+    # basis against window_start will CONTRADICT it — use these.
+    perf_window_start: str | None = None
+    perf_observed_from: str | None = None
 
 
 def snapshot_input_sha(snap: RiskSnapshot) -> str:
@@ -224,6 +233,8 @@ def write_snapshot(
     db_path: Path | str | None = None,
     metric_version: str = METRIC_VERSION,
     rebase_basis: RebaseBasis | None = None,
+    perf_window_start: str | None = None,
+    perf_observed_from: str | None = None,
 ) -> bool:
     """Upsert the single last-known snapshot for ``user_id`` AND append the
     same capture to ``portfolio_risk_snapshot_history`` (migration 0185).
@@ -252,10 +263,22 @@ def write_snapshot(
     cols = ", ".join(("user_id", "captured_at", *_METRIC_COLUMNS))
     placeholders = ", ".join(["?"] * (2 + len(_METRIC_COLUMNS)))
     updates = ", ".join(f"{col}=excluded.{col}" for col in ("captured_at", *_METRIC_COLUMNS))
-    prov_cols = ", ".join((cols, "metric_version", "rebase_basis"))
-    prov_placeholders = ", ".join((placeholders, "?", "?"))
+    prov_cols_tuple = ("metric_version", "rebase_basis", "perf_window_start", "perf_observed_from")
+    prov_cols = ", ".join((cols, *prov_cols_tuple))
+    # One "?" per provenance column appended to prov_cols. Kept derived from
+    # the same tuple rather than hand-counted: a mismatch here does NOT raise
+    # loudly — it raises sqlite3.OperationalError, which the pre-0199 fallback
+    # below catches, so the write silently succeeds WITHOUT provenance. That
+    # exact bug shipped for one commit during development.
+    prov_placeholders = ", ".join((placeholders, *(["?"] * len(prov_cols_tuple))))
     prov_updates = ", ".join(
-        (updates, "metric_version=excluded.metric_version", "rebase_basis=excluded.rebase_basis")
+        (
+            updates,
+            "metric_version=excluded.metric_version",
+            "rebase_basis=excluded.rebase_basis",
+            "perf_window_start=excluded.perf_window_start",
+            "perf_observed_from=excluded.perf_observed_from",
+        )
     )
     sha = snapshot_input_sha(snap)
     try:
@@ -264,7 +287,15 @@ def write_snapshot(
             conn.execute(
                 f"INSERT INTO {_TABLE} ({prov_cols}) VALUES ({prov_placeholders}) "
                 f"ON CONFLICT(user_id) DO UPDATE SET {prov_updates}",
-                [user_id, captured_at, *values, metric_version, rebase_basis],
+                [
+                    user_id,
+                    captured_at,
+                    *values,
+                    metric_version,
+                    rebase_basis,
+                    perf_window_start,
+                    perf_observed_from,
+                ],
             )
         except sqlite3.OperationalError:  # pre-0199 DB — no provenance columns yet
             conn.execute(
@@ -280,7 +311,16 @@ def write_snapshot(
                 conn.execute(
                     f"INSERT OR IGNORE INTO {_HISTORY_TABLE} ({prov_cols}, input_sha) "
                     f"VALUES ({prov_placeholders}, ?)",
-                    [user_id, captured_at, *values, metric_version, rebase_basis, sha],
+                    [
+                        user_id,
+                        captured_at,
+                        *values,
+                        metric_version,
+                        rebase_basis,
+                        perf_window_start,
+                        perf_observed_from,
+                        sha,
+                    ],
                 )
             except sqlite3.OperationalError:
                 try:
@@ -313,6 +353,8 @@ def _snapshot_from_row(row: sqlite3.Row) -> RiskSnapshot:
         **{col: row[col] for col in _METRIC_COLUMNS},
         metric_version=row["metric_version"] if "metric_version" in keys else None,
         rebase_basis=row["rebase_basis"] if "rebase_basis" in keys else None,
+        perf_window_start=row["perf_window_start"] if "perf_window_start" in keys else None,
+        perf_observed_from=(row["perf_observed_from"] if "perf_observed_from" in keys else None),
     )
 
 
@@ -339,7 +381,7 @@ def read_history(
         try:
             rows = conn.execute(
                 f"SELECT captured_at, {', '.join(_METRIC_COLUMNS)}, metric_version, "
-                f"rebase_basis FROM {_HISTORY_TABLE} WHERE {' AND '.join(clauses)} "
+                f"rebase_basis, perf_window_start, perf_observed_from FROM {_HISTORY_TABLE} WHERE {' AND '.join(clauses)} "
                 "ORDER BY captured_at DESC LIMIT ?",
                 params,
             ).fetchall()
@@ -394,7 +436,8 @@ def read_latest_snapshot(
         try:
             row = conn.execute(
                 f"SELECT captured_at, {', '.join(_METRIC_COLUMNS)}, metric_version, "
-                f"rebase_basis FROM {_TABLE} WHERE user_id = ?",
+                f"rebase_basis, perf_window_start, perf_observed_from "
+                f"FROM {_TABLE} WHERE user_id = ?",
                 (user_id,),
             ).fetchone()
         except sqlite3.OperationalError:  # pre-0199 DB — no provenance columns yet

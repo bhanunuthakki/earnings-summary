@@ -95,6 +95,18 @@ def upgrade() -> None:
             op.add_column(table, sa.Column("metric_version", sa.Text(), nullable=True))
         if "rebase_basis" not in cols:
             op.add_column(table, sa.Column("rebase_basis", sa.Text(), nullable=True))
+        # The two raw dates the basis is derived FROM, so a future reader can
+        # recompute the classification instead of trusting the expression that
+        # produced it. These are NOT redundant with window_start/window_end:
+        # those come from the BETA endpoint, while the basis and all four
+        # drawdown columns come from the PERFORMANCE endpoint, and the two
+        # endpoints default to different windows (measured live 2026-07-24:
+        # beta 2025-07-24, performance 2026-05-09). Cross-checking the basis
+        # against window_start would therefore contradict it.
+        if "perf_window_start" not in cols:
+            op.add_column(table, sa.Column("perf_window_start", sa.Text(), nullable=True))
+        if "perf_observed_from" not in cols:
+            op.add_column(table, sa.Column("perf_observed_from", sa.Text(), nullable=True))
         # Backfill pre-existing rows to the current definition — see module
         # docstring for why NULL would be wrong here.
         bind.execute(
@@ -119,6 +131,10 @@ def downgrade() -> None:
         # input_sha) — no view references either table (verified against
         # sqlite_master at authoring time), so the batch/view-guard dance
         # from 0188 is unnecessary here.
+        if "perf_observed_from" in cols:
+            op.drop_column(table, "perf_observed_from")
+        if "perf_window_start" in cols:
+            op.drop_column(table, "perf_window_start")
         if "rebase_basis" in cols:
             op.drop_column(table, "rebase_basis")
         if "metric_version" in cols:
