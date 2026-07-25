@@ -27,17 +27,48 @@ tax_treatment, additive ``/api/v1`` namespace, ETag, pagination) lives at
 ``../portfolio-tracker/docs/api/positions-v1.md``. Once the tracker ships those,
 this client can switch to ``GET /api/v1/portfolio/positions`` and drop the local
 joins / derivations below.
+
+**v1 transport (consolidation PRD §12 Phase 2 — consumer adoption).** The
+tracker now serves the versioned ``/api/v1`` Portfolio Data Service, consumed
+through the typed client in :mod:`integrations.portfolio_tracker_v1`. With
+``PORTFOLIO_TRACKER_V1_READS=1`` the four public facades here
+(:func:`fetch_live_portfolio`, :func:`fetch_transaction_history`,
+:func:`fetch_portfolio_analytics`, :func:`fetch_exit_quality`) route through
+that typed client — schema validation, the fail-closed major-version gate, and
+the response envelope all enforced — then adapt back to the exact legacy
+dataclass shapes so no call site changes. The envelope is surfaced additively
+(``as_of`` / ``is_stale`` / ``is_partial`` / ``envelope_warnings``). The
+switch defaults OFF; it flips ON only after ``execution/tracker_v1_parity.py``
+passes and the owner approves cutover, and the legacy transport paths are
+deleted in Phase 5. A broken v1 read reports ``available=False`` with the v1
+reason — it never silently falls back to the legacy endpoints, which would
+mask contract breaks. One documented exception: ``/api/policy`` has no v1
+successor (policy weights are provider-owned calculation config, Phase-0
+ruling PT-6), so the ``policy`` analytics section stays on its legacy
+endpoint under either transport — tracked as a shared-contract gap.
 """
 
 from __future__ import annotations
 
+import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import TypeVar, cast
 from urllib.parse import urlencode
 
 import requests
+from pydantic import BaseModel
+
+from integrations.portfolio_tracker_v1 import (
+    PerformanceV1Result,
+    TrackerV1Client,
+    V1Fetch,
+    V1Meta,
+)
+
+log = logging.getLogger(__name__)
 
 # 127.0.0.1 (not "localhost"): on Windows a DOWN tracker costs ~2s of
 # OS-level refused-connect retries PER address family, and "localhost"
@@ -118,6 +149,15 @@ class LivePortfolio:
     total_market_value: float = 0.0
     positions: list[LivePosition] = field(default_factory=list[LivePosition])
     transactions: list[LiveTransaction] = field(default_factory=list[LiveTransaction])
+    # Provider envelope (consolidation PRD §8.1: surfaced, never swallowed).
+    # Populated only on the v1 transport path (PORTFOLIO_TRACKER_V1_READS=1);
+    # defaults keep legacy-path consumers and payloads unaffected. ``as_of`` is
+    # the holdings observation date; ``envelope_warnings`` carries stable
+    # warning CODES only (never messages, which can embed account detail).
+    as_of: str | None = None
+    is_stale: bool = False
+    is_partial: bool = False
+    envelope_warnings: list[str] = field(default_factory=list[str])
     # Market value summed into each tax bucket (taxable / tax_deferred / tax_free /
     # unknown). Bucketed at the LOT level since one position can span accounts with
     # different treatments (e.g. the same name in a Roth IRA and a brokerage).
@@ -192,8 +232,16 @@ def fetch_live_portfolio(
     Never raises on a tracker problem — returns ``available=False`` with an
     ``error`` reason so callers can degrade. ``api_url`` falls back to the
     ``PORTFOLIO_TRACKER_API_URL`` env var, then ``http://127.0.0.1:8000``.
+
+    With ``PORTFOLIO_TRACKER_V1_READS=1`` the read routes through the typed
+    ``/api/v1`` client instead (same return shape + envelope fields; see the
+    module docstring).
     """
     base = (api_url or os.environ.get("PORTFOLIO_TRACKER_API_URL") or _DEFAULT_API_URL).rstrip("/")
+    if _v1_reads_enabled():
+        return _fetch_live_portfolio_v1(
+            base, timeout=timeout, transactions_limit=transactions_limit
+        )
     try:
         holdings = _get(base, "/api/portfolio/holdings", timeout=timeout)
         items = _get(base, "/api/plaid/items", timeout=timeout)
@@ -339,6 +387,8 @@ def fetch_transaction_history(
     as approximate, not exact.
     """
     base = _resolve_base(api_url)
+    if _v1_reads_enabled():
+        return _fetch_transaction_history_v1(base, timeout=timeout, start_date=start_date)
     params = urlencode({"start_date": start_date, "limit": int(limit)})
     try:
         return _build_transactions(
@@ -655,6 +705,13 @@ class ExitQuality:
     total_spy_value_if_reinvested: float | None
     total_exit_alpha_vs_spy: float | None
     rows: list[ExitQualityRow] = field(default_factory=list[ExitQualityRow])
+    # Provider envelope (consolidation PRD §8.1) — populated on the v1 path
+    # (both via the analytics aggregate and the standalone fetch_exit_quality);
+    # defaults keep legacy-path consumers unaffected. Warning CODES only.
+    as_of: str | None = None
+    is_stale: bool = False
+    is_partial: bool = False
+    envelope_warnings: list[str] = field(default_factory=list[str])
 
 
 @dataclass(slots=True)
@@ -709,6 +766,15 @@ class PortfolioAnalytics:
     beta: BetaStats | None = None
     drawdown: Drawdown | None = None
     exit_quality: ExitQuality | None = None
+    # Provider envelope (consolidation PRD §8.1) — v1 transport path only;
+    # defaults keep legacy-path consumers unaffected. ``as_of`` is the holdings
+    # OBSERVATION date the analytics were computed over (a fresh calculation on
+    # a week-old book reads stale); flags OR across the fetched sections.
+    # ``envelope_warnings`` carries stable warning CODES only.
+    as_of: str | None = None
+    is_stale: bool = False
+    is_partial: bool = False
+    envelope_warnings: list[str] = field(default_factory=list[str])
 
 
 def fetch_portfolio_analytics(
@@ -748,6 +814,15 @@ def fetch_portfolio_analytics(
     by name.
     """
     base = _resolve_base(api_url)
+    if _v1_reads_enabled():
+        return _fetch_portfolio_analytics_v1(
+            base,
+            timeout=timeout,
+            start_date=start_date,
+            end_date=end_date,
+            include_backfill=include_backfill,
+            only=only,
+        )
     out = PortfolioAnalytics(available=False, api_url=base)
     conn_down: str | None = None
 
@@ -1150,6 +1225,10 @@ def fetch_exit_quality(
 ) -> ExitQuality | None:
     """``GET /api/portfolio/exit-quality`` — the sell side: did each exit beat
     holding? None when the tracker can't answer."""
+    if _v1_reads_enabled():
+        return _fetch_exit_quality_v1(
+            _resolve_base(api_url), timeout=timeout, start_date=start_date, end_date=end_date
+        )
     window: dict[str, str] = {}
     if start_date:
         window["start_date"] = start_date
@@ -1187,3 +1266,370 @@ def fetch_after_tax(
     return _fetch_section(
         f"/api/portfolio/after-tax{suffix}", _parse_after_tax, api_url=api_url, timeout=timeout
     )
+
+
+# ---------------------------------------------------------------------------
+# v1 transport (consolidation PRD §12 Phase 2 — consumer adoption)
+#
+# The four public facades route here when PORTFOLIO_TRACKER_V1_READS=1. The
+# typed client owns validation, the fail-closed major-version gate, cursor
+# pagination, and envelope extraction; these adapters only convert the typed
+# models back to the legacy dataclass shapes (Decimal -> float at this one
+# boundary) so no consumer changes. Analytics adapters funnel the typed
+# model's inner section back through the SAME legacy parsers via
+# ``model_dump(mode="json")`` — one shape-truth per section, and the v1 inner
+# payloads are contractually parity-shaped with the legacy endpoints (tracker
+# PR #52 fixtures). A broken v1 read degrades with the v1 reason; it never
+# falls back to legacy endpoints.
+# ---------------------------------------------------------------------------
+
+_V1_READS_ENV = "PORTFOLIO_TRACKER_V1_READS"
+
+# Ratified five-way tax treatment (SC-1) -> this module's coarse legacy
+# buckets (positions-v1.md: consumers needing the old buckets map
+# pretax->tax_deferred and roth+hsa->tax_free).
+_COARSE_TAX: dict[str, str] = {
+    "taxable": "taxable",
+    "pretax": "tax_deferred",
+    "roth": "tax_free",
+    "hsa": "tax_free",
+    "unknown": "unknown",
+}
+
+
+def _v1_reads_enabled() -> bool:
+    """True when the owner has switched reads onto the ``/api/v1`` transport."""
+    return os.environ.get(_V1_READS_ENV, "").strip().lower() in {"1", "true"}
+
+
+def _opt_float(v: Decimal | None) -> float | None:
+    return None if v is None else float(v)
+
+
+def _dump_model(m: BaseModel) -> dict[str, object]:
+    """JSON-mode dump of a typed v1 model, fed back through the legacy parsers
+    (dates -> ISO strings, Decimals -> strings ``_f`` coerces). The model
+    already validated shape and units; this keeps the legacy dataclass mapping
+    in ONE place per section instead of a parallel field-by-field adapter."""
+    return cast("dict[str, object]", m.model_dump(mode="json"))
+
+
+def _envelope_codes(meta: V1Meta | None) -> list[str]:
+    return [w.code for w in meta.warnings] if meta is not None else []
+
+
+def _fetch_live_portfolio_v1(
+    base: str, *, timeout: float, transactions_limit: int
+) -> LivePortfolio:
+    """v1 transport for :func:`fetch_live_portfolio`.
+
+    ``/api/v1/portfolio/positions`` is contractually envelope-less, so
+    ``as_of`` comes from its ``snapshot_date`` and the staleness flags ride
+    the transactions read's envelope (same book, same observation cycle) —
+    no extra round-trip. Both reads must succeed, matching the legacy
+    all-or-nothing fetch."""
+    client = TrackerV1Client(base_url=base, read_timeout=timeout)
+    pos = client.get_positions()
+    if not pos.available or pos.data is None:
+        return LivePortfolio(available=False, api_url=base, error=f"v1 positions: {pos.error}")
+    txns = client.get_transactions_page(limit=max(1, int(transactions_limit)))
+    if not txns.available or txns.data is None:
+        return LivePortfolio(available=False, api_url=base, error=f"v1 transactions: {txns.error}")
+
+    positions: list[LivePosition] = []
+    for p in pos.data.positions:
+        lots = [
+            TaxLot(
+                account_id=lot.account_id,
+                account_name=lot.account_name,
+                quantity=float(lot.quantity),
+                market_value=_opt_float(lot.market_value),
+                tax_treatment=_COARSE_TAX.get(lot.tax_treatment, "unknown"),
+                cost_basis=_opt_float(lot.cost_basis),
+            )
+            for lot in p.accounts
+        ]
+        positions.append(
+            LivePosition(
+                ticker=p.ticker,
+                name=p.name,
+                quantity=float(p.quantity),
+                market_value=_opt_float(p.market_value),
+                cost_basis=_opt_float(p.cost_basis),
+                unrealized_pnl=_opt_float(p.unrealized_pnl),
+                # Server-derived on v1 (percent 0-100, same convention).
+                percent_of_portfolio=_opt_float(p.percent_of_portfolio),
+                accounts=lots,
+            )
+        )
+    by_tax = {bucket: 0.0 for bucket in TAX_BUCKETS}
+    for pos_row in positions:
+        for lot in pos_row.accounts:
+            by_tax[lot.tax_treatment] = by_tax.get(lot.tax_treatment, 0.0) + (
+                lot.market_value or 0.0
+            )
+    meta = txns.meta
+    as_of = (
+        pos.data.snapshot_date.isoformat()
+        if pos.data.snapshot_date is not None
+        else (meta.as_of.isoformat() if meta is not None and meta.as_of is not None else None)
+    )
+    return LivePortfolio(
+        available=True,
+        api_url=base,
+        total_market_value=float(pos.data.total_market_value),
+        positions=positions,
+        transactions=_live_transactions_from_v1(txns.data.transactions),
+        by_tax_treatment=by_tax,
+        as_of=as_of,
+        is_stale=meta.is_stale if meta is not None else False,
+        is_partial=meta.is_partial if meta is not None else False,
+        envelope_warnings=_envelope_codes(meta),
+    )
+
+
+def _live_transactions_from_v1(txns: Sequence[BaseModel]) -> list[LiveTransaction]:
+    out: list[LiveTransaction] = []
+    for t in txns:
+        d = _dump_model(t)
+        out.append(
+            LiveTransaction(
+                date=_s(d.get("date")) or "",
+                ticker=_s(d.get("ticker")),
+                name=_s(d.get("name")),
+                type=_s(d.get("type")) or "",
+                subtype=_s(d.get("subtype")),
+                quantity=_f(d.get("quantity")),
+                amount=_f(d.get("amount")),
+                account_name=_s(d.get("account_name")) or "?",
+                account_id=_i(d.get("account_id")),
+                price=_f(d.get("price")),
+                fees=_f(d.get("fees")),
+            )
+        )
+    return out
+
+
+def _fetch_transaction_history_v1(
+    base: str, *, timeout: float, start_date: str
+) -> list[LiveTransaction] | None:
+    """v1 transport for :func:`fetch_transaction_history`: cursor pagination
+    replaces the legacy 5,000-row single-call cap, so the v1 read returns the
+    FULL window (a superset of the legacy read — strictly better for FIFO lot
+    reconstruction; the legacy "len == limit means truncated" caveat no longer
+    triggers). ``None`` on any v1 problem, same as legacy."""
+    client = TrackerV1Client(base_url=base, read_timeout=timeout)
+    res = client.get_all_transactions(start_date=start_date)
+    if not res.available or res.data is None:
+        return None
+    return _live_transactions_from_v1(res.data)
+
+
+def _merge_v1_envelope(out: PortfolioAnalytics, metas: list[V1Meta]) -> None:
+    """Aggregate per-section envelopes onto the analytics result: earliest
+    ``as_of`` (most conservative), flags OR'd, warning codes unioned in
+    first-seen order."""
+    dates = [m.as_of for m in metas if m.as_of is not None]
+    out.as_of = min(dates).isoformat() if dates else None
+    out.is_stale = any(m.is_stale for m in metas)
+    out.is_partial = any(m.is_partial for m in metas)
+    seen: list[str] = []
+    for m in metas:
+        for w in m.warnings:
+            if w.code not in seen:
+                seen.append(w.code)
+    out.envelope_warnings = seen
+
+
+_V1_WIDE_HISTORY_START = "2000-01-01"
+
+
+def _get_performance_v1_observed(
+    client: TrackerV1Client,
+    *,
+    start_date: str | None,
+    end_date: str | None,
+    include_backfill: bool,
+) -> V1Fetch[PerformanceV1Result]:
+    """Request ``analytics/performance`` over the OBSERVED window, matching the
+    legacy transport's default.
+
+    The two transports default differently, and the difference rebases every
+    return in the series rather than just trimming its head. Legacy
+    ``/api/portfolio/performance`` defaults to the snapshot-derived window
+    (first observed snapshot → today). v1 defaults to trailing 365 days and
+    fills the pre-observation span with the provider's MODELED transaction
+    walk-back, so its ``base_value`` is a reconstructed figure from a year ago.
+    Measured live 2026-07-24: legacy 73 points from 2026-05-09 at +0.0664%,
+    v1 default 362 points from 2025-07-24 at +8.62% — same book, same day.
+
+    ``earliest_observed_date`` on the series is the provider's own marker for
+    where observation begins, so re-requesting from it yields the observed-only
+    window (verified identical to legacy: 73 points, same ``base_value``, same
+    return to full precision). That marker is WINDOW-RELATIVE — it reports the
+    earliest observation *inside* the requested window — hence the widen step
+    below rather than a single cheap probe.
+
+    Call cost: 1 request when the caller passes ``start_date`` or asks for the
+    walk-back explicitly, 2 in the normal default case, 3 only when observation
+    predates the probe's trailing-365d window (measured 2.74s / 2.5MB for the
+    widened discovery read).
+    """
+    if start_date is not None:
+        # An explicit caller window is authoritative under both transports.
+        return client.get_performance(
+            start_date=start_date, end_date=end_date, include_backfill=include_backfill
+        )
+    if include_backfill:
+        # The caller asked for the modeled walk-back, which is precisely what
+        # the wide default window provides; no rebase wanted.
+        return client.get_performance(end_date=end_date, include_backfill=True)
+
+    probe = client.get_performance(end_date=end_date)
+    if not probe.available or probe.data is None:
+        return probe
+    observed = probe.data.series.earliest_observed_date
+    if observed is None:
+        # Provider declined to mark the observation start; the probe window is
+        # the only honest answer available. Surfaced, not silently narrowed.
+        return probe
+    if observed > probe.data.series.start_date:
+        return client.get_performance(start_date=observed.isoformat(), end_date=end_date)
+
+    # Observation starts at (or before) the probe window's own start, so the
+    # trailing-365d probe may be clipping real history. Widen once to let the
+    # provider report the true observation start, then rebase onto it.
+    wide = client.get_performance(start_date=_V1_WIDE_HISTORY_START, end_date=end_date)
+    if not wide.available or wide.data is None:
+        return probe
+    wide_observed = wide.data.series.earliest_observed_date
+    if wide_observed is None or wide_observed <= wide.data.series.start_date:
+        # History reaches back past _V1_WIDE_HISTORY_START — beyond anything
+        # this book should contain. Return the widened read as-is rather than
+        # inventing a start date, and say so.
+        log.info(
+            {
+                "event": "tracker_v1_performance_history_predates_wide_start",
+                "wide_start": _V1_WIDE_HISTORY_START,
+            }
+        )
+        return wide
+    if wide_observed == probe.data.series.start_date:
+        return probe
+    return client.get_performance(start_date=wide_observed.isoformat(), end_date=end_date)
+
+
+def _fetch_portfolio_analytics_v1(
+    base: str,
+    *,
+    timeout: float,
+    start_date: str | None,
+    end_date: str | None,
+    include_backfill: bool,
+    only: set[str] | frozenset[str] | None,
+) -> PortfolioAnalytics:
+    """v1 transport for :func:`fetch_portfolio_analytics`. Same per-section
+    fault isolation and ``only=`` semantics; ``beta`` and ``drawdown`` share
+    the single ``analytics/risk`` read. The ``policy`` section stays on the
+    legacy ``/api/policy`` endpoint under either transport — it has no v1
+    successor (provider-owned calculation config, Phase-0 ruling PT-6);
+    documented shared-contract gap, not a silent fallback."""
+    # The legacy 6s analytics budget models per-endpoint cost; v1 bundles more
+    # work per call (risk = beta+drawdown, position-performance carries the
+    # counterfactual series) and measured >6s live. Floor the read budget at
+    # the v1 transport's own default; a caller-passed LARGER timeout still wins.
+    client = TrackerV1Client(base_url=base, analytics_read_timeout=max(timeout, 20.0))
+    out = PortfolioAnalytics(available=False, api_url=base)
+    metas: list[V1Meta] = []
+
+    def want(key: str) -> bool:
+        return key in only if only is not None else key in _DEFAULT_SECTIONS
+
+    def note_meta(meta: V1Meta | None) -> None:
+        if meta is not None:
+            metas.append(meta)
+
+    if want("performance"):
+        perf = _get_performance_v1_observed(
+            client, start_date=start_date, end_date=end_date, include_backfill=include_backfill
+        )
+        if perf.available and perf.data is not None:
+            out.performance = _parse_performance(_dump_model(perf.data.series))
+            note_meta(perf.meta)
+        else:
+            out.errors["performance"] = f"v1: {perf.error}"
+    if want("position_alpha"):
+        alpha = client.get_position_performance(start_date=start_date, end_date=end_date)
+        if alpha.available and alpha.data is not None:
+            out.position_alpha = _parse_position_alpha(_dump_model(alpha.data.result))
+            note_meta(alpha.meta)
+        else:
+            out.errors["position_alpha"] = f"v1: {alpha.error}"
+    if want("positioning"):
+        positioning = client.get_positioning(start_date=start_date, end_date=end_date)
+        if positioning.available and positioning.data is not None:
+            out.positioning = _parse_positioning(_dump_model(positioning.data.positioning))
+            note_meta(positioning.meta)
+        else:
+            out.errors["positioning"] = f"v1: {positioning.error}"
+    if want("policy"):
+        try:
+            out.policy = _parse_policy(_get_obj(base, "/api/policy", timeout=timeout))
+        except requests.RequestException as exc:
+            out.errors["policy"] = f"{type(exc).__name__}: {exc}"
+        except ValueError as exc:
+            out.errors["policy"] = f"bad response: {exc}"
+    if want("beta") or want("drawdown"):
+        risk = client.get_risk(start_date=start_date, end_date=end_date)
+        if risk.available and risk.data is not None:
+            if want("beta"):
+                out.beta = _parse_beta(_dump_model(risk.data.beta))
+            if want("drawdown"):
+                out.drawdown = _parse_drawdown(_dump_model(risk.data.drawdown))
+            note_meta(risk.meta)
+        else:
+            if want("beta"):
+                out.errors["beta"] = f"v1: {risk.error}"
+            if want("drawdown"):
+                out.errors["drawdown"] = f"v1: {risk.error}"
+    if want("exit_quality"):
+        exit_q = client.get_exit_quality(start_date=start_date, end_date=end_date)
+        if exit_q.available and exit_q.data is not None:
+            out.exit_quality = _parse_exit_quality(_dump_model(exit_q.data.result))
+            note_meta(exit_q.meta)
+        else:
+            out.errors["exit_quality"] = f"v1: {exit_q.error}"
+
+    out.available = any(
+        section is not None
+        for section in (
+            out.performance,
+            out.position_alpha,
+            out.positioning,
+            out.policy,
+            out.beta,
+            out.drawdown,
+            out.exit_quality,
+        )
+    )
+    _merge_v1_envelope(out, metas)
+    return out
+
+
+def _fetch_exit_quality_v1(
+    base: str, *, timeout: float, start_date: str | None, end_date: str | None
+) -> ExitQuality | None:
+    """v1 transport for the standalone :func:`fetch_exit_quality`."""
+    # Same v1 analytics read-budget floor as _fetch_portfolio_analytics_v1.
+    client = TrackerV1Client(base_url=base, analytics_read_timeout=max(timeout, 20.0))
+    res = client.get_exit_quality(start_date=start_date, end_date=end_date)
+    if not res.available or res.data is None:
+        return None
+    parsed = _parse_exit_quality(_dump_model(res.data.result))
+    meta = res.meta
+    if meta is not None:
+        parsed.as_of = meta.as_of.isoformat() if meta.as_of is not None else None
+        parsed.is_stale = meta.is_stale
+        parsed.is_partial = meta.is_partial
+        parsed.envelope_warnings = _envelope_codes(meta)
+    return parsed
