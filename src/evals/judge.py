@@ -42,11 +42,17 @@ class JudgeVerdict:
 @dataclass(frozen=True, slots=True)
 class JudgeOutcome:
     """What one judge call produced. ``verdict is None`` means the call
-    failed or the output didn't validate — the caller must fail the case."""
+    failed or the output didn't validate — the caller must fail the case.
+
+    ``infra=True`` marks the CALL failing operationally (CLI error, quota,
+    network) as opposed to the judge answering unparseably: the former says
+    nothing about the case under judgment and must be recorded as an infra
+    fact (score=None), never as a measured 0.0."""
 
     verdict: JudgeVerdict | None
     raw: str
     error: str | None = None
+    infra: bool = False
 
 
 _PROMPT_TEMPLATE = """\
@@ -131,12 +137,14 @@ def run_judge(
     try:
         raw = call_llm(prompt, purpose=JUDGE_PURPOSE, scope="eval", run_id=run_id)
     except Exception as exc:
-        if is_hard_stop(exc):
+        from llm.transport import LLMQuotaExhausted  # local — avoids import cycle
+
+        if is_hard_stop(exc) or isinstance(exc, LLMQuotaExhausted):
             from evals.harness import EvalAbortError  # local — avoids module cycle
 
             raise EvalAbortError(
-                f"eval_judge hard stop: {type(exc).__name__}: {exc} — "
-                "aborting instead of failing cases on configuration."
+                f"eval_judge stop: {type(exc).__name__}: {exc} — "
+                "aborting instead of failing cases on configuration/outage."
             ) from exc
         log.warning(
             {
@@ -144,7 +152,7 @@ def run_judge(
                 "error": f"{type(exc).__name__}: {exc}",
             }
         )
-        return JudgeOutcome(verdict=None, raw="", error=f"{type(exc).__name__}: {exc}")
+        return JudgeOutcome(verdict=None, raw="", error=f"{type(exc).__name__}: {exc}", infra=True)
     verdict = parse_verdict(raw)
     if verdict is None:
         log.warning({"event": "eval_judge_unparseable", "raw_head": raw[:200]})

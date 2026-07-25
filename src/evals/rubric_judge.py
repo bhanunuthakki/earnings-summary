@@ -41,6 +41,7 @@ from uuid import uuid4
 
 from evals.corpora import CORPUS_LOADERS, AuditItem, filter_since
 from evals.harness import (
+    JUDGE_INFRA_STAGE,
     CaseResult,
     EvalAbortError,
     EvalRunSummary,
@@ -52,6 +53,7 @@ from evals.harness import (
 from evals.judge import JUDGE_PURPOSE
 from llm.cli import DEFAULT_MODEL, LLM_MODELS, call_llm, is_hard_stop
 from llm.prompt_versions import prompt_version_for
+from llm.transport import LLMQuotaExhausted
 
 log = logging.getLogger(__name__)
 
@@ -331,9 +333,12 @@ def judge_item(
             run_id=run_id,
         )
     except Exception as exc:
-        if is_hard_stop(exc):
+        if is_hard_stop(exc) or isinstance(exc, LLMQuotaExhausted):
+            # Quota exhaustion is not a hard stop for PRODUCTION (pipelines
+            # defer per-item), but a measurement run under an exhausted quota
+            # measures the outage, not the subject — abort like a hard stop.
             raise EvalAbortError(
-                f"eval_judge hard stop while auditing {item.item_id}: "
+                f"eval_judge stop while auditing {item.item_id}: "
                 f"{type(exc).__name__}: {exc} — aborting instead of scoring 0s."
             ) from exc
         latency_ms = int((time.monotonic() - t0) * 1000)
@@ -345,14 +350,17 @@ def judge_item(
                 "error": f"{type(exc).__name__}: {exc}",
             }
         )
+        # score=None + judge_infra: the JUDGE failed, so nothing was measured
+        # about the item. Scoring 0.0 here put 18 outage artifacts into July's
+        # eval history and dragged healthy prompts' averages down ~0.25.
         return CaseResult(
             case_id=item.item_id,
             question=item.label,
             passed=False,
-            score=0.0,
+            score=None,
             expected_json=expected_json,
             actual_json=None,
-            failure_stage="judge",
+            failure_stage=JUDGE_INFRA_STAGE,
             judge_rationale=f"judge call failed: {type(exc).__name__}: {exc}",
             prompt_text=prompt,
             response_text=None,
@@ -451,6 +459,7 @@ def run_rubric_eval(
         notes=f"audit corpus n={len(items)}"
         + (f" since_days={since_days}" if since_days is not None else ""),
     )
+    consecutive_infra = 0
     for item in items:
         result = judge_item(rubric, item, run_id=rid, judge_model=spec.judge_model, caller=caller)
         summary.cases.append(result)
@@ -465,5 +474,14 @@ def run_rubric_eval(
                 "failure_stage": result.failure_stage,
             }
         )
+        # A run whose judge keeps failing is measuring the transport. Three in
+        # a row is an outage, not three coincidences — abort like a hard stop
+        # instead of appending infra rows for every remaining item.
+        consecutive_infra = consecutive_infra + 1 if result.is_infra_failure else 0
+        if consecutive_infra >= 3:
+            raise EvalAbortError(
+                f"[{purpose}] {consecutive_infra} consecutive judge infra failures — "
+                "the transport is down; aborting the audit run (nothing was measured)."
+            )
     summary.finished_at = now_naive_utc()
     return summary

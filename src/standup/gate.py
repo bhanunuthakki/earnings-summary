@@ -37,16 +37,18 @@ class GateOutcome:
     """The verdict on one composed brief.
 
     ``judge_failed`` distinguishes an infra failure (the judge call itself
-    errored, or returned unparseable JSON — ``CaseResult.failure_stage ==
-    "judge"``) from a GENUINE low quality score. Both used to collapse into
-    ``score=0.0``, indistinguishable at this layer — which is how the
-    standup channel's "9 of 12 suppressed" turned out to be almost entirely
-    judge-call failures (``eval_judge`` / Claude CLI errors) locked out for a
-    full ``dedup_days`` window each time, not a miscalibrated quality bar.
-    See ``standup.run`` for how the two are now handled differently."""
+    errored — ``failure_stage == "judge_infra"``, ``score=None`` — or returned
+    unparseable JSON — ``failure_stage == "judge"``) from a GENUINE low
+    quality score. Both used to collapse into ``score=0.0``, indistinguishable
+    at this layer — which is how the standup channel's "9 of 12 suppressed"
+    turned out to be almost entirely judge-call failures (``eval_judge`` /
+    Claude CLI errors) locked out for a full ``dedup_days`` window each time,
+    not a miscalibrated quality bar. See ``standup.run`` for how the two are
+    now handled differently. ``score`` is None exactly when the judge call
+    failed operationally (nothing was measured)."""
 
     passed: bool
-    score: float
+    score: float | None
     rationale: str
     facet_scores: dict[str, float] = field(default_factory=dict[str, float])
     judge_failed: bool = False
@@ -126,13 +128,15 @@ def gate_message(
                 }
         except (ValueError, TypeError):
             facet_scores = {}
-    passed = bool(result.passed) and result.score >= min_score
+    passed = bool(result.passed) and result.score is not None and result.score >= min_score
     return GateOutcome(
         passed=passed,
         score=result.score,
         rationale=result.judge_rationale or "",
         facet_scores=facet_scores,
-        judge_failed=(result.failure_stage == "judge"),
+        # "judge" = the judge ran but answered unparseably; "judge_infra" = the
+        # judge CALL failed (score=None). Both are retry-not-suppress here.
+        judge_failed=(result.failure_stage in ("judge", "judge_infra")),
     )
 
 

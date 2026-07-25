@@ -294,7 +294,10 @@ def _agreement(judged: list[tuple[str, object]], judges: list[str]) -> float:
 
     by_label: dict[str, list[str]] = {}
     for _jb, jp in judged:
-        if isinstance(jp, JudgedPair):
+        # Errored judgments are excluded: two judges both failing on a case is
+        # not "agreement" — during the July-2026 CLI outage every failed pair
+        # resolved to tie==tie and agreement read 1.0 while nothing was judged.
+        if isinstance(jp, JudgedPair) and not jp.error:
             by_label.setdefault(jp.label, []).append(jp.winner)
     multi = [w for w in by_label.values() if len(w) >= 2]
     if not multi:
@@ -329,6 +332,8 @@ def _evaluate_candidate(
     inc_chars_total = 0
     n_ok = 0  # cases where the candidate succeeded (used for char mean denominator)
     n_errors = 0  # operational failures — decide_switch separates these from quality
+    n_judgments = 0  # judge calls attempted (per case per judge)
+    n_judge_errors = 0  # judge calls that errored — EXCLUDED from tallies
 
     for case in cases:
         cand = run_model(
@@ -362,6 +367,18 @@ def _evaluate_candidate(
                 criteria_block=(criteria_blocks or {}).get(case.label),
             )
             judged.append((jb, jp))
+            n_judgments += 1
+            if jp.error:
+                # A failed judge call resolves to winner="tie" with .error set.
+                # Booking it as a tie counted it toward parity_rate — during
+                # the July-2026 CLI outage that path could have built a
+                # SWITCH_DOWN streak out of pure transport failure. Excluded
+                # from the tallies; counted for the JUDGE_DEGRADED verdict.
+                n_judge_errors += 1
+                error_audit.append(
+                    {"label": case.label, "judge": jb, "judge_error": jp.error[:300]}
+                )
+                continue
             if jp.winner == GEMINI:  # GEMINI slot == candidate
                 tally[jb][0] += 1
             elif jp.winner == CLAUDE:  # CLAUDE slot == incumbent
@@ -371,8 +388,8 @@ def _evaluate_candidate(
 
     case_audit: list[dict[str, object]] = list(error_audit)
     for jb, jp in judged:
-        if not isinstance(jp, JudgedPair):
-            continue
+        if not isinstance(jp, JudgedPair) or jp.error:
+            continue  # errored judgments live in error_audit as judge_error rows
         winner_model = (
             candidate if jp.winner == GEMINI else (incumbent if jp.winner == CLAUDE else "tie")
         )
@@ -405,6 +422,8 @@ def _evaluate_candidate(
         incumbent_output_chars_mean=inc_chars_mean,
         n_cases_attempted=len(cases),
         n_candidate_errors=n_errors,
+        n_judgments_attempted=n_judgments,
+        n_judge_errors=n_judge_errors,
     )
     return verdict, case_audit
 

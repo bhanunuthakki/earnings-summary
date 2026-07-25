@@ -68,7 +68,9 @@ class DeliveredBrief:
     kind: str
     ticker: str | None
     headline: str
-    score: float
+    # None never reaches a delivered brief in practice (a judge-infra outcome
+    # is retried, not delivered) — Optional only because GateOutcome.score is.
+    score: float | None
     session_id: str
     turn_id: int | None
     answer: str
@@ -304,7 +306,10 @@ def run_standup(
                     )
                 continue
 
-            if outcome.score >= cfg.caveat_floor:
+            # score=None only occurs under judge_failed (handled above) — the
+            # narrow is defense-in-depth so a future infra shape can never be
+            # compared against the caveat floor as if it were a measurement.
+            if outcome.score is not None and outcome.score >= cfg.caveat_floor:
                 # GENUINELY scored (the judge ran and returned a real
                 # verdict) but below the standup's extra-caution floor —
                 # deliver with a caveat rather than bury it (the channel was
@@ -317,7 +322,7 @@ def run_standup(
                 {
                     "event": "standup_suppressed_eval",
                     "signal": signal.signature,
-                    "score": round(outcome.score, 3),
+                    "score": round(outcome.score, 3) if outcome.score is not None else None,
                     "min_score": cfg.min_score,
                     "caveat_floor": cfg.caveat_floor,
                 }
