@@ -25,7 +25,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from allocation.recommendation import DeterministicFrontier
+from allocation.recommendation import DeterministicFrontier, format_allocation_citation
 
 __all__ = [
     "IncrementalDollarRecommendation",
@@ -153,13 +153,22 @@ class IncrementalDollarRecommendation(BaseModel):
         )
         reasons.extend(self._check_numeric_probability("confidence_basis", self.confidence_basis))
 
-        allowed_refs = set(frontier.source_freshness) | {
-            fact for plan in frontier.plans for fact in plan.rationale_facts
-        }
+        allowed_refs = (
+            set(frontier.source_freshness)
+            | {fact for plan in frontier.plans for fact in plan.rationale_facts}
+            | {
+                format_allocation_citation(a)
+                for plan in frontier.plans
+                for a in plan.allocations
+            }
+        )
         for ref in self.source_refs:
             # A source_ref is either a literal source_freshness key (e.g.
-            # "dcf", "weights") or must appear verbatim as / within one of the
-            # frontier's own rationale facts — an invented id/citation fails.
+            # "dcf", "weights"), one of the frontier's own rationale facts, or
+            # the exact per-ticker allocation line the prompt showed the LLM
+            # (``format_allocation_citation`` — the single source of truth
+            # shared with the prompt renderer, so a verbatim citation of what
+            # was actually displayed can never be rejected as invented).
             if ref in allowed_refs:
                 continue
             if any(ref in fact for fact in allowed_refs):

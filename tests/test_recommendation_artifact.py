@@ -224,6 +224,39 @@ def test_ineligible_ticker_retries_then_falls_back(
     assert result.recommendation.preferred_plan.allocations[0].ticker == "NU"
 
 
+def test_source_ref_citing_per_ticker_allocation_line_is_not_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for a real first-production-run failure (2026-07-25): the
+    LLM cited the exact per-ticker allocation line it was shown in the prompt
+    (``allocation.recommendation_artifact._format_plan`` /
+    ``format_allocation_citation``, e.g. "NU: $6,000.00 -> 5.50% of book
+    (zone=ordinary)") as a ``source_refs`` entry. That line is genuinely
+    verbatim from the frontier the LLM was shown, but
+    ``validate_against_frontier``'s ``allowed_refs`` set only checked
+    ``source_freshness`` keys and ``rationale_facts`` — not the per-ticker
+    allocation line — so a correct citation was rejected as "invented",
+    burning the one corrective retry and forcing an unnecessary
+    deterministic fallback. Fixed by sharing ``format_allocation_citation``
+    between the prompt renderer and the grounding check."""
+    db_path = _make_db(tmp_path)
+    calls: list[str] = []
+
+    def fake_call(prompt: str, **kw: object) -> object:
+        calls.append(prompt)
+        payload = _valid_payload()
+        payload["source_refs"] = ["NU: $6,000.00 -> 5.50% of book (zone=ordinary)"]
+        return payload
+
+    monkeypatch.setattr(ra, "call_llm_structured", fake_call)
+
+    result = ra.generate_recommendation(db_path, tmp_path, cash_usd=_CASH)
+
+    assert result.selection_mode == "llm"
+    assert len(calls) == 1  # no corrective retry needed — the citation was valid
+    assert result.recommendation.preferred_plan.allocations[0].ticker == "NU"
+
+
 def test_allocations_dont_sum_is_caught(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = _make_db(tmp_path)
 
