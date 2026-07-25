@@ -88,6 +88,24 @@ FACTOR_LEG_DRIFT_THRESHOLD: Final[float] = 0.10
 # The scalar metrics read straight off history columns, paired with their
 # threshold — one list so scan/baseline/findings all stay in lockstep with
 # adding a metric being a one-line change.
+#
+# DELIBERATELY EXCLUDES max_drawdown_pct / current_drawdown_pct /
+# drawdown_recovered / days_to_recovery. Those four are computed locally in
+# refresh_portfolio_risk_snapshot.py from analytics.performance.points, which
+# inherits that tracker endpoint's window semantics — legacy defaults to the
+# snapshot-derived OBSERVED window, while the typed /api/v1 transport
+# (PORTFOLIO_TRACKER_V1_READS, default OFF) defaults to trailing-365d with a
+# provider MODELED transaction walk-back filling the pre-observation span
+# (verified: 73 points at +0.0664% vs 362 points at +8.62%, same book/day).
+# The shipped v1 client rebases to the series' own earliest_observed_date
+# (byte-equivalent to legacy, pinned by portfolio-tracker's own
+# test_performance_v1_rebases_to_earliest_observed) so this is inert today —
+# but if that ever slips, or if drawdown drift monitoring is added here
+# later, it needs its own transport-provenance guard (there is currently no
+# column on portfolio_risk_snapshot_history to distinguish "real drift" from
+# "the read transport changed under us" — see the C8/consolidation-session
+# coordination thread, 2026-07-24/25). Do not add a drawdown metric to this
+# tuple without reading that context first.
 _SCALAR_METRICS: Final[tuple[tuple[str, float], ...]] = (
     ("spy_beta", SPY_BETA_DRIFT_THRESHOLD),
     ("growth_tilt", GROWTH_TILT_DRIFT_THRESHOLD),
