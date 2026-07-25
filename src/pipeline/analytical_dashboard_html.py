@@ -519,7 +519,23 @@ def light_markdown_to_html(md: str) -> str:
     return render_prose(md)
 
 
+# Display order for the ladder's list-type group bands (D3.1: group by
+# semantic kind, the owner's book first).
+_LADDER_GROUP_ORDER = ("portfolio", "evaluation", "watchlist")
+
+
 def _trigger_ladder_section(rows: list[TriggerLadderRow]) -> str:
+    """The valuation-trigger ladder, on the Wave-1 density rules
+    (surface_density_jit_redesign.md):
+
+    * D7 — the header states the question the table answers.
+    * D3.1 — rows GROUP by list type (portfolio first) under band rows,
+      instead of repeating an identical "evaluation" cell down a column.
+    * D5 — a column that is constant across every row is dead weight: when all
+      rows share one trigger status (prod: 11× UNREVIEWED — every model
+      sanity-flagged), the status lifts into a single header pill and the
+      column disappears.
+    """
     if not rows:
         return (
             '<section class="panel"><div class="panel-head"><h2>Trigger ladder</h2></div>'
@@ -527,23 +543,56 @@ def _trigger_ladder_section(rows: list[TriggerLadderRow]) -> str:
             '<p class="muted">No DCF runs yet. Run <code>python execution/refresh_dcf.py --all-named</code>.</p></div></section>'
         )
 
+    statuses = {(r.trigger_status or "unknown") for r in rows}
+    lifted_status = statuses.pop() if len(statuses) == 1 else None
+    status_note = ""
+    if lifted_status is not None:
+        label = escape(lifted_status.replace("_", " "))
+        status_note = (
+            f' <span class="k-pill k-pill-warn" title="every row shares this trigger status; '
+            f'the per-row column is elided">all {label}</span>'
+            if lifted_status == "unreviewed"
+            else f' <span class="k-chip">all {label}</span>'
+        )
+
     out: list[str] = [
-        '<section class="panel"><div class="panel-head"><h2>Trigger ladder</h2>'
-        '<p class="sub">Every holding positioned by DCF over/under vs MoS bar. Sorted by absolute deviation.</p>'
+        '<section class="panel"><div class="panel-head"><h2>Trigger ladder'
+        f"{status_note}</h2>"
+        '<p class="sub">Should I trim or add anything? — each name\'s DCF gap vs your '
+        "margin-of-safety bar, biggest deviation first.</p>"
         '</div><div class="panel-body">',
         '<table class="trigger-table"><thead><tr>',
-        "<th>Ticker</th><th>List</th><th>Verdict</th>",
+        "<th>Ticker</th><th>Verdict</th>",
         '<th class="num">Live</th><th class="num">Fair value</th>',
         '<th class="num">Over/under</th><th class="num">MoS bar</th>',
-        "<th>Trigger</th></tr></thead><tbody>",
+        ("" if lifted_status is not None else "<th>Trigger</th>"),
+        "</tr></thead><tbody>",
     ]
-    for r in rows:
+    n_cols = 6 if lifted_status is not None else 7
+
+    def _group_rank(list_type: str) -> int:
+        try:
+            return _LADDER_GROUP_ORDER.index(list_type)
+        except ValueError:
+            return len(_LADDER_GROUP_ORDER)
+
+    grouped = sorted(rows, key=lambda r: _group_rank(r.list_type))
+    current_group: str | None = None
+    for r in grouped:
+        if r.list_type != current_group:
+            current_group = r.list_type
+            n_in_group = sum(1 for x in rows if x.list_type == current_group)
+            out.append(
+                f'<tr class="tl-group"><td colspan="{n_cols}">'
+                f"{escape(current_group.replace('_', ' ').title())} &middot; {n_in_group}"
+                "</td></tr>"
+            )
         tone = _TRIGGER_TONE.get(r.trigger_status or "unknown", "tone-muted")
         ou = f"{(r.over_under_pct or 0) * 100:+.1f}%" if r.over_under_pct is not None else "—"
         mos = f"{(r.mos_bar or 0) * 100:.0f}%" if r.mos_bar is not None else "—"
         # Precompute the conditional numeric cells. (Inlining the ``if/else`` into
         # the f-string below would bind the ternary to the WHOLE concatenated
-        # string and drop the row opener + ticker/list/verdict cells whenever a
+        # string and drop the row opener + ticker/verdict cells whenever a
         # value is NULL — exactly the "empty rows with just values" bug for
         # watchlist tickers, which have no live price / over-under / MoS.)
         live = (
@@ -556,14 +605,21 @@ def _trigger_ladder_section(rows: list[TriggerLadderRow]) -> str:
             if r.dcf_fair_value is not None
             else '<td class="num muted">—</td>'
         )
+        trigger_cell = (
+            ""
+            if lifted_status is not None
+            else (
+                '<td class="trigger-cell">'
+                f"{escape((r.trigger_status or 'unknown').replace('_', ' '))}</td>"
+            )
+        )
         out.append(
             f'<tr class="{tone}">'
             f'<td><a href="../research/{escape(r.ticker)}/" class="ticker-link">{escape(r.ticker)}</a></td>'
-            f"<td>{escape(r.list_type)}</td>"
             f"<td>{escape(r.verdict or '—')}</td>"
             f"{live}{fair}"
             f'<td class="num">{ou}</td><td class="num">{mos}</td>'
-            f'<td class="trigger-cell">{escape((r.trigger_status or "unknown").replace("_", " "))}</td>'
+            f"{trigger_cell}"
             "</tr>"
         )
     out.append("</tbody></table></div></section>")
@@ -709,6 +765,8 @@ _PAGE_HEAD = (
   tr.tx-buy {{ background: color-mix(in srgb, var(--ok) 4%, transparent); }}
   tr.tx-sell {{ background: color-mix(in srgb, var(--bad) 2%, transparent); }}
   td.trigger-cell {{ font-family: var(--sans); font-size: var(--fs-caption); text-transform: uppercase; }}
+  tr.tl-group td {{ color: var(--muted); font-size: var(--fs-caption); font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.06em; padding-top: 10px; border-bottom: 0; }}
   tr.tone-sell .trigger-cell {{ color: var(--bad); }}
   tr.tone-trim .trigger-cell {{ color: var(--warn); }}
   tr.tone-init .trigger-cell {{ color: var(--ok); }}

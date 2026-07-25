@@ -378,3 +378,46 @@ def test_active_target_card_omits_appetite_chips_when_profile_fields_null(
     card = render_active_target_card(db, tmp_path)
     assert "Target vol (ann.)" not in card
     assert "Sharpe floor" not in card
+
+
+def test_degraded_book_context_renders_owner_language_not_raw_dump(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D4 (surface_density_jit_redesign.md): the degraded strip is a warn pill
+    + what-it-means line, with the raw engineering reasons behind a details
+    peek — never dumped verbatim into the card body. The walkthrough caught
+    prod showing "book context degraded: tracker offline and no risk snapshot
+    — book Sharpe unknown · …" in monospace as the card's closing line."""
+    import pipeline.positioning_panel as panel
+
+    raw = (
+        "tracker offline and no risk snapshot — book Sharpe unknown",
+        "sector weights are tracker-only — sector factors unscored",
+    )
+    monkeypatch.setattr(
+        panel, "read_materialized_fit_meta", lambda root: {"book": {"degraded": list(raw)}}
+    )
+    card = panel.render_active_target_card(tmp_path / "missing.db", tmp_path)
+
+    # Owner-language strip: pill + count + consequence.
+    assert 'class="k-pill k-pill-warn">context degraded</span>' in card
+    assert "2 book-context leg(s) unscored" in card
+    # The raw reasons survive — but only inside the details peek.
+    details = card[card.index("<details") : card.index("</details>")]
+    for reason in raw:
+        assert reason in details
+    # And never as the old free-floating monospace line.
+    assert "book context degraded:" not in card
+
+
+def test_healthy_book_context_has_no_degraded_strip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The degraded strip must be absent — not empty — on a healthy book, so
+    degraded stays visibly distinct from healthy (silent-degradation rule)."""
+    import pipeline.positioning_panel as panel
+
+    monkeypatch.setattr(panel, "read_materialized_fit_meta", lambda root: {"book": {}})
+    card = panel.render_active_target_card(tmp_path / "missing.db", tmp_path)
+    assert "pos-degraded" not in card
+    assert "context degraded" not in card

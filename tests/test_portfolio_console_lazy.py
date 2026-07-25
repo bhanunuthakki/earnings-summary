@@ -158,3 +158,71 @@ def test_health_synthesis_without_cached_memo_keeps_the_run_hint(
     html = pp.render_portfolio_synthesis_panel(tmp_path / "missing.db")
     assert "No cross-portfolio synthesis cached" in html
     assert "full memo →" not in html
+
+
+# --------------------------------------------------------------------------- #
+# Wave 1 (surface_density_jit_redesign.md D1): the consoles are a brief + one
+# dense tile grid, and the What-if signpost section is gone.
+# --------------------------------------------------------------------------- #
+
+
+def test_allocation_console_is_brief_plus_grid(tmp_path: Path, probe_down: None) -> None:
+    html = render_portfolio_allocation_panel(tmp_path / "missing.db")
+    # Band 1: the read leads, then ONE grid wraps the tiles.
+    assert 'class="console-grid"' in html
+    assert 'id="csec-brief"' in html
+    assert html.index('id="csec-brief"') < html.index('id="csec-risk_budget"')
+    # Wide spans: brief + landing recommendation; Risk Budget / Posture /
+    # Positioning are tiles (no csec-wide on their wrappers).
+    assert 'class="console-sec csec-wide" id="csec-brief"' in html
+    assert 'class="console-sec csec-wide" id="csec-allocation_recommendation"' in html
+    assert 'class="console-sec" id="csec-risk_budget"' in html
+    assert 'class="console-sec" id="csec-positioning"' in html
+
+
+def test_allocation_console_whatif_signpost_is_gone(tmp_path: Path, probe_down: None) -> None:
+    """D1 Band-3 rule: a section may never exist solely to say where its
+    functionality lives. The signpost is dead; the brief carries a What-if
+    chip that jumps to the Next dollar tile (which owns the actions)."""
+    html = render_portfolio_allocation_panel(tmp_path / "missing.db")
+    assert "csec-whatif_pointer" not in html
+    assert "Simulate a weight change or compare candidates" not in html
+    assert 'data-console-jump="csec-allocation_recommendation">What-if / Compare</button>' in html
+
+
+def test_record_console_is_brief_plus_grid(tmp_path: Path, probe_down: None) -> None:
+    from pipeline.portfolio_console_panel import render_portfolio_record_panel
+
+    html = render_portfolio_record_panel(tmp_path / "missing.db")
+    assert 'class="console-grid"' in html
+    assert 'class="console-sec csec-wide" id="csec-brief"' in html
+    assert 'class="console-sec csec-wide" id="csec-decisions"' in html
+    # Memos + Triggers sit side-by-side as tiles.
+    assert 'class="console-sec" id="csec-memos"' in html
+    assert 'class="console-sec" id="csec-triggers"' in html
+
+
+def test_briefs_degrade_to_quiet_line_on_missing_db(tmp_path: Path, probe_down: None) -> None:
+    """D4: an empty read states itself in one line — it never blanks the
+    console or leaks a traceback."""
+    from pipeline.portfolio_console_panel import render_portfolio_record_panel
+
+    # Allocation still has one true fact on an empty DB — no next-dollar
+    # artifact exists — so its read states that (with the doorway chip)
+    # rather than the generic quiet line.
+    alloc = render_portfolio_allocation_panel(tmp_path / "missing.db")
+    assert 'class="panel console-brief"' in alloc
+    assert "No current next-dollar recommendation" in alloc
+    assert "Traceback" not in alloc
+    # Record has nothing to say → the one-line quiet state, never a blank.
+    record = render_portfolio_record_panel(tmp_path / "missing.db")
+    assert 'class="panel console-brief"' in record
+    assert "Not enough live data for a read yet" in record
+    assert "Traceback" not in record
+
+
+def test_health_console_unchanged_by_grid_mode(tmp_path: Path, probe_down: None) -> None:
+    """Health keeps the stacked layout until the Wave-1 pattern is reviewed —
+    grid mode is opt-in per console, not a scaffold-wide flip."""
+    html = render_portfolio_health_panel(tmp_path / "missing.db")
+    assert 'class="console-grid"' not in html

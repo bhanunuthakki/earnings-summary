@@ -50,6 +50,8 @@ def render_console(
     wrap_class: str,
     extra_nav: str = "",
     nav_exclude: tuple[str, ...] = (),
+    grid: bool = False,
+    wide: tuple[str, ...] = (),
 ) -> str:
     """Assemble a composite console: an anchor-nav band (jump chips) over the
     composed builder sections.
@@ -70,6 +72,12 @@ def render_console(
     shell's hashchange router treats an unknown hash as a panel id and would fall
     back to Overview, navigating AWAY from the console. A data-attr +
     ``scrollIntoView`` never touches ``location.hash``, so the router never fires.
+
+    ``grid=True`` is the D1 page model (surface_density_jit_redesign.md): the
+    sections lay out as a dense multi-column tile grid instead of a full-width
+    vertical stack. ``wide`` names the anchors that span every column (the
+    Band-1 brief, a landing section). The adopting console owns the
+    ``.console-grid`` CSS — this scaffold stays styling-free.
     """
     nav = extra_nav + "".join(
         f'<button type="button" class="k-chip k-chip-btn" data-console-jump="csec-{escape(anchor)}">'
@@ -79,9 +87,12 @@ def render_console(
     )
     toolbar = panel_toolbar(title, filters=nav, suppress_title=True)
     body = "".join(
-        f'<div class="console-sec" id="csec-{escape(anchor)}">{_safe(label, fn)}</div>'
+        f'<div class="console-sec{" csec-wide" if grid and anchor in wide else ""}" '
+        f'id="csec-{escape(anchor)}">{_safe(label, fn)}</div>'
         for anchor, label, fn in sections
     )
+    if grid:
+        body = f'<div class="console-grid">{body}</div>'
     return (
         f'<div class="{escape(wrap_class)}">{toolbar}{body}</div><script>{_CONSOLE_NAV_JS}</script>'
     )

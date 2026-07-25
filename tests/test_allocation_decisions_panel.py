@@ -30,8 +30,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import comments_server  # noqa: E402
 
 from advisor.position_review import attest_review_changed  # noqa: E402
+from attribution import ConvictionAlphaRow, SkillDecomposition  # noqa: E402
 from decision_calibration import CalibrationStats  # noqa: E402
 from integrations.portfolio_tracker_client import (  # noqa: E402
+    BetaStats,
     LivePortfolio,
     LivePosition,
     PositionAlpha,
@@ -1011,3 +1013,118 @@ def test_kpi_strip_absent_when_calibration_total_zero() -> None:
     stats = _stats(total=0, graded=0, overall_hit_rate=None)
     page = compose_decisions_page([], [], offline, None, calibration=stats)
     assert _HOIST_MARKER not in page
+
+
+# --------------------------------------------------------------------------- #
+# Wave 1 (surface_density_jit_redesign.md D4/D7): skill decomposition leads
+# with an honest verdict; an all-unstated conviction join never renders as a
+# one-row "unstated" table.
+# --------------------------------------------------------------------------- #
+
+
+def _decomp(
+    by_conviction: list[ConvictionAlphaRow] | None = None,
+) -> SkillDecomposition:
+    if by_conviction is None:
+        by_conviction = [
+            ConvictionAlphaRow(
+                conviction="unstated",
+                n=21,
+                alpha_usd=41_774.0,
+                sizing_usd=11_774.0,
+                mean_conviction=None,
+            )
+        ]
+    return SkillDecomposition(
+        window_start="2025-07-24",
+        window_end="2026-07-24",
+        n_names=21,
+        total_alpha_usd=41_774.0,
+        selection_usd=30_000.0,
+        sizing_usd=11_774.0,
+        timing_usd=-17_619.0,
+        n_timed=4,
+        by_conviction=by_conviction,
+        top_contributors=[],
+        excluded_no_value=0,
+        confident=True,
+        notes=[],
+    )
+
+
+def _beta(significant: bool | None, t: float | None = -0.7) -> BetaStats:
+    return BetaStats(
+        benchmark="SPY",
+        start_date=None,
+        end_date=None,
+        sample_size=252,
+        risk_free_annual=None,
+        beta=1.4,
+        alpha_annualized_pct=-41.8,
+        alpha_t_stat=t,
+        alpha_std_error_annualized_pct=None,
+        alpha_significant=significant,
+        r_squared=0.1,
+        correlation=None,
+        sharpe=None,
+        sortino=None,
+        information_ratio=None,
+        portfolio_volatility_annualized=None,
+        benchmark_volatility_annualized=None,
+        tracking_error_annualized=None,
+        notes=[],
+    )
+
+
+def test_skill_verdict_reconciles_dollars_with_luck_test() -> None:
+    """The prod symptom: "+$41,774 total alpha" and "not distinguishable from
+    zero — could be luck" rendered as adjacent, unreconciled lines. The verdict
+    must say both in one sentence, before any KPI."""
+    from pipeline.allocation_decisions_panel import _skill_decomposition_section
+
+    html = _skill_decomposition_section(_decomp(), _beta(significant=False))
+    assert 'class="adc-line sk-verdict"' in html
+    v_start = html.index("sk-verdict")
+    assert "you made" in html[v_start : v_start + 400]
+    assert "not yet statistically distinguishable from luck" in html[v_start : v_start + 400]
+    assert "t=-0.7" in html
+    # The verdict leads: it appears before the KPI strip.
+    assert html.index("sk-verdict") < html.index("sk-kpis")
+
+
+def test_skill_verdict_significant_alpha_reads_as_skill() -> None:
+    from pipeline.allocation_decisions_panel import _skill_decomposition_section
+
+    html = _skill_decomposition_section(_decomp(), _beta(significant=True, t=2.4))
+    assert "real skill, not luck" in html
+    assert "could be luck" not in html
+
+
+def test_all_unstated_conviction_join_renders_unlock_line_not_table() -> None:
+    """A one-row table whose only cell reads "unstated" is an empty ritual —
+    D4 replaces it with the line naming what unlocks the join."""
+    from pipeline.allocation_decisions_panel import _skill_decomposition_section
+
+    html = _skill_decomposition_section(_decomp(), None)
+    assert "Conviction &rarr; outcome is locked" in html
+    assert "<th>Conviction</th>" not in html
+
+
+def test_stated_conviction_join_still_renders_the_table() -> None:
+    from pipeline.allocation_decisions_panel import _skill_decomposition_section
+
+    rows = [
+        ConvictionAlphaRow(
+            conviction="high", n=3, alpha_usd=9_000.0, sizing_usd=1_000.0, mean_conviction=4.7
+        ),
+        ConvictionAlphaRow(
+            conviction="unstated",
+            n=18,
+            alpha_usd=32_774.0,
+            sizing_usd=10_774.0,
+            mean_conviction=None,
+        ),
+    ]
+    html = _skill_decomposition_section(_decomp(by_conviction=rows), None)
+    assert "<th>Conviction</th>" in html
+    assert "Conviction &rarr; outcome is locked" not in html
