@@ -43,25 +43,34 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from filings.models import HardStopError  # noqa: E402
 from transcripts import transcript_judgment as tj  # noqa: E402
 from transcripts.longitudinal import (  # noqa: E402
+    ABTONE_MIN_OBSERVATIONS,
+    ABTONE_RESIDUAL_MATERIALITY,
     ANALYST_ROSTER_OVERLAP_FLOOR,
+    ParsedParticipant,
     RosterEntry,
     SpeakerRole,
+    ToneObservation,
     TranscriptEvent,
     Turn,
     _parse_aggregator_blob,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
     _parse_whisper_blob,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
     _split_kpi_phrases,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
+    classify_exec_title,
     classify_roles,
     extract_kpi_terms,
     find_kpi_mention,
+    fit_tone_residual_model,
     jaccard,
     load_call_turns,
     nearest_earnings_surprise,
     pair_qa_exchanges,
+    parse_participants_roster,
     resolve_exec_role,
+    resolve_role_from_participants_roster,
     roster_names_by_role,
     strip_document_artifacts,
-    tone_shift_is_abnormal,
+    tone_delta_heuristic_flag,
+    tone_residual,
     write_transcript_events,
 )
 from transcripts.transcript_judgment import build_qa_judgment_prompt, judge_call  # noqa: E402
@@ -126,7 +135,8 @@ def _full_conn(tmp_path: Path) -> sqlite3.Connection:
             is_ceo INTEGER DEFAULT 0
         );
         CREATE TABLE earnings_surprises (
-            id INTEGER PRIMARY KEY, ticker TEXT, release_date TEXT, eps_surprise_pct REAL
+            id INTEGER PRIMARY KEY, ticker TEXT, release_date TEXT, eps_surprise_pct REAL,
+            revenue_surprise_pct REAL
         );
         """
     )
@@ -552,30 +562,258 @@ def test_nearest_earnings_surprise_none_outside_window(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tone-shift proxy (documented NOT to be a fitted OLS residual)
+# Legacy tone-delta heuristic (renamed from tone_shift_is_abnormal, D2.3 —
+# documented NOT to be a fitted OLS residual; kept for comparison only,
+# unused in production since fit_tone_residual_model/tone_residual exist)
 # ---------------------------------------------------------------------------
 
 
 def test_tone_shift_below_materiality_is_not_abnormal() -> None:
-    assert tone_shift_is_abnormal(0.1, 10.0) is False
+    assert tone_delta_heuristic_flag(0.1, 10.0) is False
 
 
 def test_tone_shift_opposite_sign_of_surprise_is_abnormal() -> None:
-    assert tone_shift_is_abnormal(-0.5, 15.0) is True  # tone dropped despite a beat
+    assert tone_delta_heuristic_flag(-0.5, 15.0) is True  # tone dropped despite a beat
 
 
 def test_tone_shift_large_move_on_small_surprise_is_abnormal() -> None:
-    assert tone_shift_is_abnormal(0.5, 0.5) is True  # big move, in-line results
+    assert tone_delta_heuristic_flag(0.5, 0.5) is True  # big move, in-line results
 
 
 def test_tone_shift_same_sign_material_surprise_not_abnormal() -> None:
-    assert tone_shift_is_abnormal(0.5, 20.0) is False  # tone up, big beat — consistent
+    assert tone_delta_heuristic_flag(0.5, 20.0) is False  # tone up, big beat — consistent
 
 
 def test_tone_shift_no_surprise_data_still_surfaces() -> None:
     # No control variable available — still surfaced (as "unexplained"),
     # never silently dropped.
-    assert tone_shift_is_abnormal(0.5, None) is True
+    assert tone_delta_heuristic_flag(0.5, None) is True
+
+
+# ---------------------------------------------------------------------------
+# ABTONE — the real residual fit (D2.3)
+# ---------------------------------------------------------------------------
+
+
+def _obs(
+    tone: float, eps: float | None, *, ticker: str = "ZZZ", speaker: str = "Bob", period: int = 1
+) -> ToneObservation:
+    return ToneObservation(
+        ticker=ticker,
+        fiscal_period_type="Q1",
+        fiscal_year=2020 + period,
+        period_end=datetime(2020 + period, 3, 31),
+        speaker=speaker,
+        tone_score=tone,
+        eps_surprise_pct=eps,
+        revenue_surprise_pct=None,
+    )
+
+
+def test_fit_tone_residual_model_below_min_observations_returns_none() -> None:
+    obs = [_obs(0.5, 1.0, period=i) for i in range(ABTONE_MIN_OBSERVATIONS - 1)]
+    assert fit_tone_residual_model(obs) is None
+
+
+def test_fit_tone_residual_model_fits_a_perfect_linear_relationship() -> None:
+    # tone = 0.1 + 0.02 * eps_surprise_pct, exactly — a clean signal the
+    # normal-equations solver must recover with R^2 ~ 1.0.
+    obs = [_obs(0.1 + 0.02 * x, x, period=x) for x in range(ABTONE_MIN_OBSERVATIONS + 2)]
+    model = fit_tone_residual_model(obs)
+    assert model is not None
+    assert model.n_obs == len(obs)
+    assert model.intercept == pytest.approx(0.1, abs=1e-6)
+    assert model.beta_eps == pytest.approx(0.02, abs=1e-6)
+    assert model.r_squared == pytest.approx(1.0, abs=1e-6)
+
+
+def test_fit_tone_residual_model_skips_observations_missing_eps() -> None:
+    obs = [_obs(0.1 + 0.02 * x, x, period=x) for x in range(ABTONE_MIN_OBSERVATIONS + 2)]
+    obs.append(_obs(0.9, None, period=99))  # missing control — must not crash or count
+    model = fit_tone_residual_model(obs)
+    assert model is not None
+    assert model.n_obs == ABTONE_MIN_OBSERVATIONS + 2
+
+
+def test_fit_tone_residual_model_singular_predictor_returns_none() -> None:
+    # Every observation has the IDENTICAL eps_surprise_pct — no variance to
+    # fit against, the normal equations are singular.
+    obs = [_obs(0.1 * i, 5.0, period=i) for i in range(ABTONE_MIN_OBSERVATIONS + 2)]
+    assert fit_tone_residual_model(obs) is None
+
+
+def test_tone_residual_matches_hand_computed_value() -> None:
+    obs = [_obs(0.1 + 0.02 * x, x, period=x) for x in range(ABTONE_MIN_OBSERVATIONS + 2)]
+    model = fit_tone_residual_model(obs)
+    assert model is not None
+    # An observation exactly on the fitted line has ~zero residual.
+    on_line = _obs(0.1 + 0.02 * 3.0, 3.0, period=3)
+    assert tone_residual(model, on_line) == pytest.approx(0.0, abs=1e-6)
+    # An observation off the line by +0.4 has residual ~+0.4.
+    off_line = _obs(0.1 + 0.02 * 3.0 + 0.4, 3.0, period=3)
+    assert tone_residual(model, off_line) == pytest.approx(0.4, abs=1e-6)
+
+
+def test_tone_residual_none_when_observation_missing_control() -> None:
+    obs = [_obs(0.1 + 0.02 * x, x, period=x) for x in range(ABTONE_MIN_OBSERVATIONS + 2)]
+    model = fit_tone_residual_model(obs)
+    assert model is not None
+    missing = _obs(0.5, None, period=50)
+    assert tone_residual(model, missing) is None
+
+
+def test_abtone_residual_materiality_reuses_tone_materiality_scale() -> None:
+    # Documented design choice (see longitudinal.py's ABTONE_RESIDUAL_MATERIALITY
+    # comment) — not a new, unvalidated magic number.
+    assert 0.0 < ABTONE_RESIDUAL_MATERIALITY <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# CORPORATE PARTICIPANTS roster parsing (D2.4)
+# ---------------------------------------------------------------------------
+
+
+def test_classify_exec_title_recognizes_spelled_out_ceo() -> None:
+    assert classify_exec_title("Chairman and Chief Executive Officer") == "CEO"
+
+
+def test_classify_exec_title_recognizes_spelled_out_cfo() -> None:
+    assert classify_exec_title("Senior Vice President and Chief Financial Officer") == "CFO"
+
+
+def test_classify_exec_title_recognizes_ceo_abbreviation() -> None:
+    assert classify_exec_title("Co-Founder, Chairman & CEO") == "CEO"
+
+
+def test_classify_exec_title_other_exec_for_ir_title() -> None:
+    assert classify_exec_title("Vice President-Investor Relations") == "other_exec"
+
+
+def test_classify_exec_title_unresolved_for_no_keyword() -> None:
+    assert classify_exec_title("Analyst") == "unresolved"
+
+
+# Shape 1 — "packed": one participant per line, "<Name> <Company> - <Title>"
+# (Refinitiv StreetEvents source, real example: TSM).
+_TSM_LIKE_TURNS = [
+    Turn(
+        seq=0,
+        speaker="CORPORATE PARTICIPANTS",
+        text=(
+            "Jeff Su Taiwan Semiconductor Manufacturing Co Ltd - Director of Investor Relations\n"
+            "Wendell Huang Taiwan Semiconductor Manufacturing Co Ltd - Senior Vice President and "
+            "Chief Financial Officer\n"
+            "C.C. Wei Taiwan Semiconductor Manufacturing Co Ltd - Chairman and Chief Executive Officer"
+        ),
+    ),
+    Turn(seq=1, speaker="CONFERENCE CALL PARTICIPANTS", text="Some Analyst Some Bank - Analyst"),
+    Turn(seq=2, speaker="QUESTIONS AND ANSWERS", text="Let's begin."),
+    Turn(seq=3, speaker="Jeff Su", text="Thank you, C.C."),
+]
+
+
+def test_parse_participants_roster_packed_shape_resolves_cfo_and_ceo() -> None:
+    roster = parse_participants_roster(_TSM_LIKE_TURNS)
+    assert roster["Wendell Huang"].exec_role == "CFO"
+    assert roster["C.C. Wei"].exec_role == "CEO"
+    assert roster["Jeff Su"].exec_role == "other_exec"
+
+
+# Shape 2 — "fragmented": heading glued onto the first name, name/title
+# pairs split across pseudo-turns, dot-leader garbage interleaved (FactSet
+# CallStreet source, real example: NVDA).
+_NVDA_LIKE_TURNS = [
+    Turn(
+        seq=0,
+        speaker="CORPORATE PARTICIPANTS Toshiya Hari",
+        text="Vice President-Investor Relations & Strategic Finance, NVIDIA Corp. \n"
+        "Colette M. Kress \nChief Financial Officer & Executive Vice President, NVIDIA Corp.",
+    ),
+    Turn(
+        seq=1,
+        speaker="Jensen Huang",
+        text="Co-Founder, President, Chief Executive Officer & Director, NVIDIA Corp. \n"
+        + "." * 40,
+    ),
+    Turn(seq=2, speaker="OTHER PARTICIPANTS Joe Moore", text="Analyst, Morgan Stanley & Co. LLC"),
+    Turn(seq=3, speaker="Operator", text="Good afternoon."),
+    Turn(seq=4, speaker="Jensen Huang", text="Thanks everyone."),
+]
+
+
+def test_parse_participants_roster_fragmented_shape_resolves_cfo_and_ceo() -> None:
+    roster = parse_participants_roster(_NVDA_LIKE_TURNS)
+    assert roster["Colette M. Kress"].exec_role == "CFO"
+    assert roster["Jensen Huang"].exec_role == "CEO"
+
+
+def test_strip_document_artifacts_removes_the_participants_span() -> None:
+    kept = strip_document_artifacts(_NVDA_LIKE_TURNS)
+    kept_speakers = [t.speaker for t in kept]
+    assert "CORPORATE PARTICIPANTS Toshiya Hari" not in kept_speakers
+    assert "OTHER PARTICIPANTS Joe Moore" not in kept_speakers
+    # Real dialogue after the roster block must survive.
+    assert "Operator" in kept_speakers
+    assert kept_speakers.count("Jensen Huang") == 1  # only the post-roster turn kept
+
+
+# Shape 3 — "inline": no heading at all, management named in prepared-
+# remarks prose (real example: a Bio-Techne-style call).
+_INLINE_INTRO_TURNS = [
+    Turn(seq=0, speaker="Operator", text="Welcome to the call."),
+    Turn(
+        seq=1,
+        speaker="David Clair",
+        text=(
+            "On the call with me this morning are Kim Kelderman, President and Chief "
+            "Executive Officer, and Jim Hippel, Chief Financial Officer of Bio-Techne."
+        ),
+    ),
+]
+
+
+def test_parse_participants_roster_inline_shape_resolves_cfo_and_ceo() -> None:
+    roster = parse_participants_roster(_INLINE_INTRO_TURNS)
+    assert roster["Kim Kelderman"].exec_role == "CEO"
+    assert roster["Jim Hippel"].exec_role == "CFO"
+
+
+def test_parse_participants_roster_no_roster_block_degrades_honestly() -> None:
+    """The 97%-aggregator majority of the book carries neither a heading nor
+    an inline intro — must return {}, never a guessed role."""
+    turns = [
+        Turn(seq=0, speaker="Alice Analyst", text="How is Argentina trending?"),
+        Turn(seq=1, speaker="Bob CEO", text="Great quarter, thanks for asking."),
+    ]
+    assert parse_participants_roster(turns) == {}
+
+
+def test_resolve_role_from_participants_roster_exact_match() -> None:
+    roster = {
+        "Colette M. Kress": ParsedParticipant(name="Colette M. Kress", title="CFO", exec_role="CFO")
+    }
+    result = resolve_role_from_participants_roster("Colette M. Kress", roster)
+    assert result is not None
+    assert result.exec_role == "CFO"
+
+
+def test_resolve_role_from_participants_roster_last_name_fallback() -> None:
+    """Q&A speaker attribution often drops a middle initial the roster
+    block carries — e.g. "Colette Kress" in Q&A vs "Colette M. Kress" in
+    the roster block (real NVDA case)."""
+    roster = {
+        "Colette M. Kress": ParsedParticipant(name="Colette M. Kress", title="CFO", exec_role="CFO")
+    }
+    result = resolve_role_from_participants_roster("Colette Kress", roster)
+    assert result is not None
+    assert result.exec_role == "CFO"
+
+
+def test_resolve_role_from_participants_roster_no_match_returns_none() -> None:
+    roster = {
+        "Colette M. Kress": ParsedParticipant(name="Colette M. Kress", title="CFO", exec_role="CFO")
+    }
+    assert resolve_role_from_participants_roster("Someone Else", roster) is None
 
 
 # ---------------------------------------------------------------------------
@@ -606,10 +844,10 @@ def test_roster_names_by_role_filters_correctly() -> None:
 def _sample_event(**overrides: object) -> TranscriptEvent:
     base = TranscriptEvent(
         ticker="ZZZ",
-        event_type="qa_nonanswer_rate_shift",
+        event_type="abnormal_tone_shift",
         fiscal_year=2025,
         fiscal_period="Q1",
-        subject="qa_nonanswer_rate",
+        subject="qa_topic_test",
         evidence_quote="Q: ... A: ...",
     )
     return base.model_copy(update=overrides)
@@ -663,6 +901,7 @@ def _snapshot_with_one_exchange(tmp_path: Path):
                 answer_text="We are confident.",
             )
         ],
+        participants_roster={},
         parse_coverage="reparsed_aggregator",
     )
 
@@ -677,7 +916,6 @@ def test_judge_call_degrades_on_llm_failure(
     snap = _snapshot_with_one_exchange(tmp_path)
     result = judge_call(snap, db_path=tmp_path / "nonexistent.db")
     assert result.degraded is True
-    assert result.questions == {}
     assert result.tone == {}
 
 
@@ -711,17 +949,17 @@ def test_judge_call_no_exchanges_short_circuits_without_llm_call(
         turns=[],
         roster={},
         exchanges=[],
+        participants_roster={},
         parse_coverage="unattributed",
     )
     result = judge_call(snap, db_path=tmp_path / "nonexistent.db")
-    assert result.questions == {}
+    assert result.tone == {}
     assert result.degraded is False
 
 
 def test_judge_call_parses_valid_response(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _fake(*args: object, **kwargs: object) -> object:
         return {
-            "questions": {"0": {"non_answer": True, "rationale": "dodged the question"}},
             "tone": {"Bob": {"score": 0.4, "rationale": "confident phrasing"}},
         }
 
@@ -729,8 +967,16 @@ def test_judge_call_parses_valid_response(tmp_path: Path, monkeypatch: pytest.Mo
     snap = _snapshot_with_one_exchange(tmp_path)
     result = judge_call(snap, db_path=tmp_path / "nonexistent.db")
     assert result.degraded is False
-    assert result.questions["0"].non_answer is True
     assert result.tone["Bob"].score == pytest.approx(0.4)
+
+
+def test_judge_call_prompt_no_longer_asks_for_non_answer_verdicts(tmp_path: Path) -> None:
+    """D1.6 grep-clean check: the prompt itself must not solicit the
+    dropped non-answer construct anymore."""
+    snap = _snapshot_with_one_exchange(tmp_path)
+    prompt, _n = build_qa_judgment_prompt(snap)
+    assert "non_answer" not in prompt
+    assert "non-answer" not in prompt.lower()
 
 
 def test_triage_topics_degrades_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -775,6 +1021,7 @@ def test_build_qa_judgment_prompt_never_leaks_more_than_max_exchanges() -> None:
         turns=[],
         roster={},
         exchanges=many,
+        participants_roster={},
         parse_coverage="reparsed_aggregator",
     )
     _prompt, n_included = build_qa_judgment_prompt(snap)
