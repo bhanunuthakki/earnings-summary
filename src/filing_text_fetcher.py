@@ -588,9 +588,30 @@ def split_risk_factors(item_1a_text: str) -> list[tuple[str, str]]:
     return out
 
 
+#: A bare "Table of Contents" line (optionally "(Continued)"/"—continued")
+#: reads as a heading under every test below — short, capitalized, header-
+#: shaped — and its own entries, once an HTML table's title/page-number
+#: cells flatten together with no separating whitespace ("Item 1A.Risk
+#: Factors9"), read as body prose rather than sub-headings themselves. That
+#: combination silently produced a "table of contents" item in both the
+#: risk-factors and MD&A splits of the same filing (src/filings/
+#: section_items.py) — the single biggest collision behind the disclosure_
+#: events data-loss bug migration 0203 fixed at the schema level. This
+#: catches it one level down, inside an already-sliced section's own
+#: sub-heading pass; taxonomy.locate_items() (0198) separately guards the
+#: earlier section-BOUNDARY slice against TOC-latching.
+_TOC_HEADING_RX = re.compile(r"^table\s+of\s+contents\b", re.IGNORECASE)
+
+
+def _looks_like_toc_heading(line: str) -> bool:
+    return bool(_TOC_HEADING_RX.match(line.strip()))
+
+
 def _looks_like_risk_heading(line: str) -> bool:
     """Heuristic: short (5-180 chars), starts with a capital, mostly Title
     Case or All Caps, doesn't end with mid-sentence punctuation."""
+    if _looks_like_toc_heading(line):
+        return False
     if not (5 < len(line) < 180):
         return False
     if line.endswith(("..", ",", ";", " ")):
