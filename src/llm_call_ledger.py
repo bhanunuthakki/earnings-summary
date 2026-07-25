@@ -59,6 +59,11 @@ class LlmCallRecord:
     artifact_id: int | None = None
     error: str | None = None
     run_id: str | None = None
+    # P0 prompt-registry identity (llm.prompt_registry, mig 0205). NULL = an
+    # unmigrated call site passing a raw string — honest, never backfilled.
+    template_id: str | None = None
+    template_version: str | None = None
+    template_vars_sha256: str | None = None
 
 
 def sha256_text(text: str) -> str:
@@ -149,6 +154,22 @@ INSERT INTO llm_calls(
 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 """
 
+# Extended INSERT carrying the P0 template-identity columns (mig 0205). The
+# writer tries this first and falls back to the legacy SQL — WITH a warning —
+# when the columns are absent (a pre-0205 DB). Silent fallback would be the
+# silent-degradation class: template telemetry vanishing while everything
+# looks migrated; the warning names the missing migration instead.
+_INSERT_SQL_TEMPLATED = """
+INSERT INTO llm_calls(
+    called_at, purpose, ticker, scope, model,
+    prompt_sha256, response_sha256, prompt_chars, response_chars,
+    input_tokens, cache_creation_input_tokens, cache_read_input_tokens,
+    output_tokens, elapsed_ms, cost_estimate_usd, cache_hit,
+    fallback_used, artifact_id, error, run_id,
+    template_id, template_version, template_vars_sha256
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+"""
+
 
 def record_call(record: LlmCallRecord, *, db_path: Path | str | None = None) -> int | None:
     """Best-effort write of one ledger row. Never raises.
@@ -198,31 +219,51 @@ def record_call(record: LlmCallRecord, *, db_path: Path | str | None = None) -> 
         conn = sqlite3.connect(str(path), timeout=30.0)
         try:
             conn.execute("PRAGMA busy_timeout = 30000")
-            cur = conn.execute(
-                _INSERT_SQL,
-                (
-                    record.called_at.isoformat(),
-                    record.purpose,
-                    record.ticker,
-                    record.scope,
-                    record.model,
-                    record.prompt_sha256,
-                    record.response_sha256,
-                    record.prompt_chars,
-                    record.response_chars,
-                    record.input_tokens,
-                    record.cache_creation_input_tokens,
-                    record.cache_read_input_tokens,
-                    record.output_tokens,
-                    record.elapsed_ms,
-                    record.cost_estimate_usd,
-                    1 if record.cache_hit else 0,
-                    record.fallback_used,
-                    record.artifact_id,
-                    record.error,
-                    record.run_id,
-                ),
+            legacy_values = (
+                record.called_at.isoformat(),
+                record.purpose,
+                record.ticker,
+                record.scope,
+                record.model,
+                record.prompt_sha256,
+                record.response_sha256,
+                record.prompt_chars,
+                record.response_chars,
+                record.input_tokens,
+                record.cache_creation_input_tokens,
+                record.cache_read_input_tokens,
+                record.output_tokens,
+                record.elapsed_ms,
+                record.cost_estimate_usd,
+                1 if record.cache_hit else 0,
+                record.fallback_used,
+                record.artifact_id,
+                record.error,
+                record.run_id,
             )
+            try:
+                cur = conn.execute(
+                    _INSERT_SQL_TEMPLATED,
+                    (
+                        *legacy_values,
+                        record.template_id,
+                        record.template_version,
+                        record.template_vars_sha256,
+                    ),
+                )
+            except sqlite3.OperationalError as exc:
+                if "template" not in str(exc):
+                    raise
+                # Pre-0205 DB: the row still lands, but template telemetry is
+                # dropped — say so loudly instead of degrading in silence.
+                log.warning(
+                    {
+                        "event": "llm_call_ledger_template_cols_missing",
+                        "hint": "run `alembic upgrade head` (mig 0205) to capture "
+                        "template identity",
+                    }
+                )
+                cur = conn.execute(_INSERT_SQL, legacy_values)
             conn.commit()
             return cur.lastrowid
         finally:

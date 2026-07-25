@@ -42,6 +42,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import cast
 
+from llm.prompt_registry import PromptTemplate, register
+
 log = logging.getLogger(__name__)
 
 PURPOSE = "scenario_prior"
@@ -105,6 +107,10 @@ def global_prior(today: date | None = None) -> ScenarioPrior:
 ScenarioPriorCall = Callable[[str], dict[str, object]]
 
 
+# P0 prompt-registry migration (llm_quality_program_2026_07.md): the body is
+# unchanged byte-for-byte (gate: test_scenario_prior_template_byte_identity);
+# it is now registered so every call logs template id + auto-version + vars sha
+# and the improvement loop can optimize it without capture archaeology.
 _PROMPT = """You are setting the probability weights for the three DCF scenarios \
 (Bull / Base / Bear) for {ticker}, grounded ONLY in the analyst's own thesis and \
 bear-case anchors below.
@@ -136,11 +142,24 @@ Return ONLY this JSON object, nothing else:
 sentences naming the specific thesis/bear factor that justifies the skew>"}}"""
 
 
+SCENARIO_PRIOR_TEMPLATE = register(
+    PromptTemplate(
+        template_id="scenario_prior.weights",
+        body=_PROMPT,
+        variables=("ticker", "anchor_block"),
+        description="Per-name Bull/Base/Bear probability weights from thesis anchors",
+    )
+)
+
+
 def build_prompt(ticker: str, anchor_block: str) -> str:
     """The scenario_prior prompt for one name. ``anchor_block`` is the composed +
     spotlighted thesis/bear/KPI context (``llm.anchors.compose_anchor_block``);
-    embedding it as the only grounding keeps the call thesis-anchored."""
-    return _PROMPT.format(ticker=ticker.upper(), anchor_block=anchor_block)
+    embedding it as the only grounding keeps the call thesis-anchored.
+
+    Returns a ``RenderedPrompt`` (str subclass): the transport treats it as a
+    plain string while the ledger records which template+version produced it."""
+    return SCENARIO_PRIOR_TEMPLATE.render(ticker=ticker.upper(), anchor_block=anchor_block)
 
 
 def _num(payload: dict[str, object], key: str) -> float | None:
