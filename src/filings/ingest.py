@@ -55,6 +55,7 @@ from filings.models import (
     SectionSource,
     SourceContractError,
     TransientError,
+    most_severe_warning,
 )
 
 log = logging.getLogger(__name__)
@@ -518,7 +519,7 @@ def _ingest_one_fmp_payload(
         # A PARTIAL verdict always names WHY in the queryable column, not only
         # in free-text detail: "degraded, reason unknown" is the state this
         # store exists to make impossible.
-        reason_code=reason_code or (notes[0] if notes else None),
+        reason_code=reason_code or most_severe_warning(notes),
         detail="; ".join(notes) or None,
         sections_written=written,
         source_ref=rel_ref,
@@ -715,7 +716,7 @@ def _ingest_one_edgar_filing(
     notes.extend(result.warnings)
     record(
         CoverageStatus.PARTIAL if notes else CoverageStatus.OK,
-        notes[0] if notes else None,
+        most_severe_warning(notes),
         "; ".join(notes) or None,
         written,
     )
@@ -877,7 +878,7 @@ def ingest_local_exhibits(
             notes.append("fye_assumed_12_31")
         record(
             CoverageStatus.PARTIAL if notes else CoverageStatus.OK,
-            notes[0] if notes else "ok",
+            most_severe_warning(notes) or "ok",
             "; ".join(notes) or None,
             written,
         )
