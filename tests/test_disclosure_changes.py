@@ -379,6 +379,51 @@ def test_mdna_split_does_not_mistake_a_table_row_for_a_subheading() -> None:
     assert result.items[0][0] == _RESULTS_HEADING
 
 
+#: A real TOC entry, once its HTML table's title/page-number cells flatten
+#: with no separating whitespace, glues into one token ("Item1ARiskFactors9")
+#: — too few "words" to look like a heading itself, so it reads as BODY text
+#: under the "Table of Contents" line above it, easily clearing the 60-char
+#: floor.
+_TOC_BODY = (
+    "Item1ARiskFactors9\n"
+    "Item1BUnresolvedStaffComments25\n"
+    "Item2Properties26\n"
+    "Item3LegalProceedings26\n"
+)
+
+
+def test_split_risk_factors_rejects_a_table_of_contents_heading() -> None:
+    """Regression for the disclosure_events collision bug: "Table of
+    Contents" reads as a heading to the shared heuristic (short, capitalized,
+    header-shaped) same as any real risk-factor title, and its own garbled
+    entries clear the body-length floor — producing a spurious "table of
+    contents" item that then collided with the identical item MD&A's split
+    produced for the same filing, before migration 0203 added canonical_id
+    to disclosure_events' row identity."""
+    text = (
+        "Table of Contents\n" + _TOC_BODY + "\n" + _COMPETITION_HEADING + "\n" + _COMPETITION_BODY
+    )
+    section = _section(text=text)
+    section = section.model_copy(update={"id": 1})
+    result = split_section(section)
+    assert result.ok
+    headings = {h for h, _ in result.items}
+    assert "Table of Contents" not in headings
+
+
+def test_split_mdna_rejects_a_table_of_contents_heading() -> None:
+    """Same guard, exercised through _split_mdna_items's own pass rather than
+    split_risk_factors — both reuse _looks_like_risk_heading, but they are
+    separate functions and a fix to one does not guarantee the other."""
+    text = "Table of Contents\n" + _TOC_BODY + "\n" + _RESULTS_HEADING + "\n" + _RESULTS_BODY
+    section = _section(text=text, canonical_id="mdna", section_key_raw="Item 7")
+    section = section.model_copy(update={"id": 1})
+    result = split_section(section)
+    assert result.ok
+    headings = {h for h, _ in result.items}
+    assert "Table of Contents" not in headings
+
+
 # ---------------------------------------------------------------------------
 # alignment — the core classification logic
 # ---------------------------------------------------------------------------
@@ -568,6 +613,91 @@ def test_rerunning_the_pipeline_is_idempotent(conn: sqlite3.Connection) -> None:
     event_count = conn.execute("SELECT COUNT(*) FROM disclosure_events").fetchone()[0]
     assert item_count == len(items1)
     assert event_count == len(events1)
+
+
+def _event(**overrides: object) -> DisclosureEvent:
+    payload: dict[str, object] = {
+        "ticker": "META",
+        "event_type": "item_added",
+        "form": FilingForm.FORM_10K,
+        "fiscal_year": 2025,
+        "fiscal_period": FiscalPeriod.FY,
+        "prior_fiscal_year": None,
+        "prior_fiscal_period": None,
+        "source_ref": "acc-1",
+        "source_doc_id": None,
+        "canonical_id": "risk_factors",
+        "subject": "table of contents",
+        "subject_label": "Table of Contents",
+        "prior_excerpt": None,
+        "current_excerpt": "some excerpt",
+        "evidence_quote": "some excerpt",
+    }
+    payload.update(overrides)
+    return DisclosureEvent(**payload)  # type: ignore[arg-type]
+
+
+def test_write_events_keeps_the_same_subject_distinct_across_sections(
+    conn: sqlite3.Connection,
+) -> None:
+    """Regression for the data-loss bug fixed by migration 0203: the same
+    normalized heading ("table of contents", or any other phrase) can appear
+    as an item in BOTH the risk-factors and MD&A sections of the same
+    filing. Those are two distinct findings and must land as two distinct
+    rows, not collide under a unique key that omits canonical_id."""
+    risk_event = _event(canonical_id="risk_factors")
+    mdna_event = _event(canonical_id="mdna")
+    written = item_diff.write_events(conn, [risk_event, mdna_event])
+    conn.commit()
+
+    assert written == 2
+    rows = conn.execute(
+        "SELECT canonical_id FROM disclosure_events WHERE subject = 'table of contents' "
+        "ORDER BY canonical_id"
+    ).fetchall()
+    assert [r[0] for r in rows] == ["mdna", "risk_factors"]
+
+
+def test_write_events_still_dedupes_the_same_subject_within_one_section(
+    conn: sqlite3.Connection,
+) -> None:
+    """The canonical_id fix must not turn the upsert into an always-insert:
+    re-running write_events for the SAME section still updates the existing
+    row rather than accumulating a duplicate."""
+    first = item_diff.write_events(conn, [_event(canonical_id="risk_factors")])
+    conn.commit()
+    second = item_diff.write_events(
+        conn, [_event(canonical_id="risk_factors", current_excerpt="updated excerpt")]
+    )
+    conn.commit()
+
+    assert first == 1
+    assert second == 1
+    rows = conn.execute(
+        "SELECT current_excerpt FROM disclosure_events WHERE subject = 'table of contents'"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "updated excerpt"
+
+
+def test_write_events_coerces_a_null_canonical_id_to_the_empty_sentinel(
+    conn: sqlite3.Connection,
+) -> None:
+    """disclosure_events.canonical_id is NOT NULL DEFAULT '' (migration
+    0203) precisely because SQLite treats two NULLs in a UNIQUE index as
+    distinct — a raw None here would silently stop deduplicating every event
+    for a concept this module has no canonical_id for."""
+    event = _event(canonical_id=None, subject="a metric lifecycle change")
+    item_diff.write_events(conn, [event])
+    conn.commit()
+    item_diff.write_events(conn, [event])
+    conn.commit()
+
+    rows = conn.execute(
+        "SELECT canonical_id FROM disclosure_events WHERE subject = 'a metric lifecycle change'"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == ""
 
 
 def test_write_items_prunes_ordinals_a_re_split_no_longer_produces(
