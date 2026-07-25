@@ -58,6 +58,14 @@ def _yes(_text: str) -> dict[str, object]:
     return {"intent": "wondering", "claim": "do NU margins hold?", "ticker": "NU"}
 
 
+def _triage_research(_text: str) -> dict[str, object]:
+    """B7 (#971) put a second gate behind the intent call: a `wondering` is
+    routed by `research.triage`, and only `research_task` creates a task —
+    `answer_now` / `belief_candidate` deliberately create none. A test that
+    wants the task must therefore stub BOTH calls, not just the intent."""
+    return {"route": "research_task", "why": "test stub"}
+
+
 def _ids(page_items: list[FeedItem]) -> list[int]:
     return [i.note.id for i in page_items]
 
@@ -153,7 +161,12 @@ def test_keyset_is_stable_across_a_midscroll_capture(db_path: Path) -> None:
 def test_wondering_badge_is_batched(db_path: Path) -> None:
     flat = _musing(db_path, "flat observation about the tape")
     wonder = _musing(db_path, "do NU's margins still hold up here?")
-    proposals.detect_and_create_task(wonder, db_path=db_path, call=_yes)
+    # The badge IS the research task (FeedItem.wondering: ResearchTask | None),
+    # so post-B7 it appears only for a wondering the triage routes to
+    # research_task — answer_now / belief_candidate legitimately show none.
+    proposals.detect_and_create_task(
+        wonder, db_path=db_path, call=_yes, triage_call=_triage_research
+    )
     by_id = {i.note.id: i for i in load_feed(db_path=db_path).items}
     w = by_id[wonder].wondering
     assert w is not None
@@ -217,7 +230,9 @@ def test_incorporate_creates_task_and_is_idempotent(db_path: Path) -> None:
 def test_incorporate_reuses_the_auto_tap_task(db_path: Path) -> None:
     # The auto-tap and the incorporate button must converge on one task per note.
     nid = _musing(db_path, "do NU's margins still hold?")
-    tid = proposals.detect_and_create_task(nid, db_path=db_path, call=_yes)
+    tid = proposals.detect_and_create_task(
+        nid, db_path=db_path, call=_yes, triage_call=_triage_research
+    )
     assert tid is not None
     res = act_on_feed_item(nid, "incorporate", db_path=db_path)
     assert res.task_id == tid
