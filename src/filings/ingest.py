@@ -515,7 +515,10 @@ def _ingest_one_fmp_payload(
         fiscal_year=fiscal_year,
         fiscal_period=fiscal_period,
         status=CoverageStatus.PARTIAL if notes else CoverageStatus.OK,
-        reason_code=reason_code,
+        # A PARTIAL verdict always names WHY in the queryable column, not only
+        # in free-text detail: "degraded, reason unknown" is the state this
+        # store exists to make impossible.
+        reason_code=reason_code or (notes[0] if notes else None),
         detail="; ".join(notes) or None,
         sections_written=written,
         source_ref=rel_ref,
