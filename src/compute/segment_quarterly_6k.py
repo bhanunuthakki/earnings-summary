@@ -57,10 +57,20 @@ all, and in what shape -- was checked per-ticker against real EDGAR filings
 
 So Stage 2 builds a REAL route for NU/NVO and marks ASML honestly
 (``fpi_annual_only``) rather than forcing a build the evidence refutes. Any
-OTHER 20-F/40-F ticker (WIX, BHP, RIO, VALE, HDB, BN, CNQ, FNV) is untested by
+OTHER 20-F/40-F ticker (BHP, RIO, VALE, HDB, BN, CNQ, FNV) is untested by
 this spike -- left at the existing ``fpi_route_unproven`` default
 (``execution/audit_segment_quarterly_coverage.py``'s pre-existing fallback),
 not silently assumed to work OR assumed broken.
+
+**WIX added 2026-07-25** (Disclosure Intelligence v1 PRD, D1.2), same
+protocol: fetched WIX's live 1Q26 6-K (accession 0001628280-26-034370, filed
+2026-05-13), inspected ``index.json``, confirmed the earnings-release exhibit
+(``firstquarter2026results.htm``) is real narrative/tabular text (32.8KB
+stripped from 630KB raw, density 0.052 -- well clear of
+``sec_6k_fetch._MIN_TEXT_DENSITY``) carrying a genuine quarterly product-line
+revenue/bookings breakdown (Creative Subscriptions / Business Solutions /
+Transaction / Partners), not an image-scanned deck. Marked "supported" below;
+the exhibit-filename hint lives in ``pipeline.sec_6k_fetch._TICKER_EXHIBIT_HINT``.
 
 ## Shape difference from the annual crosstab extractor
 
@@ -117,6 +127,7 @@ TickerStatus = Literal["supported", "confirmed_annual_only"]
 _TICKER_6K_STATUS: dict[str, TickerStatus] = {
     "NU": "supported",
     "NVO": "supported",
+    "WIX": "supported",
     "ASML": "confirmed_annual_only",
 }
 
@@ -231,7 +242,7 @@ def extract_for_ticker(
             quarter=quarter,
             skipped_reason=(
                 f"{ticker} is not in the Phase-3 spike-validated ticker set "
-                "(NU, NVO) -- fpi_6k route unproven for this name, see "
+                "(NU, NVO, WIX) -- fpi_6k route unproven for this name, see "
                 "compute.segment_quarterly_6k._TICKER_6K_STATUS"
             ),
         )

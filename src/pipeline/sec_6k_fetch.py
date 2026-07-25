@@ -14,11 +14,29 @@ document, sometimes an image-scanned slide deck — see ``fetch_6k_exhibit_text`
 image-only guard) that has to be downloaded and read separately.
 
 Per-ticker exhibit-filename heuristics (`_TICKER_EXHIBIT_HINT`) are seeded
-ONLY for tickers this framework's spike actually validated (NU, NVO) — see
-``compute.segment_quarterly_6k`` for the classification table. Do not add a
-ticker here without first confirming its exhibit-naming convention the same
+ONLY for tickers this framework's spike actually validated (NU, NVO, WIX) —
+see ``compute.segment_quarterly_6k`` for the classification table. Do not add
+a ticker here without first confirming its exhibit-naming convention the same
 way the spike did (fetch one live 6-K, inspect ``index.json``, check the
 exhibit is real narrative/table HTML and not an image-scanned slide deck).
+
+WIX validated 2026-07-25 against its live 1Q26 6-K (accession
+0001628280-26-034370, filed 2026-05-13, 44 days after the March 31 2026
+quarter-end — the same lag band NU/NVO showed): ``index.json`` lists
+``firstquarter2026results.htm`` (the earnings-release exhibit, 630KB raw /
+32.8KB stripped text, density 0.052 — well above ``_MIN_TEXT_DENSITY``) and a
+10KB ``wix-6xkxfirstquarter2026.htm`` (the bare 6-K cover letter, no
+financials). The results exhibit is real narrative + tabular text with
+per-line-of-business revenue and bookings breakdowns (Creative Subscriptions /
+Business Solutions / Transaction / Partners), not an image-scanned deck. Cross-
+checked against three more quarters' index.json (2026-03-04 Q4/FY,
+2025-05-21 Q1'25, 2025-08-06 Q2'25): the earnings-release exhibit always
+starts with a quarter word ("firstquarter...", "fourthquarterandfullyear...")
+regardless of the trailing suffix ("results", a bare year, "andfullyear...");
+WIX's OTHER 6-Ks in the same window (share-repurchase announcements, AGM
+proxy/results, all named "pr...-6xk.htm" / "wix-...agm...htm" / "wix-6xkx...")
+never start that way, so the hint does not need the filing-window narrowing
+NU/NVO's exhibits already get from ``_FILING_WINDOW_DAYS``.
 
 CIK resolution reuses ``pipeline.sec_xbrl.CIK_MAP`` (the existing hand-curated
 resolver — segment_quarterly_framework.md §7 risk #2 flagged checking for one
@@ -61,16 +79,22 @@ _FILING_WINDOW_DAYS = (10, 100)
 
 # Per-ticker "which exhibit in a candidate 6-K is the financial-statements /
 # earnings-release exhibit" heuristic, validated against exactly one quarter
-# each during the Phase-3 spike (2026-07-18, NU 1Q26 / NVO 1Q26 filings).
-# Filename conventions are filing-agent-specific and may drift across
-# quarters or years -- if this regex stops matching for a ticker already
-# marked "supported" in segment_quarterly_6k._TICKER_6K_STATUS, that's a
-# fpi_6k_exhibit_not_located coverage row, not a silent guess.
+# each during the Phase-3 spike (2026-07-18, NU 1Q26 / NVO 1Q26 filings) plus
+# WIX (2026-07-25, 1Q26). Filename conventions are filing-agent-specific and
+# may drift across quarters or years -- if this regex stops matching for a
+# ticker already marked "supported" in segment_quarterly_6k._TICKER_6K_STATUS,
+# that's a fpi_6k_exhibit_not_located coverage row, not a silent guess.
 _TICKER_EXHIBIT_HINT: dict[str, re.Pattern[str]] = {
     # "nufs1q26_6k.htm" -- Nu Financial Statements <quarter><yy>.
     "NU": re.compile(r"^nufs\d.*_6k\.htm$", re.IGNORECASE),
     # "caq12026.htm" -- Novo Nordisk "Company Announcement" quarterly report.
     "NVO": re.compile(r"^caq?\d[\dA-Za-z]*\.htm$", re.IGNORECASE),
+    # "firstquarter2026results.htm" / "fourthquarterandfullyear20.htm" -- Wix's
+    # earnings-release exhibit always opens with the quarter word regardless of
+    # the trailing suffix; confirmed distinct from WIX's OTHER 6-K exhibits in
+    # the same accession window (share-repurchase and AGM filings), which are
+    # all named "pr...-6xk.htm" / "wix-...agm...htm" / "wix-6xkx...".
+    "WIX": re.compile(r"^(?:first|second|third|fourth)quarter", re.IGNORECASE),
 }
 
 # Below this many plain-text characters per HTML byte, treat the exhibit as

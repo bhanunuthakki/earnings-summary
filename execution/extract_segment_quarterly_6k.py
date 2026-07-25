@@ -10,7 +10,7 @@ Usage:
 
 Routing: only tickers whose ``tracked_companies.filing_regime == '20-F'``
 AND whose Phase-3 spike classification is ``"supported"``
-(``compute.segment_quarterly_6k._TICKER_6K_STATUS`` -- currently NU/NVO;
+(``compute.segment_quarterly_6k._TICKER_6K_STATUS`` -- currently NU/NVO/WIX;
 ASML is spike-confirmed negative and any other 20-F/40-F name is untested)
 are ever fetched over the network. Everything else records or leaves in
 place an honest ``segment_quarterly_coverage`` reason code -- never a blind

@@ -15,6 +15,22 @@ WIX, RBRK, VEEV, BN) on 2026-05-06. Coverage:
 
 Used by `execution/fetch_qa_transcript.py`. Each source is a `AggregatorSource`
 with a `fetch_qa(ticker, year, quarter) -> AggregatorHit | None` callable.
+
+**Per-turn attribution, 2026-07-25 (Disclosure Intelligence v1 PRD D1.5).**
+The 2026-07-25 roic fix (see `_TranscriptMessageParser`) replaced roic.ai's
+flatten-and-guess parsing with real DOM structure but left stockanalysis.com
+and tickertrends.io (11/308 of the corpus, `grep -rl aggregator_stockanalysis\\|
+aggregator_tickertrends transcripts/`) on the old heuristic. Live inspection
+(2026-07-25, WIX 1Q26) found BOTH sources also carry genuine per-turn DOM
+structure `_strip_html` throws away: stockanalysis.com renders 51
+speaker-labeled `<div class="border-t border-sharp ...">` blocks;
+tickertrends.io renders 41 `<p class="mb-2"><strong>Name:</strong> ...</p>`
+paragraphs. `_StockAnalysisMessageParser` / `_TickerTrendsMessageParser` parse
+these directly, each falling back to the legacy flattened path (logged, not
+silent) if a redesign ever changes the shape — exactly `_roic_fetch`'s own
+degrade contract. Separately, stockanalysis.com's transcript DETAIL page (not
+the listing page) 400s with a bare `requests` Accept header — `_http_get` now
+sends a browser-realistic one for every source.
 """
 
 from __future__ import annotations
@@ -181,9 +197,22 @@ def _extract_qa(visible_text: str) -> str | None:
     return qa if len(qa) >= 500 else None
 
 
+#: stockanalysis.com's Cloudflare front end returns 400 "Invalid download
+#: request" for a transcript detail page fetched with `requests`' default
+#: bare Accept header (verified live 2026-07-25) -- a real browser's Accept
+#: header is enough on its own to clear it (Accept-Language/Referer are not
+#: load-bearing, checked independently). Sent on every request, not only
+#: stockanalysis's: a more browser-realistic header can only help elsewhere.
+_ACCEPT_HEADER = (
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+)
+
+
 def _http_get(url: str) -> requests.Response | None:
     try:
-        return requests.get(url, headers={"User-Agent": UA}, timeout=HTTP_TIMEOUT)
+        return requests.get(
+            url, headers={"User-Agent": UA, "Accept": _ACCEPT_HEADER}, timeout=HTTP_TIMEOUT
+        )
     except requests.RequestException:
         return None
 
@@ -378,8 +407,109 @@ def _roic_fetch(ticker: str, year: int, quarter: int) -> AggregatorHit | None:
 
 
 # ---------------------------------------------------------------------------
-# Source: stockanalysis.com (list-then-fetch)
+# Source: stockanalysis.com — DOM-structured per-turn extraction
 # ---------------------------------------------------------------------------
+#
+# stockanalysis.com renders each call turn as its own block (verified live
+# 2026-07-25, WIX 1Q26: 51 clean speaker-labeled turns):
+#   <div class="border-t border-sharp pt-5 first:border-t-0 first:pt-0">
+#     <div class="text-lg font-bold text-default md:text-xl">Emily Liu</div>
+#     <div class="text-sm italic text-muted">Head of Investor Relations, Wix.com</div>  <!-- optional -->
+#     <p class="text-default mt-2">
+#       <span class="transcript-sentence" data-start-sec="..." data-end-sec="...">...</span>
+#       ...
+#     </p>
+#   </div>
+#
+# `_split_into_speaker_paragraphs`'s flatten-and-guess heuristic (the same
+# construct the roic fix replaced) cannot see any of this structure once the
+# page is reduced to plain text, so it depended on the "<Letter> <Name>"
+# rendering shape holding up -- which this source does not even use. Parsing
+# the DOM directly recovers genuine per-turn attribution instead.
+
+
+class _StockAnalysisMessageParser(HTMLParser):
+    """Extract (speaker_name, body_text) per turn block.
+
+    Mirrors `_TranscriptMessageParser`'s depth-tracking shape: the outer
+    "border-t border-sharp" div is one turn, its own "text-lg font-bold"
+    child div is the speaker name, and an optional "text-sm italic
+    text-muted" child div is the speaker's role/title -- isolated so neither
+    leaks into the body, which is everything else inside the turn (the <p>
+    of transcript-sentence spans).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.turns: list[tuple[str, str]] = []
+        self._in_turn = False
+        self._turn_depth = 0
+        self._in_name = False
+        self._name_depth = 0
+        self._in_role = False
+        self._role_depth = 0
+        self._name_parts: list[str] = []
+        self._body_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_d = dict(attrs)
+        classes = (attrs_d.get("class") or "").split()
+        if not self._in_turn:
+            if tag == "div" and "border-t" in classes and "border-sharp" in classes:
+                self._in_turn = True
+                self._turn_depth = 1
+                self._name_parts = []
+                self._body_parts = []
+            return
+        if tag != "div":
+            return
+        self._turn_depth += 1
+        if self._in_role:
+            self._role_depth += 1
+        elif self._in_name:
+            self._name_depth += 1
+        elif "text-lg" in classes and "font-bold" in classes:
+            self._in_name = True
+            self._name_depth = 1
+        elif "text-sm" in classes and "italic" in classes:
+            self._in_role = True
+            self._role_depth = 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if not self._in_turn:
+            return
+        if tag != "div":
+            return
+        if self._in_role:
+            self._role_depth -= 1
+            if self._role_depth == 0:
+                self._in_role = False
+        elif self._in_name:
+            self._name_depth -= 1
+            if self._name_depth == 0:
+                self._in_name = False
+        self._turn_depth -= 1
+        if self._turn_depth == 0:
+            name = " ".join("".join(self._name_parts).split())
+            body = " ".join("".join(self._body_parts).split())
+            if name and body:
+                self.turns.append((name, body))
+            self._in_turn = False
+
+    def handle_data(self, data: str) -> None:
+        if not self._in_turn or self._in_role:
+            return
+        if self._in_name:
+            self._name_parts.append(data)
+        else:
+            self._body_parts.append(data)
+
+
+def _parse_stockanalysis_messages(html: str) -> list[tuple[str, str]]:
+    """Return [(speaker, body), ...] in call order, or [] if the DOM shape changed."""
+    p = _StockAnalysisMessageParser()
+    p.feed(html)
+    return p.turns
 
 
 def _stockanalysis_fetch(ticker: str, year: int, quarter: int) -> AggregatorHit | None:
@@ -401,6 +531,39 @@ def _stockanalysis_fetch(ticker: str, year: int, quarter: int) -> AggregatorHit 
     r2 = _http_get(transcript_url)
     if r2 is None or r2.status_code != 200 or _has_paywall(r2.text):
         return None
+
+    turns = _parse_stockanalysis_messages(r2.text)
+    if turns:
+        qa_turns, boundary_found = _slice_qa_turns(turns)
+        qa = _serialize_turns(qa_turns)
+        if len(qa) < 500:
+            return None
+        if not boundary_found:
+            log.warning(
+                "stockanalysis %s Q%s %s: no Q&A boundary cue matched any turn; "
+                "keeping the whole call rather than dropping it — %d turns, %d chars",
+                ticker,
+                quarter,
+                year,
+                len(qa_turns),
+                len(qa),
+            )
+        return AggregatorHit(
+            source_name="stockanalysis",
+            page_url=transcript_url,
+            qa_text=qa,
+            full_text_chars=len(qa),
+        )
+
+    # DOM shape changed / didn't match at all — degrade to the legacy
+    # flatten-and-guess path rather than failing outright.
+    log.warning(
+        "stockanalysis %s Q%s %s: no border-t/border-sharp turn blocks found; "
+        "falling back to flattened-text extraction (degraded speaker attribution)",
+        ticker,
+        quarter,
+        year,
+    )
     text = _strip_html(r2.text)
     qa = _extract_qa(text)
     if qa is None:
@@ -414,8 +577,71 @@ def _stockanalysis_fetch(ticker: str, year: int, quarter: int) -> AggregatorHit 
 
 
 # ---------------------------------------------------------------------------
-# Source: tickertrends.io
+# Source: tickertrends.io — DOM-structured per-turn extraction
 # ---------------------------------------------------------------------------
+#
+# tickertrends.io renders each call turn as its own paragraph (verified live
+# 2026-07-25, WIX 1Q26: 41 clean speaker-labeled turns):
+#   <p class="mb-2"><strong>Nir Zohar:</strong> Thank you, Emily. Hello ...</p>
+#
+# The speaker's name sits in the paragraph's own leading <strong> tag,
+# trailing colon included — isolated the same way roic's speaker-name <p> and
+# stockanalysis's name <div> are, so it never leaks into the body.
+
+
+class _TickerTrendsMessageParser(HTMLParser):
+    """Extract (speaker_name, body_text) per `<p class="mb-2">` turn."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.turns: list[tuple[str, str]] = []
+        self._in_turn = False
+        self._in_name = False
+        self._name_seen = False
+        self._name_parts: list[str] = []
+        self._body_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_d = dict(attrs)
+        if not self._in_turn:
+            classes = (attrs_d.get("class") or "").split()
+            if tag == "p" and "mb-2" in classes:
+                self._in_turn = True
+                self._in_name = False
+                self._name_seen = False
+                self._name_parts = []
+                self._body_parts = []
+            return
+        if tag == "strong" and not self._name_seen:
+            self._in_name = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if not self._in_turn:
+            return
+        if tag == "strong" and self._in_name:
+            self._in_name = False
+            self._name_seen = True
+        elif tag == "p":
+            name = " ".join("".join(self._name_parts).split()).rstrip(":").strip()
+            body = " ".join("".join(self._body_parts).split())
+            if name and body:
+                self.turns.append((name, body))
+            self._in_turn = False
+
+    def handle_data(self, data: str) -> None:
+        if not self._in_turn:
+            return
+        if self._in_name:
+            self._name_parts.append(data)
+        else:
+            self._body_parts.append(data)
+
+
+def _parse_tickertrends_messages(html: str) -> list[tuple[str, str]]:
+    """Return [(speaker, body), ...] in call order, or [] if the DOM shape changed."""
+    p = _TickerTrendsMessageParser()
+    p.feed(html)
+    return p.turns
 
 
 def _tickertrends_fetch(ticker: str, year: int, quarter: int) -> AggregatorHit | None:
@@ -423,6 +649,36 @@ def _tickertrends_fetch(ticker: str, year: int, quarter: int) -> AggregatorHit |
     r = _http_get(url)
     if r is None or r.status_code != 200 or _has_paywall(r.text):
         return None
+
+    turns = _parse_tickertrends_messages(r.text)
+    if turns:
+        qa_turns, boundary_found = _slice_qa_turns(turns)
+        qa = _serialize_turns(qa_turns)
+        if len(qa) < 500:
+            return None
+        if not boundary_found:
+            log.warning(
+                "tickertrends %s Q%s %s: no Q&A boundary cue matched any turn; "
+                "keeping the whole call rather than dropping it — %d turns, %d chars",
+                ticker,
+                quarter,
+                year,
+                len(qa_turns),
+                len(qa),
+            )
+        return AggregatorHit(
+            source_name="tickertrends", page_url=url, qa_text=qa, full_text_chars=len(qa)
+        )
+
+    # DOM shape changed / didn't match at all — degrade to the legacy
+    # flatten-and-guess path rather than failing outright.
+    log.warning(
+        "tickertrends %s Q%s %s: no <p class=mb-2> turn blocks found; "
+        "falling back to flattened-text extraction (degraded speaker attribution)",
+        ticker,
+        quarter,
+        year,
+    )
     text = _strip_html(r.text)
     qa = _extract_qa(text)
     if qa is None:

@@ -362,7 +362,13 @@ def split_20f(text: str) -> SplitResult:
     alongside it — storing both would double-count the same prose in every
     downstream diff and inflate any change metric computed over the store.
     """
-    top = locate_items(text, FORM_20F_ITEMS)
+    # A thin incorporate-by-reference 20-F (NVO) can reprint an item's own
+    # title as a running page header well inside that item's real body — see
+    # ``taxonomy._drop_running_header_repeats``. FORM_20F_ITEMS is large
+    # enough (29 items) for ``_drop_contents_block`` to have already resolved
+    # any genuine contents page, so a surviving duplicate at this point is
+    # safe to treat as the running-header defect rather than a second TOC.
+    top = locate_items(text, FORM_20F_ITEMS, drop_running_header_repeats=True)
     if not top:
         return SplitResult([], ["no_item_headers_located"])
 

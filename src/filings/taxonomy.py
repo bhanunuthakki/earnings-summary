@@ -75,6 +75,18 @@ _QUOTE_OPENERS = "\"'“‘(«"  # noqa: RUF001 — curly quotes are what _strip
 #: after this block?" test — see ``_drop_contents_block``.
 _TOC_MIN_ITEMS = 8
 _TOC_MIN_SHARE = 0.6
+#: A document that only ever touches a HANDFUL of items — a partial-restatement
+#: 10-K/A that amends just its Item 1/1A/7/7A/8/9A/15 headings — can never
+#: clear the absolute ``_TOC_MIN_ITEMS`` floor above, because its own taxonomy
+#: footprint (``total_distinct`` below) never reaches 8. That is not evidence
+#: the document has no contents page; RGEN's FY2023 10-K/A prints one for
+#: exactly those 7 items, packed as tightly as any full-form TOC. The floor
+#: that actually matters is on ``duplicated_distinct`` — how many items show up
+#: MORE THAN ONCE at all — kept low enough to reach a thin restatement's TOC
+#: but high enough that a single incidental repeat (see
+#: ``_drop_running_header_repeats``, NVO's running-page-header defect, exactly
+#: one item duplicated) never qualifies as "a block."
+_TOC_MIN_DUPLICATED = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -384,8 +396,23 @@ def _candidate_positions(text: str, spec: ItemSpec) -> list[tuple[int, int, str]
     return out
 
 
-def _drop_contents_block(pool: list[tuple[int, int, int, str]]) -> list[tuple[int, int, int, str]]:
+def _drop_contents_block(
+    pool: list[tuple[int, int, int, str]], *, taxonomy_size: int
+) -> list[tuple[int, int, int, str]]:
     """Remove the table-of-contents entries from a candidate pool.
+
+    ``taxonomy_size`` is ``len(specs)`` from the caller — the number of items
+    THIS TAXONOMY CAN EVER CONTAIN, not how many were found in this document.
+    The distinction matters: a 10-Q's Part I/Part II pass and each part's own
+    item list are small BY DESIGN (2, 4, 7 possible specs) and were never
+    reachable by the original absolute floor either, so they must keep taking
+    the exact same "never touch it, let the DP decide" path they always have.
+    A thin RGEN 10-K/A that only touches 7 of ``FORM_10K_ITEMS``' 23 possible
+    items is a different situation entirely — the taxonomy is large, the
+    DOCUMENT is thin — and that is the one case the adaptive branch below is
+    for. Gating on the found count alone (an earlier version of this fix)
+    could not tell those apart and silently changed 10-Q Part I/II and
+    per-part boundaries it was never meant to touch.
 
     A TOC writes the form's item structure a SECOND time, and chain scoring
     cannot arbitrate between two copies of the same structure — it takes both.
@@ -423,8 +450,48 @@ def _drop_contents_block(pool: list[tuple[int, int, int, str]]) -> list[tuple[in
     """
     if not pool:
         return pool
-    total_distinct = len({spec_idx for _, spec_idx, _, _ in pool})
-    threshold = max(_TOC_MIN_ITEMS, int(total_distinct * _TOC_MIN_SHARE))
+    counts_all: dict[int, int] = {}
+    for _, spec_idx, _, _ in pool:
+        counts_all[spec_idx] = counts_all.get(spec_idx, 0) + 1
+    total_distinct = len(counts_all)
+    duplicated_distinct = sum(1 for n in counts_all.values() if n > 1)
+
+    # Two threshold regimes, chosen so a normal-sized filing's behavior is
+    # BYTE-IDENTICAL to before this function learned about thin filings at
+    # all. The gate is ``taxonomy_size`` (see the docstring above), NOT how
+    # many items this document happens to contain: a large taxonomy
+    # (FORM_10K_ITEMS/FORM_20F_ITEMS, 23/29 items) used by a thin DOCUMENT
+    # (RGEN's restated 10-K/A: 7 items found) is the one case the adaptive
+    # branch is for — ``_best_chain``'s own gap-maximizing DP never got a
+    # chance to run against a correctly-stripped pool there, because the pool
+    # was never stripped at all, so this branch is pure upside. A SMALL
+    # taxonomy (10-Q's 2-spec Part I/II pass, or either part's own 4/7-item
+    # list) keeps the original formula exactly, because the DP has always been
+    # the thing correctly excluding an orphan TOC row there too (a filer-
+    # omitted optional item, confirmed on RGEN's OTHER 10-Ks): changing the
+    # window's shape nudges the DP's own decision in ways this function cannot
+    # predict from density alone, and the corpus diff caught exactly that when
+    # this gate was keyed on the found count instead.
+    if taxonomy_size < _TOC_MIN_ITEMS or total_distinct >= _TOC_MIN_ITEMS:
+        threshold = max(_TOC_MIN_ITEMS, int(total_distinct * _TOC_MIN_SHARE))
+    else:
+        # Two independent bars: an absolute floor on how many items repeat AT
+        # ALL (protects the single-item running-header case, a different
+        # defect — see ``_drop_running_header_repeats``) and a share floor on
+        # repetition density (protects a thin filing's real few-item cluster
+        # of trivial "Not applicable." answers from being read as a TOC just
+        # because a couple happen to repeat). Below either, there is no
+        # contents block to remove.
+        if duplicated_distinct < _TOC_MIN_DUPLICATED:
+            return pool
+        if duplicated_distinct < total_distinct * _TOC_MIN_SHARE:
+            return pool
+        # The window search targets exactly the items known to repeat, not the
+        # full taxonomy footprint — a thin restated 10-K/A (RGEN FY2023: 7
+        # items total, 6 of them duplicated by its own partial contents page)
+        # can never pack ``_TOC_MIN_ITEMS`` distinct items into one window,
+        # but it reliably packs every item that actually has a second copy.
+        threshold = duplicated_distinct
 
     window = _densest_window(pool, threshold)
     if window is None:
@@ -444,10 +511,20 @@ def _drop_contents_block(pool: list[tuple[int, int, int, str]]) -> list[tuple[in
     # and is what the document guarantees: a contents page precedes the body it
     # points at, so nothing before the listing is a body header either.
     after_block = {pool[i][1] for i in range(hi + 1, len(pool))}
-    if len(after_block) < _TOC_MIN_ITEMS:
+    after_block_floor = (
+        _TOC_MIN_ITEMS
+        if (taxonomy_size < _TOC_MIN_ITEMS or total_distinct >= _TOC_MIN_ITEMS)
+        else min(_TOC_MIN_ITEMS, duplicated_distinct)
+    )
+    if len(after_block) < after_block_floor:
         # Nothing substantial follows, so this dense listing is not a contents
         # page with a body after it — it is the body, or an exhibit index at the
         # end of the filing. Excising it would delete the disclosure itself.
+        # The floor scales down with ``duplicated_distinct`` ONLY in the thin-
+        # filing regime, for the same reason the window threshold does: a
+        # thin filing's real body can never produce 8 distinct post-block
+        # items when only 6 were ever duplicated in the first place. A
+        # normal-sized filing keeps the original, unconditional floor.
         return pool
 
     # Never delete an item's ONLY evidence: an item is cleared out of the block
@@ -526,7 +603,54 @@ def _best_chain(pool: list[tuple[int, int, int, str]], *, allow_reorder: bool) -
     return chain
 
 
-def locate_items(text: str, specs: tuple[ItemSpec, ...]) -> list[LocatedItem]:
+def _drop_running_header_repeats(
+    pool: list[tuple[int, int, int, str]],
+) -> list[tuple[int, int, int, str]]:
+    """Drop a later candidate that repeats an EARLIER one's exact header line
+    for the SAME item, PROVIDED no other item's own candidate sits between
+    the two — the running-page-header defect, distinct from (and checked
+    after) a contents block.
+
+    Real case: NVO's 20-F prints "ITEM 3 KEY INFORMATION" once as the true
+    heading, then AGAIN, verbatim, as a running page header roughly one page
+    into the very risk-factors prose that heading introduces, with nothing
+    else in the taxonomy located anywhere in between — the whole stretch is
+    Item 3's own prose. Both occurrences look like a clean, non-citation,
+    non-TOC header on their own line, so both survive every earlier filter.
+    Chain scoring then maximizes the gap FROM the preceding item, and the
+    later (fake) occurrence manufactures a bigger gap than the real one — so
+    it wins, which pushes Item 3's own A/B/C/D sub-item markers into the
+    PRECEDING item's slice and leaves Item 3.D Risk Factors unreachable
+    (``subsplit_incomplete_item_3``, then ``missing_risk_factors``).
+
+    The "nothing else between" condition is what keeps this from colliding
+    with a genuine contents/index listing that happens to fall below
+    ``_drop_contents_block``'s own bars (a 10-Q's one-paragraph Part I/Part II
+    index prints "PART I" verbatim in both the index and the real header, a
+    few hundred characters apart — but the index's OWN "PART II" entry sits
+    directly between them, so that pair is left alone here; a real running
+    header has no such neighbor because it is reprinted mid-disclosure, not
+    mid-listing). Only the FIRST (earliest, i.e. real) occurrence of an
+    isolated repeat is kept.
+    """
+    last_seen: dict[tuple[int, str], int] = {}
+    drop: set[int] = set()
+    for i, (_, spec_idx, _, line) in enumerate(pool):
+        key = (spec_idx, " ".join(line.split()).lower())
+        prev_i = last_seen.get(key)
+        if prev_i is not None and not any(pool[j][1] != spec_idx for j in range(prev_i + 1, i)):
+            drop.add(i)
+            continue  # last_seen stays at the earliest kept occurrence
+        last_seen[key] = i
+    return [row for i, row in enumerate(pool) if i not in drop]
+
+
+def locate_items(
+    text: str,
+    specs: tuple[ItemSpec, ...],
+    *,
+    drop_running_header_repeats: bool = False,
+) -> list[LocatedItem]:
     """Resolve each item to its body position, choosing the best header chain.
 
     Candidates from every item are pooled and a chain is selected by dynamic
@@ -548,6 +672,21 @@ def locate_items(text: str, specs: tuple[ItemSpec, ...]) -> list[LocatedItem]:
     ``_is_citation`` and ``_drop_contents_block``, not the order it appears in.
     What order still buys is uniqueness, and that is enforced directly below.
 
+    ``drop_running_header_repeats`` additionally removes an isolated repeat of
+    an item's own header line deep in its body (see
+    ``_drop_running_header_repeats``) — opt-in, and only requested by
+    ``split_20f``. A small taxonomy (the 10-Q Part I/Part II 2-spec pass, or a
+    part's own 4-7 item list) can have a genuine TOC-vs-real pair survive
+    ``_drop_contents_block`` (too few distinct items for its density signal to
+    engage) that the chain scorer ALREADY resolves correctly on gap alone —
+    proven on the corpus: turning this on unconditionally silently traded a
+    20-F-only defect for new breakage on AMZN/MELI 10-Q Part I/II boundaries,
+    because "isolated repeat, nothing else between" cannot always tell a
+    running header apart from a TOC entry that a small taxonomy has no other
+    way to catch. Scoping it to the one caller with a confirmed defect and a
+    taxonomy large enough for ``_drop_contents_block`` to do its own job first
+    keeps the two defenses from stepping on each other.
+
     Returns items in document order with ``body_end`` filled in. Empty list
     when nothing matched, which callers must treat as ``NO_SECTIONS_FOUND``
     rather than an empty-but-valid partition.
@@ -559,7 +698,9 @@ def locate_items(text: str, specs: tuple[ItemSpec, ...]) -> list[LocatedItem]:
     if not pool:
         return []
     pool.sort(key=lambda t: (t[0], t[1]))
-    pool = _drop_contents_block(pool)
+    pool = _drop_contents_block(pool, taxonomy_size=len(specs))
+    if drop_running_header_repeats:
+        pool = _drop_running_header_repeats(pool)
 
     chain = _best_chain(pool, allow_reorder=True)
     # An unordered chain can return to an item it already used (3 → 7 → 3),

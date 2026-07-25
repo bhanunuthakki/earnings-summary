@@ -811,6 +811,135 @@ def test_a_contents_block_is_removed_whole_or_not_at_all() -> None:
         assert f"Body prose for {key} " in by_key[key].text
 
 
+def test_running_header_repeat_is_dropped_when_isolated() -> None:
+    """An item's own title, reprinted verbatim as a running page header well
+    inside that item's real body with nothing else in the taxonomy located in
+    between, is the running-header defect (NVO's 20-F: "ITEM 3 KEY
+    INFORMATION" appears once as the true heading, then again a page into the
+    D. Risk Factors prose it introduces) — only the isolated, later repeat is
+    dropped, opt-in via ``drop_running_header_repeats``."""
+    pool = [
+        (100, 0, 110, "ITEM 2 OFFER STATISTICS"),
+        (500, 1, 510, "ITEM 3 KEY INFORMATION"),  # the real header
+        (900, 1, 910, "ITEM 3 KEY INFORMATION"),  # running-header repeat
+        (1200, 2, 1210, "ITEM 4 INFORMATION ON THE COMPANY"),
+    ]
+    out = taxonomy._drop_running_header_repeats(pool)
+    assert out == [pool[0], pool[1], pool[3]], "only the isolated later repeat should be dropped"
+
+
+def test_running_header_repeat_kept_when_interleaved_with_another_item() -> None:
+    """A repeat that has ANOTHER item's own candidate sitting between it and
+    the earlier occurrence is not the running-header defect — it is (at
+    least potentially) a small index/TOC pair, and ``_drop_contents_block``'s
+    density signal is what has to arbitrate those, not this filter.
+
+    Pinned directly on the real defect this guards against: a 10-Q's Part
+    I/Part II one-paragraph index prints "PART I" and "PART II" a few hundred
+    characters apart, then the REAL "PART I" header, then (far later) the
+    real "PART II" header — Part I's own index-vs-real pair has Part II's
+    index entry sitting between them, so it must be left alone here. Treating
+    it as an isolated repeat instead (an earlier version of this fix) dropped
+    the real Part I header and broke the AMZN/MELI 10-Q boundary."""
+    pool = [
+        (100, 0, 110, "PART I. FINANCIAL INFORMATION"),  # index entry
+        (150, 1, 160, "PART II. OTHER INFORMATION"),  # index entry -- sits BETWEEN the Part I pair
+        (900, 0, 910, "PART I. FINANCIAL INFORMATION"),  # the real header
+        (90000, 1, 90010, "PART II. OTHER INFORMATION"),  # the real header, far later
+    ]
+    out = taxonomy._drop_running_header_repeats(pool)
+    assert out == pool, "an interleaved pair must survive this filter untouched"
+
+
+def test_split_20f_recovers_risk_factors_despite_running_header_repeat() -> None:
+    """End-to-end regression pin for the NVO defect: Item 3's D. Risk Factors
+    sub-item must still be located even though "ITEM 3 KEY INFORMATION"
+    reprints as a running header inside the risk-factors prose itself."""
+    risk_prose_p1 = "\n".join(
+        f"Risk factor prose sentence {n} about the issuer." for n in range(30)
+    )
+    risk_prose_p2 = "\n".join(f"More risk factor prose sentence {n}." for n in range(30))
+    text = "\n".join(
+        [
+            "ITEM 1 IDENTITY OF DIRECTORS, SENIOR MANAGEMENT AND ADVISORS",
+            "Not applicable.",
+            "ITEM 2 OFFER STATISTICS AND EXPECTED TIMETABLE",
+            "Not applicable.",
+            "ITEM 3 KEY INFORMATION",
+            "A. [RESERVED]",
+            "B. CAPITALIZATION AND INDEBTEDNESS",
+            "Not applicable.",
+            "C. REASONS FOR THE OFFER AND USE OF PROCEEDS",
+            "Not applicable.",
+            "D. RISK FACTORS",
+            risk_prose_p1,
+            # The running-header repeat: the same title, verbatim, on its own
+            # line, well inside the risk-factors prose it introduced.
+            "ITEM 3 KEY INFORMATION",
+            risk_prose_p2,
+            "ITEM 4 INFORMATION ON THE COMPANY",
+            "\n".join(f"Company information prose sentence {n}." for n in range(40)),
+        ]
+    )
+    result = edgar_sections.split_20f(text)
+    by_concept = {s.concept: s for s in result.slices}
+    assert "risk_factors" in by_concept, "the running-header repeat must not swallow Item 3.D"
+    assert "Risk factor prose sentence 0" in by_concept["risk_factors"].text
+    assert "company_information" in by_concept
+    assert "Company information prose sentence 0" in by_concept["company_information"].text
+
+
+def test_thin_restated_10k_contents_block_is_stripped() -> None:
+    """A partial-restatement 10-K/A that only touches a handful of items still
+    prints a dense contents page for those items — RGEN's FY2023 10-K/A
+    (Items 1, 1A, 7, 7A, 8, 9A, 15, each suffixed "(Restated)"). The document's
+    OWN taxonomy footprint (7 items) never reaches the absolute
+    ``_TOC_MIN_ITEMS`` floor an ordinary, full 10-K would, so the business
+    section must not inherit the contents page as its own body."""
+    restated_items = [
+        ("Item 1", "Business (Restated)"),
+        ("Item 1A", "Risk Factors (Restated)"),
+        ("Item 7", "Management's Discussion and Analysis of Financial Condition (Restated)"),
+        ("Item 7A", "Quantitative and Qualitative Disclosures About Market Risk (Restated)"),
+        ("Item 8", "Financial Statements and Supplementary Data (Restated)"),
+        ("Item 9A", "Controls and Procedures (Restated)"),
+        ("Item 15", "Exhibits and Financial Statement Schedules (Restated)"),
+    ]
+    body: list[str] = []
+    for key, title in restated_items:
+        body.append(f"ITEM {key.split()[-1]}. {title.upper()}")
+        body.extend(f"Restated body prose for {key} about the registrant." for _ in range(40))
+    contents = [f"{key}.\n\n{title}\n\n{n + 1}" for n, (key, title) in enumerate(restated_items)]
+    text = "\n".join(["Table of Contents", *contents, "", *body])
+    result = edgar_sections.split_10k(text)
+    by_key = {s.key: s for s in result.slices}
+    assert "Item 1" in by_key, "the business section must still be located"
+    assert "Restated body prose for Item 1 " in by_key["Item 1"].text
+    assert "Table of Contents" not in by_key["Item 1"].text
+    assert "Restated (Restated)" not in by_key["Item 1"].text
+
+
+def test_small_taxonomy_pass_never_treats_its_own_index_as_a_contents_block() -> None:
+    """A taxonomy that is small BY DESIGN (a 10-Q's 2-entry Part I/Part II
+    pass) must keep relying purely on chain scoring to resolve a TOC-vs-real
+    pair, exactly as before this fix — the adaptive, duplicated-item-based
+    branch is scoped to a LARGE taxonomy used by a thin document (RGEN's
+    restated 10-K/A), not to a taxonomy that is inherently tiny. Regression
+    pin: an earlier version of this fix keyed the gate on how many DISTINCT
+    items were found rather than on the taxonomy's own size, and it broke
+    exactly this shape on real AMZN/MELI 10-Qs."""
+    part1 = edgar_sections._PART1_SPEC
+    part2 = edgar_sections._PART2_SPEC
+    pool = [
+        (100, 0, 110, "PART I. FINANCIAL INFORMATION"),  # one-paragraph index
+        (150, 1, 160, "PART II. OTHER INFORMATION"),  # one-paragraph index
+        (900, 0, 910, "PART I. FINANCIAL INFORMATION"),  # the real header
+        (90000, 1, 90010, "PART II. OTHER INFORMATION"),  # the real header
+    ]
+    out = taxonomy._drop_contents_block(pool, taxonomy_size=len((part1, part2)))
+    assert out == pool, "a 2-item taxonomy must never engage the thin-filing branch"
+
+
 def test_items_printed_out_of_order_are_still_partitioned() -> None:
     """Filers reorder items, and the taxonomy's order must not overrule them.
 
@@ -1066,6 +1195,53 @@ def test_fiscal_year_labels_by_year_of_fiscal_end() -> None:
     assert ingest.fiscal_year_for(datetime(2025, 4, 30), 1, 31) == 2026
 
 
+@pytest.mark.parametrize(
+    ("period_end", "fye_month", "fye_day", "expected"),
+    [
+        # AVGO: stored FYE 11-02; actual closes wobble a day either side.
+        (datetime(2025, 11, 2), 11, 2, 2025),
+        (datetime(2024, 11, 3), 11, 2, 2024),  # one day past the cutoff
+        (datetime(2023, 10, 29), 11, 2, 2023),  # a few days before it
+        # LITE: stored FYE 06-28; actual closes drift as late as Jul 3.
+        (datetime(2024, 6, 29), 6, 28, 2024),
+        (datetime(2021, 7, 3), 6, 28, 2021),
+        # NVDA: stored FYE 01-25; actual closes drift as late as Jan 31.
+        (datetime(2025, 1, 26), 1, 25, 2025),
+        (datetime(2021, 1, 31), 1, 25, 2021),
+    ],
+)
+def test_fiscal_year_for_tolerates_52_53_week_wobble(
+    period_end: datetime, fye_month: int, fye_day: int, expected: int
+) -> None:
+    """A 52/53-week fiscal calendar's actual close drifts a few days either
+    side of the stored ``(fye_month, fye_day)`` reference every year. A bare
+    day-of-year comparison bumped a one-day overshoot into the WRONG fiscal
+    year (AVGO's real FY2024 10-K, period end 2024-11-03, landed in FY2025) —
+    a genuine cross-source bug, confirmed against FMP's own ``year`` field for
+    the same filing agreeing with the tolerant answer, not the strict one."""
+    assert ingest.fiscal_year_for(period_end, fye_month, fye_day) == expected
+
+
+@pytest.mark.parametrize(
+    ("period_end", "fye_month", "fye_day", "expected"),
+    [
+        # A genuine quarterly period-end sits months away from the FYE and
+        # must keep taking the plain day-of-year comparison unaffected by the
+        # wobble tolerance -- these would ALL be misclassified by a "closest
+        # calendar-year FYE" search across adjacent years, which is why the
+        # fix is a small tolerance band around the cutoff, not that.
+        (datetime(2024, 3, 31), 12, 31, 2024),
+        (datetime(2020, 1, 15), 12, 31, 2020),
+        (datetime(2019, 12, 31), 12, 31, 2019),
+        (datetime(2024, 9, 27), 12, 31, 2024),  # DHR-shaped: Q3, Dec FYE
+    ],
+)
+def test_fiscal_year_for_quarterly_periods_are_unaffected_by_wobble_tolerance(
+    period_end: datetime, fye_month: int, fye_day: int, expected: int
+) -> None:
+    assert ingest.fiscal_year_for(period_end, fye_month, fye_day) == expected
+
+
 def test_unknown_fiscal_year_end_is_reported_not_assumed(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT INTO tracked_companies (ticker, list_type) VALUES ('RBRK', 'portfolio')")
     month, day, known = ingest.fiscal_year_end_for(conn, "RBRK")
@@ -1138,6 +1314,83 @@ def test_ingest_fmp_flags_regime_mismatch_but_keeps_sections(
     assert all(s.form is FilingForm.FORM_20F for s in sections), "the filing's own declaration wins"
     [coverage] = store.get_coverage(conn, "NU")
     assert coverage.reason_code == "regime_mismatch_resolved_to_declared"
+
+
+def test_ingest_fmp_withholds_sections_when_declared_form_is_unsupported(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """A declared, RECOGNIZED-but-unsupported Document Type (an 8-K) must not
+    fall back to trusting the filename the way a genuinely undeclared cover
+    section does — DHR's cached "form_10k_2025" payload declares
+    ``Document type: 8-K`` and ``Document Period End Date: Jan. 28, 2026``, a
+    full month past the real Dec 31 2025 close, and prior to this fix that
+    date was silently accepted as the 10-K's own period end."""
+    _write_payload(
+        tmp_path,
+        "DHR_form_10k_2025.json",
+        {
+            "symbol": "DHR",
+            "period": "FY",
+            "year": "2025",
+            "Cover page": [
+                {"Document type": ["8-K"]},
+                {"Document Period End Date": ["Jan. 28,  2026"]},
+            ],
+            "Some section": [{"Line item": ["1"]}],
+        },
+    )
+    report = ingest.ingest_fmp(conn, "DHR", tmp_path, fmp_dir=tmp_path)
+    assert report.sections_written == 0
+    assert store.get_sections(conn, "DHR") == []
+    [coverage] = store.get_coverage(conn, "DHR")
+    assert coverage.status is CoverageStatus.REGIME_MISMATCH
+    assert coverage.reason_code == "declared_form_unsupported"
+
+
+def test_ingest_fmp_withdraws_stale_rows_once_form_is_recognized_as_unsupported(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """A row written by an earlier, less careful ingest must not survive a
+    re-run that now correctly identifies the payload as an unsupported form —
+    otherwise ``reconcile_sources`` keeps flagging a cross-source disagreement
+    against data this pipeline no longer trusts at all (measured on prod: DHR
+    FY2025 kept disagreeing with EDGAR's 2025-12-31 every run until the stale
+    ``fmp_rfile`` row itself was withdrawn, not merely stopped from growing)."""
+    path = _write_payload(
+        tmp_path,
+        "DHR_form_10k_2025.json",
+        {
+            "symbol": "DHR",
+            "period": "FY",
+            "year": "2025",
+            "Cover page": [{"Document Type": ["10-K"]}],
+            "Some section": [{"Line item": ["1"]}],
+        },
+    )
+    ingest.ingest_fmp(conn, "DHR", tmp_path, fmp_dir=tmp_path)
+    assert store.get_sections(conn, "DHR"), "the well-formed payload must have written rows first"
+
+    # The same payload now declares an 8-K, as if a subsequent fetch replaced
+    # the cache with the wrong document under the same filename.
+    path.write_text(
+        json.dumps(
+            {
+                "symbol": "DHR",
+                "period": "FY",
+                "year": "2025",
+                "Cover page": [
+                    {"Document type": ["8-K"]},
+                    {"Document Period End Date": ["Jan. 28,  2026"]},
+                ],
+                "Some section": [{"Line item": ["1"]}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    ingest.ingest_fmp(conn, "DHR", tmp_path, fmp_dir=tmp_path)
+    assert store.get_sections(conn, "DHR") == [], (
+        "the stale rows must be withdrawn, not just frozen"
+    )
 
 
 def test_ingest_fmp_withholds_sections_on_year_mismatch(

@@ -98,6 +98,73 @@ def test_locate_6k_exhibit_matches_filename_hint_in_window() -> None:
     assert result.accession == "0001292814-26-003053"
 
 
+_WIX_SUBMISSIONS_PAYLOAD = {
+    "filings": {
+        "recent": {
+            "form": ["6-K", "6-K", "6-K"],
+            "filingDate": ["2026-05-13", "2026-03-04", "2026-01-22"],
+            "accessionNumber": [
+                "0001628280-26-034370",
+                "0001628280-26-014406",
+                "0001628280-26-003707",
+            ],
+        }
+    }
+}
+
+#: Real WIX 1Q26 6-K index shape (2026-07-25 spike, D1.2): the earnings-
+#: release exhibit alongside the bare 6-K cover letter.
+_WIX_INDEX_PAYLOAD = {
+    "directory": {
+        "item": [
+            {"name": "0001628280-26-034370-index.html"},
+            {"name": "firstquarter2026results.htm"},
+            {"name": "wix-6xkxfirstquarter2026.htm"},
+        ]
+    }
+}
+
+#: A NON-earnings WIX 6-K from the same filing window (a share-repurchase
+#: announcement) -- must never match the quarter-word hint.
+_WIX_NON_EARNINGS_INDEX_PAYLOAD = {
+    "directory": {"item": [{"name": "pr280126-6xk.htm"}, {"name": "pr2brepurchaseapproval.htm"}]}
+}
+
+
+def test_locate_6k_exhibit_matches_wix_quarter_word_hint() -> None:
+    """WIX 1Q26: quarter-end 2026-03-31, filed 2026-05-13 (43 days later) --
+    the earnings-release exhibit 'firstquarter2026results.htm' matches WIX's
+    registered hint; the bare cover-letter exhibit does not need to (only one
+    match is required to locate the filing)."""
+    session = _make_session(
+        {"submissions": _WIX_SUBMISSIONS_PAYLOAD, "index.json": _WIX_INDEX_PAYLOAD}
+    )
+    result = locate_6k_exhibit("WIX", quarter="Q1", year=2026, session=session)
+    assert result is not None
+    assert result.exhibit_filename == "firstquarter2026results.htm"
+    assert result.accession == "0001628280-26-034370"
+
+
+def test_locate_6k_exhibit_wix_hint_does_not_match_non_earnings_6k() -> None:
+    """A share-repurchase or AGM 6-K in the same window must not be mistaken
+    for the earnings-release exhibit -- confirmed against WIX's real 6-K
+    naming split (2026-07-25 spike): non-earnings exhibits are named
+    "pr...-6xk.htm" / "wix-...agm...htm", never "<quarter word>...".
+    """
+    payload = {
+        "filings": {
+            "recent": {
+                "form": ["6-K"],
+                "filingDate": ["2026-05-20"],  # inside Q1 2026's filing window
+                "accessionNumber": ["0001628280-26-003707"],
+            }
+        }
+    }
+    session = _make_session({"submissions": payload, "index.json": _WIX_NON_EARNINGS_INDEX_PAYLOAD})
+    result = locate_6k_exhibit("WIX", quarter="Q1", year=2026, session=session)
+    assert result is None
+
+
 def test_locate_6k_exhibit_returns_none_for_untested_ticker() -> None:
     """A ticker with no registered exhibit-filename hint (e.g. ASML, or any
     20-F name the spike didn't validate) never triggers a network call --

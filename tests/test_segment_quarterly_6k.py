@@ -2,13 +2,13 @@
 (docs/design/segment_quarterly_framework.md §1.1, spike-gated ``fpi_6k`` route).
 
 Covers the three outcomes the Phase-3 spike verdict requires be distinguishable:
-  1. A ticker the spike validated as extractable (NU/NVO-shaped): end-to-end
-     mocked fetch + LLM writes segment_periods/segment_dimensions rows, with
-     an explicit non-"revenue" metric (non_current_assets) round-tripping.
+  1. A ticker the spike validated as extractable (NU/NVO/WIX-shaped): end-to-
+     end mocked fetch + LLM writes segment_periods/segment_dimensions rows,
+     with an explicit non-"revenue" metric (non_current_assets) round-tripping.
   2. A ticker the spike confirmed has NO quarterly disclosure (ASML): no
      network call attempted, a ``not_disclosed``/``fpi_annual_only``
      coverage row is written instead.
-  3. A ticker the spike never tested (e.g. WIX): no network call, no
+  3. A ticker the spike never tested (e.g. BHP): no network call, no
      coverage row written by this module (left to
      audit_segment_quarterly_coverage.py's existing fpi_route_unproven
      default) -- this module must not claim evidence it doesn't have.
@@ -246,24 +246,54 @@ def test_confirmed_annual_only_ticker_skips_network_and_records_coverage(
 def test_untested_ticker_skips_network_and_writes_no_coverage_row(
     conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """WIX (a 20-F name on the roster the spike never sampled): no network
+    """BHP (a 20-F name on the roster the spike never sampled): no network
     call, and NO coverage row from this module -- audit_segment_quarterly_
     coverage.py's existing fpi_route_unproven default is the honest answer
     here, not a claim this module has evidence for."""
     located_mock = MagicMock(side_effect=AssertionError("must not attempt to locate a 6-K"))
     monkeypatch.setattr(segment_quarterly_6k, "locate_6k_exhibit", located_mock)
 
-    result = extract_for_ticker("WIX", 2026, "Q1", tmp_path, conn)
+    result = extract_for_ticker("BHP", 2026, "Q1", tmp_path, conn)
 
     assert result.skipped_reason is not None
     assert "not in the Phase-3 spike-validated ticker set" in result.skipped_reason
     located_mock.assert_not_called()
     assert (
         conn.execute(
-            "SELECT COUNT(*) FROM segment_quarterly_coverage WHERE ticker = 'WIX'"
+            "SELECT COUNT(*) FROM segment_quarterly_coverage WHERE ticker = 'BHP'"
         ).fetchone()[0]
         == 0
     )
+
+
+def test_wix_is_supported_and_attempts_a_locate_call() -> None:
+    """WIX moved from untested to spike-validated 2026-07-25 (D1.2): it must
+    take the "supported" branch, distinct from both ASML's confirmed-negative
+    short-circuit and an untested ticker's silent skip -- proven by checking
+    the classification table directly, the single source of truth every other
+    code path in this module reads from."""
+    assert segment_quarterly_6k._TICKER_6K_STATUS["WIX"] == "supported"
+
+
+def test_wix_exhibit_not_located_records_not_computable_coverage(
+    conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """WIX must actually reach the network-locate step (unlike ASML/untested
+    tickers, which short-circuit before it) -- proven by mocking
+    ``locate_6k_exhibit`` to return None and checking it was CALLED, then that
+    the honest not_computable coverage row is written."""
+    locate_mock = MagicMock(return_value=None)
+    monkeypatch.setattr(segment_quarterly_6k, "locate_6k_exhibit", locate_mock)
+
+    result = extract_for_ticker("WIX", 2026, "Q1", tmp_path, conn)
+
+    locate_mock.assert_called_once()
+    assert result.skipped_reason is not None
+    row = conn.execute(
+        "SELECT status, reason_code FROM segment_quarterly_coverage WHERE ticker = 'WIX'"
+    ).fetchone()
+    assert row["status"] == "not_computable"
+    assert row["reason_code"] == "fpi_6k_exhibit_not_located"
 
 
 def test_exhibit_not_located_records_not_computable_coverage(

@@ -147,16 +147,50 @@ def fiscal_period_for(period_end: datetime, fye_month: int, fye_day: int) -> Fis
     return _QUARTER_BY_INDEX[index]
 
 
+#: A 52/53-week fiscal calendar closes on a fixed weekday nearest a target
+#: date (AVGO: Sunday nearest Nov 2; LITE: Friday nearest Jun 28-ish; NVDA:
+#: last Sunday in January), so the actual close drifts a few days either side
+#: of ``tracked_companies.fiscal_year_end`` every year. Measured across the
+#: four tickers this shifts for (AVGO/DHR/LITE/NVDA reconciliation findings):
+#: the largest observed drift is 6 days (NVDA). 10 gives margin without
+#: reaching anywhere near a real quarterly period-end, which sits ~90 days
+#: from the annual FYE at the closest.
+_FYE_WOBBLE_TOLERANCE_DAYS = 10
+
+
 def fiscal_year_for(period_end: datetime, fye_month: int, fye_day: int) -> int:
     """The fiscal year a period-end belongs to, labeled by the year it ends in.
 
     Matches the convention FMP's own ``year`` field uses (and the one the rest
     of the platform's annual files are named after): the FY is the calendar
     year containing the fiscal year END, not the start.
+
+    A plain day-of-year comparison against the single stored
+    ``(fye_month, fye_day)`` is exact for a calendar FYE but wrong for a
+    52/53-week filer: AVGO's FY2024 10-K reports a period end of 2024-11-03,
+    one day past its stored ``11-02`` reference, and a bare "which side of the
+    cutoff" test bumped that into FY2025 — a real bug, not a labeling
+    preference, because FMP's OWN payload for the same filing (period end
+    2024-11-03) already carries ``year=2024``, so the platform's two lanes
+    landed the same document in two different fiscal-year buckets. Confirmed
+    the same way for LITE (stored ``06-28``, actual closes wobble as late as
+    07-03) and NVDA (stored ``01-25``, actual closes as late as 01-31).
+    Tolerating a small overshoot either side of the stored reference resolves
+    it without touching the comparison a genuine quarterly period-end relies
+    on: a 10-Q's period end sits months away from the FYE, so it is never
+    inside the tolerance window and takes the exact-comparison path unchanged.
     """
-    if (period_end.month, period_end.day) <= (fye_month, fye_day):
-        return period_end.year
-    return period_end.year + 1
+    try:
+        cutoff = datetime(period_end.year, fye_month, fye_day)
+    except ValueError:
+        # Feb 29 stored as an FYE on a non-leap period_end.year — no ticker in
+        # the current book does this, but constructing a real date must not
+        # crash on it.
+        cutoff = datetime(period_end.year, fye_month, 28)
+    delta_days = (period_end - cutoff).days
+    if -_FYE_WOBBLE_TOLERANCE_DAYS <= delta_days <= _FYE_WOBBLE_TOLERANCE_DAYS:
+        return cutoff.year
+    return period_end.year if delta_days < 0 else period_end.year + 1
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +415,55 @@ def _ingest_one_fmp_payload(
 
     meta = parsed.meta
     notes: list[str] = list(parsed.warnings)
+
+    # A payload that ACTIVELY DECLARES a document type this pipeline doesn't
+    # partition (an 8-K, say) is not the same situation as one with no
+    # Document Type at all — falling back to the filename's form for THAT
+    # case would silently graft an unrelated document's own period end onto
+    # the fiscal year the filename claims. Confirmed on DHR's cached
+    # "form_10k_2025" payload: its cover section declares
+    # ``Document type: 8-K`` and ``Document Period End Date: Jan 28, 2026`` —
+    # a full month past the real Dec 31, 2025 close — and prior to this fix
+    # that date was accepted as FY2025's 10-K period end (within
+    # ``_MAX_YEAR_GAP`` of the filename year, so the separate period-mismatch
+    # check never caught it), producing a real cross-source disagreement
+    # against EDGAR's correct 2025-12-31. Sections are withheld here exactly
+    # as PERIOD_MISMATCH withholds them — a mis-sourced section is worse than
+    # a missing one — and the raw declaration is recorded for tracing the
+    # upstream fetch/cache bug.
+    if meta.declared_form_raw is not None and meta.declared_form is None:
+        report.failures.append(f"{path.name}: undeclared_form_regime_mismatch")
+        # A prior, less careful ingest may already have written this
+        # source_ref's sections under the wrong fiscal year (DHR: exactly this
+        # — its old FY2025 rows carried the 8-K's 2026-01-28 period end and
+        # kept disagreeing with EDGAR's correct 2025-12-31 on every
+        # ``reconcile_sources`` run since). Withdraw them; there is nothing
+        # here this pipeline still trusts enough to keep.
+        withdrawn = store.withdraw_partition(conn, SectionSource.FMP_RFILE, rel_ref)
+        withdrawn_note = (
+            f"; withdrew {withdrawn} previously-written section(s)" if withdrawn else ""
+        )
+        _record(
+            conn,
+            report,
+            ticker=ticker,
+            source=SectionSource.FMP_RFILE,
+            form=hint.form,
+            fiscal_year=hint.fiscal_year,
+            fiscal_period=hint.fiscal_period,
+            status=CoverageStatus.REGIME_MISMATCH,
+            reason_code="declared_form_unsupported",
+            detail=(
+                f"payload declares Document Type={meta.declared_form_raw!r}, not a form this "
+                f"pipeline partitions; filename claims {hint.form.value} FY{hint.fiscal_year} — "
+                "sections withheld rather than trusting the filename over an active declaration"
+                f"{withdrawn_note}"
+            ),
+            sections_written=0,
+            source_ref=rel_ref,
+            extractor_version=version,
+        )
+        return
 
     # --- form reconciliation: the filing's own declaration wins -------------
     form = meta.declared_form or hint.form

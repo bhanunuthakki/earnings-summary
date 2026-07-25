@@ -132,6 +132,26 @@ def _prune_superseded(conn: sqlite3.Connection, sections: Sequence[FilingSection
     return deleted
 
 
+def withdraw_partition(conn: sqlite3.Connection, source: SectionSource, source_ref: str) -> int:
+    """Delete every stored section for one ``(source, source_ref)``.
+
+    ``_prune_superseded`` only fires from inside ``write_sections``, so a
+    document the caller decides NOT to (re-)write — because a re-check found
+    it was never what its filename claimed, e.g. DHR's cached "FY2025 10-K"
+    payload turning out to be an 8-K's own cover section — leaves whatever an
+    earlier, less careful ingest already wrote in place forever. This is the
+    withdraw-only counterpart: for a source_ref the pipeline no longer trusts
+    at all, there is no new partition to keep rows against, so everything for
+    it goes. Returns the row count removed (0 is a normal, silent no-op for a
+    source_ref that was never ingested).
+    """
+    cur = conn.execute(
+        f"DELETE FROM {SECTIONS_TABLE} WHERE source = ? AND source_ref = ?",
+        (source.value, source_ref),
+    )
+    return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+
 def write_sections(conn: sqlite3.Connection, sections: Sequence[FilingSection]) -> int:
     """Upsert sections on (source, source_ref, section_key_raw, ordinal).
 
