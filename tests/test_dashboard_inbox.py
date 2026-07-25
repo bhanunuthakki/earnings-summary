@@ -354,7 +354,17 @@ def test_quick_buttons_absent_off_the_rail_and_for_settled_actions(db_path: Path
     # Full (feed) cards keep the existing <a href="/approve"> links.
     full = render_inbox_stream(items, db_path=db_path)
     assert 'class="ix-act' not in full
-    assert f'href="/approve?action_id={action_id}"' in full
+    # An ALERT card settles at the alert level — every pending action plus the
+    # alert itself. Targeting one action left the alert 'pending' and the card
+    # standing in the queue (with its new ledger entry rendering beside it as a
+    # second card), which is what "approve does nothing" looked like.
+    alert_id = items[0].alert.id  # type: ignore[union-attr]
+    assert f'href="/approve?alert_id={alert_id}"' in full
+    assert f'href="/approve?alert_id={alert_id}&dismiss=1"' in full
+    assert f"action_id={action_id}" not in full
+    # A STANDALONE draft has no parent to settle, so it keeps the action target.
+    draft_only = render_inbox_stream(collect_inbox(db_path, kinds=("draft",)), db_path=db_path)
+    assert f'href="/approve?action_id={action_id}"' in draft_only
     # Once the action settles there is nothing to APPROVE, but the parent alert
     # is still pending — so the card keeps its dismiss-alert ✕ (you can still
     # clear the alert from the rail).

@@ -365,6 +365,19 @@ def attributions_for_book(
 # Top-contributor list cap on the by-name breakdown (the biggest stories only).
 _MAX_CONTRIBUTORS = 6
 
+# Plausibility ceiling on a name's implied window alpha RETURN (|alpha| / capital
+# base). 10.0 = 1000% — beyond any real single-name outcome in a one-year window,
+# but the first thing a data artifact produces: a dust/stale start value (a $0.01
+# remnant of a closed position) under real dollar alpha makes rate = a/value
+# explode by 5-6 orders of magnitude, and ``sel_i = mean_w * rate`` with it.
+# Prod rendered selection -$38.59bn / sizing +$38.59bn on a book five orders of
+# magnitude smaller — and the documented additive identity (selection + sizing
+# == total) held throughout, because sizing is computed as the residual. The
+# invariant is true by construction and therefore pins nothing about magnitude;
+# plausibility has to be gated per input, exactly like the financial-data rule:
+# a figure 10x off is a unit/data error, not an outlier — exclude and surface.
+_MAX_PLAUSIBLE_ALPHA_RATE = 10.0
+
 
 @dataclass(frozen=True, slots=True)
 class ConvictionAlphaRow:
@@ -481,6 +494,7 @@ def decompose_alpha(
 
     priced: list[tuple[str, float, float, float | None]] = []  # ticker, alpha, value, conviction
     excluded_no_value = 0
+    excluded_implausible: list[str] = []
     timing_usd = 0.0
     n_timed = 0
     for row in alpha.rows:
@@ -498,6 +512,9 @@ def decompose_alpha(
         value = _usable_value(row)
         if value is None:
             excluded_no_value += 1
+            continue
+        if abs(a) / value > _MAX_PLAUSIBLE_ALPHA_RATE:
+            excluded_implausible.append(ticker)
             continue
         priced.append((ticker, a, value, conv_map.get(ticker)))
 
@@ -550,6 +567,14 @@ def decompose_alpha(
         notes.append(
             f"{excluded_no_value} name(s) had no usable window value and are out of the "
             "selection/sizing split (still in raw alpha upstream)."
+        )
+    if excluded_implausible:
+        notes.append(
+            f"{len(excluded_implausible)} name(s) excluded as data-implausible "
+            f"({', '.join(sorted(excluded_implausible))}): window alpha implies a "
+            f">{_MAX_PLAUSIBLE_ALPHA_RATE:.0%} return on the recorded capital base — "
+            "a dust/stale position value, not skill. Out of the split (still in raw "
+            "alpha upstream); fix the tracker row to re-admit it."
         )
     notes.append(
         "Timing is a flow-lean diagnostic: the tracker's alpha already nets "

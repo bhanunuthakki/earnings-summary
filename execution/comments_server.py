@@ -65,7 +65,12 @@ except ImportError:  # pragma: no cover - install hint
 
 import sqlite3  # noqa: E402
 
-from approve_queued_action import approve_and_apply, dismiss_action  # noqa: E402
+from approve_queued_action import (  # noqa: E402
+    approve_alert_and_apply_all,
+    approve_and_apply,
+    dismiss_action,
+    dismiss_alert_and_cancel_actions,
+)
 from process_report_comments import (  # noqa: E402
     _resolve_latest_report_date,
     preview_thesis_edits,
@@ -2038,11 +2043,26 @@ def create_app(
         (and a urlencoded form POST never preflights): a cross-site Referer
         or ``Sec-Fetch-Site: cross-site`` gets 403, while no-Referer requests
         (address bar, curl) stay usable."""
+        # Two granularities. ``action_id`` settles ONE draft (the rail's hover
+        # ✓/✕, the CLI hint). ``alert_id`` settles the whole card — every
+        # pending action on the alert, then the alert itself — which is what
+        # the feed footer links use: an alert can carry many drafts (prod: 9 on
+        # FCX 28, 17 on NU 1), so a per-action link cleared one of N and left
+        # the card sitting in the queue looking like nothing happened.
+        raw_alert_id = request.values.get("alert_id", "")
         raw_id = request.values.get("action_id", "")
-        try:
-            action_id = int(raw_id)
-        except ValueError:
-            return ({"error": f"action_id must be an integer, got {raw_id!r}"}, 400)
+        alert_id: int | None = None
+        action_id: int | None = None
+        if raw_alert_id:
+            try:
+                alert_id = int(raw_alert_id)
+            except ValueError:
+                return ({"error": f"alert_id must be an integer, got {raw_alert_id!r}"}, 400)
+        else:
+            try:
+                action_id = int(raw_id)
+            except ValueError:
+                return ({"error": f"action_id must be an integer, got {raw_id!r}"}, 400)
         referer = request.headers.get("Referer", "")
         back = _referer_back_path(referer)
         if request.headers.get("Sec-Fetch-Site", "") == "cross-site" or (referer and back is None):
@@ -2050,7 +2070,13 @@ def create_app(
         dismissed = request.values.get("dismiss") in ("1", "true", "True")
         consequence = ""
         try:
-            if dismissed:
+            if alert_id is not None:
+                consequence = (
+                    dismiss_alert_and_cancel_actions(alert_id, db_path=db_path)
+                    if dismissed
+                    else approve_alert_and_apply_all(alert_id, db_path=db_path)
+                )
+            elif dismissed:
                 dismiss_action(action_id, db_path=db_path)
             else:
                 # approve_and_apply RETURNS the exact consequence string
@@ -2072,10 +2098,14 @@ def create_app(
             from dashboard.inbox import acted_span
 
             if dismissed:
+                # Undo is action-level only: cancelling ONE draft is reversible
+                # via /api/actions/<id>/uncancel, but an alert-level dismiss
+                # also transitioned the alert and has no single inverse — so it
+                # renders a terminal chip rather than an Undo that would half
+                # restore the card.
+                undo = f"/api/actions/{action_id}/uncancel" if action_id is not None else None
                 return Response(
-                    acted_span(
-                        "✕ dismissed", "cancelled", undo_url=f"/api/actions/{action_id}/uncancel"
-                    ),
+                    acted_span("✕ dismissed", "cancelled", undo_url=undo, detail=consequence),
                     mimetype="text/html",
                 )
             return Response(
@@ -2089,6 +2119,8 @@ def create_app(
             )
         if request.method == "POST":
             status = ACTION_STATUS_CANCELLED if dismissed else ACTION_STATUS_APPLIED
+            if alert_id is not None:
+                return {"ok": True, "alert_id": alert_id, "status": status}
             return {"ok": True, "action_id": action_id, "status": status}
         return redirect(back or "/feed", code=303)
 

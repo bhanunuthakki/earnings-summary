@@ -714,10 +714,28 @@ def _render_card_footer(out: StringIO, it: InboxItem, *, compact: bool) -> None:
         # Feed: the no-JS approve path (GET /approve), absolute so it resolves
         # the same on / and /feed. No CLI hint, no inline evidence drawer — that
         # detail is one ticker-click away in the holding view.
-        parts.append(f'<a class="ix-foot-act" href="/approve?action_id={pending.id}">approve</a>')
+        #
+        # An ALERT card settles at the alert level, not the action level. The
+        # per-action link cleared exactly one draft and left the alert 'pending'
+        # — and since the inbox fetches pending alerts unbounded, the card never
+        # moved while its fresh ledger entry rendered as a SECOND card. Alerts
+        # routinely carry several drafts (prod: 9 on FCX 28, 17 on NU 1), so the
+        # count rides the hover text: the owner should know one click is
+        # settling nine things. Standalone drafts have no parent to settle and
+        # keep the action-level target.
+        n_open = sum(1 for qa in it.actions if qa.status == ACTION_STATUS_PENDING)
+        if it.kind == "alert" and it.alert is not None:
+            target, noun = f"alert_id={it.alert.id}", f"{n_open} queued action(s)"
+        else:
+            target, noun = f"action_id={pending.id}", "this draft"
+        parts.append(
+            f'<a class="ix-foot-act" href="/approve?{target}" '
+            f'title="Apply {_esc(noun)} and clear this card">approve</a>'
+        )
         parts.append(
             '<a class="ix-foot-act ix-foot-dismiss" '
-            f'href="/approve?action_id={pending.id}&dismiss=1">dismiss</a>'
+            f'href="/approve?{target}&dismiss=1" '
+            f'title="Cancel {_esc(noun)} and clear this card">dismiss</a>'
         )
 
     article = _article_url(it)

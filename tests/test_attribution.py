@@ -417,6 +417,48 @@ def test_decompose_excludes_unpriced_names() -> None:
     assert any("no usable window value" in n for n in d.notes)
 
 
+def test_decompose_excludes_dust_position_blowup() -> None:
+    """A dust/stale capital base must not detonate the split.
+
+    The prod symptom this pins: one name carrying real dollar alpha on a $0.01
+    recorded start value made ``rate = a/value`` explode, rendering selection
+    −$38.59bn / sizing +$38.59bn on a five-orders-of-magnitude-smaller book —
+    while the additive identity (selection + sizing == total) held throughout,
+    because sizing is the residual. So this test pins MAGNITUDE, not the sum:
+    the dust name is excluded as data-implausible (named in the receipt note),
+    and the surviving split stays on the same scale as the alpha it explains.
+    """
+    d = decompose_alpha(_alpha([
+        _row("A", value_start=50_000, alpha=400),
+        _row("B", value_start=60_000, alpha=-250),
+        _row("DUST", value_start=0.01, alpha=150, value_end=0.01),
+    ]))  # fmt: skip
+    assert d is not None
+    assert d.n_names == 2  # DUST is out of the split
+    assert d.excluded_no_value == 0  # distinct exclusion class, separately noted
+    assert any("data-implausible" in n and "DUST" in n for n in d.notes)
+    # Magnitude sanity: no leg may exceed the book's own scale. Pre-fix,
+    # selection here would read ≈ ±$825m (mean_w 55k · rate 15000).
+    book = 110_000.0
+    assert d.selection_usd is not None and abs(d.selection_usd) < book
+    assert d.sizing_usd is not None and abs(d.sizing_usd) < book
+    assert d.total_alpha_usd == pytest.approx(150.0)  # 400 - 250; DUST's 150 out
+    assert d.selection_usd + d.sizing_usd == pytest.approx(d.total_alpha_usd)
+
+
+def test_decompose_big_but_plausible_winner_stays_in() -> None:
+    # A genuine multi-bagger (900% window alpha return) sits under the 1000%
+    # ceiling and must NOT be excluded — the gate is for data artifacts, not
+    # outlier skill.
+    d = decompose_alpha(_alpha([
+        _row("MOON", value_start=1_000, alpha=9_000),
+        _row("B", value_start=50_000, alpha=500),
+    ]))  # fmt: skip
+    assert d is not None
+    assert d.n_names == 2
+    assert not any("data-implausible" in n for n in d.notes)
+
+
 def test_decompose_value_at_end_fallback_for_new_position() -> None:
     # Opened inside the window (start 0) → end value is the capital-at-risk proxy.
     d = decompose_alpha(_alpha([
