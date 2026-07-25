@@ -1454,6 +1454,14 @@ def _merge_v1_envelope(out: PortfolioAnalytics, metas: list[V1Meta]) -> None:
 
 _V1_WIDE_HISTORY_START = "2000-01-01"
 
+# Client-side envelope code (not a provider warning): the performance series
+# carried no ``earliest_observed_date``, so the observed-window rebase could not
+# run and the returned series may include the provider's MODELED walk-back. Read
+# it as "these returns may not be observation-based" — a log line alone would
+# not reach a rendering surface, and PRD §13.3 forbids presenting a partial or
+# reconstructed read as current.
+_UNMARKED_OBSERVATION_CODE = "performance_observation_start_unmarked"
+
 
 def _get_performance_v1_observed(
     client: TrackerV1Client,
@@ -1501,8 +1509,20 @@ def _get_performance_v1_observed(
         return probe
     observed = probe.data.series.earliest_observed_date
     if observed is None:
-        # Provider declined to mark the observation start; the probe window is
-        # the only honest answer available. Surfaced, not silently narrowed.
+        # Provider declined to mark the observation start, so there is nothing
+        # to rebase onto and the probe window stands. That window is the
+        # trailing-365d default, which INCLUDES the modeled walk-back — so this
+        # branch hands back reconstructed returns dressed as ordinary ones. The
+        # field is Optional on the v1 model, so a provider-side rename or
+        # dropped field lands here and validates cleanly: log it and let the
+        # caller mark it (see _UNMARKED_OBSERVATION_CODE) rather than degrading
+        # in silence.
+        log.info(
+            {
+                "event": "tracker_v1_performance_observation_start_unmarked",
+                "probe_window_start": probe.data.series.start_date.isoformat(),
+            }
+        )
         return probe
     if observed > probe.data.series.start_date:
         return client.get_performance(start_date=observed.isoformat(), end_date=end_date)
@@ -1560,6 +1580,7 @@ def _fetch_portfolio_analytics_v1(
         if meta is not None:
             metas.append(meta)
 
+    observation_unmarked = False
     if want("performance"):
         perf = _get_performance_v1_observed(
             client, start_date=start_date, end_date=end_date, include_backfill=include_backfill
@@ -1567,6 +1588,14 @@ def _fetch_portfolio_analytics_v1(
         if perf.available and perf.data is not None:
             out.performance = _parse_performance(_dump_model(perf.data.series))
             note_meta(perf.meta)
+            # Only meaningful when the caller took the rebase path: an explicit
+            # window or include_backfill is the caller OWNING the window, not
+            # the client failing to establish one.
+            observation_unmarked = (
+                start_date is None
+                and not include_backfill
+                and perf.data.series.earliest_observed_date is None
+            )
         else:
             out.errors["performance"] = f"v1: {perf.error}"
     if want("position_alpha"):
@@ -1624,6 +1653,10 @@ def _fetch_portfolio_analytics_v1(
         )
     )
     _merge_v1_envelope(out, metas)
+    # Appended AFTER the merge, which assigns envelope_warnings wholesale from
+    # provider metas and would otherwise drop a client-side code.
+    if observation_unmarked and _UNMARKED_OBSERVATION_CODE not in out.envelope_warnings:
+        out.envelope_warnings.append(_UNMARKED_OBSERVATION_CODE)
     return out
 
 

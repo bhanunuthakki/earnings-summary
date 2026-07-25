@@ -576,3 +576,49 @@ def test_rebase_basis_unknown_when_provider_omits_marker() -> None:
     )
     assert unmarked.earliest_observed_date is None
     assert _rebase_basis(unmarked) == "unknown"
+
+
+def test_unmarked_observation_raises_envelope_warning(
+    v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When the provider omits earliest_observed_date the rebase cannot run, so
+    the returned series still carries the modeled walk-back. That must reach the
+    CALLER as an envelope code — a log line alone never reaches a rendering
+    surface, and PRD §13.3 forbids presenting a reconstructed read as current."""
+    router = _PerfRouter(earliest_observed=None)
+    router.install(monkeypatch)
+
+    analytics = tc.fetch_portfolio_analytics(only={"performance"})
+
+    assert router.starts == [None]  # probe only; nothing to rebase onto
+    assert tc._UNMARKED_OBSERVATION_CODE in analytics.envelope_warnings  # pyright: ignore[reportPrivateUsage]
+
+
+def test_marked_observation_adds_no_warning(
+    v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The normal rebase path must stay quiet — the code is a real signal, not
+    noise on every fetch."""
+    router = _PerfRouter(earliest_observed="2026-06-23")
+    router.install(monkeypatch)
+
+    analytics = tc.fetch_portfolio_analytics(only={"performance"})
+
+    assert tc._UNMARKED_OBSERVATION_CODE not in analytics.envelope_warnings  # pyright: ignore[reportPrivateUsage]
+
+
+def test_caller_owned_window_never_warns_about_observation(
+    v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit window or include_backfill is the caller OWNING the window,
+    not the client failing to establish one — no warning in either case, even
+    with the marker absent."""
+    router = _PerfRouter(earliest_observed=None)
+    router.install(monkeypatch)
+
+    explicit = tc.fetch_portfolio_analytics(start_date="2025-09-01", only={"performance"})
+    backfilled = tc.fetch_portfolio_analytics(include_backfill=True, only={"performance"})
+
+    code = tc._UNMARKED_OBSERVATION_CODE  # pyright: ignore[reportPrivateUsage]
+    assert code not in explicit.envelope_warnings
+    assert code not in backfilled.envelope_warnings
