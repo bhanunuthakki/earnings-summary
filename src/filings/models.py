@@ -246,8 +246,15 @@ class FilingSection(BaseModel):
     derived rather than caller-supplied (see ``build``) so every writer in the
     system computes them identically — a stem computed two ways is a silent
     cross-period join failure.
+
+    ``id`` is ``None`` for a freshly-built, not-yet-persisted instance and is
+    populated only when rehydrated from a DB row (``store._rows_to_sections``).
+    It exists so a consumer that needs the row identity — ``filing_section_items
+    .section_id`` is a code-validated pointer to exactly this value, per the
+    repo's FK-poisoning invariant — never has to re-query for it.
     """
 
+    id: int | None = None
     ticker: str
     source: SectionSource
     source_ref: str = Field(min_length=1, max_length=255)

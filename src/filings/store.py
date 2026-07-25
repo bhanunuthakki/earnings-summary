@@ -304,6 +304,7 @@ def _rows_to_sections(rows: Iterable[sqlite3.Row]) -> list[FilingSection]:
         try:
             out.append(
                 FilingSection(
+                    id=row["id"] if "id" in row.keys() else None,  # noqa: SIM118
                     ticker=row["ticker"],
                     source=SectionSource(row["source"]),
                     source_ref=row["source_ref"],
