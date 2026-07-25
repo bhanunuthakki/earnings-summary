@@ -753,6 +753,57 @@ def load_investment_decision_card_corpus(repo_root: Path) -> list[AuditItem]:
     return out
 
 
+def load_senior_partner_brief_corpus(repo_root: Path) -> list[AuditItem]:
+    """Every current (non-superseded) ``senior_partner_brief`` artifact,
+    newest first (P2.2, personal_investment_partner_prd.md §9.1/§10.5).
+    Graded content is the artifact's ``content_md`` — scope='portfolio', so
+    ``ticker`` is always None (mirrors the Incremental Dollar Recommendation
+    loader). Missing DB/table -> empty corpus."""
+    out: list[AuditItem] = []
+    db_path = repo_root / "data" / "portfolio.db"
+    if not db_path.exists():
+        return out
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5.0)
+    except sqlite3.Error as exc:
+        log.warning({"event": "eval_corpus_db_open_failed", "error": str(exc)})
+        return out
+    try:
+        present = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_artifacts'"
+        ).fetchone()
+        if present is None:
+            log.info({"event": "eval_corpus_no_llm_artifacts_table"})
+            return out
+        rows = conn.execute(
+            """
+            SELECT id, content_md, generated_at
+            FROM llm_artifacts
+            WHERE purpose = 'senior_partner_brief'
+              AND scope = 'portfolio'
+              AND superseded_by_id IS NULL
+              AND content_md IS NOT NULL AND content_md != ''
+            ORDER BY id DESC
+            """
+        ).fetchall()
+    except sqlite3.Error as exc:
+        log.warning({"event": "eval_corpus_senior_partner_brief_read_failed", "error": str(exc)})
+        return out
+    finally:
+        conn.close()
+    for artifact_id, content_md, generated_at in rows:
+        out.append(
+            AuditItem(
+                item_id=f"artifact:{artifact_id}",
+                label=f"senior_partner_brief/artifact:{artifact_id}",
+                ticker=None,
+                content=_clip(str(content_md)),
+                produced_at=_parse_naive_utc(generated_at),
+            )
+        )
+    return out
+
+
 # purpose -> loader. The rubric runner resolves its corpus here; adding an
 # audit purpose = one rubric file + one loader + one entry (+ registry/model
 # wiring asserted by tests).
@@ -762,6 +813,7 @@ CORPUS_LOADERS: dict[str, CorpusLoader] = {
     "advisor_next_dollar": load_advisor_next_dollar_corpus,
     "incremental_dollar_recommendation": load_incremental_dollar_recommendation_corpus,
     "investment_decision_card": load_investment_decision_card_corpus,
+    "senior_partner_brief": load_senior_partner_brief_corpus,
     "ask_advisory_answer": load_ask_advisory_answer_corpus,
     "calibration_coach": load_calibration_coach_corpus,
     "peer_selection": load_peer_selection_corpus,

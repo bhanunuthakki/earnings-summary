@@ -534,7 +534,12 @@ def test_run_governor_never_resurrects_a_retired_profile_fact(
     _root, db = repo
     fid = _seed_life_event_fact(db, event_date="2026-08-01")
     first = run_governor(db, send_fn=lambda pid, m: False, now=_NOW)
-    assert first["send_failed"] == 1  # attempted while still affirmed, delivery failed
+    # P2.2: life_event_checkpoint is brief-routed, so the first run records
+    # 'routed_to_brief' rather than attempting (and failing) a Telegram send.
+    # The guarantee under test is unchanged and is asserted below: once the
+    # fact is retired it is not re-COLLECTED, so nothing is revisited.
+    assert first["routed_to_brief"] == 1
+    assert first["send_failed"] == 0
 
     conn = sqlite3.connect(str(db))
     try:
@@ -555,8 +560,21 @@ def test_run_governor_sends_life_event_checkpoint_and_never_repeats(
     _seed_life_event_fact(db, event_date="2026-08-01")
     sent: list[Moment] = []
     tally = run_governor(db, send_fn=lambda pid, m: sent.append(m) or True, now=_NOW)
-    assert tally["sent"] == 1
-    assert sent[0].class_ == "life_event_checkpoint"
+    # P2.2 (PRD §9.1): life_event_checkpoint is one of BRIEF_ROUTED_CLASSES —
+    # the Senior Partner Brief owns its delivery now, so it lands
+    # 'routed_to_brief' and send_fn is never called. Detection, collection,
+    # and the once-forever guarantee below are unchanged.
+    assert tally["routed_to_brief"] == 1
+    assert tally["sent"] == 0
+    assert sent == []
+    conn = sqlite3.connect(str(db))
+    try:
+        row = conn.execute(
+            "SELECT class_, status FROM coach_pings ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row == ("life_event_checkpoint", "routed_to_brief")
     # Once-forever: a second run sees nothing new for this class.
     again = run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
     assert again["seen"] == 0
@@ -573,7 +591,14 @@ def test_capacity_breach_class_honors_the_shared_mute_discipline(
     _seed_human_capital_fact(db, cap_pct=20.0)
     _write_weights(root, {"META": 0.15, "GOOGL": 0.10})
     tally = run_governor(db, send_fn=lambda pid, m: True, now=_NOW, repo_root=root)
-    assert tally["sent"] == 1
+    # P2.2: capacity_breach is brief-routed. The mute discipline this test
+    # pins is UNCHANGED and is the point — record_dismissal still accepts the
+    # ping (its status guard admits 'routed_to_brief'/'acted' precisely so a
+    # brief-routed class stays mutable by the owner), and MUTE_AFTER is
+    # untouched. A class losing its Telegram ping must not lose the owner's
+    # ability to silence it.
+    assert tally["routed_to_brief"] == 1
+    assert tally["sent"] == 0
 
     conn = sqlite3.connect(str(db))
     try:

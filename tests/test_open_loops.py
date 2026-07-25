@@ -123,6 +123,25 @@ def test_digest_ping_line(db_path: Path) -> None:
     assert "Coach digest" in html
 
 
+def test_routed_to_brief_line(db_path: Path) -> None:
+    """P2.2: a coach_pings row the governor routed to the Senior Partner
+    Brief (status='routed_to_brief') gets its own debt line — distinct from
+    'Coach digest', which never sees these rows anymore."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO coach_pings (class_, key, ticker, body, status, source_ref, "
+            "created_at, updated_at) VALUES ('profile_drift', 'fact:1', NULL, 'b', "
+            "'routed_to_brief', 'fact:1', '2026-07-01T08:00:00', '2026-07-01T08:00:00')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    html = render_open_loops_band(db_path)
+    assert "Routed to weekly brief" in html
+    assert "Coach digest" not in html
+
+
 def test_proposed_tenets_flag_gated(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from synthesis.tenets import record_tenet
 

@@ -175,6 +175,18 @@ PACKS: tuple[PackSpec, ...] = (
         "in-time context — a NEW deployable plan for a different amount requires the "
         "recommendation action core, not this pack alone",
     ),
+    PackSpec(
+        "brief",
+        "Senior Partner Brief",
+        "/mobile/inbox",
+        900,
+        "the latest weekly Senior Partner Brief (P2.2, personal_investment_partner_prd.md "
+        "§9.1) — what changed that matters, the highest-priority portfolio decision, "
+        "best current use of incremental capital, an assumption worth challenging, and a "
+        'prior Owner Decision worth revisiting — for "what does this week\'s brief say", '
+        '"what should I be paying attention to", "what changed since last week", or any '
+        "question about the standing weekly synthesis rather than a fresh on-demand read",
+    ),
 )
 
 PACK_KEYS: tuple[str, ...] = tuple(p.key for p in PACKS)
@@ -845,6 +857,72 @@ def _allocation_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[st
     return _item(spec, _join_capped(lines, spec.char_budget))
 
 
+# ---------------------------------------------------------------------------
+# brief — the latest Senior Partner Brief artifact (P2.2)
+# ---------------------------------------------------------------------------
+
+# Mirrors advisor.senior_partner_brief.PURPOSE as a local literal — same
+# reasoning as _ALLOCATION_PURPOSE above (keep this lightweight module out of
+# the heavier llm.cli/llm.structured/llm_budget import chain).
+_BRIEF_PURPOSE = "senior_partner_brief"
+
+
+def _brief_section_line(label: str, item_raw: object) -> str | None:
+    if not isinstance(item_raw, dict):
+        return None
+    item = cast("dict[str, object]", item_raw)
+    title = str(item.get("title") or "")
+    if not title:
+        return None
+    disposition = str(item.get("disposition") or "")
+    ticker = item.get("ticker")
+    ticker_note = f" ({ticker})" if ticker else ""
+    return f"{label}{ticker_note} [{disposition}]: {title}"
+
+
+def _brief_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[str, object] | None:
+    """The latest weekly Senior Partner Brief, summarized section-by-section
+    with citations to its own ``source_refs`` — the same artifact the Today
+    doorway and Telegram builder read (PRD §9.1 surface parity: one artifact,
+    several surfaces)."""
+    del focus  # portfolio-wide by nature, like the allocation pack
+    import llm_artifact_store
+
+    try:
+        artifact = llm_artifact_store.read_current(
+            ticker=None, purpose=_BRIEF_PURPOSE, scope="portfolio", db_path=db_path
+        )
+    except Exception:
+        return None
+    if artifact is None or not isinstance(artifact.content_json, dict):
+        return _item(spec, "no Senior Partner Brief has been composed yet")
+
+    content = cast("dict[str, object]", artifact.content_json)
+    mode = str(content.get("selection_mode") or "llm")
+    lines: list[str] = [
+        f"artifact #{artifact.id}, as of {_day(artifact.generated_at)}, mode={mode}"
+    ]
+    what_changed = content.get("what_changed")
+    if isinstance(what_changed, list):
+        for raw in cast("list[object]", what_changed)[:5]:
+            line = _brief_section_line("what changed", raw)
+            if line:
+                lines.append(line)
+    for label, key in (
+        ("highest-priority decision", "highest_priority_decision"),
+        ("best use of capital", "capital_use"),
+        ("worth challenging", "assumption_challenge"),
+        ("worth revisiting", "decision_revisit"),
+    ):
+        line = _brief_section_line(label, content.get(key))
+        if line:
+            lines.append(line)
+    if content.get("is_active_week"):
+        explanation = str(content.get("active_week_explanation") or "")
+        lines.append(f"active week: {explanation}" if explanation else "active week")
+    return _item(spec, _join_capped(lines, spec.char_budget))
+
+
 _LOADERS: dict[str, Callable[[PackSpec, Path, list[str]], dict[str, object] | None]] = {
     "holdings": _holdings_item,
     "conviction": _conviction_item,
@@ -855,6 +933,7 @@ _LOADERS: dict[str, Callable[[PackSpec, Path, list[str]], dict[str, object] | No
     "performance": _performance_item,
     "macro": _macro_item,
     "allocation": _allocation_item,
+    "brief": _brief_item,
 }
 
 

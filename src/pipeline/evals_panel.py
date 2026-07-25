@@ -63,6 +63,9 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
     # Investment Decision Card (P1.1) — in sync with run_llm_evals.AUDIT_PURPOSES
     # + rubric_judge.AUDIT_SPECS.
     "investment_decision_card",
+    # Senior Partner Brief (P2.2) — in sync with run_llm_evals.AUDIT_PURPOSES
+    # + rubric_judge.AUDIT_SPECS.
+    "senior_partner_brief",
     "ask_advisory_answer",
     # Calibration coach scorecard audit (close_the_loops L8) — keeps this run
     # bar in sync with run_llm_evals.AUDIT_PURPOSES.

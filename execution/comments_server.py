@@ -1145,6 +1145,17 @@ def create_app(
         from pipeline.open_loops import render_open_loops_band
 
         open_loops_html = render_open_loops_band(db_path)
+        # P2.2 (PRD §9.1): the Senior Partner Brief LEADS this composition —
+        # the brief owns delivery for the four governor-routed moment classes
+        # (see research.governor.BRIEF_ROUTED_CLASSES), so its doorway sits
+        # above the ritual-debt band rather than beside it. Isolated like its
+        # siblings; renders "" (no card) when nothing has been composed yet.
+        try:
+            from pipeline.senior_partner_brief_panel import render_brief_today_card
+
+            open_loops_html = render_brief_today_card(db_path) + open_loops_html
+        except Exception:
+            pass
         # The Incremental Dollar Recommendation's compact Today doorway
         # (P0.4b, PRD §7.4 surface-parity exit gate): quiet when there is no
         # current recommendation, isolated so a read failure can never break
@@ -3459,6 +3470,30 @@ def create_app(
         except DraftActionError as exc:
             return ({"error": str(exc)}, 400)
         return result
+
+    @app.route("/api/senior-partner-brief/dismiss-item/<int:ping_id>", methods=["POST", "OPTIONS"])
+    def senior_partner_brief_dismiss_item_api(ping_id: int):
+        """Dismiss ONE governor-routed moment (calibration_finding/
+        capacity_breach/life_event_checkpoint/profile_drift) from the brief —
+        the SAME action core the mobile Inbox buttons and the Telegram
+        ``spb:dismiss_item:<ping_id>`` callback call
+        (``advisor.senior_partner_brief.dismiss_routed_moment``, a thin
+        wrapper over ``research.governor.record_dismissal``). Consequence-
+        first receipt: the response names the muted class when this was the
+        3rd consecutive dismissal, so the owner knows the class just went
+        silent rather than discovering it later."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from advisor.senior_partner_brief import dismiss_routed_moment
+
+        recorded, muted_class = dismiss_routed_moment(ping_id, db_path=db_path)
+        if not recorded:
+            return ({"error": f"no dismissable ping for id={ping_id}"}, 404)
+        return {
+            "dismissed": True,
+            "ping_id": ping_id,
+            "muted_class": muted_class,
+        }
 
     @app.route("/mobile/inbox", methods=["GET"])
     def mobile_inbox_page():

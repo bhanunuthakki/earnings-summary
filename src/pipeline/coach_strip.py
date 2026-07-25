@@ -39,10 +39,15 @@ _CLASS_LABELS: dict[str, str] = {
 
 
 def _rows(db_path: Path | str | None, *, now: datetime | None = None) -> list[tuple[str, str, str]]:
-    """(state, class label, body) for today's sent pings + the digest queue,
-    newest first, capped at ``_MAX_ROWS``. Sent-today first: those are the
-    items Telegram pushed this morning — the strip's whole contract is
-    showing the same thing."""
+    """(state, class label, body) for today's sent pings + the digest queue +
+    the brief-routed queue, newest first within each state, capped at
+    ``_MAX_ROWS``. Sent-today first: those are the items Telegram pushed this
+    morning — the strip's whole contract is showing the same thing. P2.2: a
+    calibration_finding/capacity_breach/life_event_checkpoint/profile_drift
+    moment never reaches 'sent' or 'digest' anymore (governor.
+    BRIEF_ROUTED_CLASSES) — without surfacing 'routed_to_brief' here too,
+    those four classes would silently vanish from this band the moment the
+    P2.2 governor adapter landed, even though the owner used to see them."""
     stamp = now or now_naive_utc()
     day_start = stamp.date().isoformat()
     conn = open_conn(db_path)
@@ -62,6 +67,16 @@ def _rows(db_path: Path | str | None, *, now: datetime | None = None) -> list[tu
             if room > 0
             else []
         )
+        room -= len(digest)
+        routed = (
+            conn.execute(
+                "SELECT class_, body FROM coach_pings "
+                "WHERE status = 'routed_to_brief' ORDER BY id DESC LIMIT ?",
+                (room,),
+            ).fetchall()
+            if room > 0
+            else []
+        )
     finally:
         conn.close()
     out: list[tuple[str, str, str]] = []
@@ -69,6 +84,8 @@ def _rows(db_path: Path | str | None, *, now: datetime | None = None) -> list[tu
         out.append(("sent", _CLASS_LABELS.get(str(r[0]), str(r[0])), str(r[1])))
     for r in digest:
         out.append(("digest", _CLASS_LABELS.get(str(r[0]), str(r[0])), str(r[1])))
+    for r in routed:
+        out.append(("routed_to_brief", _CLASS_LABELS.get(str(r[0]), str(r[0])), str(r[1])))
     return out
 
 
@@ -85,7 +102,12 @@ def render_coach_strip(db_path: Path | str | None = None, *, now: datetime | Non
     lines: list[str] = []
     for state, label, body in rows:
         tone = "" if state == "sent" else " k-chip-warn"
-        state_note = "" if state == "sent" else " (queued)"
+        if state == "sent":
+            state_note = ""
+        elif state == "routed_to_brief":
+            state_note = " (in weekly brief)"
+        else:
+            state_note = " (queued)"
         lines.append(
             '<div class="cc-ol-line">'
             f'<span class="k-chip{tone}">{escape(label)}</span> '
