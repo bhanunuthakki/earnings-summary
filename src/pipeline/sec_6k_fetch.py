@@ -43,9 +43,12 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from log_redact import redact as _redact
 from pipeline.sec_xbrl import CIK_MAP
+from sec_identity import sec_user_agent
 from table_extractors.period_axis import NominalQuarter, expected_period_ends
 
-USER_AGENT = "EarningsSummary/1.0 (research@example.com)"
+#: Declared to the SEC via ``sec_identity`` so this project has ONE contact,
+#: not one per module. Override with the EDGAR_USER_AGENT env var.
+USER_AGENT = sec_user_agent()
 _SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 _ARCHIVES_BASE = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{accn_nodash}/"
 _TIMEOUT = (10, 30)

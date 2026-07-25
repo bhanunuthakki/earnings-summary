@@ -44,13 +44,16 @@ from pathlib import Path
 from typing import cast
 
 from db_paths import resolve_db_path
+from sec_identity import sec_user_agent
 
 log = logging.getLogger(__name__)
 
 # SEC EDGAR submissions API requires a User-Agent header per their fair-use policy.
 # Set yours via env var EDGAR_USER_AGENT (recommended). Default falls back to a
 # generic agent — works but please be a polite citizen and set your own.
-SEC_USER_AGENT_DEFAULT = "earnings-summary research/0.1 (analyst@example.com)"
+#: Declared to the SEC via ``sec_identity`` so this project has ONE contact,
+#: not one per module. Override with the EDGAR_USER_AGENT env var.
+SEC_USER_AGENT_DEFAULT = sec_user_agent()
 
 
 # ---------------------------------------------------------------------------

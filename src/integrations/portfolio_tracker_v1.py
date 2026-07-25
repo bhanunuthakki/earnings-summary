@@ -1202,9 +1202,7 @@ class TrackerV1Client:
         cursor: str | None = None,
     ) -> V1Fetch[TransactionsV1Result]:
         """One page. Default window trailing 730 days per the contract."""
-        params = _query_params(
-            start_date=start_date, end_date=end_date, limit=limit, cursor=cursor
-        )
+        params = _query_params(start_date=start_date, end_date=end_date, limit=limit, cursor=cursor)
         return self._get(
             "/api/v1/transactions", TransactionsV1Result, params=params, timeout=self._read_timeout
         )
@@ -1276,9 +1274,7 @@ class TrackerV1Client:
         cursor: str | None = None,
     ) -> V1Fetch[PositionSnapshotsV1Result]:
         """One page. Default window trailing 90 days per the contract."""
-        params = _query_params(
-            start_date=start_date, end_date=end_date, limit=limit, cursor=cursor
-        )
+        params = _query_params(start_date=start_date, end_date=end_date, limit=limit, cursor=cursor)
         return self._get(
             "/api/v1/position-snapshots",
             PositionSnapshotsV1Result,
@@ -1371,7 +1367,10 @@ class TrackerV1Client:
             reserve_amount=reserve_amount,
         )
         return self._get(
-            "/api/v1/analytics/risk", RiskV1Result, params=params, timeout=self._analytics_read_timeout
+            "/api/v1/analytics/risk",
+            RiskV1Result,
+            params=params,
+            timeout=self._analytics_read_timeout,
         )
 
     def get_exit_quality(

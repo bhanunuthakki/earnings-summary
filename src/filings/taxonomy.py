@@ -102,12 +102,21 @@ def _item_patterns(number: str, title_alternatives: str) -> tuple[re.Pattern[str
     in by the caller (e.g. ``r"1a"`` vs ``r"1(?![0-9abc])"``) so "Item 1" never
     swallows "Item 1A".
     """
-    sep = r"\s*[.:\-–—]?\s*"  # noqa: RUF001 — EN/EM dash are real SEC item separators
+    # A filer may answer two adjacent items under ONE heading, and writes it as
+    # a plural with a bridge: FCX's 10-K heads its MD&A "Items 7. and 7A.
+    # Management's Discussion and Analysis…" and its business section "Items 1.
+    # and 2. Business and Properties". Without the plural and the bridge, the
+    # title keyword is unreachable past the second item number and the heading
+    # matches nothing — FCX had no `mdna` section at all for this reason. The
+    # bridge is optional and bounded to one item designator, so an ordinary
+    # "Item 7. Management's Discussion" is unaffected.
+    bridge = r"(?:and\s+\d{1,2}\s*[a-c]?\s*[.:\-–—]?\s*)?"  # noqa: RUF001 — EN/EM dash are real SEC item separators
+    sep = rf"\s*[.:\-–—]?\s*{bridge}"  # noqa: RUF001 — EN/EM dash are real SEC item separators
     title = re.compile(
-        rf"item\s*{number}{sep}(?:{title_alternatives})",
+        rf"items?\s*{number}{sep}(?:{title_alternatives})",
         re.IGNORECASE,
     )
-    bare = re.compile(rf"^[ \t]*item\s*{number}[ \t.:\-–—]*$", re.IGNORECASE | re.MULTILINE)  # noqa: RUF001 — EN/EM dash are real SEC separators
+    bare = re.compile(rf"^[ \t]*items?\s*{number}[ \t.:\-–—]*$", re.IGNORECASE | re.MULTILINE)  # noqa: RUF001 — EN/EM dash are real SEC separators
     return title, bare
 
 

@@ -26,6 +26,7 @@ from models.artifacts import (
     parse_tmp_artifact,
     parse_transcript_processed,
 )
+from sec_identity import sec_user_agent
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
@@ -288,7 +289,9 @@ def _fmp_files_exist(ticker: str) -> bool:
 # ---------------------------------------------------------------------------
 
 _SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
-_SEC_USER_AGENT = "RetailInvestorApp/1.0 (contact@example.com)"
+#: Declared to the SEC via ``sec_identity`` so this project has ONE contact,
+#: not one per module. Override with the EDGAR_USER_AGENT env var.
+_SEC_USER_AGENT = sec_user_agent()
 _DDG_HTML_URL = "https://html.duckduckgo.com/html/"
 _DDG_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 _DDG_RESULT_RX = re.compile(r'class="result__url" href="//duckduckgo\.com/l/\?uddg=([^"&]+)')

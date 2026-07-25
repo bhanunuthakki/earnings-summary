@@ -47,9 +47,12 @@ from typing import cast
 
 from models.facts import FactLocator, LegacyEscapeHatch
 from pipeline.locators import html_span_locator, locate_char_span, verify_quote_in_source
+from sec_identity import sec_user_agent
 
 # SEC requires a descriptive User-Agent on every request.
-SEC_USER_AGENT = "earnings-summary provenance-override (contact: bhanunuthakthi@gmail.com)"
+#: Declared to the SEC via ``sec_identity`` so this project has ONE contact,
+#: not one per module. Override with the EDGAR_USER_AGENT env var.
+SEC_USER_AGENT = sec_user_agent()
 
 # LLM purpose key — register the cheapest at-parity model in llm.cli.LLM_MODELS.
 EIGHT_K_PURPOSE = "extract_8k_overrides"

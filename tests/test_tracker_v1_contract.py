@@ -574,7 +574,13 @@ def test_telemetry_log_has_no_payload_contents(
 
     log_text = "\n".join(record.getMessage() for record in caplog.records)
     # Fixture values that must never appear in a log line.
-    for leaked in ("Example Brokerage", "Example Roth IRA", "Example HSA", "6800.000000", "12000.000000"):
+    for leaked in (
+        "Example Brokerage",
+        "Example Roth IRA",
+        "Example HSA",
+        "6800.000000",
+        "12000.000000",
+    ):
         assert leaked not in log_text
     # The allowed telemetry fields ARE expected to be present.
     assert "/api/v1/accounts" in log_text
