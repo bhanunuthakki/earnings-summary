@@ -1,120 +1,107 @@
-# Disclosure-Change Program — Keep / Cut Ruling
+# Disclosure-Change Program — What We Track and Why
 
-Ruled 2026-07-25 by the owner, after the P0-P5 build and the event study.
-Supersedes the priority ordering in `disclosure_change_build_stack.md` — that
-document describes what was BUILT; this one describes what is MAINTAINED and why.
+Ruled 2026-07-25 by the owner, after the P0-P5 build. Supersedes the priority
+ordering in `disclosure_change_build_stack.md` — that document records what was
+BUILT; this one records what is MAINTAINED and on what evidence.
 
 ## The ruling in one line
 
-**On THIS 44-ticker book, this is deep-research tooling.** Keep the detection
-and reading layer. Do not attempt to validate return prediction here.
+**Track the signals robust research supports, and weigh them probabilistically
+alongside everything else.** In-sample validation on this book is NOT the gate
+and never was.
 
-## What this ruling does NOT say
+## The standard of evidence — read this first
 
-It does **not** say narrative-change signals lack predictive power. The
-academic literature establishes the opposite, on wide universes:
+An earlier draft ran an event study on the 44-ticker book, found it
+underpowered, and concluded the program was "research tooling, not alpha."
+**That reasoning was wrong at the root.** It treated failure to replicate in a
+44-name owned basket as evidence against the signal class, when it was only
+evidence that the sample cannot test it. No investment process holds its inputs
+to the standard of re-deriving published effects in its own portfolio.
 
-| Finding | Source | Universe |
+The correct standard: **robust external research is the evidence.** If a
+replicated, peer-reviewed finding says a disclosure or tone change carries
+predictive information, then surfacing that change is a justified input —
+because investing is probabilistic and inputs are weighed, not proven. The
+pipeline's job is to make the signal visible, honest and receipted; not to
+independently re-derive an effect on a sample too small to do it.
+
+## The evidence base
+
+| Finding | Source | Setting |
 |---|---|---|
-| Filing-language change predicts returns; short changers / long non-changers up to **188bps/month** | Cohen, Malloy & Nguyen, *JF* 2020 | entire US filing universe, ~20 yrs |
-| CFO deceptive-language model earns **-4% to -11%** annualized 4-factor alpha | Larcker & Zakolyukina, *JAR* 2012 | large/profitable US firms |
-| Q&A non-answers predict analyst downgrades and **subsequent-quarter abnormal returns** | Gow, Larcker & Zakolyukina, *JAR* 2021 | broad panel |
-| Risk-factor updates (esp. >100-word growth) predict **lower abnormal returns** and future negative earnings shocks | Filzen, *Acc. Horizons* 2015 | broad 10-Q panel |
-| Abnormal tone predicts negative future earnings and a **delayed negative reaction** over 1-2 quarters | Huang, Teoh & Zhang, *TAR* 2014 | broad panel |
+| Filing-language change predicts returns; short changers / long non-changers **up to 188bps/month** | Cohen, Malloy & Nguyen, *JF* 2020 | entire US filing universe, ~20 yrs |
+| CFO deceptive-language model earns **-4% to -11%** annualized 4-factor alpha (CEO language: nothing) | Larcker & Zakolyukina, *JAR* 2012 | large US firms |
+| Q&A non-answers predict analyst downgrades and **subsequent-quarter abnormal returns**; ~11% base rate, stable across time and industry | Gow, Larcker & Zakolyukina, *JAR* 2021 | broad panel |
+| Risk-factor updates — especially **>100-word QoQ growth** — predict lower abnormal returns and future negative earnings shocks | Filzen, *Acc. Horizons* 2015 | broad 10-Q panel |
+| **Abnormal** tone (residualized on fundamentals) predicts negative future earnings and a delayed negative reaction over 1-2 quarters | Huang, Teoh & Zhang, *TAR* 2014 | broad panel |
 | Expected-but-missing disclosure: **-41bps** around the next earnings announcement | Zhou & Zhou, *JAR* 2020 | broad panel |
 | Stopping quarterly EPS guidance: **-4.8%** 3-day CAR | Chen, Matsumoto & Rajgopal, *JAE* 2011 | 96 stoppers |
+| Individual risk-factor **additions AND removals** both move the variance risk premium | Lyle, Riedl & Siano, *TAR* 2023 | broad panel |
 
-The signal class is real and replicated. Caveats that travel with it: post-
-publication decay (McLean & Pontiff, *JF* 2016, ~50-58%), a formal critique of
-Lazy Prices by Kent Daniel, and documented firm adaptation to machine readers
-(Cao et al., NBER 27950).
+Caveats that travel with all of it, and should temper the weight — not the
+decision to track: post-publication decay of ~50-58% (McLean & Pontiff, *JF*
+2016), a formal critique of Lazy Prices by Kent Daniel, and documented firm
+adaptation to machine readers (Cao et al., NBER 27950).
 
-## Why return prediction cannot be VALIDATED on this book
+Two structural properties shape what we build:
 
-Not because the detectors are weak, and not because the literature is wrong —
-because of the arithmetic of a 44-name universe.
+* **The signal is DRIFT, not announcement.** Cohen/Malloy/Nguyen found NO
+  abnormal return around the filing date; it accrues over subsequent months.
+  These are not day-of alerts — they stay relevant for weeks.
+* **It localizes to SPECIFIC sections** (Item 1A, litigation, executive-team
+  language), not whole documents. This is why item-level is the right
+  granularity and whole-document length is the weakest measure.
 
-1. **The cross-section is too small, structurally.** Cohen/Malloy/Nguyen
-   established Lazy Prices on the entire universe of US filings over ~20 years.
-   Cross-sectional anomalies are estimated by ranking thousands of firms against
-   each other each period. This book has **44 tickers**. There is no
-   cross-section to rank against, and adding periods (10-Qs) multiplies periods
-   without widening it.
-2. **Events cluster hard.** 5,954 detected events collapsed to **at most 109
-   independent (ticker, arrival-date) draws**, decaying to 77 at a six-month
-   horizon. Sub-buckets ran 20-26. Raw event counts massively overstate sample.
-3. **The study measured its own invalidity.** "Drift" here = cumulative
-   abnormal return vs SPY over a post-filing window. Events classified
-   `substantive` drifted +8.8% at six months; `boilerplate_update` drifted
-   +8.7%. If disclosure CONTENT drove returns those could not be identical —
-   so the drift is a universe-composition effect (the tracked names rose in
-   2024-2026), not a disclosure effect. After controlling for earnings
-   surprise every bucket collapsed to ~0.
+## KEEP — tracked as literature-supported research inputs
 
-   **These numbers are a diagnostic of the study, not evidence about the
-   signal class.** Do not cite them as if they refute the literature above;
-   they only show this book cannot test it.
-4. **No multiple-comparison correction was possible at this n.** 108 cells at
-   nominal 95% would produce ~5 zero-crossings by chance; exactly 4 were found.
-   Consistent with noise.
-
-Separating (3) from a real effect requires a within-ticker placebo (same
-tickers, non-event quarters). That is not built, and building it does not fix
-(1) or (2).
-
-## KEEP — maintained as research tooling
-
-These earn their place by making filings faster to read with receipts. None of
-them needs to predict returns to be worth the maintenance.
-
-| Component | Why it stays |
+| Component | Evidence it serves |
 |---|---|
-| `filing_sections` store + coverage semantics (0198) | The substrate. Honest absence-reporting is what makes every consumer safe. |
-| `filing_section_items` + item add/remove/reword (P0) | "Which risk factors did this issuer add and drop, verbatim" is direct research leverage. |
-| Discontinued-metric detector (P1) | Four suppression stages; correctly quarantines ASC 842/606 transitions. "They stopped disclosing X, last value was Y" is exactly the Netflix-subscribers case worth catching. |
-| Specificity / boilerplate classifier (P3) | Triage. 1,379 boilerplate vs 1,923 substantive is how a human avoids reading 5,954 diffs. |
-| Cross-sectional detrending (P2) | Keeps magnitudes comparable across years. Cheap, already built. |
-| Transcript speaker attribution (roic.ai DOM fix) | 38% -> 92.9% attribution. Infrastructure, independent of any signal on top. |
-| Google Finance earnings deep link | One-click recorded audio + speaker-attributed transcript. Human access, not a quantitative signal. |
+| `filing_sections` store + coverage semantics (0198) | Substrate. Honest absence-reporting is what makes every consumer safe. |
+| Item add/remove/reword (P0) | Lyle/Riedl/Siano — both directions informative at item level. |
+| Discontinued-metric detector (P1) | Zhou/Zhou (expected-but-missing) and Chen/Matsumoto/Rajgopal (cessation). Four suppression stages; quarantines ASC 842/606 transitions. |
+| Specificity / boilerplate classifier (P3) | Hope/Hu/Lu specificity; carries the Filzen >100-word threshold. Also triage — 1,379 boilerplate vs 1,923 substantive is how a human avoids reading 5,954 diffs. |
+| Cross-sectional detrending (P2) | Dyer/Lang/Stice-Lawrence — length inflation is market-wide; magnitudes must be same-period-relative. |
+| Transcript speaker attribution | Prerequisite for Gow/Larcker/Zakolyukina and Larcker/Zakolyukina, both of which are speaker-role-specific. 38% -> 92.9%. |
+| Earnings-audio deep link | Human access to recorded call + attributed transcript. Not a quantitative signal. |
 
-## CUT / PARK
+## GAPS — literature-supported, not yet tracked
+
+These are the highest-value additions, because published evidence backs them
+and we do not surface them at all:
+
+1. **Guidance withdrawal / expected-but-missing disclosure.** Zhou/Zhou's
+   -41bps and Chen/Matsumoto/Rajgopal's -4.8% are among the best-evidenced
+   effects in this whole space, and P1 detects discontinued XBRL METRICS but
+   not withdrawn GUIDANCE. Closest thing to a direct build.
+2. **Abnormal tone (ABTONE), residualized on fundamentals** — Huang/Teoh/Zhang.
+   Raw tone mostly re-derives the earnings surprise; the residual is the signal.
+3. **CFO-vs-CEO language separation** — Larcker/Zakolyukina found the CFO model
+   tradeable and the CEO model not. Pooling management speech discards the
+   finding. Now feasible given the attribution fix.
+4. **Document-level YoY similarity, detrended** — the actual Lazy Prices
+   construct. Deliberately skipped as "the weak measure," which was right for
+   ranking but wrong for omitting: it is the single most replicated finding here.
+
+## PARK / DO NOT SHIP
 
 | Component | Disposition |
 |---|---|
-| **P5 event study** | **Parked**, not deleted. Keep as a periodic sanity check; do not invest further until a within-ticker placebo exists. Do not cite any cell from it as a finding. |
-| **P4 non-answer rate** | **Not shipped as a signal.** It moved AWAY from the ~11% literature baseline after attribution was fixed (26.3% -> 30.1%), and MELI worsened under strictly better data — which falsifies the attribution hypothesis. The pairing and period-dedup bugs are worth fixing for research value; the metric must not be presented as reproducing the published construct until it does. |
-| **P6 alerting surfaces** | **Reframed.** Build against research value (read this filing faster), never as an alert implying a forecast the platform does not have. |
-| **P7 vocal-affect signal** | **Out of reach**, unchanged. Text-only pipeline cannot recover it; the deep link gives human access only. Never proxy it from transcript disfluencies. |
+| **P5 event study** | **Do not repeat on this book.** Not because it failed — because in-sample validation was never the standard and 44 owned names cannot supply one. Keep the code; do not cite any cell from it as a finding either way. |
+| **P4 non-answer rate** | **Do not ship until it reproduces the construct.** This is a CORRECTNESS bar, not a validation bar: our measure reads 30.1% against a baseline the literature finds stable at ~11%, and it moved further away after attribution was fixed. That means OUR DETECTOR is wrong, not that the signal is. Fix the period-dedup and Q&A-pairing bugs, re-measure, then ship. |
+| **P7 vocal affect** | **Out of reach.** Text-only cannot recover it (Mayew/Venkatachalam is an acoustic effect). Never proxy it from transcript disfluencies. |
 
-## A number worth remembering
+## Surfaces
 
-**5 concealment verdicts out of 5,954 events.** If the classifier is roughly
-calibrated, that is the base rate for an issuer actually hiding something. It
-argues the value here is not catching concealment — it is reading filings
-faster, with receipts. Which is the deep-research goal, not the alpha one.
+Surface these as **weighted inputs with receipts**, never as forecasts or
+day-of alerts — the drift structure of the evidence means they inform a view
+over weeks, not a trade on the filing date. Feed into the thesis machinery as
+break-rule / KPI inputs, per the ticker-beliefs ruling.
 
-## If the goal is STOCK PICKING, the question changes
+## Scope note
 
-Alpha here means picking names, which means the signal has to run over a
-universe wide enough to rank against — not over 44 names already owned. The
-literature's effect sizes come from exactly that setting. So the real decision
-is not "does this work" (it does, per §2) but **"do we widen the universe?"**
-
-Three options, honestly costed:
-
-1. **Screen a wide universe** (S&P 500 / Russell 1000). The detectors already
-   run off cached EDGAR + companyfacts, which are FREE and unmetered — the
-   binding cost is fetch time and storage, NOT FMP quota, since the narrative
-   half never needed FMP. This is the only option that produces stock-picking
-   alpha, and it is more tractable than assumed: the pipeline is universe-
-   agnostic by construction.
-2. **Stay at 44 names as research tooling** — the current ruling. Zero new
-   cost, no stock-picking capability.
-3. **Buy the signal** rather than build it. Not evaluated.
-
-Whichever is chosen, any *validation* still needs a within-ticker placebo
-(same names, non-event quarters) and an out-of-sample period not overlapping
-2024-2026.
-
-**Treat any return number computed on the 44-name book as unsupported —
-including the ones in §3 above.**
+The narrative detectors run off EDGAR text and SEC companyfacts, which are
+**free and unmetered** — FMP only ever supplied the R-file partition. The
+pipeline is universe-agnostic by construction, so widening beyond the tracked
+book is bounded by fetch time and storage rather than quota. Whether to do that
+is an open owner decision, not a prerequisite for anything above.
