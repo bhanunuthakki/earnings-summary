@@ -52,8 +52,15 @@ def test_paper_mode_emits_light_root_plus_dark_override() -> None:
     css = controls_css("paper")
     assert "color-scheme: light" in css
     assert ':root[data-theme="dark"]' in css
-    # Both chevron inks present: light root + dark override.
-    assert "%236c6f78" in css and "%23888b94" in css
+    # Both chevron inks present: light root + dark override. Derived from the
+    # palette rather than spelled as literals — the literal form of this
+    # assertion silently pinned the pre-2026-07-25 cool grays.
+    from ui.tokens import PALETTE_DARK, PALETTE_LIGHT
+
+    light_ink = "%23" + PALETTE_LIGHT["muted"].lstrip("#")
+    dark_ink = "%23" + PALETTE_DARK["muted"].lstrip("#")
+    assert light_ink in css and dark_ink in css
+    assert light_ink != dark_ink
 
 
 def test_rejects_unknown_mode() -> None:
@@ -1117,3 +1124,39 @@ def test_fact_anchor_attrs_emits_handle_and_degrades() -> None:
     # Precedence: a cell carrying both — data-fact-ref ordered before data-ask-q.
     triple = fact_anchor_attrs("kpi:NU:42", "NIM", ask_q="How has NIM trended?")
     assert triple.index("data-fact-ref") < triple.index("data-ask-q")
+
+
+def test_glyph_ink_tracks_the_palette() -> None:
+    """The two theme-dependent glyph inks are DERIVED from tokens, not copied.
+
+    Regression pin for a silent drift found on 2026-07-25: ``_CHEVRON_DARK`` and
+    ``_CHECK_DARK`` froze ``%23888b94`` / ``%230c0d10`` while their comments
+    claimed they tracked ``--muted`` / ``--accent-contrast``. Warming the dark
+    palette falsified both and nothing failed — the chevron just kept rendering
+    in the old cool gray on a warm surface.
+
+    This asserts the LINK, so it survives any future palette edit: whatever the
+    palette says today must be the ink in today's glyph, and the stale cool
+    values must be gone from the rendered CSS.
+    """
+    from ui.controls import _CHECK_DARK, _CHECK_LIGHT, _CHEVRON_DARK, _CHEVRON_LIGHT
+    from ui.tokens import PALETTE_DARK, PALETTE_LIGHT
+
+    def enc(value: str) -> str:
+        return "%23" + value.lstrip("#")
+
+    assert enc(PALETTE_DARK["muted"]) in _CHEVRON_DARK
+    assert enc(PALETTE_LIGHT["muted"]) in _CHEVRON_LIGHT
+    assert enc(PALETTE_DARK["accent-contrast"]) in _CHECK_DARK
+    assert enc(PALETTE_LIGHT["accent-contrast"]) in _CHECK_LIGHT
+
+    # The glyphs must differ per theme — one shared ink would mean a glyph is
+    # illegible on one of the two grounds.
+    assert _CHEVRON_DARK != _CHEVRON_LIGHT
+    assert _CHECK_DARK != _CHECK_LIGHT
+
+    # And the rendered CSS must carry no pre-warming ink.
+    for mode in ("paper", "dark"):
+        css = controls_css(mode)
+        assert "%23888b94" not in css, "stale cool --muted ink in chevron"
+        assert "%230c0d10" not in css, "stale cool --accent-contrast ink in check"

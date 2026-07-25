@@ -86,32 +86,49 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from models.validation import Severity
+from ui.tokens import PALETTE_DARK, PALETTE_LIGHT
 
 if TYPE_CHECKING:
     from datetime import datetime
 
-# Chevron for single-selects + the disclosure (summary) marker, URL-encoded (no
-# literal braces/quotes/#: the string survives both raw f-string assembly and
-# brace-doubled .format templates). Stroke matches each theme's --muted.
-_CHEVRON_DARK = (
+
+def _glyph_ink(hex_color: str) -> str:
+    """A palette hex as the URL-encoded ink of an inline SVG data URI."""
+    return "%23" + hex_color.lstrip("#")
+
+
+# The two theme-dependent glyphs, DERIVED from the palette rather than copied
+# from it (2026-07-25). These strings previously froze `%23888b94` and
+# `%230c0d10` while their comments claimed they tracked --muted and
+# --accent-contrast; the palette warming falsified both silently, and nothing
+# failed — a chevron simply kept rendering in the old cool gray on a warm
+# surface. Deriving them removes that drift class entirely: a palette edit now
+# repaints the glyphs, and `test_glyph_ink_tracks_the_palette` pins the link.
+#
+# Still URL-encoded with no literal braces/quotes/#, so the strings survive both
+# raw f-string assembly and brace-doubled .format templates.
+_CHEVRON_TEMPLATE = (
     "url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 "
-    "viewBox=%220 0 16 16%22%3E%3Cpath d=%22M4 6l4 4 4-4%22 stroke=%22%23888b94%22 "
+    "viewBox=%220 0 16 16%22%3E%3Cpath d=%22M4 6l4 4 4-4%22 stroke=%22{ink}%22 "
     "stroke-width=%221.6%22 fill=%22none%22 stroke-linecap=%22round%22 "
     "stroke-linejoin=%22round%22/%3E%3C/svg%3E')"
 )
-_CHEVRON_LIGHT = _CHEVRON_DARK.replace("%23888b94", "%236c6f78")
+# Chevron for single-selects + the disclosure (summary) marker. Stroke is each
+# theme's --muted.
+_CHEVRON_DARK = _CHEVRON_TEMPLATE.format(ink=_glyph_ink(PALETTE_DARK["muted"]))
+_CHEVRON_LIGHT = _CHEVRON_TEMPLATE.format(ink=_glyph_ink(PALETTE_LIGHT["muted"]))
 
 # Checkmark for the kit-drawn checkbox (:checked). Sits ON the accent fill, so
 # its ink is each theme's --accent-contrast (near-white on the light theme's
-# dark-blue accent, near-black on the dark theme's light-blue accent) — a
-# theme-dependent glyph like the chevron, for the same URL-encoding reasons.
-_CHECK_LIGHT = (
+# dark-blue accent, near-black on the dark theme's light-blue accent).
+_CHECK_TEMPLATE = (
     "url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 "
-    "viewBox=%220 0 16 16%22%3E%3Cpath d=%22M3.5 8.5l3 3 6-7%22 stroke=%22%23ffffff%22 "
+    "viewBox=%220 0 16 16%22%3E%3Cpath d=%22M3.5 8.5l3 3 6-7%22 stroke=%22{ink}%22 "
     "stroke-width=%222%22 fill=%22none%22 stroke-linecap=%22round%22 "
     "stroke-linejoin=%22round%22/%3E%3C/svg%3E')"
 )
-_CHECK_DARK = _CHECK_LIGHT.replace("%23ffffff", "%230c0d10")
+_CHECK_LIGHT = _CHECK_TEMPLATE.format(ink=_glyph_ink(PALETTE_LIGHT["accent-contrast"]))
+_CHECK_DARK = _CHECK_TEMPLATE.format(ink=_glyph_ink(PALETTE_DARK["accent-contrast"]))
 
 # The element baseline + the component classes. Theme-independent: the two
 # theme-dependent declarations (color-scheme, chevron ink) are prepended by

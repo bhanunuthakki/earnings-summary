@@ -34,13 +34,15 @@ PALETTE_LIGHT: dict[str, str] = {
     "bg": "#fafaf7",
     "surface": "#ffffff",
     "paper": "#f4f3ef",
-    "fg": "#0c0d10",
-    "fg-soft": "#2a2c33",
-    # The one de-emphasis gray. #6c6f78 clears WCAG AA (~4.5:1) against this bg
-    # for the real body text it backs (td.muted, crumb-sep, news-date). The old
-    # second gray (--muted-2) collapsed here (design-sync 2026-07-19): two grays
-    # of de-emphasis was one too many.
-    "muted": "#6c6f78",
+    "fg": "#0d0d0c",
+    "fg-soft": "#2d2a23",
+    # The one de-emphasis gray. #6f6b60 clears WCAG AA against this bg for the
+    # real body text it backs (td.muted, crumb-sep, news-date): 5.09:1 here and
+    # 5.32:1 on the white theme's #ffffff. The old second gray (--muted-2)
+    # collapsed here (design-sync 2026-07-19): two grays of de-emphasis was one
+    # too many. Warmed 2026-07-25 alongside the dark palette — the cool pair
+    # measured 4.80:1 / 5.02:1, so the warming also bought a little headroom.
+    "muted": "#6f6b60",
     "border": "#e4e3dd",
     "border-2": "#d1cfc7",
     "hairline": "#ecebe5",
@@ -54,10 +56,22 @@ PALETTE_LIGHT: dict[str, str] = {
     "ok": "#15803d",
     "warn": "#b97c00",
     "bad": "#b91c1c",
-    "seg-1": "#0c0d10",
-    "seg-2": "#43464e",
-    "seg-3": "#7a7d86",
-    "seg-4": "#b6b8be",
+    # The editorial mark (2026-07-25). A muted ochre reserved for DOCUMENT
+    # furniture — section labels, the masthead rule, footnote markers, margin-
+    # note keylines. It is deliberately duller and browner than --warn so a
+    # section label can never be misread as a caution state, and it never
+    # fills a control (that is --accent's job).
+    #
+    # --mark carries text: 5.62:1 here, 6.32:1 on the dark ground — AA-body on
+    # both. --mark-soft is a KEYLINE ONLY (2.05:1 light / 2.88:1 dark): it is
+    # legal on a 1px rule or border and never on type. The two are separate
+    # tokens precisely so that constraint is expressible.
+    "mark": "#8a5a28",
+    "mark-soft": "#c8ad8a",
+    "seg-1": "#0d0d0c",
+    "seg-2": "#443f34",
+    "seg-3": "#7d7869",
+    "seg-4": "#b5b0a4",
     "seg-5": "#dcdcd7",
     # One popover/menu elevation per theme (combobox lists, peeks, palettes).
     "shadow-pop": "0 12px 32px rgba(15, 15, 20, 0.18)",
@@ -74,30 +88,44 @@ PALETTE_WHITE_OVERRIDES: dict[str, str] = {
 }
 
 # Dark — the dashboard surfaces' only theme; the workspace's opt-in theme.
+#
+# Warmed 2026-07-25. The neutrals used to carry a blue cast (#0c0d10 ground,
+# #2a2d35 borders, #888b94 gray) which read as "screen". Every neutral now
+# carries a faint amber cast instead, which reads as paper. The shift is small
+# per-swatch and deliberately invisible as a color change — it is felt as a
+# temperature change across the whole surface. Semantics are UNTOUCHED:
+# --ok/--warn/--bad keep their exact values and --accent stays blue, so
+# "green = good" and "blue = interactive" survive the warming intact.
 PALETTE_DARK: dict[str, str] = {
-    "bg": "#0c0d10",
-    "surface": "#14161b",
-    "paper": "#1a1d23",
+    "bg": "#0d0d0c",
+    "surface": "#141412",
+    "paper": "#191815",
     "fg": "#f4f3ef",
-    "fg-soft": "#d5d6d2",
-    # The one de-emphasis gray (see PALETTE_LIGHT). #888b94 clears WCAG AA
-    # (~4.9:1) against this bg for the body text it backs; --muted-2 folded here.
-    "muted": "#888b94",
-    "border": "#2a2d35",
-    "border-2": "#383b44",
-    "hairline": "#1f2127",
+    "fg-soft": "#d3cec3",
+    # The one de-emphasis gray (see PALETTE_LIGHT). #8b877d is the warm
+    # counterpart of the old #888b94 at the same lightness: 5.43:1 against this
+    # bg (the cool pair measured 5.71:1), so the AA-body floor still holds for
+    # the real body text it backs.
+    "muted": "#8b877d",
+    "border": "#272621",
+    "border-2": "#38342b",
+    "hairline": "#1c1b18",
     "accent": "#8aa8ff",
     "accent-soft": "#1c2138",
     # Dark accent is light — ink on it must be near-black, not white.
-    "accent-contrast": "#0c0d10",
+    "accent-contrast": "#0d0d0c",
     "ok": "#4ade80",
     "warn": "#f5c66a",
     "bad": "#f08a8a",
+    # See PALETTE_LIGHT. On dark the mark is lighter than the ground; the soft
+    # variant is the keyline shade, not a text color.
+    "mark": "#b08d5f",
+    "mark-soft": "#705737",
     "seg-1": "#f4f3ef",
-    "seg-2": "#b6b8be",
-    "seg-3": "#7a7d86",
-    "seg-4": "#43464e",
-    "seg-5": "#25282f",
+    "seg-2": "#b5b0a4",
+    "seg-3": "#7d7869",
+    "seg-4": "#443f34",
+    "seg-5": "#262219",
     "shadow-pop": "0 12px 32px rgba(0, 0, 0, 0.45)",
     "scrim": "rgba(0, 0, 0, 0.5)",
 }
