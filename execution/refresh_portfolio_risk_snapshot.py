@@ -16,16 +16,25 @@ structured ``invalid`` event, fires the ``data_feed_stale`` dead-man alert
 
 Provenance (§7.1.9, migration 0199): every write stamps
 ``portfolio_risk_snapshot_store.METRIC_VERSION`` plus a ``rebase_basis``
-derived from what the tracker actually returned —
-``"modeled_backfill"`` when ``PerformanceSeries.backfill_start_unreliable``
-is True, ``"observed"`` otherwise — never hardcoded. This matters because a
-transport change (a new tracker endpoint version, a resampling fix, a
-different lookback default) or a provider change can shift EVERY beta /
-sharpe / drawdown number in a capture while ``window_start`` / ``window_end``
-stay bit-for-bit identical. Without this stamp, a downstream drift sensor
-(or the Risk Budget's "vs prior" delta) has no way to tell a real risk move
-from a definition change — it would just see two different numbers and
-report a move that never happened in the market.
+derived by comparing ``PerformanceSeries.start_date`` against
+``.earliest_observed_date`` — never hardcoded, and deliberately NOT from
+``backfill_start_unreliable``, which measures a constant ``False`` across
+observed and heavily-reconstructed series alike (see the derivation comment
+in ``main`` for the measurements). The two raw dates are stored beside the
+derived basis so a reader can recompute the classification instead of
+trusting it.
+
+This matters because a transport or provider change can shift the four
+drawdown columns (``max_drawdown_pct``, ``current_drawdown_pct``,
+``drawdown_recovered``, ``days_to_recovery``) while ``window_start`` /
+``window_end`` stay bit-for-bit identical — those two describe the BETA
+window, whereas the drawdown columns and the basis describe the PERFORMANCE
+window, and the two endpoints default differently. Beta / sharpe / sortino /
+volatility come from the analytics endpoint and are NOT transport-sensitive
+in the same way. Without this stamp, a downstream drift sensor (or the Risk
+Budget's "vs prior" delta) has no way to tell a real risk move from a
+definition change — it would just see two different numbers and report a
+move that never happened in the market.
 
 CLI:
     python execution/refresh_portfolio_risk_snapshot.py
