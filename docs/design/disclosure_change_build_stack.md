@@ -1,5 +1,11 @@
 # Disclosure-Change Build Stack — priority-ordered
 
+> **SUPERSEDED for maintenance decisions by `disclosure_program_ruling.md`
+> (2026-07-25).** This document records what was BUILT and the research behind
+> it. The ruling records what is MAINTAINED: the program is deep-research
+> tooling, not an alpha program. P5 is parked and P4's non-answer rate is not
+> shipped as a signal. Read the ruling before planning work here.
+
 Derived from the 2026-07-24/25 session: the Phase 0 section store (migration 0198),
 the literature review (`disclosure_change_signals.md`), and the empirical calibration
 runs against the real book. Schema for P0/P1 lands in migration 0203.
