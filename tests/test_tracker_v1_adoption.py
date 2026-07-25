@@ -622,3 +622,31 @@ def test_caller_owned_window_never_warns_about_observation(
     code = tc._UNMARKED_OBSERVATION_CODE  # pyright: ignore[reportPrivateUsage]
     assert code not in explicit.envelope_warnings
     assert code not in backfilled.envelope_warnings
+
+
+def test_unmarked_code_implies_unknown_basis_but_not_conversely(
+    v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The envelope code and the risk-snapshot ``rebase_basis`` stamp key off the
+    same provider field, but the implication is ONE-DIRECTIONAL. Pinned here so
+    nobody "tightens" it into an equivalence and builds alerting that cries wolf.
+
+    forward: code emitted  => basis "unknown"      (must hold)
+    reverse: basis "unknown" => code emitted       (must NOT hold)
+    """
+    code = tc._UNMARKED_OBSERVATION_CODE  # pyright: ignore[reportPrivateUsage]
+
+    # Forward: no marker on the rebase path -> code emitted AND basis unknown.
+    router = _PerfRouter(earliest_observed=None)
+    router.install(monkeypatch)
+    unmarked = tc.fetch_portfolio_analytics(only={"performance"})
+    assert code in unmarked.envelope_warnings
+    assert unmarked.performance is not None
+    assert _rebase_basis(unmarked.performance) == "unknown"
+
+    # Reverse fails: an explicit caller window suppresses the code (the caller
+    # owns the window) while the basis still resolves to unknown.
+    explicit = tc.fetch_portfolio_analytics(start_date="2025-09-01", only={"performance"})
+    assert code not in explicit.envelope_warnings
+    assert explicit.performance is not None
+    assert _rebase_basis(explicit.performance) == "unknown"

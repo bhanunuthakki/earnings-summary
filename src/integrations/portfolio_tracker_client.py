@@ -1460,6 +1460,19 @@ _V1_WIDE_HISTORY_START = "2000-01-01"
 # it as "these returns may not be observation-based" — a log line alone would
 # not reach a rendering surface, and PRD §13.3 forbids presenting a partial or
 # reconstructed read as current.
+#
+# Relationship to the risk-snapshot ``rebase_basis`` stamp (migration 0199), which
+# keys off the same provider field: the implication runs ONE WAY ONLY.
+#
+#     this code emitted  =>  that capture's rebase_basis == "unknown"     (holds)
+#     rebase_basis "unknown"  =>  this code emitted                   (does NOT)
+#
+# The stamp is the broader condition — it also resolves "unknown" when the series
+# arrives with no ``start_date`` at all (a degraded payload that still parses),
+# which is not what this code guards. And this code is deliberately scoped to the
+# rebase path, so an explicit caller window or ``include_backfill`` suppresses it
+# while the stamp may still say "unknown". Any alerting built on the pair must
+# test the forward implication only; the equivalence cries wolf.
 _UNMARKED_OBSERVATION_CODE = "performance_observation_start_unmarked"
 
 
