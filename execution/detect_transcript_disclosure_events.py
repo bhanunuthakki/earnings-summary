@@ -1,16 +1,36 @@
 """Detect transcript longitudinal-tracking events — Layer-3 CLI for the P4
 build (``docs/design/disclosure_change_build_stack.md`` P4,
-``docs/design/disclosure_change_signals.md`` §1.7).
+``docs/design/disclosure_change_signals.md`` §1.7, D2.3/D2.4 of
+``docs/design/disclosure_intelligence_v1_prd.md``).
 
-Deterministic turn-parsing/role-classification/Q&A-pairing
-(``src/transcripts/longitudinal.py``), one batched LLM judgment call per
-transcript for non-answer classification + per-speaker tone
+Deterministic turn-parsing/role-classification/Q&A-pairing/participants-
+roster-parsing (``src/transcripts/longitudinal.py``), one batched LLM
+judgment call per transcript for per-speaker tone
 (``src/transcripts/transcript_judgment.judge_call``, cached — reruns cost
 zero new tokens for an already-judged call), one batched LLM triage call
 per ticker for KPI/topic relevance (``transcript_judgment.triage_topics``),
-then writes ``qa_nonanswer_rate_shift`` / ``transcript_topic_disappeared`` /
-``transcript_tone_shift_abnormal`` / ``executive_speaker_change`` /
-``analyst_roster_change`` rows to ``disclosure_events`` (migration 0203).
+then writes ``abnormal_tone_shift`` / ``transcript_topic_disappeared`` /
+``executive_speaker_change`` / ``analyst_roster_change`` rows to
+``disclosure_events`` (migration 0203).
+
+DROPPED (D1.6): the "is this answer evasive?" non-answer classification and
+its ``qa_nonanswer_rate_shift`` event — owner ruling, the construct never
+reproduced Gow/Larcker/Zakolyukina's ~11% baseline against this book. Zero
+``qa_nonanswer_rate_shift`` rows were ever written to prod (verified against
+a copy on 2026-07-25), so no data purge was needed.
+
+``abnormal_tone_shift`` (D2.3, renamed from ``transcript_tone_shift_
+abnormal``) is now emitted from a REAL fitted residual
+(``src/transcripts/longitudinal.fit_tone_residual_model`` /
+``tone_residual``) — a deterministic pooled OLS of tone score on
+fundamentals (eps_surprise_pct), fit ONCE across every requested ticker's
+already-cached tone scores before the per-ticker event-emission pass, zero
+new LLM calls. Each speaker's ``exec_role`` (CEO/CFO/other_exec/unresolved,
+D2.4) is resolved per-call from the transcript's own CORPORATE PARTICIPANTS
+roster where one exists, ahead of the (book-wide-empty) ``exec_comp_
+packages`` DEF 14A join — see ``longitudinal.parse_participants_roster``.
+This module does NOT implement Larcker/Zakolyukina's deception-marker
+language model; the tone score is a separate, sentiment-only construct.
 
 Every run is idempotent (upsert on ``disclosure_events``'s unique key), so a
 partial run resumes simply by running again, and a fully-cached ticker
@@ -45,24 +65,26 @@ import db  # noqa: E402
 from filings.models import HardStopError  # noqa: E402
 from llm.cli import is_hard_stop  # noqa: E402
 from transcripts.longitudinal import (  # noqa: E402
+    ABTONE_MIN_OBSERVATIONS,
+    ABTONE_RESIDUAL_MATERIALITY,
     ANALYST_ROSTER_MIN_N,
     ANALYST_ROSTER_OVERLAP_FLOOR,
     DETECTOR_VERSION,
-    NONANSWER_BASELINE_PCT,
-    NONANSWER_MATERIALITY_PP,
-    NONANSWER_MIN_QUESTIONS,
     TOPIC_MIN_PRIOR_PRESENCE,
     CallSnapshot,
     SpeakerRole,
+    ToneObservation,
+    ToneResidualModel,
     TranscriptEvent,
     build_call_snapshot,
     call_full_text,
     extract_kpi_terms,
     find_kpi_mention,
+    fit_tone_residual_model,
     jaccard,
     nearest_earnings_surprise,
     roster_names_by_role,
-    tone_shift_is_abnormal,
+    tone_residual,
     write_transcript_events,
 )
 from transcripts.transcript_judgment import CallJudgment, judge_call, triage_topics  # noqa: E402
@@ -101,75 +123,138 @@ def _portfolio_tickers(conn: sqlite3.Connection) -> list[str]:
 
 
 def _ticker_transcript_ids(conn: sqlite3.Connection, ticker: str) -> list[int]:
+    """One transcript id per (fiscal_period_type, period_end), oldest first.
+
+    Real-book data quality issue found during D2.3/D2.4 verification: some
+    tickers (e.g. NVDA) carry TWO ``transcripts`` rows for the identical
+    period — one from a segmented source (FactSet/Refinitiv PDF ingest,
+    dozens of ``transcript_segments`` rows) and one from the aggregator Q&A
+    fetch (a single blob row) — with no dedup at ingest time. Left
+    unhandled, every call-over-call measure in this module (tone deltas,
+    executive/analyst roster deltas) would compare two representations of
+    the SAME real call as if they were sequential quarters. Kept per period:
+    the id with the MOST ``transcript_segments`` rows — a proxy for "richer
+    source," and not coincidentally the one more likely to carry the
+    CORPORATE PARTICIPANTS roster block D2.4 parses. This is a data-hygiene
+    symptom in the ingestion path (out of this module's ownership to fix at
+    the source); this is a defensive read-side dedup only.
+    """
     rows = conn.execute(
-        "SELECT id FROM transcripts WHERE UPPER(ticker) = ? "
+        "SELECT id, fiscal_period_type, period_end FROM transcripts WHERE UPPER(ticker) = ? "
         "AND fiscal_period_type IN ('Q1','Q2','Q3','Q4') AND period_end IS NOT NULL "
         "ORDER BY period_end ASC",
         (ticker.upper(),),
     ).fetchall()
-    return [int(r[0]) for r in rows]
+    best_by_period: dict[tuple[str, str], tuple[int, int]] = {}
+    order: list[tuple[str, str]] = []
+    for id_raw, fpt_raw, period_end_raw in rows:
+        key = (str(fpt_raw), str(period_end_raw))
+        n_segments = conn.execute(
+            "SELECT COUNT(*) FROM transcript_segments WHERE transcript_id = ?", (int(id_raw),)
+        ).fetchone()[0]
+        if key not in best_by_period:
+            order.append(key)
+        if key not in best_by_period or n_segments > best_by_period[key][1]:
+            best_by_period[key] = (int(id_raw), int(n_segments))
+    return [best_by_period[key][0] for key in order]
 
 
-def _nonanswer_rate(judgment: CallJudgment) -> tuple[float | None, int]:
-    if not judgment.questions:
-        return None, 0
-    n = len(judgment.questions)
-    non_answers = sum(1 for v in judgment.questions.values() if v.non_answer)
-    return (non_answers / n) * 100.0, n
-
-
-def _evidence_for_nonanswer(snap: CallSnapshot, judgment: CallJudgment) -> str:
-    """Most confident non-answer example this call, for the receipt."""
-    by_index = {ex.index: ex for ex in snap.exchanges}
-    for idx_str, verdict in judgment.questions.items():
-        if not verdict.non_answer:
-            continue
-        try:
-            idx = int(idx_str)
-        except ValueError:
-            continue
-        ex = by_index.get(idx)
-        if ex is None:
-            continue
-        q = ex.question_text[:300]
-        a = ex.answer_text[:300]
-        return f'Q ({ex.analyst_name or "unknown"}): "{q}" | A: "{a}" | model rationale: {verdict.rationale}'
-    return "(non-answer flagged but exchange text unavailable)"
-
-
-def run_ticker(
+def _build_snapshots_and_judgments(
     *,
     ticker: str,
     conn: sqlite3.Connection,
     use_llm: bool,
-    dry_run: bool,
     db_path: Path,
-) -> dict[str, object]:
+) -> tuple[list[CallSnapshot], dict[int, CallJudgment], int]:
+    """Phase 1: deterministic snapshots + (cached-first) tone judgments for
+    one ticker. Returns (snapshots, judgments_by_transcript_id,
+    llm_degraded_calls). Split out from event emission so ``main()`` can
+    pool every requested ticker's tone observations and fit ONE
+    ``ToneResidualModel`` (D2.3) before any ticker's events are built."""
     ids = _ticker_transcript_ids(conn, ticker)
-    if len(ids) < 2:
-        return {
-            "ticker": ticker,
-            "status": "insufficient_history",
-            "n_transcripts": len(ids),
-            "n_events_written": 0,
-        }
-
     snapshots: list[CallSnapshot] = []
     for tid in ids:
         snap = build_call_snapshot(conn, tid)
         if snap is not None:
             snapshots.append(snap)
 
+    judgments: dict[int, CallJudgment] = {}
+    llm_degraded_calls = 0
+    for snap in snapshots:
+        if not snap.exchanges:
+            continue
+        if not use_llm:
+            continue
+        judgment = judge_call(snap, db_path=db_path)
+        if judgment.degraded:
+            llm_degraded_calls += 1
+        else:
+            judgments[snap.transcript_id] = judgment
+    return snapshots, judgments, llm_degraded_calls
+
+
+def collect_tone_observations(
+    *,
+    ticker: str,
+    conn: sqlite3.Connection,
+    snapshots: list[CallSnapshot],
+    judgments: dict[int, CallJudgment],
+) -> list[ToneObservation]:
+    """Flatten one ticker's cached tone judgments into
+    ``ToneObservation`` rows for the pooled D2.3 residual fit. Zero new LLM
+    calls — reads only what ``judgments`` already holds."""
+    observations: list[ToneObservation] = []
+    for snap in snapshots:
+        judgment = judgments.get(snap.transcript_id)
+        if judgment is None:
+            continue
+        surprise = nearest_earnings_surprise(conn, ticker, snap.period_end)
+        for speaker, verdict in judgment.tone.items():
+            observations.append(
+                ToneObservation(
+                    ticker=ticker,
+                    fiscal_period_type=snap.fiscal_period_type,
+                    fiscal_year=snap.fiscal_year,
+                    period_end=snap.period_end,
+                    speaker=speaker,
+                    tone_score=verdict.score,
+                    eps_surprise_pct=surprise.eps_surprise_pct if surprise else None,
+                    revenue_surprise_pct=surprise.revenue_surprise_pct if surprise else None,
+                )
+            )
+    return observations
+
+
+def run_ticker(
+    *,
+    ticker: str,
+    conn: sqlite3.Connection,
+    snapshots: list[CallSnapshot],
+    judgments: dict[int, CallJudgment],
+    llm_degraded_calls: int,
+    residual_model: ToneResidualModel | None,
+    use_llm: bool,
+    dry_run: bool,
+    db_path: Path,
+) -> dict[str, object]:
+    """Phase 2: build + write this ticker's events from ALREADY-built
+    snapshots/judgments (phase 1) and the pooled residual model (fit once,
+    across every requested ticker, by ``main()``)."""
+    if len(snapshots) < 2:
+        return {
+            "ticker": ticker,
+            "status": "insufficient_history",
+            "n_transcripts": len(snapshots),
+            "n_events_written": 0,
+        }
+
     kpi_terms = extract_kpi_terms(conn, ticker)
     events: list[TranscriptEvent] = []
     coverage_notes: list[dict[str, object]] = []
 
-    # --- Q&A-dependent measures: non-answer rate, tone, exec roster ------
-    prev_judgment: CallJudgment | None = None
+    # --- Q&A-dependent measures: tone residual, exec/analyst roster -----
     prev_snap: CallSnapshot | None = None
     n_calls_with_qa = 0
-    nonanswer_rates: list[float] = []
-    llm_degraded_calls = 0
 
     for snap in snapshots:
         fiscal_period = snap.fiscal_period_type
@@ -185,65 +270,53 @@ def run_ticker(
             )
             continue
 
-        judgment: CallJudgment | None = None
-        if use_llm:
-            judgment = judge_call(snap, db_path=db_path)
-            if judgment.degraded:
-                llm_degraded_calls += 1
-                judgment = None
+        judgment = judgments.get(snap.transcript_id)
+        prev_judgment = judgments.get(prev_snap.transcript_id) if prev_snap is not None else None
 
         if judgment is not None:
             n_calls_with_qa += 1
-            rate, n_judged = _nonanswer_rate(judgment)
-            if rate is not None and n_judged >= NONANSWER_MIN_QUESTIONS:
-                nonanswer_rates.append(rate)
-                vs_baseline = abs(rate - NONANSWER_BASELINE_PCT)
-                vs_prior = None
-                if prev_judgment is not None:
-                    prior_rate, prior_n = _nonanswer_rate(prev_judgment)
-                    if prior_rate is not None and prior_n >= NONANSWER_MIN_QUESTIONS:
-                        vs_prior = abs(rate - prior_rate)
-                material = vs_baseline >= NONANSWER_MATERIALITY_PP or (
-                    vs_prior is not None and vs_prior >= NONANSWER_MATERIALITY_PP
-                )
-                if material:
-                    events.append(
-                        TranscriptEvent(
-                            ticker=ticker,
-                            event_type="qa_nonanswer_rate_shift",
-                            fiscal_year=fiscal_year,
-                            fiscal_period=fiscal_period,
-                            source_doc_id=None,
-                            subject="qa_nonanswer_rate",
-                            subject_label=f"Q&A non-answer rate: {rate:.1f}% (n={n_judged})",
-                            current_excerpt=f"{rate:.1f}% of {n_judged} judged questions",
-                            evidence_quote=_evidence_for_nonanswer(snap, judgment),
-                            materiality=round(vs_baseline, 1),
-                            verdict="unclassified",
-                            interpretation_md=(
-                                f"Deviates {vs_baseline:.1f}pp from the ~{NONANSWER_BASELINE_PCT:.0f}% "
-                                "stable baseline (Gow/Larcker/Zakolyukina, JAR 2021)"
-                                + (
-                                    f"; {vs_prior:.1f}pp vs prior call"
-                                    if vs_prior is not None
-                                    else ""
-                                )
-                            ),
-                            detector_version=DETECTOR_VERSION,
-                        )
-                    )
-
-            # Tone, tracked BY NAME (never pooled CEO/CFO) — see
-            # transcripts.longitudinal module docstring on exec_role.
-            if prev_snap is not None and prev_judgment is not None:
-                surprise = nearest_earnings_surprise(conn, ticker, snap.period_end)
+            # ABTONE (D2.3) — the REAL fitted residual, not the retired
+            # tone_delta_heuristic_flag proxy. Tracked BY NAME (never pooled
+            # CEO/CFO) — see transcripts.longitudinal module docstring on
+            # exec_role (D2.4 resolves it per-call from the transcript's own
+            # CORPORATE PARTICIPANTS roster where one exists).
+            if prev_snap is not None and prev_judgment is not None and residual_model is not None:
+                surprise_cur = nearest_earnings_surprise(conn, ticker, snap.period_end)
+                surprise_prev = nearest_earnings_surprise(conn, ticker, prev_snap.period_end)
                 for speaker, verdict in judgment.tone.items():
                     prior_verdict = prev_judgment.tone.get(speaker)
                     if prior_verdict is None:
                         continue  # no comparable prior score for this named person
-                    delta = verdict.score - prior_verdict.score
-                    eps_pct = surprise.eps_surprise_pct if surprise is not None else None
-                    if tone_shift_is_abnormal(delta, eps_pct):
+                    obs_cur = ToneObservation(
+                        ticker=ticker,
+                        fiscal_period_type=fiscal_period,
+                        fiscal_year=fiscal_year,
+                        period_end=snap.period_end,
+                        speaker=speaker,
+                        tone_score=verdict.score,
+                        eps_surprise_pct=surprise_cur.eps_surprise_pct if surprise_cur else None,
+                        revenue_surprise_pct=(
+                            surprise_cur.revenue_surprise_pct if surprise_cur else None
+                        ),
+                    )
+                    obs_prev = ToneObservation(
+                        ticker=ticker,
+                        fiscal_period_type=prev_snap.fiscal_period_type,
+                        fiscal_year=prev_snap.fiscal_year,
+                        period_end=prev_snap.period_end,
+                        speaker=speaker,
+                        tone_score=prior_verdict.score,
+                        eps_surprise_pct=surprise_prev.eps_surprise_pct if surprise_prev else None,
+                        revenue_surprise_pct=(
+                            surprise_prev.revenue_surprise_pct if surprise_prev else None
+                        ),
+                    )
+                    resid_cur = tone_residual(residual_model, obs_cur)
+                    resid_prev = tone_residual(residual_model, obs_prev)
+                    if resid_cur is None or resid_prev is None:
+                        continue  # missing control this call — honest skip, no fabricated 0
+                    delta_resid = resid_cur - resid_prev
+                    if abs(delta_resid) >= ABTONE_RESIDUAL_MATERIALITY:
                         exec_role = snap.roster.get(speaker)
                         role_label = (
                             exec_role.exec_role
@@ -253,27 +326,43 @@ def run_ticker(
                         events.append(
                             TranscriptEvent(
                                 ticker=ticker,
-                                event_type="transcript_tone_shift_abnormal",
+                                event_type="abnormal_tone_shift",
                                 fiscal_year=fiscal_year,
                                 fiscal_period=fiscal_period,
                                 prior_fiscal_year=prev_snap.fiscal_year,
                                 prior_fiscal_period=prev_snap.fiscal_period_type,
                                 subject=speaker,
-                                subject_label=f"{speaker} ({role_label}) tone shift",
-                                prior_excerpt=f"prior tone {prior_verdict.score:+.2f}: {prior_verdict.rationale}",
-                                current_excerpt=f"current tone {verdict.score:+.2f}: {verdict.rationale}",
+                                subject_label=f"{speaker} ({role_label}) abnormal tone shift",
+                                prior_excerpt=(
+                                    f"prior residual {resid_prev:+.2f} "
+                                    f"(raw tone {prior_verdict.score:+.2f}): {prior_verdict.rationale}"
+                                ),
+                                current_excerpt=(
+                                    f"current residual {resid_cur:+.2f} "
+                                    f"(raw tone {verdict.score:+.2f}): {verdict.rationale}"
+                                ),
                                 evidence_quote=verdict.rationale,
-                                materiality=round(abs(delta), 2),
+                                materiality=round(abs(delta_resid), 2),
                                 verdict="unclassified",
                                 interpretation_md=(
-                                    f"Delta {delta:+.2f} on a -1..1 scale; eps_surprise_pct="
-                                    f"{eps_pct if eps_pct is not None else 'n/a'}. Proxy for ABTONE "
-                                    "residualization (Huang/Teoh/Zhang, TAR 2014) — NOT a fitted "
-                                    "OLS residual; see tone_shift_is_abnormal docstring."
+                                    f"Residual delta {delta_resid:+.2f} on a -1..1 scale — the real "
+                                    "ABTONE construct (Huang/Teoh/Zhang, TAR 2014): tone residualized "
+                                    f"against eps_surprise_pct (fitted book-wide, R^2={residual_model.r_squared:.3f}, "
+                                    f"n={residual_model.n_obs}). A within-book deviation flag, not a "
+                                    "claim of statistical significance — see fit_tone_residual_model "
+                                    "docstring. NOT the retired tone_delta_heuristic_flag proxy."
                                 ),
                                 detector_version=DETECTOR_VERSION,
                             )
                         )
+            elif prev_snap is not None and residual_model is None:
+                coverage_notes.append(
+                    {
+                        "transcript_id": snap.transcript_id,
+                        "fiscal_period": f"{fiscal_period}-{fiscal_year}",
+                        "reason": "no_residual_model_insufficient_pooled_observations",
+                    }
+                )
 
         # Executive roster delta (deterministic, no LLM; NOVEL/UNVALIDATED).
         if prev_snap is not None:
@@ -354,8 +443,6 @@ def run_ticker(
                     )
 
         prev_snap = snap
-        if judgment is not None:
-            prev_judgment = judgment
 
     # --- KPI/topic presence (deterministic candidates, LLM relevance gate) --
     candidates_by_kpi: dict[str, list[tuple[int, int, str, str]]] = {}
@@ -428,12 +515,12 @@ def run_ticker(
     return {
         "ticker": ticker,
         "status": "ok",
-        "n_transcripts": len(ids),
+        "n_transcripts": len(snapshots),
         "n_snapshots_built": len(snapshots),
         "n_calls_with_qa_exchanges": n_calls_with_qa,
         "coverage_notes": coverage_notes,
-        "nonanswer_rates_measured": [round(r, 1) for r in nonanswer_rates],
         "llm_degraded_calls": llm_degraded_calls,
+        "residual_model_used": residual_model is not None,
         "n_kpi_candidates": sum(len(v) for v in candidates_by_kpi.values()),
         "n_events_built": len(events),
         "n_events_written": n_written,
@@ -476,13 +563,67 @@ def main(argv: list[str] | None = None) -> int:
             return _EXIT_BAD_ARGS
 
         started = datetime.now(UTC).replace(tzinfo=None)
+        use_llm = not args.no_llm
+
+        # Phase 1: build snapshots + (cached-first) tone judgments for EVERY
+        # requested ticker before fitting anything — the D2.3 residual model
+        # is pooled across the whole requested set, not per-ticker, since no
+        # single ticker has enough quarters on file for a within-ticker fit
+        # to have any power (see fit_tone_residual_model docstring).
+        snapshots_by_ticker: dict[str, list[CallSnapshot]] = {}
+        judgments_by_ticker: dict[str, dict[int, CallJudgment]] = {}
+        degraded_by_ticker: dict[str, int] = {}
+        for ticker in tickers:
+            try:
+                snaps, judgs, degraded = _build_snapshots_and_judgments(
+                    ticker=ticker, conn=conn, use_llm=use_llm, db_path=db_path
+                )
+            except HardStopError as exc:
+                log.error({"event": "hard_stop", "ticker": ticker, "error": str(exc)})
+                return _EXIT_HARD_STOP
+            except Exception as exc:
+                if is_hard_stop(exc):
+                    log.error({"event": "hard_stop", "ticker": ticker, "error": str(exc)})
+                    return _EXIT_HARD_STOP
+                raise
+            snapshots_by_ticker[ticker] = snaps
+            judgments_by_ticker[ticker] = judgs
+            degraded_by_ticker[ticker] = degraded
+
+        observations: list[ToneObservation] = []
+        for ticker in tickers:
+            observations.extend(
+                collect_tone_observations(
+                    ticker=ticker,
+                    conn=conn,
+                    snapshots=snapshots_by_ticker[ticker],
+                    judgments=judgments_by_ticker[ticker],
+                )
+            )
+        residual_model = fit_tone_residual_model(observations)
+        log.info(
+            {
+                "event": "tone_residual_model_fit",
+                "n_observations_pooled": len(observations),
+                "n_obs_used": residual_model.n_obs if residual_model else 0,
+                "r_squared": residual_model.r_squared if residual_model else None,
+                "fitted": residual_model is not None,
+                "min_required": ABTONE_MIN_OBSERVATIONS,
+            }
+        )
+
+        # Phase 2: emit + write events per ticker using the shared model.
         reports: list[dict[str, object]] = []
         for ticker in tickers:
             try:
                 outcome = run_ticker(
                     ticker=ticker,
                     conn=conn,
-                    use_llm=not args.no_llm,
+                    snapshots=snapshots_by_ticker[ticker],
+                    judgments=judgments_by_ticker[ticker],
+                    llm_degraded_calls=degraded_by_ticker[ticker],
+                    residual_model=residual_model,
+                    use_llm=use_llm,
                     dry_run=args.dry_run,
                     db_path=db_path,
                 )
@@ -507,7 +648,9 @@ def main(argv: list[str] | None = None) -> int:
             "finished_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
             "tickers": tickers,
             "dry_run": args.dry_run,
-            "llm_enabled": not args.no_llm,
+            "llm_enabled": use_llm,
+            "residual_model_n_obs": residual_model.n_obs if residual_model else 0,
+            "residual_model_r_squared": residual_model.r_squared if residual_model else None,
             "total_events_written": sum(cast("int", r.get("n_events_written", 0)) for r in reports),
             "reports": reports,
         }
