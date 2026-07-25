@@ -85,6 +85,18 @@ QA_TAIL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Some IR officers (not the operator) run the analyst queue themselves —
+# "Operator, could you please open the line for Mr. Jorge Kuri from Morgan
+# Stanley?" (NU's convention). This is the same kind of templated protocol cue
+# as QA_BOUNDARY_RE above (call-hosting-service script, not content
+# classification); it is checked per-turn against `_TranscriptMessageParser`
+# output, never against the flattened whole-page text, so it cannot cross a
+# real speaker-turn boundary.
+_QA_HANDOFF_RE = re.compile(
+    r"open\s+(?:the\s+|up\s+the\s+)?line\s+for\s+(?:mr\.?|ms\.?|mrs\.?|dr\.?)\s*",
+    re.IGNORECASE,
+)
+
 
 def _split_into_speaker_paragraphs(qa_text: str) -> str:
     """Insert blank lines between speaker turns so the file is readable.
@@ -177,8 +189,150 @@ def _http_get(url: str) -> requests.Response | None:
 
 
 # ---------------------------------------------------------------------------
-# Source: roic.ai
+# Source: roic.ai — DOM-structured per-turn extraction
 # ---------------------------------------------------------------------------
+#
+# roic.ai renders each call message as its own block:
+#   <div data-cy="transcripts_call_message">
+#     <div data-transcript-avatar="true"><span>B</span></div>   <!-- initial only -->
+#     <p data-transcript-speaker-name="true">Bipul Sinha</p>
+#     <span>...body paragraphs...</span>
+#   </div>
+#
+# The page's *flattened visible text* (what `_strip_html` produces) runs the
+# avatar initial straight into the speaker name with no delimiter — "B Bipul
+# Sinha" — which is what the old `_split_into_speaker_paragraphs` heuristic
+# below was reverse-engineering, and why it silently produced ZERO turn
+# boundaries whenever a call didn't spell a name in that exact shape (verified
+# 2026-07-25: NU_Q1_2026 collapsed to one 55k-char "Operator" turn). The
+# `data-transcript-speaker-name="true"` attribute is an unambiguous, real
+# structural signal for who is speaking at each turn — parsing the DOM instead
+# of the flattened text recovers genuine per-turn speaker attribution instead
+# of guessing it back from a rendering artifact.
+
+
+class _TranscriptMessageParser(HTMLParser):
+    """Extract (speaker_name, body_text) per `data-cy="transcripts_call_message"` block.
+
+    Tracks two independent nested regions inside each message block: the
+    speaker-name `<p data-transcript-speaker-name="true">` (isolated so its
+    text never leaks into the body) and the avatar `<div
+    data-transcript-avatar="true">` (whose single-letter initial must be
+    dropped, not treated as body text). Everything else inside the message
+    block is body text, joined with single spaces (only the delimiter BETWEEN
+    turns matters for the downstream `segment_by_speaker` regex, not
+    within-turn paragraph breaks).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.turns: list[tuple[str, str]] = []
+        self._in_msg = False
+        self._msg_depth = 0
+        self._in_name = False
+        self._name_depth = 0
+        self._in_avatar = False
+        self._avatar_depth = 0
+        self._name_parts: list[str] = []
+        self._body_parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attrs_d = dict(attrs)
+        if not self._in_msg:
+            if tag == "div" and attrs_d.get("data-cy") == "transcripts_call_message":
+                self._in_msg = True
+                self._msg_depth = 1
+                self._name_parts = []
+                self._body_parts = []
+            return
+        if tag == "div":
+            self._msg_depth += 1
+            if not self._in_avatar and attrs_d.get("data-transcript-avatar") == "true":
+                self._in_avatar = True
+                self._avatar_depth = 1
+            elif self._in_avatar:
+                self._avatar_depth += 1
+        if (
+            not self._in_name
+            and tag == "p"
+            and attrs_d.get("data-transcript-speaker-name") == "true"
+        ):
+            self._in_name = True
+            self._name_depth = 1
+        elif self._in_name and tag == "p":
+            self._name_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if not self._in_msg:
+            return
+        if self._in_name and tag == "p":
+            self._name_depth -= 1
+            if self._name_depth == 0:
+                self._in_name = False
+        if tag == "div":
+            if self._in_avatar:
+                self._avatar_depth -= 1
+                if self._avatar_depth == 0:
+                    self._in_avatar = False
+            self._msg_depth -= 1
+            if self._msg_depth == 0:
+                name = " ".join("".join(self._name_parts).split())
+                body = " ".join("".join(self._body_parts).split())
+                if name and body:
+                    self.turns.append((name, body))
+                self._in_msg = False
+
+    def handle_data(self, data: str) -> None:
+        if not self._in_msg or self._in_avatar:
+            return
+        if self._in_name:
+            self._name_parts.append(data)
+        else:
+            self._body_parts.append(data)
+
+
+def _parse_roic_messages(html: str) -> list[tuple[str, str]]:
+    """Return [(speaker, body), ...] in call order, or [] if the DOM shape changed."""
+    p = _TranscriptMessageParser()
+    p.feed(html)
+    return p.turns
+
+
+def _slice_qa_turns(turns: list[tuple[str, str]]) -> tuple[list[tuple[str, str]], bool]:
+    """Return (qa_turns, boundary_found).
+
+    Searches each turn's body in call order for a start cue (the standard
+    operator-script phrasing, or the IR-officer handoff variant); slices from
+    the first match onward, then trims at the first end cue found from there.
+    When no start cue matches any turn, `boundary_found` is False and the
+    WHOLE call (prepared remarks + Q&A) is returned rather than silently
+    dropping the transcript — a visible, logged degrade, not a silent one
+    (see `_roic_fetch`).
+    """
+    start_idx: int | None = None
+    for i, (_name, body) in enumerate(turns):
+        if QA_BOUNDARY_RE.search(body) or _QA_HANDOFF_RE.search(body):
+            start_idx = i
+            break
+    boundary_found = start_idx is not None
+    scoped = turns[start_idx:] if start_idx is not None else list(turns)
+
+    end_idx: int | None = None
+    for i, (_name, body) in enumerate(scoped):
+        m = QA_TAIL_RE.search(body)
+        if m:
+            end_idx = i
+            scoped[i] = (scoped[i][0], scoped[i][1][: m.end()])
+            break
+    if end_idx is not None:
+        scoped = scoped[: end_idx + 1]
+    return scoped, boundary_found
+
+
+def _serialize_turns(turns: list[tuple[str, str]]) -> str:
+    """Render turns so the existing `\\n<Name>: <text>` speaker regex (shared with
+    the PDF ingest path — never reinvented here) recovers every turn boundary."""
+    return "\n\n".join(f"{name}: {body}" for name, body in turns)
 
 
 def _roic_fetch(ticker: str, year: int, quarter: int) -> AggregatorHit | None:
@@ -186,6 +340,36 @@ def _roic_fetch(ticker: str, year: int, quarter: int) -> AggregatorHit | None:
     r = _http_get(url)
     if r is None or r.status_code != 200 or _has_paywall(r.text):
         return None
+
+    turns = _parse_roic_messages(r.text)
+    if turns:
+        qa_turns, boundary_found = _slice_qa_turns(turns)
+        qa = _serialize_turns(qa_turns)
+        if len(qa) < 500:
+            return None
+        if not boundary_found:
+            log.warning(
+                "roic %s Q%s %s: no Q&A boundary cue matched any turn; "
+                "keeping the whole call (prepared remarks + Q&A) rather than "
+                "dropping it — %d turns, %d chars",
+                ticker,
+                quarter,
+                year,
+                len(qa_turns),
+                len(qa),
+            )
+        return AggregatorHit(source_name="roic", page_url=url, qa_text=qa, full_text_chars=len(qa))
+
+    # DOM shape changed / didn't match at all — degrade to the legacy
+    # flatten-and-guess path rather than failing outright. Logged distinctly
+    # so this fallback is visible, not a silent quality drop.
+    log.warning(
+        "roic %s Q%s %s: no data-cy=transcripts_call_message blocks found; "
+        "falling back to flattened-text extraction (degraded speaker attribution)",
+        ticker,
+        quarter,
+        year,
+    )
     text = _strip_html(r.text)
     qa = _extract_qa(text)
     if qa is None:
