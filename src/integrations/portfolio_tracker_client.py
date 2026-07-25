@@ -490,15 +490,6 @@ class PerformanceSeries:
     # the earliest observation INSIDE the requested window, never before it.
     earliest_observed_date: str | None = None
     points: list[PerformancePoint] = field(default_factory=list[PerformancePoint])
-    # The first day the provider has REAL observations for. Everything in the
-    # series before it is a modeled walk-back. The endpoint has always
-    # returned this; the parser used to drop it. Comparing it to
-    # ``start_date`` is the ONLY way to tell an observed series from a
-    # walk-back-filled one — ``backfill_start_unreliable`` answers the
-    # narrower question "is the walk-back's starting VALUE untrustworthy"
-    # and measures False even on a 9,698-point series whose first 9,625
-    # points are reconstructed.
-    earliest_observed_date: str | None = None
 
 
 @dataclass(slots=True)
@@ -942,7 +933,6 @@ def _parse_performance(data: dict[str, object]) -> PerformanceSeries:
         backfill_start_unreliable=bool(data.get("backfill_start_unreliable")),
         earliest_observed_date=_s(data.get("earliest_observed_date")),
         points=points,
-        earliest_observed_date=_s(data.get("earliest_observed_date")),
     )
 
 
