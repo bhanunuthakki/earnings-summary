@@ -1,11 +1,15 @@
-"""Detect discontinued/relabeled XBRL metrics — Layer-3 CLI for the P1 build.
+"""Detect discontinued/relabeled/standard-transition XBRL metrics — Layer-3
+CLI for the P1 build.
 
 Deterministic candidate generation + suppression
 (``src/filings/metric_lifecycle.py``: axis-aware gap-calibrated absence
-detection, then relabel-pair suppression), then an optional single batched
-LLM triage call per ticker (``src/filings/metric_triage.py``), then writes
-``metric_discontinued``/``metric_relabeled`` rows to ``disclosure_events``
-(migration 0200). See ``docs/design/disclosure_change_signals.md`` §2-3.
+detection, then relabel-pair suppression, then a cross-sectional
+accounting-standard-transition gate built once per run over the FULL cached
+companyfacts book), then an optional single batched LLM triage call per
+ticker (``src/filings/metric_triage.py``), then writes
+``metric_discontinued``/``metric_relabeled``/``metric_standard_transition``
+rows to ``disclosure_events`` (migration 0200). See
+``docs/design/disclosure_change_signals.md`` §2-3.
 
 Every run is idempotent (upsert on ``disclosure_events``'s unique key), so a
 partial run resumes simply by running again.
@@ -38,6 +42,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import db  # noqa: E402
 from filings.metric_lifecycle import (  # noqa: E402
     MetricLifecycleEvent,
+    StandardTransitionCorpus,
+    build_standard_transition_corpus,
     candidate_to_event,
     run_lifecycle_detection,
     write_lifecycle_events,
@@ -88,12 +94,17 @@ def run_ticker(
     conn: sqlite3.Connection,
     use_llm: bool,
     dry_run: bool,
+    standard_transition_corpus: StandardTransitionCorpus | None,
 ) -> dict[str, object]:
-    """Run Stage 0+1 (always), Stage 2 (unless ``use_llm=False``), and write
-    (unless ``dry_run=True``) for one ticker. Never raises on an LLM triage
-    failure — that degrades honestly (unclassified verdicts) rather than
-    aborting the ticker, per the module's degrade-loud-not-silent contract."""
-    result = run_lifecycle_detection(repo_root, ticker)
+    """Run Stage 0+1+1.5 (always), Stage 2 (unless ``use_llm=False``), and
+    write (unless ``dry_run=True``) for one ticker. Never raises on an LLM
+    triage failure — that degrades honestly (unclassified verdicts) rather
+    than aborting the ticker, per the module's degrade-loud-not-silent
+    contract. ``standard_transition_corpus`` should be built ONCE per run
+    (see ``main``) and passed to every call, not rebuilt per ticker."""
+    result = run_lifecycle_detection(
+        repo_root, ticker, standard_transition_corpus=standard_transition_corpus
+    )
     if result is None:
         return {"ticker": ticker, "status": "no_companyfacts", "n_events_written": 0}
 
@@ -115,6 +126,8 @@ def run_ticker(
 
     events: list[MetricLifecycleEvent] = [
         candidate_to_event(cand, verdict="mechanical") for cand in result.relabeled_pairs
+    ] + [
+        candidate_to_event(cand, verdict="mechanical") for cand in result.standard_transition_pairs
     ]
     for cand in result.candidates:
         verdict = "unclassified"
@@ -142,11 +155,15 @@ def run_ticker(
         "naive_count": result.naive_count,
         "after_gap_calibration": result.after_gap_calibration,
         "after_relabel_suppression": result.after_relabel_suppression,
+        "after_standard_transition_suppression": result.after_standard_transition_suppression,
         "n_discontinued": len(result.candidates),
         "n_relabeled": len(result.relabeled_pairs),
+        "n_standard_transition": len(result.standard_transition_pairs),
         "n_events_written": n_written,
         "triage_degraded": bool(triage is not None and triage.degraded),
         "triage_skipped": not use_llm,
+        "standard_transition_gate_ran": result.standard_transition_gate_ran,
+        "standard_transition_comparison_tickers": result.standard_transition_comparison_tickers,
     }
 
 
@@ -165,6 +182,16 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run",
         action="store_true",
         help="Detect (+ triage) but do not write disclosure_events",
+    )
+    parser.add_argument(
+        "--no-cross-sectional",
+        action="store_true",
+        help=(
+            "Skip Stage 1.5's cross-sectional standard-transition gate "
+            "(the corpus scan over every cached ticker) — deterministic "
+            "stages 0+1 only, no full-book scan. Off by default; every "
+            "surviving metric_discontinued candidate is checked."
+        ),
     )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
@@ -188,6 +215,49 @@ def main(argv: list[str] | None = None) -> int:
             log.error({"event": "empty_ticker_set"})
             return _EXIT_BAD_ARGS
 
+        # Stage 1.5's cross-sectional corpus is a FULL scan over every
+        # cached ticker (deliberately the whole book, not just the ones
+        # requested here or the held portfolio — see
+        # list_cached_tickers/build_standard_transition_corpus docstrings
+        # for why more comparison points matter). Built ONCE per run and
+        # shared across every per-ticker call below, never rebuilt per
+        # ticker (that would turn an O(n) run into O(n^2)).
+        corpus: StandardTransitionCorpus | None = None
+        if not args.no_cross_sectional:
+            corpus = build_standard_transition_corpus(repo_root)
+            comparison_pool = len(corpus.tickers_covered)
+            log.info(
+                {
+                    "event": "standard_transition_corpus_built",
+                    "tickers_covered": comparison_pool,
+                    "distinct_tags_with_stop_events": len(corpus.stop_events),
+                }
+            )
+            if comparison_pool <= 1:
+                # Absence is never silent: a corpus with <=1 ticker (itself,
+                # or nothing at all) means the gate will structurally never
+                # fire — every candidate would read as "confirmed
+                # company-specific" when really no comparison ever happened.
+                log.warning(
+                    {
+                        "event": "standard_transition_corpus_no_comparison_data",
+                        "tickers_covered": comparison_pool,
+                        "hint": (
+                            "no cached companyfacts found beyond this run's own "
+                            "ticker(s) — the cross-sectional gate ran but could "
+                            "not compare against anything; every metric_discontinued "
+                            "verdict below is UNCONFIRMED against noise source 4"
+                        ),
+                    }
+                )
+        else:
+            log.warning(
+                {
+                    "event": "standard_transition_gate_skipped",
+                    "hint": "--no-cross-sectional passed; metric_discontinued may include ASU/ASC-driven noise",
+                }
+            )
+
         started = datetime.now(UTC).replace(tzinfo=None)
         reports: list[dict[str, object]] = []
         for ticker in tickers:
@@ -198,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
                     conn=conn,
                     use_llm=not args.no_llm,
                     dry_run=args.dry_run,
+                    standard_transition_corpus=corpus,
                 )
             except HardStopError as exc:
                 log.error({"event": "hard_stop", "ticker": ticker, "error": str(exc)})
@@ -211,6 +282,8 @@ def main(argv: list[str] | None = None) -> int:
             "tickers": tickers,
             "dry_run": args.dry_run,
             "llm_enabled": not args.no_llm,
+            "cross_sectional_gate_ran": corpus is not None,
+            "cross_sectional_comparison_tickers": len(corpus.tickers_covered) if corpus else 0,
             "total_events_written": sum(cast("int", r.get("n_events_written", 0)) for r in reports),
             "reports": reports,
         }

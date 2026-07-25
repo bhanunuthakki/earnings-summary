@@ -1,7 +1,7 @@
 """Tests for the P1 discontinued-metric detector (``src/filings/metric_lifecycle.py``
 + ``src/filings/metric_triage.py``).
 
-Weighted toward the three noise sources the empirical calibration session
+Weighted toward the four noise sources the empirical calibration session
 measured (docs/design/disclosure_change_signals.md §2), because a
 happy-path-only suite here would pass while the detector reproduces the
 175-candidates-for-META noise:
@@ -10,10 +10,16 @@ happy-path-only suite here would pass while the detector reproduces the
 2. an irregular-cadence tag must not flag within its own historical
    tolerance, but MUST flag once it exceeds it;
 3. a taxonomy relabel (MELI's PP&E-tag rename, reproduced synthetically
-   here) must classify as ``metric_relabeled``, never ``metric_discontinued``.
+   here) must classify as ``metric_relabeled``, never ``metric_discontinued``;
+4. an accounting-standard transition — a tag stopped by several OTHER
+   cached tickers within the same window — must classify as
+   ``metric_standard_transition``, while a genuinely company-specific stop
+   (shared by no one else) must NOT be swept up by that gate.
 
-Also covers: idempotent writes, and that an LLM triage failure degrades
-loudly (no candidate is ever silently marked "plumbing").
+Also covers: the "(Deprecated ...)" taxonomy-annotation strip (without it,
+a real tag's relabel match is missed on containment alone), idempotent
+writes, and that an LLM triage failure degrades loudly (no candidate is
+ever silently marked "plumbing").
 """
 
 from __future__ import annotations
@@ -31,8 +37,10 @@ from filings import metric_lifecycle as ml  # noqa: E402
 from filings.metric_lifecycle import (  # noqa: E402
     Axis,
     CandidateKind,
+    build_standard_transition_corpus,
     candidate_to_event,
     group_by_concept,
+    list_cached_tickers,
     load_tag_series,
     run_lifecycle_detection,
     write_lifecycle_events,
@@ -291,6 +299,170 @@ def test_meta_ppe_relabel_reproduced_from_directive_example(tmp_path: Path) -> N
     assert "us-gaap:PropertyPlantAndEquipmentNet" in relabeled_names
     discontinued_names = {c.qualified_name for c in result.candidates}
     assert "us-gaap:PropertyPlantAndEquipmentNet" not in discontinued_names
+
+
+def test_deprecated_annotation_stripped_before_relabel_containment(tmp_path: Path) -> None:
+    """Real case found in coordinator review: the US-GAAP taxonomy annotates
+    a retired element's OWN label with "(Deprecated YYYY-MM-DD)"
+    (``AdvertisingRevenue`` -> "Advertising Revenue (Deprecated 2018-01-31)",
+    replaced by ``RevenueFromContractWithCustomerExcludingAssessedTax`` —
+    sharing only the "revenue" token, exactly reproduced here). Left
+    unstripped, "deprecated" inflates the OLD tag's token denominator from 2
+    to 3: containment drops from 1/2 = 0.5 (passes 0.4) to 1/3 = 0.33
+    (fails), missing an otherwise-valid match."""
+    tags: dict[str, list[dict[str, object]]] = {
+        "AlwaysAnnual": [_annual_entry(fy, 1000.0 + fy) for fy in range(2010, 2020)],
+        "AlwaysQuarterly": [
+            _quarterly_entry(fy, q, 100.0 + fy) for fy in range(2010, 2020) for q in (1, 2, 3)
+        ],
+        "AdvertisingRevenue": [_annual_entry(fy, 40.0 + fy - 2010) for fy in range(2010, 2018)],
+        # Debuts in the FIRST QUARTERLY filing after adoption (unified rank
+        # is only +1 from a prior calendar year's ANNUAL rank, since annual
+        # entries sit at "quarter 4" of the unified rank and a Q1 entry the
+        # next year is the very next slot) — exactly how the real
+        # AdvertisingRevenue -> RevenueFromContractWithCustomer... pairing
+        # actually lines up (its earliest appearance is a 10-Q, not a 10-K).
+        # A PURE annual-to-annual pairing one calendar year apart is 4
+        # unified-rank units apart and would NOT clear this gate — an
+        # accepted, documented shape of the window, not a bug.
+        "RevenueFromContractExcludingTax": [
+            _quarterly_entry(2018, 1, 41.0, accn="acc-2018-q1-new"),
+            _annual_entry(2018, 42.0, accn="acc-2018-10k-new"),
+            _annual_entry(2019, 43.0, accn="acc-2019-new"),
+        ],
+    }
+    _write_companyfacts(tmp_path, "DEPR", tags)
+
+    # Patch in the real taxonomy annotation this test exists to strip
+    # (the auto-generated fixture label is just the bare tag name).
+    import json
+
+    facts_path = tmp_path / "data" / "historical" / "sec" / "DEPR_companyfacts.json"
+    payload = json.loads(facts_path.read_text())
+    payload["facts"]["us-gaap"]["AdvertisingRevenue"]["label"] = (
+        "Advertising Revenue (Deprecated 2018-01-31)"
+    )
+    facts_path.write_text(json.dumps(payload))
+
+    # Confirm the WITHOUT-strip scenario actually fails containment (a plain
+    # word-split, not the module's own tokenizer, so this checks the claim
+    # independently rather than trivially): {advertising, revenue,
+    # deprecated, 2018-01-31} shares only "revenue" with the new label's
+    # vocabulary -> well below the 0.4 threshold.
+    unstripped_words = {
+        w.lower().strip("(),")
+        for w in ["Advertising", "Revenue", "(Deprecated", "2018-01-31)"]
+        if len(w.strip("(),")) > 2
+    }
+    assert (
+        len(unstripped_words & {"revenue"}) / len(unstripped_words)
+        < ml.RELABEL_LABEL_CONTAINMENT_MIN
+    )
+
+    result = run_lifecycle_detection(tmp_path, "DEPR")
+    assert result is not None
+    relabeled_names = {c.qualified_name: c for c in result.relabeled_pairs}
+    assert "us-gaap:AdvertisingRevenue" in relabeled_names, (
+        "the (Deprecated ...) annotation must not block an otherwise-valid relabel match"
+    )
+    assert (
+        relabeled_names["us-gaap:AdvertisingRevenue"].relabeled_to
+        == "us-gaap:RevenueFromContractExcludingTax"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Noise source 4 — cross-sectional accounting-standard transitions
+# ---------------------------------------------------------------------------
+
+
+def test_tag_stopped_by_several_tickers_classifies_as_standard_transition(
+    tmp_path: Path,
+) -> None:
+    """Three tickers independently stop the SAME tag in the SAME fiscal
+    year (the ASU-842-style signature: many companies, one adoption
+    window) — the corpus-built cross-sectional gate must reclassify it as
+    ``metric_standard_transition``, never ``metric_discontinued``."""
+    shared_tags: dict[str, list[dict[str, object]]] = {
+        "AlwaysAnnual": [_annual_entry(fy, 1000.0 + fy) for fy in range(2010, 2024)],
+        "SharedScheduleTag": [_annual_entry(fy, 10.0 + fy) for fy in range(2012, 2019)],
+    }
+    for ticker in ("STDA", "STDB", "STDC"):
+        _write_companyfacts(tmp_path, ticker, shared_tags)
+
+    corpus = build_standard_transition_corpus(tmp_path, ["STDA", "STDB", "STDC"])
+    assert corpus.tickers_covered == ["STDA", "STDB", "STDC"]
+    assert "us-gaap:SharedScheduleTag" in corpus.stop_events
+    assert len(corpus.stop_events["us-gaap:SharedScheduleTag"]) == 3
+
+    result = run_lifecycle_detection(tmp_path, "STDA", standard_transition_corpus=corpus)
+    assert result is not None
+    assert result.standard_transition_gate_ran is True
+    assert result.standard_transition_comparison_tickers == 2  # STDB, STDC
+
+    st_names = {c.qualified_name: c for c in result.standard_transition_pairs}
+    assert "us-gaap:SharedScheduleTag" in st_names
+    assert st_names["us-gaap:SharedScheduleTag"].kind is CandidateKind.STANDARD_TRANSITION
+    assert st_names["us-gaap:SharedScheduleTag"].standard_transition_other_tickers == 2
+    discontinued_names = {c.qualified_name for c in result.candidates}
+    assert "us-gaap:SharedScheduleTag" not in discontinued_names
+
+
+def test_company_specific_stop_not_swept_into_standard_transition(tmp_path: Path) -> None:
+    """A tag only ONE ticker ever reports must NOT be reclassified — the
+    gate requires >= ``STANDARD_TRANSITION_MIN_OTHER_TICKERS`` OTHER
+    tickers, and a company-specific event has zero."""
+    shared_tags: dict[str, list[dict[str, object]]] = {
+        "AlwaysAnnual": [_annual_entry(fy, 1000.0 + fy) for fy in range(2010, 2024)],
+        "SharedScheduleTag": [_annual_entry(fy, 10.0 + fy) for fy in range(2012, 2019)],
+    }
+    for ticker in ("STDA", "STDB", "STDC"):
+        _write_companyfacts(tmp_path, ticker, shared_tags)
+    # UNIQ has its OWN one-off stopped tag that nobody else shares.
+    uniq_tags: dict[str, list[dict[str, object]]] = {
+        "AlwaysAnnual": [_annual_entry(fy, 1000.0 + fy) for fy in range(2010, 2024)],
+        "UniqueCompanyTag": [_annual_entry(fy, 5.0 + fy) for fy in range(2012, 2019)],
+    }
+    _write_companyfacts(tmp_path, "UNIQ", uniq_tags)
+
+    corpus = build_standard_transition_corpus(tmp_path, ["STDA", "STDB", "STDC", "UNIQ"])
+    result = run_lifecycle_detection(tmp_path, "UNIQ", standard_transition_corpus=corpus)
+    assert result is not None
+    st_names = {c.qualified_name for c in result.standard_transition_pairs}
+    assert "us-gaap:UniqueCompanyTag" not in st_names
+    discontinued_names = {c.qualified_name for c in result.candidates}
+    assert "us-gaap:UniqueCompanyTag" in discontinued_names
+
+
+def test_standard_transition_gate_degrades_honestly_without_corpus(tmp_path: Path) -> None:
+    """No corpus supplied (single-ticker call, no cross-sectional data) must
+    NOT silently read as "confirmed company-specific" — the result records
+    ``standard_transition_gate_ran=False`` and the candidate stays
+    ``metric_discontinued`` (the safe default: never promoted without a
+    confirming corpus)."""
+    tags: dict[str, list[dict[str, object]]] = {
+        "AlwaysAnnual": [_annual_entry(fy, 1000.0 + fy) for fy in range(2010, 2024)],
+        "SharedScheduleTag": [_annual_entry(fy, 10.0 + fy) for fy in range(2012, 2019)],
+    }
+    _write_companyfacts(tmp_path, "STDA", tags)
+
+    result = run_lifecycle_detection(tmp_path, "STDA")  # no standard_transition_corpus
+    assert result is not None
+    assert result.standard_transition_gate_ran is False
+    assert result.standard_transition_comparison_tickers == 0
+    assert result.standard_transition_pairs == []
+    discontinued_names = {c.qualified_name for c in result.candidates}
+    assert "us-gaap:SharedScheduleTag" in discontinued_names
+
+
+def test_list_cached_tickers_finds_every_companyfacts_file(tmp_path: Path) -> None:
+    for ticker in ("AAA", "BBB", "CCC"):
+        _write_companyfacts(tmp_path, ticker, {"SomeTag": [_annual_entry(2020, 1.0)]})
+    assert list_cached_tickers(tmp_path) == ["AAA", "BBB", "CCC"]
+
+
+def test_list_cached_tickers_empty_when_no_data_dir(tmp_path: Path) -> None:
+    assert list_cached_tickers(tmp_path) == []
 
 
 # ---------------------------------------------------------------------------

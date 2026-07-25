@@ -11,7 +11,7 @@ boundary a test would need to mock.
 Naive detection ("tag reported >=6 periods, absent from the last 4") is
 ~90% noise — measured at 175 candidates for META alone, including
 ``PropertyPlantAndEquipmentNet``, which META obviously still reports (under
-a renamed tag — see below). Three independent, deterministically-killable
+a renamed tag — see below). Four independent, deterministically-killable
 noise sources:
 
 1. **Axis conflation.** A tag's disclosure cadence is bound to its FORM
@@ -45,6 +45,43 @@ noise sources:
    (``find_relabel_target``). A match reclassifies the candidate as
    ``metric_relabeled`` rather than ``metric_discontinued`` — it must never
    reach the LLM triage step, let alone a surface.
+4. **Accounting-standard transitions.** A tag stops not because ONE company
+   decided anything, but because an ASU/ASC forced the WHOLE taxonomy off
+   it, industry-wide, in the same 1-3 year window — and, unlike noise
+   source 3, sometimes with no distinct successor tag at all (the
+   information simply gets folded into a schedule the new standard already
+   requires elsewhere, or picked up by a tag that ALREADY existed rather
+   than one freshly debuting — see the "already-active broader tag" known
+   limitation below, which this gate independently resolves for at least
+   one real case). Confirmed industry-wide across the full 99-ticker cached
+   book: ``OperatingLeasesFutureMinimumPaymentsDueThereafter``/
+   ``...DueCurrent``/``...Due`` (ASU 842, FY2018-2020) independently stopped
+   for 40-47 tickers within this same ±2-period window;
+   ``ExcessTaxBenefitFromShareBasedCompensationFinancingActivities``
+   (ASU 2016-09) for 32; ``DeferredRevenueCurrent``/``SalesRevenueServicesNet``
+   (ASC 606) for 24/13. This is the same principle as P2 "cross-sectional
+   detrending" in ``docs/design/disclosure_change_build_stack.md``, applied
+   at TAG level instead of at a similarity-score level: benchmark each
+   candidate against the same-window cross-section of the WHOLE cached book
+   rather than judging it in isolation. Fix: ``build_standard_transition_corpus``
+   scans every OTHER cached ticker's Stage 0 output once per run and counts,
+   for a given candidate, how many other tickers stopped the SAME tag within
+   ``RELABEL_PERIOD_WINDOW`` periods; at or above
+   ``STANDARD_TRANSITION_MIN_OTHER_TICKERS`` the candidate becomes
+   ``metric_standard_transition`` rather than ``metric_discontinued`` — a
+   *different verdict from ``metric_relabeled``* (no successor tag is
+   claimed; the disclosure may simply be gone) but the same "mechanical, not
+   a company decision" classification. Deliberately NOT a hardcoded list of
+   known ASU/ASC standards — a hardcoded list rots the day a NEW standard
+   ships; the cross-sectional count is self-calibrating and requires no
+   maintenance to catch a transition this repo has never seen. Corpus
+   BREADTH matters: on an 11-ticker (portfolio-only) corpus META's #1
+   candidate by materiality was still ``AdvertisingRevenue`` (0.95 — the
+   size of revenue itself), fixed instead by the ``_DEPRECATED_ANNOTATION_RX``
+   strip below (a relabel-gate fix, not this one — it shares its tag with
+   only 1 other cached ticker, below this gate's threshold); running the
+   corpus over the full 99-ticker book is what surfaces the 24-47-ticker
+   clusters above with headroom to spare.
 
 Materiality ranks (never filters) surviving candidates: the last reported
 value relative to a scale anchor (revenue, falling back to total assets)
@@ -56,8 +93,42 @@ module. ``disclosure_events.verdict`` (migration 0200) exists precisely so a
 detector commits to concealment vs. maturity vs. mechanical rather than
 letting the event type imply a direction it has not earned; this module
 only emits the deterministic ``mechanical`` verdict for confirmed relabels
-and leaves every ``metric_discontinued`` candidate ``unclassified`` until
-``filings.metric_triage`` (or a human) judges it.
+and standard transitions, and leaves every ``metric_discontinued``
+candidate ``unclassified`` until ``filings.metric_triage`` (or a human)
+judges it.
+
+**Known limitation — an already-active broader tag absorbing a narrower
+one is invisible to the relabel gate, by design.** ``find_relabel_target``
+only matches a replacement whose OWN first-ever appearance is close in time
+to the stop (noise source 3 is specifically about a NEW tag debuting).
+When a company instead folds a narrower line into a tag it has ALREADY been
+reporting continuously for years, there is no "new tag debuting" to find —
+confirmed on META: ``Cash`` (last 2015 Q3) has 100% label-token containment
+with the still-active ``CashAndCashEquivalentsAtCarryingValue`` (period gap
+-13, i.e. that tag already existed 13 unified periods before ``Cash``
+stopped) and ``NetIncomeLossAvailableToCommonStockholdersBasic`` (last
+FY2020) similarly contains 3/7 of its tokens in the already-active
+``NetIncomeLoss`` (gap -34). Both correctly fall through as
+``metric_discontinued`` rather than a false ``metric_relabeled`` suppression
+— which is arguably the RIGHT outcome for the second case in particular
+(the "available to common stockholders" adjustment disappearing can reflect
+a real capital-structure change, e.g. preferred stock redemption, that is
+worth an LLM/human look, not noise to suppress). A related case, META's
+``IntangibleAssetsNetIncludingGoodwill`` (last 2014 Q2, containment 0.6
+against the still-active ``IntangibleAssetsNetExcludingGoodwill``, debuting
+one period later): the antonym guard correctly blocks this pairing despite
+the tight timing, because "including" vs "excluding" goodwill are genuinely
+different carrying values, not a rename — META split a combined figure into
+components, a real disclosure-granularity decision. Widening the period
+window to also match "already active" targets, or loosening the antonym
+guard, was deliberately NOT done — it would trade these honest gaps for
+false-suppressing real, judgment-worthy disclosure changes. (VEEV's
+``PaymentsToAcquirePropertyPlantAndEquipment``, which looked like this same
+"no successor found" case on an 11-ticker corpus, resolved once
+``build_standard_transition_corpus`` ran over the full 99-ticker cached
+book: NVDA and WIX independently stopped the identical tag within the same
+quarter, so it correctly reclassifies as ``metric_standard_transition``
+instead — direct evidence that corpus breadth matters for this gate.)
 """
 
 from __future__ import annotations
@@ -123,12 +194,33 @@ RELABEL_MAGNITUDE_RATIO = 5.0
 #: Unrelated tags essentially never share this much core vocabulary AND
 #: land within the period window AND the magnitude band simultaneously.
 RELABEL_LABEL_CONTAINMENT_MIN = 0.4
+#: Noise source 4 (accounting-standard transitions): a candidate is
+#: reclassified ``metric_standard_transition`` when at least this many OTHER
+#: cached tickers stopped the identical tag within ``RELABEL_PERIOD_WINDOW``
+#: periods of this ticker's stop. Measured on the full 99-ticker cached
+#: book: at this threshold 219/2258 distinct stopped tags (~9.7%) qualify —
+#: a minority, so real company-specific events are not swept up — while the
+#: confirmed ASU-842/ASU-2016-09/ASC-606 examples in the module docstring
+#: clear it by 10-20x margin (13-47 tickers each), giving ample headroom.
+STANDARD_TRANSITION_MIN_OTHER_TICKERS = 2
 
 _LABEL_STOPWORDS = frozenset(
     {"and", "of", "the", "to", "for", "on", "in", "at", "by", "or", "with", "from"}
 )
 _CAMEL_BOUNDARY_RX = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 _WORD_RX = re.compile(r"[A-Za-z]+")
+#: The US-GAAP taxonomy annotates a retired element's OWN label with this
+#: suffix, e.g. ``"Advertising Revenue (Deprecated 2018-01-31)"`` — confirmed
+#: on 2,991 label instances across the full cached book, always a trailing
+#: suffix. This is administrative taxonomy metadata, not content describing
+#: what the tag measures, and must be stripped before tokenizing: left in,
+#: it inflates the OLD tag's token count and can drop containment below
+#: threshold for a tag that is otherwise an exact-vocabulary match — real
+#: case found in review: "Advertising Revenue (Deprecated 2018-01-31)" vs.
+#: "Revenue from Contract with Customer, Excluding Assessed Tax" scored
+#: containment 1/3 (denominator inflated by "deprecated") instead of the
+#: correct 1/2, missing META's #1-by-materiality candidate.
+_DEPRECATED_ANNOTATION_RX = re.compile(r"\(deprecated[^)]*\)", re.IGNORECASE)
 
 
 def _singularize(token: str) -> str:
@@ -153,8 +245,12 @@ def _label_tokens(label: str) -> set[str]:
 
     Splits camelCase boundaries first so a bare tag name (no human label
     available) still tokenizes sensibly — real companyfacts ``label`` values
-    are already space-separated prose, so this is a no-op for them."""
-    spaced = _CAMEL_BOUNDARY_RX.sub(" ", label)
+    are already space-separated prose, so this is a no-op for them. Strips
+    a trailing ``(Deprecated ...)`` taxonomy annotation first (see
+    ``_DEPRECATED_ANNOTATION_RX``) — it is metadata about the tag's
+    lifecycle, not a description of what it measures."""
+    without_deprecation = _DEPRECATED_ANNOTATION_RX.sub("", label)
+    spaced = _CAMEL_BOUNDARY_RX.sub(" ", without_deprecation)
     return {
         _singularize(t.lower())
         for t in _WORD_RX.findall(spaced)
@@ -194,6 +290,7 @@ class Axis(StrEnum):
 class CandidateKind(StrEnum):
     DISCONTINUED = "metric_discontinued"
     RELABELED = "metric_relabeled"
+    STANDARD_TRANSITION = "metric_standard_transition"
 
 
 def _axis_for_form(form: str) -> Axis | None:
@@ -522,6 +619,10 @@ class MetricCandidate(BaseModel):
     relabeled_to: str | None = None
     relabel_period_gap: int | None = None
     relabel_magnitude_ratio: float | None = None
+    #: Set only when ``kind is CandidateKind.STANDARD_TRANSITION`` — how many
+    #: OTHER cached tickers stopped this identical tag within the same
+    #: period window (see ``STANDARD_TRANSITION_MIN_OTHER_TICKERS``).
+    standard_transition_other_tickers: int | None = None
 
     @property
     def qualified_name(self) -> str:
@@ -721,32 +822,19 @@ def naive_candidate_count(concepts: dict[tuple[str, str], TagSeries]) -> tuple[i
     return len(flagged), flagged
 
 
-class LifecycleRunResult(BaseModel):
-    """Per-ticker Stage 0 + Stage 1 output, with before/after counts at each
-    suppression stage for the verification report."""
+def _stage0_candidates(
+    ticker: str,
+    concepts: dict[tuple[str, str], TagSeries],
+    axis_summaries: dict[Axis, AxisSummary],
+) -> tuple[list[MetricCandidate], int]:
+    """Stage 0: axis-aware, gap-calibrated absence detection (noise sources
+    1+2). Returns ``(candidates, tags_skipped_no_min_observations)``.
 
-    ticker: str
-    naive_count: int
-    after_gap_calibration: int
-    after_relabel_suppression: int
-    candidates: list[MetricCandidate]
-    relabeled_pairs: list[MetricCandidate]
-    tags_considered: int
-    tags_skipped_no_min_observations: int
-
-
-def run_lifecycle_detection(repo_root: Path, ticker: str) -> LifecycleRunResult | None:
-    """Stage 0 (axis-aware, gap-calibrated absence) + Stage 1 (relabel
-    suppression). Zero LLM. Returns ``None`` when the ticker has no cached
-    companyfacts (an explained absence, not an error — the CLI records it
-    as such)."""
-    series = load_tag_series(repo_root, ticker)
-    if series is None:
-        return None
-    concepts = group_by_concept(series)
-    axis_summaries = compute_axis_summaries(series)
-    naive_count, _ = naive_candidate_count(concepts)
-
+    Factored out of ``run_lifecycle_detection`` so ``build_standard_transition_corpus``
+    can reuse the identical per-ticker Stage 0 pass when building the
+    cross-sectional histogram — the two must compute IDENTICAL candidate
+    sets, or the cross-ticker counts would be comparing apples to oranges.
+    """
     stage0: list[MetricCandidate] = []
     skipped_min_obs = 0
     for (taxonomy, tag), s in concepts.items():
@@ -813,7 +901,134 @@ def run_lifecycle_detection(repo_root: Path, ticker: str) -> LifecycleRunResult 
                 materiality=materiality,
             )
         )
+    return stage0, skipped_min_obs
 
+
+def list_cached_tickers(repo_root: Path) -> list[str]:
+    """Every ticker with a cached companyfacts payload — the corpus scope
+    for the standard-transition gate. Deliberately the FULL cached book
+    (``data/historical/sec/*_companyfacts.json``), not just the actively
+    held/tracked portfolio: cross-sectional statistical power comes from
+    MORE comparison points, and the confirmed cross-ticker clustering
+    (module docstring, noise source 4) includes plenty of pure comparables
+    that are never held positions."""
+    sec_dir = repo_root / "data" / "historical" / "sec"
+    if not sec_dir.is_dir():
+        return []
+    return sorted(
+        p.name.removesuffix("_companyfacts.json") for p in sec_dir.glob("*_companyfacts.json")
+    )
+
+
+class StandardTransitionCorpus(BaseModel):
+    """Per-tag histogram of (ticker, stop-period-rank) built from a Stage 0
+    sweep across every cached ticker — the P2 "cross-sectional detrending"
+    principle (``docs/design/disclosure_change_build_stack.md``) applied at
+    tag level. Build ONCE per run (``build_standard_transition_corpus``),
+    never per ticker — it is a full corpus pass.
+    """
+
+    #: qualified_name -> [(ticker, unified period_rank), ...] for every
+    #: ticker whose Stage 0 pass flagged that tag as absent.
+    stop_events: dict[str, list[tuple[str, int]]] = Field(
+        default_factory=dict[str, list[tuple[str, int]]]
+    )
+    #: Tickers actually swept into this corpus (had cached companyfacts).
+    tickers_covered: list[str] = Field(default_factory=list[str])
+
+    def cross_ticker_count(
+        self, qualified_name: str, *, exclude_ticker: str, near_rank: int, window: int
+    ) -> int:
+        """How many OTHER tickers stopped ``qualified_name`` within
+        ``window`` unified periods of ``near_rank``."""
+        others = {
+            t
+            for t, r in self.stop_events.get(qualified_name, [])
+            if t != exclude_ticker and abs(r - near_rank) <= window
+        }
+        return len(others)
+
+
+def build_standard_transition_corpus(
+    repo_root: Path, tickers: list[str] | None = None
+) -> StandardTransitionCorpus:
+    """Sweep Stage 0 across every ticker (default: ``list_cached_tickers``)
+    once, to power the cross-sectional standard-transition gate. Cache the
+    result and reuse it across every per-ticker ``run_lifecycle_detection``
+    call in a run — recomputing this per ticker would be an O(n^2) full
+    corpus re-scan for every ticker instead of one.
+    """
+    scope = tickers if tickers is not None else list_cached_tickers(repo_root)
+    stop_events: dict[str, list[tuple[str, int]]] = {}
+    covered: list[str] = []
+    for ticker in scope:
+        series = load_tag_series(repo_root, ticker)
+        if series is None:
+            continue
+        covered.append(ticker)
+        concepts = group_by_concept(series)
+        axis_summaries = compute_axis_summaries(series)
+        stage0, _ = _stage0_candidates(ticker, concepts, axis_summaries)
+        for cand in stage0:
+            stop_events.setdefault(cand.qualified_name, []).append(
+                (ticker, cand.last_observation.period_rank)
+            )
+    return StandardTransitionCorpus(stop_events=stop_events, tickers_covered=covered)
+
+
+class LifecycleRunResult(BaseModel):
+    """Per-ticker Stage 0 + Stage 1 + Stage "1.5" output, with before/after
+    counts at each suppression stage for the verification report."""
+
+    ticker: str
+    naive_count: int
+    after_gap_calibration: int
+    after_relabel_suppression: int
+    after_standard_transition_suppression: int
+    candidates: list[MetricCandidate]
+    relabeled_pairs: list[MetricCandidate]
+    standard_transition_pairs: list[MetricCandidate]
+    tags_considered: int
+    tags_skipped_no_min_observations: int
+    #: Whether the cross-sectional gate ran at all (``False`` when the
+    #: caller passed no corpus — a single-ticker run without one is NOT
+    #: silently treated as "no standard transitions found"; the CLI/report
+    #: must say the gate was skipped, per the absence-is-never-silent rule).
+    standard_transition_gate_ran: bool
+    #: How many OTHER tickers the gate actually had to compare against
+    #: (``tickers_covered`` minus this ticker if present). Zero means the
+    #: gate ran but had no comparison data — also worth surfacing rather
+    #: than silently reading as "confirmed company-specific".
+    standard_transition_comparison_tickers: int
+
+
+def run_lifecycle_detection(
+    repo_root: Path,
+    ticker: str,
+    *,
+    standard_transition_corpus: StandardTransitionCorpus | None = None,
+) -> LifecycleRunResult | None:
+    """Stage 0 (axis-aware, gap-calibrated absence) + Stage 1 (relabel
+    suppression) + Stage "1.5" (cross-sectional standard-transition
+    suppression, when ``standard_transition_corpus`` is supplied). Zero LLM.
+    Returns ``None`` when the ticker has no cached companyfacts (an
+    explained absence, not an error — the CLI records it as such).
+
+    ``standard_transition_corpus`` should be built ONCE per run via
+    ``build_standard_transition_corpus`` and passed to every per-ticker call
+    — building it here per-ticker would silently turn an O(n) run into
+    O(n^2). Passing ``None`` (e.g. a genuinely single-ticker, no-corpus
+    call) skips the gate honestly: ``standard_transition_gate_ran=False`` on
+    the result, never a silent "nothing found".
+    """
+    series = load_tag_series(repo_root, ticker)
+    if series is None:
+        return None
+    concepts = group_by_concept(series)
+    axis_summaries = compute_axis_summaries(series)
+    naive_count, _ = naive_candidate_count(concepts)
+
+    stage0, skipped_min_obs = _stage0_candidates(ticker, concepts, axis_summaries)
     after_gap = len(stage0)
 
     discontinued: list[MetricCandidate] = []
@@ -835,17 +1050,51 @@ def run_lifecycle_detection(repo_root: Path, ticker: str) -> LifecycleRunResult 
         else:
             discontinued.append(cand)
 
-    discontinued.sort(key=lambda c: (c.materiality is None, -(c.materiality or 0.0)))
+    # Stage "1.5" — cross-sectional standard-transition suppression (noise
+    # source 4). Runs over what's left after relabel suppression: a tag
+    # already reclassified metric_relabeled never needs this check.
+    final_discontinued: list[MetricCandidate] = []
+    standard_transitions: list[MetricCandidate] = []
+    comparison_tickers = 0
+    if standard_transition_corpus is not None:
+        comparison_tickers = len(
+            [t for t in standard_transition_corpus.tickers_covered if t != ticker]
+        )
+    for cand in discontinued:
+        if standard_transition_corpus is not None:
+            count = standard_transition_corpus.cross_ticker_count(
+                cand.qualified_name,
+                exclude_ticker=ticker,
+                near_rank=cand.last_observation.period_rank,
+                window=RELABEL_PERIOD_WINDOW,
+            )
+            if count >= STANDARD_TRANSITION_MIN_OTHER_TICKERS:
+                standard_transitions.append(
+                    cand.model_copy(
+                        update={
+                            "kind": CandidateKind.STANDARD_TRANSITION,
+                            "standard_transition_other_tickers": count,
+                        }
+                    )
+                )
+                continue
+        final_discontinued.append(cand)
+
+    final_discontinued.sort(key=lambda c: (c.materiality is None, -(c.materiality or 0.0)))
 
     return LifecycleRunResult(
         ticker=ticker,
         naive_count=naive_count,
         after_gap_calibration=after_gap,
         after_relabel_suppression=len(discontinued),
-        candidates=discontinued,
+        after_standard_transition_suppression=len(final_discontinued),
+        candidates=final_discontinued,
         relabeled_pairs=relabeled,
+        standard_transition_pairs=standard_transitions,
         tags_considered=len(concepts),
         tags_skipped_no_min_observations=skipped_min_obs,
+        standard_transition_gate_ran=standard_transition_corpus is not None,
+        standard_transition_comparison_tickers=comparison_tickers,
     )
 
 
@@ -889,6 +1138,12 @@ def candidate_to_event(
         current_excerpt = (
             f"relabeled to {candidate.relabeled_to} "
             f"(debut {candidate.relabel_period_gap:+d} unified period(s) from stop{ratio_part})"
+        )
+    elif candidate.kind is CandidateKind.STANDARD_TRANSITION:
+        current_excerpt = (
+            f"{candidate.standard_transition_other_tickers} other cached ticker(s) stopped "
+            f"this same tag within {RELABEL_PERIOD_WINDOW} periods — an accounting-standard "
+            "transition, not a company-specific decision (no successor tag claimed)"
         )
     else:
         current_excerpt = (
