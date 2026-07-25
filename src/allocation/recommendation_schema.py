@@ -156,11 +156,7 @@ class IncrementalDollarRecommendation(BaseModel):
         allowed_refs = (
             set(frontier.source_freshness)
             | {fact for plan in frontier.plans for fact in plan.rationale_facts}
-            | {
-                format_allocation_citation(a)
-                for plan in frontier.plans
-                for a in plan.allocations
-            }
+            | {format_allocation_citation(a) for plan in frontier.plans for a in plan.allocations}
         )
         for ref in self.source_refs:
             # A source_ref is either a literal source_freshness key (e.g.
