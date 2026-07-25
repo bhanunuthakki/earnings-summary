@@ -173,8 +173,12 @@ def test_strip_renders_compact_rows(db_path: Path) -> None:
     # Tickers carry the shell hover mini-card hook (inert off the shell).
     assert 'data-peek-ticker="ORCL"' in html
     assert 'data-peek-ticker="NU"' in html
-    # Date order: ORCL (real, sooner) before NU (estimate, later).
-    assert html.index('data-peek-ticker="ORCL"') < html.index('data-peek-ticker="NU"')
+    # Tier order beats date order (Wave 2): NU (portfolio) leads even though
+    # ORCL (evaluation) reports sooner — the owner's book first. The summary
+    # line still names the SOONEST reporter regardless of tier.
+    assert html.index('data-peek-ticker="NU"') < html.index('data-peek-ticker="ORCL"')
+    assert html.index("Portfolio") < html.index('data-peek-ticker="NU"')
+    assert html.index('data-peek-ticker="NU"') < html.index("Evaluation")
     # The watchlist name never appears.
     assert "ZZ" not in html
 
@@ -231,7 +235,9 @@ def test_strip_caps_watch_items_with_overflow_hint(db_path: Path) -> None:
         create_note(ticker="NU", kind="watch", body=f"Watch item number {i}.", db_path=db_path)
     html = render_upcoming_strip(db_path, TODAY)
     assert html.count('class="up-watch-item"') == _PREP_NOTES_PER_TICKER
-    assert f"+{n - _PREP_NOTES_PER_TICKER} more open item(s)" in html
+    # Wave 2: the hint is compact ("+N") — the chips share the row's
+    # horizontal lane with the date now, not a block of their own.
+    assert f'class="up-watch-more muted">+{n - _PREP_NOTES_PER_TICKER}</span>' in html
 
 
 def test_strip_row_without_notes_has_no_watch_block(db_path: Path) -> None:
@@ -241,3 +247,72 @@ def test_strip_row_without_notes_has_no_watch_block(db_path: Path) -> None:
     html = render_upcoming_strip(db_path, TODAY)
     assert 'data-peek-ticker="NU"' in html
     assert 'class="up-watch"' not in html
+
+
+# --------------------------------------------------------------------------- #
+# Wave 2 (surface_density_jit_redesign.md, walkthrough #2/#4): tier bands,
+# the in-row chip lane, and the on-demand prep chip.
+# --------------------------------------------------------------------------- #
+
+
+def _seed_active_signal(db_path: Path, ticker: str) -> None:
+    """Give ``ticker`` a derived active-valuation signal (an unexpired
+    research hot-flag)."""
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS research_hot_flags "
+            "(id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, set_at TEXT, expires_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO research_hot_flags (ticker, set_at, expires_at) VALUES (?, ?, ?)",
+            (ticker, TODAY.isoformat(), (TODAY + timedelta(days=30)).isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_strip_tiers_active_valuation_between_portfolio_and_evaluation(db_path: Path) -> None:
+    """An evaluation name with an unexpired hot-flag ranks in the middle
+    "Active valuation" band — derived, never a manual strip flag."""
+    _seed_calendar(db_path)
+    real = TODAY + timedelta(days=2)
+    _seed_expected_earnings(db_path, [("ORCL", real)])
+    _seed_active_signal(db_path, "ORCL")
+
+    html = render_upcoming_strip(db_path, TODAY)
+
+    assert "Active valuation" in html
+    # NU (portfolio) first, then ORCL under the Active band, and no Evaluation
+    # band (nothing left for it — an empty tier renders no header).
+    assert html.index('data-peek-ticker="NU"') < html.index("Active valuation")
+    assert html.index("Active valuation") < html.index('data-peek-ticker="ORCL"')
+    assert "Evaluation" not in html
+
+
+def test_every_row_carries_the_on_demand_prep_chip(db_path: Path) -> None:
+    """Walkthrough #4: the earnings memo is a chip created on demand — every
+    upcoming row carries the peek doorway; nothing is pre-generated."""
+    _seed_calendar(db_path)
+    html = render_upcoming_strip(db_path, TODAY)
+    assert 'data-peek-url="/api/peek/earnings-prep?ticker=NU"' in html
+    assert 'data-peek-title="Earnings prep — NU"' in html
+
+
+def test_watch_chips_render_inside_the_row_lane(db_path: Path) -> None:
+    """Walkthrough #2: the chips sit in the horizontal space right of the
+    ticker (inside .up-chips, inside .up-row) — not stacked beneath the row."""
+    from user_state.notes import create_note
+
+    _seed_calendar(db_path)
+    create_note(ticker="NU", kind="watch", body="Watch the NIM print.", db_path=db_path)
+    html = render_upcoming_strip(db_path, TODAY)
+    row_start = html.index('<div class="up-row"')
+    row_end = html.index("</div>", html.index('class="up-date"', row_start))
+    row = html[row_start:row_end]
+    assert 'class="up-chips"' in row
+    assert 'class="up-watch-item"' in row
+    assert 'data-peek-url="/api/peek/earnings-prep?ticker=NU"' in row
+    # The old below-the-row list is gone.
+    assert '<ul class="up-watch">' not in html
