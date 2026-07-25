@@ -444,6 +444,7 @@ REGISTERED: frozenset[str] = frozenset(
         "pipeline/model_eval_panel.py",
         "pipeline/open_loops.py",
         "pipeline/peeks.py",
+        "pipeline/portfolio_console_panel.py",
         "pipeline/portfolio_panel.py",
         "pipeline/position_lifecycle_panel.py",
         "pipeline/positioning_panel.py",

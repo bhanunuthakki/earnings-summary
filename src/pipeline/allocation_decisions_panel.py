@@ -1728,28 +1728,36 @@ def _reversal_verdict(outcome_label: str | None, vindicated: bool | None) -> str
 
 
 def _skill_decomposition_section(d: SkillDecomposition, beta: BetaStats | None = None) -> str:
-    """The shared selection/sizing/timing decomposition (L8 §6), rendered as a
-    KPI strip + an edge-vs-leak read + the conviction → outcome join, with the
-    tracker's Jensen alpha (L-seam 5) joined in beside it. The arithmetic is the
-    engine's; this only frames it."""
+    """The shared selection/sizing/timing decomposition (L8 §6).
+
+    Wave 1 (surface_density_jit_redesign.md D4/D7): the HONEST VERDICT leads —
+    one sentence reconciling the dollar figure with the Jensen-α luck test,
+    because the walkthrough caught the old layout asserting "+$41,774 total
+    alpha" and "not distinguishable from zero — could be luck" in adjacent,
+    unreconciled lines ("I can't make out my skill from this"). The KPI strip
+    and the edge/leak read follow; the conviction → outcome join renders only
+    when at least one bucket carries a STATED conviction — an all-unstated
+    table is an empty ritual and shows as one unlock line instead. The
+    arithmetic is the engine's; this only frames it."""
     window = (
         f"{escape(d.window_start)} → {escape(d.window_end)}"
         if d.window_start and d.window_end
         else "the tracker window"
     )
-    basis_text = (
-        "your policy benchmark (the designated, anti-cherry-pick benchmark)"
-        if d.benchmark_basis == "policy"
-        else "the SPY counterfactual"
-    )
+    basis_short = "your policy benchmark" if d.benchmark_basis == "policy" else "SPY"
     head = (
         '<section class="panel"><h2>Skill decomposition</h2>'
-        f'<p class="sub">Realized dollar alpha over {window}, split into the repeatable '
-        "decisions behind it — <b>selection</b> (which names, size-neutral), <b>sizing</b> "
-        "(did your weighting amplify selection), <b>timing</b> (did within-window adds/trims "
-        f"lean into alpha). Selection + sizing is an exact split; timing is a flow-lean "
-        f"diagnostic. Alpha is the tracker's {basis_text} — never recomputed here.</p>"
+        '<p class="sub">Is the alpha repeatable — and which decision produces it? '
+        f"Realized dollar alpha over {window} vs {basis_short}, split into "
+        '<b title="which names, size-neutral">selection</b> / '
+        '<b title="did your weighting amplify selection">sizing</b> / '
+        '<b title="did within-window adds/trims lean into alpha (flow-lean '
+        'diagnostic, not part of the exact split)">timing</b>.</p>'
     )
+
+    # No dollar total (tracker gap) → fall back to the bare Jensen line so the
+    # luck read still shows; the verdict subsumes it otherwise.
+    verdict = _verdict_line(d, beta) or _jensen_line(beta)
 
     def kpi(label: str, v: float | None) -> str:
         body = _money(v, signed=True) if v is not None else "&mdash;"
@@ -1769,32 +1777,79 @@ def _skill_decomposition_section(d: SkillDecomposition, beta: BetaStats | None =
     )
 
     read = _skill_read(d)
-    jensen = _jensen_line(beta)
 
     def _rating(v: float | None) -> str:
         return f"{v:.1f}/5" if v is not None else "&mdash;"
 
-    conv_rows = "".join(
-        "<tr>"
-        f"<td>{escape(c.conviction)}</td>"
-        f'<td class="num">{c.n}</td>'
-        f'<td class="num">{_signed_span(c.alpha_usd)}</td>'
-        f'<td class="num">{_signed_span(c.sizing_usd)}</td>'
-        f'<td class="num">{_rating(c.mean_conviction)}</td></tr>'
-        for c in d.by_conviction
-    )
-    conv_table = (
-        '<h3 class="adc-sub">Conviction &rarr; outcome</h3>'
-        '<table class="ad-table adc-table"><thead><tr>'
-        '<th>Conviction</th><th class="num">Names</th><th class="num">Alpha</th>'
-        '<th class="num" title="this bucket\'s share of the weight-tilt term">Sizing</th>'
-        '<th class="num">Avg rating</th>'
-        f"</tr></thead><tbody>{conv_rows}</tbody></table>"
-        if conv_rows
-        else ""
-    )
+    has_stated_conviction = any(c.conviction != "unstated" for c in d.by_conviction)
+    if has_stated_conviction:
+        conv_rows = "".join(
+            "<tr>"
+            f"<td>{escape(c.conviction)}</td>"
+            f'<td class="num">{c.n}</td>'
+            f'<td class="num">{_signed_span(c.alpha_usd)}</td>'
+            f'<td class="num">{_signed_span(c.sizing_usd)}</td>'
+            f'<td class="num">{_rating(c.mean_conviction)}</td></tr>'
+            for c in d.by_conviction
+        )
+        conv_table = (
+            '<h3 class="adc-sub">Conviction &rarr; outcome</h3>'
+            '<table class="ad-table adc-table"><thead><tr>'
+            '<th>Conviction</th><th class="num">Names</th><th class="num">Alpha</th>'
+            '<th class="num" title="this bucket\'s share of the weight-tilt term">Sizing</th>'
+            '<th class="num">Avg rating</th>'
+            f"</tr></thead><tbody>{conv_rows}</tbody></table>"
+        )
+    elif d.by_conviction:
+        # D4: an all-unstated join says what unlocks it, in one line — never a
+        # one-row table whose only cell reads "unstated".
+        conv_table = (
+            '<p class="muted ad-note">Conviction &rarr; outcome is locked: none of the '
+            f"{d.n_names} priced name(s) carries a stated conviction. Rate a position "
+            "(1&ndash;5, on its decision) and this join starts answering whether the "
+            "names you believe in actually deliver.</p>"
+        )
+    else:
+        conv_table = ""
     notes = "".join(f'<p class="muted ad-note">{escape(n)}</p>' for n in d.notes)
-    return f"{head}{kpis}{jensen}{read}{conv_table}{notes}</section>"
+    return f"{head}{verdict}{kpis}{read}{conv_table}{notes}</section>"
+
+
+def _verdict_line(d: SkillDecomposition, beta: BetaStats | None) -> str:
+    """The one-sentence reconciliation of the dollar alpha and the luck test.
+
+    A positive dollar figure and an insignificant Jensen α are NOT a
+    contradiction — one is realized money, the other says the process is not
+    yet statistically distinguishable from chance — but the surface has to say
+    that in one breath, not leave the owner to reconcile two adjacent lines."""
+    if d.total_alpha_usd is None:
+        return ""
+    money = _money(d.total_alpha_usd, signed=True)
+    made = "made" if d.total_alpha_usd >= 0 else "gave up"
+    luck = ""
+    if beta is not None and beta.alpha_significant is not None:
+        t = f", t={beta.alpha_t_stat:.1f}" if beta.alpha_t_stat is not None else ""
+        pct = (
+            f" {beta.alpha_annualized_pct:+.1f}% annualized"
+            if beta.alpha_annualized_pct is not None
+            else ""
+        )
+        # The Jensen number stays VISIBLE inside the verdict (it used to be its
+        # own line; subsuming it must not lose the value).
+        luck = (
+            f" — Jensen &alpha;{pct} is statistically distinguishable from zero{t}: "
+            "real skill, not luck"
+            if beta.alpha_significant
+            else f" — but Jensen &alpha;{pct} is not distinguishable from zero{t}: "
+            f"at n={d.n_names} this is not yet statistically distinguishable from "
+            "luck; treat the split as directional"
+        )
+    elif not d.confident:
+        luck = f" — thin book (n={d.n_names}); treat the split as directional"
+    return (
+        f'<p class="adc-line sk-verdict"><b>Verdict:</b> you {made} {money} of realized '
+        f"alpha this window{luck}.</p>"
+    )
 
 
 def _jensen_line(beta: BetaStats | None) -> str:

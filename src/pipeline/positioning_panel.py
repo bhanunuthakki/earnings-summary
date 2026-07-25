@@ -60,6 +60,12 @@ _PANEL_STYLE = """<style>
   font-family:var(--mono); width:100%; box-sizing:border-box; }
 .pos-narrative { font-family:inherit; min-height:64px; width:100%; margin-top:6px; }
 .pos-diff { font-size:var(--fs-caption); color:var(--muted); font-family:var(--mono); }
+/* D4 degraded-context strip: owner-language line + raw reasons behind details. */
+.pos-degraded { margin-top:8px; font-size:var(--fs-caption); color:var(--muted);
+  display:flex; flex-wrap:wrap; align-items:baseline; gap:6px; }
+.pos-degraded details { flex-basis:100%; }
+.pos-degraded summary { cursor:pointer; }
+.pos-degraded ul { margin:4px 0 0 18px; font-family:var(--mono); }
 .pos-error { color:var(--bad); font-size:var(--fs-body); margin-top:8px; white-space:pre-wrap; }
 .pos-actions { display:flex; gap:8px; margin-top:12px; align-items:center; }
 </style>"""
@@ -205,11 +211,24 @@ def render_active_target_card(db_path: Path, repo_root: Path) -> str:
         if p.life_circumstances:
             rows.append(_dim("Life circumstances", escape("; ".join(p.life_circumstances))))
         rows.append(f'<p class="muted" style="margin-top:8px">“{escape(intent.narrative)}”</p>')
+    # D4 (surface_density_jit_redesign.md): a degraded book context announces
+    # itself in the owner's vocabulary — a warn pill + what it means for THIS
+    # card — with the raw engineering reasons one click away in a details
+    # peek. The old rendering dumped the diagnostic strings verbatim
+    # ("tracker offline and no risk snapshot — book Sharpe unknown · …") into
+    # the card body in monospace. Still visibly distinct from the healthy
+    # state (silent-degradation rule) — just no longer written for a debugger.
     degraded = cast("list[object]", book.get("degraded") or [])
     degraded_html = (
-        '<p class="pos-diff">book context degraded: '
-        + escape(" · ".join(str(d) for d in degraded))
-        + "</p>"
+        (
+            '<div class="pos-degraded">'
+            '<span class="k-pill k-pill-warn">context degraded</span> '
+            f"<span>{len(degraded)} book-context leg(s) unscored — targets still "
+            "render; the affected gap chips are missing rather than guessed.</span>"
+            "<details><summary>details</summary><ul>"
+            + "".join(f"<li>{escape(str(d))}</li>" for d in degraded)
+            + "</ul></details></div>"
+        )
         if degraded
         else ""
     )
@@ -494,11 +513,11 @@ def render_positioning_panel(db_path: Path, repo_root: Path) -> str:
         [
             _PANEL_STYLE,
             '<section class="panel"><h2>Positioning</h2>',
-            '<p class="sub">Your durable portfolio positioning — the target book the '
-            "evaluation-list fit math scores against. The coach pushes back and grounds the "
-            "conversation in the live book; nothing persists until you approve the encoded "
-            "targets (your edits win). The prior saved state stays authoritative until you "
-            "express new views. For the short at-a-glance read, see Portfolio Posture above.</p>",
+            # D7: the subtitle states the question the section answers, in one
+            # line — the old five-line mechanics paragraph is exactly the
+            # "unnecessary detail" the walkthrough flagged.
+            '<p class="sub">Should the target book change? — durable targets the '
+            "fit math scores against; nothing persists until you approve.</p>",
             '<div class="pos-grid">',
             '<details class="pos-span"><summary>Advanced — active target detail</summary>',
             render_active_target_card(db_path, repo_root),

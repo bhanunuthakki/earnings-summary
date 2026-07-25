@@ -24,6 +24,7 @@ from flask.testing import FlaskClient  # noqa: E402
 
 from pipeline.analytical_dashboard import (  # noqa: E402
     AnalyticalDashboard,
+    TriggerLadderRow,
     build_analytical_dashboard,
 )
 from pipeline.analytical_dashboard_html import render_html  # noqa: E402
@@ -252,9 +253,11 @@ def test_trigger_ladder_null_price_row_is_well_formed() -> None:
     # Ticker link + verdict cells (also dropped by the bug) are present...
     assert 'class="ticker-link">AMAT</a>' in row_html
     assert ">Pending<" in row_html
-    # ...and the row has all 8 cells (ticker, list, verdict, live, fair, over/under,
-    # mos, trigger) — the malformed bug row had fewer.
-    assert row_html.count("<td") == 8
+    # ...and the row is complete. Wave 1 (D5): the List column became a group
+    # band and the single shared trigger status lifted into the header pill, so
+    # a complete row is 6 cells (ticker, verdict, live, fair, over/under, mos)
+    # — the malformed bug row had fewer.
+    assert row_html.count("<td") == 6
 
 
 def _seed_ladder_extras(db_path: Path) -> None:
@@ -667,3 +670,59 @@ def test_trigger_ladder_one_row_per_ticker_when_same_day_reruns_exist(tmp_path: 
     assert len(nu_rows) == 1  # fanned out to 2 pre-fix
     assert nu_rows[0].live_price == pytest.approx(63.50)  # the LATER rerun wins
     assert nu_rows[0].over_under_pct == pytest.approx(0.32)
+
+
+def _ladder_row(
+    ticker: str, list_type: str, status: str, ou: float | None = 0.30
+) -> TriggerLadderRow:
+    return TriggerLadderRow(
+        ticker=ticker,
+        list_type=list_type,
+        over_under_pct=ou,
+        mos_bar=0.25,
+        trigger_status=status,
+        live_price=10.0,
+        dcf_fair_value=7.0,
+        verdict="ok",
+    )
+
+
+def test_trigger_ladder_groups_by_list_and_lifts_constant_status() -> None:
+    """Wave 1 (D3.1/D5): rows band by list type (portfolio first) instead of
+    repeating an identical column cell, and a trigger status shared by EVERY
+    row lifts into one header pill (prod: 11× UNREVIEWED down a dead column)."""
+    rows = [
+        _ladder_row("EVA", "evaluation", "unreviewed"),
+        _ladder_row("NU", "portfolio", "unreviewed"),
+    ]
+    html = render_html(
+        AnalyticalDashboard(trigger_ladder=rows),
+        generated_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    section = html[html.index("Trigger ladder") :]
+    # Header pill carries the lifted status; the per-row column is gone.
+    assert "all unreviewed" in section
+    assert "<th>Trigger</th>" not in section
+    assert 'class="trigger-cell"' not in section
+    # Group bands, owner's book first, with counts.
+    assert 'class="tl-group"' in section
+    assert section.index("Portfolio &middot; 1") < section.index("Evaluation &middot; 1")
+    # The List column is gone (the band carries it).
+    assert "<th>List</th>" not in section
+    # D7: the header asks the question the table answers.
+    assert "Should I trim or add anything?" in section
+
+
+def test_trigger_ladder_mixed_statuses_keep_the_column() -> None:
+    rows = [
+        _ladder_row("NU", "portfolio", "sell"),
+        _ladder_row("EVA", "evaluation", "hold"),
+    ]
+    html = render_html(
+        AnalyticalDashboard(trigger_ladder=rows),
+        generated_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    section = html[html.index("Trigger ladder") :]
+    assert "<th>Trigger</th>" in section
+    assert section.count('class="trigger-cell"') == 2
+    assert "all sell" not in section and "all hold" not in section
