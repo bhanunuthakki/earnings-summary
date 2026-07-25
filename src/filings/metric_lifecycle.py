@@ -82,6 +82,27 @@ noise sources:
    only 1 other cached ticker, below this gate's threshold); running the
    corpus over the full 99-ticker book is what surfaces the 24-47-ticker
    clusters above with headroom to spare.
+5. **Mandatory-disclosure suppression.** A D1e ground-truth pass over 20
+   hand-labeled ``metric_lifecycle_triage`` candidates (PR #1037,
+   ``evals/golden/metric_lifecycle_triage.json``) measured 45% accuracy with
+   **0/4 concealment precision** — every "concealment" verdict the LLM
+   triage produced was wrong, and 3 of the 4 (MELI's
+   ``ShareBasedCompensation``, ``InterestExpenseDebt``, ``InterestPaid``) are
+   MANDATORY GAAP disclosures that cannot legally stop being reported: a
+   company cannot choose to stop disclosing SBC (ASC 718) or interest
+   expense/paid while the underlying activity continues. So a mandatory tag
+   going silent beyond its own precedent is BY DEFINITION a missed successor
+   tag or a reporting-structure change, never a company decision to
+   withhold — sending it to Stage 2/3 triage at all invites the exact
+   concealment over-attribution the goldens measured, because the model
+   cannot see from tag/label/value alone that this one is legally required.
+   Fix: ``is_mandatory_gaap_tag`` — a conservative tag-name-substring
+   allowlist — reclassifies these as ``metric_reporting_change`` (fixed
+   ``mechanical`` verdict, never triaged), run as the LAST suppression stage
+   (after relabel and standard-transition), zero token cost. See that
+   function's docstring for the full evidence and the contrast with D2.1's
+   guidance-withdrawal family, where silence IS a real signal precisely
+   because guidance is voluntary.
 
 Materiality ranks (never filters) surviving candidates: the last reported
 value relative to a scale anchor (revenue, falling back to total assets)
@@ -92,10 +113,10 @@ Do NOT encode "stopped reporting = bearish" anywhere downstream of this
 module. ``disclosure_events.verdict`` (migration 0203) exists precisely so a
 detector commits to concealment vs. maturity vs. mechanical rather than
 letting the event type imply a direction it has not earned; this module
-only emits the deterministic ``mechanical`` verdict for confirmed relabels
-and standard transitions, and leaves every ``metric_discontinued``
-candidate ``unclassified`` until ``filings.metric_triage`` (or a human)
-judges it.
+only emits the deterministic ``mechanical`` verdict for confirmed relabels,
+standard transitions, and mandatory-GAAP reporting changes (noise source 5),
+and leaves every ``metric_discontinued`` candidate ``unclassified`` until
+``filings.metric_triage`` (or a human) judges it.
 
 **Known limitation — an already-active broader tag absorbing a narrower
 one is invisible to the relabel gate, by design.** ``find_relabel_target``
@@ -137,11 +158,12 @@ import json
 import logging
 import re
 import sqlite3
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from itertools import pairwise
 from pathlib import Path
-from typing import cast
+from typing import NamedTuple, cast
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -203,6 +225,75 @@ RELABEL_LABEL_CONTAINMENT_MIN = 0.4
 #: confirmed ASU-842/ASU-2016-09/ASC-606 examples in the module docstring
 #: clear it by 10-20x margin (13-47 tickers each), giving ample headroom.
 STANDARD_TRANSITION_MIN_OTHER_TICKERS = 2
+
+#: Noise source 5 (mandatory-disclosure suppression). Measured on the D1e
+#: ground-truth pass (docs/design/disclosure_intelligence_v1_prd.md, PR #1037,
+#: ``evals/golden/metric_lifecycle_triage.json``): metric_lifecycle_triage
+#: scored 45% accuracy (9/20) with **0/4 concealment precision** — every
+#: single "concealment" verdict the LLM triage produced was wrong on review,
+#: and 3 of those 4 (MELI's ``ShareBasedCompensation``, ``InterestExpenseDebt``,
+#: ``InterestPaid``) are MANDATORY GAAP disclosures: ASC 718 requires SBC
+#: disclosure whenever a company grants equity awards; interest expense/paid
+#: are standard captions disclosed whenever interest-bearing debt or
+#: cash-paid activity exists. A company cannot lawfully choose to stop
+#: reporting these — so when one goes silent beyond its own historical
+#: tolerance, it is BY DEFINITION a missed successor tag (a relabel/
+#: consolidation the Stage 1 gate failed to match — the known "already-active
+#: broader tag" limitation documented in this module's docstring) or a
+#: reporting-structure change, NEVER a company choice to withhold. Sending
+#: these to LLM triage at all invites exactly the concealment
+#: over-attribution the goldens measured, because "silent for N quarters,
+#: business-meaningful" is the same shape of evidence Stage 2 sees for a
+#: genuine concealment candidate — the model has no way to know from the
+#: tag/label/value alone that THIS one is legally required. Fix: catch it
+#: here, deterministically, at zero token cost, exactly like Stage 1.5 catches
+#: accounting-standard-transition waves.
+#:
+#: Contrast with D2.1's guidance-withdrawal family
+#: (``filings.guidance_lifecycle``): management guidance is VOLUNTARY —
+#: nothing compels a company to issue forward guidance at all, so a
+#: guidance PRACTICE going silent beyond its own cadence is a genuine,
+#: real-by-construction signal (Chen/Matsumoto/Rajgopal's -4.8% CAR).
+#: Mandatory GAAP tags are the opposite case: the disclosure duty itself
+#: cannot lapse, so silence there can only be a bookkeeping/tagging artifact.
+#: Same "expected disclosure baseline" engine, opposite prior on what
+#: silence can mean — this is exactly why ``metric_lifecycle``'s Stage 2/3
+#: leaves the direction question to a judgment layer instead of encoding one
+#: global "stopped = X" rule: the right default direction is a property of
+#: the SUBJECT (mandatory vs. voluntary), not of the detector.
+#:
+#: Deliberately a conservative, tag-name-substring allowlist (not a
+#: human-label keyword match, which is far noisier) covering only the
+#: confirmed golden-set tags plus the closest structurally-mandatory GAAP
+#: analogs (other supplemental cash-flow captions under the same ASC 230
+#: umbrella as InterestPaid, and EPS/revenue under ASC 260/606, which no
+#: SEC-reporting company omits). Extend cautiously — a false ADD here
+#: reclassifies a genuine business-metric discontinuation as "mechanical"
+#: and hides it from triage entirely, which is the more expensive mistake.
+_MANDATORY_GAAP_TAG_MARKERS: frozenset[str] = frozenset(
+    {
+        "sharebasedcompensation",  # ASC 718 -- confirmed golden-set miss (MELI)
+        "interestexpense",  # standard income-statement caption -- confirmed (MELI)
+        "interestpaid",  # ASC 230 supplemental cash-flow line -- confirmed (MELI)
+        "incometaxespaid",  # ASC 230 supplemental cash-flow line, same umbrella as InterestPaid
+        "depreciationdepletionandamortization",
+        "depreciationandamortization",
+        "earningspershare",  # ASC 260 -- mandatory for any company with public equity
+        "revenuefromcontractwithcustomer",  # ASC 606 -- the top-line, never omitted
+    }
+)
+_MANDATORY_GAAP_EXACT_TAGS: frozenset[str] = frozenset({"revenues"})
+
+
+def is_mandatory_gaap_tag(tag: str) -> bool:
+    """Conservative check: does this tag's name match a structurally-required
+    GAAP disclosure — see ``_MANDATORY_GAAP_TAG_MARKERS`` docstring for the
+    evidence and the reasoning for staying conservative."""
+    lowered = tag.lower()
+    if lowered in _MANDATORY_GAAP_EXACT_TAGS:
+        return True
+    return any(marker in lowered for marker in _MANDATORY_GAAP_TAG_MARKERS)
+
 
 _LABEL_STOPWORDS = frozenset(
     {"and", "of", "the", "to", "for", "on", "in", "at", "by", "or", "with", "from"}
@@ -291,6 +382,12 @@ class CandidateKind(StrEnum):
     DISCONTINUED = "metric_discontinued"
     RELABELED = "metric_relabeled"
     STANDARD_TRANSITION = "metric_standard_transition"
+    #: Noise source 5 — a mandatory GAAP disclosure (see
+    #: ``_MANDATORY_GAAP_TAG_MARKERS``) went silent beyond its own precedent.
+    #: Always ``verdict="mechanical"``, never sent to LLM triage — the
+    #: disclosure duty cannot lapse, so this can only be a missed successor
+    #: tag or a reporting-structure change, never concealment.
+    REPORTING_CHANGE = "metric_reporting_change"
 
 
 def _axis_for_form(form: str) -> Axis | None:
@@ -562,6 +659,57 @@ class TagLifecycleStats(BaseModel):
         )
 
 
+class GapCalibration(NamedTuple):
+    """The subject-agnostic Stage-0 core: how far this subject's OWN gap
+    tolerance stretches, and how far its current silence has exceeded it.
+
+    ``historical_max_gap`` is computed purely from ranks the subject has
+    itself appeared on; ``current_silence`` is measured against an
+    externally-supplied ``as_of_rank`` (some independent "how current is our
+    data" reference — e.g. the ticker's last known-reported rank on this
+    axis for XBRL tags, or the ticker's last coverage-known period for a
+    non-XBRL subject series) — never the subject's own last rank, which
+    would make current_silence always 0.
+    """
+
+    historical_max_gap: int
+    current_silence: int
+
+
+def gap_calibration(
+    present_ranks: Sequence[int],
+    as_of_rank: int,
+    *,
+    min_observations: int = MIN_OBSERVATIONS,
+) -> GapCalibration | None:
+    """Subject-agnostic extraction of Stage 0's own-cadence math (Zhou &
+    Zhou's "expected disclosure baseline, built from the subject's own
+    history"), factored out of ``compute_tag_lifecycle`` so a SECOND subject
+    family (D2.1's guidance-withdrawal detector, ``filings.guidance_lifecycle``)
+    can reuse the identical calibration instead of reimplementing it —
+    per the PRD's "generalize, don't build a second detector" instruction.
+
+    ``present_ranks`` must be sorted ascending, one entry per distinct period
+    the subject was observed present (already deduped by the caller — XBRL's
+    own dedup keeps the latest ``filed`` restatement per (fy, fp); a non-XBRL
+    caller does whatever deduping its own subject needs). Returns ``None``
+    when there are fewer than ``min_observations`` distinct present periods —
+    too little history for the subject's own cadence to be judgeable at all
+    (mirrors the pre-refactor behavior exactly: same threshold, same "give up
+    rather than guess" contract).
+
+    The caller still owns the FLAG decision (``current_silence >=
+    min_current_silence and current_silence > historical_max_gap``) — this
+    function only computes the two numbers that decision needs.
+    """
+    if len(present_ranks) < min_observations:
+        return None
+    historical_max_gap = max((b - a for a, b in pairwise(present_ranks)), default=1)
+    historical_max_gap = max(historical_max_gap, 1)
+    current_silence = as_of_rank - present_ranks[-1]
+    return GapCalibration(historical_max_gap=historical_max_gap, current_silence=current_silence)
+
+
 def compute_tag_lifecycle(
     series: TagSeries, axis: Axis, axis_summary: AxisSummary
 ) -> TagLifecycleStats | None:
@@ -580,13 +728,12 @@ def compute_tag_lifecycle(
         cur = by_period.get(key)
         if cur is None or o.filed > cur.filed:
             by_period[key] = o
-    if len(by_period) < MIN_OBSERVATIONS:
-        return None
 
     ranked = sorted(by_period.values(), key=_axis_native_rank)
     ranks = [_axis_native_rank(o) for o in ranked]
-    historical_max_gap = max((b - a for a, b in pairwise(ranks)), default=1)
-    historical_max_gap = max(historical_max_gap, 1)
+    calibration = gap_calibration(ranks, axis_summary.last_period_rank)
+    if calibration is None:
+        return None
     last_obs = ranked[-1]
     last_rank = ranks[-1]
     return TagLifecycleStats(
@@ -595,8 +742,8 @@ def compute_tag_lifecycle(
         first_rank=ranks[0],
         last_rank=last_rank,
         last_observation=last_obs,
-        historical_max_gap=historical_max_gap,
-        current_silence=axis_summary.last_period_rank - last_rank,
+        historical_max_gap=calibration.historical_max_gap,
+        current_silence=calibration.current_silence,
         axis_last_rank=axis_summary.last_period_rank,
     )
 
@@ -985,9 +1132,16 @@ class LifecycleRunResult(BaseModel):
     after_gap_calibration: int
     after_relabel_suppression: int
     after_standard_transition_suppression: int
+    #: Count remaining after the mandatory-GAAP gate (noise source 5) — the
+    #: number of `candidates` below, kept for symmetry with the other
+    #: before/after stage counts.
+    after_mandatory_gaap_suppression: int
     candidates: list[MetricCandidate]
     relabeled_pairs: list[MetricCandidate]
     standard_transition_pairs: list[MetricCandidate]
+    #: Mandatory-GAAP-tag candidates (noise source 5) — always
+    #: ``verdict="mechanical"``, never triaged. See ``is_mandatory_gaap_tag``.
+    reporting_change_pairs: list[MetricCandidate]
     tags_considered: int
     tags_skipped_no_min_observations: int
     #: Whether the cross-sectional gate ran at all (``False`` when the
@@ -1080,7 +1234,25 @@ def run_lifecycle_detection(
                 continue
         final_discontinued.append(cand)
 
-    final_discontinued.sort(key=lambda c: (c.materiality is None, -(c.materiality or 0.0)))
+    # Noise source 5 — mandatory-GAAP suppression (D1e finding, PR #1037):
+    # runs over what's left after Stage 1.5, exactly like Stage 1.5 runs over
+    # what's left after Stage 1 — a tag already reclassified relabeled or
+    # standard_transition never needs this check. A mandatory-disclosure tag
+    # going silent beyond its own precedent can only be a missed successor
+    # tag or a reporting-structure change (the disclosure duty itself cannot
+    # lapse), so it is pulled OUT of the LLM-triage-bound population entirely
+    # rather than left for Stage 2/3 to (mis)judge concealment vs. maturity.
+    reporting_changes: list[MetricCandidate] = []
+    gaap_filtered: list[MetricCandidate] = []
+    for cand in final_discontinued:
+        if is_mandatory_gaap_tag(cand.tag):
+            reporting_changes.append(
+                cand.model_copy(update={"kind": CandidateKind.REPORTING_CHANGE})
+            )
+        else:
+            gaap_filtered.append(cand)
+
+    gaap_filtered.sort(key=lambda c: (c.materiality is None, -(c.materiality or 0.0)))
 
     return LifecycleRunResult(
         ticker=ticker,
@@ -1088,9 +1260,11 @@ def run_lifecycle_detection(
         after_gap_calibration=after_gap,
         after_relabel_suppression=len(discontinued),
         after_standard_transition_suppression=len(final_discontinued),
-        candidates=final_discontinued,
+        after_mandatory_gaap_suppression=len(gaap_filtered),
+        candidates=gaap_filtered,
         relabeled_pairs=relabeled,
         standard_transition_pairs=standard_transitions,
+        reporting_change_pairs=reporting_changes,
         tags_considered=len(concepts),
         tags_skipped_no_min_observations=skipped_min_obs,
         standard_transition_gate_ran=standard_transition_corpus is not None,
@@ -1144,6 +1318,13 @@ def candidate_to_event(
             f"{candidate.standard_transition_other_tickers} other cached ticker(s) stopped "
             f"this same tag within {RELABEL_PERIOD_WINDOW} periods — an accounting-standard "
             "transition, not a company-specific decision (no successor tag claimed)"
+        )
+    elif candidate.kind is CandidateKind.REPORTING_CHANGE:
+        current_excerpt = (
+            f"{candidate.qualified_name} is a mandatory GAAP disclosure — the company cannot "
+            "lawfully stop reporting it, so this silence can only be a missed successor tag or "
+            "a reporting-structure change, never concealment (D1e ground-truth finding, "
+            "evals/golden/metric_lifecycle_triage.json)"
         )
     else:
         current_excerpt = (

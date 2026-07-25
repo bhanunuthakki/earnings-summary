@@ -340,8 +340,18 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # evals/golden/disclosure_item_specificity_triage.json). Bump when
     # filings.metric_triage._build_prompt / filings.boilerplate_triage._build_prompt
     # is materially rewritten, then re-run `run_llm_evals.py --purpose <p>`.
+    # NOTE (D2.1 fold-in, PR follow-on to #1037): metric_lifecycle_triage's
+    # prompt gained an explicit materiality input and the mandatory-GAAP
+    # noise source moved candidates out of this purpose entirely BEFORE they
+    # reach it — not a version bump on its own (no golden-set re-grade
+    # requested alongside), but flagged here so a future re-grade knows the
+    # prompt changed since the v1 golden set was captured.
     "metric_lifecycle_triage": "v1",
     "disclosure_item_specificity_triage": "v1",
+    # Guidance-withdrawal detector Stage 2/3 triage (D2.1,
+    # filings.guidance_triage._build_prompt). Bump when the relevance/prior
+    # prompt is materially rewritten.
+    "guidance_lifecycle_triage": "v1",
 }
 
 _DEFAULT_VERSION = "v1"

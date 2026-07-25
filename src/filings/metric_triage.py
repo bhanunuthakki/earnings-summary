@@ -91,13 +91,16 @@ def _build_prompt(ticker: str, candidates: list[MetricCandidate]) -> str:
     rows = [
         f"- {c.qualified_name} | label: {c.label!r} | last value: {c.last_value:,.0f} "
         f"| last period: {c.last_period_label} | silent for {c.current_silence} "
-        f"{c.axis.value} period(s), beyond its own historical tolerance of {c.historical_max_gap}"
+        f"{c.axis.value} period(s), beyond its own historical tolerance of {c.historical_max_gap} "
+        f"| materiality: {'unknown' if c.materiality is None else f'{c.materiality:.3f}'} "
+        "(fraction of revenue/total assets, higher = bigger line item)"
         for c in candidates
     ]
     listing = "\n".join(rows)
     return f"""You are triaging XBRL disclosure tags that {ticker} has stopped reporting, \
 to separate business-meaningful metrics from accounting plumbing. You are given ONLY the \
-tag name, its label, its last reported value, and its last period — no filing text.
+tag name, its label, its last reported value, its last period, and a materiality score \
+(the last value as a fraction of revenue or total assets) — no filing text.
 
 For EACH tag below, decide:
 1. relevance: "business_metric" if an investor would notice losing this disclosure \
@@ -111,7 +114,10 @@ into a broader one -- the classic case is Apple dropping unit sales), or "unclea
 (impossible to judge from name/label/value alone). "unclear" is the honest default for \
 almost every accounting_plumbing tag, and is often the honest answer for business_metric \
 tags too -- you cannot see WHY it stopped from this data alone. Do not force a directional \
-guess you cannot support.
+guess you cannot support. Materiality does NOT by itself imply concealment or maturity -- a \
+high-materiality tag going silent deserves a genuinely considered answer, not a reflexive \
+"unclear" you would also give a trivial one; still answer "unclear" if the name/label/value \
+alone truly cannot settle it, high materiality or not.
 3. rationale: one sentence.
 
 Tags (each is a candidate the company has stopped reporting beyond its own normal filing cadence):

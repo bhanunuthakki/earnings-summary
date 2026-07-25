@@ -40,6 +40,7 @@ from filings.metric_lifecycle import (  # noqa: E402
     build_standard_transition_corpus,
     candidate_to_event,
     group_by_concept,
+    is_mandatory_gaap_tag,
     list_cached_tickers,
     load_tag_series,
     run_lifecycle_detection,
@@ -453,6 +454,82 @@ def test_standard_transition_gate_degrades_honestly_without_corpus(tmp_path: Pat
     assert result.standard_transition_pairs == []
     discontinued_names = {c.qualified_name for c in result.candidates}
     assert "us-gaap:SharedScheduleTag" in discontinued_names
+
+
+# ---------------------------------------------------------------------------
+# Noise source 5 — mandatory-GAAP suppression (D1e finding, PR #1037)
+# ---------------------------------------------------------------------------
+
+
+def test_is_mandatory_gaap_tag_matches_confirmed_golden_set_cases() -> None:
+    """The exact three tags the D1e ground-truth pass confirmed as
+    mislabeled 'concealment' (evals/golden/metric_lifecycle_triage.json)."""
+    assert is_mandatory_gaap_tag("ShareBasedCompensation")
+    assert is_mandatory_gaap_tag("InterestExpenseDebt")
+    assert is_mandatory_gaap_tag("InterestPaid")
+    # Closest structurally-mandatory analogs, same conservative allowlist.
+    assert is_mandatory_gaap_tag("Revenues")
+    assert is_mandatory_gaap_tag("RevenueFromContractWithCustomerExcludingAssessedTax")
+    assert is_mandatory_gaap_tag("EarningsPerShareBasic")
+    # A real business metric must NOT be swept up.
+    assert not is_mandatory_gaap_tag("PayablesToCustomers")
+    assert not is_mandatory_gaap_tag("AccruedVacationCurrent")
+
+
+def test_mandatory_gaap_tag_reclassifies_reporting_change_not_discontinued(
+    tmp_path: Path,
+) -> None:
+    """A stopped mandatory-GAAP tag (MELI's real ShareBasedCompensation case,
+    reproduced synthetically) must classify as ``metric_reporting_change``,
+    never ``metric_discontinued`` — so it never reaches LLM triage's
+    concealment/maturity question at all."""
+    tags: dict[str, list[dict[str, object]]] = {
+        "AlwaysQuarterly": [
+            _quarterly_entry(fy, q, 100.0 + fy) for fy in range(2019, 2025) for q in (1, 2, 3)
+        ],
+        # Reports every quarter for years, then goes silent well beyond its
+        # own historical tolerance -- no relabel target planted, so absent
+        # the mandatory-GAAP gate this would fall through as
+        # metric_discontinued (confirmed by the companion test below).
+        "ShareBasedCompensation": [
+            _quarterly_entry(fy, q, 50.0 + fy) for fy in range(2013, 2020) for q in (1, 2, 3)
+        ],
+    }
+    _write_companyfacts(tmp_path, "SBCTEST", tags)
+
+    result = run_lifecycle_detection(tmp_path, "SBCTEST")
+    assert result is not None
+    discontinued_names = {c.qualified_name for c in result.candidates}
+    reporting_change_names = {c.qualified_name: c for c in result.reporting_change_pairs}
+    assert "us-gaap:ShareBasedCompensation" not in discontinued_names
+    assert "us-gaap:ShareBasedCompensation" in reporting_change_names
+    cand = reporting_change_names["us-gaap:ShareBasedCompensation"]
+    assert cand.kind is CandidateKind.REPORTING_CHANGE
+
+    event = candidate_to_event(cand, verdict="mechanical")
+    assert event.verdict == "mechanical"
+    assert "mandatory GAAP" in (event.current_excerpt or "")
+
+
+def test_non_mandatory_business_metric_still_reaches_discontinued(tmp_path: Path) -> None:
+    """Regression guard: a genuine business-metric stop with no relabel
+    target and no mandatory-tag match must still flow through to
+    ``metric_discontinued`` / LLM triage exactly as before this fix."""
+    tags: dict[str, list[dict[str, object]]] = {
+        "AlwaysQuarterly": [
+            _quarterly_entry(fy, q, 100.0 + fy) for fy in range(2019, 2025) for q in (1, 2, 3)
+        ],
+        "PayablesToCustomers": [
+            _quarterly_entry(fy, q, 500.0 + fy) for fy in range(2013, 2020) for q in (1, 2, 3)
+        ],
+    }
+    _write_companyfacts(tmp_path, "BIZMETRIC", tags)
+
+    result = run_lifecycle_detection(tmp_path, "BIZMETRIC")
+    assert result is not None
+    discontinued_names = {c.qualified_name for c in result.candidates}
+    assert "us-gaap:PayablesToCustomers" in discontinued_names
+    assert result.reporting_change_pairs == []
 
 
 def test_list_cached_tickers_finds_every_companyfacts_file(tmp_path: Path) -> None:

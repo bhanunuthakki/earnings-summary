@@ -589,6 +589,17 @@ LLM_MODELS: dict[str, str] = {
     # risk_factor_diff sibling purposes); flag if/when a golden-set-gated
     # downgrade loop is warranted.
     "metric_lifecycle_triage": FAST_CLASSIFIER_MODEL,
+    # Guidance-withdrawal detector Stage 2/3 triage (D2.1,
+    # docs/design/disclosure_intelligence_v1_prd.md, src/filings/guidance_triage.py):
+    # ONE batched call per ticker over subject key + description + silence
+    # pattern ONLY (never a document, never transcript text) — same
+    # closed relevance/prior classification shape as metric_lifecycle_triage,
+    # over a per-ticker candidate list from BOTH lanes (management_commitments
+    # own-cadence + MD&A guidance/outlook heading own-cadence) — Haiku tier.
+    # No budget row / golden set added yet (same posture as
+    # metric_lifecycle_triage); flag if/when a golden-set-gated downgrade
+    # loop is warranted.
+    "guidance_lifecycle_triage": FAST_CLASSIFIER_MODEL,
     # P4 transcript longitudinal tracking (docs/design/disclosure_change_
     # build_stack.md P4, src/transcripts/transcript_judgment.py): ONE
     # batched call per transcript over paired analyst-question/management-

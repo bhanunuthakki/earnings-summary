@@ -124,11 +124,18 @@ def run_ticker(
             )
             triage = None  # degrade to unclassified verdicts below
 
-    events: list[MetricLifecycleEvent] = [
-        candidate_to_event(cand, verdict="mechanical") for cand in result.relabeled_pairs
-    ] + [
-        candidate_to_event(cand, verdict="mechanical") for cand in result.standard_transition_pairs
-    ]
+    events: list[MetricLifecycleEvent] = (
+        [candidate_to_event(cand, verdict="mechanical") for cand in result.relabeled_pairs]
+        + [
+            candidate_to_event(cand, verdict="mechanical")
+            for cand in result.standard_transition_pairs
+        ]
+        # Noise source 5 (D1e finding, PR #1037): mandatory-GAAP tags never
+        # reach LLM triage at all — the disclosure duty cannot lapse, so
+        # this can only be mechanical (missed successor tag / reporting
+        # change), never concealment.
+        + [candidate_to_event(cand, verdict="mechanical") for cand in result.reporting_change_pairs]
+    )
     for cand in result.candidates:
         verdict = "unclassified"
         interpretation: str | None = None
@@ -156,9 +163,11 @@ def run_ticker(
         "after_gap_calibration": result.after_gap_calibration,
         "after_relabel_suppression": result.after_relabel_suppression,
         "after_standard_transition_suppression": result.after_standard_transition_suppression,
+        "after_mandatory_gaap_suppression": result.after_mandatory_gaap_suppression,
         "n_discontinued": len(result.candidates),
         "n_relabeled": len(result.relabeled_pairs),
         "n_standard_transition": len(result.standard_transition_pairs),
+        "n_reporting_change": len(result.reporting_change_pairs),
         "n_events_written": n_written,
         "triage_degraded": bool(triage is not None and triage.degraded),
         "triage_skipped": not use_llm,
