@@ -580,6 +580,15 @@ LLM_MODELS: dict[str, str] = {
     # closed-enum JSON tasks, batched — Haiku tier.
     "risk_factor_classify": FAST_CLASSIFIER_MODEL,
     "risk_factor_diff": FAST_CLASSIFIER_MODEL,
+    # Discontinued-metric detector Stage 2 triage (P1,
+    # docs/design/disclosure_change_signals.md §3, src/filings/metric_triage.py):
+    # ONE batched call per ticker over tag name + label + last value + last
+    # period ONLY (never a document) — a closed relevance/prior classification
+    # over ~40 candidates, same shape as risk_factor_classify — Haiku tier.
+    # No budget row / golden set added yet (same as its risk_factor_classify/
+    # risk_factor_diff sibling purposes); flag if/when a golden-set-gated
+    # downgrade loop is warranted.
+    "metric_lifecycle_triage": FAST_CLASSIFIER_MODEL,
     # Segment-name canonicalization: narrow JSON mapping task — Haiku tier.
     "canonicalize_segments": FAST_CLASSIFIER_MODEL,
     # Customer-concentration table extraction (src/table_extractors/): short

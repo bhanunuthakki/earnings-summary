@@ -102,7 +102,12 @@ def upgrade() -> None:
             sa.Column("ticker", sa.String(length=16), nullable=False),
             # 'item_added' | 'item_removed' | 'item_reworded' |
             # 'section_added' | 'section_removed' |
-            # 'metric_discontinued' | 'metric_relabeled' | 'metric_resumed'
+            # 'metric_discontinued' | 'metric_relabeled' | 'metric_resumed' |
+            # 'metric_standard_transition' (P1, src/filings/metric_lifecycle.py:
+            # a tag stopped industry-wide within the same window as >= N other
+            # cached tickers -- an ASU/ASC-driven transition, not a company
+            # decision; distinct from 'metric_relabeled' because no successor
+            # tag is claimed)
             sa.Column("event_type", sa.String(length=32), nullable=False),
             sa.Column("form", sa.String(length=8), nullable=True),
             sa.Column("fiscal_year", sa.Integer(), nullable=True),
