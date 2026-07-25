@@ -41,6 +41,7 @@ from allocation.recommendation import (
     DeterministicFrontier,
     FrontierPlan,
     build_frontier,
+    format_allocation_citation,
 )
 from allocation.recommendation_schema import IncrementalDollarRecommendation
 from llm.cli import LLMBudgetExceeded, is_hard_stop
@@ -94,11 +95,7 @@ def _format_plan(plan: FrontierPlan) -> str:
     else:
         lines = [f"- {plan.kind}:"]
         for a in plan.allocations:
-            zone = a.zone or "unclassified"
-            lines.append(
-                f"    {a.ticker}: ${a.dollars:,.2f} -> {a.resulting_weight_pct:.2f}% "
-                f"of book (zone={zone})"
-            )
+            lines.append(f"    {format_allocation_citation(a)}")
         lines.append(f"    cash retained: ${plan.cash_retained_usd:,.2f}")
     for fact in plan.rationale_facts:
         lines.append(f"    fact: {fact}")

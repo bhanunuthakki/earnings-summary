@@ -113,6 +113,24 @@ class DeterministicFrontier:
 # --------------------------------------------------------------------------- #
 
 
+def format_allocation_citation(alloc: PlanAllocation) -> str:
+    """The exact per-ticker allocation line shown to the governed LLM in the
+    §7.4 prompt (``allocation.recommendation_artifact._format_plan``) for one
+    ``PlanAllocation``. This is the single source of truth for that line's
+    text — both the prompt renderer and
+    ``recommendation_schema.IncrementalDollarRecommendation.
+    validate_against_frontier``'s ``source_refs`` grounding check call this
+    function, so a citation that verbatim-matches what the LLM was actually
+    shown can never be rejected as "invented" (bug: the two previously used
+    independently-formatted strings that drifted — a correct, verbatim
+    citation of a per-ticker allocation line failed the grounding check
+    because it wasn't in the fact set the validator compared against, wasting
+    the one corrective retry and forcing an unnecessary deterministic
+    fallback on an otherwise-valid LLM response)."""
+    zone = alloc.zone or "unclassified"
+    return f"{alloc.ticker}: ${alloc.dollars:,.2f} -> {alloc.resulting_weight_pct:.2f}% of book (zone={zone})"
+
+
 def _sha(payload: object) -> str:
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
