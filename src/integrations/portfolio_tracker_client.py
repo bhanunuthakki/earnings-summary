@@ -479,6 +479,16 @@ class PerformanceSeries:
     base_value: float | None
     net_external_cashflow_in: float | None
     backfill_start_unreliable: bool
+    # First date backed by a real observed snapshot. Served by BOTH transports
+    # and load-bearing for provenance: a series whose ``start_date`` precedes
+    # this is partly the provider's MODELED transaction walk-back, so its
+    # returns are rebased off a reconstructed value. Compare the two fields to
+    # classify the basis — ``backfill_start_unreliable`` does NOT answer this
+    # (it flags an untrustworthy walk-back START VALUE, and measured False on
+    # both transports across observed, trailing-365d, and 26-year windows on
+    # 2026-07-24, so it is constant in practice). WINDOW-RELATIVE: it reports
+    # the earliest observation INSIDE the requested window, never before it.
+    earliest_observed_date: str | None = None
     points: list[PerformancePoint] = field(default_factory=list[PerformancePoint])
 
 
@@ -921,6 +931,7 @@ def _parse_performance(data: dict[str, object]) -> PerformanceSeries:
         base_value=_f(data.get("base_value")),
         net_external_cashflow_in=_f(data.get("net_external_cashflow_in")),
         backfill_start_unreliable=bool(data.get("backfill_start_unreliable")),
+        earliest_observed_date=_s(data.get("earliest_observed_date")),
         points=points,
     )
 

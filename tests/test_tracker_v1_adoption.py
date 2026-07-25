@@ -486,3 +486,93 @@ def test_performance_v1_missing_observed_marker_returns_probe(
 
     assert router.starts == [None]
     assert analytics.performance is not None
+
+
+# ---------------------------------------------------------------------------
+# earliest_observed_date provenance (consumed by the risk-snapshot rebase_basis
+# stamp — PRD §7.1 req 9)
+# ---------------------------------------------------------------------------
+
+
+def _rebase_basis(series: tc.PerformanceSeries) -> str:
+    """The CORRECT basis discriminator, mirrored from the risk-snapshot stamp:
+    a series starting before observation began is partly modeled walk-back."""
+    observed = series.earliest_observed_date
+    if observed is None or series.start_date is None:
+        return "unknown"
+    return "observed" if series.start_date >= observed else "modeled_backfill"
+
+
+def test_earliest_observed_date_parsed_on_legacy_shape() -> None:
+    """The legacy payload carries earliest_observed_date at top level; it must
+    reach the dataclass or downstream provenance cannot classify the basis."""
+    series = tc._parse_performance(  # pyright: ignore[reportPrivateUsage]
+        {
+            "start_date": "2026-05-09",
+            "end_date": "2026-07-24",
+            "base_value": "646629.324288",
+            "earliest_observed_date": "2026-05-09",
+            "backfill_start_unreliable": False,
+            "points": [],
+        }
+    )
+    assert series.earliest_observed_date == "2026-05-09"
+    assert _rebase_basis(series) == "observed"
+
+
+def test_earliest_observed_date_parsed_on_v1_transport(
+    v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same field must survive the v1 model -> legacy dataclass adaptation."""
+    router = _PerfRouter(earliest_observed="2026-06-23")
+    router.install(monkeypatch)
+
+    analytics = tc.fetch_portfolio_analytics(only={"performance"})
+
+    perf = analytics.performance
+    assert perf is not None
+    # The rebase already moved the window onto the observed start, so the
+    # adapted series classifies as observed rather than modeled.
+    assert perf.earliest_observed_date == "2026-06-23"
+    assert _rebase_basis(perf) == "observed"
+
+
+def test_backfill_flag_cannot_discriminate_walk_back_basis() -> None:
+    """REGRESSION GUARD for a real near-miss: ``backfill_start_unreliable`` is
+    NOT a basis discriminator. It flags an untrustworthy walk-back START VALUE,
+    and measured False on both transports across the observed window, the
+    trailing-365d default, and a 26-year window (2026-07-24) — i.e. constant in
+    practice. A stamp derived from it silently records 'observed' for a series
+    that is 80% reconstructed. Only start_date vs earliest_observed_date
+    separates them; this test fails if anyone swaps the comparison back."""
+    walk_back = tc._parse_performance(  # pyright: ignore[reportPrivateUsage]
+        {
+            "start_date": "2025-07-24",
+            "end_date": "2026-07-24",
+            "base_value": "546979.845476",
+            "earliest_observed_date": "2026-05-09",
+            "backfill_start_unreliable": False,
+            "points": [],
+        }
+    )
+    # The flag is blind to it...
+    assert walk_back.backfill_start_unreliable is False
+    # ...while the date comparison correctly calls it modeled.
+    assert _rebase_basis(walk_back) == "modeled_backfill"
+
+
+def test_rebase_basis_unknown_when_provider_omits_marker() -> None:
+    """No marker means the basis is indeterminate, not observed — the client
+    returns the probe window unrebased in that case, so defaulting to
+    'observed' would assert a guarantee nobody verified."""
+    unmarked = tc._parse_performance(  # pyright: ignore[reportPrivateUsage]
+        {
+            "start_date": "2025-07-24",
+            "end_date": "2026-07-24",
+            "base_value": "1.0",
+            "backfill_start_unreliable": False,
+            "points": [],
+        }
+    )
+    assert unmarked.earliest_observed_date is None
+    assert _rebase_basis(unmarked) == "unknown"
