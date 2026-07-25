@@ -387,6 +387,51 @@ over two contradictory counts. It now shows one reconciled line on the actions
 row, and when the request outran the data that line says so, `4 quarters · ⚠ 8
 missing`, instead of disagreeing with itself.)
 
+### 6.3 The research document — a reading surface, not a panel grid
+
+Some surfaces are **documents**: a thesis review, a monthly brief, a memo. They
+carry an argument end to end, and they get a different arrangement from a
+console. This is the only place `--mark` appears (§2), and it is layout, not
+decoration — the primitives are in `controls.py`, so a document composes the
+kit like everything else.
+
+**Rules instead of boxes.** A document separates sections with hairlines and
+whitespace, never cards with fills. This is the load-bearing rule: cards,
+filled pills and gradients are what make a research page read as a *dashboard*,
+and a research page that reads as a dashboard has lost the seriousness it needs
+to be trusted. Status is a **word in plain type** (`holds`, `near`), not a
+`.k-pill` — pills are chrome, and in a document state belongs to the sentence.
+
+**A margin note attaches to one section, never to a standing gutter.** Use
+`.k-doc-row` for the section that has a note; leave every other section
+full-bleed. A reserved note column runs the height of the page and sits empty
+everywhere a note isn't, which on a long document is a dead strip down the
+whole surface. `.k-doc` deliberately has no `grid-template-columns`, and
+`test_doc_row_carries_the_note_column_not_the_document` keeps it that way.
+
+**The kit** (all in `controls.py`): `.k-doc` (the measure) · `.k-doc-row`
+(content + its note; tune with `--k-note-w`) · `.k-doc-mast` (identity band,
+with the mark as a short rule under its left edge) · `.k-note` / `.k-note-title`
+(the margin note; its keyline is the only legal use of `--mark-soft`) · `.k-fn`
+(footnote marker, sized in `em` so it rides its prose) · `.k-band` /
+`.k-band-v` / `.k-band-x` (a full-bleed strip of read-only figures; compose
+`.k-label` for each caption, tune with `--k-band-cols`) · `.k-qa` / `.k-qa-q` /
+`.k-qa-a` / `.k-qa-who` (a recorded exchange) · `.k-label-mark` (the section
+label tone).
+
+**Density does not drop.** A document is not a spacious version of a panel — it
+carries *more*, because it has room for the qualitative half a panel grid has
+nowhere to put: what is priced in, what management was asked and how they
+answered, what would falsify the thesis, what was decided and why. Tables keep
+their row rhythm and mono numerals unchanged. The warmth comes from typesetting
+— serif prose at a real measure, generous leading, a single ochre on the
+furniture — and nowhere from ornament.
+
+**Where interaction lives.** A document is a reading surface; it does not grow
+its own chat. The conversational surface is the existing Ask dock
+(`pipeline/ask_dock.py`) in its `split` mode, scoped to the ticker. A document
+may offer a launcher, never a second input.
+
 ## 7. Do / don't
 
 - **Do** compose: `palette_css(mode) + controls_css(mode) + layout-only CSS`.

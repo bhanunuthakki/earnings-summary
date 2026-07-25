@@ -1160,3 +1160,85 @@ def test_glyph_ink_tracks_the_palette() -> None:
         css = controls_css(mode)
         assert "%23888b94" not in css, "stale cool --muted ink in chevron"
         assert "%230c0d10" not in css, "stale cool --accent-contrast ink in check"
+
+
+# ---------------------------------------------------------------------------
+# The research document primitives (design_language §6.3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["paper", "dark"])
+def test_document_primitives_present(mode: str) -> None:
+    """The document kit ships in both modes — it is not a dark-only surface."""
+    css = controls_css(mode)
+    for selector in (
+        ".k-doc",
+        ".k-doc-row",
+        ".k-doc-mast",
+        ".k-note",
+        ".k-note-title",
+        ".k-fn",
+        ".k-band",
+        ".k-qa",
+        ".k-label-mark",
+    ):
+        assert selector in css, f"{selector} missing from controls_css({mode!r})"
+
+
+def test_doc_row_carries_the_note_column_not_the_document() -> None:
+    """A margin note attaches per-section; the document reserves no gutter.
+
+    The whole point of ``.k-doc-row`` is that ``.k-doc`` stays a single column.
+    If ``.k-doc`` ever grows its own ``grid-template-columns`` the layout is back
+    to a standing rail that sits empty everywhere a note isn't.
+    """
+    css = controls_css("paper")
+    doc_rule = re.search(r"\.k-doc\s*\{([^}]*)\}", css)
+    assert doc_rule is not None
+    assert "grid-template-columns" not in doc_rule.group(1)
+
+    row_rule = re.search(r"\.k-doc-row\s*\{([^}]*)\}", css)
+    assert row_rule is not None
+    assert "grid-template-columns" in row_rule.group(1)
+
+
+@pytest.mark.parametrize("mode", ["paper", "dark"])
+def test_mark_soft_is_only_ever_a_keyline(mode: str) -> None:
+    """``--mark-soft`` is below the AA-body floor by design (see test_ui_tokens).
+
+    That makes it safe on a 1px rule and unsafe on type. This is the CSS-side
+    half of that contract: every declaration consuming it must be a border. The
+    token test pins the ratio; this pins the usage, so the two together make
+    "keyline only" an enforced property rather than a comment.
+    """
+    css = controls_css(mode)
+    uses = re.findall(r"([a-z-]+)\s*:\s*[^;{}]*var\(--mark-soft\)", css)
+    assert uses, "--mark-soft is unused; drop the token or use it"
+    offenders = [prop for prop in uses if not prop.startswith("border")]
+    assert not offenders, (
+        f"--mark-soft used on {offenders} — it is a keyline token below the text "
+        "contrast floor. Carry type with --mark."
+    )
+
+
+@pytest.mark.parametrize("mode", ["paper", "dark"])
+def test_mark_never_fills_a_control(mode: str) -> None:
+    """The editorial mark is furniture ink, never a fill.
+
+    ``--accent`` owns interactive fills. If ``--mark`` starts backgrounding
+    things it becomes a second accent and the "one interactive color" rule in
+    §2 quietly dies.
+    """
+    css = controls_css(mode)
+    fills = re.findall(r"(background(?:-color)?)\s*:\s*[^;{}]*var\(--mark\b", css)
+    assert not fills, f"--mark used as a fill ({fills}); it is ink, not a background"
+
+
+def test_footnote_marker_scales_with_its_prose() -> None:
+    """``.k-fn`` sizes in em on purpose: a reference mark rides the text it
+    annotates, and prose runs at a different size per surface. A px step here
+    would make the marker the wrong size in exactly the place it is used."""
+    css = controls_css("paper")
+    rule = re.search(r"\.k-fn\s*\{([^}]*)\}", css)
+    assert rule is not None
+    assert re.search(r"font-size:\s*[0-9.]+em", rule.group(1))
