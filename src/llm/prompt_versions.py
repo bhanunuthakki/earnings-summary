@@ -334,6 +334,14 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # alongside the per-ticker mix+thesis input hash — bumping it (e.g. after
     # a TAXONOMY definition rewrite) forks every cached derivation cleanly.
     "business_factor_taxonomy": "v1",
+    # D1e ground truth (disclosure_intelligence_v1_prd.md): the two P1/P3
+    # judgment-layer classifiers, first registered here at v1 alongside their
+    # first golden sets (evals/golden/metric_lifecycle_triage.json,
+    # evals/golden/disclosure_item_specificity_triage.json). Bump when
+    # filings.metric_triage._build_prompt / filings.boilerplate_triage._build_prompt
+    # is materially rewritten, then re-run `run_llm_evals.py --purpose <p>`.
+    "metric_lifecycle_triage": "v1",
+    "disclosure_item_specificity_triage": "v1",
 }
 
 _DEFAULT_VERSION = "v1"
