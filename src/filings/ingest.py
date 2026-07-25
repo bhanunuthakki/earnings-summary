@@ -54,6 +54,7 @@ from filings.models import (
     HardStopError,
     SectionSource,
     SourceContractError,
+    TickerNotResolvableError,
     TransientError,
     most_severe_warning,
 )
@@ -563,6 +564,25 @@ def ingest_edgar(
             limit_per_form=limit_per_form,
             session=session,
         )
+    except TickerNotResolvableError as exc:
+        # One issuer that EDGAR cannot serve is a coverage fact, not a broken
+        # run — the rest of the batch still has work to do.
+        _record(
+            conn,
+            report,
+            ticker=ticker,
+            source=SectionSource.EDGAR_TEXT,
+            form=next(iter(sorted(forms, key=lambda f: f.value))) if forms else FilingForm.FORM_10K,
+            fiscal_year=None,
+            fiscal_period=FiscalPeriod.FY,
+            status=CoverageStatus.SOURCE_MISSING,
+            reason_code="no_cik",
+            detail=str(exc),
+            sections_written=0,
+            source_ref=None,
+            extractor_version=edgar_sections.EXTRACTOR_VERSION,
+        )
+        return report
     except HardStopError:
         raise
     except (TransientError, SourceContractError) as exc:

@@ -157,6 +157,17 @@ class FilingSectionIngestError(Exception):
     """
 
 
+class TickerNotResolvableError(FilingSectionIngestError):
+    """This ticker cannot be fetched from EDGAR at all — but others can.
+
+    Deliberately NOT a ``HardStopError``: an unresolvable CIK is a fact about
+    one issuer (an ADR like NTDOY with no direct SEC presence), not a broken
+    run. Treating it as a hard stop aborted a 38-ticker batch on reaching the
+    first such name; it now records ``SOURCE_MISSING`` for that ticker and the
+    batch continues.
+    """
+
+
 class HardStopError(FilingSectionIngestError):
     """A failure that must NOT be retried and must NOT degrade silently.
 
