@@ -2,7 +2,7 @@
 
 Derived from the 2026-07-24/25 session: the Phase 0 section store (migration 0198),
 the literature review (`disclosure_change_signals.md`), and the empirical calibration
-runs against the real book. Schema for P0/P1 lands in migration 0200.
+runs against the real book. Schema for P0/P1 lands in migration 0203.
 
 **The organizing finding — everything below is ranked by it:**
 

@@ -35,8 +35,8 @@ No DB-level foreign keys, per the repo's FK-poisoning invariant: ``section_id``
 and ``source_doc_id`` are code-validated INTEGER pointers, matching
 ``filing_sections.doc_id`` (0198) and ``segment_quarterly_coverage`` (0168).
 
-Revision ID: 0200_disclosure_events
-Revises: 0199_risk_snapshot_provenance
+Revision ID: 0203_disclosure_events
+Revises: 0202_prompt_ab_arms
 Create Date: 2026-07-25
 """
 
@@ -48,8 +48,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0200_disclosure_events"
-down_revision: str | Sequence[str] | None = "0199_risk_snapshot_provenance"
+revision: str = "0203_disclosure_events"
+down_revision: str | Sequence[str] | None = "0202_prompt_ab_arms"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -111,7 +111,13 @@ def upgrade() -> None:
             sa.Column("prior_fiscal_period", sa.String(length=4), nullable=True),
             sa.Column("source_ref", sa.String(length=255), nullable=True),
             sa.Column("source_doc_id", sa.Integer(), nullable=True),
-            sa.Column("canonical_id", sa.String(length=64), nullable=True),
+            # Part of the row identity below, so it is NOT NULL with an empty
+            # sentinel rather than nullable: SQLite treats two NULLs in a
+            # UNIQUE index as distinct, so a nullable member of the key would
+            # silently stop deduplicating exactly the rows that don't carry a
+            # section concept (every metric-lifecycle event). Same trap, and
+            # same reasoning, as filing_section_coverage's NULL-safe upsert.
+            sa.Column("canonical_id", sa.String(length=64), nullable=False, server_default=""),
             # What changed: a risk-factor heading, an XBRL tag, a section stem.
             sa.Column("subject", sa.String(length=255), nullable=False),
             sa.Column("subject_label", sa.Text(), nullable=True),
@@ -133,11 +139,18 @@ def upgrade() -> None:
             # 'new' | 'reviewed' | 'dismissed' — owner-facing triage state.
             sa.Column("status", sa.String(length=16), nullable=False, server_default="new"),
             sa.Column("created_at", sa.DateTime(), nullable=False),
+            # ``canonical_id`` is part of row identity: the same heading can
+            # legitimately appear as an item in two different sections (a
+            # phrase occurring in both Risk Factors and MD&A), and those are
+            # two distinct findings. Omitting it made them collide and
+            # silently overwrite each other — measured at ~32% of computed
+            # item events lost before this was caught.
             sa.UniqueConstraint(
                 "ticker",
                 "event_type",
                 "fiscal_year",
                 "fiscal_period",
+                "canonical_id",
                 "subject",
                 "detector_version",
                 name="uq_disclosure_events",
