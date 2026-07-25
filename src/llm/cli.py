@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import shutil
 import subprocess
 import tempfile
@@ -60,7 +61,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from llm.capture import capture_exchange
+from llm.fallback import fallback_available
 from llm.ledger import fallback_call_logged, record_llm_call
+from llm.transport import (
+    FailureInfo,
+    LLMQuotaExhausted,
+    classify_cli_failure,
+    clear_quota_block,
+    quota_block_active,
+    record_quota_exhausted,
+    retry_budget,
+)
+
+# Backoff base for transient-class retries (llm.transport.retry_budget owns the
+# per-class attempt counts). attempt 1 → ~3s, attempt 2 → ~6s, + up to 1s jitter.
+_RETRY_BASE_SECONDS = float(os.environ.get("LLM_RETRY_BASE_S", "3"))
 
 log = logging.getLogger(__name__)
 
@@ -841,6 +856,14 @@ def is_hard_stop(exc: BaseException) -> bool:
     timeouts, non-zero exits, both Claude + Gemini momentarily unavailable,
     empty / unparseable completions. One flaky call shouldn't nuke every other
     section + the render.
+
+    ``LLMQuotaExhausted`` (the subscription window breaker) is DELIBERATELY not
+    a hard stop: unlike a budget cap it is temporal and self-healing, so
+    production pipelines defer the item and retry next run (the per-item
+    degrade pattern) instead of crashing a whole build over a window that
+    resets on its own. Measurement contexts are the exception — eval/judge
+    callers must abort on it explicitly (see ``evals.rubric_judge``), because
+    scoring under an exhausted quota measures the outage, not the subject.
     """
     return isinstance(exc, (LLMBudgetExceeded, LLMSetupError))
 
@@ -1020,102 +1043,166 @@ def _call_claude(
     from llm_call_ledger import parse_claude_json_output, sha256_text
 
     prompt_sha = sha256_text(prompt)
+
+    # Quota circuit breaker (July-2026 incident): once the subscription window
+    # is exhausted, every spawn is doomed for hours. Fail fast — typed, ledgered,
+    # zero subprocesses — until the recorded reset passes.
+    blocked_until = quota_block_active()
+    if blocked_until is not None:
+        msg = (
+            f"LLM quota breaker engaged until {blocked_until.isoformat()} — "
+            "call skipped without spawning the CLI (defer and retry next run)"
+        )
+        record_llm_call(
+            started_at=datetime.now(UTC),
+            elapsed_ms=0,
+            model=model,
+            prompt_sha=prompt_sha,
+            prompt_chars=len(prompt),
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope,
+            run_id=run_id,
+            error=f"[quota_blocked] {msg}",
+        )
+        raise LLMQuotaExhausted(msg, blocked_until=blocked_until)
+
     started_at = datetime.now(UTC)
     t0 = time.monotonic()
-    try:
-        result = subprocess.run(
-            # --no-session-persistence: every call is a fresh `-p` subprocess and
-            # NOTHING in this repo ever --resume/--continue-s, so writing a session
-            # transcript to ~/.claude per call is pure waste — disabling it drops
-            # that disk write (and stops the session files accumulating) with zero
-            # behavioral change. (L14 latency: native prompt caching is unreachable
-            # via `-p`, so transport hygiene like this is the only CLI-side lever
-            # that's safe under subscription billing — `--bare` would force
-            # ANTHROPIC_API_KEY billing and was rejected.)
-            [
-                llm_client._claude_cli_path,
-                "-p",
-                "--model",
-                model,
-                "--output-format",
-                "json",
-                "--no-session-persistence",
-            ],
-            input=prompt,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",  # Force UTF-8 — Windows otherwise defaults to cp1252 which dies on
-            errors="replace",  # common financial-doc Unicode (U+2212 minus, en/em dashes, arrows).
-            check=True,
-            timeout=timeout_seconds,
-            cwd=_neutral_subprocess_cwd(),  # avoid booting the project's MCP servers (hangs)
-            env=_subprocess_env(),  # strip ambient ANTHROPIC_BASE_URL (2026-07 incident)
-        )
-        elapsed_ms = int((time.monotonic() - t0) * 1000)
-        # Parse the JSON envelope. ValueError when malformed → caught below
-        # and routed through the Gemini fallback (same as a CLI failure).
-        text, meta = parse_claude_json_output(result.stdout.strip())
-        text = text.strip()
-        if not text:
-            raise RuntimeError(
-                f"claude -p returned empty `result`. stderr: {result.stderr.strip()[:200]}"
+    last_error: Exception | None = None
+    last_info: FailureInfo | None = None
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            result = subprocess.run(
+                # --no-session-persistence: every call is a fresh `-p` subprocess and
+                # NOTHING in this repo ever --resume/--continue-s, so writing a session
+                # transcript to ~/.claude per call is pure waste — disabling it drops
+                # that disk write (and stops the session files accumulating) with zero
+                # behavioral change. (L14 latency: native prompt caching is unreachable
+                # via `-p`, so transport hygiene like this is the only CLI-side lever
+                # that's safe under subscription billing — `--bare` would force
+                # ANTHROPIC_API_KEY billing and was rejected.)
+                [
+                    llm_client._claude_cli_path,
+                    "-p",
+                    "--model",
+                    model,
+                    "--output-format",
+                    "json",
+                    "--no-session-persistence",
+                ],
+                input=prompt,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",  # Force UTF-8 — Windows otherwise defaults to cp1252 which dies
+                errors="replace",  # on financial-doc Unicode (U+2212 minus, en/em dashes, arrows).
+                check=True,
+                timeout=timeout_seconds,
+                cwd=_neutral_subprocess_cwd(),  # avoid booting the project's MCP servers (hangs)
+                env=_subprocess_env(),  # strip ambient ANTHROPIC_BASE_URL (2026-07 incident)
             )
-        log.info({"event": "llm_call_done", "response_chars": len(text)})
-        record_llm_call(
-            started_at=started_at,
-            elapsed_ms=elapsed_ms,
-            model=model,
-            prompt_sha=prompt_sha,
-            prompt_chars=len(prompt),
-            purpose=purpose,
-            ticker=ticker,
-            scope=scope,
-            run_id=run_id,
-            response_text=text,
-            meta=meta,
-        )
-        # Opt-in full-text capture (off unless LLM_CAPTURE_DIR is set) — the
-        # corpus source for execution/compare_backends.py --from-capture.
-        capture_exchange(
-            prompt=prompt,
-            response=text,
-            purpose=purpose,
-            ticker=ticker,
-            scope=scope,
-            model=model,
-            run_id=run_id,
-        )
-        return text
-    except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as claude_error:
-        elapsed_ms = int((time.monotonic() - t0) * 1000)
-        error_msg = f"{type(claude_error).__name__}: {str(claude_error)[:500]}"
-        tail = _stderr_tail(claude_error)
-        if tail:
-            error_msg += f" | output: {tail}"
-        record_llm_call(
-            started_at=started_at,
-            elapsed_ms=elapsed_ms,
-            model=model,
-            prompt_sha=prompt_sha,
-            prompt_chars=len(prompt),
-            purpose=purpose,
-            ticker=ticker,
-            scope=scope,
-            run_id=run_id,
-            error=error_msg,
-        )
-        # Operational failure — try Gemini fallback. fallback_call_logged raises
-        # if no Gemini key is configured, surfacing both errors together. The
-        # fallback writes its own ledger row tagged fallback_used='gemini'.
-        return fallback_call_logged(
-            prompt,
-            claude_error,
-            prompt_sha=prompt_sha,
-            purpose=purpose,
-            ticker=ticker,
-            scope=scope,
-            run_id=run_id,
-        )
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            # Parse the JSON envelope. ValueError when malformed → caught below
+            # and classified (the raised message now carries the envelope's
+            # `result` head, so is_error-with-exit-0 failures classify too).
+            text, meta = parse_claude_json_output(result.stdout.strip())
+            text = text.strip()
+            if not text:
+                raise RuntimeError(
+                    f"claude -p returned empty `result`. stderr: {result.stderr.strip()[:200]}"
+                )
+            log.info({"event": "llm_call_done", "response_chars": len(text)})
+            clear_quota_block()  # no-op unless a breaker file exists
+            record_llm_call(
+                started_at=started_at,
+                elapsed_ms=elapsed_ms,
+                model=model,
+                prompt_sha=prompt_sha,
+                prompt_chars=len(prompt),
+                purpose=purpose,
+                ticker=ticker,
+                scope=scope,
+                run_id=run_id,
+                response_text=text,
+                meta=meta,
+            )
+            # Opt-in full-text capture (off unless LLM_CAPTURE_DIR is set) — the
+            # corpus source for execution/compare_backends.py --from-capture.
+            capture_exchange(
+                prompt=prompt,
+                response=text,
+                purpose=purpose,
+                ticker=ticker,
+                scope=scope,
+                model=model,
+                run_id=run_id,
+            )
+            return text
+        except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as claude_error:
+            last_error = claude_error
+            last_info = classify_cli_failure(claude_error)
+            if last_info.kind == "usage_limit":
+                # Deterministic until the window resets — engage the breaker so
+                # every process fails fast instead of spawning doomed CLIs.
+                record_quota_exhausted(last_info)
+                break
+            if attempt < retry_budget(last_info.kind):
+                delay = _RETRY_BASE_SECONDS * (2 ** (attempt - 1)) + random.uniform(0.0, 1.0)
+                log.warning(
+                    {
+                        "event": "llm_call_retry",
+                        "purpose": purpose,
+                        "attempt": attempt,
+                        "kind": last_info.kind,
+                        "delay_s": round(delay, 1),
+                        "detail": last_info.detail[:200],
+                    }
+                )
+                time.sleep(delay)
+                continue
+            break
+
+    # Final failure: ONE ledger row carrying the classified cause (retries are
+    # log events, not rows — a 3-attempt blip is one failure, not three).
+    assert last_error is not None and last_info is not None
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    error_msg = (
+        f"{last_info.ledger_prefix} {type(last_error).__name__} "
+        f"(attempt {attempt}/{retry_budget(last_info.kind)}): {last_info.detail[:400]}"
+    )
+    record_llm_call(
+        started_at=started_at,
+        elapsed_ms=elapsed_ms,
+        model=model,
+        prompt_sha=prompt_sha,
+        prompt_chars=len(prompt),
+        purpose=purpose,
+        ticker=ticker,
+        scope=scope,
+        run_id=run_id,
+        error=error_msg,
+    )
+    if last_info.kind == "usage_limit" and not fallback_available():
+        # Typed so eval/judge callers can abort instead of scoring the outage;
+        # production callers defer per-item (is_hard_stop → False).
+        raise LLMQuotaExhausted(
+            f"usage limit exhausted: {last_info.detail[:300]}",
+            blocked_until=last_info.retry_after,
+        ) from last_error
+    # Operational failure — try Gemini fallback. fallback_call_logged raises
+    # if the fallback is disabled/unconfigured, surfacing both errors together;
+    # an actual Gemini attempt writes its own ledger row (fallback_used='gemini').
+    return fallback_call_logged(
+        prompt,
+        last_error,
+        prompt_sha=prompt_sha,
+        purpose=purpose,
+        ticker=ticker,
+        scope=scope,
+        run_id=run_id,
+    )
 
 
 def call_llm(
@@ -1407,6 +1494,29 @@ def call_llm_with_web(
     from llm_call_ledger import parse_claude_json_output, sha256_text
 
     prompt_sha = sha256_text(prompt)
+
+    # Quota breaker: a blocked window dooms the (expensive, agentic) web spawn
+    # and the plain fall-through alike — fail fast with the typed error.
+    blocked_until = quota_block_active()
+    if blocked_until is not None:
+        msg = (
+            f"LLM quota breaker engaged until {blocked_until.isoformat()} — "
+            "web call skipped without spawning the CLI (defer and retry next run)"
+        )
+        record_llm_call(
+            started_at=datetime.now(UTC),
+            elapsed_ms=0,
+            model=resolved_model,
+            prompt_sha=prompt_sha,
+            prompt_chars=len(prompt),
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope or "web",
+            run_id=run_id,
+            error=f"[quota_blocked] {msg}",
+        )
+        raise LLMQuotaExhausted(msg, blocked_until=blocked_until)
+
     started_at = datetime.now(UTC)
     t0 = time.monotonic()
     # A caller may LOWER the per-run ceiling (the tiered research budget), never
@@ -1480,10 +1590,10 @@ def call_llm_with_web(
         return text
     except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as web_err:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
-        web_error_msg = f"{type(web_err).__name__}: {str(web_err)[:500]}"
-        web_tail = _stderr_tail(web_err)
-        if web_tail:
-            web_error_msg += f" | output: {web_tail}"
+        web_info = classify_cli_failure(web_err)
+        web_error_msg = (
+            f"{web_info.ledger_prefix} {type(web_err).__name__}: {web_info.detail[:400]}"
+        )
         record_llm_call(
             started_at=started_at,
             elapsed_ms=elapsed_ms,
@@ -1496,14 +1606,21 @@ def call_llm_with_web(
             run_id=run_id,
             error=web_error_msg,
         )
+        if web_info.kind == "usage_limit":
+            # Engage the breaker here too — the plain-path fall-through below
+            # will then fail fast (typed) instead of spawning a second doomed
+            # subprocess against the same exhausted window.
+            record_quota_exhausted(web_info)
         log.warning(
             {
                 "event": "llm_web_call_fallback_to_plain",
-                "error": f"{type(web_err).__name__}: {web_err}",
+                "kind": web_info.kind,
+                "error": f"{type(web_err).__name__}: {web_info.detail[:200]}",
             }
         )
         # Fall through to non-web path so the caller still gets output. The
-        # plain _call_claude path records its own ledger row(s).
+        # plain _call_claude path records its own ledger row(s), carries the
+        # retry/breaker policy, and raises LLMQuotaExhausted when blocked.
         return _call_claude(
             prompt,
             model=resolved_model,

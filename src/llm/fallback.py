@@ -65,6 +65,17 @@ def _describe(claude_error: Exception, limit: int = 300) -> str:
     return f"{base} | output: {tail}" if tail else base
 
 
+def fallback_available() -> bool:
+    """True only when a Gemini attempt would ACTUALLY fire: fallback not
+    disabled AND a key is configured. The single gate callers use to decide
+    whether the fallback path exists — checking ``is_fallback_disabled`` alone
+    misses the no-key case, and both non-attempt cases must behave identically
+    (raise the Claude cause; write NO Gemini ledger row)."""
+    if is_fallback_disabled():
+        return False
+    return bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+
+
 def is_fallback_disabled() -> bool:
     """Returns True when the operator has explicitly disabled the Gemini
     fallback via ``LLM_FALLBACK_DISABLED=1`` in the environment.

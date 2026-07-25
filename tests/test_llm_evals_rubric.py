@@ -232,20 +232,36 @@ def test_judge_item_unparseable_fails_closed(rubric: Rubric) -> None:
     assert res.judge_verdict == "looks good to me!"  # raw preserved for audit
 
 
-def test_judge_item_transient_call_failure_fails_closed(rubric: Rubric) -> None:
+def test_judge_item_transient_call_failure_is_infra_not_zero(rubric: Rubric) -> None:
+    """A judge-CALL failure measures the transport, not the item. It must land
+    as failure_stage='judge_infra' with score=None — the July-2026 incident put
+    18 score-0.0 outage artifacts into eval history, dragging bear_case's
+    apparent average from 0.959 to 0.706."""
+
     def boom(prompt: str, **_kw: object) -> str:
         raise RuntimeError("CLI exploded")
 
     res = judge_item(rubric, _item(), run_id="r1", caller=boom)
-    assert not res.passed and res.failure_stage == "judge"
+    assert not res.passed and res.failure_stage == "judge_infra"
+    assert res.score is None
     assert res.judge_rationale is not None and "CLI exploded" in res.judge_rationale
+
+
+def test_judge_item_quota_exhausted_aborts(rubric: Rubric) -> None:
+    from llm.transport import LLMQuotaExhausted
+
+    def blocked(prompt: str, **_kw: object) -> str:
+        raise LLMQuotaExhausted("usage window exhausted")
+
+    with pytest.raises(EvalAbortError, match="stop"):
+        judge_item(rubric, _item(), run_id="r1", caller=blocked)
 
 
 def test_judge_item_hard_stop_aborts(rubric: Rubric) -> None:
     def capped(prompt: str, **_kw: object) -> str:
         raise LLMBudgetExceeded("eval_judge over cap")
 
-    with pytest.raises(EvalAbortError, match="hard stop"):
+    with pytest.raises(EvalAbortError, match="stop"):
         judge_item(rubric, _item(), run_id="r1", caller=capped)
 
 
@@ -254,8 +270,24 @@ def test_mode_a_run_judge_hard_stop_aborts(monkeypatch: pytest.MonkeyPatch) -> N
         raise LLMBudgetExceeded("eval_judge over cap")
 
     monkeypatch.setattr(ej, "call_llm", capped)
-    with pytest.raises(EvalAbortError, match="hard stop"):
+    with pytest.raises(EvalAbortError, match="stop"):
         ej.run_judge("q", "{}", "{}", "diff", run_id="r1")
+
+
+def test_mode_a_transient_failure_is_marked_infra(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(prompt: str, **_kw: object) -> str:
+        raise RuntimeError("CLI exploded")
+
+    monkeypatch.setattr(ej, "call_llm", boom)
+    outcome = ej.run_judge("q", "{}", "{}", "diff", run_id="r1")
+    assert outcome.verdict is None and outcome.infra
+
+
+def test_mode_a_unparseable_is_not_infra(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The judge RAN and answered garbage — a judge-quality fact, kept fail-closed."""
+    monkeypatch.setattr(ej, "call_llm", lambda *_a, **_k: "not json at all")
+    outcome = ej.run_judge("q", "{}", "{}", "diff", run_id="r1")
+    assert outcome.verdict is None and not outcome.infra
 
 
 # ----------------------------------------------------------------------------
