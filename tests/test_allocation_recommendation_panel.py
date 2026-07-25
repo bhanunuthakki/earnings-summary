@@ -88,7 +88,9 @@ def _make_db(tmp_path: Path) -> Path:
             drawdown_recovered INTEGER, days_to_recovery INTEGER,
             spy_beta REAL, qqq_beta REAL, growth_tilt REAL,
             avg_correlation_spy REAL, rate_beta_10y REAL,
-            names_priced INTEGER, names_total INTEGER
+            names_priced INTEGER, names_total INTEGER,
+            metric_version TEXT, rebase_basis TEXT,
+            perf_window_start TEXT, perf_observed_from TEXT
         );
         CREATE TABLE portfolio_risk_snapshot_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -106,7 +108,9 @@ def _make_db(tmp_path: Path) -> Path:
             spy_beta REAL, qqq_beta REAL, growth_tilt REAL,
             avg_correlation_spy REAL, rate_beta_10y REAL,
             names_priced INTEGER, names_total INTEGER,
-            input_sha TEXT
+            input_sha TEXT,
+            metric_version TEXT, rebase_basis TEXT,
+            perf_window_start TEXT, perf_observed_from TEXT
         );
         CREATE TABLE wealth_context_snapshot_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -368,6 +372,8 @@ def test_risk_budget_four_categories_and_delta(tmp_path: Path) -> None:
         weighted_avg_correlation_spy=0.5,
         current_drawdown_pct=-5.0,
         max_drawdown_pct=-10.0,
+        metric_version="v1",
+        rebase_basis="observed",
     )
     _seed_risk_snapshot(
         db_path,
@@ -378,6 +384,8 @@ def test_risk_budget_four_categories_and_delta(tmp_path: Path) -> None:
         weighted_avg_correlation_spy=0.62,
         current_drawdown_pct=-8.0,
         max_drawdown_pct=-10.0,
+        metric_version="v1",
+        rebase_basis="observed",
     )
     html = render_risk_budget_section(db_path, tmp_path)
 
@@ -386,9 +394,45 @@ def test_risk_budget_four_categories_and_delta(tmp_path: Path) -> None:
     assert "3. Downside / stress" in html
     assert "4. Capacity / liquidity" in html
     assert "NU" in html
-    # Delta vs prior valid snapshot: top1 20.0 -> 24.0 = +4.0pp.
+    # Matched provenance (§7.1.9): delta vs prior valid snapshot renders,
+    # top1 20.0 -> 24.0 = +4.0pp.
     assert "4.0pp vs prior" in html
     assert "Secondary metrics" in html
+
+
+def test_risk_budget_mismatched_provenance_suppresses_delta(tmp_path: Path) -> None:
+    """PRD §7.1.9: a metric-version change must not render a false delta
+    against an incomparable prior — the numeric delta is suppressed and the
+    reason is surfaced instead."""
+    db_path = _make_db(tmp_path)
+    _seed_risk_snapshot(
+        db_path,
+        table="portfolio_risk_snapshot_history",
+        captured_at="2026-07-15T09:00:00",
+        top1_weight_pct=20.0,
+        hhi=0.12,
+        current_drawdown_pct=-5.0,
+        max_drawdown_pct=-10.0,
+        metric_version="v1",
+        rebase_basis="observed",
+    )
+    _seed_risk_snapshot(
+        db_path,
+        table="portfolio_risk_snapshot_history",
+        captured_at="2026-07-22T09:00:00",
+        top1_weight_pct=24.0,
+        hhi=0.15,
+        current_drawdown_pct=-8.0,
+        max_drawdown_pct=-10.0,
+        metric_version="v2",  # bumped — definition changed
+        rebase_basis="observed",
+    )
+    html = render_risk_budget_section(db_path, tmp_path)
+
+    assert "4.0pp vs prior" not in html  # no false delta across the version change
+    assert "3.0pp vs prior" not in html
+    assert "metric definition changed (v1 → v2)" in html
+    assert 'k-pill k-pill-warn">metric definition changed' in html
 
 
 def test_risk_budget_null_metrics_render_as_em_dash_not_zero(tmp_path: Path) -> None:

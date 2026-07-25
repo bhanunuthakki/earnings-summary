@@ -14,6 +14,19 @@ writes NOTHING (the last valid snapshot and history stay untouched), logs a
 structured ``invalid`` event, fires the ``data_feed_stale`` dead-man alert
 (feed=risk_snapshot, one per day, signature-deduped), and exits 1.
 
+Provenance (§7.1.9, migration 0199): every write stamps
+``portfolio_risk_snapshot_store.METRIC_VERSION`` plus a ``rebase_basis``
+derived from what the tracker actually returned —
+``"modeled_backfill"`` when ``PerformanceSeries.backfill_start_unreliable``
+is True, ``"observed"`` otherwise — never hardcoded. This matters because a
+transport change (a new tracker endpoint version, a resampling fix, a
+different lookback default) or a provider change can shift EVERY beta /
+sharpe / drawdown number in a capture while ``window_start`` / ``window_end``
+stay bit-for-bit identical. Without this stamp, a downstream drift sensor
+(or the Risk Budget's "vs prior" delta) has no way to tell a real risk move
+from a definition change — it would just see two different numbers and
+report a move that never happened in the market.
+
 CLI:
     python execution/refresh_portfolio_risk_snapshot.py
     python execution/refresh_portfolio_risk_snapshot.py --db-path /tmp/x.db
@@ -45,6 +58,8 @@ from pipeline.portfolio_panel import (  # noqa: E402
 )
 from portfolio_risk import compute_drawdown, factor_exposure_rollup  # noqa: E402
 from portfolio_risk_snapshot_store import (  # noqa: E402
+    METRIC_VERSION,
+    RebaseBasis,
     RiskBudgetSnapshot,
     history_has_sha,
     snapshot_input_sha,
@@ -129,6 +144,36 @@ def main(argv: list[str] | None = None) -> int:
     factor = factor_exposure_rollup(analytics.positioning.correlations, rate_betas)
     snap = _build_risk_snapshot(analytics, drawdown, factor)
 
+    # §7.1.9 provenance: derive rebase_basis by COMPARING the window the
+    # series actually starts at against the first day the provider has real
+    # observations for. Do NOT use `backfill_start_unreliable` — measured
+    # against the live tracker it is a constant False across an observed
+    # window, the walk-back-filled default, AND a 2000-01-01 window whose
+    # first 9,625 of 9,698 points are reconstructed. It answers "is the
+    # walk-back's starting VALUE untrustworthy", not "does this series
+    # contain a walk-back at all". Stamping it would record the same basis
+    # for both shapes — a guarantee that reads as verified while
+    # distinguishing nothing, which is worse than no stamp.
+    perf = analytics.performance
+    observed_from = perf.earliest_observed_date
+    rebase_basis: RebaseBasis
+    if observed_from is None or perf.start_date is None:
+        # The provider declined to mark its observation start, so the basis
+        # is genuinely indeterminate — say so rather than assuming observed.
+        rebase_basis = "unknown"
+    elif perf.start_date >= observed_from:
+        rebase_basis = "observed"
+    else:
+        rebase_basis = "modeled_backfill"
+    # Store the two raw dates the basis came from. NOT redundant with the
+    # snapshot's window_start/window_end — those are the BETA endpoint's
+    # window (live 2026-07-24: beta starts 2025-07-24, performance starts
+    # 2026-05-09), so a reader who sanity-checks the basis against
+    # window_start gets the opposite answer. These make the classification
+    # recomputable from the row instead of trusted.
+    perf_window_start = perf.start_date
+    perf_observed_from = observed_from
+
     weights = tuple(
         float(r.weight_pct) for r in analytics.positioning.correlations if r.weight_pct is not None
     )
@@ -161,7 +206,14 @@ def main(argv: list[str] | None = None) -> int:
 
     sha = snapshot_input_sha(snap)
     deduped = history_has_sha(sha, db_path=db_path)
-    if not write_snapshot(snap, db_path=db_path):
+    if not write_snapshot(
+        snap,
+        db_path=db_path,
+        metric_version=METRIC_VERSION,
+        rebase_basis=rebase_basis,
+        perf_window_start=perf_window_start,
+        perf_observed_from=perf_observed_from,
+    ):
         reason = "snapshot write failed"
         _log("invalid", reason=reason)
         _fire_deadman(db_path, reason=reason)
@@ -191,6 +243,10 @@ def main(argv: list[str] | None = None) -> int:
                 "num_positions": num_positions,
                 "input_sha": sha,
                 "history_deduped": deduped,
+                "metric_version": METRIC_VERSION,
+                "rebase_basis": rebase_basis,
+                "perf_window_start": perf_window_start,
+                "perf_observed_from": perf_observed_from,
                 "source_errors": list(fetch_errors),
             }
         )

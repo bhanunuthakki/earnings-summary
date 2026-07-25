@@ -520,6 +520,18 @@ def render_risk_budget_section(db_path: Path, repo_root: Path) -> str:
         )
     prior = history[1] if len(history) > 1 else None
 
+    # PRD §7.1.9: a "vs prior" delta must never be rendered across a
+    # metric-version / rebase-basis change — that is a false delta, not a
+    # real risk move. When the two rows aren't comparable, null out `prior`
+    # so every _delta(...) call below degrades to "" automatically, and
+    # surface the reason once near the timestamp (same stale-pill treatment).
+    comparability_note = ""
+    if prior is not None and not risk_store.comparable(snap, prior):
+        reason = risk_store.incomparable_reason(snap, prior)
+        if reason:
+            comparability_note = f' <span class="k-pill k-pill-warn">{escape(reason)}</span>'
+        prior = None
+
     is_stale = False
     try:
         captured = datetime.fromisoformat(snap.captured_at) if snap.captured_at else None
@@ -626,7 +638,7 @@ def render_risk_budget_section(db_path: Path, repo_root: Path) -> str:
 
     return (
         f"{_STYLE}{head}"
-        f'<p class="alloc-meta">{stamp}{stale_pill}</p>'
+        f'<p class="alloc-meta">{stamp}{stale_pill}{comparability_note}</p>'
         f'<div class="risk-cat-grid">{concentration_cat}{shared_driver_cat}{dd_cat}{capacity_cat}</div>'
         f"{secondary}</section>"
     )
