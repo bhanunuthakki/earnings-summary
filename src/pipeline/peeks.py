@@ -2075,3 +2075,190 @@ def render_discovery_compare_peek(repo_root: Path, db_path: Path, tickers: list[
     # renders correctly even when opened without a prior Score/Fit peek on the
     # page (repeated <style> blocks are harmless — same rules, later wins).
     return f"{table}{foot}<style>{_SCORE_CSS}</style>"
+
+
+# --------------------------------------------------------------------------- #
+# Earnings-prep peek (Wave 2, surface_density_jit_redesign.md D2 + walkthrough
+# #4): the one-page prep memo, assembled ON DEMAND when the strip's "prep"
+# chip is clicked — never a scheduled artifact. Deterministic composition of
+# what the platform already knows about the name; the governed-LLM leg is the
+# Ask doorway in the footer (click → the ask engine synthesizes the narrative
+# on the same grounding).
+# --------------------------------------------------------------------------- #
+
+
+def render_earnings_prep_peek(db_path: Path, repo_root: Path, ticker: str) -> str | None:
+    """The on-demand earnings-prep memo for one upcoming name.
+
+    Sections, each best-effort (a missing table drops its block, never the
+    memo): next-ER header with thesis status · the owner's open watch items /
+    questions (ask doorways) · prior-quarter prep notes from the thesis ledger
+    (``earnings_prep_append`` — what the drafter queued to watch on THIS call)
+    · the valuation stance (latest consolidated DCF). ``None`` (→ the route
+    404s) only when the ticker isn't a tracked, non-archived name."""
+    t = (ticker or "").strip().upper()
+    if not t:
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        try:
+            tracked = conn.execute(
+                "SELECT list_type FROM tracked_companies WHERE ticker = ? AND archived_at IS NULL",
+                (t,),
+            ).fetchone()
+        except sqlite3.Error:
+            tracked = None
+        if tracked is None:
+            return None
+        header = _prep_header(conn, repo_root, t)
+        valuation = _prep_valuation(conn, t)
+    finally:
+        conn.close()
+
+    watch = _prep_watch_items(db_path, t)
+    ledger = _prep_ledger_notes(db_path, t)
+
+    ask_q = (
+        f"Prep me for {t}'s upcoming earnings call — synthesize what to listen for "
+        "from my open questions, watch items, prior-quarter tone, and the thesis."
+    )
+    foot = (
+        '<div class="cc-peek-foot">'
+        f'<button type="button" class="k-chip k-chip-btn" data-ask-q="{escape(ask_q, quote=True)}">'
+        "ask for the narrative →</button>"
+        f'<a href="/#holding={escape(t, quote=True)}">open the holding →</a></div>'
+    )
+    return (
+        f'<div class="cc-prep">{header}{watch}{ledger}{valuation}</div>{foot}'
+        f"<style>{_PREP_CSS}</style>"
+    )
+
+
+def _prep_header(conn: sqlite3.Connection, repo_root: Path, t: str) -> str:
+    when: str | None = None
+    try:
+        from expected_earnings import upcoming_by_ticker
+
+        cal = upcoming_by_ticker(conn, datetime.now(UTC).date())
+        d = cal.get(t)
+        when = d.isoformat() if d is not None else None
+    except Exception:
+        when = None
+    if when is None:
+        try:
+            when = next_earnings(repo_root, t, datetime.now(UTC))
+        except Exception:
+            when = None
+    status = ""
+    try:
+        row = conn.execute(
+            "SELECT breach_status FROM thesis_state WHERE ticker = ?", (t,)
+        ).fetchone()
+        if row is not None and row[0]:
+            tone = {"ok": "-ok", "watch": "-warn", "breach": "-bad"}.get(str(row[0]), "")
+            status = (
+                f' <span class="k-pill k-pill{tone}">{escape(str(row[0]))}</span>'
+                if tone
+                else (f' <span class="k-pill">{escape(str(row[0]))}</span>')
+            )
+    except sqlite3.Error:
+        status = ""
+    when_txt = escape(when) if when else "date not on the calendar yet"
+    return f'<div class="prep-head"><span class="prep-when">reports {when_txt}</span>{status}</div>'
+
+
+def _prep_watch_items(db_path: Path, t: str) -> str:
+    try:
+        from user_state.notes import list_notes
+
+        notes = list_notes(ticker=t, status="open", db_path=db_path)
+    except Exception:
+        return ""
+    kind_rank = {"watch": 0, "question": 1}
+    notes = sorted(notes, key=lambda n: kind_rank.get(n.kind, 9))[:6]
+    if not notes:
+        return (
+            '<div class="prep-sec"><h4>What you said to watch</h4>'
+            '<p class="muted">No open watch items or questions on this name — capture one '
+            "and it becomes this list.</p></div>"
+        )
+    items = "".join(
+        '<li><button type="button" class="prep-ask" '
+        f'data-ask-q="{escape(f"{n.body.strip()} ({t})", quote=True)}" '
+        f'title="open in Ask"><span class="k-chip">{escape(n.kind)}</span> '
+        f"{escape(n.body.strip())}</button></li>"
+        for n in notes
+    )
+    return f'<div class="prep-sec"><h4>What you said to watch</h4><ul>{items}</ul></div>'
+
+
+def _prep_ledger_notes(db_path: Path, t: str) -> str:
+    try:
+        from user_state.ledger import list_entries
+
+        entries = list_entries(
+            ticker=t, entry_kind="earnings_prep_append", limit=3, db_path=db_path
+        )
+    except Exception:
+        return ""
+    if not entries:
+        return ""
+    items = "".join(
+        f"<li>{escape(e.body.strip())} "
+        f'<span class="muted">({escape(str(e.created_at)[:10])})</span></li>'
+        for e in entries
+    )
+    return f'<div class="prep-sec"><h4>Queued from prior signals</h4><ul>{items}</ul></div>'
+
+
+def _prep_valuation(conn: sqlite3.Connection, t: str) -> str:
+    try:
+        row = conn.execute(
+            "SELECT live_price, npv_per_share, over_under_pct, "
+            "COALESCE(sanity_flag, '') FROM dcf_runs "
+            "WHERE ticker = ? AND (segment_name IS NULL OR segment_name = '') "
+            "ORDER BY valuation_date DESC, rowid DESC LIMIT 1",
+            (t,),
+        ).fetchone()
+    except sqlite3.Error:
+        return ""
+    if row is None:
+        return ""
+    live, fair, ou, sanity = row
+    bits: list[str] = []
+    if live is not None:
+        bits.append(f"live ${float(live):,.0f}")
+    if fair is not None:
+        bits.append(f"fair ${float(fair):,.0f}")
+    if ou is not None:
+        bits.append(f"{float(ou) * 100.0:+.0f}% vs fair")
+    if not bits:
+        return ""
+    pill = (
+        ' <span class="k-pill k-pill-warn" title="model failed the DCF trust gate; '
+        'read the gap as unreviewed">unreviewed model</span>'
+        if sanity
+        else ""
+    )
+    return (
+        '<div class="prep-sec"><h4>Valuation stance</h4>'
+        f"<p>{escape(' · '.join(bits))}{pill}</p></div>"
+    )
+
+
+_PREP_CSS = """
+.cc-prep { display: flex; flex-direction: column; gap: 8px; }
+.prep-head { display: flex; align-items: baseline; gap: 8px; }
+.prep-when { font-family: var(--mono, monospace); color: var(--fg); font-weight: 600; }
+.prep-sec h4 { margin: 0 0 3px; font-size: var(--fs-caption); color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.06em; }
+.prep-sec ul { list-style: none; margin: 0; padding: 0; }
+.prep-sec li { padding: 2px 0; font-size: var(--fs-body); }
+.prep-sec p { margin: 0; font-size: var(--fs-body); }
+.prep-ask { background: transparent; border: 0; padding: 0; cursor: pointer;
+  color: var(--fg); font: inherit; text-align: left; }
+.prep-ask:hover { color: var(--accent); }
+""".strip()

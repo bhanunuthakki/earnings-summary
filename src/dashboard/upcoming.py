@@ -57,6 +57,65 @@ def _tracked_tickers(conn: sqlite3.Connection) -> set[str]:
     return {str(t) for (t,) in rows}
 
 
+# Priority tiers for the strip (Wave 2, surface_density_jit_redesign.md
+# application map #2): the owner's book first, then names he is ACTIVELY
+# valuing, then the rest of the evaluation list. "Active" is DERIVED — an
+# unexpired research hot-flag, or owner activity (a decision / an authored
+# note) inside the window — never a new flag to maintain.
+_TIER_ORDER: tuple[str, ...] = ("portfolio", "active", "evaluation")
+_TIER_LABELS: dict[str, str] = {
+    "portfolio": "Portfolio",
+    "active": "Active valuation",
+    "evaluation": "Evaluation",
+}
+_ACTIVE_WINDOW_DAYS = 30
+
+
+def _tier_by_ticker(conn: sqlite3.Connection, tickers: set[str], today: date) -> dict[str, str]:
+    """Resolve each upcoming name to its strip tier. Best-effort per source —
+    a missing table just can't promote anyone."""
+    if not tickers:
+        return {}
+    marks = ",".join("?" for _ in tickers)
+    args = tuple(sorted(tickers))
+    tiers: dict[str, str] = dict.fromkeys(args, "evaluation")
+    try:
+        for t, lt in conn.execute(
+            f"SELECT ticker, list_type FROM tracked_companies "
+            f"WHERE archived_at IS NULL AND ticker IN ({marks})",
+            args,
+        ):
+            if lt == "portfolio":
+                tiers[str(t)] = "portfolio"
+    except sqlite3.Error:
+        pass
+    cutoff = (today - timedelta(days=_ACTIVE_WINDOW_DAYS)).isoformat()
+    active_probes = (
+        (
+            "SELECT DISTINCT ticker FROM research_hot_flags "
+            f"WHERE ticker IN ({marks}) AND (expires_at IS NULL OR expires_at >= ?)",
+            (*args, today.isoformat()),
+        ),
+        (
+            f"SELECT DISTINCT ticker FROM decisions WHERE ticker IN ({marks}) AND made_at >= ?",
+            (*args, cutoff),
+        ),
+        (
+            f"SELECT DISTINCT ticker FROM analyst_notes "
+            f"WHERE ticker IN ({marks}) AND created_at >= ?",
+            (*args, cutoff),
+        ),
+    )
+    for sql, params in active_probes:
+        try:
+            for (t,) in conn.execute(sql, params):
+                if tiers.get(str(t)) == "evaluation":
+                    tiers[str(t)] = "active"
+        except sqlite3.Error:
+            continue
+    return tiers
+
+
 def _last_release_by_ticker(conn: sqlite3.Connection) -> list[tuple[str, object]]:
     """Latest earnings_surprises release per tracked name, for the est. path."""
     try:
@@ -134,34 +193,45 @@ def _open_notes(
 def _watch_doorways(db_path: Path | None, user_id: str, ticker: str) -> str:
     """Inline, clickable "things to watch out for" for one upcoming name.
 
-    The owner's open watch items / questions (lead-kinds first, capped) render
-    as Law-2 doorways: each is a ``data-ask-q`` button the shell's global
-    delegate (``goAsk``) opens in Ask, scoped to the name — so the row goes from
-    "reports soon" to "here's what I said to watch, click to dig in" in one move.
-    Returns "" when the name has no open notes (hide-don't-stub — the row still
-    renders its ticker + date)."""
+    Wave 2 (walkthrough #2): the doorways sit IN the row, in the horizontal
+    space right of the ticker — not stacked beneath it. Each open watch item /
+    question (lead-kinds first, capped) is a ``data-ask-q`` button the shell's
+    global delegate (``goAsk``) opens in Ask scoped to the name; overflow
+    collapses to a "+n" count. Returns "" when the name has no open notes
+    (hide-don't-stub — the row still renders ticker + prep chip + date)."""
     notes = _open_notes(db_path, user_id, ticker=ticker)
     if not notes:
         return ""
     out = StringIO()
-    out.write('<ul class="up-watch">')
     for n in notes[:_PREP_NOTES_PER_TICKER]:
         body = n.body.strip()
         label = body if len(body) <= _WATCH_LABEL_MAX else body[: _WATCH_LABEL_MAX - 1] + "…"
         ask_q = f"{body} ({ticker})"
         full = f"{n.kind}: {body}"
         out.write(
-            '<li><button type="button" class="up-watch-item" '
+            '<button type="button" class="up-watch-item" '
             f'data-ask-q="{_esc(ask_q)}" title="{_esc(full)}">'
             f'<span class="up-watch-kind k-chip">{_esc(n.kind)}</span>'
             f'<span class="up-watch-body">{_esc(label)}</span>'
-            "</button></li>"
+            "</button>"
         )
     overflow = len(notes) - _PREP_NOTES_PER_TICKER
     if overflow > 0:
-        out.write(f'<li class="up-watch-more muted">+{overflow} more open item(s)</li>')
-    out.write("</ul>")
+        out.write(f'<span class="up-watch-more muted">+{overflow}</span>')
     return out.getvalue()
+
+
+def _prep_chip(ticker: str) -> str:
+    """The on-demand earnings-prep memo doorway (walkthrough #4: "a chip that
+    happens to be created on demand", never a pre-generated artifact). Opens
+    the peek drawer on ``/api/peek/earnings-prep`` — assembled at click time
+    from what the platform already knows about the name."""
+    return (
+        '<button type="button" class="up-prep k-chip k-chip-btn" '
+        f'data-peek-url="/api/peek/earnings-prep?ticker={_esc(ticker)}" '
+        f'data-peek-title="Earnings prep — {_esc(ticker)}" '
+        'title="One-page earnings prep, assembled on demand">prep</button>'
+    )
 
 
 def render_upcoming_strip(
@@ -180,6 +250,20 @@ def render_upcoming_strip(
     upcoming = upcoming_earnings(db_path, today, horizon_days=horizon_days)
     if not upcoming:
         return ""
+
+    # Tier resolution (Wave 2): portfolio > active valuation (derived) > rest.
+    tiers: dict[str, str] = {}
+    if db_path is not None and Path(db_path).exists():
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        except sqlite3.Error:
+            conn = None
+        if conn is not None:
+            try:
+                tiers = _tier_by_ticker(conn, {t for t, _, _ in upcoming}, today)
+            finally:
+                conn.close()
+
     out = StringIO()
     # data-up-summary: the one-line informative summary the shell hoists into
     # its collapsed <details> header ("Upcoming earnings · N in 14d — next TICK
@@ -197,20 +281,35 @@ def render_upcoming_strip(
         f'<span class="up-strip-sub">next {horizon_days}d</span></div>'
     )
     out.write('<ul class="up-strip-list">')
-    for ticker, when, is_estimate in upcoming:
-        base = "est. next earnings" if is_estimate else "next earnings"
-        date_txt = f"~{when.isoformat()}" if is_estimate else when.isoformat()
-        out.write("<li>")
-        out.write(f'<div class="up-row" title="{_esc(base)}">')
+    for tier in _TIER_ORDER:
+        tier_rows = [
+            (t, when, est) for t, when, est in upcoming if tiers.get(t, "evaluation") == tier
+        ]
+        if not tier_rows:
+            continue
         out.write(
-            f'<span class="up-ticker" data-peek-ticker="{_esc(ticker)}">{_esc(ticker)}</span>'
+            f'<li class="up-tier"><span class="up-tier-label">{_TIER_LABELS[tier]}'
+            f"</span><span class='up-tier-n'>{len(tier_rows)}</span></li>"
         )
-        if is_estimate:
-            out.write('<span class="up-est">est.</span>')
-        out.write(f'<span class="up-date">{_esc(date_txt)}</span>')
-        out.write("</div>")
-        out.write(_watch_doorways(db_path, user_id, ticker))
-        out.write("</li>")
+        for ticker, when, is_estimate in tier_rows:
+            base = "est. next earnings" if is_estimate else "next earnings"
+            date_txt = f"~{when.isoformat()}" if is_estimate else when.isoformat()
+            out.write("<li>")
+            out.write(f'<div class="up-row" title="{_esc(base)}">')
+            out.write(
+                f'<span class="up-ticker" data-peek-ticker="{_esc(ticker)}">{_esc(ticker)}</span>'
+            )
+            if is_estimate:
+                out.write('<span class="up-est">est.</span>')
+            # Walkthrough #2: the chips live IN the horizontal space right of
+            # the ticker — prep doorway first, then the owner's open items.
+            out.write('<span class="up-chips">')
+            out.write(_prep_chip(ticker))
+            out.write(_watch_doorways(db_path, user_id, ticker))
+            out.write("</span>")
+            out.write(f'<span class="up-date">{_esc(date_txt)}</span>')
+            out.write("</div>")
+            out.write("</li>")
     out.write("</ul></div>")
     return out.getvalue()
 
@@ -230,24 +329,33 @@ UPCOMING_CSS = """
   font-family: var(--mono, monospace); }
 .up-strip-list { list-style: none; margin: 0; padding: 0; }
 .up-strip-list li { padding: 3px 0; font-size: var(--fs-caption); }
-.up-row { display: flex; align-items: baseline; gap: 8px; }
+/* Tier bands (Wave 2): Portfolio > Active valuation > Evaluation. */
+.up-tier { display: flex; align-items: baseline; gap: 6px; padding-top: 7px; }
+.up-tier-label { color: var(--muted); font-size: var(--fs-caption); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.06em; }
+.up-tier-n { color: var(--muted); font-family: var(--mono, monospace);
+  font-size: var(--fs-caption); }
+.up-row { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .up-ticker { font-family: var(--mono, monospace); font-weight: 600;
-  color: var(--fg); }
+  color: var(--fg); flex: none; }
 .up-est { color: var(--muted); font-size: var(--fs-caption); font-weight: 600;
-  text-transform: uppercase; letter-spacing: 0.05em; }
+  text-transform: uppercase; letter-spacing: 0.05em; flex: none; }
 .up-date { margin-left: auto; font-family: var(--mono, monospace);
-  color: var(--muted); white-space: nowrap; }
-/* "Things to watch out for" — the owner's open notes for the name, inline as
-   clickable Ask doorways (the actionable link off the earnings lane). */
-.up-watch { list-style: none; margin: 3px 0 0; padding: 0 0 0 2px;
-  display: flex; flex-direction: column; gap: 1px; }
-.up-watch-item { display: flex; align-items: baseline; gap: 6px; width: 100%;
-  text-align: left; background: transparent; border: 0; padding: 1px 0;
-  cursor: pointer; color: var(--muted); font: inherit; font-size: var(--fs-caption);
-  min-width: 0; }
+  color: var(--muted); white-space: nowrap; flex: none; }
+/* The row's chip lane (Wave 2, walkthrough #2): prep doorway + the owner's
+   open watch items, IN the horizontal space right of the ticker. Overflow
+   ellipsizes inside the lane; the date never wraps. */
+.up-chips { display: flex; align-items: baseline; gap: 6px; min-width: 0;
+  overflow: hidden; flex: 1 1 auto; }
+.up-prep { flex: none; }
+.up-watch-item { display: inline-flex; align-items: baseline; gap: 5px;
+  background: transparent; border: 0; padding: 0; cursor: pointer;
+  color: var(--muted); font: inherit; font-size: var(--fs-caption); min-width: 0;
+  overflow: hidden; }
 .up-watch-item:hover { color: var(--accent); }
 .up-watch-item:hover .up-watch-body { text-decoration: underline; }
 .up-watch-kind { flex: none; }
-.up-watch-body { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.up-watch-more { font-size: var(--fs-caption); color: var(--muted); padding-left: 2px; }
+.up-watch-body { overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  max-width: 200px; }
+.up-watch-more { font-size: var(--fs-caption); color: var(--muted); flex: none; }
 """.strip()

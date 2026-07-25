@@ -858,6 +858,10 @@ _BESPOKE_BUTTON_OK = frozenset(
         "cc-tab",
         # the doorway: a datum rendered as a label that opens Ask (§4.1)
         "fact-doorway",
+        # the earnings-prep memo's watch-item doorway (Wave 2): the owner's own
+        # note text rendered as a line that opens Ask — same §4.1 shape as
+        # fact-doorway / up-watch-item, not a skinned button.
+        "prep-ask",
         # specialized Ask-dock control cluster
         "ask-dock-ctl",
         # grandfathered bespoke interactive rows / text buttons (migrate later)

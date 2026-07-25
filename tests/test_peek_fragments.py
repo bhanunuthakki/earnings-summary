@@ -1125,3 +1125,92 @@ def test_tier_strip_chips_open_provenance_peek() -> None:
     # ...while the cron-hint tooltips stay the hover layer.
     assert 'title="P1 — all fresh"' in html
     assert "To force-refresh" in html
+
+
+# --------------------------------------------------------------------------- #
+# Wave 2 (surface_density_jit_redesign.md D2, walkthrough #4): the on-demand
+# earnings-prep peek — assembled at click time, never pre-generated.
+# --------------------------------------------------------------------------- #
+
+
+def _seed_prep_ticker(db_path: Path, ticker: str = "NU") -> None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO tracked_companies (ticker, name, list_type) "
+            "VALUES (?, ?, 'portfolio')",
+            (ticker, ticker.title()),
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS thesis_state (ticker TEXT, thesis TEXT, breach_status TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO thesis_state (ticker, thesis, breach_status) VALUES (?, 'T.', 'watch')",
+            (ticker,),
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS dcf_runs (ticker TEXT, valuation_date TEXT, "
+            "segment_name TEXT, over_under_pct REAL, mos_bar_used REAL, live_price REAL, "
+            "npv_per_share REAL, sanity_flag TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO dcf_runs (ticker, valuation_date, segment_name, over_under_pct, "
+            "live_price, npv_per_share, sanity_flag) VALUES (?, '2026-07-01', NULL, "
+            "0.30, 13.0, 10.0, NULL)",
+            (ticker,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_earnings_prep_peek_assembles_grounded_memo(repo: Path, db_path: Path) -> None:
+    from pipeline.peeks import render_earnings_prep_peek
+    from user_state.ledger import append_entry
+    from user_state.notes import create_note
+
+    _seed_prep_ticker(db_path)
+    create_note(ticker="NU", kind="watch", body="Watch the NIM print.", db_path=db_path)
+    append_entry(
+        ticker="NU",
+        entry_kind="earnings_prep_append",
+        body="Re-check Grasberg-style ramp confidence.",
+        db_path=db_path,
+    )
+
+    html = render_earnings_prep_peek(db_path, repo, "NU")
+    assert html is not None
+    # The owner's open watch item, as an Ask doorway.
+    assert "What you said to watch" in html
+    assert 'data-ask-q="Watch the NIM print. (NU)"' in html
+    # Prior-quarter prep note from the ledger.
+    assert "Queued from prior signals" in html
+    assert "Re-check Grasberg-style ramp confidence." in html
+    # Valuation stance with the DCF gap.
+    assert "Valuation stance" in html
+    assert "+30% vs fair" in html
+    # Thesis status pill + the governed-LLM narrative doorway.
+    assert ">watch</span>" in html
+    assert "ask for the narrative" in html and "data-ask-q=" in html
+
+
+def test_earnings_prep_peek_route_serves_and_404s(client: FlaskClient, db_path: Path) -> None:
+    _seed_prep_ticker(db_path)
+    ok = client.get("/api/peek/earnings-prep?ticker=NU")
+    assert ok.status_code == 200
+    assert "Valuation stance" in ok.data.decode()
+    assert client.get("/api/peek/earnings-prep?ticker=NOPE").status_code == 404
+    assert client.get("/api/peek/earnings-prep").status_code == 404
+
+
+def test_earnings_prep_peek_empty_name_still_renders_capture_hint(
+    repo: Path, db_path: Path
+) -> None:
+    """D4: a name with nothing on file gets the one-line capture hint, not a
+    blank memo."""
+    from pipeline.peeks import render_earnings_prep_peek
+
+    _seed_prep_ticker(db_path, ticker="ORCL")
+    html = render_earnings_prep_peek(db_path, repo, "ORCL")
+    assert html is not None
+    assert "No open watch items or questions" in html

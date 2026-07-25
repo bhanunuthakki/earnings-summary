@@ -3964,6 +3964,21 @@ def create_app(
             abort(404)
         return Response(html, mimetype="text/html")
 
+    @app.route("/api/peek/earnings-prep", methods=["GET"])
+    def peek_earnings_prep():
+        """The on-demand earnings-prep memo — the click-through behind the
+        upcoming-earnings strip's "prep" chip (Wave 2, D2: a JIT chip, never a
+        pre-generated artifact). Deterministic assembly of the owner's open
+        watch items, prior-quarter prep notes, and the valuation stance; the
+        governed-LLM narrative is the Ask doorway in the memo's footer. 404
+        for an untracked ticker."""
+        from pipeline.peeks import render_earnings_prep_peek
+
+        html = render_earnings_prep_peek(db_path, repo_root, request.args.get("ticker") or "")
+        if html is None:
+            abort(404)
+        return Response(html, mimetype="text/html")
+
     @app.route("/api/peek/fit", methods=["GET"])
     def peek_fit():
         """The portfolio-fit breakdown for an evaluation name — the click-through
