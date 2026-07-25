@@ -113,6 +113,42 @@ EXPLAINED_ABSENCE_STATUSES: frozenset[CoverageStatus] = frozenset(
 )
 
 
+#: Extraction warnings ranked worst-first. A document routinely produces
+#: several at once, and only ONE of them fits the queryable ``reason_code``
+#: column, so the choice must be the most severe rather than whichever the
+#: splitter happened to append first. The ordering is by what a consumer would
+#: do about it: a partition that is WRONG (boundaries shifted, so one item's
+#: prose is filed under another) outranks one that is merely INCOMPLETE
+#: (a sub-item that failed to split), which outranks a labeling nuance.
+_WARNING_SEVERITY: tuple[str, ...] = (
+    "slice_boundaries_suspect",
+    "part_boundary_unresolved",
+    "no_item_headers_located",
+    "missing_risk_factors",
+    "missing_mdna",
+    "no_cover_section",
+    "unparseable_period_end",
+    "unparseable_year_field",
+)
+
+
+def most_severe_warning(warnings: list[str]) -> str | None:
+    """Pick the warning that best explains a degraded verdict.
+
+    Ranked entries win in ``_WARNING_SEVERITY`` order; anything unranked (the
+    parameterized ones like ``subsplit_incomplete_item_3`` or
+    ``empty_sections:4``) falls back to first-seen, so a new warning is never
+    silently dropped just for being unlisted.
+    """
+    if not warnings:
+        return None
+    for candidate in _WARNING_SEVERITY:
+        for warning in warnings:
+            if warning == candidate or warning.startswith(f"{candidate}:"):
+                return warning
+    return warnings[0]
+
+
 class FilingSectionIngestError(Exception):
     """Base for every failure this package raises.
 

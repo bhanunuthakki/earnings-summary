@@ -30,6 +30,7 @@ from filings.models import (  # noqa: E402
     HardStopError,
     SectionSource,
     SourceContractError,
+    most_severe_warning,
     normalize_stem,
 )
 
@@ -892,3 +893,29 @@ def test_partial_coverage_always_names_a_reason(conn: sqlite3.Connection, tmp_pa
     [coverage] = store.get_coverage(conn, "META")
     assert coverage.status is CoverageStatus.PARTIAL
     assert coverage.reason_code, "a PARTIAL verdict with no reason_code is not actionable"
+
+
+def test_reason_code_names_the_most_severe_warning() -> None:
+    """Only one warning fits the queryable reason_code column, so it must be
+    the one a consumer would act on first.
+
+    Regression: NVO's 20-F emits subsplit_incomplete_item_3 (incomplete),
+    slice_boundaries_suspect (WRONG — one item's prose filed under another)
+    and missing_risk_factors. Taking the first-appended warning surfaced the
+    least severe of the three, so `WHERE reason_code='slice_boundaries_suspect'`
+    silently missed the only filings that have the problem.
+    """
+    assert (
+        most_severe_warning(
+            ["subsplit_incomplete_item_3", "slice_boundaries_suspect", "missing_risk_factors"]
+        )
+        == "slice_boundaries_suspect"
+    )
+    assert most_severe_warning(["missing_mdna", "missing_risk_factors"]) == "missing_risk_factors"
+    assert most_severe_warning([]) is None
+
+
+def test_unranked_warnings_still_surface() -> None:
+    """A warning nobody thought to rank must not vanish from reason_code."""
+    assert most_severe_warning(["empty_sections:4"]) == "empty_sections:4"
+    assert most_severe_warning(["subsplit_incomplete_item_5"]) == "subsplit_incomplete_item_5"
