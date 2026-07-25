@@ -166,10 +166,30 @@ def run_experiment(
         return AB_INSUFFICIENT
     purpose = str(row["purpose"])
     frozen_model = str(row["frozen_model"])
+
+    # Every pre-judging bail-out below MUST move the experiment out of
+    # 'proposed'/'running'. Adversarial-review finding (2026-07-25): these
+    # paths returned with status='proposed', and _live_experiment_purposes
+    # excludes proposed/running purposes from future draws — so each
+    # un-runnable experiment PERMANENTLY locked its purpose out of the loop.
+    # With INSUFFICIENT_FRAME being the sampler's honest-and-common verdict on
+    # a thin frame, the cycle would have locked out one purpose per week until
+    # the loop was silently dead again — the exact dead-circuit pattern §4.7
+    # exists to kill. 'abandoned' costs only the sunk proposal (~cents); the
+    # next cycle proposes fresh against whatever the harvest has become.
+    def _abandon(why: str) -> str:
+        log.warning(
+            "[%s] %s — experiment %s abandoned (purpose stays drawable)",
+            purpose,
+            why,
+            experiment_id,
+        )
+        _set_experiment_status(db_path, experiment_id, "abandoned", decision=AB_INSUFFICIENT)
+        return AB_INSUFFICIENT
+
     arms = load_arms(db_path, experiment_id)
     if not arms or not all(arm.edits for arm in arms):
-        log.error("experiment %s has no valid arms", experiment_id)
-        return AB_INSUFFICIENT
+        return _abandon("no valid arms")
 
     from evals.sampler import FrameRecord  # local: keep module import surface tight
 
@@ -177,8 +197,7 @@ def run_experiment(
     files = sorted(capture_dir.glob("capture_*.jsonl"))
     frame: dict[str, FrameRecord] = load_frame(files, purpose)
     if not frame:
-        log.warning("[%s] no capture frame; cannot run experiment", purpose)
-        return AB_INSUFFICIENT
+        return _abandon("no capture frame")
     features, _deferred = (
         ensure_difficulty_features(
             db_path,
@@ -202,8 +221,7 @@ def run_experiment(
         exclude_shas=_prior_run_shas(db_path, experiment_id),
     )
     if sample.insufficient_frame or not sample.cases:
-        log.warning("[%s] %s", purpose, sample.reason or "no cases drawn")
-        return AB_INSUFFICIENT
+        return _abandon(sample.reason or "no cases drawn")
 
     # §4.1/§4.2: anchors must hold on EVERY sampled rendered prompt — checked
     # BEFORE any spend; a failure is an authoring problem, not a quality result.

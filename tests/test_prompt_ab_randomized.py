@@ -362,3 +362,48 @@ def test_legacy_experiment_without_arms_reads_as_one_arm(tmp_path: Path) -> None
     assert len(loaded) == 1
     assert loaded[0].arm_label == "A"
     assert loaded[0].edits[0].find == "old"
+
+
+# --------------------------------------------------------------------------
+# Adversarial-review regressions (2026-07-25): the stale-'proposed' lockout
+# --------------------------------------------------------------------------
+
+
+def _insert_experiment(db_path: Path, purpose: str, status: str, created_at: str) -> None:
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "INSERT INTO prompt_experiments (experiment_id, purpose, baseline_prompt_version, "
+        "variant_label, hypothesis, edits_json, frozen_model, status, created_at) "
+        "VALUES (?, ?, 'v1', 'exp-x', 'h', '[]', 'm', ?, ?)",
+        (f"exp-{purpose}-{created_at}", purpose, status, created_at),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_stale_proposed_experiment_does_not_lock_purpose_out(tmp_path: Path) -> None:
+    """A process dying between persist and decide leaves status='proposed'.
+    Unbounded exclusion would then remove that purpose from every future draw —
+    one purpose per failure until the loop is silently dead again (the exact
+    dead-circuit §4.7 exists to kill). The draw excludes only RECENT
+    proposed/running experiments."""
+    import importlib.util
+    import sys as _sys
+    from datetime import UTC, datetime, timedelta
+
+    src = Path(__file__).resolve().parents[1] / "execution" / "run_prompt_ab_cycle.py"
+    spec = importlib.util.spec_from_file_location("rpac_lockout_check", src)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    _sys.modules["rpac_lockout_check"] = mod
+    spec.loader.exec_module(mod)
+
+    db_path = _db_with_arms(tmp_path)
+    now = datetime.now(UTC).replace(tzinfo=None)
+    _insert_experiment(db_path, "fresh_p", "proposed", now.isoformat())
+    _insert_experiment(db_path, "stale_p", "proposed", (now - timedelta(days=30)).isoformat())
+    _insert_experiment(db_path, "stale_running", "running", (now - timedelta(days=30)).isoformat())
+    live = mod._live_experiment_purposes(db_path)
+    assert "fresh_p" in live  # a genuinely live experiment still blocks
+    assert "stale_p" not in live  # a stuck one expires out of the exclusion
+    assert "stale_running" not in live

@@ -143,10 +143,20 @@ def meta_spend_this_month(db_path: Path) -> float:
     return float(row[0] or 0.0) if row else 0.0
 
 
-def _live_experiment_purposes(db_path: Path) -> set[str]:
-    """Purposes with an undecided experiment — §4.6 allows one at a time."""
+def _live_experiment_purposes(db_path: Path, *, max_age_days: int = 14) -> set[str]:
+    """Purposes with a RECENT undecided experiment — §4.6 allows one at a time.
+
+    The age window is load-bearing, not cosmetic: a process that dies between
+    persisting an experiment and deciding it leaves status='proposed' forever,
+    and an unbounded exclusion would then lock that purpose out of every future
+    draw — silently, one purpose per failure, until the loop is dead again
+    (adversarial-review finding, 2026-07-25). Fourteen days is two weekly
+    cycles: long enough that a genuinely live experiment is never preempted,
+    short enough that a stuck one costs at most two skipped draws.
+    """
     if not db_path.exists():
         return set()
+    cutoff = (datetime.now(UTC) - timedelta(days=max_age_days)).replace(tzinfo=None).isoformat()
     try:
         conn = sqlite3.connect(str(db_path), timeout=10.0)
         try:
@@ -156,7 +166,8 @@ def _live_experiment_purposes(db_path: Path) -> set[str]:
                 return set()
             rows = conn.execute(
                 "SELECT DISTINCT purpose FROM prompt_experiments "
-                "WHERE status IN ('proposed', 'running')"
+                "WHERE status IN ('proposed', 'running') AND created_at >= ?",
+                (cutoff,),
             ).fetchall()
         finally:
             conn.close()

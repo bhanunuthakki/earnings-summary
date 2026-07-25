@@ -34,7 +34,7 @@ CREATE TABLE eval_case_results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     eval_run_id INTEGER NOT NULL, case_id TEXT NOT NULL, question TEXT NOT NULL,
     expected_json TEXT, actual_json TEXT, passed INTEGER NOT NULL,
-    score REAL NOT NULL, failure_stage TEXT, judge_verdict TEXT,
+    score REAL, failure_stage TEXT, judge_verdict TEXT,
     judge_rationale TEXT, prompt_text TEXT, response_text TEXT,
     latency_ms INTEGER, created_at TEXT NOT NULL
 );
@@ -267,6 +267,36 @@ def test_failed_drawer_renders_through_prov_kit_and_escapes(tmp_path: Path) -> N
     assert "&lt;i&gt;q&lt;/i&gt;" in html  # the question (drawer meta), escaped
     assert "&lt;u&gt;why&lt;/u&gt;" in html  # the judge rationale, escaped
     assert "&lt;b&gt;CID&lt;/b&gt;" in html  # the case id (drawer title), escaped
+
+
+def test_failed_drawer_survives_null_score_infra_case(tmp_path: Path) -> None:
+    """judge_infra cases (July-2026 transport hardening) persist score=NULL —
+    'not measured', distinct from a real 0.0. The drawer previously cast
+    float(r['score']) unconditionally, so the FIRST infra case crashed the
+    whole System→Evals panel render (adversarial-review finding, 2026-07-25).
+    prov_case already omits the score pill for None; the panel must pass it
+    through instead of crashing or faking a 0.00."""
+    db = tmp_path / "p.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(_DDL)
+    conn.execute(
+        "INSERT INTO eval_runs (run_id, purpose, mode, prompt_version, model, judge_model,"
+        " n_cases, n_pass, avg_score, started_at)"
+        " VALUES ('rid_i', 'bear_case', 'audit', 'v2', 'sonnet', 'haiku',"
+        " 1, 0, NULL, '2026-07-25T02:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO eval_case_results (eval_run_id, case_id, question, expected_json,"
+        " actual_json, passed, score, failure_stage, judge_rationale, created_at)"
+        " VALUES (1, 'NU', 'q', NULL, NULL, 0, NULL, 'judge_infra',"
+        " 'judge call failed: LLMQuotaExhausted: window exhausted', '2026-07-25T02:01:00')"
+    )
+    conn.commit()
+    conn.close()
+    html = render_evals_panel(db)  # must not raise
+    assert "judge_infra" in html  # the stage is visible in the drawer meta
+    assert "judge call failed" in html
+    assert "0.00" not in html  # never fabricate a measured-zero pill
 
 
 def test_runnable_purposes_match_runner_cli() -> None:

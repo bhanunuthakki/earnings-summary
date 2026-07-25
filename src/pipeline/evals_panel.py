@@ -142,7 +142,9 @@ class FailedCaseRow:
     purpose: str
     case_id: str
     question: str
-    score: float
+    # None = judge-infra case (the judge call failed; nothing was measured) —
+    # prov_case omits the score pill for None instead of faking a 0.00.
+    score: float | None
     failure_stage: str | None
     judge_rationale: str | None
     expected_json: str | None
@@ -249,7 +251,7 @@ def load_failed_cases(
                     purpose=run.purpose,
                     case_id=str(r["case_id"]),
                     question=str(r["question"]),
-                    score=float(r["score"]),
+                    score=float(r["score"]) if r["score"] is not None else None,
                     failure_stage=r["failure_stage"],
                     judge_rationale=r["judge_rationale"],
                     expected_json=r["expected_json"],

@@ -392,7 +392,7 @@ def _migrated_db(tmp_path: Path) -> Path:
             purpose VARCHAR(64) NOT NULL,
             prompt_version VARCHAR(32) NOT NULL,
             ticker VARCHAR(16),
-            score FLOAT NOT NULL,
+            score FLOAT,
             reason VARCHAR(200),
             scored_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             scored_by VARCHAR(64),
