@@ -453,7 +453,9 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
             "earnings",
             "Earnings",
             len(spec.earnings.full_quarters) + len(spec.earnings.digest_quarters),
-            lambda b: _earnings_tab(b, spec.earnings, spec.financials, spec.qa_roster),
+            lambda b: _earnings_tab(
+                b, spec.earnings, spec.financials, spec.qa_roster, spec.ticker, spec.repo_root
+            ),
         ),
         (
             "news",
