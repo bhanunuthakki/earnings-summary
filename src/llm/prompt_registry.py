@@ -68,7 +68,7 @@ class RenderedPrompt(str):
         return obj
 
 
-def _body_slots(body: str) -> set[str]:
+def body_slots(body: str) -> set[str]:
     """The real ``{slot}`` names in a template body (``{{``/``}}`` escapes and
     positional ``{}`` excluded — positional slots are rejected at registration)."""
     slots: set[str] = set()
@@ -94,7 +94,7 @@ class PromptTemplate:
         object.__setattr__(
             self, "version", hashlib.sha256(self.body.encode("utf-8")).hexdigest()[:12]
         )
-        real = _body_slots(self.body)
+        real = body_slots(self.body)
         declared = set(self.variables)
         if any(
             field_name == ""

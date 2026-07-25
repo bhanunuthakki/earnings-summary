@@ -278,6 +278,10 @@ LLM_MODELS: dict[str, str] = {
     # exactly-once) and only ever reach production through the A/B promotion bar
     # + prompt_pin_overrides (§10 Q1) — a bad proposal steers nothing.
     "prompt_variant_propose": "claude-opus-4-8",
+    # P2 reflective mutation (llm.prompt_reflect): rewrites a whole template
+    # from judged failure evidence — judgment-tier work, Opus-pinned like its
+    # edit-splice predecessor.
+    "prompt_reflect_rewrite": "claude-opus-4-8",
     # The Ledger Phase-1 artifact drafters (web-less, feed the gated mutating kinds).
     # thesis_entry_draft distills a memo + evidence into an append-only ledger entry;
     # research_code_spec drafts an inert, human-reviewed code-change spec. Both are
