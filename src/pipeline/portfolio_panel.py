@@ -95,6 +95,8 @@ from portfolio_risk import (
     factor_exposure_rollup,
 )
 from portfolio_risk_snapshot_store import (
+    METRIC_VERSION,
+    RebaseBasis,
     RiskSnapshot,
     read_latest_snapshot,
     write_snapshot,
@@ -1923,7 +1925,21 @@ def _persist_risk_snapshot(
         drawdown = compute_drawdown(analytics.performance.points)
     if factor is None and analytics.positioning is not None:
         factor = factor_exposure_rollup(analytics.positioning.correlations)
-    write_snapshot(_build_risk_snapshot(analytics, drawdown, factor), db_path=db_path)
+    # §7.1.9 provenance: this opportunistic render-path write derives
+    # rebase_basis the identical way the authoritative scheduled writer does
+    # (execution/refresh_portfolio_risk_snapshot.py) — from the tracker's own
+    # backfill_start_unreliable signal, never guessed — so a page-load-
+    # triggered capture is just as comparable as a scheduled one, rather than
+    # permanently reading as "unknown provenance" against every future delta.
+    rebase_basis: RebaseBasis = (
+        "modeled_backfill" if analytics.performance.backfill_start_unreliable else "observed"
+    )
+    write_snapshot(
+        _build_risk_snapshot(analytics, drawdown, factor),
+        db_path=db_path,
+        metric_version=METRIC_VERSION,
+        rebase_basis=rebase_basis,
+    )
 
 
 def _cached_risk_section(snap: RiskSnapshot) -> str:
