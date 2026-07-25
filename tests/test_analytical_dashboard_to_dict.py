@@ -636,3 +636,34 @@ def test_run_scenario_route_dispatches_valid_scenario(tmp_path: Path) -> None:
     assert "run_scenario.py" in job.argv[1]
     assert "--scenario" in job.argv and "fed_cuts_50bps" in job.argv
     assert "--portfolio" in job.argv
+
+
+def test_trigger_ladder_one_row_per_ticker_when_same_day_reruns_exist(tmp_path: Path) -> None:
+    """Render-seam dedupe (D3.2): the nightly sweep can write SEVERAL dcf_runs
+    on one valuation_date (prod: FCX/LLY/LITE each carried two on their max
+    date, minutes apart). The old (ticker, valuation_date) join fanned out and
+    the owner's ladder listed FCX twice at two live prices. Latest run (max id
+    on the max date) must win, alone."""
+    db_path = tmp_path / "portfolio.db"
+    _seed_db(db_path)
+    conn = sqlite3.connect(str(db_path))
+    # Two same-day reruns for NU, newer than _seed_db's row: the earlier rerun
+    # carries a stale live price, the later one the corrected price.
+    conn.execute(
+        "INSERT INTO dcf_runs (ticker, valuation_date, segment_name, over_under_pct, "
+        "mos_bar_used, live_price, npv_per_share) VALUES ('NU', '2026-06-02', NULL, "
+        "0.30, 0.25, 60.97, 35.45)"
+    )
+    conn.execute(
+        "INSERT INTO dcf_runs (ticker, valuation_date, segment_name, over_under_pct, "
+        "mos_bar_used, live_price, npv_per_share) VALUES ('NU', '2026-06-02', NULL, "
+        "0.32, 0.25, 63.50, 35.45)"
+    )
+    conn.commit()
+    conn.close()
+
+    dash = build_analytical_dashboard(db_path, sections={"trigger_ladder"})
+    nu_rows = [r for r in dash.trigger_ladder if r.ticker == "NU"]
+    assert len(nu_rows) == 1  # fanned out to 2 pre-fix
+    assert nu_rows[0].live_price == pytest.approx(63.50)  # the LATER rerun wins
+    assert nu_rows[0].over_under_pct == pytest.approx(0.32)

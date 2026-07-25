@@ -321,7 +321,21 @@ def load_diet_signals(
         conn.close()
     signals = [_row_to_signal(r) for r in rows]
     kept = [s for s in signals if _passes_quality_gate(s)]
-    return kept[: int(limit)]
+    # Render-seam identity dedupe (surface_density_jit_redesign.md D3.2): the
+    # EDGAR poller can re-observe the same filing on consecutive runs with a
+    # fresh published_at (prod: BN's SC 13D/A landed twice, one day apart, and
+    # the owner's stream showed the identical headline on both dates). One
+    # story = one row: key by (ticker, signal_type, title); the newest-first
+    # sort above makes first-seen the latest observation, so latest wins.
+    seen: set[tuple[str, str, str]] = set()
+    deduped: list[SignalRow] = []
+    for s in kept:
+        key = (s.ticker, s.signal_type, s.title)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(s)
+    return deduped[: int(limit)]
 
 
 def load_forward_agenda(

@@ -282,3 +282,35 @@ def test_check_constraints_match_store_constants(tmp_path: Path) -> None:
         conn.close()
     assert _check_values(sql, "signal_type") == set(SIGNAL_TYPES)
     assert _check_values(sql, "cadence") == set(CADENCES)
+
+
+def test_stream_dedupes_reobserved_story_latest_wins(tmp_path: Path) -> None:
+    """Render-seam identity dedupe (D3.2): the EDGAR poller re-observes the
+    same filing on consecutive runs with a fresh published_at — prod carried
+    BN's SC 13D/A twice, one day apart, and the owner's Ingest stream showed
+    the identical headline on both dates. One story = one row (latest
+    observation), while a genuinely different story on the same name stays."""
+    db = tmp_path / "signals.db"
+    title = "SC 13D/A: activist stake (>5%) amended - BROOKFIELD Corp /ON/"
+    make_news_then_signals(
+        db,
+        [
+            ("BN", title, "http://e/1", "2026-07-23 23:22:00", None, "SEC", "edgar_13d", "t"),
+            ("BN", title, "http://e/2", "2026-07-24 00:31:19", None, "SEC", "edgar_13d", "t"),
+            (
+                "BN",
+                "BN closes fund X",
+                "http://e/3",
+                "2026-07-22 09:00:00",
+                "s",
+                "R",
+                "fmp_stock_news",
+                "t",
+            ),
+        ],
+    )
+    rows = load_diet_signals(db, types=SIGNAL_TYPES)
+    matches = [r for r in rows if r.title == title]
+    assert len(matches) == 1  # was 2 pre-fix
+    assert matches[0].published_at.startswith("2026-07-24")  # latest observation wins
+    assert any(r.title == "BN closes fund X" for r in rows)  # different story survives
