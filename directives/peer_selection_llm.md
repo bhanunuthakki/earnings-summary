@@ -45,7 +45,7 @@ peers"). Everything shipped so far treats the *symptom*, not the *generator*:
 The selection mechanism is still **100% the FMP sector/market-cap screen**:
 `src/report/sections/p3_data.py::load_peer_comp` builds its pool from
 `_fmp_peer_pool`, which reads `data/historical/fmp/{TICKER}_peers.json` (FMP's
-`stock_peers` list, written by `execution/build_diligence.py`). It is then scored by
+`stock_peers` list, cached by `execution/save_fmp_data.py`'s `stock-peers` endpoint pull — NOT by the retired `build_diligence.py`, which only ever READ that cache; corrected 2026-07-25 when that script was removed). It is then scored by
 named-rival / industry / sector / scale affinity. That FMP list IS the thing the owner
 called wrong (NU → Barclays, NOW → Applied Materials): an industry/cap screen has no
 notion of *business-model comparability* (NU's real comps are MELI Credit, Inter,
@@ -81,7 +81,7 @@ take it if the FMP pool proves to add no value in practice.)
    `{peer}_key_metrics_ttm.json` + `{peer}_profile.json`). An LLM peer not already
    cached has no metrics and would render all-em-dash (then get dropped). So the
    pipeline must fetch each suggested peer's `profile` + `key_metrics_ttm` (reuse the
-   FMP client `build_diligence.py` already uses; respect `FMP_TIER=free` rate limits —
+   shared FMP client in `execution/save_fmp_data.py`; respect `FMP_TIER=free` rate limits —
    batch + cache). **This is the one non-trivial part; budget for it.**
 4. **Merge into `load_peer_comp`, riding the S5 plumbing.** S5 already injects a chosen
    ticker absent from the FMP pool and scores it. LLM-suggested tickers become pool

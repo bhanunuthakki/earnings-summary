@@ -509,13 +509,20 @@ process_comments.bat NU --apply                    :: drain comments → edits +
 
 ```cmd
 build_report.bat AMD --enable-llm --flavor evaluation --allow-untracked
-python execution/build_diligence.py --ticker AMD
 :: ...build a DCF workbook in dcf/AMD.xlsx...
 python execution/refresh_dcf.py --ticker AMD
 :: ...edit micro_thesis/holdings/AMD.json...
 python execution/pressure_test_thesis.py --ticker AMD
-python execution/check_initiation_gate.py --ticker AMD
+python execution/build_investment_decision_card.py --ticker AMD
 ```
+
+The evaluation now concludes with the **Investment Decision Card** (PRD §8.1) at
+the top of the workspace — hypothesis, what's priced in, portfolio fit, the
+strongest opposing case, evidence readiness, and a Pass / Watch / Research-further
+/ Promote disposition. The old `start_diligence.py` / `build_diligence.py` /
+`check_initiation_gate.py` trio it replaced was retired 2026-07-25 (PRD §8.3): it
+was disconnected from `discovery_build`, and its required `micro_thesis/diligence/`
+directory never existed on this install.
 
 ### Per-ticker enhancements
 

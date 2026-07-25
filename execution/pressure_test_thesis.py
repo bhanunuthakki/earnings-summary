@@ -360,8 +360,11 @@ def _append_to_diligence(
 ) -> Path | None:
     """Append a §7 Thesis pressure-test section to the diligence markdown.
 
-    Returns None if the diligence file doesn't exist — caller can run
-    `build_diligence.py` first.
+    Returns None if the diligence file doesn't exist. The legacy
+    `build_diligence.py` that used to create it was retired 2026-07-25 (PRD
+    §8.3, superseded by the Investment Decision Card), so on a fresh install
+    this leg is simply inert — the pressure-test result still lands in its
+    own artifact; only this optional markdown append is skipped.
     """
     path = repo_root / "micro_thesis" / "diligence" / f"{ticker}.md"
     if not path.exists():

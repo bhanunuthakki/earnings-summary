@@ -5,7 +5,7 @@ company-doc override (e.g. the GOOG Q4'25 8-K figures) wins regardless of the
 cache's contents. Without this, a ``save_fmp_data`` / ``fetch_fmp_historical_data``
 re-fetch that re-introduces FMP's contaminated segmentation would silently reach
 the direct-JSON DCF readers (``execution/build_redesigned_dcf.py``,
-``dcf_opus_assumptions.py``, ``start_diligence.py``) and the DB-ingest gate.
+``dcf_opus_assumptions.py``) and the DB-ingest gate.
 
 Consumers:
   * ``compute.segments.extract_segment_facts`` — the DB-ingest path (passes its conn).
