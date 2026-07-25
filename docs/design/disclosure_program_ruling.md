@@ -6,12 +6,33 @@ document describes what was BUILT; this one describes what is MAINTAINED and why
 
 ## The ruling in one line
 
-**This is a deep-research program, not an alpha program.** Keep the detection
-and reading tooling. Stop investing in return prediction on this book.
+**On THIS 44-ticker book, this is deep-research tooling.** Keep the detection
+and reading layer. Do not attempt to validate return prediction here.
 
-## Why alpha was ruled out
+## What this ruling does NOT say
 
-Not because the detectors are weak — because of the arithmetic of the universe.
+It does **not** say narrative-change signals lack predictive power. The
+academic literature establishes the opposite, on wide universes:
+
+| Finding | Source | Universe |
+|---|---|---|
+| Filing-language change predicts returns; short changers / long non-changers up to **188bps/month** | Cohen, Malloy & Nguyen, *JF* 2020 | entire US filing universe, ~20 yrs |
+| CFO deceptive-language model earns **-4% to -11%** annualized 4-factor alpha | Larcker & Zakolyukina, *JAR* 2012 | large/profitable US firms |
+| Q&A non-answers predict analyst downgrades and **subsequent-quarter abnormal returns** | Gow, Larcker & Zakolyukina, *JAR* 2021 | broad panel |
+| Risk-factor updates (esp. >100-word growth) predict **lower abnormal returns** and future negative earnings shocks | Filzen, *Acc. Horizons* 2015 | broad 10-Q panel |
+| Abnormal tone predicts negative future earnings and a **delayed negative reaction** over 1-2 quarters | Huang, Teoh & Zhang, *TAR* 2014 | broad panel |
+| Expected-but-missing disclosure: **-41bps** around the next earnings announcement | Zhou & Zhou, *JAR* 2020 | broad panel |
+| Stopping quarterly EPS guidance: **-4.8%** 3-day CAR | Chen, Matsumoto & Rajgopal, *JAE* 2011 | 96 stoppers |
+
+The signal class is real and replicated. Caveats that travel with it: post-
+publication decay (McLean & Pontiff, *JF* 2016, ~50-58%), a formal critique of
+Lazy Prices by Kent Daniel, and documented firm adaptation to machine readers
+(Cao et al., NBER 27950).
+
+## Why return prediction cannot be VALIDATED on this book
+
+Not because the detectors are weak, and not because the literature is wrong —
+because of the arithmetic of a 44-name universe.
 
 1. **The cross-section is too small, structurally.** Cohen/Malloy/Nguyen
    established Lazy Prices on the entire universe of US filings over ~20 years.
@@ -22,13 +43,17 @@ Not because the detectors are weak — because of the arithmetic of the universe
 2. **Events cluster hard.** 5,954 detected events collapsed to **at most 109
    independent (ticker, arrival-date) draws**, decaying to 77 at a six-month
    horizon. Sub-buckets ran 20-26. Raw event counts massively overstate sample.
-3. **The decisive evidence — a confound no sample size fixes.** In the event
-   study, `verdict=substantive` (+8.8%) and `verdict=boilerplate_update`
-   (+8.7%) showed near-identical six-month drift. If disclosure CONTENT drove
-   returns, those two could not move together. The pattern is a
-   universe-composition effect — the ~40 tracked names outperformed in
-   2024-2026 — not an event-study finding. After controlling for earnings
-   surprise, every bucket collapsed to approximately zero.
+3. **The study measured its own invalidity.** "Drift" here = cumulative
+   abnormal return vs SPY over a post-filing window. Events classified
+   `substantive` drifted +8.8% at six months; `boilerplate_update` drifted
+   +8.7%. If disclosure CONTENT drove returns those could not be identical —
+   so the drift is a universe-composition effect (the tracked names rose in
+   2024-2026), not a disclosure effect. After controlling for earnings
+   surprise every bucket collapsed to ~0.
+
+   **These numbers are a diagnostic of the study, not evidence about the
+   signal class.** Do not cite them as if they refute the literature above;
+   they only show this book cannot test it.
 4. **No multiple-comparison correction was possible at this n.** 108 cells at
    nominal 95% would produce ~5 zero-crossings by chance; exactly 4 were found.
    Consistent with noise.
@@ -68,14 +93,28 @@ calibrated, that is the base rate for an issuer actually hiding something. It
 argues the value here is not catching concealment — it is reading filings
 faster, with receipts. Which is the deep-research goal, not the alpha one.
 
-## What would reopen the alpha question
+## If the goal is STOCK PICKING, the question changes
 
-Only these, and (1) is the binding constraint:
+Alpha here means picking names, which means the signal has to run over a
+universe wide enough to rank against — not over 44 names already owned. The
+literature's effect sizes come from exactly that setting. So the real decision
+is not "does this work" (it does, per §2) but **"do we widen the universe?"**
 
-1. A materially wider cross-section (hundreds to thousands of issuers), which
-   this platform is not designed for and which FMP/EDGAR quota would not support.
-2. A within-ticker placebo design separating universe composition from event
-   effects.
-3. An out-of-sample period not overlapping 2024-2026.
+Three options, honestly costed:
 
-Absent those, treat any return number computed on this book as unsupported.
+1. **Screen a wide universe** (S&P 500 / Russell 1000). The detectors already
+   run off cached EDGAR + companyfacts, which are FREE and unmetered — the
+   binding cost is fetch time and storage, NOT FMP quota, since the narrative
+   half never needed FMP. This is the only option that produces stock-picking
+   alpha, and it is more tractable than assumed: the pipeline is universe-
+   agnostic by construction.
+2. **Stay at 44 names as research tooling** — the current ruling. Zero new
+   cost, no stock-picking capability.
+3. **Buy the signal** rather than build it. Not evaluated.
+
+Whichever is chosen, any *validation* still needs a within-ticker placebo
+(same names, non-event quarters) and an out-of-sample period not overlapping
+2024-2026.
+
+**Treat any return number computed on the 44-name book as unsupported —
+including the ones in §3 above.**
