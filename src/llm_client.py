@@ -153,6 +153,12 @@ from llm.ledger import (
 from llm.ledger import (
     record_llm_call as _record_to_ledger,  # noqa: F401  # pyright: ignore[reportUnusedImport]
 )
+from llm.prompt_registry import (
+    PromptTemplate as PromptTemplate,
+)
+from llm.prompt_registry import (
+    register as register,
+)
 from llm.structured import (
     StructuredParseError as StructuredParseError,
 )
@@ -1152,37 +1158,15 @@ Event Document Text:
 _MAX_WEB_RESULTS_PER_NEWS_CALL: int = 7
 _MAX_EXCERPT_CHARS_PER_NEWS_ITEM: int = 400
 
-
-def generate_recent_developments(
-    ticker: str,
-    news_days: int = 7,
-    anchor_block: str = "",
-    max_web_results: int = _MAX_WEB_RESULTS_PER_NEWS_CALL,
-    max_excerpt_chars: int = _MAX_EXCERPT_CHARS_PER_NEWS_ITEM,
-) -> str:
-    """Recent-developments brief sourced via Claude WebSearch + WebFetch.
-
-    Routes through `call_llm_with_web` so the model can pull current news
-    from Bloomberg / Reuters / CNBC / FT / WSJ / company press releases and
-    cite URLs inline. On Claude failure, `call_llm_with_web` falls back to
-    plain `_call_claude` (no web), then to Gemini per the standard chain.
-
-    Used by the §8 Recent developments section. Output is markdown, with
-    sources as inline links the section renderer passes through unchanged.
-
-    ``anchor_block`` (optional) injects the thesis + bear-case anchor so the
-    "rank by thesis impact" rule and the per-item implication clauses can
-    actually reference the analyst's tier-1 KPIs and named bear failures
-    rather than guessing.
-
-    ``max_web_results`` / ``max_excerpt_chars`` cap the model's web budget
-    explicitly: prior versions instructed "3-7 items" but never bounded
-    the number of web_fetch calls or per-article quote length, so latency
-    and cost varied wildly (6-50KB prompts depending on article density).
-    The defaults match the audit's "max 7 results, 500-char excerpt"
-    guidance — tighten via the kwargs when calling for very tight contexts.
-    """
-    prompt = f"""You are a senior equity analyst preparing a recent-developments
+# P0 prompt-registry migration (llm_quality_program_2026_07.md). Body is
+# byte-identical to the legacy f-string (gate:
+# tests/test_prompt_registry_migrations.py); the shared style/safety blocks
+# become declared PARTIALS (WEB_CONTENT_NOTICE / NUMBER_FORMATTING_BLOCK) so
+# a change to either is visible as a new template version.
+RECENT_DEVELOPMENTS_TEMPLATE = register(
+    PromptTemplate(
+        template_id="recent_developments.brief",
+        body="""You are a senior equity analyst preparing a recent-developments
 brief for {ticker} for an analyst-grade research memo. Bar: every item
 must move the thesis or be tracking a specific known catalyst — pure news
 recap earns an automatic rewrite.
@@ -1238,7 +1222,59 @@ RANKING + filtering rules:
 If no material news found in the window, write `*No material news in the last
 {news_days} days.*` under "Material news" and skip the other two sections.
 Do not pad with stale or low-signal items just to fill the section.
-"""
+""",
+        variables=(
+            "ticker",
+            "anchor_block",
+            "news_days",
+            "max_web_results",
+            "max_excerpt_chars",
+            "WEB_CONTENT_NOTICE",
+            "NUMBER_FORMATTING_BLOCK",
+        ),
+        description="Web-sourced recent-developments brief, ranked by thesis impact",
+    )
+)
+
+
+def generate_recent_developments(
+    ticker: str,
+    news_days: int = 7,
+    anchor_block: str = "",
+    max_web_results: int = _MAX_WEB_RESULTS_PER_NEWS_CALL,
+    max_excerpt_chars: int = _MAX_EXCERPT_CHARS_PER_NEWS_ITEM,
+) -> str:
+    """Recent-developments brief sourced via Claude WebSearch + WebFetch.
+
+    Routes through `call_llm_with_web` so the model can pull current news
+    from Bloomberg / Reuters / CNBC / FT / WSJ / company press releases and
+    cite URLs inline. On Claude failure, `call_llm_with_web` falls back to
+    plain `_call_claude` (no web), then to Gemini per the standard chain.
+
+    Used by the §8 Recent developments section. Output is markdown, with
+    sources as inline links the section renderer passes through unchanged.
+
+    ``anchor_block`` (optional) injects the thesis + bear-case anchor so the
+    "rank by thesis impact" rule and the per-item implication clauses can
+    actually reference the analyst's tier-1 KPIs and named bear failures
+    rather than guessing.
+
+    ``max_web_results`` / ``max_excerpt_chars`` cap the model's web budget
+    explicitly: prior versions instructed "3-7 items" but never bounded
+    the number of web_fetch calls or per-article quote length, so latency
+    and cost varied wildly (6-50KB prompts depending on article density).
+    The defaults match the audit's "max 7 results, 500-char excerpt"
+    guidance — tighten via the kwargs when calling for very tight contexts.
+    """
+    prompt = RECENT_DEVELOPMENTS_TEMPLATE.render(
+        ticker=ticker,
+        anchor_block=anchor_block,
+        news_days=news_days,
+        max_web_results=max_web_results,
+        max_excerpt_chars=max_excerpt_chars,
+        WEB_CONTENT_NOTICE=WEB_CONTENT_NOTICE,
+        NUMBER_FORMATTING_BLOCK=NUMBER_FORMATTING_BLOCK,
+    )
     try:
         return call_llm_with_web(prompt, purpose="recent_developments", ticker=ticker)
     except Exception as e:
@@ -1270,6 +1306,28 @@ def _parse_news_json_array(raw: str) -> list[object] | None:
     return cast("list[object]", payload)
 
 
+# P0 prompt-registry migration (llm_quality_program_2026_07.md). Body derived
+# MECHANICALLY from the legacy concatenation (literal JSON braces escaped,
+# interpolations turned into slots) and gated on byte identity in
+# tests/test_prompt_registry_migrations.py. This is the platform's #1 LLM
+# spender ($375 of July's $644) — the first purpose the improvement loop
+# should be able to optimize without capture archaeology.
+NEWS_STRUCTURING_TEMPLATE = register(
+    PromptTemplate(
+        template_id="news_structuring.items",
+        body='You are sourcing recent news for a long-term investor in {ticker} and returning it as STRUCTURED DATA (not prose).\n\n{anchor_clause}Search the web for {ticker} news from the last {news_days} days. Prioritize Bloomberg, Reuters, CNBC, FT, WSJ, and company press releases. Skip blog spam, opinion pieces with no new information, and pure stock-price chatter.\n\nWEB BUDGET (HARD CAPS): issue AT MOST 2 web_search queries; open AT MOST {max_web_results} URLs via web_fetch.\n\n{WEB_CONTENT_NOTICE}\n\nReturn ONLY a JSON array, one object per distinct story, EXACTLY:\n[{{"headline": "<title>", "url": "<canonical article url>", "published_at": "YYYY-MM-DD HH:MM:SS", "published_tz": "UTC", "snippet": "<one-sentence gloss>", "source": "<outlet, e.g. Reuters>"}}]\n\nHARD RULES:\n- published_at: the publication timestamp where you can determine it, formatted \'YYYY-MM-DD HH:MM:SS\' (24-hour, a space not \'T\', no zone suffix). Give it in UTC and set published_tz to \'UTC\'. If you only know the US/Eastern wall-clock time, return that and set published_tz to \'ET\'.\n- If you CANNOT determine a publication date for a story from its source, OMIT that story entirely. Never guess or fabricate a date.\n- url must be the real article URL (it is the dedup key). Omit any item without one.\n- Output the JSON array and nothing else: no markdown fences, no prose.',
+        variables=(
+            "ticker",
+            "anchor_clause",
+            "news_days",
+            "max_web_results",
+            "WEB_CONTENT_NOTICE",
+        ),
+        description="Web-sourced news as structured JSON rows (FMP-independent ingester)",
+    )
+)
+
+
 def structure_recent_news_json(
     ticker: str,
     news_days: int = 2,
@@ -1294,31 +1352,12 @@ def structure_recent_news_json(
     """
     framing = anchor_block.strip()
     anchor_clause = f"{framing}\n\n" if framing else ""
-    prompt = (
-        f"You are sourcing recent news for a long-term investor in {ticker} and "
-        f"returning it as STRUCTURED DATA (not prose).\n\n"
-        f"{anchor_clause}"
-        f"Search the web for {ticker} news from the last {news_days} days. "
-        f"Prioritize Bloomberg, Reuters, CNBC, FT, WSJ, and company press "
-        f"releases. Skip blog spam, opinion pieces with no new information, and "
-        f"pure stock-price chatter.\n\n"
-        f"WEB BUDGET (HARD CAPS): issue AT MOST 2 web_search queries; open AT "
-        f"MOST {max_web_results} URLs via web_fetch.\n\n"
-        f"{WEB_CONTENT_NOTICE}\n\n"
-        "Return ONLY a JSON array, one object per distinct story, EXACTLY:\n"
-        '[{"headline": "<title>", "url": "<canonical article url>", '
-        '"published_at": "YYYY-MM-DD HH:MM:SS", "published_tz": "UTC", '
-        '"snippet": "<one-sentence gloss>", "source": "<outlet, e.g. Reuters>"}]\n\n'
-        "HARD RULES:\n"
-        "- published_at: the publication timestamp where you can determine it, "
-        "formatted 'YYYY-MM-DD HH:MM:SS' (24-hour, a space not 'T', no zone "
-        "suffix). Give it in UTC and set published_tz to 'UTC'. If you only know "
-        "the US/Eastern wall-clock time, return that and set published_tz to 'ET'.\n"
-        "- If you CANNOT determine a publication date for a story from its "
-        "source, OMIT that story entirely. Never guess or fabricate a date.\n"
-        "- url must be the real article URL (it is the dedup key). Omit any item "
-        "without one.\n"
-        "- Output the JSON array and nothing else: no markdown fences, no prose."
+    prompt = NEWS_STRUCTURING_TEMPLATE.render(
+        ticker=ticker,
+        anchor_clause=anchor_clause,
+        news_days=news_days,
+        max_web_results=max_web_results,
+        WEB_CONTENT_NOTICE=WEB_CONTENT_NOTICE,
     )
     for attempt, body in enumerate((prompt, _NEWS_STRUCTURING_RETRY_PREAMBLE + prompt)):
         try:
