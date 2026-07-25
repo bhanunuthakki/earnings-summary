@@ -123,3 +123,25 @@ def test_judge_error_still_counts_as_infra_not_quality() -> None:
         n_judge_errors=12,
     )
     assert verdict.recommendation == JUDGE_DEGRADED
+
+
+def test_scheduled_runs_do_not_use_the_dead_gemini_judge() -> None:
+    """The gap that made every sweep unpromotable: the weekly orchestrator and
+    the prompt-A/B driver both defaulted to ("claude","gemini"). With Gemini's
+    key invalid, half of every judgment errored -> JUDGE_DEGRADED -> nothing
+    could ever clear a promotion bar. Scheduled runs now default to the LIVE
+    cross-family pool."""
+    from llm.model_ladder import DEFAULT_JUDGES
+
+    assert GEMINI not in DEFAULT_JUDGES
+    assert set(DEFAULT_JUDGES) <= set(JUDGE_POOL)
+    # Cross-family by construction: not all one vendor.
+    assert len(set(DEFAULT_JUDGES)) >= 2
+
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    for rel in ("execution/run_weekly_model_eval.py", "execution/run_prompt_ab.py"):
+        src = (root / rel).read_text(encoding="utf-8")
+        assert "DEFAULT_JUDGES" in src, rel
+        assert '"claude", "gemini"' not in src, f"{rel} still hardcodes the dead pair"

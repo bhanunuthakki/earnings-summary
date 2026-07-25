@@ -122,6 +122,14 @@ DEEPSEEK_JUDGE_MODEL = "deepseek/deepseek-v4-flash"
 
 # Judge backend -> model. Cross-family by construction: a pool that is all
 # one family measures its own preferences (see llm_quality_program §P4).
+# The judges a SCHEDULED run uses by default. Gemini is deliberately absent:
+# its key is invalid (measured 2026-07-25), so including it made half of every
+# judgment error -> JUDGE_DEGRADED -> nothing could ever clear a promotion bar.
+# The pair below is cross-family by construction (open-weight + OpenAI), which
+# is the point: a same-family pool scored the same candidate 100% where these
+# two scored it 50%. Re-add gemini here once its key is rotated.
+DEFAULT_JUDGES: tuple[str, ...] = ("deepseek", "codex")
+
 JUDGE_POOL: dict[str, str] = {
     CLAUDE: "claude-opus-4-8",
     GEMINI: "gemini-3.1-pro-preview",

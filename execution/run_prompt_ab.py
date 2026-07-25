@@ -57,7 +57,7 @@ from evals.sampler import (  # noqa: E402
 from llm.backend_judge import CLAUDE, GEMINI, JudgedPair, judge_pair  # noqa: E402
 from llm.cli import DEFAULT_MODEL, LLM_MODELS  # noqa: E402
 from llm.model_eval import run_model  # noqa: E402
-from llm.model_ladder import JUDGE_POOL  # noqa: E402
+from llm.model_ladder import DEFAULT_JUDGES, JUDGE_POOL  # noqa: E402
 from llm.prompt_ab import (  # noqa: E402
     AB_INSUFFICIENT,
     KEEP_BASELINE,
@@ -452,7 +452,7 @@ def main() -> int:
     )
     parser.add_argument("--arm", default=None, help="promote only this arm label")
     parser.add_argument("--n", type=int, default=DEFAULT_N)
-    parser.add_argument("--judges", default=f"{CLAUDE},{GEMINI}")
+    parser.add_argument("--judges", default=",".join(DEFAULT_JUDGES))
     parser.add_argument("--timeout", type=int, default=None)
     args = parser.parse_args()
 
