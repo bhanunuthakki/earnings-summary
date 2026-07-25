@@ -1,0 +1,425 @@
+{
+  "purpose": "metric_lifecycle_triage",
+  "cases": [
+    {
+      "id": "prod_3492_MELI",
+      "ticker": "MELI",
+      "taxonomy": "us-gaap",
+      "tag": "PayablesToCustomers",
+      "label": "Payables to Customers",
+      "axis": "quarterly",
+      "fiscal_year": 2019,
+      "fiscal_period": "Q2",
+      "last_value": 640954000.0,
+      "current_silence": 27,
+      "historical_max_gap": 2,
+      "expected": {
+        "relevance": "business_metric",
+        "prior": "maturity"
+      },
+      "hand_label_note": "Payables to Customers ($641M, MELI's largest single item here) is business-meaningful for a marketplace/fintech, but a 27-quarter silence with no deterioration evidence most plausibly reflects the line folding into a broader payables/liabilities aggregate as reporting matured -- not deliberate concealment. Model over-called concealment.",
+      "prod_event_id": 3492,
+      "prod_verdict": "concealment",
+      "prod_materiality": 0.4452142287065008
+    },
+    {
+      "id": "prod_3510_MELI",
+      "ticker": "MELI",
+      "taxonomy": "us-gaap",
+      "tag": "ShareBasedCompensation",
+      "label": "Share-based Payment Arrangement, Noncash Expense",
+      "axis": "quarterly",
+      "fiscal_year": 2019,
+      "fiscal_period": "Q2",
+      "last_value": 16792000.0,
+      "current_silence": 27,
+      "historical_max_gap": 2,
+      "expected": {
+        "relevance": "accounting_plumbing",
+        "prior": "unclear"
+      },
+      "hand_label_note": "Share-based compensation is a MANDATORY, universally-disclosed GAAP footnote item for any company still granting equity (ASC 718) -- companies do not stop reporting SBC. A 27-quarter silence almost certainly means MELI switched to a different, more specific SBC tag (successor-tag miss by the relabel-detection stage), not that SBC vanished. Calling this 'concealment' is close to the worst possible miss: nobody hides mandatory SBC.",
+      "prod_event_id": 3510,
+      "prod_verdict": "concealment",
+      "prod_materiality": 0.025583794086413866
+    },
+    {
+      "id": "prod_3517_MELI",
+      "ticker": "MELI",
+      "taxonomy": "us-gaap",
+      "tag": "InterestExpenseDebt",
+      "label": "Interest Expense, Debt",
+      "axis": "quarterly",
+      "fiscal_year": 2018,
+      "fiscal_period": "Q2",
+      "last_value": 9186000.0,
+      "current_silence": 31,
+      "historical_max_gap": 2,
+      "expected": {
+        "relevance": "accounting_plumbing",
+        "prior": "unclear"
+      },
+      "hand_label_note": "Interest expense on debt is a standard income-statement caption disclosed whenever interest-bearing debt exists. A 31-quarter silence far more plausibly means the debt was retired (good news, nothing to conceal) or the tag was consolidated -- not concealment.",
+      "prod_event_id": 3517,
+      "prod_verdict": "concealment",
+      "prod_materiality": 0.016594467065781725
+    },
+    {
+      "id": "prod_3549_MELI",
+      "ticker": "MELI",
+      "taxonomy": "us-gaap",
+      "tag": "InterestPaid",
+      "label": "Interest Paid, Including Capitalized Interest, Operating and Investing Activities",
+      "axis": "quarterly",
+      "fiscal_year": 2012,
+      "fiscal_period": "Q2",
+      "last_value": 26426.0,
+      "current_silence": 55,
+      "historical_max_gap": 2,
+      "expected": {
+        "relevance": "accounting_plumbing",
+        "prior": "unclear"
+      },
+      "hand_label_note": "Interest Paid is a tiny ($26K, materiality 0.0002 -- the lowest in this sample) supplemental cash-flow disclosure line. A 55-quarter (~14yr) silence from 2012 across MELI's long reporting history is almost certainly tag consolidation, not concealment of a trivial figure.",
+      "prod_event_id": 3549,
+      "prod_verdict": "concealment",
+      "prod_materiality": 0.0001676457527120472
+    },
+    {
+      "id": "prod_5788_TMO",
+      "ticker": "TMO",
+      "taxonomy": "us-gaap",
+      "tag": "BusinessAcquisitionProFormaIncomeLossFromContinuingOperationsBeforeChangesInAccountingAndExtraordinaryItemsNetOfTaxPerShareDiluted",
+      "label": "Business Acquisition, Pro Forma Income (Loss) from Continuing Operations, Net of Tax, Per Share, Diluted",
+      "axis": "quarterly",
+      "fiscal_year": 2014,
+      "fiscal_period": "Q3",
+      "last_value": 1.0,
+      "current_silence": 46,
+      "historical_max_gap": 2,
+      "expected": {
+        "relevance": "accounting_plumbing",
+        "prior": "maturity"
+      },
+      "hand_label_note": "A one-time pro-forma per-share figure tied to a specific acquisition's integration period is transaction-specific accounting disclosure (GAAP stops requiring it once integration completes), not a KPI investors track. Model got the right 'nothing to worry about' signal but the wrong relevance axis (called this a business metric).",
+      "prod_event_id": 5788,
+      "prod_verdict": "maturity",
+      "prod_materiality": 1.4859613026581042e-10
+    },
+    {
+      "id": "prod_4073_CDNS",
+      "ticker": "CDNS",
+      "taxonomy": "us-gaap",
+      "tag": "RepaymentsOfConvertibleDebt",
+      "label": "Repayments of Convertible Debt",
+      "axis": "quarterly",
+      "fiscal_year": 2016,
+      "fiscal_period": "Q3",
+      "last_value": 349999000.0,
+      "current_silence": 38,
+      "historical_max_gap": 8,
+      "expected": {
+        "relevance": "business_metric",
+        "prior": "maturity"
+      },
+      "hand_label_note": "Convertible-debt repayment is a real capital-structure disclosure; a ~9.5-year silence plausibly reflects the convertible program being fully retired. Agree with the model.",
+      "prod_event_id": 4073,
+      "prod_verdict": "maturity",
+      "prod_materiality": 0.19272191854667436
+    },
+    {
+      "id": "prod_5640_TECH",
+      "ticker": "TECH",
+      "taxonomy": "us-gaap",
+      "tag": "ConversionOfStockSharesConverted1",
+      "label": "Conversion of Stock, Shares Converted",
+      "axis": "annual",
+      "fiscal_year": 2016,
+      "fiscal_period": "FY",
+      "last_value": 733.0,
+      "current_silence": 9,
+      "historical_max_gap": 1,
+      "expected": {
+        "relevance": "accounting_plumbing",
+        "prior": "maturity"
+      },
+      "hand_label_note": "733 shares converted (materiality ~6e-7, negligible) is not a metric anyone tracks as a KPI -- routine equity-roll-forward detail. The 'conversions ceased' story is fine, but the relevance call should have been accounting_plumbing.",
+      "prod_event_id": 5640,
+      "prod_verdict": "maturity",
+      "prod_materiality": 6.44847990062479e-07
+    },
+    {
+      "id": "prod_3534_MELI",
+      "ticker": "MELI",
+      "taxonomy": "us-gaap",
+      "tag": "PaymentsOfDividendsPreferredStockAndPreferenceStock",
+      "label": "Payments of Ordinary Dividends, Preferred Stock and Preference Stock",
+      "axis": "quarterly",
+      "fiscal_year": 2021,
+      "fiscal_period": "Q3",
+      "last_value": 3000000.0,
+      "current_silence": 18,
+      "historical_max_gap": 2,
+      "expected": {
+        "relevance": "business_metric",
+        "prior": "maturity"
+      },
+      "hand_label_note": "Preferred dividend payments are a real capital-structure/cost-of-capital item; silence after $3M in 2021Q3 plausibly means the preferred was redeemed. Agree with the model.",
+      "prod_event_id": 3534,
+      "prod_verdict": "maturity",
+      "prod_materiality": 0.0021770682148040637
+    },
+    {
+      "id": "prod_3387_BKNG",
+      "ticker": "BKNG",
+      "taxonomy": "us-gaap",
+      "tag": "FiniteLivedIntangibleAssetsNet",
+      "label": "Finite-Lived Intangible Assets, Net",
+      "axis": "quarterly",
+      "fiscal_year": 2018,
+      "fiscal_period": "Q3",
+      "last_value": 2117275000.0,
+      "current_silence": 30,
+      "historical_max_gap": 2,
+      "expected": {
+        "relevance": "business_metric",
+        "prior": "unclear"
+      },
+      "hand_label_note": "$2.1B (materiality 0.21, genuinely large) of intangible assets disappearing from tagged disclosure for ~7.5 years, with BKNG continuing to make acquisitions (OpenTable, KAYAK, Rentalcars.com) over that window, is a specific causal claim ('consolidated goodwill/intangible reporting') the model cannot actually support from tag/label/value alone -- its own prompt says unclear is the honest default here. Overconfident, not wrong-direction.",
+      "prod_event_id": 3387,
+      "prod_verdict": "maturity",
+      "prod_materiality": 0.21434271692345477
+    },
+    {
+      "id": "prod_5445_RGEN",
+      "ticker": "RGEN",
+      "taxonomy": "us-gaap",
+      "tag": "RoyaltyRevenue",
+      "label": "Royalty Revenue (Deprecated 2018-01-31)",
+      "axis": "quarterly",
+      "fiscal_year": 2018,
+      "fiscal_period": "Q1",
+      "last_value": 21000.0,
+      "current_silence": 32,
+      "historical_max_gap": 6,
+      "expected": {
+        "relevance": "accounting_plumbing",
+        "prior": "unclear"
+      },
+      "hand_label_note": "The tag name is literally suffixed '(Deprecated 2018-01-31)' -- this is a US-GAAP TAXONOMY retirement (a standard_transition case the earlier detector stage should have caught, not a company judgment call), on a $21K (materiality 0.0007) royalty line. Not a business KPI, and 'maturity' implies an intentional company decision this tag-deprecation isn't.",
+      "prod_event_id": 5445,
+      "prod_verdict": "maturity",
+      "prod_materiality": 0.0006864988558352403
+    },
+    {
+      "id": "prod_4153_CGEH",
+      "ticker": "CGEH",
+      "taxonomy": "us-gaap",
+      "tag": "ProceedsFromIssuanceOfCommonStock",
+      "label": "Proceeds from Issuance of Common Stock",
+      "axis": "quarterly",
+      "fiscal_year": 2018,
+      "fiscal_period": "Q3",
+      "last_value": 19300000.0,
+      "current_silence": 32,
+      "historical_max_gap": 2,
+      "expected": {
+        "relevance": "business_metric",
+        "prior": "maturity"
+      },
+      "hand_label_note": "Proceeds from stock issuance is a real financing-activity line investors track for dilution risk (materiality 0.31, the second-highest in this bucket) -- this is NOT accounting plumbing. The model's own rationale ('stopped relying on equity financing') is a fine maturity story; it just filed it under noise/plumbing instead of business_metric.",
+      "prod_event_id": 4153,
+      "prod_verdict": "noise",
+      "prod_materiality": 0.3124190624190624
+    },
+    {
+      "id": "prod_5219_NVDA",
+      "ticker": "NVDA",
+      "taxonomy": "us-gaap",
+      "tag": "AllowanceForDoubtfulAccountsReceivableCurrent",
+      "label": "Accounts Receivable, Allowance for Credit Loss, Current",
+      "axis": "annual",
+      "fiscal_year": 2018,
+      "fiscal_period": "FY",
+      "last_value": 13000000.0,
+      "current_silence": 8,
+      "historical_max_gap": 2,
+      "expected": {
+        "relevance": "accounting_plumbing",
+        "prior": "unclear"
+      },
+      "hand_label_note": "Bad-debt allowance is a routine footnote item; genuinely immaterial (0.0026) for a company with NVDA's high-quality OEM/cloud customer base. Agree with the model.",
+      "prod_event_id": 5219,
+      "prod_verdict": "noise",
+      "prod_materiality": 0.002594810379241517
+    },
+    {
+      "id": "prod_4005_AMZN",
+      "ticker": "AMZN",
+      "taxonomy": "us-gaap",
+      "tag": "StockIssuedDuringPeriodValueStockOptionsExercised",
+      "label": "Stock Issued During Period, Value, Stock Options Exercised",
+      "axis": "annual",
+      "fiscal_year": 2019,
+      "fiscal_period": "FY",
+      "last_value": 1000000.0,
+      "current_silence": 6,
+      "historical_max_gap": 1,
+      "expected": {
+        "relevance": "accounting_plumbing",
+        "prior": "unclear"
+      },
+      "hand_label_note": "$1M of option-exercise value is immaterial (5.6e-6) for AMZN; routine equity-roll-forward detail. Agree with the model.",
+      "prod_event_id": 4005,
+      "prod_verdict": "noise",
+      "prod_materiality": 5.62220997829827e-06
+    },
+    {
+      "id": "prod_3832_VEEV",
+      "ticker": "VEEV",
+      "taxonomy": "us-gaap",
+      "tag": "CapitalizedComputerSoftwareAccumulatedAmortization",
+      "label": "Capitalized Computer Software, Accumulated Amortization",
+      "axis": "quarterly",
+      "fiscal_year": 2017,
+      "fiscal_period": "Q2",
+      "last_value": 2822000.0,
+      "current_silence": 39,
+      "historical_max_gap": 6,
+      "expected": {
+        "relevance": "accounting_plumbing",
+        "prior": "unclear"
+      },
+      "hand_label_note": "Accumulated amortization sub-schedule detail; genuinely routine footnote plumbing. Agree.",
+      "prod_event_id": 3832,
+      "prod_verdict": "noise",
+      "prod_materiality": 0.015008243365420412
+    },
+    {
+      "id": "prod_3736_NOW",
+      "ticker": "NOW",
+      "taxonomy": "us-gaap",
+      "tag": "OtherCommitmentDueInFifthYear",
+      "label": "Other Commitment, to be Paid, Year Five",
+      "axis": "quarterly",
+      "fiscal_year": 2018,
+      "fiscal_period": "Q3",
+      "last_value": 891000.0,
+      "current_silence": 31,
+      "historical_max_gap": 2,
+      "expected": {
+        "relevance": "accounting_plumbing",
+        "prior": "unclear"
+      },
+      "hand_label_note": "A single year-5 slice of a contractual-obligations table; granular schedule detail, correctly plumbing. Agree with the model.",
+      "prod_event_id": 3736,
+      "prod_verdict": "noise",
+      "prod_materiality": 0.000730161487792126
+    },
+    {
+      "id": "prod_3542_MELI",
+      "ticker": "MELI",
+      "taxonomy": "us-gaap",
+      "tag": "GoodwillTranslationAndPurchaseAccountingAdjustments",
+      "label": "Goodwill, Translation and Purchase Accounting Adjustments",
+      "axis": "quarterly",
+      "fiscal_year": 2022,
+      "fiscal_period": "Q1",
+      "last_value": -5000000.0,
+      "current_silence": 16,
+      "historical_max_gap": 10,
+      "expected": {
+        "relevance": "accounting_plumbing",
+        "prior": "unclear"
+      },
+      "hand_label_note": "Goodwill translation/purchase-accounting sub-line; granular rollforward detail, genuinely immaterial (0.0007). Agree with the model.",
+      "prod_event_id": 3542,
+      "prod_verdict": "noise",
+      "prod_materiality": 0.0007073136228603763
+    },
+    {
+      "id": "prod_4169_CGEH",
+      "ticker": "CGEH",
+      "taxonomy": "us-gaap",
+      "tag": "ShareBasedCompensationArrangementByShareBasedPaymentAwardEquityInstrumentsOtherThanOptionsNonvestedNumber",
+      "label": "Share-based Compensation Arrangement by Share-based Payment Award, Equity Instruments Other than Options, Nonvested, Number",
+      "axis": "quarterly",
+      "fiscal_year": 2024,
+      "fiscal_period": "Q2",
+      "last_value": 842631.0,
+      "current_silence": 9,
+      "historical_max_gap": 2,
+      "expected": {
+        "relevance": "accounting_plumbing",
+        "prior": "unclear"
+      },
+      "hand_label_note": "Nonvested-award SHARE COUNT (not a dollar KPI) is standard equity-comp rollforward detail, not something investors track as a KPI the way ARR/users/take-rate are tracked. Only 9 periods (~2yr) silent and recent (2024Q2) -- could easily just be a lagging/late-arriving fact rather than a real disclosure decision either way.",
+      "prod_event_id": 4169,
+      "prod_verdict": "unclassified",
+      "prod_materiality": 0.009237450531139346
+    },
+    {
+      "id": "prod_3416_BKNG",
+      "ticker": "BKNG",
+      "taxonomy": "us-gaap",
+      "tag": "CostmethodInvestmentsOtherThanTemporaryImpairment",
+      "label": "Cost-method Investments, Other than Temporary Impairment",
+      "axis": "quarterly",
+      "fiscal_year": 2017,
+      "fiscal_period": "Q3",
+      "last_value": 63208000.0,
+      "current_silence": 34,
+      "historical_max_gap": 2,
+      "expected": {
+        "relevance": "accounting_plumbing",
+        "prior": "unclear"
+      },
+      "hand_label_note": "'Other-than-temporary-impairment' only fires on an actual impairment EVENT -- its long absence more likely means no further impairments occurred (a normal, unremarkable state) than that BKNG stopped disclosing an ongoing metric. Event-triggered plumbing, not a KPI.",
+      "prod_event_id": 3416,
+      "prod_verdict": "unclassified",
+      "prod_materiality": 0.005883645164293028
+    },
+    {
+      "id": "prod_5328_ORCL",
+      "ticker": "ORCL",
+      "taxonomy": "us-gaap",
+      "tag": "FinancialInstrumentsOwnedCorporateDebtAtFairValue",
+      "label": "Financial Instruments, Owned, Corporate Debt, at Fair Value",
+      "axis": "quarterly",
+      "fiscal_year": 2018,
+      "fiscal_period": "Q3",
+      "last_value": 41618000000.0,
+      "current_silence": 32,
+      "historical_max_gap": 2,
+      "expected": {
+        "relevance": "business_metric",
+        "prior": "unclear"
+      },
+      "hand_label_note": "Agree with the model's own call here (business_metric + unclear) -- and flagging separately: this is the SINGLE MOST MATERIAL item in the whole 25-item metric sample (materiality 1.55, $41.6B), yet it received the same passive 'unclear' treatment as trivial plumbing, while four far-smaller, far-more-mundane tags (SBC, interest paid/expense) got escalated all the way to 'concealment'. Verdict severity is not tracking materiality -- it looks like it's tracking how 'ordinary' the tag NAME sounds, not the size of what disappeared.",
+      "prod_event_id": 5328,
+      "prod_verdict": "unclassified",
+      "prod_materiality": 1.5508850381963852
+    },
+    {
+      "id": "prod_5524_SNPS",
+      "ticker": "SNPS",
+      "taxonomy": "us-gaap",
+      "tag": "ShortTermBorrowings",
+      "label": "Short-term Debt",
+      "axis": "quarterly",
+      "fiscal_year": 2022,
+      "fiscal_period": "Q3",
+      "last_value": 74992000.0,
+      "current_silence": 15,
+      "historical_max_gap": 2,
+      "expected": {
+        "relevance": "business_metric",
+        "prior": "unclear"
+      },
+      "hand_label_note": "Short-term borrowings is a real credit/leverage metric; the honest 'paid down or restructured, unclear which' read matches the model. Agree.",
+      "prod_event_id": 5524,
+      "prod_verdict": "unclassified",
+      "prod_materiality": 0.017837430393894856
+    }
+  ]
+}

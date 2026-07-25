@@ -105,6 +105,10 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
     # Decision Draft parse (P2.1, mode-A golden classifier) — kept in sync
     # with run_llm_evals.GOLDEN_PURPOSES.
     "decision_draft_parse",
+    # D1e disclosure-judgment ground truth (mode-A golden classifiers) — kept
+    # in sync with run_llm_evals.GOLDEN_PURPOSES.
+    "metric_lifecycle_triage",
+    "disclosure_item_specificity_triage",
 )
 
 CALL_HEALTH_WINDOW_DAYS = 30

@@ -70,6 +70,14 @@ CLASSIFIER_PURPOSES: tuple[str, ...] = (
     # musing false positives, and prompt-injection — the parser must prefer
     # an ambiguous draft over a false consequential mutation.
     "decision_draft_parse",
+    # D1e (disclosure_intelligence_v1_prd.md): ground truth for the two
+    # disclosure-judgment purposes that shipped with zero eval coverage.
+    # metric_lifecycle_triage — business_metric/accounting_plumbing +
+    # concealment/maturity/unclear over XBRL tag name/label/last-value.
+    "metric_lifecycle_triage",
+    # disclosure_item_specificity_triage — boilerplate_update/substantive
+    # over a diff hunk (risk_factors/mdna item_added/removed/reworded events).
+    "disclosure_item_specificity_triage",
 )
 
 _METADATA_RX = re.compile(r"^(?:[A-Z][A-Z0-9.]*_Q[1-4]_\d{4}|UNKNOWN)$")
@@ -1124,6 +1132,141 @@ def load_decision_draft_parse_golden(path: Path) -> list[ClassifierCase]:
     return cases
 
 
+_METRIC_RELEVANCE = ("business_metric", "accounting_plumbing")
+_METRIC_PRIOR = ("concealment", "maturity", "unclear")
+
+
+def load_metric_lifecycle_triage_golden(path: Path) -> list[ClassifierCase]:
+    """Cases for ``filings.metric_triage.triage_candidates`` (D1e,
+    disclosure_intelligence_v1_prd.md). Each case is ONE hand-labeled
+    ``metric_discontinued`` prod row, reconstructed as a real
+    ``MetricCandidate`` from the same tag/label/last-value/silence fields the
+    production prompt renders (never a document/filing text — this purpose
+    never sees one). ``expected`` pins BOTH axes (``relevance``, ``prior``);
+    a case counts as passed only when both match, mirroring
+    ``grade_intake_classifier_case``'s partial-credit pattern."""
+    from filings.metric_lifecycle import Axis, CandidateKind, MetricCandidate, XbrlObservation
+
+    errors: list[str] = []
+    seen: set[str] = set()
+    cases: list[ClassifierCase] = []
+    for i, c in enumerate(_load_doc(path, "metric_lifecycle_triage")):
+        label = f"cases[{i}]"
+        case_id = _require_str(c, "id", label, errors)
+        if case_id in seen:
+            errors.append(f"{label}: duplicate id {case_id!r}")
+        seen.add(case_id)
+        ticker = _require_str(c, "ticker", label, errors).upper()
+        taxonomy = _require_str(c, "taxonomy", label, errors)
+        tag = _require_str(c, "tag", label, errors)
+        tag_label = _require_str(c, "label", label, errors)
+        axis_raw = c.get("axis")
+        try:
+            axis = Axis(str(axis_raw))
+        except ValueError:
+            errors.append(f"{label} ({case_id}): axis must be 'annual' or 'quarterly'")
+            axis = Axis.ANNUAL
+        fiscal_year = c.get("fiscal_year")
+        fiscal_period = c.get("fiscal_period")
+        if not isinstance(fiscal_year, int) or isinstance(fiscal_year, bool):
+            errors.append(f"{label} ({case_id}): fiscal_year must be an int")
+            fiscal_year = 2020
+        if not isinstance(fiscal_period, str) or not fiscal_period:
+            errors.append(f"{label} ({case_id}): fiscal_period must be a non-empty str")
+            fiscal_period = "FY"
+        last_value = c.get("last_value")
+        if not isinstance(last_value, (int, float)) or isinstance(last_value, bool):
+            errors.append(f"{label} ({case_id}): last_value must be a number")
+            last_value = 0.0
+        current_silence = c.get("current_silence")
+        historical_max_gap = c.get("historical_max_gap")
+        if not isinstance(current_silence, int) or isinstance(current_silence, bool):
+            errors.append(f"{label} ({case_id}): current_silence must be an int")
+            current_silence = 0
+        if not isinstance(historical_max_gap, int) or isinstance(historical_max_gap, bool):
+            errors.append(f"{label} ({case_id}): historical_max_gap must be an int")
+            historical_max_gap = 0
+        expected = c.get("expected")
+        if not isinstance(expected, dict):
+            errors.append(f"{label} ({case_id}): `expected` must be an object")
+            expected = {}
+        exp = cast("dict[str, object]", expected)
+        relevance = exp.get("relevance")
+        prior = exp.get("prior")
+        if relevance not in _METRIC_RELEVANCE:
+            errors.append(
+                f"{label} ({case_id}): expected.relevance must be one of {_METRIC_RELEVANCE}"
+            )
+        if prior not in _METRIC_PRIOR:
+            errors.append(f"{label} ({case_id}): expected.prior must be one of {_METRIC_PRIOR}")
+        candidate = MetricCandidate(
+            ticker=ticker,
+            taxonomy=taxonomy,
+            tag=tag,
+            label=tag_label,
+            axis=axis,
+            last_observation=XbrlObservation(
+                fiscal_year=fiscal_year,
+                fiscal_period=str(fiscal_period),
+                form="10-K" if axis is Axis.ANNUAL else "10-Q",
+                end=f"{fiscal_year}-12-31",
+                val=float(last_value),
+                accn="0000000000-00-000000",
+                filed=f"{fiscal_year}-12-31",
+            ),
+            current_silence=current_silence,
+            historical_max_gap=historical_max_gap,
+            kind=CandidateKind.DISCONTINUED,
+        )
+        cases.append(ClassifierCase(case_id, {"ticker": ticker, "candidate": candidate}, exp))
+    if errors:
+        raise ValueError(f"golden file invalid at {path}: " + "; ".join(errors))
+    return cases
+
+
+def load_disclosure_item_specificity_triage_golden(path: Path) -> list[ClassifierCase]:
+    """Cases for ``filings.boilerplate_triage.triage_events`` (D1e,
+    disclosure_intelligence_v1_prd.md). Each case is ONE hand-labeled
+    item-level prod row, carrying the exact diff hunk / excerpt the
+    production prompt would see (reconstructed with the SAME reduction —
+    ``filings.specificity.extract_diff_hunk`` for reworded items — the
+    production classifier applies), never a whole item body/section/
+    document. ``expected`` pins the ``verdict`` field only (``confidence``
+    is continuous and not graded)."""
+    errors: list[str] = []
+    seen: set[str] = set()
+    cases: list[ClassifierCase] = []
+    for i, c in enumerate(_load_doc(path, "disclosure_item_specificity_triage")):
+        label = f"cases[{i}]"
+        case_id = _require_str(c, "id", label, errors)
+        if case_id in seen:
+            errors.append(f"{label}: duplicate id {case_id!r}")
+        seen.add(case_id)
+        ticker = _require_str(c, "ticker", label, errors).upper()
+        event_type = _require_str(c, "event_type", label, errors)
+        heading = _require_str(c, "heading", label, errors)
+        hunk = _require_str(c, "hunk", label, errors)
+        prod_event_id = c.get("prod_event_id")
+        if not isinstance(prod_event_id, int) or isinstance(prod_event_id, bool):
+            errors.append(f"{label} ({case_id}): prod_event_id must be an int")
+            prod_event_id = 0
+        expected = c.get("expected")
+        if not isinstance(expected, dict):
+            errors.append(f"{label} ({case_id}): `expected` must be an object")
+            expected = {}
+        exp = cast("dict[str, object]", expected)
+        verdict = exp.get("verdict")
+        if verdict not in ("boilerplate_update", "substantive"):
+            errors.append(
+                f"{label} ({case_id}): expected.verdict must be boilerplate_update or substantive"
+            )
+        candidate: tuple[int, str, str, str] = (prod_event_id, event_type, heading, hunk)
+        cases.append(ClassifierCase(case_id, {"ticker": ticker, "candidate": candidate}, exp))
+    if errors:
+        raise ValueError(f"golden file invalid at {path}: " + "; ".join(errors))
+    return cases
+
+
 def grade_decision_draft_parse_case(
     case: ClassifierCase, *, fn: Callable[..., dict[str, object]]
 ) -> CaseResult:
@@ -1190,6 +1333,119 @@ def grade_decision_draft_parse_case(
     )
 
 
+def grade_metric_lifecycle_triage_case(
+    case: ClassifierCase, *, fn: Callable[..., object]
+) -> CaseResult:
+    """Calls the REAL ``triage_candidates(ticker, [candidate])`` — a single-
+    candidate batch, same call shape production uses per-ticker just with
+    one member. Both ``relevance`` and ``prior`` must match; a degraded
+    outcome (LLM failure) or a missing verdict both score 0 at stage
+    ``call`` — never treated as a pass."""
+    from filings.metric_lifecycle import MetricCandidate
+
+    expected = cast("dict[str, object]", case.expected)
+    ticker = cast("str", case.inputs["ticker"])
+    candidate = cast("MetricCandidate", case.inputs["candidate"])
+    t0 = time.monotonic()
+    try:
+        outcome = fn(ticker, [candidate])
+    except Exception as exc:
+        _abort_on_hard_stop(exc, "metric_lifecycle_triage", case.case_id)
+        raise
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    degraded = bool(getattr(outcome, "degraded", False))
+    verdict = None if degraded else getattr(outcome, "verdicts", {}).get(candidate.qualified_name)
+    if verdict is None:
+        return CaseResult(
+            case_id=case.case_id,
+            question=f"metric_lifecycle_triage/{case.case_id}",
+            passed=False,
+            score=0.0,
+            expected_json=dumps_compact(expected),
+            actual_json=None,
+            failure_stage="call",
+            judge_rationale=(
+                "triage degraded (LLM call/parse failure)"
+                if degraded
+                else "no verdict returned for this candidate"
+            ),
+            latency_ms=latency_ms,
+        )
+    act_relevance = verdict.relevance.value
+    act_prior = verdict.prior.value
+    relevance_ok = act_relevance == expected.get("relevance")
+    prior_ok = act_prior == expected.get("prior")
+    passed = relevance_ok and prior_ok
+    score = (0.5 if relevance_ok else 0.0) + (0.5 if prior_ok else 0.0)
+    return CaseResult(
+        case_id=case.case_id,
+        question=f"metric_lifecycle_triage/{case.case_id}",
+        passed=passed,
+        score=score,
+        expected_json=dumps_compact(expected),
+        actual_json=dumps_compact({"relevance": act_relevance, "prior": act_prior}),
+        failure_stage=None if passed else "mismatch",
+        judge_rationale=(
+            None
+            if passed
+            else f"expected relevance={expected.get('relevance')!r} prior={expected.get('prior')!r}, "
+            f"got {act_relevance!r}/{act_prior!r}"
+        ),
+        latency_ms=latency_ms,
+    )
+
+
+def grade_disclosure_item_specificity_triage_case(
+    case: ClassifierCase, *, fn: Callable[..., object]
+) -> CaseResult:
+    """Calls the REAL ``triage_events(ticker, [candidate])`` — a single-item
+    batch. Only ``verdict`` is graded (``confidence`` is continuous)."""
+    expected = cast("dict[str, object]", case.expected)
+    ticker = cast("str", case.inputs["ticker"])
+    candidate = cast("tuple[int, str, str, str]", case.inputs["candidate"])
+    event_id = candidate[0]
+    t0 = time.monotonic()
+    try:
+        outcome = fn(ticker, [candidate])
+    except Exception as exc:
+        _abort_on_hard_stop(exc, "disclosure_item_specificity_triage", case.case_id)
+        raise
+    latency_ms = int((time.monotonic() - t0) * 1000)
+    degraded = bool(getattr(outcome, "degraded", False))
+    verdict = None if degraded else getattr(outcome, "verdicts", {}).get(event_id)
+    if verdict is None:
+        return CaseResult(
+            case_id=case.case_id,
+            question=f"disclosure_item_specificity_triage/{case.case_id}",
+            passed=False,
+            score=0.0,
+            expected_json=dumps_compact(expected),
+            actual_json=None,
+            failure_stage="call",
+            judge_rationale=(
+                "triage degraded (LLM call/parse failure)"
+                if degraded
+                else "no verdict returned for this candidate"
+            ),
+            latency_ms=latency_ms,
+        )
+    act_verdict = verdict.verdict.value
+    passed = act_verdict == expected.get("verdict")
+    return CaseResult(
+        case_id=case.case_id,
+        question=f"disclosure_item_specificity_triage/{case.case_id}",
+        passed=passed,
+        score=1.0 if passed else 0.0,
+        expected_json=dumps_compact(expected),
+        actual_json=dumps_compact({"verdict": act_verdict}),
+        failure_stage=None if passed else "mismatch",
+        judge_rationale=(
+            None if passed else f"expected verdict={expected.get('verdict')!r}, got {act_verdict!r}"
+        ),
+        latency_ms=latency_ms,
+    )
+
+
 # ---------------------------------------------------------------------------
 # run orchestration
 # ---------------------------------------------------------------------------
@@ -1237,6 +1493,14 @@ def _production_fn(purpose: str) -> Callable[..., object]:
         import capture.decision_draft as decision_draft
 
         return cast("Callable[..., object]", decision_draft.parse_note_for_eval)
+    if purpose == "metric_lifecycle_triage":
+        import filings.metric_triage as metric_triage
+
+        return cast("Callable[..., object]", metric_triage.triage_candidates)
+    if purpose == "disclosure_item_specificity_triage":
+        import filings.boilerplate_triage as boilerplate_triage
+
+        return cast("Callable[..., object]", boilerplate_triage.triage_events)
     return llm_client.structure_recent_news_json
 
 
@@ -1285,6 +1549,12 @@ def run_classifier_eval(
     elif purpose == "decision_draft_parse":
         cases = load_decision_draft_parse_golden(golden_path)
         grade = grade_decision_draft_parse_case
+    elif purpose == "metric_lifecycle_triage":
+        cases = load_metric_lifecycle_triage_golden(golden_path)
+        grade = grade_metric_lifecycle_triage_case
+    elif purpose == "disclosure_item_specificity_triage":
+        cases = load_disclosure_item_specificity_triage_golden(golden_path)
+        grade = grade_disclosure_item_specificity_triage_case
     else:
         raise ValueError(
             f"no classifier eval for purpose {purpose!r} — known: {list(CLASSIFIER_PURPOSES)}"
