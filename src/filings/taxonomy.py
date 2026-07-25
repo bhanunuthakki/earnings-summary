@@ -40,6 +40,49 @@ from filings.models import FilingForm
 _MAX_HEADER_LINE_LEN = 200
 #: Dotted page-number leader — the table-of-contents tell.
 _TOC_LEADER = ".."
+#: A header line that ends with its own trailing page number ("Item 5. MD&A
+#: 60") — the same TOC tell as the dotted leader, just without the dots. Rare
+#: in this corpus (most filers' HTML puts the page number in its own <p>,
+#: hence its own line — see ``_BARE_PAGE_NUMBER_RX`` below) but cheap to guard
+#: against for filers whose renderer keeps title and number on one line.
+_TRAILING_PAGE_NUMBER_RX = re.compile(r"\s+\d{1,4}$")
+#: A standalone page-number line — one whole line containing nothing but a
+#: 1-4 digit number. This is the dotless-TOC tell that actually fires in this
+#: corpus: NU's 20-F and FCX's 10-K both render their table of contents as one
+#: block element per title and one per page number (so each ends up on its own
+#: line with no dotted leader at all), while a real body header is preceded and
+#: followed by prose, not a number.
+_BARE_PAGE_NUMBER_RX = re.compile(r"^[ \t]*\d{1,4}[ \t]*$", re.MULTILINE)
+#: How far past a header to look for that bare-page-number tell. Wide enough to
+#: span a TOC parent entry's own sub-item bullets (each with its own page
+#: number, e.g. a 20-F's "A. Offer Statistics / 155 / B. Method... / 155")
+#: before the next ITEM line, narrow enough that it won't reach past a real
+#: section's own body into an unrelated later item.
+_TOC_LOOKAHEAD_CHARS = 400
+#: A single incidental page number turning up near a genuinely short answer
+#: ("Not applicable.", two lines below a real header, from the page footer) is
+#: normal and must not be flagged. Even two real, back-to-back terse items
+#: (each its own one-line answer) can each contribute a lone footer number —
+#: see ``_looks_like_toc_entry`` for the real corpus case that forced this to
+#: 3 rather than 2. A genuine TOC cluster always has more than two page
+#: numbers in play within the window.
+_MIN_TOC_PAGE_NUMBERS = 3
+#: Another item header STARTING a line — required, IN ADDITION to the
+#: page-number density above, before a candidate is rejected as TOC. Item 8
+#: (Financial Statements) and Item 15 (Exhibits) routinely open their REAL
+#: body with their own inline index ("Index to Consolidated Financial
+#: Statements ... The following ... are included in Item 8 of this Annual
+#: Report ... Report of Independent Registered Public Accounting Firm ... 65
+#: ... Consolidated Balance Sheets ... 67 ..."), which is just as
+#: page-number-dense as a real TOC AND can even cross-reference another item
+#: by number in passing prose ("included in Item 8 of this..."). The
+#: anchor to a LINE START is what tells the two apart: a real table of
+#: contents marches through consecutive item numbers each headlining their
+#: own line, while a prose cross-reference has "Item N" in the middle of a
+#: sentence, never at the start of a line. Requiring both signals is what
+#: keeps this from mistaking a financial-statement/exhibit index for a table
+#: of contents and dropping the one real header for Item 8 or Item 15.
+_ITEM_LINE_START_RX = re.compile(r"^[ \t]*item\s*\d", re.IGNORECASE | re.MULTILINE)
 #: Gap contributions are capped so one enormous section can't outweigh a chain
 #: that locates many well-separated headers.
 _GAP_CAP = 20_000
@@ -245,11 +288,37 @@ class LocatedItem:
     body_end: int = field(default=-1)
 
 
+def _looks_like_toc_entry(text: str, line_end: int) -> bool:
+    """True when the text just past a header line carries the TOC's page-number
+    signature rather than a real section body.
+
+    A real body header is followed by prose; a table-of-contents entry is
+    followed by (at most) its own page number and then straight into the NEXT
+    item's title and page number. Two consecutive REAL items that both happen
+    to be one-line answers ("Not applicable." / "None.") each still contribute
+    their own lone page-footer number, so a 2-number threshold isn't quite
+    enough to rule that shape out (observed: AVGO's Item 3 "incorporated by
+    reference" answer sits right before Item 4's "None.", each with its own
+    footer number, two numbers total). Requiring THREE keeps that real,
+    if terse, pair of items from being mistaken for a TOC run while still
+    catching every genuine TOC cluster in this corpus, which always has more
+    than two entries in play within the window.
+    """
+    lookahead = text[line_end : line_end + _TOC_LOOKAHEAD_CHARS]
+    if len(_BARE_PAGE_NUMBER_RX.findall(lookahead)) < _MIN_TOC_PAGE_NUMBERS:
+        return False
+    return _ITEM_LINE_START_RX.search(lookahead) is not None
+
+
 def _candidate_positions(text: str, spec: ItemSpec) -> list[tuple[int, int, str]]:
     """All plausible header positions for one item as (header_start, body_start, line).
 
-    Filters out table-of-contents rows (dotted leaders) and long prose lines
-    that merely mention the item.
+    Filters out table-of-contents rows — both the dotted-leader shape
+    ("Item 1A. Risk Factors....9") and the dotless shape used by filers whose
+    HTML renders each TOC title and page number as its own block element
+    ("Item 1A. Risk Factors" / "9" on separate lines, or "Item 1A. Risk
+    Factors 9" on one line when a renderer keeps them together) — and long
+    prose lines that merely mention the item.
     """
     out: list[tuple[int, int, str]] = []
     seen: set[int] = set()
@@ -265,8 +334,25 @@ def _candidate_positions(text: str, spec: ItemSpec) -> list[tuple[int, int, str]
             stripped = line.strip()
             if _TOC_LEADER in stripped or len(stripped) > _MAX_HEADER_LINE_LEN:
                 continue
+            if _TRAILING_PAGE_NUMBER_RX.search(stripped):
+                continue
+            if _looks_like_toc_entry(text, line_end):
+                continue
             seen.add(line_start)
-            out.append((line_start, max(m.end(), line_end), stripped))
+            # The title match can itself wrap onto a second physical line (a
+            # header rendered as "Item 4A. Unresolved" / "staff comments" from
+            # an inline <br> or span break) — \s in the title pattern matches
+            # that newline same as a plain space. When it does, m.end() lands
+            # mid-word on the SECOND line, not at the end of the header's own
+            # text, so the body must start at the end of whichever line
+            # actually holds m.end() rather than at m.end() itself. Real case:
+            # NU's 20-F wraps "Item 4A. Unresolved\nstaff comments" this way,
+            # and taking m.end() literally cut the body open mid-word
+            # ("comments\n\nNot applicable...") instead of after the header.
+            body_start = text.find("\n", max(m.end(), line_start))
+            if body_start == -1:
+                body_start = len(text)
+            out.append((line_start, max(body_start, line_end), stripped))
     out.sort(key=lambda t: t[0])
     return out
 

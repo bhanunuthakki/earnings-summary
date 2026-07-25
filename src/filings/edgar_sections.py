@@ -201,6 +201,103 @@ def _boundaries_look_suspect(slices: list[SectionSlice], specs: tuple[ItemSpec, 
     return leaks > _MAX_SUCCESSOR_LEAKS
 
 
+#: Concepts that are near-universally a one-line "Not applicable." / "None."
+#: answer across the whole book. A slice filed under one of these labels that
+#: runs to thousands of characters did not suddenly gain real disclosure — a
+#: boundary swallowed a NEIGHBORING item's prose instead.
+_TRIVIAL_CONCEPTS = frozenset({"unresolved_staff_comments", "mine_safety", "offer_statistics"})
+#: Calibrated against the real corpus (``data/sec_text/``): genuine mine-safety
+#: prose (FCX, NSP, DHR, NVO all actually operate mines) tops out around 5,400
+#: chars; the smallest CONFIRMED-corrupted case (NVO's unresolved_staff_comments,
+#: a boundary artifact unrelated to the TOC fix below) is 6,231, and NU's and
+#: FCX's worst TOC-latched cases ran 87K-298K. 6,000 sits in that gap.
+_TRIVIAL_SECTION_MAX_CHARS = 6_000
+
+
+def _trivial_section_oversized(slices: list[SectionSlice]) -> bool:
+    """True when a near-always-trivial concept's slice is implausibly large.
+
+    Unlike ``_boundaries_look_suspect`` (which needs the successor's own
+    header text to still be present in the prior slice), this catches the
+    shape where the swallowed content came from an item the chain skipped
+    over entirely — NU's 20-F reorders Items 1/2/3/4/4A in its body relative
+    to their canonical numbering, so Item 4A's real "Not applicable." answer
+    ends up bundled with Item 3's full risk-factors disclosure with no leaked
+    header text to detect, because Item 3 was never a chain node to begin
+    with. Detecting it does not fix the cut; it is the same trade as
+    ``_boundaries_look_suspect`` — a flagged gap beats a clean-looking
+    mislabel.
+    """
+    return any(
+        s.concept in _TRIVIAL_CONCEPTS and len(s.text) > _TRIVIAL_SECTION_MAX_CHARS for s in slices
+    )
+
+
+#: A leading legal-drafting enumerator ("(a)", "(b)(1)", "1.", "A.") is a
+#: normal, correct way for a real section to open — it is not evidence of a
+#: cut landing mid-sentence, so it is stripped before the case of the first
+#: real word is inspected.
+_ENUMERATOR_PREFIX_RX = re.compile(r"^\(?[a-zA-Z0-9]{1,3}\)?[.:)]\s*")
+#: Share of a filing's OWN slices that may legitimately open on a lowercase
+#: letter (a genuine cross-reference like "10b5-1 Trading Plans...") before
+#: the pattern stops looking like noise and starts looking like a partition
+#: whose cuts are landing inside sentences. Calibrated against the corpus:
+#: every clean filing's worst case is 1 slice out of >=15 (<=7%); NU's and
+#: NVO's shifted partitions run 15-27%.
+_MID_SENTENCE_SHARE = 0.15
+#: A single mid-sentence slice happens even in clean filings; only a genuine
+#: SHARE (not one occurrence) indicates the partition itself is the problem.
+_MIN_MID_SENTENCE_SLICES = 2
+
+
+def _starts_mid_sentence(text: str) -> bool:
+    """True when a slice's body opens on a lowercase letter.
+
+    A real header hands off to a capitalized sentence or an enumerated list
+    item ("(a) Evaluation of disclosure controls..."); stripping ordinary
+    enumerators first is what keeps those common, legitimate openings from
+    registering as false positives here.
+    """
+    body = text.lstrip()
+    for _ in range(3):  # a chained enumerator like "(a) 1." needs 2 passes
+        stripped = _ENUMERATOR_PREFIX_RX.sub("", body, count=1)
+        if stripped == body:
+            break
+        body = stripped.lstrip()
+    first_alpha = next((c for c in body if c.isalpha()), None)
+    return bool(first_alpha and first_alpha.islower())
+
+
+def _mid_sentence_share_suspect(slices: list[SectionSlice]) -> bool:
+    """True when enough of ONE filing's slices open mid-sentence that the
+    partition — not any single section — is what needs flagging.
+
+    Real case: NU's 20-F, after the TOC-rejection fix, still lands several
+    cuts inside a sentence because its item order in the body does not match
+    the canonical numbering the chain has to assume (see
+    ``_trivial_section_oversized``), so multiple slices in the SAME filing
+    show the symptom at once. A share threshold is what lets this catch that
+    filing-wide pattern without firing on the rare, legitimate lowercase
+    cross-reference any single clean filing can have.
+    """
+    if not slices:
+        return False
+    count = sum(1 for s in slices if _starts_mid_sentence(s.text))
+    return count >= _MIN_MID_SENTENCE_SLICES and count / len(slices) >= _MID_SENTENCE_SHARE
+
+
+def _integrity_warnings(slices: list[SectionSlice]) -> list[str]:
+    """Post-split checks shared by every taxonomy-based splitter (10-K, 10-Q,
+    20-F) — the safety net for boundary defects ``_boundaries_look_suspect``
+    cannot see because the swallowed item was never a chain node at all."""
+    warnings: list[str] = []
+    if _trivial_section_oversized(slices):
+        warnings.append("trivial_section_oversized")
+    if _mid_sentence_share_suspect(slices):
+        warnings.append("slice_starts_mid_sentence")
+    return warnings
+
+
 def split_10k(text: str) -> SplitResult:
     """Partition a 10-K into its Items 1–16."""
     slices = _slices_from_items(text, FORM_10K_ITEMS)
@@ -209,6 +306,7 @@ def split_10k(text: str) -> SplitResult:
         return SplitResult([], ["no_item_headers_located"])
     if _boundaries_look_suspect(slices, FORM_10K_ITEMS):
         warnings.append("slice_boundaries_suspect")
+    warnings.extend(_integrity_warnings(slices))
     concepts = {s.concept for s in slices}
     # Item 1A and Item 7 are the whole point of the narrative partition; a
     # filing that yields sections but not these two is a partition worth
@@ -248,7 +346,7 @@ def split_10q(text: str) -> SplitResult:
     if not slices:
         return SplitResult([], ["no_item_headers_located"])
 
-    warnings: list[str] = []
+    warnings: list[str] = _integrity_warnings(slices)
     if "mdna" not in {s.concept for s in slices}:
         warnings.append("missing_mdna")
     return SplitResult(slices, warnings)
@@ -318,6 +416,7 @@ def split_20f(text: str) -> SplitResult:
         return SplitResult([], ["no_item_headers_located"])
     if _boundaries_look_suspect(slices, FORM_20F_ITEMS):
         warnings.append("slice_boundaries_suspect")
+    warnings.extend(_integrity_warnings(slices))
     if "risk_factors" not in {s.concept for s in slices}:
         warnings.append("missing_risk_factors")
     return SplitResult(slices, warnings)
