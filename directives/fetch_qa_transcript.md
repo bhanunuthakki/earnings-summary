@@ -8,7 +8,7 @@ Pull just the **Question-and-Answer segment** of an earnings call from free, no-
 
 - **Prepared remarks** are 1:1 reproducible from the press release + investor deck. Re-transcribing them adds zero unique signal.
 - **Q&A** is the unique audio-only content — analysts probing the edges of management's prepared message — and is exactly what say-do consistency analysis needs.
-- Aggregators publish Q&A pre-segmented and **speaker-tagged** (e.g. `B Bipul Sinha`, `F Fatima Boolani`), which is structurally cleaner than diarising audio.
+- Aggregators publish Q&A pre-segmented and **speaker-tagged**, which is structurally cleaner than diarising audio — roic.ai's page DOM marks each message with `data-cy="transcripts_call_message"` and isolates the real name in `<p data-transcript-speaker-name="true">`; that's the real signal `_parse_roic_messages` reads (see 2026-07-25 note below), not a text convention.
 - Cost: $0 + ~1 second per quarter vs ~25 min of CPU + audio download + Whisper.
 
 ## Tools / Scripts
@@ -72,5 +72,29 @@ python execution/fetch_qa_transcript.py --list-sources
 
 - **Fiscal-year tickers (RBRK, VEEV)**: roic.ai uses fiscal-year labelling. Pass `--year` and `--quarter` as the company reports them (e.g. RBRK Q4 FY26 = `--year 2026 --quarter 4`).
 - **Most-recent quarter not yet indexed**: aggregators typically update within 12-48h of the call. If the call was within the last day, expect `[miss]` and fall back to `fetch_audio_transcripts.py`.
-- **Speaker-tag formatting differs across sources**: roic.ai uses `<Letter> <FullName>` (e.g. `B Bipul Sinha`); stockanalysis uses uppercase names. Both are preserved verbatim — the say-do pipeline can normalise downstream.
+- **Speaker-tag formatting differs across sources**: roic.ai is parsed from its actual DOM structure (`_parse_roic_messages` in `src/aggregator_sources.py`, fixed 2026-07-25 — see note below); stockanalysis/tickertrends still use the flattened-text + `_split_into_speaker_paragraphs` heuristic (documented residual gap, not yet fixed).
 - **Page footer leakage**: handled by the end-cue trim. If a new aggregator is added that uses a different end-of-call template, extend `QA_TAIL_RE` in `src/aggregator_sources.py`.
+- **IR-officer-run queue (NU)**: NU's IR officer, not the operator, hands off to each analyst ("could you please open the line for Mr. X from Firm?"). `_QA_HANDOFF_RE` in `src/aggregator_sources.py` recognizes this variant per-turn, alongside the standard operator-script cues.
+
+## 2026-07-25 correction: roic.ai speaker tags were never a text convention
+
+Verifying P4 (`src/transcripts/longitudinal.py`) found that `_strip_html`'s
+whole-page text flatten (every DOM node joined with `" "`, no block
+boundaries preserved) destroys speaker-turn structure before
+`_split_into_speaker_paragraphs`'s letter-prefix heuristic ever runs — the
+heuristic was reverse-engineering an artifact of that flattening (roic.ai's
+avatar-initial `<span>B</span>` running straight into the name), not a real
+source convention. Confirmed against a live page: `NU_Q1_2026` (55k chars)
+collapsed to a **single "Operator" turn** end to end.
+
+roic.ai's actual DOM marks each message with
+`data-cy="transcripts_call_message"` and isolates the real speaker name in
+`<p data-transcript-speaker-name="true">` — an unambiguous structural signal.
+`_parse_roic_messages` (`src/aggregator_sources.py`) reads this directly and
+serializes real turns as `Name: body` so the existing newline-anchored
+`segment_by_speaker` (shared with the PDF ingest path) recovers every
+boundary, instead of guessing one back from flattened text. `_roic_fetch`
+falls back to the old flatten-and-guess path only if the DOM shape is ever
+absent (a redesign), logged as a visible quality-degrade, never silent.
+stockanalysis.com and tickertrends.io were NOT re-verified against their own
+DOM and still use the old heuristic — a residual gap, not a fix.
