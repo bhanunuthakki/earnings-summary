@@ -30,6 +30,7 @@ from filings.models import (  # noqa: E402
     HardStopError,
     SectionSource,
     SourceContractError,
+    TickerNotResolvableError,
     most_severe_warning,
     normalize_stem,
 )
@@ -919,3 +920,24 @@ def test_unranked_warnings_still_surface() -> None:
     """A warning nobody thought to rank must not vanish from reason_code."""
     assert most_severe_warning(["empty_sections:4"]) == "empty_sections:4"
     assert most_severe_warning(["subsplit_incomplete_item_5"]) == "subsplit_incomplete_item_5"
+
+
+def test_unresolvable_ticker_degrades_instead_of_aborting_the_batch(
+    conn: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An ADR with no direct SEC presence is a coverage fact, not a broken run.
+
+    Regression: NTDOY raised HardStopError from CIK resolution, which aborted a
+    38-ticker eval backfill on reaching it — the 20 tickers after it in the
+    alphabet never ran.
+    """
+
+    def _no_cik(*_args: object, **_kwargs: object) -> list[object]:
+        raise TickerNotResolvableError("no CIK for ticker NTDOY")
+
+    monkeypatch.setattr(ingest.edgar_fetch, "list_filings", _no_cik)
+    report = ingest.ingest_edgar(conn, "NTDOY", tmp_path)
+    assert report.sections_written == 0
+    [coverage] = store.get_coverage(conn, "NTDOY")
+    assert coverage.status is CoverageStatus.SOURCE_MISSING
+    assert coverage.reason_code == "no_cik"

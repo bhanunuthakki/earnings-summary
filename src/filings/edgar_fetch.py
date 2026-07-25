@@ -11,8 +11,11 @@ Failures are classified per AGENTS.md's error classes, because the three
 demand different responses and collapsing them is how a run either spins on an
 unfixable error or silently swallows a real one:
 
-* ``HardStopError`` — 401/403 and unresolvable CIK. Retrying without a fix is
-  pointless; the run surfaces it.
+* ``HardStopError`` — 401/403. Retrying without a fix is pointless; the run
+  surfaces it and stops.
+* ``TickerNotResolvableError`` — no CIK for this ticker. A fact about ONE
+  issuer (an ADR with no direct SEC presence), so the batch continues and the
+  ticker gets a SOURCE_MISSING coverage row.
 * ``TransientError`` — timeouts, connection errors, 429, 5xx. The orchestrator
   records ``FETCH_FAILED`` and continues to the next accession.
 * ``SourceContractError`` — 404 and other 4xx on a URL we constructed, i.e.
@@ -41,6 +44,7 @@ from filings.models import (
     FilingForm,
     HardStopError,
     SourceContractError,
+    TickerNotResolvableError,
     TransientError,
 )
 
@@ -131,9 +135,14 @@ def resolve_cik(ticker: str, *, user_agent: str = USER_AGENT_DEFAULT) -> str:
 
     ``pipeline.sec_xbrl.CIK_MAP`` already covers every 20-F/40-F name on the
     roster; the ``insider_transactions`` lookup is the fallback for anything
-    else. Raises ``HardStopError`` when neither resolves — a ticker with no
-    CIK cannot be fetched at all, and pretending otherwise would produce an
-    empty result indistinguishable from "this issuer filed nothing".
+    else.
+
+    Raises ``TickerNotResolvableError`` when neither resolves. That is a fact
+    about ONE issuer — an ADR such as NTDOY files nothing directly with the SEC
+    — so the caller records ``SOURCE_MISSING`` for it and carries on with the
+    rest of the batch. (It was a ``HardStopError`` until a 38-ticker eval run
+    aborted on reaching the first such name.) A lookup that fails for
+    infrastructure reasons is still transient, and is raised as such.
     """
     upper = ticker.strip().upper()
     try:
@@ -150,9 +159,13 @@ def resolve_cik(ticker: str, *, user_agent: str = USER_AGENT_DEFAULT) -> str:
 
         found = _lookup_cik_for_ticker(upper, user_agent=user_agent)
     except Exception as exc:
-        raise HardStopError(f"CIK lookup failed for {upper}: {exc}") from exc
+        # The lookup itself broke (network, SEC ticker file unavailable) —
+        # transient, not a statement about this issuer.
+        raise TransientError(f"CIK lookup failed for {upper}: {exc}") from exc
     if not found:
-        raise HardStopError(f"no CIK for ticker {upper} (foreign issuer with no SEC presence?)")
+        raise TickerNotResolvableError(
+            f"no CIK for ticker {upper} (ADR or foreign issuer with no direct SEC presence?)"
+        )
     return str(found).zfill(10)
 
 
