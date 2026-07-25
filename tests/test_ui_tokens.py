@@ -108,12 +108,62 @@ def test_scale_tokens_ride_along_in_both_palette_css_modes() -> None:
             assert f"--{name}:" in root, f"--{name} missing from palette_css({mode!r}) :root"
 
 
+def _relative_luminance(hex_color: str) -> float:
+    raw = hex_color.lstrip("#")
+    channels = [int(raw[i : i + 2], 16) / 255 for i in (0, 2, 4)]
+    linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def contrast_ratio(a: str, b: str) -> float:
+    """WCAG 2.1 contrast ratio between two #rrggbb colors."""
+    la, lb = _relative_luminance(a), _relative_luminance(b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
 def test_accent_contrast_is_ink_on_accent_per_theme() -> None:
     """UI polish v3: --accent-contrast is the only ink allowed on accent fill.
-    Dark accent is a LIGHT blue, so its contrast ink is near-black; light
-    accent is a dark blue, so its contrast ink is white."""
-    assert PALETTE_DARK["accent-contrast"] == "#0c0d10"
+
+    This pins the PROPERTY, not a frozen hex: the ink must actually be legible
+    on the accent fill it sits on. An earlier version asserted the literal
+    ``#0c0d10``, which broke on the 2026-07-25 palette warming without saying
+    anything about legibility — a literal that moves with the palette tests
+    nothing. On dark the ink is the page ground (a light accent takes near-black
+    ink); on light it is white.
+    """
+    assert PALETTE_DARK["accent-contrast"] == PALETTE_DARK["bg"]
     assert PALETTE_LIGHT["accent-contrast"] == "#ffffff"
+    for palette in (PALETTE_LIGHT, PALETTE_DARK):
+        ratio = contrast_ratio(palette["accent-contrast"], palette["accent"])
+        assert ratio >= 4.5, (
+            f"--accent-contrast {palette['accent-contrast']} on --accent "
+            f"{palette['accent']} is {ratio:.2f}:1, below the 4.5:1 AA-body floor"
+        )
+
+
+def test_mark_carries_text_and_mark_soft_is_keyline_only() -> None:
+    """The editorial mark (2026-07-25) is two tokens because it has two jobs.
+
+    ``--mark`` sets type (section labels, footnote markers) so it must clear
+    AA-body on its own ground. ``--mark-soft`` is a 1px keyline shade and is
+    deliberately BELOW that floor — this test is what stops someone promoting it
+    to a text color, and what stops someone "fixing" it to be readable.
+    """
+    for palette in (PALETTE_LIGHT, PALETTE_DARK):
+        on_text = contrast_ratio(palette["mark"], palette["bg"])
+        assert on_text >= 4.5, f"--mark is {on_text:.2f}:1 on --bg, below AA-body"
+        keyline = contrast_ratio(palette["mark-soft"], palette["bg"])
+        assert keyline < 4.5, (
+            f"--mark-soft is {keyline:.2f}:1 — that is text-legible. It is a "
+            "keyline token; if a rule needs to carry type, use --mark."
+        )
+
+
+def test_mark_is_not_the_warn_semantic() -> None:
+    """A section label must never be readable as a caution state."""
+    for palette in (PALETTE_LIGHT, PALETTE_DARK):
+        assert palette["mark"] != palette["warn"]
+        assert palette["mark-soft"] != palette["warn"]
 
 
 def test_shadow_pop_defined_in_both_themes() -> None:

@@ -52,8 +52,15 @@ def test_paper_mode_emits_light_root_plus_dark_override() -> None:
     css = controls_css("paper")
     assert "color-scheme: light" in css
     assert ':root[data-theme="dark"]' in css
-    # Both chevron inks present: light root + dark override.
-    assert "%236c6f78" in css and "%23888b94" in css
+    # Both chevron inks present: light root + dark override. Derived from the
+    # palette rather than spelled as literals — the literal form of this
+    # assertion silently pinned the pre-2026-07-25 cool grays.
+    from ui.tokens import PALETTE_DARK, PALETTE_LIGHT
+
+    light_ink = "%23" + PALETTE_LIGHT["muted"].lstrip("#")
+    dark_ink = "%23" + PALETTE_DARK["muted"].lstrip("#")
+    assert light_ink in css and dark_ink in css
+    assert light_ink != dark_ink
 
 
 def test_rejects_unknown_mode() -> None:
@@ -1117,3 +1124,152 @@ def test_fact_anchor_attrs_emits_handle_and_degrades() -> None:
     # Precedence: a cell carrying both — data-fact-ref ordered before data-ask-q.
     triple = fact_anchor_attrs("kpi:NU:42", "NIM", ask_q="How has NIM trended?")
     assert triple.index("data-fact-ref") < triple.index("data-ask-q")
+
+
+def test_glyph_ink_tracks_the_palette() -> None:
+    """The two theme-dependent glyph inks are DERIVED from tokens, not copied.
+
+    Regression pin for a silent drift found on 2026-07-25: ``_CHEVRON_DARK`` and
+    ``_CHECK_DARK`` froze ``%23888b94`` / ``%230c0d10`` while their comments
+    claimed they tracked ``--muted`` / ``--accent-contrast``. Warming the dark
+    palette falsified both and nothing failed — the chevron just kept rendering
+    in the old cool gray on a warm surface.
+
+    This asserts the LINK, so it survives any future palette edit: whatever the
+    palette says today must be the ink in today's glyph, and the stale cool
+    values must be gone from the rendered CSS.
+    """
+    from ui.controls import _CHECK_DARK, _CHECK_LIGHT, _CHEVRON_DARK, _CHEVRON_LIGHT
+    from ui.tokens import PALETTE_DARK, PALETTE_LIGHT
+
+    def enc(value: str) -> str:
+        return "%23" + value.lstrip("#")
+
+    assert enc(PALETTE_DARK["muted"]) in _CHEVRON_DARK
+    assert enc(PALETTE_LIGHT["muted"]) in _CHEVRON_LIGHT
+    assert enc(PALETTE_DARK["accent-contrast"]) in _CHECK_DARK
+    assert enc(PALETTE_LIGHT["accent-contrast"]) in _CHECK_LIGHT
+
+    # The glyphs must differ per theme — one shared ink would mean a glyph is
+    # illegible on one of the two grounds.
+    assert _CHEVRON_DARK != _CHEVRON_LIGHT
+    assert _CHECK_DARK != _CHECK_LIGHT
+
+    # And the rendered CSS must carry no pre-warming ink.
+    for mode in ("paper", "dark"):
+        css = controls_css(mode)
+        assert "%23888b94" not in css, "stale cool --muted ink in chevron"
+        assert "%230c0d10" not in css, "stale cool --accent-contrast ink in check"
+
+
+# ---------------------------------------------------------------------------
+# The research document primitives (design_language §6.3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["paper", "dark"])
+def test_document_primitives_present(mode: str) -> None:
+    """The document kit ships in both modes — it is not a dark-only surface."""
+    css = controls_css(mode)
+    for selector in (
+        ".k-doc",
+        ".k-doc-row",
+        ".k-doc-mast",
+        ".k-note",
+        ".k-note-title",
+        ".k-fn",
+        ".k-band",
+        ".k-qa",
+        ".k-label-mark",
+    ):
+        assert selector in css, f"{selector} missing from controls_css({mode!r})"
+
+
+def test_doc_row_carries_the_note_column_not_the_document() -> None:
+    """A margin note attaches per-section; the document reserves no gutter.
+
+    The whole point of ``.k-doc-row`` is that ``.k-doc`` stays a single column.
+    If ``.k-doc`` ever grows its own ``grid-template-columns`` the layout is back
+    to a standing rail that sits empty everywhere a note isn't.
+    """
+    css = controls_css("paper")
+    doc_rule = re.search(r"\.k-doc\s*\{([^}]*)\}", css)
+    assert doc_rule is not None
+    assert "grid-template-columns" not in doc_rule.group(1)
+
+    row_rule = re.search(r"\.k-doc-row\s*\{([^}]*)\}", css)
+    assert row_rule is not None
+    assert "grid-template-columns" in row_rule.group(1)
+
+
+@pytest.mark.parametrize("mode", ["paper", "dark"])
+def test_mark_soft_is_only_ever_a_keyline(mode: str) -> None:
+    """``--mark-soft`` is below the AA-body floor by design (see test_ui_tokens).
+
+    That makes it safe on a 1px rule and unsafe on type. This is the CSS-side
+    half of that contract: every declaration consuming it must be a border. The
+    token test pins the ratio; this pins the usage, so the two together make
+    "keyline only" an enforced property rather than a comment.
+    """
+    css = controls_css(mode)
+    uses = re.findall(r"([a-z-]+)\s*:\s*[^;{}]*var\(--mark-soft\)", css)
+    assert uses, "--mark-soft is unused; drop the token or use it"
+    offenders = [prop for prop in uses if not prop.startswith("border")]
+    assert not offenders, (
+        f"--mark-soft used on {offenders} — it is a keyline token below the text "
+        "contrast floor. Carry type with --mark."
+    )
+
+
+@pytest.mark.parametrize("mode", ["paper", "dark"])
+def test_mark_never_fills_a_control(mode: str) -> None:
+    """The editorial mark is furniture ink, never a fill.
+
+    ``--accent`` owns interactive fills. If ``--mark`` starts backgrounding
+    things it becomes a second accent and the "one interactive color" rule in
+    §2 quietly dies.
+    """
+    css = controls_css(mode)
+    fills = re.findall(r"(background(?:-color)?)\s*:\s*[^;{}]*var\(--mark\b", css)
+    assert not fills, f"--mark used as a fill ({fills}); it is ink, not a background"
+
+
+def test_footnote_marker_scales_with_its_prose() -> None:
+    """``.k-fn`` sizes in em on purpose: a reference mark rides the text it
+    annotates, and prose runs at a different size per surface. A px step here
+    would make the marker the wrong size in exactly the place it is used."""
+    css = controls_css("paper")
+    rule = re.search(r"\.k-fn\s*\{([^}]*)\}", css)
+    assert rule is not None
+    assert re.search(r"font-size:\s*[0-9.]+em", rule.group(1))
+
+
+def test_note_rail_does_not_eat_the_reading_measure() -> None:
+    """The document width is the measure PLUS the note rail, never a flat cap.
+
+    Regression pin for a bug caught by browser measurement, not by review:
+    ``.k-doc`` was a flat ``max-width: 76ch``, so in any section carrying a
+    margin note the 13.5rem rail was subtracted from the inside and prose
+    collapsed to ~40ch — unreadable, in exactly the sections that matter most.
+
+    Deriving the width from ``--k-measure`` keeps prose at its measure whether
+    or not a section is annotated, and lets full-bleed sections use the whole
+    width. Verified in-browser at 1280px: prose 66ch, band full-bleed at 703px.
+    """
+    css = controls_css("paper")
+    doc_rule = re.search(r"\.k-doc\s*\{([^}]*)\}", css)
+    assert doc_rule is not None
+    body = doc_rule.group(1)
+    assert "--k-measure" in body, ".k-doc must define the reading measure"
+    max_width = re.search(r"max-width:\s*([^;]+)", body)
+    assert max_width is not None
+    expr = max_width.group(1)
+    assert expr.strip().startswith("calc("), (
+        f"max-width is {expr!r} — a flat cap lets the note rail eat the measure"
+    )
+    assert "var(--k-measure)" in expr and "var(--k-note-w" in expr
+
+    # Prose is capped independently, so a full-bleed section does not run long.
+    prose_cap = re.search(r"\.k-doc\s+\.prose\s*\{([^}]*)\}", css)
+    assert prose_cap is not None, ".k-doc .prose must cap at the measure"
+    assert "var(--k-measure)" in prose_cap.group(1)

@@ -86,32 +86,49 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from models.validation import Severity
+from ui.tokens import PALETTE_DARK, PALETTE_LIGHT
 
 if TYPE_CHECKING:
     from datetime import datetime
 
-# Chevron for single-selects + the disclosure (summary) marker, URL-encoded (no
-# literal braces/quotes/#: the string survives both raw f-string assembly and
-# brace-doubled .format templates). Stroke matches each theme's --muted.
-_CHEVRON_DARK = (
+
+def _glyph_ink(hex_color: str) -> str:
+    """A palette hex as the URL-encoded ink of an inline SVG data URI."""
+    return "%23" + hex_color.lstrip("#")
+
+
+# The two theme-dependent glyphs, DERIVED from the palette rather than copied
+# from it (2026-07-25). These strings previously froze `%23888b94` and
+# `%230c0d10` while their comments claimed they tracked --muted and
+# --accent-contrast; the palette warming falsified both silently, and nothing
+# failed — a chevron simply kept rendering in the old cool gray on a warm
+# surface. Deriving them removes that drift class entirely: a palette edit now
+# repaints the glyphs, and `test_glyph_ink_tracks_the_palette` pins the link.
+#
+# Still URL-encoded with no literal braces/quotes/#, so the strings survive both
+# raw f-string assembly and brace-doubled .format templates.
+_CHEVRON_TEMPLATE = (
     "url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 "
-    "viewBox=%220 0 16 16%22%3E%3Cpath d=%22M4 6l4 4 4-4%22 stroke=%22%23888b94%22 "
+    "viewBox=%220 0 16 16%22%3E%3Cpath d=%22M4 6l4 4 4-4%22 stroke=%22{ink}%22 "
     "stroke-width=%221.6%22 fill=%22none%22 stroke-linecap=%22round%22 "
     "stroke-linejoin=%22round%22/%3E%3C/svg%3E')"
 )
-_CHEVRON_LIGHT = _CHEVRON_DARK.replace("%23888b94", "%236c6f78")
+# Chevron for single-selects + the disclosure (summary) marker. Stroke is each
+# theme's --muted.
+_CHEVRON_DARK = _CHEVRON_TEMPLATE.format(ink=_glyph_ink(PALETTE_DARK["muted"]))
+_CHEVRON_LIGHT = _CHEVRON_TEMPLATE.format(ink=_glyph_ink(PALETTE_LIGHT["muted"]))
 
 # Checkmark for the kit-drawn checkbox (:checked). Sits ON the accent fill, so
 # its ink is each theme's --accent-contrast (near-white on the light theme's
-# dark-blue accent, near-black on the dark theme's light-blue accent) — a
-# theme-dependent glyph like the chevron, for the same URL-encoding reasons.
-_CHECK_LIGHT = (
+# dark-blue accent, near-black on the dark theme's light-blue accent).
+_CHECK_TEMPLATE = (
     "url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 "
-    "viewBox=%220 0 16 16%22%3E%3Cpath d=%22M3.5 8.5l3 3 6-7%22 stroke=%22%23ffffff%22 "
+    "viewBox=%220 0 16 16%22%3E%3Cpath d=%22M3.5 8.5l3 3 6-7%22 stroke=%22{ink}%22 "
     "stroke-width=%222%22 fill=%22none%22 stroke-linecap=%22round%22 "
     "stroke-linejoin=%22round%22/%3E%3C/svg%3E')"
 )
-_CHECK_DARK = _CHECK_LIGHT.replace("%23ffffff", "%230c0d10")
+_CHECK_LIGHT = _CHECK_TEMPLATE.format(ink=_glyph_ink(PALETTE_LIGHT["accent-contrast"]))
+_CHECK_DARK = _CHECK_TEMPLATE.format(ink=_glyph_ink(PALETTE_DARK["accent-contrast"]))
 
 # The element baseline + the component classes. Theme-independent: the two
 # theme-dependent declarations (color-scheme, chevron ink) are prepended by
@@ -252,9 +269,12 @@ a.k-tick-sym:hover { color: var(--accent); }
 .k-menu li { padding: 6px 12px; cursor: pointer; font-size: var(--fs-body); }
 .k-menu li.sel, .k-menu li:hover { background: var(--paper); }
 
-/* ---- field/section caption ---- */
+/* ---- field/section caption. .k-label-mark is the DOCUMENT tone (§6.3): the
+   same caption in the editorial ochre, for a research document's section
+   labels. A tone modifier, not a new class — same shape, same weight. ---- */
 .k-label { font-size: var(--fs-caption); font-weight: 600; color: var(--muted);
   text-transform: uppercase; letter-spacing: 0.06em; }
+.k-label-mark { color: var(--mark); letter-spacing: 0.16em; }
 
 /* ---- mobile: 16px floor prevents iOS from zooming on input focus ---- */
 @media (max-width: 768px) {
@@ -395,6 +415,78 @@ details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
 /* prose table headers are sentence-case (uppercase+tracking is reserved for the
    Label / Chip / Pill kit primitives — design-sync 2026-07-19). */
 .prose th { font-size: var(--fs-caption); font-weight: 600; color: var(--muted); }
+
+/* ---- the research document (design_language §6.3). A reading surface, not a
+   panel grid: hairline rules and whitespace instead of cards, because a
+   document that grows boxes starts reading as a dashboard — which is where a
+   research surface loses its seriousness. Warmth comes from --mark on the
+   furniture (labels, masthead rule, footnote marks, note keylines), never from
+   a fill.
+
+   .k-doc-row is the load-bearing idea. A margin note attaches to the ONE
+   section it annotates rather than living in a standing gutter column: a
+   reserved rail is empty everywhere a note isn't, which on a long page is a
+   dead strip down the whole surface. Sections with nothing to annotate are
+   full-bleed and use the entire measure. ---- */
+/* The measure. --k-measure is the READING column; the document is that column
+   PLUS the note rail, so prose keeps a real measure whether or not a section
+   carries a note, and full-bleed sections (tables, bands) still get the whole
+   width. Setting .k-doc to a flat 76ch was wrong and browser measurement caught
+   it: the 13.5rem note rail ate the measure from the inside, leaving ~40ch of
+   prose in every annotated section. Prose is capped independently so a
+   full-bleed section does not run to a 100ch line. */
+.k-doc { --k-measure: 66ch;
+  max-width: calc(var(--k-measure) + var(--k-note-w, 13.5rem) + var(--sp-5)); }
+.k-doc .prose { max-width: var(--k-measure); }
+.k-doc-row { display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--k-note-w, 13.5rem);
+  gap: 0 var(--sp-5); align-items: start; }
+
+/* Masthead: identity + stamps over one rule, with the mark as a short accent
+   under its left edge (the document's one branded pixel). */
+.k-doc-mast { position: relative; padding-bottom: var(--sp-3);
+  margin-bottom: var(--sp-5); border-bottom: 1px solid var(--border); }
+/* Drawn as a border, not a background fill: --mark is ink and furniture, and
+   test_mark_never_fills_a_control keeps that absolute rather than "absolute
+   except this one 1px case". */
+.k-doc-mast::after { content: ""; position: absolute; left: 0; bottom: -1px;
+  width: 84px; border-top: 1px solid var(--mark); }
+
+/* The margin note. --mark-soft is a KEYLINE token (below the text floor by
+   design) so it is legal here on the 1px rule and nowhere on the type. */
+.k-note { font-size: var(--fs-caption); line-height: 1.55; color: var(--muted);
+  padding-left: var(--sp-3); border-left: 1px solid var(--mark-soft); }
+.k-note-title { display: block; color: var(--mark); font-size: var(--fs-caption);
+  font-weight: 600; text-transform: uppercase; letter-spacing: 0.14em;
+  margin-bottom: var(--sp-1); }
+
+/* Footnote marker. Sized in em, not px: a reference mark must scale with the
+   prose it sits in rather than pin to a UI step. */
+.k-fn { font-size: 0.72em; font-weight: 600; color: var(--mark);
+  vertical-align: super; margin-left: 1px; }
+
+/* The stat band: a full-bleed strip of read-only figures between two rules.
+   Compose .k-label for each cell's caption — no band-local caption class. */
+.k-band { display: grid;
+  grid-template-columns: repeat(var(--k-band-cols, 4), minmax(0, 1fr));
+  gap: 0 var(--sp-5); padding: var(--sp-3) 0;
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.k-band-v { display: block; font-family: var(--mono); font-size: var(--fs-title);
+  font-variant-numeric: tabular-nums; margin-top: var(--sp-1); }
+.k-band-x { display: block; font-size: var(--fs-caption); color: var(--muted);
+  margin-top: var(--sp-1); line-height: 1.45; }
+
+/* A recorded exchange (management Q&A, an interview). The answer is indented
+   under its question by a hairline, so a dodge reads as a dodge. */
+.k-qa { border-top: 1px solid var(--hairline); padding: var(--sp-2) 0 var(--sp-1); }
+.k-qa:first-child { border-top: 0; padding-top: 0; }
+.k-qa-q { font-family: var(--serif); font-size: var(--fs-body); line-height: 1.55;
+  color: var(--fg); }
+.k-qa-a { font-family: var(--serif); font-size: var(--fs-body); line-height: 1.6;
+  color: var(--muted); margin-top: var(--sp-1); padding-left: var(--sp-4);
+  border-left: 1px solid var(--hairline); }
+.k-qa-who { font-family: var(--sans); font-size: var(--fs-caption); font-weight: 600;
+  color: var(--fg-soft); }
 
 /* ---- provenance / data-quality rows (design_language §10; Law: provenance is
    actionable). prov_row()/prov_drawer()/prov_case() are the ONE render boundary
