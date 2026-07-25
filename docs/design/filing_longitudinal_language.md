@@ -51,14 +51,49 @@ Owner ask: track changes in reporting language and metrics across filings (10-K/
 5. **`fmp_10q_json` unindexed** in `documents` (13 files) and 10-Q backfill never run beyond META/UBER.
 6. **No cross-period section matcher** (needed for both partitions; FMP stems + content similarity, EDGAR item ids + note-title normalization).
 
-## 3. Proposed build (phased, data first)
+## 3. Build
 
-### Phase 0 — durable section-partition store (no LLM, pure data)
-- New table `filing_sections`: `(id, ticker, doc_id FK→documents, form, accession_number, fiscal_year, fiscal_period, source ∈ {edgar_text, fmp_rfile}, section_key_raw, section_stem, canonical_section_id NULL, title, text, text_sha256, char_len, ordinal, created_at)`. Idempotent on `(doc_id, source, section_key_raw)`.
-- Extend `filing_text_fetcher`: `fetch_by_accession(ticker, accession)` + 10-Q item split (Part I Items 1–4 / Part II Items 1–6) + 20-F item split (Items 3–18, esp. 3.D and 5) + 6-K exhibit logical-section split (LLM-assisted headings, exhibits already on disk).
-- Ingest both partitions for the portfolio roster first: EDGAR narrative (10-K/10-Q/20-F/6-K) ~5y back via `documents` accessions; FMP R-file stems from the 673 cached files (zero network).
-- Backfills: `fetch_fmp_10q_json` for the 10-K-regime portfolio names; register `fmp_10q_json` docs (fix `fmp_doc_index` gap).
-- Respect quota windows (bursts ≥6–7h apart, clear of 03:00–05:00 PT) and SEC rate etiquette.
+### Phase 0 — durable section-partition store (SHIPPED, migration 0198)
+
+Two tables (`filing_sections`, `filing_section_coverage`), a `src/filings/` package, and two
+Layer-3 CLIs. No LLM anywhere in Phase 0 — it is pure extraction, storage, and query.
+
+| Piece | Where |
+|---|---|
+| Schema | `alembic/versions/0198_filing_sections.py` — no DB-level FKs (FK-poisoning invariant), UNIQUE `(source, source_ref, section_key_raw, ordinal)` |
+| Typed contracts | `src/filings/models.py` — `SectionSource`, `FilingForm`, `FiscalPeriod`, `CoverageStatus`, the three error classes, `normalize_stem` |
+| Per-form taxonomies | `src/filings/taxonomy.py` — 10-K Items 1–16, part-scoped 10-Q, 20-F Items 1–19 + 3.A–D / 5.A–E sub-items, each carrying a **cross-form `concept`** so a 10-K Item 1A and a 20-F Item 3.D share one `risk_factors` timeline |
+| Narrative splitters | `src/filings/edgar_sections.py` — TOC-resistant chain scoring, part-aware 10-Q, 20-F sub-split + preamble, free-form 6-K |
+| R-file parser | `src/filings/fmp_sections.py` — declared-`Document Type` wins over filename; drift raises |
+| EDGAR fetch | `src/filings/edgar_fetch.py` — by-accession, classified failures (hard-stop / transient / contract) |
+| Orchestration | `src/filings/ingest.py` — three independent lanes, reconciliation, coverage |
+| Read layer | `src/filings/store.py` — `period_availability`, `section_timeline`, whole-document partition replacement |
+| CLIs | `execution/ingest_filing_sections.py`, `execution/filing_sections_report.py` |
+| Tests | `tests/test_filing_sections.py` (56, degradation-weighted) |
+
+**Verified against real data** (prod-DB copy, 2026-07-24): META+NU FMP → 1,531 sections / 19 payloads;
+NU+NVO 6-K exhibits → 1,301 sections / 12 exhibits; META 10-K ×2 → 36 items incl. Item 1A (196KB) and
+Item 7 (61KB); WIX 20-F ×3 → Item 3.D `risk_factors` (233KB) + Item 5.A–D. NU's `form_10k`-named
+payloads were correctly flagged `regime_mismatch_resolved_to_declared` and stored as 20-F.
+
+**Robustness contract** (what each failure does):
+
+| Situation | Behavior |
+|---|---|
+| Only one source has the period | Both lanes record their own verdict; `period_availability` labels it `is_single_source` and names why the other is absent |
+| Declared form ≠ filename/DB regime | Filing's own declaration wins; recorded as `regime_mismatch_resolved_to_declared`; sections kept |
+| Payload year vs filename year off by >1, or symbol mismatch | **Sections withheld**, `PERIOD_MISMATCH` — a mis-yeared section would corrupt every alignment |
+| Two sources disagree on `period_end` for one bucket | `reconcile_sources` flags BOTH coverage rows; never auto-resolved (no principled winner) |
+| Payload shape changed | `SCHEMA_DRIFT` + dump under `.tmp/filing_sections/schema_drift/`; never guess-fixed |
+| Network / 429 / 5xx | `FETCH_FAILED` for that document; run continues; next run resumes (idempotent) |
+| 401/403, missing migration, dangling `doc_id` | `HardStopError` → CLI exit 1 |
+| 40-F (MJDS) | `UNSUPPORTED_FORM` — disclosure is incorporated by reference, so there is nothing to partition |
+| Coverage claims `ok` but no rows exist | Read layer trusts rows over claims and reports the source absent |
+| Table missing | Readers raise unless `missing_ok=True` (the lens case) |
+
+Remaining Phase-0 backfills: `fetch_fmp_10q_json` for the 10-K-regime portfolio names, and registering
+`fmp_10q_json` rows in `documents` (the `fmp_doc_index` gap). Respect quota windows (bursts ≥6–7h
+apart, clear of 03:00–05:00 PT) and SEC rate etiquette.
 
 ### Phase 1 — cross-period section alignment (deterministic core, LLM fallback)
 - Canonical taxonomy table per form regime; deterministic matcher (item id / normalized stem / title similarity / content shingle overlap); LLM only for renames-merges-splits, auto-resolved (DERIVE-DON'T-ASK), decisions logged with receipts.
