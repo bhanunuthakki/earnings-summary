@@ -2,10 +2,13 @@
 
 **Status: BUILT 2026-07-02 — owner reviewed §9 same day; decisions LOCKED in §10
 (which overrides any earlier recommendation it conflicts with); all six build
-phases merged same day (#749 #750 #751 #752 #753 #754). Residual open items:
-3-family RISKY judging (§10 Q5a, deferred past PR6), the Q6 purpose=None
-deprecation PR (after the SayDo trailing window clears), and wiring nominator
-`prompt_experiment` rows into `run_prompt_ab` automatically.**
+phases merged same day (#749 #750 #751 #752 #753 #754). EXTENDED 2026-07-24/25
+(owner-authorized): §4.7 — the §4 prompt loop was a dead circuit (zero
+experiments ever) and is now a randomized, self-steering cycle (#1005 #1010
+#1014), hardened against the July-2026 transport outage (#1008). Residual open
+items: 3-family RISKY judging (§10 Q5a, deferred past PR6), the Q6 purpose=None
+deprecation PR (after the SayDo trailing window clears), wiring nominator
+`prompt_experiment` rows into the §4.7 cycle, and §4.7.6's list.**
 
 Extends — does NOT replace — the existing spine:
 `directives/model_eval_loop.md` (the downgrade loop), `directives/cheapest_model_routing.md`
@@ -670,6 +673,174 @@ CREATE TABLE prompt_ab_verdicts (         -- deliberately parallel to model_eval
   from a different model (detected via capture record's `model`, side re-run fresh);
   experiment/model-switch race (frozen_model pins the comparison; if `_model_for` moved
   mid-experiment the promotion PR must re-run the eval gate under the new model).
+
+---
+
+## 4.7 The randomized cycle (built 2026-07-24)
+
+§4.1–§4.6 specified the mechanism but left the loop hand-driven, and it did not
+run: `prompt_experiments` held **zero rows** from the PR5 merge (2026-07-02) to
+2026-07-24. Three gaps, each closed below.
+
+### 4.7.1 Scaffold derivation replaces the template registry (amends §4.1/§4.2)
+
+§4.2 sourced the prompt template from "a small per-purpose registry entry"
+pointing at a checked-in constant. Most purposes here build their prompt inline,
+so there is no constant to point at, and any registry drifts from the code the
+moment a prompt is edited.
+
+`src/llm/prompt_scaffold.py` derives the scaffold from the **captured renders**:
+lines occurring exactly once in every render, glued into contiguous blocks, each
+re-verified as a once-only substring. Derived from what production actually
+sent, so it cannot drift.
+
+The derivation is also the **anchor space**. §4.1's exactly-once rule is the
+admission test for a block, so a proposer restricted to quoting blocks proposes
+legally by construction — "propose, then reject on anchor failure" becomes
+"propose within bounds". An edit anchoring outside the scaffold is refused even
+when it would splice cleanly today, because it may sit in the data region and
+mutate real data on a later render.
+
+Measured on the live corpus (2026-07-24): eligible for **9 of 9** captured
+purposes, coverage 0.03–0.89 of the render, derivation 0.01s total.
+A purpose with fewer than two renders, or no shared structure, is **ineligible**
+and skipped loudly — never silently degraded to a weaker anchor rule.
+
+### 4.7.2 Randomized exploration (extends §4.2)
+
+§4.2's single Opus proposal has no exploration: one model's priors, re-proposed
+every cycle, with no memory of what has already lost.
+
+* `src/llm/prompt_strategies.py` defines eleven named **edit strategies**
+  (output contract, specificity forcing, negative example, reasoning chain,
+  length budget, format precision, instruction priority, consumer framing,
+  self-check, scope guard, ordering swap). The drawn strategy enters the
+  proposal prompt as a required direction.
+* Strategies are drawn by **Thompson sampling** over Beta posteriors on "does
+  this kind of edit get promoted?", pooled across purposes (per-purpose
+  posteriors would need dozens of experiments each to say anything).
+* Plus an **ε = 0.15 exploration floor**. Thompson alone drives a losing
+  strategy to zero draws at top-k-of-eleven selection, and a strategy that is
+  never drawn can never update. These posteriors go stale *by design*: every
+  promotion rewrites the scaffold that later experiments edit, so "output-
+  contract edits don't help" can be true in June and false in August.
+* Only **decided** outcomes update a posterior. PROMOTE is a win, KEEP_BASELINE
+  a loss; HOLD / INSUFFICIENT_DATA / VARIANT_ERRORED / TRANSPORT_DEGRADED update
+  nothing — the existing STREAK_NEUTRAL convention.
+* Every draw is **seeded** and the seed is stored on the experiment
+  (`rng_seed`), so any cycle replays exactly.
+
+`src/llm/prompt_signal.py` builds the §4.2 improvement signal that was specified
+but never implemented — the shipped code passed the literal string
+`"(operator-initiated; see recent verdict rationales)"`. It reads eval scores
+and failures, judge rationales from cases the incumbent lost, and the
+operational error rate, and yields a **deficit** in [0,1].
+
+Two honesty rules, both load-bearing:
+
+* A purpose with **no eval coverage** gets an explicit neutral prior (0.35) and
+  `has_eval_coverage=False`, never a zero. Scoring it 0.0 would read as "this
+  prompt is perfect" and would starve exactly the purposes nobody has measured.
+* Rows whose **judge crashed** are excluded from the quality math and counted
+  separately. Measured impact 2026-07-24: including them put `bear_case` at avg
+  0.706 / 26% fail and `transcript_summary` at 0.642. Excluding them: **0.959**
+  and **0.963**. The unfiltered signal would have aimed every cycle at whichever
+  purpose the CLI happened to fail on most.
+
+Purpose selection is weighted by `ab_leverage = cost_30d × (1 + 2·deficit)` —
+explicitly **not** `PurposeWorkload.headroom_usd_30d`, which measures the saving
+from a cheaper *model* and is 0 for web-scoped purposes that §4.6 declares
+A/B-eligible.
+
+### 4.7.3 Multi-arm experiments and combinations (extends §4.3–§4.5)
+
+§4.5's schema modelled exactly two arms. Migration **0202** (`0202_prompt_ab_arms` — renumbered from 0200 in #1010 after a two-head collision with #1002's 0201) adds `prompt_arms`
+(baseline stays implicit), `prompt_ab_verdicts.arm_label` (nullable — NULL is
+the legacy-two-arm marker), and `cycle_id` / `rng_seed` / `signal_json` on
+`prompt_experiments`.
+
+* **Parallel arms** share one case sample and one baseline run per case, which
+  is what makes k arms affordable and removes the sample-to-sample variance that
+  makes separate experiments incomparable.
+* A **composed arm** carries the union of two arms' edits. Two edits that each
+  win alone can lose together; with two-arm experiments that is invisible — both
+  promote, both apply, and the regression surfaces later as an unexplained
+  quality drop. Composition is refused pre-spend when the edit sets overlap or
+  when a dry-run splice fails (one edit's *replacement* can destroy the other's
+  anchor even when the `find` strings do not overlap).
+* New verdict **`INTERACTION_NEGATIVE`**: a composed arm whose win rate falls
+  below its best component. Distinct from KEEP_BASELINE, which would wrongly
+  imply the components were bad. It disqualifies the combination from promotion
+  while leaving each component's own record intact.
+* Arms promote **independently** (`--arm`), one active override per purpose.
+  Auto-demote now requires **every** arm to conclude KEEP_BASELINE — one losing
+  arm says nothing about an override won by a different one.
+
+### 4.7.4 `TRANSPORT_DEGRADED` — new, and not optional (amends §4.3 step 6)
+
+§4.3's `VARIANT_ERRORED` blames the variant when ≥50% of its cases error. That
+rule assumes a healthy transport. Measured 2026-07-24 from `llm_calls`:
+
+| month | calls | errored | rate |
+|---|---|---|---|
+| 2026-05 | 223 | 8 | 4% |
+| 2026-06 | 4,473 | 466 | 10% |
+| 2026-07 | 10,340 | 7,488 | **72%** |
+
+Under that regime the old rule condemns healthy variants as authoring failures
+and teaches the bandit to avoid whichever strategy was unlucky. `decide_ab` now
+also takes `n_baseline_errors`; when the **unedited** baseline is failing at
+≥25%, the run is `TRANSPORT_DEGRADED` — neutral for the bandit and for the
+pooled promotion bar, because nothing was measured about the prompt.
+
+### 4.7.5 Cadence and budget (settles §4.6)
+
+Prompt cycles run as **step 4 of `run_weekly_model_eval.py`**, riding the
+existing weekly registration rather than adding a schedule — the scheduling
+directive's rule for any LLM leg, and it keeps measurement bursts inside one
+already-protected window.
+
+Owner ceiling (2026-07-24): **2–3 cycles/week within $40/month**. The real
+governor is the month-to-date measurement spend checked before every cycle, not
+the cycle count — a week whose proposals fail cheaply should not consume the
+budget of a week where every arm ran.
+
+`_SELF_PURPOSES` bars the loop from A/B-ing the optimizer's own prompts (I5).
+
+The purpose draw is restricted to purposes the capture corpus can actually
+scaffold (≥2 distinct captured renders) — found on the first prod dry-run
+(2026-07-25), where the unrestricted draw burned its cycle on `key_metrics`
+(high leverage, zero captures). Excluded purposes are logged as a harvest hint
+(#1014); an uncaptured purpose's fix is more harvest, not a wasted draw.
+
+Companion incident work (#1008, outside this directive but load-bearing for
+it): the transport itself now classifies CLI failures (`llm/transport.py`,
+`[class]`-prefixed ledger errors), circuit-breaks on quota exhaustion
+(`LLMQuotaExhausted` — eval/judge callers ABORT, production defers per-item),
+and the model loop gained `JUDGE_DEGRADED` (streak-neutral) because errored
+judge_pairs previously landed as ties = parity — an outage could have built a
+SWITCH_DOWN streak.
+
+Live verification (2026-07-25, prod dry-run): drew `valuation_basis` on
+evidence (10 judge rationales, deficit 0.372), derived a 10-block scaffold at
+89% coverage, produced two legally-anchored Opus proposals under drawn
+strategies plus a composed combination arm. Meta spend at that point:
+$9.39 / $40 MTD.
+
+### 4.7.6 Still open
+
+* The nominator's `kind='prompt_experiment'` rows are still not consumed by the
+  cycle (it draws by leverage×deficit instead). Eight nominations exist to date,
+  all `model_downgrade`; the nominator has never emitted a prompt experiment.
+* No Evals-panel surface for arms or the strategy posteriors yet — the loop is
+  auditable from the DB alone (`prompt_arms` ⋈ `prompt_ab_verdicts`).
+* Composition is limited to pairs of arms **within one cycle**. Composing
+  against previously-promoted overrides across cycles is the natural next step
+  and needs a rule for stacking two active overrides.
+* Harvest coverage: 50 of ~59 costed production purposes had no scaffoldable
+  captures on 2026-07-25 (incl. `news_structuring`, `saydo_commitment_extract`
+  by cost) — widening `_HARVEST_STEPS` in `run_weekly_model_eval.py` is the
+  highest-leverage next move for both this loop and the model loop.
 
 ---
 
