@@ -50,6 +50,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -187,6 +188,37 @@ def _purpose_costs(db_path: Path, *, window_days: int = 30) -> dict[str, float]:
     return {str(r[0]): float(r[1] or 0.0) for r in rows if r[0]}
 
 
+def _capturable_purposes(files: list[Path], *, min_renders: int = 2) -> set[str]:
+    """Purposes with >= min_renders DISTINCT captured prompts — the scaffold
+    derivation's hard prerequisite. One cheap pass over the capture files
+    (counting distinct prompt hashes per purpose), not a load_frame per
+    candidate."""
+    import hashlib
+
+    seen: dict[str, set[str]] = {}
+    for path in files:
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if not line.strip():
+                continue
+            try:
+                rec: object = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            record = cast("dict[str, object]", rec)
+            purpose = record.get("purpose")
+            prompt = record.get("prompt")
+            if isinstance(purpose, str) and isinstance(prompt, str) and prompt.strip():
+                digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16]
+                seen.setdefault(purpose, set()).add(digest)
+    return {p for p, digests in seen.items() if len(digests) >= min_renders}
+
+
 def plan_cycle(
     db_path: Path,
     capture_dir: Path,
@@ -213,14 +245,31 @@ def plan_cycle(
     else:
         costs = _purpose_costs(db_path)
         live = _live_experiment_purposes(db_path)
+        # A scaffold needs >=2 captured renders, so the draw pool is restricted
+        # to purposes the corpus can actually serve. Found on the first prod
+        # dry-run (2026-07-25): the unrestricted draw picked key_metrics (high
+        # leverage, ZERO captures) and burned the whole cycle on a skip. An
+        # uncaptured purpose's fix is more harvest, not a wasted draw.
+        capturable = _capturable_purposes(files)
         weights: dict[str, float] = {}
         signals: dict[str, ImprovementSignal] = {}
+        skipped_uncaptured: list[str] = []
         for candidate, cost in costs.items():
             if candidate in live or candidate in _SELF_PURPOSES:
+                continue
+            if candidate not in capturable:
+                skipped_uncaptured.append(candidate)
                 continue
             sig = build_improvement_signal(db_path, candidate)
             signals[candidate] = sig
             weights[candidate] = ab_leverage(cost, sig.deficit)
+        if skipped_uncaptured:
+            log.info(
+                "draw pool excludes %d uncaptured purpose(s) (top by cost: %s) — "
+                "harvest them to make them A/B-eligible",
+                len(skipped_uncaptured),
+                ", ".join(sorted(skipped_uncaptured, key=lambda p: -costs[p])[:5]),
+            )
         drawn = draw_purpose(weights, rng)
         if drawn is None:
             log.error(
