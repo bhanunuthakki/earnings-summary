@@ -45,9 +45,6 @@ _DEFAULT_USER = "bhanu"
 # constant), never something inferred at write time.
 METRIC_VERSION = "v1"
 
-# How the analytics window backing a snapshot was established — derived from
-# the tracker's own signal (PerformanceSeries.backfill_start_unreliable), not
-# guessed. See execution/refresh_portfolio_risk_snapshot.py.
 # How the analytics window that produced a capture was established.
 #   observed         — the series starts at/after the provider's first real
 #                      observation; every point is measured.

@@ -90,7 +90,9 @@ def _insert_case(
             case.expected_json,
             case.actual_json,
             1 if case.passed else 0,
-            float(case.score),
+            # NULL, not 0.0, for judge-infra cases: "not measured" must stay
+            # distinguishable from a real measured zero in the DB.
+            float(case.score) if case.score is not None else None,
             case.failure_stage,
             case.judge_verdict,
             case.judge_rationale,

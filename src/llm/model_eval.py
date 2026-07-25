@@ -170,6 +170,20 @@ CANDIDATE_ERROR_RATE_THRESHOLD = 0.5
 # not a different candidate.
 INSUFFICIENT_FRAME = "INSUFFICIENT_FRAME"
 
+# The JUDGES failed operationally on most judgments — nothing was measured.
+# The dangerous failure mode this closes (found 2026-07-24, July quota
+# incident): ``judge_pair`` resolves a failed judge call to winner="tie" with
+# ``.error`` set, and a tie counts toward parity_rate. During a Claude-CLI
+# outage while testing a candidate on a DIFFERENT transport (OpenRouter), every
+# judgment "tied" → parity 100% + agreement 1.0 → a SWITCH_DOWN streak built
+# entirely from the outage. Errored judgments are now excluded from the tallies
+# (sweep side) and a majority-errored run gets this label — streak-neutral,
+# like CANDIDATE_ERRORED.
+JUDGE_DEGRADED = "JUDGE_DEGRADED"
+
+# Above this fraction of errored judgments the surviving tallies are noise.
+JUDGE_ERROR_RATE_THRESHOLD = 0.5
+
 
 @dataclass(frozen=True, slots=True)
 class CandidateVerdict:
@@ -199,6 +213,10 @@ class CandidateVerdict:
     # CANDIDATE_ERRORED — infra breakage, excluded from switch/keep streaks.
     n_candidate_errors: int = 0
     candidate_error_rate: float = 0.0
+    # Judge-failure accounting (mirrors the candidate's): errored judgments are
+    # excluded from the tallies; a majority-errored run is JUDGE_DEGRADED.
+    n_judge_errors: int = 0
+    judge_error_rate: float = 0.0
 
 
 def decide_switch(
@@ -214,6 +232,8 @@ def decide_switch(
     incumbent_output_chars_mean: float = 0.0,
     n_cases_attempted: int = 0,
     n_candidate_errors: int = 0,
+    n_judgments_attempted: int = 0,
+    n_judge_errors: int = 0,
 ) -> CandidateVerdict:
     """Turn the per-judge tallies into a switch recommendation. Conservative:
     a downgrade ships only when EVERY judge says the cheaper model holds parity
@@ -231,7 +251,13 @@ def decide_switch(
     (where each errored case was booked as an incumbent win) are noise, and
     recording KEEP_INCUMBENT would let a broken backend masquerade as a
     measured quality loss. Callers that don't track errors (older paths) pass
-    the defaults and get the pre-existing behavior."""
+    the defaults and get the pre-existing behavior.
+
+    ``n_judgments_attempted`` / ``n_judge_errors`` do the same for the JUDGES:
+    the sweep excludes errored judgments from ``per_judge`` (they used to land
+    as ties, i.e. parity), and when a majority of judgments errored the verdict
+    is JUDGE_DEGRADED — streak-neutral, because a run whose judges were down
+    measured the outage, not the candidate."""
     # n is the case count (same across judges); take the max judge's total.
     totals = [cw + iw + ti for (cw, iw, ti) in per_judge.values()]
     n = max(totals) if totals else 0
@@ -240,6 +266,7 @@ def decide_switch(
     ties = sum(ti for (_cw, _iw, ti) in per_judge.values())
 
     error_rate = n_candidate_errors / n_cases_attempted if n_cases_attempted > 0 else 0.0
+    judge_error_rate = n_judge_errors / n_judgments_attempted if n_judgments_attempted > 0 else 0.0
 
     if n_cases_attempted > 0 and error_rate >= CANDIDATE_ERROR_RATE_THRESHOLD:
         rec, reason = (
@@ -247,6 +274,13 @@ def decide_switch(
             f"{candidate} failed operationally on {n_candidate_errors}/{n_cases_attempted} "
             f"case(s) ({error_rate:.0%}) — infrastructure failure, not a quality verdict; "
             "fix the backend before trusting any tally",
+        )
+    elif n_judgments_attempted > 0 and judge_error_rate >= JUDGE_ERROR_RATE_THRESHOLD:
+        rec, reason = (
+            JUDGE_DEGRADED,
+            f"judges errored on {n_judge_errors}/{n_judgments_attempted} judgment(s) "
+            f"({judge_error_rate:.0%}) — the judging transport was down; nothing was "
+            "measured about the candidate",
         )
     elif n < min_n:
         rec, reason = INSUFFICIENT_DATA, f"only {n} case(s); need >={min_n}"
@@ -298,4 +332,6 @@ def decide_switch(
         token_efficiency_ratio=token_efficiency_ratio,
         n_candidate_errors=n_candidate_errors,
         candidate_error_rate=error_rate,
+        n_judge_errors=n_judge_errors,
+        judge_error_rate=judge_error_rate,
     )

@@ -47,6 +47,7 @@ from llm.model_eval import (  # noqa: E402
     CANDIDATE_ERRORED,
     INSUFFICIENT_DATA,
     INSUFFICIENT_FRAME,
+    JUDGE_DEGRADED,
     KEEP_INCUMBENT,
     SWITCH_DOWN,
 )
@@ -63,8 +64,15 @@ log = logging.getLogger("apply_model_switches")
 # #723): a thin-frame or thin-data week is not switch OR keep evidence, and an
 # infra-broken week is not a quality signal — none of them should reset a streak.
 # (CANDIDATE_ERRORED as the NEWEST verdict still short-circuits the pair with an
-# infra alert before any streak is read.)
-STREAK_NEUTRAL: tuple[str, ...] = (INSUFFICIENT_DATA, INSUFFICIENT_FRAME, CANDIDATE_ERRORED)
+# infra alert before any streak is read.) JUDGE_DEGRADED joined 2026-07-24: a
+# sweep whose JUDGES were down (July quota incident) measured the outage, not
+# the candidate — it must never count toward a switch or keep streak.
+STREAK_NEUTRAL: tuple[str, ...] = (
+    INSUFFICIENT_DATA,
+    INSUFFICIENT_FRAME,
+    CANDIDATE_ERRORED,
+    JUDGE_DEGRADED,
+)
 
 # Pooled-evidence switch gate (§2.4): besides the verdict streak, the pooled
 # parity proportion across the streak's sweeps must clear this 95% Wilson

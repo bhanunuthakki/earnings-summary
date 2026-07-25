@@ -550,8 +550,17 @@ def _route_wondering(
         # (B3) already runs its own answer-or-not gate on every landed
         # capture — this route just gets out of its way (see this module's
         # docstring + research.triage's module docstring for the interplay).
+        # research_route_why (added post-#971) is a separate field, not a
+        # reshape of research_route — two tests pin research_route as a bare
+        # string (test_research_proposals.py), and the feed read model
+        # (onmymind.feed._wondering_route_and_why) only needs the reason for
+        # the badge tooltip, not a structural change to what's already pinned.
         with contextlib.suppress(Exception):
-            patch_note_context(note_id, {"research_route": "answer_now"}, db_path=db_path)
+            patch_note_context(
+                note_id,
+                {"research_route": "answer_now", "research_route_why": triage.why},
+                db_path=db_path,
+            )
         _audit_tap(
             note_id=note_id, channel=channel, detail="answer_now", llm_ran=llm_ran, db_path=db_path
         )
@@ -563,7 +572,11 @@ def _route_wondering(
         with contextlib.suppress(Exception):
             patch_note_context(
                 note_id,
-                {"ladder": "saved", "research_route": "belief_candidate"},
+                {
+                    "ladder": "saved",
+                    "research_route": "belief_candidate",
+                    "research_route_why": triage.why,
+                },
                 db_path=db_path,
             )
         _audit_tap(

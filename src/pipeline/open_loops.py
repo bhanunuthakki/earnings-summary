@@ -116,6 +116,25 @@ def _digest_ping_debt(db_path: Path | str | None) -> tuple[int, str]:
         conn.close()
 
 
+def _routed_to_brief_debt(db_path: Path | str | None) -> tuple[int, str]:
+    """P2.2 (personal_investment_partner_prd.md §9.1): coach pings the
+    governor routed to the Senior Partner Brief (calibration_finding /
+    capacity_breach / life_event_checkpoint / profile_drift —
+    ``research.governor.BRIEF_ROUTED_CLASSES``) and no brief has drained yet
+    (``status = 'routed_to_brief'``). Without this line these four classes'
+    items would be invisible on Home between the moment the governor routes
+    them and the next weekly brief — the digest-debt line above only ever
+    counted ``status = 'digest'``, which these rows never reach."""
+    conn = open_conn(db_path)
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*), MIN(created_at) FROM coach_pings WHERE status = 'routed_to_brief'"
+        ).fetchone()
+        return int(row[0] or 0), _age_suffix(row[1]) if row[0] else ""
+    finally:
+        conn.close()
+
+
 def _line(href: str, label: str, count: int, suffix: str = "") -> str:
     return (
         f'<a class="cc-ol-line" href="{href}">{label}: '
@@ -188,6 +207,12 @@ def render_open_loops_band(db_path: Path | str | None = None) -> str:
         n, age = _digest_ping_debt(db_path)
         if n:
             lines.append(_line(_LEDGER_HASH, "Coach digest", n, age))
+    except Exception:
+        pass
+    try:
+        n, age = _routed_to_brief_debt(db_path)
+        if n:
+            lines.append(_line(_LEDGER_HASH, "Routed to weekly brief", n, age))
     except Exception:
         pass
 

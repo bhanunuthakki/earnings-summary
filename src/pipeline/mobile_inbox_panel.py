@@ -13,9 +13,12 @@ must never collapse into the same blank card):
      the SAME action core as Telegram (``capture.decision_draft_actions``);
   2. unresolved Investment Decision Card dispositions — evaluation-list names
      with a CURRENT card and no pass/watch/promote decision on record yet;
-  3. the latest Senior Partner Brief — a labeled "not generated yet" state
-     today (P2.2 fills this in; the section exists now so the page's shape
-     doesn't change under that later PR);
+  3. the latest Senior Partner Brief (P2.2, PRD §9.1) — the five ordered
+     sections, read from the SAME ``llm_artifacts`` row (scope='portfolio',
+     purpose='senior_partner_brief') the Today doorway
+     (``pipeline.senior_partner_brief_panel``) and the Telegram builder
+     (``advisor.senior_partner_brief.build_telegram_text``) read — one
+     artifact, three surfaces, no drift;
   4. a compact ``dashboard.inbox`` stream (the same read the Home rail uses,
      ``compact=True``).
 
@@ -182,11 +185,100 @@ def _card_dispositions_section(db_path: Path) -> str:
     return "".join(_card_disposition_card(r) for r in rows)
 
 
-def _senior_partner_brief_section() -> str:
-    # P2.2 fills this in (src/advisor/senior_partner_brief.py, PRD §9.1) — the
-    # section exists now, labeled distinctly from "failed"/"empty", so the
-    # page's shape is stable across that later PR.
-    return '<div class="mi-not-generated">Senior Partner Brief not generated yet.</div>'
+_COACH_PING_REF_RX = "coach_ping:"
+
+
+def _dismiss_ping_ids(item: dict[str, object]) -> list[int]:
+    """The governor-routed moment(s) backing this brief item, if any —
+    parsed from ``source_refs`` entries shaped ``coach_ping:<id>`` (the ref
+    format ``advisor.senior_partner_brief._gather_routed_moments`` cites).
+    Powers the per-item Dismiss button (P2.2 mute-learning fix): dismissing
+    HERE calls the same action core (``dismiss_routed_moment`` ->
+    ``research.governor.record_dismissal``) the Telegram
+    ``spb:dismiss_item:<id>`` callback calls, so 3 consecutive dismissals of
+    a class mute it regardless of which surface the owner used."""
+    refs = item.get("source_refs")
+    if not isinstance(refs, list):
+        return []
+    ids: list[int] = []
+    for ref in cast("list[object]", refs):
+        text = str(ref)
+        if text.startswith(_COACH_PING_REF_RX):
+            suffix = text[len(_COACH_PING_REF_RX) :]
+            if suffix.isdigit():
+                ids.append(int(suffix))
+    return ids
+
+
+def _brief_item_card(label: str, item_raw: object) -> str:
+    if not isinstance(item_raw, dict):
+        return ""
+    item = cast("dict[str, object]", item_raw)
+    title = str(item.get("title") or "")
+    if not title:
+        return ""
+    body = str(item.get("body") or "")
+    disposition = str(item.get("disposition") or "")
+    effort = item.get("effort_estimate")
+    ticker = item.get("ticker")
+    ticker_html = ticker_label(str(ticker)) if ticker else ""
+    effort_chip = f'<span class="k-chip">{escape(str(effort))}</span>' if effort else ""
+    dismiss_buttons = "".join(
+        f'<button type="button" class="k-btn k-btn-quiet k-btn-sm" '
+        f'data-mi-dismiss-ping="{pid}">Dismiss</button>'
+        for pid in _dismiss_ping_ids(item)
+    )
+    actions = f'<div class="mi-actions">{dismiss_buttons}</div>' if dismiss_buttons else ""
+    return (
+        '<div class="mi-card">'
+        f'<div class="mi-card-head"><span class="k-chip k-chip-mono">{escape(label)}</span>'
+        f'{ticker_html}<span class="k-chip">{escape(disposition)}</span>{effort_chip}</div>'
+        f'<div class="mi-body"><strong>{escape(title)}</strong><br>{escape(body[:400])}</div>'
+        f"{actions}</div>"
+    )
+
+
+def _senior_partner_brief_section(db_path: Path) -> str:
+    """P2.2 (src/advisor/senior_partner_brief.py, PRD §9.1): the five ordered
+    sections from the latest ``senior_partner_brief`` artifact. §12.2 states
+    kept distinct: 'not generated yet' (no artifact at all) vs. 'failed to
+    read back' (artifact exists but content_json isn't the expected shape)
+    vs. the populated card set — never collapsed into the same blank card."""
+    try:
+        import llm_artifact_store
+
+        artifact = llm_artifact_store.read_current(
+            ticker=None, purpose="senior_partner_brief", scope="portfolio", db_path=db_path
+        )
+    except Exception:
+        return (
+            '<div class="mi-failed">Senior Partner Brief unavailable — database unreachable.</div>'
+        )
+    if artifact is None:
+        return '<div class="mi-not-generated">Senior Partner Brief not generated yet.</div>'
+    if not isinstance(artifact.content_json, dict):
+        return '<div class="mi-failed">Senior Partner Brief failed to read back.</div>'
+
+    content = cast("dict[str, object]", artifact.content_json)
+    mode = str(content.get("selection_mode") or "llm")
+    mode_note = (
+        '<div class="mi-body">Mechanical digest — no LLM synthesis applied this week.</div>'
+        if mode == "deterministic_fallback"
+        else ""
+    )
+    cards = [mode_note]
+    what_changed = content.get("what_changed")
+    if isinstance(what_changed, list):
+        for raw in cast("list[object]", what_changed)[:5]:
+            cards.append(_brief_item_card("What changed", raw))
+    cards.append(_brief_item_card("Highest priority", content.get("highest_priority_decision")))
+    cards.append(_brief_item_card("Capital use", content.get("capital_use")))
+    cards.append(_brief_item_card("Worth challenging", content.get("assumption_challenge")))
+    cards.append(_brief_item_card("Worth revisiting", content.get("decision_revisit")))
+    body = "".join(c for c in cards if c)
+    if not body:
+        return '<div class="mi-empty">This week\'s brief has nothing to surface.</div>'
+    return body
 
 
 def _inbox_stream_section(db_path: Path) -> str:
@@ -203,6 +295,28 @@ _JS = """
 <script>
 (function () {
   document.body.addEventListener('click', function (ev) {
+    var dismissBtn = ev.target.closest('[data-mi-dismiss-ping]');
+    if (dismissBtn) {
+      var pingId = dismissBtn.getAttribute('data-mi-dismiss-ping');
+      dismissBtn.disabled = true;
+      dismissBtn.textContent = '...';
+      fetch('/api/senior-partner-brief/dismiss-item/' + pingId, { method: 'POST' })
+        .then(function (r) { return r.json().then(function (body) { return { r: r, body: body }; }); })
+        .then(function (res) {
+          var card = dismissBtn.closest('.mi-card');
+          if (res.r.ok) {
+            if (card) { card.style.opacity = '0.4'; }
+            dismissBtn.textContent = res.body.muted_class
+              ? ('Muted ' + res.body.muted_class)
+              : 'Dismissed';
+          } else {
+            dismissBtn.disabled = false;
+            dismissBtn.textContent = 'Dismiss';
+          }
+        })
+        .catch(function () { dismissBtn.disabled = false; dismissBtn.textContent = 'Dismiss'; });
+      return;
+    }
     var btn = ev.target.closest('[data-mi-act]');
     if (!btn) return;
     var act = btn.getAttribute('data-mi-act');
@@ -238,7 +352,7 @@ def render_mobile_inbox(db_path: Path) -> str:
         '<section class="mi-sec"><h2 class="mi-sec-h">Card dispositions</h2>'
         f"{_card_dispositions_section(db_path)}</section>"
         '<section class="mi-sec"><h2 class="mi-sec-h">Senior Partner Brief</h2>'
-        f"{_senior_partner_brief_section()}</section>"
+        f"{_senior_partner_brief_section(db_path)}</section>"
         '<section class="mi-sec"><h2 class="mi-sec-h">Recent activity</h2>'
         f"{_inbox_stream_section(db_path)}</section>"
     )

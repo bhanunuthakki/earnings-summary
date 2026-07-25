@@ -34,22 +34,39 @@ def now_naive_utc() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+# failure_stage marking a case whose JUDGE failed operationally (CLI error,
+# quota, network) — an INFRA fact, not a quality fact. Such cases carry
+# score=None and are excluded from avg_score/pass-rate math. Measured July
+# 2026: 18 of 28 recorded "failures" were judge-call crashes scored 0.0, which
+# dragged bear_case's apparent avg from 0.959 to 0.706 — the score was
+# measuring the CLI outage, not the prompt.
+JUDGE_INFRA_STAGE = "judge_infra"
+
+
 @dataclass(slots=True)
 class CaseResult:
-    """One graded golden case — maps 1:1 onto an eval_case_results row."""
+    """One graded golden case — maps 1:1 onto an eval_case_results row.
+
+    ``score=None`` means "not measured" (judge infra failure) — distinct from
+    0.0, which is a real measured zero. The DB column is nullable REAL, so the
+    distinction survives persistence."""
 
     case_id: str
     question: str
     passed: bool
-    score: float
+    score: float | None
     expected_json: str | None = None
     actual_json: str | None = None
-    failure_stage: str | None = None  # "compile" | "execute" | "mismatch" | None
+    failure_stage: str | None = None  # "compile" | "execute" | "mismatch" | "judge_infra" | None
     judge_verdict: str | None = None
     judge_rationale: str | None = None
     prompt_text: str | None = None
     response_text: str | None = None
     latency_ms: int | None = None
+
+    @property
+    def is_infra_failure(self) -> bool:
+        return self.failure_stage == JUDGE_INFRA_STAGE
 
 
 @dataclass(slots=True)
@@ -74,14 +91,27 @@ class EvalRunSummary:
         return len(self.cases)
 
     @property
+    def n_infra(self) -> int:
+        """Cases whose judge failed operationally — counted, never scored."""
+        return sum(1 for c in self.cases if c.is_infra_failure)
+
+    @property
+    def n_scored(self) -> int:
+        return sum(1 for c in self.cases if c.score is not None)
+
+    @property
     def n_pass(self) -> int:
         return sum(1 for c in self.cases if c.passed)
 
     @property
     def avg_score(self) -> float | None:
-        if not self.cases:
+        """Mean over SCORED cases only. Infra-failed cases (score=None) say
+        nothing about quality; averaging them in as zeros made a healthy
+        prompt look broken exactly when the transport was down."""
+        scored = [c.score for c in self.cases if c.score is not None]
+        if not scored:
             return None
-        return sum(c.score for c in self.cases) / len(self.cases)
+        return sum(scored) / len(scored)
 
     def to_json_dict(self) -> dict[str, object]:
         """Stdout-friendly summary (cases included, transcripts truncated)."""
@@ -106,6 +136,8 @@ class EvalRunSummary:
             "finished_at": self.finished_at.isoformat() if self.finished_at else None,
             "n_cases": self.n_cases,
             "n_pass": self.n_pass,
+            "n_scored": self.n_scored,
+            "n_infra": self.n_infra,
             "avg_score": self.avg_score,
             "cases": cases,
         }

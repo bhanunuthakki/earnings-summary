@@ -90,9 +90,16 @@ def parse_claude_json_output(stdout: str) -> tuple[str, dict[str, object]]:
         raise ValueError(f"Claude CLI returned non-object JSON: {type(payload).__name__}")
     payload_dict = cast("dict[str, object]", payload)
     if payload_dict.get("is_error"):
+        # Include the envelope's `result` HEAD — it carries the actual reason
+        # ("usage limit reached...", "There's an issue with the selected
+        # model...", auth prompts). Before this, the raised message named only
+        # subtype/status, so the July-2026 quota incident was recorded as
+        # thousands of indistinguishable generic errors.
+        result_raw = payload_dict.get("result")
+        result_head = result_raw[:300] if isinstance(result_raw, str) else ""
         raise ValueError(
             f"Claude CLI reported error: subtype={payload_dict.get('subtype')!r} "
-            f"api_status={payload_dict.get('api_error_status')!r}"
+            f"api_status={payload_dict.get('api_error_status')!r} result={result_head!r}"
         )
     result = payload_dict.get("result")
     if not isinstance(result, str):

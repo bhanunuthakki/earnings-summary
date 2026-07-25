@@ -113,7 +113,18 @@ def fallback_call_logged(
     counts in a stable shape, so the row records latency + response_chars
     only; usage/cost stay NULL. That's still enough to track *how often*
     fallback fires and how much latency it adds.
+
+    A ledger row is written ONLY when a Gemini attempt actually fires. When
+    the fallback is disabled or unconfigured, ``try_gemini_fallback`` raises
+    without attempting anything — recording a ``model='gemini-2.5-flash'``
+    error row for that non-attempt fabricated 3,496 phantom rows in July 2026
+    (every Claude failure double-counted, half of them against a model that
+    was never called), which doubled the apparent platform error rate.
     """
+    from llm.fallback import fallback_available
+
+    if not fallback_available():
+        return try_gemini_fallback(prompt, claude_error)  # raises; no phantom row
     started_at = datetime.now(UTC)
     t0 = time.monotonic()
     try:

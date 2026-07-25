@@ -61,9 +61,11 @@ confidence+freshness / invalidators / what-changed / learned-later).
 |---|---|---|
 | **Review section (new, id `review`)** | Re-parent **three existing panels unsplit**: `musings` (Ledger, **landing**), `triage`, `journal`. **Do NOT carve Weekly/Beliefs out of the Ledger page** — its one-page form gives the Sunday ritual completion semantics (scroll-to-bottom = done; jump-chips already carry pending counts, `ledger_panel.py:1092`), which matches the owner's verified binge-clear pattern. Five cadence tabs would replace "am I done?" with "did I visit all five?". | The burial is real and verified: while a holding is open, the Companies sub-row — the Ledger's only nav handle — is suppressed (`command_center_shell.py:45,1811`). Re-parent fixes that; the split was the friction. Landing = `musings`, statically (conditional "Weekly-when-waiting" landing is not expressible in `_THEMES` tuple order — needs logic that doesn't exist; dropped). |
 | **Ask demoted — hide the button, keep the panel** | Keep the `ask` theme + `explore` panel **in `_THEMES`**; hide only its top-nav button via a new hidden-sections set in `_render_section_nav`. (**Not** `_UTILITY_SECTIONS` — `_render_system_button` returns on first match and supports exactly one utility section, `command_center_shell.py:534-550`.) `#ask`/`#explore` keep resolving to the full panel. | Data supports demotion (5 sessions ever); but v1's dock-only form was **wrong** — `goAsk` (every `data-ask-q` doorway), `goView` (palette saved-views), and the dock's own ⇗ pop-out all hard-target `#explore` as a full panel (`command_center_shell.py:1990,2000`; `ask_dock.py:279`), and the 400px dock cannot host the ViewSpec canvas, builder, or saved-view management (`explore_panel.py:340-342,661-663,884-901`). v1's "zero capability loss" claim is retracted; this form actually achieves it. |
-| **Portfolio lands on Synthesis** | Reorder the `portfolio_synthesis` tuple to first — **after porting the tracker-offline card into it** (the panel currently degrades silently to equal-weight when the tracker is down: "no offline card here, Performance carries it", `portfolio_panel.py:975-976`). **Keep the label "Synthesis"** — renaming it "Allocation" beside sibling "Positioning" creates a near-synonym collision. | The panel is stronger than v1's critics assumed: 3 of 4 components are live/deterministic (thesis-health rollup, sector exposure, next-dollar distribution); the LLM memo is last, not the page. Known asymmetry, accepted and documented: `#portfolio` (a live panel id, **not** an alias — v1 cited a nonexistent alias) keeps deep-linking to Performance while the nav button lands on Synthesis. |
+| **Portfolio → three consoles: Health / Allocation / Record** — supersedes the row below | **Shipped 2026-07 (P0.4b, PR #961; PRD §6/§7.4/§7.5), superseding the original "reorder the `portfolio_synthesis` tuple" plan.** The eight Portfolio sub-tabs collapsed into three composite consoles (`src/pipeline/portfolio_console_panel.py`): **Health** (Synthesis + Risk + Red Team — thesis health and what could break it; the primary next-dollar answer was removed from here per PRD §6), **Allocation** (leads with the governed Incremental Dollar Recommendation, eager, then the decision-facing Risk Budget, Portfolio Posture, a what-if/compare pointer, Positioning, then Performance), **Record** (Decisions + Memos + Triggers — the audit trail). `#portfolio` continues to resolve as a live panel id, aliased through `command_center_shell._LEGACY_PANEL_REDIRECTS`. | Kept below for the historical record — the original v2 plan and its evidence are superseded, not deleted, per the repo's append-only-evidence convention for adversarial-loop artifacts. |
+| ~~Portfolio lands on Synthesis~~ (superseded, see row above) | Reorder the `portfolio_synthesis` tuple to first — **after porting the tracker-offline card into it** (the panel currently degrades silently to equal-weight when the tracker is down: "no offline card here, Performance carries it", `portfolio_panel.py:975-976`). **Keep the label "Synthesis"** — renaming it "Allocation" beside sibling "Positioning" creates a near-synonym collision. | The panel is stronger than v1's critics assumed: 3 of 4 components are live/deterministic (thesis-health rollup, sector exposure, next-dollar distribution); the LLM memo is last, not the page. Known asymmetry, accepted and documented: `#portfolio` (a live panel id, **not** an alias — v1 cited a nonexistent alias) keeps deep-linking to Performance while the nav button lands on Synthesis. |
 | **Home relabeled "Today"** | Label only; section id `home`, panel id `overview` unchanged. | Free; matches the briefing direction (§4). |
 | **Companies keeps Holding · Discovery · Diet** | After the three ritual panels leave, Companies is coherent: your names / new names / signal-on-your-names. | — |
+| **Mobile Inbox (new, `/mobile/inbox`)** | Shipped 2026-07 (P2.1, PR #983; PRD §9.2/§11.6). A compact, Tailscale-protected route added to `execution/comments_server.py`: pending Decision Draft confirmations, unresolved Investment Decision Card dispositions, the latest Senior Partner Brief (once P2.2 ships), short recommendation/card views, and Confirm/Correct/Dismiss/Defer/Open-full-app actions. Shares action cores with desktop and Telegram (PRD principle P7) — not a second application. | Not anticipated by v1/v2 — added later by the Decision Draft program (PRD §9.2), which needed a non-Telegram surface for ambiguous drafts requiring correction on a bigger screen than a phone keyboard replying to a bot message. |
 
 ### 2.2 Rejected (with the evidence that killed them)
 
@@ -91,10 +93,16 @@ DERIVE-DON'T-ASK (system assembles everything; owner supplies only verdicts):
    the half-hour into five minutes of confirms). Ends with an explicit "packet clear"
    receipt — bounded, like the 07-02 session the owner actually executed. The web Review
    section is the packet's landing page for anything needing a bigger screen.
-2. **Point-of-intent nudge.** When a decision is created with NULL conviction or
-   falsifier, send a same-day Telegram follow-up: *"You logged BKNG add — one line:
-   conviction? what would prove you wrong?"* This attacks the exact observed failure
-   (decisions 96/97) at the moment of intent instead of waiting on a dashboard visit.
+2. **Point-of-intent nudge — demoted 2026-07 (PRD §9.2; P2.1, PR #983).** When a
+   decision is created with NULL conviction or falsifier, send a same-day Telegram
+   follow-up. **No longer a rigid two-line compulsory form.** `send_nudges` first
+   tries `_prefill_hint` (the linked advice artifact's disconfirming case / bear
+   case / thesis, else the decision's `rationale_excerpt`) and asks the owner to
+   confirm or correct it in one line; absent a resolvable hint, the ask is a single
+   soft optional line ("no pressure, Skip is fine"). This still attacks the exact
+   observed failure (decisions 96/97) at the moment of intent, but existing
+   falsifiers are requested only when genuinely missing from the thesis — never
+   compulsory merely to preserve the decision (`src/capture/decision_nudge.py::send_nudges`).
 3. **Un-gag the standup channel.** The proactive briefing has delivered 3 briefs ever and
    recorded 9+ suppressions since. **Corrected diagnosis (PR-2 implementation):** the
    judge was not tuned to silence — its own LLM call has been *failing outright* daily
@@ -127,6 +135,14 @@ additive:
    decisions, falsifiers, prices). A server-side stamp (alembic, with the 0141
    stamped-DB guard) only if multi-device staleness actually bites.
 5. **"One pattern noticed"** — deferred until `investor_calibration` has rows.
+6. **Senior Partner Brief summary** (PRD §9.1, P2.2) — **not yet built** as of
+   2026-07-24 (no `src/advisor/senior_partner_brief.py`, no
+   `execution/compose_senior_partner_brief.py` anywhere in the repo). Placeholder
+   entry only, so this directive doesn't need a second patch when P2.2 ships:
+   summary, effort estimate per action, active-week explanation, Why/Compare
+   alternatives/Correct context/Record-confirm decision/Defer/Dismiss, per PRD
+   §9.1's frontend spec. P2.2 is sequenced after Workstream B3/B4, both already
+   merged (PRD §3.3 ruling 4), so nothing blocks starting it.
 
 ---
 

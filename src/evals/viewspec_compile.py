@@ -238,8 +238,28 @@ def grade_case(
 
     outcome = judge(case.question, expected_json, actual_json, "\n".join(diffs), run_id=run_id)
     if outcome.verdict is None:
-        # Fail closed: an unjudgeable divergence is a failure, with the raw
-        # judge text preserved so the judge itself stays auditable.
+        if outcome.infra:
+            # The judge CALL failed (CLI/quota/network): nothing was measured
+            # about this divergence. score=None keeps the outage out of the
+            # run average instead of booking it as a real 0.0.
+            from evals.harness import JUDGE_INFRA_STAGE
+
+            return CaseResult(
+                case_id=case.case_id,
+                question=case.question,
+                passed=False,
+                score=None,
+                expected_json=expected_json,
+                actual_json=actual_json,
+                failure_stage=JUDGE_INFRA_STAGE,
+                judge_rationale=f"judge call failed: {outcome.error}",
+                prompt_text=res.prompt_text,
+                response_text=res.raw_response,
+                latency_ms=latency_ms,
+            )
+        # Fail closed: an unjudgeable divergence (judge ran, output invalid)
+        # is a failure, with the raw judge text preserved so the judge itself
+        # stays auditable.
         return CaseResult(
             case_id=case.case_id,
             question=case.question,
