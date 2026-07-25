@@ -117,3 +117,75 @@ def test_monte_carlo_section_missing_latam_shows_placeholder() -> None:
     html = _page(PortfolioAnalytics(available=True, api_url="http://x"), _mc(), None)
     assert "Joint-LatAm stress" in html
     assert "not enough weighted holdings to stress" in html
+
+
+# --------------------------------------------------------------------------- #
+# Wave 3 (surface_density_jit_redesign.md #3): the implicit-bets statement —
+# the risk page's organizing frame ("what am I positioned for").
+# --------------------------------------------------------------------------- #
+
+
+def _bets_snapshot(**kw: object):
+    from portfolio_risk_snapshot_store import RiskSnapshot
+
+    defaults: dict[str, object] = {
+        "captured_at": "2026-07-24T09:00:00",
+        "beta": 1.44,
+        "r_squared": 0.10,
+        "growth_tilt": -0.47,
+        "rate_beta_10y": 0.02,
+    }
+    defaults.update(kw)
+    return RiskSnapshot(**defaults)  # type: ignore[arg-type]
+
+
+def test_implicit_bets_rank_and_state_numbers() -> None:
+    from pipeline.portfolio_panel import _implicit_bets_section
+
+    weights = {"VTI": 0.201, "MELI": 0.147, "NU": 0.123, "NOW": 0.085}
+    html = _implicit_bets_section(_bets_snapshot(), weights, None)
+
+    assert "What am I positioned for?" in html
+    # Concentration bet leads (top weight 20.1% x salience 4 = highest).
+    assert "<strong>Single-name execution at VTI</strong>" in html
+    assert "20.1% of the book" in html
+    # LatAm cycle bet with the joint weight (MELI+NU = 27.0%).
+    assert "LatAm credit/FX cycle" in html
+    assert "27.0% of the book" in html
+    # Style bet states direction + the tilt number.
+    assert "value leadership over growth" in html
+    assert "-0.47" in html
+    # Market bet reconciles beta with the low R².
+    assert "β 1.44" in html
+    assert "mostly stock-specific" in html
+    # Ordering: concentration before the style bet.
+    assert html.index("Single-name execution") < html.index("value leadership")
+
+
+def test_implicit_bets_degrade_to_unlock_line() -> None:
+    from pipeline.portfolio_panel import _implicit_bets_section
+
+    html = _implicit_bets_section(None, {}, None)
+    assert "What am I positioned for?" in html
+    assert "Not derivable yet" in html
+    assert "<ol>" not in html
+
+
+def test_implicit_bets_lead_the_risk_page_in_both_branches() -> None:
+    from integrations.portfolio_tracker_client import PortfolioAnalytics
+    from pipeline.portfolio_panel import compose_risk_page
+
+    bets = '<section class="panel pfr-bets"><h2>What am I positioned for?</h2></section>'
+    offline = compose_risk_page(
+        PortfolioAnalytics(available=False, api_url="http://x", errors={}),
+        drawdown=None,
+        factor=None,
+        scenarios=[],
+        digest="",
+        bets=bets,
+    )
+    assert "What am I positioned for?" in offline
+    # It LEADS: before any other section of the page body.
+    assert offline.index("pfr-bets") < offline.index("pfr-root") + len(offline)
+    root = offline.index('id="pfr-root"')
+    assert offline.index("pfr-bets", root) < offline.index("</section>", root) + 1
