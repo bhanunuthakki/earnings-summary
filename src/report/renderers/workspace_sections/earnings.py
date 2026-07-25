@@ -9,6 +9,7 @@ re-exports in ``workspace_html``."""
 from __future__ import annotations
 
 from io import StringIO
+from pathlib import Path
 
 from report.models import (
     CellSource,
@@ -33,6 +34,7 @@ from report.renderers.workspace_sections._shared import (
     _source_chip_html,
     _xlink_html,
 )
+from ui.earnings_audio import google_finance_earnings_url
 
 __all__ = [
     "_beat_rate_scorecard_panel",
@@ -59,6 +61,8 @@ def _earnings_tab(
     section: EarningsSection,
     financials: FinancialsSection,
     qa: QARosterSection | None,
+    ticker: str,
+    repo_root: str,
 ) -> None:
     cards = section.full_quarters + section.digest_quarters
     body.write('<div class="tab-body">')
@@ -96,7 +100,7 @@ def _earnings_tab(
             f'data-quarter="{_esc(qid)}" style="{display}">'
         )
         _financial_highlights_panel(body, card, _financials_for_card(card, financials))
-        _earnings_narrative_panel(body, card)
+        _earnings_narrative_panel(body, card, ticker, repo_root)
         _qa_roster_panel_for_quarter(body, qa, card.quarter, card.year)
         body.write("</div>")
 
@@ -233,7 +237,9 @@ def _ws_period_sort_key(period: str) -> tuple[int, int]:
     return (9999, 9)
 
 
-def _earnings_narrative_panel(body: StringIO, card: QuarterlyEarningsCard) -> None:
+def _earnings_narrative_panel(
+    body: StringIO, card: QuarterlyEarningsCard, ticker: str, repo_root: str
+) -> None:
     qid = f"{card.quarter} {card.year}"
     sub_parts = ["full" if card.is_recent else "digest"]
     if card.transcript_path:
@@ -243,6 +249,14 @@ def _earnings_narrative_panel(body: StringIO, card: QuarterlyEarningsCard) -> No
         sub_parts.append(
             f'<a href="{_esc(as_uri)}" target="_blank" rel="noopener" class="muted">'
             "transcript ↗</a>"
+        )
+    audio_url = google_finance_earnings_url(Path(repo_root), ticker)
+    if audio_url:
+        sub_parts.append(
+            f'<a href="{_esc(audio_url)}" target="_blank" rel="noopener" class="muted" '
+            'title="Opens Google Finance in a new tab — recorded call audio + transcript, '
+            'hosted by Google, not this platform.">'
+            "Google Finance audio/transcript ↗</a>"
         )
     body.write(
         _panel_head(

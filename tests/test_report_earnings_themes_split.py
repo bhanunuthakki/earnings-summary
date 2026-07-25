@@ -633,6 +633,8 @@ def test_workspace_renders_themes_panel() -> None:
         _sample_section_with_themes(),
         FinancialsSection(status=SectionStatus.OK),
         None,
+        "TEST",
+        ".",
     )
     s = out.getvalue()
     assert "Cross-quarter themes" in s
@@ -651,6 +653,8 @@ def test_workspace_skips_themes_panel_when_empty() -> None:
         EarningsSection(status=SectionStatus.OK),
         FinancialsSection(status=SectionStatus.OK),
         None,
+        "TEST",
+        ".",
     )
     s = out.getvalue()
     assert "Cross-quarter themes" not in s
