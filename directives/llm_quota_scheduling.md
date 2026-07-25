@@ -139,5 +139,5 @@ Ledger-measured (successful prod calls only; measurement scopes excluded):
   time); weekend rungs segmented. One optional decongestion (needs elevation —
   non-admin cannot modify the registered task): move `refresh_business_factors`
   Sun 11:30 → Sun 19:30 to thin the 4-job Sunday-morning window
-  (`schtasks /change /tn "\earnings-summaryefresh_business_factors" /st 19:30`
+  (`schtasks /change /tn "\earnings-summary\refresh_business_factors" /st 19:30`
   from an elevated shell, then mirror `cron/refresh_business_factors.task.xml`).
