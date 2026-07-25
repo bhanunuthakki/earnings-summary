@@ -44,9 +44,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 
 from alerts import (  # noqa: E402
+    ACTION_STATUS_APPLIED,
     ACTION_STATUS_PENDING,
+    ALERT_STATUS_PENDING,
     QueuedActionRow,
     apply_action,
+    approve_alert,
     cancel_action,
     dismiss_alert,
     get_action,
@@ -133,6 +136,89 @@ def main() -> int:
 # ----------------------------------------------------------------------------
 
 
+def _settle_parent_alert(alert_id: int, db_path: Path | None = None) -> str:
+    """Close the parent alert once its LAST pending action is settled.
+
+    The defect this exists for: settling a queued action moved only the
+    ``queued_actions`` row, leaving the parent ``alerts`` row 'pending'
+    forever. The inbox fetches pending alerts unbounded
+    (``dashboard/inbox.py`` — ``limit=None``, standing queue), so approving a
+    card wrote its ledger entry (which renders as a NEW card) while the
+    original stayed exactly where it was. Prod carried four alerts stuck this
+    way, one pending since 2026-06-01 with all 17 of its actions settled.
+
+    Only fires when nothing is still pending on the alert, so approving one of
+    several drafts never closes a decision the owner hasn't finished. The
+    terminal status is DERIVED, not assumed: an alert with at least one applied
+    action was acted on ('approved'); one whose actions were all cancelled was
+    waved off ('dismissed').
+
+    Returns a receipt fragment for the caller's summary line. Best-effort on a
+    status conflict — a concurrent transition is not worth failing an approve
+    whose downstream write already landed.
+    """
+    try:
+        alert = get_alert(alert_id, db_path=db_path)
+    except LookupError:
+        return ""
+    if alert.status != ALERT_STATUS_PENDING:
+        return ""
+    actions = list_queued_actions_for_alert(alert_id, db_path=db_path)
+    remaining = [qa for qa in actions if qa.status == ACTION_STATUS_PENDING]
+    if remaining:
+        return f" Alert {alert_id} stays open ({len(remaining)} action(s) still pending)."
+    acted = any(qa.status == ACTION_STATUS_APPLIED for qa in actions)
+    try:
+        if acted:
+            approve_alert(alert_id, db_path=db_path)
+            verb = "approved"
+        else:
+            dismiss_alert(alert_id, db_path=db_path)
+            verb = "dismissed"
+    except (LookupError, ValueError):
+        return ""
+    return f" Alert {alert_id} ({alert.ticker} · {alert.trigger_kind}) {verb} and cleared from the inbox."
+
+
+def approve_alert_and_apply_all(alert_id: int, db_path: Path | None = None) -> str:
+    """Approve EVERY pending action on one alert, then close the alert.
+
+    The card-level approve. ``dashboard/inbox.py::_pending_action`` documents
+    "one action per alert is the drafter's norm" and surfaces only the first —
+    but that norm does not hold in prod (FCX alert 28 carries 9 actions, NU
+    alert 1 carries 17, with repeated kinds). The per-action link therefore
+    cleared one of N and the card re-rendered still pending, which reads as
+    "approve did nothing". This settles the whole decision in one click.
+
+    Raises LookupError (unknown alert) / ValueError (alert already terminal, or
+    nothing pending to approve).
+    """
+    alert = get_alert(alert_id, db_path=db_path)
+    if alert.status != ALERT_STATUS_PENDING:
+        raise ValueError(
+            f"alerts id={alert_id} status is {alert.status!r}, "
+            f"cannot transition (expected {ALERT_STATUS_PENDING!r})"
+        )
+    pending = [
+        qa
+        for qa in list_queued_actions_for_alert(alert_id, db_path=db_path)
+        if qa.status == ACTION_STATUS_PENDING
+    ]
+    if not pending:
+        raise ValueError(f"alerts id={alert_id} has no pending queued actions to approve")
+    written: list[str] = []
+    for qa in pending:
+        # Each call settles its own action and writes its downstream row; the
+        # final one drains the queue and _settle_parent_alert closes the alert.
+        approve_and_apply(qa.id, db_path=db_path)
+        written.append(_ACTION_TO_ENTRY_KIND.get(qa.action_kind, qa.action_kind))
+    kinds = ", ".join(sorted(set(written)))
+    return (
+        f"Approved alert id={alert_id} ({alert.ticker} · {alert.trigger_kind}): "
+        f"{len(pending)} action(s) applied ({kinds}). Cleared from the inbox."
+    )
+
+
 def approve_and_apply(action_id: int, db_path: Path | None = None) -> str:
     """Approve queued_action ``action_id``: write its downstream user-state
     row, then mark it 'applied'. Returns a one-line summary.
@@ -168,7 +254,7 @@ def approve_and_apply(action_id: int, db_path: Path | None = None) -> str:
             f"position_sizing_intent id={intent.id} written: "
             f"{intent.ticker} · {intent.intent_kind} · "
             f"value={intent.intent_value}."
-        )
+        ) + _settle_parent_alert(qa.alert_id, db_path)
 
     if qa.action_kind in _ACTION_TO_ENTRY_KIND:
         entry = _write_ledger_entry(qa, db_path)
@@ -178,7 +264,7 @@ def approve_and_apply(action_id: int, db_path: Path | None = None) -> str:
             f"Ledger entry id={entry.id} written: "
             f"{entry.ticker} · {entry.entry_kind} · "
             f"source_alert_id={entry.source_alert_id}."
-        )
+        ) + _settle_parent_alert(qa.alert_id, db_path)
 
     raise ValueError(
         f"queued_action id={action_id} has unsupported action_kind="
@@ -198,7 +284,7 @@ def dismiss_action(action_id: int, db_path: Path | None = None) -> str:
         f"Cancelled queued_action id={cancelled.id} "
         f"(was {qa_before.status!r}, now {cancelled.status!r}). "
         "No ledger entry written."
-    )
+    ) + _settle_parent_alert(qa_before.alert_id, db_path)
 
 
 # ----------------------------------------------------------------------------
@@ -216,33 +302,44 @@ def _do_cancel_action(action_id: int, db_path: Path | None) -> int:
     return 0
 
 
-def _do_dismiss_alert(alert_id: int, db_path: Path | None) -> int:
+def dismiss_alert_and_cancel_actions(alert_id: int, db_path: Path | None = None) -> str:
     """Dismiss the alert and cancel all of its pending queued actions.
 
     Cancels each pending action first so a partial failure mid-cancel
     leaves the parent alert still 'pending' (callers can re-run).
     Already-applied / already-cancelled actions are skipped.
+
+    Shared core: the CLI's ``--dismiss-alert`` and the card's alert-level
+    dismiss link both land here, so the two can never diverge on semantics.
+    Cancels via the ``cancel_action`` store primitive rather than
+    ``dismiss_action`` — the alert transition is this function's own job, and
+    routing through the wrapper would let ``_settle_parent_alert`` close the
+    alert mid-loop and turn the final ``dismiss_alert`` into a status conflict.
     """
     actions = list_queued_actions_for_alert(alert_id, db_path=db_path)
     cancelled_ids: list[int] = []
     skipped_ids: list[int] = []
     for qa in actions:
-        if qa.status == "pending":
+        if qa.status == ACTION_STATUS_PENDING:
             cancel_action(qa.id, db_path=db_path)
             cancelled_ids.append(qa.id)
         else:
             skipped_ids.append(qa.id)
     dismissed = dismiss_alert(alert_id, db_path=db_path)
-    sys.stdout.write(
+    out = (
         f"Dismissed alert id={dismissed.id} ({dismissed.ticker} · "
         f"{dismissed.trigger_kind}). "
         f"Cancelled {len(cancelled_ids)} pending action(s)"
     )
     if cancelled_ids:
-        sys.stdout.write(f": {cancelled_ids}")
+        out += f": {cancelled_ids}"
     if skipped_ids:
-        sys.stdout.write(f"; skipped {len(skipped_ids)} non-pending action(s): {skipped_ids}")
-    sys.stdout.write(".\n")
+        out += f"; skipped {len(skipped_ids)} non-pending action(s): {skipped_ids}"
+    return out + "."
+
+
+def _do_dismiss_alert(alert_id: int, db_path: Path | None) -> int:
+    sys.stdout.write(dismiss_alert_and_cancel_actions(alert_id, db_path=db_path) + "\n")
     return 0
 
 

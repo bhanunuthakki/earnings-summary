@@ -105,6 +105,20 @@ def _pct(v: float | None, *, digits: int = 1) -> str:
     return f"{v:.{digits}f}%"
 
 
+def _num(v: float | None, *, digits: int = 2) -> str:
+    """A plain scalar metric, rounded for display — never a raw float repr.
+
+    Every numeric that reaches HTML goes through a formatter. An unrounded
+    ``R²: 0.0976124298052155`` is noise, not information, and the UI guard in
+    ``tests/test_ui_controls.py`` is token/component-shaped — it cannot see a
+    float that was f-stringed straight into the markup. ``None`` renders as an
+    em-dash, the same absent-value convention as ``_pct`` / ``_money``.
+    """
+    if v is None:
+        return "—"
+    return f"{v:,.{digits}f}"
+
+
 def _zone_chip(zone: str | None) -> str:
     if not zone:
         return ""
@@ -566,7 +580,7 @@ def render_risk_budget_section(db_path: Path, repo_root: Path) -> str:
     concentration_cat = (
         '<div class="risk-cat"><h4>1. Single-name concentration</h4>'
         f"<p>Top-1 weight: {_pct(snap.top1_weight_pct)}{top1_delta} &middot; "
-        f"HHI: {snap.hhi if snap.hhi is not None else '—'}</p>"
+        f"HHI: {_num(snap.hhi, digits=0)}</p>"
         f"{conc_rows}</div>"
     )
 
@@ -624,15 +638,15 @@ def render_risk_budget_section(db_path: Path, repo_root: Path) -> str:
 
     secondary = (
         '<details><summary>Secondary metrics</summary><div class="k-well">'
-        f"<p>Sharpe: {snap.sharpe if snap.sharpe is not None else '—'} &middot; "
-        f"Sortino: {snap.sortino if snap.sortino is not None else '—'} &middot; "
-        f"Beta: {snap.beta if snap.beta is not None else '—'} &middot; "
-        f"R&sup2;: {snap.r_squared if snap.r_squared is not None else '—'}</p>"
+        f"<p>Sharpe: {_num(snap.sharpe)} &middot; "
+        f"Sortino: {_num(snap.sortino)} &middot; "
+        f"Beta: {_num(snap.beta)} &middot; "
+        f"R&sup2;: {_num(snap.r_squared)}</p>"
         f"<p>Top5 weight: {_pct(snap.top5_weight_pct)} &middot; "
         f"Top10 weight: {_pct(snap.top10_weight_pct)} &middot; "
-        f"Effective holdings: {snap.effective_holdings if snap.effective_holdings is not None else '—'}</p>"
-        f"<p>Growth tilt: {snap.growth_tilt if snap.growth_tilt is not None else '—'} &middot; "
-        f"Rate beta (10y): {snap.rate_beta_10y if snap.rate_beta_10y is not None else '—'}</p>"
+        f"Effective holdings: {_num(snap.effective_holdings, digits=1)}</p>"
+        f"<p>Growth tilt: {_num(snap.growth_tilt)} &middot; "
+        f"Rate beta (10y): {_num(snap.rate_beta_10y)}</p>"
         "</div></details>"
     )
 

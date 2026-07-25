@@ -235,6 +235,20 @@ def _no_hex_colors(html: str) -> bool:
     return re.search(r"#[0-9a-fA-F]{3,8}\b", html) is None
 
 
+def _no_raw_floats(html: str) -> bool:
+    """No unrounded float repr survives into the emitted markup.
+
+    The repo's UI guard (tests/test_ui_controls.py) is token- and
+    component-shaped: it checks classes and CSS variables, never VALUES. That
+    blind spot let every scalar metric in the Risk Budget's secondary block
+    ship as a raw repr (`HHI: 1072.8133108622762`, `R²: 0.0976124298052155`).
+    Any number carrying 5+ decimal places is a float that skipped its
+    formatter. <style> is excluded — CSS carries its own literals.
+    """
+    body = re.sub(r"<style>.*?</style>", "", html, flags=re.S)
+    return re.search(r"\d\.\d{5,}", body) is None
+
+
 # --------------------------------------------------------------------------- #
 # 1. Incremental Dollar Recommendation section — §12.2 distinct states
 # --------------------------------------------------------------------------- #
@@ -398,6 +412,71 @@ def test_risk_budget_four_categories_and_delta(tmp_path: Path) -> None:
     # top1 20.0 -> 24.0 = +4.0pp.
     assert "4.0pp vs prior" in html
     assert "Secondary metrics" in html
+
+
+def test_risk_budget_rounds_every_scalar_metric(tmp_path: Path) -> None:
+    """Every scalar metric is rounded for display, not f-stringed raw.
+
+    Seeds the exact prod values that surfaced the bug: the panel formatted its
+    percentages via ``_pct`` but interpolated HHI / Sharpe / Sortino / Beta /
+    R² / effective-holdings / tilt / rate-beta straight into the markup, so the
+    owner's Risk Budget read `Sharpe: -0.3513674average...` at full float
+    precision.
+    """
+    db_path = _make_db(tmp_path)
+    _seed_weights(tmp_path, {"VTI": 0.201, "MELI": 0.147})
+    _seed_risk_snapshot(
+        db_path,
+        table="portfolio_risk_snapshot_history",
+        captured_at="2026-07-24T09:00:00",
+        top1_weight_pct=20.1,
+        top5_weight_pct=62.5,
+        top10_weight_pct=90.4,
+        hhi=1072.8133108622762,
+        sharpe=-0.3513674827983,
+        sortino=-0.4460646007553607,
+        beta=1.4431753558196838,
+        r_squared=0.0976124298052155,
+        effective_holdings=9.321286284155512,
+        growth_tilt=-0.47379622494585705,
+        rate_beta_10y=0.018506046022587996,
+        current_drawdown_pct=-7.3,
+        max_drawdown_pct=-76.1,
+        metric_version="v1",
+        rebase_basis="observed",
+    )
+    html = render_risk_budget_section(db_path, tmp_path)
+
+    assert _no_raw_floats(html), "a raw float repr reached the rendered Risk Budget"
+    assert "HHI: 1,073" in html
+    assert "Sharpe: -0.35" in html
+    assert "Sortino: -0.45" in html
+    assert "Beta: 1.44" in html
+    assert "R&sup2;: 0.10" in html
+    assert "Effective holdings: 9.3" in html
+    assert "Growth tilt: -0.47" in html
+    assert "Rate beta (10y): 0.02" in html
+
+
+def test_risk_budget_absent_scalars_render_em_dash_not_zero(tmp_path: Path) -> None:
+    """Rounding must not turn a NULL metric into 0.00 — §7.1's null-not-zero
+    rule applies to the scalar block the same as to the percentages."""
+    db_path = _make_db(tmp_path)
+    _seed_risk_snapshot(
+        db_path,
+        table="portfolio_risk_snapshot_history",
+        captured_at="2026-07-24T09:00:00",
+        top1_weight_pct=20.1,
+        metric_version="v1",
+        rebase_basis="observed",
+    )
+    html = render_risk_budget_section(db_path, tmp_path)
+
+    assert "Sharpe: —" in html
+    assert "HHI: —" in html
+    assert "Rate beta (10y): —" in html
+    assert "Sharpe: 0.00" not in html
+    assert "HHI: 0" not in html
 
 
 def test_risk_budget_mismatched_provenance_suppresses_delta(tmp_path: Path) -> None:

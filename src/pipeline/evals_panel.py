@@ -484,7 +484,7 @@ def _health_section(health: list[CallHealthRow]) -> str:
         f'<td class="num {"ev-warn" if h.fallback_rate > 0.1 else ""}">'
         f"{h.fallback_rate * 100:.0f}%<span class='muted'> ({h.fallbacks})</span></td>"
         f'<td class="num">${h.cost_usd:.2f}</td>'
-        f'<td class="num">{h.avg_elapsed_ms if h.avg_elapsed_ms is not None else "—"}</td>'
+        f'<td class="num">{f"{h.avg_elapsed_ms:,.0f}" if h.avg_elapsed_ms is not None else "—"}</td>'
         "</tr>"
         for h in health
     )

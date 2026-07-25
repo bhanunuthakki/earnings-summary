@@ -25,11 +25,13 @@ from alerts import (
     ACTION_STATUS_APPLIED,
     ACTION_STATUS_CANCELLED,
     ACTION_STATUS_PENDING,
+    ALERT_STATUS_APPROVED,
     ALERT_STATUS_DISMISSED,
     ALERT_STATUS_PENDING,
     fire_alert,
     get_action,
     get_alert,
+    list_queued_actions_for_alert,
     queue_action,
 )
 from user_state.ledger import list_entries
@@ -209,10 +211,13 @@ def test_approve_route_rejects_cross_site_click(client: FlaskClient, db_path: Pa
 def test_feed_renders_absolute_approve_links(client: FlaskClient, db_path: Path) -> None:
     # The card renders on / AND /feed; a relative "approve?..." href
     # resolved to a different (dead) path per surface. It must be absolute.
-    action_id = _seed_pending_action(db_path)
+    # The target is the ALERT, not one of its queued actions — settling a
+    # single action left the alert 'pending' and the card in the queue.
+    _seed_pending_action(db_path)
     html = client.get("/feed").data.decode()
-    assert f'href="/approve?action_id={action_id}"' in html
-    assert f'href="/approve?action_id={action_id}&dismiss=1"' in html
+    assert 'href="/approve?alert_id=' in html
+    assert '&dismiss=1"' in html
+    assert 'href="approve?' not in html
 
 
 # ----------------------------------------------------------------------------
@@ -556,3 +561,74 @@ def test_home_rail_renders_ranked_inbox_with_chips_and_quick_actions(
     assert f'data-action-id="{action_id}"' in body  # hover quick ✓/✕
     assert 'title="ranked: severity' in body  # why-ranked tooltip
     assert "ix-last-seen:" in body  # INBOX_JS shipped with the rail
+
+
+# ----------------------------------------------------------------------------
+# GET /approve?alert_id=N — the card-level settle.
+#
+# The feed footer used to target one queued action. Approving settled that
+# action and wrote its ledger entry, but left the parent alert 'pending' — and
+# the inbox fetches pending alerts unbounded, so the card never left while the
+# new ledger entry rendered beside it as a second card. Alerts also carry many
+# drafts in prod (9 on FCX 28, 17 on NU 1), so one click cleared one of N.
+# ----------------------------------------------------------------------------
+
+
+def test_approve_alert_settles_every_action_and_clears_the_card(
+    client: FlaskClient, db_path: Path
+) -> None:
+    action_id = _seed_pending_action(db_path, ticker="NU")
+    alert_id = get_action(action_id, db_path=db_path).alert_id
+    queue_action(
+        alert_id=alert_id,
+        action_kind="bear_append",
+        payload={"body": "second draft on the same alert"},
+        db_path=db_path,
+    )
+
+    resp = client.get(
+        f"/approve?alert_id={alert_id}",
+        headers={"Referer": "http://127.0.0.1:7421/feed"},
+    )
+
+    assert resp.status_code == 303
+    actions = list_queued_actions_for_alert(alert_id, db_path=db_path)
+    assert [qa.status for qa in actions] == [ACTION_STATUS_APPLIED] * 2
+    assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_APPROVED
+    assert len(list_entries(ticker="NU", db_path=db_path)) == 2
+
+
+def test_dismiss_alert_via_approve_route_cancels_and_clears(
+    client: FlaskClient, db_path: Path
+) -> None:
+    action_id = _seed_pending_action(db_path, ticker="NU")
+    alert_id = get_action(action_id, db_path=db_path).alert_id
+
+    resp = client.get(
+        f"/approve?alert_id={alert_id}&dismiss=1",
+        headers={"Referer": "http://127.0.0.1:7421/feed"},
+    )
+
+    assert resp.status_code == 303
+    assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_CANCELLED
+    assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_DISMISSED
+    assert list_entries(ticker="NU", db_path=db_path) == []
+
+
+def test_approve_alert_rejects_cross_site(client: FlaskClient, db_path: Path) -> None:
+    """The alert-level target carries the same same-site guard as the
+    action-level one — a wider blast radius must not mean a weaker gate."""
+    action_id = _seed_pending_action(db_path, ticker="NU")
+    alert_id = get_action(action_id, db_path=db_path).alert_id
+
+    resp = client.get(f"/approve?alert_id={alert_id}", headers={"Sec-Fetch-Site": "cross-site"})
+
+    assert resp.status_code == 403
+    assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_PENDING
+    assert get_action(action_id, db_path=db_path).status == ACTION_STATUS_PENDING
+
+
+def test_approve_alert_bad_id_is_400_not_500(client: FlaskClient, db_path: Path) -> None:
+    resp = client.get("/approve?alert_id=notanint")
+    assert resp.status_code == 400
+    assert "alert_id must be an integer" in resp.get_json()["error"]

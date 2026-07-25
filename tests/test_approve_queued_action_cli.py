@@ -15,7 +15,9 @@ from alembic import command
 from alerts import (
     ACTION_STATUS_APPLIED,
     ACTION_STATUS_CANCELLED,
+    ALERT_STATUS_APPROVED,
     ALERT_STATUS_DISMISSED,
+    ALERT_STATUS_PENDING,
     fire_alert,
     get_action,
     get_alert,
@@ -523,3 +525,121 @@ def test_no_action_id_and_no_alert_id_exits_1(
     assert rc == 1
     captured = capsys.readouterr()
     assert "Pass exactly one" in captured.err
+
+
+# ----------------------------------------------------------------------------
+# Parent-alert settlement — the inbox "approve does nothing" defect
+#
+# Settling a queued action used to move ONLY the queued_actions row. The parent
+# alert stayed 'pending', and the inbox fetches pending alerts unbounded, so an
+# approved card never left the queue — while its new ledger entry rendered as a
+# second card. Prod carried four alerts stuck this way (NU alert 1 pending since
+# 2026-06-01 with all 17 of its actions already settled).
+# ----------------------------------------------------------------------------
+
+
+def _queue(db_path: Path, alert_id: int, body: str) -> Any:
+    return queue_action(
+        alert_id=alert_id,
+        action_kind="thesis_update",
+        payload={"ticker": "GOOG", "body": body},
+        db_path=db_path,
+    )
+
+
+def test_approving_last_action_closes_parent_alert(cli: Any, db_path: Path) -> None:
+    alert_id = _seed_alert(db_path, signature="sig-settle-one")
+    qa = _queue(db_path, alert_id, "only draft")
+
+    summary = cli.approve_and_apply(qa.id, db_path=db_path)
+
+    assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_APPROVED
+    assert "cleared from the inbox" in summary
+
+
+def test_approving_one_of_several_leaves_alert_open(cli: Any, db_path: Path) -> None:
+    """The drafter's "one action per alert" norm does not hold in prod, so a
+    partial approve must NOT close a decision the owner hasn't finished."""
+    alert_id = _seed_alert(db_path, signature="sig-settle-partial")
+    first = _queue(db_path, alert_id, "draft one")
+    _queue(db_path, alert_id, "draft two")
+
+    summary = cli.approve_and_apply(first.id, db_path=db_path)
+
+    assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_PENDING
+    assert "stays open (1 action(s) still pending)" in summary
+
+
+def test_cancelling_every_action_dismisses_parent_alert(cli: Any, db_path: Path) -> None:
+    alert_id = _seed_alert(db_path, signature="sig-settle-cancel")
+    first = _queue(db_path, alert_id, "draft one")
+    second = _queue(db_path, alert_id, "draft two")
+
+    cli.dismiss_action(first.id, db_path=db_path)
+    assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_PENDING
+
+    summary = cli.dismiss_action(second.id, db_path=db_path)
+
+    assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_DISMISSED
+    assert "dismissed and cleared" in summary
+
+
+def test_settled_status_is_derived_not_assumed(cli: Any, db_path: Path) -> None:
+    """An alert with at least one APPLIED action was acted on, so it settles
+    'approved' even when the owner waved off the remaining drafts."""
+    alert_id = _seed_alert(db_path, signature="sig-settle-mixed")
+    first = _queue(db_path, alert_id, "draft one")
+    second = _queue(db_path, alert_id, "draft two")
+
+    cli.approve_and_apply(first.id, db_path=db_path)
+    cli.dismiss_action(second.id, db_path=db_path)
+
+    assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_APPROVED
+
+
+def test_approve_alert_applies_every_pending_action(cli: Any, db_path: Path) -> None:
+    """One click settles the whole card: FCX alert 28 carries 9 actions and NU
+    alert 1 carries 17, but the footer only ever surfaced the first."""
+    alert_id = _seed_alert(db_path, signature="sig-batch")
+    for n in range(3):
+        _queue(db_path, alert_id, f"draft {n}")
+
+    summary = cli.approve_alert_and_apply_all(alert_id, db_path=db_path)
+
+    actions = list_queued_actions_for_alert(alert_id, db_path=db_path)
+    assert [qa.status for qa in actions] == [ACTION_STATUS_APPLIED] * 3
+    assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_APPROVED
+    assert len(list_entries(ticker="GOOG", db_path=db_path)) == 3
+    assert "3 action(s) applied" in summary
+
+
+def test_approve_alert_rejects_already_settled_alert(cli: Any, db_path: Path) -> None:
+    alert_id = _seed_alert(db_path, signature="sig-batch-terminal")
+    qa = _queue(db_path, alert_id, "only draft")
+    cli.approve_and_apply(qa.id, db_path=db_path)
+
+    with pytest.raises(ValueError, match="cannot transition"):
+        cli.approve_alert_and_apply_all(alert_id, db_path=db_path)
+
+
+def test_approve_alert_rejects_alert_with_nothing_pending(cli: Any, db_path: Path) -> None:
+    alert_id = _seed_alert(db_path, signature="sig-batch-empty")
+
+    with pytest.raises(ValueError, match="no pending queued actions"):
+        cli.approve_alert_and_apply_all(alert_id, db_path=db_path)
+
+
+def test_dismiss_alert_core_cancels_actions_and_closes_alert(cli: Any, db_path: Path) -> None:
+    """The shared core behind both the CLI's --dismiss-alert and the card's
+    alert-level dismiss link."""
+    alert_id = _seed_alert(db_path, signature="sig-dismiss-core")
+    first = _queue(db_path, alert_id, "draft one")
+    _queue(db_path, alert_id, "draft two")
+
+    summary = cli.dismiss_alert_and_cancel_actions(alert_id, db_path=db_path)
+
+    actions = list_queued_actions_for_alert(alert_id, db_path=db_path)
+    assert [qa.status for qa in actions] == [ACTION_STATUS_CANCELLED] * 2
+    assert get_alert(alert_id, db_path=db_path).status == ALERT_STATUS_DISMISSED
+    assert get_action(first.id, db_path=db_path).status == ACTION_STATUS_CANCELLED
+    assert "Cancelled 2 pending action(s)" in summary

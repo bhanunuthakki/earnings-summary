@@ -537,16 +537,28 @@ def _build_trigger_ladder(
     if not has_thesis_state:
         return []
 
-    # Subquery: each ticker's latest dcf_runs row (segment_name = NULL = consolidated)
+    # Subquery: each ticker's latest dcf_runs row (segment_name = NULL =
+    # consolidated). ONE row per ticker by construction: the nightly sweep can
+    # write several runs on the same valuation_date (prod: FCX/LLY/LITE each
+    # carried two on their max date, minutes apart), and the old join on
+    # (ticker, valuation_date) fanned out — the owner's ladder showed FCX
+    # twice at two live prices. Latest run wins (valuation_date, then rowid —
+    # dcf_runs' id is a rowid alias, and test DBs build the table bare) —
+    # the render-seam dedupe rule (surface_density_jit_redesign.md D3.2).
     dcf_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
     sanity_sel = "dr.sanity_flag" if "sanity_flag" in dcf_cols else "NULL AS sanity_flag"
     rows = conn.execute(
         f"""
         WITH latest_dcf AS (
-            SELECT ticker, MAX(valuation_date) AS vd
-            FROM dcf_runs
-            WHERE segment_name IS NULL OR segment_name = ''
-            GROUP BY ticker
+            SELECT ticker, run_id FROM (
+                SELECT ticker, rowid AS run_id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY ticker
+                           ORDER BY valuation_date DESC, rowid DESC
+                       ) AS rn
+                FROM dcf_runs
+                WHERE segment_name IS NULL OR segment_name = ''
+            ) WHERE rn = 1
         )
         SELECT tc.ticker, tc.list_type,
                dr.over_under_pct, dr.mos_bar_used, dr.live_price,
@@ -561,9 +573,7 @@ def _build_trigger_ladder(
                END AS trigger_status
         FROM tracked_companies tc
         LEFT JOIN latest_dcf ld ON ld.ticker = tc.ticker
-        LEFT JOIN dcf_runs dr
-          ON dr.ticker = tc.ticker AND dr.valuation_date = ld.vd
-          AND (dr.segment_name IS NULL OR dr.segment_name = '')
+        LEFT JOIN dcf_runs dr ON dr.rowid = ld.run_id
         JOIN thesis_state ts ON ts.ticker = tc.ticker
         WHERE tc.archived_at IS NULL
           AND tc.list_type IN ({placeholders})
