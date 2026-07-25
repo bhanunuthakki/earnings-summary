@@ -428,7 +428,16 @@ details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
    reserved rail is empty everywhere a note isn't, which on a long page is a
    dead strip down the whole surface. Sections with nothing to annotate are
    full-bleed and use the entire measure. ---- */
-.k-doc { max-width: 76ch; }
+/* The measure. --k-measure is the READING column; the document is that column
+   PLUS the note rail, so prose keeps a real measure whether or not a section
+   carries a note, and full-bleed sections (tables, bands) still get the whole
+   width. Setting .k-doc to a flat 76ch was wrong and browser measurement caught
+   it: the 13.5rem note rail ate the measure from the inside, leaving ~40ch of
+   prose in every annotated section. Prose is capped independently so a
+   full-bleed section does not run to a 100ch line. */
+.k-doc { --k-measure: 66ch;
+  max-width: calc(var(--k-measure) + var(--k-note-w, 13.5rem) + var(--sp-5)); }
+.k-doc .prose { max-width: var(--k-measure); }
 .k-doc-row { display: grid;
   grid-template-columns: minmax(0, 1fr) var(--k-note-w, 13.5rem);
   gap: 0 var(--sp-5); align-items: start; }

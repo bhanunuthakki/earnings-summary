@@ -1242,3 +1242,34 @@ def test_footnote_marker_scales_with_its_prose() -> None:
     rule = re.search(r"\.k-fn\s*\{([^}]*)\}", css)
     assert rule is not None
     assert re.search(r"font-size:\s*[0-9.]+em", rule.group(1))
+
+
+def test_note_rail_does_not_eat_the_reading_measure() -> None:
+    """The document width is the measure PLUS the note rail, never a flat cap.
+
+    Regression pin for a bug caught by browser measurement, not by review:
+    ``.k-doc`` was a flat ``max-width: 76ch``, so in any section carrying a
+    margin note the 13.5rem rail was subtracted from the inside and prose
+    collapsed to ~40ch — unreadable, in exactly the sections that matter most.
+
+    Deriving the width from ``--k-measure`` keeps prose at its measure whether
+    or not a section is annotated, and lets full-bleed sections use the whole
+    width. Verified in-browser at 1280px: prose 66ch, band full-bleed at 703px.
+    """
+    css = controls_css("paper")
+    doc_rule = re.search(r"\.k-doc\s*\{([^}]*)\}", css)
+    assert doc_rule is not None
+    body = doc_rule.group(1)
+    assert "--k-measure" in body, ".k-doc must define the reading measure"
+    max_width = re.search(r"max-width:\s*([^;]+)", body)
+    assert max_width is not None
+    expr = max_width.group(1)
+    assert expr.strip().startswith("calc("), (
+        f"max-width is {expr!r} — a flat cap lets the note rail eat the measure"
+    )
+    assert "var(--k-measure)" in expr and "var(--k-note-w" in expr
+
+    # Prose is capped independently, so a full-bleed section does not run long.
+    prose_cap = re.search(r"\.k-doc\s+\.prose\s*\{([^}]*)\}", css)
+    assert prose_cap is not None, ".k-doc .prose must cap at the measure"
+    assert "var(--k-measure)" in prose_cap.group(1)
