@@ -20,6 +20,10 @@ over time:
     mysterious quality drop. A composed arm measures it directly, which is what
     the new INTERACTION_NEGATIVE verdict records.
 
+Renumbered 0200->0202 post-merge: #1002's 0201_senior_partner_brief_budget
+landed first off the same 0199 parent (two heads). Re-chained per the
+alembic-collision convention.
+
 Schema:
 
 ``prompt_arms`` — one row per non-baseline arm. The baseline is implicit
@@ -55,8 +59,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0200_prompt_ab_arms"
-down_revision: str | Sequence[str] | None = "0199_risk_snapshot_provenance"
+revision: str = "0202_prompt_ab_arms"
+down_revision: str | Sequence[str] | None = "0201_senior_partner_brief_budget"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
