@@ -47,10 +47,13 @@ from filings.models import (
     TickerNotResolvableError,
     TransientError,
 )
+from sec_identity import sec_user_agent
 
 log = logging.getLogger(__name__)
 
-USER_AGENT_DEFAULT = "EarningsSummary/1.0 (research@example.com)"
+#: Declared to the SEC via ``sec_identity`` so this project has ONE contact,
+#: not one per module. Override with the EDGAR_USER_AGENT env var.
+USER_AGENT_DEFAULT = sec_user_agent()
 _SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 _ARCHIVE_URL = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{accn_nodash}/{doc}"
 _TIMEOUT = (10, 60)

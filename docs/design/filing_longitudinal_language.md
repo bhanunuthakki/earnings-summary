@@ -90,6 +90,26 @@ all of which produced a *silently wrong* partition rather than a flagged one:
 Corpus effect: risk-factors coverage 112 → 116 of 125 documents, no document lost a section, and
 contents-block excision (which fires on 109) never removes an item's last candidate.
 
+**FCX (2026-07-25, follow-up).** FCX answers two items under one plural heading —
+"Items 7. and 7A. Management's Discussion and Analysis…", and likewise "Items 1. and 2. Business and
+Properties". Neither the plural nor the bridging second item number was tolerated, so the title
+keyword was unreachable and the heading matched nothing: FCX had **no `mdna` section at all** for any
+cached year, with `missing_mdna` the only hint. `_item_patterns` now accepts `items?` plus one
+optional `and <n>` bridge. Corpus effect: FCX gains MD&A for all three years (142K / 141K / 150K),
+zero change anywhere else.
+
+**NVO remains unpartitioned, and an attempt to fix it was reverted.** Its 20-F has two compounding
+problems: the renderer stamps running page-headers ("ITEM 4 INFORMATION ON THE COMPANY" ×8, "ITEM 5
+…" ×6), and it carries a *partial* index (~8 items) that is too small to trip
+`_drop_contents_block`'s ≥8-distinct-item bar while still being dense enough to anchor the chain.
+A `_drop_running_headers` pass (keep only the first occurrence of a verbatim-repeated header line)
+was written and **reverted**: it recovered only NVO's small `mdna` (~6KB) while *regressing* NU
+FY2024 badly (risk factors 288,907 → 423,760, MD&A → 0), because "first occurrence is the real
+heading" is false whenever an index row survives ahead of the body. NVO stays flagged
+`slice_boundaries_suspect` / `missing_risk_factors`. Its risk section is 6.7KB and largely
+incorporation-by-reference to the Danish Annual Report, so the disclosure lost is small — but it is
+lost, and nothing downstream should treat NVO's absence as "no risk factors changed".
+
 **Reconciliation with #1009**, which landed first and fixed the same NU/FCX symptoms independently.
 Kept from it: the FCX fix, the wrapped-header `body_start` correction (found in both), the
 trailing-page-number row test, and the `trivial_section_oversized` / `slice_starts_mid_sentence`

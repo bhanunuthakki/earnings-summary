@@ -40,6 +40,7 @@ _GOOGLE_FINANCE_EXCHANGE: dict[str, str] = {
     "NYSE": "NYSE",
 }
 
+
 # Share-class tickers FMP spells with a dash (BRK-B, BF-B, ...) that Google
 # Finance spells with a dot (BRK.B). Verified in-browser 2026-07-24:
 # BRK.B:NYSE resolves, BRK-B:NYSE does not (falls through to the generic

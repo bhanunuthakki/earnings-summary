@@ -898,6 +898,44 @@ def test_market_risk_and_financial_statements_title_variants() -> None:
     assert "Segment and Geographic" not in by_concept["mdna"].text, "MD&A ran into Item 8"
 
 
+def test_two_items_answered_under_one_plural_heading() -> None:
+    """FCX answers Items 7 and 7A together and heads the section "Items 7. and
+    7A. Management's Discussion and Analysis…". Neither the plural nor the
+    second item number was tolerated, so the title keyword was unreachable and
+    the heading matched nothing at all — FCX had no `mdna` section for any of
+    its three cached fiscal years, while `missing_mdna` was the only hint."""
+    body = "\n".join("Managements discussion prose about results." for _ in range(60))
+    statements = "\n".join("Report of independent accountants detail." for _ in range(60))
+    text = "\n".join(
+        [
+            "Items 1. and 2. Business and Properties",
+            "\n".join("Business and properties prose." for _ in range(40)),
+            "Item 1A. Risk Factors",
+            "\n".join("Risk disclosure prose." for _ in range(40)),
+            "Items 7. and 7A. Management's Discussion and Analysis of Financial Condition",
+            body,
+            "Item 8. Financial Statements and Supplementary Data",
+            statements,
+        ]
+    )
+    by_concept = {s.concept: s for s in edgar_sections.split_10k(text).slices}
+    assert "mdna" in by_concept, "the plural combined heading was not matched"
+    assert "Managements discussion" in by_concept["mdna"].text
+    assert "Report of independent" not in by_concept["mdna"].text, "MD&A ran into Item 8"
+    assert "business" in by_concept, "the plural Items 1. and 2. heading was not matched"
+
+    # The ordinary singular form must be unaffected by the plural tolerance.
+    plain = "\n".join(
+        [
+            "Item 7. Management's Discussion and Analysis of Financial Condition",
+            body,
+            "Item 8. Financial Statements and Supplementary Data",
+            statements,
+        ]
+    )
+    assert "mdna" in {s.concept for s in edgar_sections.split_10k(plain).slices}
+
+
 def test_subitem_letter_may_be_the_wrong_one() -> None:
     """NU prints its risk factors as "A.Risk Factors" under Item 3 while its own
     contents page and every cross-reference call the section 3.D. Keying on the
