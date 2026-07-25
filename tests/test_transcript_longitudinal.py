@@ -60,6 +60,7 @@ from transcripts.longitudinal import (  # noqa: E402
     pair_qa_exchanges,
     resolve_exec_role,
     roster_names_by_role,
+    strip_document_artifacts,
     tone_shift_is_abnormal,
     write_transcript_events,
 )
@@ -309,6 +310,101 @@ def test_introduction_with_honorific_prefix_still_matches() -> None:
     ]
     roster = classify_roles(turns)
     assert roster["Mario Pierry"].role is SpeakerRole.ANALYST
+
+
+def test_named_operator_not_classified_management() -> None:
+    """Regression for a real NVDA miscall found during verification: a
+    NAMED human operator ("Sarah", not the literal string "Operator") who
+    runs the question queue speaks on almost every turn, so raw frequency
+    ranked her #1 and misclassified her MANAGEMENT — then her transition
+    line ("next question comes from X, your line is open") got paired as
+    a fake ANSWER to the prior question, corrupting the non-answer
+    measure. Structural detection (queue-transition language dominates
+    her turns) must win over frequency."""
+    turns = [
+        Turn(
+            seq=0, speaker="Sarah", text="Next question comes from Vivek Arya. Your line is open."
+        ),
+        Turn(seq=1, speaker="Vivek Arya", text="Question about China revenue."),
+        Turn(seq=2, speaker="Jensen Huang", text="Here is the answer on China."),
+        Turn(
+            seq=3, speaker="Sarah", text="Next question comes from Ben Reitzes. Your line is open."
+        ),
+        Turn(seq=4, speaker="Ben Reitzes", text="Question about margins."),
+        Turn(seq=5, speaker="Jensen Huang", text="Here is the answer on margins."),
+        Turn(seq=6, speaker="Sarah", text="Please go ahead with the next question."),
+        Turn(seq=7, speaker="C.J. Muse", text="Question about CapEx."),
+        Turn(seq=8, speaker="Jensen Huang", text="Here is the answer on CapEx."),
+    ]
+    roster = classify_roles(turns)
+    assert roster["Sarah"].role is SpeakerRole.OPERATOR
+    assert roster["Jensen Huang"].role is SpeakerRole.MANAGEMENT
+    exchanges = pair_qa_exchanges(turns, roster)
+    assert len(exchanges) == 3
+    for ex in exchanges:
+        assert "Your line is open" not in ex.answer_text
+        assert "answer on" in ex.answer_text
+
+
+def test_document_artifacts_stripped_before_role_classification() -> None:
+    """Regression for a real NVDA miscall: FactSet CallStreet page-footer
+    copyright lines and "CONFERENCE CALL PARTICIPANTS" roster listings got
+    captured as fake speaker turns by the PDF ingest path, producing
+    garbage question/answer pairs the LLM judge correctly (but
+    uselessly) flagged as non-answers."""
+    turns = [
+        Turn(
+            seq=0,
+            speaker="Header",
+            text="Copyright © 2001-2025 FactSet CallStreet, LLC www.callstreet.com",
+        ),
+        Turn(
+            seq=1,
+            speaker="Roster",
+            text="Analyst, Morgan Stanley & Co. LLC Analyst, BofA Securities, Inc. Analyst, Cantor Fitzgerald",
+        ),
+        Turn(seq=2, speaker="Vivek Arya", text="Real question about China revenue."),
+    ]
+    kept = strip_document_artifacts(turns)
+    kept_speakers = [t.speaker for t in kept]
+    assert "Header" not in kept_speakers
+    assert "Roster" not in kept_speakers
+    assert "Vivek Arya" in kept_speakers
+
+
+def test_management_name_variant_folds_to_management_not_analyst() -> None:
+    """Regression for a real MELI miscall found during verification: the
+    aggregator name-capture parser occasionally over-captures a trailing
+    word from a management continuation phrase ("Martin de los Santos
+    Regarding...") into a one-off "ghost" speaker identity. Left
+    unclassified, that ghost defaults to ANALYST, so Martin's own
+    continuation of a colleague's answer gets misread by pair_qa_exchanges
+    as a fake new QUESTION — and the real answer text that follows gets
+    misattributed as its "answer," inflating the non-answer measure with a
+    parsing artifact rather than a real evasive answer."""
+    turns = [
+        Turn(seq=0, speaker="Alice Analyst", text="How is Argentina trending?"),
+        Turn(seq=1, speaker="Ariel Szarfsztejn", text="Argentina had a great quarter."),
+        Turn(
+            seq=2, speaker="Martin de los Santos", text="And just to complement, margins improved."
+        ),
+        Turn(
+            seq=3,
+            speaker="Martin de los Santos Regarding",
+            text="the credit book, we saw stabilization too.",
+        ),
+        Turn(seq=4, speaker="Ariel Szarfsztejn", text="Osvaldo covered logistics well."),
+        Turn(seq=5, speaker="Bob Analyst", text="Any color on take rate?"),
+        Turn(seq=6, speaker="Martin de los Santos", text="Take rate improved sequentially."),
+    ]
+    roster = classify_roles(turns)
+    assert roster["Martin de los Santos"].role is SpeakerRole.MANAGEMENT
+    assert roster["Martin de los Santos Regarding"].role is SpeakerRole.MANAGEMENT
+    exchanges = pair_qa_exchanges(turns, roster)
+    assert len(exchanges) == 2
+    assert exchanges[0].question_text == "How is Argentina trending?"
+    assert "credit book" in exchanges[0].answer_text
+    assert "stabilization" in exchanges[0].answer_text
 
 
 # ---------------------------------------------------------------------------

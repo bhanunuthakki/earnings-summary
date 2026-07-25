@@ -434,6 +434,43 @@ def strip_boilerplate(turns: list[Turn]) -> list[Turn]:
 
 
 # ---------------------------------------------------------------------------
+# Document-artifact stripping — a DIFFERENT failure mode from boilerplate,
+# found during verification against real NVDA/GOOG/TSM calls: the ~3% of
+# transcripts ingested from FactSet CallStreet PDFs (compute.transcript_
+# ingest.py's own speaker-turn splitter, trusted verbatim as "segmented" —
+# see load_call_turns) sometimes captures PAGE FURNITURE — the page-footer
+# copyright line, or the "CORPORATE PARTICIPANTS"/"CONFERENCE CALL
+# PARTICIPANTS" roster block — as if it were a real speaker turn. Left in,
+# these get paired into fake "questions"/"answers" that are pure PDF
+# artifacts, and the LLM judge (correctly) flags them non_answer=True
+# because there IS no question or answer — which silently inflates the
+# measured non-answer rate with garbage, not a real signal. Two of NVDA's
+# highest measured rates (50-60%) were roughly half document artifacts
+# before this filter existed.
+# ---------------------------------------------------------------------------
+
+_DOC_ARTIFACT_RE = re.compile(
+    r"copyright\s*©|factset callstreet|www\.callstreet\.com|1-877-factset", re.IGNORECASE
+)
+# A roster-listing turn ("Analyst, Morgan Stanley & Co. LLC Analyst, BofA
+# Securities, Inc. ...") repeats the "Analyst," title prefix several times
+# in a row — real analyst speech never does this.
+_ROSTER_LISTING_RE = re.compile(r"Analyst,", re.IGNORECASE)
+_ROSTER_LISTING_MIN_COUNT = 2
+
+
+def strip_document_artifacts(turns: list[Turn]) -> list[Turn]:
+    kept: list[Turn] = []
+    for t in turns:
+        if _DOC_ARTIFACT_RE.search(t.text):
+            continue
+        if len(_ROSTER_LISTING_RE.findall(t.text)) >= _ROSTER_LISTING_MIN_COUNT:
+            continue
+        kept.append(t)
+    return kept
+
+
+# ---------------------------------------------------------------------------
 # Speaker-role classification
 # ---------------------------------------------------------------------------
 
@@ -473,6 +510,38 @@ def _extract_introduced_analyst_names(turns: list[Turn]) -> set[str]:
     return names
 
 
+# A NAMED human operator ("Sarah", not the literal string "Operator" — seen
+# on some CallStreet-derived NVDA calls) runs the question queue just like
+# an "Operator"-labeled speaker, but speaks on almost every turn, so raw
+# frequency alone ranks her #1 and misclassifies her MANAGEMENT — and her
+# transition line ("next question comes from X, your line is open") then
+# gets paired as if it were management's ANSWER to the PRIOR question,
+# corrupting the non-answer measure with a transition line that was never
+# an answer at all. Detected structurally: a speaker whose turns are
+# DOMINATED by transition cues, regardless of name.
+_OPERATOR_TRANSITION_RE = re.compile(
+    r"your line is open|next question comes from|please go ahead|please proceed|"
+    r"we'?ll take (?:our|the) next question|open(?:ed)?\s+the\s+line\s+for",
+    re.IGNORECASE,
+)
+_OPERATOR_LIKE_MIN_SHARE = 0.5
+
+
+def _is_operator_like(turns_for_name: list[Turn]) -> bool:
+    if not turns_for_name:
+        return False
+    hits = sum(1 for t in turns_for_name if _OPERATOR_TRANSITION_RE.search(t.text))
+    return hits / len(turns_for_name) >= _OPERATOR_LIKE_MIN_SHARE
+
+
+def _is_management_alias(name: str, management_names: set[str]) -> bool:
+    """True when ``name`` is a longer variant of an already-identified
+    management name (``name`` starts with ``mgmt + " "``). See the
+    docstring at the call site in ``classify_roles`` for the real
+    mis-parse this guards against."""
+    return any(name != mgmt and name.startswith(mgmt + " ") for mgmt in management_names)
+
+
 def classify_roles(turns: list[Turn]) -> dict[str, RosterEntry]:
     """Classify each unique speaker name as OPERATOR / MANAGEMENT / ANALYST.
 
@@ -481,12 +550,15 @@ def classify_roles(turns: list[Turn]) -> dict[str, RosterEntry]:
     prerequisite for it). Management is identified structurally: the
     handful of names that answer questions REPEATEDLY across the call,
     versus the many analyst names that each appear once or twice — EXCEPT
-    a name explicitly introduced as the next questioner
+    (a) a name explicitly introduced as the next questioner
     (``_extract_introduced_analyst_names``), which always wins as ANALYST
-    regardless of how many follow-ups they asked. This is the honest
-    fallback the real book requires today (aggregator-sourced calls have no
-    "on the call today are CEO X, CFO Y" roster line at all — that line
-    lives in the prepared remarks, which those files never fetch)."""
+    regardless of how many follow-ups they asked, and (b) a speaker whose
+    turns are dominated by queue-transition language
+    (``_is_operator_like``), which always wins as OPERATOR regardless of
+    how often they speak. This is the honest fallback the real book
+    requires today (aggregator-sourced calls have no "on the call today are
+    CEO X, CFO Y" roster line at all — that line lives in the prepared
+    remarks, which those files never fetch)."""
     by_name: dict[str, list[Turn]] = defaultdict(list)
     for t in turns:
         if t.speaker:
@@ -495,7 +567,16 @@ def classify_roles(turns: list[Turn]) -> dict[str, RosterEntry]:
         return {}
 
     introduced_analysts = _extract_introduced_analyst_names(turns)
-    non_operator = {name: tlist for name, tlist in by_name.items() if name.lower() != "operator"}
+    operator_like_names = {
+        name
+        for name, tlist in by_name.items()
+        if name.lower() != "operator" and _is_operator_like(tlist)
+    }
+    non_operator = {
+        name: tlist
+        for name, tlist in by_name.items()
+        if name.lower() != "operator" and name not in operator_like_names
+    }
     ranked = sorted(non_operator.items(), key=lambda kv: -len(kv[1]))
     management_names: set[str] = {
         name
@@ -505,9 +586,22 @@ def classify_roles(turns: list[Turn]) -> dict[str, RosterEntry]:
 
     roster: dict[str, RosterEntry] = {}
     for name, tlist in by_name.items():
-        if name.lower() == "operator":
+        if name.lower() == "operator" or name in operator_like_names:
             role = SpeakerRole.OPERATOR
-        elif name in management_names:
+        elif name in management_names or _is_management_alias(name, management_names):
+            # A low-frequency variant of an already-identified management
+            # name (real example: the aggregator name-capture parser
+            # occasionally over-captures a trailing word from a management
+            # continuation phrase — "Martin de los Santos Regarding..." —
+            # producing a one-off "ghost" identity that would otherwise
+            # default to ANALYST and corrupt Q&A pairing: a management
+            # continuation gets misread as a fake new question, and the
+            # real answer text that follows gets misattributed as its
+            # "answer," inflating the non-answer measure with a parsing
+            # artifact rather than a real evasive answer). Folding by name
+            # PREFIX is deliberately conservative — it only fires when the
+            # variant literally starts with a confirmed management name
+            # followed by a word boundary, never the reverse.
             role = SpeakerRole.MANAGEMENT
         else:
             role = SpeakerRole.ANALYST
@@ -836,7 +930,7 @@ def build_call_snapshot(conn: sqlite3.Connection, transcript_id: int) -> CallSna
         else datetime.fromisoformat(str(period_end_raw))
     )
     turns, coverage = load_call_turns(conn, transcript_id)
-    turns = strip_boilerplate(turns)
+    turns = strip_document_artifacts(strip_boilerplate(turns))
     roster = classify_roles(turns)
     ticker = str(ticker_raw).upper()
     for name, entry in list(roster.items()):
