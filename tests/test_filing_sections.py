@@ -20,7 +20,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from filings import edgar_sections, fmp_sections, ingest, store  # noqa: E402
+from filings import edgar_sections, fmp_sections, ingest, store, taxonomy  # noqa: E402
 from filings.models import (  # noqa: E402
     CoverageRecord,
     CoverageStatus,
@@ -831,3 +831,64 @@ def test_reconcile_is_quiet_when_sources_agree(conn: sqlite3.Connection) -> None
         ],
     )
     assert ingest.reconcile_sources(conn, "META") == []
+
+
+def test_shifted_slices_are_flagged_as_suspect() -> None:
+    """A partition whose slices each swallow the NEXT item's header is
+    misaligned — every slice attributes one item's prose to another.
+
+    Real case: NVO's 20-F repeats "ITEM 3 KEY INFORMATION" as a running header,
+    so the header chain latched onto the wrong occurrences and its Item 2 slice
+    contained Item 3's heading. Detection cannot fix the cut, but a flagged gap
+    is far better for a language diff than a clean-looking mislabel.
+
+    Exercised against the detector directly: the chain scorer routes around
+    duplicated headers in synthetic text, so the shifted state has to be built
+    explicitly rather than provoked.
+    """
+    prose = "Disclosure prose that fills out the body. " * 20
+    shifted = [
+        edgar_sections.SectionSlice(
+            key="Item 1", text=prose + "\nItem 1A. Risk Factors", ordinal=0
+        ),
+        edgar_sections.SectionSlice(key="Item 1A", text=prose + "\nItem 2. Properties", ordinal=1),
+        edgar_sections.SectionSlice(
+            key="Item 2", text=prose + "\nItem 3. Legal Proceedings", ordinal=2
+        ),
+        edgar_sections.SectionSlice(key="Item 3", text=prose, ordinal=3),
+    ]
+    assert edgar_sections._boundaries_look_suspect(shifted, taxonomy.FORM_10K_ITEMS)
+
+    aligned = [
+        edgar_sections.SectionSlice(key="Item 1", text=prose, ordinal=0),
+        edgar_sections.SectionSlice(key="Item 1A", text=prose, ordinal=1),
+        edgar_sections.SectionSlice(key="Item 2", text=prose, ordinal=2),
+        edgar_sections.SectionSlice(key="Item 3", text=prose, ordinal=3),
+    ]
+    assert not edgar_sections._boundaries_look_suspect(aligned, taxonomy.FORM_10K_ITEMS)
+
+
+def test_clean_partition_is_not_flagged_suspect() -> None:
+    """The check must not fire on a normal filing, or the signal is useless."""
+    result = edgar_sections.split_10k(_fake_10k())
+    assert "slice_boundaries_suspect" not in result.warnings
+
+
+def test_partial_coverage_always_names_a_reason(conn: sqlite3.Connection, tmp_path: Path) -> None:
+    """ "Degraded, reason unknown" is the state this store exists to prevent:
+    a PARTIAL verdict must carry a queryable reason_code, not only free text."""
+    _write_payload(
+        tmp_path,
+        "META_form_10k_2025.json",
+        {
+            "symbol": "META",
+            "period": "FY",
+            "year": "2025",
+            # No cover section -> a `no_cover_section` note, hence PARTIAL.
+            "Revenue": [{"Advertising": ["1", "2"]}],
+        },
+    )
+    ingest.ingest_fmp(conn, "META", tmp_path, fmp_dir=tmp_path)
+    [coverage] = store.get_coverage(conn, "META")
+    assert coverage.status is CoverageStatus.PARTIAL
+    assert coverage.reason_code, "a PARTIAL verdict with no reason_code is not actionable"

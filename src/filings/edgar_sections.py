@@ -20,6 +20,7 @@ tuned against. A second stripper would drift from it silently.
 
 from __future__ import annotations
 
+import itertools
 import logging
 import re
 import sys
@@ -153,12 +154,61 @@ def _subsplit(
     return slices, preamble
 
 
+#: A real section header sits on a short line; anything longer is prose that
+#: merely mentions the item ("as described in Item 4 below").
+_BARE_HEADER_MAX_LEN = 80
+#: How many slices may contain their OWN SUCCESSOR's header before the
+#: partition is called shifted. One can happen innocently (a running page
+#: header caught at a boundary); two in a document is the off-by-one signature.
+_MAX_SUCCESSOR_LEAKS = 1
+
+
+def _contains_bare_header(body: str, spec: ItemSpec) -> bool:
+    """True when ``spec``'s header appears in ``body`` as a standalone line."""
+    match = spec.bare_rx.search(body) or spec.title_rx.search(body)
+    if match is None:
+        return False
+    line_start = body.rfind("\n", 0, match.start()) + 1
+    line_end = body.find("\n", match.start())
+    line = body[line_start : line_end if line_end != -1 else len(body)].strip()
+    return len(line) <= _BARE_HEADER_MAX_LEN
+
+
+def _boundaries_look_suspect(slices: list[SectionSlice], specs: tuple[ItemSpec, ...]) -> bool:
+    """True when the slices are shifted relative to the real item boundaries.
+
+    A correctly-cut partition holds each item's prose and NOT the next item's
+    header — that header IS the boundary. So the tell for an off-by-one chain
+    is specific: slice *i* contains the bare header of slice *i+1*. Counting
+    foreign headers generally is too blunt (a backward cross-reference is
+    normal and a shifted partition may only skew its first few slices); the
+    successor relationship is what actually distinguishes a shift.
+
+    Detecting it does not fix it, and that is the point. The alternative is a
+    partition that looks clean while attributing one item's disclosure to
+    another — far worse for a language diff than a flagged gap. Real case:
+    NVO's thin incorporate-by-reference 20-F repeats "ITEM 3 KEY INFORMATION",
+    and its Item 1, 2 and 3 slices each swallowed the following item's heading.
+    """
+    if len(slices) < 3:
+        return False
+    by_key = {spec.key: spec for spec in specs}
+    leaks = 0
+    for current, following in itertools.pairwise(slices):
+        spec = by_key.get(following.key)
+        if spec is not None and _contains_bare_header(current.text, spec):
+            leaks += 1
+    return leaks > _MAX_SUCCESSOR_LEAKS
+
+
 def split_10k(text: str) -> SplitResult:
     """Partition a 10-K into its Items 1–16."""
     slices = _slices_from_items(text, FORM_10K_ITEMS)
     warnings: list[str] = []
     if not slices:
         return SplitResult([], ["no_item_headers_located"])
+    if _boundaries_look_suspect(slices, FORM_10K_ITEMS):
+        warnings.append("slice_boundaries_suspect")
     concepts = {s.concept for s in slices}
     # Item 1A and Item 7 are the whole point of the narrative partition; a
     # filing that yields sections but not these two is a partition worth
@@ -266,6 +316,8 @@ def split_20f(text: str) -> SplitResult:
 
     if not slices:
         return SplitResult([], ["no_item_headers_located"])
+    if _boundaries_look_suspect(slices, FORM_20F_ITEMS):
+        warnings.append("slice_boundaries_suspect")
     if "risk_factors" not in {s.concept for s in slices}:
         warnings.append("missing_risk_factors")
     return SplitResult(slices, warnings)
