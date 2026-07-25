@@ -7,7 +7,7 @@ push the ``ticker`` predicate inside that window, so the cost grows with the
 TOTAL number of facts in the DB rather than the one ticker being rendered — the
 documented "metrics/ratios views are slow" cliff, and it sits on the brief-build
 render path (``report.sections.evaluation_snapshot`` and
-``execution/build_diligence.py``).
+the retired ``build_diligence.py``, removed 2026-07-25).
 
 These helpers inline the identical dedup + pivot, but with ``WHERE ticker = ?``
 applied *before* the partition, so the window only sorts that one ticker's slice

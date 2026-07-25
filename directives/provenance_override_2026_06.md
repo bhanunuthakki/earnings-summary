@@ -59,7 +59,7 @@ tiering alone.** Two further problems compound it:
    and `fmp_derived_kpis` dedup by `MAX(source_doc_id)` (insertion order) — a re-fetched FMP
    row (higher id) would win.
 2. **Segment + DCF readers bypass the DB entirely.** `build_redesigned_dcf.py`,
-   `dcf_opus_assumptions.py`, and `start_diligence.py` read the raw
+   and `dcf_opus_assumptions.py` read the raw
    `data/historical/fmp/*_segments_*.json` directly — no tier, no gate.
 
 **Conclusion:** the durable, uniform mechanism is a **first-class override record**
@@ -164,7 +164,7 @@ reads the raw JSON **and applies `apply_segment_overrides`**. Route through it:
 - `compute.segments.extract_segment_facts` (DB ingest) — even a re-fetched bad record is
   corrected *before* the reconciliation gate ⇒ the DB gets the 8-K figures, not a drop.
 - The three direct-JSON DCF readers (`execution/build_redesigned_dcf.py`,
-  `execution/dcf_opus_assumptions.py`, `execution/start_diligence.py`) — they now see the
+  `execution/dcf_opus_assumptions.py`) — they now see the
   corrected `data` dict. **This closes the regression.**
 - `pipeline.segment_cache_audit` / the `VALIDATE_SEGMENT_CACHE` stage — a flagged record
   that has an active override is reported **OK (overridden)**, not FAILED; un-overridden
