@@ -1,4 +1,4 @@
-"""Round-trip test for ``0200_senior_partner_brief_budget``.
+"""Round-trip test for ``0201_senior_partner_brief_budget``.
 
 Mirrors tests/test_investment_decision_card_budget_migration.py: hand-create
 the minimal ``llm_budgets`` shape, stamp the prior head, run the one
@@ -25,7 +25,7 @@ from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0197_decision_drafts"
-HEAD = "0200_senior_partner_brief_budget"
+HEAD = "0201_senior_partner_brief_budget"
 
 _PRE_DDL = """
 CREATE TABLE llm_budgets (

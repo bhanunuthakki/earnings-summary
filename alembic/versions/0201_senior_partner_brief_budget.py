@@ -16,7 +16,7 @@ labeled mechanical digest of artifact pointers, no synthesized confidence)
 ships instead of a silent downgrade to a cheaper model. Mirrors 0188's/
 0191's idempotent ``ON CONFLICT DO NOTHING`` seed pattern.
 
-Revision ID: 0200_senior_partner_brief_budget
+Revision ID: 0201_senior_partner_brief_budget
 Revises: 0199_risk_snapshot_provenance
 Create Date: 2026-07-24
 
@@ -39,7 +39,7 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0200_senior_partner_brief_budget"
+revision: str = "0201_senior_partner_brief_budget"
 down_revision: str | Sequence[str] | None = "0199_risk_snapshot_provenance"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
