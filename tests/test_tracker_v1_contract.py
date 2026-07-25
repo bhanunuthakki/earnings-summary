@@ -637,6 +637,11 @@ def test_probe_v1_hits_health_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
         return _FakeResponse(_load(FIXTURES_DIR / "health.json"))
 
     monkeypatch.setattr(requests.Session, "get", fake_get)
+    # The no-arg constructor resolves its base URL through the environment, so
+    # this assertion is only about the COMPILED-IN default. Without the delenv
+    # the test reads the developer's own tracker URL and fails on any machine
+    # that sets one (it does here: PORTFOLIO_TRACKER_API_URL=...:8001).
+    monkeypatch.delenv("PORTFOLIO_TRACKER_API_URL", raising=False)
     client = tv1.TrackerV1Client()
     fetch = client.probe_v1()
     assert fetch.available is True

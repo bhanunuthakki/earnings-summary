@@ -94,9 +94,16 @@ _DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 # (connect, read) timeout tuple halves. Connect stays tight regardless of
 # endpoint family (a dead loopback tracker should fail fast); read differs
 # because analytics/* recomputes TWR/beta/drawdown over a window on request.
+# The analytics read budget is 20s, not the legacy client's 6s: the v1
+# endpoints bundle MORE work per call than their legacy counterparts
+# (``analytics/risk`` = beta + drawdown in one read; ``position-performance``
+# carries the full counterfactual series) and the live book measured >6s on
+# both during the 2026-07-24 dual-read parity run. Offline detection is the
+# CONNECT timeout's job, so a longer read budget only spends time when the
+# server is doing legitimate work.
 _CONNECT_TIMEOUT_SECONDS = 0.5
 _READ_TIMEOUT_SECONDS = 4.0
-_ANALYTICS_READ_TIMEOUT_SECONDS = 6.0
+_ANALYTICS_READ_TIMEOUT_SECONDS = 20.0
 
 # Hard cap on cursor-pagination pages, bounding a runaway loop against a
 # server that never returns a null next_cursor.
