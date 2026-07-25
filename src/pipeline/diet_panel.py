@@ -25,6 +25,7 @@ kit (`.p-table`/`.k-pill`/`.k-chip`/`ticker_label`) — no raw hex, guard-clean.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import UTC, date, datetime
 from html import escape
@@ -92,6 +93,11 @@ _PANEL_STYLE = """<style>
 .diet-date { font-family: var(--mono); font-weight: 600; color: var(--fg);
   font-variant-numeric: tabular-nums; white-space: nowrap; }
 .diet-empty { color: var(--muted); font-style: italic; padding: var(--sp-3) 0; }
+/* D3 group headers inside the stream: kind + a deterministic summary. */
+.diet-group-h { font-size: var(--fs-body); font-weight: 600; color: var(--fg);
+  margin: var(--sp-4) 0 var(--sp-1); }
+.diet-group-sum { font-weight: 400; color: var(--muted); font-size: var(--fs-caption);
+  margin-left: 6px; }
 .diet-scaffold { margin-top: var(--sp-5); padding: var(--sp-3) var(--sp-4);
   background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius);
   font-size: var(--fs-caption); color: var(--muted); line-height: 1.55; }
@@ -165,10 +171,17 @@ def _freshness_line(rows: list[SignalRow]) -> str:
 
 
 def _stream_section(rows: list[SignalRow], list_types: dict[str, str]) -> str:
+    """The ingest stream, regrouped per D3 (surface_density_jit_redesign.md,
+    walkthrough #8): sell-side actions as a parsed dense table (firm / action /
+    PT from→to with a deterministic per-group summary), filings as their own
+    block, and the remaining news reading list — instead of one undifferentiated
+    chronological mix. Within every group the order stays book-first then
+    newest-first (the non-decaying diet invariant is untouched — grouping is
+    presentation, the reader still never decays)."""
     head = (
         '<div class="diet-sec first"><h3 class="diet-sec-h">Ingest stream</h3>'
-        '<p class="diet-sec-sub">Recent sell-side ratings + news, '
-        "<strong>your book first</strong> (held then evaluation), each newest-first. "
+        '<p class="diet-sec-sub">What happened on your names, grouped by kind — '
+        "<strong>your book first</strong> within each group, newest-first. "
         "Not ranked by urgency — this is reading, not triage."
         f"{_freshness_line(rows)}</p>"
     )
@@ -177,9 +190,153 @@ def _stream_section(rows: list[SignalRow], list_types: dict[str, str]) -> str:
             head + '<p class="diet-empty">No diet signals yet — they populate from the '
             "news + yfinance-grades feeds.</p></div>"
         )
+    ratings = [r for r in rows if r.signal_type == SIGNAL_CONSENSUS_RATING]
+    filings = [
+        r
+        for r in rows
+        if r.signal_type == SIGNAL_GENERAL_NEWS and (r.source_feed or "").startswith("edgar")
+    ]
+    grouped_ids = {id(r) for r in ratings} | {id(r) for r in filings}
+    news = [r for r in rows if id(r) not in grouped_ids]
+    return (
+        head
+        + _ratings_block(ratings, list_types)
+        + _filings_block(filings, list_types)
+        + _news_block(news, list_types)
+        + "</div>"
+    )
+
+
+# yf_grades-mirrored titles are machine-generated and structured — two fixed
+# shapes: "{Firm} maintains {Rating} on {T}; PT $109 → $110" and "{Firm}
+# upgrades {T} to {Rating}". Structured vendor text, so a regex parse at
+# render is appropriate (the LLM-where-semantics-matter rule cuts the other
+# way here: there are no semantics, only a format).
+_RATING_ON_RE = re.compile(
+    r"\b(?P<action>maintains|reiterates|raises|lowers)\s+"
+    r"(?P<rating>[A-Za-z][A-Za-z -]{1,24}?)\s+on\b"
+)
+_RATING_TO_RE = re.compile(
+    r"\b(?P<action>upgrades|downgrades|initiates|resumes)\s+\S+\s+to\s+"
+    r"(?P<rating>[A-Za-z][A-Za-z -]{1,24}?)(?:;|,|\s+with\b|$)"
+)
+_PT_RE = re.compile(r"PT\s+\$(?P<a>[\d,]+(?:\.\d+)?)\s*(?:→|->)\s*\$(?P<b>[\d,]+(?:\.\d+)?)")
+
+
+def _parse_rating(title: str) -> tuple[str, str, float | None, float | None]:
+    """(action, rating, pt_from, pt_to) — best-effort; blanks when unparsed."""
+    action, rating = "", ""
+    m = _RATING_ON_RE.search(title) or _RATING_TO_RE.search(title)
+    if m:
+        action = m.group("action")
+        rating = m.group("rating").strip()
+    pt_from = pt_to = None
+    pm = _PT_RE.search(title)
+    if pm:
+        try:
+            pt_from = float(pm.group("a").replace(",", ""))
+            pt_to = float(pm.group("b").replace(",", ""))
+        except ValueError:
+            pt_from = pt_to = None
+    return action, rating, pt_from, pt_to
+
+
+def _ratings_block(rows: list[SignalRow], list_types: dict[str, str]) -> str:
+    if not rows:
+        return ""
+    parsed = [(r, *_parse_rating(r.title)) for r in rows]
+    n_up = sum(1 for _, _, _, a, b in parsed if a is not None and b is not None and b > a)
+    n_down = sum(1 for _, _, _, a, b in parsed if a is not None and b is not None and b < a)
+    summary_bits = [f"{len(rows)} action(s) on {len({r.ticker for r in rows})} name(s)"]
+    if n_up or n_down:
+        summary_bits.append(f"{n_up} PT raise(s) / {n_down} cut(s)")
+    body: list[str] = []
+    for r, action, rating, pt_from, pt_to in parsed:
+        marker = _book_marker_html(list_types.get(r.ticker, ""))
+        if pt_from is not None and pt_to is not None:
+            delta = (pt_to - pt_from) / pt_from * 100.0 if pt_from else 0.0
+            tone = "k-num-pos" if pt_to >= pt_from else "k-num-neg"
+            pt_cell = (
+                f'${pt_from:,.0f} → <span class="{tone}">${pt_to:,.0f}</span> '
+                f'<span class="diet-firm">({delta:+.0f}%)</span>'
+            )
+        else:
+            pt_cell = "—"
+        # The parsed read, still a doorway: linked to the story when a url
+        # exists, with the full raw title on hover so nothing is lost.
+        parsed_txt = (
+            f"{escape(action)} <strong>{escape(rating)}</strong>" if action else escape(r.title)
+        )
+        action_cell = (
+            f'<a href="{escape(r.url, quote=True)}" target="_blank" rel="noopener" '
+            f'title="{escape(r.title)}">{parsed_txt}</a>'
+            if r.url
+            else f'<span title="{escape(r.title)}">{parsed_txt}</span>'
+        )
+        body.append(
+            "<tr>"
+            f'<td class="diet-when">{escape(r.published_at[:10])}</td>'
+            f"<td>{ticker_label(r.ticker)}{marker}</td>"
+            f'<td><span class="diet-firm">{escape(r.firm or "—")}</span></td>'
+            f"<td>{action_cell}</td>"
+            f'<td class="num">{pt_cell}</td>'
+            "</tr>"
+        )
+    return (
+        '<h4 class="diet-group-h">Sell-side actions '
+        f'<span class="diet-group-sum">{escape(" · ".join(summary_bits))}</span></h4>'
+        '<table class="p-table"><thead><tr><th>When</th><th>Name</th><th>Firm</th>'
+        '<th>Action</th><th class="num">PT</th></tr></thead>'
+        f"<tbody>{''.join(body)}</tbody></table>"
+    )
+
+
+# Leading "KIND:" tag on an EDGAR-fed headline ("SC 13D/A: activist stake…").
+_FILING_KIND_RE = re.compile(r"^([A-Z0-9][A-Z0-9 /-]{1,12}):\s*")
+
+
+def _filings_block(rows: list[SignalRow], list_types: dict[str, str]) -> str:
+    if not rows:
+        return ""
+    body: list[str] = []
+    for r in rows:
+        marker = _book_marker_html(list_types.get(r.ticker, ""))
+        title = r.title
+        kind_chip = ""
+        m = _FILING_KIND_RE.match(title)
+        if m:
+            kind_chip = f'<span class="k-chip k-chip-mono">{escape(m.group(1))}</span> '
+            title = title[m.end() :]
+        link = (
+            f'<a href="{escape(r.url or "", quote=True)}" target="_blank" rel="noopener">'
+            f"{escape(title)}</a>"
+            if r.url
+            else escape(title)
+        )
+        body.append(
+            "<tr>"
+            f'<td class="diet-when">{escape(r.published_at[:10])}</td>'
+            f"<td>{ticker_label(r.ticker)}{marker}</td>"
+            f'<td class="diet-sig">{kind_chip}{link}</td>'
+            "</tr>"
+        )
+    return (
+        '<h4 class="diet-group-h">Filings '
+        f'<span class="diet-group-sum">{len(rows)} on '
+        f"{len({r.ticker for r in rows})} name(s)</span></h4>"
+        '<table class="p-table"><thead><tr><th>When</th><th>Name</th><th>Filing</th>'
+        f"</tr></thead><tbody>{''.join(body)}</tbody></table>"
+    )
+
+
+def _news_block(rows: list[SignalRow], list_types: dict[str, str]) -> str:
+    if not rows:
+        return ""
     body = "".join(_stream_row(r, list_types.get(r.ticker, "")) for r in rows)
-    table = (
-        lg.grid_open()
+    return (
+        '<h4 class="diet-group-h">News &amp; podcasts '
+        f'<span class="diet-group-sum">{len(rows)} item(s)</span></h4>'
+        + lg.grid_open()
         + lg.filter_bar(len(rows), noun="signals", placeholder="Filter by name / source / text…")
         + '<table class="p-table"><thead><tr>'
         + lg.th("When", "when", "text", num=False)
@@ -190,7 +347,20 @@ def _stream_section(rows: list[SignalRow], list_types: dict[str, str]) -> str:
         + f"</tr></thead><tbody>{body}</tbody></table>"
         + lg.grid_close()
     )
-    return head + table + "</div>"
+
+
+def _book_marker_html(list_type: str) -> str:
+    marker = _BOOK_MARKER.get(list_type)
+    if not marker:
+        return ""
+    return f' <span class="k-chip k-chip-mono" title="{escape(marker[1])}">{marker[0]}</span>'
+
+
+def _linked_title(r: SignalRow) -> str:
+    title = escape(r.title)
+    if r.url:
+        return f'<a href="{escape(r.url, quote=True)}" target="_blank" rel="noopener">{title}</a>'
+    return title
 
 
 def _stream_row(r: SignalRow, list_type: str = "") -> str:

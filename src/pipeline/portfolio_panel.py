@@ -1460,6 +1460,11 @@ def _next_dollar_memo(memo: tuple[str, str, str] | None, *, with_heading: bool) 
 # ---------------------------------------------------------------------------
 
 _RISK_CSS = """<style>
+/* Implicit bets (Wave 3, surface_density_jit_redesign.md #3): the ranked
+   prose statement of what the book is positioned for. */
+.pfr-bets ol { margin: 4px 0 0 20px; padding: 0; }
+.pfr-bets li { margin: 0 0 6px; font-size: var(--fs-body); line-height: 1.5; }
+.pfr-bets .pfr-bet-nums { color: var(--muted); font-size: var(--fs-caption); }
 .pfr-uw { width: 100%; height: auto; display: block; margin-top: 6px; }
 .pfr-top { font-size: var(--fs-caption); color: var(--muted); margin: 6px 0 0; }
 .pfr-tops { margin-top: 8px; }
@@ -1611,6 +1616,18 @@ def render_portfolio_risk_panel(
             _persist_risk_snapshot(analytics, db_path, drawdown=drawdown, factor=factor)
         else:
             snapshot = read_latest_snapshot(db_path=db_path)
+    # The implicit-bets frame reads the LATEST snapshot regardless of branch
+    # (tracker up: the row _persist_risk_snapshot just refreshed) + the local
+    # weights — so the page's organizing statement renders online and offline.
+    bets_snapshot = snapshot
+    if bets_snapshot is None and db_path is not None:
+        bets_snapshot = read_latest_snapshot(db_path=db_path)
+    bets_weights = (
+        _local_book_weights(analytics.positioning, db_path.parent.parent)
+        if db_path is not None
+        else {}
+    )
+    bets = _implicit_bets_section(bets_snapshot, bets_weights, factors)
     return compose_risk_page(
         analytics,
         drawdown=drawdown,
@@ -1628,6 +1645,7 @@ def render_portfolio_risk_panel(
         scenarios=scenarios,
         digest=digest,
         snapshot=snapshot,
+        bets=bets,
     )
 
 
@@ -1781,6 +1799,115 @@ def _read_business_factor_vector(db_path: Path | None) -> BookFactorVector | Non
     return book_factor_vector(db_path, db_path.parent.parent)
 
 
+def _implicit_bets_section(
+    snapshot: RiskSnapshot | None,
+    weights: dict[str, float],
+    factors: BookFactorVector | None,
+) -> str:
+    """The ranked implicit-bets statement — the risk page's organizing frame
+    (Wave 3, surface_density_jit_redesign.md application map #3; the owner's
+    own words chose this over a spider: the screen should state "what am I
+    currently positioned for from a timing of different cycles").
+
+    Every bet is DERIVED from data already on disk (risk snapshot, materialized
+    weights, the C3 factor vector) and states its numbers inline; the sections
+    below carry the evidence. Deterministic prose — no render-path LLM. Ranked
+    by salience (weight/magnitude); an unpopulated source drops its bet."""
+    bets: list[tuple[float, str]] = []
+
+    if weights:
+        top_t, top_w = max(weights.items(), key=lambda kv: kv[1])
+        if top_w >= 0.10:
+            bets.append(
+                (
+                    top_w * 4.0,
+                    f"<strong>Single-name execution at {escape(top_t)}</strong> — "
+                    f"{top_w * 100.0:.1f}% of the book rides one name's outcome. "
+                    '<span class="pfr-bet-nums">Concentration zones + the collision '
+                    "audit below carry the evidence.</span>",
+                )
+            )
+        latam_w = sum(weights.get(t, 0.0) for t in ("NU", "MELI", "STNE"))
+        if latam_w >= 0.10:
+            bets.append(
+                (
+                    latam_w * 3.0,
+                    "<strong>The LatAm credit/FX cycle</strong> — "
+                    f"{latam_w * 100.0:.1f}% of the book moves on Brazil-credit "
+                    "conditions hitting NU/MELI together. "
+                    '<span class="pfr-bet-nums">The joint-LatAm event stress below '
+                    "prices that exact scenario.</span>",
+                )
+            )
+
+    if snapshot is not None and snapshot.growth_tilt is not None:
+        g = snapshot.growth_tilt
+        if abs(g) > 0.1:
+            direction = "growth leadership over value" if g > 0 else "value leadership over growth"
+            rate_txt = ""
+            if snapshot.rate_beta_10y is not None:
+                rate_txt = (
+                    f" Rate sensitivity is near-neutral (10y β {snapshot.rate_beta_10y:+.2f})"
+                    if abs(snapshot.rate_beta_10y) < 0.1
+                    else f" 10y-rate β {snapshot.rate_beta_10y:+.2f}"
+                )
+            bets.append(
+                (
+                    abs(g),
+                    f"<strong>The style cycle: {direction}</strong> "
+                    f'<span class="pfr-bet-nums">(QQQ-SPY tilt {g:+.2f}).{rate_txt}</span>',
+                )
+            )
+
+    if snapshot is not None and snapshot.beta is not None:
+        b = snapshot.beta
+        r2 = snapshot.r_squared
+        idio = (
+            f" — but R² {r2:.2f} means outcomes here are mostly stock-specific, not an index ride"
+            if r2 is not None and r2 < 0.3
+            else ""
+        )
+        bets.append(
+            (
+                min(abs(b - 1.0), 0.9),
+                f"<strong>The market itself</strong> "
+                f'<span class="pfr-bet-nums">(β {b:.2f}{idio}).</span>',
+            )
+        )
+
+    if factors is not None and factors.vector:
+        for name, loading in sorted(
+            factors.vector.items(), key=lambda kv: abs(kv[1]), reverse=True
+        )[:2]:
+            if abs(loading) < 0.05:
+                continue
+            tops = factors.top_contributors.get(name, ())
+            names = ", ".join(t for t, _ in tops[:3])
+            bets.append(
+                (
+                    abs(loading),
+                    f"<strong>{escape(name.replace('_', ' ').title())}</strong> "
+                    f'<span class="pfr-bet-nums">(book loading {loading:+.2f}'
+                    f"{' · via ' + escape(names) if names else ''}).</span>",
+                )
+            )
+
+    head = (
+        '<section class="panel pfr-bets"><h2>What am I positioned for?</h2>'
+        '<p class="sub">The statement your holdings make about the world — the book\'s '
+        "implicit bets, ranked by how much rides on each. The sections below carry "
+        "the evidence.</p>"
+    )
+    if not bets:
+        # D4: nothing derivable yet → one line naming what unlocks the read.
+        return (
+            head + '<p class="muted">Not derivable yet — a risk snapshot (morning '
+            "pipeline) and materialized weights unlock this read.</p></section>"
+        )
+    items = "".join(f"<li>{line}</li>" for _, line in sorted(bets, key=lambda b: -b[0]))
+    return f"{head}<ol>{items}</ol></section>"
+
+
 def compose_risk_page(
     analytics: PortfolioAnalytics,
     *,
@@ -1799,6 +1926,7 @@ def compose_risk_page(
     position_guard: PositionGuardCacheModel | None = None,
     collision: CachedReport | None = None,
     factors: BookFactorVector | None = None,
+    bets: str = "",
 ) -> str:
     """Pure assembly of the Risk page (testable without network or DB). The
     ``#pfr-root`` wrapper is the re-inject target the run-scenario script swaps
@@ -1818,6 +1946,11 @@ def compose_risk_page(
     computed from local disk/DB, so they render in BOTH branches —
     tracker up or down."""
     parts: list[str] = [_RISK_CSS, '<div id="pfr-root">']
+    # The implicit-bets statement leads (Wave 3): the page's organizing frame,
+    # rendered in BOTH branches — "" only when the caller didn't build it
+    # (pure-assembly tests).
+    if bets:
+        parts.append(bets)
     if analytics.available:
         if analytics.beta is not None:
             parts.append(_risk_section(analytics.beta))

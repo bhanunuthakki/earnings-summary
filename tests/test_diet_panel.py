@@ -57,13 +57,14 @@ def db(tmp_path: Path) -> Path:
 
 def test_renders_both_lenses_through_the_kit(db: Path) -> None:
     html = render_diet_panel(db)
-    # ingest stream: the rating + the news, with the consensus_rating pill.
+    # ingest stream, regrouped (Wave 3, D3): the rating lands in the parsed
+    # Sell-side actions table (full title preserved on hover), the news row
+    # stays in the reading list.
     assert "Ingest stream" in html
-    assert "MS upgrades META to Buy" in html
+    assert "Sell-side actions" in html
+    assert "upgrades <strong>Buy</strong>" in html
+    assert 'title="MS upgrades META to Buy"' in html
     assert "Nu launches product" in html
-    # Category pills stay QUIET (neutral .k-pill, no accent): accent is reserved
-    # for interactive/selected/unread, not a decorative category tint (§2).
-    assert 'k-pill">Rating' in html
     # forward agenda: the investor day as a dated row.
     assert "Forward agenda" in html
     assert "Analyst Day 2099" in html
@@ -93,7 +94,9 @@ def test_media_appearance_renders_in_the_stream(db: Path) -> None:
 
 def test_signal_links_to_its_source(db: Path) -> None:
     html = render_diet_panel(db)
-    assert 'href="http://x/2"' in html  # the rating story is a doorway to its url
+    # The parsed rating row is still a doorway to its story (D3 groups
+    # summarize; they never orphan the underlying source).
+    assert 'href="http://x/2"' in html
 
 
 def test_disclosed_scaffolds_are_named_not_promised(db: Path) -> None:
@@ -248,3 +251,89 @@ def test_escapes_untrusted_headline(tmp_path: Path) -> None:
     html = render_diet_panel(d)
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;" in html
+
+
+# --------------------------------------------------------------------------- #
+# Wave 3 (surface_density_jit_redesign.md D3, walkthrough #8): the stream is
+# grouped by kind — parsed sell-side table, filings block, news reading list —
+# never one undifferentiated chronological mix.
+# --------------------------------------------------------------------------- #
+
+
+def test_stream_groups_ratings_filings_and_news(tmp_path: Path) -> None:
+    db = tmp_path / "signals.db"
+    make_news_then_signals(
+        db,
+        [
+            (
+                "NOW",
+                "Macquarie maintains Neutral on NOW; PT $109 -> $110",
+                "http://s/1",
+                "2026-07-23 10:00:00",
+                None,
+                "Macquarie",
+                "yf_grades",
+                "t",
+            ),
+            (
+                "BN",
+                "SC 13D/A: activist stake (>5%) amended - BROOKFIELD Corp",
+                "http://s/2",
+                "2026-07-24 00:31:19",
+                None,
+                "SEC",
+                "edgar_13d",
+                "t",
+            ),
+            (
+                "NU",
+                "Nu wins banking license in Mexico",
+                "http://s/3",
+                "2026-07-22 09:00:00",
+                "s",
+                "Reuters",
+                "fmp_stock_news",
+                "t",
+            ),
+        ],
+    )
+    html = render_diet_panel(db)
+
+    # Three group headers with deterministic summaries.
+    assert "Sell-side actions" in html
+    assert "1 action(s) on 1 name(s)" in html
+    assert "1 PT raise(s) / 0 cut(s)" in html
+    assert "Filings" in html
+    assert "News &amp; podcasts" in html
+    # The rating parsed into firm/action/PT columns with the delta anchored.
+    assert "maintains <strong>Neutral</strong>" in html
+    assert "$109 →" in html and "$110" in html and "(+1%)" in html
+    # The filing's kind lifted into a chip, headline de-prefixed.
+    assert 'k-chip k-chip-mono">SC 13D/A</span>' in html
+    # Groups order: ratings, filings, then the news reading list.
+    assert html.index("Sell-side actions") < html.index("Filings")
+    assert html.index("Filings") < html.index("News &amp; podcasts")
+
+
+def test_stream_group_absent_when_kind_absent(tmp_path: Path) -> None:
+    """An empty group renders NO header (hide-don't-stub) — news only here."""
+    db = tmp_path / "signals.db"
+    make_news_then_signals(
+        db,
+        [
+            (
+                "NU",
+                "Nu launches product",
+                "http://x/1",
+                "2026-06-01 12:00:00",
+                "s",
+                "Reuters",
+                "fmp_stock_news",
+                "t",
+            )
+        ],
+    )
+    html = render_diet_panel(db)
+    assert "Sell-side actions" not in html
+    assert ">Filings" not in html
+    assert "News &amp; podcasts" in html
