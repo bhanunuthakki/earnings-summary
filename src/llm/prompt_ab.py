@@ -54,6 +54,16 @@ KEEP_BASELINE = "KEEP_BASELINE"
 AB_HOLD = "HOLD"
 AB_INSUFFICIENT = "INSUFFICIENT_DATA"
 VARIANT_ERRORED = "VARIANT_ERRORED"
+# A composed arm that scores BELOW the best of the arms it was built from: its
+# two edits are individually fine and jointly harmful. Distinct from
+# KEEP_BASELINE, which would wrongly imply the components were bad too.
+INTERACTION_NEGATIVE = "INTERACTION_NEGATIVE"
+# The TRANSPORT failed on both sides — nothing was measured about the prompt.
+# Without this, a failing CLI reads as "the variant is broken" (VARIANT_ERRORED)
+# and the bandit learns to avoid whichever strategy was unlucky enough to be
+# drawn during an outage. Measured 2026-07-24: the platform-wide llm_calls error
+# rate ran 72% for the month, so this is the common case, not a corner one.
+TRANSPORT_DEGRADED = "TRANSPORT_DEGRADED"
 
 # Promotion bar (§4.4): asymmetric to the model-switch bar — a prompt change is
 # cheap and reversible, but churn has cost and "provably better" still rules.
@@ -63,6 +73,10 @@ PROMOTION_MIN_AGREEMENT = 0.6
 PROMOTION_MIN_RUNS = 2
 PROMOTION_MIN_CASES = 10
 VARIANT_ERROR_RATE_THRESHOLD = 0.5  # mirrors CANDIDATE_ERROR_RATE_THRESHOLD
+# Baseline error rate above which a variant's failures are attributed to the
+# transport rather than to the edit. The baseline is UNEDITED, so anything it
+# fails on is not the variant's fault by construction.
+TRANSPORT_FLOOR = 0.25
 
 SET_BY_AUTO_AB = "auto:prompt_ab_loop"
 
@@ -70,32 +84,42 @@ SET_BY_AUTO_AB = "auto:prompt_ab_loop"
 PROPOSE_PROMPT = """\
 You are improving one production LLM prompt via a SMALL, surgical edit set.
 
-Purpose: "{purpose}". Below are (1) the CURRENT prompt template (the checked-in
-instruction scaffold), (2) one real rendered example (scaffold + per-ticker
-data), and (3) the improvement signal — where this prompt's outputs recently
-lost quality facets or eval points.
+Purpose: "{purpose}". Below are (1) the SCAFFOLD BLOCKS — the parts of this
+prompt that are byte-identical across every captured production render, i.e.
+the instruction text as opposed to the per-request data, (2) one real rendered
+example so you can see scaffold and data in context, (3) the improvement signal
+showing where this prompt's outputs recently lost quality, and (4) the
+DIRECTION your edit must take this cycle.
 
-Propose ONE variant as an ordered list of exact-match edits ON THE SCAFFOLD.
+Propose ONE variant as an ordered list of exact-match edits.
 Hard rules:
-- Each "find" string must occur EXACTLY ONCE in the template AND inside the
-  rendered example — never touch the per-ticker data region.
+- Every "find" string MUST be copied verbatim from inside a SCAFFOLD BLOCK. That
+  is the only region proven safe to edit; anything else risks mutating the
+  per-request data on some future render.
+- Each "find" must occur EXACTLY ONCE in the block you took it from.
 - Preserve WHAT is asked (same task, same output consumer). Changing task
   semantics is a product change, out of scope.
-- Fewest edits that plausibly fix the signal. 1-4 edits.
+- Follow the REQUIRED DIRECTION. Do not substitute a different improvement you
+  happen to prefer — other directions are being tested as separate arms, and an
+  off-direction edit corrupts the comparison.
+- Fewest edits that plausibly work. 1-4 edits.
 
 Respond with ONLY a JSON object:
 {{"hypothesis": "<one line: what should improve and why>",
  "edits": [{{"find": "<exact substring>", "replace": "<replacement>"}}, ...],
  "expected_effect": "<which facet/criteria should move>"}}
 
-=== CURRENT TEMPLATE ===
-{template}
+=== SCAFFOLD BLOCKS (the only legal edit targets) ===
+{scaffold}
 
 === RENDERED EXAMPLE ===
 {example}
 
 === IMPROVEMENT SIGNAL ===
 {signal}
+
+=== REQUIRED DIRECTION FOR THIS EDIT ===
+{direction}
 """
 
 StructCall = Callable[..., object]
@@ -195,9 +219,16 @@ def propose_variant(
     rendered_example: str,
     improvement_signal: str,
     struct: StructCall | None = None,
+    direction: str = "No specific direction — make the single highest-value edit.",
 ) -> VariantProposal | None:
     """One proposal pass (Opus). Returns None on any failure — proposing is
-    steering, never load-bearing."""
+    steering, never load-bearing.
+
+    ``template`` carries the scaffold the edits must be quoted from (the derived
+    block menu from ``llm.prompt_scaffold``, or a checked-in template for the
+    legacy ``--template-file`` path). ``direction`` is the drawn strategy's
+    constraint; the default keeps the single-shot legacy behaviour usable.
+    """
     struct_fn: StructCall
     if struct is None:
         from llm.structured import call_llm_structured
@@ -209,9 +240,10 @@ def propose_variant(
         payload = struct_fn(
             PROPOSE_PROMPT.format(
                 purpose=purpose,
-                template=template[:12000],
+                scaffold=template[:12000],
                 example=rendered_example[:8000],
                 signal=improvement_signal[:4000],
+                direction=direction[:1200],
             ),
             purpose=PROPOSE_PURPOSE,
             scope="meta_eval",
@@ -292,6 +324,183 @@ def create_experiment(
     return experiment_id
 
 
+# ---------------------------------------------------------------------------
+# Arms (mig 0200) — parallel + composed variants against one shared sample
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class PromptArm:
+    """One non-baseline arm. The baseline is implicit and never an arm."""
+
+    arm_label: str
+    edits: tuple[PromptEdit, ...]
+    hypothesis: str
+    strategy_key: str  # comma-separated for a composed arm
+    source: str = "fresh"  # 'fresh' | 'composed'
+    composed_from: tuple[str, ...] = ()
+
+    @property
+    def is_composed(self) -> bool:
+        return self.source == "composed"
+
+
+def compose(
+    left: PromptArm, right: PromptArm, *, arm_label: str, scaffold_text: str | None = None
+) -> PromptArm | None:
+    """Union two arms into a combination arm, or None if they cannot compose.
+
+    Two edit sets conflict when they touch overlapping text: applying one
+    destroys the other's anchor, so ``apply_edits`` would raise mid-splice and
+    the arm would read as an authoring failure. Detecting it here keeps the
+    conflict out of the spend path entirely.
+
+    The check is a substring-overlap test on the ``find`` strings plus, when a
+    scaffold is supplied, a real dry-run splice — the dry run is what actually
+    proves composability, since two non-overlapping finds can still collide if
+    one's REPLACE text contains the other's find.
+    """
+    left_finds = [e.find for e in left.edits]
+    right_finds = [e.find for e in right.edits]
+    for lf in left_finds:
+        for rf in right_finds:
+            if lf in rf or rf in lf:
+                return None
+    merged = (*left.edits, *right.edits)
+    if scaffold_text is not None:
+        try:
+            apply_edits(scaffold_text, merged)
+        except EditAnchorError:
+            return None
+    return PromptArm(
+        arm_label=arm_label,
+        edits=merged,
+        hypothesis=(
+            f"COMBINATION of {left.arm_label} + {right.arm_label}: "
+            f"{left.hypothesis[:150]} || {right.hypothesis[:150]}"
+        )[:400],
+        strategy_key=",".join(
+            dict.fromkeys([*left.strategy_key.split(","), *right.strategy_key.split(",")])
+        ),
+        source="composed",
+        composed_from=(left.arm_label, right.arm_label),
+    )
+
+
+def write_arms(db_path: Path, experiment_id: str, arms: tuple[PromptArm, ...]) -> None:
+    """Persist an experiment's arms (mig 0200)."""
+    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    try:
+        conn.executemany(
+            """
+            INSERT INTO prompt_arms
+                (experiment_id, arm_label, edits_json, hypothesis, strategy_key,
+                 source, composed_from, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    experiment_id,
+                    arm.arm_label,
+                    edits_to_json(arm.edits),
+                    arm.hypothesis,
+                    arm.strategy_key,
+                    arm.source,
+                    ",".join(arm.composed_from) if arm.composed_from else None,
+                    _now_iso(),
+                )
+                for arm in arms
+            ],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def load_arms(db_path: Path, experiment_id: str) -> tuple[PromptArm, ...]:
+    """The experiment's arms, or a single synthesised arm from the legacy
+    ``prompt_experiments.edits_json`` when no arm rows exist.
+
+    The two shapes are distinguishable by construction (arm rows present or
+    absent), so the legacy path is a visible fallback, not a silent
+    reinterpretation of new-shape data.
+    """
+    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    try:
+        if _has_table(conn, "prompt_arms"):
+            rows = conn.execute(
+                "SELECT * FROM prompt_arms WHERE experiment_id = ? ORDER BY arm_label",
+                (experiment_id,),
+            ).fetchall()
+            if rows:
+                return tuple(
+                    PromptArm(
+                        arm_label=str(r["arm_label"]),
+                        edits=edits_from_json(str(r["edits_json"])),
+                        hypothesis=str(r["hypothesis"] or ""),
+                        strategy_key=str(r["strategy_key"] or ""),
+                        source=str(r["source"] or "fresh"),
+                        composed_from=tuple(
+                            p for p in str(r["composed_from"] or "").split(",") if p
+                        ),
+                    )
+                    for r in rows
+                )
+        legacy = conn.execute(
+            "SELECT edits_json, hypothesis FROM prompt_experiments WHERE experiment_id = ?",
+            (experiment_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if legacy is None:
+        return ()
+    edits = edits_from_json(str(legacy["edits_json"]))
+    if not edits:
+        return ()
+    return (
+        PromptArm(
+            arm_label="A",
+            edits=edits,
+            hypothesis=str(legacy["hypothesis"] or ""),
+            strategy_key="",
+            source="fresh",
+        ),
+    )
+
+
+def detect_negative_interaction(
+    arm_results: dict[str, tuple[str, float]],
+    arms: tuple[PromptArm, ...],
+) -> dict[str, str]:
+    """Relabel composed arms that underperform their own components.
+
+    ``arm_results`` maps arm_label -> (recommendation, win_rate). A composed arm
+    is flagged when its win rate falls below the best component's — the
+    combination destroyed value the parts had. Only DECIDED components count:
+    comparing against a component whose run was TRANSPORT_DEGRADED would compare
+    a real number against an artefact of the outage.
+    """
+    relabelled: dict[str, str] = {}
+    neutral = {TRANSPORT_DEGRADED, AB_INSUFFICIENT, VARIANT_ERRORED}
+    for arm in arms:
+        if not arm.is_composed or arm.arm_label not in arm_results:
+            continue
+        own_rec, own_rate = arm_results[arm.arm_label]
+        if own_rec in neutral:
+            continue
+        component_rates = [
+            arm_results[label][1]
+            for label in arm.composed_from
+            if label in arm_results and arm_results[label][0] not in neutral
+        ]
+        if not component_rates:
+            continue
+        if own_rate < max(component_rates):
+            relabelled[arm.arm_label] = INTERACTION_NEGATIVE
+    return relabelled
+
+
 def record_ab_verdict(
     db_path: Path,
     *,
@@ -307,33 +516,56 @@ def record_ab_verdict(
     recommendation: str,
     reason: str,
     summary_json: str | None = None,
+    arm_label: str | None = None,
 ) -> None:
-    """Append one experiment run's verdict (rolling INSERTs, never upserts)."""
+    """Append one experiment run's verdict (rolling INSERTs, never upserts).
+
+    ``arm_label`` is written only when the column exists (mig 0200) — the
+    function stays usable against a pre-0200 DB rather than raising, which keeps
+    the legacy two-arm path and its tests working unchanged.
+    """
     conn = sqlite3.connect(str(db_path), timeout=10.0)
     try:
+        has_arm_col = any(
+            r[1] == "arm_label" for r in conn.execute("PRAGMA table_info(prompt_ab_verdicts)")
+        )
+        columns = [
+            "experiment_id",
+            "purpose",
+            "run_id",
+            "n_cases",
+            "variant_wins",
+            "baseline_wins",
+            "ties",
+            "win_rate",
+            "judge_agreement",
+            "recommendation",
+            "reason",
+            "summary_json",
+            "recorded_at",
+        ]
+        values: list[object] = [
+            experiment_id,
+            purpose,
+            run_id,
+            n_cases,
+            variant_wins,
+            baseline_wins,
+            ties,
+            win_rate,
+            judge_agreement,
+            recommendation,
+            reason,
+            summary_json,
+            _now_iso(),
+        ]
+        if has_arm_col:
+            columns.append("arm_label")
+            values.append(arm_label)
+        placeholders = ",".join("?" * len(columns))
         conn.execute(
-            """
-            INSERT INTO prompt_ab_verdicts
-                (experiment_id, purpose, run_id, n_cases, variant_wins,
-                 baseline_wins, ties, win_rate, judge_agreement, recommendation,
-                 reason, summary_json, recorded_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                experiment_id,
-                purpose,
-                run_id,
-                n_cases,
-                variant_wins,
-                baseline_wins,
-                ties,
-                win_rate,
-                judge_agreement,
-                recommendation,
-                reason,
-                summary_json,
-                _now_iso(),
-            ),
+            f"INSERT INTO prompt_ab_verdicts ({','.join(columns)}) VALUES ({placeholders})",
+            tuple(values),
         )
         conn.commit()
     finally:
@@ -347,16 +579,32 @@ def decide_ab(
     n_cases_attempted: int,
     n_variant_errors: int,
     min_cases: int = 4,
+    n_baseline_errors: int = 0,
 ) -> tuple[str, str]:
     """One run's recommendation from per-judge tallies (§4.3 — the
     decide_switch math, relabeled). The PROMOTION bar additionally pools >=2
-    runs / >=10 cases via ``promotion_ready``."""
+    runs / >=10 cases via ``promotion_ready``.
+
+    ``n_baseline_errors`` separates an authoring failure from a transport
+    failure. The baseline prompt is UNEDITED, so its failures cannot be caused
+    by the variant's edits; when it is failing too, the run measured the CLI,
+    not the prompt, and must not be recorded as evidence about either.
+    """
     error_rate = n_variant_errors / n_cases_attempted if n_cases_attempted else 0.0
+    baseline_error_rate = n_baseline_errors / n_cases_attempted if n_cases_attempted else 0.0
+    if n_cases_attempted > 0 and baseline_error_rate >= TRANSPORT_FLOOR:
+        return (
+            TRANSPORT_DEGRADED,
+            f"baseline itself failed on {n_baseline_errors}/{n_cases_attempted} case(s) "
+            f"({baseline_error_rate:.0%}) — the transport is down, nothing was measured "
+            "about the prompt; neutral for the bandit and the promotion bar",
+        )
     if n_cases_attempted > 0 and error_rate >= VARIANT_ERROR_RATE_THRESHOLD:
         return (
             VARIANT_ERRORED,
             f"variant failed operationally on {n_variant_errors}/{n_cases_attempted} case(s) "
-            f"({error_rate:.0%}) — an authoring failure, not a quality verdict",
+            f"({error_rate:.0%}) while the baseline held "
+            f"({baseline_error_rate:.0%}) — an authoring failure, not a quality verdict",
         )
     totals = [vw + bw + ti for (vw, bw, ti) in per_judge.values()]
     n = max(totals) if totals else 0
@@ -383,20 +631,41 @@ def decide_ab(
     return AB_HOLD, "mixed: below the promotion bar for some judge"
 
 
-def promotion_ready(db_path: Path, experiment_id: str) -> tuple[bool, str]:
+def promotion_ready(
+    db_path: Path, experiment_id: str, *, arm_label: str | None = None
+) -> tuple[bool, str]:
     """§4.4 pooled bar: >=PROMOTION_MIN_RUNS runs recommending PROMOTE_VARIANT
-    and >=PROMOTION_MIN_CASES distinct judged cases total, no KEEP_BASELINE."""
+    and >=PROMOTION_MIN_CASES distinct judged cases total, no KEEP_BASELINE.
+
+    With ``arm_label`` the bar is evaluated for THAT arm alone — arms compete
+    independently, and one arm losing says nothing about another's edits.
+    Passing None keeps the legacy whole-experiment behaviour.
+
+    TRANSPORT_DEGRADED and INTERACTION_NEGATIVE are handled explicitly:
+    the former is neutral (it measured the CLI, not the prompt) while the latter
+    is disqualifying (the combination was measured, and it was worse).
+    """
     try:
         conn = sqlite3.connect(str(db_path), timeout=10.0)
         conn.row_factory = sqlite3.Row
         try:
             if not _has_table(conn, "prompt_ab_verdicts"):
                 return False, "prompt_ab_verdicts absent"
-            rows = conn.execute(
-                "SELECT recommendation, n_cases FROM prompt_ab_verdicts "
-                "WHERE experiment_id = ? ORDER BY recorded_at",
-                (experiment_id,),
-            ).fetchall()
+            has_arm_col = any(
+                r[1] == "arm_label" for r in conn.execute("PRAGMA table_info(prompt_ab_verdicts)")
+            )
+            if arm_label is not None and has_arm_col:
+                rows = conn.execute(
+                    "SELECT recommendation, n_cases FROM prompt_ab_verdicts "
+                    "WHERE experiment_id = ? AND arm_label = ? ORDER BY recorded_at",
+                    (experiment_id, arm_label),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT recommendation, n_cases FROM prompt_ab_verdicts "
+                    "WHERE experiment_id = ? ORDER BY recorded_at",
+                    (experiment_id,),
+                ).fetchall()
         finally:
             conn.close()
     except sqlite3.Error as exc:
@@ -404,14 +673,18 @@ def promotion_ready(db_path: Path, experiment_id: str) -> tuple[bool, str]:
     recs = [str(r["recommendation"]) for r in rows]
     if KEEP_BASELINE in recs:
         return False, "a run concluded KEEP_BASELINE"
+    if INTERACTION_NEGATIVE in recs:
+        return False, "a run concluded INTERACTION_NEGATIVE (the combination hurt)"
     promotes = [r for r in rows if str(r["recommendation"]) == PROMOTE_VARIANT]
     total_cases = sum(int(r["n_cases"] or 0) for r in promotes)
     if len(promotes) >= PROMOTION_MIN_RUNS and total_cases >= PROMOTION_MIN_CASES:
         return True, f"{len(promotes)} promoting run(s), {total_cases} pooled cases"
+    n_transport = sum(1 for r in recs if r == TRANSPORT_DEGRADED)
+    suffix = f" ({n_transport} run(s) neutral: transport degraded)" if n_transport else ""
     return (
         False,
         f"{len(promotes)}/{PROMOTION_MIN_RUNS} promoting run(s), "
-        f"{total_cases}/{PROMOTION_MIN_CASES} pooled cases",
+        f"{total_cases}/{PROMOTION_MIN_CASES} pooled cases{suffix}",
     )
 
 
