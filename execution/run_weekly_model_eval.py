@@ -26,6 +26,14 @@ does four things in order:
      model_pin_overrides + alerts, and every verdict carries its full per-case
      judge rationale + sample manifest in summary_json — so the whole loop is
      auditable from the DB alone.
+  4. PROMPT CYCLES: randomized prompt A/B (meta_eval_governance.md §4) — draw a
+     purpose by leverage×deficit, derive its scaffold from the captured renders,
+     Thompson-sample edit strategies, propose one arm per strategy plus a
+     COMBINATION arm, judge them all against one shared sample, and promote any
+     arm clearing the pooled §4.4 bar. Steps 0-3 improve the MODEL behind a
+     prompt; step 4 improves the prompt itself. Bounded by a month-to-date
+     measurement-spend ceiling (``--prompt-budget``), and it degrades on its own
+     — a failed cycle never takes the model loop down with it.
 
 Capture isolation: the harvest sets LLM_CAPTURE_DIR only in the harvest
 subprocess env; this orchestrator's own process never has it set, so the sweep's
@@ -208,6 +216,22 @@ def main() -> int:
         "so the sweep's per-tier n — RISKY 16 / default 12 — governs; lower it "
         "only for quick manual runs)",
     )
+    parser.add_argument(
+        "--prompt-cycles",
+        type=int,
+        default=2,
+        help="randomized prompt A/B cycles to run after the model loop (0 disables). "
+        "Owner ceiling 2026-07-24: 2-3/week inside a $40/mo meta budget.",
+    )
+    parser.add_argument(
+        "--prompt-cases", type=int, default=12, help="cases per prompt A/B arm (default 12)"
+    )
+    parser.add_argument(
+        "--prompt-budget",
+        type=float,
+        default=40.0,
+        help="month-to-date measurement-spend ceiling; cycles stop when reached",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -296,6 +320,7 @@ def main() -> int:
     # ---- 3. Apply (auto-switch) ----
     if args.skip_apply:
         log.info("--skip-apply: not applying switches")
+        _run_prompt_cycles(repo_root, db_path, capture_dir, args)
         return 0
 
     from apply_model_switches import evaluate_switches
@@ -314,7 +339,76 @@ def main() -> int:
     log.info(
         "=== done: %d verdict(s), %d switched, %d reverted ===", len(verdicts), switched, reverted
     )
+
+    # ---- 4. Prompt-improvement cycles ----
+    _run_prompt_cycles(repo_root, db_path, capture_dir, args)
     return 0
+
+
+def _run_prompt_cycles(
+    repo_root: Path, db_path: Path, capture_dir: Path, args: argparse.Namespace
+) -> None:
+    """Step 4: randomized prompt A/B cycles (meta_eval_governance.md §4).
+
+    Rides THIS weekly job rather than registering its own schedule — the
+    scheduling directive's rule for anything with an LLM leg, and it keeps every
+    measurement burst inside one already-protected window instead of scattering
+    three across the week.
+
+    The real governor is the MONTHLY budget checked inside each cycle, not the
+    cycle count: a week where proposals fail cheaply should not consume the same
+    budget as a week where every arm ran.
+
+    Degrades per the §4 policy — a failed cycle is logged and the next one still
+    runs; prompt improvement is steering and must never take the model loop down
+    with it.
+    """
+    if args.prompt_cycles <= 0:
+        log.info("--prompt-cycles 0: skipping prompt A/B")
+        return
+    from run_prompt_ab_cycle import meta_spend_this_month, persist_plan, plan_cycle
+
+    log.info("--- step 4: %d prompt A/B cycle(s) ---", args.prompt_cycles)
+    for i in range(args.prompt_cycles):
+        spent = meta_spend_this_month(db_path)
+        if spent >= args.prompt_budget:
+            log.warning(
+                "prompt cycles stopped: meta spend $%.2f >= ceiling $%.2f",
+                spent,
+                args.prompt_budget,
+            )
+            return
+        try:
+            plan = plan_cycle(db_path, capture_dir)
+        except Exception as exc:  # steering: never take the weekly job down
+            log.warning("prompt cycle %d planning failed (%s)", i + 1, str(exc)[:200])
+            continue
+        if plan is None:
+            log.info("prompt cycle %d: nothing eligible to experiment on", i + 1)
+            continue
+        experiment_id = persist_plan(db_path, plan)
+        log.info(
+            "prompt cycle %d: experiment %s on '%s' with %d arm(s) [%s]",
+            i + 1,
+            experiment_id,
+            plan.purpose,
+            len(plan.arms),
+            ", ".join(a.strategy_key for a in plan.arms),
+        )
+        try:
+            from run_prompt_ab import run_experiment
+
+            verdict = run_experiment(
+                db_path,
+                capture_dir,
+                experiment_id,
+                judges=["claude", "gemini"],
+                n=args.prompt_cases,
+                timeout_seconds=None,
+            )
+            log.info("prompt cycle %d: %s", i + 1, verdict)
+        except Exception as exc:
+            log.warning("prompt cycle %d run failed (%s)", i + 1, str(exc)[:200])
 
 
 if __name__ == "__main__":
