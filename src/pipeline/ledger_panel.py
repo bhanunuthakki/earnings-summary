@@ -1499,7 +1499,7 @@ def _reply_placeholder(item: FeedItem) -> str:
         return "Reply - research it, save it, or ask about it..."
     if _is_question_item(item):
         return "Ask a follow-up..."
-    if item.wondering:
+    if item.wondering or item.wondering_route:
         return "Reply - research it, or just talk it through..."
     return "Reply - save it, send to research, or talk it through..."
 
@@ -1516,6 +1516,34 @@ def _feed_actions(item: FeedItem) -> str:
         '<button type="button" class="k-btn k-btn-primary k-btn-sm" data-om-reply>Send</button>'
         + _verb_button("dismiss", "Dismiss", "k-btn-danger")
     )
+
+
+# wondering_route -> the badge's short label. research_task keeps the
+# original bare "wondering" text (the task itself is that route's receipt,
+# same as before this fix); the two taskless routes get their own label so
+# the badge still tells the truth about what happened, not just that
+# something was captured.
+_WONDERING_ROUTE_LABEL: dict[str, str] = {
+    "research_task": "wondering",
+    "answer_now": "answerable",
+    "belief_candidate": "belief",
+}
+
+
+def _wondering_badge(item: FeedItem) -> str:
+    """The Wondering badge (B7 fix, 2026-07-25): before this, the badge was
+    `item.wondering` truthiness — true only for the research_task route, so a
+    wondering B7 correctly triaged to answer_now/belief_candidate vanished
+    from the feed's visual vocabulary entirely (the exact "silently
+    disappears" failure B7 exists to close, relocated one layer up). Now
+    keyed off `wondering_route`, which is set for all three routes; the
+    taskless two carry the triage's one-line reasoning as a tooltip."""
+    route = item.wondering_route
+    if route is None:
+        return ""
+    label = _WONDERING_ROUTE_LABEL.get(route, route)
+    title = f' title="{escape(item.wondering_why, quote=True)}"' if item.wondering_why else ""
+    return f'<span class="ledger-needs"{title}>{escape(label)}</span>'
 
 
 def _feed_card(item: FeedItem) -> str:
@@ -1547,7 +1575,7 @@ def _feed_card(item: FeedItem) -> str:
         type_chip = f'<span class="ledger-chan">{escape(channel)}</span>' if channel else ""
     else:
         type_chip = f'<span class="ledger-chan">{escape(item.item_type)}</span>'
-    wondering = '<span class="ledger-needs">wondering</span>' if item.wondering else ""
+    wondering = _wondering_badge(item)
     ladder_label = LADDER_LABELS.get(item.ladder or "", "")
     if item.ladder == "incorporated":
         # Wave B (B7): "in research" is a doorway, not an inert badge — the

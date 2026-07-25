@@ -78,6 +78,16 @@ class FeedItem:
     item_type: str  # 'musing' | 'doc' | 'link'
     ladder: str | None  # None | 'saved' | 'discuss' | 'incorporated'
     wondering: ResearchTask | None  # the batched-resolved research task, if any
+    # B7 routing regression fix (2026-07-25): a wondering triaged to answer_now
+    # or belief_candidate creates NO task, so `wondering` above is None for it —
+    # exactly the "silently disappears" failure B7 was built to close on the
+    # OTHER two routes. wondering_route tells the badge which of the three B7
+    # routes fired (None ⇒ not a detected wondering at all), independent of
+    # whether a task exists; wondering_why carries the triage's one-line
+    # reasoning for the two taskless routes (empty for research_task, where the
+    # task itself is the receipt).
+    wondering_route: str | None = None  # "research_task" | "answer_now" | "belief_candidate"
+    wondering_why: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +119,28 @@ def _item_type(note: AnalystNoteRow) -> str:
 def _ladder(note: AnalystNoteRow) -> str | None:
     val = (note.context or {}).get("ladder")
     return str(val) if isinstance(val, str) and val else None
+
+
+# The two B7 routes that create no task — research.proposals._route_wondering
+# never stamps context['research_route'] for research_task (the task row IS
+# that route's receipt), so this set is exhaustive for the context-derived case.
+_TASKLESS_WONDERING_ROUTES = frozenset({"answer_now", "belief_candidate"})
+
+
+def _wondering_route_and_why(note: AnalystNoteRow, *, has_task: bool) -> tuple[str | None, str]:
+    """Which B7 route this note's wondering took, and why (taskless routes
+    only) — derived from the SAME note row the feed already fetched, so this
+    costs no extra query (no N+1 across a page). Task presence always wins
+    (it's the ground truth); the context stamp is only consulted for the two
+    routes that leave no other trace."""
+    if has_task:
+        return "research_task", ""
+    ctx = note.context or {}
+    route = ctx.get("research_route")
+    if not isinstance(route, str) or route not in _TASKLESS_WONDERING_ROUTES:
+        return None, ""
+    why = ctx.get("research_route_why")
+    return route, str(why)[:200] if isinstance(why, str) else ""
 
 
 def _encode_cursor(note: AnalystNoteRow) -> str:
@@ -149,15 +181,20 @@ def load_feed(
     has_more = len(rows) > limit
     rows = rows[:limit]
     tasks = get_tasks_for_notes([r.id for r in rows], db_path=db_path)
-    items = [
-        FeedItem(
-            note=r,
-            item_type=_item_type(r),
-            ladder=_ladder(r),
-            wondering=tasks.get(r.id),
+    items = []
+    for r in rows:
+        task = tasks.get(r.id)
+        route, why = _wondering_route_and_why(r, has_task=task is not None)
+        items.append(
+            FeedItem(
+                note=r,
+                item_type=_item_type(r),
+                ladder=_ladder(r),
+                wondering=task,
+                wondering_route=route,
+                wondering_why=why,
+            )
         )
-        for r in rows
-    ]
     next_cursor = _encode_cursor(rows[-1]) if (has_more and rows) else None
     return FeedPage(items=items, next_cursor=next_cursor)
 
@@ -175,11 +212,15 @@ def load_feed_item(
     if note is None or note.kind not in FEED_KINDS or note.status == "archived":
         return None
     tasks = get_tasks_for_notes([note.id], db_path=db_path)
+    task = tasks.get(note.id)
+    route, why = _wondering_route_and_why(note, has_task=task is not None)
     return FeedItem(
         note=note,
         item_type=_item_type(note),
         ladder=_ladder(note),
-        wondering=tasks.get(note.id),
+        wondering=task,
+        wondering_route=route,
+        wondering_why=why,
     )
 
 

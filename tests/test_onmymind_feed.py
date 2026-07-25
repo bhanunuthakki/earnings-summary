@@ -15,7 +15,7 @@ from alembic.config import Config
 from alembic import command
 from capture import ingest, research_notify, telegram
 from capture.matcher import build_roster_index
-from onmymind.feed import FeedItem, act_on_feed_item, load_feed, onmymind_enabled
+from onmymind.feed import FeedItem, act_on_feed_item, load_feed, load_feed_item, onmymind_enabled
 from pipeline.ledger_panel import render_ledger_panel, render_onmymind_list
 from research import proposals
 from user_state import notes
@@ -172,6 +172,69 @@ def test_wondering_badge_is_batched(db_path: Path) -> None:
     assert w is not None
     assert w.ticker == "NU"
     assert by_id[flat].wondering is None
+    # research_task is the only route that ever populates `wondering`, but
+    # wondering_route names it too (symmetry with the two taskless routes).
+    assert by_id[wonder].wondering_route == "research_task"
+    assert by_id[flat].wondering_route is None
+
+
+def _triage(route: str, why: str = "test reason") -> object:
+    def _call(_prompt: str) -> dict[str, object]:
+        return {"route": route, "why": why}
+
+    return _call
+
+
+def test_wondering_badge_survives_answer_now_routing(db_path: Path) -> None:
+    """B7 fix (2026-07-25): before this, a wondering B7 correctly routed to
+    answer_now created no task, so the feed's ONLY badge signal (`wondering`
+    truthiness) went dark — the exact "disappears silently" failure B7 exists
+    to close, relocated from research_tasks to the feed itself."""
+    nid = _musing(db_path, "what's my cost basis on NU?")
+    proposals.detect_and_create_task(
+        nid, db_path=db_path, call=_yes, triage_call=_triage("answer_now", "platform owns this")
+    )
+    item = load_feed(db_path=db_path).items[0]
+    assert item.note.id == nid
+    assert item.wondering is None  # no task — this is the regression's exact shape
+    assert item.wondering_route == "answer_now"
+    assert item.wondering_why == "platform owns this"
+    # load_feed_item (the card-level refresh read) must agree with the page read.
+    solo = load_feed_item(nid, db_path=db_path)
+    assert solo is not None
+    assert solo.wondering_route == "answer_now"
+    html = render_onmymind_list(db_path)
+    assert "answerable" in html
+    assert 'title="platform owns this"' in html
+
+
+def test_wondering_badge_survives_belief_candidate_routing(db_path: Path) -> None:
+    nid = _musing(db_path, "I sell my winners too early")
+    proposals.detect_and_create_task(
+        nid,
+        db_path=db_path,
+        call=_yes,
+        triage_call=_triage("belief_candidate", "reads like a standing view"),
+    )
+    item = load_feed(db_path=db_path).items[0]
+    assert item.wondering is None
+    assert item.wondering_route == "belief_candidate"
+    assert item.wondering_why == "reads like a standing view"
+    note = notes.get_note(nid, db_path=db_path)
+    assert note is not None and (note.context or {}).get("ladder") == "saved"
+    html = render_onmymind_list(db_path)
+    assert "belief" in html
+
+
+def test_no_wondering_route_for_a_plain_observation(db_path: Path) -> None:
+    """A note that was never a wondering at all (research_route absent from
+    context) must not fabricate a route — None, not an empty-string route."""
+    nid = _musing(db_path, "flat observation about the tape")
+    item = load_feed(db_path=db_path).items[0]
+    assert item.note.id == nid
+    assert item.wondering is None
+    assert item.wondering_route is None
+    assert item.wondering_why == ""
 
 
 def test_dismissed_items_leave_the_feed(db_path: Path) -> None:
