@@ -394,6 +394,157 @@ def test_split_10k_warns_when_core_sections_missing() -> None:
     assert "missing_mdna" in result.warnings
 
 
+def _fake_10k_dotless_toc() -> str:
+    """A table of contents with NO dotted leaders at all -- each item title and
+    its page number are separate lines/block elements, the real production
+    shape for NU's 20-F and FCX's 10-K (``docs/design`` / PR description).
+    ``_TOC_LEADER`` alone would accept every one of these as a real header.
+    """
+    filler = "\n".join("Body prose about the business and its operations." for _ in range(60))
+    return "\n".join(
+        [
+            "TABLE OF CONTENTS",
+            "",
+            "Item 1. Business",
+            "3",
+            "",
+            "Item 1A. Risk Factors",
+            "9",
+            "",
+            "Item 7. Management's Discussion and Analysis of Financial Condition",
+            "40",
+            "",
+            "Item 8. Financial Statements and Supplementary Data",
+            "60",
+            "",
+            "Item 1. Business",
+            filler,
+            "Item 1A. Risk Factors",
+            filler,
+            "Item 7. Management's Discussion and Analysis of Financial Condition",
+            filler,
+            "Item 8. Financial Statements and Supplementary Data",
+            filler,
+        ]
+    )
+
+
+def test_split_10k_rejects_dotless_toc_without_leaders() -> None:
+    """Regression for the diagnosed defect: NU's 20-F and FCX's 10-K render
+    their TOC as one title per line and one bare page number per line, with no
+    dots anywhere, so the old ``_TOC_LEADER``-only filter let the chain latch
+    onto it (NU's Item 2 slice opened with TOC page numbers; FCX's Item 1B
+    ballooned to ~298K chars of everything between the TOC and Item 1C's real
+    body). The chain must still find the real body here, not the TOC."""
+    result = edgar_sections.split_10k(_fake_10k_dotless_toc())
+    concepts = [s.concept for s in result.slices]
+    assert "risk_factors" in concepts
+    assert "mdna" in concepts
+    risk = next(s for s in result.slices if s.concept == "risk_factors")
+    assert "Body prose" in risk.text
+    first_line = risk.text.strip().splitlines()[0]
+    assert not first_line.strip().isdigit(), "a bare TOC page number leaked into the body slice"
+
+
+# --- new integrity checks: trivial-section-oversized + mid-sentence share ---
+
+
+def test_trivial_section_oversized_flags_implausibly_large_concept() -> None:
+    """unresolved_staff_comments / mine_safety / offer_statistics are almost
+    always one line of "Not applicable." -- a slice this size under one of
+    those labels means a boundary swallowed a neighboring item's disclosure,
+    which is exactly what happened to FCX (~298K chars) and NU (~87-106K)."""
+    prose = "Disclosure prose that fills out the body. " * 200
+    oversized = [
+        edgar_sections.SectionSlice(
+            key="Item 1B", text=prose, ordinal=0, concept="unresolved_staff_comments"
+        )
+    ]
+    assert edgar_sections._trivial_section_oversized(oversized)
+
+    trivial = [
+        edgar_sections.SectionSlice(
+            key="Item 1B", text="Not applicable.", ordinal=0, concept="unresolved_staff_comments"
+        )
+    ]
+    assert not edgar_sections._trivial_section_oversized(trivial)
+
+    # A concept OUTSIDE the near-always-trivial set is never flagged, no
+    # matter how large -- a genuinely long MD&A is not a defect.
+    large_mdna = [edgar_sections.SectionSlice(key="Item 7", text=prose, ordinal=0, concept="mdna")]
+    assert not edgar_sections._trivial_section_oversized(large_mdna)
+
+
+def test_mid_sentence_share_flags_a_filing_wide_pattern_not_one_slice() -> None:
+    """A single lowercase-opening slice ("10b5-1 Trading Plans...") happens in
+    clean filings too, so only a SHARE across the filing's own slices should
+    fire -- not one occurrence. Real case: NU's 20-F, after the TOC fix, still
+    has several slices open mid-sentence because its body reorders items
+    relative to their canonical numbers."""
+    clean = [
+        edgar_sections.SectionSlice(
+            key=f"Item {i}", text="Prose that starts properly. " * 10, ordinal=i, concept=f"c{i}"
+        )
+        for i in range(6)
+    ]
+    assert not edgar_sections._mid_sentence_share_suspect(clean)
+
+    # One slice with a legitimate lowercase cross-reference is still fine.
+    one_off = list(clean)
+    one_off[0] = edgar_sections.SectionSlice(
+        key="Item 0", text="10b5-1 Trading Plans discussed further below.", ordinal=0, concept="c0"
+    )
+    assert not edgar_sections._mid_sentence_share_suspect(one_off)
+
+    # Multiple cuts landing mid-sentence in the SAME filing is the pattern.
+    shifted = list(clean)
+    shifted[0] = edgar_sections.SectionSlice(
+        key="Item 0", text="comments\n\nNot applicable.", ordinal=0, concept="c0"
+    )
+    shifted[1] = edgar_sections.SectionSlice(
+        key="Item 1",
+        text="staff information that continues from the prior cut.",
+        ordinal=1,
+        concept="c1",
+    )
+    assert edgar_sections._mid_sentence_share_suspect(shifted)
+
+
+def test_enumerator_openings_are_not_mid_sentence() -> None:
+    """ "(a) Evaluation of disclosure controls..." is a completely normal,
+    correctly-cut section start -- legal drafting enumerators must be
+    stripped before the case of the first real word is inspected."""
+    assert not edgar_sections._starts_mid_sentence("(a) Evaluation of disclosure controls.")
+    assert not edgar_sections._starts_mid_sentence("(a)(1). Financial Statements.")
+    assert edgar_sections._starts_mid_sentence("comments\n\nNot applicable.")
+
+
+def test_new_integrity_warnings_are_silent_on_clean_fixtures() -> None:
+    """The existing clean 10-K/20-F fixtures must not gain new false-positive
+    warnings just because the two new integrity checks were wired in."""
+    result_10k = edgar_sections.split_10k(_fake_10k())
+    assert "trivial_section_oversized" not in result_10k.warnings
+    assert "slice_starts_mid_sentence" not in result_10k.warnings
+
+    filler = "\n".join("Foreign private issuer disclosure prose." for _ in range(40))
+    text = "\n".join(
+        [
+            "Item 3. Key Information",
+            "3.A Selected Financial Data",
+            filler,
+            "3.B Capitalization and Indebtedness",
+            filler,
+            "3.D Risk Factors",
+            filler,
+            "Item 5. Operating and Financial Review and Prospects",
+            filler,
+        ]
+    )
+    result_20f = edgar_sections.split_20f(text)
+    assert "trivial_section_oversized" not in result_20f.warnings
+    assert "slice_starts_mid_sentence" not in result_20f.warnings
+
+
 def test_split_10q_is_part_aware() -> None:
     filler = "\n".join("Quarterly prose that fills the section body." for _ in range(40))
     text = "\n".join(
@@ -920,6 +1071,33 @@ def test_unranked_warnings_still_surface() -> None:
     """A warning nobody thought to rank must not vanish from reason_code."""
     assert most_severe_warning(["empty_sections:4"]) == "empty_sections:4"
     assert most_severe_warning(["subsplit_incomplete_item_5"]) == "subsplit_incomplete_item_5"
+
+
+def test_new_integrity_warnings_rank_above_incomplete_and_missing() -> None:
+    """The two new WRONG-class warnings (a boundary swallowed a neighboring
+    item's disclosure) must outrank the merely-incomplete/missing ones, same
+    as ``slice_boundaries_suspect`` -- and defer to it when both fire
+    together, since it is the more specific of the two same-class signals.
+    Real case: NU's 20-F fires both trivial_section_oversized AND
+    slice_starts_mid_sentence at once (Item 4A absorbing Item 3's content)."""
+    assert (
+        most_severe_warning(["missing_risk_factors", "trivial_section_oversized"])
+        == "trivial_section_oversized"
+    )
+    assert (
+        most_severe_warning(["missing_mdna", "slice_starts_mid_sentence"])
+        == "slice_starts_mid_sentence"
+    )
+    assert (
+        most_severe_warning(
+            ["slice_starts_mid_sentence", "trivial_section_oversized", "part_boundary_unresolved"]
+        )
+        == "trivial_section_oversized"
+    )
+    assert (
+        most_severe_warning(["trivial_section_oversized", "slice_boundaries_suspect"])
+        == "slice_boundaries_suspect"
+    )
 
 
 def test_unresolvable_ticker_degrades_instead_of_aborting_the_batch(

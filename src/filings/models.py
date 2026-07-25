@@ -122,6 +122,8 @@ EXPLAINED_ABSENCE_STATUSES: frozenset[CoverageStatus] = frozenset(
 #: (a sub-item that failed to split), which outranks a labeling nuance.
 _WARNING_SEVERITY: tuple[str, ...] = (
     "slice_boundaries_suspect",
+    "trivial_section_oversized",
+    "slice_starts_mid_sentence",
     "part_boundary_unresolved",
     "no_item_headers_located",
     "missing_risk_factors",
