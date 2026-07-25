@@ -1,4 +1,4 @@
-"""Tests for the P0 item-level disclosure-change engine (migration 0200).
+"""Tests for the P0 item-level disclosure-change engine (migration 0203).
 
 Weighted toward the failure modes the design doc calls out explicitly
 (docs/design/disclosure_change_build_stack.md §P0):
@@ -127,7 +127,7 @@ CREATE TABLE disclosure_events (
     prior_fiscal_period VARCHAR(4),
     source_ref VARCHAR(255),
     source_doc_id INTEGER,
-    canonical_id VARCHAR(64),
+    canonical_id VARCHAR(64) NOT NULL DEFAULT '',
     subject VARCHAR(255) NOT NULL,
     subject_label TEXT,
     prior_excerpt TEXT,
@@ -141,7 +141,7 @@ CREATE TABLE disclosure_events (
     status VARCHAR(16) NOT NULL DEFAULT 'new',
     created_at DATETIME NOT NULL,
     CONSTRAINT uq_disclosure_events UNIQUE
-        (ticker, event_type, fiscal_year, fiscal_period, subject, detector_version)
+        (ticker, event_type, fiscal_year, fiscal_period, canonical_id, subject, detector_version)
 );
 """
 

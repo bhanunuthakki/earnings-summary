@@ -17,7 +17,7 @@ returns OLDEST FIRST, never re-sorted here — and classifies every item as:
 Removals are first-class: they get exactly the same treatment as additions,
 never dropped as a side effect of only scanning forward. ``verdict`` on every
 emitted event stays ``"unclassified"`` — direction is not implied by event
-type (migration 0200 docstring; concealment vs. maturity is a judgment call
+type (migration 0203 docstring; concealment vs. maturity is a judgment call
 for a later, LLM-backed phase).
 """
 
@@ -64,7 +64,7 @@ _TOKEN_RX = re.compile(r"[a-z0-9]+")
 
 @dataclass(slots=True)
 class DisclosureEvent:
-    """One row bound for ``disclosure_events`` — see migration 0200 for schema."""
+    """One row bound for ``disclosure_events`` — see migration 0203 for schema."""
 
     ticker: str
     event_type: str
@@ -358,14 +358,15 @@ def _require_table(conn: sqlite3.Connection, *, missing_ok: bool) -> bool:
         log.info({"event": "disclosure_events_table_absent", "degraded": True})
         return False
     raise HardStopError(
-        f"{EVENTS_TABLE} missing — run `alembic upgrade head` (migration 0200) "
+        f"{EVENTS_TABLE} missing — run `alembic upgrade head` (migration 0203) "
         "before writing or querying disclosure events"
     )
 
 
 def write_events(conn: sqlite3.Connection, events: Sequence[DisclosureEvent]) -> int:
     """Upsert events on the unique key (ticker, event_type, fiscal_year,
-    fiscal_period, subject, detector_version).
+    fiscal_period, canonical_id, subject, detector_version) — matching
+    ``uq_disclosure_events`` from migration 0203.
 
     Uses an explicit NULL-safe SELECT-then-INSERT/UPDATE rather than
     ``ON CONFLICT``, for the same reason as ``store.record_coverage``: SQLite
@@ -376,6 +377,11 @@ def write_events(conn: sqlite3.Connection, events: Sequence[DisclosureEvent]) ->
     their OWN ``fiscal_year``/``fiscal_period`` (the period they were first
     seen in) is always set, so this only matters if a future detector emits
     with a null current period — handled the same way regardless.
+
+    ``canonical_id`` is NOT NULL in the table (empty-string sentinel), so a
+    ``None`` from ``SectionItem.canonical_id`` (unclassified section types)
+    is coerced to ``""`` here — the one place every event funnels through
+    before it touches the row-identity columns.
     """
     if not events:
         return 0
@@ -383,11 +389,12 @@ def write_events(conn: sqlite3.Connection, events: Sequence[DisclosureEvent]) ->
     now = _now()
     written = 0
     for e in events:
+        canonical_id = e.canonical_id or ""
         existing = conn.execute(
             f"""
             SELECT id FROM {EVENTS_TABLE}
             WHERE ticker = ? AND event_type = ? AND fiscal_year IS ? AND fiscal_period IS ?
-              AND subject = ? AND detector_version = ?
+              AND canonical_id = ? AND subject = ? AND detector_version = ?
             LIMIT 1
             """,
             (
@@ -395,6 +402,7 @@ def write_events(conn: sqlite3.Connection, events: Sequence[DisclosureEvent]) ->
                 e.event_type,
                 e.fiscal_year,
                 e.fiscal_period.value if e.fiscal_period else None,
+                canonical_id,
                 e.subject,
                 e.detector_version,
             ),
@@ -421,7 +429,7 @@ def write_events(conn: sqlite3.Connection, events: Sequence[DisclosureEvent]) ->
                     e.prior_fiscal_period.value if e.prior_fiscal_period else None,
                     e.source_ref,
                     e.source_doc_id,
-                    e.canonical_id,
+                    canonical_id,
                     e.subject,
                     e.subject_label,
                     e.prior_excerpt,
@@ -449,7 +457,7 @@ def write_events(conn: sqlite3.Connection, events: Sequence[DisclosureEvent]) ->
                     e.prior_fiscal_period.value if e.prior_fiscal_period else None,
                     e.source_ref,
                     e.source_doc_id,
-                    e.canonical_id,
+                    canonical_id,
                     e.subject_label,
                     e.prior_excerpt,
                     e.current_excerpt,

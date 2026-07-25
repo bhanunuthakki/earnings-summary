@@ -1,7 +1,7 @@
 """Split ``filing_sections`` rows into atomic ``filing_section_items`` rows.
 
 Why item-level at all: the literature review (``docs/design/
-disclosure_change_signals.md`` §1.2) and the migration 0200 docstring are both
+disclosure_change_signals.md`` §1.2) and the migration 0203 docstring are both
 explicit that additions and removals of INDIVIDUAL disclosure items — one risk
 factor, one MD&A sub-heading — carry the signal, and that a section-level or
 document-level similarity score misses it. This module is the splitter half of
@@ -44,7 +44,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from filing_text_fetcher import _looks_like_risk_heading, split_risk_factors
+from filing_text_fetcher import (
+    _looks_like_risk_heading,  # pyright: ignore[reportPrivateUsage]
+    split_risk_factors,
+)
 from filings.models import (
     FilingForm,
     FilingSection,
@@ -325,7 +328,7 @@ def _require_table(conn: sqlite3.Connection, *, missing_ok: bool) -> bool:
         log.info({"event": "filing_section_items_table_absent", "degraded": True})
         return False
     raise HardStopError(
-        f"{ITEMS_TABLE} missing — run `alembic upgrade head` (migration 0200) "
+        f"{ITEMS_TABLE} missing — run `alembic upgrade head` (migration 0203) "
         "before splitting or querying section items"
     )
 
