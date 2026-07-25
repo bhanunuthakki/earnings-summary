@@ -76,6 +76,38 @@ NU+NVO 6-K exhibits → 1,301 sections / 12 exhibits; META 10-K ×2 → 36 items
 Item 7 (61KB); WIX 20-F ×3 → Item 3.D `risk_factors` (233KB) + Item 5.A–D. NU's `form_10k`-named
 payloads were correctly flagged `regime_mismatch_resolved_to_declared` and stored as 20-F.
 
+**Header-matching corrections, 2026-07-25.** Re-partitioning all 125 cached EDGAR documents under
+`data/sec_text/` and diffing against the stored rows found four defects in `taxonomy.locate_items`,
+all of which produced a *silently wrong* partition rather than a flagged one:
+
+| Defect | Effect | Fix |
+|---|---|---|
+| In-prose item citations accepted as headers | NU's 20-F wraps at ~135 chars, so the 200-char prose guard was inert and hundreds of `"Item 3. Key Information—D. Risk Factors"` references became rival headers | `taxonomy._is_citation` |
+| Contents rows earned the per-item bonus | The winning chain took the contents page *and* the body; the item numbers were spent, so real body items were unreachable and their disclosure was absorbed by a neighbour (NU risk factors, FCX Items 1A/7) | `taxonomy._drop_contents_block` |
+| Taxonomy order treated as evidence | NU prints Item 4, 4A, then 3 — Items 1–3 became unreachable. Measured across the corpus, order-scoring changed the outcome for NU only, and for the worse | order preference removed; uniqueness enforced explicitly |
+| Title variants unmatched | ServiceNow writes "Qualitative and Quantitative" (7A) and "Consolidated Financial Statements" (8), so both boundaries vanished and Item 7 ran 120KB into the segment footnote. NU labels its risk factors "A.Risk Factors", not 3.D | title alternates; sub-item letter matched as *a* letter, not *the* letter |
+
+Corpus effect: risk-factors coverage 112 → 116 of 125 documents, no document lost a section, and
+contents-block excision (which fires on 109) never removes an item's last candidate.
+
+**Reconciliation with #1009**, which landed first and fixed the same NU/FCX symptoms independently.
+Kept from it: the FCX fix, the wrapped-header `body_start` correction (found in both), the
+trailing-page-number row test, and the `trivial_section_oversized` / `slice_starts_mid_sentence`
+integrity warnings. Removed from it: `_looks_like_toc_entry`, a per-row lookahead test for the
+dotless contents shape. It is correct row by row, but **a lookahead cannot see a contents block's
+tail** — the last rows have no following entry to supply the signature. On NU it stripped 29 of 32
+contents rows and left the final two, which is worse than leaving all 32: the density that
+identifies the block was gone, so `_drop_contents_block` no longer fired and the survivors consumed
+item numbers exactly as before. Measured three ways over the corpus — #1009 alone 115, this change
+alone 116, both together **113** (all three NU years lost), with **no filing** where the per-row test
+helped. The general rule, now recorded in the code: *a contents block must be removed whole, or not
+at all.*
+`EXTRACTOR_VERSION` is deliberately **not** bumped — `filing_section_coverage` is keyed by it and
+`period_availability` does not filter on it, so a bump would leave stale coverage rows merging into
+the same period bucket. **Stored rows written before this change are stale and must be re-ingested**
+(`execution/ingest_filing_sections.py --all-portfolio --sources edgar`); the section table replaces a
+document's partition wholly, so a re-run is sufficient.
+
 **Robustness contract** (what each failure does):
 
 | Situation | Behavior |
