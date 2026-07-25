@@ -38,7 +38,7 @@ registry**.
 |---|---|---|---|
 | `run_morning_pipeline` | daily 04:00 | stage 0 news → `material_news_classification`; stage 0b `decision_conditions_extract` (+ qualitative twin); stage 1b standup (`run_standup.py`) → `ask_answer` compose + `eval_judge` gate per surviving trip | the canonical protected window; post-#814 degrades per-item; stage 1b was the previously-undocumented leg behind the 2026-07-13 incident (below) |
 | `refresh_scenario_priors` | monthly, 1st 03:00 | `scenario_prior` (Sonnet) | `--only-changed` + `inputs_sha256` → usually zero calls |
-| weekly eval rungs (`run_grade_calibration` / model-eval) | Sun 10:30 | `eval_judge`, rubric audits, sweep candidates; **+ prompt A/B cycles** (2026-07-25, meta_eval_governance.md §4.7: `run_weekly_model_eval` step 4 — `prompt_variant_propose` (Opus) + `scope='prompt_ab'` arm runs/judging, default 2 cycles/run, governed by the $40/mo month-to-date measurement-spend ceiling checked BEFORE each cycle, not by cycle count; rides this SAME window, no new registration); **+ `behavior_distill`** (tenet-2 Phase 4, one batch call over the graded `decisions` corpus, added as the LAST rung 2026-07-18) | daytime slot — deliberately outside burst hours; the LIVE Windows Task Scheduler entry had drifted to 03:30 (inside the protected window, colliding with `run_morning_pipeline`) — re-registered to 10:30 on 2026-07-13, and `cron/grade_calibration.task.xml` corrected to match so a re-register can't revert it (see incident note below); `behavior_distill` rides this SAME window (no new cron entry) and follows rule 3 (transient failure defers + tallies, retried next Sunday; a hard stop propagates as a non-zero exit, counted like any other rung failure by `execution/run_calibration_grading.py` — see `synthesis.behavior_distill`) |
+| weekly eval rungs — SPLIT across two windows (registry verified live 2026-07-25): `run_grade_calibration` **Sun 10:30** (task `grade_calibration`); `run_weekly_model_eval` **Sat 20:00** (task `model_eval_sweep` — this table previously lumped both at "Sun 10:30", registry/reality drift of the same class as the 03:30 incident below) | Sun 10:30: `eval_judge`, rubric audits; Sat 20:00: sweep candidates + judging, **+ prompt A/B cycles** (2026-07-25, meta_eval_governance.md §4.7: `run_weekly_model_eval` step 4 — `prompt_variant_propose` (Opus) + `scope='prompt_ab'` arm runs/judging, default 2 cycles/run, governed by the $40/mo month-to-date measurement-spend ceiling checked BEFORE each cycle, not by cycle count; rides the Sat 20:00 window, no new registration); **+ `behavior_distill`** (tenet-2 Phase 4, one batch call over the graded `decisions` corpus, added as the LAST rung 2026-07-18) | daytime slot — deliberately outside burst hours; the LIVE Windows Task Scheduler entry had drifted to 03:30 (inside the protected window, colliding with `run_morning_pipeline`) — re-registered to 10:30 on 2026-07-13, and `cron/grade_calibration.task.xml` corrected to match so a re-register can't revert it (see incident note below); `behavior_distill` rides this SAME window (no new cron entry) and follows rule 3 (transient failure defers + tallies, retried next Sunday; a hard stop propagates as a non-zero exit, counted like any other rung failure by `execution/run_calibration_grading.py` — see `synthesis.behavior_distill`) |
 | `ledger_synthesis` | daily (morning block) | `theme_synth` | cost-capped; degrades to "synthesis not available" |
 | capture poller (service, event-driven) | continuous | `capture_intent` (Haiku per musing), `artifact_brief` (Sonnet), `capture_triage` (Haiku per landed musing/observation — replaces the regex answer gate), `coach_reply_intent` (Haiku per free-text reply to a coach ping, B3), `research_triage` (Haiku, B7 — one extra call per `wondering` verdict routing answer_now/belief_candidate/research_task; fails open to research_task on any failure, budget warn-mode 0194) | no fixed window; starved calls surface as missed classifications — budgets seeded warn-mode (0138/0139/0188/0194); `coach_reply_intent` volume is bounded by the governor's own DAILY_CAP=1/WEEKLY_CAP=3 (research/governor.py), so it's the cheapest leg on this row |
 | `coach_pings` | daily 07:15 | **none** (zero-LLM governor) | listed to show it's quota-safe |
@@ -107,3 +107,37 @@ discarding the subprocess's captured `stderr`/`stdout` — every historical
 `llm_calls.error` row was indistinguishable regardless of cause. Both now append
 a stderr/stdout tail, so a future quota incident (or any other CLI failure)
 self-diagnoses from the ledger without a live investigation.
+
+## Addendum — July-2026 quota postmortem (traffic audit 2026-07-25, owner-directed)
+
+Ledger-measured (successful prod calls only; measurement scopes excluded):
+
+* **App demand did NOT grow.** July successful calls 2,917 / $644 vs June 3,372
+  / $602. The apparent 2.3x call-count jump was retry churn against the dead
+  window (e.g. `saydo_commitment_extract` 10.4 calls per unique prompt ≈ one
+  re-attempt per failing day) — eliminated going forward by the #1008 breaker.
+* **The app-side burn spike was one purpose-era**: `news_structuring` on Opus
+  with ~206K cache-read tokens/call — $366 of July's $644 (57%), 197M of the
+  222M tokens in the 04:00 PT pipeline hour. **Fixed 2026-07-19 by #943**
+  (Sonnet pin + incremental persist): ~120 calls/day → ~11/day, ~$45/day →
+  ~$2.8/day.
+* **Exhaustion timing matched app burn + interactive load**: both dead bands
+  (Jul 5-13, Jul 20-23) began immediately after multi-day 25-50M-token app
+  days combined with the month's exceptional interactive/agent-wave activity
+  (the #941-#1018 build program). Interactive usage is invisible to the ledger
+  but shares the same subscription window.
+* **No runaway consumers found.** `saydo_commitment_extract` (new Jul 2),
+  `recent_developments`, `earnings_themes_split` are all 1-call-per-item,
+  change-gated; their spikes are legitimate backlog flushes on the first
+  healthy day after a dead band.
+* **One residual risk — the recovery flash-flood**: the first healthy day
+  flushes the whole deferred backlog at once (Jul 14: 462 calls / 43M tokens),
+  which can re-stress a freshly reset window. Open suggestion: cap deferred-
+  backlog processing per run so a flush spreads over 2-3 runs.
+* Schedule placement audited against the live Task Scheduler registry: LLM burn
+  concentrates 04:00-07:00 PT (asleep hours, window recovers before interactive
+  time); weekend rungs segmented. One optional decongestion (needs elevation —
+  non-admin cannot modify the registered task): move `refresh_business_factors`
+  Sun 11:30 → Sun 19:30 to thin the 4-job Sunday-morning window
+  (`schtasks /change /tn "\earnings-summary\refresh_business_factors" /st 19:30`
+  from an elevated shell, then mirror `cron/refresh_business_factors.task.xml`).
