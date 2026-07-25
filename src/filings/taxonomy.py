@@ -16,12 +16,21 @@ Three facts drive this module's shape:
    items without first splitting on the part boundary silently mislabels half
    the document, so ``split_10q`` is part-aware by construction.
 
-3. **The table of contents matches every item pattern, in order.** A naive
-   "first match wins" or "last match wins" both fail (TOC first, cross-
-   references last). ``locate_items`` instead scores whole *chains* of
-   candidate headers by how much text sits between them: a TOC's entries are
-   ~100 chars apart, a body's are thousands, so the body chain wins on score
-   without any hard-coded "skip the first N chars" guess.
+3. **A filing states its item structure more than once, and only one of them
+   is the disclosure.** The contents page lists every item; the body prints
+   them; the prose then cites them by name for hundreds of paragraphs. A naive
+   "first match wins" or "last match wins" both fail. So candidates are filtered
+   before they are scored — ``_is_citation`` drops in-sentence references and
+   ``_drop_contents_block`` drops the contents listing — and only then does
+   ``locate_items`` score whole *chains* by how much text sits between them.
+
+   Chain scoring alone was tried first and is not sufficient, which is worth
+   recording because it looked sufficient: contents entries are packed a few
+   hundred characters apart so they earn no gap, but they DO earn the per-item
+   bonus, so the winning chain simply took the contents page AND the body. The
+   damage was invisible in the output (contents rows slice to nothing) and
+   severe in effect — the item numbers were spent, so real body items became
+   unreachable and their disclosure was absorbed by a neighbour.
 
 6-K exhibits have no mandated structure at all and are deliberately absent
 here — ``edgar_sections.split_freeform`` handles them by heading detection
@@ -43,46 +52,9 @@ _TOC_LEADER = ".."
 #: A header line that ends with its own trailing page number ("Item 5. MD&A
 #: 60") — the same TOC tell as the dotted leader, just without the dots. Rare
 #: in this corpus (most filers' HTML puts the page number in its own <p>,
-#: hence its own line — see ``_BARE_PAGE_NUMBER_RX`` below) but cheap to guard
-#: against for filers whose renderer keeps title and number on one line.
+#: hence its own line, which ``_drop_contents_block`` handles structurally)
+#: but cheap to guard against for a renderer that keeps them on one line.
 _TRAILING_PAGE_NUMBER_RX = re.compile(r"\s+\d{1,4}$")
-#: A standalone page-number line — one whole line containing nothing but a
-#: 1-4 digit number. This is the dotless-TOC tell that actually fires in this
-#: corpus: NU's 20-F and FCX's 10-K both render their table of contents as one
-#: block element per title and one per page number (so each ends up on its own
-#: line with no dotted leader at all), while a real body header is preceded and
-#: followed by prose, not a number.
-_BARE_PAGE_NUMBER_RX = re.compile(r"^[ \t]*\d{1,4}[ \t]*$", re.MULTILINE)
-#: How far past a header to look for that bare-page-number tell. Wide enough to
-#: span a TOC parent entry's own sub-item bullets (each with its own page
-#: number, e.g. a 20-F's "A. Offer Statistics / 155 / B. Method... / 155")
-#: before the next ITEM line, narrow enough that it won't reach past a real
-#: section's own body into an unrelated later item.
-_TOC_LOOKAHEAD_CHARS = 400
-#: A single incidental page number turning up near a genuinely short answer
-#: ("Not applicable.", two lines below a real header, from the page footer) is
-#: normal and must not be flagged. Even two real, back-to-back terse items
-#: (each its own one-line answer) can each contribute a lone footer number —
-#: see ``_looks_like_toc_entry`` for the real corpus case that forced this to
-#: 3 rather than 2. A genuine TOC cluster always has more than two page
-#: numbers in play within the window.
-_MIN_TOC_PAGE_NUMBERS = 3
-#: Another item header STARTING a line — required, IN ADDITION to the
-#: page-number density above, before a candidate is rejected as TOC. Item 8
-#: (Financial Statements) and Item 15 (Exhibits) routinely open their REAL
-#: body with their own inline index ("Index to Consolidated Financial
-#: Statements ... The following ... are included in Item 8 of this Annual
-#: Report ... Report of Independent Registered Public Accounting Firm ... 65
-#: ... Consolidated Balance Sheets ... 67 ..."), which is just as
-#: page-number-dense as a real TOC AND can even cross-reference another item
-#: by number in passing prose ("included in Item 8 of this..."). The
-#: anchor to a LINE START is what tells the two apart: a real table of
-#: contents marches through consecutive item numbers each headlining their
-#: own line, while a prose cross-reference has "Item N" in the middle of a
-#: sentence, never at the start of a line. Requiring both signals is what
-#: keeps this from mistaking a financial-statement/exhibit index for a table
-#: of contents and dropping the one real header for Item 8 or Item 15.
-_ITEM_LINE_START_RX = re.compile(r"^[ \t]*item\s*\d", re.IGNORECASE | re.MULTILINE)
 #: Gap contributions are capped so one enormous section can't outweigh a chain
 #: that locates many well-separated headers.
 _GAP_CAP = 20_000
@@ -90,6 +62,19 @@ _GAP_CAP = 20_000
 _ITEM_BONUS = 1_500
 #: Below this, two headers are adjacent (TOC-like) and contribute no gap score.
 _MIN_SECTION_CHARS = 240
+#: Longest structural lead-in tolerated before a header on its own line
+#: ("PART I", a page number, a table pipe). Longer means prose.
+_MAX_HEADER_PREFIX_LEN = 40
+#: An item reference opening with one of these is a citation ("see \"Item 5.
+#: Operating and Financial Review\""), never a heading.
+_QUOTE_OPENERS = "\"'“‘(«"  # noqa: RUF001 — curly quotes are what _strip_html emits
+#: A contents block lists essentially the whole form. Both bars must clear:
+#: the absolute one stops a four-item cluster of "Not applicable." bodies from
+#: reading as a TOC, the relative one keeps the test meaningful for the forms
+#: with fewer items. The same absolute bar doubles as the "is there a body
+#: after this block?" test — see ``_drop_contents_block``.
+_TOC_MIN_ITEMS = 8
+_TOC_MIN_SHARE = 0.6
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +116,17 @@ def _spec(key: str, concept: str, number: str, titles: str, part: str | None = N
     return ItemSpec(key=key, concept=concept, title_rx=title_rx, bare_rx=bare_rx, part=part)
 
 
+#: Filers write the market-risk title in BOTH word orders — ServiceNow's 10-K
+#: says "Qualitative and Quantitative Disclosures About Market Risk". Accepting
+#: only the SEC's order left Item 7A unmatched, and an unmatched Item 7A is not
+#: a missing section: it removes the boundary, so Item 7 runs on through 7A and
+#: 8 and MD&A ends up holding the financial-statement footnotes.
+_MARKET_RISK_TITLES = r"(?:quantitative|qualitative)\s+and\s+(?:qualitative|quantitative)"
+#: Likewise "Consolidated Financial Statements and Supplementary Data" — the
+#: qualifier is optional, the noun is not.
+_FINANCIAL_STATEMENTS_TITLES = r"(?:consolidated\s+)?financial\s+statements"
+
+
 # --- 10-K -------------------------------------------------------------------
 # Item numbers carry explicit guards: "1" must not match "1A"/"1B"/"1C", "9"
 # must not match "9A"/"9B"/"9C", "1" must not match "10".
@@ -148,8 +144,8 @@ FORM_10K_ITEMS: tuple[ItemSpec, ...] = (
         "Item 6", "selected_financial_data", r"6(?![0-9])", r"\[?reserved\]?|selected\s+financial"
     ),
     _spec("Item 7", "mdna", r"7(?![0-9a])", r"management.{0,3}s\s+discussion"),
-    _spec("Item 7A", "market_risk", r"7\s*a", r"quantitative\s+and\s+qualitative"),
-    _spec("Item 8", "financial_statements", r"8(?![0-9])", r"financial\s+statements"),
+    _spec("Item 7A", "market_risk", r"7\s*a", _MARKET_RISK_TITLES),
+    _spec("Item 8", "financial_statements", r"8(?![0-9])", _FINANCIAL_STATEMENTS_TITLES),
     _spec("Item 9", "auditor_changes", r"9(?![0-9abc])", r"changes\s+in\s+and\s+disagreements"),
     _spec("Item 9A", "controls_procedures", r"9\s*a", r"controls\s+and\s+procedures"),
     _spec("Item 9B", "other_information", r"9\s*b", r"other\s+information"),
@@ -168,9 +164,11 @@ FORM_10K_ITEMS: tuple[ItemSpec, ...] = (
 # these two tuples are only ever applied to their own part's slice.
 
 FORM_10Q_PART1_ITEMS: tuple[ItemSpec, ...] = (
-    _spec("Part I Item 1", "financial_statements", r"1(?![0-9a])", r"financial\s+statements", "I"),
+    _spec(
+        "Part I Item 1", "financial_statements", r"1(?![0-9a])", _FINANCIAL_STATEMENTS_TITLES, "I"
+    ),
     _spec("Part I Item 2", "mdna", r"2(?![0-9])", r"management.{0,3}s\s+discussion", "I"),
-    _spec("Part I Item 3", "market_risk", r"3(?![0-9])", r"quantitative\s+and\s+qualitative", "I"),
+    _spec("Part I Item 3", "market_risk", r"3(?![0-9])", _MARKET_RISK_TITLES, "I"),
     _spec(
         "Part I Item 4", "controls_procedures", r"4(?![0-9])", r"controls\s+and\s+procedures", "I"
     ),
@@ -204,7 +202,7 @@ FORM_20F_ITEMS: tuple[ItemSpec, ...] = (
     _spec("Item 8", "financial_information", r"8(?![0-9])", r"financial\s+information"),
     _spec("Item 9", "offer_listing", r"9(?![0-9])", r"the\s+offer\s+and\s+listing"),
     _spec("Item 10", "additional_information", r"10(?![0-9])", r"additional\s+information"),
-    _spec("Item 11", "market_risk", r"11(?![0-9])", r"quantitative\s+and\s+qualitative"),
+    _spec("Item 11", "market_risk", r"11(?![0-9])", _MARKET_RISK_TITLES),
     _spec("Item 12", "securities_description", r"12(?![0-9])", r"description\s+of\s+securities"),
     _spec("Item 13", "defaults", r"13(?![0-9])", r"defaults,?\s+dividend"),
     _spec("Item 14", "material_modifications", r"14(?![0-9])", r"material\s+modifications"),
@@ -223,8 +221,8 @@ FORM_20F_ITEMS: tuple[ItemSpec, ...] = (
     _spec("Item 16I", "foreign_jurisdictions", r"16\s*i", r"disclosure\s+regarding\s+foreign"),
     _spec("Item 16J", "insider_trading_policy", r"16\s*j", r"insider\s+trading"),
     _spec("Item 16K", "cybersecurity", r"16\s*k", r"cybersecurity"),
-    _spec("Item 17", "financial_statements", r"17(?![0-9])", r"financial\s+statements"),
-    _spec("Item 18", "financial_statements", r"18(?![0-9])", r"financial\s+statements"),
+    _spec("Item 17", "financial_statements", r"17(?![0-9])", _FINANCIAL_STATEMENTS_TITLES),
+    _spec("Item 18", "financial_statements", r"18(?![0-9])", _FINANCIAL_STATEMENTS_TITLES),
     _spec("Item 19", "exhibits", r"19(?![0-9])", r"exhibits?"),
 )
 
@@ -239,10 +237,22 @@ def _subitem(key: str, concept: str, letter: str, titles: str) -> ItemSpec:
     item's own slice, and because the title keyword is required — a bare "D."
     alone never matches. The numbered form stays accepted for the filers that
     do use it.
+
+    Which letter is written does NOT have to be the SEC's. NU's 20-F prints its
+    risk factors under "A.Risk Factors" while its own table of contents and
+    every cross-reference in the document call that section 3.D; keying on the
+    letter found no risk-factors sub-item at all and left Item 3 whole — 240KB
+    of risk factors plus everything the missing boundary let in. So the title
+    keyword identifies the disclosure and the letter only has to be A LETTER,
+    standing alone as its own token. Requiring one still matters: dropping it
+    entirely makes ``risk\\s+factors?`` match the opening words of an ordinary
+    sentence ("Risk factor disclosure prose…"), turning body text into rival
+    headers. ``key``/``concept`` keep recording the letter the SEC assigns, so
+    the cross-form timeline is unaffected by what the filer chose to print.
     """
     number = key.split()[-1].split(".")[0]
     rx = re.compile(
-        rf"(?:item\s*)?(?:{number}\s*\.?\s*)?{letter}\s*[.:\-–—)]?\s*(?:{titles})",  # noqa: RUF001 — EN/EM dash are real SEC item separators
+        rf"(?:item\s*)?(?:{number}\s*\.?\s*)?(?<![a-z])[a-k](?![a-z])\s*[.:\-–—)]?\s*(?:{titles})",  # noqa: RUF001 — EN/EM dash are real SEC item separators
         re.IGNORECASE,
     )
     bare = re.compile(
@@ -288,37 +298,45 @@ class LocatedItem:
     body_end: int = field(default=-1)
 
 
-def _looks_like_toc_entry(text: str, line_end: int) -> bool:
-    """True when the text just past a header line carries the TOC's page-number
-    signature rather than a real section body.
+def _is_citation(text: str, line_start: int, match_start: int) -> bool:
+    """True when the item reference at ``match_start`` is prose, not a heading.
 
-    A real body header is followed by prose; a table-of-contents entry is
-    followed by (at most) its own page number and then straight into the NEXT
-    item's title and page number. Two consecutive REAL items that both happen
-    to be one-line answers ("Not applicable." / "None.") each still contribute
-    their own lone page-footer number, so a 2-number threshold isn't quite
-    enough to rule that shape out (observed: AVGO's Item 3 "incorporated by
-    reference" answer sits right before Item 4's "None.", each with its own
-    footer number, two numbers total). Requiring THREE keeps that real,
-    if terse, pair of items from being mistaken for a TOC run while still
-    catching every genuine TOC cluster in this corpus, which always has more
-    than two entries in play within the window.
+    A heading owns its line. A cross-reference is embedded in a sentence, and
+    the two are told apart by what sits to the LEFT of the reference on the same
+    line — the one place the difference always shows:
+
+    * lowercase words before it ("as described in Item 4 below") — prose;
+    * an opening quote immediately before it ("Item 5. Operating…") — a
+      citation, even when the quote starts the line, which is the shape a
+      hard-wrapped filing produces constantly;
+    * a long lead-in — prose that happens to avoid both tells.
+
+    A structural lead-in ("PART I", a page number, a table pipe) is none of
+    those and passes. Without this test a filing whose stripped text wraps at
+    ~135 chars — NU's 20-F does — offers HUNDREDS of in-prose citations as
+    candidate headers, all of them under the line-length limit, and the chain
+    scorer happily builds a partition out of them.
     """
-    lookahead = text[line_end : line_end + _TOC_LOOKAHEAD_CHARS]
-    if len(_BARE_PAGE_NUMBER_RX.findall(lookahead)) < _MIN_TOC_PAGE_NUMBERS:
+    prefix = text[line_start:match_start]
+    if prefix.rstrip().endswith(tuple(_QUOTE_OPENERS)):
+        return True
+    stripped = prefix.strip()
+    if not stripped:
         return False
-    return _ITEM_LINE_START_RX.search(lookahead) is not None
+    return len(stripped) > _MAX_HEADER_PREFIX_LEN or any(c.islower() for c in stripped)
 
 
 def _candidate_positions(text: str, spec: ItemSpec) -> list[tuple[int, int, str]]:
     """All plausible header positions for one item as (header_start, body_start, line).
 
-    Filters out table-of-contents rows — both the dotted-leader shape
-    ("Item 1A. Risk Factors....9") and the dotless shape used by filers whose
-    HTML renders each TOC title and page number as its own block element
-    ("Item 1A. Risk Factors" / "9" on separate lines, or "Item 1A. Risk
-    Factors 9" on one line when a renderer keeps them together) — and long
-    prose lines that merely mention the item.
+    Filters out three things that match an item pattern without being a
+    header: table-of-contents rows in the dotted-leader shape ("Item 1A.
+    Risk Factors....9") or with a trailing page number ("Item 1A. Risk
+    Factors 9"); long prose lines that merely mention the item; and
+    in-sentence cross-references (``_is_citation``). The dotless contents
+    shape — each title and page number in its own block element, so each on
+    its own line — is NOT handled here; it is a property of the block, not
+    of any one row, and ``_drop_contents_block`` removes it as a region.
     """
     out: list[tuple[int, int, str]] = []
     seen: set[int] = set()
@@ -336,7 +354,7 @@ def _candidate_positions(text: str, spec: ItemSpec) -> list[tuple[int, int, str]
                 continue
             if _TRAILING_PAGE_NUMBER_RX.search(stripped):
                 continue
-            if _looks_like_toc_entry(text, line_end):
+            if _is_citation(text, line_start, m.start()):
                 continue
             seen.add(line_start)
             # The title match can itself wrap onto a second physical line (a
@@ -357,30 +375,120 @@ def _candidate_positions(text: str, spec: ItemSpec) -> list[tuple[int, int, str]
     return out
 
 
-def locate_items(text: str, specs: tuple[ItemSpec, ...]) -> list[LocatedItem]:
-    """Resolve each item to its body position, choosing the best header chain.
+def _drop_contents_block(pool: list[tuple[int, int, int, str]]) -> list[tuple[int, int, int, str]]:
+    """Remove the table-of-contents entries from a candidate pool.
 
-    Candidates from every item are pooled and a chain is selected by dynamic
-    programming: a chain must visit items in taxonomy order at increasing
-    positions, and scores as the sum of capped inter-header gaps plus a bonus
-    per item located. Because a table of contents packs its entries a few
-    hundred characters apart while a real body separates them by thousands,
-    the body chain outscores the TOC chain without any positional guesswork —
-    and a filing that genuinely omits items (a 10-Q's abbreviated Part II) just
-    yields a shorter chain rather than mismatched slices.
+    A TOC writes the form's item structure a SECOND time, and chain scoring
+    cannot arbitrate between two copies of the same structure — it takes both.
+    Contents entries are packed a few hundred characters apart, so each one
+    earns its ``_ITEM_BONUS`` while contributing no gap: prefixing the real body
+    chain with the entire TOC is free profit, and the winning chain on NU's 20-F
+    did exactly that, walking all 33 contents rows before reaching page one.
+    The damage was not the junk rows (they slice to nothing) but the item
+    numbers they consumed — with Items 1, 2 and 3 already spent on the TOC, the
+    body's Item 3 was unreachable and NU's entire risk-factors disclosure was
+    absorbed into the neighbouring slice.
 
-    Returns items in document order with ``body_end`` filled in. Empty list
-    when nothing matched, which callers must treat as ``NO_SECTIONS_FOUND``
-    rather than an empty-but-valid partition.
+    The block is identified by a density no body achieves — nearly every item
+    in the taxonomy inside a few thousand characters — rather than by position,
+    because a long front matter can push the contents a quarter of the way into
+    the document. When no run qualifies (a filing with no TOC) the pool is
+    returned unchanged, and when removing the run would leave almost nothing
+    the pool is also returned unchanged: a thin 20-F whose only item headers
+    ARE that dense block is better partitioned badly than not at all.
+
+    **A contents block must be removed whole, or not at all.** #1009 added a
+    per-row test (``_looks_like_toc_entry``: ≥3 bare page-number lines plus an
+    item title starting a line, within 400 chars of lookahead) that was correct
+    row by row and still net-negative here, because a lookahead cannot see the
+    block's TAIL — its last rows have no following entry to supply the
+    signature. On NU it stripped 29 of 32 contents rows and left the final two,
+    which is strictly worse than leaving all 32: the density that identifies the
+    block was gone, so this function no longer fired, and the survivors went on
+    to consume item numbers exactly as before. Measured over the 125 cached
+    documents, adding it back drops risk-factors coverage 116 → 113 (all three
+    NU years) and improves nothing, so it was removed when the two changes were
+    reconciled. The trailing-page-number row test it also added is orthogonal
+    — it rejects one row on its own evidence, without thinning a block — and is
+    kept above.
     """
-    pool: list[tuple[int, int, int, str]] = []  # (pos, spec_index, body_start, line)
-    for idx, spec in enumerate(specs):
-        for header_start, body_start, line in _candidate_positions(text, spec):
-            pool.append((header_start, idx, body_start, line))
     if not pool:
-        return []
-    pool.sort(key=lambda t: (t[0], t[1]))
+        return pool
+    total_distinct = len({spec_idx for _, spec_idx, _, _ in pool})
+    threshold = max(_TOC_MIN_ITEMS, int(total_distinct * _TOC_MIN_SHARE))
 
+    window = _densest_window(pool, threshold)
+    if window is None:
+        return pool
+    lo, hi = window  # inclusive indices
+    if (pool[hi][0] - pool[lo][0]) / max(hi - lo, 1) >= _MIN_SECTION_CHARS:
+        # Spread this thin, the "block" is just the document listing its items
+        # once, in the body. There is no second copy to drop.
+        return pool
+
+    # The block runs from the first candidate through the end of that window.
+    # Growing outward from the window by spacing was tried and is not sound:
+    # a contents page's own spacing is uneven (NU's Item 16A-16K rows sit 83
+    # chars apart, its Item 1-10 rows 130-359), so a reach calibrated on the
+    # densest part stops short of the rest and leaves exactly the rows that do
+    # the damage. Anchoring at the start of the pool needs no tolerance at all
+    # and is what the document guarantees: a contents page precedes the body it
+    # points at, so nothing before the listing is a body header either.
+    after_block = {pool[i][1] for i in range(hi + 1, len(pool))}
+    if len(after_block) < _TOC_MIN_ITEMS:
+        # Nothing substantial follows, so this dense listing is not a contents
+        # page with a body after it — it is the body, or an exhibit index at the
+        # end of the filing. Excising it would delete the disclosure itself.
+        return pool
+
+    # Never delete an item's ONLY evidence: an item is cleared out of the block
+    # only when it still has a candidate AFTER it. Otherwise its last in-block
+    # candidate survives — last, not first, because a contents row always
+    # precedes the body header it points at, so if both fell inside the block
+    # the later one is the real heading.
+    last_in_block: dict[int, int] = {}
+    for i in range(hi + 1):
+        last_in_block[pool[i][1]] = i
+    return [
+        row
+        for i, row in enumerate(pool)
+        if i > hi or (row[1] not in after_block and last_in_block[row[1]] == i)
+    ]
+
+
+def _densest_window(
+    pool: list[tuple[int, int, int, str]], threshold: int
+) -> tuple[int, int] | None:
+    """Narrowest span of ``pool`` holding ``threshold`` distinct items, inclusive.
+
+    The anchor for contents detection: whatever else a document contains, the
+    place where most of the form's items appear in the fewest characters is its
+    contents page. Returns None when no span reaches the threshold.
+    """
+    counts: dict[int, int] = {}
+    best: tuple[int, int, int] | None = None  # (span, lo, hi)
+    lo = 0
+    for hi, (_, spec_idx, _, _) in enumerate(pool):
+        counts[spec_idx] = counts.get(spec_idx, 0) + 1
+        while len(counts) >= threshold:
+            span = pool[hi][0] - pool[lo][0]
+            if best is None or span < best[0]:
+                best = (span, lo, hi)
+            head = pool[lo][1]
+            counts[head] -= 1
+            if not counts[head]:
+                del counts[head]
+            lo += 1
+    return None if best is None else (best[1], best[2])
+
+
+def _best_chain(pool: list[tuple[int, int, int, str]], *, allow_reorder: bool) -> list[int]:
+    """Highest-scoring chain of candidate indices, as described in ``locate_items``.
+
+    ``allow_reorder=False`` forbids backward taxonomy steps, which makes the
+    chain a strictly increasing subsequence of item indices and therefore unique
+    by construction — the fallback for when the unordered chain repeats an item.
+    """
     n = len(pool)
     best_score = [float(_ITEM_BONUS)] * n
     prev: list[int | None] = [None] * n
@@ -388,7 +496,9 @@ def locate_items(text: str, specs: tuple[ItemSpec, ...]) -> list[LocatedItem]:
         pos_i, spec_i, _, _ = pool[i]
         for j in range(i):
             pos_j, spec_j, _, _ = pool[j]
-            if spec_j >= spec_i or pos_j >= pos_i:
+            if pos_j >= pos_i:
+                continue
+            if spec_j == spec_i or (not allow_reorder and spec_j > spec_i):
                 continue
             gap = pos_i - pos_j
             contribution = float(min(gap, _GAP_CAP)) if gap >= _MIN_SECTION_CHARS else 0.0
@@ -404,6 +514,55 @@ def locate_items(text: str, specs: tuple[ItemSpec, ...]) -> list[LocatedItem]:
         chain.append(cursor)
         cursor = prev[cursor]
     chain.reverse()
+    return chain
+
+
+def locate_items(text: str, specs: tuple[ItemSpec, ...]) -> list[LocatedItem]:
+    """Resolve each item to its body position, choosing the best header chain.
+
+    Candidates from every item are pooled and a chain is selected by dynamic
+    programming: a chain visits each item at most once at strictly increasing
+    positions, and scores as the sum of capped inter-header gaps plus a bonus
+    per item located. Because a table of contents packs its entries a few
+    hundred characters apart while a real body separates them by thousands,
+    the body chain outscores the TOC chain without any positional guesswork —
+    and a filing that genuinely omits items (a 10-Q's abbreviated Part II) just
+    yields a shorter chain rather than mismatched slices.
+
+    Taxonomy order is deliberately NOT scored. Filers reorder items — NU's 20-F
+    prints Item 4, then Item 4A, then Item 3 — and requiring taxonomy order did
+    not mislabel those items so much as swallow them: with Items 1–3 unreachable
+    once Item 4 was taken, NU's entire risk-factors disclosure was absorbed into
+    the Item 4A slice. Scoring order as evidence was measured across the 125
+    cached filings and changed the outcome for exactly one issuer — NU, for the
+    worse — because what actually separates a real header from a false one is
+    ``_is_citation`` and ``_drop_contents_block``, not the order it appears in.
+    What order still buys is uniqueness, and that is enforced directly below.
+
+    Returns items in document order with ``body_end`` filled in. Empty list
+    when nothing matched, which callers must treat as ``NO_SECTIONS_FOUND``
+    rather than an empty-but-valid partition.
+    """
+    pool: list[tuple[int, int, int, str]] = []  # (pos, spec_index, body_start, line)
+    for idx, spec in enumerate(specs):
+        for header_start, body_start, line in _candidate_positions(text, spec):
+            pool.append((header_start, idx, body_start, line))
+    if not pool:
+        return []
+    pool.sort(key=lambda t: (t[0], t[1]))
+    pool = _drop_contents_block(pool)
+
+    chain = _best_chain(pool, allow_reorder=True)
+    # An unordered chain can return to an item it already used (3 → 7 → 3),
+    # which would emit that item TWICE and hand the store two rival slices under
+    # one key. Uniqueness cannot be expressed as a constraint on this DP, so it
+    # is verified afterwards and a violating chain is rejected outright for the
+    # ordered one, which is unique by construction. This is a live path, not a
+    # formality: across the cached corpus the unordered chain repeats an item on
+    # DASH, NVO, RGEN and VEEV, and is a clean permutation only on NU.
+    used = [pool[i][1] for i in chain]
+    if len(set(used)) != len(used):
+        chain = _best_chain(pool, allow_reorder=False)
 
     located: list[LocatedItem] = []
     for slot, i in enumerate(chain):

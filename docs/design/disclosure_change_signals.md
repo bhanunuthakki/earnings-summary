@@ -205,3 +205,13 @@ incremental content (§1.7).
 - Cross-source period disagreement is real on off-calendar-FYE filers: the Phase 0
   reconciliation flagged AVGO, DHR, LITE and NVDA, where EDGAR and FMP bucket the same 10-K
   into different fiscal years. Those periods must not be diffed cross-source until resolved.
+- **Item-level diffs inherit the Phase 0 partition's quality, and a bad partition inflates
+  them without warning.** A boundary that fails to close does not read as an error; it reads
+  as a section that changed enormously. Four header-matching defects were fixed on 2026-07-25
+  (see `filing_longitudinal_language.md`) — before that, NU's Item 3.D held its risk factors
+  *plus* the Item 4 business overview and NOW's Item 7 ran into the Item 8 footnotes, which
+  is enough to dominate any change metric computed over them. Two consequences for consumers:
+  rows written before that date are stale until re-ingested, and NVO's 20-F remains flagged
+  `slice_boundaries_suspect` with no `risk_factors` section at all. Check
+  `filing_section_coverage.reason_code` before trusting a diff, rather than reading a large
+  change as a large disclosure change.

@@ -661,6 +661,282 @@ def test_split_20f_keeps_parent_when_subsplit_explains_too_little() -> None:
     assert any("subsplit_incomplete" in w for w in result.warnings)
 
 
+# --- header matching: prose, contents blocks, and filer-specific labels -----
+#
+# Every case below is a real defect found by re-partitioning the 125 cached
+# EDGAR filings under data/sec_text and comparing against the stored rows.
+
+
+def _wrapped(paragraph: str, width: int = 135) -> str:
+    """Hard-wrap prose the way NU's stripped 20-F text arrives.
+
+    Line width is the whole point: the header matcher's only prose defense used
+    to be a 200-character line-length limit, which is inert on a document whose
+    every line is 135 characters. Nothing else in the corpus wraps this way,
+    which is why one issuer carried a silently wrong partition.
+    """
+    words, lines, current = paragraph.split(), [], ""
+    for word in words:
+        if len(current) + len(word) + 1 > width:
+            lines.append(current)
+            current = word
+        else:
+            current = f"{current} {word}".strip()
+    lines.append(current)
+    return "\n".join(lines)
+
+
+def test_cross_reference_in_wrapped_prose_is_not_a_header() -> None:
+    """An item citation inside a sentence must not become a header candidate.
+
+    NU's 20-F cites '"Item 3. Key Information—D. Risk Factors"' dozens of times
+    in body prose. Hard-wrapped, each citation sits on a short line and passed
+    the length check, so the chain scorer built its partition out of footnote
+    references — including one that started its line with the opening quote.
+    """
+    citing = _wrapped(
+        "The risks described in this section should be read together with the discussion under "
+        '"Item 5. Operating and Financial Review and Prospects" and the disclosures set out in '
+        '"Item 3. Key Information-D. Risk Factors" and elsewhere in this annual report, each of '
+        "which may materially affect the results we report for any future period."
+    )
+    for spec in taxonomy.FORM_20F_ITEMS:
+        assert taxonomy._candidate_positions(citing, spec) == [], (
+            f"{spec.key} matched a cross-reference in prose"
+        )
+
+    # The same title as an actual heading still matches — the test above must
+    # not be passing merely because the patterns stopped working.
+    heading = "Item 5. Operating and Financial Review and Prospects\nBody prose follows here."
+    item5 = next(s for s in taxonomy.FORM_20F_ITEMS if s.key == "Item 5")
+    assert taxonomy._candidate_positions(heading, item5)
+
+
+def test_body_starts_after_a_header_that_wraps_onto_a_second_line() -> None:
+    """A slice must not open on the tail of its own heading.
+
+    NU's 20-F prints "Item 4A. Unresolved" / "staff comments" across two
+    physical lines, and the title pattern stops at "staff" — so the body began
+    mid-word on " comments". The same arithmetic bites any filing whose title
+    pattern matches a prefix of the real heading ("Market for" inside "Market
+    for Registrant's Common Equity…"). Independently confirmed against
+    data/sec_text/NU_20f_000129281426002166.txt.
+    """
+    text = "Item 4A. Unresolved\nstaff comments\n\nNot applicable.\n"
+    spec = next(s for s in taxonomy.FORM_20F_ITEMS if s.key == "Item 4A")
+    positions = taxonomy._candidate_positions(text, spec)
+    assert positions, "the wrapped heading must still be found"
+    _, body_start, _ = positions[0]
+    assert text[body_start:].strip() == "Not applicable."
+
+
+def test_contents_block_does_not_consume_item_numbers() -> None:
+    """A table of contents must not spend the item numbers the body needs.
+
+    Contents rows sit a few hundred characters apart, so each earns its
+    per-item bonus while contributing no gap: the highest-scoring chain walked
+    the whole TOC and only then entered the body. Harmless-looking, except the
+    item numbers were now taken, so real body items became unreachable.
+    """
+    items = [
+        ("Item 1", "Business"),
+        ("Item 1A", "Risk Factors"),
+        ("Item 1B", "Unresolved Staff Comments"),
+        ("Item 1C", "Cybersecurity"),
+        ("Item 2", "Properties"),
+        ("Item 3", "Legal Proceedings"),
+        ("Item 5", "Market for Registrant's Common Equity"),
+        ("Item 7", "Management's Discussion and Analysis of Financial Condition"),
+        ("Item 7A", "Quantitative and Qualitative Disclosures About Market Risk"),
+        ("Item 8", "Financial Statements and Supplementary Data"),
+        ("Item 9A", "Controls and Procedures"),
+        ("Item 10", "Directors, Executive Officers and Corporate Governance"),
+        ("Item 11", "Executive Compensation"),
+        ("Item 12", "Security Ownership of Certain Beneficial Owners"),
+        ("Item 15", "Exhibits"),
+    ]
+    body: list[str] = []
+    for key, title in items:
+        body.append(f"{key}. {title}")
+        body.extend(f"Body prose for {key} about the registrant." for _ in range(40))
+    text = "\n".join(["TABLE OF CONTENTS", *[f"{k}. {t}" for k, t in items], "", *body])
+    result = edgar_sections.split_10k(text)
+    by_key = {s.key: s for s in result.slices}
+    assert set(by_key) == {k for k, _ in items}
+    for key, slice_ in by_key.items():
+        # Each slice must hold ITS OWN body, which a contents row cannot: a row
+        # taken as a header slices to the next row, a few dozen characters away.
+        assert f"Body prose for {key} " in slice_.text, f"{key} did not get its own body"
+        assert "TABLE OF CONTENTS" not in slice_.text
+
+
+def test_a_contents_block_is_removed_whole_or_not_at_all() -> None:
+    """Thinning a contents block is worse than leaving it intact.
+
+    `_drop_contents_block` identifies the block by its density, so anything
+    that removes SOME of its rows first destroys the signal that finds the
+    rest — and the survivors go on to consume item numbers exactly as before.
+    This is not hypothetical: #1009's per-row lookahead test stripped 29 of
+    NU's 32 contents rows and left the final two (a lookahead cannot see the
+    block's tail, which has no following entry to look ahead at), which cost
+    all three NU years their risk-factors section.
+
+    Pinned by simulating the thinning directly: drop all but the last two
+    contents rows, and the partition must still not hand a body item's number
+    to a leftover row.
+    """
+    items = [f"Item {n}" for n in ("1", "1A", "7", "8", "9A", "10", "11", "12", "15")]
+    titles = {
+        "Item 1": "Business",
+        "Item 1A": "Risk Factors",
+        "Item 7": "Management's Discussion and Analysis of Financial Condition",
+        "Item 8": "Financial Statements and Supplementary Data",
+        "Item 9A": "Controls and Procedures",
+        "Item 10": "Directors, Executive Officers and Corporate Governance",
+        "Item 11": "Executive Compensation",
+        "Item 12": "Security Ownership of Certain Beneficial Owners",
+        "Item 15": "Exhibits",
+    }
+    body: list[str] = []
+    for key in items:
+        body.append(f"{key}. {titles[key]}")
+        body.extend(f"Body prose for {key} about the registrant." for _ in range(40))
+
+    thinned_contents = [f"{k}. {titles[k]}" for k in items[-2:]]
+    text = "\n".join(["TABLE OF CONTENTS", *thinned_contents, "", *body])
+    result = edgar_sections.split_10k(text)
+    by_key = {s.key: s for s in result.slices}
+    for key in ("Item 1A", "Item 7", "Item 12", "Item 15"):
+        assert key in by_key, f"{key} was lost to a leftover contents row"
+        assert f"Body prose for {key} " in by_key[key].text
+
+
+def test_items_printed_out_of_order_are_still_partitioned() -> None:
+    """Filers reorder items, and the taxonomy's order must not overrule them.
+
+    NU's 20-F prints Item 4, then Item 4A, then Item 3, then Item 1. Requiring
+    taxonomy order made Items 3 and 1 unreachable once Item 4 was taken, so the
+    entire risk-factors disclosure was absorbed into the preceding slice — a
+    swallowed item, not merely a missing one.
+    """
+    company = "\n".join("Company information prose." for _ in range(60))
+    risks = "\n".join("Risk factor disclosure prose for the issuer." for _ in range(60))
+    directors = "\n".join("Directors and senior management prose." for _ in range(60))
+    text = "\n".join(
+        [
+            "Item 4. Information on the Company",
+            company,
+            "Item 4A. Unresolved Staff Comments",
+            "Not applicable.",
+            "Item 3. Key Information",
+            "D. Risk Factors",
+            risks,
+            "Item 1. Identity of Directors, Senior Management and Advisers",
+            directors,
+        ]
+    )
+    result = edgar_sections.split_20f(text)
+    by_concept = {s.concept: s for s in result.slices}
+    assert by_concept["risk_factors"].key == "Item 3.D"
+    assert "Risk factor disclosure" in by_concept["risk_factors"].text
+    assert "Company information prose" not in by_concept["risk_factors"].text
+    assert "Company information prose" in by_concept["company_information"].text
+    assert "Risk factor disclosure" not in by_concept["company_information"].text
+    assert [s.key for s in result.slices] == [
+        "Item 4",
+        "Item 3.D",
+        "Item 1",
+    ], "slices must come back in document order, not taxonomy order"
+
+
+def test_no_item_is_emitted_twice() -> None:
+    """Dropping the order constraint lets a chain revisit an item; it must not.
+
+    Two slices under one key would hand the store rival texts for one
+    disclosure. The guard falls back to the strictly-ordered chain, which is
+    unique by construction — and it is a live path, firing on DASH, NVO, RGEN
+    and VEEV in the cached corpus.
+    """
+    filler = "\n".join("Disclosure prose that fills out the body." for _ in range(40))
+    text = "\n".join(
+        [
+            "Item 1. Business",
+            filler,
+            "Item 7. Management's Discussion and Analysis of Financial Condition",
+            filler,
+            "Item 15. Exhibits",
+            filler,
+            # An exhibit index that names Item 1 again, after Item 15.
+            "Item 1. Business",
+            filler,
+        ]
+    )
+    keys = [s.key for s in edgar_sections.split_10k(text).slices]
+    assert len(keys) == len(set(keys)), f"an item was emitted twice: {keys}"
+
+
+def test_market_risk_and_financial_statements_title_variants() -> None:
+    """ServiceNow writes "Qualitative and Quantitative" and "Consolidated
+    Financial Statements". Neither matched, so Items 7A and 8 were never
+    located — and a missing boundary is worse than a missing section: MD&A ran
+    straight through both, ending 120KB later inside the segment footnote.
+    """
+    filler = "\n".join("Managements discussion prose about results." for _ in range(60))
+    statements = "\n".join("(19) Segment and Geographic Information detail." for _ in range(60))
+    text = "\n".join(
+        [
+            "Item 7. Management's Discussion and Analysis of Financial Condition",
+            filler,
+            "Item 7A. Qualitative and Quantitative Disclosures About Market Risk",
+            "\n".join("Market risk prose." for _ in range(40)),
+            "Item 8. Consolidated Financial Statements and Supplementary Data",
+            statements,
+        ]
+    )
+    by_concept = {s.concept: s for s in edgar_sections.split_10k(text).slices}
+    assert set(by_concept) >= {"mdna", "market_risk", "financial_statements"}
+    assert "Segment and Geographic" not in by_concept["mdna"].text, "MD&A ran into Item 8"
+
+
+def test_subitem_letter_may_be_the_wrong_one() -> None:
+    """NU prints its risk factors as "A.Risk Factors" under Item 3 while its own
+    contents page and every cross-reference call the section 3.D. Keying on the
+    SEC's letter found no risk-factors sub-item at all and left Item 3 whole."""
+    risks = "\n".join("Risk factor disclosure prose for the issuer." for _ in range(80))
+    text = "\n".join(
+        [
+            "Item 3. Key Information",
+            "A.[Reserved.]",
+            "B.Capitalization and Indebtedness",
+            "Not applicable.",
+            "A.Risk Factors",
+            risks,
+            "Item 4. Information on the Company",
+            "\n".join("Company information prose." for _ in range(40)),
+        ]
+    )
+    by_concept = {s.concept: s.key for s in edgar_sections.split_20f(text).slices}
+    assert by_concept.get("risk_factors") == "Item 3.D", (
+        "the concept follows the disclosure, and section_key_raw keeps the SEC's label"
+    )
+
+
+def test_subitem_title_words_in_a_sentence_are_not_a_subitem_header() -> None:
+    """Tolerating a mislabeled letter must not become tolerating NO letter.
+
+    Without a letter, ``risk\\s+factors?`` matches the opening words of an
+    ordinary sentence — "Risk factor disclosure prose…" — so every line of a
+    risk section became a rival 3.D header and the slice collapsed to the last
+    one. The letter must be present and stand alone; which letter it is, is the
+    part filers get wrong.
+    """
+    body = "\n".join("Risk factor disclosure prose for the issuer." for _ in range(40))
+    risk_spec = next(s for s in taxonomy.FORM_20F_ITEM3_SUBITEMS if s.key == "Item 3.D")
+    assert taxonomy._candidate_positions(body, risk_spec) == []
+    assert taxonomy._candidate_positions("D. Risk Factors\n" + body, risk_spec)
+    assert taxonomy._candidate_positions("A.Risk Factors\n" + body, risk_spec)
+
+
 def test_split_freeform_falls_back_to_whole_document() -> None:
     result = edgar_sections.split_freeform("just one long run of prose without headings. " * 40)
     assert len(result.slices) == 1
