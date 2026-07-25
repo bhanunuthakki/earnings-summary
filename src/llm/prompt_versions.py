@@ -107,6 +107,12 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # personal_investment_partner_prd.md §8.1/§10). Bump when
     # research.investment_decision_card._build_prompt is materially rewritten.
     "investment_decision_card": "v1",
+    # Senior Partner Brief (P2.2, mode-B rubric,
+    # personal_investment_partner_prd.md §9.1/§10). Bump when
+    # advisor.senior_partner_brief._build_prompt is materially rewritten, then
+    # re-run `run_llm_evals.py --purpose senior_partner_brief` so the rewrite
+    # forks the score history cleanly.
+    "senior_partner_brief": "v1",
     # Ask advisory answer (mode-B rubric, close_the_loops L3). The audit run
     # records this version, so bump when the conversational ANSWER prompt (the
     # system context + evidence + thread assembly in src/ask/engine.py /

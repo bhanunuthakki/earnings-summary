@@ -86,3 +86,15 @@ def test_strip_caps_rows(db_path: Path) -> None:
         _seed_ping(db_path, class_="profile_drift", body=f"digest item {i}", status="digest")
     html = render_coach_strip(db_path, now=_NOW)
     assert html.count("cc-ol-line") == 4  # _MAX_ROWS
+
+
+def test_strip_renders_routed_to_brief_items(db_path: Path) -> None:
+    """P2.2: calibration_finding/capacity_breach/life_event_checkpoint/
+    profile_drift moments land status='routed_to_brief' (governor.
+    BRIEF_ROUTED_CLASSES) instead of sent/digest — the strip must still show
+    them (labeled distinctly), or they'd silently vanish from Home."""
+    _seed_ping(db_path, class_="profile_drift", body="drifted fact", status="routed_to_brief")
+    html = render_coach_strip(db_path, now=_NOW)
+    assert "drifted fact" in html
+    assert "(in weekly brief)" in html
+    assert "(queued)" not in html

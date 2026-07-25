@@ -102,6 +102,11 @@ AUDIT_PURPOSES = (
     # Mode-B rubric; corpus =
     # evals.corpora.load_investment_decision_card_corpus.
     "investment_decision_card",
+    # Senior Partner Brief (P2.2, personal_investment_partner_prd.md
+    # §9.1/§10.5) — the weekly governed synthesis over the whole advisory
+    # surface. Mode-B rubric; corpus =
+    # evals.corpora.load_senior_partner_brief_corpus.
+    "senior_partner_brief",
     "ask_advisory_answer",
     "calibration_coach",
     "peer_selection",
