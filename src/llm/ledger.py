@@ -65,6 +65,7 @@ def record_llm_call(
     """
     try:
         from llm.prompt_registry import template_meta
+        from llm.tracectx import context_fields
         from llm_call_ledger import (
             LlmCallRecord,
             record_call,
@@ -73,6 +74,7 @@ def record_llm_call(
         )
 
         template_id, template_version, vars_sha = template_meta(prompt)
+        trace_id, span_id, parent_span_id, stage = context_fields()
         usage = usage_from_json_meta(meta) if meta else {}
         record_call(
             LlmCallRecord(
@@ -99,6 +101,10 @@ def record_llm_call(
                 template_id=template_id,
                 template_version=template_version,
                 template_vars_sha256=vars_sha,
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=parent_span_id,
+                stage=stage,
             )
         )
     except Exception as exc:  # ImportError, unexpected attribute errors, …

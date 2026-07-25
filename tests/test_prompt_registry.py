@@ -113,13 +113,19 @@ CREATE TABLE llm_calls (
     output_tokens INTEGER, elapsed_ms INTEGER, cost_estimate_usd REAL,
     cache_hit INTEGER NOT NULL DEFAULT 0, fallback_used TEXT,
     artifact_id INTEGER, error TEXT, run_id TEXT,
-    template_id TEXT, template_version TEXT, template_vars_sha256 TEXT
+    template_id TEXT, template_version TEXT, template_vars_sha256 TEXT,
+    trace_id TEXT, span_id TEXT, parent_span_id TEXT, stage TEXT
 );
 """
 
 
 def _record(db: Path, prompt: object) -> sqlite3.Row:
+    import llm_call_ledger
     from llm.ledger import record_llm_call
+
+    # The available-columns cache is keyed by db path and lives for the
+    # process; tests build several DBs with different schemas.
+    llm_call_ledger._OPTIONAL_COLUMN_CACHE.pop(str(db), None)
 
     record_llm_call(
         started_at=datetime.now(UTC).replace(tzinfo=None),
@@ -190,7 +196,7 @@ def test_ledger_pre_migration_db_still_lands_row(
     with caplog.at_level(logging.WARNING):
         row = _record(db, t.render(a="1"))
     assert row["purpose"] == "scenario_prior"  # the row landed
-    assert any("template_cols_missing" in r.message for r in caplog.records)
+    assert any("optional_cols_missing" in r.message for r in caplog.records)
 
 
 # ---------------------------------------------------------------------------

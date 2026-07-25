@@ -64,6 +64,11 @@ class LlmCallRecord:
     template_id: str | None = None
     template_version: str | None = None
     template_vars_sha256: str | None = None
+    # P1 trace context (llm.tracectx, mig 0206). NULL = untraced entrypoint.
+    trace_id: str | None = None
+    span_id: str | None = None
+    parent_span_id: str | None = None
+    stage: str | None = None
 
 
 def sha256_text(text: str) -> str:
@@ -154,21 +159,79 @@ INSERT INTO llm_calls(
 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 """
 
-# Extended INSERT carrying the P0 template-identity columns (mig 0205). The
-# writer tries this first and falls back to the legacy SQL — WITH a warning —
-# when the columns are absent (a pre-0205 DB). Silent fallback would be the
-# silent-degradation class: template telemetry vanishing while everything
-# looks migrated; the warning names the missing migration instead.
-_INSERT_SQL_TEMPLATED = """
-INSERT INTO llm_calls(
-    called_at, purpose, ticker, scope, model,
-    prompt_sha256, response_sha256, prompt_chars, response_chars,
-    input_tokens, cache_creation_input_tokens, cache_read_input_tokens,
-    output_tokens, elapsed_ms, cost_estimate_usd, cache_hit,
-    fallback_used, artifact_id, error, run_id,
-    template_id, template_version, template_vars_sha256
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-"""
+# Columns added by later migrations, each independently optional. The writer
+# includes exactly the ones the target DB actually has.
+#
+# Why dynamic rather than a second hard-coded INSERT: with a fixed "extended"
+# statement, a DB at 0205-but-not-0206 fails the extended insert and falls all
+# the way back to the legacy column set — silently dropping the TEMPLATE
+# identity it could perfectly well store. Partial-migration states are normal
+# (multiple worktrees, a prod DB mid-upgrade), and "degrade further than
+# necessary, without saying so" is precisely the silent-degradation class this
+# platform keeps finding. Column-aware construction stores everything the
+# schema can hold and warns about exactly what it cannot.
+_OPTIONAL_COLUMNS: tuple[str, ...] = (
+    "template_id",
+    "template_version",
+    "template_vars_sha256",
+    "trace_id",
+    "span_id",
+    "parent_span_id",
+    "stage",
+)
+
+_BASE_COLUMNS: tuple[str, ...] = (
+    "called_at",
+    "purpose",
+    "ticker",
+    "scope",
+    "model",
+    "prompt_sha256",
+    "response_sha256",
+    "prompt_chars",
+    "response_chars",
+    "input_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+    "output_tokens",
+    "elapsed_ms",
+    "cost_estimate_usd",
+    "cache_hit",
+    "fallback_used",
+    "artifact_id",
+    "error",
+    "run_id",
+)
+
+# path -> the optional columns that DB has (PRAGMA once per process per DB).
+_OPTIONAL_COLUMN_CACHE: dict[str, frozenset[str]] = {}
+
+
+def _available_optional_columns(conn: sqlite3.Connection, path_key: str) -> frozenset[str]:
+    cached = _OPTIONAL_COLUMN_CACHE.get(path_key)
+    if cached is not None:
+        return cached
+    present: set[str] = set()
+    try:
+        rows = cast(
+            "list[tuple[object, ...]]", conn.execute("PRAGMA table_info(llm_calls)").fetchall()
+        )
+        present = {str(row[1]) for row in rows}
+    except sqlite3.Error:
+        pass  # unreadable schema -> assume no optional columns, warn below
+    available = frozenset(c for c in _OPTIONAL_COLUMNS if c in present)
+    missing = [c for c in _OPTIONAL_COLUMNS if c not in present]
+    if missing:
+        log.warning(
+            {
+                "event": "llm_call_ledger_optional_cols_missing",
+                "missing": missing,
+                "hint": "run `alembic upgrade head` (migs 0205/0206) — these fields "
+                "will be dropped from ledger rows until then",
+            }
+        )
+    _OPTIONAL_COLUMN_CACHE[path_key] = available
+    return available
 
 
 def record_call(record: LlmCallRecord, *, db_path: Path | str | None = None) -> int | None:
@@ -219,7 +282,7 @@ def record_call(record: LlmCallRecord, *, db_path: Path | str | None = None) -> 
         conn = sqlite3.connect(str(path), timeout=30.0)
         try:
             conn.execute("PRAGMA busy_timeout = 30000")
-            legacy_values = (
+            base_values: tuple[object, ...] = (
                 record.called_at.isoformat(),
                 record.purpose,
                 record.ticker,
@@ -241,29 +304,15 @@ def record_call(record: LlmCallRecord, *, db_path: Path | str | None = None) -> 
                 record.error,
                 record.run_id,
             )
-            try:
-                cur = conn.execute(
-                    _INSERT_SQL_TEMPLATED,
-                    (
-                        *legacy_values,
-                        record.template_id,
-                        record.template_version,
-                        record.template_vars_sha256,
-                    ),
-                )
-            except sqlite3.OperationalError as exc:
-                if "template" not in str(exc):
-                    raise
-                # Pre-0205 DB: the row still lands, but template telemetry is
-                # dropped — say so loudly instead of degrading in silence.
-                log.warning(
-                    {
-                        "event": "llm_call_ledger_template_cols_missing",
-                        "hint": "run `alembic upgrade head` (mig 0205) to capture "
-                        "template identity",
-                    }
-                )
-                cur = conn.execute(_INSERT_SQL, legacy_values)
+            available = _available_optional_columns(conn, str(path))
+            optional = [c for c in _OPTIONAL_COLUMNS if c in available]
+            columns = (*_BASE_COLUMNS, *optional)
+            values = (*base_values, *(getattr(record, c) for c in optional))
+            placeholders = ",".join("?" * len(columns))
+            cur = conn.execute(
+                f"INSERT INTO llm_calls({','.join(columns)}) VALUES ({placeholders})",
+                values,
+            )
             conn.commit()
             return cur.lastrowid
         finally:
