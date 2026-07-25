@@ -16,7 +16,9 @@ Seams under test:
   * ``read_history`` / ``read_latest_snapshot`` — return the provenance;
   * ``comparable`` / ``incomparable_reason`` — the None-is-unknown matrix;
   * ``execution/refresh_portfolio_risk_snapshot.py`` — derives
-    ``rebase_basis`` from ``PerformanceSeries.backfill_start_unreliable``,
+    ``rebase_basis`` by comparing ``PerformanceSeries.start_date`` against
+    ``.earliest_observed_date`` (NOT ``backfill_start_unreliable``, which is a
+    constant False across both window shapes),
     never hardcoded.
 """
 
@@ -315,7 +317,9 @@ def _load_refresh_module() -> object:
     return mod
 
 
-def _canned_analytics(*, backfill_start_unreliable: bool) -> PortfolioAnalytics:
+def _canned_analytics(
+    *, earliest_observed_date: str | None, start_date: str | None = "2026-01-23"
+) -> PortfolioAnalytics:
     points = [
         PerformancePoint(
             date="2026-07-01",
@@ -353,12 +357,16 @@ def _canned_analytics(*, backfill_start_unreliable: bool) -> PortfolioAnalytics:
         available=True,
         api_url="http://127.0.0.1:8000",
         performance=PerformanceSeries(
-            start_date="2026-01-23",
+            start_date=start_date,
             end_date="2026-07-23",
             base_value=100_000.0,
             net_external_cashflow_in=0.0,
-            backfill_start_unreliable=backfill_start_unreliable,
+            # Constant False in the real API across observed AND
+            # heavily-reconstructed series — pinned False here so a test
+            # can never accidentally derive the basis from it.
+            backfill_start_unreliable=False,
             points=points,
+            earliest_observed_date=earliest_observed_date,
         ),
         positioning=Positioning(
             snapshot_date="2026-07-23",
@@ -397,14 +405,14 @@ def _canned_analytics(*, backfill_start_unreliable: bool) -> PortfolioAnalytics:
     )
 
 
-def test_refresh_script_stamps_observed_when_backfill_reliable(
+def test_refresh_script_stamps_observed_when_window_starts_at_first_observation(
     head_db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     mod = _load_refresh_module()
     monkeypatch.setattr(
         mod,
         "fetch_portfolio_analytics",
-        lambda **_: _canned_analytics(backfill_start_unreliable=False),
+        lambda **_: _canned_analytics(start_date="2026-01-23", earliest_observed_date="2026-01-23"),
     )
     assert mod.main(["--db-path", str(head_db)]) == 0
     latest = read_latest_snapshot(db_path=head_db)
@@ -413,14 +421,14 @@ def test_refresh_script_stamps_observed_when_backfill_reliable(
     assert latest.metric_version == METRIC_VERSION
 
 
-def test_refresh_script_stamps_modeled_backfill_when_unreliable(
+def test_refresh_script_stamps_modeled_backfill_when_window_precedes_observation(
     head_db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     mod = _load_refresh_module()
     monkeypatch.setattr(
         mod,
         "fetch_portfolio_analytics",
-        lambda **_: _canned_analytics(backfill_start_unreliable=True),
+        lambda **_: _canned_analytics(start_date="2025-07-24", earliest_observed_date="2026-05-09"),
     )
     assert mod.main(["--db-path", str(head_db)]) == 0
     latest = read_latest_snapshot(db_path=head_db)
@@ -437,9 +445,50 @@ def test_refresh_script_summary_json_includes_provenance(
     monkeypatch.setattr(
         mod,
         "fetch_portfolio_analytics",
-        lambda **_: _canned_analytics(backfill_start_unreliable=True),
+        lambda **_: _canned_analytics(start_date="2025-07-24", earliest_observed_date="2026-05-09"),
     )
     assert mod.main(["--db-path", str(head_db)]) == 0
     out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert out["metric_version"] == METRIC_VERSION
     assert out["rebase_basis"] == "modeled_backfill"
+
+
+def test_refresh_script_stamps_unknown_when_provider_omits_observation_marker(
+    head_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No marker means the basis is genuinely indeterminate. Defaulting to
+    'observed' would assert a guarantee nobody verified."""
+    mod = _load_refresh_module()
+    monkeypatch.setattr(
+        mod,
+        "fetch_portfolio_analytics",
+        lambda **_: _canned_analytics(earliest_observed_date=None),
+    )
+    assert mod.main(["--db-path", str(head_db)]) == 0
+    latest = read_latest_snapshot(db_path=head_db)
+    assert latest is not None
+    assert latest.rebase_basis == "unknown"
+
+
+def test_backfill_flag_alone_never_decides_the_basis() -> None:
+    """Regression pin for the defect this derivation replaced: the live API
+    returns backfill_start_unreliable=False for an observed window AND for a
+    walk-back-filled one, so a basis derived from it would be constant. Both
+    fixtures below carry the SAME flag value and must still classify
+    differently."""
+    observed = _canned_analytics(start_date="2026-01-23", earliest_observed_date="2026-01-23")
+    walk_back = _canned_analytics(start_date="2025-07-24", earliest_observed_date="2026-05-09")
+    assert observed.performance is not None and walk_back.performance is not None
+    assert (
+        observed.performance.backfill_start_unreliable
+        == walk_back.performance.backfill_start_unreliable
+    )
+
+
+def test_two_unknown_basis_captures_are_not_comparable() -> None:
+    """Two admissions of ignorance must not compare equal — they may rest on
+    different bases, which is the false delta this guard exists to stop."""
+    a = RiskSnapshot(metric_version="v1", rebase_basis="unknown")
+    b = RiskSnapshot(metric_version="v1", rebase_basis="unknown")
+    assert comparable(a, b) is False
+    assert incomparable_reason(a, b) == "analytics window basis is unrecorded for these captures"

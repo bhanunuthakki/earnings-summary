@@ -144,11 +144,27 @@ def main(argv: list[str] | None = None) -> int:
     factor = factor_exposure_rollup(analytics.positioning.correlations, rate_betas)
     snap = _build_risk_snapshot(analytics, drawdown, factor)
 
-    # §7.1.9 provenance: derive rebase_basis from the tracker's own signal —
-    # never guessed. See the module docstring for why this matters.
-    rebase_basis: RebaseBasis = (
-        "modeled_backfill" if analytics.performance.backfill_start_unreliable else "observed"
-    )
+    # §7.1.9 provenance: derive rebase_basis by COMPARING the window the
+    # series actually starts at against the first day the provider has real
+    # observations for. Do NOT use `backfill_start_unreliable` — measured
+    # against the live tracker it is a constant False across an observed
+    # window, the walk-back-filled default, AND a 2000-01-01 window whose
+    # first 9,625 of 9,698 points are reconstructed. It answers "is the
+    # walk-back's starting VALUE untrustworthy", not "does this series
+    # contain a walk-back at all". Stamping it would record the same basis
+    # for both shapes — a guarantee that reads as verified while
+    # distinguishing nothing, which is worse than no stamp.
+    perf = analytics.performance
+    observed_from = perf.earliest_observed_date
+    rebase_basis: RebaseBasis
+    if observed_from is None or perf.start_date is None:
+        # The provider declined to mark its observation start, so the basis
+        # is genuinely indeterminate — say so rather than assuming observed.
+        rebase_basis = "unknown"
+    elif perf.start_date >= observed_from:
+        rebase_basis = "observed"
+    else:
+        rebase_basis = "modeled_backfill"
 
     weights = tuple(
         float(r.weight_pct) for r in analytics.positioning.correlations if r.weight_pct is not None

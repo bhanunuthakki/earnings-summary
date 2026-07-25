@@ -48,7 +48,19 @@ METRIC_VERSION = "v1"
 # How the analytics window backing a snapshot was established — derived from
 # the tracker's own signal (PerformanceSeries.backfill_start_unreliable), not
 # guessed. See execution/refresh_portfolio_risk_snapshot.py.
-RebaseBasis = Literal["observed", "modeled_backfill"]
+# How the analytics window that produced a capture was established.
+#   observed         — the series starts at/after the provider's first real
+#                      observation; every point is measured.
+#   modeled_backfill — the series starts BEFORE it, so the leading span is a
+#                      reconstructed walk-back.
+#   unknown          — the provider returned no observation marker, so the
+#                      basis is indeterminate. Deliberately its own value:
+#                      defaulting an unmarked series to "observed" would
+#                      assert a guarantee nobody verified.
+# Derived by comparing PerformanceSeries.start_date against
+# .earliest_observed_date — NOT from backfill_start_unreliable, which is a
+# constant False across observed and heavily-reconstructed series alike.
+RebaseBasis = Literal["observed", "modeled_backfill", "unknown"]
 
 # The metric columns, in insert order — kept in one list so write/read stay in
 # lockstep with the migration and adding a metric is a one-line change.
@@ -406,10 +418,16 @@ def comparable(a: RiskSnapshot, b: RiskSnapshot) -> bool:
     stamped one of the two fields) is NEVER comparable to anything, including
     another ``None`` — an unknown definition might silently differ from
     another unknown definition, so treating two unknowns as a match would be
-    exactly the false-delta risk this function exists to prevent."""
+    exactly the false-delta risk this function exists to prevent.
+
+    The literal string ``"unknown"`` is treated exactly like ``None`` for the
+    same reason: it means the provider gave no observation marker, so two
+    ``"unknown"`` captures may well rest on different bases. Comparing equal
+    on a shared admission of ignorance would reintroduce the false delta by
+    the back door."""
     if a.metric_version is None or b.metric_version is None:
         return False
-    if a.rebase_basis is None or b.rebase_basis is None:
+    if a.rebase_basis in (None, "unknown") or b.rebase_basis in (None, "unknown"):
         return False
     return a.metric_version == b.metric_version and a.rebase_basis == b.rebase_basis
 
@@ -429,4 +447,9 @@ def incomparable_reason(current: RiskSnapshot, prior: RiskSnapshot) -> str | Non
         return f"metric definition changed ({prior_v} → {current_v})"
     prior_basis = prior.rebase_basis or "unknown"
     current_basis = current.rebase_basis or "unknown"
+    if prior_basis == current_basis:
+        # Both sides unknown (or both None): nothing "changed" — we simply
+        # cannot vouch that they rest on the same basis, which is a
+        # different and more honest statement than asserting a change.
+        return "analytics window basis is unrecorded for these captures"
     return f"analytics window basis changed ({prior_basis} → {current_basis})"
