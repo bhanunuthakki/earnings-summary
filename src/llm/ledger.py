@@ -49,6 +49,7 @@ def record_llm_call(
     meta: dict[str, object] | None = None,
     error: str | None = None,
     fallback_used: str | None = None,
+    prompt: object | None = None,
 ) -> None:
     """Best-effort write of one row into llm_calls. Never raises.
 
@@ -56,8 +57,14 @@ def record_llm_call(
     fields populate. On failure: pass error= and leave response/meta None — the
     ledger row still records the attempt and its latency. The fallback path
     records a SECOND row with fallback_used='gemini'.
+
+    ``prompt`` (P0, llm.prompt_registry): pass the prompt OBJECT when in scope
+    — if it is a ``RenderedPrompt`` the row carries the template identity
+    (template_id / version / vars sha); a plain string carries NULLs, the
+    honest mark of an unmigrated call site.
     """
     try:
+        from llm.prompt_registry import template_meta
         from llm_call_ledger import (
             LlmCallRecord,
             record_call,
@@ -65,6 +72,7 @@ def record_llm_call(
             usage_from_json_meta,
         )
 
+        template_id, template_version, vars_sha = template_meta(prompt)
         usage = usage_from_json_meta(meta) if meta else {}
         record_call(
             LlmCallRecord(
@@ -88,6 +96,9 @@ def record_llm_call(
                 cost_estimate_usd=cast("float | None", usage.get("cost_estimate_usd")),
                 fallback_used=fallback_used,
                 error=error,
+                template_id=template_id,
+                template_version=template_version,
+                template_vars_sha256=vars_sha,
             )
         )
     except Exception as exc:  # ImportError, unexpected attribute errors, …
@@ -142,6 +153,7 @@ def fallback_call_logged(
             run_id=run_id,
             response_text=text,
             fallback_used="gemini",
+            prompt=prompt,
         )
         return text
     except Exception as gemini_err:
@@ -158,5 +170,6 @@ def fallback_call_logged(
             run_id=run_id,
             error=f"{type(gemini_err).__name__}: {str(gemini_err)[:500]}",
             fallback_used="gemini",
+            prompt=prompt,
         )
         raise

@@ -1113,6 +1113,7 @@ def _call_claude(
             scope=scope,
             run_id=run_id,
             error=f"[quota_blocked] {msg}",
+            prompt=prompt,
         )
         raise LLMQuotaExhausted(msg, blocked_until=blocked_until)
 
@@ -1176,6 +1177,7 @@ def _call_claude(
                 run_id=run_id,
                 response_text=text,
                 meta=meta,
+                prompt=prompt,
             )
             # Opt-in full-text capture (off unless LLM_CAPTURE_DIR is set) — the
             # corpus source for execution/compare_backends.py --from-capture.
@@ -1232,6 +1234,7 @@ def _call_claude(
         scope=scope,
         run_id=run_id,
         error=error_msg,
+        prompt=prompt,
     )
     if last_info.kind == "usage_limit" and not fallback_available():
         # Typed so eval/judge callers can abort instead of scoring the outage;
@@ -1563,6 +1566,7 @@ def call_llm_with_web(
             scope=scope or "web",
             run_id=run_id,
             error=f"[quota_blocked] {msg}",
+            prompt=prompt,
         )
         raise LLMQuotaExhausted(msg, blocked_until=blocked_until)
 
@@ -1623,6 +1627,7 @@ def call_llm_with_web(
             run_id=run_id,
             response_text=text,
             meta=meta,
+            prompt=prompt,
         )
         # Opt-in full-text capture (see _call_claude). scope tags it as a web
         # call so the replay step can flag web-grounded purposes (Gemini has no
@@ -1654,6 +1659,7 @@ def call_llm_with_web(
             scope=scope or "web",
             run_id=run_id,
             error=web_error_msg,
+            prompt=prompt,
         )
         if web_info.kind == "usage_limit":
             # Engage the breaker here too — the plain-path fall-through below
