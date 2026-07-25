@@ -87,6 +87,12 @@ GOLDEN_PURPOSES = (
     # the async capture tap that turns a landed musing into a confirmable
     # decision draft (mode-A: intent/ticker/action + the prefer-ambiguous bar).
     "decision_draft_parse",
+    # D1e (disclosure_intelligence_v1_prd.md) — ground truth for the
+    # disclosure-judgment layer, mode-A golden classifiers over hand-labeled
+    # prod disclosure_events rows (evals/golden/metric_lifecycle_triage.json,
+    # evals/golden/disclosure_item_specificity_triage.json).
+    "metric_lifecycle_triage",
+    "disclosure_item_specificity_triage",
 )
 AUDIT_PURPOSES = (
     "bear_case",

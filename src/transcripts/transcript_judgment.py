@@ -1,17 +1,29 @@
-"""P4 transcript longitudinal tracking — the two LLM judgment calls.
+"""P4 transcript longitudinal tracking — the LLM judgment calls.
 
 Everything in ``transcripts.longitudinal`` is deterministic. This module is
-the ONLY place an LLM is invoked, and only for the two questions the design
-stack explicitly reserves for judgment (``docs/design/disclosure_change_
-build_stack.md`` P4 cross-cutting rules): "is this answer evasive?" and "is
-this KPI business-meaningful?". Both are ONE batched call — per transcript
-for the former, per ticker for the latter — never per question, never per
-KPI candidate. Haiku-tier models (``FAST_CLASSIFIER_MODEL`` via
-``llm.cli.LLM_MODELS``), mirroring ``filings.metric_triage``'s precedent
-(closed classification over a short, bounded candidate list, not open-ended
-generation).
+the ONLY place an LLM is invoked: ONE batched per-transcript call scoring
+each management speaker's tone (-1.0..+1.0), and ONE batched per-ticker call
+triaging KPI/topic relevance — never per question, never per KPI candidate.
+Haiku-tier models (``FAST_CLASSIFIER_MODEL`` via ``llm.cli.LLM_MODELS``),
+mirroring ``filings.metric_triage``'s precedent (closed classification over
+a short, bounded candidate list, not open-ended generation).
 
-Token efficiency: the QA-judgment prompt below carries ONLY the paired
+DROPPED (D1.6, owner ruling, 2026-07-25): the per-transcript call used to
+ALSO ask a "is this answer evasive?" (non-answer) question, one verdict per
+Q&A exchange. That construct never reproduced Gow/Larcker/Zakolyukina's
+~11% baseline against this book (measured 30.1%, spread widened, not
+narrowed) and the owner ruled DROP, not repair. It has been removed from
+the prompt entirely (not just unused downstream) — a prior build kept
+asking the LLM for verdicts nobody consumed, which is exactly the kind of
+half-dead surface that gets rebuilt naively later. Tone scoring is
+unaffected and stays the production path for D2.3 (see
+``transcripts.longitudinal.fit_tone_residual_model``). This is a prompt-
+shape change, so every previously-cached ``transcript_qa_judgment`` artifact
+misses on its next read (different input_sha256) and is re-judged ONCE on
+the next real (non-``--no-llm``) detector run — a bounded, expected,
+Haiku-tier cost, not a new recurring call.
+
+Token efficiency: the tone-judgment prompt below carries ONLY the paired
 question/answer excerpts and the management speakers' own answer text —
 never the full call, never prepared remarks. The topic-triage prompt
 carries ONLY KPI names (from ``kpi_definitions``), matching
@@ -19,8 +31,8 @@ carries ONLY KPI names (from ``kpi_definitions``), matching
 
 Both calls degrade honestly on failure (the repo's silent-degradation-class
 rule): a failed or unparseable call returns a degraded result carrying NO
-verdicts, never a fabricated "not evasive" / "not relevant" default for
-every candidate. Hard stops (budget cap / missing CLI, per
+verdicts, never a fabricated "neutral" / "not relevant" default for every
+candidate. Hard stops (budget cap / missing CLI, per
 ``llm.cli.is_hard_stop``) propagate untouched so a caller fails the whole
 run loudly instead of mistaking a setup problem for a judgment miss.
 """
@@ -46,7 +58,10 @@ TOPIC_TRIAGE_PURPOSE = "transcript_topic_triage"
 
 # No budget row / golden set added yet (same posture as metric_lifecycle_triage,
 # src/llm/cli.py) — flag if/when a golden-set-gated downgrade loop is warranted.
-_PROMPT_VERSION = "v1"
+# v2 (D1.6): the non-answer question was removed from the prompt entirely —
+# bumped so a stale v1-cached artifact (with a "questions" key nothing reads
+# anymore) is never mistaken for a fresh v2 read.
+_PROMPT_VERSION = "v2"
 
 # Bound prompt size per exchange/speaker so a runaway call (some real
 # transcripts run 50+ exchanges) can't blow past a sane token budget. This
@@ -59,11 +74,6 @@ _MAX_CHARS_PER_SPEAKER_TONE_SAMPLE = 2500
 _MAX_EXCHANGES = 30
 
 
-class QuestionVerdict(BaseModel):
-    non_answer: bool
-    rationale: str = Field(max_length=300)
-
-
 class ToneVerdict(BaseModel):
     score: float = Field(ge=-1.0, le=1.0)
     rationale: str = Field(max_length=300)
@@ -72,13 +82,12 @@ class ToneVerdict(BaseModel):
 class CallJudgment(BaseModel):
     """Result of the ONE batched per-transcript LLM call.
 
-    ``degraded=True`` means the call/parse failed — ``questions`` and
-    ``tone`` are then guaranteed empty, never a fabricated "answered"/
-    "neutral" default for every candidate (silent-degradation-class rule).
+    ``degraded=True`` means the call/parse failed — ``tone`` is then
+    guaranteed empty, never a fabricated "neutral" default for every
+    candidate (silent-degradation-class rule).
     """
 
     transcript_id: int
-    questions: dict[str, QuestionVerdict] = Field(default_factory=dict["str", "QuestionVerdict"])
     tone: dict[str, ToneVerdict] = Field(default_factory=dict["str", "ToneVerdict"])
     exchanges_judged: int = 0
     exchanges_truncated: int = 0
@@ -114,18 +123,12 @@ def build_qa_judgment_prompt(snapshot: CallSnapshot) -> tuple[str, int]:
 
     prompt = f"""You are analyzing the Q&A portion of {snapshot.ticker}'s {snapshot.fiscal_period_type} \
 {snapshot.fiscal_year} earnings call. You are given ONLY the analyst questions and management's \
-answers (no prepared remarks, no other context).
-
-TASK 1 — For EACH numbered question/answer pair below, decide whether management gave an \
-EXPLICIT NON-ANSWER: declined to answer, redirected without addressing the actual question, said \
-"we don't guide on that" / "we're not breaking that out" without substantive follow-up, or \
-otherwise avoided the substance of what was asked. A answer that is brief but DOES address the \
-question is NOT a non-answer. Provide one sentence of rationale per question.
+answers (no prepared remarks, no other context), for context on what each speaker discussed:
 
 QUESTIONS AND ANSWERS:
 {questions_block}
 
-TASK 2 — For EACH management speaker listed below, score their overall tone across their answers \
+TASK — For EACH management speaker listed below, score their overall tone across their answers \
 on a scale from -1.0 (very negative / defensive / hedging) to +1.0 (very positive / confident), \
 based on the LANGUAGE alone (not the underlying numbers, which you cannot see). Provide one \
 sentence of rationale citing representative phrasing.
@@ -133,11 +136,10 @@ sentence of rationale citing representative phrasing.
 MANAGEMENT SPEAKERS:
 {tone_block}
 
-Return ONLY a JSON object of this exact shape (every question index above MUST appear as a key \
-in "questions"; every management speaker above MUST appear as a key in "tone"):
+Return ONLY a JSON object of this exact shape (every management speaker above MUST appear as a \
+key in "tone"):
 
 {{
-  "questions": {{"<index>": {{"non_answer": true|false, "rationale": "..."}}, ...}},
   "tone": {{"<speaker name>": {{"score": <float -1.0 to 1.0>, "rationale": "..."}}, ...}}
 }}"""
     return prompt, len(exchanges)
@@ -233,22 +235,8 @@ def judge_call(
 def _parse_judgment(
     payload: dict[str, object], *, snapshot: CallSnapshot, n_included: int
 ) -> CallJudgment:
-    questions_raw = payload.get("questions")
     tone_raw = payload.get("tone")
-    questions: dict[str, QuestionVerdict] = {}
     tone: dict[str, ToneVerdict] = {}
-    if isinstance(questions_raw, dict):
-        for k, v in cast("dict[str, object]", questions_raw).items():
-            if not isinstance(v, dict):
-                continue
-            row = cast("dict[str, object]", v)
-            try:
-                questions[k] = QuestionVerdict(
-                    non_answer=bool(row.get("non_answer")),
-                    rationale=str(row.get("rationale") or "")[:300],
-                )
-            except (ValueError, TypeError):
-                continue
     if isinstance(tone_raw, dict):
         for k, v in cast("dict[str, object]", tone_raw).items():
             if not isinstance(v, dict):
@@ -265,9 +253,8 @@ def _parse_judgment(
                 continue
     return CallJudgment(
         transcript_id=snapshot.transcript_id,
-        questions=questions,
         tone=tone,
-        exchanges_judged=len(questions),
+        exchanges_judged=len(tone),
         exchanges_truncated=max(0, len(snapshot.exchanges) - n_included),
     )
 

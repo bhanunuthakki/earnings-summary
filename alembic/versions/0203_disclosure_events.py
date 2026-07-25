@@ -110,18 +110,38 @@ def upgrade() -> None:
             # tag is claimed) |
             # P4 transcript longitudinal tracking (docs/design/
             # disclosure_change_build_stack.md P4, src/transcripts/):
-            # 'qa_nonanswer_rate_shift'    — deviation of a call's Q&A
-            #     non-answer rate from the ~11% baseline (Gow/Larcker/
-            #     Zakolyukina, JAR 2021) or from the ticker's own prior call.
+            # 'qa_nonanswer_rate_shift' — RETIRED (D1.6, owner ruling,
+            #     2026-07-25): the non-answer construct never reproduced
+            #     Gow/Larcker/Zakolyukina's ~11% baseline against this book
+            #     (measured 30.1%, spread widened) and was DROPPED, not
+            #     repaired. Zero rows of this type were ever written to
+            #     prod. Do not rebuild without a new literature reproduction.
             # 'transcript_topic_disappeared' — a KPI mentioned on the last
             #     2+ calls, absent this one. NOVEL/UNVALIDATED — the
             #     literature has no published validation for this specific
             #     measure (nearest analog: guidance withdrawal).
-            # 'transcript_tone_shift_abnormal' — a named management
-            #     speaker's tone moved beyond what the same-quarter earnings
-            #     surprise would predict (Huang/Teoh/Zhang ABTONE-style
-            #     proxy — see transcripts.longitudinal.tone_shift_is_abnormal
-            #     for exactly what this is NOT: a fitted OLS residual).
+            # 'transcript_tone_shift_abnormal' — RETIRED, renamed
+            #     'abnormal_tone_shift' (D2.3): the original event type was
+            #     emitted from a two-rule heuristic proxy
+            #     (transcripts.longitudinal.tone_delta_heuristic_flag, itself
+            #     renamed from tone_shift_is_abnormal since that name implied
+            #     a resolved judgment its own docstring disclaimed). Superseded
+            #     by a real fitted residual — see 'abnormal_tone_shift' below.
+            # 'abnormal_tone_shift' (D2.3) — a named management speaker's
+            #     call-over-call RESIDUAL tone (tone score minus a
+            #     deterministic OLS fit on eps_surprise_pct, pooled book-wide
+            #     — transcripts.longitudinal.fit_tone_residual_model /
+            #     tone_residual) moved beyond a materiality threshold. This
+            #     IS the real Huang/Teoh/Zhang ABTONE construct — a within-
+            #     book deviation flag, not a claim of statistical
+            #     significance (this book is not powered for that). Each
+            #     speaker's exec_role (CEO/CFO/other_exec/unresolved, D2.4)
+            #     is resolved per-call from the transcript's own CORPORATE
+            #     PARTICIPANTS roster where one exists — see
+            #     transcripts.longitudinal.parse_participants_roster. Does
+            #     NOT implement Larcker/Zakolyukina's deception-marker
+            #     language model; the tone score is a separate, sentiment-
+            #     only construct.
             # 'executive_speaker_change' — a management speaker (by name)
             #     appeared/disappeared vs the prior call. NOVEL/UNVALIDATED.
             # 'analyst_roster_change' — material (<25% overlap) turnover in

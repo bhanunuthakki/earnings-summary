@@ -16,18 +16,23 @@ mono only where mono means something.
 
 ## 1. Type
 
-Six semantic steps (`src/ui/tokens.py::TYPE_SCALE`). Size encodes
+**Four** semantic steps (`src/ui/tokens.py::TYPE_SCALE`). Size encodes
 **importance, not surface**: the same kind of element renders the same size on
 every screen.
 
 | Token          | px   | Use for                                                            |
 |----------------|------|--------------------------------------------------------------------|
 | `--fs-display` | 22   | The page's ONE dominant element: page title, hero stat            |
-| `--fs-title`   | 16   | Panel / drawer / card titles (the h2 tier)                        |
-| `--fs-section` | 14   | Sub-section headings; serif reading prose; prominent inputs        |
-| `--fs-body`    | 13   | Default UI text: tables, inputs, buttons, tabs                    |
-| `--fs-caption` | 11.5 | Secondary metadata: table headers, stamps, hints, sublabels       |
-| `--fs-micro`   | 10   | Smallest annotations: chips, badges, kind tags, axis marks        |
+| `--fs-title`   | 16   | Panel / drawer / card titles + real sub-section headings (h2/h3)   |
+| `--fs-body`    | 13   | Default UI text: tables, inputs, buttons, tabs, reading prose      |
+| `--fs-caption` | 11   | Everything smaller: table headers, stamps, hints, sublabels, chips, badges, kind tags, axis marks |
+
+Four steps, not six (design-sync 2026-07-19): `--fs-section` (14) folded into
+`--fs-body` — or `--fs-title` for a real heading — and `--fs-micro` (10) into
+`--fs-caption`, which rounded 11.5 → 11. A six-step ramp on a 13px base gave
+two pairs (14/13 and 11.5/10) too close to read as distinct tiers. The guard
+derives the legal set from `TYPE_SCALE` itself, so this table is documentation
+and `tokens.py` is the contract.
 
 Font roles (`FONT_TOKENS`): `--sans` (Inter) is the UI; `--serif` (Source
 Serif 4) is reading prose in reports; `--mono` (JetBrains Mono) is **only**
@@ -65,9 +70,10 @@ not colors, in all surface CSS — **zero raw hex outside tokens.py**:
 | Role                          | Tokens                                  | Rule                                                         |
 |-------------------------------|------------------------------------------|--------------------------------------------------------------|
 | Canvas / cards / wells        | `--bg`, `--surface`, `--paper`           | Page → panel → inset, in that order                          |
-| Ink                           | `--fg`, `--fg-soft`, `--muted`, `--muted-2` | Two grays of de-emphasis, no more                         |
+| Ink                           | `--fg`, `--fg-soft`, `--muted`           | ONE gray of de-emphasis (`--muted-2` folded in 2026-07-19)   |
 | Lines                         | `--border`, `--border-2`, `--hairline`   | hairline = row rules; border = boxes; border-2 = hover/strong |
 | Semantics                     | `--ok` / `--warn` / `--bad` (= pos/neg)  | green=good, red=bad, **everywhere**                          |
+| Editorial mark                | `--mark`, `--mark-soft`                  | Document furniture ONLY — see below                          |
 | Interactive                   | `--accent`, `--accent-soft`, `--accent-contrast` | Accent is RESERVED for interactive/selected/unread; never decoration. `--accent-contrast` is the only ink allowed on accent fill |
 | Tones (report)                | `--tone-*`                               | Quote/sentiment washes in the report only                    |
 | Charts                        | `CHART_SERIES` (Okabe-Ito)               | Categorical series only                                      |
@@ -76,6 +82,36 @@ not colors, in all surface CSS — **zero raw hex outside tokens.py**:
 Status pills derive from semantic tokens (`color` + `color-mix(...45%,
 transparent)` border) — never freehand a new background/foreground pair per
 status (the old `#14361f/#6ee7a0` family is exactly the drift this kills).
+
+**The editorial mark (`--mark` / `--mark-soft`, 2026-07-25).** A muted ochre
+that exists so a *research document* can have warmth without a second accent.
+It is scoped to document furniture — section labels, the masthead rule,
+footnote markers, margin-note keylines — and to nothing else:
+
+- It **never fills a control.** Buttons, links, selected states and unread
+  marks stay `--accent`. The mark is not a second interactive color.
+- It is **not a status.** It is deliberately duller and browner than `--warn`
+  so a section label can never be read as a caution state; a surface that
+  wants to say "careful" uses `--warn`, always.
+- `--mark` **carries type** (5.62:1 light / 6.32:1 dark — AA-body on both).
+  `--mark-soft` is a **keyline only** (2.05:1 / 2.88:1): legal on a 1px rule
+  or border, never on text. They are two tokens precisely so that constraint
+  is expressible, and `tests/test_ui_tokens.py` pins both halves — including
+  that `--mark-soft` stays *below* the text floor, so nobody "fixes" it.
+
+**Neutral temperature (2026-07-25).** Both palettes' neutrals carry a faint
+amber cast (dark ground `#0d0d0c` rather than `#0c0d10`, borders `#272621`
+rather than `#2a2d35`). The shift is small per swatch and deliberately
+imperceptible *as a color*; it is felt as a temperature change across a whole
+surface, which is how a dense research page gets warmth without decoration.
+Semantics did not move: `--ok/--warn/--bad` keep their exact values and
+`--accent` stays blue, so "green = good" and "blue = interactive" are intact.
+
+Theme-dependent **glyphs** (`--k-chevron`, `--k-check`) are *derived* from the
+palette in `controls.py`, never copied. They used to freeze their inks as
+literals while claiming to track `--muted` / `--accent-contrast`; the warming
+falsified both silently and nothing failed. `test_glyph_ink_tracks_the_palette`
+now pins the link.
 
 One scoped exception to "accent = interactive": the workspace REPORT's
 category/kind tags (`.qa-tag`, `.ir-type`, `.decision-action`, `.oi-kind`)
@@ -350,6 +386,51 @@ times — an assistant-message band, a fragment caption, and the chart title —
 over two contradictory counts. It now shows one reconciled line on the actions
 row, and when the request outran the data that line says so, `4 quarters · ⚠ 8
 missing`, instead of disagreeing with itself.)
+
+### 6.3 The research document — a reading surface, not a panel grid
+
+Some surfaces are **documents**: a thesis review, a monthly brief, a memo. They
+carry an argument end to end, and they get a different arrangement from a
+console. This is the only place `--mark` appears (§2), and it is layout, not
+decoration — the primitives are in `controls.py`, so a document composes the
+kit like everything else.
+
+**Rules instead of boxes.** A document separates sections with hairlines and
+whitespace, never cards with fills. This is the load-bearing rule: cards,
+filled pills and gradients are what make a research page read as a *dashboard*,
+and a research page that reads as a dashboard has lost the seriousness it needs
+to be trusted. Status is a **word in plain type** (`holds`, `near`), not a
+`.k-pill` — pills are chrome, and in a document state belongs to the sentence.
+
+**A margin note attaches to one section, never to a standing gutter.** Use
+`.k-doc-row` for the section that has a note; leave every other section
+full-bleed. A reserved note column runs the height of the page and sits empty
+everywhere a note isn't, which on a long document is a dead strip down the
+whole surface. `.k-doc` deliberately has no `grid-template-columns`, and
+`test_doc_row_carries_the_note_column_not_the_document` keeps it that way.
+
+**The kit** (all in `controls.py`): `.k-doc` (the measure) · `.k-doc-row`
+(content + its note; tune with `--k-note-w`) · `.k-doc-mast` (identity band,
+with the mark as a short rule under its left edge) · `.k-note` / `.k-note-title`
+(the margin note; its keyline is the only legal use of `--mark-soft`) · `.k-fn`
+(footnote marker, sized in `em` so it rides its prose) · `.k-band` /
+`.k-band-v` / `.k-band-x` (a full-bleed strip of read-only figures; compose
+`.k-label` for each caption, tune with `--k-band-cols`) · `.k-qa` / `.k-qa-q` /
+`.k-qa-a` / `.k-qa-who` (a recorded exchange) · `.k-label-mark` (the section
+label tone).
+
+**Density does not drop.** A document is not a spacious version of a panel — it
+carries *more*, because it has room for the qualitative half a panel grid has
+nowhere to put: what is priced in, what management was asked and how they
+answered, what would falsify the thesis, what was decided and why. Tables keep
+their row rhythm and mono numerals unchanged. The warmth comes from typesetting
+— serif prose at a real measure, generous leading, a single ochre on the
+furniture — and nowhere from ornament.
+
+**Where interaction lives.** A document is a reading surface; it does not grow
+its own chat. The conversational surface is the existing Ask dock
+(`pipeline/ask_dock.py`) in its `split` mode, scoped to the ticker. A document
+may offer a launcher, never a second input.
 
 ## 7. Do / don't
 

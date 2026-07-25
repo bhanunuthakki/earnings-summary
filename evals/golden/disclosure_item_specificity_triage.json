@@ -1,0 +1,380 @@
+{
+  "purpose": "disclosure_item_specificity_triage",
+  "cases": [
+    {
+      "id": "prod_2471_SNOW",
+      "ticker": "SNOW",
+      "event_type": "item_added",
+      "heading": "Table of Contents",
+      "hunk": "These provisions may frustrate or prevent any attempts by our stockholders to replace or remove our current management by making it more difficult for stockholders to replace members of our board of directors, which is responsible for appointing the members of our management. In addition, because we are incorporated in Delaware, we are governed by the provisions of Section 203 of the Delaware General Corporation Law, which generally, subject to certain exceptions, prohibits a Delaware corporatio",
+      "expected": {
+        "verdict": "boilerplate_update"
+      },
+      "hand_label_note": "Generic Delaware anti-takeover / Section 203 provisions -- common to any Delaware corporation, no firm-specific content. Agree.",
+      "prod_event_id": 2471,
+      "prod_verdict": "boilerplate_update",
+      "prod_confidence": 0.85,
+      "canonical_id": "risk_factors"
+    },
+    {
+      "id": "prod_686_VEEV",
+      "ticker": "VEEV",
+      "event_type": "item_reworded",
+      "heading": "Risks Related to Our Status as a Public Benefit Corporation, Our ESG Disclosures, and Ownership of Our Common Stock",
+      "hunk": "...to legal uncertainty and other risks. [WAS: On February 1, 2021, after approval by our stockholders, we became] [NOW: We are] a Delaware public benefit corporation (\"PBC\")....\n...PBC, and we are the largest [WAS: (none)] [NOW: publicly traded company, as measured by revenue or market c] ...",
+      "expected": {
+        "verdict": "substantive"
+      },
+      "hand_label_note": "The added clause -- 'the largest publicly traded company, as measured by revenue or market cap' among PBCs -- is a new, specific competitive/positioning claim, not filler; it is new firm-specific information (and a claim that itself carries legal risk if inaccurate). Model under-called this as boilerplate.",
+      "prod_event_id": 686,
+      "prod_verdict": "boilerplate_update",
+      "prod_confidence": 0.75,
+      "canonical_id": "risk_factors"
+    },
+    {
+      "id": "prod_560_UBER",
+      "ticker": "UBER",
+      "event_type": "item_reworded",
+      "heading": "Operational Risks",
+      "hunk": "Our business would be adversely affected if Drivers were classified as employees, workers or quasi-employees. The classification of Drivers is currently being challenged in courts, by legislators and by government agencies in the United States and abroad. We are involved in numer",
+      "expected": {
+        "verdict": "boilerplate_update"
+      },
+      "hand_label_note": "Driver-misclassification risk language is a long-repeated, near-identical disclosure across UBER's filings; nothing in the shown excerpt is new or quantified. Agree, lower confidence only because no WAS/NOW markers are visible in the stored hunk.",
+      "prod_event_id": 560,
+      "prod_verdict": "boilerplate_update",
+      "prod_confidence": 0.9,
+      "canonical_id": "risk_factors"
+    },
+    {
+      "id": "prod_2687_SOFI",
+      "ticker": "SOFI",
+      "event_type": "item_reworded",
+      "heading": "Risks Related to Ownership of Our Securities",
+      "hunk": "The price of our common stock has fluctuated and may be volatile in the future. The price of our common stock has fluctuated and may continue to fluctuate due to a variety of factors, including: changes in the industry in which we operate, including public perception of such indu",
+      "expected": {
+        "verdict": "boilerplate_update"
+      },
+      "hand_label_note": "Stock-price-volatility risk language is close to universal SEC boilerplate. Agree.",
+      "prod_event_id": 2687,
+      "prod_verdict": "boilerplate_update",
+      "prod_confidence": 0.85,
+      "canonical_id": "risk_factors"
+    },
+    {
+      "id": "prod_1411_DHR",
+      "ticker": "DHR",
+      "event_type": "item_reworded",
+      "heading": "Operational Risks",
+      "hunk": "...affect our business and financial statements. [WAS: 21] [NOW: (none)] We rely on information technology systems,...\n...employees, customers, other business partners and [WAS: (none)] [NOW: pa] ...",
+      "expected": {
+        "verdict": "boilerplate_update"
+      },
+      "hand_label_note": "Footnote-marker / cross-reference renumbering -- textbook boilerplate per the purpose's own definition. Agree.",
+      "prod_event_id": 1411,
+      "prod_verdict": "boilerplate_update",
+      "prod_confidence": 0.85,
+      "canonical_id": "risk_factors"
+    },
+    {
+      "id": "prod_2573_SNPS",
+      "ticker": "SNPS",
+      "event_type": "item_reworded",
+      "heading": "Business Operations Risks",
+      "hunk": "...to increased risks and compliance obligations. [WAS: Our operating results may fluctuate in] [NOW: We derive roughly half of our revenue from sales outside] the United States, and we expect...\n...our revenue from sales outside the [WAS: future, which may adversely affect] [NOW: United States, and we expect] our orders and revenue to continue...\n...United States, and we expect our [WAS: stock price.] [NOW: orders and revenue to continue to depend on sales to customers outside the U.S.] We have also continually expanded our...",
+      "expected": {
+        "verdict": "substantive"
+      },
+      "hand_label_note": "New, quantified, firm-specific claim ('roughly half of our revenue from sales outside the United States') replacing generic forward-looking filler. Agree.",
+      "prod_event_id": 2573,
+      "prod_verdict": "substantive",
+      "prod_confidence": 0.85,
+      "canonical_id": "risk_factors"
+    },
+    {
+      "id": "prod_78_MELI",
+      "ticker": "MELI",
+      "event_type": "item_added",
+      "heading": "Privacy and Data Protection",
+      "hunk": "We process significant amounts of personal data from users, employees, service providers and partners across multiple jurisdictions. Our ability to collect, use, store, and transfer such data lawfully is essential to our operations. Privacy and data protection laws continue to expand in scope and complexity worldwide, including in Latin America, where countries such as Brazil, Chile, Ecuador, Peru, Colombia, Mexico and Argentina have enacted or are considering stricter frameworks governing proce",
+      "expected": {
+        "verdict": "substantive"
+      },
+      "hand_label_note": "Names specific LatAm countries and their privacy-law regimes -- firm-specific geographic exposure. Agree.",
+      "prod_event_id": 78,
+      "prod_verdict": "substantive",
+      "prod_confidence": 0.85,
+      "canonical_id": "risk_factors"
+    },
+    {
+      "id": "prod_2341_QCOM",
+      "ticker": "QCOM",
+      "event_type": "item_reworded",
+      "heading": "RISKS RELATED TO INTELLECTUAL PROPERTY",
+      "hunk": "The enforcement and protection of our intellectual property may be expensive, could fail to prevent misappropriation or unauthorized use of our intellectual property, could result in the loss of our ability to enforce one or more patents, and could be adversely affected by change",
+      "expected": {
+        "verdict": "substantive"
+      },
+      "hand_label_note": "Reframes from 'we rely on our own IP' to 'third parties claim we infringe' -- a real shift in the disclosed risk profile (litigation exposure), not wording polish. Agree.",
+      "prod_event_id": 2341,
+      "prod_verdict": "substantive",
+      "prod_confidence": 0.85,
+      "canonical_id": "risk_factors"
+    },
+    {
+      "id": "prod_2582_SNPS",
+      "ticker": "SNPS",
+      "event_type": "item_removed",
+      "heading": "General Risks",
+      "hunk": "Catastrophic events and the effects of climate change, pandemics or other unexpected events may disrupt our business and harm our operating results. Due to the global nature of our business, our operating results may be negatively impacted by catastrophic events and the effects of climate change, pandemics, such as the COVID-19 pandemic, or other unexpected events throughout the world. We rely on a global network of infrastructure applications, enterprise applications and technology systems for",
+      "expected": {
+        "verdict": "boilerplate_update"
+      },
+      "hand_label_note": "The removed paragraph is 100% generic pandemic/catastrophic-events language with zero SNPS-specific content -- and dropping this exact shared COVID-era paragraph was extremely common across issuers around this time (routine risk-factor pruning as pandemic risk normalized), not company-specific news. Model over-called this substantive; the safer/less-costly direction of the two error types found in this sample.",
+      "prod_event_id": 2582,
+      "prod_verdict": "substantive",
+      "prod_confidence": 0.85,
+      "canonical_id": "risk_factors"
+    },
+    {
+      "id": "prod_486_NU",
+      "ticker": "NU",
+      "event_type": "item_added",
+      "heading": "In January 2025, Brazil enacted Complementary",
+      "hunk": "Law No. 214 establishing a new value-added tax system through the creation of Federal Contribution on Goods and Services, or \"CBS\", and State and Municipal Tax on Goods and Services, or \"IBS\". Although the VAT framework introduces a multi-year transition period in which the full collection of CBS (replacing COFINS and PIS mentioned above) will occur in 2027 and the full collection of IBS (replacing ISS mentioned above) will occur in 2033, key elements \u2014 such as applicable tax rates and detailed",
+      "expected": {
+        "verdict": "substantive"
+      },
+      "hand_label_note": "Names a specific Brazilian law (Complementary Law No. 214), specific new taxes (CBS/IBS), and specific transition years (2027/2033) -- squarely firm-specific and quantified. Agree.",
+      "prod_event_id": 486,
+      "prod_verdict": "substantive",
+      "prod_confidence": 0.9,
+      "canonical_id": "risk_factors"
+    },
+    {
+      "id": "prod_710_VEEV",
+      "ticker": "VEEV",
+      "event_type": "item_reworded",
+      "heading": "Operating Expenses and Operating Margin",
+      "hunk": "...operating expenses to increase in the [WAS: fiscal year ending January 31, 2025,] [NOW: near term,] primarily due to employee compensation-related costs....",
+      "expected": {
+        "verdict": "boilerplate_update"
+      },
+      "hand_label_note": "Swaps a specific fiscal-year-end date for vaguer 'near term' language in forward-looking opex guidance -- a rolling update, not new information. Agree.",
+      "prod_event_id": 710,
+      "prod_verdict": "boilerplate_update",
+      "prod_confidence": 0.8,
+      "canonical_id": "mdna"
+    },
+    {
+      "id": "prod_1126_AMZN",
+      "ticker": "AMZN",
+      "event_type": "item_added",
+      "heading": "Table of Contents",
+      "hunk": "Guidance We provided guidance on February 5, 2026, in our earnings release furnished on Form 8-K as set forth below. These forward-looking statements reflect Amazon.com's expectations as of February 5, 2026, and are subject to substantial uncertainty. Our results are inherently unpredictable and may be materially affected by many factors, such as fluctuations in foreign exchange rates and energy prices, changes in global economic and geopolitical conditions, tariff and trade policies, resource a",
+      "expected": {
+        "verdict": "boilerplate_update"
+      },
+      "hand_label_note": "Close call: the change adds 'energy prices' and 'tariff and trade policies' to an already-long generic macro-uncertainty disclaimer list. Two nouns appended to a standard laundry list of forward-looking-statement qualifiers is not quantified, AMZN-specific information -- it reads as incremental housekeeping on a boilerplate disclaimer, not a new disclosure. Agree with boilerplate_update, lower confidence.",
+      "prod_event_id": 1126,
+      "prod_verdict": "boilerplate_update",
+      "prod_confidence": 0.85,
+      "canonical_id": "mdna"
+    },
+    {
+      "id": "prod_1926_MDB",
+      "ticker": "MDB",
+      "event_type": "item_reworded",
+      "heading": "Extending Product Leadership and Maintaining Developer Mindshare",
+      "hunk": "We are committed to delivering market-leading products to continue to build and maintain credibility with the global software developer community. We believe we must maintain our product leadership position and the strength of our brand to drive further revenue growth. We intend",
+      "expected": {
+        "verdict": "boilerplate_update"
+      },
+      "hand_label_note": "Pure generic corporate-strategy language ('committed to delivering market-leading products'), no company-specific facts or figures. Agree.",
+      "prod_event_id": 1926,
+      "prod_verdict": "boilerplate_update",
+      "prod_confidence": 0.75,
+      "canonical_id": "mdna"
+    },
+    {
+      "id": "prod_27163_BKNG",
+      "ticker": "BKNG",
+      "event_type": "item_reworded",
+      "heading": "Annual Goodwill Impairment Test",
+      "hunk": "As of September 30, 2020, we performed our annual goodwill impairment test. Other than the OpenTable and KAYAK reporting unit, the fair values of our reporting units substantially exceeded their respective carrying values. For the OpenTable and KAYAK reporting unit, we recognized",
+      "expected": {
+        "verdict": "substantive"
+      },
+      "hand_label_note": "MISS: this discloses a goodwill impairment recognized against NAMED reporting units (OpenTable, KAYAK) -- a real, material, firm-specific financial event (the excerpt is cut off right before what is presumably the impairment dollar amount). Impairment recognition against named acquired businesses is the opposite of generic accounting boilerplate. This is the costly error direction: a substantive change buried as boilerplate.",
+      "prod_event_id": 27163,
+      "prod_verdict": "boilerplate_update",
+      "prod_confidence": 0.8,
+      "canonical_id": "mdna"
+    },
+    {
+      "id": "prod_3193_V",
+      "ticker": "V",
+      "event_type": "item_reworded",
+      "heading": "Non-operating Income (Expense)",
+      "hunk": "... [WAS: (none)] [NOW: Non-operating income (expense) primarily includes interest income on cash and investments, interest expense from borrowings, interest related to taxes, and gains and losses on equity investments and derivatives.] The following table presents the components...",
+      "expected": {
+        "verdict": "boilerplate_update"
+      },
+      "hand_label_note": "Standard definitional sentence describing what a line item is composed of, ahead of a data table -- explanatory boilerplate, not a new figure or event. Agree.",
+      "prod_event_id": 3193,
+      "prod_verdict": "boilerplate_update",
+      "prod_confidence": 0.85,
+      "canonical_id": "mdna"
+    },
+    {
+      "id": "prod_1900_MDB",
+      "ticker": "MDB",
+      "event_type": "item_reworded",
+      "heading": "Components of Results of Operations",
+      "hunk": "...is comprised of term licenses and [WAS: hosted as-a-service] [NOW: database-as-a-service] solutions. Revenue from our MongoDB Atlas...\n...solutions. Revenue from our MongoDB Atlas [WAS: (none)] [NOW: database-as-a-service] offering is primarily generated on a...\n...usage basis and is billed either [WAS: (none)] [NOW: 54 Table of Contents] monthly in arrears or paid upfront....",
+      "expected": {
+        "verdict": "boilerplate_update"
+      },
+      "hand_label_note": "Terminology rebrand ('hosted as-a-service' -> 'database-as-a-service') plus a stray page-number artifact ('54 Table of Contents') -- no new information. Agree.",
+      "prod_event_id": 1900,
+      "prod_verdict": "boilerplate_update",
+      "prod_confidence": 0.7,
+      "canonical_id": "mdna"
+    },
+    {
+      "id": "prod_27251_BKNG",
+      "ticker": "BKNG",
+      "event_type": "item_reworded",
+      "heading": "Valuation of Investments in Private Companies",
+      "hunk": "See Note 5 to our Unaudited Consolidated Financial Statements for additional information related to the investments in private companies. The fair value of these investments are measured using unobservable inputs when little or no market data is available (\"Level 3 inputs\"). See",
+      "expected": {
+        "verdict": "boilerplate_update"
+      },
+      "hand_label_note": "Standard fair-value/Level-3 cross-reference accounting-policy language. Agree.",
+      "prod_event_id": 27251,
+      "prod_verdict": "boilerplate_update",
+      "prod_confidence": 0.9,
+      "canonical_id": "mdna"
+    },
+    {
+      "id": "prod_28043_MELI",
+      "ticker": "MELI",
+      "event_type": "item_removed",
+      "heading": "Current liabilities",
+      "hunk": "Accounts payable and accrued expenses $ 67 $ 128 Loans payable and other financial liabilities 43,589 43,862 Total current liabilities 43,656 43,990",
+      "expected": {
+        "verdict": "substantive"
+      },
+      "hand_label_note": "Removal of an actual balance-sheet data table (accounts payable, loans payable, total current liabilities with real dollar comparisons) is quantified, firm-specific information leaving MD&A. Agree.",
+      "prod_event_id": 28043,
+      "prod_verdict": "substantive",
+      "prod_confidence": 0.95,
+      "canonical_id": "mdna"
+    },
+    {
+      "id": "prod_29044_MELI",
+      "ticker": "MELI",
+      "event_type": "item_added",
+      "heading": "Derivative instruments",
+      "hunk": "30 \u2014 30 \u2014 6 \u2014 \u2014 6 Customer crypto-assets safeguarding liabilities 15 \u2014 15 \u2014 \u2014 \u2014 \u2014 \u2014",
+      "expected": {
+        "verdict": "substantive"
+      },
+      "hand_label_note": "New disclosure of 'customer crypto-assets safeguarding liabilities' is genuinely novel, firm-specific information about MELI's business scope/risk. Agree.",
+      "prod_event_id": 29044,
+      "prod_verdict": "substantive",
+      "prod_confidence": 0.95,
+      "canonical_id": "mdna"
+    },
+    {
+      "id": "prod_2330_ORCL",
+      "ticker": "ORCL",
+      "event_type": "item_added",
+      "heading": "Table of Contents",
+      "hunk": "are inherently uncertain with respect to outcomes. Notes 6, 9, 12 and 15 of Notes to Consolidated Financial Statements included elsewhere in this Annual Report include additional information regarding our most material contractual obligations and contingencies. Capital Expenditures: Cash used for capital expenditures increased from $21.2 billion in fiscal 2025 to $55.7 billion in fiscal 2026 primarily due to the expansion of our data centers. We expect this upward trend to continue during fiscal",
+      "expected": {
+        "verdict": "substantive"
+      },
+      "hand_label_note": "Oracle's capex jump from $21.2B to $55.7B tied to data-center expansion is a major, specific, highly material disclosure. Agree, high confidence.",
+      "prod_event_id": 2330,
+      "prod_verdict": "substantive",
+      "prod_confidence": 0.9,
+      "canonical_id": "mdna"
+    },
+    {
+      "id": "prod_28645_MELI",
+      "ticker": "MELI",
+      "event_type": "item_reworded",
+      "heading": "Capital expenditures",
+      "hunk": "... [WAS: Our capital expenditures (comprised] [NOW: $ 137 $ 113 Depreciation and amortization $ 84 $ 38 (*) Figures have been calculated using rounded amounts. Growth calculations based on this table may not total due to rounding (1)New or existing user who performed at least one] of the following actions during the...\n...who performed at least one of [WAS: our payments for property and equipment (such as fulfillment centers), intangible assets (excluding digital assets) for] [NOW: (none)] the following actions during the reported...\n...performed at least one of the [WAS: years ended December 31, 2021 and 2020 amounted to $630.1 million and $254.1 million, respectively. During 2021, we invested $218.5 million in information technology in Brazil, Argentina and Mexico, and $327.4 million in our Argentine, Brazilian and Mexican shipping premises and offices. 63 Table of Contents We are continually increasi] [NOW: following actions during the reported period: (1) made one purchase, or reservation, or asked one question or MercadoLibre Marketplace or Classified Marketplace (2) maintained an active listing on MercadoLibre Marketplace or Classified Marketplace (3) maintained a] ...",
+      "expected": {
+        "verdict": "substantive"
+      },
+      "hand_label_note": "Taking the pairing at face value, specific historical capex figures ($630.1M/$254.1M, $218.5M IT investment, $327.4M shipping premises across Brazil/Argentina/Mexico) are removed -- quantified data leaving the filing is substantive regardless of what replaced it. SEPARATE DATA-QUALITY FLAG (not a triage-accuracy issue): the WAS and NOW text read as unrelated content (capex figures vs. marketplace active-user definitions) sharing a heading -- looks like a diff/section-alignment artifact in the upstream pipeline, worth a look outside this task's scope.",
+      "prod_event_id": 28645,
+      "prod_verdict": "substantive",
+      "prod_confidence": 0.95,
+      "canonical_id": "mdna"
+    },
+    {
+      "id": "prod_1761_LITE",
+      "ticker": "LITE",
+      "event_type": "item_added",
+      "heading": "Industrial Tech",
+      "hunk": "Our Industrial Tech products include solid-state lasers, kilowatt-class fiber lasers, ultrafast lasers, diode lasers, and gas lasers, which address applications in numerous end-markets. In the consumer end-market, our laser light sources are integrated into our customers' 3D sensing cameras, which are used in mobile devices, payment kiosks, and other consumer electronics devices to enable applications including biometric identification, computational photography and virtual and augmented reality",
+      "expected": {
+        "verdict": "substantive"
+      },
+      "hand_label_note": "New segment/product-line description (solid-state/fiber/diode/gas lasers; 3D sensing, biometric ID, computational photography, AR/VR applications) -- first-time disclosure of a segment's product detail is decision-relevant. Agree.",
+      "prod_event_id": 1761,
+      "prod_verdict": "substantive",
+      "prod_confidence": 0.9,
+      "canonical_id": "mdna"
+    },
+    {
+      "id": "prod_28081_MELI",
+      "ticker": "MELI",
+      "event_type": "item_removed",
+      "heading": "Other Investments",
+      "hunk": "6,890 3,490 Total long-term investments $ 6,890 $ 263,983 (*) Cash deposited and owned by the Company under the sole control and dominion of escrow agents as collateral of loans granted to a Brazilian subsidiary with due date in October 2020. (**) Cash, cash equivalents, restricted cash and cash equivalents as reported in the consolidated statements of cash flow.",
+      "expected": {
+        "verdict": "substantive"
+      },
+      "hand_label_note": "Removed investment-balance data shows a ~97% decline ($263,983 -> $6,890) -- a dramatic, quantified change leaving MD&A. Agree, high confidence.",
+      "prod_event_id": 28081,
+      "prod_verdict": "substantive",
+      "prod_confidence": 0.95,
+      "canonical_id": "mdna"
+    },
+    {
+      "id": "prod_2515_SNOW",
+      "ticker": "SNOW",
+      "event_type": "item_added",
+      "heading": "Interest Expense",
+      "hunk": "Interest expense consists of amortization of debt issuance costs incurred in connection with the issuance of our convertible senior notes.",
+      "expected": {
+        "verdict": "substantive"
+      },
+      "hand_label_note": "Close call (item_added, so first-time disclosure): tells investors for the first time that SNOW carries convertible senior notes generating amortizing interest expense -- a real capital-structure fact not previously stated, not just a line-item description. Agree, moderate confidence.",
+      "prod_event_id": 2515,
+      "prod_verdict": "substantive",
+      "prod_confidence": 0.85,
+      "canonical_id": "mdna"
+    },
+    {
+      "id": "prod_3021_TECH",
+      "ticker": "TECH",
+      "event_type": "item_removed",
+      "heading": "Diagnostics and Genomics",
+      "hunk": "39,753 34,242 30,770 Total research and development expenses $ 96,664 $ 92,493 $ 87,140",
+      "expected": {
+        "verdict": "substantive"
+      },
+      "hand_label_note": "Removal of three years of segment-level R&D expense data ($39,753/$34,242/$30,770) plausibly reflects a segment restructuring/divestiture -- quantified, firm-specific. Agree, high confidence.",
+      "prod_event_id": 3021,
+      "prod_verdict": "substantive",
+      "prod_confidence": 0.95,
+      "canonical_id": "mdna"
+    }
+  ]
+}

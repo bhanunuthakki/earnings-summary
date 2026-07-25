@@ -14,26 +14,53 @@ What the literature establishes, so this module does not re-derive it:
 
 * **Q&A carries more signal than prepared remarks** and must be scored
   separately (Matsumoto, Pronk & Roelofsen, *TAR* 86(4), 2011).
-* **~11% of analyst questions get an explicit non-answer**, stable across
-  time and industry — deviation from that baseline is the signal, not the
-  level (Gow, Larcker & Zakolyukina, *JAR* 59(4), 2021).
 * **>90% of topic-share variation is firm-level**, ~70% of that
   within-firm-over-time — track deltas, never raw levels (Hassan,
   Hollander, van Lent & Tahoun, *QJE* 134(4), 2019).
 * **Tone must be residualized against fundamentals** before calling it a
-  shift (Huang, Teoh & Zhang, *TAR* 89(3), 2014 — ABTONE).
+  shift (Huang, Teoh & Zhang, *TAR* 89(3), 2014 — ABTONE). See
+  ``fit_tone_residual_model``/``tone_residual`` below for the real fitted
+  residual (D2.3); ``tone_delta_heuristic_flag`` is the OLDER transparent
+  two-rule proxy, kept only for side-by-side comparison, never the
+  production abnormal-tone signal.
 * **CEO and CFO language are not interchangeable** — only CFO language was
   tradeable (Larcker & Zakolyukina, *JAR* 50(2), 2012). Speakers are always
   tracked BY NAME below, never pooled into one "management" bucket.
+  ``parse_participants_roster`` (D2.4) resolves named speakers to CEO/CFO
+  from the transcript's own CORPORATE PARTICIPANTS block where one exists,
+  ahead of the (still-empty-book-wide) ``exec_comp_packages`` DEF 14A join.
+  This module does NOT implement, and explicitly does not claim, Larcker/
+  Zakolyukina's deception-marker language model — the tone score here is a
+  different, sentiment-only construct (see ``transcript_judgment.judge_call``).
 * **Vocal affect is an audio signal** (Mayew & Venkatachalam, *JF* 67(1),
   2012) — explicitly out of scope for a text-only pipeline. This module
   never proxies it from "um"/"uh" disfluency counts.
+
+DROPPED — P4 non-answer rate (D1.6, owner ruling, 2026-07-25): Gow, Larcker
+& Zakolyukina's ~11% non-answer baseline never reproduced against this
+book (measured 30.1% after the attribution fix, spread widened rather than
+narrowed) and the owner ruled DROP, not repair — no further tuning of the
+threshold/baseline. Verified against a copy of prod ``disclosure_events``
+on 2026-07-25: zero ``qa_nonanswer_rate_shift`` rows were ever written (the
+construct never reached prod), so this was a code-only removal, no data
+purge needed. The non-answer verdict is also no longer requested from the
+LLM (see ``transcript_judgment.build_qa_judgment_prompt`` — only the tone
+question remains in the per-transcript batched call). Do not rebuild a
+non-answer scoring path on this substrate without a NEW literature
+reproduction, not just a threshold retune.
 
 Real-book note (measured 2026-07-25 against a copy of ``data/portfolio.db``,
 546 ``transcripts`` rows / 863 ``transcript_segments`` rows): only ~17
 transcripts (~3%) were ingested with real per-turn speaker attribution
 (``compute.transcript_ingest``'s PDF path, i.e. >=2 stored segment rows).
-The other ~97% are ``execution/fetch_qa_transcript.py`` aggregator pulls —
+Re-measured later the same day (concurrent ingestion in flight elsewhere in
+the session): 548 ``transcripts`` / 165 with >=2 segments (~30%) — the
+corpus grew, but the qualitative split holds: the majority is still
+aggregator-sourced Q&A-only, and the D2.4 CORPORATE PARTICIPANTS heading
+itself was found on only 7 of those 165 (NVDA, TSM) — the "inline intro"
+shape (see ``parse_participants_roster``) resolves a CEO and/or CFO on a
+further ~18 calls across other tickers with real prepared remarks.
+The other ~97% (by the original measurement) are ``execution/fetch_qa_transcript.py`` aggregator pulls —
 ONE ``transcript_segments`` row holding the ENTIRE call as a single blob.
 Critically, that source fetches **Q&A only** ("prepared remarks are
 reproducible from the press release + investor deck and are excluded here
@@ -80,19 +107,6 @@ DETECTOR_VERSION = "transcript_longitudinal_v1"
 # through the detection logic below.
 # ---------------------------------------------------------------------------
 
-# Gow/Larcker/Zakolyukina's headline number. Deviation from this is the
-# signal (§1.7) — never the raw level.
-NONANSWER_BASELINE_PCT = 11.0
-# Below this many questions, a call's non-answer rate is too noisy a
-# statistic to trust (a single non-answer on 3 questions is 33%, which
-# would swamp the baseline for no real reason).
-NONANSWER_MIN_QUESTIONS = 5
-# A rate more than this many percentage points from EITHER the ~11%
-# baseline or the ticker's own prior call is treated as material. This is a
-# round, transparent threshold (not fit to this book) — revisit once P5's
-# event-study panel exists.
-NONANSWER_MATERIALITY_PP = 15.0
-
 # A KPI must be present in every one of this many consecutive PRIOR calls
 # before its absence this quarter counts as a candidate — a KPI mentioned
 # only once, then dropped, is far weaker evidence of a deliberate change
@@ -109,9 +123,23 @@ ANALYST_ROSTER_MIN_N = 5
 # the earnings-surprise check.
 TONE_MATERIALITY = 0.35
 # "Small surprise" floor (absolute eps_surprise_pct) used by the
-# disproportion check in `tone_shift_is_abnormal` — see that function's
+# disproportion check in `tone_delta_heuristic_flag` — see that function's
 # docstring for what this proxy is and, more importantly, is NOT.
 TONE_SMALL_SURPRISE_PCT = 2.0
+
+# Minimum pooled (ticker, period, speaker) tone observations before
+# `fit_tone_residual_model` will even attempt a fit — below this an OLS fit
+# is fitting noise, not signal (with an intercept + 1 predictor, 3 points is
+# the bare mathematical minimum for a residual to exist at all; this floor
+# is deliberately well above that). See that function's docstring for the
+# book's own measured power (2026-07-25: n=48, R^2=0.06) and why this stays
+# a within-book deviation flag, never a claim of statistical significance.
+ABTONE_MIN_OBSERVATIONS = 10
+# Same materiality floor as `tone_delta_heuristic_flag`'s TONE_MATERIALITY —
+# the residual lives on the same -1..1 tone scale, so reusing the
+# already-justified threshold avoids inventing a second, unvalidated magic
+# number derived from this small sample's own residual variance.
+ABTONE_RESIDUAL_MATERIALITY = TONE_MATERIALITY
 
 # Frequency heuristic for management-vs-analyst classification (see
 # `classify_roles`). A share-based fallback (promote a top-ranked name below
@@ -173,6 +201,11 @@ class RosterEntry:
     turn_count: int
     total_chars: int
     exec_role: str | None = None
+    # 'participants_block' (D2.4 — this transcript's own CORPORATE
+    # PARTICIPANTS roster) | 'exec_comp_packages' (DEF 14A join) | None
+    # (unresolved). Reported so coverage can be measured honestly rather
+    # than inferred from exec_role alone.
+    exec_role_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -196,6 +229,11 @@ class CallSnapshot:
     turns: list[Turn]
     roster: dict[str, RosterEntry]
     exchanges: list[QAExchange]
+    # D2.4 — name -> ParsedParticipant, parsed from THIS transcript's own
+    # CORPORATE PARTICIPANTS block (or inline intro prose). Empty when no
+    # such block/intro was found (honest degrade, not a guess) — see
+    # `parse_participants_roster`.
+    participants_roster: dict[str, ParsedParticipant]
     # 'segmented' (trusted transcript_segments rows) | 'reparsed_aggregator' |
     # 'reparsed_whisper' | 'reparsed_fallback' | 'unattributed' (single blob,
     # no speaker structure recoverable at all).
@@ -460,8 +498,15 @@ _ROSTER_LISTING_MIN_COUNT = 2
 
 
 def strip_document_artifacts(turns: list[Turn]) -> list[Turn]:
+    # D2.4: the CORPORATE PARTICIPANTS span (management + analyst roster) is
+    # now parsed for name/title BEFORE this function runs (see
+    # `build_call_snapshot` / `parse_participants_roster`) — it must still be
+    # removed from the turn stream here so it never pollutes Q&A pairing.
+    roster_span = _find_participants_roster_span(turns)
     kept: list[Turn] = []
-    for t in turns:
+    for i, t in enumerate(turns):
+        if roster_span is not None and roster_span[0] <= i < roster_span[1]:
+            continue
         if _DOC_ARTIFACT_RE.search(t.text):
             continue
         if len(_ROSTER_LISTING_RE.findall(t.text)) >= _ROSTER_LISTING_MIN_COUNT:
@@ -636,6 +681,271 @@ def resolve_exec_role(conn: sqlite3.Connection, ticker: str, name: str) -> str |
             if is_ceo_raw:
                 return "CEO"
             return str(role_raw) if role_raw else "executive"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# CORPORATE PARTICIPANTS roster parsing (D2.4 — Larcker & Zakolyukina, JAR
+# 2012: CFO language was tradeable, CEO language was not; pooling discards
+# the finding). This module does NOT implement, and explicitly does not
+# claim, their deception-marker language model — the -1..1 tone score this
+# repo tracks (`transcript_judgment.judge_call`) is a different, sentiment-
+# only construct. What this section adds is role RESOLUTION: turning a named
+# speaker into a CEO/CFO label using the transcript's OWN participant
+# roster, ahead of the (still book-wide-empty) `exec_comp_packages` DEF 14A
+# join `resolve_exec_role` already provides.
+#
+# `strip_document_artifacts` used to delete this block outright as PDF page
+# furniture (see that function's own docstring). It still must not leak into
+# Q&A/tone turns — but the block is parsed for name/title FIRST, on the RAW
+# turns, before any stripping runs (see `build_call_snapshot`).
+#
+# Measured against a copy of prod on 2026-07-25 (165 transcripts with >=2
+# stored `transcript_segments` rows — the only ingestion path that could
+# ever carry this heading): exactly 7 carry a CORPORATE PARTICIPANTS
+# heading (NVDA x3, TSM x4), in TWO visibly different raw shapes, plus a
+# THIRD shape with no heading at all:
+#   1. "packed" (Refinitiv StreetEvents, e.g. TSM): one participant per line,
+#      already inside a single stored row: "<Name> <Company> - <Title>".
+#   2. "fragmented" (FactSet CallStreet, e.g. NVDA; also S&P Global Market
+#      Intelligence, e.g. CRM under its "Call Participants EXECUTIVES"
+#      heading): the ingest-time speaker/text splitter mis-segments the
+#      block, gluing the heading onto the first person's name ("CORPORATE
+#      PARTICIPANTS Toshiya Hari") and splitting name/title lines across
+#      several pseudo-turns, sometimes with PDF dot-leader garbage ("....")
+#      or a title continuation glued onto the NEXT person's name
+#      interleaved. Degrades to a partial roster (some names/titles lost to
+#      the glue, never a wrong CEO/CFO claim) rather than a full parse.
+#   3. "inline" (no heading at all — the common case for a segmented,
+#      non-aggregator source with real prepared remarks, e.g. a Bio-Techne-
+#      style call): the IR host names management inline in prose ("On the
+#      call with me this morning are Kim Kelderman, President and Chief
+#      Executive Officer, and Jim Hippel, Chief Financial Officer").
+# A call with none of the three degrades to an EMPTY roster (`{}`), never a
+# guessed role — the 97%-aggregator majority of the book always takes this
+# path, by design (see the module docstring on `parse_coverage`).
+# ---------------------------------------------------------------------------
+
+_ROSTER_HEADING_RE = re.compile(
+    r"^(CORPORATE PARTICIPANTS|CALL PARTICIPANTS EXECUTIVES)\s*(.*)$", re.IGNORECASE
+)
+# The analyst-roster sub-heading — still INSIDE the overall span (it must be
+# scanned past, not stopped at), just not part of the management name/title
+# extraction (see `_roster_span_lines`). Matched with `.search`, not
+# `.match`: the S&P Global source sometimes glues the "ANALYSTS" marker onto
+# the end of the prior person's title line rather than starting its own
+# turn (e.g. "Customer Success Officer ANALYSTS").
+_ANALYST_ROSTER_HEADING_RE = re.compile(
+    r"(OTHER PARTICIPANTS|CONFERENCE CALL PARTICIPANTS|\bANALYSTS\b)", re.IGNORECASE
+)
+# The real end of the roster block(s) — prepared remarks or Q&A begins here.
+_ROSTER_HARD_STOP_RE = re.compile(
+    r"^(PRESENTATION|QUESTIONS AND ANSWERS|Operator)\b", re.IGNORECASE
+)
+# PDF table-of-contents leader lines ("...................") left over from
+# the page-furniture the FactSet "fragmented" shape sometimes interleaves.
+_DOT_LEADER_RE = re.compile(r"^[.\s]{5,}$")
+_TITLE_KEYWORDS_RE = re.compile(
+    r"\b(chief\s+\w+\s+officer|president|vice\s+president|chairman|director|founder|"
+    r"co-founder|investor\s+relations|treasurer|controller|managing\s+director|"
+    r"head\s+of|general\s+counsel|secretary)\b",
+    re.IGNORECASE,
+)
+# Shape 3 (inline prose): "<Name>, <title phrase>[, <title phrase>]*" —
+# bounded to a handful of title-starting keywords so this never fires on
+# ordinary prose that happens to contain a comma. Token separators use
+# `[ \t]` (never bare `\s`, which also matches newline) so a name can never
+# accidentally swallow the start of the NEXT line — a real mis-match found
+# against the real book (CRM) when this used `\s+`.
+_INLINE_PARTICIPANT_RE = re.compile(
+    r"([A-Z][A-Za-z.'\-]+(?:[ \t]+[A-Z][A-Za-z.'\-]+){0,3}),[ \t]+"
+    r"((?:President|Chief\s+\w+\s+Officer|Chairman|Founder|Co-Founder)[^,.;\n]*"
+    r"(?:,[ \t]*(?:President|Chief\s+\w+\s+Officer|Chairman|Founder|Co-Founder)[^,.;\n]*)*)"
+)
+# Shape 3 is only attempted over a call's leading turns (prepared-remarks/
+# IR-intro territory) — bounding it here keeps false-positive risk low on
+# the rare Q&A exchange that happens to mention a title in passing.
+_INLINE_INTRO_MAX_TURNS = 5
+# Safety bound on how many turns past a CORPORATE PARTICIPANTS heading are
+# scanned before giving up — guards against a heading that, for whatever
+# reason, never hits a recognized stop marker.
+_ROSTER_SPAN_MAX_TURNS = 20
+
+
+@dataclass(frozen=True)
+class ParsedParticipant:
+    name: str
+    title: str
+    # 'CEO' | 'CFO' | 'other_exec' | 'unresolved' (a title matched but named
+    # no recognizable role keyword at all — kept rather than dropped, since
+    # the name IS a confirmed management participant even when the title
+    # text itself doesn't parse to a role).
+    exec_role: str
+
+
+_CEO_ABBR_RE = re.compile(r"\bCEO\b")
+_CFO_ABBR_RE = re.compile(r"\bCFO\b")
+
+
+def classify_exec_title(title: str) -> str:
+    """Map a free-text title to 'CEO' / 'CFO' / 'other_exec' / 'unresolved'.
+    Checked in this order because a title can legitimately contain BOTH
+    phrases ("Chairman and Chief Executive Officer") — CEO/CFO win over the
+    generic executive-keyword bucket, never the reverse. Accepts both the
+    spelled-out phrase and the bare abbreviation ("Chairman & CEO" — seen on
+    the real book's S&P Global Market Intelligence source)."""
+    low = title.lower()
+    if "chief executive officer" in low or _CEO_ABBR_RE.search(title):
+        return "CEO"
+    if "chief financial officer" in low or _CFO_ABBR_RE.search(title):
+        return "CFO"
+    if _TITLE_KEYWORDS_RE.search(title):
+        return "other_exec"
+    return "unresolved"
+
+
+def _find_participants_roster_span(turns: list[Turn]) -> tuple[int, int] | None:
+    """(start, stop) turn-index span covering the CORPORATE PARTICIPANTS
+    block AND any immediately-following analyst roster block, or None when
+    no heading is found. `stop` is exclusive."""
+    start = None
+    for i, t in enumerate(turns):
+        if _ROSTER_HEADING_RE.match((t.speaker or "").strip()):
+            start = i
+            break
+    if start is None:
+        return None
+    stop = min(start + 1 + _ROSTER_SPAN_MAX_TURNS, len(turns))
+    for j in range(start + 1, stop):
+        spk = (turns[j].speaker or "").strip()
+        if _ANALYST_ROSTER_HEADING_RE.search(spk):
+            continue  # analyst-roster sub-heading — still inside the span
+        if _ROSTER_HARD_STOP_RE.match(spk):
+            return start, j
+    return start, stop
+
+
+def _roster_span_lines(turns: list[Turn], span: tuple[int, int]) -> list[str]:
+    """Flatten the management sub-block of a roster span into raw text
+    lines, stopping at the first analyst-roster sub-heading (OTHER
+    PARTICIPANTS / CONFERENCE CALL PARTICIPANTS) — those names are analysts,
+    not management, and are not needed for CEO/CFO resolution."""
+    start, stop = span
+    lines: list[str] = []
+    heading_m = _ROSTER_HEADING_RE.match((turns[start].speaker or "").strip())
+    lead_name = heading_m.group(2).strip() if heading_m else ""
+    if lead_name:
+        lines.append(lead_name)
+    lines.extend(line.strip() for line in (turns[start].text or "").split("\n") if line.strip())
+    for j in range(start + 1, stop):
+        spk = (turns[j].speaker or "").strip()
+        if _ANALYST_ROSTER_HEADING_RE.search(spk):
+            break
+        if spk and not _ROSTER_HEADING_RE.match(spk):
+            lines.append(spk)
+        lines.extend(line.strip() for line in (turns[j].text or "").split("\n") if line.strip())
+    return [line for line in lines if not _DOT_LEADER_RE.match(line)]
+
+
+def _parse_packed_participant_lines(lines: list[str]) -> dict[str, ParsedParticipant]:
+    """Shape 1: one participant per line, "<Name> <Company...> - <Title>".
+    Requires EVERY non-trivial line to match — a partial match means this
+    isn't actually the packed shape, and falling back to the alternating
+    parser is safer than returning a half-parsed roster."""
+    roster: dict[str, ParsedParticipant] = {}
+    for line in lines:
+        if " - " not in line:
+            return {}
+        head, title = line.rsplit(" - ", 1)
+        name_tokens = head.split()[:2]
+        if not name_tokens or not title.strip():
+            return {}
+        name = " ".join(name_tokens)
+        roster[name] = ParsedParticipant(
+            name=name, title=title.strip(), exec_role=classify_exec_title(title)
+        )
+    return roster
+
+
+def _looks_like_name_line(line: str) -> bool:
+    if _TITLE_KEYWORDS_RE.search(line):
+        return False
+    tokens = line.split()
+    if not (1 <= len(tokens) <= 4):
+        return False
+    return all(re.match(r"^[A-Z][\w.'\-]*,?$", t) for t in tokens)
+
+
+def _parse_alternating_participant_lines(lines: list[str]) -> dict[str, ParsedParticipant]:
+    """Shape 2: name line, then title line(s), repeating — tolerant of the
+    FactSet ingest-time mis-segmentation gluing the heading onto the first
+    name and splitting subsequent name/title pairs across pseudo-turns (see
+    this section's module-level note). A title line is anything containing
+    a recognizable title keyword; a name line is a short run of capitalized
+    tokens with none. Stray lines that match neither are skipped rather than
+    guessed onto either role."""
+    roster: dict[str, ParsedParticipant] = {}
+    pending_name: str | None = None
+    for line in lines:
+        if pending_name is not None and _TITLE_KEYWORDS_RE.search(line):
+            roster[pending_name] = ParsedParticipant(
+                name=pending_name, title=line, exec_role=classify_exec_title(line)
+            )
+            pending_name = None
+        elif _looks_like_name_line(line):
+            pending_name = line
+    return roster
+
+
+def _parse_inline_participant_intro(turns: list[Turn]) -> dict[str, ParsedParticipant]:
+    """Shape 3: no CORPORATE PARTICIPANTS heading at all — management is
+    named inline in prepared-remarks prose ("...are Kim Kelderman, President
+    and Chief Executive Officer, and Jim Hippel, Chief Financial Officer of
+    Bio-Techne."). Only scanned over the call's leading turns to bound
+    false-positive risk on an unrelated Q&A mention of a title."""
+    roster: dict[str, ParsedParticipant] = {}
+    for t in turns[:_INLINE_INTRO_MAX_TURNS]:
+        for m in _INLINE_PARTICIPANT_RE.finditer(t.text or ""):
+            name, title = m.group(1).strip(), m.group(2).strip()
+            role = classify_exec_title(title)
+            if role != "unresolved":
+                roster[name] = ParsedParticipant(name=name, title=title, exec_role=role)
+    return roster
+
+
+def parse_participants_roster(turns: list[Turn]) -> dict[str, ParsedParticipant]:
+    """Parse the transcript's own management roster into name -> role.
+
+    Tried in order: the heading-based "packed" shape, then the
+    heading-based "alternating" shape, then (only when no heading was found
+    at all) the headingless "inline intro" shape. Returns ``{}`` when none
+    match — an honest degrade, never a guessed role. Must be called on the
+    RAW turns (before `strip_document_artifacts`), since that function
+    removes this exact block."""
+    span = _find_participants_roster_span(turns)
+    if span is None:
+        return _parse_inline_participant_intro(turns)
+    lines = _roster_span_lines(turns, span)
+    packed = _parse_packed_participant_lines(lines)
+    if packed:
+        return packed
+    return _parse_alternating_participant_lines(lines)
+
+
+def resolve_role_from_participants_roster(
+    name: str, roster: dict[str, ParsedParticipant]
+) -> ParsedParticipant | None:
+    """Match a Q&A speaker name against a parsed participants roster — exact
+    match first, then last-name match (mirrors `resolve_exec_role`'s DEF 14A
+    matching exactly, so e.g. "Colette Kress" in Q&A resolves against
+    "Colette M. Kress" in the roster block)."""
+    norm = _normalize_name(name).lower()
+    norm_last = norm.split()[-1] if norm.split() else ""
+    for candidate_name, participant in roster.items():
+        cand = _normalize_name(candidate_name).lower()
+        cand_last = cand.split()[-1] if cand.split() else ""
+        if cand == norm or (norm_last and cand_last == norm_last and len(norm.split()) >= 2):
+            return participant
     return None
 
 
@@ -824,8 +1134,8 @@ def call_full_text(turns: list[Turn]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Earnings-surprise join (control variable for the ABTONE-style proxy — see
-# transcript_judgment / the CLI's tone_shift_is_abnormal usage)
+# Earnings-surprise join (fundamentals control for D2.3's ABTONE residual
+# fit and the legacy tone_delta_heuristic_flag proxy)
 # ---------------------------------------------------------------------------
 
 
@@ -833,6 +1143,10 @@ def call_full_text(turns: list[Turn]) -> str:
 class SurpriseInfo:
     release_date: str
     eps_surprise_pct: float | None
+    # Secondary fundamentals control (D2.3 — Huang/Teoh/Zhang's ABTONE
+    # regresses tone on more than just EPS surprise). Same table, same join,
+    # so adding it costs no new query — see fit_tone_residual_model.
+    revenue_surprise_pct: float | None = None
 
 
 def nearest_earnings_surprise(
@@ -845,7 +1159,7 @@ def nearest_earnings_surprise(
     residualization for that call, not assume a zero surprise."""
     try:
         rows = conn.execute(
-            "SELECT release_date, eps_surprise_pct FROM earnings_surprises "
+            "SELECT release_date, eps_surprise_pct, revenue_surprise_pct FROM earnings_surprises "
             "WHERE UPPER(ticker) = ? AND release_date >= ? AND release_date <= ? "
             "ORDER BY release_date ASC LIMIT 1",
             (
@@ -858,24 +1172,189 @@ def nearest_earnings_surprise(
         return None
     if not rows:
         return None
-    release_date, eps_pct = rows[0]
+    release_date, eps_pct, rev_pct = rows[0]
     return SurpriseInfo(
         release_date=str(release_date),
         eps_surprise_pct=float(eps_pct) if eps_pct is not None else None,
+        revenue_surprise_pct=float(rev_pct) if rev_pct is not None else None,
     )
 
 
-def tone_shift_is_abnormal(tone_delta: float, eps_surprise_pct: float | None) -> bool:
-    """A TRANSPARENT PROXY for Huang/Teoh/Zhang's ABTONE residual — NOT a
-    fitted OLS regression. A real fitted residual needs a historical panel
-    per ticker (dozens of quarters) this book does not yet have; P5 ("own
-    event study") is where that belongs once one exists. Until then: flag a
-    tone delta as abnormal when either (a) it moved OPPOSITE the direction
-    the same-quarter earnings surprise would suggest, or (b) it moved by a
-    material amount despite an in-line/small surprise (large move, small
-    fundamentals change). Both conditions are transparent and re-checkable
-    by eye from the two numbers in the event row; neither claims the
-    statistical guarantees of a fitted residual."""
+# ---------------------------------------------------------------------------
+# ABTONE — the real residual fit (D2.3, Huang/Teoh/Zhang, TAR 2014).
+#
+# "Abnormal" tone is the RESIDUAL after controlling for fundamentals — raw
+# tone mostly re-derives the earnings surprise, so the surprise-adjusted
+# residual is the actual signal, not the raw score. Fitted deterministically
+# (ordinary least squares via the normal equations, pure Python — no new
+# dependency, no LLM call) over tone scores `transcript_judgment.judge_call`
+# has ALREADY produced and cached: this step is Layer-3 arithmetic on
+# existing numbers, zero new tokens.
+#
+# Pooled ACROSS the whole tracked book rather than fit separately per
+# same-period cross-section: with ~15-90 (ticker, period, speaker)
+# observations total measured against a copy of prod on 2026-07-25, a
+# per-quarter cross-section (a handful of tickers reporting in any given
+# quarter) is far too small to fit 2 coefficients. Pooling trades "true"
+# cross-sectional detrending (Huang/Teoh/Zhang's own design) for a
+# book-specific normalization step — exactly the caveat
+# docs/design/disclosure_gap_scoping.md's Gap 2 section calls out: "fine as
+# a within-book deviation flag... never a claim the coefficient is
+# significant." Measured this session (eps_surprise_pct only, n=48):
+# R^2 = 0.058 — consistent with "explains almost none of the variance,"
+# which is itself informative (tone is NOT simply re-deriving the earnings
+# surprise in this book, so a residual delta is not automatically near-zero
+# noise). Revenue surprise was tried as a second predictor (n=32, R^2=0.031,
+# lower N for no R^2 gain) and is not used by default — see
+# `fit_tone_residual_model`'s `use_revenue_surprise` parameter for a caller
+# that wants to try it once more history accumulates.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ToneObservation:
+    """One (ticker, fiscal_period, speaker) tone reading, ready to fit
+    against fundamentals controls. One row per name-key in a judged call's
+    ``CallJudgment.tone`` dict — the SAME literal name string
+    ``transcript_judgment`` used, so callers matching call-over-call deltas
+    by name (see ``execution/detect_transcript_disclosure_events.py``) stay
+    consistent with how every other by-name measure in this module already
+    matches (exact string; no cross-call identity resolution attempted)."""
+
+    ticker: str
+    fiscal_period_type: str
+    fiscal_year: int
+    period_end: datetime
+    speaker: str
+    tone_score: float
+    eps_surprise_pct: float | None
+    revenue_surprise_pct: float | None
+
+
+@dataclass(frozen=True)
+class ToneResidualModel:
+    """A fitted ``tone_score ~ intercept + beta_eps * eps_surprise_pct
+    [+ beta_revenue * revenue_surprise_pct]`` OLS model. ``r_squared`` is
+    reported for transparency, not as a significance claim — see this
+    section's module-level note on statistical power."""
+
+    intercept: float
+    beta_eps: float
+    beta_revenue: float | None
+    n_obs: int
+    r_squared: float
+    uses_revenue_surprise: bool
+
+
+def _solve_linear_system(a: list[list[float]], b: list[float]) -> list[float] | None:
+    """Gaussian elimination with partial pivoting. Returns None on a
+    singular system (e.g. a predictor with zero variance) rather than
+    raising — callers treat that as "cannot fit," not a crash."""
+    n = len(b)
+    aug = [[*row, b[i]] for i, row in enumerate(a)]
+    for col in range(n):
+        pivot_row = max(range(col, n), key=lambda r: abs(aug[r][col]))
+        if abs(aug[pivot_row][col]) < 1e-12:
+            return None
+        aug[col], aug[pivot_row] = aug[pivot_row], aug[col]
+        piv = aug[col][col]
+        aug[col] = [v / piv for v in aug[col]]
+        for r in range(n):
+            if r != col:
+                factor = aug[r][col]
+                aug[r] = [aug[r][j] - factor * aug[col][j] for j in range(n + 1)]
+    return [aug[i][n] for i in range(n)]
+
+
+def fit_tone_residual_model(
+    observations: list[ToneObservation],
+    *,
+    use_revenue_surprise: bool = False,
+) -> ToneResidualModel | None:
+    """Deterministic pooled OLS fit of tone score on fundamentals controls.
+    Returns None when there are fewer than ``ABTONE_MIN_OBSERVATIONS`` usable
+    rows or the normal equations are singular (e.g. every observation has an
+    identical eps_surprise_pct) — callers must treat that as "cannot
+    residualize this run," never silently fall back to raw tone."""
+    predictors: list[str] = ["eps_surprise_pct"]
+    if use_revenue_surprise:
+        predictors.append("revenue_surprise_pct")
+    usable = [
+        o
+        for o in observations
+        if o.eps_surprise_pct is not None
+        and (not use_revenue_surprise or o.revenue_surprise_pct is not None)
+    ]
+    n = len(usable)
+    if n < ABTONE_MIN_OBSERVATIONS:
+        return None
+
+    k = len(predictors) + 1  # + intercept
+    x_rows: list[list[float]] = []
+    y_vals: list[float] = []
+    for o in usable:
+        row = [1.0, float(o.eps_surprise_pct)]  # type: ignore[arg-type]
+        if use_revenue_surprise:
+            row.append(float(o.revenue_surprise_pct))  # type: ignore[arg-type]
+        x_rows.append(row)
+        y_vals.append(o.tone_score)
+
+    xtx = [[sum(x_rows[i][a] * x_rows[i][b] for i in range(n)) for b in range(k)] for a in range(k)]
+    xty = [sum(x_rows[i][a] * y_vals[i] for i in range(n)) for a in range(k)]
+    beta = _solve_linear_system(xtx, xty)
+    if beta is None:
+        return None
+
+    y_mean = sum(y_vals) / n
+    ss_tot = sum((y - y_mean) ** 2 for y in y_vals)
+    preds = [sum(beta[a] * x_rows[i][a] for a in range(k)) for i in range(n)]
+    ss_res = sum((y_vals[i] - preds[i]) ** 2 for i in range(n))
+    r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+
+    return ToneResidualModel(
+        intercept=beta[0],
+        beta_eps=beta[1],
+        beta_revenue=beta[2] if use_revenue_surprise else None,
+        n_obs=n,
+        r_squared=r_squared,
+        uses_revenue_surprise=use_revenue_surprise,
+    )
+
+
+def tone_residual(model: ToneResidualModel, obs: ToneObservation) -> float | None:
+    """``obs.tone_score`` minus the model's fitted prediction. Returns None
+    when ``obs`` lacks a control the model needs (honest degrade — never
+    silently substitutes a zero surprise, which would fabricate a residual
+    equal to the raw tone score)."""
+    if obs.eps_surprise_pct is None:
+        return None
+    predicted = model.intercept + model.beta_eps * obs.eps_surprise_pct
+    if model.uses_revenue_surprise:
+        if obs.revenue_surprise_pct is None:
+            return None
+        predicted += (model.beta_revenue or 0.0) * obs.revenue_surprise_pct
+    return obs.tone_score - predicted
+
+
+def tone_delta_heuristic_flag(tone_delta: float, eps_surprise_pct: float | None) -> bool:
+    """A TRANSPARENT TWO-RULE HEURISTIC — NOT Huang/Teoh/Zhang's ABTONE
+    residual, NOT a fitted OLS regression. Renamed from
+    ``tone_shift_is_abnormal`` (D2.3): that name implied a resolved
+    abnormal-tone judgment, which this function never was — its own
+    docstring said so, but the name didn't. The REAL fitted residual is
+    ``fit_tone_residual_model`` / ``tone_residual`` below, which is what
+    ``execution/detect_transcript_disclosure_events.py`` now uses to emit
+    ``abnormal_tone_shift`` events. This heuristic is kept, unused in
+    production, purely for side-by-side comparison (per
+    ``docs/design/disclosure_gap_scoping.md``'s explicit "alongside, not
+    replaced by" guidance) — do not resurrect it as the primary signal.
+
+    Flags a tone delta as abnormal when either (a) it moved OPPOSITE the
+    direction the same-quarter earnings surprise would suggest, or (b) it
+    moved by a material amount despite an in-line/small surprise (large
+    move, small fundamentals change). Both conditions are transparent and
+    re-checkable by eye from the two numbers in the event row; neither
+    claims the statistical guarantees of a fitted residual."""
     if abs(tone_delta) < TONE_MATERIALITY:
         return False
     if eps_surprise_pct is None:
@@ -929,15 +1408,31 @@ def build_call_snapshot(conn: sqlite3.Connection, transcript_id: int) -> CallSna
         if isinstance(period_end_raw, datetime)
         else datetime.fromisoformat(str(period_end_raw))
     )
-    turns, coverage = load_call_turns(conn, transcript_id)
-    turns = strip_document_artifacts(strip_boilerplate(turns))
+    raw_turns, coverage = load_call_turns(conn, transcript_id)
+    # D2.4: parsed on the RAW turns — strip_document_artifacts removes this
+    # exact block, so it must be captured before either strip call runs.
+    participants_roster = parse_participants_roster(raw_turns)
+    turns = strip_document_artifacts(strip_boilerplate(raw_turns))
     roster = classify_roles(turns)
     ticker = str(ticker_raw).upper()
     for name, entry in list(roster.items()):
-        if entry.role is SpeakerRole.MANAGEMENT:
-            exec_role = resolve_exec_role(conn, ticker, name)
-            if exec_role:
-                roster[name] = replace(entry, exec_role=exec_role)
+        if entry.role is not SpeakerRole.MANAGEMENT:
+            continue
+        # Transcript-scoped roster first (authoritative for THIS call), DEF
+        # 14A join second (see module docstring — exec_comp_packages is
+        # empty book-wide as of this writing, so this fallback almost never
+        # fires today, but stays for when it's backfilled).
+        participant = resolve_role_from_participants_roster(name, participants_roster)
+        if participant is not None:
+            roster[name] = replace(
+                entry, exec_role=participant.exec_role, exec_role_source="participants_block"
+            )
+            continue
+        exec_role = resolve_exec_role(conn, ticker, name)
+        if exec_role:
+            roster[name] = replace(
+                entry, exec_role=exec_role, exec_role_source="exec_comp_packages"
+            )
     exchanges = pair_qa_exchanges(turns, roster)
     return CallSnapshot(
         transcript_id=transcript_id,
@@ -948,6 +1443,7 @@ def build_call_snapshot(conn: sqlite3.Connection, transcript_id: int) -> CallSna
         turns=turns,
         roster=roster,
         exchanges=exchanges,
+        participants_roster=participants_roster,
         parse_coverage=coverage,
     )
 
