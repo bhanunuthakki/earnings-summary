@@ -8,7 +8,7 @@ accounting-standard-transition gate built once per run over the FULL cached
 companyfacts book), then an optional single batched LLM triage call per
 ticker (``src/filings/metric_triage.py``), then writes
 ``metric_discontinued``/``metric_relabeled``/``metric_standard_transition``
-rows to ``disclosure_events`` (migration 0200). See
+rows to ``disclosure_events`` (migration 0203). See
 ``docs/design/disclosure_change_signals.md`` §2-3.
 
 Every run is idempotent (upsert on ``disclosure_events``'s unique key), so a

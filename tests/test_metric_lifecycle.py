@@ -59,7 +59,7 @@ CREATE TABLE disclosure_events (
     prior_fiscal_period VARCHAR(4),
     source_ref VARCHAR(255),
     source_doc_id INTEGER,
-    canonical_id VARCHAR(64),
+    canonical_id VARCHAR(64) NOT NULL DEFAULT '',
     subject VARCHAR(255) NOT NULL,
     subject_label TEXT,
     prior_excerpt TEXT,
@@ -73,7 +73,7 @@ CREATE TABLE disclosure_events (
     status VARCHAR(16) NOT NULL DEFAULT 'new',
     created_at DATETIME NOT NULL,
     CONSTRAINT uq_disclosure_events UNIQUE
-        (ticker, event_type, fiscal_year, fiscal_period, subject, detector_version)
+        (ticker, event_type, fiscal_year, fiscal_period, canonical_id, subject, detector_version)
 );
 """
 

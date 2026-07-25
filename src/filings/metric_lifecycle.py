@@ -89,7 +89,7 @@ taken from the SAME filing (matched by accession number) or, failing that,
 the nearest date in the same payload.
 
 Do NOT encode "stopped reporting = bearish" anywhere downstream of this
-module. ``disclosure_events.verdict`` (migration 0200) exists precisely so a
+module. ``disclosure_events.verdict`` (migration 0203) exists precisely so a
 detector commits to concealment vs. maturity vs. mechanical rather than
 letting the event type imply a direction it has not earned; this module
 only emits the deterministic ``mechanical`` verdict for confirmed relabels
@@ -1099,7 +1099,7 @@ def run_lifecycle_detection(
 
 
 class MetricLifecycleEvent(BaseModel):
-    """The write contract for one ``disclosure_events`` row (migration 0200)."""
+    """The write contract for one ``disclosure_events`` row (migration 0203)."""
 
     ticker: str
     event_type: CandidateKind
@@ -1184,7 +1184,7 @@ def write_lifecycle_events(conn: sqlite3.Connection, events: list[MetricLifecycl
         return 0
     if not table_exists(conn, EVENTS_TABLE):
         raise HardStopError(
-            f"{EVENTS_TABLE} missing — run `alembic upgrade head` (migration 0200) first"
+            f"{EVENTS_TABLE} missing — run `alembic upgrade head` (migration 0203) first"
         )
     now = _now_naive_utc()
     written = 0
