@@ -589,6 +589,21 @@ LLM_MODELS: dict[str, str] = {
     # risk_factor_diff sibling purposes); flag if/when a golden-set-gated
     # downgrade loop is warranted.
     "metric_lifecycle_triage": FAST_CLASSIFIER_MODEL,
+    # P4 transcript longitudinal tracking (docs/design/disclosure_change_
+    # build_stack.md P4, src/transcripts/transcript_judgment.py): ONE
+    # batched call per transcript over paired analyst-question/management-
+    # answer excerpts ONLY (never the full call, never prepared remarks) —
+    # non-answer classification + per-speaker tone scoring together. Closed
+    # judgment over a bounded (<=30) candidate list, same shape as
+    # risk_factor_classify — Haiku tier.
+    "transcript_qa_judgment": FAST_CLASSIFIER_MODEL,
+    # P4 discontinued-topic triage: ONE batched call per ticker over KPI
+    # catalog NAMES ONLY (never transcript text), mirroring
+    # metric_lifecycle_triage's "tag names only" contract — Haiku tier.
+    "transcript_topic_triage": FAST_CLASSIFIER_MODEL,
+    # No budget row / golden set added yet for either purpose above (same
+    # posture as risk_factor_classify/risk_factor_diff) — flag if/when a
+    # golden-set-gated downgrade loop is warranted.
     # Segment-name canonicalization: narrow JSON mapping task — Haiku tier.
     "canonicalize_segments": FAST_CLASSIFIER_MODEL,
     # Customer-concentration table extraction (src/table_extractors/): short

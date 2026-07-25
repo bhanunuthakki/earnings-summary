@@ -107,7 +107,26 @@ def upgrade() -> None:
             # a tag stopped industry-wide within the same window as >= N other
             # cached tickers -- an ASU/ASC-driven transition, not a company
             # decision; distinct from 'metric_relabeled' because no successor
-            # tag is claimed)
+            # tag is claimed) |
+            # P4 transcript longitudinal tracking (docs/design/
+            # disclosure_change_build_stack.md P4, src/transcripts/):
+            # 'qa_nonanswer_rate_shift'    — deviation of a call's Q&A
+            #     non-answer rate from the ~11% baseline (Gow/Larcker/
+            #     Zakolyukina, JAR 2021) or from the ticker's own prior call.
+            # 'transcript_topic_disappeared' — a KPI mentioned on the last
+            #     2+ calls, absent this one. NOVEL/UNVALIDATED — the
+            #     literature has no published validation for this specific
+            #     measure (nearest analog: guidance withdrawal).
+            # 'transcript_tone_shift_abnormal' — a named management
+            #     speaker's tone moved beyond what the same-quarter earnings
+            #     surprise would predict (Huang/Teoh/Zhang ABTONE-style
+            #     proxy — see transcripts.longitudinal.tone_shift_is_abnormal
+            #     for exactly what this is NOT: a fitted OLS residual).
+            # 'executive_speaker_change' — a management speaker (by name)
+            #     appeared/disappeared vs the prior call. NOVEL/UNVALIDATED.
+            # 'analyst_roster_change' — material (<25% overlap) turnover in
+            #     the set of analysts asking questions vs the prior call.
+            #     NOVEL/UNVALIDATED.
             sa.Column("event_type", sa.String(length=32), nullable=False),
             sa.Column("form", sa.String(length=8), nullable=True),
             sa.Column("fiscal_year", sa.Integer(), nullable=True),

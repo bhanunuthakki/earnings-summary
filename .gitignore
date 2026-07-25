@@ -34,8 +34,10 @@ data/deferred_fmp/*
 # IDE / agent state
 .claude/
 
-# Transcript data (user-specific, not checked in)
-transcripts/
+# Transcript data (user-specific, not checked in). Anchored to repo root —
+# an unanchored pattern here also shadowed src/transcripts/ (the P4
+# longitudinal-tracking package, docs/design/disclosure_change_build_stack.md).
+/transcripts/
 
 # Generated brief artifacts written by execution/build_artifacts.py
 # (output/research/<TICKER>/<DATE>_workspace.html etc.). Reproducible from
