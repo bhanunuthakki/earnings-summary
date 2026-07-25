@@ -10,7 +10,7 @@ zero new tokens for an already-judged call), one batched LLM triage call
 per ticker for KPI/topic relevance (``transcript_judgment.triage_topics``),
 then writes ``qa_nonanswer_rate_shift`` / ``transcript_topic_disappeared`` /
 ``transcript_tone_shift_abnormal`` / ``executive_speaker_change`` /
-``analyst_roster_change`` rows to ``disclosure_events`` (migration 0200).
+``analyst_roster_change`` rows to ``disclosure_events`` (migration 0203).
 
 Every run is idempotent (upsert on ``disclosure_events``'s unique key), so a
 partial run resumes simply by running again, and a fully-cached ticker

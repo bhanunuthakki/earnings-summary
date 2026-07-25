@@ -873,10 +873,20 @@ def prior_transcript_ids(
 
 
 # ---------------------------------------------------------------------------
-# disclosure_events write contract (migration 0200 — reused, not extended;
-# see the migration's vocabulary comment update for the new event_type
-# values this module emits).
+# disclosure_events write contract (migration 0203, ex-0200 — reused, not
+# extended; see the migration's vocabulary comment update for the new
+# event_type values this module emits).
 # ---------------------------------------------------------------------------
+
+# canonical_id is part of disclosure_events' row identity (migration 0203
+# made it NOT NULL + a unique-key member, after ~32% of P0's item events
+# were found silently overwriting each other without it — same section
+# heading legitimately recurring across two different filing sections).
+# Transcripts have no equivalent "section" concept the way filings do: every
+# P4 measure below runs over the Q&A portion (aggregator-sourced calls are
+# Q&A-only to begin with — see the module docstring), so ALL transcript
+# events share one stable value rather than a fabricated per-event one.
+TRANSCRIPT_QA_CANONICAL_ID = "transcript_qa"
 
 
 class TranscriptEvent(BaseModel):
@@ -888,6 +898,7 @@ class TranscriptEvent(BaseModel):
     prior_fiscal_period: str | None = None
     source_ref: str | None = None
     source_doc_id: int | None = None
+    canonical_id: str = TRANSCRIPT_QA_CANONICAL_ID
     subject: str
     subject_label: str | None = None
     prior_excerpt: str | None = None
@@ -902,16 +913,18 @@ class TranscriptEvent(BaseModel):
 
 def write_transcript_events(conn: sqlite3.Connection, events: list[TranscriptEvent]) -> int:
     """Idempotent upsert into ``disclosure_events`` on its unique key
-    (ticker, event_type, fiscal_year, fiscal_period, subject,
+    (ticker, event_type, fiscal_year, fiscal_period, canonical_id, subject,
     detector_version). NULL-safe explicit lookup rather than ``ON
     CONFLICT`` — SQLite does not treat two NULL fiscal_year/fiscal_period
     values as conflicting in a UNIQUE index (mirrors
-    ``filings.metric_lifecycle.write_lifecycle_events`` / ``filings.store``)."""
+    ``filings.metric_lifecycle.write_lifecycle_events`` / ``filings.store``).
+    ``canonical_id`` itself is NOT NULL at the schema level (migration 0203),
+    so no ``IS ?``/``IS NULL`` handling is needed for that column."""
     if not events:
         return 0
     if not _table_exists(conn, EVENTS_TABLE):
         raise HardStopError(
-            f"{EVENTS_TABLE} missing — run `alembic upgrade head` (migration 0200) first"
+            f"{EVENTS_TABLE} missing — run `alembic upgrade head` (migration 0203) first"
         )
     now = _now_naive_utc()
     written = 0
@@ -920,10 +933,18 @@ def write_transcript_events(conn: sqlite3.Connection, events: list[TranscriptEve
             f"""
             SELECT id FROM {EVENTS_TABLE}
             WHERE ticker = ? AND event_type = ? AND fiscal_year IS ? AND fiscal_period IS ?
-              AND subject = ? AND detector_version = ?
+              AND canonical_id = ? AND subject = ? AND detector_version = ?
             LIMIT 1
             """,
-            (e.ticker, e.event_type, e.fiscal_year, e.fiscal_period, e.subject, e.detector_version),
+            (
+                e.ticker,
+                e.event_type,
+                e.fiscal_year,
+                e.fiscal_period,
+                e.canonical_id,
+                e.subject,
+                e.detector_version,
+            ),
         ).fetchone()
         common = (
             e.subject_label,
@@ -940,10 +961,10 @@ def write_transcript_events(conn: sqlite3.Connection, events: list[TranscriptEve
                 f"""
                 INSERT INTO {EVENTS_TABLE}
                     (ticker, event_type, fiscal_year, fiscal_period, prior_fiscal_year,
-                     prior_fiscal_period, source_ref, source_doc_id, subject, subject_label,
-                     prior_excerpt, current_excerpt, evidence_quote, materiality, verdict,
-                     interpretation_md, confidence, detector_version, status, created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     prior_fiscal_period, source_ref, source_doc_id, canonical_id, subject,
+                     subject_label, prior_excerpt, current_excerpt, evidence_quote, materiality,
+                     verdict, interpretation_md, confidence, detector_version, status, created_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     e.ticker,
@@ -954,6 +975,7 @@ def write_transcript_events(conn: sqlite3.Connection, events: list[TranscriptEve
                     e.prior_fiscal_period,
                     e.source_ref,
                     e.source_doc_id,
+                    e.canonical_id,
                     e.subject,
                     *common,
                     e.detector_version,
