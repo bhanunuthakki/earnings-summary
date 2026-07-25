@@ -113,9 +113,20 @@ MODEL_LADDER: dict[str, ModelCost] = {
 # verdict comes from >=2 DISTINCT families. OpenRouter open-weight models are
 # candidates, NOT judges, until a judge-agreement spot-check certifies one —
 # judging needs the discriminating model to out-class both contestants.
+# The cheap, INDEPENDENT (non-Anthropic, non-Google) judge. Picked from the
+# live OpenRouter catalogue 2026-07-25: $0.094/$0.188 per MTok with a 1M
+# context, so a judge prompt never truncates, and DeepSeek's reasoning
+# lineage is the strongest of the cheap open-weight families. Verified
+# live as a judge before wiring.
+DEEPSEEK_JUDGE_MODEL = "deepseek/deepseek-v4-flash"
+
+# Judge backend -> model. Cross-family by construction: a pool that is all
+# one family measures its own preferences (see llm_quality_program §P4).
 JUDGE_POOL: dict[str, str] = {
     CLAUDE: "claude-opus-4-8",
     GEMINI: "gemini-3.1-pro-preview",
+    "deepseek": DEEPSEEK_JUDGE_MODEL,
+    "codex": "gpt-5.6-terra",
 }
 
 

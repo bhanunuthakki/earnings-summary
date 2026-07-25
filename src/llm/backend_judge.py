@@ -54,6 +54,12 @@ JUDGE_PURPOSE = "backend_compare_judge"
 # The two real backends compared. "tie" is the third verdict bucket.
 CLAUDE = "claude"
 GEMINI = "gemini"
+# P4 cross-family judges (llm_quality_program_2026_07.md). Same-family
+# judging (Claude grading Claude) is the weakest evidence in the loop, and
+# with the Gemini key invalid it was ALL the loop had. DEEPSEEK routes
+# through OpenRouter; CODEX through the ChatGPT-membership CLI wrapper.
+DEEPSEEK = "deepseek"
+CODEX = "codex"
 
 # Per-facet preference is reported alongside the overall winner so a promotion
 # call can see WHERE a backend wins (e.g. "ties on substance, loses on format").
@@ -283,13 +289,33 @@ def _judge_once(
         criteria_block=criteria_block,
     )
     try:
-        raw = call_llm(
-            prompt,
-            purpose=JUDGE_PURPOSE,
-            scope="backend_judge",
-            run_id=run_id,
-            backend=judge_backend,
-        )
+        if judge_backend == CODEX:
+            # Membership transport, not a call_llm backend — its own wrapper
+            # (and its own ledger row) per llm.codex_backend.
+            from llm.codex_backend import call_codex_llm
+
+            raw = call_codex_llm(
+                prompt, purpose=JUDGE_PURPOSE, scope="backend_judge", run_id=run_id
+            )
+        elif judge_backend == DEEPSEEK:
+            from llm.model_ladder import DEEPSEEK_JUDGE_MODEL
+
+            raw = call_llm(
+                prompt,
+                purpose=JUDGE_PURPOSE,
+                scope="backend_judge",
+                run_id=run_id,
+                model=DEEPSEEK_JUDGE_MODEL,
+                backend="openrouter",
+            )
+        else:
+            raw = call_llm(
+                prompt,
+                purpose=JUDGE_PURPOSE,
+                scope="backend_judge",
+                run_id=run_id,
+                backend=judge_backend,
+            )
     except Exception as exc:  # a judge that won't run is a recordable outcome
         log.warning(
             {
