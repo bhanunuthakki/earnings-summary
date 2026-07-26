@@ -58,6 +58,7 @@ for _p in (str(PROJECT_ROOT), str(PROJECT_ROOT / "src")):
 import execution.fetch_edgar_news as edgarnews  # noqa: E402
 import execution.fetch_fmp_news as fmpnews  # noqa: E402
 import execution.fetch_yf_grades as yfgrades  # noqa: E402
+import execution.fetch_yf_news as yfnews  # noqa: E402
 from competitive.sec_watch import check_s1_watch, load_watches  # noqa: E402
 from db import DB_PATH  # noqa: E402
 from execution.fetch_news_websearch import fetch_websearch_news_for_ticker  # noqa: E402
@@ -200,6 +201,18 @@ def _safe_s1_watch() -> list[NewsRow]:
         return []
 
 
+def _safe_yf_news(ticker: str, *, days: int) -> list[NewsRow]:
+    """Free per-ticker journalism (yfinance). Degrades to [] like every other
+    additive feed — this is now the DEFAULT journalism source, replacing the
+    ~$0.40/ticker WebSearch+LLM call (see execution/fetch_yf_news.py for the
+    measured economics)."""
+    try:
+        return yfnews.fetch_news_for_ticker(ticker, days=days)
+    except Exception as exc:
+        _log("yf_news_failed", ticker=ticker, error=f"{type(exc).__name__}: {exc}"[:200])
+        return []
+
+
 def _collect_additive(
     tickers: list[str],
     *,
@@ -207,6 +220,7 @@ def _collect_additive(
     skip_edgar: bool,
     skip_grades: bool,
     skip_s1_watch: bool,
+    skip_yf_news: bool = False,
 ) -> list[NewsRow]:
     """The additive non-FMP feeds for the whole book: EDGAR sequentially (its
     module throttles to honor SEC's 10 req/s policy), grades threaded (plain
@@ -221,6 +235,13 @@ def _collect_additive(
         with ThreadPoolExecutor(max_workers=_GRADES_WORKERS) as executor:
             futures = [
                 executor.submit(_safe_grades, ticker.upper(), days=days) for ticker in tickers
+            ]
+            for future in futures:
+                rows.extend(future.result())
+    if not skip_yf_news:
+        with ThreadPoolExecutor(max_workers=_GRADES_WORKERS) as executor:
+            futures = [
+                executor.submit(_safe_yf_news, ticker.upper(), days=days) for ticker in tickers
             ]
             for future in futures:
                 rows.extend(future.result())
@@ -419,7 +440,13 @@ def run(
         return 0
 
     eligible: frozenset[str] | None = None
-    if source == "auto" and websearch_scope == "portfolio":
+    if source == "auto" and websearch_scope == "none":
+        # Nobody is eligible for the paid fallback: the free yfinance feed is
+        # the journalism source now. An EMPTY frozenset (not None) is the
+        # "gate everyone out" signal — None means "no gate".
+        eligible = frozenset()
+        _log("news_websearch_scope", scope="none", eligible=0)
+    elif source == "auto" and websearch_scope == "portfolio":
         eligible = portfolio_tickers(db_path)
         _log("news_websearch_scope", scope="portfolio", eligible=len(eligible))
 
@@ -528,12 +555,16 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--websearch-scope",
-        choices=("portfolio", "all"),
-        default="portfolio",
-        help="Which tickers may use the WebSearch+LLM fallback under --source auto: "
-        "'portfolio' (default — held names only; everyone else degrades to the "
-        "additive feeds) or 'all' (the pre-2026-07 behavior, ~$14/day at current "
-        "book size).",
+        choices=("none", "portfolio", "all"),
+        default="none",
+        help="Which tickers may use the WebSearch+LLM fallback under --source auto. "
+        "DEFAULT 'none' (2026-07-25): the free yfinance journalism feed "
+        "(execution/fetch_yf_news.py) now covers this, and the paid path measured "
+        "$5.74 per STORED row — 93% of its calls stored nothing after (ticker,url) "
+        "dedup, because FMP's stock-news endpoint 402s and the LLM fallback "
+        "silently became the primary for the whole book. 'portfolio' = held names "
+        "only (~$14/day); 'all' = the pre-2026-07 behavior. Use a non-none scope "
+        "for a deliberate one-off sweep, not as the standing default.",
     )
     return parser.parse_args(argv)
 
