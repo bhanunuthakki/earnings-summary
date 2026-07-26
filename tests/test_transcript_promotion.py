@@ -18,7 +18,6 @@ import pytest
 import index_manager
 from compute.transcript_ingest import IngestResult, ParsedFilename, QASectionStatus, sha256_of
 
-
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -352,7 +351,8 @@ def test_main_promotes_after_fresh_ingest(
             fiscal_period_type TEXT,
             period_end TIMESTAMP,
             source_url TEXT,
-            has_qa_section INTEGER
+            has_qa_section INTEGER,
+            source TEXT
         );
         CREATE TABLE transcript_segments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

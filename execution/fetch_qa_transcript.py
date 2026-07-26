@@ -26,7 +26,6 @@ fallback for quarters not yet indexed by any aggregator.
 from __future__ import annotations
 
 import argparse
-import datetime as _dt
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,13 +37,13 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.append(str(SRC_DIR))
 
+import index_manager  # noqa: E402
 from aggregator_sources import (  # noqa: E402
     SOURCES,
     AggregatorHit,
     fetch_qa_with_fallback,
 )
 from alias_manager import resolve_ticker  # noqa: E402
-import index_manager  # noqa: E402
 from transcript_qa import (  # noqa: E402
     QaStatus,
     validate_synthesized_transcript,
@@ -75,6 +74,18 @@ class FetchQaResult:
 
 
 def _build_header(spec: FetchQaSpec, hit: AggregatorHit) -> str:
+    """Build the file's banner header.
+
+    Deliberately excludes a wall-clock fetch timestamp: this header is
+    hashed (`sha256_of`) to decide whether a re-fetch is byte-identical to
+    what's already ingested. A `Built at: {datetime.now()}` line used to
+    live here and made every re-fetch hash differently even when the
+    underlying Q&A text hadn't changed, defeating that idempotency check
+    (root cause of the 2026-07-25 transcript-duplication incident — see
+    `execution/dedupe_transcripts.py`). Fetch time is already tracked in
+    `.tmp/transcript_index.json`'s `indexed_at`; it doesn't need to also be
+    inside the hashed file content.
+    """
     canonical = resolve_ticker(spec.ticker)
     return (
         f"=== SYNTHESIZED QUARTERLY UPDATE — Q&A SEGMENT ONLY ===\n"
@@ -86,7 +97,6 @@ def _build_header(spec: FetchQaSpec, hit: AggregatorHit) -> str:
         f"Ticker:    {canonical}\n"
         f"Period:    Q{spec.quarter} {spec.year}\n"
         f"Source:    aggregator_{hit.source_name} ({hit.page_url})\n"
-        f"Built at:  {_dt.datetime.now().isoformat(timespec='seconds')}\n"
         f"\n"
         f"=== Q&A SEGMENT ===\n"
     )
