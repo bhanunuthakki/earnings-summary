@@ -103,3 +103,51 @@ loop.*
 - Wide-index screening: out (owner ruling 1).
 - Vocal affect: out of reach text-only; never proxied from disfluencies.
 - FMP FPI refresh: blocked on the pending Starter purchase.
+
+---
+
+# Status After Execution & Open Items (2026-07-25)
+
+Execution complete through D2. All 16 program PRs merged; closing pass run
+against prod as the single writer, verified end state: **35,570 sections / 45
+tickers / 39,964 items / 35,486 disclosure events** across 13 event types.
+Acceptance spot-checks: NVO risk_factors restored (3 sections), business TOC
+contamination 0/110 (was 93/97), concealment verdicts 5 → 2 after the
+mandatory-GAAP suppression stage.
+
+Closed by adjacent sessions since ratification: mobile-inbox doorway (#1044,
+merged), transcript period-duplication root cause with schema-enforced
+uniqueness (#1048, merged — supersedes the read-time dedup as the primary
+guard).
+
+## Open items
+
+| # | Item | Owner / next action |
+|---|---|---|
+| O1 | **D3 proactive operation** — new-accession trigger + weekly sweep. Code is unwritten pending the directive registration it must ship with. | **Owner: authorize the directive patch below**, then one build task |
+| O2 | **D4 surfaces** — Ask grounding → workspace strip → high-materiality feed chips (order ratified). Events exist; nothing consumes them yet. | Next build task; unblocked |
+| O3 | **3,269 `item_*` events unclassified** — P3 covered part of the 10-Q volume; the run is idempotent and skips classified rows. | One run: `python execution/classify_disclosure_specificity.py --tickers <all> --db-path <prod>` |
+| O4 | **WIX 6-K exhibits** — hint + status wired (D1.2); coverage honestly reads `source_missing/no_local_exhibits` until an exhibit is fetched. | Resolves on the segment 6-K pipeline's next run for WIX |
+| O5 | **FMP quarterly backfill partial** — free tier: GOOG 402 (permanent at this tier), daily 429 after LITE. Fetcher skips existing files, so re-runs resume. FPI annual refresh remains blocked on the **pending FMP Starter purchase**. | Owner (purchase); otherwise re-run `fetch_fmp_10q_json.py` on later days |
+| O6 | **Stale directive text** — `directives/navigation_ia.md` and `directives/llm_quota_scheduling.md` still say the Senior Partner Brief is "NOT YET MERGED"/"not yet built"; it merged 2026-07-24 (#1002) and has now run twice. | **Owner: authorize edit + commit** (directive-change gate); the fix is deleting the two stale passages |
+| O7 | **77 `decision_drafts` awaiting confirmation** — mechanism verified working; doorway now exists (#1044). | Owner triage in the mobile Inbox |
+| O8 | **Telegram delivery untested** (PIP DoD item 8) — every brief run used `--no-telegram`. | One supervised run without the flag |
+| O9 | **Thin-substrate watch items** (honest limits, grow with data): ABTONE residual fit n=48, CFO/CEO roster resolves on 25/548 calls, `guidance_withdrawn` = 2 events (coverage-gated by design). Stored transcript rows for the 11 stockanalysis/tickertrends files predate the D1.5 parsers — a re-pull of just those sources would lift their attribution. | Watch; optional targeted transcript re-pull |
+| O10 | **Stale-verdict cleanup session** (task_d01494ff) — the closing pass's P1 re-run superseded most stale concealment rows; confirm that session found nothing conflicting when it reports. | Verify on its completion |
+
+## Proposed directive patch for O1 (NOT applied — awaiting authorization)
+
+Addition to `directives/llm_quota_scheduling.md` (registration required for any
+new scheduled LLM job):
+
+> **disclosure_change_sweep** — weekly, Sat 14:00 PT (clear of the 04:00
+> pipeline, Sun 09:00 brief, and Sun ~10:30 eval rungs). Runs P0→P3 +
+> guidance/similarity/transcript detectors for any tracked ticker with a new
+> accession since the last sweep; per-item degrade on transient LLM failure
+> (defer + tally + retry next run), hard stops loud. Budget: reuses the
+> existing per-purpose budgets; no new purpose. Idempotent; safe to re-run.
+
+Plus a new-accession fast path: `ingest_filing_sections` already records new
+accessions; the trigger runs the same detector set for just that ticker,
+outside protected windows, deferring to the sweep when inside one.
+
