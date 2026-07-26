@@ -934,14 +934,109 @@ def render_holding_fragment(repo_root: Path, ticker: str) -> str:
     return "".join(
         [
             render_ticker_fragment(tcc),
+            _disclosure_change_strip(db_path, t),
             f'<div class="tcc-report-main">{_report_embed_section(t, tcc.report_date)}</div>',
             _tcc_drawer("ops", "Ops · refresh & data", ops_body),
             _COMBO_STYLE,
             _COMBO_SCRIPT,
             _TCC_DRAWER_STYLE,
+            _DISCLOSURE_STYLE,
             _TCC_DRAWER_SCRIPT,
         ]
     )
+
+
+def _disclosure_change_strip(db_path: Path, ticker: str) -> str:
+    """Compact, drift-framed disclosure panel with verbatim source receipts."""
+
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                """
+                SELECT event_type, fiscal_year, fiscal_period, canonical_id,
+                       subject, subject_label, source_doc_id, evidence_quote,
+                       materiality, verdict, interpretation_md
+                FROM disclosure_events
+                WHERE ticker = ? AND status != 'dismissed'
+                ORDER BY COALESCE(materiality, 0) DESC, created_at DESC, id DESC
+                LIMIT 4
+                """,
+                (ticker.upper(),),
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return (
+            '<section class="disclosure-strip k-well">'
+            "<h2>Disclosure drift</h2>"
+            '<p class="muted">Disclosure-change history is unavailable in this database.</p>'
+            "</section>"
+        )
+    if not rows:
+        return (
+            '<section class="disclosure-strip k-well">'
+            '<div class="disclosure-head"><h2>Disclosure drift</h2>'
+            '<span class="k-chip">relevant for weeks</span></div>'
+            '<p class="muted">No stored change events for this name. That is a coverage state, '
+            "not evidence that disclosures were unchanged.</p></section>"
+        )
+
+    out = [
+        '<section class="disclosure-strip k-well">',
+        '<div class="disclosure-head"><h2>Disclosure drift</h2>',
+        '<span class="k-chip">relevant for weeks</span></div>',
+        '<p class="sub">Longitudinal changes, not day-of alerts. Read the verdict with '
+        "the verbatim receipt; the event label alone has no direction.</p>",
+        '<div class="disclosure-rows">',
+    ]
+    for row in rows:
+        verdict = str(row["verdict"] or "unclassified")
+        tone = (
+            "bad"
+            if verdict == "concealment"
+            else "warn"
+            if verdict in {"substantive", "unclassified"}
+            else "ok"
+            if verdict == "maturity"
+            else ""
+        )
+        period = " ".join(
+            part
+            for part in (str(row["fiscal_year"] or ""), str(row["fiscal_period"] or ""))
+            if part
+        )
+        subject = str(row["subject_label"] or row["subject"] or "unnamed subject")
+        event_label = str(row["event_type"] or "").replace("_", " ")
+        concept = str(row["canonical_id"] or "").replace("_", " ")
+        receipt = " ".join(str(row["evidence_quote"] or "").split())
+        interpretation = str(row["interpretation_md"] or "").strip()
+        out.append('<article class="disclosure-row">')
+        out.append('<div class="disclosure-row-head">')
+        out.append(
+            f'<span class="k-pill{pill_tone_class(tone)}">{escape(verdict)}</span>'
+            f'<span class="k-chip k-chip-mono">{escape(period or "period unknown")}</span>'
+        )
+        out.append(
+            f"<strong>{escape(subject)}</strong>"
+            f'<span class="muted">{escape(event_label)} · {escape(concept or "cross-document")}</span>'
+        )
+        if row["source_doc_id"] is not None:
+            out.append(
+                f'<a class="k-btn k-btn-quiet k-btn-sm" href="/source/{int(row["source_doc_id"])}">'
+                "Source</a>"
+            )
+        out.append("</div>")
+        if receipt:
+            out.append(f'<p class="disclosure-receipt">“{escape(receipt)}”</p>')
+        if interpretation:
+            out.append(
+                f'<div class="disclosure-interpretation">{render_prose(interpretation)}</div>'
+            )
+        out.append("</article>")
+    out.append("</div></section>")
+    return "".join(out)
 
 
 def _tcc_drawer(drawer_id: str, title: str, body: str) -> str:
@@ -998,6 +1093,18 @@ _COMBO_STYLE = """<style>
 .cc-combo-none { color: var(--muted); cursor: default; }
 .cc-holding-right { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .cc-holding-hint { color: var(--muted); font-size: var(--fs-caption); }
+</style>"""
+
+_DISCLOSURE_STYLE = """<style>
+.disclosure-strip { margin: 10px 0; }
+.disclosure-head, .disclosure-row-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.disclosure-head { justify-content:space-between; }
+.disclosure-head h2 { margin:0; }
+.disclosure-rows { display:grid; gap:8px; margin-top:8px; }
+.disclosure-row { display:grid; gap:5px; padding-top:8px; border-top:1px solid var(--border); }
+.disclosure-row-head strong { margin-right:auto; }
+.disclosure-receipt, .disclosure-interpretation p { margin:0; }
+.disclosure-receipt { color:var(--fg); }
 </style>"""
 
 # Self-contained combobox wiring, re-run on every fragment inject (the shell's

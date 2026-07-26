@@ -3503,6 +3503,38 @@ def create_app(
             return ({"error": str(exc)}, 400)
         return result
 
+    @app.route("/api/decision-draft-groups/<int:draft_id>/confirm", methods=["POST", "OPTIONS"])
+    def decision_draft_group_confirm_api(draft_id: int):
+        """Confirm one tracker trade group as one aggregated Owner Decision."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from capture.decision_draft_actions import (
+            DraftActionError,
+            confirm_tracker_fill_group,
+        )
+
+        try:
+            result = confirm_tracker_fill_group(draft_id, db_path=db_path)
+        except DraftActionError as exc:
+            return ({"error": str(exc)}, 400)
+        return result
+
+    @app.route("/api/decision-draft-groups/<int:draft_id>/dismiss", methods=["POST", "OPTIONS"])
+    def decision_draft_group_dismiss_api(draft_id: int):
+        """Dismiss every pending fill in one tracker group without deleting evidence."""
+        if request.method == "OPTIONS":
+            return ("", 204)
+        from capture.decision_draft_actions import (
+            DraftActionError,
+            dismiss_tracker_fill_group,
+        )
+
+        try:
+            result = dismiss_tracker_fill_group(draft_id, db_path=db_path)
+        except DraftActionError as exc:
+            return ({"error": str(exc)}, 400)
+        return result
+
     @app.route("/api/senior-partner-brief/dismiss-item/<int:ping_id>", methods=["POST", "OPTIONS"])
     def senior_partner_brief_dismiss_item_api(ping_id: int):
         """Dismiss ONE governor-routed moment (calibration_finding/

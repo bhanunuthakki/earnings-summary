@@ -4,8 +4,9 @@ Layer-3 entrypoint for the P3 build (docs/design/disclosure_change_build_stack.m
 §P3). For each ticker: fetch its unclassified item_added/item_removed/
 item_reworded events, resolve the confidently-boilerplate and confidently-
 substantive extremes deterministically (filings.specificity), batch the
-ambiguous survivors into ONE LLM call per ticker (filings.boilerplate_triage),
-and persist verdict/confidence/interpretation_md back onto disclosure_events
+ambiguous survivors into one LLM call per ticker plus at most one missing-id
+recovery call (filings.boilerplate_triage), and persist
+verdict/confidence/interpretation_md back onto disclosure_events
 (filings.boilerplate_classify).
 
 A degraded or missing LLM verdict leaves the row `unclassified` — never a

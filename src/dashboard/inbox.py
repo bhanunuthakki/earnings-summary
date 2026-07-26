@@ -73,13 +73,27 @@ _LEDGER_KIND_LABELS: dict[str, str] = {
     "advisor_memo": ADVISOR_MEMO_TITLE,
 }
 
-_DEFAULT_KINDS: tuple[str, ...] = ("alert", "draft", "ledger", "note", "synthesis")
+_DEFAULT_KINDS: tuple[str, ...] = (
+    "alert",
+    "draft",
+    "disclosure",
+    "ledger",
+    "note",
+    "synthesis",
+)
 
 # Cross-kind dedupe survivor order: when near-identical bodies land in the
 # stream under different kinds (the advisor's memory-everywhere write puts one
 # memo line in the ledger AND the journal), keep the kind that carries the
 # most context on its card.
-_KIND_RICHNESS: dict[str, int] = {"alert": 4, "draft": 3, "synthesis": 2, "ledger": 1, "note": 0}
+_KIND_RICHNESS: dict[str, int] = {
+    "alert": 5,
+    "draft": 4,
+    "disclosure": 3,
+    "synthesis": 2,
+    "ledger": 1,
+    "note": 0,
+}
 
 # Humanized alert trigger labels for the card's kind chip — the raw enum
 # (earnings_tone, material_news, …) never reaches a user-facing label
@@ -126,6 +140,7 @@ class InboxItem:
     score_why: str = ""
     semantic_kind: str | None = None
     note_id: int | None = None
+    source_doc_id: int | None = None
 
 
 def _norm_body(text: str) -> str:
@@ -386,6 +401,57 @@ def collect_inbox(
                 )
             )
 
+    if "disclosure" in kinds:
+        try:
+            conn = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True)
+            conn.row_factory = sqlite3.Row
+            clauses = [
+                "status != 'dismissed'",
+                "materiality >= 0.8",
+                "TRIM(COALESCE(evidence_quote, '')) != ''",
+                "verdict NOT IN ('noise', 'mechanical', 'boilerplate_update')",
+            ]
+            params: list[object] = []
+            if ticker is not None:
+                clauses.append("ticker = ?")
+                params.append(ticker.upper())
+            rows = conn.execute(
+                f"""
+                SELECT ticker, event_type, subject, subject_label, evidence_quote,
+                       interpretation_md, source_doc_id, created_at
+                FROM disclosure_events
+                WHERE {" AND ".join(clauses)}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (*params, limit),
+            ).fetchall()
+            conn.close()
+        except sqlite3.Error:
+            rows = []
+        for row in rows:
+            when = _parse_artifact_dt(str(row["created_at"] or ""))
+            if when is None or not _in_window(when, windowed=True):
+                continue
+            subject = str(row["subject_label"] or row["subject"] or "Disclosure")
+            quote = " ".join(str(row["evidence_quote"] or "").split())
+            interpretation = " ".join(str(row["interpretation_md"] or "").split())
+            body = f"{subject}: “{quote}”"
+            if interpretation:
+                body += f" — {interpretation}"
+            items.append(
+                InboxItem(
+                    kind="disclosure",
+                    ticker=str(row["ticker"] or "").upper() or None,
+                    when=when,
+                    title="Disclosure drift",
+                    body=body,
+                    source_doc_id=(
+                        int(row["source_doc_id"]) if row["source_doc_id"] is not None else None
+                    ),
+                )
+            )
+
     if "synthesis" in kinds and ticker is None:
         # Portfolio-scope insight: the cross-portfolio synthesis memo's
         # structured sections, only while the lens output is fresh.
@@ -397,7 +463,7 @@ def collect_inbox(
     # one — an advisor memo's ledger entry and its journal-observation echo
     # carry the same line under different decorations (see ``_fuzzy_norm``),
     # and the old per-kind key rendered both. The survivor is the RICHEST
-    # kind (alert > draft > synthesis > ledger > note), newest on ties — so
+    # kind (alert > draft > disclosure > synthesis > ledger > note), newest on ties — so
     # within one kind this still keeps the newest of texts that repeat across
     # consecutive runs. Bodyless items (alert cards — their narrative lives
     # in evidence_json) pass through: alerts dedupe upstream on
@@ -745,6 +811,11 @@ def _render_card_footer(out: StringIO, it: InboxItem, *, compact: bool) -> None:
         parts.append(
             f'<a class="ix-foot-link" href="{_esc(article)}" target="_blank" '
             'rel="noopener noreferrer">article ↗</a>'
+        )
+
+    if it.kind == "disclosure" and it.source_doc_id is not None:
+        parts.append(
+            f'<a class="ix-foot-link" href="/source/{it.source_doc_id}">source receipt ↗</a>'
         )
 
     if parts:

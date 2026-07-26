@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -54,6 +55,83 @@ def test_empty_db_renders_empty_list(db_path: Path) -> None:
     assert 'class="dash-filters"' not in html
     # Complete HTML document
     assert "<!doctype html>" in html
+
+
+def test_feed_shows_only_high_materiality_disclosure_chips(db_path: Path) -> None:
+    conn = sqlite3.connect(str(db_path))
+    now = datetime.now(UTC).replace(tzinfo=None).isoformat()
+    base = (
+        "NU",
+        "item_reworded",
+        "10-Q",
+        2026,
+        "Q2",
+        2026,
+        "Q1",
+        "0001",
+        None,
+        "risk_factors",
+    )
+    conn.execute(
+        """
+        INSERT INTO disclosure_events
+        (ticker, event_type, form, fiscal_year, fiscal_period,
+         prior_fiscal_year, prior_fiscal_period, source_ref, source_doc_id,
+         canonical_id, subject, subject_label, prior_excerpt, current_excerpt,
+         evidence_quote, materiality, verdict, interpretation_md, confidence,
+         detector_version, status, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            *base,
+            "credit quality",
+            "Credit quality",
+            None,
+            None,
+            "Delinquency formation increased in the youngest vintages.",
+            0.92,
+            "substantive",
+            "More company-specific risk language.",
+            0.9,
+            "test_v1",
+            "new",
+            now,
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO disclosure_events
+        (ticker, event_type, form, fiscal_year, fiscal_period,
+         prior_fiscal_year, prior_fiscal_period, source_ref, source_doc_id,
+         canonical_id, subject, subject_label, prior_excerpt, current_excerpt,
+         evidence_quote, materiality, verdict, interpretation_md, confidence,
+         detector_version, status, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            *base,
+            "formatting",
+            "Formatting",
+            None,
+            None,
+            "Minor punctuation changed.",
+            0.20,
+            "noise",
+            "No substantive change.",
+            0.9,
+            "test_v1",
+            "new",
+            now,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    html = render_alert_feed(db_path=db_path)
+
+    assert "Disclosure drift" in html
+    assert "Delinquency formation increased in the youngest vintages." in html
+    assert "Minor punctuation changed." not in html
 
 
 def test_active_filters_render_as_removable_chips(db_path: Path) -> None:

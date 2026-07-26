@@ -29,12 +29,15 @@ Operational notes learned wiring it up (2026-07-25):
 
 from __future__ import annotations
 
+import importlib
 import logging
 import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, cast
+
+from log_redact import redact
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +57,18 @@ DEFAULT_TIMEOUT_SECONDS = 420
 
 
 class _CodexCaller(Protocol):
-    def __call__(self, prompt: str, *, model: str, timeout_seconds: int) -> object: ...
+    def __call__(self, prompt: str, *, model: str, timeout_seconds: int) -> _CodexResult: ...
+
+
+class _CodexUsage(Protocol):
+    input_tokens: int
+    cached_input_tokens: int
+    output_tokens: int
+
+
+class _CodexResult(Protocol):
+    text: str
+    usage: _CodexUsage
 
 
 def _load_wrapper() -> _CodexCaller:
@@ -63,9 +77,9 @@ def _load_wrapper() -> _CodexCaller:
         sys.path.insert(0, str(_SNIPPETS_DIR))
     # Resolved at RUNTIME from the machine's snippets dir (outside this repo),
     # so the type checker cannot see it — deliberate, not a missing dep.
-    from codex_cli import call_codex_with_usage  # type: ignore[import-not-found]
-
-    return cast("_CodexCaller", call_codex_with_usage)
+    module = importlib.import_module("codex_cli")
+    caller = module.call_codex_with_usage
+    return cast("_CodexCaller", caller)
 
 
 def codex_available() -> bool:
@@ -77,9 +91,9 @@ def codex_available() -> bool:
         log.info({"event": "codex_backend_unavailable", "reason": str(exc)[:200]})
         return False
     try:
-        import codex_cli  # type: ignore[import-not-found]
-
-        codex_cli._verify_setup_once()
+        module = importlib.import_module("codex_cli")
+        verify = module._verify_setup_once
+        verify()
     except Exception as exc:
         log.info({"event": "codex_backend_auth_unverified", "reason": str(exc)[:200]})
         return False
@@ -119,14 +133,21 @@ def call_codex_llm(
             ticker=ticker,
             scope=scope,
             run_id=run_id,
-            error=f"[codex] {type(exc).__name__}: {str(exc)[:400]}",
+            error=f"[codex] {type(exc).__name__}: {redact(exc)[:400]}",
             prompt=prompt,
         )
         raise
     elapsed_ms = int((time.monotonic() - t0) * 1000)
-    text = str(getattr(result, "text", "") or "").strip()
+    text = result.text.strip()
     from llm_call_ledger import sha256_text
 
+    meta: dict[str, object] = {
+        "usage": {
+            "input_tokens": result.usage.input_tokens,
+            "cache_read_input_tokens": result.usage.cached_input_tokens,
+            "output_tokens": result.usage.output_tokens,
+        }
+    }
     record_llm_call(
         started_at=started_at,
         elapsed_ms=elapsed_ms,
@@ -138,6 +159,7 @@ def call_codex_llm(
         scope=scope,
         run_id=run_id,
         response_text=text,
+        meta=meta,
         prompt=prompt,
     )
     if not text:

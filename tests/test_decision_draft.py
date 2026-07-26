@@ -28,8 +28,10 @@ from capture.decision_draft import (  # noqa: E402
 from capture.decision_draft_actions import (  # noqa: E402
     DraftActionError,
     confirm_draft,
+    confirm_tracker_fill_group,
     correct_draft,
     dismiss_draft,
+    dismiss_tracker_fill_group,
 )
 
 _BOOTSTRAP_DDL = """
@@ -306,6 +308,101 @@ def test_confirm_is_idempotent(db_path: Path) -> None:
     n = conn.execute("SELECT COUNT(*) FROM decisions WHERE ticker = 'NU'").fetchone()[0]
     conn.close()
     assert n == 1
+
+
+def _make_tracker_fill(
+    db_path: Path,
+    *,
+    external_id: str,
+    amount_usd: float,
+    key: str,
+) -> int:
+    return create_draft_row(
+        source_note_id=None,
+        source_channel="tracker",
+        source_external_id=external_id,
+        idempotency_key=key,
+        original_text="Tracker-detected buy fill: NU on 2026-07-24",
+        draft=DecisionDraft(
+            intent="executed_change",
+            proposed_ticker="NU",
+            proposed_action="buy",
+            proposed_amount_usd=amount_usd,
+            parse_confidence=1.0,
+        ),
+        status="awaiting_confirmation",
+        db_path=db_path,
+    )
+
+
+def test_confirm_tracker_fill_group_creates_one_aggregated_decision(db_path: Path) -> None:
+    _seed_roster(db_path, ["NU"])
+    first_id = _make_tracker_fill(
+        db_path, external_id="NU:2026-07-24:buy", amount_usd=100.0, key="tracker:a"
+    )
+    second_id = _make_tracker_fill(
+        db_path, external_id="NU:2026-07-24:buy", amount_usd=250.0, key="tracker:b"
+    )
+
+    result = confirm_tracker_fill_group(first_id, db_path=db_path)
+
+    conn = _conn(db_path)
+    decisions = conn.execute(
+        "SELECT id, size_usd FROM decisions WHERE ticker = 'NU' AND recommendation_kind = 'buy'"
+    ).fetchall()
+    linked = conn.execute(
+        "SELECT id, status, decision_id FROM decision_drafts WHERE id IN (?, ?) ORDER BY id",
+        (first_id, second_id),
+    ).fetchall()
+    conn.close()
+    assert len(decisions) == 1
+    assert decisions[0]["size_usd"] == 350.0
+    assert result["fill_count"] == 2
+    assert {row["status"] for row in linked} == {"confirmed"}
+    assert {row["decision_id"] for row in linked} == {decisions[0]["id"]}
+
+
+def test_confirm_tracker_fill_group_is_idempotent(db_path: Path) -> None:
+    _seed_roster(db_path, ["NU"])
+    first_id = _make_tracker_fill(
+        db_path, external_id="NU:2026-07-24:buy", amount_usd=100.0, key="tracker:c"
+    )
+    second_id = _make_tracker_fill(
+        db_path, external_id="NU:2026-07-24:buy", amount_usd=250.0, key="tracker:d"
+    )
+
+    first = confirm_tracker_fill_group(first_id, db_path=db_path)
+    second = confirm_tracker_fill_group(second_id, db_path=db_path)
+
+    assert second["receipt"] == "already_actioned"
+    assert second["decision_id"] == first["decision_id"]
+    conn = _conn(db_path)
+    count = conn.execute(
+        "SELECT COUNT(*) FROM decisions WHERE ticker = 'NU' AND recommendation_kind = 'buy'"
+    ).fetchone()[0]
+    conn.close()
+    assert count == 1
+
+
+def test_dismiss_tracker_fill_group_preserves_rows_without_decision(db_path: Path) -> None:
+    first_id = _make_tracker_fill(
+        db_path, external_id="NU:2026-07-24:buy", amount_usd=100.0, key="tracker:e"
+    )
+    second_id = _make_tracker_fill(
+        db_path, external_id="NU:2026-07-24:buy", amount_usd=250.0, key="tracker:f"
+    )
+
+    result = dismiss_tracker_fill_group(second_id, db_path=db_path)
+
+    conn = _conn(db_path)
+    rows = conn.execute(
+        "SELECT status, decision_id FROM decision_drafts WHERE id IN (?, ?)",
+        (first_id, second_id),
+    ).fetchall()
+    conn.close()
+    assert result["fill_count"] == 2
+    assert {row["status"] for row in rows} == {"dismissed"}
+    assert {row["decision_id"] for row in rows} == {None}
 
 
 def test_dismiss_never_creates_a_decision(db_path: Path) -> None:

@@ -6,6 +6,7 @@ Also covers §12.2's distinct loading/empty/failed/stale states."""
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -97,6 +98,51 @@ def test_mobile_section_labels_not_generated_distinctly(tmp_path: Path) -> None:
     db_path = _make_db(tmp_path)
     html = render_mobile_inbox(db_path)
     assert "Senior Partner Brief not generated yet." in html
+
+
+def test_mobile_groups_split_tracker_fills_into_one_review_card(tmp_path: Path) -> None:
+    db_path = _make_db(tmp_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE decision_drafts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_channel TEXT NOT NULL,
+            source_external_id TEXT,
+            original_text TEXT NOT NULL,
+            draft_json TEXT,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    for index, amount in enumerate((100.0, 250.0), start=1):
+        conn.execute(
+            "INSERT INTO decision_drafts "
+            "(source_channel, source_external_id, original_text, draft_json, status, created_at) "
+            "VALUES ('tracker', 'NU:2026-07-24:buy', ?, ?, 'awaiting_confirmation', ?)",
+            (
+                "Tracker-detected buy fill: NU on 2026-07-24",
+                json.dumps(
+                    {
+                        "intent": "executed_change",
+                        "proposed_ticker": "NU",
+                        "proposed_action": "buy",
+                        "proposed_amount_usd": amount,
+                    }
+                ),
+                f"2026-07-24T11:00:0{index}",
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+    html = render_mobile_inbox(db_path)
+
+    assert html.count("data-draft-group-id=") == 1
+    assert "2 split fills" in html
+    assert "$350" in html
+    assert "Confirm trade" in html
 
 
 def test_today_card_and_mobile_section_render_populated_artifact(tmp_path: Path) -> None:

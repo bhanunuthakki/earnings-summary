@@ -8,18 +8,17 @@
 """
 src/llm/cli.py
 --------------
-Claude Code CLI subprocess wiring + the public ``call_llm`` / ``call_llm_with_web``
-entry points + per-purpose budget enforcement.
+Governed subscription-LLM routing + the public ``call_llm`` /
+``call_llm_with_web`` entry points + per-purpose budget enforcement.
 
-Primary path: ``claude -p`` via subprocess. The CLI honors whichever auth is
-configured in the environment — ``ANTHROPIC_API_KEY`` for metered API billing,
-or ``claude auth login`` for a Pro/Max subscription.
+Primary path: the isolated Codex membership transport. Purpose-resolved
+Haiku/Sonnet/Opus-class pins map to Luna/Terra/Sol respectively. Operational
+Codex failures fall back to the Claude subscription transport and are ledgered
+as such; ``LLM_PRIMARY_SUBSCRIPTION_BACKEND=claude`` is the reversible rollback
+switch. Explicit provider-family model ids remain on their requested family.
 
-On any operational failure (timeout, non-zero exit, empty stdout, malformed
-JSON envelope, binary missing mid-run), the call is routed through the Gemini
-fallback in ``src/llm/fallback.py``. Setup-class errors (binary missing on
-first call) propagate without fallback — they need operator action, not
-papering over.
+``call_llm_with_web`` remains Claude-only: the Codex membership wrapper is
+intentionally answer-only with tools and web disabled.
 
 Second backend: ``src/llm/gemini_backend.py`` calls the Gemini Developer API
 directly (metered key) with the same call contract. ``call_llm`` routes a
@@ -27,8 +26,7 @@ purpose there when its resolved model is a Gemini model id — model-first
 dispatch, see directives/cheapest_model_routing.md — or when a caller forces
 ``backend="gemini"`` explicitly (the compare harness). A purpose only
 resolves to a Gemini model after the LLM-evals judges grade its output
-quality first; see directives/gemini_backend.md. Everything else runs
-Claude, exactly as before.
+quality first; see directives/gemini_backend.md.
 
 Public API:
     DEFAULT_MODEL, FAST_CLASSIFIER_MODEL — canonical model ids.
@@ -144,6 +142,13 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 # Sonnet would be overkill. Haiku 4.5 returns ~5x faster at materially the
 # same quality on narrowly-scoped JSON-output tasks.
 FAST_CLASSIFIER_MODEL = "claude-haiku-4-5-20251001"
+
+PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR = "LLM_PRIMARY_SUBSCRIPTION_BACKEND"
+_PRIMARY_CODEX = "codex"
+_PRIMARY_CLAUDE = "claude"
+_CODEX_FAST_MODEL = "gpt-5.6-luna"
+_CODEX_DEFAULT_MODEL = "gpt-5.6-terra"
+_CODEX_JUDGMENT_MODEL = "gpt-5.6-sol"
 
 # Per-purpose model selection. Every public generator below should resolve its
 # model via _model_for(purpose) so retuning one section doesn't require touching
@@ -745,6 +750,12 @@ LLM_MODELS: dict[str, str] = {
     # task (per-column duration_months/end_date/is_cumulative), same shape
     # and same tier as canonicalize_segments — Haiku tier.
     "segment_10q_period_disambiguate": FAST_CLASSIFIER_MODEL,
+    # Foreign-private-issuer 6-K segment/product/geography table extraction
+    # (compute.segment_quarterly_6k). The input is a keyword-windowed exhibit
+    # excerpt and the output is a narrow JSON breakdown contract, so the fast
+    # structured tier is sufficient. Route through the governed entrypoint;
+    # this purpose previously bypassed it via llm_client._call_claude.
+    "segment_6k_breakdown_extract": FAST_CLASSIFIER_MODEL,
     # The behavioral-rules distiller (tenet-2 Phase 4, docs/design/
     # tenet2_advisory_program.md §3.2 Tier C / §7 ruling 3): distils the
     # owner's graded decisions corpus into candidate behavioral rules with
@@ -899,6 +910,31 @@ class LLMSetupError(RuntimeError):
     ``pytest.raises(RuntimeError)`` call sites that caught the old bare
     RuntimeError keep working unchanged.
     """
+
+
+_CODEX_MODEL_BY_CLAUDE_TIER: dict[str, str] = {
+    "claude-haiku-4-5-20251001": _CODEX_FAST_MODEL,
+    "claude-haiku-4-5": _CODEX_FAST_MODEL,
+    "claude-sonnet-4-6": _CODEX_DEFAULT_MODEL,
+    "claude-sonnet-5": _CODEX_DEFAULT_MODEL,
+    "claude-opus-4-7": _CODEX_JUDGMENT_MODEL,
+    "claude-opus-4-8": _CODEX_JUDGMENT_MODEL,
+    "claude-fable-5": _CODEX_JUDGMENT_MODEL,
+}
+
+
+def _primary_subscription_backend() -> str:
+    value = os.environ.get(PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, _PRIMARY_CODEX).strip().lower()
+    if value not in {_PRIMARY_CODEX, _PRIMARY_CLAUDE}:
+        raise LLMSetupError(
+            f"{PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR} must be 'codex' or 'claude', got {value!r}"
+        )
+    return value
+
+
+def _codex_model_for(claude_model: str) -> str:
+    """Map the existing eval-gated Claude quality tier onto Codex's tier."""
+    return _CODEX_MODEL_BY_CLAUDE_TIER.get(claude_model, _CODEX_DEFAULT_MODEL)
 
 
 def is_hard_stop(exc: BaseException) -> bool:
@@ -1062,6 +1098,7 @@ def _call_claude(
     scope: str | None = None,
     run_id: str | None = None,
     force_budget_bypass: bool = False,
+    fallback_used: str | None = None,
 ) -> str:
     """
     Single-shot LLM call. Tries the Claude Code CLI first. On any operational
@@ -1128,6 +1165,7 @@ def _call_claude(
             scope=scope,
             run_id=run_id,
             error=f"[quota_blocked] {msg}",
+            fallback_used=fallback_used,
             prompt=prompt,
         )
         raise LLMQuotaExhausted(msg, blocked_until=blocked_until)
@@ -1192,6 +1230,7 @@ def _call_claude(
                 run_id=run_id,
                 response_text=text,
                 meta=meta,
+                fallback_used=fallback_used,
                 prompt=prompt,
             )
             # Opt-in full-text capture (off unless LLM_CAPTURE_DIR is set) — the
@@ -1249,6 +1288,7 @@ def _call_claude(
         scope=scope,
         run_id=run_id,
         error=error_msg,
+        fallback_used=fallback_used,
         prompt=prompt,
     )
     if last_info.kind == "usage_limit" and not fallback_available():
@@ -1342,9 +1382,10 @@ def call_llm(
             ledger row silently written to the wrong DB ("no such table:
             llm_calls"). None = current behavior (the process global).
     """
-    if backend not in (None, "claude", "gemini", "openrouter"):
+    if backend not in (None, "codex", "claude", "gemini", "openrouter"):
         raise ValueError(
-            f"Unknown LLM backend {backend!r}: expected 'claude', 'gemini', or 'openrouter'."
+            f"Unknown LLM backend {backend!r}: expected 'codex', 'claude', "
+            "'gemini', or 'openrouter'."
         )
 
     if db_path is not None:
@@ -1367,11 +1408,13 @@ def call_llm(
                 backend=backend,
             )
 
+    from llm.model_ladder import CLAUDE as _CLAUDE_FAMILY
     from llm.model_ladder import GEMINI as _GEMINI_FAMILY  # late — avoids import cycle
     from llm.model_ladder import OPENROUTER as _OPENROUTER_FAMILY
     from llm.model_ladder import family_of
 
     # Model-first: resolve the intended model (DB pin → LLM_MODELS → DEFAULT).
+    explicit_model = model is not None
     if model is None:
         if purpose is None:
             log.warning({"event": "llm_call_no_purpose", "fallback": DEFAULT_MODEL})
@@ -1403,8 +1446,49 @@ def call_llm(
             resolved_backend = "gemini"
         elif _family == _OPENROUTER_FAMILY:
             resolved_backend = "openrouter"
+        elif (
+            _family == _CLAUDE_FAMILY
+            and not explicit_model
+            and _primary_subscription_backend() == _PRIMARY_CODEX
+        ):
+            resolved_backend = "codex"
         else:
             resolved_backend = "claude"
+
+    codex_fell_back = False
+    if resolved_backend == "codex":
+        from llm.codex_backend import call_codex_llm
+
+        _enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
+        codex_model = (
+            resolved_model
+            if resolved_model.startswith("gpt-")
+            else _codex_model_for(resolved_model)
+        )
+        try:
+            return call_codex_llm(
+                prompt,
+                model=codex_model,
+                timeout_seconds=timeout_seconds or DEFAULT_TIMEOUT_SECONDS,
+                purpose=purpose,
+                ticker=ticker,
+                scope=scope,
+                run_id=run_id,
+            )
+        except (OSError, RuntimeError, ValueError) as codex_error:
+            if backend == "codex":
+                raise
+            from log_redact import redact
+
+            log.warning(
+                {
+                    "event": "codex_backend_failed_falling_back_to_claude",
+                    "purpose": purpose,
+                    "error": f"{type(codex_error).__name__}: {redact(codex_error)[:200]}",
+                }
+            )
+            resolved_backend = "claude"
+            codex_fell_back = True
 
     if resolved_backend == "gemini":
         from llm.gemini_backend import call_gemini  # late — avoids import cycle
@@ -1483,6 +1567,7 @@ def call_llm(
         scope=scope,
         run_id=run_id,
         force_budget_bypass=force_budget_bypass,
+        fallback_used="claude" if codex_fell_back else None,
     )
 
 

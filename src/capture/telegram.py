@@ -14,11 +14,17 @@ unit-tested; the HTTP calls are thin wrappers over ``urllib``.
 from __future__ import annotations
 
 import json
+import logging
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
+
+from log_redact import redact
+
+log = logging.getLogger(__name__)
 
 _API = "https://api.telegram.org/bot{token}/{method}"
 _FILE = "https://api.telegram.org/file/bot{token}/{file_path}"
@@ -160,10 +166,28 @@ def _request(url: str, *, data: dict[str, object] | None = None, timeout: float 
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             payload = cast("dict[str, object]", json.loads(resp.read().decode("utf-8")))
+    except urllib.error.HTTPError as exc:
+        description = f"HTTP {exc.code}: {exc.reason}"
+        try:
+            error_payload: object = json.loads(exc.read().decode("utf-8"))
+            if isinstance(error_payload, dict):
+                payload_map = cast("dict[str, object]", error_payload)
+                raw_description = payload_map.get("description")
+                if isinstance(raw_description, str) and raw_description.strip():
+                    description = raw_description.strip()
+        except (OSError, UnicodeError, ValueError) as parse_exc:
+            log.warning(
+                {
+                    "event": "telegram_error_body_unreadable",
+                    "status": exc.code,
+                    "error": f"{type(parse_exc).__name__}: {redact(parse_exc)}",
+                }
+            )
+        raise TelegramError(f"telegram api error: {redact(description)}") from None
     except (OSError, ValueError) as exc:
-        raise TelegramError(f"telegram request failed: {exc}") from exc
+        raise TelegramError(f"telegram request failed: {redact(exc)}") from None
     if not payload.get("ok"):
-        raise TelegramError(f"telegram api error: {payload.get('description')}")
+        raise TelegramError(f"telegram api error: {redact(payload.get('description'))}")
     return payload.get("result")
 
 

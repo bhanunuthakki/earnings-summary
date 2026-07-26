@@ -14,21 +14,25 @@ from llm_client import call_llm
 response = call_llm(prompt, purpose="bear_case")
 ```
 
-`call_llm(prompt, *, purpose=None, model=None, timeout_seconds=None)` lives in
-`src/llm_client.py`. It:
+`call_llm(prompt, *, purpose=None, model=None, timeout_seconds=None)` is
+implemented in `src/llm/cli.py` and re-exported by `src/llm_client.py`. It:
 
-1. Resolves `purpose` to a Claude model id via `LLM_MODELS` (or uses an
-   explicit `model` arg as escape hatch).
-2. Calls the Claude Code CLI subprocess. The CLI honors whatever auth is
-   configured in the environment — `ANTHROPIC_API_KEY` for metered API
-   billing, or `claude auth login` for subscription billing — operator's
-   choice.
-3. On any operational failure (timeout / non-zero exit / empty stdout / binary
-   missing mid-run), **automatically** falls back to Gemini Flash if a
-   `GEMINI_API_KEY` is configured. No per-call wiring needed.
-4. Setup errors (`claude` binary missing on first call) raise loudly without
-   engaging the fallback — those are operator problems, not retry-able
-   failures.
+1. Resolves `purpose` to the existing eval-gated quality tier in `LLM_MODELS`
+   (or uses an explicit `model` arg as an escape hatch).
+2. For normal purpose-resolved traffic, calls the isolated Codex membership
+   transport first: Haiku-class purposes map to `gpt-5.6-luna`,
+   Sonnet-class purposes to `gpt-5.6-terra`, and Opus/Fable-class purposes to
+   `gpt-5.6-sol`.
+3. On an operational Codex failure, falls back to the Claude subscription
+   transport and records `fallback_used='claude'`. The existing Claude
+   operational fallback remains available after that where configured.
+4. Explicit provider-family requests remain explicit: a caller passing a
+   Claude, Gemini, or OpenRouter model id routes to that family rather than
+   being silently translated.
+5. `LLM_PRIMARY_SUBSCRIPTION_BACKEND=claude` is the reversible rollback
+   switch. The production default is `codex`.
+6. `call_llm_with_web` remains Claude-only because the membership Codex
+   wrapper is intentionally answer-only with web and tools disabled.
 
 ## Hard rules
 
@@ -43,8 +47,8 @@ response = call_llm(prompt, purpose="bear_case")
    `model="claude-..."` ad-hoc at call sites. If a section needs a different
    model, add or update its entry in `LLM_MODELS` so the choice is reviewable.
 4. **No `genai.GenerativeModel(...)` retries, no parallel `_try_*` helpers.**
-   The Claude→Gemini cascade lives in `_call_claude` and is the only retry
-   logic. Single source of truth.
+   Ordered transport fallback lives in `call_llm` / `_call_claude` and is the
+   only retry logic. Single source of truth.
 
 ## Adding an LLM-backed section
 
@@ -64,10 +68,12 @@ response = call_llm(prompt, purpose="bear_case")
 
 ## Failure modes you don't have to handle
 
-- Claude CLI missing → `_verify_setup_once` raises with install instructions.
-- Claude CLI timeout / empty output → automatic Gemini fallback if key set.
-- Both Claude and Gemini fail → `_try_gemini_fallback` re-raises the original
-  Claude error chained with the Gemini error so both surface together.
+- Codex membership transport unavailable → a structured warning and Claude
+  fallback, with both attempts separately ledgered.
+- Claude CLI timeout / empty output after Codex fallback → the existing
+  configured fallback policy applies.
+- Explicit/forced backend failure → raises; forced-family comparisons never
+  silently switch contestants.
 
 ## Failure modes you DO have to handle
 

@@ -104,7 +104,8 @@ from compute.segment_crosstabs_llm import (
     _parse_decimal,
     _parse_period_end,
 )
-from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
+from llm.cli import FAST_CLASSIFIER_MODEL, call_llm
+from llm_client import JSON_FENCE_RE
 from models.facts import FiscalPeriodType, SegmentDimension, Unit
 from pipeline.sec_6k_fetch import (
     fetch_6k_exhibit_text,
@@ -116,6 +117,7 @@ from pipeline.segment_quarterly_coverage import record_coverage
 from table_extractors.period_axis import NominalQuarter, expected_period_ends
 
 EXTRACTOR_ID = "segment_quarterly_6k_v1"
+LLM_PURPOSE = "segment_6k_breakdown_extract"
 
 # Per-ticker classification from the Phase-3 spike (module docstring). Only
 # "supported" tickers ever trigger a network fetch -- everything else either
@@ -348,7 +350,13 @@ def extract_for_ticker(
 
     start_dt = datetime.now(UTC)
     t0 = time.perf_counter()
-    breakdowns = _ask_claude(ticker, year, quarter, relevant_text)
+    breakdowns = _ask_llm(
+        ticker,
+        year,
+        quarter,
+        relevant_text,
+        db_path=_connection_db_path(conn),
+    )
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
     end_dt = datetime.now(UTC)
 
@@ -483,9 +491,28 @@ If the text has no such breakdown at all, return {{"breakdowns": []}}.
 \"\"\""""
 
 
-def _ask_claude(ticker: str, year: int, quarter: str, text: str) -> list[SixKBreakdown]:
+def _connection_db_path(conn: sqlite3.Connection) -> Path | None:
+    row = conn.execute("PRAGMA database_list").fetchone()
+    if row is None or len(row) < 3 or not row[2]:
+        return None
+    return Path(str(row[2]))
+
+
+def _ask_llm(
+    ticker: str,
+    year: int,
+    quarter: str,
+    text: str,
+    *,
+    db_path: Path | None,
+) -> list[SixKBreakdown]:
     prompt = _build_prompt(ticker, year, quarter, text)
-    raw = _call_claude(prompt, model=FAST_CLASSIFIER_MODEL).strip()
+    raw = call_llm(
+        prompt,
+        purpose=LLM_PURPOSE,
+        ticker=ticker,
+        db_path=db_path,
+    ).strip()
     if raw.startswith("```"):
         raw = JSON_FENCE_RE.sub("", raw).strip()
     try:

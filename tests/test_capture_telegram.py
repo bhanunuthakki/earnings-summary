@@ -2,11 +2,32 @@
 
 from __future__ import annotations
 
+import io
+import urllib.error
 from pathlib import Path
 
 import pytest
 
 from capture import telegram, token_store
+
+
+def test_http_error_surfaces_api_description_without_leaking_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> object:
+        raise urllib.error.HTTPError(
+            "https://api.telegram.org/botSECRET/sendMessage",
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(b'{"ok":false,"description":"Bad Request: chat not found"}'),
+        )
+
+    monkeypatch.setattr(telegram.urllib.request, "urlopen", fail)
+    with pytest.raises(telegram.TelegramError) as caught:
+        telegram.send_message("SECRET", 123, "hello")
+    assert "chat not found" in str(caught.value)
+    assert "SECRET" not in str(caught.value)
 
 
 def test_parse_text_update() -> None:

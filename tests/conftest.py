@@ -29,6 +29,10 @@ import pytest
 # monkeypatch (see test_fmp_tier_ladder) and are unaffected; setdefault (not a
 # hard write) means an explicitly-exported FMP_TIER still wins.
 os.environ.setdefault("FMP_TIER", "basic")
+# Production is Codex-first. Unit tests pin the reversible Claude mode so
+# legacy tests never launch a real membership subprocess; dedicated routing
+# tests opt back into Codex and patch the transport seam.
+os.environ.setdefault("LLM_PRIMARY_SUBSCRIPTION_BACKEND", "claude")
 
 
 @pytest.fixture(autouse=True)

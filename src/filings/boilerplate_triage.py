@@ -6,7 +6,9 @@ call → parse → degrade-honestly structure, same batching discipline:
 
 * ONE batched call per ticker over every item that survives deterministic
   specificity scoring (``filings.specificity``) — the confidently-boilerplate
-  and confidently-substantive extremes never reach here.
+  and confidently-substantive extremes never reach here. If a structurally
+  valid response omits ids, one bounded recovery call contains only those
+  omitted candidates.
 * The prompt carries event id + event type + heading + a DIFF HUNK ONLY —
   never a whole item body, section, or document. For ``item_reworded``
   events the hunk is already reduced to just the changed spans
@@ -107,13 +109,14 @@ def triage_events(
     *,
     db_path: Path | str | None = None,
 ) -> TriageOutcome:
-    """ONE batched call over diff hunks for this ticker's ambiguous survivors.
+    """Batched triage over this ticker's ambiguous survivors.
 
     Raises whatever ``call_llm``/``call_llm_structured`` raises when it is a
     hard stop (budget cap / missing CLI, per ``is_hard_stop``) — those must
     propagate so the caller fails the run loudly rather than mistaking a
-    setup problem for a triage miss. Every other failure degrades to
-    ``TriageOutcome(degraded=True)``.
+    setup problem for a triage miss. Every other initial-call failure degrades
+    to ``TriageOutcome(degraded=True)``. A partial valid response gets one
+    recovery call for missing ids; any ids still missing remain unclassified.
     """
     if not candidates:
         return TriageOutcome(ticker=ticker)
@@ -143,28 +146,31 @@ def triage_events(
             degrade_reason=f"{type(exc).__name__}: {str(exc)[:300]}",
         )
 
-    verdicts: dict[int, ItemVerdict] = {}
-    dropped = 0
-    for key, raw in cast("dict[str, object]", decoded).items():
-        try:
-            event_id = int(key)
-        except (TypeError, ValueError):
-            dropped += 1
-            continue
-        if not isinstance(raw, dict):
-            dropped += 1
-            continue
-        row = cast("dict[str, object]", raw)
-        try:
-            verdicts[event_id] = ItemVerdict(
-                event_id=event_id,
-                verdict=BoilerplateVerdict(str(row.get("verdict"))),
-                confidence=float(cast("float", row.get("confidence", 0.0))),
-                rationale=str(row.get("rationale") or "")[:300],
-            )
-        except (ValueError, TypeError):
-            dropped += 1
-            continue
+    def _parse_verdicts(payload: object) -> tuple[dict[int, ItemVerdict], int]:
+        parsed: dict[int, ItemVerdict] = {}
+        dropped_rows = 0
+        for key, raw in cast("dict[str, object]", payload).items():
+            try:
+                event_id = int(key)
+            except (TypeError, ValueError):
+                dropped_rows += 1
+                continue
+            if not isinstance(raw, dict):
+                dropped_rows += 1
+                continue
+            row = cast("dict[str, object]", raw)
+            try:
+                parsed[event_id] = ItemVerdict(
+                    event_id=event_id,
+                    verdict=BoilerplateVerdict(str(row.get("verdict"))),
+                    confidence=float(cast("float", row.get("confidence", 0.0))),
+                    rationale=str(row.get("rationale") or "")[:300],
+                )
+            except (ValueError, TypeError):
+                dropped_rows += 1
+        return parsed, dropped_rows
+
+    verdicts, dropped = _parse_verdicts(decoded)
     if dropped:
         log.warning(
             {"event": "boilerplate_triage_rows_dropped", "ticker": ticker, "count": dropped}
@@ -179,4 +185,44 @@ def triage_events(
                 "missing": sorted(missing),
             }
         )
+        missing_candidates = [candidate for candidate in candidates if candidate[0] in missing]
+        try:
+            recovery_decoded = call_llm_structured(
+                _build_prompt(ticker, missing_candidates),
+                purpose=TRIAGE_PURPOSE,
+                ticker=ticker,
+                expect="object",
+                db_path=db_path,
+            )
+        except Exception as exc:
+            if is_hard_stop(exc):
+                raise
+            log.error(
+                {
+                    "event": "boilerplate_triage_recovery_failed",
+                    "ticker": ticker,
+                    "n_candidates": len(missing_candidates),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+        else:
+            recovered, recovery_dropped = _parse_verdicts(recovery_decoded)
+            verdicts.update(recovered)
+            if recovery_dropped:
+                log.warning(
+                    {
+                        "event": "boilerplate_triage_recovery_rows_dropped",
+                        "ticker": ticker,
+                        "count": recovery_dropped,
+                    }
+                )
+            still_missing = expected_ids - verdicts.keys()
+            if still_missing:
+                log.warning(
+                    {
+                        "event": "boilerplate_triage_recovery_missing_verdicts",
+                        "ticker": ticker,
+                        "missing": sorted(still_missing),
+                    }
+                )
     return TriageOutcome(ticker=ticker, verdicts=verdicts)
