@@ -1923,7 +1923,7 @@ Diagram rules:
 - Width: keep every line <= 78 characters. Height: aim for 8-16 lines total. The block must look balanced when rendered in a fixed-width font.
 - Use ONLY: ┌ ─ ┐ │ └ ┘ ├ ┤ ┬ ┴ ┼ → ← ↑ ↓ plus ASCII letters, digits, spaces, common punctuation. No emoji, no Markdown bold, no HTML.
 - Anchor the labels in concrete facts from the inputs above. If a fact isn't in the inputs, leave the label generic rather than invent.
-- Do NOT escape characters inside the JSON string except for required \\n (newlines between diagram rows) and \\". The renderer interprets the string as-is in a code fence.
+- Do NOT escape characters inside the JSON string except for required \\n (newlines between diagram rows) and ". The renderer interprets the string as-is in a code fence.
 
 Caption rules:
 - Plain English. Reference the platform's distinctive mechanism (network effect, vertical integration, data flywheel, regulatory moat, etc.) only if the inputs actually support it.
@@ -2021,6 +2021,28 @@ VALUATION_MULTIPLE_CHOICES: tuple[str, ...] = (
     "EV/FCF",
 )
 
+# P0 prompt-registry migration (llm_quality_program_2026_07.md). The f-string
+# EXPRESSIONS (sector-or-?, the .strip()[:N] truncations) are pre-computed at the
+# call site into named slots; surrounding text untouched. Byte identity is gated
+# in tests/test_prompt_registry_migrations.py.
+VALUATION_BASIS_TEMPLATE = register(
+    PromptTemplate(
+        template_id="valuation_basis.pick",
+        body='You are a senior buy-side analyst picking THE SINGLE multiple\nthat best frames {ticker} for an investment memo. Not 2-3 multiples. ONE.\nThe reader will see this number prominently on the report\'s Valuation tab;\nyour pick must answer the question "is this stock rich or cheap?" in the\nlens that\'s most diagnostic for THIS specific business.\n\nTICKER: {ticker}\nSECTOR / INDUSTRY: {sector_label} / {industry_label}\n\nTHESIS (the analyst\'s investment case):\n"""\n{thesis_block}\n"""\n\nFINANCIAL PROFILE (recent quarterly + TTM shape):\n"""\n{financial_profile_block}\n"""\n\nAVAILABLE ANALYST ESTIMATES (use to know which NTM multiples are computable):\n"""\n{available_estimates_block}\n"""\n\nPICK FROM EXACTLY THESE OPTIONS (verbatim string match):\n{choices_block}\n\nSelection guidance:\n- Banks / fintech-with-balance-sheet (NU, MELI\'s credit book, SOFI): P/B or P/TBV is the canonical lens. P/E only if earnings power is the bet.\n- SaaS / high-growth software with negative or thin GAAP earnings: EV/NTM Revenue, EV/LTM Revenue as fallback.\n- Profitable platforms / GARP (GOOG, META, NOW at scale): EV/NTM EBITDA or P/E (NTM) when consensus EBITDA / EPS is available.\n- Capital-intensive / industrial / commodity (BHP, FCX, CGEH): EV/LTM EBITDA — through-cycle.\n- FCF-thesis names (mature compounders, royalty/lease businesses): P/FCF or EV/FCF.\n- If the thesis is explicitly about FCF inflection or capex moderation, prefer the FCF multiples regardless of sector default.\n- Only pick NTM multiples when the AVAILABLE ANALYST ESTIMATES block lists the relevant NTM line.\n- Note: choosing P/E (NTM) additionally surfaces a PEG ratio (forward P/E divided by forward EPS growth) on the Valuation tab — the diagnostic lens when the thesis is about earnings compounding and "cheap or rich vs growth" is the question. PEG is auto-omitted for every other multiple and for unprofitable / negative-growth names, so weigh it as a point in P/E (NTM)\'s favor only when forward EPS growth is genuinely the bet.\n\n{NUMBER_FORMATTING_BLOCK}\n\nReturn ONLY a JSON object (no markdown fence, no prose):\n\n{{\n  "multiple": "<one of the options above, exact string>",\n  "rationale": "1-2 sentence why THIS multiple is the diagnostic lens for THIS ticker\'s thesis. Reference the specific thesis pillar or business-model mechanic that makes it the right pick. Generic \'standard SaaS lens\' earns a rewrite.",\n  "target_band": "Optional 1-sentence qualitative read of where the multiple SHOULD trade (e.g. \'historical 10-15x range; deserves the upper half if margin expansion sustains\', or \'currently in a re-rating window — base-case 4-6x P/TBV\'). Pass empty string if no view.",\n  "notes": "Optional 1-line caveat, e.g. \'NTM not available, fell back to LTM\' or \'historical P/B distorted by 2022 IPO multiple compression\'. Empty string if none."\n}}\n',
+        variables=(
+            "ticker",
+            "sector_label",
+            "industry_label",
+            "thesis_block",
+            "financial_profile_block",
+            "available_estimates_block",
+            "choices_block",
+            "NUMBER_FORMATTING_BLOCK",
+        ),
+        description="Pick the ONE valuation multiple that frames this business",
+    )
+)
+
 
 def generate_valuation_basis(
     ticker: str,
@@ -2049,54 +2071,16 @@ def generate_valuation_basis(
       estimates are listed as available.
     """
     choices_block = "\n".join(f"- {m}" for m in VALUATION_MULTIPLE_CHOICES)
-    prompt = f"""You are a senior buy-side analyst picking THE SINGLE multiple
-that best frames {ticker} for an investment memo. Not 2-3 multiples. ONE.
-The reader will see this number prominently on the report's Valuation tab;
-your pick must answer the question "is this stock rich or cheap?" in the
-lens that's most diagnostic for THIS specific business.
-
-TICKER: {ticker}
-SECTOR / INDUSTRY: {sector or "?"} / {industry or "?"}
-
-THESIS (the analyst's investment case):
-\"\"\"
-{thesis_text.strip()[:2000] or "(no thesis on file)"}
-\"\"\"
-
-FINANCIAL PROFILE (recent quarterly + TTM shape):
-\"\"\"
-{financial_profile_md.strip()[:2500]}
-\"\"\"
-
-AVAILABLE ANALYST ESTIMATES (use to know which NTM multiples are computable):
-\"\"\"
-{available_estimates_md.strip()[:1200]}
-\"\"\"
-
-PICK FROM EXACTLY THESE OPTIONS (verbatim string match):
-{choices_block}
-
-Selection guidance:
-- Banks / fintech-with-balance-sheet (NU, MELI's credit book, SOFI): P/B or P/TBV is the canonical lens. P/E only if earnings power is the bet.
-- SaaS / high-growth software with negative or thin GAAP earnings: EV/NTM Revenue, EV/LTM Revenue as fallback.
-- Profitable platforms / GARP (GOOG, META, NOW at scale): EV/NTM EBITDA or P/E (NTM) when consensus EBITDA / EPS is available.
-- Capital-intensive / industrial / commodity (BHP, FCX, CGEH): EV/LTM EBITDA — through-cycle.
-- FCF-thesis names (mature compounders, royalty/lease businesses): P/FCF or EV/FCF.
-- If the thesis is explicitly about FCF inflection or capex moderation, prefer the FCF multiples regardless of sector default.
-- Only pick NTM multiples when the AVAILABLE ANALYST ESTIMATES block lists the relevant NTM line.
-- Note: choosing P/E (NTM) additionally surfaces a PEG ratio (forward P/E divided by forward EPS growth) on the Valuation tab — the diagnostic lens when the thesis is about earnings compounding and "cheap or rich vs growth" is the question. PEG is auto-omitted for every other multiple and for unprofitable / negative-growth names, so weigh it as a point in P/E (NTM)'s favor only when forward EPS growth is genuinely the bet.
-
-{NUMBER_FORMATTING_BLOCK}
-
-Return ONLY a JSON object (no markdown fence, no prose):
-
-{{
-  "multiple": "<one of the options above, exact string>",
-  "rationale": "1-2 sentence why THIS multiple is the diagnostic lens for THIS ticker's thesis. Reference the specific thesis pillar or business-model mechanic that makes it the right pick. Generic 'standard SaaS lens' earns a rewrite.",
-  "target_band": "Optional 1-sentence qualitative read of where the multiple SHOULD trade (e.g. 'historical 10-15x range; deserves the upper half if margin expansion sustains', or 'currently in a re-rating window — base-case 4-6x P/TBV'). Pass empty string if no view.",
-  "notes": "Optional 1-line caveat, e.g. 'NTM not available, fell back to LTM' or 'historical P/B distorted by 2022 IPO multiple compression'. Empty string if none."
-}}
-"""
+    prompt = VALUATION_BASIS_TEMPLATE.render(
+        ticker=ticker,
+        sector_label=sector or "?",
+        industry_label=industry or "?",
+        thesis_block=thesis_text.strip()[:2000] or "(no thesis on file)",
+        financial_profile_block=financial_profile_md.strip()[:2500],
+        available_estimates_block=available_estimates_md.strip()[:1200],
+        choices_block=choices_block,
+        NUMBER_FORMATTING_BLOCK=NUMBER_FORMATTING_BLOCK,
+    )
     try:
         payload = call_llm_structured(
             prompt, purpose="valuation_basis", ticker=ticker, expect="object"

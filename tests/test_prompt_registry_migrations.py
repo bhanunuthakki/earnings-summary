@@ -196,3 +196,129 @@ def test_migrated_templates_are_registered() -> None:
         t = REGISTRY[tid]
         assert t.variables
         assert t.render(**{v: "x" for v in t.variables})
+
+
+# --------------------------------------------------------------------------
+# valuation_basis — migrated with pre-computed expression slots
+# --------------------------------------------------------------------------
+
+
+def _legacy_valuation_basis(
+    ticker: str,
+    sector: str | None,
+    industry: str | None,
+    thesis_text: str,
+    financial_profile_md: str,
+    available_estimates_md: str,
+    choices_block: str,
+) -> str:
+    return f"""You are a senior buy-side analyst picking THE SINGLE multiple
+that best frames {ticker} for an investment memo. Not 2-3 multiples. ONE.
+The reader will see this number prominently on the report's Valuation tab;
+your pick must answer the question "is this stock rich or cheap?" in the
+lens that's most diagnostic for THIS specific business.
+
+TICKER: {ticker}
+SECTOR / INDUSTRY: {sector or "?"} / {industry or "?"}
+
+THESIS (the analyst's investment case):
+\"\"\"
+{thesis_text.strip()[:2000] or "(no thesis on file)"}
+\"\"\"
+
+FINANCIAL PROFILE (recent quarterly + TTM shape):
+\"\"\"
+{financial_profile_md.strip()[:2500]}
+\"\"\"
+
+AVAILABLE ANALYST ESTIMATES (use to know which NTM multiples are computable):
+\"\"\"
+{available_estimates_md.strip()[:1200]}
+\"\"\"
+
+PICK FROM EXACTLY THESE OPTIONS (verbatim string match):
+{choices_block}
+
+Selection guidance:
+- Banks / fintech-with-balance-sheet (NU, MELI's credit book, SOFI): P/B or P/TBV is the canonical lens. P/E only if earnings power is the bet.
+- SaaS / high-growth software with negative or thin GAAP earnings: EV/NTM Revenue, EV/LTM Revenue as fallback.
+- Profitable platforms / GARP (GOOG, META, NOW at scale): EV/NTM EBITDA or P/E (NTM) when consensus EBITDA / EPS is available.
+- Capital-intensive / industrial / commodity (BHP, FCX, CGEH): EV/LTM EBITDA — through-cycle.
+- FCF-thesis names (mature compounders, royalty/lease businesses): P/FCF or EV/FCF.
+- If the thesis is explicitly about FCF inflection or capex moderation, prefer the FCF multiples regardless of sector default.
+- Only pick NTM multiples when the AVAILABLE ANALYST ESTIMATES block lists the relevant NTM line.
+- Note: choosing P/E (NTM) additionally surfaces a PEG ratio (forward P/E divided by forward EPS growth) on the Valuation tab — the diagnostic lens when the thesis is about earnings compounding and "cheap or rich vs growth" is the question. PEG is auto-omitted for every other multiple and for unprofitable / negative-growth names, so weigh it as a point in P/E (NTM)'s favor only when forward EPS growth is genuinely the bet.
+
+{NUMBER_FORMATTING_BLOCK}
+
+Return ONLY a JSON object (no markdown fence, no prose):
+
+{{
+  "multiple": "<one of the options above, exact string>",
+  "rationale": "1-2 sentence why THIS multiple is the diagnostic lens for THIS ticker's thesis. Reference the specific thesis pillar or business-model mechanic that makes it the right pick. Generic 'standard SaaS lens' earns a rewrite.",
+  "target_band": "Optional 1-sentence qualitative read of where the multiple SHOULD trade (e.g. 'historical 10-15x range; deserves the upper half if margin expansion sustains', or 'currently in a re-rating window — base-case 4-6x P/TBV'). Pass empty string if no view.",
+  "notes": "Optional 1-line caveat, e.g. 'NTM not available, fell back to LTM' or 'historical P/B distorted by 2022 IPO multiple compression'. Empty string if none."
+}}
+"""
+
+
+@pytest.mark.parametrize(
+    ("sector", "industry", "thesis"),
+    [
+        ("Financials", "Banks", "FCF inflection thesis"),
+        (None, None, ""),  # the or-"?" and or-"(no thesis on file)" branches
+    ],
+)
+def test_valuation_basis_byte_identity(
+    sector: str | None, industry: str | None, thesis: str
+) -> None:
+    from llm_client import VALUATION_BASIS_TEMPLATE, VALUATION_MULTIPLE_CHOICES
+
+    choices_block = "\n".join(f"- {m}" for m in VALUATION_MULTIPLE_CHOICES)
+    fin, est = "  rev 1.2B  ", "  EPS NTM 3.10  "
+    rendered = VALUATION_BASIS_TEMPLATE.render(
+        ticker="NU",
+        sector_label=sector or "?",
+        industry_label=industry or "?",
+        thesis_block=thesis.strip()[:2000] or "(no thesis on file)",
+        financial_profile_block=fin.strip()[:2500],
+        available_estimates_block=est.strip()[:1200],
+        choices_block=choices_block,
+        NUMBER_FORMATTING_BLOCK=NUMBER_FORMATTING_BLOCK,
+    )
+    assert rendered == _legacy_valuation_basis(
+        "NU", sector, industry, thesis, fin, est, choices_block
+    )
+    assert rendered.template_id == "valuation_basis.pick"
+
+
+def test_valuation_basis_matches_real_production_captures() -> None:
+    """The gate a source-text migration can silently fail: Python ESCAPES.
+
+    The body was lifted from source, where the author wrote \\" to embed triple
+    quotes inside an f-string. Taken literally, the template stopped matching
+    what production actually sent — invisible to a self-consistent byte test,
+    caught immediately by replaying real captures. Skips when the corpus is
+    absent (CI has no capture dir)."""
+    import pathlib
+
+    import llm_client  # noqa: F401  (registers)
+    from evals.sampler import load_frame
+    from llm.prompt_registry import REGISTRY
+
+    cap = pathlib.Path(__file__).resolve().parents[1] / "data" / "llm_capture"
+    if not cap.exists():
+        pytest.skip("no capture corpus available")
+    frame = load_frame(sorted(cap.glob("capture_*.jsonl")), "valuation_basis")
+    if not frame:
+        pytest.skip("no valuation_basis captures")
+    template = REGISTRY["valuation_basis.pick"]
+    head = template.body.split("{ticker}")[0]
+    for rec in frame.values():
+        assert rec.prompt.startswith(head)
+        # every long literal segment of the template must appear verbatim
+        import re as _re
+
+        for seg in _re.split(r"\{[a-zA-Z_]+\}", template.body):
+            if len(seg.strip()) > 40:
+                assert seg in rec.prompt, f"template drifted from production: {seg[:60]!r}"

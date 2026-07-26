@@ -53,6 +53,7 @@ CAPTURE_DENYLIST: frozenset[str] = frozenset(
         "model_frontier_research",
         "query_criteria_derive",
         "prompt_variant_propose",
+        "prompt_reflect_rewrite",
     }
 )
 
