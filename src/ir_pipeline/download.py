@@ -7,7 +7,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from ir_pipeline._net import ensure_safe_public_url
+from ir_pipeline._net import GuardedHTTPRedirectHandler, ensure_safe_public_url
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
@@ -38,7 +38,8 @@ def download_spreadsheet(url: str, repo_root: Path, ticker: str) -> Path:
     dest_dir = repo_root / "data" / "ir_spreadsheets" / ticker.upper()
     dest_dir.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(url, headers={"User-Agent": _UA})
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    opener = urllib.request.build_opener(GuardedHTTPRedirectHandler())
+    with opener.open(req, timeout=120) as resp:
         data = resp.read()
         cd = resp.headers.get("Content-Disposition", "")
         name = _filename_from_content_disposition(cd, f"{ticker.upper()}_ir_spreadsheet.xlsx")

@@ -69,6 +69,15 @@ class LlmCallRecord:
     span_id: str | None = None
     parent_span_id: str | None = None
     stage: str | None = None
+    # Transport provenance (migration 0210).  These are intentionally nullable
+    # for historical rows and third-party scripts that have not yet moved to
+    # the governed entrypoint; new governed calls always populate them.
+    provider: str | None = None
+    transport: str | None = None
+    attempts: int | None = None
+    retries: int | None = None
+    outcome: str | None = None
+    failure_class: str | None = None
 
 
 def sha256_text(text: str) -> str:
@@ -178,6 +187,12 @@ _OPTIONAL_COLUMNS: tuple[str, ...] = (
     "span_id",
     "parent_span_id",
     "stage",
+    "provider",
+    "transport",
+    "attempts",
+    "retries",
+    "outcome",
+    "failure_class",
 )
 
 _BASE_COLUMNS: tuple[str, ...] = (

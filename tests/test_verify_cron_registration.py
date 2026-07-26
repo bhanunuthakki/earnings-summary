@@ -15,6 +15,7 @@ from execution.verify_cron_registration import (
     _print_report,  # pyright: ignore[reportPrivateUsage]
     compare,
     main,
+    report_payload,
 )
 
 _NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
@@ -258,6 +259,33 @@ def test_compare_no_xmls_returns_empty(tmp_path: Path) -> None:
         report, xml_tasks = compare(tmp_path)
     assert xml_tasks == []
     assert not report.has_problems
+
+
+def test_report_payload_is_machine_readable() -> None:
+    report = TaskReport(missing=[r"\earnings-summary\daily"])
+    payload = report_payload(report, [])
+    assert payload["status"] == "failed"
+    assert payload["missing"] == [r"\earnings-summary\daily"]
+
+
+def test_alert_hook_receives_only_failed_health(monkeypatch: pytest.MonkeyPatch) -> None:
+    import execution.verify_cron_registration as verifier
+
+    calls: list[list[str]] = []
+    monkeypatch.setenv("ES_CRON_ALERT_HOOK", "C:/tools/alert.exe")
+
+    def fake_run(command: list[str], **_kwargs: object) -> None:
+        calls.append(command)
+
+    monkeypatch.setattr(
+        verifier.subprocess,
+        "run",
+        fake_run,
+    )
+    verifier._notify_alert_hook(  # pyright: ignore[reportPrivateUsage]
+        {"status": "failed"}
+    )
+    assert calls == [["C:/tools/alert.exe"]]
 
 
 def test_main_exit_code_zero_all_ok(tmp_path: Path) -> None:

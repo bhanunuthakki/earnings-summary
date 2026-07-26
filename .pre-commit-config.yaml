@@ -6,6 +6,17 @@
 # ruff/pyright baseline — see directives/regrade_memo_post_wedge.md). New/edited
 # code is kept clean without blocking on legacy debt.
 repos:
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: 68e8b45440415753fff70a312ece8da92ba85b4a # v1.5.0  # pragma: allowlist secret
+    hooks:
+      - id: detect-secrets
+        args:
+          - --exclude-files
+          - >-
+            ^(?:evals[\\/]golden[\\/]metric_lifecycle_triage\.json|
+            tests[\\/](?:test_etf_instrument_mvp|test_gemini_backend|
+            test_peer_selection|test_validate_environment)\.py)$
+
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.12
     hooks:

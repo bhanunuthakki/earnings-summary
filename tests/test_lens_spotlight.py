@@ -54,11 +54,11 @@ def test_enumerate_capture_spotlights_document(monkeypatch: pytest.MonkeyPatch) 
 
     captured: dict[str, str] = {}
 
-    def fake_call(prompt: str, model: str | None = None) -> str:
+    def fake_call(prompt: str, **_: object) -> list[object]:
         captured["prompt"] = prompt
-        return "[]"
+        return []
 
-    monkeypatch.setattr(kes, "_call_claude", fake_call)
+    monkeypatch.setattr(kes, "call_llm_structured", fake_call)
     # vars()[...] reaches the module-private helper without tripping pyright
     # reportPrivateUsage (strict) or ruff B009 (getattr-with-constant).
     enumerate_fn = vars(kes)["_llm_extract_enumerate"]

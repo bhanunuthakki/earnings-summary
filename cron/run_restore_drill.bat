@@ -16,6 +16,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\restore_drill_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\restore_drill.py > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "restore-drill" "portfolio-db" execution\restore_drill.py > "%LOG_FILE%" 2>&1
 
 endlocal

@@ -126,6 +126,17 @@ from pipeline.ticker_command_center import (  # noqa: E402
     render_notes_drawer_fragment,
 )
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
+from server_runtime.access import (  # noqa: E402
+    REPORT_CAPABILITY_HEADER,
+    ReportCapabilityStore,
+    is_allowed_client_address,
+    is_allowed_origin,
+    resolve_tailscale_ipv4,
+    tailscale_access_enabled,
+    validate_bind_host,
+)
+from server_runtime.streaming import drain_events  # noqa: E402
+from sqlite_runtime import connect_sqlite  # noqa: E402
 
 # Repo-wide maintenance chores exposed on the dashboard, each dispatched as a
 # single-flight job running an existing CLI under execution/. (Onboarding a
@@ -147,22 +158,16 @@ def _cors_allow_origin(origin: str) -> str | None:
     (CSRF defense). For a non-loopback bind, an explicit comma-separated
     ``COMMENTS_SERVER_CORS_WHITELIST`` of allowed origins is honored.
     """
-    if not origin:
-        return None  # same-origin / non-browser caller needs no CORS header
-    if origin == "null":
-        return "null"
-    try:
-        hostname = urllib.parse.urlparse(origin).hostname or ""
-    except ValueError:
-        return None
-    if hostname in ("127.0.0.1", "localhost", "::1"):
-        return origin
-    whitelist = [
+    whitelist = frozenset(
         o.strip()
         for o in os.environ.get("COMMENTS_SERVER_CORS_WHITELIST", "").split(",")
         if o.strip()
-    ]
-    return origin if origin in whitelist else None
+    )
+    return is_allowed_origin(
+        origin,
+        allow_tailscale=tailscale_access_enabled(),
+        whitelist=whitelist,
+    )
 
 
 def _referer_back_path(referer: str) -> str | None:
@@ -378,8 +383,11 @@ def create_app(
     chat_executor: concurrent.futures.Executor | None = None,
 ) -> Flask:
     app = Flask(__name__)
+    app.config["MAX_CONTENT_LENGTH"] = 1_048_576
     db_path = repo_root / "data" / "portfolio.db"
-    job_registry = registry or Registry()
+    job_registry = registry or Registry(repo_root=repo_root)
+    report_capability = ReportCapabilityStore(repo_root)
+    report_capability.load_or_create()
     app.config["DISPATCH_REGISTRY"] = job_registry
     # Dedicated pool so a long-running LLM subprocess doesn't pin a Flask
     # request thread for the full 10-60s of a chat turn. Pool size caps
@@ -399,15 +407,19 @@ def create_app(
         executes lazily, on the pool thread) and pipe its events through
         a Queue, then drain the queue into SSE frames. Shared by
         /chat/<ticker> and /api/ask/stream."""
-        chunks: queue.Queue[dict[str, object] | None] = queue.Queue()
-        chat_pool.submit(_drain_events, events, chunks)
+        chunks: queue.Queue[dict[str, object] | None] = queue.Queue(maxsize=64)
+        stop = threading.Event()
+        chat_pool.submit(drain_events, events, chunks, stop)
 
         def generate():
-            while True:
-                item = chunks.get()
-                if item is None:
-                    break
-                yield f"data: {json.dumps(item)}\n\n"
+            try:
+                while True:
+                    item = chunks.get()
+                    if item is None:
+                        break
+                    yield f"data: {json.dumps(item)}\n\n"
+            finally:
+                stop.set()
 
         return Response(
             stream_with_context(generate()),
@@ -424,16 +436,20 @@ def create_app(
         """Like ``_stream_engine_events`` but emits a leading
         ``{type: "session", session_id: "…"}`` frame so the client always
         knows which session this turn belongs to."""
-        chunks: queue.Queue[dict[str, object] | None] = queue.Queue()
-        chat_pool.submit(_drain_events, events, chunks)
+        chunks: queue.Queue[dict[str, object] | None] = queue.Queue(maxsize=64)
+        stop = threading.Event()
+        chat_pool.submit(drain_events, events, chunks, stop)
 
         def generate():
-            yield f"data: {json.dumps({'type': 'session', 'session_id': session_id})}\n\n"
-            while True:
-                item = chunks.get()
-                if item is None:
-                    break
-                yield f"data: {json.dumps(item)}\n\n"
+            try:
+                yield f"data: {json.dumps({'type': 'session', 'session_id': session_id})}\n\n"
+                while True:
+                    item = chunks.get()
+                    if item is None:
+                        break
+                    yield f"data: {json.dumps(item)}\n\n"
+            finally:
+                stop.set()
 
         return Response(
             stream_with_context(generate()),
@@ -445,9 +461,17 @@ def create_app(
         )
 
     def _open_db() -> sqlite3.Connection:
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        return conn
+        return connect_sqlite(db_path)
+
+    @app.before_request
+    def enforce_network_boundary():
+        remote_address = request.remote_addr or ""
+        if not is_allowed_client_address(
+            remote_address,
+            allow_tailscale=tailscale_access_enabled(),
+        ):
+            return ({"error": "client address is outside the allowed network"}, 403)
+        return None
 
     @app.before_request
     def bind_correlation_id() -> None:
@@ -474,6 +498,10 @@ def create_app(
         if request.method in ("GET", "HEAD", "OPTIONS"):
             return None
         origin = request.headers.get("Origin", "")
+        if origin == "null" and not report_capability.matches(
+            request.headers.get(REPORT_CAPABILITY_HEADER, "")
+        ):
+            return ({"error": "static report capability required"}, 403)
         if origin and _cors_allow_origin(origin) is None:
             return ({"error": "cross-origin state-changing request refused"}, 403)
         return None
@@ -494,7 +522,9 @@ def create_app(
             response.headers["Access-Control-Allow-Origin"] = allowed
             response.headers["Vary"] = "Origin"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, DELETE, OPTIONS"
-        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Access-Control-Allow-Headers"] = (
+            f"Content-Type, {REPORT_CAPABILITY_HEADER}"
+        )
         # Security headers — the dashboard is network-reachable over Tailscale.
         # SAMEORIGIN (not DENY) because the command center embeds /reports/<T> in
         # a same-origin iframe. no-referrer so ticker-bearing report URLs (which
@@ -969,7 +999,7 @@ def create_app(
             return ("", 204)
         from owner_profile.store import affirm_fact
 
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path)
         try:
             row = affirm_fact(conn, fact_id)
             conn.commit()
@@ -995,7 +1025,7 @@ def create_app(
             return ("", 204)
         from owner_profile.store import reject_fact
 
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path)
         try:
             ok = reject_fact(conn, fact_id)
             conn.commit()
@@ -1016,7 +1046,7 @@ def create_app(
             return ("", 204)
         from owner_profile.store import reaffirm_fact
 
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path)
         try:
             row = reaffirm_fact(conn, fact_id)
             conn.commit()
@@ -1043,7 +1073,7 @@ def create_app(
             return ("", 204)
         from owner_profile.store import retire_fact
 
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path)
         try:
             ok = retire_fact(conn, fact_id)
             conn.commit()
@@ -1072,7 +1102,7 @@ def create_app(
         narrative = payload.get("narrative")
         if not isinstance(narrative, str) or not narrative.strip():
             return ({"ok": False, "error": "narrative is required"}, 400)
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path)
         try:
             old = get_fact(conn, fact_id)
             if old is None:
@@ -1112,7 +1142,7 @@ def create_app(
 
         try:
             counts = run_tenet_distill(
-                db_path, user_id=request.args.get("user_id", DEFAULT_USER_ID)
+                db_path, user_id=DEFAULT_USER_ID
             )
         except Exception as exc:  # a distill failure must not 500 the tap
             return ({"error": f"distill failed: {exc}"}, 500)
@@ -1280,11 +1310,12 @@ def create_app(
         """Download the Personal-CIO substrate (alerts / queued actions / thesis
         ledger) as an .xlsx workbook. Previously this existed only as the
         ``export_cio_xlsx`` CLI — unreachable from the :7421 app (v6 re-grade,
-        Richness). ``?user_id=`` scopes the export. Built to a stable path under
-        data/dashboard and streamed as an attachment."""
+        Richness). The server is intentionally single-user, so identity is fixed
+        by repository configuration rather than request parameters. Built to a
+        stable path under data/dashboard and streamed as an attachment."""
         from dashboard.cio_export import export_cio_workbook
 
-        user_id = request.args.get("user_id", DEFAULT_USER_ID)
+        user_id = DEFAULT_USER_ID
         out_path = repo_root / "data" / "dashboard" / "cio_export.xlsx"
         written = export_cio_workbook(out_path, user_id=user_id, db_path=db_path)
         return send_file(
@@ -1395,7 +1426,7 @@ def create_app(
             # live for the composite + peek + direct fetch.
             from pipeline.portfolio_console_panel import render_portfolio_health_panel
 
-            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            user_id = DEFAULT_USER_ID
             return Response(
                 render_portfolio_health_panel(db_path, user_id=user_id), mimetype="text/html"
             )
@@ -1407,7 +1438,7 @@ def create_app(
             # default window.
             from pipeline.portfolio_console_panel import render_portfolio_allocation_panel
 
-            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            user_id = DEFAULT_USER_ID
             return Response(
                 render_portfolio_allocation_panel(db_path, repo_root, user_id=user_id),
                 mimetype="text/html",
@@ -1418,7 +1449,7 @@ def create_app(
             # record + advisor Memos + the Triggers ladder (old `holdings`).
             from pipeline.portfolio_console_panel import render_portfolio_record_panel
 
-            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            user_id = DEFAULT_USER_ID
             return Response(
                 render_portfolio_record_panel(db_path, user_id=user_id), mimetype="text/html"
             )
@@ -1475,7 +1506,7 @@ def create_app(
             # old 8-tab strip; the killed ids alias here (_LEGACY_PANEL_REDIRECTS).
             from pipeline.provenance_panel import render_provenance_panel
 
-            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            user_id = DEFAULT_USER_ID
             return Response(
                 render_provenance_panel(db_path, repo_root, user_id=user_id),
                 mimetype="text/html",
@@ -1488,7 +1519,7 @@ def create_app(
             # for the Provenance console's anchor + any direct fetch.
             from pipeline.section_coverage_panel import render_section_coverage_panel
 
-            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            user_id = DEFAULT_USER_ID
             return Response(
                 render_section_coverage_panel(db_path, repo_root, user_id=user_id),
                 mimetype="text/html",
@@ -1504,7 +1535,7 @@ def create_app(
                 render_saved_views_list,
             )
 
-            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            user_id = DEFAULT_USER_ID
             fragment = request.args.get("fragment")
             if fragment == "views":
                 return Response(
@@ -1546,7 +1577,7 @@ def create_app(
                 render_reconcile_list,
             )
 
-            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            user_id = DEFAULT_USER_ID
             fragment = request.args.get("fragment")
             if fragment == "research":
                 # The Ledger → Research inbox lane re-fetched after a run / action.
@@ -1601,7 +1632,7 @@ def create_app(
                 render_sources_editor,
             )
 
-            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            user_id = DEFAULT_USER_ID
             fragment = request.args.get("fragment")
             if fragment == "sources":
                 return Response(render_sources_editor(db_path), mimetype="text/html")
@@ -1627,7 +1658,7 @@ def create_app(
                 render_reconciliation_list,
             )
 
-            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            user_id = DEFAULT_USER_ID
             j_ticker = (request.args.get("ticker") or "").strip().upper() or None
             j_kind = (request.args.get("kind") or "").strip() or None
             j_status = (request.args.get("status") or "open").strip() or "open"
@@ -1653,7 +1684,7 @@ def create_app(
             # panel JS refreshes after a route / resolve / dismiss.
             from pipeline.triage_panel import render_triage_list, render_triage_panel
 
-            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            user_id = DEFAULT_USER_ID
             t_renderer = (
                 render_triage_list
                 if request.args.get("fragment") == "list"
@@ -1713,7 +1744,7 @@ def create_app(
             # Richness). Folded into the Decisions tab (P2.2); kept for old links.
             from pipeline.thesis_ledger_panel import render_thesis_ledger_panel
 
-            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            user_id = DEFAULT_USER_ID
             return Response(
                 render_thesis_ledger_panel(db_path, user_id=user_id), mimetype="text/html"
             )
@@ -1725,7 +1756,7 @@ def create_app(
             # (thesis ledger + sizing intents + decision notes).
             from pipeline.allocation_decisions_panel import render_allocation_decisions_panel
 
-            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            user_id = DEFAULT_USER_ID
             return Response(
                 render_allocation_decisions_panel(db_path, user_id=user_id),
                 mimetype="text/html",
@@ -1737,7 +1768,7 @@ def create_app(
             # swap-discipline screen + the durable memo record.
             from pipeline.advisor_memos_panel import render_advisor_memos_panel
 
-            user_id = request.args.get("user_id", DEFAULT_USER_ID)
+            user_id = DEFAULT_USER_ID
             return Response(
                 render_advisor_memos_panel(db_path, user_id=user_id),
                 mimetype="text/html",
@@ -1799,7 +1830,7 @@ def create_app(
 
         return Response(
             render_position_lifecycle_section(
-                db_path, ticker, user_id=request.args.get("user_id", DEFAULT_USER_ID)
+                db_path, ticker, user_id=DEFAULT_USER_ID
             ),
             mimetype="text/html",
         )
@@ -2010,7 +2041,7 @@ def create_app(
         except ValueError:
             limit = 200
         html_text = render_alert_feed(
-            user_id=request.args.get("user_id", DEFAULT_USER_ID),
+            user_id=DEFAULT_USER_ID,
             ticker=request.args.get("ticker"),
             trigger_kind=request.args.get("trigger_kind"),
             status=request.args.get("status"),
@@ -2358,7 +2389,7 @@ def create_app(
             return ("", 204)
         from user_state import notes as notes_store
 
-        user_id = request.args.get("user_id", DEFAULT_USER_ID)
+        user_id = DEFAULT_USER_ID
         if request.method == "GET":
             q_ticker = (request.args.get("ticker") or "").strip().upper() or None
             q_kind = (request.args.get("kind") or "").strip() or None
@@ -2728,7 +2759,7 @@ def create_app(
         except FormError as exc:
             return (str(exc), 400)
         session_id = (form.get("session_id") or "").strip() or None
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path)
         try:
             append_intent(
                 conn,
@@ -2762,7 +2793,7 @@ def create_app(
         if not narrative:
             return ({"error": "narrative required"}, 400)
         now = datetime.now(UTC).replace(tzinfo=None).isoformat()
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path)
         try:
             fact_id = append_fact(
                 conn,
@@ -3097,7 +3128,7 @@ def create_app(
         import sqlite3 as _sqlite3
 
         try:
-            conn = _sqlite3.connect(str(db_path))
+            conn = connect_sqlite(db_path)
             try:
                 row = conn.execute(
                     "SELECT distilled_at FROM ask_sessions WHERE id = ?", (sid,)
@@ -3234,7 +3265,7 @@ def create_app(
         from user_state import saved_views as views_store
         from viewspec.spec import ViewSpec, ViewSpecError
 
-        user_id = request.args.get("user_id", DEFAULT_USER_ID)
+        user_id = DEFAULT_USER_ID
         if request.method == "GET":
             try:
                 rows = views_store.list_views(user_id=user_id, db_path=db_path)
@@ -3303,7 +3334,7 @@ def create_app(
         everything except dismissed) or one lifecycle bucket."""
         from discovery.store import CANDIDATE_STATUSES, list_candidates
 
-        user_id = request.args.get("user_id", DEFAULT_USER_ID)
+        user_id = DEFAULT_USER_ID
         status_raw = (request.args.get("status") or "live").strip()
         status = None if status_raw == "live" else status_raw
         if status is not None and status not in CANDIDATE_STATUSES:
@@ -3371,8 +3402,7 @@ def create_app(
             return ("", 204)
         from discovery.store import get_candidate, promote_to_watchlist
 
-        payload = cast("dict[str, object]", request.get_json(silent=True) or {})
-        user_id = str(payload.get("user_id") or DEFAULT_USER_ID)
+        user_id = DEFAULT_USER_ID
         try:
             cand = get_candidate(cand_id, db_path=db_path)
         except sqlite3.Error:
@@ -3627,7 +3657,7 @@ def create_app(
                 {"error": f"at most {MAX_BUILD_BATCH} builds per run, got {len(tickers)}"},
                 400,
             )
-        user_id = str(body.get("user_id") or DEFAULT_USER_ID)
+        user_id = DEFAULT_USER_ID
         try:
             live = list_candidates(user_id=user_id, db_path=db_path)
         except sqlite3.Error:
@@ -3690,7 +3720,7 @@ def create_app(
             return ({"error": "ticker required"}, 400)
         narrative_raw = body.get("narrative")
         narrative = str(narrative_raw).strip() or None if narrative_raw is not None else None
-        user_id = str(body.get("user_id") or DEFAULT_USER_ID)
+        user_id = DEFAULT_USER_ID
         to_write: list[tuple[str, float]] = []
         if (conviction := body.get("conviction")) is not None:
             try:
@@ -3871,7 +3901,7 @@ def create_app(
         return Response(
             render_alerts_list_peek(
                 db_path,
-                user_id=request.args.get("user_id", DEFAULT_USER_ID),
+                user_id=DEFAULT_USER_ID,
                 ticker=request.args.get("ticker") or None,
                 status=request.args.get("status") or None,
             ),
@@ -4593,6 +4623,7 @@ def create_app(
                 kind="tracker-server",
                 argv=argv,
                 cwd=str(tracker_root),
+                write_sets=[],
             )
         except RegistryConflict as e:
             return ({"error": str(e)}, 409)
@@ -5410,42 +5441,35 @@ def _parse_date(s: str) -> date:
     return date.fromisoformat(s[:10])
 
 
-def _drain_events(
-    events: Iterator[dict[str, object]],
-    chunks: queue.Queue[dict[str, object] | None],
-) -> None:
-    """Iterate an ask-engine event stream on a pool thread and push each
-    event onto `chunks`. `None` marks end-of-stream so the SSE generator
-    on the request thread can stop pumping."""
-    try:
-        for chunk in events:
-            chunks.put(chunk)
-    except Exception as e:
-        # Surface as an SSE error frame instead of crashing the pool —
-        # the request thread is still waiting on the queue and needs the
-        # `None` sentinel below to terminate.
-        chunks.put({"type": "error", "error": f"chat stream failed: {e}"})
-    finally:
-        chunks.put(None)
-
-
 def main() -> int:
     configure_logging()  # structured root logging + correlation ids (sre-4)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=7421)
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--host")
+    parser.add_argument(
+        "--tailscale",
+        action="store_true",
+        help="Bind to this device's Tailscale IPv4 address; no app login is added.",
+    )
     args = parser.parse_args()
 
     repo_root = args.repo_root.resolve()
+    if args.tailscale:
+        os.environ["COMMENTS_SERVER_ALLOW_TAILSCALE"] = "1"
+    host = args.host or (resolve_tailscale_ipv4() if args.tailscale else "127.0.0.1")
+    try:
+        validate_bind_host(host, allow_tailscale=args.tailscale)
+    except ValueError as exc:
+        parser.error(str(exc))
     print(
-        f"comments_server: repo_root={repo_root} host={args.host} port={args.port}",
+        f"comments_server: repo_root={repo_root} host={host} port={args.port}",
         file=sys.stderr,
     )
     app = create_app(repo_root)
     # Flask's built-in dev server is fine here — this is a single-user
     # localhost tool, not a production service.
-    app.run(host=args.host, port=args.port, debug=False, threaded=True)
+    app.run(host=host, port=args.port, debug=False, threaded=True)
     return 0
 
 

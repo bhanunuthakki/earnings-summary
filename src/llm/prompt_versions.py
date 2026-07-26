@@ -47,6 +47,14 @@ from __future__ import annotations
 #     new version. (Before, each trigger hardcoded ``"v1"`` and never consulted
 #     this registry, so every artifact was permanently ``v1`` — v6 re-grade.)
 _PROMPT_VERSIONS: dict[str, str] = {
+    # Governed private-caller migrations: all are schema-bound extractors and
+    # must have a stable prompt version for eval/ledger attribution.
+    "kpi_summary_extract": "v1",
+    "kpi_summary_enumerate": "v1",
+    "segment_6k_extract": "v1",
+    "segment_definition_extract": "v1",
+    "segment_crosstab_extract": "v1",
+    "ir_sheet_kpi_map": "v1",
     # Graded calibration purposes.
     # bear_case v2 (2026-06-12, S9): untrusted-content spotlighting — the IR
     # anchor block is now wrapped in BEGIN/END UNTRUSTED-DATA markers with an

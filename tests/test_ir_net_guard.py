@@ -70,6 +70,21 @@ def test_missing_host_blocked() -> None:
         ensure_safe_public_url("http:///no-host")
 
 
+def test_redirect_to_private_target_is_blocked() -> None:
+    from ir_pipeline._net import safe_redirect_url
+
+    with pytest.raises(UnsafeURLError):
+        safe_redirect_url("https://issuer.example/a.pdf", "http://127.0.0.1/admin")
+
+
+def test_relative_redirect_is_resolved_and_allowed() -> None:
+    from ir_pipeline._net import safe_redirect_url
+
+    assert safe_redirect_url("https://issuer.example/a.pdf", "/documents/q1.pdf") == (
+        "https://issuer.example/documents/q1.pdf"
+    )
+
+
 @pytest.mark.parametrize(
     ("cd", "expected"),
     [

@@ -1219,6 +1219,7 @@ def load_segment_junction_series(
     *,
     db_path: Path | None = None,
     period_types: Iterable[str] = DEFAULT_PERIOD_TYPES,
+    as_of_date: date | datetime | str | None = None,
 ) -> list[Observation]:
     """Load a chronological series from segment_periods + segment_dimensions.
 
@@ -1250,6 +1251,7 @@ def load_segment_junction_series(
         return []
     period_list = list(period_types) or list(DEFAULT_PERIOD_TYPES)
     period_placeholders = ",".join("?" * len(period_list))
+    as_of_cutoff = _normalize_as_of(as_of_date)
     try:
         for required in ("segment_periods", "segment_dimensions"):
             if (
@@ -1281,6 +1283,8 @@ def load_segment_junction_series(
         )
         if tier_aware:
             tier_case = _tier_rank_case_sql("d.source_quality_tier")
+            as_of_clause = "AND d.fetched_at <= ?" if as_of_cutoff is not None else ""
+            as_of_params: list[object] = [as_of_cutoff] if as_of_cutoff is not None else []
             sql = f"""
                 WITH ranked_periods AS (
                     SELECT
@@ -1294,6 +1298,7 @@ def load_segment_junction_series(
                     LEFT JOIN documents d ON d.id = sp_inner.source_doc_id
                     WHERE sp_inner.ticker = ?
                       AND sp_inner.fiscal_period_type IN ({period_placeholders})
+                      {as_of_clause}
                 )
                 SELECT sp.period_end, sd1.value
                 FROM segment_periods sp
@@ -1316,6 +1321,7 @@ def load_segment_junction_series(
             params: list[object] = [
                 ticker.upper(),
                 *period_list,
+                *as_of_params,
                 head_dim_type,
                 head_dim_name,
                 metric,
@@ -1420,6 +1426,7 @@ def load_segment_junction_series_with_provenance(
     *,
     db_path: Path | None = None,
     period_types: Iterable[str] = DEFAULT_PERIOD_TYPES,
+    as_of_date: date | datetime | str | None = None,
 ) -> list[SourcedObservation]:
     """`load_segment_junction_series` + per-period document provenance.
 
@@ -1444,6 +1451,7 @@ def load_segment_junction_series_with_provenance(
         return []
     period_list = list(period_types) or list(DEFAULT_PERIOD_TYPES)
     period_placeholders = ",".join("?" * len(period_list))
+    as_of_cutoff = _normalize_as_of(as_of_date)
     try:
         for required in ("segment_periods", "segment_dimensions"):
             if not _has_table(conn, required):
@@ -1505,6 +1513,8 @@ def load_segment_junction_series_with_provenance(
 
         if has_tier:
             tier_case = _tier_rank_case_sql("d.source_quality_tier")
+            as_of_clause = "AND d.fetched_at <= ?" if as_of_cutoff is not None else ""
+            as_of_params: list[object] = [as_of_cutoff] if as_of_cutoff is not None else []
             sql = f"""
                 WITH ranked_periods AS (
                     SELECT
@@ -1518,6 +1528,7 @@ def load_segment_junction_series_with_provenance(
                     LEFT JOIN documents d ON d.id = sp_inner.source_doc_id
                     WHERE sp_inner.ticker = ?
                       AND sp_inner.fiscal_period_type IN ({period_placeholders})
+                      {as_of_clause}
                 )
                 SELECT sp.period_end, sd1.value, sp.unit, sp.source_doc_id, {prov_cols}
                 FROM segment_periods sp
@@ -1526,7 +1537,7 @@ def load_segment_junction_series_with_provenance(
                 {dim_value_clause}
                 ORDER BY sp.period_end ASC
             """
-            params: list[object] = [ticker.upper(), *period_list, *dim_params]
+            params: list[object] = [ticker.upper(), *period_list, *as_of_params, *dim_params]
         else:
             sql = f"""
                 SELECT sp.period_end, sd1.value, sp.unit, sp.source_doc_id, {prov_cols}
@@ -1587,7 +1598,6 @@ def load_segment_series(
         _LEGACY_METRIC_TO_JUNCTION_METRIC,
     )
 
-    _ = as_of_date  # accepted for API parity; see docstring
     dim_type_enum = _LEGACY_METRIC_TO_DIM_TYPE.get(metric)
     if dim_type_enum is None:
         # Unknown legacy metric: fall through with the original metric
@@ -1607,4 +1617,5 @@ def load_segment_series(
         repo_root=repo_root,
         db_path=db_path,
         period_types=period_types,
+        as_of_date=as_of_date,
     )

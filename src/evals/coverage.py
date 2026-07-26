@@ -52,6 +52,14 @@ GOLDEN_PURPOSES: frozenset[str] = frozenset(
         "scenario_prior",
         # Sector-benchmark-ETF proposal (comparable_sets_bottoms_up.md §4, Phase 3).
         "sector_benchmark_proposal",
+        # Schema-bound extractor purposes. Their fixtures exercise the output
+        # contracts (not prose wording) in tests/test_llm_governance.py.
+        "kpi_summary_extract",
+        "kpi_summary_enumerate",
+        "segment_6k_extract",
+        "segment_definition_extract",
+        "segment_crosstab_extract",
+        "ir_sheet_kpi_map",
         # segment_10q_period_disambiguate rides in via CLASSIFIER_PURPOSES below.
         *CLASSIFIER_PURPOSES,
     }

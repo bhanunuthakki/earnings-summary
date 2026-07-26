@@ -21,6 +21,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\check_comp_set_drift_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\check_comp_set_drift.py > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "check-comp-set-drift" "portfolio-db" execution\check_comp_set_drift.py > "%LOG_FILE%" 2>&1
 
 endlocal

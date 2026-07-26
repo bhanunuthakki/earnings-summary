@@ -7,6 +7,7 @@ the tier_1 allowlist drops.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from collections.abc import Callable
@@ -31,11 +32,15 @@ from models.facts import FiscalPeriodType, Unit  # noqa: E402
 from models.kpis import DefinitionOrigin  # noqa: E402
 
 
-def _const_caller(response: str) -> Callable[[str, str | None], str]:
-    """A typed stand-in for `_call_claude` that always returns `response`."""
+def _const_caller(response: str) -> Callable[..., object]:
+    """A typed stand-in for the governed structured call."""
 
-    def _call(prompt: str, model: str | None = None) -> str:
-        return response
+    def _call(prompt: str, **_: object) -> object:
+        del prompt
+        cleaned = response.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1].rsplit("```", 1)[0]
+        return json.loads(cleaned)
 
     return _call
 
@@ -58,11 +63,11 @@ def test_enumerate_prompt_has_no_allowlist_and_valid_units(
 ) -> None:
     captured: dict[str, str] = {}
 
-    def fake_call(prompt: str, model: str | None = None) -> str:
+    def fake_call(prompt: str, **_: object) -> object:
         captured["prompt"] = prompt
-        return _ENUMERATE_JSON
+        return json.loads(_ENUMERATE_JSON)
 
-    monkeypatch.setattr(kes, "_call_claude", fake_call)
+    monkeypatch.setattr(kes, "call_llm_structured", fake_call)
     rows = _llm_extract_enumerate("NU", "Q1 2025 [ir]", "Revenue was $1.2 billion. NIM 17.8%.")
 
     prompt = captured["prompt"]
@@ -78,22 +83,22 @@ def test_enumerate_prompt_has_no_allowlist_and_valid_units(
 
 def test_enumerate_strips_fence_and_caps_max_facts(monkeypatch: pytest.MonkeyPatch) -> None:
     fenced = "```json\n" + _ENUMERATE_JSON + "\n```"
-    monkeypatch.setattr(kes, "_call_claude", _const_caller(fenced))
+    monkeypatch.setattr(kes, "call_llm_structured", _const_caller(fenced))
     rows = _llm_extract_enumerate("NU", "Q1 2025", "text", max_facts=2)
     assert len(rows) == 2  # capped
 
 
 def test_enumerate_returns_empty_on_non_array_or_blank(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(kes, "_call_claude", _const_caller('{"not": "an array"}'))
+    monkeypatch.setattr(kes, "call_llm_structured", _const_caller('{"not": "an array"}'))
     assert _llm_extract_enumerate("NU", "Q1 2025", "text") == []
     # Blank input short-circuits without even calling the model.
     calls: list[int] = []
 
-    def _counting(prompt: str, model: str | None = None) -> str:
+    def _counting(prompt: str, **_: object) -> list[object]:
         calls.append(1)
-        return "[]"
+        return []
 
-    monkeypatch.setattr(kes, "_call_claude", _counting)
+    monkeypatch.setattr(kes, "call_llm_structured", _counting)
     assert _llm_extract_enumerate("NU", "Q1 2025", "   ") == []
     assert calls == []
 
@@ -102,7 +107,7 @@ def test_enumerate_skips_malformed_items(monkeypatch: pytest.MonkeyPatch) -> Non
     bad = (
         '[{"label": "Revenue", "value": 5, "unit": "actual"}, {"value": 9}, "junk", {"label": "X"}]'
     )
-    monkeypatch.setattr(kes, "_call_claude", _const_caller(bad))
+    monkeypatch.setattr(kes, "call_llm_structured", _const_caller(bad))
     rows = _llm_extract_enumerate("NU", "Q1 2025", "text")
     # Only the item with both label AND value survives.
     assert rows == [{"label": "Revenue", "value": 5, "unit": "actual"}]
@@ -235,11 +240,11 @@ def test_capture_for_ticker_persists_capture_facts_and_canonicalizes(
 
     calls: list[int] = []
 
-    def fake_call(prompt: str, model: str | None = None) -> str:
+    def fake_call(prompt: str, **_: object) -> object:
         calls.append(1)
-        return _ENUMERATE_JSON
+        return json.loads(_ENUMERATE_JSON)
 
-    monkeypatch.setattr(kes, "_call_claude", fake_call)
+    monkeypatch.setattr(kes, "call_llm_structured", fake_call)
 
     log = capture_for_ticker("NU", tmp_path, conn, source_group="ir")
     assert log.kpis_inserted_total == 3
@@ -304,7 +309,7 @@ def test_capture_for_ticker_drops_absurd_actual_magnitude(
     conn = sqlite3.connect(str(db))
     conn.row_factory = sqlite3.Row
 
-    monkeypatch.setattr(kes, "_call_claude", _const_caller(_ABSURD_ENUMERATE_JSON))
+    monkeypatch.setattr(kes, "call_llm_structured", _const_caller(_ABSURD_ENUMERATE_JSON))
 
     log = capture_for_ticker("NU", tmp_path, conn, source_group="ir")
     assert log.kpis_inserted_total == 1  # only the sane Revenue fact
@@ -403,11 +408,11 @@ def test_capture_for_ir_pdf_docs_supplement_long_tail(
     monkeypatch.setattr(kes, "_read_pdf_text", fake_pdf_text)
     calls: list[int] = []
 
-    def fake_call(prompt: str, model: str | None = None) -> str:
+    def fake_call(prompt: str, **_: object) -> object:
         calls.append(1)
-        return _ENUMERATE_JSON
+        return json.loads(_ENUMERATE_JSON)
 
-    monkeypatch.setattr(kes, "_call_claude", fake_call)
+    monkeypatch.setattr(kes, "call_llm_structured", fake_call)
 
     log = capture_for_ir_pdf_docs("RBRK", tmp_path, conn)
     assert log.kpis_inserted_total == 3
@@ -476,11 +481,11 @@ def test_capture_for_ir_pdf_docs_skips_non_pdf_and_missing(
 
     calls: list[int] = []
 
-    def fake_call(prompt: str, model: str | None = None) -> str:
+    def fake_call(prompt: str, **_: object) -> object:
         calls.append(1)
-        return _ENUMERATE_JSON
+        return json.loads(_ENUMERATE_JSON)
 
-    monkeypatch.setattr(kes, "_call_claude", fake_call)
+    monkeypatch.setattr(kes, "call_llm_structured", fake_call)
 
     log = capture_for_ir_pdf_docs("LLY", tmp_path, conn)
     assert log.kpis_inserted_total == 0
@@ -524,7 +529,7 @@ def test_capture_for_ir_pdf_docs_emits_pdf_slide_locators(
     )
     conn.commit()
 
-    monkeypatch.setattr(kes, "_call_claude", _const_caller(_ENUMERATE_JSON))
+    monkeypatch.setattr(kes, "call_llm_structured", _const_caller(_ENUMERATE_JSON))
 
     log = capture_for_ir_pdf_docs("NU", tmp_path, conn)
     assert log.kpis_inserted_total == 3

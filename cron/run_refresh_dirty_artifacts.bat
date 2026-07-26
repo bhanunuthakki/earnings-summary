@@ -24,6 +24,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\refresh_dirty_artifacts_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\refresh_dirty_artifacts.py --execute --max-cost-usd 5 > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "refresh-dirty-artifacts" "portfolio-db" execution\refresh_dirty_artifacts.py --execute --max-cost-usd 5 > "%LOG_FILE%" 2>&1
 
 endlocal

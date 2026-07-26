@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import subprocess
 from collections.abc import Iterator
+from datetime import UTC
 from typing import Any
 
 import pytest
@@ -46,11 +47,6 @@ def _good_cli_response(text: str = "ok") -> str:
     )
 
 
-def _noop_record(**_kwargs: object) -> None:
-    """Stub for record_llm_call so the post-call ledger write never reaches a
-    real DB during these resolution tests."""
-
-
 @pytest.fixture
 def capture_web_cmd(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
     """Run call_llm_with_web fully offline, capturing the argv handed to the
@@ -60,7 +56,7 @@ def capture_web_cmd(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]
     monkeypatch.setattr(llm_client, "_setup_verified", True)
     monkeypatch.setattr(llm_client, "_claude_cli_path", r"C:\fake\claude.cmd")
 
-    state: dict[str, Any] = {"cmd": None}
+    state: dict[str, Any] = {"cmd": None, "records": []}
 
     def _fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         state["cmd"] = cmd
@@ -69,7 +65,12 @@ def capture_web_cmd(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]
         )
 
     monkeypatch.setattr(cli.subprocess, "run", _fake_run)
-    monkeypatch.setattr(cli, "record_llm_call", _noop_record)
+    monkeypatch.setattr(cli, "quota_block_active", lambda: None)
+    monkeypatch.setattr(
+        cli,
+        "record_llm_call",
+        lambda **kwargs: state["records"].append(kwargs),
+    )
     yield state
 
 
@@ -145,3 +146,70 @@ def test_web_call_carries_hard_cost_cap(capture_web_cmd: dict[str, Any]) -> None
     assert "--max-budget-usd" in cmd
     value = float(cmd[cmd.index("--max-budget-usd") + 1])
     assert value > 0
+
+
+def test_web_success_records_transport_provenance(
+    capture_web_cmd: dict[str, Any],
+) -> None:
+    cli.call_llm_with_web(
+        "prompt",
+        purpose="recent_developments",
+        force_budget_bypass=True,
+    )
+
+    (record,) = capture_web_cmd["records"]
+    assert record["provider"] == "anthropic"
+    assert record["transport"] == "subscription_cli"
+    assert record["attempts"] == 1
+    assert record["retries"] == 0
+    assert record["response_text"] == "ok"
+
+
+def test_web_failure_records_transport_and_failure_class(
+    monkeypatch: pytest.MonkeyPatch,
+    capture_web_cmd: dict[str, Any],
+) -> None:
+    def _failed_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(cmd=["claude"], timeout=1)
+
+    monkeypatch.setattr(cli.subprocess, "run", _failed_run)
+    monkeypatch.setattr(cli, "_call_claude", lambda *_args, **_kwargs: "plain fallback")
+
+    result = cli.call_llm_with_web(
+        "prompt",
+        purpose="recent_developments",
+        force_budget_bypass=True,
+    )
+
+    assert result == "plain fallback"
+    (record,) = capture_web_cmd["records"]
+    assert record["provider"] == "anthropic"
+    assert record["transport"] == "subscription_cli"
+    assert record["attempts"] == 1
+    assert record["retries"] == 0
+    assert record["failure_class"] == "timeout"
+    assert record["error"].startswith("[timeout]")
+
+
+def test_web_quota_block_records_zero_attempt_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+    capture_web_cmd: dict[str, Any],
+) -> None:
+    blocked_until = cli.datetime.now(UTC)
+    monkeypatch.setattr(cli, "quota_block_active", lambda: blocked_until)
+
+    with pytest.raises(cli.LLMQuotaExhausted):
+        cli.call_llm_with_web(
+            "prompt",
+            purpose="recent_developments",
+            force_budget_bypass=True,
+        )
+
+    assert capture_web_cmd["cmd"] is None
+    (record,) = capture_web_cmd["records"]
+    assert record["provider"] == "anthropic"
+    assert record["transport"] == "subscription_cli"
+    assert record["attempts"] == 0
+    assert record["retries"] == 0
+    assert record["failure_class"] == "quota_blocked"
+    assert record["error"].startswith("[quota_blocked]")

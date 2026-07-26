@@ -22,10 +22,14 @@ import re
 import sqlite3
 import time
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
-from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
+from pydantic import TypeAdapter
+
+from llm.structured import call_llm_structured
+from llm_client import FAST_CLASSIFIER_MODEL
 
 _SECTION_KEYWORDS = (
     "segment",
@@ -108,11 +112,11 @@ def extract_for_ticker(
         _write_cache(cache_path, result)
         return result
 
-    start_dt = datetime.now(timezone.utc)
+    start_dt = datetime.now(UTC)
     t0 = time.perf_counter()
     definitions = _ask_claude(ticker, year, segment_names, relevant_text)
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
-    end_dt = datetime.now(timezone.utc)
+    end_dt = datetime.now(UTC)
 
     result = SegmentDefinitionsResult(
         ticker=ticker,
@@ -258,10 +262,15 @@ Example:
 
 Return ONLY the JSON object — no markdown fence, no commentary."""
 
-    raw = _call_claude(prompt, model=FAST_CLASSIFIER_MODEL).strip()
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RE.sub("", raw).strip()
-    parsed = json.loads(raw)
+    parsed = cast(
+        dict[str, str | None],
+        call_llm_structured(
+            prompt,
+            purpose="segment_definition_extract",
+            expect="object",
+            schema=TypeAdapter(dict[str, str | None]),
+        ),
+    )
     out: dict[str, str | None] = {}
     for name in segment_names:
         v = parsed.get(name)

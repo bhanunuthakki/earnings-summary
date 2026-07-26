@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import csv
 import io
+import json
+import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -298,6 +300,41 @@ def _print_report(report: TaskReport, xml_tasks: list[_XmlTask]) -> None:
     print(f"  {problems} problem(s) found. Fix: re-run schtasks /create or check the XML.\n")
 
 
+def report_payload(report: TaskReport, xml_tasks: list[_XmlTask]) -> dict[str, object]:
+    """Stable machine-readable cron health contract for alerting consumers."""
+    return {
+        "status": "ok" if not report.has_problems else "failed",
+        "task_count": len(xml_tasks) + len(report.unparseable) + len(report.no_uri),
+        "ok": report.ok,
+        "unparseable": report.unparseable,
+        "no_uri": report.no_uri,
+        "missing": report.missing,
+        "disabled": report.disabled,
+        "mismatch": [
+            {"task": name, "xml_time": xml_time, "scheduler_time": scheduler_time}
+            for name, xml_time, scheduler_time in report.mismatch
+        ],
+    }
+
+
+def _notify_alert_hook(payload: dict[str, object]) -> None:
+    """Send failed cron health to an opt-in local alert hook.
+
+    The executable path is operator-configured (``ES_CRON_ALERT_HOOK``) and is
+    invoked without a shell; its stdin is the stable JSON health record.  A
+    notification failure never hides the underlying scheduler failure.
+    """
+    hook = os.environ.get("ES_CRON_ALERT_HOOK")
+    if not hook:
+        return
+    try:
+        subprocess.run(
+            [hook], input=json.dumps(payload), text=True, check=False, timeout=30
+        )
+    except OSError as exc:
+        sys.stderr.write(f"WARNING: cron alert hook failed: {exc}\n")
+
+
 def main(argv: list[str] | None = None) -> int:
     import argparse
 
@@ -309,6 +346,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory containing *.task.xml files (default: cron/).",
     )
     parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit one machine-readable health record for an alert hook or dashboard.",
+    )
+    parser.add_argument(
         "--quiet",
         action="store_true",
         help="Suppress the human-readable table; only the exit code matters.",
@@ -317,7 +359,13 @@ def main(argv: list[str] | None = None) -> int:
 
     report, xml_tasks = compare(args.cron_dir)
 
-    if not args.quiet:
+    payload = report_payload(report, xml_tasks)
+    if report.has_problems:
+        _notify_alert_hook(payload)
+
+    if args.json:
+        print(json.dumps(payload, sort_keys=True))
+    elif not args.quiet:
         _print_report(report, xml_tasks)
 
     # "Nothing to check" means zero *.task.xml files on disk — NOT zero that

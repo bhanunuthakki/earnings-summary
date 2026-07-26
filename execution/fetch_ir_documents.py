@@ -48,6 +48,14 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
+from ir_pipeline._net import (  # noqa: E402
+    GuardedHTTPRedirectHandler,
+    UnsafeURLError,
+    ensure_safe_public_url,
+    safe_redirect_url,
+)
+from log_redact import redact  # noqa: E402
+
 LOG_FORMAT = json.dumps({"level": "%(levelname)s", "ts": "%(asctime)s", "msg": "%(message)s"})
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stderr)
 log = logging.getLogger(__name__)
@@ -65,6 +73,7 @@ _UA = (
 _CONNECT_READ_TIMEOUT = 60
 _RATE_LIMIT_S = 0.5
 _CATEGORIZER = SCRIPT_DIR / "categorize_ir_uploads.py"
+_MAX_REDIRECTS = 5
 
 
 def resolve_root(arg_repo_root: str | None) -> Path:
@@ -177,26 +186,42 @@ def _fetch_curl_cffi(url: str) -> tuple[bytes, str, str] | None:
     try:
         from curl_cffi import requests as cc
     except ImportError:
-        log.error({"event": "curl_cffi_unavailable", "url": url})
+        log.error({"event": "curl_cffi_unavailable", "url": redact(url)})
         return None
-    try:
-        resp = cc.get(
-            url,
-            impersonate=_IMPERSONATE,
-            headers={
-                "Accept": "application/pdf,application/vnd.ms-excel,application/octet-stream,*/*"
-            },
-            timeout=_CONNECT_READ_TIMEOUT,
-        )
-    except Exception as e:  # broad on purpose: curl_cffi's error tree is wide; degrade, never crash
-        log.error({"event": "curl_cffi_failed", "url": url, "error": str(e)[:120]})
-        return None
-    if resp.status_code != 200:
-        log.error({"event": "curl_cffi_http", "url": url, "status": resp.status_code})
-        return None
-    cd = resp.headers.get("Content-Disposition", "") or ""
-    ct = resp.headers.get("Content-Type", "") or ""
-    return resp.content, cd, ct
+    current = url
+    for _ in range(_MAX_REDIRECTS + 1):
+        try:
+            ensure_safe_public_url(current)
+            resp = cc.get(
+                current,
+                impersonate=_IMPERSONATE,
+                headers={
+                    "Accept": "application/pdf,application/vnd.ms-excel,application/octet-stream,*/*"
+                },
+                timeout=_CONNECT_READ_TIMEOUT,
+                allow_redirects=False,
+            )
+        except (UnsafeURLError, ValueError) as e:
+            log.warning({"event": "unsafe_url_blocked", "url": redact(current), "error": redact(e)})
+            return None
+        except Exception as e:  # curl_cffi exposes a broad error tree; degrade safely
+            log.error({"event": "curl_cffi_failed", "url": redact(current), "error": redact(e)[:120]})
+            return None
+        if 300 <= resp.status_code < 400:
+            try:
+                current = safe_redirect_url(current, resp.headers.get("Location", "") or "")
+            except UnsafeURLError as e:
+                log.warning({"event": "unsafe_redirect_blocked", "url": redact(current), "error": redact(e)})
+                return None
+            continue
+        if resp.status_code != 200:
+            log.error({"event": "curl_cffi_http", "url": redact(current), "status": resp.status_code})
+            return None
+        cd = resp.headers.get("Content-Disposition", "") or ""
+        ct = resp.headers.get("Content-Type", "") or ""
+        return resp.content, cd, ct
+    log.warning({"event": "too_many_redirects", "url": redact(url)})
+    return None
 
 
 def _fetch_bytes(url: str) -> tuple[bytes, str, str] | None:
@@ -208,6 +233,11 @@ def _fetch_bytes(url: str) -> tuple[bytes, str, str] | None:
     An explicit HTTP error (403/404) is a real refusal, not a tarpit, so it is NOT
     retried.
     """
+    try:
+        ensure_safe_public_url(url)
+    except UnsafeURLError as e:
+        log.warning({"event": "unsafe_url_blocked", "url": redact(url), "error": redact(e)})
+        return None
     req = urllib.request.Request(
         url,
         headers={
@@ -218,19 +248,20 @@ def _fetch_bytes(url: str) -> tuple[bytes, str, str] | None:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=_CONNECT_READ_TIMEOUT) as resp:
+        opener = urllib.request.build_opener(GuardedHTTPRedirectHandler())
+        with opener.open(req, timeout=_CONNECT_READ_TIMEOUT) as resp:
             return (
                 resp.read(),
                 resp.headers.get("Content-Disposition", "") or "",
                 resp.headers.get("Content-Type", "") or "",
             )
     except urllib.error.HTTPError as e:
-        log.error({"event": "http_error", "url": url, "status": e.code})
+        log.error({"event": "http_error", "url": redact(url), "status": e.code})
         return None
     except (urllib.error.URLError, OSError, ValueError) as e:
         # Connection refused / DNS / read-timeout (the tarpit signature) → try the
         # TLS-impersonating client before giving up.
-        log.warning({"event": "urllib_failed_trying_curl", "url": url, "error": str(e)[:120]})
+        log.warning({"event": "urllib_failed_trying_curl", "url": redact(url), "error": redact(e)[:120]})
         return _fetch_curl_cffi(url)
 
 
@@ -256,7 +287,7 @@ def _download(url: str, dest_dir: Path, base_name: str) -> Path | None:
     if dest.suffix in {".pdf", ".xlsx", ".xls"} and data[:512].lstrip()[:15].lower().startswith(
         (b"<!doctype", b"<html", b"<?xml")
     ):
-        log.warning({"event": "html_not_document", "url": url})
+        log.warning({"event": "html_not_document", "url": redact(url)})
         return None
 
     dest_dir.mkdir(parents=True, exist_ok=True)

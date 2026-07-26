@@ -488,24 +488,19 @@ def record_validation_issue(
     raw_value: str | None,
     expected: str | None,
 ) -> int:
-    """Insert one validation_issues row; returns its id."""
-    cur = conn.execute(
-        "INSERT INTO validation_issues "
-        "(run_id, source_doc_id, ticker, severity, rule, raw_value, expected, "
-        " raised_at, resolved_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
-        (
-            run_id,
-            source_doc_id,
-            ticker.upper() if ticker is not None else None,
-            severity.value,
-            rule.value,
-            raw_value,
-            expected,
-            datetime.now(),
-        ),
+    """Record an issue against its defect fingerprint; returns its stable id."""
+    from pipeline.validation_issue_store import record_issue
+
+    return record_issue(
+        conn,
+        run_id=run_id,
+        source_doc_id=source_doc_id,
+        ticker=ticker,
+        severity=severity.value,
+        rule=rule.value,
+        raw_value=raw_value,
+        expected=expected,
     )
-    return int(cur.lastrowid) if cur.lastrowid is not None else 0
 
 
 def guard_llm_extracted_parent(

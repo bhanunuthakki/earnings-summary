@@ -98,13 +98,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from pydantic import TypeAdapter
+
 from compute.segment_crosstabs_llm import (
     _axis_to_dim_type,
     _parse_currency,
     _parse_decimal,
     _parse_period_end,
 )
-from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
+from llm.structured import call_llm_structured
+from llm_client import FAST_CLASSIFIER_MODEL
 from models.facts import FiscalPeriodType, SegmentDimension, Unit
 from pipeline.sec_6k_fetch import (
     fetch_6k_exhibit_text,
@@ -485,16 +488,16 @@ If the text has no such breakdown at all, return {{"breakdowns": []}}.
 
 def _ask_claude(ticker: str, year: int, quarter: str, text: str) -> list[SixKBreakdown]:
     prompt = _build_prompt(ticker, year, quarter, text)
-    raw = _call_claude(prompt, model=FAST_CLASSIFIER_MODEL).strip()
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RE.sub("", raw).strip()
-    try:
-        parsed: object = json.loads(raw)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(parsed, dict):
-        return []
-    parsed_obj = cast("dict[str, object]", parsed)
+    parsed_obj = cast(
+        dict[str, object],
+        call_llm_structured(
+            prompt,
+            purpose="segment_6k_extract",
+            expect="object",
+            required_keys=("breakdowns",),
+            schema=TypeAdapter(dict[str, object]),
+        ),
+    )
     items = parsed_obj.get("breakdowns")
     if not isinstance(items, list):
         return []

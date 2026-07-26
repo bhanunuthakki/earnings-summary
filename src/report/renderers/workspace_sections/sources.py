@@ -21,10 +21,10 @@ from ui.controls import prov_severity_tick
 
 # The research server the report deep-links into. The report opens via file://,
 # so console links (the in-app /source/<doc_id> viewers, the live data-quality
-# console) must be absolute — same hardcoded base the chat/socratic links use
-# (workspace_sections/boot.py). The viewers 302 to the original URL when a doc
-# isn't in-app-viewable, so the link is never a dead end.
-_CONSOLE_BASE = "http://localhost:7421"
+# console) carry a server-relative path. The workspace JS resolves that path
+# against the serving Tailscale origin for HTTP reports and the configured
+# localhost fallback for file:// reports. The viewers 302 to the original URL
+# when a doc isn't in-app-viewable, so the link is never a dead end.
 
 __all__ = [
     "_prompt_quality_panel",
@@ -53,7 +53,8 @@ def _sources_tab(
     # console (System → Provenance) — resolve / refresh / diagnose live there.
     body.write(
         '<div class="row-actions">'
-        f'<a class="k-btn k-btn-quiet k-btn-sm" href="{_CONSOLE_BASE}/#provenance" '
+        '<a class="k-btn k-btn-quiet k-btn-sm" href="/#provenance" '
+        'data-server-path="/#provenance" '
         'target="_blank" rel="noopener">Open the live data-quality console &rarr;</a>'
         "</div>"
     )
@@ -189,7 +190,8 @@ def _sources_tab(
             # reports without it fall back to the plain path text.
             if d.doc_id is not None:
                 path_cell = (
-                    f'<a href="{_CONSOLE_BASE}/source/{d.doc_id}" target="_blank" '
+                    f'<a href="/source/{d.doc_id}" '
+                    f'data-server-path="/source/{d.doc_id}" target="_blank" '
                     f'rel="noopener">{_esc(d.file_path)}</a>'
                 )
             else:

@@ -29,6 +29,7 @@ import pytest
 # monkeypatch (see test_fmp_tier_ladder) and are unaffected; setdefault (not a
 # hard write) means an explicitly-exported FMP_TIER still wins.
 os.environ.setdefault("FMP_TIER", "basic")
+os.environ.setdefault("COMMENTS_SERVER_REPORT_CAPABILITY", "test-report-capability")
 
 
 @pytest.fixture(autouse=True)

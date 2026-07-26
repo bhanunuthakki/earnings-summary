@@ -15,6 +15,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\weekly_score_stances_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\score_advisor_stances.py > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "weekly-score-stances" "portfolio-db" execution\score_advisor_stances.py > "%LOG_FILE%" 2>&1
 
 endlocal

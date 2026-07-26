@@ -29,9 +29,12 @@ JS = (
       setTimeout(init, 100);
       return;
     }
-    var SERVER_URL = boot.server_url || 'http://localhost:7421';
+    var SERVER_URL = /^https?:$/.test(window.location.protocol)
+      ? window.location.origin
+      : (boot.server_url || 'http://localhost:7421');
     var TICKER = boot.ticker;
     var REPORT_DATE = boot.report_date;
+    var MUTATION_HEADERS = window.__workspaceMutationHeaders || {'Content-Type': 'application/json'};
 
     // The chat panel is now a push-sidebar (flex sibling of .l1-root),
     // mirroring the comments sidebar — see _chat_drawer_shell +
@@ -139,7 +142,7 @@ JS = (
       // SSE via fetch + ReadableStream (EventSource doesn't support POST)
       fetch(SERVER_URL + '/chat/' + TICKER, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: MUTATION_HEADERS,
         body: JSON.stringify({report_date: REPORT_DATE, message: msg, context_spec: lastSpec}),
       }).then(function(resp) {
         if (!resp.ok || !resp.body) throw new Error('chat HTTP ' + resp.status);
@@ -257,7 +260,7 @@ JS = (
           var dryRun = btn.getAttribute('data-action') === 'preview';
           fetch(SERVER_URL + '/chat/' + TICKER + '/apply', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: MUTATION_HEADERS,
             body: JSON.stringify({diff: diff, report_date: REPORT_DATE, dry_run: dryRun}),
           }).then(function(r) { return r.json(); }).then(function(res) {
             var msg = (res.applied ? '✓ Applied: ' : (res.dry_run ? '↗ Preview: ' : '✗ ')) +

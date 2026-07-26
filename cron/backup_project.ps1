@@ -25,8 +25,10 @@ Write-Host "=== 1/2  consistent DB snapshot (gzipped) ==="
 
 Write-Host "=== 2/2  mirror working tree -> $root\tree ==="
 $dst = Join-Path $root 'tree'
-# Exclude only: corruption-prone live files + regenerable bulk.
+# Credentials are deliberately excluded even though this is a private Drive
+# mirror: project backups must never duplicate secret-bearing source files.
+# The consistent DB snapshot remains a separate, recoverable artifact.
 $xd = @('.git', 'venv', '.tmp', '.cache', 'cache', 'logs', '__pycache__', '.pytest_cache', '.claude', 'node_modules')
-$xf = @('*.pyc', '*.db', '*.db-wal', '*.db-shm', 'portfolio.db.bak*')
+$xf = @('*.pyc', '*.db', '*.db-wal', '*.db-shm', 'portfolio.db.bak*', '.env', '.env.*', 'credentials.json', 'token.json', '*credential*', '*secret*', '*.pem', '*.key', '*.pfx', '*.p12')
 robocopy $repo $dst /MIR /XD $xd /XF $xf /R:1 /W:1 /NP /NFL /NDL
 if ($LASTEXITCODE -ge 8) { Write-Host "robocopy ERROR (exit $LASTEXITCODE)" } else { Write-Host "mirror OK (robocopy exit $LASTEXITCODE)" }

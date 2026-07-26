@@ -10,6 +10,8 @@ from __future__ import annotations
 import threading
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -150,3 +152,32 @@ def test_list_jobs_returns_snapshots():
     _quick_job(r, ticker="GOOG")
     snaps = r.list_jobs()
     assert {s["ticker"] for s in snaps} == {"NU", "GOOG"}
+
+
+def test_repo_registry_wraps_interactive_writer_with_shared_lock(tmp_path: Path):
+    r = Registry(repo_root=tmp_path)
+    with patch("dispatch_registry.subprocess.Popen") as popen:
+        process = popen.return_value
+        process.stdout = iter(())
+        process.wait.return_value = 0
+        process.returncode = 0
+        job = r.start(ticker="NU", kind="refresh-full", argv=["python", "writer.py"])
+        assert job._reader is not None
+        job._reader.join(timeout=2)
+
+    command = popen.call_args.args[0]
+    assert command[1] == str(tmp_path / "src/runtime/job_runtime.py")
+    assert command[2:6] == ["--job", "interactive-refresh-full", "--write-set", "portfolio-db"]
+    assert command[-3:] == ["--", "python", "writer.py"]
+
+
+def test_explicit_read_only_job_is_not_wrapped(tmp_path: Path):
+    r = Registry(repo_root=tmp_path)
+    job = r.start(
+        ticker="_REPO",
+        kind="tracker-server",
+        argv=["server", "--port", "8000"],
+        write_sets=[],
+        spawn=False,
+    )
+    assert job.write_sets == ()

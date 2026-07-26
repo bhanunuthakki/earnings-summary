@@ -41,6 +41,10 @@ class IngestionRun(BaseModel):
 
     id: int | None = None
     run_id: str
+    # ``run_id`` remains the compatibility alias for the concrete attempt.
+    # The logical id survives retries and is added by migration 0211.
+    pipeline_key: str | None = None
+    attempt_id: str | None = None
     started_at: datetime
     ended_at: datetime | None
     directive: str
@@ -54,6 +58,7 @@ class StageTransition(BaseModel):
 
     id: int | None = None
     run_id: str
+    attempt_id: str | None = None
     ticker: str
     period_end: datetime | None
     stage: StageName

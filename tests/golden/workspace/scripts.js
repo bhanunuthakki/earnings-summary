@@ -580,13 +580,28 @@ window.livingGrid = window.livingGrid || function () {
   var commentStore = readJson('workspace-comments') || {comments: []};
   if (!boot) return;  // No boot data — comments feature disabled.
 
-  var SERVER_URL = boot.server_url || 'http://localhost:7421';
+  var SERVER_URL = /^https?:$/.test(window.location.protocol)
+    ? window.location.origin
+    : (boot.server_url || 'http://localhost:7421');
   var TICKER = boot.ticker;
   var REPORT_DATE = boot.report_date;
+  var MUTATION_HEADERS = {'Content-Type': 'application/json'};
+  if (boot.report_capability) {
+    MUTATION_HEADERS['X-Report-Capability'] = boot.report_capability;
+  }
+  window.__workspaceMutationHeaders = MUTATION_HEADERS;
 
   // Allow the chat module to share boot + comment refs.
   window.__workspaceCommentBoot = boot;
   window.__workspaceCommentStore = commentStore;
+
+  // Navigation links must follow the server that delivered an HTTP report
+  // (including a Tailscale address), while standalone file:// reports retain
+  // the configured localhost fallback.
+  document.querySelectorAll('a[data-server-path]').forEach(function(link) {
+    var path = link.getAttribute('data-server-path');
+    if (path && path.charAt(0) === '/') link.href = SERVER_URL + path;
+  });
 
   // ---------------------------------------------------------------
   // Draft autosave — survive tab close / refresh / server-down with
@@ -682,7 +697,7 @@ window.livingGrid = window.livingGrid || function () {
           try {
             r = await fetch(SERVER_URL + '/comments', {
               method: 'POST',
-              headers: {'Content-Type': 'application/json'},
+              headers: MUTATION_HEADERS,
               body: JSON.stringify(it.payload)
             });
           } catch (err) {
@@ -829,7 +844,7 @@ window.livingGrid = window.livingGrid || function () {
   // ---------------------------------------------------------------
   // Sidebar — static shell rendered by the Python template. Opens
   // when a pin / mark / floater-button is activated; lists comments
-  // for that anchor + a "new comment" form. Dismiss via the × button
+  // for that anchor + a "new comment" form. Dismiss via the close button
   // or Escape — no outside-click listener (it raced with mousedown-
   // triggered opens from the selection floater and closed the
   // sidebar on the same gesture that opened it).
@@ -1038,7 +1053,7 @@ window.livingGrid = window.livingGrid || function () {
     var anchorAtSubmit = currentAnchor;
     fetch(SERVER_URL + '/comments', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: MUTATION_HEADERS,
       body: JSON.stringify(payload)
     }).then(function(r) { return r.json(); }).then(function(created) {
       commentStore.comments.push(created);
@@ -1073,7 +1088,7 @@ window.livingGrid = window.livingGrid || function () {
     var anchorAtSubmit = currentAnchor;
     fetch(SERVER_URL + '/api/notes', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: MUTATION_HEADERS,
       body: JSON.stringify({
         ticker: TICKER,
         kind: kind,
@@ -1096,7 +1111,7 @@ window.livingGrid = window.livingGrid || function () {
   function updateComment(id, status) {
     fetch(SERVER_URL + '/comments/' + id, {
       method: 'PATCH',
-      headers: {'Content-Type': 'application/json'},
+      headers: MUTATION_HEADERS,
       body: JSON.stringify({ticker: TICKER, report_date: REPORT_DATE, status: status})
     }).then(function(r) { return r.json(); }).then(function(updated) {
       for (var i = 0; i < commentStore.comments.length; i++) {
@@ -1431,9 +1446,12 @@ window.livingGrid = window.livingGrid || function () {
       setTimeout(init, 100);
       return;
     }
-    var SERVER_URL = boot.server_url || 'http://localhost:7421';
+    var SERVER_URL = /^https?:$/.test(window.location.protocol)
+      ? window.location.origin
+      : (boot.server_url || 'http://localhost:7421');
     var TICKER = boot.ticker;
     var REPORT_DATE = boot.report_date;
+    var MUTATION_HEADERS = window.__workspaceMutationHeaders || {'Content-Type': 'application/json'};
 
     // The chat panel is now a push-sidebar (flex sibling of .l1-root),
     // mirroring the comments sidebar — see _chat_drawer_shell +
@@ -1541,7 +1559,7 @@ window.livingGrid = window.livingGrid || function () {
       // SSE via fetch + ReadableStream (EventSource doesn't support POST)
       fetch(SERVER_URL + '/chat/' + TICKER, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: MUTATION_HEADERS,
         body: JSON.stringify({report_date: REPORT_DATE, message: msg, context_spec: lastSpec}),
       }).then(function(resp) {
         if (!resp.ok || !resp.body) throw new Error('chat HTTP ' + resp.status);
@@ -1659,7 +1677,7 @@ window.livingGrid = window.livingGrid || function () {
           var dryRun = btn.getAttribute('data-action') === 'preview';
           fetch(SERVER_URL + '/chat/' + TICKER + '/apply', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: MUTATION_HEADERS,
             body: JSON.stringify({diff: diff, report_date: REPORT_DATE, dry_run: dryRun}),
           }).then(function(r) { return r.json(); }).then(function(res) {
             var msg = (res.applied ? '✓ Applied: ' : (res.dry_run ? '↗ Preview: ' : '✗ ')) +
@@ -1752,7 +1770,10 @@ window.livingGrid = window.livingGrid || function () {
     try { return JSON.parse(el.textContent); } catch (e) { return null; }
   }
   var boot = readJson('workspace-boot') || {};
-  var SERVER_URL = boot.server_url || 'http://localhost:7421';
+  var SERVER_URL = /^https?:$/.test(window.location.protocol)
+    ? window.location.origin
+    : (boot.server_url || 'http://localhost:7421');
+  var MUTATION_HEADERS = window.__workspaceMutationHeaders || {'Content-Type': 'application/json'};
   var TICKER = root.getAttribute('data-dcf-ticker') || boot.ticker;
 
   var elToggle = document.getElementById('dcf-edit-toggle');
@@ -2011,7 +2032,7 @@ window.livingGrid = window.livingGrid || function () {
     setStatus('Recomputing…');
     fetch(SERVER_URL + '/api/dcf/recompute', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: MUTATION_HEADERS,
       body: JSON.stringify({inputs: model})
     }).then(function (r) {
       return r.json().then(function (j) { return {ok: r.ok, status: r.status, body: j}; });
@@ -2134,7 +2155,7 @@ window.livingGrid = window.livingGrid || function () {
     setStatus('Saving…');
     fetch(SERVER_URL + '/api/dcf/save', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: MUTATION_HEADERS,
       body: JSON.stringify({ticker: TICKER, inputs: model})
     }).then(function (r) {
       return r.json().then(function (j) { return {ok: r.ok, status: r.status, body: j}; });
@@ -2168,7 +2189,10 @@ window.livingGrid = window.livingGrid || function () {
       setTimeout(init, 100);
       return;
     }
-    var SERVER_URL = boot.server_url || 'http://localhost:7421';
+    var SERVER_URL = /^https?:$/.test(window.location.protocol)
+      ? window.location.origin
+      : (boot.server_url || 'http://localhost:7421');
+    var MUTATION_HEADERS = window.__workspaceMutationHeaders || {'Content-Type': 'application/json'};
 
     document.querySelectorAll('.l1-decision-card .dc-act').forEach(function (btn) {
       btn.addEventListener('click', function () {
@@ -2185,7 +2209,7 @@ window.livingGrid = window.livingGrid || function () {
         if (statusEl) statusEl.textContent = 'Recording ' + verb + '…';
         fetch(SERVER_URL + '/api/research/card/' + artifactId + '/' + verb, {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
+          headers: MUTATION_HEADERS,
           body: JSON.stringify({})
         }).then(function (r) {
           return r.json().then(function (data) { return {ok: r.ok, data: data}; });

@@ -27,7 +27,7 @@ set LOG_FILE=%LOG_DIR%\weekly_model_eval_%TS%.log
 cd /d "%PROJECT_ROOT%"
 
 echo === %DATE% %TIME% weekly_model_eval starting === >> "%LOG_FILE%" 2>&1
-python execution\run_weekly_model_eval.py ^
+call "%PROJECT_ROOT%\cron\run_python.bat" "weekly-model-eval" "portfolio-db" execution\run_weekly_model_eval.py ^
     --repo-root "%PROJECT_ROOT%" >> "%LOG_FILE%" 2>&1
 echo === %DATE% %TIME% weekly_model_eval done (exit %ERRORLEVEL%) === >> "%LOG_FILE%" 2>&1
 

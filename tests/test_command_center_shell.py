@@ -40,6 +40,12 @@ def test_overview_panel_is_the_research_cockpit() -> None:
     assert "/actions/maintenance" not in html
 
 
+def test_holding_panel_ignores_late_response_from_previous_ticker() -> None:
+    """A slow prior-ticker fetch must never paint after a newer selection."""
+    assert "LOAD_GENERATION" in SHELL_JS
+    assert "generation !== LOAD_GENERATION[pid]" in SHELL_JS
+
+
 def test_overview_rail_carries_unread_badge_and_inbox_js() -> None:
     """Inbox v2: the rail header carries the per-surface unread badge and the
     aside embeds INBOX_JS (unread accents; the hover ✓/✕ actions are HTMX now,

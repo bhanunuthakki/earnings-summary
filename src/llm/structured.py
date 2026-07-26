@@ -30,11 +30,14 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, TypeVar, cast
+
+from pydantic import TypeAdapter, ValidationError
 
 from llm.cli import call_llm
 
 log = logging.getLogger(__name__)
+T = TypeVar("T")
 
 JSON_FENCE_RX = re.compile(r"^```(?:json)?\s*|\s*```$")
 
@@ -121,10 +124,12 @@ def call_llm_structured(
     run_id: str | None = None,
     model: str | None = None,
     backend: str | None = None,
+    timeout_seconds: int | None = None,
     expect: Literal["object", "array"] = "object",
     required_keys: tuple[str, ...] = (),
+    schema: TypeAdapter[T] | None = None,
     db_path: Path | str | None = None,
-) -> object:
+) -> T | object:
     """``call_llm`` + strict parse + one retry-with-feedback, loud on failure.
 
     ``db_path`` scopes the call's DB-backed layers (model pins, prompt A/B,
@@ -146,11 +151,13 @@ def call_llm_structured(
         run_id=run_id,
         model=model,
         backend=backend,
+        timeout_seconds=timeout_seconds,
         db_path=db_path,
     )
     try:
-        return parse_json_payload(raw, expect=expect, required_keys=required_keys)
-    except ValueError as first_exc:
+        parsed = parse_json_payload(raw, expect=expect, required_keys=required_keys)
+        return schema.validate_python(parsed) if schema is not None else parsed
+    except (ValueError, ValidationError) as first_exc:
         log.warning(
             {
                 "event": "llm_structured_parse_failed_retrying",
@@ -168,11 +175,13 @@ def call_llm_structured(
         run_id=run_id,
         model=model,
         backend=backend,
+        timeout_seconds=timeout_seconds,
         db_path=db_path,
     )
     try:
-        return parse_json_payload(raw_retry, expect=expect, required_keys=required_keys)
-    except ValueError as retry_exc:
+        parsed = parse_json_payload(raw_retry, expect=expect, required_keys=required_keys)
+        return schema.validate_python(parsed) if schema is not None else parsed
+    except (ValueError, ValidationError) as retry_exc:
         log.error(
             {
                 "event": "llm_structured_parse_failed_twice",

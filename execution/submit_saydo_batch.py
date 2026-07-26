@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from datetime import UTC, datetime
@@ -96,8 +97,18 @@ class _AnthropicClient(Protocol):
 
 
 def _default_client_factory() -> _AnthropicClient:
-    """Lazy import so the script (and its tests) don't require the SDK to be
-    installed unless a real submission is attempted."""
+    """Construct the *explicitly approved* metered Anthropic Batch client.
+
+    Batch is not a subscription CLI transport.  It remains available only for
+    this named scheduler-compatible exception, which operators must opt into
+    per process after reviewing its hard budget gate.  Tests inject a fake and
+    do not need this flag because they never construct a billed client.
+    """
+    if os.environ.get("ES_APPROVED_ANTHROPIC_BATCH") != "1":
+        raise RuntimeError(
+            "Anthropic Batch is metered and disabled by default. Set "
+            "ES_APPROVED_ANTHROPIC_BATCH=1 only for an approved governed batch run."
+        )
     from anthropic import Anthropic
 
     return cast("_AnthropicClient", Anthropic())
@@ -503,6 +514,12 @@ def _write_results(
         elif result_type == "errored":
             counts["errored"] += 1
             err = getattr(result, "error", None)
+            _record_batched_failure(
+                custom_id=cid,
+                request=request_index.get(cid),
+                error=err,
+                now=now,
+            )
             error_records.append(
                 {
                     "custom_id": cid,
@@ -512,9 +529,21 @@ def _write_results(
             )
         elif result_type == "expired":
             counts["expired"] += 1
+            _record_batched_failure(
+                custom_id=cid,
+                request=request_index.get(cid),
+                error="expired",
+                now=now,
+            )
             error_records.append({"custom_id": cid, "type": "expired"})
         elif result_type == "canceled":
             counts["canceled"] += 1
+            _record_batched_failure(
+                custom_id=cid,
+                request=request_index.get(cid),
+                error="canceled",
+                now=now,
+            )
             error_records.append({"custom_id": cid, "type": "canceled"})
         else:
             # Unknown variant — record without crashing.
@@ -613,9 +642,47 @@ def _record_batched_call(
             output_tokens=output_tokens or None,
             cost_estimate_usd=cost_float,
             fallback_used=None,
+            provider="anthropic",
+            transport="metered_api",
+            attempts=1,
+            retries=0,
+            outcome="success",
         )
     )
     return Decimal(str(cost_float)).quantize(Decimal("0.0001"))
+
+
+def _record_batched_failure(
+    *,
+    custom_id: str,
+    request: dict[str, object] | None,
+    error: object,
+    now: Callable[[], datetime],
+) -> None:
+    """Ledger every terminal batch result, including failures, without text."""
+    params = cast("dict[str, object]", request.get("params", {})) if request else {}
+    prompt = _prompt_text_from_params(params)
+    model_raw = params.get("model")
+    model = model_raw if isinstance(model_raw, str) else "unknown"
+    record_call(
+        LlmCallRecord(
+            called_at=now(),
+            model=model,
+            prompt_sha256=sha256_text(prompt) if prompt else "0" * 64,
+            prompt_chars=len(prompt),
+            elapsed_ms=0,
+            purpose="pairwise_analysis",
+            ticker=_ticker_from_custom_id(custom_id),
+            scope=f"batch:saydo:{custom_id}",
+            error=str(error)[:500],
+            provider="anthropic",
+            transport="metered_api",
+            attempts=1,
+            retries=0,
+            outcome="failure",
+            failure_class="batch_terminal",
+        )
+    )
 
 
 def _batched_cost_usd(input_tokens: int, output_tokens: int) -> float:

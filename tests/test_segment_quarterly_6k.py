@@ -187,11 +187,11 @@ def test_supported_ticker_end_to_end_writes_both_metrics(
     monkeypatch.setattr(segment_quarterly_6k, "fetch_6k_exhibit_text", fake_fetch)
     call_count = {"n": 0}
 
-    def fake_call_claude(prompt: str, **_: object) -> str:
+    def fake_call_claude(prompt: str, **_: object) -> object:
         call_count["n"] += 1
-        return _NU_LLM_RESPONSE
+        return json.loads(_NU_LLM_RESPONSE)
 
-    monkeypatch.setattr(segment_quarterly_6k, "_call_claude", fake_call_claude)
+    monkeypatch.setattr(segment_quarterly_6k, "call_llm_structured", fake_call_claude)
 
     result = extract_for_ticker("NU", 2026, "Q1", tmp_path, conn)
 
@@ -395,7 +395,11 @@ def test_subtotal_rows_are_skipped_deterministically(
 
     monkeypatch.setattr(segment_quarterly_6k, "locate_6k_exhibit", lambda *a, **k: _NU_LOCATED)
     monkeypatch.setattr(segment_quarterly_6k, "fetch_6k_exhibit_text", lambda *a, **k: fetched)
-    monkeypatch.setattr(segment_quarterly_6k, "_call_claude", lambda *a, **k: response_with_total)
+    monkeypatch.setattr(
+        segment_quarterly_6k,
+        "call_llm_structured",
+        lambda *a, **k: json.loads(response_with_total),
+    )
 
     result = extract_for_ticker("NU", 2024, "Q3", tmp_path, conn)
 
