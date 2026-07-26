@@ -75,10 +75,17 @@ def render_portfolio_health_panel(db_path: Path, *, user_id: str = DEFAULT_USER_
     Synthesis (thesis rollup + allocation) landing, the whole-book Risk cockpit,
     and the monthly adversarial Red Team brief. Risk + Red Team are the
     console's heavy tail (tracker round-trips + the brief) — they defer to
-    on-reveal HTMX fragments so Synthesis paints first (B4a)."""
+    on-reveal HTMX fragments so Synthesis paints first (B4a).
+
+    Wave 4 (D1 propagation): the Band-1 read leads here too. The tile GRID is
+    a documented exception — Health's three children are themselves composite
+    full-width surfaces (the Risk page alone is a dozen sections), so tiling
+    them side-by-side would crush real tables into half-columns for no density
+    gain; the read + anchor nav carry D1's value on this console."""
     from pipeline.portfolio_panel import render_portfolio_synthesis_panel
 
     sections: list[ConsoleSection] = [
+        ("brief", "Read", lambda: _health_brief(db_path)),
         ("synthesis", "Synthesis", lambda: render_portfolio_synthesis_panel(db_path)),
         ("risk", "Risk", lambda: _lazy_section_placeholder("/api/panel/portfolio_risk", "Risk")),
         (
@@ -87,7 +94,12 @@ def render_portfolio_health_panel(db_path: Path, *, user_id: str = DEFAULT_USER_
             lambda: _lazy_section_placeholder("/api/panel/red_team", "Red Team"),
         ),
     ]
-    return render_console("Health", sections, wrap_class="portfolio-health-console")
+    return _CONSOLE_CSS + render_console(
+        "Health",
+        sections,
+        wrap_class="portfolio-health-console",
+        nav_exclude=("brief",),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -114,6 +126,90 @@ def _jump_chip(anchor: str, label: str) -> str:
     return (
         f'<button type="button" class="k-chip k-chip-btn" data-console-jump="csec-{anchor}">'
         f"{escape(label)}</button>"
+    )
+
+
+def _health_brief(db_path: Path) -> str:
+    """The Health read: where the theses stand, how fresh the risk picture is,
+    and what the last red-team run left on the table."""
+    import sqlite3
+
+    lines: list[str] = []
+    links: list[str] = []
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        conn = None
+    if conn is not None:
+        try:
+            # Thesis health over the owner's REAL theses only — the same
+            # non-stub predicate the trigger ladder uses (bulk-onboarded STUB
+            # rows would otherwise read as 29 phantom breaches).
+            try:
+                counts = dict(
+                    conn.execute(
+                        "SELECT ts.breach_status, COUNT(*) FROM thesis_state ts "
+                        "JOIN tracked_companies tc ON tc.ticker = ts.ticker "
+                        "AND tc.archived_at IS NULL "
+                        "AND tc.list_type IN ('portfolio', 'evaluation') "
+                        "WHERE TRIM(COALESCE(ts.thesis, '')) <> '' "
+                        "AND ts.thesis NOT LIKE '%STUB:%' "
+                        "GROUP BY ts.breach_status"
+                    ).fetchall()
+                )
+                if counts:
+                    order = ("breach", "warn", "watch", "ok")
+                    bits = [f"{counts[k]} {escape(k)}" for k in order if counts.get(k)] + [
+                        f"{v} {escape(str(k))}" for k, v in counts.items() if k not in order and v
+                    ]
+                    tone_lead = "breach" in counts and counts["breach"] > 0
+                    lead = (
+                        "<strong>Thesis health needs eyes:</strong> "
+                        if tone_lead
+                        else "Thesis health: "
+                    )
+                    lines.append(lead + " &middot; ".join(bits) + ".")
+                    links.append(_jump_chip("synthesis", "Synthesis"))
+            except sqlite3.Error:
+                pass
+            try:
+                row = conn.execute(
+                    "SELECT run_key, COUNT(*) FROM red_team_items "
+                    "WHERE run_key = (SELECT MAX(run_key) FROM red_team_items) "
+                    "GROUP BY run_key"
+                ).fetchone()
+                if row is not None:
+                    lines.append(
+                        f"Last red-team run ({escape(str(row[0]))}): {row[1]} attack(s) on file."
+                    )
+                    links.append(_jump_chip("red_team", "Red Team"))
+            except sqlite3.Error:
+                pass
+        finally:
+            conn.close()
+
+    try:
+        import portfolio_risk_snapshot_store as risk_store
+        from ui.time import stamp_html
+
+        snap = risk_store.read_latest_snapshot(db_path=db_path)
+        if snap is not None and snap.captured_at:
+            lines.append(
+                "Whole-book risk picture "
+                + stamp_html(snap.captured_at, mode="rel", prefix="as of ")
+                + "."
+            )
+            links.append(_jump_chip("risk", "Risk"))
+    except Exception:
+        pass
+
+    return _brief_shell(
+        "The read",
+        "Where the theses stand and how fresh the risk picture is — the sections "
+        "below carry the evidence.",
+        lines,
+        links,
     )
 
 
