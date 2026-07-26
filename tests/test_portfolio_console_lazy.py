@@ -226,3 +226,52 @@ def test_health_console_unchanged_by_grid_mode(tmp_path: Path, probe_down: None)
     grid mode is opt-in per console, not a scaffold-wide flip."""
     html = render_portfolio_health_panel(tmp_path / "missing.db")
     assert 'class="console-grid"' not in html
+
+
+# --------------------------------------------------------------------------- #
+# Wave 4: the Band-1 read propagates to Health (grid stays a documented
+# exception — its children are composite full-width surfaces).
+# --------------------------------------------------------------------------- #
+
+
+def test_health_console_gets_the_brief_but_not_the_grid(tmp_path: Path, probe_down: None) -> None:
+    html = render_portfolio_health_panel(tmp_path / "missing.db")
+    assert 'id="csec-brief"' in html
+    assert 'class="panel console-brief"' in html
+    assert html.index('id="csec-brief"') < html.index('id="csec-synthesis"')
+    # Documented exception: no tile grid on Health.
+    assert 'class="console-grid"' not in html
+    # Lazy tail untouched.
+    assert html.count('class="cc-loading"') == 2
+
+
+def test_health_brief_counts_real_theses_only(tmp_path: Path, probe_down: None) -> None:
+    """The thesis-health line uses the non-stub predicate — bulk-onboarded
+    STUB rows must not read as phantom breaches."""
+    import sqlite3 as _sq
+
+    db = tmp_path / "health.db"
+    conn = _sq.connect(str(db))
+    conn.executescript(
+        "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT);"
+        "CREATE TABLE thesis_state (ticker TEXT, thesis TEXT, breach_status TEXT);"
+    )
+    rows = [
+        ("NU", "portfolio", "Real thesis.", "ok"),
+        ("MELI", "portfolio", "Real thesis two.", "breach"),
+        ("STB", "evaluation", "STUB: needs user-authored thesis", "breach"),
+        ("WCH", "watchlist", "Watchlist thesis (out of scope).", "breach"),
+    ]
+    for t, lt, thesis, status in rows:
+        conn.execute("INSERT INTO tracked_companies (ticker, list_type) VALUES (?, ?)", (t, lt))
+        conn.execute(
+            "INSERT INTO thesis_state (ticker, thesis, breach_status) VALUES (?, ?, ?)",
+            (t, thesis, status),
+        )
+    conn.commit()
+    conn.close()
+
+    html = render_portfolio_health_panel(db)
+    assert "Thesis health needs eyes:" in html
+    assert "1 breach" in html  # MELI only — STB (stub) and WCH (watchlist) excluded
+    assert "1 ok" in html

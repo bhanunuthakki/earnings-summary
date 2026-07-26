@@ -1,7 +1,15 @@
 # Surface Density & JIT-Artifact Redesign — the overarching design choices
 
-Status: PROPOSED 2026-07-24 (owner walkthrough feedback, screenshots 1–8 in
-`.tmp/walkthrough/`). Extends `directives/design_language.md` (tokens + kit stay
+Status: SHIPPED 2026-07-25/26 — Wave 0 #1012, Wave 1 #1019, Wave 2 #1020,
+Wave 3 #1021, Wave 4 (Health propagation) follows. Every application-map row
+below is live. One documented exception: the Health console carries the Band-1
+read + anchor nav but NOT the tile grid — its three children are themselves
+composite full-width surfaces (the Risk page alone is a dozen sections), so
+tiling them would crush real tables into half-columns for no density gain.
+Owner feedback on the shipped surfaces drives any further iteration.
+
+Origin: owner walkthrough feedback 2026-07-24, screenshots 1–8 in
+`.tmp/walkthrough/`. Extends `directives/design_language.md` (tokens + kit stay
 canonical and untouched) at the **composition** level: how a console page is
 shaped, where LLM synthesis sits, and when an artifact is a section vs a chip.
 
