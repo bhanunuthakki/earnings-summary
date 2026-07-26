@@ -1,53 +1,109 @@
 {
   "ticker": "LITE",
   "name": "Lumentum Holdings",
-  "last_updated": "2026-05-10",
-  "thesis": "Lumentum Holdings — optical components. STUB: needs user-authored thesis. Default key driver: Datacenter optics + telecom recovery. Until per-ticker break_rules are authored, the universal red-flag rules below detect outright deterioration.",
-  "verdict": "Pending",
-  "verdict_color": "gray",
-  "key_driver": "Datacenter optics + telecom recovery",
-  "_status": "stub_for_recurring_onboard",
+  "last_updated": "2026-07-25",
+  "thesis": "Lumentum is a datacenter-optics inflection: the Optical Communications segment (external / ultra-high-power lasers for co-packaged optics) is driving revenue acceleration ($337M FQ1'25 -> $808M FQ3'26) and margin expansion (gross 23% -> 44%, operating -24% -> +22%) as AI-cluster bandwidth scales 800G -> 1.6T -> 3.2T. The bull case (OFC 2026 analysis) rests on a narrow-linewidth / high-power-laser engineering lead that plugs into ring-modulator CPO, anchored by Nvidia's $2B investment and a rapid fab expansion. Break rules track the inflection REVERSING (revenue deceleration, margin-moat erosion, operating-leverage loss) - the moat is a lead, not a monopoly, and is actively contested by VCSEL NPO/CPO (Coherent), MOPA lasers (Furukawa), and SiPho integration (Tower/GloFo). Separately, the valuation is stretched: at ~$763 the market implies a ~66% 5-yr revenue CAGR / ~70x EV/EBITDA exit vs a debt-corrected DCF base fair value of ~$184 - the operational thesis and the valuation point in opposite directions. MoS bar 30%.",
+  "verdict": "Watch",
+  "verdict_color": "yellow",
+  "key_driver": "Datacenter CPO / ultra-high-power laser ramp (Optical Communications segment); linewidth + high-power engineering lead vs VCSEL, MOPA, and SiPho integration",
+  "_status": null,
   "tier_1_kpis": [
     {
       "name": "Revenue YoY Growth (USD)",
-      "current": "TBV from latest earnings release",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "<0% YoY for 2 consecutive Qs (placeholder; user to set per-ticker threshold)",
-      "source": "earnings release"
-    },
-    {
-      "name": "Operating Margin (GAAP)",
-      "current": "TBV",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Below 0% for 2 consecutive Qs (placeholder)",
-      "source": "earnings release"
+      "current": "+90.1% (FQ3'26, rev $808M)",
+      "prior": "+65.5% (FQ2'26, rev $666M)",
+      "yoy": "accelerating",
+      "status": "On track",
+      "break_condition": "Revenue YoY <15% for 2 consecutive Qs - the CPO inflection stalling (vs +90% now)",
+      "source": "earnings release",
+      "as_of": "2026-03-28"
     },
     {
       "name": "Gross Margin (GAAP)",
-      "current": "TBV",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Below 20% for 2 consecutive Qs (placeholder)",
-      "source": "earnings release"
+      "current": "44.2% (FQ3'26)",
+      "prior": "36.1% (FQ2'26)",
+      "yoy": "expanding",
+      "status": "On track",
+      "break_condition": "Gross margin <35% for 2 consecutive Qs - loss of the margin step-up / pricing pressure from VCSEL, MOPA, or integrated rivals",
+      "source": "earnings release",
+      "as_of": "2026-03-28"
     },
     {
-      "name": "Net Income Margin (GAAP)",
-      "current": "TBV",
+      "name": "Operating Margin (GAAP)",
+      "current": "21.6% (FQ3'26)",
+      "prior": "9.7% (FQ2'26)",
+      "yoy": "expanding",
+      "status": "On track",
+      "break_condition": "Operating margin <5% for 2 consecutive Qs - operating leverage breaking down",
+      "source": "earnings release",
+      "as_of": "2026-03-28"
+    },
+    {
+      "name": "Valuation vs DCF fair value",
+      "current": "~$763 price vs ~$184 debt-corrected DCF base (~+315% over fair; bull $249 / bear $133)",
       "prior": null,
       "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Below 0% for 2 consecutive Qs (placeholder)",
-      "source": "earnings release"
+      "status": "Stretched",
+      "break_condition": "Monitor only - market implies ~66% 5-yr revenue CAGR / ~70x EV/EBITDA exit; buy discipline governed by MoS bar 30%",
+      "source": "dcf_runs (debt-corrected 2026-07-25)",
+      "as_of": "2026-07-25"
     }
   ],
-  "tier_2_kpis": [],
+  "tier_2_kpis": [
+    {
+      "name": "CPO design-win qualification (Meta/Broadcom Phase 2)",
+      "current": "Monitor - qualification success unlocks hyperscaler deployment",
+      "break_condition": "Loss or slippage of a named CPO/UHP-laser design win at a lead hyperscaler",
+      "source": "transcript / IR"
+    },
+    {
+      "name": "Nvidia customer concentration",
+      "current": "Monitor - Nvidia $2B strategic investment; concentration is both anchor and single-point risk",
+      "break_condition": "Nvidia demand pause or second-sourcing away from Lumentum",
+      "source": "transcript / 10-Q"
+    },
+    {
+      "name": "Optical Communications segment revenue trajectory",
+      "current": "Monitor - the CPO/datacenter engine; QoQ decline is the leading tell before consolidated revenue rolls over",
+      "break_condition": "Optical Comms segment revenue declines QoQ for 2 consecutive Qs",
+      "source": "10-Q segment footnote"
+    },
+    {
+      "name": "Convertible-note dilution",
+      "current": "Monitor - ~$3.25B converts now captured in total debt; deeply ITM at ~$763, so if-converted dilution is not yet in the 96.2M diluted share count",
+      "break_condition": "Modeling watch, not a thesis break - see off-BS if-converted scope",
+      "source": "10-Q debt footnote"
+    }
+  ],
   "tier_3_kpis": [],
   "break_rules": [
+    {
+      "rule_id": "revenue_growth_below_15pct",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 15,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue YoY growth below 15% for 2 consecutive quarters - the datacenter/CPO inflection has stalled (thesis bet is sustained 25%+ growth off the current +90% ramp)."
+    },
+    {
+      "rule_id": "gross_margin_moat_erosion",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 35,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin back below 35% for 2 consecutive quarters - the recent step-up (23% -> 44%) is reversing, signalling pricing pressure as VCSEL NPO/CPO, MOPA lasers, or vertically-integrated rivals erode the linewidth premium."
+    },
+    {
+      "rule_id": "operating_leverage_reversal",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 5,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Operating margin below 5% for 2 consecutive quarters - the operating-leverage flip (-24% -> +22%) has reversed and the scale story is not holding."
+    },
     {
       "rule_id": "universal_revenue_decline",
       "kpi_name": "Revenue YoY Growth (USD)",
@@ -55,7 +111,7 @@
       "threshold": 0,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+      "narrative": "Revenue declining YoY for 2 consecutive quarters - outright top-line contraction."
     },
     {
       "rule_id": "universal_operating_loss",
@@ -64,7 +120,7 @@
       "threshold": 0,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
+      "narrative": "GAAP operating margin negative for 2 consecutive quarters - operating loss."
     },
     {
       "rule_id": "universal_gross_margin_collapse",
@@ -73,7 +129,7 @@
       "threshold": 20,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
+      "narrative": "Gross margin below 20% for 2 consecutive quarters - severe pricing/cost issue."
     },
     {
       "rule_id": "universal_net_loss",
@@ -82,7 +138,7 @@
       "threshold": 0,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
+      "narrative": "GAAP net income negative for 2 consecutive quarters - bottom-line loss."
     },
     {
       "rule_id": "capex_intensity_too_high",
@@ -91,7 +147,7 @@
       "threshold": 25,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
+      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs - capex bloat without proportional revenue."
     },
     {
       "rule_id": "fcf_margin_collapse",
@@ -100,7 +156,7 @@
       "threshold": 5,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
+      "narrative": "FCF margin below 5% for 2 consecutive Qs - cash conversion broken."
     },
     {
       "rule_id": "ocf_decline_yoy",
@@ -113,16 +169,14 @@
     }
   ],
   "schema_version": 2,
-  "wacc": null,
-  "mos_bar": null,
+  "wacc": 0.115,
+  "mos_bar": 0.3,
   "dcf_defaults": {
     "forecast_years": 5,
-    "terminal_multiple": null,
+    "terminal_multiple": 14,
     "gsheet_id": "1lL5Kxddb1w1u0c3o9LAM16BhiNCkM_bzzM8aO4T_Hl0"
   },
-  "flags": [
-    "DCF_PARAMS_PENDING"
-  ],
+  "flags": [],
   "segments": [],
   "operational_kpis": [],
   "break_rules_soft": []
