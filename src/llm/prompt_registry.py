@@ -111,10 +111,15 @@ class PromptTemplate:
                 f"{sorted(undeclared)}) — a drifted declaration lies to every consumer"
             )
 
-    def render(self, **variables: str) -> RenderedPrompt:
+    def render(self, **variables: object) -> RenderedPrompt:
         """Strict render: the provided variable set must EXACTLY equal the
         declared set. Missing → the slot would silently vanish; extra → the
-        caller thinks something is in the prompt that isn't. Both raise."""
+        caller thinks something is in the prompt that isn't. Both raise.
+
+        Values are ``object`` (not ``str``) so int/float variables render
+        exactly as the f-strings they replace did — ``{n}`` with ``n=7``
+        yields ``"7"`` under both ``f""`` and ``.format``, which is what the
+        byte-identity migration gates assert."""
         provided = set(variables)
         declared = set(self.variables)
         if provided != declared:
@@ -125,7 +130,9 @@ class PromptTemplate:
             )
         text = self.body.format(**variables)
         vars_sha = hashlib.sha256(
-            json.dumps(variables, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            json.dumps(
+                {k: str(v) for k, v in variables.items()}, sort_keys=True, ensure_ascii=False
+            ).encode("utf-8")
         ).hexdigest()
         return RenderedPrompt(
             text,
