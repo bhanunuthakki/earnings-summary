@@ -438,6 +438,11 @@ details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
 .k-doc { --k-measure: 66ch;
   max-width: calc(var(--k-measure) + var(--k-note-w, 13.5rem) + var(--sp-5)); }
 .k-doc .prose { max-width: var(--k-measure); }
+/* A document that inherits its host's width. The workspace report owns its own
+   page width (--pad-x) and spans wide financial tables, so it takes the
+   document SEMANTICS — prose capped at the measure, notes, section rhythm —
+   without the outer clamp. Everything else about .k-doc still applies. */
+.k-doc-fluid { max-width: none; }
 .k-doc-row { display: grid;
   grid-template-columns: minmax(0, 1fr) var(--k-note-w, 13.5rem);
   gap: 0 var(--sp-5); align-items: start; }

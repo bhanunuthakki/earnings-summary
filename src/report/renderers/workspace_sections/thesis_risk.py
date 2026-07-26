@@ -79,7 +79,14 @@ def _thesis_tab(
     macro_sensitivities: list[MacroSensitivityRow] | None = None,
     report_date: date | None = None,
 ) -> None:
-    body.write('<div class="tab-body">')
+    # §6.3: the thesis tab is a DOCUMENT, not a console — it carries one
+    # argument end to end. `k-doc` brings the document semantics (reading
+    # measure for prose, the margin-note primitives, the section rhythm);
+    # `k-doc-fluid` drops the kit's outer width clamp because the report owns
+    # its own page width and spans wide financial tables. The panels inside are
+    # mapped to sections by a scoped block in workspace_styles, so no call site
+    # here changes.
+    body.write('<div class="tab-body k-doc k-doc-fluid">')
     eyebrow_bits = ["Thesis", "Valuation", "Break conditions"]
     if thesis.last_updated is not None:
         eyebrow_bits.append(f"updated {fmt_date(thesis.last_updated.isoformat())}")
