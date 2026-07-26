@@ -495,6 +495,17 @@ def test_telegram_keyboard_falls_back_to_legacy_review_callback_without_url() ->
     assert {"text": "Review in Inbox", "callback_data": "spb:review:2104"} in buttons
 
 
+def test_private_mobile_inbox_url_reads_service_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "private_mobile_base_url"
+    config_path.write_text("https://desktop.example.ts.net\n", encoding="utf-8")
+    monkeypatch.delenv("EARNINGS_SUMMARY_PRIVATE_BASE_URL", raising=False)
+    monkeypatch.setattr(spb, "_PRIVATE_BASE_URL_PATH", config_path)
+
+    assert spb.private_mobile_inbox_url() == "https://desktop.example.ts.net/mobile/inbox"
+
+
 # --------------------------------------------------------------------------- #
 # render_markdown — five distinct sections
 # --------------------------------------------------------------------------- #

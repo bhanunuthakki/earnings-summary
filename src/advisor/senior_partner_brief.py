@@ -88,6 +88,9 @@ ENGINE_VERSION = "v1"
 # given this module's scope is COMPOSITION, not card freshness itself.
 _CARD_FRESH_DAYS = 14
 _PRIVATE_BASE_URL_ENV = "EARNINGS_SUMMARY_PRIVATE_BASE_URL"
+_PRIVATE_BASE_URL_PATH = (
+    Path(__file__).resolve().parents[2] / "data" / "secrets" / "private_mobile_base_url"
+)
 
 # "Active week" thresholds (PRD §9.1: "an active week increases visible
 # context, not ping frequency") — all deterministic, all over a rolling
@@ -1106,9 +1109,21 @@ def private_mobile_inbox_url(explicit: str | None = None) -> str | None:
     ``/mobile/inbox`` by itself is not actionable inside Telegram. The
     configured base must therefore be an absolute HTTP(S) URL (normally the
     Tailscale Serve HTTPS origin). ``explicit`` is primarily for tests and
-    one-shot callers; production reads ``EARNINGS_SUMMARY_PRIVATE_BASE_URL``.
+    one-shot callers. Production first reads
+    ``EARNINGS_SUMMARY_PRIVATE_BASE_URL``, then the local
+    ``data/secrets/private_mobile_base_url`` service configuration. The file
+    fallback matters for the Windows poller service, which runs as LocalSystem
+    and therefore does not inherit the interactive user's environment.
     """
-    raw = explicit if explicit is not None else os.environ.get(_PRIVATE_BASE_URL_ENV, "")
+    if explicit is not None:
+        raw = explicit
+    else:
+        raw = os.environ.get(_PRIVATE_BASE_URL_ENV, "")
+        if not raw.strip():
+            try:
+                raw = _PRIVATE_BASE_URL_PATH.read_text(encoding="utf-8")
+            except OSError:
+                raw = ""
     value = raw.strip().rstrip("/")
     if not value:
         return None
