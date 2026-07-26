@@ -698,9 +698,8 @@ def _disclosure_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[st
         where.append(f"ticker IN ({marks})")
         params.extend(focus)
     params.append(10 if focus else 8)
-    rows = _rows(
-        db_path,
-        f"""
+    # Clause fragments are fixed here; all values remain bound parameters.
+    query = f"""
         SELECT ticker, event_type, fiscal_year, fiscal_period, canonical_id,
                subject, subject_label, evidence_quote, materiality, verdict,
                interpretation_md
@@ -708,7 +707,10 @@ def _disclosure_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[st
         WHERE {" AND ".join(where)}
         ORDER BY COALESCE(materiality, 0) DESC, created_at DESC, id DESC
         LIMIT ?
-        """,
+        """  # nosec B608
+    rows = _rows(
+        db_path,
+        query,
         tuple(params),
     )
     if not rows:

@@ -209,7 +209,9 @@ def test_chat_surfaces_subprocess_errors_as_sse(monkeypatch, client):
     body = resp.get_data(as_text=True)
     assert "partial" in body
     assert "chat stream failed" in body
-    assert "subprocess died" in body
+    # The client gets a stable retry message, while the detailed exception is
+    # retained only in the redacted server log.
+    assert "subprocess died" not in body
 
 
 def test_chat_data_question_streams_view_fragment(

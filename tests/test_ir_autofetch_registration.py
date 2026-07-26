@@ -87,10 +87,17 @@ def test_real_download_picks_xlsx_extension_from_content_disposition(
 
     monkeypatch.setattr("execution.fetch_ir_documents.time.sleep", _nosleep)
 
-    def _fake_urlopen(req: object, timeout: int = 0) -> _FakeResp:
-        return _FakeResp({"Content-Disposition": 'attachment; filename="Nu 1Q26.xlsx"'}, b"PKfake")
+    class _FakeOpener:
+        def open(self, req: object, timeout: int = 0) -> _FakeResp:
+            return _FakeResp(
+                {"Content-Disposition": 'attachment; filename="Nu 1Q26.xlsx"'},
+                b"PKfake",
+            )
 
-    monkeypatch.setattr("execution.fetch_ir_documents.urllib.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr(
+        "execution.fetch_ir_documents.urllib.request.build_opener",
+        lambda *_handlers: _FakeOpener(),
+    )
     fid.process_ticker("NU", root=tmp_path, db_path=tmp_path / "db")
 
     staged = list((tmp_path / "ir_documents" / "NU").glob("*"))
