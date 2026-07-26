@@ -106,14 +106,19 @@ loop.*
 
 ---
 
-# Status After Execution & Open Items (2026-07-25)
+# Status After Execution & Open Items (refreshed 2026-07-26)
 
 Execution complete through D2. All 16 program PRs merged; closing pass run
-against prod as the single writer, verified end state: **35,570 sections / 45
+against prod as the single writer, verified closing snapshot: **35,570 sections / 45
 tickers / 39,964 items / 35,486 disclosure events** across 13 event types.
 Acceptance spot-checks: NVO risk_factors restored (3 sections), business TOC
 contamination 0/110 (was 93/97), concealment verdicts 5 → 2 after the
 mandatory-GAAP suppression stage.
+
+A read-only live audit on 2026-07-26, after subsequent ingestion and
+classification activity, sees **36,465 disclosure events**. Moving operational
+counts below are stamped separately rather than being presented as part of the
+closing snapshot.
 
 Closed by adjacent sessions since ratification: mobile-inbox doorway (#1044,
 merged), transcript period-duplication root cause with schema-enforced
@@ -126,7 +131,7 @@ guard).
 |---|---|---|
 | O1 | **D3 proactive operation** — new-accession trigger + weekly sweep. Code is unwritten pending the directive registration it must ship with. | **Owner: authorize the directive patch below**, then one build task |
 | O2 | **D4 surfaces** — Ask grounding → workspace strip → high-materiality feed chips (order ratified). Events exist; nothing consumes them yet. | Next build task; unblocked |
-| O3 | **3,269 `item_*` events unclassified** — P3 covered part of the 10-Q volume; the run is idempotent and skips classified rows. | One run: `python execution/classify_disclosure_specificity.py --tickers <all> --db-path <prod>` |
+| O3 | **3,100 `item_*` events remain unclassified** as of the 2026-07-26 live audit, down 169 during the ongoing run. The exact classifier predicate is `event_type LIKE 'item_%' AND verdict = 'unclassified'`; current classified rows are 19,983 `substantive` and 8,996 `boilerplate_update`. The run is idempotent and skips classified rows, so this is a moving count. | Let the current run finish; a later re-run of `python execution/classify_disclosure_specificity.py --tickers <all> --db-path <prod>` resumes only the remainder. |
 | O4 | **WIX 6-K exhibits** — hint + status wired (D1.2); coverage honestly reads `source_missing/no_local_exhibits` until an exhibit is fetched. | Resolves on the segment 6-K pipeline's next run for WIX |
 | O5 | **FMP quarterly backfill partial** — free tier: GOOG 402 (permanent at this tier), daily 429 after LITE. Fetcher skips existing files, so re-runs resume. FPI annual refresh remains blocked on the **pending FMP Starter purchase**. | Owner (purchase); otherwise re-run `fetch_fmp_10q_json.py` on later days |
 | O6 | **Stale directive text** — `directives/navigation_ia.md` and `directives/llm_quota_scheduling.md` still say the Senior Partner Brief is "NOT YET MERGED"/"not yet built"; it merged 2026-07-24 (#1002) and has now run twice. | **Owner: authorize edit + commit** (directive-change gate); the fix is deleting the two stale passages |
