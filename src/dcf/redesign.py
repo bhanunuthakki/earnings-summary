@@ -907,7 +907,7 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
             base_rev[s] = _fy_sum(fs, seg_row, fy_cols) if seg_row is not None else rev_ly
 
         cash_row = _find_row(fs, "Cash & ST Investments")
-        debt_row = _find_row(fs, "Long-term Debt")
+        debt_row = _find_row(fs, "Total Debt")
         shares_row = _find_row(fs, "Diluted Shares (M)")
         if cash_row is None or debt_row is None or shares_row is None:
             raise RedesignError("Financials sheet missing cash / debt / shares row")
