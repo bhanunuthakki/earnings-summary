@@ -62,6 +62,8 @@ sys.path.insert(
     0, str(PROJECT_ROOT / "execution")
 )  # for run_model_eval_sweep + apply_model_switches
 
+from llm.model_ladder import DEFAULT_JUDGES  # noqa: E402
+
 log = logging.getLogger("run_weekly_model_eval")
 
 # Harvest commands per ticker. Each forces a real incumbent LLM call so the
@@ -306,7 +308,7 @@ def main() -> int:
         capture_dir=capture_dir,
         db_path=db_path,
         purposes=None,
-        judges=["claude", "gemini"],
+        judges=list(DEFAULT_JUDGES),
         limit=args.sweep_limit,
         lookback_days=30,
         min_n=4,
@@ -402,7 +404,7 @@ def _run_prompt_cycles(
                 db_path,
                 capture_dir,
                 experiment_id,
-                judges=["claude", "gemini"],
+                judges=list(DEFAULT_JUDGES),
                 n=args.prompt_cases,
                 timeout_seconds=None,
             )

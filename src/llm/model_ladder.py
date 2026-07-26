@@ -113,9 +113,45 @@ MODEL_LADDER: dict[str, ModelCost] = {
 # verdict comes from >=2 DISTINCT families. OpenRouter open-weight models are
 # candidates, NOT judges, until a judge-agreement spot-check certifies one —
 # judging needs the discriminating model to out-class both contestants.
+# The cheap, INDEPENDENT (non-Anthropic, non-Google) judge. Picked from the
+# live OpenRouter catalogue 2026-07-25: $0.094/$0.188 per MTok with a 1M
+# context, so a judge prompt never truncates, and DeepSeek's reasoning
+# lineage is the strongest of the cheap open-weight families. Verified
+# live as a judge before wiring.
+# ROTATE THIS PERIODICALLY (owner directive 2026-07-25). It was picked from the
+# LIVE OpenRouter catalogue on 2026-07-25 — cheap open-weight models improve
+# fast and the price/quality frontier moves monthly, so a judge pinned once and
+# forgotten becomes a stale instrument measuring everything else.
+#
+# The rotation already has a home: ``model_frontier_research`` (MONTHLY, Opus +
+# web, src/llm/frontier.py) re-verifies the frontier and upserts discovered
+# models into ``candidate_models``. When it surfaces a cheaper-or-better
+# independent (non-Anthropic, non-Google) model — or a new public judge
+# benchmark lands — re-verify a candidate as a JUDGE before swapping:
+#   1. smoke-test it on a known-answer pair (the specific-vs-vague check);
+#   2. run one backtest with BOTH the incumbent and candidate judge and compare
+#      their verdicts on the same cases — a judge swap that changes verdicts is
+#      the thing you are trying to detect, not a detail;
+#   3. keep >=2 DISTINCT families in DEFAULT_JUDGES at all times.
+# Judge quality is the measurement instrument for every promotion in this
+# system; drift here silently biases model AND prompt selection.
+DEEPSEEK_JUDGE_MODEL = "deepseek/deepseek-v4-flash"  # reviewed 2026-07-25
+
+# Judge backend -> model. Cross-family by construction: a pool that is all
+# one family measures its own preferences (see llm_quality_program §P4).
+# The judges a SCHEDULED run uses by default. Gemini is deliberately absent:
+# its key is invalid (measured 2026-07-25), so including it made half of every
+# judgment error -> JUDGE_DEGRADED -> nothing could ever clear a promotion bar.
+# The pair below is cross-family by construction (open-weight + OpenAI), which
+# is the point: a same-family pool scored the same candidate 100% where these
+# two scored it 50%. Re-add gemini here once its key is rotated.
+DEFAULT_JUDGES: tuple[str, ...] = ("deepseek", "codex")
+
 JUDGE_POOL: dict[str, str] = {
     CLAUDE: "claude-opus-4-8",
     GEMINI: "gemini-3.1-pro-preview",
+    "deepseek": DEEPSEEK_JUDGE_MODEL,
+    "codex": "gpt-5.6-terra",
 }
 
 

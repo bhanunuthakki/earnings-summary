@@ -832,7 +832,7 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     judges = [j.strip() for j in str(args.judges).split(",") if j.strip()]
-    valid_judges = (CLAUDE, GEMINI)
+    valid_judges = (CLAUDE, GEMINI, "deepseek", "codex")
     if not judges or any(j not in valid_judges for j in judges):
         parser.error(f"--judges must be a comma list of {valid_judges}; got {args.judges!r}")
 

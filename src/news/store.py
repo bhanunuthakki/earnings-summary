@@ -55,6 +55,12 @@ SOURCE_FEED_EDGAR_8K = "edgar_8k"
 SOURCE_FEED_EDGAR_13D = "edgar_13d"
 SOURCE_FEED_EDGAR_13G = "edgar_13g"
 SOURCE_FEED_YF_GRADES = "yf_grades"
+# Free per-ticker journalism (execution/fetch_yf_news.py). Replaced the
+# WebSearch+LLM ingester as the default source 2026-07-25: that path cost
+# $5.74 per stored row (93% of calls stored nothing after (ticker,url) dedup)
+# because FMP's stock-news endpoint 402s, so the LLM fallback silently became
+# the primary for the whole book.
+SOURCE_FEED_YF_NEWS = "yf_news"
 # Competitor IPO S-1 watch (src/competitive/sec_watch.py): an EDGAR full-text
 # search flags when a watched private competitor (Cohesity) files its IPO S-1.
 # The row is attributed to the affected holding's ticker (RBRK) since it is
