@@ -257,7 +257,11 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "case_difficulty_classify": "v1",
     # Meta-eval steering (llm/nominator.py + llm/frontier.py, §1.2/§10.1).
     "optimizer_nominator": "v1",
-    "model_frontier_research": "v1",
+    # v2 (2026-07-25): the monthly research now ALSO scouts independent
+    # judge-grade models, so the judge pool can be rotated as cheap
+    # open-weight models improve (owner directive; see
+    # model_ladder.DEEPSEEK_JUDGE_MODEL for the swap procedure).
+    "model_frontier_research": "v2",
     # Per-case checklist deriver (llm/query_criteria.py, §3). This version IS
     # the query_criteria cache key: bumping it forks checklist history cleanly.
     "query_criteria_derive": "v1",

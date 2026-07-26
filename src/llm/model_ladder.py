@@ -118,7 +118,24 @@ MODEL_LADDER: dict[str, ModelCost] = {
 # context, so a judge prompt never truncates, and DeepSeek's reasoning
 # lineage is the strongest of the cheap open-weight families. Verified
 # live as a judge before wiring.
-DEEPSEEK_JUDGE_MODEL = "deepseek/deepseek-v4-flash"
+# ROTATE THIS PERIODICALLY (owner directive 2026-07-25). It was picked from the
+# LIVE OpenRouter catalogue on 2026-07-25 — cheap open-weight models improve
+# fast and the price/quality frontier moves monthly, so a judge pinned once and
+# forgotten becomes a stale instrument measuring everything else.
+#
+# The rotation already has a home: ``model_frontier_research`` (MONTHLY, Opus +
+# web, src/llm/frontier.py) re-verifies the frontier and upserts discovered
+# models into ``candidate_models``. When it surfaces a cheaper-or-better
+# independent (non-Anthropic, non-Google) model — or a new public judge
+# benchmark lands — re-verify a candidate as a JUDGE before swapping:
+#   1. smoke-test it on a known-answer pair (the specific-vs-vague check);
+#   2. run one backtest with BOTH the incumbent and candidate judge and compare
+#      their verdicts on the same cases — a judge swap that changes verdicts is
+#      the thing you are trying to detect, not a detail;
+#   3. keep >=2 DISTINCT families in DEFAULT_JUDGES at all times.
+# Judge quality is the measurement instrument for every promotion in this
+# system; drift here silently biases model AND prompt selection.
+DEEPSEEK_JUDGE_MODEL = "deepseek/deepseek-v4-flash"  # reviewed 2026-07-25
 
 # Judge backend -> model. Cross-family by construction: a pool that is all
 # one family measures its own preferences (see llm_quality_program §P4).

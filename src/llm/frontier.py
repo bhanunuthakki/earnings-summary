@@ -70,6 +70,14 @@ capability signals for language models across three providers:
 - open-weight models served via OpenRouter (family "openrouter", ids are
   provider/model slugs like "deepseek/deepseek-chat").
 
+Also flag any INDEPENDENT (non-Anthropic, non-Google) model that would make a
+better cheap JUDGE than the incumbent (currently deepseek/deepseek-v4-flash).
+Judging is this platform's measurement instrument — every model and prompt
+promotion rests on judged verdicts — so a cheaper or sharper independent judge
+is worth surfacing even when it is unsuitable as a production generator. Note
+its context window (a judge prompt must never truncate) and any public
+judge-agreement benchmark you can verify.
+
 Goal: surface models that could serve as CHEAPER candidates for analytical /
 extraction / classification workloads — especially newly released or newly
 re-priced models, and the most promising handful of OpenRouter open-weight
