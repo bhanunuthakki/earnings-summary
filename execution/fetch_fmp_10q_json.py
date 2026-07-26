@@ -6,13 +6,22 @@ stable/financial-reports-json endpoint and save to
 `data/historical/fmp/{TICKER}_form_10q_{YEAR}_{QUARTER}.json`.
 
 Skips fetches whose target file already exists, so re-running fills only
-the gaps. Records per-call status to fmp_endpoint_status. Use --tickers
-to scope to a subset, or pass nothing to walk all classified tickers.
+the gaps. Use --tickers to scope to a subset, or pass nothing to walk all
+classified tickers.
+
+After fetching, indexes every touched ticker's on-disk FMP files into the
+``documents`` table via ``pipeline.fmp_doc_index.index_fmp_files_for_ticker``
+(idempotent, INSERT OR IGNORE on sha256) — this is the fix for the
+``fmp_10q_json`` documents-registration gap: files fetched here previously
+never got a ``documents`` row, since only ``onboard_ticker.py`` /
+``fmp_backpop.py`` called the indexer. Pass --no-index to skip (e.g. for a
+dry data-only fetch).
 
 Usage:
     python execution/fetch_fmp_10q_json.py
     python execution/fetch_fmp_10q_json.py --tickers GOOG,AMZN,META
     python execution/fetch_fmp_10q_json.py --start-year 2022
+    python execution/fetch_fmp_10q_json.py --db-path C:/path/to/data/portfolio.db
 """
 
 from __future__ import annotations
@@ -33,13 +42,20 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from log_redact import redact as _redact  # noqa: E402
+from pipeline.fmp_doc_index import index_fmp_files_for_ticker  # noqa: E402
 
-load_dotenv(PROJECT_ROOT / ".env")
-API_KEY = os.environ.get("FMP_API_KEY")
-if not API_KEY:
-    sys.stderr.write("FATAL: FMP_API_KEY not set in .env\n")
-    sys.exit(1)
+# .env is loaded lazily in main(), AFTER --db-path is known — when running
+# from a worktree against the main checkout's DB (data/ is gitignored and a
+# fresh worktree has no .env of its own), the secret lives next to the
+# passed --db-path, not next to this script's own PROJECT_ROOT.
+API_KEY: str | None = None
 
+# Data files (cached FMP payloads, the DB) live alongside the DB, not
+# alongside the code — running this from a worktree against the main
+# checkout's DB is the normal case here (see docs/design/
+# filing_longitudinal_language.md verification notes). --db-path overrides
+# both DB_PATH and FMP_DIR/PROJECT_ROOT_DATA to the passed DB's siblings.
+PROJECT_ROOT_DATA = PROJECT_ROOT
 FMP_DIR = PROJECT_ROOT / "data" / "historical" / "fmp"
 DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 ENDPOINT = "https://financialmodelingprep.com/stable/financial-reports-json"
@@ -112,6 +128,8 @@ def _is_real_payload(body: dict | list | None) -> bool:
 
 
 def main() -> int:
+    global FMP_DIR, DB_PATH, PROJECT_ROOT_DATA, API_KEY
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tickers", help="Comma-separated tickers (default: all classified)")
     parser.add_argument("--start-year", type=int, default=DEFAULT_START_YEAR)
@@ -121,7 +139,33 @@ def main() -> int:
         default=date.today().year,
         help="Inclusive upper bound (default: current year)",
     )
+    parser.add_argument(
+        "--db-path",
+        type=str,
+        default=None,
+        help=(
+            "Portfolio DB path override. Re-derives FMP_DIR from the DB's "
+            "parent so this can run from a worktree against the main "
+            "checkout's data/ (gitignored, not present in a fresh worktree)."
+        ),
+    )
+    parser.add_argument(
+        "--no-index",
+        action="store_true",
+        help="Skip the post-fetch documents-table indexing step",
+    )
     args = parser.parse_args()
+
+    if args.db_path:
+        DB_PATH = Path(args.db_path)
+        PROJECT_ROOT_DATA = DB_PATH.parent.parent
+        FMP_DIR = DB_PATH.parent / "historical" / "fmp"
+
+    load_dotenv(PROJECT_ROOT_DATA / ".env")
+    API_KEY = os.environ.get("FMP_API_KEY")
+    if not API_KEY:
+        sys.stderr.write(f"FATAL: FMP_API_KEY not set in {PROJECT_ROOT_DATA / '.env'}\n")
+        return 1
 
     tickers = _resolve_tickers(args.tickers)
     if not tickers:
@@ -157,6 +201,15 @@ def main() -> int:
                 if fetched % 25 == 0:
                     print(f"  fetched={fetched} (last: {ticker} {year} {q})", flush=True)
 
+    indexed = 0
+    if not args.no_index:
+        conn = sqlite3.connect(str(DB_PATH))
+        try:
+            for ticker in tickers:
+                indexed += index_fmp_files_for_ticker(conn, ticker, PROJECT_ROOT_DATA)
+        finally:
+            conn.close()
+
     print(
         json.dumps(
             {
@@ -165,6 +218,7 @@ def main() -> int:
                 "skipped_existing": skipped_existing,
                 "empty_or_unavailable": empty,
                 "failed": failed,
+                "documents_indexed": indexed,
             },
             indent=2,
         )
