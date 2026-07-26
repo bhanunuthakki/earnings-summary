@@ -426,6 +426,7 @@ def call_gemini(
                 run_id=run_id,
                 response_text=text,
                 meta=usage_meta_from_response(usage_dict, model=_try_model),
+                prompt=prompt,
             )
             return text
         except (
@@ -446,6 +447,7 @@ def call_gemini(
                 scope=scope,
                 run_id=run_id,
                 error=f"{type(gemini_error).__name__}: {str(gemini_error)[:500]}",
+                prompt=prompt,
             )
             if isinstance(gemini_error, google_exceptions.NotFound):
                 if not _annealed and _try_model != _GEMINI_FAST_MODEL_FALLBACK:

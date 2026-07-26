@@ -221,3 +221,56 @@ def test_scenario_prior_template_byte_identity() -> None:
 
 def test_scenario_prior_registered() -> None:
     assert "scenario_prior.weights" in REGISTRY
+
+
+def test_every_backend_forwards_the_prompt_object() -> None:
+    """P0's template identity rides on the RenderedPrompt str-SUBCLASS, so any
+    ledger write that doesn't forward the prompt OBJECT silently records NULLs.
+
+    Found live 2026-07-25: the Claude path was wired but the OpenRouter and
+    Gemini backends were not — precisely the backends the new cross-family
+    judges use, so judged calls lost their template attribution. Asserted as
+    source structure because the alternative is four live backend calls.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    for rel in (
+        "src/llm/cli.py",
+        "src/llm/openrouter_backend.py",
+        "src/llm/gemini_backend.py",
+        "src/llm/ledger.py",
+    ):
+        src = (root / rel).read_text(encoding="utf-8")
+        for m in re.finditer(r"record_llm_call\(", src):
+            start = m.end()
+            depth = 0
+            for k in range(start, len(src)):
+                if src[k] == "(":
+                    depth += 1
+                elif src[k] == ")":
+                    if depth == 0:
+                        break
+                    depth -= 1
+            call = src[start:k]
+            # Real call sites always pass started_at=; a bare "record_llm_call("
+            # inside a docstring or comment does not.
+            if "started_at=" not in call:
+                continue
+            line = src[: m.start()].count("\n") + 1
+            assert "prompt=" in call, (
+                f"{rel}:{line} record_llm_call() does not forward prompt= — "
+                "template identity will be NULL for this path"
+            )
+
+
+def test_str_conversion_drops_identity_by_design() -> None:
+    """Documents the sharp edge: str()/concatenation returns a plain str and
+    loses the metadata. Callers must pass the RenderedPrompt THROUGH, not a
+    stringified copy (this is why the check above asserts on the call site)."""
+    t = PromptTemplate("t.sharp", "A {x}.", ("x",))
+    r = t.render(x="1")
+    assert template_meta(r)[0] == "t.sharp"
+    assert template_meta(str(r)) == (None, None, None)
+    assert template_meta(r + "") == (None, None, None)
