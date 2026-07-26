@@ -9,17 +9,19 @@ Sections, each with an explicit loading/empty/stale/failed/last-valid state
 (design_language §12.2 — "not generated," "failed," and "nothing pending"
 must never collapse into the same blank card):
 
-  1. pending Decision Drafts — Confirm / Correct / Dismiss / Defer, POSTing
+  1. current Incremental Dollar Recommendation — the same artifact id and
+     preferred plan rendered by Portfolio → Allocation and loaded into Ask;
+  2. pending Decision Drafts — Confirm / Correct / Dismiss / Defer, POSTing
      the SAME action core as Telegram (``capture.decision_draft_actions``);
-  2. unresolved Investment Decision Card dispositions — evaluation-list names
+  3. unresolved Investment Decision Card dispositions — evaluation-list names
      with a CURRENT card and no pass/watch/promote decision on record yet;
-  3. the latest Senior Partner Brief (P2.2, PRD §9.1) — the five ordered
+  4. the latest Senior Partner Brief (P2.2, PRD §9.1) — the five ordered
      sections, read from the SAME ``llm_artifacts`` row (scope='portfolio',
      purpose='senior_partner_brief') the Today doorway
      (``pipeline.senior_partner_brief_panel``) and the Telegram builder
      (``advisor.senior_partner_brief.build_telegram_text``) read — one
      artifact, three surfaces, no drift;
-  4. a compact ``dashboard.inbox`` stream (the same read the Home rail uses,
+  5. a compact ``dashboard.inbox`` stream (the same read the Home rail uses,
      ``compact=True``).
 
 Confirm/Correct/Dismiss POST to ``/api/decision-drafts/<id>/confirm|correct|
@@ -119,6 +121,52 @@ def _draft_card(row: sqlite3.Row) -> str:
         f'data-mi-act="dismiss">{dismiss_label}</button>'
         '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-mi-act="defer">Defer</button>'
         "</div></div>"
+    )
+
+
+def _allocation_recommendation_section(db_path: Path) -> str:
+    """Render the current allocation artifact without re-deriving its plan."""
+    try:
+        import llm_artifact_store
+
+        artifact = llm_artifact_store.read_current(
+            ticker=None,
+            purpose="incremental_dollar_recommendation",
+            scope="portfolio",
+            db_path=db_path,
+        )
+    except Exception:
+        return '<div class="mi-failed">Allocation recommendation unavailable.</div>'
+    if artifact is None:
+        return '<div class="mi-not-generated">Allocation recommendation not generated yet.</div>'
+    if not isinstance(artifact.content_json, dict):
+        return '<div class="mi-failed">Allocation recommendation failed to read back.</div>'
+    plan_raw = artifact.content_json.get("preferred_plan")
+    if not isinstance(plan_raw, dict):
+        return '<div class="mi-failed">Allocation recommendation has no preferred plan.</div>'
+    plan = cast("dict[str, object]", plan_raw)
+    name = str(plan.get("name") or "Preferred plan")
+    allocations_raw = plan.get("allocations")
+    allocations = (
+        cast("list[object]", allocations_raw) if isinstance(allocations_raw, list) else []
+    )
+    legs: list[str] = []
+    for raw in allocations:
+        if not isinstance(raw, dict):
+            continue
+        item = cast("dict[str, object]", raw)
+        ticker = str(item.get("ticker") or "").upper()
+        pct = item.get("pct_of_cash")
+        if ticker and isinstance(pct, (int, float)):
+            legs.append(f"{ticker} {float(pct):.0f}%")
+    plan_line = " · ".join(legs) if legs else "Retain new cash."
+    return (
+        f'<div class="mi-card" data-artifact-id="{artifact.id}">'
+        '<div class="mi-card-head"><span class="k-chip">current allocation</span>'
+        f'<span class="k-chip k-chip-mono">artifact #{artifact.id}</span></div>'
+        f'<div class="mi-body"><strong>{escape(name)}</strong><br>{escape(plan_line)}</div>'
+        '<div class="mi-actions"><a class="k-btn k-btn-quiet k-btn-sm" '
+        'href="/#portfolio_allocation">Open Allocation</a></div></div>'
     )
 
 
@@ -292,6 +340,15 @@ def _brief_item_card(label: str, item_raw: object) -> str:
     )
 
 
+def _brief_empty_card(label: str, message: str) -> str:
+    return (
+        '<div class="mi-card">'
+        f'<div class="mi-card-head"><span class="k-chip k-chip-mono">{escape(label)}</span>'
+        '<span class="k-chip">no material item</span></div>'
+        f'<div class="mi-body">{escape(message)}</div></div>'
+    )
+
+
 def _senior_partner_brief_section(db_path: Path) -> str:
     """P2.2 (src/advisor/senior_partner_brief.py, PRD §9.1): the five ordered
     sections from the latest ``senior_partner_brief`` artifact. §12.2 states
@@ -325,10 +382,31 @@ def _senior_partner_brief_section(db_path: Path) -> str:
     if isinstance(what_changed, list):
         for raw in cast("list[object]", what_changed)[:5]:
             cards.append(_brief_item_card("What changed", raw))
-    cards.append(_brief_item_card("Highest priority", content.get("highest_priority_decision")))
-    cards.append(_brief_item_card("Capital use", content.get("capital_use")))
-    cards.append(_brief_item_card("Worth challenging", content.get("assumption_challenge")))
-    cards.append(_brief_item_card("Worth revisiting", content.get("decision_revisit")))
+    cards.append(
+        _brief_item_card("Highest priority", content.get("highest_priority_decision"))
+        or _brief_empty_card(
+            "Highest priority",
+            "No portfolio decision met the brief's action threshold this week.",
+        )
+    )
+    cards.append(
+        _brief_item_card("Capital use", content.get("capital_use"))
+        or _brief_empty_card("Capital use", "No material capital-use decision this week.")
+    )
+    cards.append(
+        _brief_item_card("Worth challenging", content.get("assumption_challenge"))
+        or _brief_empty_card(
+            "Worth challenging",
+            "No assumption challenge was sufficiently grounded.",
+        )
+    )
+    cards.append(
+        _brief_item_card("Worth revisiting", content.get("decision_revisit"))
+        or _brief_empty_card(
+            "Worth revisiting",
+            "No prior Owner Decision is ready to revisit.",
+        )
+    )
     body = "".join(c for c in cards if c)
     if not body:
         return '<div class="mi-empty">This week\'s brief has nothing to surface.</div>'
@@ -400,11 +478,13 @@ _JS = """
 
 
 def render_mobile_inbox(db_path: Path) -> str:
-    """The full standalone mobile page. Composes the four sections above; a
+    """The full standalone mobile page. Composes the five sections above; a
     single section's read failure never blanks the rest (each is isolated)."""
     style = f"<style>{palette_css('paper')}</style><style>{controls_css('paper')}</style>{_STYLE}"
     body = (
         '<h1 class="mi-h1">Inbox</h1>'
+        '<section class="mi-sec"><h2 class="mi-sec-h">Allocation decision</h2>'
+        f"{_allocation_recommendation_section(db_path)}</section>"
         '<section class="mi-sec"><h2 class="mi-sec-h">Decision drafts</h2>'
         f"{_drafts_section(db_path)}</section>"
         '<section class="mi-sec"><h2 class="mi-sec-h">Card dispositions</h2>'

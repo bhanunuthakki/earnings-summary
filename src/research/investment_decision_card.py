@@ -579,11 +579,18 @@ def _deterministic_card(
     extra_degraded: str | None = None,
 ) -> InvestmentDecisionCard | None:
     """§8.1's mechanical fallback: built ONLY from grounded facts, no LLM
-    prose. Returns ``None`` when the deterministic inputs don't suffice for
-    even a labeled fallback (no thesis on file — PRD §10.6: never call the
-    LLM, or fabricate, as a substitute for missing evidence)."""
-    if inputs.spec is None or not inputs.spec.thesis:
+    prose. A deterministically BLOCKED assessment persists an explicit blocker
+    card even when no thesis is on file, because the missing thesis is itself
+    the decision-readiness result. An eligible assessment still may not
+    fabricate a missing thesis."""
+    if (inputs.spec is None or not inputs.spec.thesis) and inputs.assessment.eligible:
         return None
+
+    thesis = (
+        inputs.spec.thesis
+        if inputs.spec is not None and inputs.spec.thesis
+        else "No directional hypothesis is on file; this evaluation is explicitly blocked."
+    )
 
     degraded_note = f" ({extra_degraded})" if extra_degraded else ""
     fv = px = None
@@ -594,7 +601,11 @@ def _deterministic_card(
         if fv is not None and px is not None:
             valuation_range = f"fair value ${float(fv):.2f} vs live price ${float(px):.2f}"
 
-    breakers = [r.rule_id for r in (*inputs.spec.break_rules, *inputs.spec.business_model_rules)]
+    breakers = (
+        [r.rule_id for r in (*inputs.spec.break_rules, *inputs.spec.business_model_rules)]
+        if inputs.spec is not None
+        else list(inputs.assessment.blocking_reasons)
+    )
     payload: dict[str, object] = {
         "ticker": ticker,
         "as_of": as_of,
@@ -604,7 +615,7 @@ def _deterministic_card(
         "source_refs": [],
         "hypothesis_origin": inputs.hypothesis_origin,
         "company_hypothesis": {
-            "directional_thesis": inputs.spec.thesis,
+            "directional_thesis": thesis,
             "operating_mechanism": f"mechanical fallback{degraded_note} — no LLM judgment applied",
             "key_kpis": [],
             "confirming_evidence": [],
@@ -776,6 +787,33 @@ def generate_card(db_path: Path, repo_root: Path, ticker: str) -> CardResult:
 
     inputs = _gather_inputs(db_path, repo_root, ticker, list_type=list_type)
     degraded: list[str] = []
+
+    if not inputs.assessment.eligible:
+        blockers = "; ".join(inputs.assessment.blocking_reasons[:5])
+        degraded.append(f"deterministically blocked: {blockers}")
+        card = _deterministic_card(
+            ticker,
+            inputs,
+            as_of=as_of,
+            extra_degraded="deterministically blocked; no LLM call made",
+        )
+        if card is None:
+            return CardResult(
+                artifact_id=None,
+                card=None,
+                cache_hit=False,
+                selection_mode="failed",
+                degraded_reasons=tuple(degraded),
+                failure_reason="blocked assessment could not produce an explicit blocker card",
+            )
+        artifact_id, cache_hit = _persist(card, inputs, db_path=db_path)
+        return CardResult(
+            artifact_id=artifact_id,
+            card=card,
+            cache_hit=cache_hit,
+            selection_mode="deterministic_fallback",
+            degraded_reasons=tuple(degraded),
+        )
 
     skip_check = should_skip_for_budget(PURPOSE, db_path=db_path)
     if skip_check is not None:

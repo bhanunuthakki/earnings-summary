@@ -46,6 +46,7 @@ from pipeline.allocation_decisions_panel import (  # noqa: E402
     _coach_mutes_section,
     _coach_pings_section,
     _coach_pnl_section,
+    _decision_journal_section,
     _query_coach_pnl,
     build_decisions_timeline,
     build_sizing_audit_rows,
@@ -939,6 +940,37 @@ def test_coach_digest_section_renders_and_empty_state(tmp_path: Path) -> None:
     )
     html = _coach_digest_section(db)
     assert "intent_followup" in html and "WIX" in html
+
+
+def test_decision_journal_defaults_to_owner_and_preserves_advisor_count(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "journal.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        """
+        CREATE VIEW v_decision_journal AS
+        SELECT 1 AS decision_id, 'NU' AS ticker, 'owner' AS decided_by,
+               'watch' AS recommendation_kind, '2026-07-25' AS made_at,
+               NULL AS linked_memo_id, NULL AS linked_memo_kind,
+               NULL AS advice_before_memo_id, NULL AS advice_before_memo_kind,
+               0 AS guard_override_flag, 0 AS owner_attested_change,
+               NULL AS coach_ping_class, NULL AS decision_nudge_id,
+               NULL AS user_action_kind, NULL AS outcome_label,
+               NULL AS outcome_pct, NULL AS stance_verdict
+        UNION ALL
+        SELECT 2, 'WIX', 'advisor', 'buy', '2026-07-24',
+               NULL, NULL, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    html = _decision_journal_section(db)
+
+    assert "owner: watch" in html
+    assert "advisor: buy" not in html
+    assert "1 advisor record preserved outside the Owner-default journal" in html
 
 
 def test_coach_unmute_route_calls_governor_and_row_disappears(

@@ -467,12 +467,32 @@ def test_telegram_text_omits_dollar_totals() -> None:
     assert "Trim NVO" in text  # ticker/action/rationale still present
 
 
-def test_telegram_keyboard_has_why_review_defer_dismiss() -> None:
+def test_telegram_keyboard_links_review_to_private_mobile_inbox() -> None:
     brief = spb.SeniorPartnerBrief(as_of="x", iso_year=2026, iso_week=30, input_sha="sha")
-    kb = spb.build_telegram_keyboard(brief)
+    kb = spb.build_telegram_keyboard(
+        brief,
+        artifact_id=2104,
+        inbox_url="https://desktop.example.ts.net/mobile/inbox",
+    )
     rows = cast("list[list[dict[str, object]]]", kb["inline_keyboard"])
-    flat = [btn["callback_data"] for row in rows for btn in row]
-    assert flat == ["spb:why", "spb:review", "spb:defer", "spb:dismiss"]
+    buttons = [btn for row in rows for btn in row]
+    assert buttons == [
+        {"text": "Why?", "callback_data": "spb:why:2104"},
+        {
+            "text": "Review in Inbox",
+            "url": "https://desktop.example.ts.net/mobile/inbox",
+        },
+        {"text": "Defer", "callback_data": "spb:defer:2104"},
+        {"text": "Dismiss", "callback_data": "spb:dismiss:2104"},
+    ]
+
+
+def test_telegram_keyboard_falls_back_to_legacy_review_callback_without_url() -> None:
+    brief = spb.SeniorPartnerBrief(as_of="x", iso_year=2026, iso_week=30, input_sha="sha")
+    kb = spb.build_telegram_keyboard(brief, artifact_id=2104, inbox_url="")
+    rows = cast("list[list[dict[str, object]]]", kb["inline_keyboard"])
+    buttons = [btn for row in rows for btn in row]
+    assert {"text": "Review in Inbox", "callback_data": "spb:review:2104"} in buttons
 
 
 # --------------------------------------------------------------------------- #

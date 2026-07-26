@@ -76,6 +76,54 @@ def test_parse_callback_valid_and_malformed() -> None:
         assert research_notify.parse_callback(bad) is None
 
 
+def test_dispatch_legacy_spb_review_sends_private_inbox_link(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "EARNINGS_SUMMARY_PRIVATE_BASE_URL",
+        "https://desktop.example.ts.net",
+    )
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok",
+        _cb("spb:review"),
+        db_path=db_path,
+        send=spy.send,
+        answer=spy.answer,
+        edit=spy.edit,
+    )
+    assert status == "spb_review"
+    assert spy.answers == [("cq", "Opening the private Inbox...")]
+    assert spy.sends == [
+        (5, "https://desktop.example.ts.net/mobile/inbox", None),
+    ]
+
+
+def test_dispatch_spb_dismiss_item_uses_shared_action_core(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called: list[int] = []
+    monkeypatch.setattr(
+        "advisor.senior_partner_brief.dismiss_routed_moment",
+        lambda ping_id, **kwargs: (called.append(ping_id) is None, None),
+    )
+    spy = _Spy()
+    status = research_notify.dispatch_callback(
+        "tok",
+        _cb("spb:dismiss_item:42", message_id=77, message_text="Senior Partner Brief"),
+        db_path=db_path,
+        send=spy.send,
+        answer=spy.answer,
+        edit=spy.edit,
+    )
+    assert status == "spb_item_dismissed"
+    assert called == [42]
+    assert spy.answers == [("cq", "Dismissed.")]
+    # A per-item dismissal must not strip the whole brief keyboard; the other
+    # routed items and brief-level controls remain actionable.
+    assert spy.edits == []
+
+
 def test_keyboards_carry_the_callback_data() -> None:
     kb = research_notify.proposal_keyboard(9)
     flat = str(kb)
