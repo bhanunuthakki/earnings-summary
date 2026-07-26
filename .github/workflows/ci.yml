@@ -29,8 +29,13 @@ concurrency:
 
 jobs:
   tests:
+    name: tests (shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -51,8 +56,24 @@ jobs:
         # init_db() + alembic, not `alembic upgrade head` alone — the 0000
         # baseline assumes the legacy init_db tables — so we skip it here.)
         run: mkdir -p data
-      - name: Run test suite
-        run: pytest -q
+      - name: Run test-suite shard
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t all_files < <(find tests -type f -name 'test_*.py' | sort)
+          selected=()
+          shard_index=$((${{ matrix.shard }} - 1))
+          for i in "${!all_files[@]}"; do
+            if (( i % 4 == shard_index )); then
+              selected+=("${all_files[$i]}")
+            fi
+          done
+          if (( ${#selected[@]} == 0 )); then
+            echo "::error::test shard ${{ matrix.shard }} selected no files"
+            exit 1
+          fi
+          printf 'Shard %s/4: %s files\n' '${{ matrix.shard }}' "${#selected[@]}"
+          pytest -q "${selected[@]}"
 
   quality:
     runs-on: ubuntu-latest

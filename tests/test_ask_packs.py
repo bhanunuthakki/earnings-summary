@@ -61,6 +61,15 @@ CREATE TABLE analyst_notes (
     resolution_note TEXT, context_json TEXT,
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL, resolved_at TEXT
 );
+CREATE TABLE disclosure_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker TEXT NOT NULL, event_type TEXT NOT NULL, form TEXT,
+    fiscal_year INTEGER, fiscal_period TEXT, canonical_id TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL, subject_label TEXT, source_doc_id INTEGER,
+    evidence_quote TEXT, materiality REAL, verdict TEXT NOT NULL,
+    interpretation_md TEXT, status TEXT NOT NULL DEFAULT 'new',
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -117,6 +126,21 @@ def db(tmp_path: Path) -> Path:
         "INSERT INTO analyst_notes (user_id, ticker, kind, status, body, created_at, updated_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         [(DEFAULT_USER_ID, t, k, s, b, ts, ts) for t, k, s, b, ts in notes],
+    )
+    conn.execute(
+        """
+        INSERT INTO disclosure_events
+        (ticker, event_type, form, fiscal_year, fiscal_period, canonical_id,
+         subject, subject_label, source_doc_id, evidence_quote, materiality,
+         verdict, interpretation_md, created_at)
+        VALUES
+        ('NU', 'item_reworded', '10-Q', 2026, 'Q2', 'risk_factors',
+         'credit quality', 'Credit quality', 42,
+         'Delinquency formation increased in the youngest vintages.',
+         0.92, 'substantive',
+         'The risk language became more specific; this is drift, not a day-of alert.',
+         '2026-07-25T10:00:00')
+        """
     )
     conn.commit()
     conn.close()
@@ -591,6 +615,18 @@ def test_performance_offline_is_explicit(db: Path, monkeypatch: pytest.MonkeyPat
     items = load_packs(["performance"], db_path=db, focus_tickers=[])
     assert len(items) == 1
     assert "tracker offline" in str(items[0]["text"])
+
+
+def test_disclosure_pack_carries_drift_frame_and_verbatim_receipt(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    item = _one(db, "disclosures", ["NU"], monkeypatch)
+    assert item is not None
+    text = str(item["text"])
+    assert "drift, not a day-of alert" in text
+    assert "NU 2026 Q2" in text
+    assert "Delinquency formation increased in the youngest vintages." in text
+    assert "substantive" in text
 
 
 def test_load_packs_canonical_order_and_unknown_keys(

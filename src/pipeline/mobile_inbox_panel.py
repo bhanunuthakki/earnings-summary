@@ -85,30 +85,38 @@ def _open(db_path: Path) -> sqlite3.Connection | None:
 
 
 def _draft_card(row: sqlite3.Row) -> str:
-    ticker = ""
-    action = ""
-    if row["draft_json"]:
-        import json
-
-        try:
-            content_raw: object = json.loads(row["draft_json"])
-        except (ValueError, TypeError):
-            content_raw = {}
-        if isinstance(content_raw, dict):
-            content = cast("dict[str, object]", content_raw)
-            ticker = str(content.get("proposed_ticker") or "")
-            action = str(content.get("proposed_action") or content.get("intent") or "")
+    ticker = str(row["ticker"] or "")
+    action = str(row["action"] or "")
     ticker_html = ticker_label(ticker) if ticker else '<span class="k-chip">PORTFOLIO</span>'
     action_chip = f'<span class="k-chip k-chip-mono">{escape(action)}</span>' if action else ""
+    fill_count = int(row["fill_count"])
+    amount_raw = row["amount_usd"]
+    amount_note = f" · ${float(amount_raw):,.0f} total" if amount_raw is not None else ""
+    group_note = (
+        f'<span class="k-chip k-chip-mono">{fill_count} split fills</span>'
+        if fill_count > 1
+        else ""
+    )
+    is_tracker_group = str(row["source_channel"]) == "tracker" and row["source_external_id"]
+    data_attr = (
+        f'data-draft-group-id="{int(row["id"])}"'
+        if is_tracker_group
+        else f'data-draft-id="{int(row["id"])}"'
+    )
+    confirm_label = "Confirm trade" if is_tracker_group else "Confirm"
+    dismiss_label = "Dismiss trade" if is_tracker_group else "Dismiss"
     return (
-        f'<div class="mi-card" data-draft-id="{int(row["id"])}">'
+        f'<div class="mi-card" {data_attr}>'
         f'<div class="mi-card-head">{ticker_html}{action_chip}'
-        f'<span class="k-chip">{escape(str(row["source_channel"]))}</span></div>'
-        f'<div class="mi-body">{escape(str(row["original_text"])[:280])}</div>'
+        f'<span class="k-chip">{escape(str(row["source_channel"]))}</span>{group_note}</div>'
+        f'<div class="mi-body">{escape(str(row["original_text"])[:280])}'
+        f"{escape(amount_note)}</div>"
         '<div class="mi-actions">'
-        '<button type="button" class="k-btn k-btn-primary k-btn-sm" data-mi-act="confirm">Confirm</button>'
+        f'<button type="button" class="k-btn k-btn-primary k-btn-sm" '
+        f'data-mi-act="confirm">{confirm_label}</button>'
         '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-mi-act="correct">Correct</button>'
-        '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-mi-act="dismiss">Dismiss</button>'
+        f'<button type="button" class="k-btn k-btn-quiet k-btn-sm" '
+        f'data-mi-act="dismiss">{dismiss_label}</button>'
         '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-mi-act="defer">Defer</button>'
         "</div></div>"
     )
@@ -125,9 +133,47 @@ def _drafts_section(db_path: Path) -> str:
                 '<span class="mi-recover">Run <code>alembic upgrade head</code> to migrate.</span>'
                 "</div>"
             )
+        counts = conn.execute(
+            """
+            SELECT COUNT(*) AS fill_count,
+                   COUNT(DISTINCT CASE
+                       WHEN source_channel = 'tracker' AND source_external_id IS NOT NULL
+                       THEN 'tracker:' || source_external_id
+                       ELSE 'draft:' || CAST(id AS TEXT)
+                   END) AS group_count
+            FROM decision_drafts
+            WHERE status = 'awaiting_confirmation'
+            """
+        ).fetchone()
         rows = conn.execute(
-            "SELECT * FROM decision_drafts WHERE status = 'awaiting_confirmation' "
-            "ORDER BY id DESC LIMIT 20"
+            """
+            WITH pending AS (
+                SELECT *,
+                       CASE
+                           WHEN source_channel = 'tracker' AND source_external_id IS NOT NULL
+                           THEN 'tracker:' || source_external_id
+                           ELSE 'draft:' || CAST(id AS TEXT)
+                       END AS group_key
+                FROM decision_drafts
+                WHERE status = 'awaiting_confirmation'
+            )
+            SELECT MIN(id) AS id,
+                   MAX(id) AS newest_id,
+                   MAX(source_channel) AS source_channel,
+                   MAX(source_external_id) AS source_external_id,
+                   MAX(original_text) AS original_text,
+                   MAX(json_extract(draft_json, '$.proposed_ticker')) AS ticker,
+                   MAX(COALESCE(
+                       json_extract(draft_json, '$.proposed_action'),
+                       json_extract(draft_json, '$.intent')
+                   )) AS action,
+                   SUM(CAST(json_extract(draft_json, '$.proposed_amount_usd') AS REAL)) AS amount_usd,
+                   COUNT(*) AS fill_count
+            FROM pending
+            GROUP BY group_key
+            ORDER BY newest_id DESC
+            LIMIT 60
+            """
         ).fetchall()
     except sqlite3.Error:
         return '<div class="mi-failed">Decision drafts unavailable.</div>'
@@ -135,7 +181,15 @@ def _drafts_section(db_path: Path) -> str:
         conn.close()
     if not rows:
         return '<div class="mi-empty">Nothing pending — captures land here for confirmation.</div>'
-    return "".join(_draft_card(r) for r in rows)
+    summary = ""
+    if counts is not None and int(counts["fill_count"]) != int(counts["group_count"]):
+        summary = (
+            '<div class="k-well mi-body">'
+            f"Review {int(counts['group_count'])} trade decisions from "
+            f"{int(counts['fill_count'])} underlying fills. Split fills stay linked "
+            "as audit evidence.</div>"
+        )
+    return summary + "".join(_draft_card(r) for r in rows)
 
 
 def _card_disposition_card(row: sqlite3.Row) -> str:
@@ -320,17 +374,21 @@ _JS = """
     var btn = ev.target.closest('[data-mi-act]');
     if (!btn) return;
     var act = btn.getAttribute('data-mi-act');
-    var card = btn.closest('[data-draft-id]');
+    var card = btn.closest('[data-draft-id], [data-draft-group-id]');
     if (!card) return;
     var id = card.getAttribute('data-draft-id');
+    var groupId = card.getAttribute('data-draft-group-id');
     if (act === 'defer') { card.style.opacity = '0.4'; btn.disabled = true; return; }
     if (act === 'correct') {
-      window.location.href = '/#ledger-console?draft=' + id;
+      window.location.href = '/#ledger-console?draft=' + (groupId || id);
       return;
     }
     btn.disabled = true;
     btn.textContent = '...';
-    fetch('/api/decision-drafts/' + id + '/' + act, {
+    var endpoint = groupId
+      ? ('/api/decision-draft-groups/' + groupId + '/' + act)
+      : ('/api/decision-drafts/' + id + '/' + act);
+    fetch(endpoint, {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
     }).then(function (r) {
       if (r.ok) { card.remove(); } else { btn.disabled = false; }

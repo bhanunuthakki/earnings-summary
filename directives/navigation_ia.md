@@ -135,10 +135,10 @@ additive:
    decisions, falsifiers, prices). A server-side stamp (alembic, with the 0141
    stamped-DB guard) only if multi-device staleness actually bites.
 5. **"One pattern noticed"** — deferred until `investor_calibration` has rows.
-6. **Senior Partner Brief summary** (PRD §9.1, P2.2) — **not yet built** as of
-   2026-07-24 (no `src/advisor/senior_partner_brief.py`, no
-   `execution/compose_senior_partner_brief.py` anywhere in the repo). Placeholder
-   entry only, so this directive doesn't need a second patch when P2.2 ships:
+6. **Senior Partner Brief summary** (PRD §9.1, P2.2) — **shipped 2026-07-24
+   in #1002** (`src/advisor/senior_partner_brief.py`,
+   `execution/compose_senior_partner_brief.py`). The Today doorway, mobile
+   Inbox, Ask pack, and Telegram builder read the same artifact:
    summary, effort estimate per action, active-week explanation, Why/Compare
    alternatives/Correct context/Record-confirm decision/Defer/Dismiss, per PRD
    §9.1's frontend spec. P2.2 is sequenced after Workstream B3/B4, both already

@@ -30,10 +30,12 @@ import argparse
 import json
 import logging
 import sqlite3
+import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Literal, Protocol, cast
+from zoneinfo import ZoneInfo
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -45,6 +47,65 @@ from filings.models import FilingForm, HardStopError  # noqa: E402
 _VALID_SOURCES = ("fmp", "edgar", "exhibits")
 _EXIT_HARD_STOP = 1
 _EXIT_BAD_ARGS = 2
+_PACIFIC = ZoneInfo("America/Los_Angeles")
+
+
+class _Completed(Protocol):
+    returncode: int
+    stderr: str
+
+
+class _Runner(Protocol):
+    def __call__(self, argv: list[str], **kwargs: object) -> _Completed: ...
+
+
+_SUBPROCESS_RUNNER = cast("_Runner", subprocess.run)
+
+
+def _accessions_for_ticker(conn: sqlite3.Connection, ticker: str) -> set[str]:
+    rows = conn.execute(
+        """
+        SELECT DISTINCT accession_number
+        FROM filing_sections
+        WHERE ticker = ? AND accession_number IS NOT NULL
+          AND TRIM(accession_number) != ''
+        """,
+        (ticker.upper(),),
+    ).fetchall()
+    return {str(row[0]) for row in rows}
+
+
+def _trigger_disclosure_fast_path(
+    *,
+    tickers: tuple[str, ...],
+    db_path: Path,
+    project_root: Path = PROJECT_ROOT,
+    now: datetime | None = None,
+    runner: _Runner = _SUBPROCESS_RUNNER,
+) -> Literal["not_needed", "deferred_protected_window", "complete", "failed"]:
+    """Run D3 for newly ingested accessions, clear of protected LLM hours."""
+
+    if not tickers:
+        return "not_needed"
+    local_now = (now or datetime.now(_PACIFIC)).astimezone(_PACIFIC)
+    if 3 <= local_now.hour < 5:
+        return "deferred_protected_window"
+    argv = [
+        sys.executable,
+        str(project_root / "execution" / "run_disclosure_change_sweep.py"),
+        "--tickers",
+        ",".join(sorted(set(tickers))),
+        "--db-path",
+        str(db_path),
+    ]
+    proc = runner(
+        argv,
+        cwd=str(project_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return "complete" if proc.returncode == 0 else "failed"
 
 
 class _JsonLineFormatter(logging.Formatter):
@@ -194,9 +255,11 @@ def main(argv: list[str] | None = None) -> int:
         # everything to `object` and casting it back.
         reports: list[tuple[str, ingest.IngestReport]] = []
         findings: dict[str, list[str]] = {}
+        new_accession_tickers: list[str] = []
         started = datetime.now(UTC).replace(tzinfo=None)
 
         for ticker in tickers:
+            accessions_before = _accessions_for_ticker(conn, ticker)
             for lane in lanes:
                 try:
                     if lane == "fmp":
@@ -247,6 +310,30 @@ def main(argv: list[str] | None = None) -> int:
                         }
                     )
 
+            if _accessions_for_ticker(conn, ticker) - accessions_before:
+                new_accession_tickers.append(ticker)
+
+        fast_path_status = _trigger_disclosure_fast_path(
+            tickers=tuple(new_accession_tickers),
+            db_path=Path(db.DB_PATH),
+        )
+        if fast_path_status == "deferred_protected_window":
+            log.info(
+                {
+                    "event": "disclosure_fast_path_deferred",
+                    "reason": "protected_llm_window",
+                    "tickers": new_accession_tickers,
+                }
+            )
+        elif fast_path_status == "failed":
+            log.error(
+                {
+                    "event": "disclosure_fast_path_failed",
+                    "tickers": new_accession_tickers,
+                    "hint": "weekly sweep will retry because the checkpoint was not advanced",
+                }
+            )
+
         summary: dict[str, object] = {
             "started_at": started.isoformat(),
             "finished_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
@@ -259,11 +346,13 @@ def main(argv: list[str] | None = None) -> int:
             "failures": [f for _, r in reports for f in r.failures],
             "mismatches": [m for _, r in reports for m in r.mismatches],
             "cross_source_findings": findings,
+            "new_accession_tickers": new_accession_tickers,
+            "disclosure_fast_path": fast_path_status,
             "reports": [{"lane": lane, **r.as_dict()} for lane, r in reports],
         }
         json.dump(summary, sys.stdout, indent=2, default=str)
         sys.stdout.write("\n")
-        return 0
+        return _EXIT_HARD_STOP if fast_path_status == "failed" else 0
     finally:
         conn.close()
 

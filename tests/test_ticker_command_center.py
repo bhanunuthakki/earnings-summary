@@ -82,6 +82,13 @@ def _seed_db(db_path: Path) -> None:
         CREATE TABLE decisions (ticker TEXT, recommendation_kind TEXT, recommendation_value REAL,
                                 conviction TEXT, made_at TIMESTAMP, outcome_label TEXT);
         CREATE TABLE brief_provenance_log (ticker TEXT, generated_at TIMESTAMP, trigger TEXT);
+        CREATE TABLE disclosure_events (
+            id INTEGER PRIMARY KEY, ticker TEXT, event_type TEXT, form TEXT,
+            fiscal_year INTEGER, fiscal_period TEXT, canonical_id TEXT,
+            subject TEXT, subject_label TEXT, source_doc_id INTEGER,
+            evidence_quote TEXT, materiality REAL, verdict TEXT,
+            interpretation_md TEXT, status TEXT, created_at TEXT
+        );
         """
     )
     now = datetime.now(UTC).isoformat()
@@ -122,6 +129,17 @@ def _seed_db(db_path: Path) -> None:
         "INSERT INTO decisions VALUES ('NU','trim',20.0,'high','2026-05-15T00:00:00','pending')"
     )
     conn.execute("INSERT INTO brief_provenance_log VALUES ('NU',?,'manual')", (now,))
+    conn.execute(
+        """
+        INSERT INTO disclosure_events VALUES
+        (1, 'NU', 'item_reworded', '10-Q', 2026, 'Q2', 'risk_factors',
+         'credit quality', 'Credit quality', 42,
+         'Delinquency formation increased in the youngest vintages.',
+         0.92, 'substantive',
+         'The wording became more company-specific.', 'new', ?)
+        """,
+        (now,),
+    )
     conn.commit()
     conn.close()
 
@@ -269,6 +287,10 @@ def test_render_holding_fragment_embeds_report(repo: Path) -> None:
     assert "Per-holding 5-min rereads" in frag
     # The reread is no longer an inline fold above the report.
     assert "tcc-reread-fold" not in frag
+    assert "Disclosure drift" in frag
+    assert "relevant for weeks" in frag
+    assert "Delinquency formation increased in the youngest vintages." in frag
+    assert 'href="/source/42"' in frag
 
 
 def test_render_holding_fragment_no_brief_degrades(tmp_path: Path) -> None:

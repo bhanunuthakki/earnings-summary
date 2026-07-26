@@ -7,8 +7,8 @@ Weighted toward the failure modes the design doc calls out:
     triage is not called when nothing is ambiguous;
   * an LLM failure must degrade every ambiguous survivor to `unclassified`,
     never a fabricated `boilerplate_update`;
-  * a response missing one id's verdict leaves THAT row unclassified while
-    resolving the rest;
+  * a response missing one id's verdict retries only that id once; a second
+    omission leaves THAT row unclassified while preserving the rest;
   * the Filzen 2015 risk-growth override forces a would-be-LOW event into
     the LLM survivor lane instead of a confident boilerplate fast path;
   * persistence is idempotent and keyed by row id, not by (fragile) subject
@@ -27,6 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from filings import boilerplate_classify as bc  # noqa: E402
+from filings import boilerplate_triage as bt  # noqa: E402
 from filings.boilerplate_triage import BoilerplateVerdict, ItemVerdict, TriageOutcome  # noqa: E402
 from filings.models import HardStopError  # noqa: E402
 
@@ -361,3 +362,62 @@ def test_missing_table_is_hard_stop() -> None:
     conn = sqlite3.connect(":memory:")
     with pytest.raises(HardStopError):
         bc.fetch_item_events(conn, "AAA")
+
+
+def test_triage_retries_only_missing_verdicts_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    def _fake_call(prompt: str, **_kwargs: object) -> object:
+        calls.append(prompt)
+        if len(calls) == 1:
+            return {
+                "1": {
+                    "verdict": "substantive",
+                    "confidence": 0.9,
+                    "rationale": "specific",
+                }
+            }
+        return {
+            "2": {
+                "verdict": "boilerplate_update",
+                "confidence": 0.8,
+                "rationale": "generic",
+            }
+        }
+
+    monkeypatch.setattr(bt, "call_llm_structured", _fake_call)
+
+    outcome = bt.triage_events(
+        "TEST",
+        [
+            (1, "item_added", "First", "specific text"),
+            (2, "item_added", "Second", "generic text"),
+        ],
+    )
+
+    assert set(outcome.verdicts) == {1, 2}
+    assert len(calls) == 2
+    assert "id=1" in calls[0] and "id=2" in calls[0]
+    assert "id=1" not in calls[1] and "id=2" in calls[1]
+
+
+def test_triage_leaves_ids_unclassified_after_one_recovery_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def _fake_call(_prompt: str, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        return {}
+
+    monkeypatch.setattr(bt, "call_llm_structured", _fake_call)
+
+    outcome = bt.triage_events(
+        "TEST",
+        [(1, "item_added", "First", "specific text")],
+    )
+
+    assert outcome.verdicts == {}
+    assert outcome.degraded is False
+    assert calls == 2

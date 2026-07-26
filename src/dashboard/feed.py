@@ -55,7 +55,11 @@ def render_alert_feed(
         ticker=ticker,
         status=status,
         trigger_kind=trigger_kind,
-        kinds=("alert",) if alerts_only else ("alert", "draft", "ledger", "note", "synthesis"),
+        kinds=(
+            ("alert",)
+            if alerts_only
+            else ("alert", "draft", "disclosure", "ledger", "note", "synthesis")
+        ),
         limit=limit,
     )
 

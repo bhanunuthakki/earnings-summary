@@ -19,6 +19,7 @@ trim/add/size question needs:
                  cohort's documented accuracy (decision_calibration, the
                  keystone "confront me at the decision moment" loop)
   journal      — open analyst notes (analyst_notes)
+  disclosures  — longitudinal filing/transcript changes with verbatim receipts
   performance  — window TWR vs benchmarks + per-name alpha + concentration
                  (tracker analytics API)
 
@@ -143,6 +144,16 @@ PACKS: tuple[PackSpec, ...] = (
         "/#journal",
         800,
         "the analyst's open questions, watch-items, assumptions and decisions on file",
+    ),
+    PackSpec(
+        "disclosures",
+        "Disclosure drift · receipts",
+        "/#portfolio",
+        1200,
+        "what changed across a company's recent filings or calls, including "
+        "risk-factor/MD&A wording, withdrawn guidance, discontinued metrics, "
+        "document similarity and abnormal management tone; use for longitudinal "
+        "or peer-comparison disclosure questions and quote the verbatim receipt",
     ),
     PackSpec(
         "performance",
@@ -677,6 +688,64 @@ def _journal_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[str, 
 # ---------------------------------------------------------------------------
 
 
+def _disclosure_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[str, object] | None:
+    """Recent disclosure drift, with the stored verbatim receipt on every row."""
+
+    params: list[object] = []
+    where = ["status != 'dismissed'"]
+    if focus:
+        marks = ",".join("?" for _ in focus)
+        where.append(f"ticker IN ({marks})")
+        params.extend(focus)
+    params.append(10 if focus else 8)
+    rows = _rows(
+        db_path,
+        f"""
+        SELECT ticker, event_type, fiscal_year, fiscal_period, canonical_id,
+               subject, subject_label, evidence_quote, materiality, verdict,
+               interpretation_md
+        FROM disclosure_events
+        WHERE {" AND ".join(where)}
+        ORDER BY COALESCE(materiality, 0) DESC, created_at DESC, id DESC
+        LIMIT ?
+        """,
+        tuple(params),
+    )
+    if not rows:
+        scope = ", ".join(focus) if focus else "the tracked book"
+        return _item(
+            spec,
+            "Disclosure drift, not a day-of alert. No stored disclosure-change "
+            f"events are on file for {scope}; do not infer that disclosures were unchanged.",
+        )
+
+    lines = [
+        "Disclosure drift, not a day-of alert. Treat these as longitudinal changes "
+        "that can remain relevant for weeks; event direction comes from the verdict "
+        "and receipt, never the event type alone."
+    ]
+    for row in rows:
+        period = " ".join(
+            token
+            for token in (str(row["fiscal_year"] or ""), str(row["fiscal_period"] or ""))
+            if token
+        )
+        subject = str(row["subject_label"] or row["subject"] or "unnamed subject")
+        concept = str(row["canonical_id"] or "").replace("_", " ")
+        verdict = str(row["verdict"] or "unclassified")
+        event_type = str(row["event_type"] or "").replace("_", " ")
+        receipt = " ".join(str(row["evidence_quote"] or "").split())
+        interpretation = " ".join(str(row["interpretation_md"] or "").split())
+        lead = f"{row['ticker']} {period}".strip()
+        detail = f"{event_type} · {concept or 'cross-document'} · {subject} · {verdict}"
+        if receipt:
+            detail += f' · receipt: "{receipt}"'
+        if interpretation:
+            detail += f" · interpretation: {interpretation}"
+        lines.append(f"{lead}: {detail}")
+    return _item(spec, _join_capped(lines, spec.char_budget))
+
+
 def _performance_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[str, object] | None:
     analytics = fetch_portfolio_analytics(only={"performance", "position_alpha", "positioning"})
     if not analytics.available:
@@ -930,6 +999,7 @@ _LOADERS: dict[str, Callable[[PackSpec, Path, list[str]], dict[str, object] | No
     "decisions": _decisions_item,
     "calibration": _calibration_item,
     "journal": _journal_item,
+    "disclosures": _disclosure_item,
     "performance": _performance_item,
     "macro": _macro_item,
     "allocation": _allocation_item,
