@@ -109,6 +109,7 @@ def call_codex_llm(
     run_id: str | None = None,
     model: str = CODEX_JUDGE_MODEL,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    fallback_used: str | None = None,
 ) -> str:
     """One Codex call with a ledger row. Raises on failure (the caller's
     judge wrapper records it as a judge error — infra, never a score)."""
@@ -135,6 +136,11 @@ def call_codex_llm(
             run_id=run_id,
             error=f"[codex] {type(exc).__name__}: {redact(exc)[:400]}",
             prompt=prompt,
+            provider="openai",
+            transport="subscription_cli",
+            attempts=1,
+            retries=0,
+            failure_class="codex_transport",
         )
         raise
     elapsed_ms = int((time.monotonic() - t0) * 1000)
@@ -160,7 +166,12 @@ def call_codex_llm(
         run_id=run_id,
         response_text=text,
         meta=meta,
+        fallback_used=fallback_used,
         prompt=prompt,
+        provider="openai",
+        transport="subscription_cli",
+        attempts=1,
+        retries=0,
     )
     if not text:
         raise RuntimeError("Codex returned an empty response")

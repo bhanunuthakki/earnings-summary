@@ -13,6 +13,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\ledger_synthesis_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\run_ledger_synthesis.py > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "ledger-synthesis" "portfolio-db" execution\run_ledger_synthesis.py > "%LOG_FILE%" 2>&1
 
 endlocal

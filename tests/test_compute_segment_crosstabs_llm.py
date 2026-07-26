@@ -191,11 +191,11 @@ def test_extract_writes_one_period_and_three_dim_rows(
 
     call_count = {"n": 0}
 
-    def fake_call_claude(prompt: str, **_: object) -> str:
+    def fake_call_claude(prompt: str, **_: object) -> object:
         call_count["n"] += 1
-        return _VALID_LLM_RESPONSE
+        return json.loads(_VALID_LLM_RESPONSE)
 
-    monkeypatch.setattr(segment_crosstabs_llm, "_call_claude", fake_call_claude)
+    monkeypatch.setattr(segment_crosstabs_llm, "call_llm_structured", fake_call_claude)
 
     result = extract_for_ticker("AMZN", tmp_path, conn)
 
@@ -251,11 +251,11 @@ def test_extract_idempotent_on_sha256(
 
     call_count = {"n": 0}
 
-    def fake_call_claude(prompt: str, **_: object) -> str:
+    def fake_call_claude(prompt: str, **_: object) -> object:
         call_count["n"] += 1
-        return _VALID_LLM_RESPONSE
+        return json.loads(_VALID_LLM_RESPONSE)
 
-    monkeypatch.setattr(segment_crosstabs_llm, "_call_claude", fake_call_claude)
+    monkeypatch.setattr(segment_crosstabs_llm, "call_llm_structured", fake_call_claude)
 
     first = extract_for_ticker("AMZN", tmp_path, conn)
     assert call_count["n"] == 1
@@ -284,11 +284,11 @@ def test_extract_refresh_bypasses_cache(
 
     call_count = {"n": 0}
 
-    def fake_call_claude(prompt: str, **_: object) -> str:
+    def fake_call_claude(prompt: str, **_: object) -> object:
         call_count["n"] += 1
-        return _VALID_LLM_RESPONSE
+        return json.loads(_VALID_LLM_RESPONSE)
 
-    monkeypatch.setattr(segment_crosstabs_llm, "_call_claude", fake_call_claude)
+    monkeypatch.setattr(segment_crosstabs_llm, "call_llm_structured", fake_call_claude)
 
     extract_for_ticker("AMZN", tmp_path, conn)
     extract_for_ticker("AMZN", tmp_path, conn, refresh=True)
@@ -303,7 +303,11 @@ def test_extract_skips_when_no_doc_row(
     junction writer requires a real documents.id FK."""
     _write_10k_payload(tmp_path, "AMZN", 2024)
 
-    monkeypatch.setattr(segment_crosstabs_llm, "_call_claude", lambda *a, **k: _VALID_LLM_RESPONSE)
+    monkeypatch.setattr(
+        segment_crosstabs_llm,
+        "call_llm_structured",
+        lambda *a, **k: json.loads(_VALID_LLM_RESPONSE),
+    )
 
     result = extract_for_ticker("AMZN", tmp_path, conn)
     assert result.skipped_reason is not None
@@ -365,7 +369,11 @@ def test_build_secondary_expansions_surfaces_parent_label_aws(
             ]
         }
     )
-    monkeypatch.setattr(segment_crosstabs_llm, "_call_claude", lambda *a, **k: aws_quarterly)
+    monkeypatch.setattr(
+        segment_crosstabs_llm,
+        "call_llm_structured",
+        lambda *a, **k: json.loads(aws_quarterly),
+    )
 
     extract_for_ticker("AMZN", tmp_path, conn)
 
@@ -440,7 +448,11 @@ def test_extract_one_axis_fallback_writes_revenue_metric(
             ]
         }
     )
-    monkeypatch.setattr(segment_crosstabs_llm, "_call_claude", lambda *a, **k: one_axis_response)
+    monkeypatch.setattr(
+        segment_crosstabs_llm,
+        "call_llm_structured",
+        lambda *a, **k: json.loads(one_axis_response),
+    )
 
     result = extract_for_ticker("AMZN", tmp_path, conn)
     assert result.skipped_reason is None
@@ -550,7 +562,11 @@ def test_build_secondary_expansions_multi_word_subject(
             ]
         }
     )
-    monkeypatch.setattr(segment_crosstabs_llm, "_call_claude", lambda *a, **k: payload)
+    monkeypatch.setattr(
+        segment_crosstabs_llm,
+        "call_llm_structured",
+        lambda *a, **k: json.loads(payload),
+    )
 
     extract_for_ticker("AMZN", tmp_path, conn)
 

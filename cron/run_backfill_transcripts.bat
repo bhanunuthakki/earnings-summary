@@ -16,6 +16,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\backfill_transcripts_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\backfill_transcripts.py > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "backfill-transcripts" "portfolio-db" execution\backfill_transcripts.py > "%LOG_FILE%" 2>&1
 
 endlocal

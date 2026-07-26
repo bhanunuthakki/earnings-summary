@@ -27,6 +27,7 @@ from models.artifacts import (
     parse_transcript_processed,
 )
 from sec_identity import sec_user_agent
+from sqlite_runtime import connect_sqlite
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
@@ -97,22 +98,7 @@ def get_connection() -> sqlite3.Connection:
     # write transactions can briefly hold the lock. Without it, any concurrent
     # writer immediately raises OperationalError("database is locked") and
     # kills long-running pulls. 30s is well above any normal transaction.
-    conn = sqlite3.connect(DB_PATH, timeout=30.0)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 30000")
-    # WAL mode: a single writer no longer blocks concurrent readers (and vice
-    # versa). This DB is hit simultaneously by sibling-branch pipelines and the
-    # scheduled cron jobs (morning pipeline, backups, refresh) — under the
-    # default rollback journal those overlapping transactions serialize and risk
-    # "database is locked" / partial-write corruption. journal_mode=WAL is
-    # persisted in the DB header, so re-asserting it per connection is a cheap
-    # idempotent no-op; on an in-memory DB it silently stays 'memory'.
-    # synchronous=NORMAL is the standard WAL pairing: durable across application
-    # crashes, only the last transaction is at risk on OS/power loss — the right
-    # trade for a local single-operator tool.
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    return conn
+    return connect_sqlite(DB_PATH)
 
 
 def init_db() -> None:

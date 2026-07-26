@@ -214,7 +214,10 @@ JS = r"""
     try { return JSON.parse(el.textContent); } catch (e) { return null; }
   }
   var boot = readJson('workspace-boot') || {};
-  var SERVER_URL = boot.server_url || 'http://localhost:7421';
+  var SERVER_URL = /^https?:$/.test(window.location.protocol)
+    ? window.location.origin
+    : (boot.server_url || 'http://localhost:7421');
+  var MUTATION_HEADERS = window.__workspaceMutationHeaders || {'Content-Type': 'application/json'};
   var TICKER = root.getAttribute('data-dcf-ticker') || boot.ticker;
 
   var elToggle = document.getElementById('dcf-edit-toggle');
@@ -473,7 +476,7 @@ JS = r"""
     setStatus('Recomputing…');
     fetch(SERVER_URL + '/api/dcf/recompute', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: MUTATION_HEADERS,
       body: JSON.stringify({inputs: model})
     }).then(function (r) {
       return r.json().then(function (j) { return {ok: r.ok, status: r.status, body: j}; });
@@ -596,7 +599,7 @@ JS = r"""
     setStatus('Saving…');
     fetch(SERVER_URL + '/api/dcf/save', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: MUTATION_HEADERS,
       body: JSON.stringify({ticker: TICKER, inputs: model})
     }).then(function (r) {
       return r.json().then(function (j) { return {ok: r.ok, status: r.status, body: j}; });

@@ -29,7 +29,7 @@ set LOG_FILE=%LOG_DIR%\backfill_earnings_surprises_%TS%.log
 cd /d "%PROJECT_ROOT%"
 
 echo === backfill_earnings_surprises.py === >> "%LOG_FILE%" 2>&1
-python execution\backfill_earnings_surprises.py >> "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "backfill-earnings-surprises-fetch" "portfolio-db" execution\backfill_earnings_surprises.py >> "%LOG_FILE%" 2>&1
 if errorlevel 1 (
     echo === backfill FAILED with exit code %errorlevel%; skipping ingest === >> "%LOG_FILE%" 2>&1
     exit /b %errorlevel%
@@ -37,6 +37,6 @@ if errorlevel 1 (
 
 echo. >> "%LOG_FILE%" 2>&1
 echo === ingest_earnings_surprises.py === >> "%LOG_FILE%" 2>&1
-python execution\ingest_earnings_surprises.py >> "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "backfill-earnings-surprises-ingest" "portfolio-db" execution\ingest_earnings_surprises.py >> "%LOG_FILE%" 2>&1
 
 endlocal

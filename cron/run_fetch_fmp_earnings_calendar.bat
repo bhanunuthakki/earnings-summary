@@ -23,7 +23,7 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\fetch_fmp_earnings_calendar_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\fetch_fmp_earnings_calendar.py --all > "%LOG_FILE%" 2>&1
-python execution\refresh_expected_earnings.py >> "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "fetch-fmp-earnings-calendar" "portfolio-db" execution\fetch_fmp_earnings_calendar.py --all > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "refresh-expected-earnings" "portfolio-db" execution\refresh_expected_earnings.py >> "%LOG_FILE%" 2>&1
 
 endlocal

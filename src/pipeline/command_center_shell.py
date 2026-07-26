@@ -1876,6 +1876,7 @@ SHELL_JS = r"""
   // /api/metrics/panel (read back in System → Data Cache).
   var SKEL = {};            // panel id -> boot placeholder markup
   var INFLIGHT = {};        // cache key -> in-flight fragment promise
+  var LOAD_GENERATION = {}; // panel id -> most recent requested navigation
   var FRESH_MS = 30000;     // just-fetched window: skip revalidation
   var WARM_PANELS = ['portfolio_health', 'explore'];
 
@@ -1956,6 +1957,8 @@ SHELL_JS = r"""
     var body = panel.querySelector('.cc-panel-body');
     var url = ep + (ticker ? ('?ticker=' + encodeURIComponent(ticker)) : '');
     var key = cacheKey(pid, ticker || '');
+    var generation = (LOAD_GENERATION[pid] || 0) + 1;
+    LOAD_GENERATION[pid] = generation;
     var cached = cacheGet(key);
     var t0 = performance.now();
     var served = null;  // the path that painted first, if any
@@ -1975,6 +1978,7 @@ SHELL_JS = r"""
 
     var tFetch = performance.now();
     fetchFragment(url, key, cached && cached.etag).then(function (res) {
+      if (generation !== LOAD_GENERATION[pid]) return;
       var fetchMs = performance.now() - tFetch;
       if (res.status === 304) {
         if (cached) { cached.ts = Date.now(); cacheSet(key, cached); }
@@ -2009,6 +2013,7 @@ SHELL_JS = r"""
       }
       cacheSet(key, entry);
     }).catch(function (e) {
+      if (generation !== LOAD_GENERATION[pid]) return;
       if (!served) {
         // A TypeError after the retries means the transport never completed —
         // almost always the server still coming up on a freshly-spawned session,

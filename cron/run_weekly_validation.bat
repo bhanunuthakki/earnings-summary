@@ -17,6 +17,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\weekly_validation_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\run_weekly_validation.py > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "weekly-validation" "portfolio-db" execution\run_weekly_validation.py > "%LOG_FILE%" 2>&1
 
 endlocal

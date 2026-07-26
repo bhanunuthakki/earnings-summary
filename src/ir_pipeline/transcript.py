@@ -40,6 +40,7 @@ from pathlib import Path
 import requests
 from pypdf import PdfReader
 
+from ir_pipeline._net import UnsafeURLError, ensure_safe_public_url, safe_redirect_url
 from ir_pipeline.config import IrConfig, get_config
 from ir_pipeline.discover import discover_history_hybrid
 from ir_pipeline.discover._docmeta import classify, filename_for_url
@@ -51,6 +52,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 _RENDER_TIMEOUT_MS = 60000
 _DOWNLOAD_TIMEOUT_S = 60
+_MAX_REDIRECTS = 5
 # A genuine full call is tens of KB; below this the extract is a stub / failure.
 _MIN_TRANSCRIPT_CHARS = 2000
 
@@ -183,11 +185,27 @@ def fetch_ir_transcript(
         return None
     url, filename = found
 
-    resp = requests.get(url, headers={"User-Agent": _UA}, timeout=_DOWNLOAD_TIMEOUT_S)
+    current_url = url
+    try:
+        for _ in range(_MAX_REDIRECTS + 1):
+            ensure_safe_public_url(current_url)
+            resp = requests.get(
+                current_url,
+                headers={"User-Agent": _UA},
+                timeout=_DOWNLOAD_TIMEOUT_S,
+                allow_redirects=False,
+            )
+            if not 300 <= resp.status_code < 400:
+                break
+            current_url = safe_redirect_url(current_url, resp.headers.get("Location", ""))
+        else:
+            return None
+    except (requests.RequestException, UnsafeURLError, ValueError):
+        return None
     if resp.status_code != 200 or not resp.content:
         return None
 
     text = _normalize(_extract_pdf_text(resp.content))
     if len(text) < _MIN_TRANSCRIPT_CHARS:
         return None
-    return IrTranscriptHit(page_url=url, qa_text=_qa_segment(text), filename=filename)
+    return IrTranscriptHit(page_url=current_url, qa_text=_qa_segment(text), filename=filename)

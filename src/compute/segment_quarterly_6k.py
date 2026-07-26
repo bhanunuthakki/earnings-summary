@@ -98,14 +98,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from pydantic import TypeAdapter
+
 from compute.segment_crosstabs_llm import (
     _axis_to_dim_type,
     _parse_currency,
     _parse_decimal,
     _parse_period_end,
 )
-from llm.cli import FAST_CLASSIFIER_MODEL, call_llm
-from llm_client import JSON_FENCE_RE
+from llm.cli import FAST_CLASSIFIER_MODEL
+from llm.structured import call_llm_structured
 from models.facts import FiscalPeriodType, SegmentDimension, Unit
 from pipeline.sec_6k_fetch import (
     fetch_6k_exhibit_text,
@@ -507,21 +509,18 @@ def _ask_llm(
     db_path: Path | None,
 ) -> list[SixKBreakdown]:
     prompt = _build_prompt(ticker, year, quarter, text)
-    raw = call_llm(
-        prompt,
-        purpose=LLM_PURPOSE,
-        ticker=ticker,
-        db_path=db_path,
-    ).strip()
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RE.sub("", raw).strip()
-    try:
-        parsed: object = json.loads(raw)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(parsed, dict):
-        return []
-    parsed_obj = cast("dict[str, object]", parsed)
+    parsed_obj = cast(
+        dict[str, object],
+        call_llm_structured(
+            prompt,
+            purpose=LLM_PURPOSE,
+            ticker=ticker,
+            expect="object",
+            required_keys=("breakdowns",),
+            schema=TypeAdapter(dict[str, object]),
+            db_path=db_path,
+        ),
+    )
     items = parsed_obj.get("breakdowns")
     if not isinstance(items, list):
         return []

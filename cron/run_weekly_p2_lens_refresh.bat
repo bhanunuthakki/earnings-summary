@@ -16,6 +16,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\weekly_p2_lens_refresh_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\run_due_lenses.py --cadence weekly > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "weekly-p2-lens-refresh" "portfolio-db" execution\run_due_lenses.py --cadence weekly > "%LOG_FILE%" 2>&1
 
 endlocal

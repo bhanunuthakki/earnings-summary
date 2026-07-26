@@ -20,7 +20,7 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\fetch_macro_series_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\fetch_macro_series.py > "%LOG_FILE%" 2>&1
-python execution\compute_macro_sensitivities.py --portfolio >> "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "fetch-macro-series" "portfolio-db" execution\fetch_macro_series.py > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "compute-macro-sensitivities" "portfolio-db" execution\compute_macro_sensitivities.py --portfolio >> "%LOG_FILE%" 2>&1
 
 endlocal

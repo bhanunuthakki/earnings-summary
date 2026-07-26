@@ -43,9 +43,55 @@ def test_loopback_origin_passes_guard(client) -> None:
     assert r.status_code != 403  # guard passes; handler 400s on the empty body
 
 
-def test_null_origin_passes_guard(client) -> None:
-    # The file:// workspace report sends Origin: null and must keep working.
+def test_null_origin_requires_report_capability(client) -> None:
     r = client.post(_POST_ROUTE, json={}, headers={"Origin": "null"})
+    assert r.status_code == 403
+
+
+def test_null_origin_with_report_capability_passes_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = "test-report-capability"
+    monkeypatch.setenv("COMMENTS_SERVER_REPORT_CAPABILITY", token)
+    app = comments_server.create_app(tmp_path)
+    r = app.test_client().post(
+        _POST_ROUTE,
+        json={},
+        headers={
+            "Origin": "null",
+            "X-Report-Capability": token,
+        },
+    )
+    assert r.status_code != 403
+
+
+def test_non_tailnet_client_is_refused_in_tailscale_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COMMENTS_SERVER_ALLOW_TAILSCALE", "1")
+    app = comments_server.create_app(tmp_path)
+    r = app.test_client().get(
+        "/healthz",
+        environ_base={"REMOTE_ADDR": "192.168.1.40"},
+    )
+    assert r.status_code == 403
+
+
+def test_tailnet_client_and_origin_pass_in_tailscale_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COMMENTS_SERVER_ALLOW_TAILSCALE", "1")
+    app = comments_server.create_app(tmp_path)
+    r = app.test_client().post(
+        _POST_ROUTE,
+        json={},
+        base_url="http://100.100.1.2:7421",
+        environ_base={"REMOTE_ADDR": "100.100.1.3"},
+        headers={"Origin": "http://100.100.1.2:7421"},
+    )
     assert r.status_code != 403
 
 

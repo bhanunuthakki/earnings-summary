@@ -46,7 +46,10 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
+from pydantic import TypeAdapter
+
+from llm.structured import call_llm_structured
+from llm_client import FAST_CLASSIFIER_MODEL
 from models.facts import (
     Currency,
     FiscalPeriodType,
@@ -591,15 +594,13 @@ def _dump_compact(item: object) -> str:
 def _ask_claude(ticker: str, year: int | None, text: str) -> list[Crosstab]:
     """Call Haiku with the cross-tab JSON contract; parse + validate."""
     prompt = _build_prompt(ticker, year, text)
-    raw = _call_claude(prompt, model=FAST_CLASSIFIER_MODEL).strip()
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RE.sub("", raw).strip()
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(parsed, dict):
-        return []
+    parsed = call_llm_structured(
+        prompt,
+        purpose="segment_crosstab_extract",
+        expect="object",
+        required_keys=("cross_tabs",),
+        schema=TypeAdapter(dict[str, object]),
+    )
     items = parsed.get("cross_tabs")
     if not isinstance(items, list):
         return []

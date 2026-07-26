@@ -15,6 +15,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\verify_cron_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\verify_cron_registration.py > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "verify-cron" "task-scheduler" execution\verify_cron_registration.py > "%LOG_FILE%" 2>&1
 
 endlocal

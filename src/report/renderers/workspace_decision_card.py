@@ -21,7 +21,10 @@ JS = r"""
       setTimeout(init, 100);
       return;
     }
-    var SERVER_URL = boot.server_url || 'http://localhost:7421';
+    var SERVER_URL = /^https?:$/.test(window.location.protocol)
+      ? window.location.origin
+      : (boot.server_url || 'http://localhost:7421');
+    var MUTATION_HEADERS = window.__workspaceMutationHeaders || {'Content-Type': 'application/json'};
 
     document.querySelectorAll('.l1-decision-card .dc-act').forEach(function (btn) {
       btn.addEventListener('click', function () {
@@ -38,7 +41,7 @@ JS = r"""
         if (statusEl) statusEl.textContent = 'Recording ' + verb + '…';
         fetch(SERVER_URL + '/api/research/card/' + artifactId + '/' + verb, {
           method: 'POST',
-          headers: {'Content-Type': 'application/json'},
+          headers: MUTATION_HEADERS,
           body: JSON.stringify({})
         }).then(function (r) {
           return r.json().then(function (data) { return {ok: r.ok, data: data}; });

@@ -28,9 +28,6 @@ __all__ = [
 # The Socratic think-through page is the deterministic per-ticker decision
 # surface every other "review this name" doorway in the workspace already
 # points at (chat drawer's "think it through", the console's Memos panel).
-_REVIEW_BASE = "http://localhost:7421"
-
-
 def _position_tab(
     body: StringIO,
     pp: PortfolioPositionSection | None,
@@ -265,7 +262,8 @@ def _position_coaching(
     if ticker:
         body.write(
             f'<a class="k-btn k-btn-quiet k-btn-sm" '
-            f'href="{_REVIEW_BASE}/socratic/{_esc(ticker.upper())}" '
+            f'href="/socratic/{_esc(ticker.upper())}" '
+            f'data-server-path="/socratic/{_esc(ticker.upper())}" '
             'target="_blank" rel="noopener">Review this position &rarr;</a>'
         )
     body.write("</div>")

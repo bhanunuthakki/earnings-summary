@@ -427,6 +427,10 @@ def call_gemini(
                 response_text=text,
                 meta=usage_meta_from_response(usage_dict, model=_try_model),
                 prompt=prompt,
+                provider="google",
+                transport="metered_api",
+                attempts=_attempt + 1,
+                retries=_attempt,
             )
             return text
         except (
@@ -448,6 +452,11 @@ def call_gemini(
                 run_id=run_id,
                 error=f"{type(gemini_error).__name__}: {str(gemini_error)[:500]}",
                 prompt=prompt,
+                provider="google",
+                transport="metered_api",
+                attempts=_attempt + 1,
+                retries=_attempt,
+                failure_class="gemini_transport",
             )
             if isinstance(gemini_error, google_exceptions.NotFound):
                 if not _annealed and _try_model != _GEMINI_FAST_MODEL_FALLBACK:

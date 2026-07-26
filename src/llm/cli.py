@@ -59,8 +59,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from llm.capture import capture_exchange
-from llm.fallback import fallback_available
-from llm.ledger import fallback_call_logged, record_llm_call
+from llm.ledger import record_llm_call
 from llm.transport import (
     FailureInfo,
     LLMQuotaExhausted,
@@ -74,6 +73,10 @@ from llm.transport import (
 # Backoff base for transient-class retries (llm.transport.retry_budget owns the
 # per-class attempt counts). attempt 1 → ~3s, attempt 2 → ~6s, + up to 1s jitter.
 _RETRY_BASE_SECONDS = float(os.environ.get("LLM_RETRY_BASE_S", "3"))
+
+# Tier three is billed.  Adding a purpose here is an explicit operational
+# approval; the default is to fail loudly after both subscription transports.
+OPENROUTER_FALLBACK_PURPOSES: frozenset[str] = frozenset()
 
 log = logging.getLogger(__name__)
 
@@ -796,6 +799,14 @@ LLM_MODELS: dict[str, str] = {
     # closed-vocab classification shape as metric_lifecycle_triage -> Haiku
     # tier.
     "disclosure_item_specificity_triage": FAST_CLASSIFIER_MODEL,
+    # Legacy private callers migrated to the governed entrypoint.  These are
+    # short, schema-bound document extractors; each has a golden/eval registry
+    # entry and a versioned prompt identity.
+    "kpi_summary_extract": FAST_CLASSIFIER_MODEL,
+    "kpi_summary_enumerate": FAST_CLASSIFIER_MODEL,
+    "segment_definition_extract": FAST_CLASSIFIER_MODEL,
+    "segment_crosstab_extract": FAST_CLASSIFIER_MODEL,
+    "ir_sheet_kpi_map": FAST_CLASSIFIER_MODEL,
     # NOT here by design: the 14 dynamic `lens:<name>` purposes (plus the
     # scenario-suffixed lens:macro_scenario:<id> / lens:portfolio_macro_stress:<id>)
     # resolve their model from the Lens object itself
@@ -1167,6 +1178,11 @@ def _call_claude(
             error=f"[quota_blocked] {msg}",
             fallback_used=fallback_used,
             prompt=prompt,
+            provider="anthropic",
+            transport="subscription_cli",
+            attempts=0,
+            retries=0,
+            failure_class="quota_blocked",
         )
         raise LLMQuotaExhausted(msg, blocked_until=blocked_until)
 
@@ -1232,6 +1248,10 @@ def _call_claude(
                 meta=meta,
                 fallback_used=fallback_used,
                 prompt=prompt,
+                provider="anthropic",
+                transport="subscription_cli",
+                attempts=attempt,
+                retries=attempt - 1,
             )
             # Opt-in full-text capture (off unless LLM_CAPTURE_DIR is set) — the
             # corpus source for execution/compare_backends.py --from-capture.
@@ -1290,26 +1310,58 @@ def _call_claude(
         error=error_msg,
         fallback_used=fallback_used,
         prompt=prompt,
+        provider="anthropic",
+        transport="subscription_cli",
+        attempts=attempt,
+        retries=attempt - 1,
+        failure_class=last_info.kind,
     )
-    if last_info.kind == "usage_limit" and not fallback_available():
+    if os.environ.get("LLM_FALLBACK_DISABLED", "").lower() in {"1", "true", "yes"}:
+        if last_info.kind == "usage_limit":
+            raise LLMQuotaExhausted(
+                f"usage limit exhausted: {last_info.detail[:300]}",
+                blocked_until=last_info.retry_after,
+            ) from last_error
+        raise last_error
+    try:
+        from llm.codex_backend import call_codex_llm
+
+        return call_codex_llm(
+            prompt,
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope,
+            run_id=run_id,
+            fallback_used="codex",
+        )
+    except Exception as codex_error:
+        if purpose not in OPENROUTER_FALLBACK_PURPOSES:
+            if last_info.kind == "usage_limit":
+                raise LLMQuotaExhausted(
+                    "Claude quota is exhausted and the Codex subscription fallback failed",
+                    blocked_until=last_info.retry_after,
+                ) from codex_error
+            raise RuntimeError(
+                "Both subscription LLM transports failed "
+                f"(claude={type(last_error).__name__}, codex={type(codex_error).__name__}); "
+                "this purpose is not approved for metered OpenRouter fallback."
+            ) from codex_error
+        from llm.openrouter_backend import call_openrouter
+
+        log.error({"event": "llm_metered_openrouter_fallback", "purpose": purpose})
+        return call_openrouter(
+            prompt,
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope,
+            run_id=run_id,
+            force_budget_bypass=force_budget_bypass,
+        )
         # Typed so eval/judge callers can abort instead of scoring the outage;
         # production callers defer per-item (is_hard_stop → False).
-        raise LLMQuotaExhausted(
-            f"usage limit exhausted: {last_info.detail[:300]}",
-            blocked_until=last_info.retry_after,
-        ) from last_error
     # Operational failure — try Gemini fallback. fallback_call_logged raises
     # if the fallback is disabled/unconfigured, surfacing both errors together;
     # an actual Gemini attempt writes its own ledger row (fallback_used='gemini').
-    return fallback_call_logged(
-        prompt,
-        last_error,
-        prompt_sha=prompt_sha,
-        purpose=purpose,
-        ticker=ticker,
-        scope=scope,
-        run_id=run_id,
-    )
 
 
 def call_llm(
@@ -1667,6 +1719,11 @@ def call_llm_with_web(
             run_id=run_id,
             error=f"[quota_blocked] {msg}",
             prompt=prompt,
+            provider="anthropic",
+            transport="subscription_cli",
+            attempts=0,
+            retries=0,
+            failure_class="quota_blocked",
         )
         raise LLMQuotaExhausted(msg, blocked_until=blocked_until)
 
@@ -1728,6 +1785,10 @@ def call_llm_with_web(
             response_text=text,
             meta=meta,
             prompt=prompt,
+            provider="anthropic",
+            transport="subscription_cli",
+            attempts=1,
+            retries=0,
         )
         # Opt-in full-text capture (see _call_claude). scope tags it as a web
         # call so the replay step can flag web-grounded purposes (Gemini has no
@@ -1760,6 +1821,11 @@ def call_llm_with_web(
             run_id=run_id,
             error=web_error_msg,
             prompt=prompt,
+            provider="anthropic",
+            transport="subscription_cli",
+            attempts=1,
+            retries=0,
+            failure_class=web_info.kind,
         )
         if web_info.kind == "usage_limit":
             # Engage the breaker here too — the plain-path fall-through below

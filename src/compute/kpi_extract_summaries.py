@@ -43,10 +43,13 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import cast
 
+from pydantic import TypeAdapter
+
 import parser  # first-party src/parser.py (untyped legacy module — read PDFs via _read_pdf_text)
 from compute.kpi_resolver import normalize_kpi_name
+from llm.structured import call_llm_structured
 from llm.untrusted import spotlight
-from llm_client import FAST_CLASSIFIER_MODEL, JSON_FENCE_RE, _call_claude
+from llm_client import FAST_CLASSIFIER_MODEL
 from models.documents import SourceType, tier_for_source_type
 from models.facts import FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import DefinitionOrigin
@@ -551,7 +554,7 @@ For EACH of the KPI names below, find the value reported FOR THIS QUARTER (not g
       * "ratio"    — unitless multiples reported with an "x" (e.g. coverage 1.8x → 1.8).
       * "bps"      — only when the document states the metric in basis points.
     Use only those five tokens; if unsure between "actual" and a scaled form, always pick "actual" with the full figure.
-  - "confidence": float 0.0–1.0; lower if you had to estimate from context
+  - "confidence": float 0.0-1.0; lower if you had to estimate from context
   - "source_excerpt": the VERBATIM snippet (under 200 characters) copied character-for-character from the document that contains the reported value — the sentence or table line you read it from. Never paraphrase or reformat; if you cannot quote it exactly, omit this field.
 
 If a KPI is not disclosed in the document, OMIT IT from the response. Do not guess.
@@ -566,19 +569,13 @@ Document text:
 
 Return ONLY the JSON object — no markdown fence, no commentary."""
 
-    raw = _call_claude(prompt, model=FAST_CLASSIFIER_MODEL).strip()
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RE.sub("", raw).strip()
-    # Haiku occasionally appends commentary after the JSON; raw_decode peels
-    # off the first top-level value and ignores the rest.
-    start = raw.find("{")
-    if start < 0:
-        return {}
-    decoder = json.JSONDecoder()
-    parsed, _ = decoder.raw_decode(raw[start:])
-    if not isinstance(parsed, dict):
-        return {}
-    return {str(k): v for k, v in parsed.items() if isinstance(v, dict) and "value" in v}
+    parsed = call_llm_structured(
+        prompt,
+        purpose="kpi_summary_extract",
+        expect="object",
+        schema=TypeAdapter(dict[str, dict[str, object]]),
+    )
+    return {key: value for key, value in parsed.items() if "value" in value}
 
 
 def parse_decimal_value(raw: object) -> Decimal | None:
@@ -801,23 +798,19 @@ Rules:
 
 Document text:
 {spotlighted}"""
-    raw = _call_claude(prompt, model=FAST_CLASSIFIER_MODEL).strip()
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RE.sub("", raw).strip()
-    start = raw.find("[")
-    if start < 0:
-        return []
-    decoder = json.JSONDecoder()
-    try:
-        parsed, _ = decoder.raw_decode(raw[start:])
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(parsed, list):
-        return []
+    parsed = cast(
+        list[dict[str, object]],
+        call_llm_structured(
+            prompt,
+            purpose="kpi_summary_enumerate",
+            expect="array",
+            schema=TypeAdapter(list[dict[str, object]]),
+        ),
+    )
     out: list[dict[str, object]] = []
-    for item in cast("list[object]", parsed):
-        if isinstance(item, dict) and "label" in item and "value" in item:
-            out.append(cast("dict[str, object]", item))
+    for item in parsed:
+        if "label" in item and "value" in item:
+            out.append(item)
         if len(out) >= max_facts:
             break
     return out
