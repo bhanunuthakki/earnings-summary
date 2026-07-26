@@ -1,5 +1,5 @@
 """Re-pull aggregator-sourced earnings-call transcripts with the fixed roic.ai
-DOM extractor (2026-07-25) and supersede the old single-blob rows.
+DOM extractor (2026-07-25).
 
 Why this script exists: `src/aggregator_sources.py`'s old `_strip_html` +
 letter-prefix heuristic silently collapsed real multi-speaker calls to ONE
@@ -8,20 +8,29 @@ turn). The fix (`_TranscriptMessageParser`) reads roic.ai's actual DOM
 (`data-cy="transcripts_call_message"` / `data-transcript-speaker-name="true"`)
 for genuine per-turn speaker attribution. This script re-fetches every
 `.tmp/transcript_index.json` entry recorded with `source=aggregator_roic` for
-a ticker scope, and supersedes (never mutates in place) the old `documents` /
-`transcripts` / `transcript_segments` rows once the new fetch produces a
-REAL multi-turn transcript (>=2 segments) — a single-turn re-fetch (paywall,
-DOM-shape miss, genuine short call) never deletes the prior row, so a bad
-network day cannot make coverage worse than before.
+a ticker scope and re-ingests it.
 
 Only `aggregator_roic` entries are in scope: the DOM fix is roic-specific.
 `aggregator_stockanalysis` / `aggregator_tickertrends` / `issuer_ir` /
 `yt_dlp_whisper_search` entries are left untouched (documented residual gap
 — see the PR description this script shipped with).
 
+Supersede-vs-skip is decided centrally by `ingest_one`'s reliability-ranked
+period guard (`src/compute/transcript_ingest.py` +
+`src/transcripts/source_reliability.py`), not by this script: it used to
+carry its own old/new comparison (segment-count only, >=2 floor) and would
+leave a stray duplicate `documents`/`transcripts` row behind on every run
+that didn't clear that floor — the root cause of the 2026-07-25 NSP/DHR
+transcript-duplication incident (six runs in one debugging session, each
+minting a new row). The central guard also weighs source reliability, not
+just segment count, so a low-tier aggregator re-fetch can no longer replace
+a higher-tier manual/IR transcript just because it happens to parse into
+more raw segments.
+
 Idempotent: safe to re-run. A ticker/quarter already superseded in a prior
-run is simply re-verified (fetch + ingest again; sha256-keyed, so an
-unchanged re-fetch is a no-op at the ingest layer).
+run is simply re-verified (fetch + ingest again; sha256-keyed at the byte
+level, reliability-ranked at the period level — an unchanged re-fetch is a
+no-op at the ingest layer either way).
 
 Usage:
     python execution/refetch_aggregator_transcripts.py --scope portfolio_evaluation
@@ -56,7 +65,6 @@ from pipeline.queries import open_db  # noqa: E402
 
 _TRANSCRIPT_INDEX = PROJECT_ROOT / ".tmp" / "transcript_index.json"
 _MANIFEST_DIR = PROJECT_ROOT / ".tmp" / "refetch_aggregator_transcripts"
-_MIN_REAL_SEGMENTS = 2  # >=2 rows = genuine per-turn attribution, not one blob
 
 
 @dataclass
@@ -135,7 +143,11 @@ def _scope_tickers(
 def _existing_txt_document(
     conn: sqlite3.Connection, ticker: str, rel_path: str
 ) -> tuple[int, int] | None:
-    """Return (document_id, transcript_id) for the row currently backed by `rel_path`, if any."""
+    """Return (document_id, transcript_id) for the row currently backed by `rel_path`, if any.
+
+    Reporting only — supersede-vs-skip is decided centrally by `ingest_one`'s
+    reliability-ranked period guard, not here.
+    """
     row = conn.execute(
         "SELECT id FROM documents WHERE ticker = ? AND file_path = ?", (ticker, rel_path)
     ).fetchone()
@@ -157,13 +169,6 @@ def _segment_stats(conn: sqlite3.Connection, transcript_id: int) -> tuple[int, i
         (transcript_id,),
     ).fetchone()[0]
     return int(n), int(d)
-
-
-def _delete_document(conn: sqlite3.Connection, document_id: int, transcript_id: int) -> None:
-    if transcript_id >= 0:
-        conn.execute("DELETE FROM transcript_segments WHERE transcript_id = ?", (transcript_id,))
-        conn.execute("DELETE FROM transcripts WHERE id = ?", (transcript_id,))
-    conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
 
 
 def _process_one(
@@ -268,17 +273,16 @@ def _process_one(
         )
 
     new_n, new_d = _segment_stats(conn, result.transcript_id)
-    superseded = False
-    status = "no_improvement"
-    if new_n >= _MIN_REAL_SEGMENTS and old_doc_id is not None and old_doc_id != result.document_id:
-        _delete_document(
-            conn, old_doc_id, old_transcript_id if old_transcript_id is not None else -1
-        )
-        conn.commit()
-        superseded = True
+    # ingest_one already decided supersede-vs-skip via the reliability-ranked
+    # period guard (source tier, then segment-count richness); this just
+    # reports what it decided.
+    superseded = (
+        not result.skipped_existing and old_doc_id is not None and old_doc_id != result.document_id
+    )
+    if result.skipped_existing:
+        status = "no_improvement" if old_doc_id is not None else "skipped_lower_reliability"
+    else:
         status = "ok"
-    elif new_n >= _MIN_REAL_SEGMENTS:
-        status = "ok"  # first-time ingest, nothing to supersede
     return QuarterResult(
         ticker=ticker,
         year=year,
