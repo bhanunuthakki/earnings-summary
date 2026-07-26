@@ -512,7 +512,16 @@ import numpy as np  # noqa: E402
 
 latest = keys[-1]
 cash_now = m(bal_i[latest].get("cashAndShortTermInvestments")) or 0.0
-debt_now = m(bal_i[latest].get("longTermDebt")) or 0.0
+# Use TOTAL debt (long- + short-term), not longTermDebt alone: convertible notes
+# and near-maturity paper land in shortTermDebt (e.g. LITE FQ3'26: $3,251M of $3,314M
+# total debt sat in short-term), so longTermDebt-only massively understates net debt
+# and overstates equity value. Fall back to the LT+ST sum if totalDebt is absent.
+_bal_latest = bal_i[latest]
+debt_now = (
+    m(_bal_latest.get("totalDebt"))
+    or ((m(_bal_latest.get("longTermDebt")) or 0.0) + (m(_bal_latest.get("shortTermDebt")) or 0.0))
+    or 0.0
+)
 shares_now = m(inc_i[latest].get("weightedAverageShsOutDil")) or 1.0
 beta = BETA
 ke = RF + beta * ERP + CRP
@@ -1000,16 +1009,43 @@ if GEO:
 
 band(fs, frow, "BALANCE SHEET", NQ + 1)
 frow += 1
+
+
+def _bs_getter(field: str):
+    """Per-quarter balance-sheet cell getter. For ``totalDebt`` it mirrors the
+    ``debt_now`` fallback (totalDebt → longTermDebt + shortTermDebt) so the
+    Financials 'Total Debt' row the reader values off stays consistent with the
+    Monte-Carlo path even when FMP omits the aggregate ``totalDebt`` field.
+    Returns None only when every debt component is absent (blank stays blank)."""
+    if field != "totalDebt":
+        return lambda i, k, f=field: m(bal_i.get(k, {}).get(f))
+
+    def _debt(i, k):
+        b = bal_i.get(k, {})
+        td = m(b.get("totalDebt"))
+        if td is not None:
+            return td
+        lt, st = m(b.get("longTermDebt")), m(b.get("shortTermDebt"))
+        if lt is None and st is None:
+            return None
+        return (lt or 0.0) + (st or 0.0)
+
+    return _debt
+
+
 for lab, fld in [
     ("Cash & ST Investments", "cashAndShortTermInvestments"),
     ("Total Current Assets", "totalCurrentAssets"),
     ("PP&E (net)", "propertyPlantEquipmentNet"),
     ("Total Assets", "totalAssets"),
     ("Total Current Liabilities", "totalCurrentLiabilities"),
-    ("Long-term Debt", "longTermDebt"),
+    # TOTAL debt (long- + short-term), not longTermDebt: convertible notes and
+    # near-maturity paper sit in shortTermDebt (LITE FQ3'26: $3,251M of $3,314M),
+    # so longTermDebt-only understates net debt and overstates equity value.
+    ("Total Debt", "totalDebt"),
     ("Total Equity", "totalStockholdersEquity"),
 ]:
-    fin_row[lab] = write_qrow(lab, lambda i, k, f=fld: m(bal_i.get(k, {}).get(f)))
+    fin_row[lab] = write_qrow(lab, _bs_getter(fld))
 
 band(fs, frow, "CASH FLOW", NQ + 1)
 frow += 1
@@ -1066,7 +1102,7 @@ wrows = [
         USD,
         "f",
     ),
-    ("Total debt (D)", f"=Financials!{LAST}{fin_row['Long-term Debt']}", USD, "f"),
+    ("Total debt (D)", f"=Financials!{LAST}{fin_row['Total Debt']}", USD, "f"),
     ("Equity weight", "=B10/(B10+B11)", PCT, "f"),
     ("Debt weight", "=B11/(B10+B11)", PCT, "f"),
 ]
@@ -1275,7 +1311,7 @@ band(
 r += 1
 EQ_F, DB_F, CA_F = (
     fin_row["Total Equity"],
-    fin_row["Long-term Debt"],
+    fin_row["Total Debt"],
     fin_row["Cash & ST Investments"],
 )
 
@@ -1519,7 +1555,7 @@ put(vs, br + 1, 2, f"=B{sumpv}+B{tr + 10}", fmt=USD, bold=True)
 put(vs, br + 2, 1, "+ Cash & ST investments")
 put(vs, br + 2, 2, f"=Financials!{LAST}{fin_row['Cash & ST Investments']}", fmt=USD)
 put(vs, br + 3, 1, "- Long-term debt")
-put(vs, br + 3, 2, f"=-Financials!{LAST}{fin_row['Long-term Debt']}", fmt=USD)
+put(vs, br + 3, 2, f"=-Financials!{LAST}{fin_row['Total Debt']}", fmt=USD)
 put(vs, br + 4, 1, "Equity value", bold=True)
 put(vs, br + 4, 2, f"=B{br + 1}+B{br + 2}+B{br + 3}", fmt=USD, bold=True)
 put(vs, br + 5, 1, "Diluted shares (M)")
@@ -1648,7 +1684,7 @@ for i, (lab, v) in enumerate(
         ("tax", "=Valuation!$B$5"),
         ("k (calibration)", kcal),
         ("cash", f"=Financials!{LAST}{fin_row['Cash & ST Investments']}"),
-        ("debt", f"=Financials!{LAST}{fin_row['Long-term Debt']}"),
+        ("debt", f"=Financials!{LAST}{fin_row['Total Debt']}"),
         ("shares", f"=Financials!{LAST}{fin_row['Diluted Shares (M)']}"),
     ]
 ):
