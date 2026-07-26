@@ -39,6 +39,9 @@ def _no_additive_rows(*_a: object, **_k: object) -> list[NewsRow]:
 def _hermetic_additive_feeds(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fetch_news.edgarnews, "fetch_edgar_news_for_ticker", _no_additive_rows)
     monkeypatch.setattr(fetch_news.yfgrades, "fetch_grades_for_ticker", _no_additive_rows)
+    # yf_news joined the additive feeds 2026-07-25 (it replaced the paid
+    # WebSearch+LLM path); unstubbed it would reach Yahoo from the test suite.
+    monkeypatch.setattr(fetch_news.yfnews, "fetch_news_for_ticker", _no_additive_rows)
     monkeypatch.setattr(fetch_news, "check_s1_watch", lambda *_a, **_k: [])
 
 

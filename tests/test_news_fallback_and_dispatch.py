@@ -46,11 +46,16 @@ def _no_additive_rows(*_a: object, **_k: object) -> list[NewsRow]:
 
 @pytest.fixture(autouse=True)
 def _hermetic_additive_feeds(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The dispatcher now runs the additive EDGAR + grades feeds by default;
-    stub both to [] so no dispatcher test ever touches sec.gov / Yahoo.
-    Additive-specific tests re-patch with their own recorders."""
+    """The dispatcher runs the additive EDGAR + grades + yf-news feeds by
+    default; stub all THREE to [] so no dispatcher test ever touches sec.gov /
+    Yahoo. Additive-specific tests re-patch with their own recorders.
+
+    yf_news joined 2026-07-25 when it replaced the paid WebSearch+LLM path as
+    the default journalism source — an unstubbed live feed here made every
+    exact-row assertion in this file fail against the network."""
     monkeypatch.setattr(fetch_news.edgarnews, "fetch_edgar_news_for_ticker", _no_additive_rows)
     monkeypatch.setattr(fetch_news.yfgrades, "fetch_grades_for_ticker", _no_additive_rows)
+    monkeypatch.setattr(fetch_news.yfnews, "fetch_news_for_ticker", _no_additive_rows)
 
 
 _LLM_ARTIFACTS_DDL = (

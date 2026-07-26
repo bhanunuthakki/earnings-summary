@@ -420,6 +420,7 @@ def run(
     skip_edgar: bool = False,
     skip_grades: bool = False,
     skip_s1_watch: bool = False,
+    skip_yf_news: bool = False,
     websearch_scope: str = "portfolio",
 ) -> int:
     """Collect every ticker under the source policy, add the additive feeds,
@@ -492,6 +493,7 @@ def run(
             days=days,
             skip_edgar=skip_edgar,
             skip_grades=skip_grades,
+            skip_yf_news=skip_yf_news,
             skip_s1_watch=skip_s1_watch,
         )
         # Additive feeds supplement, never duplicate: drop any story the policy
@@ -549,6 +551,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Skip the additive yfinance rating-changes feed.",
     )
     parser.add_argument(
+        "--skip-yf-news",
+        action="store_true",
+        help="Skip the free yfinance journalism feed (the DEFAULT news source "
+        "since 2026-07-25, replacing the $5.74-per-stored-row WebSearch+LLM path).",
+    )
+    parser.add_argument(
         "--skip-s1-watch",
         action="store_true",
         help="Skip the additive competitor IPO S-1 watch (EDGAR full-text search).",
@@ -592,6 +600,7 @@ def main(argv: list[str] | None = None) -> int:
         limit=cast("int", args.limit),
         skip_edgar=cast("bool", args.skip_edgar),
         skip_grades=cast("bool", args.skip_grades),
+        skip_yf_news=cast("bool", args.skip_yf_news),
         skip_s1_watch=cast("bool", args.skip_s1_watch),
         websearch_scope=cast("str", args.websearch_scope),
     )
