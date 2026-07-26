@@ -1273,3 +1273,62 @@ def test_note_rail_does_not_eat_the_reading_measure() -> None:
     prose_cap = re.search(r"\.k-doc\s+\.prose\s*\{([^}]*)\}", css)
     assert prose_cap is not None, ".k-doc .prose must cap at the measure"
     assert "var(--k-measure)" in prose_cap.group(1)
+
+
+# ---------------------------------------------------------------------------
+# §6.3 document form on the workspace report
+# ---------------------------------------------------------------------------
+
+
+def test_workspace_panels_debox_inside_a_document() -> None:
+    """Inside a ``.k-doc`` the report's panels become sections, not cards.
+
+    §6.3's load-bearing rule is "rules instead of boxes": a research page that
+    grows cards reads as a dashboard. This is implemented as a scoped stylesheet
+    block rather than a rewrite of twenty ``_panel_head()`` call sites, so the
+    markup — cross-link targets, comment anchors, panel ids — is untouched and
+    the golden HTML diff stays one wrapper class.
+
+    Verified in-browser on the real golden pane: 9 panels de-boxed, section
+    titles in --mark at 11px uppercase, rows and table cells flush, thesis lede
+    still capped at 66ch, and the mark clears AA-body on all three themes
+    (paper 5.62:1 / white 5.88:1 / dark 6.32:1).
+    """
+    from report.renderers.workspace_styles import CSS
+
+    rule = re.search(r"\.k-doc\s+\.panel\s*\{([^}]*)\}", CSS)
+    assert rule is not None, "workspace CSS must map .panel to a document section"
+    body = rule.group(1)
+    # The box goes away...
+    assert re.search(r"border:\s*0", body)
+    assert re.search(r"background:\s*none", body)
+    assert re.search(r"border-radius:\s*0", body)
+    # ...replaced by a hairline section rule.
+    assert "border-top:" in body
+    # --panel-pad-x is the single lever that flushes heads, val-rows and .tbl
+    # cells to the document's left edge. Without it the section keeps card
+    # padding and still reads as a box with the border removed.
+    assert re.search(r"--panel-pad-x:\s*0", body), (
+        "panels must flush to the document edge via --panel-pad-x"
+    )
+
+    title = re.search(r"\.k-doc\s+\.panel-title\s*\{([^}]*)\}", CSS)
+    assert title is not None
+    assert "var(--mark)" in title.group(1), "section labels take the editorial mark"
+
+
+def test_thesis_tab_opts_into_document_form() -> None:
+    """The thesis tab declares itself a document.
+
+    ``k-doc`` brings the semantics; ``k-doc-fluid`` drops the kit's outer width
+    clamp because the report owns its page width and spans wide financial
+    tables. Both are required — ``k-doc`` alone would squeeze the report to the
+    reading measure and break every financial table on the tab.
+    """
+    golden = PROJECT_ROOT / "tests" / "golden" / "workspace" / "portfolio" / "pane_thesis.html"
+    html = golden.read_text(encoding="utf-8")
+    assert 'class="tab-body k-doc k-doc-fluid"' in html
+
+    css = controls_css("paper")
+    fluid = re.search(r"\.k-doc-fluid\s*\{([^}]*)\}", css)
+    assert fluid is not None and "max-width: none" in fluid.group(1)

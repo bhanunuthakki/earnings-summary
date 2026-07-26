@@ -505,6 +505,38 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
   color: var(--fg);
 }
 .panel-sub { font-size: var(--fs-caption); color: var(--muted); }
+
+/* ---- §6.3 document form. Inside a .k-doc the report's panels stop being
+   boxes and become sections: hairline rules and whitespace instead of cards,
+   because a research page that grows boxes reads as a dashboard, and that is
+   where a research surface loses the seriousness it needs to be trusted.
+
+   The MARKUP is untouched. Every _panel_head() call site, every cross-link
+   target, comment anchor and panel_id keeps working — only presentation
+   changes. That is why this is a scoped stylesheet block and not a rewrite of
+   twenty renderers: the alternative was hand-editing every call site, which
+   would have churned the goldens structurally for a purely visual change.
+
+   --panel-pad-x is the one lever. Heads, .val-rows, .tbl cells and the strip
+   lists all take their horizontal padding from it, so zeroing it here flushes
+   the whole section to the document's left edge in one declaration. ---- */
+.k-doc .panel {
+  --panel-pad-x: 0px;
+  border: 0; border-radius: 0; background: none; overflow: visible;
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-2);
+}
+.k-doc .panel:first-child { border-top: 0; padding-top: 0; }
+.k-doc .panel-head { border-bottom: 0; padding-bottom: var(--sp-2); }
+/* The section label: the kit's caption shape in the editorial mark (§2). */
+.k-doc .panel-title {
+  font-size: var(--fs-caption); font-weight: 600; color: var(--mark);
+  text-transform: uppercase; letter-spacing: 0.16em;
+}
+/* A document's own prose keeps the reading measure even though the report
+   itself is fluid — .k-doc-fluid drops the outer clamp, not this one. */
+.k-doc .lede { max-width: var(--k-measure); }
+
 /* P4.1 canonical header anatomy: title (left) · as-of · source chip · sub
    (right edge, grouped in .panel-meta). Built by workspace_html._panel_head —
    hand-rolled heads should not exist outside that helper. */
