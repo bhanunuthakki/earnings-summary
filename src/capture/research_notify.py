@@ -263,7 +263,9 @@ def dispatch_callback(
                 answer(
                     token,
                     cqid,
-                    text="Opening the private Inbox..." if inbox_url else "Inbox link not configured.",
+                    text="Opening the private Inbox..."
+                    if inbox_url
+                    else "Inbox link not configured.",
                 )
             if inbox_url and chat_id is not None:
                 send(token, chat_id, inbox_url)
@@ -312,7 +314,9 @@ def dispatch_callback(
                 send(
                     token,
                     chat_id,
-                    "\n\n".join(details) if details else "No material action was prioritized this week.",
+                    "\n\n".join(details)
+                    if details
+                    else "No material action was prioritized this week.",
                 )
             return "spb_why"
 

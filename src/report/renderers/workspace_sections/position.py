@@ -22,6 +22,7 @@ __all__ = [
     "_standing_rules_block",
 ]
 
+
 # The research server the report deep-links into (report opens via file://,
 # so the doorway must be absolute) — same hardcoded base the chat drawer /
 # sources tab use (workspace_sections/boot.py, workspace_sections/sources.py).

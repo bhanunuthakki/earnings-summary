@@ -328,9 +328,7 @@ def _notify_alert_hook(payload: dict[str, object]) -> None:
     if not hook:
         return
     try:
-        subprocess.run(
-            [hook], input=json.dumps(payload), text=True, check=False, timeout=30
-        )
+        subprocess.run([hook], input=json.dumps(payload), text=True, check=False, timeout=30)
     except OSError as exc:
         sys.stderr.write(f"WARNING: cron alert hook failed: {exc}\n")
 

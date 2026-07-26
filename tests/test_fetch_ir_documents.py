@@ -47,7 +47,9 @@ class _FakeResp:
 class _FakeOpener:
     """Minimal build_opener() result for URL-guarded downloader tests."""
 
-    def __init__(self, open_fn: Callable[[urllib.request.Request, float | None], _FakeResp]) -> None:
+    def __init__(
+        self, open_fn: Callable[[urllib.request.Request, float | None], _FakeResp]
+    ) -> None:
         self._open_fn = open_fn
 
     def open(self, req: urllib.request.Request, timeout: float | None = None) -> _FakeResp:

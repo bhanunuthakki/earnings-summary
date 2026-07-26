@@ -207,7 +207,9 @@ class Registry:
                 started_at=datetime.now(UTC),
                 cwd=cwd,
                 lock_repo_root=self._repo_root,
-                write_sets=tuple(sorted(set(["portfolio-db"] if write_sets is None else write_sets))),
+                write_sets=tuple(
+                    sorted(set(["portfolio-db"] if write_sets is None else write_sets))
+                ),
             )
             self._jobs[job_id] = job
             self._slots[slot] = job_id

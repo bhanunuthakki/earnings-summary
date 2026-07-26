@@ -10,7 +10,12 @@ from schema_compat import require_current_for_write
 
 
 def issue_fingerprint(
-    *, source_doc_id: int | None, ticker: str | None, rule: str, raw_value: str | None, expected: str | None
+    *,
+    source_doc_id: int | None,
+    ticker: str | None,
+    rule: str,
+    raw_value: str | None,
+    expected: str | None,
 ) -> str:
     """Stable identity for the underlying data defect, independent of an attempt."""
     payload = "\x1f".join(
@@ -49,7 +54,11 @@ def record_issue(
         return int(cur.lastrowid or 0)
 
     fingerprint = issue_fingerprint(
-        source_doc_id=source_doc_id, ticker=normalized_ticker, rule=rule, raw_value=raw_value, expected=expected
+        source_doc_id=source_doc_id,
+        ticker=normalized_ticker,
+        rule=rule,
+        raw_value=raw_value,
+        expected=expected,
     )
     existing = conn.execute(
         "SELECT id FROM validation_issues WHERE fingerprint = ?", (fingerprint,)
@@ -67,7 +76,18 @@ def record_issue(
         "(run_id, source_doc_id, ticker, severity, rule, raw_value, expected, raised_at, resolved_at, "
         "fingerprint, first_seen_at, last_seen_at, occurrence_count) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 1)",
-        (run_id, source_doc_id, normalized_ticker, severity, rule, raw_value, expected, now,
-         fingerprint, now, now),
+        (
+            run_id,
+            source_doc_id,
+            normalized_ticker,
+            severity,
+            rule,
+            raw_value,
+            expected,
+            now,
+            fingerprint,
+            now,
+            now,
+        ),
     )
     return int(cur.lastrowid or 0)

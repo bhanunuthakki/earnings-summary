@@ -1141,9 +1141,7 @@ def create_app(
         from synthesis.tenet_distill import run_tenet_distill
 
         try:
-            counts = run_tenet_distill(
-                db_path, user_id=DEFAULT_USER_ID
-            )
+            counts = run_tenet_distill(db_path, user_id=DEFAULT_USER_ID)
         except Exception as exc:  # a distill failure must not 500 the tap
             return ({"error": f"distill failed: {exc}"}, 500)
         return {"ok": True, **counts}
@@ -1829,9 +1827,7 @@ def create_app(
         from pipeline.position_lifecycle_panel import render_position_lifecycle_section
 
         return Response(
-            render_position_lifecycle_section(
-                db_path, ticker, user_id=DEFAULT_USER_ID
-            ),
+            render_position_lifecycle_section(db_path, ticker, user_id=DEFAULT_USER_ID),
             mimetype="text/html",
         )
 

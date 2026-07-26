@@ -46,8 +46,26 @@ def test_validation_issue_fingerprint_advances_lifecycle_not_row_count() -> None
         "ticker TEXT, severity TEXT, rule TEXT, raw_value TEXT, expected TEXT, raised_at TEXT, "
         "resolved_at TEXT, fingerprint TEXT, first_seen_at TEXT, last_seen_at TEXT, occurrence_count INTEGER)"
     )
-    first = record_issue(conn, run_id="a", source_doc_id=7, ticker="goog", severity="warn", rule="range", raw_value="x=9", expected="x<2")
-    second = record_issue(conn, run_id="b", source_doc_id=7, ticker="GOOG", severity="warn", rule="range", raw_value="x=9", expected="x<2")
+    first = record_issue(
+        conn,
+        run_id="a",
+        source_doc_id=7,
+        ticker="goog",
+        severity="warn",
+        rule="range",
+        raw_value="x=9",
+        expected="x<2",
+    )
+    second = record_issue(
+        conn,
+        run_id="b",
+        source_doc_id=7,
+        ticker="GOOG",
+        severity="warn",
+        rule="range",
+        raw_value="x=9",
+        expected="x<2",
+    )
     row = conn.execute("SELECT run_id, occurrence_count FROM validation_issues").fetchone()
     assert first == second
     assert row == ("b", 2)
@@ -97,11 +115,23 @@ def test_dcf_provenance_refuses_a_pre_migration_schema() -> None:
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE dcf_runs (id INTEGER PRIMARY KEY)")
     row = DcfRunRow(
-        ticker="GOOG", valuation_date=date(2026, 1, 1), horizon_years=5, wacc=0.1,
-        npv=1.0, npv_per_share=1.0, shares_outstanding=1.0, currency="USD",
-        live_price=None, live_price_at=None, mos_bar_used=None, assumption_snapshot_json="{}",
+        ticker="GOOG",
+        valuation_date=date(2026, 1, 1),
+        horizon_years=5,
+        wacc=0.1,
+        npv=1.0,
+        npv_per_share=1.0,
+        shares_outstanding=1.0,
+        currency="USD",
+        live_price=None,
+        live_price_at=None,
+        mos_bar_used=None,
+        assumption_snapshot_json="{}",
         provenance=DcfInputProvenance(
-            input_sha256="a" * 64, workbook_sha256=None, engine_version="test", inputs_as_of=date(2026, 1, 1)
+            input_sha256="a" * 64,
+            workbook_sha256=None,
+            engine_version="test",
+            inputs_as_of=date(2026, 1, 1),
         ),
     )
     try:

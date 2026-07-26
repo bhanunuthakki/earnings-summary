@@ -205,17 +205,23 @@ def _fetch_curl_cffi(url: str) -> tuple[bytes, str, str] | None:
             log.warning({"event": "unsafe_url_blocked", "url": redact(current), "error": redact(e)})
             return None
         except Exception as e:  # curl_cffi exposes a broad error tree; degrade safely
-            log.error({"event": "curl_cffi_failed", "url": redact(current), "error": redact(e)[:120]})
+            log.error(
+                {"event": "curl_cffi_failed", "url": redact(current), "error": redact(e)[:120]}
+            )
             return None
         if 300 <= resp.status_code < 400:
             try:
                 current = safe_redirect_url(current, resp.headers.get("Location", "") or "")
             except UnsafeURLError as e:
-                log.warning({"event": "unsafe_redirect_blocked", "url": redact(current), "error": redact(e)})
+                log.warning(
+                    {"event": "unsafe_redirect_blocked", "url": redact(current), "error": redact(e)}
+                )
                 return None
             continue
         if resp.status_code != 200:
-            log.error({"event": "curl_cffi_http", "url": redact(current), "status": resp.status_code})
+            log.error(
+                {"event": "curl_cffi_http", "url": redact(current), "status": resp.status_code}
+            )
             return None
         cd = resp.headers.get("Content-Disposition", "") or ""
         ct = resp.headers.get("Content-Type", "") or ""
@@ -261,7 +267,9 @@ def _fetch_bytes(url: str) -> tuple[bytes, str, str] | None:
     except (urllib.error.URLError, OSError, ValueError) as e:
         # Connection refused / DNS / read-timeout (the tarpit signature) → try the
         # TLS-impersonating client before giving up.
-        log.warning({"event": "urllib_failed_trying_curl", "url": redact(url), "error": redact(e)[:120]})
+        log.warning(
+            {"event": "urllib_failed_trying_curl", "url": redact(url), "error": redact(e)[:120]}
+        )
         return _fetch_curl_cffi(url)
 
 

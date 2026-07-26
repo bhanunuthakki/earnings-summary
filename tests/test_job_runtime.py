@@ -96,9 +96,7 @@ def test_concurrent_stale_lock_contenders_leave_one_owner(
         except BaseException as exc:
             thread_errors.append(exc)
 
-    contenders = [
-        threading.Thread(target=contend, args=(name,)) for name in ("one", "two")
-    ]
+    contenders = [threading.Thread(target=contend, args=(name,)) for name in ("one", "two")]
     for contender in contenders:
         contender.start()
     start.wait()

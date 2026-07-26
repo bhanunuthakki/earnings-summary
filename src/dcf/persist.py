@@ -116,7 +116,13 @@ def _has_sanity_column(conn: sqlite3.Connection) -> bool:
 
 def _has_provenance_columns(conn: sqlite3.Connection) -> bool:
     cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
-    return {"input_sha256", "workbook_sha256", "engine_version", "inputs_as_of", "provenance_json"}.issubset(cols)
+    return {
+        "input_sha256",
+        "workbook_sha256",
+        "engine_version",
+        "inputs_as_of",
+        "provenance_json",
+    }.issubset(cols)
 
 
 def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:

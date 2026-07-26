@@ -30,9 +30,7 @@ def _parse_address(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address 
 
 def is_tailscale_address(value: str) -> bool:
     address = _parse_address(value)
-    return address is not None and (
-        address in _TAILSCALE_V4 or address in _TAILSCALE_V6
-    )
+    return address is not None and (address in _TAILSCALE_V4 or address in _TAILSCALE_V6)
 
 
 def is_allowed_client_address(value: str, *, allow_tailscale: bool) -> bool:
@@ -119,9 +117,7 @@ def _tailscale_cli_output() -> str:
             timeout=10,
         )
     except (FileNotFoundError, subprocess.SubprocessError) as exc:
-        raise RuntimeError(
-            "Tailscale CLI could not provide a Tailnet IPv4 address"
-        ) from exc
+        raise RuntimeError("Tailscale CLI could not provide a Tailnet IPv4 address") from exc
     return result.stdout
 
 

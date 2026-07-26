@@ -171,9 +171,7 @@ class JobLock(AbstractContextManager["JobLock"]):
                     except FileExistsError as exc:
                         observed_owner = _read_lock_owner(path)
                         if observed_owner is None or _pid_is_alive(observed_owner.pid):
-                            raise JobAlreadyRunningError(
-                                f"write set busy: {write_set}"
-                            ) from exc
+                            raise JobAlreadyRunningError(f"write set busy: {write_set}") from exc
                         # Compare the ownership token again immediately before
                         # deletion.  The OS guard serializes cooperating
                         # contenders; the token also prevents a stale observer
@@ -215,7 +213,8 @@ def _write_health(repo_root: Path, record: HealthRecord) -> Path:
 
 
 def run_job(
-    *, repo_root: Path,
+    *,
+    repo_root: Path,
     job_name: str,
     write_sets: list[str],
     command: list[str],
@@ -273,9 +272,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.python_executable is None:
             parser.error("--scheduler-wrapper requires --python-executable")
         if len(command) < 3:
-            parser.error(
-                "--scheduler-wrapper requires JOB WRITE_SET SCRIPT [SCRIPT_ARGS ...]"
-            )
+            parser.error("--scheduler-wrapper requires JOB WRITE_SET SCRIPT [SCRIPT_ARGS ...]")
         job_name, write_set, *script_command = command
         command = [args.python_executable, *args.python_arg, *script_command]
         write_sets = [write_set]

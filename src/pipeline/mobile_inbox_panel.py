@@ -147,9 +147,7 @@ def _allocation_recommendation_section(db_path: Path) -> str:
     plan = cast("dict[str, object]", plan_raw)
     name = str(plan.get("name") or "Preferred plan")
     allocations_raw = plan.get("allocations")
-    allocations = (
-        cast("list[object]", allocations_raw) if isinstance(allocations_raw, list) else []
-    )
+    allocations = cast("list[object]", allocations_raw) if isinstance(allocations_raw, list) else []
     legs: list[str] = []
     for raw in allocations:
         if not isinstance(raw, dict):

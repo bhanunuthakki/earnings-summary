@@ -59,10 +59,7 @@ def test_0209_to_head_adds_governance_and_integrity_foundation(tmp_path: Path) -
     assert {"provider", "transport", "attempts", "retries", "outcome"} <= llm_columns
     assert conn.execute("SELECT COUNT(*) FROM pipeline_runs").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM pipeline_attempts").fetchone()[0] == 1
-    assert (
-        conn.execute("SELECT engine_version FROM dcf_runs").fetchone()[0]
-        == "legacy_pre_0211"
-    )
+    assert conn.execute("SELECT engine_version FROM dcf_runs").fetchone()[0] == "legacy_pre_0211"
     with pytest.raises(sqlite3.IntegrityError, match="immutable"):
         conn.execute("UPDATE transcripts SET document_id=2 WHERE id=1")
     conn.close()

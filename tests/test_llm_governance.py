@@ -50,9 +50,16 @@ def test_transport_provenance_is_written_when_schema_has_columns(tmp_path: Path)
     conn.close()
     record_call(
         LlmCallRecord(
-            called_at=datetime.now(UTC), model="gpt-5.6-terra", prompt_sha256="0" * 64,
-            prompt_chars=1, elapsed_ms=1, purpose="kpi_summary_extract",
-            provider="openai", transport="subscription_cli", attempts=1, retries=0,
+            called_at=datetime.now(UTC),
+            model="gpt-5.6-terra",
+            prompt_sha256="0" * 64,
+            prompt_chars=1,
+            elapsed_ms=1,
+            purpose="kpi_summary_extract",
+            provider="openai",
+            transport="subscription_cli",
+            attempts=1,
+            retries=0,
             outcome="success",
         ),
         db_path=db,
