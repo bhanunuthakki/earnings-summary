@@ -22,10 +22,11 @@ from pipeline.open_loops import render_open_loops_band  # noqa: E402
 
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 
-# ``decisions`` predates the 0059 stamp (db.init_db() territory), and 0130's
-# extension is _has_table-guarded, so the stamp+upgrade fixture never creates
-# it — hand-build the modern shape the band queries (the test_governor.py
-# pattern, post-upgrade so no migration conflicts).
+# ``decisions``, ``tracked_companies`` and ``llm_artifacts`` all predate the
+# 0059 stamp (db.init_db() territory) — 0130's extension of ``decisions`` is
+# _has_table-guarded, so the stamp+upgrade fixture never creates any of the
+# three; hand-build the modern shapes the band queries (the test_governor.py /
+# test_card_dispositions.py pattern, post-upgrade so no migration conflicts).
 _DECISIONS_DDL = """
 CREATE TABLE decisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,8 +39,29 @@ CREATE TABLE decisions (
     falsifier TEXT,
     size_usd FLOAT,
     user_notes TEXT,
+    advice_artifact_id INTEGER,
     made_at DATETIME NOT NULL,
     created_at DATETIME NOT NULL
+);
+CREATE TABLE tracked_companies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL DEFAULT 'bhanu',
+    ticker TEXT NOT NULL,
+    name TEXT NOT NULL,
+    list_type TEXT NOT NULL,
+    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    archived_at TEXT
+);
+CREATE TABLE llm_artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker VARCHAR(16),
+    scope VARCHAR(64) NOT NULL DEFAULT 'ticker',
+    purpose VARCHAR(64) NOT NULL,
+    content_json TEXT,
+    input_sha256 VARCHAR(64) NOT NULL,
+    generated_at DATETIME NOT NULL,
+    superseded_by_id INTEGER,
+    dirty BOOLEAN NOT NULL DEFAULT 0
 );
 """
 
@@ -70,6 +92,94 @@ def test_ritual_clear_on_empty_db(db_path: Path) -> None:
     html = render_open_loops_band(db_path)
     assert "Ritual clear" in html
     assert "cc-open-loops" in html
+
+
+def _insert_decision_draft(db_path: Path, *, status: str = "awaiting_confirmation") -> None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO decision_drafts (source_channel, idempotency_key, original_text, "
+            "status, created_at, updated_at) VALUES ('tracker', 'idem:1', 'buy 10 NU', "
+            "?, '2026-07-24T08:00:00', '2026-07-24T08:00:00')",
+            (status,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_pending_confirmation_line_counts_and_doors(db_path: Path) -> None:
+    _insert_decision_draft(db_path)
+    html = render_open_loops_band(db_path)
+    assert "Pending confirmations" in html
+    assert 'href="/mobile/inbox"' in html
+    assert "Ritual clear" not in html
+
+
+def test_pending_confirmation_line_ignores_non_awaiting_status(db_path: Path) -> None:
+    _insert_decision_draft(db_path, status="dismissed")
+    html = render_open_loops_band(db_path)
+    assert "Pending confirmations" not in html
+
+
+def test_pending_confirmation_line_independent_of_senior_partner_brief(db_path: Path) -> None:
+    """The 2026-07-25 postmortem: 78 drafts piled up unconfirmed because their
+    only doorway lived inside the brief's Today card, which renders nothing
+    until a senior_partner_brief artifact exists. This line must show the
+    pending count with no such artifact ever generated."""
+    _insert_decision_draft(db_path)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        count = conn.execute(
+            "SELECT COUNT(*) FROM llm_artifacts WHERE purpose = 'senior_partner_brief'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert count == 0
+    html = render_open_loops_band(db_path)
+    assert "Pending confirmations" in html
+
+
+def test_undispositioned_card_line(db_path: Path) -> None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type, added_at) "
+            "VALUES ('NU', 'Nu Holdings', 'evaluation', '2026-06-01')"
+        )
+        conn.execute(
+            "INSERT INTO llm_artifacts (ticker, scope, purpose, input_sha256, "
+            "generated_at) VALUES ('NU', 'ticker', 'investment_decision_card', "
+            "'sha', '2026-07-01T00:00:00')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    html = render_open_loops_band(db_path)
+    assert "Cards awaiting disposition" in html
+    assert 'href="/mobile/inbox"' in html
+
+
+def test_undispositioned_card_line_clears_once_dispositioned(db_path: Path) -> None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, name, list_type, added_at) "
+            "VALUES ('NU', 'Nu Holdings', 'evaluation', '2026-06-01')"
+        )
+        conn.execute(
+            "INSERT INTO llm_artifacts (id, ticker, scope, purpose, input_sha256, "
+            "generated_at) VALUES (1, 'NU', 'ticker', 'investment_decision_card', "
+            "'sha', '2026-07-01T00:00:00')"
+        )
+        conn.execute(
+            "INSERT INTO decisions (ticker, recommendation_kind, advice_artifact_id, "
+            "made_at, created_at) VALUES ('NU', 'watch', 1, '2026-07-02', '2026-07-02')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    assert "Cards awaiting disposition" not in render_open_loops_band(db_path)
 
 
 def test_reconcile_line_counts_and_doors(db_path: Path) -> None:

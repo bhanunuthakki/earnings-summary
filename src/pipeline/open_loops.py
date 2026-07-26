@@ -12,6 +12,17 @@ space can never pull the owner toward feeding it).
 Every count is a cheap read over tables that already exist. Each query is
 independently guarded so a pre-migration DB (or a stub fixture) can never
 break Home — a queue whose table is missing simply doesn't render.
+
+Pending Decision Draft confirmations and un-dispositioned Investment
+Decision Cards (2026-07-25 PRD closeout postmortem) get their own lines,
+queried directly here rather than through the Senior Partner Brief: 78
+tracker-sourced drafts piled up unconfirmed because their only doorway was a
+chip inside ``senior_partner_brief_panel.render_brief_today_card``, which
+renders "" until a ``senior_partner_brief`` artifact exists at all — so the
+confirmation queue was invisible for as long as the brief had never run.
+This band already renders unconditionally (falling back to "Ritual clear"),
+so these two lines surface the same instant a draft/card actually needs the
+owner, with no dependency on any LLM artifact ever having been generated.
 """
 
 from __future__ import annotations
@@ -32,6 +43,10 @@ _DECISIONS_PANEL = "decisions_record"
 _LEDGER_HASH = "/#musings"
 _DECISIONS_HASH = f"/#{_DECISIONS_PANEL}"
 _RED_TEAM_HASH = "/#red_team"
+# Not a shell panel hash — the mobile Inbox is its own route
+# (execution/comments_server.py), the same doorway
+# senior_partner_brief_panel.render_brief_today_card already links to.
+_MOBILE_INBOX_HREF = "/mobile/inbox"
 
 STYLE = """<style>
 /* Promoted 2026-07-18 (UX audit): this is the page's one "what needs you
@@ -135,6 +150,49 @@ def _routed_to_brief_debt(db_path: Path | str | None) -> tuple[int, str]:
         conn.close()
 
 
+def _pending_draft_confirmation_debt(db_path: Path | str | None) -> tuple[int, str]:
+    """Decision drafts (tracker/Telegram/web capture — any ``source_channel``)
+    still ``awaiting_confirmation`` — the same ``decision_drafts`` read
+    ``pipeline.mobile_inbox_panel._drafts_section`` uses, so this line and
+    the mobile Inbox never drift."""
+    conn = open_conn(db_path)
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*), MIN(created_at) FROM decision_drafts "
+            "WHERE status = 'awaiting_confirmation'"
+        ).fetchone()
+        return int(row[0] or 0), _age_suffix(row[1]) if row[0] else ""
+    finally:
+        conn.close()
+
+
+def _undispositioned_card_debt(db_path: Path | str | None) -> int:
+    """Evaluation-list Investment Decision Cards with no pass/watch/promote
+    disposition recorded yet — the same read
+    ``pipeline.mobile_inbox_panel._card_dispositions_section`` uses."""
+    conn = open_conn(db_path)
+    try:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM tracked_companies tc
+            JOIN llm_artifacts la
+              ON la.purpose = 'investment_decision_card'
+             AND UPPER(la.ticker) = UPPER(tc.ticker)
+             AND la.superseded_by_id IS NULL
+            WHERE tc.list_type = 'evaluation'
+              AND NOT EXISTS (
+                SELECT 1 FROM decisions d
+                WHERE d.advice_artifact_id = la.id
+                  AND d.recommendation_kind IN ('pass', 'watch', 'promote')
+              )
+            """
+        ).fetchone()
+        return int(row[0] or 0)
+    finally:
+        conn.close()
+
+
 def _line(href: str, label: str, count: int, suffix: str = "") -> str:
     return (
         f'<a class="cc-ol-line" href="{href}">{label}: '
@@ -179,6 +237,18 @@ def render_open_loops_band(db_path: Path | str | None = None) -> str:
     banner = _escalation_banner(db_path)
     lines: list[str] = []
 
+    try:
+        n, age = _pending_draft_confirmation_debt(db_path)
+        if n:
+            lines.append(_line(_MOBILE_INBOX_HREF, "Pending confirmations", n, age))
+    except Exception:
+        pass
+    try:
+        n = _undispositioned_card_debt(db_path)
+        if n:
+            lines.append(_line(_MOBILE_INBOX_HREF, "Cards awaiting disposition", n))
+    except Exception:
+        pass
     try:
         n = _reconcile_count(db_path)
         if n:
