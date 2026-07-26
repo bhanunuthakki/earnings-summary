@@ -80,6 +80,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from llm import tracectx  # noqa: E402
+
 DEFAULT_USER_ID = os.environ.get("CIO_USER_ID", "bhanu")
 DEFAULT_MAX_COST_USD = 10.0
 
@@ -711,6 +713,13 @@ def _run_stage(stage: _Stage) -> _StageResult:
             errors="replace",
             timeout=stage.timeout_s,
             check=False,
+            # P1 trace context (llm.tracectx): stages are SUBPROCESSES, so an
+            # in-process contextvar cannot reach them — the trace is propagated
+            # through the environment (the same mechanism OTel uses across
+            # process boundaries). Every llm_calls row the child writes is then
+            # attributable to this stage, turning "which stage burns the
+            # morning's tokens?" from ~15 hand-written queries into one GROUP BY.
+            env=tracectx.child_env(stage_name=f"morning_pipeline.{stage.key}"),
         )
     except subprocess.TimeoutExpired as exc:
         elapsed = round(time.monotonic() - t0, 3)
