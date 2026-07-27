@@ -2734,7 +2734,10 @@ def create_app(
             turn, pack, db_path=db_path, repo_root=repo_root, registry=job_registry
         )
         result = fold_events(events)
-        if result.get("status") == "error":
+        # A forced /view compile is deterministic local validation, not an
+        # upstream/provider exception. Its bounded message is actionable and
+        # safe to preserve; every other Ask error stays generic.
+        if result.get("status") == "error" and not turn.text.lstrip().lower().startswith("/view"):
             result = {
                 "status": "error",
                 "message": "ask failed; retry the request",
