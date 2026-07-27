@@ -1391,7 +1391,7 @@ def _price_cell(row: CockpitRow) -> str:
     title = (
         f" title='last FMP quote {escape(fmt_reltime(row.price_asof))}'" if row.price_asof else ""
     )
-    return f"<span{title}>${row.price:,.2f}{move}</span>"
+    return f"<span{title}>${row.price:,.0f}{move}</span>"
 
 
 def _fv_gap_cell(row: CockpitRow) -> str:
