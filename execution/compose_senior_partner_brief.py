@@ -30,12 +30,12 @@ CLI:
     python execution/compose_senior_partner_brief.py --repo-root . --db-path /tmp/x.db
 
 Exit 0 on a persisted brief (LLM-authored OR a labeled deterministic
-fallback — both are a successful compose; a Telegram send failure degrades
-the outcome but does not flip the exit code, mirroring
-``run_weekly_packet.py``'s "not configured / no chat id" degrade). A missing
-private mobile Inbox URL refuses Telegram delivery and exits 1 rather than
-sending a dead Review action. Exit 1 also covers a missing DB or a hard-stop
-exception (auth/setup) propagating from the governed call.
+fallback — both are a successful compose). Telegram being unconfigured is
+a deliberate no-delivery outcome and still exits 0, but an attempted send
+that fails exits 1 so schedulers can retry or alert. A missing private mobile
+Inbox URL also refuses Telegram delivery and exits 1 rather than sending a
+dead Review action. Exit 1 covers a missing DB or a hard-stop exception
+(auth/setup) propagating from the governed call.
 """
 
 from __future__ import annotations
@@ -83,7 +83,7 @@ def _signature_sha(iso_year: int, iso_week: int) -> str:
     return hashlib.sha256(f"senior_partner_brief:{iso_year}-W{iso_week:02d}".encode()).hexdigest()
 
 
-def _telegram_reply_markup(
+def build_delivery_keyboard(
     brief: SeniorPartnerBrief,
     *,
     artifact_id: int | None,
@@ -220,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
         else (brief.what_changed[0].title if brief.what_changed else "Senior Partner Brief")
     )
     try:
-        reply_markup = _telegram_reply_markup(
+        reply_markup = build_delivery_keyboard(
             brief,
             artifact_id=result.artifact_id,
             db_path=db_path,
@@ -255,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
             artifact_id=result.artifact_id,
         )
         print(json.dumps({"artifact_id": result.artifact_id, "delivered": False}))
-        return 0
+        return 1
 
     _record_standup_message(
         db_path,
