@@ -162,8 +162,66 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError(
-        "0211 is intentionally irreversible: downgrading would destroy durable "
-        "pipeline identity, validation history, and DCF provenance. Restore the "
-        "pre-0211 database backup if rollback is required."
-    )
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    tables = set(inspector.get_table_names())
+
+    if "transcripts" in tables:
+        op.execute("DROP TRIGGER IF EXISTS trg_transcripts_document_immutable")
+
+    if "ingestion_runs" in tables:
+        columns = _columns(inspector, "ingestion_runs")
+        indexes = {str(index["name"]) for index in inspector.get_indexes("ingestion_runs")}
+        if "ix_ingestion_runs_pipeline_key" in indexes:
+            op.drop_index("ix_ingestion_runs_pipeline_key", table_name="ingestion_runs")
+        removable = [name for name in ("attempt_id", "pipeline_key") if name in columns]
+        if removable:
+            with op.batch_alter_table("ingestion_runs") as batch:
+                for name in removable:
+                    batch.drop_column(name)
+
+    if "validation_issues" in tables:
+        columns = _columns(inspector, "validation_issues")
+        indexes = {str(index["name"]) for index in inspector.get_indexes("validation_issues")}
+        if "uq_validation_issues_fingerprint" in indexes:
+            op.drop_index("uq_validation_issues_fingerprint", table_name="validation_issues")
+        removable = [
+            name
+            for name in (
+                "occurrence_count",
+                "last_seen_at",
+                "first_seen_at",
+                "fingerprint",
+            )
+            if name in columns
+        ]
+        if removable:
+            with op.batch_alter_table("validation_issues") as batch:
+                for name in removable:
+                    batch.drop_column(name)
+
+    if "dcf_runs" in tables:
+        columns = _columns(inspector, "dcf_runs")
+        removable = [
+            name
+            for name in (
+                "provenance_json",
+                "inputs_as_of",
+                "engine_version",
+                "workbook_sha256",
+                "input_sha256",
+            )
+            if name in columns
+        ]
+        if removable:
+            with op.batch_alter_table("dcf_runs") as batch:
+                for name in removable:
+                    batch.drop_column(name)
+
+    for table in (
+        "pipeline_stage_transitions",
+        "pipeline_attempts",
+        "pipeline_runs",
+    ):
+        if table in tables:
+            op.drop_table(table)
