@@ -1,9 +1,9 @@
 """Telegram bot-token loader — the single gitignored secret for capture.
 
-The token is a @BotFather string under ``data/secrets/`` — accepted either as a
+The token is a @BotFather string in the external secrets directory — accepted as a
 one-line ``telegram_bot_token`` file or a ``telegram_bot_token.json`` holding the
-bare string or ``{"token": "..."}``. ``data/`` and ``**/secrets/`` are gitignored,
-so the secret never enters the repo. A missing/empty token raises
+bare string or ``{"token": "..."}``. A legacy in-repo file is read only during
+migration and is never a write destination. A missing/empty token raises
 ``CaptureSetupError`` — capture is simply unconfigured, not broken.
 """
 
@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import cast
 
 from db_paths import resolve_db_path
+from runtime.secrets import secret_file
 
 _ENV_OVERRIDE = "CAPTURE_TELEGRAM_TOKEN_FILE"
 _BASENAME = "telegram_bot_token"
@@ -25,19 +26,19 @@ class CaptureSetupError(RuntimeError):
     and skips the adapter rather than crashing."""
 
 
-def default_token_path() -> Path:
-    """``data/secrets/telegram_bot_token`` beside the resolved DB, or the
-    ``CAPTURE_TELEGRAM_TOKEN_FILE`` override. Falls back to the package-relative
-    ``data/`` when no DB path is configured."""
+def default_token_path(*, repo_root: Path | None = None) -> Path:
+    """External Telegram token path, or the explicit environment override."""
     override = os.environ.get(_ENV_OVERRIDE)
     if override:
         return Path(override)
-    try:
-        db = resolve_db_path(None)
-    except Exception:  # resolve_db_path imports db.DB_PATH; tolerate its absence
-        db = None
-    base = db.parent if db is not None else Path(__file__).resolve().parents[2] / "data"
-    return base / "secrets" / _BASENAME
+    root = repo_root
+    if root is None:
+        try:
+            db = resolve_db_path(None)
+        except Exception:  # resolve_db_path imports db.DB_PATH; tolerate its absence
+            db = None
+        root = db.parent.parent if db is not None else Path(__file__).resolve().parents[2]
+    return secret_file(_BASENAME, repo_root=root)
 
 
 def _resolve_existing(base: Path) -> Path | None:
@@ -72,15 +73,15 @@ def _parse_token(text: str) -> str:
     return stripped
 
 
-def load_token(path: Path | str | None = None) -> str:
+def load_token(path: Path | str | None = None, *, repo_root: Path | None = None) -> str:
     """Read the bot token, tolerating a ``.json`` file and a ``{"token": ...}``
     wrapper. Raises ``CaptureSetupError`` if absent or empty."""
-    base = Path(path) if path is not None else default_token_path()
+    base = Path(path) if path is not None else default_token_path(repo_root=repo_root)
     resolved = _resolve_existing(base)
     if resolved is None:
         raise CaptureSetupError(
             f"Telegram bot token not found at {base} (or {base.with_suffix('.json')}). "
-            "Create it with your @BotFather token; data/secrets/ is gitignored."
+            "Configure it in the external earnings-summary secrets directory."
         )
     token = _parse_token(resolved.read_text(encoding="utf-8"))
     if not token:

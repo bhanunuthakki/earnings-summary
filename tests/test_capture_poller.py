@@ -12,11 +12,28 @@ from alembic.config import Config
 from alembic import command
 from capture import poller, telegram, transcribe
 from capture.matcher import build_roster_index
+from execution import capture_poller
 from user_state import notes
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 ROSTER = build_roster_index(symbols=["NU", "MELI"], phrases={"nubank": "NU"})
+
+
+def test_runtime_configuration_binds_implicit_consumers_to_canonical_db(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import db
+
+    canonical = tmp_path / "canonical.db"
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(canonical))
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "previous.db")
+
+    resolved = capture_poller.configure_runtime_db(tmp_path)
+
+    assert resolved == canonical
+    assert Path(db.DB_PATH) == canonical
 
 
 def _cfg(db_path: Path) -> Config:

@@ -42,7 +42,6 @@ from typing import NamedTuple, cast
 from zoneinfo import ZoneInfo
 
 import requests
-from dotenv import load_dotenv
 from pydantic import ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -52,8 +51,9 @@ from db import ACTIVE_LIST_TYPES_SQL, DB_PATH  # noqa: E402
 from log_redact import redact as _redact  # noqa: E402
 from models.fmp_payloads import FmpStockNewsRecord  # noqa: E402
 from news.store import SOURCE_FEED_FMP, NewsRow, upsert_news_rows  # noqa: E402
+from runtime.secrets import load_project_env  # noqa: E402
 
-load_dotenv(PROJECT_ROOT / ".env")
+load_project_env(PROJECT_ROOT)
 FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
 
 FMP_NEWS_ENDPOINT = "https://financialmodelingprep.com/stable/news/stock"

@@ -2,7 +2,8 @@
 
 Validates the four conditions the daily jobs depend on:
 
-  1. .env file exists next to pyproject.toml (PROJECT_ROOT/.env)
+  1. The configured external .env file exists (legacy PROJECT_ROOT/.env is a
+     read-only migration fallback)
   2. FMP_API_KEY is present and non-empty in .env (or already in env)
   3. FMP_TIER is one of: free, basic, starter, premium (or absent — defaults to basic)
   4. playwright is importable (required by the IR-document + IR-KPI crons)
@@ -24,7 +25,11 @@ import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-ENV_FILE = PROJECT_ROOT / ".env"
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from runtime.secrets import project_env_file  # noqa: E402
+
+ENV_FILE = project_env_file(PROJECT_ROOT)
 VALID_TIERS = {"free", "basic", "starter", "premium"}
 
 

@@ -11,6 +11,8 @@ from collections.abc import Callable, Collection
 from pathlib import Path
 from urllib.parse import urlparse
 
+from runtime.secrets import create_secret_text, secret_read_path, secret_write_path
+
 REPORT_CAPABILITY_HEADER = "X-Report-Capability"
 _TAILSCALE_V4 = ipaddress.ip_network("100.64.0.0/10")
 _TAILSCALE_V6 = ipaddress.ip_network("fd7a:115c:a1e0::/48")
@@ -128,14 +130,15 @@ class ReportCapabilityStore:
     """Stable bearer capability used only by static ``file://`` reports."""
 
     def __init__(self, repo_root: Path) -> None:
-        self._path = repo_root / "data" / "secrets" / "report_capability"
+        self._read_path = secret_read_path("report_capability", repo_root=repo_root)
+        self._write_path = secret_write_path("report_capability")
 
     def load(self) -> str | None:
         configured = os.environ.get("COMMENTS_SERVER_REPORT_CAPABILITY", "").strip()
         if configured:
             return configured
         try:
-            value = self._path.read_text(encoding="utf-8").strip()
+            value = self._read_path.read_text(encoding="utf-8").strip()
         except FileNotFoundError:
             return None
         return value or None
@@ -144,12 +147,10 @@ class ReportCapabilityStore:
         existing = self.load()
         if existing:
             return existing
-        self._path.parent.mkdir(parents=True, exist_ok=True)
         token = secrets.token_urlsafe(32)
-        try:
-            with self._path.open("x", encoding="utf-8") as handle:
-                handle.write(token)
-        except FileExistsError:
+        created = create_secret_text(self._write_path, token)
+        self._read_path = self._write_path
+        if not created:
             raced = self.load()
             if raced:
                 return raced

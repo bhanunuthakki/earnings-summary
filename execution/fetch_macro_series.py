@@ -35,7 +35,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import requests
-from dotenv import load_dotenv
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -45,8 +44,9 @@ sys.path.insert(0, str(SRC_DIR))
 from log_redact import redact as _redact  # noqa: E402
 from macro_series import REGISTRY, ProviderSpec, SeriesSpec  # noqa: E402
 from macro_store import upsert_series_value  # noqa: E402
+from runtime.secrets import load_project_env  # noqa: E402
 
-load_dotenv(PROJECT_ROOT / ".env")
+load_project_env(PROJECT_ROOT)
 FMP_API_KEY = os.environ.get("FMP_API_KEY")
 FMP_STABLE = "https://financialmodelingprep.com/stable"
 

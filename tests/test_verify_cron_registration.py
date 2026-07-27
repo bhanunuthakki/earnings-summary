@@ -13,6 +13,7 @@ from execution.verify_cron_registration import (
     _extract_next_run_time,  # pyright: ignore[reportPrivateUsage]
     _parse_xml,  # pyright: ignore[reportPrivateUsage]
     _print_report,  # pyright: ignore[reportPrivateUsage]
+    _windows_service_is_running,  # pyright: ignore[reportPrivateUsage]
     compare,
     main,
     report_payload,
@@ -200,6 +201,107 @@ def test_compare_disabled_task(tmp_path: Path) -> None:
 
     assert report.has_problems
     assert any("disabled" in d.lower() for d in report.disabled)
+
+
+def test_capture_poller_disabled_is_ok_when_service_is_running(tmp_path: Path) -> None:
+    task_name = r"\earnings-summary\capture_poller"
+    _write_task_xml(tmp_path / "capture_poller.task.xml", task_name, "04:00:00")
+
+    with (
+        patch("execution.verify_cron_registration._query_schtasks") as mock_tasks,
+        patch(
+            "execution.verify_cron_registration._windows_service_is_running",
+            return_value=True,
+        ) as mock_service,
+    ):
+        mock_tasks.return_value = {
+            task_name.lower(): {
+                "name": task_name,
+                "next_run": "N/A",
+                "status": "Disabled",
+            }
+        }
+        report, _xml_tasks = compare(tmp_path)
+
+    assert not report.has_problems
+    assert report.disabled == []
+    assert report.ok == [rf"{task_name} (scheduler disabled; es-poller service running)"]
+    mock_service.assert_called_once_with("es-poller")
+
+
+def test_capture_poller_disabled_is_problem_when_service_is_stopped(
+    tmp_path: Path,
+) -> None:
+    task_name = r"\earnings-summary\capture_poller"
+    _write_task_xml(tmp_path / "capture_poller.task.xml", task_name, "04:00:00")
+
+    with (
+        patch("execution.verify_cron_registration._query_schtasks") as mock_tasks,
+        patch(
+            "execution.verify_cron_registration._windows_service_is_running",
+            return_value=False,
+        ),
+    ):
+        mock_tasks.return_value = {
+            task_name.lower(): {
+                "name": task_name,
+                "next_run": "N/A",
+                "status": "Disabled",
+            }
+        }
+        report, _xml_tasks = compare(tmp_path)
+
+    assert report.has_problems
+    assert report.ok == []
+    assert report.disabled == [rf"{task_name} (Status='Disabled')"]
+
+
+def test_other_disabled_task_is_not_waived_by_poller_service(tmp_path: Path) -> None:
+    task_name = r"\earnings-summary\other"
+    _write_task_xml(tmp_path / "other.task.xml", task_name, "04:00:00")
+
+    with (
+        patch("execution.verify_cron_registration._query_schtasks") as mock_tasks,
+        patch("execution.verify_cron_registration._windows_service_is_running") as mock_service,
+    ):
+        mock_tasks.return_value = {
+            task_name.lower(): {
+                "name": task_name,
+                "next_run": "N/A",
+                "status": "Disabled",
+            }
+        }
+        report, _xml_tasks = compare(tmp_path)
+
+    assert report.has_problems
+    assert report.disabled == [rf"{task_name} (Status='Disabled')"]
+    mock_service.assert_not_called()
+
+
+def test_windows_service_running_requires_positive_running_state() -> None:
+    completed = __import__("subprocess").CompletedProcess(
+        args=["sc.exe", "query", "es-poller"],
+        returncode=0,
+        stdout=(
+            "SERVICE_NAME: es-poller\n"
+            "        TYPE               : 10  WIN32_OWN_PROCESS\n"
+            "        STATE              : 4  RUNNING\n"
+        ),
+        stderr="",
+    )
+    with patch(
+        "execution.verify_cron_registration.subprocess.run",
+        return_value=completed,
+    ):
+        assert _windows_service_is_running("es-poller") is True
+
+
+def test_windows_service_query_failure_is_not_healthy() -> None:
+    with patch(
+        "execution.verify_cron_registration.subprocess.run",
+        side_effect=OSError("sc.exe unavailable"),
+    ):
+        assert _windows_service_is_running("es-poller") is False
 
 
 def test_compare_schedule_mismatch(tmp_path: Path) -> None:

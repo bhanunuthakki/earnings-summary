@@ -13,13 +13,14 @@ Usage:
   python execution/fetch_fmp_historical_data.py --all --limit 20
 """
 
+import argparse
+import json
 import os
 import sys
 import time
-import argparse
+from pathlib import Path
+
 import requests
-import json
-from dotenv import load_dotenv
 
 # Paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -28,11 +29,12 @@ SRC_DIR = os.path.join(PROJECT_ROOT, "src")
 DATA_DIR = os.path.join(PROJECT_ROOT, "data", "historical", "fmp")
 sys.path.append(SRC_DIR)
 
-import db
+import db  # noqa: E402
 from log_redact import redact as _redact  # noqa: E402
+from runtime.secrets import load_project_env  # noqa: E402
 
 # Load API Key
-load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+load_project_env(Path(PROJECT_ROOT))
 FMP_API_KEY = os.environ.get("FMP_API_KEY")
 
 FMP_BASE = "https://financialmodelingprep.com/stable"

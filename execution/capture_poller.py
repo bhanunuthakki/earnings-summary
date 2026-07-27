@@ -3,7 +3,7 @@
 Runs as a Windows scheduled task (cron/capture_poller.task.xml), NOT a Flask
 thread: capture liveness is decoupled from the dashboard, and the task supplies
 RestartOnFailure + per-run logs. The bot token is read from
-``data/secrets/telegram_bot_token``; absent → exit cleanly (capture is simply
+the external ``telegram_bot_token`` secret; absent → exit cleanly (capture is simply
 unconfigured). ``--once`` drains a single batch (manual drain / smoke test).
 
     python execution/capture_poller.py --once
@@ -26,6 +26,18 @@ sys.path.insert(0, str(SRC_DIR))
 
 from capture import poller, token_store  # noqa: E402
 from capture.matcher import load_roster  # noqa: E402
+from runtime.job_runtime import portfolio_db_path  # noqa: E402
+from runtime.secrets import load_project_env  # noqa: E402
+
+
+def configure_runtime_db(repo_root: Path) -> Path:
+    """Bind implicit LLM/accounting consumers to the poller's canonical DB."""
+    import db
+
+    load_project_env(repo_root)
+    db_path = portfolio_db_path(repo_root)
+    db.set_db_path(db_path)
+    return db_path
 
 
 def _version_stamp(repo_root: Path) -> str:
@@ -73,13 +85,12 @@ def main() -> int:
         f"started={datetime.now(UTC).isoformat()}",
         file=sys.stderr,
     )
-    db_path = repo_root / "data" / "portfolio.db"
-    offset_path = repo_root / "data" / "capture" / "telegram_offset.json"
-    audio_dir = repo_root / "data" / "capture" / "audio"
-    token_path = repo_root / "data" / "secrets" / "telegram_bot_token"
-
+    db_path = configure_runtime_db(repo_root)
+    data_dir = db_path.parent
+    offset_path = data_dir / "capture" / "telegram_offset.json"
+    audio_dir = data_dir / "capture" / "audio"
     try:
-        token = token_store.load_token(token_path)
+        token = token_store.load_token(repo_root=repo_root)
     except token_store.CaptureSetupError as exc:
         print(f"capture_poller: not configured ({exc}); exiting cleanly", file=sys.stderr)
         return 0

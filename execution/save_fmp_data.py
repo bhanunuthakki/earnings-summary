@@ -25,22 +25,21 @@ import os
 import sqlite3
 import sys
 import time
-from datetime import datetime, timedelta, date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
 import requests
-from dotenv import load_dotenv
 from pydantic import BaseModel, ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
-import db as portfolio_db  # noqa: E402
-from log_redact import redact as _redact  # noqa: E402
 from compute.split_normalization import (  # noqa: E402
     NormalizationEvent,
     normalize_estimates,
 )
+import db as portfolio_db  # noqa: E402
+from log_redact import redact as _redact  # noqa: E402
 from models.fmp_payloads import (  # noqa: E402
     FmpAnalystEstimateRecord,
     FmpBalanceSheetRecord,
@@ -52,9 +51,10 @@ from pipeline.deferred_fmp import (  # noqa: E402
     default_store_path,
     log_deferred,
 )
+from runtime.secrets import load_project_env  # noqa: E402
 from sources import registry as source_calls_log  # noqa: E402
 
-load_dotenv(PROJECT_ROOT / ".env")
+load_project_env(PROJECT_ROOT)
 API_KEY = os.environ.get("FMP_API_KEY")
 if not API_KEY:
     print("FATAL: FMP_API_KEY not set in .env", file=sys.stderr)

@@ -66,7 +66,7 @@ def announce_adoption(
             return
         root = _repo_root_for(db_path, repo_root)
         try:
-            token = load_token(root / "data" / "secrets" / "telegram_bot_token")
+            token = load_token(repo_root=root)
         except CaptureSetupError:
             token = None
         chat_id = load_chat_id(root / "data" / "capture" / "telegram_chat_id.json")

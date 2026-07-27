@@ -46,6 +46,8 @@ _NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 # Task statuses considered "healthy" — both mean the task is scheduled and
 # ready to fire; "Running" appears when the task is currently executing.
 _HEALTHY_STATUSES = {"Ready", "Running"}
+_CAPTURE_POLLER_TASK = r"\earnings-summary\capture_poller".lower()
+_CAPTURE_POLLER_SERVICE = "es-poller"
 
 
 class _XmlTask(NamedTuple):
@@ -164,6 +166,28 @@ def _query_schtasks() -> dict[str, dict[str, str]] | None:
     return tasks
 
 
+def _windows_service_is_running(service_name: str) -> bool:
+    """Return whether a named Windows service positively reports RUNNING."""
+    try:
+        result = subprocess.run(
+            ["sc.exe", "query", service_name],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    return any(
+        line.strip().startswith("STATE") and line.rstrip().endswith("RUNNING")
+        for line in result.stdout.splitlines()
+    )
+
+
 def _extract_next_run_time(next_run: str) -> str | None:
     """Extract HH:MM:SS from a schtasks 'Next Run Time' like '6/12/2026 5:35:00 AM'."""
     # Format varies by locale; we look for the time part after the date.
@@ -226,6 +250,16 @@ def compare(cron_dir: Path = CRON_DIR) -> tuple[TaskReport, list[_XmlTask]]:
             continue
 
         if status not in _HEALTHY_STATUSES:
+            if (
+                key == _CAPTURE_POLLER_TASK
+                and status.casefold() == "disabled"
+                and _windows_service_is_running(_CAPTURE_POLLER_SERVICE)
+            ):
+                report.ok.append(
+                    f"{xt.task_name} (scheduler disabled; "
+                    f"{_CAPTURE_POLLER_SERVICE} service running)"
+                )
+                continue
             report.disabled.append(f"{xt.task_name} (Status={status!r})")
             continue
 

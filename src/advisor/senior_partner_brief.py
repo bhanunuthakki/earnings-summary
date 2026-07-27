@@ -77,6 +77,7 @@ from llm.cli import LLMBudgetExceeded, is_hard_stop
 from llm.prompt_versions import prompt_version_for
 from llm.structured import StructuredParseError, call_llm_structured
 from llm.untrusted import spotlight
+from runtime.secrets import secret_file
 
 PURPOSE = "senior_partner_brief"
 ENGINE_VERSION = "v1"
@@ -86,8 +87,10 @@ ENGINE_VERSION = "v1"
 # current. Deliberately simple (age-based, not an input_sha re-derivation)
 # given this module's scope is COMPOSITION, not card freshness itself.
 _CARD_FRESH_DAYS = 14
-_PRIVATE_BASE_URL_PATH = (
-    Path(__file__).resolve().parents[2] / "data" / "secrets" / "private_mobile_base_url"
+
+_PRIVATE_BASE_URL_PATH = secret_file(
+    "private_mobile_base_url",
+    repo_root=Path(__file__).resolve().parents[2],
 )
 
 # "Active week" thresholds (PRD §9.1: "an active week increases visible
@@ -1109,7 +1112,7 @@ def private_mobile_inbox_url(explicit: str | None = None) -> str | None:
     Tailscale Serve HTTPS origin). ``explicit`` is primarily for tests and
     one-shot callers. Production first reads
     ``EARNINGS_SUMMARY_PRIVATE_BASE_URL``, then the local
-    ``data/secrets/private_mobile_base_url`` service configuration. The file
+    the external ``private_mobile_base_url`` service configuration. The file
     fallback matters for Windows service deployments such as ``es-poller``:
     service accounts do not inherit the interactive user's environment.
     Interactive scheduled tasks may use their own user-scoped environment.

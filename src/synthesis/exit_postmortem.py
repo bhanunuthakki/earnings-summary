@@ -549,7 +549,7 @@ def _send_batch_summary(text: str, *, db_path: Path | str, repo_root: Path | str
 
         root = Path(repo_root) if repo_root is not None else Path(db_path).resolve().parent.parent
         try:
-            token = load_token(root / "data" / "secrets" / "telegram_bot_token")
+            token = load_token()
         except CaptureSetupError:
             token = None
         chat_id = load_chat_id(root / "data" / "capture" / "telegram_chat_id.json")

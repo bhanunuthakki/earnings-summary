@@ -1,7 +1,7 @@
 @echo off
 REM The Ledger capture poller — long-poll Telegram and ingest musings.
 REM Runs continuously (LogonTrigger); RestartOnFailure keeps it alive. Reads the
-REM bot token from data\secrets\telegram_bot_token; exits cleanly if unconfigured.
+REM bot token from the external earnings-summary secrets directory; exits cleanly if unconfigured.
 REM One instance only (IgnoreNew) — a second getUpdates poller would 409.
 
 setlocal

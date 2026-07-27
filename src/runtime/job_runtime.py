@@ -12,11 +12,12 @@ import json
 import os
 import re
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 
@@ -90,9 +91,10 @@ class _LockOwner:
 def _read_lock_owner(path: Path) -> _LockOwner | None:
     """Read a validated owner identity, or ``None`` for unsafe/corrupt state."""
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
+        raw: object = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
             return None
+        payload = cast("dict[str, object]", raw)
         pid = payload.get("pid")
         token = payload.get("token")
         process_start = payload.get("process_start")
@@ -131,7 +133,7 @@ def _stale_lock(path: Path) -> bool:
 
 
 @contextmanager
-def _lock_transition_guard(path: Path) -> Iterator[None]:
+def _lock_transition_guard(path: Path) -> Generator[None, None, None]:
     """Serialize ownership changes using an OS lock on a persistent guard file.
 
     The guard file is intentionally never deleted.  Deleting the synchronization
@@ -201,16 +203,16 @@ class JobLock(AbstractContextManager["JobLock"]):
     """Atomic file locks for named mutable write sets, portable on Windows."""
 
     def __init__(self, repo_root: Path, job_name: str, write_sets: list[str]) -> None:
-        self._dir = repo_root / ".tmp" / "job_locks"
+        self._repo_root = repo_root.resolve()
         self._job_name = job_name
         self._write_sets = sorted(set(write_sets))
         self._owned: list[tuple[Path, str]] = []
 
     def __enter__(self) -> JobLock:
-        self._dir.mkdir(parents=True, exist_ok=True)
         try:
             for write_set in self._write_sets:
-                path = self._dir / f"{_safe_name(write_set)}.lock"
+                path = _write_set_lock_path(self._repo_root, write_set)
+                path.parent.mkdir(parents=True, exist_ok=True)
                 token = uuid4().hex
                 with _lock_transition_guard(path):
                     try:
@@ -245,6 +247,17 @@ class JobLock(AbstractContextManager["JobLock"]):
             raise
         return self
 
+    def inheritance_proof(self) -> str:
+        """Opaque child proof, validated against the still-live lock records."""
+        return json.dumps(
+            {
+                write_set: {"path": str(path), "token": token, "pid": os.getpid()}
+                for write_set, (path, token) in zip(self._write_sets, self._owned, strict=True)
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         for path, token in reversed(self._owned):
             with _lock_transition_guard(path):
@@ -253,6 +266,45 @@ class JobLock(AbstractContextManager["JobLock"]):
                     with suppress(FileNotFoundError):
                         path.unlink()
         self._owned.clear()
+
+
+def portfolio_db_path(repo_root: Path) -> Path:
+    configured = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
+    return (
+        Path(configured).expanduser().resolve()
+        if configured
+        else (repo_root / "data" / "portfolio.db").resolve()
+    )
+
+
+def _write_set_lock_path(repo_root: Path, write_set: str) -> Path:
+    if write_set == "portfolio-db":
+        db_path = portfolio_db_path(repo_root)
+        digest = hashlib.sha256(str(db_path).casefold().encode("utf-8")).hexdigest()[:20]
+        return db_path.parent / ".job_locks" / f"portfolio-db-{digest}.lock"
+    return repo_root / ".tmp" / "job_locks" / f"{_safe_name(write_set)}.lock"
+
+
+def inherited_lock_is_valid(repo_root: Path, write_set: str) -> bool:
+    """Validate that the parent process still owns the exact inherited lock."""
+    raw = os.environ.get("EARNINGS_SUMMARY_JOB_LOCK_PROOF", "")
+    try:
+        proof = json.loads(raw)
+        entry = proof[write_set]
+        path = Path(entry["path"]).resolve()
+        token = entry["token"]
+        pid = entry["pid"]
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    if (
+        path != _write_set_lock_path(repo_root.resolve(), write_set)
+        or not isinstance(token, str)
+        or not isinstance(pid, int)
+        or pid != os.getppid()
+    ):
+        return False
+    owner = _read_lock_owner(path)
+    return owner is not None and owner.pid == pid and owner.token == token and _owner_is_live(owner)
 
 
 def _write_health(repo_root: Path, record: HealthRecord) -> Path:
@@ -274,10 +326,17 @@ def run_job(
     """Run command under locks and write a durable JSON health record."""
     if not command:
         raise ValueError("job command is required")
+    from runtime.secrets import load_project_env
+
+    load_project_env(repo_root)
     started = datetime.now(UTC)
     try:
-        with JobLock(repo_root, job_name, write_sets):
-            completed = subprocess.run(command, cwd=repo_root, check=False)
+        with JobLock(repo_root, job_name, write_sets) as lock:
+            child_env = {
+                **os.environ,
+                "EARNINGS_SUMMARY_JOB_LOCK_PROOF": lock.inheritance_proof(),
+            }
+            completed = subprocess.run(command, cwd=repo_root, check=False, env=child_env)
         exit_code = completed.returncode
         status = "ok" if exit_code == 0 else "failed"
         detail = None

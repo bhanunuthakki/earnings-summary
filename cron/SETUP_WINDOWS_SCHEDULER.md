@@ -14,7 +14,7 @@ GUI.
 
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
-| `earnings-summary\backup_db` | Daily 02:45 | `backup_db.task.xml` | `run_backup_db.bat` | **SQLite online backup.** Runs `cron/backup_db.py`, which copies `data/portfolio.db` to `ES_DB_BACKUP_DIR` (default: `%USERPROFILE%\My Drive\earnings-summary-db-backups`) as a gzip-compressed snapshot via SQLite's online-backup API. Fires 15 minutes before the 03:00 refresh chain so a consistent snapshot exists before the day's writes begin. Keeps the most recent `ES_DB_BACKUP_RETAIN` snapshots (default 14). |
+| `earnings-summary\backup_db` | Daily 02:45 | `backup_db.task.xml` | `run_backup_db.bat` | **SQLite online backup.** Runs `cron/backup_db.py`, which snapshots the canonical database with SQLite's online-backup API, compresses it locally, and publishes only an authenticated AES-256-GCM `.gz.enc` envelope to `ES_DB_BACKUP_DIR` (default: `%USERPROFILE%\My Drive\earnings-summary-db-backups`). The key stays in the external secrets directory. Fires 15 minutes before the 03:00 refresh chain and retains the newest `ES_DB_BACKUP_RETAIN` encrypted snapshots (default 14). |
 
 ### Daily chain (P1 tier — portfolio refreshed every day)
 
@@ -118,7 +118,7 @@ The scheduled counterpart to the daily `backup_db` — a backup you have never r
 
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
-| `earnings-summary\restore_drill` | Monthly, 15th @ 09:00 | `restore_drill.task.xml` | `run_restore_drill.bat` | **DB restore drill.** Runs `execution/restore_drill.py`, which restores the **latest** `backup_db` snapshot to a throwaway temp path and verifies it: gunzip + `PRAGMA integrity_check` (via `cron/restore_db.py`), a core-table row-count sanity check (`tracked_companies`, `financial_facts` non-empty — catches a truncated snapshot that still passes integrity), and a soft schema-version match against the live DB (a mismatch warns; a migration after the last backup is benign). **Never touches the live DB** except to record one `ingestion_runs` row (directive=`restore_drill`) so the cron-health panel shows the drill verdict + clean-streak alongside `backup_db`. Exit 0 = passed, 1 = a hard check failed, 2 = no snapshot found. The CI tests (`tests/test_backup_restore.py`, `tests/test_restore_drill.py`) only exercise synthetic DBs, so this drill is what catches real-world rot (Drive-sync truncation, gzip corruption, a stale snapshot) on the actual `.gz` files. |
+| `earnings-summary\restore_drill` | Monthly, 15th @ 09:00 | `restore_drill.task.xml` | `run_restore_drill.bat` | **DB restore drill.** Runs `execution/restore_drill.py`, which restores the **latest authenticated encrypted** backup to a throwaway temp path and verifies AES-GCM authentication, decryption, gunzip, `PRAGMA integrity_check`, core-table row counts, and a soft schema-version match. **Never touches the live DB** except to record one `ingestion_runs` row. Exit 0 = passed, 1 = a hard check failed, 2 = no encrypted snapshot found. Plain `.gz` files are ignored except by the explicit one-time migration utility. |
 
 ### Re-registering after a schedule change
 
