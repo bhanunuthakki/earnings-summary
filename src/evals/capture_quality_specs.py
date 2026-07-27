@@ -694,3 +694,9 @@ CAPTURE_QUALITY_PURPOSES: tuple[str, ...] = tuple(
         ),
     )
 )
+
+P0_CAPTURE_QUALITY_PURPOSES: tuple[str, ...] = tuple(
+    purpose
+    for purpose in CAPTURE_QUALITY_PURPOSES
+    if CAPTURE_QUALITY_SPECS[purpose].priority == "P0"
+)

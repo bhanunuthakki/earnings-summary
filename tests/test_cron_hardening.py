@@ -50,7 +50,14 @@ def test_production_capture_is_allowlisted_and_has_no_extra_llm_job() -> None:
     }
     for filename, purposes in expected.items():
         text = (CRON / filename).read_text(encoding="utf-8")
-        assert "set LLM_CAPTURE_DIR=" not in text
+        assert (
+            'if not defined LLM_CAPTURE_DIR set "LLM_CAPTURE_DIR=%LOCALAPPDATA%'
+            '\\earnings-summary\\llm_capture"' in text
+        )
+        assert (
+            "if not defined EARNINGS_SUMMARY_CAPTURE_RETENTION_DAYS "
+            "set EARNINGS_SUMMARY_CAPTURE_RETENTION_DAYS=90" in text
+        )
         match = re.search(r"^set LLM_CAPTURE_PURPOSES=(.+)$", text, re.MULTILINE)
         assert match is not None
         assert set(match.group(1).strip().split(",")) == purposes

@@ -365,6 +365,35 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # filings.guidance_triage._build_prompt). Bump when the relevance/prior
     # prompt is materially rewritten.
     "guidance_lifecycle_triage": "v1",
+    # Explicit governance coverage for model-pinned purposes that previously
+    # inherited the v1 fallback. These rows are behavior-preserving, but make
+    # capture cohorts and eval attribution auditable.
+    "advisor_swap_check": "v1",
+    "ask_answer": "v1",
+    "bear_case_grading": "v1",
+    "canonicalize_segments": "v1",
+    "customer_concentration_extraction": "v1",
+    "dcf_assumptions": "v1",
+    "decision_extraction": "v1",
+    "exec_comp_alignment": "v1",
+    "exec_comp_extraction": "v1",
+    "extract_8k_overrides": "v1",
+    "footnote_extraction": "v1",
+    "investor_deck_extraction": "v1",
+    "kpi_registry_auto_proposal": "v1",
+    "market_signals": "v1",
+    "patent_timeline": "v1",
+    "pressure_test_thesis": "v1",
+    "risk_factor_classify": "v1",
+    "risk_factor_diff": "v1",
+    "saydo_importance": "v1",
+    "strategic_analysis": "v1",
+    "thesis_pass_a": "v1",
+    "thesis_pass_b": "v1",
+    "transcript_qa_judgment": "v1",
+    "transcript_topic_triage": "v1",
+    "valuation_basis": "v1",
+    "weekly_packet_predraft": "v1",
 }
 
 _DEFAULT_VERSION = "v1"

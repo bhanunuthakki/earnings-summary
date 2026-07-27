@@ -1,4 +1,4 @@
-"""Run the calibration graders so the prompt-calibration loop is fed automatically.
+"""Run capture retention and the calibration graders on the existing weekly window.
 
 Six rungs score LLM outputs and write ``prompt_calibration_scores`` rows, each
 tagged with the central prompt-version registry
@@ -100,6 +100,8 @@ _EVAL_AUDIT_SINCE_DAYS = "8"
 # Haiku judge per artifact, eval_judge budget; an empty week exits 0 without
 # writing a run).
 _GRADERS: tuple[_Grader, ...] = (
+    # Provider-free retention sweep runs even when capture traffic is quiet.
+    _Grader("capture_retention", "prune_llm_capture.py", _FAST_TIMEOUT_S),
     _Grader("predictions", "grade_predictions.py", _FAST_TIMEOUT_S),
     _Grader("decisions", "grade_decisions.py", _FAST_TIMEOUT_S),
     # grade_bear_cases.py has a `required=True` mutually-exclusive scope group
