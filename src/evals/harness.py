@@ -171,6 +171,17 @@ def persist_summary(summary: EvalRunSummary, *, db_path: Path) -> int:
     design); the calibration bridge stays best-effort (its own contract)."""
     from evals import store
 
+    if summary.mode == "capture_audit":
+        # Defense in depth: capture-audit judge prompts embed private production
+        # exchanges. Keep only capture IDs, hashes, scores, verdicts, and
+        # rationale in the durable DB; the source text remains solely in the
+        # retention-bounded private archive.
+        for case in summary.cases:
+            case.prompt_text = None
+            case.response_text = None
+            case.judge_verdict = None
+            case.judge_rationale = None
+
     run_db_id = store.write_run(summary, db_path=db_path)
     avg = summary.avg_score
     if avg is not None:

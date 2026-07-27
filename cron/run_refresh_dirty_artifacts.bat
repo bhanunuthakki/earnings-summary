@@ -16,6 +16,9 @@ setlocal
 set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
+REM Harvest the report-critical paths this job already executes. Capture is a
+REM local append only; the external env owns the private archive location.
+set LLM_CAPTURE_PURPOSES=saydo_filter,valuation_basis,exec_comp_alignment,company_description,recent_developments
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 REM wmic was removed from Windows 11 24H2+; use PowerShell for the UTC stamp.

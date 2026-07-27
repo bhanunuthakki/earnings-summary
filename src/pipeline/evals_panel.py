@@ -34,13 +34,14 @@ from datetime import UTC, datetime, timedelta
 from html import escape
 from pathlib import Path
 
+from evals.capture_quality_specs import CAPTURE_QUALITY_PURPOSES, CAPTURE_QUALITY_SPECS
 from llm.calibration import VersionSummary, summarize_by_prompt_version
 from ui import living_grid as lg
 from ui.controls import prov_case, prov_drawer
 
 # Purposes the run bar offers — mirrors execution/run_llm_evals.py PURPOSES
 # (asserted in tests so the two can't drift).
-RUNNABLE_PURPOSES: tuple[str, ...] = (
+_CORE_RUNNABLE_PURPOSES: tuple[str, ...] = (
     "viewspec_compile",
     "transcript_metadata",
     "intake_classifier",
@@ -110,6 +111,7 @@ RUNNABLE_PURPOSES: tuple[str, ...] = (
     "metric_lifecycle_triage",
     "disclosure_item_specificity_triage",
 )
+RUNNABLE_PURPOSES: tuple[str, ...] = _CORE_RUNNABLE_PURPOSES + CAPTURE_QUALITY_PURPOSES
 
 CALL_HEALTH_WINDOW_DAYS = 30
 _FAILED_CASES_PER_RUN = 8
@@ -346,19 +348,36 @@ def _run_bar() -> str:
     # One solid-accent primary per view (design_language §4): viewspec_compile
     # is the live golden set, so it alone is .k-btn-primary; the rest are the
     # quiet, dense run buttons.
-    buttons = "".join(
+    core_buttons = "".join(
         f'<button type="button" data-purpose="{escape(p)}"'
         f' class="k-btn {"k-btn-primary" if p == "viewspec_compile" else "k-btn-quiet"} k-btn-sm">'
         f"{escape(p)}</button>"
-        for p in RUNNABLE_PURPOSES
+        for p in _CORE_RUNNABLE_PURPOSES
+    )
+    capture_groups = "".join(
+        '<details class="ev-capture-group">'
+        f'<summary class="k-label">{priority} capture audits '
+        f"({sum(1 for spec in CAPTURE_QUALITY_SPECS.values() if spec.priority == priority)})"
+        "</summary>"
+        '<div class="ev-capture-buttons">'
+        + "".join(
+            f'<button type="button" data-purpose="{escape(p)}" '
+            'class="k-btn k-btn-quiet k-btn-sm" '
+            f'title="{escape(spec.traffic_tier)} traffic; default {spec.default_limit} cases; '
+            f'pass {spec.pass_threshold:.0%}">{escape(p)}</button>'
+            for p in CAPTURE_QUALITY_PURPOSES
+            if (spec := CAPTURE_QUALITY_SPECS[p]).priority == priority
+        )
+        + "</div></details>"
+        for priority in ("P0", "P1", "P2")
     )
     return (
         '<div class="ev-runbar" id="ev-runbar">'
         '<span class="k-label">Run eval</span>'
-        f"{buttons}"
+        f"{core_buttons}{capture_groups}"
         '<span class="muted ev-note">viewspec_compile = live golden set (16 questions); '
-        "the rest audit existing artifacts against their rubric (full corpus — the weekly "
-        "cron covers fresh-only). Judge runs on the eval_judge budget; spot-check its "
+        "capture audits replay bounded existing production exchanges and never add "
+        "production-path model calls. Judge runs on the eval_judge budget; spot-check its "
         "agreement with <code>execution/spot_check_eval_judge.py</code>.</span>"
         '<pre class="ev-log" id="ev-log" hidden></pre>'
         "</div>"
@@ -532,6 +551,8 @@ _PANEL_CSS = """<style>
 .ev-runbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 10px 14px; margin-bottom: 18px; font-size: var(--fs-body); }
+.ev-capture-group { width: 100%; }
+.ev-capture-buttons { display: flex; gap: 8px; flex-wrap: wrap; padding-top: 8px; }
 .ev-note { font-size: var(--fs-caption); }
 .ev-log { width: 100%; margin: 8px 0 0; padding: 8px 10px; background: var(--paper);
   border: 1px solid var(--border); border-radius: var(--radius); font-family: var(--mono);

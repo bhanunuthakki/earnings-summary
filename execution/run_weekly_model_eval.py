@@ -62,6 +62,7 @@ sys.path.insert(
     0, str(PROJECT_ROOT / "execution")
 )  # for run_model_eval_sweep + apply_model_switches
 
+from llm.capture import default_capture_archive_dir  # noqa: E402
 from llm.model_ladder import DEFAULT_JUDGES  # noqa: E402
 
 log = logging.getLogger("run_weekly_model_eval")
@@ -180,7 +181,10 @@ def main() -> int:
     )
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     parser.add_argument(
-        "--capture-dir", type=Path, default=None, help="default <repo>/data/llm_capture"
+        "--capture-dir",
+        type=Path,
+        default=None,
+        help="default private capture archive (LocalAppData on Windows)",
     )
     parser.add_argument(
         "--tickers", help="comma list; default = rotating sample of tracked tickers"
@@ -238,7 +242,7 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     repo_root = args.repo_root.resolve()
-    capture_dir = args.capture_dir or (repo_root / "data" / "llm_capture")
+    capture_dir = args.capture_dir or default_capture_archive_dir(repo_root)
     db_path = repo_root / "data" / "portfolio.db"
 
     # Capture must be OFF in THIS process (the sweep runs here). The harvest sets

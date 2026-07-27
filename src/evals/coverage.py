@@ -11,6 +11,8 @@ score it:
   * **outcome** — one of the mode-C graders run by
     execution/run_calibration_grading.py (constant below — update it when a
     grader is added there);
+  * **capture_audit** — replay of an opt-in production prompt/response capture
+    against a versioned purpose-specific quality bar;
   * **meta**   — the eval machinery's own purposes (judges); they grade
     others and are themselves audited by the spot-check script.
 
@@ -35,6 +37,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from evals.capture_quality_specs import CAPTURE_QUALITY_SPECS
 from evals.golden_classifiers import CLASSIFIER_PURPOSES
 from evals.rubric_judge import AUDIT_SPECS
 from llm.cli import LLM_MODELS
@@ -90,97 +93,22 @@ META_PURPOSES: frozenset[str] = frozenset(
         "prompt_reflect_rewrite",
     }
 )
+_OBSERVED_META_PURPOSES: frozenset[str] = frozenset(
+    {
+        # Legacy ledger rows used this purpose before the canonical
+        # backend_compare_judge name. It is the same governed judge workload,
+        # but it is not a current registered purpose.
+        "backend_judge",
+    }
+)
 
 # The fallback budget row's synthetic purpose — never an LLM call's own.
 _IGNORED: frozenset[str] = frozenset({"__default__"})
 
-# Explicit debt snapshot at the introduction of the no-new-gap ratchet
-# (2026-07-26). A purpose belongs here only when it was already registered and
-# uncovered at that point. This is intentionally verbose and checked in:
-#
-# * a new model-picker OR prompt-version purpose cannot silently join it;
-# * when a real eval lands, CI requires removing the now-stale exemption;
-# * adding Pydantic/schema validation alone never qualifies for removal.
-#
-# Pay this set down; never append to it merely to make CI green.
-GRANDFATHERED_UNCOVERED_PURPOSES: frozenset[str] = frozenset(
-    {
-        "advisor_socratic_memo",
-        "advisor_socratic_questions",
-        "advisor_swap_check",
-        "annual_letter",
-        "artifact_brief",
-        "ask_answer",
-        "business_factor_taxonomy",
-        "canonicalize_segments",
-        "coach_reply_intent",
-        "company_description",
-        "customer_concentration_extraction",
-        "dcf_assumption_extract",
-        "dcf_assumptions",
-        "diet_source_quality",
-        "drift_narrate",
-        "earnings_tone_diff",
-        "etf_role_synthesis",
-        "event_brief",
-        "exec_comp_alignment",
-        "exec_comp_extraction",
-        "exit_postmortem_draft",
-        "extract_8k_overrides",
-        "footnote_extraction",
-        "guidance_lifecycle_triage",
-        "investor_deck_extraction",
-        "ir_sheet_kpi_map",
-        "kpi_inflection_context",
-        "kpi_registry_auto_proposal",
-        "kpi_summary_enumerate",
-        "kpi_summary_extract",
-        "market_signals",
-        "material_news_classification",
-        "musing_decision_extract",
-        "pairwise_analysis",
-        "patent_timeline",
-        "platform_diagram",
-        "positioning_coach_turn",
-        "positioning_encode",
-        "presentation_brief",
-        "press_release_summary",
-        "pressure_test_thesis",
-        "qualitative_conditions_extract",
-        "recent_developments",
-        "red_team_attack",
-        "red_team_cross_book",
-        "research_adversarial_assess",
-        "research_code_spec",
-        "research_fetch",
-        "research_narrate",
-        "research_triage",
-        "risk_factor_classify",
-        "risk_factor_diff",
-        "saydo_commitment_extract",
-        "saydo_due_context",
-        "saydo_filter",
-        "saydo_importance",
-        "segment_6k_breakdown_extract",
-        "segment_crosstab_extract",
-        "segment_definition_extract",
-        "session_distill",
-        "strategic_analysis",
-        "tenet_accountability",
-        "tenet_distill",
-        "tenet_semantic_tension",
-        "theme_seed_cluster",
-        "theme_synthesis",
-        "thesis_collision",
-        "thesis_entry_draft",
-        "thesis_pass_a",
-        "thesis_pass_b",
-        "transcript_qa_judgment",
-        "transcript_topic_triage",
-        "valuation_basis",
-        "weekly_packet_predraft",
-    }
-)
+# The legacy snapshot was fully paid down by capture-quality replay audits.
+# Keep the symbol for gate/test compatibility: adding any exemption is a new
+# debt decision and must not be used to bypass the real quality-mode rule.
+GRANDFATHERED_UNCOVERED_PURPOSES: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,7 +116,7 @@ class CoverageRow:
     """One purpose's eval posture."""
 
     purpose: str
-    modes: tuple[str, ...]  # subset of ("golden", "audit", "outcome", "meta")
+    modes: tuple[str, ...]  # golden/audit/capture_audit/outcome/meta
     model_pinned: bool
     observed_calls: int  # llm_calls rows ever (0 = registered but never called)
 
@@ -249,9 +177,11 @@ def eval_coverage(db_path: Path) -> list[CoverageRow]:
             modes.append("golden")
         if purpose in AUDIT_SPECS:
             modes.append("audit")
+        if purpose in CAPTURE_QUALITY_SPECS:
+            modes.append("capture_audit")
         if purpose in OUTCOME_PURPOSES:
             modes.append("outcome")
-        if purpose in META_PURPOSES:
+        if purpose in META_PURPOSES or purpose in _OBSERVED_META_PURPOSES:
             modes.append("meta")
         rows.append(
             CoverageRow(
@@ -262,10 +192,11 @@ def eval_coverage(db_path: Path) -> list[CoverageRow]:
             )
         )
     if lens_calls:
+        lens_modes = ("capture_audit",) if "lens:*" in CAPTURE_QUALITY_SPECS else ()
         rows.append(
             CoverageRow(
                 purpose="lens:*",
-                modes=(),
+                modes=lens_modes,
                 model_pinned=False,  # per-lens models live on the Lens object by design
                 observed_calls=lens_calls,
             )
@@ -279,8 +210,10 @@ def render_coverage_text(rows: list[CoverageRow]) -> str:
     countable fact (n uncovered / n total)."""
     uncovered = [r for r in rows if not r.covered]
     lines = [
-        f"Eval coverage: {len(rows) - len(uncovered)}/{len(rows)} purposes have an "
+        f"Eval mode availability: {len(rows) - len(uncovered)}/{len(rows)} purposes have an "
         f"eval mode; {len(uncovered)} uncovered.",
+        "Capture-audit availability is not a passing score or corpus-readiness claim; "
+        "a missing current versioned cohort exits 2 when that audit runs.",
         "",
         f"{'purpose':<36} {'modes':<24} {'pinned':<7} calls",
     ]
@@ -318,11 +251,16 @@ def eval_coverage_gate(rows: list[CoverageRow]) -> CoverageGateResult:
 def render_coverage_gate_text(result: CoverageGateResult) -> str:
     """Human-readable CI result with an actionable failure explanation."""
     if result.passed:
-        return "Eval coverage gate: PASS - no new registered purpose lacks a real quality eval."
+        return (
+            "Eval coverage gate: PASS - no registered purpose lacks a configured "
+            "executable eval mode. Capture corpus readiness is checked when the mode runs."
+        )
 
     lines = ["Eval coverage gate: FAIL."]
     if result.new_uncovered:
-        lines.append("New registered purposes without a golden/audit/outcome/meta eval:")
+        lines.append(
+            "New registered purposes without a golden/audit/capture_audit/outcome/meta eval:"
+        )
         lines.extend(f"  - {purpose}" for purpose in result.new_uncovered)
     if result.stale_grandfathered:
         lines.append(
@@ -330,7 +268,7 @@ def render_coverage_gate_text(result: CoverageGateResult) -> str:
         )
         lines.extend(f"  - {purpose}" for purpose in result.stale_grandfathered)
     lines.append(
-        "Schema validation alone is not a quality eval. Add a real eval mode, "
-        "or remove an obsolete registration."
+        "Schema validation or an empty capture declaration alone is not a quality eval. "
+        "Add an executable eval mode, or remove an obsolete registration."
     )
     return "\n".join(lines)

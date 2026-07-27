@@ -279,7 +279,7 @@ def test_eval_coverage_gate_accepts_only_the_explicit_existing_debt(
     assert result.passed
     assert not result.new_uncovered
     assert not result.stale_grandfathered
-    assert len(GRANDFATHERED_UNCOVERED_PURPOSES) > 0
+    assert not GRANDFATHERED_UNCOVERED_PURPOSES
     assert "PASS" in render_coverage_gate_text(result)
 
 
@@ -306,24 +306,20 @@ def test_eval_coverage_gate_blocks_new_model_and_prompt_registrations(
     )
     assert not result.passed
     text = render_coverage_gate_text(result)
-    assert "golden/audit/outcome/meta" in text
-    assert "Schema validation alone is not a quality eval" in text
+    assert "golden/audit/capture_audit/outcome/meta" in text
+    assert "empty capture declaration alone is not a quality eval" in text
 
 
-def test_eval_coverage_gate_requires_stale_exemption_removal(
+def test_eval_coverage_gate_has_no_exemption_when_capture_eval_is_removed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     purpose = "annual_letter"
-    assert purpose in GRANDFATHERED_UNCOVERED_PURPOSES
-    monkeypatch.setattr(
-        coverage_module,
-        "GOLDEN_PURPOSES",
-        coverage_module.GOLDEN_PURPOSES | {purpose},
-    )
+    assert purpose not in GRANDFATHERED_UNCOVERED_PURPOSES
+    monkeypatch.delitem(coverage_module.CAPTURE_QUALITY_SPECS, purpose)
 
     result = eval_coverage_gate(eval_coverage(tmp_path / "missing.db"))
 
-    assert result.stale_grandfathered == (purpose,)
+    assert result.new_uncovered == (purpose,)
     assert not result.passed
 
 
@@ -366,6 +362,34 @@ def test_coverage_cli_report_stays_nonblocking_but_gate_fails_new_gap(
     output = capsys.readouterr().out
     assert "Eval coverage gate: FAIL" in output
     assert "new_cli_gap" in output
+
+
+def test_capture_audit_cli_fails_loudly_when_explicitly_bounded_to_zero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runner = _load_execution_module("run_llm_evals", "run_llm_evals_empty_capture_check")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "portfolio.db").touch()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_llm_evals.py",
+            "--purpose",
+            "annual_letter",
+            "--repo-root",
+            str(tmp_path),
+            "--limit",
+            "0",
+            "--no-persist",
+        ],
+    )
+
+    assert runner.main() == 2
+    assert "has no executable cases" in capsys.readouterr().err
 
 
 # ----------------------------------------------------------------------------

@@ -1385,8 +1385,10 @@ def _call_claude(
     try:
         from llm.codex_backend import call_codex_llm
 
-        return call_codex_llm(
+        codex_fallback_model = _codex_model_for(model)
+        text = call_codex_llm(
             prompt,
+            model=codex_fallback_model,
             purpose=purpose,
             ticker=ticker,
             scope=scope,
@@ -1395,6 +1397,17 @@ def _call_claude(
             fallback_from_provider="anthropic",
             fallback_from_transport="subscription_cli",
         )
+        capture_exchange(
+            prompt=prompt,
+            response=text,
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope,
+            model=codex_fallback_model,
+            run_id=run_id,
+            backend="codex",
+        )
+        return text
     except Exception as codex_error:
         if not _authorize_metered_openrouter_fallback(
             purpose, force_budget_bypass=force_budget_bypass
@@ -1409,10 +1422,12 @@ def _call_claude(
                 f"(claude={type(last_error).__name__}, codex={type(codex_error).__name__}); "
                 "this purpose is not approved for metered OpenRouter fallback."
             ) from codex_error
-        from llm.openrouter_backend import call_openrouter
+        from llm.openrouter_backend import call_openrouter, openrouter_model_for
 
-        return call_openrouter(
+        openrouter_fallback_model = openrouter_model_for(purpose)
+        text = call_openrouter(
             prompt,
+            model=openrouter_fallback_model,
             purpose=purpose,
             ticker=ticker,
             scope=scope,
@@ -1422,6 +1437,17 @@ def _call_claude(
             fallback_from_provider="openai",
             fallback_from_transport="subscription_cli",
         )
+        capture_exchange(
+            prompt=prompt,
+            response=text,
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope,
+            model=openrouter_fallback_model,
+            run_id=run_id,
+            backend="openrouter",
+        )
+        return text
         # Typed so eval/judge callers can abort instead of scoring the outage;
         # production callers defer per-item (is_hard_stop → False).
     # Operational failure — try Gemini fallback. fallback_call_logged raises
@@ -1586,7 +1612,7 @@ def call_llm(
             else _codex_model_for(resolved_model)
         )
         try:
-            return call_codex_llm(
+            text = call_codex_llm(
                 prompt,
                 model=codex_model,
                 timeout_seconds=timeout_seconds or DEFAULT_TIMEOUT_SECONDS,
@@ -1595,6 +1621,17 @@ def call_llm(
                 scope=scope,
                 run_id=run_id,
             )
+            capture_exchange(
+                prompt=prompt,
+                response=text,
+                purpose=purpose,
+                ticker=ticker,
+                scope=scope,
+                model=codex_model,
+                run_id=run_id,
+                backend="codex",
+            )
+            return text
         except (OSError, RuntimeError, ValueError) as codex_error:
             if backend == "codex":
                 raise
@@ -1617,7 +1654,7 @@ def call_llm(
         from llm.gemini_backend import call_gemini  # late — avoids import cycle
 
         try:
-            return call_gemini(
+            text = call_gemini(
                 prompt,
                 model=resolved_model,
                 timeout_seconds=timeout_seconds,
@@ -1627,6 +1664,17 @@ def call_llm(
                 run_id=run_id,
                 force_budget_bypass=force_budget_bypass,
             )
+            capture_exchange(
+                prompt=prompt,
+                response=text,
+                purpose=purpose,
+                ticker=ticker,
+                scope=scope,
+                model=resolved_model,
+                run_id=run_id,
+                backend="gemini",
+            )
+            return text
         except (LLMBudgetExceeded, LLMSetupError):
             raise  # hard stops — never paper over with a backend switch
         except (subprocess.SubprocessError, OSError, RuntimeError, ValueError) as gemini_error:
@@ -1647,7 +1695,7 @@ def call_llm(
         from llm.openrouter_backend import call_openrouter  # late — avoids import cycle
 
         try:
-            return call_openrouter(
+            text = call_openrouter(
                 prompt,
                 model=resolved_model,
                 timeout_seconds=timeout_seconds,
@@ -1657,6 +1705,17 @@ def call_llm(
                 run_id=run_id,
                 force_budget_bypass=force_budget_bypass,
             )
+            capture_exchange(
+                prompt=prompt,
+                response=text,
+                purpose=purpose,
+                ticker=ticker,
+                scope=scope,
+                model=resolved_model,
+                run_id=run_id,
+                backend="openrouter",
+            )
+            return text
         except (LLMBudgetExceeded, LLMSetupError):
             raise  # hard stops — never paper over with a backend switch
         except (OSError, RuntimeError, ValueError) as openrouter_error:
@@ -2045,6 +2104,25 @@ def stream_llm(
         )
         yield {"type": "error", "error": "answer failed; retry the request"}
         return
+    result_succeeded = (
+        proc.returncode == 0
+        and result_meta is not None
+        and result_meta.get("is_error") is False
+        and result_meta.get("subtype") == "success"
+    )
+    if not result_succeeded:
+        _record_stream_call(
+            purpose,
+            model,
+            prompt,
+            full_text,
+            started_at,
+            error="[partial] stream ended without a successful result envelope",
+            outcome="partial",
+            failure_class="partial_response",
+        )
+        yield {"type": "error", "error": "answer failed; retry the request"}
+        return
     if not full_text:
         stderr_text = redact((proc.stderr.read() if proc.stderr else "").strip())[:200]
         log.error({"event": "llm_stream_empty_response", "error": stderr_text})
@@ -2061,6 +2139,16 @@ def stream_llm(
         return
 
     _record_stream_call(purpose, model, prompt, full_text, started_at, meta=result_meta)
+    capture_exchange(
+        prompt=prompt,
+        response=full_text,
+        purpose=purpose,
+        ticker=None,
+        scope=scope,
+        model=model,
+        run_id=None,
+        backend="claude",
+    )
     yield {"type": "final", "text": full_text}
 
 

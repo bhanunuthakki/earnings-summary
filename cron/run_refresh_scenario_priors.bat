@@ -7,7 +7,9 @@ REM Owner-set priors (set_by=owner) are never touched either way.
 
 setlocal
 set PYTHONUTF8=1
-set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
+REM Resolve from this wrapper so a runtime registration cannot jump back into
+REM the mutable scratch checkout.
+for %%I in ("%~dp0..") do set "PROJECT_ROOT=%%~fI"
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 

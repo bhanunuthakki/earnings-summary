@@ -19,7 +19,7 @@ Both persist the run + per-case transcripts to eval_runs/eval_case_results
 eval mode — the analogue of the unknown-purpose model warning).
 `--coverage-gate` prints the same report and applies the provider-free CI
 ratchet: pre-existing registered gaps are grandfathered, but a newly registered
-model/prompt purpose without a real quality eval fails.
+model/prompt purpose without a configured executable quality-eval mode fails.
 
 Examples:
     python execution/run_llm_evals.py --purpose viewspec_compile
@@ -31,10 +31,10 @@ Examples:
     python execution/run_llm_evals.py --coverage
     python execution/run_llm_evals.py --coverage-gate
 
-Exit codes: 0 ok (including an empty audit corpus — nothing to grade) · 1 hard
-failure (bad golden set/rubric, missing DB/tables, abort) · 3 ran fine but
-avg_score below --min-score (the regression gate) · 4 eval-coverage ratchet
-failure.
+Exit codes: 0 ok (including an empty mode-B audit corpus — nothing to grade)
+· 1 hard failure (bad golden set/rubric, missing DB/tables, abort) · 2 capture
+audit has no real production cases · 3 ran fine but avg_score below
+--min-score (the regression gate) · 4 eval-coverage ratchet failure.
 """
 
 from __future__ import annotations
@@ -47,6 +47,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from evals.capture_quality_specs import CAPTURE_QUALITY_PURPOSES  # noqa: E402
 
 log = logging.getLogger("run_llm_evals")
 
@@ -130,7 +132,8 @@ AUDIT_PURPOSES = (
     # evals.corpora.load_behavior_distill_corpus).
     "behavior_distill",
 )
-PURPOSES = GOLDEN_PURPOSES + AUDIT_PURPOSES
+CAPTURE_AUDIT_PURPOSES = CAPTURE_QUALITY_PURPOSES
+PURPOSES = GOLDEN_PURPOSES + AUDIT_PURPOSES + CAPTURE_AUDIT_PURPOSES
 
 
 def _parse_args() -> argparse.Namespace:
@@ -252,7 +255,30 @@ def main() -> int:
     from evals.harness import EvalAbortError, persist_summary
 
     try:
-        if args.purpose in AUDIT_PURPOSES:
+        if args.purpose in CAPTURE_AUDIT_PURPOSES:
+            if args.no_judge:
+                print(
+                    "ERROR: --no-judge cannot score a capture replay; "
+                    "capture audits are judge-driven.",
+                    file=sys.stderr,
+                )
+                return 1
+            if args.golden is not None:
+                print(
+                    "ERROR: --golden does not apply to versioned capture-quality specs.",
+                    file=sys.stderr,
+                )
+                return 1
+            from evals.capture_quality import run_capture_quality_eval
+
+            summary = run_capture_quality_eval(
+                args.purpose,
+                repo_root=repo_root,
+                code_root=PROJECT_ROOT,
+                limit=args.limit,
+                since_days=args.since_days,
+            )
+        elif args.purpose in AUDIT_PURPOSES:
             if args.no_judge:
                 print(
                     "ERROR: --no-judge is a mode-A flag; rubric audits are judge-driven.",
@@ -413,6 +439,12 @@ def main() -> int:
         return 1
 
     if summary.n_cases == 0:
+        if args.purpose in CAPTURE_AUDIT_PURPOSES:
+            print(
+                f"ERROR: capture audit for {args.purpose} has no executable cases.",
+                file=sys.stderr,
+            )
+            return 2
         # An empty audit corpus (e.g. --since-days over a quiet week) is
         # "nothing to grade", not a quality signal — don't write a run row
         # and don't trip the gate.
