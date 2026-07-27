@@ -21,7 +21,7 @@ import re
 import sys
 import time
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -225,7 +225,7 @@ def analyze_for_ticker(
             skipped_reason="form_10k has no footnote section matching keywords",
         )
 
-    start_dt = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    start_dt = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     t0 = time.perf_counter()
 
     prompt = f"""You are a Senior buy-side strategic analyst conducting a deep 10-K filing review for {ticker} (FY {year}).

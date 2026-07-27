@@ -24,7 +24,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
-
 from sedi_adapter import ingest_sedi_dump  # noqa: E402
 
 log = logging.getLogger("ingest_sedi")

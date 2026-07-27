@@ -13,7 +13,7 @@ from enum import Enum
 from pydantic import BaseModel, Field
 
 
-class Jurisdiction(str, Enum):
+class Jurisdiction(str, Enum):  # noqa: UP042 - preserve legacy str(Enum) behavior
     US = "US"
     EU = "EU"
     CN = "CN"
@@ -22,7 +22,7 @@ class Jurisdiction(str, Enum):
     CA = "CA"
 
 
-class ExtensionStatus(str, Enum):
+class ExtensionStatus(str, Enum):  # noqa: UP042 - preserve legacy str(Enum) behavior
     ORIGINAL = "original"
     EXTENDED = "extended"
     PENDING_EXTENSION = "pending_extension"
@@ -31,7 +31,7 @@ class ExtensionStatus(str, Enum):
     MANUAL_CHECK_REQUIRED = "manual_check_required"
 
 
-class FetchSource(str, Enum):
+class FetchSource(str, Enum):  # noqa: UP042 - preserve legacy str(Enum) behavior
     FDA_ORANGE_BOOK = "fda_orange_book"
     EPO_PUBLIC = "epo_public"
     WIPO_PATENTSCOPE = "wipo_patentscope"
@@ -92,7 +92,7 @@ class NvoSelfDisclosedTimeline(BaseModel):
     patents: list[NvoSelfDisclosedPatent]
 
 
-class SignalType(str, Enum):
+class SignalType(str, Enum):  # noqa: UP042 - preserve legacy str(Enum) behavior
     SCRIPT_VOLUME = "script_volume"
     PRICE_PER_UNIT = "price_per_unit"
     MARKET_SHARE = "market_share"
@@ -101,7 +101,7 @@ class SignalType(str, Enum):
     PIPELINE_MILESTONE = "pipeline_milestone"
 
 
-class Confidence(str, Enum):
+class Confidence(str, Enum):  # noqa: UP042 - preserve legacy str(Enum) behavior
     HIGH = "high"
     MEDIUM = "medium"
     LOW = "low"

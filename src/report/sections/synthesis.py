@@ -159,7 +159,7 @@ def build(ticker: str, repo_root: Path) -> SynthesisSection:
 
     # Lenses are sorted by analytical importance (most-decision-critical first)
     # rather than alphabetically. Tweak to taste.
-    _LENS_ORDER: dict[str, int] = {
+    lens_order: dict[str, int] = {
         "five_min_reread": 0,
         "thesis_drift_qoq": 1,
         "bull_case": 2,
@@ -169,7 +169,7 @@ def build(ticker: str, repo_root: Path) -> SynthesisSection:
         "filing_diff_narrative": 6,
         "footnote_anomaly": 7,
     }
-    rows.sort(key=lambda r: _LENS_ORDER.get(r.name, 99))
+    rows.sort(key=lambda r: lens_order.get(r.name, 99))
 
     return SynthesisSection(
         status=SectionStatus.OK if rows else SectionStatus.MISSING_DATA,

@@ -1,6 +1,6 @@
 """reverse_dcf lens — market-implied narrative.
 
-At today's price, what (growth × margin × multiple) combination is the
+At today's price, what (growth x margin x multiple) combination is the
 market betting on, and where does that diverge from the analyst's DCF?
 """
 
@@ -38,7 +38,7 @@ betting* and where that diverges from the thesis.
 Produce a 250-400 word memo with three sections:
 
 ## 1. What the market is implying
-At the current price, what combination of (revenue growth × FCF margin ×
+At the current price, what combination of (revenue growth \u00d7 FCF margin \u00d7
 terminal multiple) is the market pricing in? Solve approximately — name
 the implied 5-year revenue CAGR, the implied steady-state FCF margin, and
 the implied exit multiple. Compare each to the analyst's DCF.

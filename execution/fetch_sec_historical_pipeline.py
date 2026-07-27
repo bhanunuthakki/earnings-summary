@@ -1,6 +1,7 @@
-import requests
-import os
 import csv
+import os
+
+import requests
 
 # SEC requires a user agent with contact info. Set EDGAR_USER_AGENT in env (recommended).
 HEADERS = {

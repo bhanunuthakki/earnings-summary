@@ -1,6 +1,6 @@
 """portfolio_macro_stress lens — portfolio-wide scenario stress digest.
 
-Takes a Scenario object, computes the per-holding beta × shock grid
+Takes a Scenario object, computes the per-holding beta x shock grid
 across the portfolio, and emits a cross-name read-through with hedge
 clusters, thesis-breaking exposures, and capital-allocation actions.
 
@@ -46,7 +46,7 @@ watchlist; your job is to surface the cross-name read-throughs.
 - Shocks:
 {scenario_shocks_block}
 
-**Per-holding sensitivity grid (beta × shock = implied weekly-return move):**
+**Per-holding sensitivity grid (beta \u00d7 shock = implied weekly-return move):**
 {stress_grid}
 
 **Portfolio composition (thesis + DCF over/under per holding):**
@@ -92,7 +92,7 @@ def _ctx_portfolio_macro_stress(*, scenario_obj: object, repo_root: Path) -> Len
     if not db.exists():
         return None
     try:
-        from macro_store import fetch_sensitivities  # noqa: PLC0415
+        from macro_store import fetch_sensitivities
     except ImportError:
         return None
     conn = sqlite3.connect(str(db))
@@ -136,7 +136,7 @@ def _ctx_portfolio_macro_stress(*, scenario_obj: object, repo_root: Path) -> Len
                 if beta is None:
                     stress_pieces.append(f"{sid}: β n/a")
                     continue
-                # Implied return contribution = beta × shock_return.
+                # Implied return contribution = beta x shock_return.
                 # `magnitude` is in pct or bps depending on unit; normalize to
                 # a return-style decimal for a rough mechanical estimate.
                 unit = getattr(shock, "unit", "pct")
@@ -199,7 +199,7 @@ def run_portfolio_macro_stress_lens(
     if ctx is None:
         log.debug({"event": "portfolio_macro_stress_context_empty", "scenario": scenario_id})
         return None
-    effective_cache_inputs = ctx.cache_inputs + [style_block_cache_token()]
+    effective_cache_inputs = [*ctx.cache_inputs, style_block_cache_token()]
     if not force:
         existing = read_current(ticker=None, purpose=purpose, scope="portfolio", db_path=db_path)
         if existing is not None and not existing.dirty:
@@ -225,7 +225,7 @@ def run_portfolio_macro_stress_lens(
             scope="portfolio",
             model=model,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning({"event": "portfolio_macro_stress_llm_failed", "error": str(exc)})
         return None
     artifact_id, _ = upsert(

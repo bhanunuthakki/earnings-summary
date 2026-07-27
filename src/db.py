@@ -524,27 +524,27 @@ def _spawn_onboard_async(ticker: str) -> None:
     cmd = [sys.executable, script, "--ticker", ticker]
 
     try:
-        log_handle = open(log_path, "w", encoding="utf-8")
-        if os.name == "nt":
-            subprocess.Popen(
-                cmd,
-                cwd=PROJECT_ROOT,
-                stdin=subprocess.DEVNULL,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                close_fds=True,
-                creationflags=_DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP,
-            )
-        else:
-            subprocess.Popen(
-                cmd,
-                cwd=PROJECT_ROOT,
-                stdin=subprocess.DEVNULL,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                close_fds=True,
-                start_new_session=True,
-            )
+        with open(log_path, "w", encoding="utf-8") as log_handle:
+            if os.name == "nt":
+                subprocess.Popen(
+                    cmd,
+                    cwd=PROJECT_ROOT,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    close_fds=True,
+                    creationflags=_DETACHED_PROCESS | _CREATE_NEW_PROCESS_GROUP,
+                )
+            else:
+                subprocess.Popen(
+                    cmd,
+                    cwd=PROJECT_ROOT,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    close_fds=True,
+                    start_new_session=True,
+                )
         sys.stderr.write(
             json.dumps({"event": "onboard_spawned", "ticker": ticker, "log": log_path}) + "\n"
         )

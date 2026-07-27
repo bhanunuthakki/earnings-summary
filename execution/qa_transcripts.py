@@ -41,8 +41,8 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.append(str(SRC_DIR))
 
-from alias_manager import resolve_ticker  # noqa: E402
 import index_manager  # noqa: E402
+from alias_manager import resolve_ticker  # noqa: E402
 from transcript_qa import (  # noqa: E402
     QaStatus,
     validate_transcript,

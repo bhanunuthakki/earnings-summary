@@ -221,7 +221,7 @@ def repo_with_signals(tmp_path: Path) -> Path:
         metric_kind="segment",
         signal_type="inflection",
         severity="red",
-        narrative="Cloud:Revenue: inflection detected at 2025-09-30 (magnitude 0.85σ, 1Q ago).",
+        narrative="Cloud:Revenue: inflection detected at 2025-09-30 (magnitude 0.85\u03c3, 1Q ago).",
     )
     return repo
 
@@ -457,7 +457,7 @@ def test_earnings_themes_cache_invalidates_on_ts_signal_change(
         metric_kind="financial",
         signal_type="inflection",
         severity="red",
-        narrative="Revenue: inflection detected at 2026-03-31 (magnitude 1.20σ, 0Q ago).",
+        narrative="Revenue: inflection detected at 2026-03-31 (magnitude 1.20\u03c3, 0Q ago).",
     )
     earnings_module.build(ticker, repo_with_signals, enable_llm=True)
     assert call_count["n"] == 2

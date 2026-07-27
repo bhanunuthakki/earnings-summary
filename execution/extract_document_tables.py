@@ -33,7 +33,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 def _sync_db_path(repo_root: Path) -> None:
     """Mirror execution/run_lens.py:_sync_db_path so the artifact / ledger
     writers land in the caller's repo."""
-    import db  # noqa: PLC0415 — lazy import after sys.path setup
+    import db
 
     db.PROJECT_ROOT = str(repo_root)
     db.DATA_DIR = str(repo_root / "data")
@@ -84,10 +84,7 @@ def main() -> int:
     repo_root = args.repo_root.resolve()
     _sync_db_path(repo_root)
 
-    if args.ticker:
-        tickers = [args.ticker.upper()]
-    else:
-        tickers = _portfolio_tickers(repo_root)
+    tickers = [args.ticker.upper()] if args.ticker else _portfolio_tickers(repo_root)
 
     grand_total_inserted = 0
     for t in tickers:

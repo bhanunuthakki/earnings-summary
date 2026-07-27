@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-import comments  # noqa: E402  (src/ is on sys.path)
+import comments
 from models.companies import Company
 from pipeline.queries import BRIEFED_LIST_TYPES, tracked_companies_for_user
 

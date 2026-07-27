@@ -10,7 +10,6 @@ from decision_extractor import (
     extract_recommendations_from_artifact,
 )
 
-
 # ---------------------------------------------------------------------------
 # Happy paths — one recommendation per artifact
 # ---------------------------------------------------------------------------

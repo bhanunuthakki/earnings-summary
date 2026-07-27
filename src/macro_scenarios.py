@@ -95,7 +95,7 @@ SCENARIOS: dict[str, Scenario] = {
             "Brazilian names (NU especially); positive translation for "
             "USD-cost / BRL-revenue exporters."
         ),
-        historical_analog="2014–15 commodity collapse / 2020 COVID dislocation",
+        historical_analog="2014\u201315 commodity collapse / 2020 COVID dislocation",
         timeframe_days=180,
         shocks=(
             MacroShock(series_id="usd_brl", magnitude=15.0, unit="pct", direction="up"),
@@ -111,7 +111,7 @@ SCENARIOS: dict[str, Scenario] = {
             "pain for E&P + commodity-leveraged sovereigns; tailwind for "
             "logistics-heavy consumer franchises."
         ),
-        historical_analog="2014–15 oil crash / Q1 2020 demand shock",
+        historical_analog="2014\u201315 oil crash / Q1 2020 demand shock",
         timeframe_days=180,
         shocks=(
             MacroShock(series_id="brent", magnitude=30.0, unit="pct", direction="down"),
@@ -127,7 +127,7 @@ SCENARIOS: dict[str, Scenario] = {
             "drives copper to multi-decade highs. Industrial-capex-leveraged "
             "names benefit; manufacturers face input-cost squeeze."
         ),
-        historical_analog="2020–21 post-COVID demand snapback + grid-build cycles",
+        historical_analog="2020\u201321 post-COVID demand snapback + grid-build cycles",
         timeframe_days=365,
         shocks=(
             MacroShock(series_id="copper", magnitude=100.0, unit="pct", direction="up"),

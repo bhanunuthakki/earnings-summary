@@ -34,11 +34,11 @@ from pydantic import BaseModel, ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+import db as portfolio_db  # noqa: E402
 from compute.split_normalization import (  # noqa: E402
     NormalizationEvent,
     normalize_estimates,
 )
-import db as portfolio_db  # noqa: E402
 from log_redact import redact as _redact  # noqa: E402
 from models.fmp_payloads import (  # noqa: E402
     FmpAnalystEstimateRecord,
@@ -338,7 +338,7 @@ PATH_ALIASES: dict[str, list[str]] = {
 def _candidates(
     endpoint_path: str, symbol: str | None, extra: dict[str, object]
 ) -> list[tuple[str, str, dict[str, object]]]:
-    paths = [endpoint_path] + PATH_ALIASES.get(endpoint_path, [])
+    paths = [endpoint_path, *PATH_ALIASES.get(endpoint_path, [])]
     out: list[tuple[str, str, dict[str, object]]] = []
     for p in paths:
         if symbol is not None:
@@ -971,7 +971,7 @@ def run_ticker(
             )
             continue
 
-        if max_calls is not None and _CALL_COUNTER >= max_calls:
+        if max_calls is not None and max_calls <= _CALL_COUNTER:
             summary["skipped"] += 1
             src_calls.append(
                 source_calls_log.PendingSourceCall(
@@ -1273,7 +1273,7 @@ def run_sector_industry(profiles_dir: Path = FMP_DIR) -> None:
         "sector-performance-snapshot",
         "industry-performance-snapshot",
     ]:
-        code, body, err, kind = fmp_call(ep, None, {"date": TODAY_STR})
+        code, body, err, _kind = fmp_call(ep, None, {"date": TODAY_STR})
         if code == 200 and body is not None:
             p = _save_global(ep.replace("-", "_"), body)
             print(
@@ -1294,7 +1294,7 @@ def run_sector_industry(profiles_dir: Path = FMP_DIR) -> None:
     # Sector PE & performance histories
     for sector in GICS_SECTORS:
         for ep in ["historical-sector-pe", "historical-sector-performance"]:
-            code, body, err, kind = fmp_call(
+            code, body, err, _kind = fmp_call(
                 ep, None, {"sector": sector, "from": TEN_YEARS_AGO, "to": TODAY_STR}
             )
             key = f"{sector}".replace(" ", "_")
@@ -1330,7 +1330,7 @@ def run_sector_industry(profiles_dir: Path = FMP_DIR) -> None:
 
     for industry in sorted(industries):
         for ep in ["historical-industry-pe", "historical-industry-performance"]:
-            code, body, err, kind = fmp_call(
+            code, body, err, _kind = fmp_call(
                 ep, None, {"industry": industry, "from": TEN_YEARS_AGO, "to": TODAY_STR}
             )
             key = industry.replace(" ", "_").replace("/", "_")
@@ -1351,7 +1351,7 @@ def run_sector_industry(profiles_dir: Path = FMP_DIR) -> None:
                 _save_global_status(ep, industry, "error", http_code=code, error_msg=err)
 
     # Global ticker list
-    code, body, err, kind = fmp_call("company-symbols-list", None)
+    code, body, err, _kind = fmp_call("company-symbols-list", None)
     if code == 200 and body is not None:
         p = _save_global("company_symbols_list", body)
         n = len(body) if isinstance(body, list) else 1
@@ -1558,7 +1558,7 @@ def main():
 
     grand = {"ok": 0, "empty": 0, "forbidden": 0, "error": 0, "skipped": 0, "total": 0}
     for t in targets:
-        if args.max_calls is not None and _CALL_COUNTER >= args.max_calls:
+        if args.max_calls is not None and args.max_calls <= _CALL_COUNTER:
             print(f"  [max-calls {args.max_calls} reached; halting before {t}]")
             break
         s = run_ticker(

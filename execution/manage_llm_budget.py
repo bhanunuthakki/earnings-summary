@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import sqlite3
 import sys
+from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -209,10 +210,8 @@ def main(argv: list[str] | None = None) -> int:
     # Windows consoles (whose default cp1252 codepage breaks on U+2014).
     reconfigure = getattr(sys.stdout, "reconfigure", None)
     if callable(reconfigure):
-        try:
+        with suppress(OSError):
             reconfigure(encoding="utf-8")
-        except OSError:
-            pass
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(

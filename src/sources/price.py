@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
@@ -111,10 +111,10 @@ def _try_yfinance(ticker: str) -> LivePrice | None:
         )
         return LivePrice(
             price=price,
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             source_name="yfinance",
         )
-    except Exception as e:  # noqa: BLE001 — yfinance raises a wide variety; log everything
+    except Exception as e:
         log_call(
             source_name="yfinance",
             kind="live_price",
@@ -181,7 +181,7 @@ def _try_fmp_cache(repo_root: Path, ticker: str) -> LivePrice | None:
         )
         return None
 
-    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
     log_call(
         source_name="fmp_cache",
         kind="live_price",

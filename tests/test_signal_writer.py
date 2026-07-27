@@ -173,7 +173,7 @@ def _seed_goog(repo_root: Path) -> Path:
     # Mix of growth shapes so the test exercises green/yellow/red branches.
     _insert_financial(db_path, "GOOG", "revenue", [100.0 + 5 * i for i in range(16)])
     _insert_financial(db_path, "GOOG", "operating_income", [25.0 + 2 * i for i in range(16)])
-    # FCF with a 1.5σ-ish anomaly in the last quarter to catch the writer's
+    # FCF with a 1.5-sigma-ish anomaly in the last quarter to catch the writer's
     # anomaly branch — values are in the ~30-50 band, end with 70 to land an
     # observable z-score against the trailing window.
     fcf_vals = [30.0 + math.sin(i) * 3 for i in range(15)] + [70.0]

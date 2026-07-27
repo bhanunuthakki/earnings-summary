@@ -264,7 +264,7 @@ def extract_for_ticker(
                 purpose=LLM_PURPOSE,
                 ticker=ticker_u,
             ).strip()
-        except Exception as exc:  # noqa: BLE001 — defensive across provider errors
+        except Exception as exc:
             log.warning(
                 {
                     "event": "deck_llm_failed",
@@ -463,7 +463,7 @@ def _read_deck_text(pdf: Path) -> str:
     skips empty decks rather than failing the whole ticker."""
     try:
         raw = extract_text_from_pdf(str(pdf))
-    except Exception as exc:  # noqa: BLE001 — pypdf raises many types
+    except Exception as exc:
         log.warning({"event": "pdf_text_failed", "path": str(pdf), "error": str(exc)[:200]})
         return ""
     if not raw:

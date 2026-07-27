@@ -43,7 +43,7 @@ sys.path.insert(0, str(SRC_DIR))
 def _sync_db_path(repo_root: Path) -> None:
     """Mirror execution/extract_document_tables.py:_sync_db_path so the
     artifact / ledger writers land in the caller's repo."""
-    import db  # noqa: PLC0415 — lazy import after sys.path setup
+    import db
 
     db.PROJECT_ROOT = str(repo_root)
     db.DATA_DIR = str(repo_root / "data")

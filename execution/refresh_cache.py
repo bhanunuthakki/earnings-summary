@@ -45,6 +45,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -56,6 +57,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 # Import the canonical endpoint catalog from save_fmp_data so audit knows
 # what's expected per ticker. save_fmp_data is the source of truth.
 import save_fmp_data as fmp_save  # noqa: E402
+
 from pipeline import cadence_policy as _cadence_policy  # noqa: E402
 
 DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
@@ -307,10 +309,8 @@ def _existing_status_rows(
     for ticker, endpoint, period, status, last_pulled_str in cur.fetchall():
         last_pulled: datetime | None = None
         if last_pulled_str:
-            try:
+            with suppress(ValueError):
                 last_pulled = datetime.fromisoformat(last_pulled_str)
-            except ValueError:
-                pass
         out[(ticker, endpoint, period or "")] = (status, last_pulled)
     return out
 
@@ -596,7 +596,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 def cmd_archive(args: argparse.Namespace) -> int:
     sys.path.insert(0, str(PROJECT_ROOT / "src"))
-    import db as portfolio_db  # noqa: E402
+    import db as portfolio_db
 
     archived = portfolio_db.archive_company(args.ticker)
     print(json.dumps({"ticker": args.ticker.upper(), "archived": archived}))
@@ -605,7 +605,7 @@ def cmd_archive(args: argparse.Namespace) -> int:
 
 def cmd_reactivate(args: argparse.Namespace) -> int:
     sys.path.insert(0, str(PROJECT_ROOT / "src"))
-    import db as portfolio_db  # noqa: E402
+    import db as portfolio_db
 
     reactivated = portfolio_db.reactivate_company(args.ticker)
     print(json.dumps({"ticker": args.ticker.upper(), "reactivated": reactivated}))
@@ -853,7 +853,7 @@ def main() -> int:
     # Default to "run" if no subcommand
     if args.cmd is None:
         # Re-parse with `run` injected
-        args = ap.parse_args(["run"] + sys.argv[1:])
+        args = ap.parse_args(["run", *sys.argv[1:]])
 
     if args.cmd == "audit":
         return cmd_audit(args)

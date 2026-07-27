@@ -1,6 +1,10 @@
 import os
+import re
+
 from pypdf import PdfReader
+
 from alias_manager import resolve_ticker
+from llm_client import identify_transcript_metadata
 
 
 def parse_filename(filename):
@@ -36,13 +40,9 @@ def extract_text_from_pdf(filepath):
     return text
 
 
-import re
-from llm_client import identify_transcript_metadata
-
-
 def read_text_file(filepath):
     """Reads content from a text file."""
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8") as f:
         return f.read()
 
 
@@ -60,10 +60,9 @@ def smart_rename_files(input_dir):
         # Check if already matches format Company_Qx_YYYY.ext
         # Regex: Any chars + _ + Q[1-4] + _ + 4 digits + .ext
         match = re.match(r"(.+)_Q[1-4]_\d{4}\.(pdf|txt|mp3|m4a|wav)", filename.lower())
-        if match:
+        if match and match.group(1).isalpha():
             # Only skip if the company part is a standard text ticker (no numbers/dots)
-            if match.group(1).isalpha():
-                continue
+            continue
 
         print(f"  Inspecting unknown format: {filename}")
         filepath = os.path.join(input_dir, filename)
@@ -107,9 +106,8 @@ def smart_rename_files(input_dir):
                         print(f"    [Fast-Path] Renaming to: {new_filename}")
                         os.rename(filepath, new_filepath)
                         continue
-                    else:
-                        print(f"    Target {new_filename} already exists. Skipping.")
-                        continue
+                    print(f"    Target {new_filename} already exists. Skipping.")
+                    continue
             except Exception as e:
                 print(f"    Heuristic check failed: {e}")
         # ------------------------------

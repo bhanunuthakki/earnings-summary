@@ -90,10 +90,7 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    if args.ticker:
-        tickers = [args.ticker.upper()]
-    else:
-        tickers = _portfolio_tickers(args.repo_root)
+    tickers = [args.ticker.upper()] if args.ticker else _portfolio_tickers(args.repo_root)
 
     total_inserted = 0
     total_graded: dict[str, int] = {"met": 0, "missed": 0, "mixed": 0, "unfalsifiable": 0}

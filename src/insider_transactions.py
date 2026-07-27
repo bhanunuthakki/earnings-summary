@@ -433,7 +433,9 @@ def fetch_form4_from_edgar(
     until_iso = (until or datetime.now(UTC)).isoformat()
     since_iso = since.isoformat()
 
-    for form, acc, fdate, pdoc in zip(forms, accession_numbers, filing_dates, primary_docs):
+    for form, acc, fdate, _pdoc in zip(
+        forms, accession_numbers, filing_dates, primary_docs, strict=False
+    ):
         if form not in ("4", "4/A", "5", "5/A", "144"):
             continue
         if fdate < since_iso[:10] or fdate > until_iso[:10]:
@@ -462,7 +464,7 @@ def fetch_form4_from_edgar(
                 source_url=f"{archive_base}/{xml_name}",
             )
             out.extend(parsed)
-        except Exception as exc:  # noqa: BLE001 — defensive across SEC retries
+        except Exception as exc:
             log.debug(
                 {
                     "event": "form4_parse_skip",

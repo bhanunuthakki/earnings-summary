@@ -163,7 +163,7 @@ def run_lens(
     # Include the style-block hash in cache_inputs so editing the global
     # NUMBER_FORMATTING_BLOCK auto-invalidates every cached lens artifact
     # on the next run — no per-lens prompt_version bump required.
-    effective_cache_inputs = ctx.cache_inputs + [style_block_cache_token()]
+    effective_cache_inputs = [*ctx.cache_inputs, style_block_cache_token()]
 
     # Cache hit check — bypass on force=True
     if not force:

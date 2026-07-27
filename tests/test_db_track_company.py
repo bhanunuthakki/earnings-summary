@@ -35,7 +35,7 @@ def isolated_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(db, "DATA_DIR", str(tmp_path))
     db.init_db()
 
-    import sqlite3  # noqa: PLC0415
+    import sqlite3
 
     conn = sqlite3.connect(str(test_db))
     try:

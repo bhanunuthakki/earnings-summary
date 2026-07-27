@@ -22,8 +22,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from llm_artifact_store import (  # noqa: E402
-    UpsertRequest,
     _DEFAULT_TTL_DAYS,
+    UpsertRequest,
     default_expires_at,
     drain_dirty,
     upsert,

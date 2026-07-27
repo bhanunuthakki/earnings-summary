@@ -142,7 +142,7 @@ def _sse(payload: dict[str, object]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-class RegistryConflict(Exception):
+class RegistryConflict(Exception):  # noqa: N818 - public compatibility name
     """Raised when start() can't accept the request — caller maps to HTTP 409."""
 
 

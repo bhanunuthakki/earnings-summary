@@ -123,7 +123,7 @@ def process_ticker(ticker: str, limit: int = 20) -> None:
         p = save_data(ticker, "product_segments", product_seg)
         print(f"  [OK] product_segments  -> {len(product_seg)} entries -> {p}")
     else:
-        print(f"  [--] product_segments  -> not available (normal for some tickers)")
+        print("  [--] product_segments  -> not available (normal for some tickers)")
 
     # 5. Geographic Revenue Segmentation
     geo_seg = fetch_from_fmp(
@@ -134,7 +134,7 @@ def process_ticker(ticker: str, limit: int = 20) -> None:
         p = save_data(ticker, "geo_segments", geo_seg)
         print(f"  [OK] geo_segments      -> {len(geo_seg)} entries -> {p}")
     else:
-        print(f"  [--] geo_segments      -> not available (normal for some tickers)")
+        print("  [--] geo_segments      -> not available (normal for some tickers)")
 
     # 6. Update Database
     if income and len(income) > 0:
@@ -149,7 +149,7 @@ def process_ticker(ticker: str, limit: int = 20) -> None:
         conn.close()
         print(f"  [DB] fmp_data_upto set to {earliest_period}")
     else:
-        print(f"  [--] DB not updated (no income data)")
+        print("  [--] DB not updated (no income data)")
 
 
 def main() -> None:

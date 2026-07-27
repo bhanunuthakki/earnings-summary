@@ -258,7 +258,7 @@ Segments to define:
 {text}
 \"\"\"
 
-Return STRICT JSON with one key per segment name above. The value must be the synthesized definition string (1–3 analytical sentences) or `null` if you cannot find any information about it. Do NOT invent information.
+Return STRICT JSON with one key per segment name above. The value must be the synthesized definition string (1\u20133 analytical sentences) or `null` if you cannot find any information about it. Do NOT invent information.
 
 Example:
 {{"Google Services": "Encompasses core monetization engines including Search, YouTube Ads, hardware, and Play Store fees; excludes higher-beta infrastructure bets like Waymo.", "Other Bets": null}}

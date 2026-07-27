@@ -31,7 +31,8 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-from macro_scenarios import SCENARIOS, all_scenario_ids, get as get_scenario  # noqa: E402
+from macro_scenarios import SCENARIOS, all_scenario_ids  # noqa: E402
+from macro_scenarios import get as get_scenario  # noqa: E402
 from synthesis_lenses import (  # noqa: E402
     run_macro_scenario_lens,
     run_portfolio_macro_stress_lens,

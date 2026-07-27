@@ -18,34 +18,34 @@ from ._shared import (
     read_lens_artifact,
     run_lens,
 )
-from .bull_case import LENS as _LENS_bull_case
-from .catalyst_calendar import LENS as _LENS_catalyst_calendar
-from .cross_portfolio_synthesis import LENS as _LENS_cross_portfolio_synthesis
-from .customer_concentration_risk import LENS as _LENS_customer_concentration_risk
-from .filing_diff_narrative import LENS as _LENS_filing_diff_narrative
-from .five_min_reread import LENS as _LENS_five_min_reread
-from .footnote_anomaly import LENS as _LENS_footnote_anomaly
-from .llm_calibration import LENS as _LENS_llm_calibration
+from .bull_case import LENS as _LENS_BULL_CASE
+from .catalyst_calendar import LENS as _LENS_CATALYST_CALENDAR
+from .cross_portfolio_synthesis import LENS as _LENS_CROSS_PORTFOLIO_SYNTHESIS
+from .customer_concentration_risk import LENS as _LENS_CUSTOMER_CONCENTRATION_RISK
+from .filing_diff_narrative import LENS as _LENS_FILING_DIFF_NARRATIVE
+from .five_min_reread import LENS as _LENS_FIVE_MIN_REREAD
+from .footnote_anomaly import LENS as _LENS_FOOTNOTE_ANOMALY
+from .llm_calibration import LENS as _LENS_LLM_CALIBRATION
 from .macro_scenario import run_macro_scenario_lens
-from .mgmt_credibility_score import LENS as _LENS_mgmt_credibility_score
+from .mgmt_credibility_score import LENS as _LENS_MGMT_CREDIBILITY_SCORE
 from .portfolio_macro_stress import run_portfolio_macro_stress_lens
-from .reverse_dcf import LENS as _LENS_reverse_dcf
-from .thesis_drift_qoq import LENS as _LENS_thesis_drift_qoq
-from .underweighted_facts import LENS as _LENS_underweighted_facts
+from .reverse_dcf import LENS as _LENS_REVERSE_DCF
+from .thesis_drift_qoq import LENS as _LENS_THESIS_DRIFT_QOQ
+from .underweighted_facts import LENS as _LENS_UNDERWEIGHTED_FACTS
 
 LENSES: dict[str, Lens] = {
-    _LENS_thesis_drift_qoq.name: _LENS_thesis_drift_qoq,
-    _LENS_five_min_reread.name: _LENS_five_min_reread,
-    _LENS_bull_case.name: _LENS_bull_case,
-    _LENS_reverse_dcf.name: _LENS_reverse_dcf,
-    _LENS_underweighted_facts.name: _LENS_underweighted_facts,
-    _LENS_catalyst_calendar.name: _LENS_catalyst_calendar,
-    _LENS_filing_diff_narrative.name: _LENS_filing_diff_narrative,
-    _LENS_footnote_anomaly.name: _LENS_footnote_anomaly,
-    _LENS_cross_portfolio_synthesis.name: _LENS_cross_portfolio_synthesis,
-    _LENS_mgmt_credibility_score.name: _LENS_mgmt_credibility_score,
-    _LENS_llm_calibration.name: _LENS_llm_calibration,
-    _LENS_customer_concentration_risk.name: _LENS_customer_concentration_risk,
+    _LENS_THESIS_DRIFT_QOQ.name: _LENS_THESIS_DRIFT_QOQ,
+    _LENS_FIVE_MIN_REREAD.name: _LENS_FIVE_MIN_REREAD,
+    _LENS_BULL_CASE.name: _LENS_BULL_CASE,
+    _LENS_REVERSE_DCF.name: _LENS_REVERSE_DCF,
+    _LENS_UNDERWEIGHTED_FACTS.name: _LENS_UNDERWEIGHTED_FACTS,
+    _LENS_CATALYST_CALENDAR.name: _LENS_CATALYST_CALENDAR,
+    _LENS_FILING_DIFF_NARRATIVE.name: _LENS_FILING_DIFF_NARRATIVE,
+    _LENS_FOOTNOTE_ANOMALY.name: _LENS_FOOTNOTE_ANOMALY,
+    _LENS_CROSS_PORTFOLIO_SYNTHESIS.name: _LENS_CROSS_PORTFOLIO_SYNTHESIS,
+    _LENS_MGMT_CREDIBILITY_SCORE.name: _LENS_MGMT_CREDIBILITY_SCORE,
+    _LENS_LLM_CALIBRATION.name: _LENS_LLM_CALIBRATION,
+    _LENS_CUSTOMER_CONCENTRATION_RISK.name: _LENS_CUSTOMER_CONCENTRATION_RISK,
 }
 
 # Macro lenses run via dedicated entry points (run_macro_scenario_lens /

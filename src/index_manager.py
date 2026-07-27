@@ -9,9 +9,10 @@ Key: {TICKER}_{YEAR}_{QUARTER}_{doc_type}
      e.g. GOOG_2025_Q3_press_release
 """
 
-import os
-import json
 import datetime
+import json
+import os
+
 from alias_manager import resolve_ticker
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -56,7 +57,7 @@ def _load(path: str) -> dict:
             json.dump({}, f, indent=4)
         return {}
     try:
-        with open(path, "r") as f:
+        with open(path) as f:
             return json.load(f)
     except Exception:
         return {}

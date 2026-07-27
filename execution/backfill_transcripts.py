@@ -63,8 +63,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 # from tests) rather than run directly via `python execution/backfill_transcripts.py`.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from fetch_qa_transcript import (  # type: ignore[import-not-found]  # noqa: E402
+    FetchQaSpec,
+    fetch_qa,
+)
+
 import db  # noqa: E402
-from fetch_qa_transcript import FetchQaSpec, fetch_qa  # type: ignore[import-not-found]  # noqa: E402
 
 _RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
 _PROCESSED_DIR = PROJECT_ROOT / "transcripts" / "processed"
@@ -202,7 +206,7 @@ def _backfill_one(
             continue
         try:
             hit = fetch_qa(FetchQaSpec(ticker=ticker, year=y, quarter=q), force=False)
-        except Exception as e:  # noqa: BLE001 — aggregator scraping is fragile
+        except Exception as e:
             result.errors.append(f"{label}: {type(e).__name__}: {e}"[:200])
             continue
         if hit is not None:

@@ -76,7 +76,7 @@ def test_compute_sensitivities_recovers_synthetic_beta() -> None:
     # Macro daily returns ~ N(0, 0.005). Build levels from them.
     macro_returns = [rng.gauss(0.0, 0.005) for _ in range(n - 1)]
     macro_levels = _gen_series_from_returns(macro_returns, start=4.0)
-    # Ticker: 0.6× sensitivity to macro + small idiosyncratic noise.
+    # Ticker: 0.6x sensitivity to macro + small idiosyncratic noise.
     tkr_returns = [0.6 * r + rng.gauss(0.0, 0.001) for r in macro_returns]
     tkr_levels = _gen_series_from_returns(tkr_returns, start=100.0)
 

@@ -15,7 +15,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-class SectionStatus(str, Enum):
+class SectionStatus(str, Enum):  # noqa: UP042 - preserve serialized enum compatibility
     """Why a section is the shape it is."""
 
     OK = "ok"  # populated from real data
@@ -26,7 +26,7 @@ class SectionStatus(str, Enum):
     BUDGET_SKIPPED = "budget_skipped"  # LLM call forgone to stay under a monthly budget cap
 
 
-class ReportFlavor(str, Enum):
+class ReportFlavor(str, Enum):  # noqa: UP042 - preserve serialized enum compatibility
     """Which brief shape to render.
 
     PORTFOLIO renders the full §1 Snapshot (verdict, thesis, KPI strip).

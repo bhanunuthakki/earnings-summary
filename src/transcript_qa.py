@@ -51,7 +51,7 @@ TIMESTAMP_LINE_RE = re.compile(r"^\[(?P<start>\d+\.\d+)s -> (?P<end>\d+\.\d+)s\]
 # ---------------------------------------------------------------------------
 
 
-class QaStatus(str, Enum):
+class QaStatus(str, Enum):  # noqa: UP042 - preserve serialized enum compatibility
     OK = "ok"
     FAILED = "failed"
 

@@ -148,7 +148,7 @@ def _seed_fmp_json(repo_root: Path, ticker: str, year: int) -> Path:
         "year": str(year),
         "Leases - Future Minimum Lease P": [
             {
-                f"Leases - Future Minimum Lease Payments (Details) - USD ($) $ in Millions": [
+                "Leases - Future Minimum Lease Payments (Details) - USD ($) $ in Millions": [
                     f"Dec. 31, {year}"
                 ]
             },

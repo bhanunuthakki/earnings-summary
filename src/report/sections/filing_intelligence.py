@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from report.models import (
     ExecutiveCompAlignmentDetail,
@@ -140,7 +140,7 @@ def _coerce_signal(raw: object) -> InvestmentSignalDetail:
     severity = severity_raw if severity_raw in ("High", "Medium", "Low") else "Low"
     return InvestmentSignalDetail(
         signal_type=str(obj.get("signal_type") or "Unspecified"),
-        severity=cast('"High" | "Medium" | "Low"', severity),
+        severity=cast("Literal['High', 'Medium', 'Low']", severity),
         description=str(obj.get("description") or ""),
     )
 

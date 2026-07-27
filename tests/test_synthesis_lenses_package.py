@@ -86,8 +86,8 @@ def test_package_public_api_is_callable() -> None:
 
 def test_shim_reexports_match_package() -> None:
     """src/synthesis_lenses.py must re-export the same names callers used pre-split."""
-    import synthesis_lenses as shim
     import synthesis.lenses as pkg
+    import synthesis_lenses as shim
 
     for attr in (
         "LENSES",

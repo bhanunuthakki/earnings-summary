@@ -177,8 +177,8 @@ def extract_for_ticker(
         parsed: dict[str, object] = {
             "multiple": override,
             "rationale": (
-                f"Analyst-pinned multiple via holdings JSON "
-                f"`valuation_multiple_override`. Skipping Opus selection."
+                "Analyst-pinned multiple via holdings JSON "
+                "`valuation_multiple_override`. Skipping Opus selection."
             ),
             "target_band": "",
             "notes": "",

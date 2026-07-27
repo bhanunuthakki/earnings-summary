@@ -23,6 +23,7 @@ import re
 import sqlite3
 import sys
 import time
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -243,7 +244,7 @@ def _process_ticker(ticker: str, repo_root: Path, refresh: bool) -> dict[str, ob
         # automatically instead of living on under the old filename.
         if db_path.exists():
             fiscal_period = f"{prev['quarter']}_{prev['year']}_to_{curr['quarter']}_{curr['year']}"
-            try:
+            with suppress(Exception):  # never fail the SayDo write on artifact store
                 upsert(
                     UpsertRequest(
                         ticker=ticker,
@@ -260,8 +261,6 @@ def _process_ticker(ticker: str, repo_root: Path, refresh: bool) -> dict[str, ob
                     ),
                     db_path=db_path,
                 )
-            except Exception:  # never fail the SayDo write on artifact store
-                pass
 
     return {
         "ticker": ticker,

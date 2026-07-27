@@ -1,5 +1,6 @@
-import os
+import contextlib
 import json
+import os
 
 # Aliases file lives in project/.tmp alongside other cached state
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -27,10 +28,8 @@ def _load_aliases():
         return _aliases_cache
 
     if not os.path.exists(CACHE_DIR):
-        try:
+        with contextlib.suppress(Exception):
             os.makedirs(CACHE_DIR)
-        except Exception:
-            pass
 
     if not os.path.exists(ALIASES_FILE):
         try:
@@ -42,7 +41,7 @@ def _load_aliases():
             return DEFAULT_ALIASES
 
     try:
-        with open(ALIASES_FILE, "r", encoding="utf-8") as f:
+        with open(ALIASES_FILE, encoding="utf-8") as f:
             _aliases_cache = json.load(f)
     except Exception:
         _aliases_cache = DEFAULT_ALIASES
@@ -67,10 +66,8 @@ def update_aliases(new_dict):
         global _aliases_cache
         _aliases_cache = aliases
         if not os.path.exists(CACHE_DIR):
-            try:
+            with contextlib.suppress(Exception):
                 os.makedirs(CACHE_DIR)
-            except Exception:
-                pass
         try:
             with open(ALIASES_FILE, "w", encoding="utf-8") as f:
                 json.dump(aliases, f, indent=4)

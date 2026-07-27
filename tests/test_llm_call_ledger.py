@@ -22,7 +22,6 @@ from llm_call_ledger import (
     usage_from_json_meta,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -87,7 +86,7 @@ def test_sha256_text_deterministic() -> None:
 
 def test_sha256_text_handles_unicode() -> None:
     # Common in financial docs: U+2212 minus, U+2014 em-dash, etc.
-    assert len(sha256_text("Q1 − 12.3%")) == 64
+    assert len(sha256_text("Q1 \u2212 12.3%")) == 64
 
 
 # ---------------------------------------------------------------------------

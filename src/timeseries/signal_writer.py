@@ -102,7 +102,7 @@ def compute_and_persist_signals(
 ) -> int:
     """Run every primitive over every in-scope metric, persist rows.
 
-    Returns the number of rows written/refreshed (each metric × primitive
+    Returns the number of rows written/refreshed (each metric x primitive
     combination that produced a usable payload counts once). Re-running
     overwrites existing rows in place — the unique constraint on
     (ticker, metric_name, metric_kind, signal_type) enforces "one current
@@ -366,7 +366,7 @@ def _severity_inflection(
     period = payload.get("inflection_period")
     narrative = (
         f"{_pretty(spec.metric_name)}: inflection detected at {period} "
-        f"(magnitude {magnitude:.2f}σ, {quarters_ago}Q ago)."
+        f"(magnitude {magnitude:.2f}\u03c3, {quarters_ago}Q ago)."
     )
     return sev, narrative
 
@@ -396,9 +396,7 @@ def _severity_yoy_acceleration(spec: _MetricSpec, payload: dict[str, object]) ->
     # delta is the canonical "thesis-input" signal. Sustained deceleration
     # without crossing is yellow; everything else green.
     crossed_zero = (most_recent_yoy - most_recent_delta) * most_recent_yoy < 0.0
-    if crossed_zero:
-        sev = "yellow"
-    elif trend == "decelerating" and abs(most_recent_delta) > 0.02:
+    if crossed_zero or (trend == "decelerating" and abs(most_recent_delta) > 0.02):
         sev = "yellow"
     else:
         sev = "green"
