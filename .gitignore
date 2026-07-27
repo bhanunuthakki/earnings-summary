@@ -9,6 +9,7 @@ token.json
 # Python
 __pycache__/
 *.pyc
+*.egg-info/
 .pytest_cache/
 
 # Ephemeral state (caches, temp audio, intermediates)
