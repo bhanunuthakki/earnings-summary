@@ -141,6 +141,38 @@ def test_assemble_book_context_live_wins(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert book.captured_at == "2026-06-13T04:00:00"
 
 
+def test_assemble_book_context_fetches_only_fit_inputs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Fit assembly must not wait on unrelated tracker analytics endpoints."""
+    analytics = _Analytics(
+        available=True,
+        beta=_Beta(sharpe=0.9, rf=0.04, vol_ann=0.18),
+        positioning=_Positioning(by_sector=[_Bucket("Technology", 35.0)], correlations=[object()]),
+    )
+    _patch_book_sources(
+        monkeypatch,
+        weights={"AAA": 1.0},
+        analytics=analytics,
+        snapshot=None,
+    )
+    fetch_kwargs: dict[str, object] = {}
+
+    def _fetch(**kwargs: object) -> _Analytics:
+        fetch_kwargs.update(kwargs)
+        return analytics
+
+    monkeypatch.setattr(
+        "integrations.portfolio_tracker_client.fetch_portfolio_analytics",
+        _fetch,
+        raising=True,
+    )
+
+    cfc.assemble_book_context(tmp_path, db_path=tmp_path / "x.db")
+
+    assert fetch_kwargs["only"] == {"beta", "positioning"}
+
+
 def test_assemble_book_context_offline_falls_back_to_snapshot(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

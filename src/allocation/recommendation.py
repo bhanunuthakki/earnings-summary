@@ -48,7 +48,6 @@ from allocation.candidate_fit import CandidateFit
 from allocation.concentration import TRIM_ASSESSMENT_THRESHOLD_PCT, ZONE_BOUNDS, classify_zone
 from allocation.eligibility import DecisionReadyAssessment, assess_universe
 from allocation.model import NextDollarModel, build_next_dollar_model
-from candidate_fit_cache import read_materialized_candidate_fit
 from integrations.portfolio_tracker_client import fetch_live_portfolio
 from owner_profile.models import HumanCapitalBucket
 from owner_profile.store import list_facts
@@ -467,6 +466,10 @@ def build_frontier(
     cash = max(0.0, float(cash_usd)) if math.isfinite(cash_usd) else 0.0
     degraded: list[str] = []
     source_freshness: dict[str, str] = {}
+    # Lazy to break the package-init cycle:
+    # candidate_fit_cache -> allocation.candidate_fit -> allocation.__init__
+    # -> allocation.recommendation. The cache is only used by this I/O entrypoint.
+    from candidate_fit_cache import read_materialized_candidate_fit
 
     assessments = assess_universe(db_path, repo_root)
     eligible = {t: a for t, a in assessments.items() if a.eligible}
