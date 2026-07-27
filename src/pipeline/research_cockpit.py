@@ -839,24 +839,37 @@ def _tier1_kpi_deltas(
     if not tickers:
         return {}
     marks = ",".join("?" for _ in tickers)
-    as_of_clause = "  AND date(f.period_end) <= ? " if as_of is not None else ""
-    params: tuple[str, ...] = tuple(sorted(tickers))
-    if as_of is not None:
-        params = (*params, as_of.isoformat())
+    ticker_params: tuple[str, ...] = tuple(sorted(tickers))
+    # Pull the small tier-1 slice first, then resolve its self-contained
+    # restatement chains in memory. The former global NOT IN subquery scanned
+    # every kpi_facts row merely to find supersedes_id values. A restatement
+    # keeps the same ticker and kpi_definition_id, so every relevant link is
+    # present in this result. Future rows remain in the slice until after the
+    # superseded-id set is built, preserving the prior query's rule that a
+    # future-dated correction still retires its predecessor.
     rows = _safe_rows(
         conn,
-        "SELECT f.ticker AS ticker, d.id AS def_id, d.name AS name, f.unit AS unit, "
-        "       f.period_end AS period_end, f.value AS value "
+        "SELECT f.id AS fact_id, f.supersedes_id AS supersedes_id, "
+        "       f.ticker AS ticker, d.id AS def_id, d.name AS name, f.unit AS unit, "
+        "       f.period_end AS period_end, date(f.period_end) AS period_date, "
+        "       f.value AS value "
         "FROM kpi_facts f JOIN kpi_definitions d ON d.id = f.kpi_definition_id "
-        "WHERE d.threshold_tier = 'tier_1_break' AND f.ticker IN (" + marks + ") "
-        "  AND f.id NOT IN (SELECT supersedes_id FROM kpi_facts "
-        "                   WHERE supersedes_id IS NOT NULL) "
-        + as_of_clause
+        "WHERE d.threshold_tier = 'tier_1_break' AND f.ticker IN ("
+        + marks
+        + ") "
         + "ORDER BY f.ticker, d.id, f.period_end DESC",
-        params,
+        ticker_params,
     )
+    superseded_ids = {int(r["supersedes_id"]) for r in rows if r["supersedes_id"] is not None}
+    as_of_iso = as_of.isoformat() if as_of is not None else None
     series: dict[tuple[str, int], list[sqlite3.Row]] = {}
     for r in rows:
+        if int(r["fact_id"]) in superseded_ids:
+            continue
+        if as_of_iso is not None:
+            period_date = r["period_date"]
+            if period_date is None or str(period_date) > as_of_iso:
+                continue
         key = (str(r["ticker"]), int(r["def_id"]))
         bucket = series.setdefault(key, [])
         if len(bucket) < 2:

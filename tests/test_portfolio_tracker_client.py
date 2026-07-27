@@ -13,6 +13,8 @@ states.
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -556,6 +558,29 @@ def test_fetch_parses_and_derives(mock_tracker: None) -> None:
     assert [t.ticker for t in live.transactions] == ["NU"]
 
 
+def test_fetch_live_parallelizes_independent_reads(monkeypatch: pytest.MonkeyPatch) -> None:
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.04)
+        try:
+            return _route(url)
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    result = fetch_live_portfolio(api_url="http://tracker.test")
+    assert result.available is True
+    assert max_active >= 2
+
+
 def test_fetch_degrades_when_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
         raise requests.ConnectionError("connection refused")
@@ -896,6 +921,33 @@ def test_fetch_analytics_degrades_when_unreachable(monkeypatch: pytest.MonkeyPat
     # Host-down short-circuits the remaining endpoints: ONE socket attempt.
     assert calls["n"] == 1
     assert a.performance is None and a.beta is None
+
+
+def test_fetch_analytics_parallelizes_independent_sections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def _get(url: str, timeout: float | None = None, params: object = None) -> _FakeResp:
+        nonlocal active, max_active
+        if "/performance" in url:
+            return _route(url)
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.04)
+        try:
+            return _route(url)
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(ptc.requests, "get", _get)
+    result = fetch_portfolio_analytics(api_url="http://tracker.test")
+    assert result.available is True
+    assert max_active >= 2
 
 
 def test_fetch_analytics_partial_failure_isolates_the_failed_endpoint(

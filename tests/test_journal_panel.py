@@ -163,6 +163,29 @@ def test_panel_list_fragment_filters(db_path: Path) -> None:
     assert "NU watch item." in render_journal_list(db_path, kind="bogus", status="weird")
 
 
+def test_journal_batches_link_targets_for_visible_tickers(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pipeline.journal_panel as journal_panel
+
+    create_note(ticker="NU", kind="watch", body="NU watch item.", db_path=db_path)
+    create_note(ticker="MELI", kind="question", body="MELI question.", db_path=db_path)
+    calls: list[set[str]] = []
+
+    def _batch(*, tickers: set[str], **_kwargs: object) -> dict[str, list[object]]:
+        calls.append(tickers)
+        return {}
+
+    monkeypatch.setattr(
+        journal_panel,
+        "linkable_targets_for_tickers",
+        _batch,
+        raising=False,
+    )
+    render_journal_list(db_path)
+    assert calls == [{"MELI", "NU"}]
+
+
 def test_journal_silos_separate_owner_from_advisor(db_path: Path) -> None:
     """S11: machine-authored advisor memos demote into a collapsed synthesis
     silo BELOW the owner's own journal — split by identity, not source table."""

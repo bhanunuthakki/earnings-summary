@@ -15,6 +15,7 @@ import pytest
 from compute._common import insert_financial_facts
 from models.documents import SourceQualityTier
 from models.facts import Currency, FinancialFact, FiscalPeriodType, LegacyEscapeHatch, Unit
+from pipeline import confidence
 from pipeline.confidence import (
     IssueSignal,
     apply_confidence_scores,
@@ -212,6 +213,38 @@ def test_load_unresolved_issues_tolerates_missing_table() -> None:
     conn = sqlite3.connect(":memory:")
     assert load_unresolved_issues(conn) == {}
     conn.close()
+
+
+def test_load_unresolved_issues_ticker_scope_avoids_parsing_other_tickers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ask can load its requested ticker's issue rows without parsing the
+    rest of the validation ledger; the existing unscoped report path remains
+    a complete all-ticker view."""
+    conn = _issue_db(
+        [
+            ("TST", "warn", "plausible_range", "revenue=-5", None),
+            ("OTHER", "warn", "plausible_range", "revenue=-7", None),
+        ]
+    )
+    parsed_raw_values: list[str] = []
+    real_parse = confidence._parse_issue  # pyright: ignore[reportPrivateUsage]
+
+    def _record_parse(rule: str, severity: str, raw_value: str) -> object:
+        parsed_raw_values.append(raw_value)
+        return real_parse(rule, severity, raw_value)
+
+    monkeypatch.setattr(confidence, "_parse_issue", _record_parse)
+
+    scoped = load_unresolved_issues(conn, tickers=[" tst "])
+    assert list(scoped) == ["TST"]
+    assert parsed_raw_values == ["revenue=-5"]
+
+    parsed_raw_values.clear()
+    unscoped = load_unresolved_issues(conn)
+    conn.close()
+    assert set(unscoped) == {"TST", "OTHER"}
+    assert parsed_raw_values == ["revenue=-5", "revenue=-7"]
 
 
 # ----------------------------------------------------------------------------

@@ -58,6 +58,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -261,14 +262,38 @@ def _issue_matches(parsed: _ParsedIssue, *, item: str, period: str, value: float
     return False
 
 
-def load_unresolved_issues(conn: sqlite3.Connection) -> dict[str, list[_ParsedIssue]]:
-    """Unresolved validation_issues parsed and grouped by ticker. ``{}`` when
-    the table is missing (pre-0006 fixture DBs)."""
+def load_unresolved_issues(
+    conn: sqlite3.Connection,
+    *,
+    tickers: Iterable[str] | None = None,
+) -> IssuesByTicker:
+    """Parsed unresolved validation issues, optionally limited to ``tickers``.
+
+    An omitted scope preserves the all-ticker view used by reports and full
+    confidence backfills. Ask passes its evidence ticker set so the retrieval
+    path does not parse unrelated rows from the validation ledger. ``{}`` is
+    returned when the table is missing or an explicit scope is empty.
+    """
+    scope: dict[str, None] = {}
+    if tickers is not None:
+        for ticker in tickers:
+            normalized = ticker.strip().upper()
+            if normalized:
+                scope.setdefault(normalized, None)
+        if not scope:
+            return {}
+
+    sql = (
+        "SELECT ticker, rule, severity, raw_value FROM validation_issues "
+        "WHERE resolved_at IS NULL AND raw_value IS NOT NULL AND ticker IS NOT NULL"
+    )
+    params: tuple[str, ...] = ()
+    if scope:
+        placeholders = ", ".join("?" for _ in scope)
+        sql += f" AND ticker IN ({placeholders})"
+        params = tuple(scope)
     try:
-        rows = conn.execute(
-            "SELECT ticker, rule, severity, raw_value FROM validation_issues "
-            "WHERE resolved_at IS NULL AND raw_value IS NOT NULL AND ticker IS NOT NULL"
-        ).fetchall()
+        rows = conn.execute(sql, params).fetchall()
     except sqlite3.Error:
         return {}
     out: dict[str, list[_ParsedIssue]] = {}
@@ -466,7 +491,7 @@ def apply_confidence_scores(
     if ticker is not None:
         sql += " WHERE ff.ticker = ?" if table == "financial_facts" else " WHERE kf.ticker = ?"
         params = (ticker.upper(),)
-    issues = load_unresolved_issues(conn)
+    issues = load_unresolved_issues(conn, tickers=(ticker,) if ticker is not None else None)
 
     examined = 0
     preserved = 0

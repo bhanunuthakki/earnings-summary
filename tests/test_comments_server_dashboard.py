@@ -135,11 +135,16 @@ def test_dashboard_page_returns_shell(client):
     # Overview is inlined → the seeded tickers appear on first paint, as
     # cockpit rows (this minimal schema lacks the enrichment tables — the
     # cockpit degrades to base fields rather than 500-ing).
-    assert "cockpit-section" in body
-    assert "NU" in body
-    assert "MELI" in body
+    assert 'hx-get="/api/panel/overview"' in body
+    assert 'hx-trigger="load"' in body
+    overview = client.get("/api/panel/overview")
+    assert overview.status_code == 200
+    overview_body = overview.get_data(as_text=True)
+    assert "cockpit-section" in overview_body
+    assert "NU" in overview_body
+    assert "MELI" in overview_body
     # The seeded thesis verdict renders as a kit status pill (.k-pill).
-    assert "k-pill" in body
+    assert "k-pill" in overview_body
 
 
 def test_dashboard_overview_excludes_action_blocks(client):

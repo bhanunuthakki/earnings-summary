@@ -42,6 +42,7 @@ import queue
 import re
 import sys
 import threading
+import time
 import urllib.parse
 from collections import deque
 from collections.abc import Iterator
@@ -56,7 +57,7 @@ sys.path.insert(0, str(SRC_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))  # import sibling execution/ modules (refresh_dispatch)
 
 try:
-    from flask import Flask, Response, abort, redirect, request, send_file, stream_with_context
+    from flask import Flask, Response, abort, g, redirect, request, send_file, stream_with_context
 except ImportError:  # pragma: no cover - install hint
     print(
         "Flask not installed. Install with: pip install flask",
@@ -405,6 +406,14 @@ def create_app(
     report_capability = ReportCapabilityStore(repo_root)
     report_capability.load_or_create()
     app.config["DISPATCH_REGISTRY"] = job_registry
+    # Panel fragments are expensive database/calculation reads but are treated
+    # as fresh by the shell for 30 seconds. Keep the exact rendered response for
+    # that same window so HTTP revalidation can stop *before* the route builder,
+    # rather than paying the full build merely to discover the ETag is unchanged.
+    panel_cache: dict[str, tuple[float, bytes, str, str]] = {}
+    panel_cache_lock = threading.Lock()
+    panel_cache_ttl_seconds = 30.0
+    panel_cache_max_entries = 256
     # Dedicated pool so a long-running LLM subprocess doesn't pin a Flask
     # request thread for the full 10-60s of a chat turn. Pool size caps
     # the number of concurrent chats; chunks flow back via per-request
@@ -533,6 +542,16 @@ def create_app(
         else:
             new_correlation_id()
 
+    @app.before_request
+    def start_request_timer() -> None:
+        g.request_started_ns = time.perf_counter_ns()
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            # A successful mutation can affect several panels. Clear before it
+            # runs so the next read cannot reuse a pre-mutation fragment; a
+            # rejected mutation merely causes a harmless extra rebuild.
+            with panel_cache_lock:
+                panel_cache.clear()
+
     @app.errorhandler(413)
     def request_too_large(_error: object):
         return _client_error("request body is too large", 413)
@@ -577,6 +596,30 @@ def create_app(
         if origin and _cors_allow_origin(origin, repo_root=repo_root) is None:
             return ({"error": "cross-origin state-changing request refused"}, 403)
         return None
+
+    @app.before_request
+    def serve_fresh_panel_cache() -> Response | None:
+        if request.method != "GET" or not request.path.startswith("/api/panel/"):
+            return None
+        cache_key = request.full_path.removesuffix("?")
+        now = time.monotonic()
+        with panel_cache_lock:
+            cached = panel_cache.get(cache_key)
+            if cached is not None and now - cached[0] > panel_cache_ttl_seconds:
+                panel_cache.pop(cache_key, None)
+                cached = None
+        if cached is None:
+            return None
+        _, body, content_type, etag = cached
+        g.panel_cache_hit = True
+        if request.if_none_match.contains(etag.strip('"')):
+            response = Response(status=304)
+        else:
+            response = Response(body, content_type=content_type)
+        response.headers["ETag"] = etag
+        response.headers["Cache-Control"] = "no-cache"
+        response.headers["X-Panel-Cache"] = "hit"
+        return response
 
     @app.after_request
     def add_cors_headers(response):
@@ -627,9 +670,46 @@ def create_app(
         ):
             response.add_etag()
             response.headers["Cache-Control"] = "no-cache"
+            if not getattr(g, "panel_cache_hit", False):
+                cache_key = request.full_path.removesuffix("?")
+                with panel_cache_lock:
+                    if len(panel_cache) >= panel_cache_max_entries:
+                        oldest_key = min(panel_cache, key=lambda key: panel_cache[key][0])
+                        panel_cache.pop(oldest_key, None)
+                    panel_cache[cache_key] = (
+                        time.monotonic(),
+                        response.get_data(),
+                        response.content_type,
+                        response.headers["ETag"],
+                    )
             # make_conditional mutates + returns self; the cast restores the
             # Flask subclass the werkzeug stub erases.
             return cast("Response", response.make_conditional(request))
+        return response
+
+    @app.after_request
+    def add_server_timing(response: Response) -> Response:
+        started_ns = getattr(g, "request_started_ns", None)
+        if isinstance(started_ns, int):
+            duration_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
+            response.headers["Server-Timing"] = f"app;dur={duration_ms:.1f}"
+            if duration_ms >= 500:
+                app.logger.info(
+                    json.dumps(
+                        {
+                            "event": "slow_http_request",
+                            "method": request.method,
+                            "path": request.path,
+                            "status": response.status_code,
+                            "duration_ms": round(duration_ms, 1),
+                            "panel_cache": (
+                                "hit" if getattr(g, "panel_cache_hit", False) else "miss"
+                            ),
+                            "correlation_id": get_correlation_id(),
+                        },
+                        separators=(",", ":"),
+                    )
+                )
         return response
 
     @app.route("/healthz", methods=["GET"])
@@ -1227,6 +1307,16 @@ def create_app(
         first paint; every other tab lazy-loads from ``GET /api/panel/<name>``
         on first activation. The standalone ``/analytical`` and ``/ticker/<t>``
         pages remain as deep-link targets."""
+        if request.path == "/":
+            overview = (
+                '<div id="cc-overview-deferred" class="cc-loading" '
+                'hx-get="/api/panel/overview" hx-trigger="load" hx-swap="outerHTML">'
+                '<span class="muted">Loading Today...</span></div>'
+            )
+            return Response(
+                render_shell(overview_html=overview, repo_root=repo_root),
+                mimetype="text/html",
+            )
         conn = _open_db()
         try:
             rows = build_cockpit_rows(conn, repo_root)
@@ -1285,9 +1375,7 @@ def create_app(
             upcoming_html=upcoming_html,
             open_loops_html=open_loops_html,
         )
-        return Response(
-            render_shell(overview_html=overview, repo_root=repo_root), mimetype="text/html"
-        )
+        return Response(overview, mimetype="text/html")
 
     @app.route("/api/dashboard", methods=["GET"])
     def dashboard_api():
@@ -1400,6 +1488,11 @@ def create_app(
         command-center shell — builds only that panel's section. ``?ticker=``
         scopes the dropdown-driven panels (prereads, insiders) to one name.
         404 for an unknown panel."""
+        if name == "overview":
+            # The document shell paints immediately; Today assembles as a
+            # cacheable fragment instead of blocking the initial HTML TTFB.
+            return dashboard_page()
+
         if name == "portfolio":
             # Portfolio → Performance: tracker analytics + live positions /
             # % of book / taxable breakdown from the companion tracker, plus
@@ -1578,6 +1671,23 @@ def create_app(
             user_id = DEFAULT_USER_ID
             return Response(
                 render_provenance_panel(db_path, repo_root, user_id=user_id),
+                mimetype="text/html",
+            )
+
+        if name == "overrides":
+            # Provenance's authoritative company-document figures. Served
+            # standalone so the consolidated console can reveal it lazily.
+            from pipeline.fact_overrides_panel import render_fact_overrides_panel
+
+            return Response(render_fact_overrides_panel(db_path), mimetype="text/html")
+
+        if name == "credibility":
+            # Confidence-prior calibration against disagreement/restatement
+            # ground truth; deferred by the consolidated Provenance shell.
+            from pipeline.credibility_panel import render_credibility_panel
+
+            return Response(
+                render_credibility_panel(db_path, user_id=DEFAULT_USER_ID),
                 mimetype="text/html",
             )
 

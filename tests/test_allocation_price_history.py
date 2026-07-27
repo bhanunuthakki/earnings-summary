@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterator
 from datetime import date, timedelta
 from pathlib import Path
+
+import pytest
 
 from allocation.price_history import (
     build_aligned_returns,
@@ -65,13 +68,59 @@ def test_load_skips_unparseable_and_nonpositive_rows(tmp_path: Path) -> None:
     assert load_daily_closes("JNK", tmp_path) == [(date(2024, 1, 2), 10.0)]
 
 
-def test_load_falls_back_to_glob_for_legacy_suffixes(tmp_path: Path) -> None:
+def test_load_falls_back_for_legacy_suffixes(tmp_path: Path) -> None:
     fmp = tmp_path / "data" / "historical" / "fmp"
     fmp.mkdir(parents=True)
     (fmp / "LEG_price_chart_5y.json").write_text(
         json.dumps([{"date": "2024-01-02", "adjClose": 7.0}]), encoding="utf-8"
     )
     assert load_daily_closes("LEG", tmp_path) == [(date(2024, 1, 2), 7.0)]
+
+
+def test_repeated_legacy_loads_use_cached_directory_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Legacy lookup must not glob the large FMP directory per ticker load."""
+    fmp = tmp_path / "data" / "historical" / "fmp"
+    fmp.mkdir(parents=True)
+    (fmp / "LEG_price_chart_5y.json").write_text(
+        json.dumps([{"date": "2024-01-02", "adjClose": 7.0}]), encoding="utf-8"
+    )
+    glob_calls: list[tuple[Path, str]] = []
+    iterdir_calls: list[Path] = []
+    original_glob = Path.glob
+    original_iterdir = Path.iterdir
+
+    def counting_glob(path: Path, pattern: str) -> object:
+        if path == fmp:
+            glob_calls.append((path, pattern))
+        return original_glob(path, pattern)
+
+    def counting_iterdir(path: Path) -> Iterator[Path]:
+        if path == fmp:
+            iterdir_calls.append(path)
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "glob", counting_glob)
+    monkeypatch.setattr(Path, "iterdir", counting_iterdir)
+
+    assert load_daily_closes("LEG", tmp_path) == [(date(2024, 1, 2), 7.0)]
+    assert load_daily_closes("LEG", tmp_path) == [(date(2024, 1, 2), 7.0)]
+    assert glob_calls == []
+    assert iterdir_calls == [fmp]
+
+
+def test_legacy_manifest_invalidates_when_fmp_directory_changes(tmp_path: Path) -> None:
+    """A newly written legacy chart must become visible without a process restart."""
+    fmp = tmp_path / "data" / "historical" / "fmp"
+    fmp.mkdir(parents=True)
+
+    assert load_daily_closes("NEW", tmp_path) == []
+    (fmp / "NEW_price_chart_5y.json").write_text(
+        json.dumps([{"date": "2024-01-02", "adjClose": 9.0}]), encoding="utf-8"
+    )
+
+    assert load_daily_closes("NEW", tmp_path) == [(date(2024, 1, 2), 9.0)]
 
 
 def test_load_missing_or_garbage_file_returns_empty(tmp_path: Path) -> None:

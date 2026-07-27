@@ -21,12 +21,48 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from functools import lru_cache
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
 import numpy.typing as npt
+
+
+def _fmp_directory_state(fmp_dir: Path) -> tuple[int, int]:
+    """Return metadata that changes when a legacy chart is added or removed."""
+    metadata = fmp_dir.stat()
+    return metadata.st_mtime_ns, metadata.st_ctime_ns
+
+
+@lru_cache(maxsize=32)
+def _legacy_chart_manifest(
+    fmp_dir: Path, directory_state: tuple[int, int]
+) -> dict[str, tuple[Path, ...]]:
+    """Index legacy FMP names once for an observed directory state.
+
+    A legacy filename has no stable endpoint contract, so it cannot be resolved
+    directly. One bounded manifest amortizes a directory scan across a panel
+    render, while the directory state in the cache key exposes newly written
+    charts to the next request.
+    """
+    del directory_state  # Deliberately a cache-key input, not payload data.
+    by_ticker: dict[str, list[Path]] = {}
+    try:
+        for path in fmp_dir.iterdir():
+            name = path.name
+            if not name.endswith(".json") or "_price_chart" not in name:
+                continue
+            ticker, _separator, _suffix = name.partition("_price_chart")
+            if ticker:
+                by_ticker.setdefault(ticker, []).append(path)
+    except OSError:
+        return {}
+    return {
+        ticker: tuple(sorted(paths, key=lambda path: path.name))
+        for ticker, paths in by_ticker.items()
+    }
 
 
 def load_daily_closes(ticker: str, repo_root: Path) -> list[tuple[date, float]]:
@@ -59,8 +95,13 @@ def load_daily_closes(ticker: str, repo_root: Path) -> list[tuple[date, float]]:
         if p.exists()
     ]
     if not candidates:
-        candidates = list(fmp_dir.glob(f"{upper}_*price_chart*.json"))
-        candidates.extend(fmp_dir.glob(f"{upper}L_*price_chart*.json"))
+        try:
+            manifest = _legacy_chart_manifest(fmp_dir, _fmp_directory_state(fmp_dir))
+        except OSError:
+            return _load_proxy_store_closes(repo_root, upper)
+        # Preserve established symbol precedence (GOOG before GOOGL) while
+        # making each legacy symbol's filename choice deterministic.
+        candidates = [*manifest.get(upper, ()), *manifest.get(f"{upper}L", ())]
     for path in candidates:
         try:
             data: object = json.loads(path.read_text(encoding="utf-8"))

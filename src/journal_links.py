@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -165,25 +166,63 @@ def linkable_targets(
     """Recent decisions + lifecycle stints for one name — the journal panel's
     link dropdown. Decisions first (newest-first), then stints (open first).
     Empty on a missing DB / pre-link schema."""
+    normalized = ticker.upper()
+    return linkable_targets_for_tickers(
+        tickers=(normalized,),
+        db_path=db_path,
+        user_id=user_id,
+        decisions_limit=decisions_limit,
+        positions_limit=positions_limit,
+    ).get(normalized, [])
+
+
+def linkable_targets_for_tickers(
+    *,
+    tickers: Iterable[str],
+    db_path: Path | str | None,
+    user_id: str = DEFAULT_USER_ID,
+    decisions_limit: int = 8,
+    positions_limit: int = 5,
+) -> dict[str, list[LinkTarget]]:
+    """Batch the Journal dropdown targets for every visible ticker.
+
+    One connection and at most two ``IN`` queries replace the prior
+    two-queries-per-card render path. Per-ticker limits and ordering remain the
+    same as :func:`linkable_targets`.
+    """
+    normalized = sorted({ticker.upper() for ticker in tickers if ticker.strip()})
+    if not normalized:
+        return {}
     conn = _open_ro(db_path)
     if conn is None:
-        return []
+        return {}
     try:
-        t = ticker.upper()
-        targets: list[LinkTarget] = []
+        targets: dict[str, list[LinkTarget]] = {ticker: [] for ticker in normalized}
+        marks = ",".join("?" for _ in normalized)
+        decision_counts: dict[str, int] = {}
         for row in _safe_rows(
             conn,
-            "SELECT * FROM decisions WHERE ticker = ? ORDER BY made_at DESC, id DESC LIMIT ?",
-            (t, decisions_limit),
+            f"SELECT * FROM decisions WHERE ticker IN ({marks}) "
+            "ORDER BY ticker, made_at DESC, id DESC",
+            tuple(normalized),
         ):
-            targets.append(_decision_target(row))
+            ticker = str(row["ticker"]).upper()
+            count = decision_counts.get(ticker, 0)
+            if count < decisions_limit:
+                targets[ticker].append(_decision_target(row))
+                decision_counts[ticker] = count + 1
+        position_counts: dict[str, int] = {}
         for row in _safe_rows(
             conn,
-            "SELECT * FROM position_entries WHERE user_id = ? AND ticker = ? "
-            "ORDER BY (exit_date IS NULL) DESC, COALESCE(exit_date, '') DESC, id DESC LIMIT ?",
-            (user_id, t, positions_limit),
+            f"SELECT * FROM position_entries WHERE user_id = ? AND ticker IN ({marks}) "
+            "ORDER BY ticker, (exit_date IS NULL) DESC, COALESCE(exit_date, '') DESC, id DESC",
+            (user_id, *normalized),
         ):
-            targets.append(_position_target(row))
+            ticker = str(row["ticker"]).upper()
+            count = position_counts.get(ticker, 0)
+            if count < positions_limit:
+                targets[ticker].append(_position_target(row))
+                position_counts[ticker] = count + 1
         return targets
     finally:
         conn.close()

@@ -41,7 +41,7 @@ from journal_links import (
     TARGET_POSITION,
     LinkTarget,
     ReconciliationItem,
-    linkable_targets,
+    linkable_targets_for_tickers,
     pending_reconciliation,
     targets_for_notes,
 )
@@ -320,18 +320,16 @@ def render_journal_list(
     targets = targets_for_notes(owner, db_path=db_path)
     # Link dropdowns: one targets fetch per distinct ticker among the OPEN
     # unlinked owner notes (the only cards that render the control).
-    options_by_ticker: dict[str, list[LinkTarget]] = {}
-    for n in owner:
-        if (
-            n.status == "open"
-            and n.ticker
-            and n.decision_id is None
-            and n.position_entry_id is None
-            and n.ticker not in options_by_ticker
-        ):
-            options_by_ticker[n.ticker] = linkable_targets(
-                ticker=n.ticker, db_path=db_path, user_id=user_id
-            )
+    linkable_tickers = {
+        n.ticker
+        for n in owner
+        if n.status == "open" and n.ticker and n.decision_id is None and n.position_entry_id is None
+    }
+    options_by_ticker = linkable_targets_for_tickers(
+        tickers=linkable_tickers,
+        db_path=db_path,
+        user_id=user_id,
+    )
     owner_html = (
         "".join(
             _note_card(n, targets=targets, link_options=options_by_ticker.get(n.ticker or "", []))

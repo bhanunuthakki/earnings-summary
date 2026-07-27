@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date
 from html import escape
@@ -207,13 +208,19 @@ def render_portfolio_panel(
     # painted. Down → skip the fetchers entirely and render the banner now.
     alive, base = probe_tracker(api_url)
     if alive:
-        analytics = fetch_portfolio_analytics(
-            api_url=api_url,
-            start_date=window.start_date,
-            end_date=window.end_date,
-            include_backfill=window.include_backfill,
-        )
-        live = fetch_live_portfolio(api_url=api_url)
+        # Analytics and live-book reads are independent tracker snapshots. They
+        # previously formed a serial waterfall after the liveness probe.
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="portfolio-panel") as pool:
+            analytics_future = pool.submit(
+                fetch_portfolio_analytics,
+                api_url=api_url,
+                start_date=window.start_date,
+                end_date=window.end_date,
+                include_backfill=window.include_backfill,
+            )
+            live_future = pool.submit(fetch_live_portfolio, api_url=api_url)
+            analytics = analytics_future.result()
+            live = live_future.result()
     else:
         analytics = PortfolioAnalytics(
             available=False, api_url=base, errors={"performance": _PROBE_DOWN_ERROR}

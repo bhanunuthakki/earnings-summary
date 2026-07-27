@@ -53,6 +53,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import TypeVar, cast
@@ -246,13 +247,23 @@ def fetch_live_portfolio(
             base, timeout=timeout, transactions_limit=transactions_limit
         )
     try:
-        holdings = _get(base, "/api/portfolio/holdings", timeout=timeout)
-        items = _get(base, "/api/plaid/items", timeout=timeout)
-        # limit is coerced to int, so inlining it into the path is injection-safe
-        # (and sidesteps the requests `params` typing).
-        txns = _get(
-            base, f"/api/portfolio/transactions?limit={int(transactions_limit)}", timeout=timeout
-        )
+        # These endpoints are independent snapshots from one tracker process.
+        # Fetch them together so a slow endpoint does not serialize the other
+        # two into the Portfolio panel's critical path.
+        with ThreadPoolExecutor(max_workers=3, thread_name_prefix="portfolio-live") as pool:
+            holdings_future = pool.submit(_get, base, "/api/portfolio/holdings", timeout=timeout)
+            items_future = pool.submit(_get, base, "/api/plaid/items", timeout=timeout)
+            # limit is coerced to int, so inlining it into the path is
+            # injection-safe (and sidesteps requests ``params`` typing).
+            transactions_future = pool.submit(
+                _get,
+                base,
+                f"/api/portfolio/transactions?limit={int(transactions_limit)}",
+                timeout=timeout,
+            )
+            holdings = holdings_future.result()
+            items = items_future.result()
+            txns = transactions_future.result()
     except requests.RequestException as exc:
         return LivePortfolio(available=False, api_url=base, error=f"{type(exc).__name__}: {exc}")
     except ValueError as exc:  # JSON decode / unexpected shape
@@ -871,28 +882,57 @@ def fetch_portfolio_analytics(
             out.errors[key] = f"bad response: {exc}"
         return None
 
-    if want("performance"):
-        out.performance = load(
-            "performance", f"/api/portfolio/performance{q(perf_params)}", _parse_performance
-        )
-    if want("position_alpha"):
-        out.position_alpha = load(
-            "position_alpha", f"/api/portfolio/position-alpha{q(window)}", _parse_position_alpha
-        )
-    if want("positioning"):
-        out.positioning = load(
-            "positioning", f"/api/portfolio/positioning{q(window)}", _parse_positioning
-        )
-    if want("policy"):
-        out.policy = load("policy", "/api/policy", _parse_policy)
-    if want("beta"):
-        out.beta = load("beta", f"/api/portfolio/beta{q(window)}", _parse_beta)
-    if want("drawdown"):
-        out.drawdown = load("drawdown", f"/api/portfolio/drawdown{q(window)}", _parse_drawdown)
-    if want("exit_quality"):
-        out.exit_quality = load(
-            "exit_quality", f"/api/portfolio/exit-quality{q(window)}", _parse_exit_quality
-        )
+    loads: list[tuple[str, str, Callable[[dict[str, object]], object], str]] = [
+        (
+            "performance",
+            f"/api/portfolio/performance{q(perf_params)}",
+            _parse_performance,
+            "performance",
+        ),
+        (
+            "position_alpha",
+            f"/api/portfolio/position-alpha{q(window)}",
+            _parse_position_alpha,
+            "position_alpha",
+        ),
+        (
+            "positioning",
+            f"/api/portfolio/positioning{q(window)}",
+            _parse_positioning,
+            "positioning",
+        ),
+        ("policy", "/api/policy", _parse_policy, "policy"),
+        ("beta", f"/api/portfolio/beta{q(window)}", _parse_beta, "beta"),
+        ("drawdown", f"/api/portfolio/drawdown{q(window)}", _parse_drawdown, "drawdown"),
+        (
+            "exit_quality",
+            f"/api/portfolio/exit-quality{q(window)}",
+            _parse_exit_quality,
+            "exit_quality",
+        ),
+    ]
+    selected = [spec for spec in loads if want(spec[0])]
+    if selected:
+        # Keep one synchronous canary so the established host-down behavior is
+        # still one socket attempt. Once the tracker answers, the independent
+        # remaining sections can safely overlap.
+        first_key, first_path, first_parse, first_attr = selected[0]
+        setattr(out, first_attr, load(first_key, first_path, first_parse))
+        remaining = selected[1:]
+        if conn_down is not None:
+            for key, path, parse, attr in remaining:
+                setattr(out, attr, load(key, path, parse))
+        elif remaining:
+            with ThreadPoolExecutor(
+                max_workers=min(4, len(remaining)),
+                thread_name_prefix="portfolio-analytics",
+            ) as pool:
+                futures = [
+                    (attr, pool.submit(load, key, path, parse))
+                    for key, path, parse, attr in remaining
+                ]
+                for attr, future in futures:
+                    setattr(out, attr, future.result())
     out.available = any(
         section is not None
         for section in (

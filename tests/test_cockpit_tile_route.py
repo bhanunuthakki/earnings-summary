@@ -27,11 +27,12 @@ def test_overview_wraps_cockpit_in_htmx_poller() -> None:
     assert 'hx-trigger="every 90s"' in ov
 
 
-def test_shell_head_loads_htmx_and_alpine() -> None:
+def test_shell_loads_htmx_after_the_body_and_defers_alpine_boot() -> None:
     html = render_shell(overview_html="<div>ov</div>")
-    # HTMX is inlined in the head, before the body.
+    # HTMX stays self-contained, but body-end loading avoids blocking first paint.
     assert "var htmx=function" in html
-    assert html.index("var htmx=function") < html.index("</head>")
+    assert html.index("var htmx=function") > html.index("</main>")
+    assert '<script type="module">' in html.split("</head>", 1)[0]
     # Alpine (the living-grid runtime) still loads too — they coexist.
     assert "window.livingGrid" in html
     # The fragment-injector processes HTMX on shell-injected content.

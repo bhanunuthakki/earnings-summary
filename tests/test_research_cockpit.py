@@ -370,6 +370,52 @@ def test_build_tier1_kpi_deltas(rows: dict[str, list[CockpitRow]]) -> None:
     assert roe.tone == "neutral"  # no rule references ROE
 
 
+def test_tier1_kpi_query_does_not_scan_unrelated_fact_history(
+    conn: sqlite3.Connection,
+) -> None:
+    """A portfolio render must not scan every other ticker's KPI history.
+
+    ``supersedes_id`` is a same-ticker restatement link.  The cockpit only
+    needs supersession rows for the requested portfolio tickers; a global
+    anti-join made its cost grow with the full 255k-row production ledger.
+    SQLite's progress handler gives this regression a deterministic VM-work
+    budget without depending on wall-clock timing.
+    """
+    conn.execute(
+        "INSERT INTO kpi_definitions "
+        "(ticker, name, unit, primary_source, threshold_tier) "
+        "VALUES ('ZZZ', 'Unrelated history', 'count', 'ir_pdf', 'tier_2_monitor')"
+    )
+    definition_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    source_doc_id = int(conn.execute("SELECT id FROM documents LIMIT 1").fetchone()[0])
+    base = datetime(2000, 1, 1)
+    conn.executemany(
+        "INSERT INTO kpi_facts "
+        "(ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, source_doc_id) "
+        "VALUES ('ZZZ', ?, 'Q1', ?, 1, 'count', ?)",
+        (
+            ((base + timedelta(seconds=i)).isoformat(), definition_id, source_doc_id)
+            for i in range(5_000)
+        ),
+    )
+
+    progress_callbacks = 0
+
+    def count_progress() -> int:
+        nonlocal progress_callbacks
+        progress_callbacks += 1
+        return 0
+
+    conn.set_progress_handler(count_progress, 100)
+    try:
+        deltas = _tier1_kpi_deltas(conn, {"NU"}, as_of=NOW.date())
+    finally:
+        conn.set_progress_handler(None, 0)
+
+    assert "NU" in deltas
+    assert progress_callbacks < 50
+
+
 def test_build_kpi_deltas_only_for_portfolio(rows: dict[str, list[CockpitRow]]) -> None:
     assert _by_ticker(rows["evaluation"])["V"].kpi_deltas == []
 
