@@ -259,12 +259,19 @@ def build_public_opener() -> urllib.request.OpenerDirector:
 
 
 def _build_browser_public_opener() -> urllib.request.OpenerDirector:
-    """Pinned, proxy-free opener that leaves redirect progression to Chromium."""
+    """Pinned, proxy-free opener that resolves guarded redirects before Chromium.
+
+    Chromium's ambient resolver is deliberately disabled. Returning a 3xx to it
+    would make the browser attempt the next hop itself and fail closed with
+    ``ERR_NAME_NOT_RESOLVED`` before our route proxy can fulfil that request.
+    Following redirects here keeps every hop inside the same public-IP guard and
+    returns the final response body to Chromium without enabling ambient DNS.
+    """
     return urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
         PinnedPublicHTTPHandler(),
         PinnedPublicHTTPSHandler(),
-        NoRedirectHandler(),
+        GuardedHTTPRedirectHandler(),
     )
 
 

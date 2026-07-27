@@ -130,8 +130,10 @@ def test_cors_service_config_allows_only_exact_private_origin(
 ) -> None:
     monkeypatch.setenv("COMMENTS_SERVER_ALLOW_TAILSCALE", "1")
     monkeypatch.delenv("COMMENTS_SERVER_CORS_WHITELIST", raising=False)
+    monkeypatch.delenv("EARNINGS_SUMMARY_PRIVATE_BASE_URL", raising=False)
     secret_dir = app_repo / "data" / "secrets"
     secret_dir.mkdir()
+    monkeypatch.setenv("EARNINGS_SUMMARY_SECRETS_DIR", str(secret_dir))
     (secret_dir / "private_mobile_base_url").write_text(
         "https://desktop.example.ts.net\n",
         encoding="utf-8",

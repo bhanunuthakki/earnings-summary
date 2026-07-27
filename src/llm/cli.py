@@ -48,15 +48,19 @@ refactor — zero behavior change).
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import random
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from llm.capture import capture_exchange
 from llm.ledger import record_llm_call
@@ -79,6 +83,9 @@ _RETRY_BASE_SECONDS = float(os.environ.get("LLM_RETRY_BASE_S", "3"))
 OPENROUTER_FALLBACK_PURPOSES: frozenset[str] = frozenset()
 
 log = logging.getLogger(__name__)
+
+_STREAM_TIMEOUT_SECONDS = 120.0
+_PROCESS_TERMINATE_GRACE_SECONDS = 2.0
 
 # A cwd with no project `.mcp.json`. The nested `claude -p` subprocess otherwise
 # tries to boot every server in the project's `.mcp.json` on startup and hangs
@@ -1703,6 +1710,358 @@ def call_llm(
             f"(codex={type(primary_codex_error).__name__}, "
             f"claude={type(claude_error).__name__})"
         ) from claude_error
+
+
+def _kill_windows_process_tree(proc: subprocess.Popen[str]) -> bool:
+    """Ask Windows to terminate ``proc`` and every descendant process.
+
+    Claude CLI is a Node wrapper that can leave its child process alive when
+    only ``Popen.terminate()`` is called. ``taskkill`` is invoked with an
+    integer PID argument (never a shell command), so no untrusted text reaches
+    command parsing. Return False when the tree kill could not be attempted or
+    did not succeed; the caller then uses the bounded single-process fallback.
+    """
+    pid = getattr(proc, "pid", None)
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        result = subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=_PROCESS_TERMINATE_GRACE_SECONDS,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        from log_redact import redact
+
+        log.warning(
+            {
+                "event": "llm_stream_tree_terminate_failed",
+                "error": redact(f"{type(exc).__name__}: {exc}")[:200],
+            }
+        )
+        return False
+    return result.returncode == 0
+
+
+def _terminate_stream_process(proc: subprocess.Popen[str]) -> None:
+    """Bounded, idempotent shutdown of a streaming transport and its children."""
+    if proc.poll() is not None:
+        return
+
+    tree_killed = os.name == "nt" and _kill_windows_process_tree(proc)
+    if not tree_killed:
+        try:
+            proc.terminate()
+        except OSError as exc:
+            if proc.poll() is not None:
+                return
+            from log_redact import redact
+
+            log.warning(
+                {
+                    "event": "llm_stream_terminate_failed",
+                    "error": redact(f"{type(exc).__name__}: {exc}")[:200],
+                }
+            )
+            try:
+                proc.kill()
+            except OSError as kill_exc:
+                log.error(
+                    {
+                        "event": "llm_stream_kill_failed",
+                        "error": redact(f"{type(kill_exc).__name__}: {kill_exc}")[:200],
+                    }
+                )
+                return
+    try:
+        proc.wait(timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            log.error({"event": "llm_stream_process_reap_failed"})
+
+
+def _record_stream_call(
+    purpose: str,
+    model: str,
+    prompt: str,
+    response: str,
+    started_at: datetime,
+    *,
+    error: str | None = None,
+    meta: dict[str, object] | None = None,
+    outcome: str | None = None,
+    failure_class: str | None = None,
+) -> None:
+    """Write the central ledger row for one Claude subscription stream."""
+    from llm_call_ledger import sha256_text
+
+    record_llm_call(
+        started_at=started_at,
+        elapsed_ms=int((datetime.now(UTC) - started_at).total_seconds() * 1000),
+        model=model,
+        prompt_sha=sha256_text(prompt),
+        prompt_chars=len(prompt),
+        purpose=purpose,
+        ticker=None,
+        scope="ask",
+        run_id=None,
+        response_text=response or None,
+        meta=meta,
+        error=error,
+        prompt=prompt,
+        provider="anthropic",
+        transport="subscription_cli",
+        auth_class="subscription",
+        attempts=1,
+        retries=0,
+        outcome=outcome,
+        failure_class=failure_class,
+    )
+
+
+def _buffered_stream_answer(
+    prompt: str, *, purpose: str, backend: str | None = None
+) -> Iterator[dict[str, object]]:
+    """Expose a governed single-shot backend as one delta plus one final event."""
+    try:
+        answer = call_llm(prompt, purpose=purpose, scope="ask", backend=backend).strip()
+    except Exception as exc:
+        from log_redact import redact
+
+        log.warning(
+            {
+                "event": "llm_buffered_stream_failed",
+                "purpose": purpose,
+                "error": redact(f"{type(exc).__name__}: {exc}")[:200],
+            }
+        )
+        yield {"type": "error", "error": "answer failed; retry the request"}
+        return
+    if not answer:
+        yield {"type": "error", "error": "answer failed; retry the request"}
+        return
+    yield {"type": "delta", "text": answer}
+    yield {"type": "final", "text": answer}
+
+
+def stream_llm(
+    prompt: str,
+    *,
+    purpose: str,
+    scope: str = "ask",
+    allowed_tools: tuple[str, ...] = ("Read",),
+    timeout_seconds: float | None = None,
+) -> Iterator[dict[str, object]]:
+    """Canonical governed streaming LLM entry point.
+
+    Model selection, budget enforcement, subprocess isolation, telemetry, and
+    cancellation all live beside ``call_llm``. Claude-family purposes retain
+    true incremental output. Backends without a streaming subscription
+    transport use the canonical buffered path and still present the same event
+    contract to clients.
+    """
+    from llm.model_ladder import CLAUDE as _CLAUDE_FAMILY
+    from llm.model_ladder import family_of
+    from log_redact import redact
+
+    if scope != "ask":
+        raise ValueError("stream_llm currently supports only the governed 'ask' scope")
+
+    model = _model_for(purpose)
+    try:
+        _enforce_budget_pre_call(purpose, force_budget_bypass=False)
+    except LLMBudgetExceeded:
+        yield {
+            "type": "error",
+            "error": "Ask monthly budget reached — raise the cap or wait for the reset.",
+        }
+        return
+
+    if family_of(model) != _CLAUDE_FAMILY:
+        yield from _buffered_stream_answer(prompt, purpose=purpose)
+        return
+
+    claude_bin = shutil.which("claude")
+    if claude_bin is None:
+        yield {"type": "error", "error": "answer transport is not configured"}
+        return
+
+    cmd = [
+        claude_bin,
+        "-p",
+        "--model",
+        model,
+        "--output-format",
+        "stream-json",
+        "--no-session-persistence",
+    ]
+    if allowed_tools:
+        cmd.extend(["--allowedTools", " ".join(allowed_tools)])
+    cmd.append("--verbose")
+
+    started_at = datetime.now(UTC)
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            cwd=_neutral_subprocess_cwd(),
+            env=_subprocess_env(),
+        )
+    except OSError as exc:
+        safe_error = redact(f"{type(exc).__name__}: {exc}")[:200]
+        log.error({"event": "llm_stream_launch_failed", "error": safe_error})
+        _record_stream_call(
+            purpose,
+            model,
+            prompt,
+            "",
+            started_at,
+            error=f"launch: {safe_error}",
+            failure_class="launch",
+        )
+        yield {"type": "error", "error": "answer failed; retry the request"}
+        return
+
+    assert proc.stdin and proc.stdout
+    full_text_parts: list[str] = []
+    result_meta: dict[str, object] | None = None
+    timed_out = threading.Event()
+    completed = False
+    canceled = False
+    transport_error: str | None = None
+    termination_lock = threading.Lock()
+
+    def _stop_process() -> None:
+        with termination_lock:
+            _terminate_stream_process(proc)
+
+    def _watchdog_expired() -> None:
+        if proc.poll() is None:
+            timed_out.set()
+            _stop_process()
+
+    timeout = timeout_seconds if timeout_seconds is not None else _STREAM_TIMEOUT_SECONDS
+    watchdog = threading.Timer(timeout, _watchdog_expired)
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        proc.stdin.write(prompt)
+        proc.stdin.close()
+        for line in proc.stdout:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                raw_event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(raw_event, dict):
+                continue
+            event = cast("dict[str, object]", raw_event)
+            event_type = event.get("type")
+            if event_type == "assistant":
+                message_value = event.get("message")
+                if not isinstance(message_value, dict):
+                    continue
+                message = cast("dict[str, object]", message_value)
+                content = message.get("content")
+                if not isinstance(content, list):
+                    continue
+                for block_value in cast("list[object]", content):
+                    if not isinstance(block_value, dict):
+                        continue
+                    block = cast("dict[str, object]", block_value)
+                    chunk = block.get("text")
+                    if block.get("type") == "text" and isinstance(chunk, str) and chunk:
+                        full_text_parts.append(chunk)
+                        yield {"type": "delta", "text": chunk}
+            elif event_type == "result":
+                result_meta = event
+        completed = True
+    except GeneratorExit:
+        canceled = True
+        raise
+    except (OSError, ValueError) as exc:
+        transport_error = redact(f"{type(exc).__name__}: {exc}")[:200]
+    finally:
+        if not completed and not timed_out.is_set():
+            _stop_process()
+        elif proc.poll() is None:
+            try:
+                proc.wait(timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                timed_out.set()
+                _stop_process()
+        watchdog.cancel()
+        watchdog.join(timeout=(_PROCESS_TERMINATE_GRACE_SECONDS * 2) + 0.1)
+        if canceled:
+            _record_stream_call(
+                purpose,
+                model,
+                prompt,
+                "".join(full_text_parts).strip(),
+                started_at,
+                error="[canceled] stream consumer disconnected",
+                outcome="canceled",
+                failure_class="canceled",
+            )
+
+    full_text = "".join(full_text_parts).strip()
+    if timed_out.is_set():
+        _record_stream_call(
+            purpose,
+            model,
+            prompt,
+            full_text,
+            started_at,
+            error="[timeout] streaming response exceeded watchdog",
+            failure_class="timeout",
+        )
+        yield {"type": "error", "error": "answer timed out; retry the request"}
+        return
+    if transport_error is not None:
+        log.error({"event": "llm_stream_transport_failed", "error": transport_error})
+        _record_stream_call(
+            purpose,
+            model,
+            prompt,
+            full_text,
+            started_at,
+            error=f"[transport] {transport_error}",
+            failure_class="transport",
+        )
+        yield {"type": "error", "error": "answer failed; retry the request"}
+        return
+    if not full_text:
+        stderr_text = redact((proc.stderr.read() if proc.stderr else "").strip())[:200]
+        log.error({"event": "llm_stream_empty_response", "error": stderr_text})
+        _record_stream_call(
+            purpose,
+            model,
+            prompt,
+            "",
+            started_at,
+            error=f"[empty] {stderr_text}",
+            failure_class="empty_response",
+        )
+        yield {"type": "error", "error": "answer failed; retry the request"}
+        return
+
+    _record_stream_call(purpose, model, prompt, full_text, started_at, meta=result_meta)
+    yield {"type": "final", "text": full_text}
 
 
 def call_llm_with_web(

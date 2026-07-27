@@ -171,6 +171,13 @@ def test_public_opener_disables_environment_proxies() -> None:
     assert proxy_handlers == []
 
 
+def test_browser_public_opener_follows_only_guarded_redirects() -> None:
+    opener = _net._build_browser_public_opener()
+
+    assert any(isinstance(handler, _net.GuardedHTTPRedirectHandler) for handler in opener.handlers)
+    assert not any(isinstance(handler, _net.NoRedirectHandler) for handler in opener.handlers)
+
+
 class _BrowserRequest:
     def __init__(self, url: str, method: str = "GET") -> None:
         self.url = url

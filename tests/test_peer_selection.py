@@ -352,11 +352,31 @@ def test_fetch_resolves_key_from_dotenv(tmp_path: Path, monkeypatch: pytest.Monk
     """No FMP_API_KEY in the environment → the key is read from repo_root/.env
     (the LLM build never exports it; this was the root cause of the prod-wide
     fetched_peers=[])."""
+    monkeypatch.delenv("EARNINGS_SUMMARY_ENV_FILE", raising=False)
     stub = _install_stub(monkeypatch, _StubResponse(200, [{"x": 1}]), api_key=None)
     (tmp_path / ".env").write_text("FMP_API_KEY=k-dotenv\n", encoding="utf-8")
     outcome = _fetch_peer_fundamentals(["INTR"], tmp_path, self_ticker="NU")
     assert outcome.fetched_any == ["INTR"]
     assert all(c[1]["apikey"] == "k-dotenv" for c in stub.calls)
+
+
+def test_fetch_prefers_external_env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".env").write_text("FMP_API_KEY=legacy-key\n", encoding="utf-8")
+    appdata = tmp_path / "appdata"
+    external = appdata / "earnings-summary" / "secrets"
+    external.mkdir(parents=True)
+    (external / ".env").write_text("FMP_API_KEY=external-key\n", encoding="utf-8")
+    monkeypatch.delenv("EARNINGS_SUMMARY_ENV_FILE", raising=False)
+    monkeypatch.delenv("EARNINGS_SUMMARY_SECRETS_DIR", raising=False)
+    monkeypatch.setenv("APPDATA", str(appdata))
+    stub = _install_stub(monkeypatch, _StubResponse(200, [{"x": 1}]), api_key=None)
+
+    outcome = _fetch_peer_fundamentals(["INTR"], repo, self_ticker="NU")
+
+    assert outcome.fetched_any == ["INTR"]
+    assert all(call[1]["apikey"] == "external-key" for call in stub.calls)
 
 
 def test_fetch_skips_cleanly_without_any_key(

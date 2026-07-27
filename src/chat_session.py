@@ -24,18 +24,13 @@ from __future__ import annotations
 
 import json
 import logging
-import shutil
-import subprocess
 import sys
-import threading
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal, cast
 
 from pydantic import BaseModel, Field
-
-from log_redact import redact
 
 log = logging.getLogger(__name__)
 
@@ -388,304 +383,23 @@ extract_diff = _extract_diff
 build_system_prompt = _system_prompt
 
 
-def _terminate_stream_process(proc: subprocess.Popen[str]) -> None:
-    """Bounded, idempotent shutdown for timeout and abandoned generators."""
-    if proc.poll() is not None:
-        return
-    try:
-        proc.terminate()
-    except OSError as exc:
-        if proc.poll() is not None:
-            return
-        log.warning({"event": "ask_stream_terminate_failed", "error": redact(exc)})
-        try:
-            proc.kill()
-        except OSError as kill_exc:
-            log.error({"event": "ask_stream_kill_failed", "error": redact(kill_exc)})
-            return
-    try:
-        proc.wait(timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        try:
-            proc.wait(timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            log.error({"event": "ask_stream_process_reap_failed"})
-
-
 def stream_llm_text(
     full_prompt: str, *, purpose: str = "ask_answer"
 ) -> Iterator[dict[str, object]]:
-    """Low-level transport: stream one assembled prompt through the claude
-    CLI. Yields {type: "delta", text} per chunk, then exactly one of
-    {type: "final", text: "<full>"} or {type: "error", error: "..."}.
-    No thread storage, no diff extraction — callers own session semantics
-    (this module's `stream_response` for the per-report thread; the ask
-    engine's portfolio scope composes its own prompt over it).
+    """Stream through the canonical LLM policy/ledger seam.
 
-    The conversational answer is the most expensive LLM call in the repo, so —
-    unlike before — it no longer rides the bare CLI default. It resolves its
-    model through the model-downgrade / Gemini-promotion loop (``purpose``
-    defaults to ``ask_answer``: ``_model_for`` consults ``model_pin_overrides``
-    -> ``LLM_MODELS`` -> ``DEFAULT_MODEL``), enforces the per-purpose monthly
-    budget (seeded soft/warn — an interactive answer is never hard-blocked
-    mid-conversation), and records a best-effort ``llm_calls`` ledger row so it
-    shows in Call Health like every other purpose. A purpose promoted to a
-    Gemini model (which the CLI can't stream) degrades to a single buffered
-    ``call_llm`` answer."""
-    from llm.cli import (
-        LLMBudgetExceeded,
-        _enforce_budget_pre_call,  # pyright: ignore[reportPrivateUsage]
-        _model_for,  # pyright: ignore[reportPrivateUsage]
+    This compatibility wrapper keeps the public Ask API and its monkeypatch
+    surface stable while centralizing model selection, budget enforcement,
+    transport isolation, cancellation, and telemetry in ``llm.cli``.
+    """
+    from llm.cli import stream_llm
+
+    yield from stream_llm(
+        full_prompt,
+        purpose=purpose,
+        scope="ask",
+        allowed_tools=("Read",),
     )
-    from llm.model_ladder import GEMINI as _GEMINI_FAMILY
-    from llm.model_ladder import family_of
-
-    model = _model_for(purpose)
-
-    # Per-purpose budget: ask_answer is seeded soft (warn), so this only raises
-    # if an operator later hard-blocks it — then degrade with an explicit error
-    # frame rather than a crashed stream.
-    try:
-        _enforce_budget_pre_call(purpose, force_budget_bypass=False)
-    except LLMBudgetExceeded:
-        yield {
-            "type": "error",
-            "error": "Ask monthly budget reached — raise the cap or wait for the reset.",
-        }
-        return
-
-    # A Gemini-promoted purpose can't stream through `claude -p`; buffer one
-    # answer through the canonical client (which owns the Gemini backend, its
-    # operational fallback to Claude, and its own ledger row).
-    if family_of(model) == _GEMINI_FAMILY:
-        yield from _buffered_llm_answer(full_prompt, purpose=purpose)
-        return
-
-    claude_bin = shutil.which("claude")
-    if claude_bin is None:
-        yield {"type": "error", "error": "claude CLI not found in PATH"}
-        return
-
-    # Filesystem read scope is enforced by --allowedTools Read; the LLM can
-    # only read, not write. (Comments + chat writes go through Flask endpoints
-    # we control, not through the CLI's Edit tool.) --model pins the resolved
-    # downgrade-loop choice instead of the CLI's ambient default.
-    cmd = [
-        claude_bin,
-        "-p",
-        "--model",
-        model,
-        "--output-format",
-        "stream-json",
-        # The conversational turn never --resume-s (the whole thread is
-        # re-encoded into the prompt each turn), so persisting a CLI session
-        # transcript is pure waste — skip the per-turn disk write. (L14.)
-        "--no-session-persistence",
-        "--allowedTools",
-        "Read",
-        "--verbose",
-    ]
-    started_at = datetime.now(UTC)
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            bufsize=1,
-        )
-    except OSError as e:
-        safe_error = redact(e)
-        log.error({"event": "ask_stream_launch_failed", "error": safe_error})
-        _record_stream_call(
-            purpose,
-            model,
-            full_prompt,
-            "",
-            started_at,
-            error=f"launch: {safe_error[:160]}",
-        )
-        yield {"type": "error", "error": "answer failed; retry the request"}
-        return
-
-    assert proc.stdin and proc.stdout
-    full_text_parts: list[str] = []
-    result_meta: dict[str, object] | None = None
-    timed_out = threading.Event()
-    completed = False
-    transport_error: str | None = None
-    termination_lock = threading.Lock()
-
-    def _stop_process() -> None:
-        with termination_lock:
-            _terminate_stream_process(proc)
-
-    def _watchdog_expired() -> None:
-        if proc.poll() is None:
-            timed_out.set()
-            _stop_process()
-
-    watchdog = threading.Timer(_STREAM_TIMEOUT_SECONDS, _watchdog_expired)
-    watchdog.daemon = True
-    watchdog.start()
-    try:
-        proc.stdin.write(full_prompt)
-        proc.stdin.close()
-        for line in proc.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            etype = event.get("type")
-            # The CLI emits a stream of `{type: ..., ...}` envelopes. We
-            # extract assistant text deltas and capture the final `result`
-            # envelope (token usage + cost) for the ledger row.
-            if etype == "assistant":
-                msg = event.get("message") or {}
-                content = msg.get("content") or []
-                for block in content if isinstance(content, list) else []:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        chunk = block.get("text") or ""
-                        if chunk:
-                            full_text_parts.append(chunk)
-                            yield {"type": "delta", "text": chunk}
-            elif etype == "result" and isinstance(event, dict):
-                result_meta = cast("dict[str, object]", event)
-        completed = True
-    except GeneratorExit:
-        raise
-    except (OSError, ValueError) as exc:
-        transport_error = redact(exc)
-    finally:
-        if not completed and not timed_out.is_set():
-            _stop_process()
-        elif proc.poll() is None:
-            try:
-                proc.wait(timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
-            except subprocess.TimeoutExpired:
-                timed_out.set()
-                _stop_process()
-        watchdog.cancel()
-        watchdog.join(timeout=(_PROCESS_TERMINATE_GRACE_SECONDS * 2) + 0.1)
-
-    full_text = "".join(full_text_parts).strip()
-    if timed_out.is_set():
-        _record_stream_call(
-            purpose,
-            model,
-            full_prompt,
-            full_text,
-            started_at,
-            error="timeout",
-        )
-        yield {"type": "error", "error": "answer timed out; retry the request"}
-        return
-    if transport_error is not None:
-        log.error({"event": "ask_stream_transport_failed", "error": transport_error})
-        _record_stream_call(
-            purpose,
-            model,
-            full_prompt,
-            full_text,
-            started_at,
-            error=f"transport: {transport_error[:160]}",
-        )
-        yield {"type": "error", "error": "answer failed; retry the request"}
-        return
-
-    if not full_text:
-        stderr_text = redact((proc.stderr.read() if proc.stderr else "").strip())[:300]
-        log.error({"event": "ask_stream_empty_response", "error": stderr_text[:160]})
-        _record_stream_call(
-            purpose, model, full_prompt, "", started_at, error=f"empty: {stderr_text[:160]}"
-        )
-        yield {"type": "error", "error": "answer failed; retry the request"}
-        return
-
-    _record_stream_call(purpose, model, full_prompt, full_text, started_at, meta=result_meta)
-    yield {"type": "final", "text": full_text}
-
-
-def _buffered_llm_answer(full_prompt: str, *, purpose: str) -> Iterator[dict[str, object]]:
-    """Non-streaming answer for a Gemini-promoted ask purpose: one ``call_llm``
-    round-trip (its own backend selection + operational fallback + ledger row),
-    surfaced as a single delta + final so streaming clients still render it."""
-    from llm.cli import call_llm
-
-    try:
-        text = call_llm(full_prompt, purpose=purpose, scope="ask").strip()
-    except Exception as exc:
-        yield {"type": "error", "error": f"answer failed: {type(exc).__name__}"}
-        return
-    if not text:
-        yield {"type": "error", "error": "empty response"}
-        return
-    yield {"type": "delta", "text": text}
-    yield {"type": "final", "text": text}
-
-
-def _record_stream_call(
-    purpose: str,
-    model: str,
-    prompt: str,
-    response: str,
-    started_at: datetime,
-    *,
-    error: str | None = None,
-    meta: dict[str, object] | None = None,
-) -> None:
-    """Best-effort ``llm_calls`` ledger row for the streamed conversational
-    answer. The streaming transport bypasses ``call_llm``, so it records its
-    own row (token usage + cost lifted from the CLI's final ``result``
-    envelope when present). Never raises — a ledger miss must not break the
-    answer that already streamed."""
-    try:
-        from llm_call_ledger import (
-            LlmCallRecord,
-            record_call,
-            sha256_text,
-            usage_from_json_meta,
-        )
-
-        usage: dict[str, int | float | None] = (
-            usage_from_json_meta(meta) if isinstance(meta, dict) else {}
-        )
-        elapsed_ms = int((datetime.now(UTC) - started_at).total_seconds() * 1000)
-        record_call(
-            LlmCallRecord(
-                called_at=started_at,
-                model=model,
-                prompt_sha256=sha256_text(prompt),
-                prompt_chars=len(prompt),
-                elapsed_ms=elapsed_ms,
-                purpose=purpose,
-                scope="ask",
-                response_sha256=sha256_text(response) if response else None,
-                response_chars=len(response) if response else None,
-                error=error,
-                input_tokens=cast("int | None", usage.get("input_tokens")),
-                cache_creation_input_tokens=cast(
-                    "int | None", usage.get("cache_creation_input_tokens")
-                ),
-                cache_read_input_tokens=cast("int | None", usage.get("cache_read_input_tokens")),
-                output_tokens=cast("int | None", usage.get("output_tokens")),
-                cost_estimate_usd=cast("float | None", usage.get("cost_estimate_usd")),
-            )
-        )
-    except Exception as exc:
-        log.debug(
-            {
-                "event": "ask_stream_ledger_skipped",
-                "error": redact(f"{type(exc).__name__}: {exc}"),
-            }
-        )
 
 
 def stream_response(
