@@ -258,7 +258,7 @@ def build_assumption_snapshot(
     forecast_years: list[int],
     wacc: float,
     terminal_multiple: float,
-    diluted_shares_M: float,
+    diluted_shares_M: float,  # noqa: N803 - serialized schema and keyword API use _M units
     workbook_path: str,
     pv_fcf_stream: float,
     pv_terminal: float,

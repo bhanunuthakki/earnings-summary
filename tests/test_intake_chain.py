@@ -19,6 +19,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
 import intake_documents  # noqa: E402
+
 from intake import IntakeClassification, IntakeResult  # noqa: E402
 from models.documents import DocType  # noqa: E402
 

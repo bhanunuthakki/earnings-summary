@@ -220,7 +220,7 @@ def ingest_live(
     )
 
 
-def _fmp_get(session: "requests.Session", api_key: str, ticker: str, path: str) -> object:
+def _fmp_get(session: requests.Session, api_key: str, ticker: str, path: str) -> object:
     """Try /stable (then /api/v3 unless stable-only); return first 200 JSON body."""
     import requests
 

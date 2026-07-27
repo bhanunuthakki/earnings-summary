@@ -6,10 +6,12 @@ from pathlib import Path
 
 from report.models import SectionStatus
 from report.sections.saydo import (
-    build as build_saydo,
-    _parse_rating,
     _parse_attribution,
+    _parse_rating,
     _parse_thesis_view,
+)
+from report.sections.saydo import (
+    build as build_saydo,
 )
 
 

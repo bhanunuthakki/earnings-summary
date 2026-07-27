@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import sqlite3
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
-
-from decimal import Decimal
 
 from models.facts import FiscalPeriodType
 from pipeline.sec_xbrl import (

@@ -56,7 +56,7 @@ from transcript_qa import (  # noqa: E402
 RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
 TMP_DIR = PROJECT_ROOT / ".tmp"
 
-# Earnings calls: typical 30–110 min; reject anything outside this band.
+# Earnings calls: typical 30-110 min; reject anything outside this band.
 MIN_DURATION_SEC = 25 * 60
 MAX_DURATION_SEC = 130 * 60
 
@@ -97,7 +97,7 @@ DEFAULT_BEAM_SIZE = 1
 # ---------------------------------------------------------------------------
 
 
-class TranscriptSource(str, Enum):
+class TranscriptSource(str, Enum):  # noqa: UP042 - preserve legacy str(Enum) behavior
     YT_DLP_WHISPER_URL = "yt_dlp_whisper_url"  # explicit URL provided
     YT_DLP_WHISPER_SEARCH = "yt_dlp_whisper_search"  # picked via smart search
     YT_DLP_WHISPER_LINKS = "yt_dlp_whisper_links"  # picked from links file

@@ -66,7 +66,7 @@ Produce a 350-500 word memo with these four sections:
 
 ## 1. Mechanical first-order impact
 Walk through the implied first-order price move using the betas above.
-Be explicit about which shock × which beta you're applying. Cite the
+Be explicit about which shock \u00d7 which beta you're applying. Cite the
 direction (up/down) and rough magnitude (in %). NO false precision — round
 to 5pp / 10% buckets. If a key shock has no beta data (n/a), say so.
 
@@ -102,7 +102,7 @@ def _ctx_macro_scenario(
     # Late import — keep macro_store optional at import time so the existing
     # lens runner doesn't acquire a hard dep on the new module.
     try:
-        from macro_store import fetch_sensitivities  # noqa: PLC0415
+        from macro_store import fetch_sensitivities
     except ImportError:
         return None
     sens_objs = fetch_sensitivities(ticker=ticker, db_path=repo_root / "data" / "portfolio.db")
@@ -176,7 +176,7 @@ def run_macro_scenario_lens(
             {"event": "macro_scenario_context_empty", "ticker": ticker, "scenario": scenario_id}
         )
         return None
-    effective_cache_inputs = ctx.cache_inputs + [style_block_cache_token()]
+    effective_cache_inputs = [*ctx.cache_inputs, style_block_cache_token()]
     if not force:
         existing = read_current(ticker=ctx.ticker, purpose=purpose, scope="ticker", db_path=db_path)
         if existing is not None and not existing.dirty:
@@ -202,7 +202,7 @@ def run_macro_scenario_lens(
             scope="ticker",
             model=model,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning({"event": "macro_scenario_llm_failed", "error": str(exc)})
         return None
     artifact_id, _ = upsert(

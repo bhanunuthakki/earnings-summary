@@ -38,7 +38,6 @@ from timeseries.loaders import (
     load_segment_series,
 )
 
-
 # ---------------------------------------------------------------------------
 # In-memory schema bootstrap
 # ---------------------------------------------------------------------------
@@ -489,7 +488,7 @@ def test_backfill_matches_unique_period_tuples(conn: sqlite3.Connection, tmp_pat
     _insert_document(conn, doc_id=10, ticker="AMZN")
     _insert_document(conn, doc_id=20, ticker="AMZN")
     legacy_rows: list[tuple[str, datetime, str, str, str, str, int]] = [
-        # doc 10, 3 segments × 1 period = 3 facts, 1 unique period tuple
+        # doc 10, 3 segments x 1 period = 3 facts, 1 unique period tuple
         (
             "AMZN",
             datetime(2025, 9, 30),
@@ -517,7 +516,7 @@ def test_backfill_matches_unique_period_tuples(conn: sqlite3.Connection, tmp_pat
             "106000000000",
             10,
         ),
-        # doc 20, 2 segments × 2 periods = 4 facts, 2 unique period tuples
+        # doc 20, 2 segments x 2 periods = 4 facts, 2 unique period tuples
         (
             "AMZN",
             datetime(2025, 9, 30),
@@ -575,7 +574,7 @@ def test_backfill_matches_unique_period_tuples(conn: sqlite3.Connection, tmp_pat
     try:
         from scratch.backfill_segment_junction import backfill
 
-        groups, periods, dims = backfill(on_disk, ticker="AMZN", dry_run=False)
+        _groups, periods, dims = backfill(on_disk, ticker="AMZN", dry_run=False)
     finally:
         on_disk.close()
 
@@ -655,6 +654,7 @@ def test_drop_segment_facts_migration_removes_table_and_adds_entity_column(
     Exercises the migration directly against a temp DB (no alembic env)
     so the test is hermetic and fast."""
     import importlib.util
+
     from sqlalchemy import create_engine
 
     here = Path(__file__).resolve().parent.parent

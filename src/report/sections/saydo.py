@@ -10,17 +10,17 @@ summary table (rating + thesis view) before the per-quarter breakdown.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
 
-from datetime import datetime
 from report.models import (
     SayDoCard,
+    SayDoHistoricalMetric,
     SayDoSection,
     SectionStatus,
-    SayDoHistoricalMetric,
 )
-from report.sections._common import missing, open_repo_db, has_table
+from report.sections._common import has_table, missing, open_repo_db
 
 _SAYDO_FILENAME_RX = re.compile(
     r"^SayDo_(?P<t>[A-Z][A-Z0-9.]*)_Q(?P<pq>[1-4])_(?P<py>\d{4})_Q(?P<cq>[1-4])_(?P<cy>\d{4})\.txt$"
@@ -180,15 +180,13 @@ def _parse_attribution(text: str) -> str | None:
             res_part = loop_sec[res_idx + 15 :].strip()
             p = res_part.split("\n\n")[0].strip()
             p = p.replace("**", "").replace("_", "").strip()
-            p = re.sub(r"\s+", " ", p)
-            return p
+            return re.sub(r"\s+", " ", p)
 
         # If no Resolution, grab Net Conviction line
         net_conv_idx = loop_sec.lower().find("**net conviction:")
         if net_conv_idx != -1:
             line = loop_sec[net_conv_idx:].split("\n")[0].strip()
-            line = line.replace("**", "").replace("_", "").strip()
-            return line
+            return line.replace("**", "").replace("_", "").strip()
 
     # 2. Try traditional label (only matching if it doesn't look like a header)
     for line in text.splitlines():
@@ -215,8 +213,7 @@ def _parse_thesis_view(text: str) -> str | None:
         paragraphs = [p.strip() for p in impact_sec.split("\n\n") if p.strip()]
         if paragraphs:
             p = paragraphs[0].replace("**", "").replace("_", "").strip()
-            p = re.sub(r"\s+", " ", p)
-            return p
+            return re.sub(r"\s+", " ", p)
 
     # 2. Try traditional label (only matching if it doesn't look like a header)
     for line in text.splitlines():

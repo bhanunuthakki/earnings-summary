@@ -79,7 +79,7 @@ def _backfill_one(
             return (ticker, len(txs), 0, None)
         inserted = upsert(txs, db_path=db_path)
         return (ticker, len(txs), inserted, None)
-    except Exception as exc:  # noqa: BLE001 — log + continue across tickers
+    except Exception as exc:
         return (ticker, 0, 0, f"{type(exc).__name__}: {exc}")
 
 
@@ -172,7 +172,6 @@ def main() -> int:
                 for t in tickers
             }
             for fut in as_completed(futures):
-                t = futures[fut]
                 ticker, fetched, inserted, err = fut.result()
                 if err:
                     errors.append((ticker, err))
@@ -200,7 +199,7 @@ def main() -> int:
     )
     if errors:
         log.warning({"event": "errors_summary", "errors": errors[:20]})
-    return 0 if not errors else 0  # don't fail the run on per-ticker errors
+    return 0  # don't fail the run on per-ticker errors
 
 
 if __name__ == "__main__":

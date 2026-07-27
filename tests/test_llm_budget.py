@@ -25,7 +25,6 @@ from llm_budget import (
     set_cap,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers — mirror migrations 0034 + 0052 inline so the tests stay
 # independent from the alembic runner. A failure here flags a bug in the

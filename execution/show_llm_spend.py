@@ -28,7 +28,7 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +53,7 @@ def _window_clause(since_days: int, run_id: str | None) -> tuple[str, list[Any]]
     where_parts: list[str] = []
     params: list[Any] = []
     if since_days > 0:
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
+        cutoff = (datetime.now(UTC) - timedelta(days=since_days)).isoformat()
         where_parts.append("called_at >= ?")
         params.append(cutoff)
     if run_id:

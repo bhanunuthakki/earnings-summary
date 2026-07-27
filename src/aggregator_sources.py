@@ -37,9 +37,9 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from html.parser import HTMLParser
-from typing import Callable
 
 import requests
 
@@ -68,12 +68,12 @@ QA_BOUNDARY_RE = re.compile(
     #   first question coming from the line of (WIX)
     r"first\s+question(?:\s+\w+){0,4}\s+(?:comes?|come|coming|is|will\s+come)\s+from|"
     # Operator-cue: open up the call/line/floor for/to questions.
-    r"(?:we['’]?ll|let['’]?s|i['’]?ll)\s+(?:now\s+)?(?:open|begin)\s+(?:the\s+|up\s+)*(?:line|floor|call)?\s*(?:up\s+)?(?:for|to)\s+question|"
+    r"(?:we['\u2019]?ll|let['\u2019]?s|i['\u2019]?ll)\s+(?:now\s+)?(?:open|begin)\s+(?:the\s+|up\s+)*(?:line|floor|call)?\s*(?:up\s+)?(?:for|to)\s+question|"
     r"open\s+(?:up\s+)?(?:the\s+)?(?:line|floor|call)?\s*(?:up\s+)?(?:to|for)\s+questions|"
     # "begin the Q&A" / "start the question-and-answer session"
-    r"(?:begin|start|let['’]?s\s+(?:now\s+)?begin)\s+(?:our\s+|the\s+)?(?:question[-\s]and[-\s]answer|q\s*&\s*a)(?:\s+session)?|"
+    r"(?:begin|start|let['\u2019]?s\s+(?:now\s+)?begin)\s+(?:our\s+|the\s+)?(?:question[-\s]and[-\s]answer|q\s*&\s*a)(?:\s+session)?|"
     # Hand-off cue: "I'll turn it over to the operator"
-    r"i['’]?ll\s+(?:now\s+)?turn\s+(?:it|the\s+call)\s+over\s+to\s+the\s+operator"
+    r"i['\u2019]?ll\s+(?:now\s+)?turn\s+(?:it|the\s+call)\s+over\s+to\s+the\s+operator"
     r")",
     re.IGNORECASE,
 )
@@ -93,8 +93,8 @@ PAYWALL_MARKERS = (
 # not content classification.
 QA_TAIL_RE = re.compile(
     r"(?:"
-    r"that\s+concludes\s+(?:today['’]?s\s+)?(?:conference\s+)?call|"
-    r"this\s+concludes\s+(?:today['’]?s\s+)?(?:conference\s+)?call|"
+    r"that\s+concludes\s+(?:today['\u2019]?s\s+)?(?:conference\s+)?call|"
+    r"this\s+concludes\s+(?:today['\u2019]?s\s+)?(?:conference\s+)?call|"
     r"you\s+may\s+now\s+disconnect|"
     r"thank\s+you\s+for\s+(?:your\s+)?participation\s*\.?\s*you\s+may"
     r")",

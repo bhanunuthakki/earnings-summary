@@ -30,8 +30,8 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-import index_manager
-from alias_manager import resolve_ticker
+import index_manager  # noqa: E402
+from alias_manager import resolve_ticker  # noqa: E402
 
 SOURCES_DIR = PROJECT_ROOT / "micro_thesis" / "sources"
 
@@ -195,7 +195,7 @@ OVERRIDES: dict[str, dict[str, FileSpec]] = {
             "quarter": "Q4",
             "year": "2026",
             "doc_type": "press_release",
-            "note": "Q4 FY2026 (RBRK FY ends Jan; Q4 FY26 ≈ Feb–Apr 2026)",
+            "note": "Q4 FY2026 (RBRK FY ends Jan; Q4 FY26 ≈ Feb-Apr 2026)",
         },
         "RBRK_Q4-FY2026-Earnings-Presentation.pdf": {
             "quarter": "Q4",
@@ -209,7 +209,7 @@ OVERRIDES: dict[str, dict[str, FileSpec]] = {
             "quarter": "Q4",
             "year": "2026",
             "doc_type": "press_release",
-            "note": "Q4 FY2026 (VEEV FY ends Jan; Q4 FY26 ≈ Nov 2025–Jan 2026)",
+            "note": "Q4 FY2026 (VEEV FY ends Jan; Q4 FY26 ≈ Nov 2025-Jan 2026)",
         },
         "VEEV_Q4-FY2026-Earnings-Presentation.pdf": {
             "quarter": "Q4",

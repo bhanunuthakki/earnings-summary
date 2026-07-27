@@ -366,7 +366,7 @@ _DOC_TYPE_SQUASHED_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
 # Period extraction
 # ---------------------------------------------------------------------------
 
-_RX_QUARTER_APOSTROPHE = re.compile(r"Q(?P<q>[1-4])['‘’ʼ]\s*(?P<yy>\d{2})\b")
+_RX_QUARTER_APOSTROPHE = re.compile(r"Q(?P<q>[1-4])['\u2018\u2019\u02bc]\s*(?P<yy>\d{2})\b")
 _RX_QUARTER_SPACE = re.compile(r"Q(?P<q>[1-4])\s*(?P<y>20\d{2})\b")
 _RX_QUARTER_FULL = re.compile(
     r"\b(?P<word>First|Second|Third|Fourth)\s+Quarter(?:\s+Fiscal)?\s+(?:20)?(?P<y>\d{2,4})\b",
@@ -1228,10 +1228,13 @@ def classify_ir_file(
                 ticker_guess=file_ticker,
             )
         ticker = file_ticker or content_ticker
-        if ticker is None and ticker_hint is not None:
-            if any(t == ticker_hint for t, *_ in _effective_registry()):
-                ticker = ticker_hint
-                ticker_evidence = ticker_evidence + ["path_hint"]
+        if (
+            ticker is None
+            and ticker_hint is not None
+            and any(t == ticker_hint for t, *_ in _effective_registry())
+        ):
+            ticker = ticker_hint
+            ticker_evidence = [*ticker_evidence, "path_hint"]
         if ticker is None:
             return CategorizationFailure(
                 reason="ticker_unidentified",

@@ -409,7 +409,7 @@ def test_propose_high_confidence_auto_applies_new_entity(db: Path) -> None:
 
 def test_propose_high_confidence_auto_applies_new_alias(db: Path) -> None:
     eid = upsert_entity(kind="competitor", canonical_name="OpenAI", db_path=db)
-    pid, status = propose_mapping(
+    _pid, status = propose_mapping(
         kind="new_alias",
         payload={"entity_id": eid, "alias_text": "ChatGPT maker"},
         confidence=0.90,
@@ -421,7 +421,7 @@ def test_propose_high_confidence_auto_applies_new_alias(db: Path) -> None:
 
 
 def test_propose_medium_confidence_pending_review(db: Path) -> None:
-    pid, status = propose_mapping(
+    _pid, status = propose_mapping(
         kind="new_entity",
         payload={"kind": "competitor", "canonical_name": "AmbiguousName"},
         confidence=0.70,
@@ -433,7 +433,7 @@ def test_propose_medium_confidence_pending_review(db: Path) -> None:
 
 
 def test_propose_low_confidence_rejected(db: Path) -> None:
-    pid, status = propose_mapping(
+    _pid, status = propose_mapping(
         kind="new_entity",
         payload={"kind": "competitor", "canonical_name": "RandomNoise"},
         confidence=0.20,

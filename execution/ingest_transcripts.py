@@ -299,7 +299,7 @@ def main() -> int:
                     project_root=PROJECT_ROOT,
                     tracked_tickers=tracked,
                 )
-            except Exception as e:  # noqa: BLE001 — corrupt PDFs raise pypdf errors outside (ValueError, OSError); one bad file must not kill the whole run
+            except Exception as e:
                 record_stage(
                     conn,
                     run_id,

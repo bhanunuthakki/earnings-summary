@@ -218,7 +218,7 @@ def test_canonicalize_helper_uses_forward_slashes_cross_platform(
 
     result = index_manager._canonicalize_transcript_filepath("BN_Q4_2025.txt")
     assert result is not None
-    assert os.sep == "\\" and "\\" not in result or os.sep == "/", (
+    assert (os.sep == "\\" and "\\" not in result) or os.sep == "/", (
         f"backslash leaked into canonical path on non-POSIX host: {result!r}"
     )
     assert "/" in result

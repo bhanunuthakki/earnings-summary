@@ -8,7 +8,7 @@ Inputs:
 
 Output:
   - PV of FCF stream
-  - Terminal value (year-5 FCF × multiple, discounted to today)
+  - Terminal value (year-5 FCF x multiple, discounted to today)
   - Enterprise value = PV + PV(terminal)
   - Fair value per share = EV / current shares
 
@@ -28,7 +28,7 @@ class PvResult:
     fcf_stream: list[float]  # 5 values, USD millions
     forecast_years: list[int]
     pv_fcf_stream: float  # Σ FCF_t / (1+wacc)^t, USD millions
-    terminal_value_undiscounted: float  # year-N FCF × multiple, USD millions
+    terminal_value_undiscounted: float  # year-N FCF x multiple, USD millions
     pv_terminal: float  # terminal discounted to today, USD millions
     enterprise_value: float  # pv_fcf_stream + pv_terminal, USD millions
     diluted_shares_M: float  # millions

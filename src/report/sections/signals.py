@@ -199,7 +199,7 @@ def _value_summary(signal_type: str, payload: dict[str, object]) -> str | None:
         period = payload.get("inflection_period")
         if isinstance(mag, (int, float)):
             when = f" @ {period}" if isinstance(period, str) else ""
-            return f"magnitude={float(mag):.2f}σ{when}"
+            return f"magnitude={float(mag):.2f}\u03c3{when}"
         return None
     if signal_type == "yoy_acceleration":
         yoy = payload.get("most_recent_yoy")

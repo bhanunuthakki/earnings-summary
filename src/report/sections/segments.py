@@ -363,7 +363,7 @@ def _to_display_units(value: float | None, bucket: MetricKey) -> float | None:
 
 
 def _sort_and_rollup(
-    prepared: list[tuple["SegmentSeries", float | None]],
+    prepared: list[tuple[SegmentSeries, float | None]],
     display_labels: list[str],
     bucket: MetricKey,
 ) -> list[SegmentSeries]:

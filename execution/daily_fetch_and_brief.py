@@ -45,10 +45,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import subprocess
 import sqlite3
+import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -91,7 +91,7 @@ def main() -> int:
     print(
         json.dumps(
             {
-                "started_at": datetime.now(timezone.utc).isoformat(),
+                "started_at": datetime.now(UTC).isoformat(),
                 "tickers": results,
                 "skipped_by_tier": skipped_by_tier,
             },

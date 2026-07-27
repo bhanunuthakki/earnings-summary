@@ -135,7 +135,7 @@ def now() -> datetime:
     return datetime(2026, 5, 25, 12, 0, 0)
 
 
-# --- tickers_due_for_refresh: tier × cadence matrix --------------------------
+# --- tickers_due_for_refresh: tier x cadence matrix --------------------------
 
 
 def test_p1_always_due_on_daily_cadence(repo_root: Path, now: datetime) -> None:

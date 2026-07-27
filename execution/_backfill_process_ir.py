@@ -17,11 +17,11 @@ Usage:
     python execution/process_ir_documents.py --dry-run --all
 """
 
+import argparse
+import json
+import logging
 import sys
 import time
-import json
-import argparse
-import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -31,19 +31,19 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-import index_manager
-from parser import extract_text_from_pdf, read_text_file
-from llm_client import (
+import index_manager  # noqa: E402
+from alias_manager import resolve_ticker  # noqa: E402
+from llm_client import (  # noqa: E402
     compose_anchor_block,
-    generate_summary,
-    generate_press_release_summary,
-    generate_presentation_brief,
     generate_event_brief,
+    generate_presentation_brief,
+    generate_press_release_summary,
+    generate_summary,
     load_bear_anchor,
     load_ir_anchor,
     load_thesis_anchor,
 )
-from alias_manager import resolve_ticker
+from parser import extract_text_from_pdf, read_text_file  # noqa: E402
 
 CACHE_DIR = PROJECT_ROOT / ".tmp"
 

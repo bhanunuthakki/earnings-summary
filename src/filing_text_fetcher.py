@@ -19,6 +19,7 @@ read from disk rather than re-fetching.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -55,28 +56,28 @@ class FilingTextResult:
 # the common cases: "Item 1A.", "ITEM 1A", "Item 1A - Risk Factors",
 # "Item 1A. Risk Factors", with optional whitespace and punctuation.
 _ITEM_1A_RX = re.compile(
-    r"item\s*1\s*a\.?\s*[—–\-:]?\s*risk\s+factors?",
+    r"item\s*1\s*a\.?\s*[\u2014\u2013\-:]?\s*risk\s+factors?",
     re.IGNORECASE,
 )
 _ITEM_1B_RX = re.compile(
-    r"item\s*1\s*b\.?\s*[—–\-:]?\s*unresolved",
+    r"item\s*1\s*b\.?\s*[\u2014\u2013\-:]?\s*unresolved",
     re.IGNORECASE,
 )
-_ITEM_2_RX = re.compile(r"item\s*2\.?\s*[—–\-:]?\s*properties", re.IGNORECASE)
+_ITEM_2_RX = re.compile(r"item\s*2\.?\s*[\u2014\u2013\-:]?\s*properties", re.IGNORECASE)
 _ITEM_7_RX = re.compile(
-    r"item\s*7\.?\s*[—–\-:]?\s*management",
+    r"item\s*7\.?\s*[\u2014\u2013\-:]?\s*management",
     re.IGNORECASE,
 )
 _ITEM_7A_RX = re.compile(
-    r"item\s*7\s*a\.?\s*[—–\-:]?\s*quantitative",
+    r"item\s*7\s*a\.?\s*[\u2014\u2013\-:]?\s*quantitative",
     re.IGNORECASE,
 )
 _ITEM_8_RX = re.compile(
-    r"item\s*8\.?\s*[—–\-:]?\s*financial\s+statements",
+    r"item\s*8\.?\s*[\u2014\u2013\-:]?\s*financial\s+statements",
     re.IGNORECASE,
 )
 _ITEM_9_RX = re.compile(
-    r"item\s*9\.?\s*[—–\-:]?\s*changes",
+    r"item\s*9\.?\s*[\u2014\u2013\-:]?\s*changes",
     re.IGNORECASE,
 )
 
@@ -109,7 +110,7 @@ def fetch_latest_10k_text(
     submissions_url = f"https://data.sec.gov/submissions/CIK{cik_padded}.json"
     try:
         payload = _http_get_json(submissions_url, user_agent=ua)
-    except Exception as exc:  # noqa: BLE001 — log + return
+    except Exception as exc:
         log.warning(
             {"event": "filing_text_submissions_failed", "ticker": ticker, "error": str(exc)}
         )
@@ -126,7 +127,9 @@ def fetch_latest_10k_text(
     target_date = None
     target_doc = None
     target_report = None
-    for form, acc, fdate, pdoc, rdate in zip(forms, accessions, dates, primary_docs, report_dates):
+    for form, acc, fdate, pdoc, rdate in zip(
+        forms, accessions, dates, primary_docs, report_dates, strict=False
+    ):
         if form != "10-K":
             continue
         if fiscal_year is not None:
@@ -167,7 +170,7 @@ def fetch_latest_10k_text(
     if text is None:
         try:
             html = _http_get_text(primary_url, user_agent=ua, timeout=60.0)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning(
                 {"event": "filing_text_html_fetch_failed", "ticker": ticker, "error": str(exc)}
             )
@@ -226,7 +229,7 @@ def fetch_latest_def14a_text(
         payload = _http_get_json(
             f"https://data.sec.gov/submissions/CIK{cik_padded}.json", user_agent=ua
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning({"event": "def14a_submissions_failed", "ticker": ticker, "error": str(exc)})
         return None
 
@@ -241,7 +244,9 @@ def fetch_latest_def14a_text(
     target_date = None
     target_doc = None
     target_report = None
-    for form, acc, fdate, pdoc, rdate in zip(forms, accessions, dates, primary_docs, report_dates):
+    for form, acc, fdate, pdoc, rdate in zip(
+        forms, accessions, dates, primary_docs, report_dates, strict=False
+    ):
         # DEF 14A and DEFA14A (additional materials) — pick straight DEF 14A.
         if form not in ("DEF 14A", "DEFA14A"):
             continue
@@ -271,15 +276,13 @@ def fetch_latest_def14a_text(
     if text is None:
         try:
             html = _http_get_text(primary_url, user_agent=ua, timeout=60.0)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning({"event": "def14a_fetch_failed", "ticker": ticker, "error": str(exc)})
             return None
         text = _strip_html(html)
         if cache_path is not None:
-            try:
+            with contextlib.suppress(OSError):
                 cache_path.write_text(text, encoding="utf-8")
-            except OSError:
-                pass
 
     return FilingTextResult(
         ticker=ticker,
@@ -458,7 +461,7 @@ def fetch_latest_s1_text(
         payload = _http_get_json(
             f"https://data.sec.gov/submissions/CIK{cik_padded}.json", user_agent=ua
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         log.warning({"event": "s1_submissions_failed", "ticker": ticker, "error": str(exc)})
         return None
 
@@ -503,7 +506,7 @@ def fetch_latest_s1_text(
     if text is None:
         try:
             html = _http_get_text(primary_url, user_agent=ua, timeout=120.0)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning({"event": "s1_fetch_failed", "ticker": ticker, "error": str(exc)})
             return None
         text = _strip_html(html)
@@ -627,9 +630,7 @@ def _looks_like_risk_heading(line: str) -> bool:
         return False
     upper_count = sum(1 for w in words if w[:1].isupper())
     # At least half the words should start uppercase (header-ish)
-    if upper_count < len(words) * 0.4:
-        return False
-    return True
+    return upper_count >= len(words) * 0.4
 
 
 def _extract_between(text: str, start_rx: re.Pattern, end_rx: re.Pattern) -> str | None:

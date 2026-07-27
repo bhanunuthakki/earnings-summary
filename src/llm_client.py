@@ -454,7 +454,7 @@ This is sourced from the company's IR website, so it is the official financial r
 | **Free Cash Flow** | [Value if disclosed] | N/A | N/A |
 
 ## 2. Key Business Metrics
-[List 3–6 company-specific KPIs disclosed in the release (e.g. DAUs, GMV, RPO, cloud revenue, etc.)]
+[List 3\u20136 company-specific KPIs disclosed in the release (e.g. DAUs, GMV, RPO, cloud revenue, etc.)]
 
 ## 3. Guidance (Next Quarter & Full Year)
 | Metric | Next Quarter | Full Year |
@@ -479,7 +479,7 @@ Press Release:
 def generate_presentation_brief(text: str, ticker: str | None = None) -> str:
     """
     Generates a strategic brief from an earnings presentation slide deck.
-    Presentations are typically 20–40 pages of slides; extract the key strategic narrative.
+    Presentations are typically 20\u201340 pages of slides; extract the key strategic narrative.
     """
     prompt = f"""
 You are a senior equity research analyst. The following text was extracted from an earnings presentation slide deck.
@@ -494,7 +494,7 @@ Extract the key strategic narrative — what story is management telling investo
 # Presentation Brief: [Company Ticker] [Quarter] [Year]
 
 ## 1. Management Narrative
-[2–3 sentences on the central investor story management is presenting this quarter]
+[2\u20133 sentences on the central investor story management is presenting this quarter]
 
 ## 2. Highlighted Metrics & Charts
 [List key data points, KPIs, or charts that management chose to prominently feature — these signal what they want investors to focus on]
@@ -694,7 +694,7 @@ If all schema KPIs match disclosure cleanly, write "No mismatches detected." and
 [For each tier_1_kpi in the schema: fill latest known value, direction (↑↓→), {scorecard_distance_phrase}, flag 🟢/🟡/🔴 (or `[schema mismatch — see Schema Hygiene]`), and inline source tag. Use `[not disclosed]` if missing.]
 
 ## Key Developments This Period
-[3–5 bullet points on material changes — new products, macro shifts, competitive moves, management credibility events. Each bullet ends with a source tag.]
+[3\u20135 bullet points on material changes — new products, macro shifts, competitive moves, management credibility events. Each bullet ends with a source tag.]
 
 ## Thesis Breaker Watchlist
 | Breaker | Status | Source |
@@ -783,7 +783,7 @@ For each tier_1_kpi within ~15% of its break_condition (read distances from the 
 - **Sensitivity:** [distance to threshold under ±X% scenarios on the input drivers]
 
 ## Open Questions for Next Quarter
-[2–3 specific things to listen for / look for in next earnings — each tied to a Resolution flip-observable named above.]
+[2\u20133 specific things to listen for / look for in next earnings — each tied to a Resolution flip-observable named above.]
 
 ## Portfolio & Thesis Fit
 This section operationalizes the investment principles above into a position-management view. Be specific; refuse to write generic content.
@@ -791,7 +791,7 @@ This section operationalizes the investment principles above into a position-man
 **One-paragraph thesis** *(the discipline test — if you can't articulate this in one paragraph drawing only on this report's evidence, the position is mis-defined and the recommendation defaults to CUT/PASS):*
 [≤120 words covering: what the company does, why the market is mispricing it (or has correctly priced it — say so), what specifically catalyzes a re-rating (or what would close the gap), expected horizon. No filler.]
 
-**Killer variables (2–3, business-specific):**
+**Killer variables (2\u20133, business-specific):**
 - [variable 1 — the actual driver, not "macro"; e.g. "GLP-1 supply ramp + insurance coverage trajectory" not "drug demand"]
 - [variable 2 — ditto]
 - [variable 3 if needed]
@@ -802,7 +802,7 @@ This section operationalizes the investment principles above into a position-man
 - [trigger 3 if relevant — competitive event, regulator action, etc.]
 
 **Sizing recommendation:**
-- **Tier:** High conviction (≤8–10%) / Standard (3–5%) / Speculative (1–2%) / Avoid
+- **Tier:** High conviction (≤8\u201310%) / Standard (3\u20135%) / Speculative (1\u20132%) / Avoid
 - **Rationale:** [Tie this to Net Conviction from the three Adversarial Loops above. High conviction requires Net Conviction = High on Thesis Status AND no fired triggers. Speculative is the right call when Net Conviction = Low but the asymmetry is favorable; specify the asymmetry.]
 
 **Time horizon & holding commitment:**
@@ -1557,7 +1557,7 @@ Produce a JSON object with EXACTLY these keys (no markdown, no commentary):
       "refutation_criteria": "what management would have to disclose or demonstrate over the next 2-4Q to neutralize this thesis. Specific and falsifiable."
     }}
   ],
-  "most_underweighted": "one-paragraph editorial argument: which of the failure modes above is most underweighted by sell-side / consensus, and WHY consensus is structurally blind to it (e.g., model inertia, organizational bias of legacy bull-side analysts, framing blind-spot, etc.). Don't pick the most-likely failure mode — pick the one that consensus is most-wrongly-pricing relative to its actual probability × impact.",
+  "most_underweighted": "one-paragraph editorial argument: which of the failure modes above is most underweighted by sell-side / consensus, and WHY consensus is structurally blind to it (e.g., model inertia, organizational bias of legacy bull-side analysts, framing blind-spot, etc.). Don't pick the most-likely failure mode — pick the one that consensus is most-wrongly-pricing relative to its actual probability \u00d7 impact.",
   "out_of_scope_flags": ["each entry: a real risk that's NOT derivable from the inputs above (regulatory, macro, technological, etc.) — with a brief reason why we're parking it. 1-3 entries max."]
 }}
 
@@ -2154,7 +2154,7 @@ bullets.
 # ---------------------------------------------------------------------------
 
 # Per-transcript section character cap. Each side of each quarter is trimmed
-# to this length before prompt assembly so 4 quarters × 2 sides stays within
+# to this length before prompt assembly so 4 quarters x 2 sides stays within
 # Sonnet's effective context window. Sized to preserve the bulk of a typical
 # Q&A segment (~30k chars uncompressed) while keeping the prompt under ~200k.
 _THEMES_SECTION_CHAR_CAP = 22000

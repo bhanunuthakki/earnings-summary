@@ -54,7 +54,7 @@ import hashlib
 # schema) so it composes cleanly with the existing markdown prompts.
 NUMBER_FORMATTING_BLOCK = """**Number formatting (apply consistently throughout):**
 
-- Percentages: 1 decimal, "%" suffix, signed for deltas — "12.3%", "+5.2% YoY", "−180 bps".
+- Percentages: 1 decimal, "%" suffix, signed for deltas — "12.3%", "+5.2% YoY", "\u2212180 bps".
 - Use **bps** for sub-1pp moves ("+45 bps"), **pp** for 1pp+ rate-on-rate moves ("+1.2 pp NIM"),
   **%** for growth rates.
 - Dollar levels: magnitude suffix + 1 decimal — "$1.4T", "$12.3B", "$847M", "$45K".

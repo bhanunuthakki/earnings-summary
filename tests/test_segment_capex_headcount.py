@@ -118,7 +118,7 @@ def test_extractor_emits_capex_facts_per_segment() -> None:
     assert ("International", datetime(2024, 12, 31)) in by_key
     assert ("AWS", datetime(2024, 12, 31)) in by_key
 
-    # Section title carries "$ in Millions" → values × 1_000_000.
+    # Section title carries "$ in Millions" → values x 1_000_000.
     aws_2024 = by_key[("AWS", datetime(2024, 12, 31))]
     assert aws_2024.value == Decimal("53267000000")
     assert aws_2024.unit == Unit.ACTUAL
@@ -205,7 +205,7 @@ def test_extractor_emits_capex_and_headcount_together_under_same_segment() -> No
     by_metric = {f.metric: f for f in facts if f.segment_name == "AWS"}
     assert "capex" in by_metric
     assert "headcount" in by_metric
-    # Capex scaled by Thousands (×1000)
+    # Capex scaled by Thousands (x1000)
     assert by_metric["capex"].value == Decimal("50000000")
     # Headcount NOT scaled
     assert by_metric["headcount"].value == Decimal("120000")
@@ -558,7 +558,7 @@ def test_extract_segment_oi_facts_writes_capex_to_junction(tmp_path: Path) -> No
         junction_segments = {r["dim_name"] for r in junction_capex}
         assert {"AWS", "International", "North America"}.issubset(junction_segments)
 
-        # AWS value matches: $53,267M × 1M = $53.267B.
+        # AWS value matches: $53,267M x 1M = $53.267B.
         aws_junction = next(r for r in junction_capex if r["dim_name"] == "AWS")
         assert str(aws_junction["value"]) == "53267000000"
     finally:
@@ -598,7 +598,7 @@ def test_amzn_shaped_fixture_produces_capex_for_aws_intl_na() -> None:
     assert ("AWS", 2024) in capex
     assert ("North America", 2024) in capex
     assert ("International", 2024) in capex
-    # Non-zero, in raw dollars (×1M from the "$ in Millions" section title).
+    # Non-zero, in raw dollars (x1M from the "$ in Millions" section title).
     assert capex[("AWS", 2024)].value == Decimal("53267000000")
     assert capex[("North America", 2024)].value == Decimal("24348000000")
     assert capex[("International", 2024)].value == Decimal("6643000000")

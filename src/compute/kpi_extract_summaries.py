@@ -1223,10 +1223,7 @@ def write_log(repo_root: Path, results: list[TickerExtractionLog]) -> Path:
     """Append/overwrite ticker entries in `data/kpi_extraction_log.json`."""
     log_path = repo_root / "data" / "kpi_extraction_log.json"
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    if log_path.exists():
-        existing = json.loads(log_path.read_text(encoding="utf-8"))
-    else:
-        existing = {}
+    existing = json.loads(log_path.read_text(encoding="utf-8")) if log_path.exists() else {}
     if not isinstance(existing, dict):
         existing = {}
     for r in results:

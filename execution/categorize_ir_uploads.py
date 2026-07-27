@@ -49,8 +49,8 @@ _PROJECT_ROOT_OVERRIDE = os.environ.get("IR_PROJECT_ROOT")
 if _PROJECT_ROOT_OVERRIDE:
     PROJECT_ROOT = Path(_PROJECT_ROOT_OVERRIDE).resolve()
 
-import index_manager
-from ir_uploads import (
+import index_manager  # noqa: E402
+from ir_uploads import (  # noqa: E402
     CategorizationFailure,
     canonical_path,
     classify_ir_file,
@@ -60,7 +60,7 @@ from ir_uploads import (
     sha256_of,
     ticker_hint_from_path,
 )
-from models.documents import DocType, FetchStatus, SourceType
+from models.documents import DocType, FetchStatus, SourceType  # noqa: E402
 
 IR_DIR = PROJECT_ROOT / "ir_documents"
 UNSORTED_DIR = IR_DIR / "_unsorted"

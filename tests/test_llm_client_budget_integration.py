@@ -27,7 +27,6 @@ import llm_call_ledger
 import llm_client
 from llm_client import LLMBudgetExceeded, call_llm
 
-
 # ---------------------------------------------------------------------------
 # Helpers — DB seed + subprocess stub
 # ---------------------------------------------------------------------------

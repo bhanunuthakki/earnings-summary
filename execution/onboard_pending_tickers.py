@@ -77,7 +77,7 @@ import sqlite3
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import cast
@@ -304,7 +304,7 @@ def apply_ipo_backoff(
 def _run_subprocess(cmd: list[str], stage: str, log_path: Path) -> StageResult:
     """Run a subprocess, append stdout/stderr to log_path, return a StageResult."""
     with open(log_path, "ab") as fh:
-        fh.write(f"\n[{stage}] cmd: {' '.join(cmd)}\n".encode("utf-8"))
+        fh.write(f"\n[{stage}] cmd: {' '.join(cmd)}\n".encode())
         fh.flush()
         proc = subprocess.run(
             cmd,
@@ -342,7 +342,7 @@ def onboard_one(
 
     All stages best-effort: failures are surfaced in the result, not raised.
     """
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
     stages: list[StageResult] = []
     is_commitment_only = pending_reason == _COMMITMENT_ONLY_REASON
 
@@ -381,7 +381,7 @@ def onboard_one(
         ]
         stages.append(_run_subprocess(commit_cmd, "extract_commitments", log_path))
 
-    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    elapsed = (datetime.now(UTC) - started).total_seconds()
     return TickerResult(
         ticker=ticker,
         pending_reason=pending_reason,
@@ -412,7 +412,7 @@ def _remaining_fmp_budget() -> int:
     """
     try:
         sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-        import refresh_cache  # noqa: E402
+        import refresh_cache
 
         tier = refresh_cache.resolve_tier(None)
         return refresh_cache.remaining_budget(tier)
@@ -461,7 +461,7 @@ def main() -> int:
     # 2026-07-16T09:17Z died on the first ticker (FIGR) with exactly this
     # traceback. run_id keeps the second-resolution stamp (human-readable,
     # unaffected) — only the log filename needs the extra entropy.
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     log_stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     log_path = _LOG_DIR / f"onboard_pending_{log_stamp}.log"
 

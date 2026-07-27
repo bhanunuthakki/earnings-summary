@@ -143,7 +143,7 @@ def extract_for_ticker(
                 repo_root=repo_root,
                 filing_doc_id=filing_doc_id,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             log.warning(
                 {
                     "event": "extractor_raised",
