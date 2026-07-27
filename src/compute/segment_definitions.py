@@ -24,9 +24,8 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
 
-from pydantic import TypeAdapter
+from pydantic import RootModel, TypeAdapter
 
 from llm.structured import call_llm_structured
 from llm_client import FAST_CLASSIFIER_MODEL
@@ -40,6 +39,10 @@ _SECTION_KEYWORDS = (
     "sales",
 )
 _MAX_TEXT_BUDGET = 60000  # chars sent to LLM — caps prompt size on chatty filings
+
+
+class _SegmentDefinitionsResponse(RootModel[dict[str, str | None]]):
+    """Closed value contract; caller also restricts keys to requested segments."""
 
 
 @dataclass
@@ -262,18 +265,16 @@ Example:
 
 Return ONLY the JSON object — no markdown fence, no commentary."""
 
-    parsed = cast(
-        dict[str, str | None],
-        call_llm_structured(
-            prompt,
-            purpose="segment_definition_extract",
-            expect="object",
-            schema=TypeAdapter(dict[str, str | None]),
-        ),
+    parsed = call_llm_structured(
+        prompt,
+        purpose="segment_definition_extract",
+        expect="object",
+        schema=TypeAdapter(_SegmentDefinitionsResponse),
     )
+    validated = _SegmentDefinitionsResponse.model_validate(parsed)
     out: dict[str, str | None] = {}
     for name in segment_names:
-        v = parsed.get(name)
+        v = validated.root.get(name)
         if isinstance(v, str) and v.strip():
             out[name] = v.strip()
         else:

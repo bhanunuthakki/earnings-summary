@@ -15,8 +15,11 @@ from __future__ import annotations
 import io
 import json
 import sqlite3
-from collections.abc import Iterator
+import threading
+from collections.abc import Generator, Iterator
 from pathlib import Path
+from types import GeneratorType
+from typing import cast
 
 import pytest
 from alembic.config import Config
@@ -61,9 +64,26 @@ class _FakeProc:
         self.stdin: _FakeStdin = _FakeStdin()
         self.stdout: Iterator[str] = iter(lines)
         self.stderr: io.StringIO = io.StringIO(stderr)
+        self.returncode: int | None = None
+        self.terminated = False
+        self.killed = False
 
-    def wait(self) -> int:
-        return 0
+    def poll(self) -> int | None:
+        return self.returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        del timeout
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+    def terminate(self) -> None:
+        self.terminated = True
+        self.returncode = -15
+
+    def kill(self) -> None:
+        self.killed = True
+        self.returncode = -9
 
 
 def _assistant_line(text: str) -> str:
@@ -202,9 +222,82 @@ def test_stream_empty_response_records_error_row(monkeypatch: pytest.MonkeyPatch
 
     events = list(real_stream_llm_text("PROMPT"))
     assert [e["type"] for e in events] == ["error"]
+    assert "model unavailable" not in str(events)
     # The failed call still lands a ledger row (with the error) for Call Health.
     assert len(records) == 1
     assert records[0].error is not None
+
+
+class _BlockingStdout:
+    def __init__(self, released: threading.Event) -> None:
+        self._released = released
+
+    def __iter__(self) -> _BlockingStdout:
+        return self
+
+    def __next__(self) -> str:
+        self._released.wait(timeout=2)
+        raise StopIteration
+
+
+class _BlockingProc(_FakeProc):
+    def __init__(self, stderr: str) -> None:
+        super().__init__([], stderr=stderr)
+        self.released = threading.Event()
+        self.stdout = _BlockingStdout(self.released)
+
+    def terminate(self) -> None:
+        super().terminate()
+        self.released.set()
+
+    def kill(self) -> None:
+        super().kill()
+        self.released.set()
+
+
+def test_stream_watchdog_terminates_and_records_generic_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_model(monkeypatch, DEFAULT_MODEL)
+    _patch_budget_ok(monkeypatch)
+    monkeypatch.setattr(chat_session.shutil, "which", _fake_which)
+    monkeypatch.setattr(chat_session, "_STREAM_TIMEOUT_SECONDS", 0.01)
+    proc = _BlockingProc(stderr="failed?api_key=secret-value")
+
+    def fake_popen(_cmd: list[str], **_kwargs: object) -> _BlockingProc:
+        return proc
+
+    monkeypatch.setattr(chat_session.subprocess, "Popen", fake_popen)
+    records = _patch_ledger(monkeypatch)
+
+    events = list(real_stream_llm_text("PROMPT"))
+
+    assert proc.terminated is True
+    assert [event["type"] for event in events] == ["error"]
+    assert "secret-value" not in str(events)
+    assert len(records) == 1
+    assert records[0].error is not None
+    assert "timeout" in records[0].error.lower()
+
+
+def test_stream_generator_close_terminates_child(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_model(monkeypatch, DEFAULT_MODEL)
+    _patch_budget_ok(monkeypatch)
+    monkeypatch.setattr(chat_session.shutil, "which", _fake_which)
+    proc = _FakeProc([_assistant_line("partial")])
+
+    def fake_popen(_cmd: list[str], **_kwargs: object) -> _FakeProc:
+        return proc
+
+    monkeypatch.setattr(chat_session.subprocess, "Popen", fake_popen)
+
+    stream = real_stream_llm_text("PROMPT")
+    assert isinstance(stream, GeneratorType)
+    stream_generator = cast("Generator[dict[str, object], None, None]", stream)
+    assert next(stream_generator)["type"] == "delta"
+    stream_generator.close()
+
+    assert proc.terminated is True
 
 
 # ---------------------------------------------------------------------------

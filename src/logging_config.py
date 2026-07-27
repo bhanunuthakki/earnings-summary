@@ -24,8 +24,11 @@ import sys
 import uuid
 from contextvars import ContextVar
 
+from log_redact import redact
+
 __all__ = [
     "JsonLogFormatter",
+    "RedactingFormatter",
     "configure_logging",
     "get_correlation_id",
     "new_correlation_id",
@@ -75,11 +78,18 @@ class JsonLogFormatter(logging.Formatter):
             "level": record.levelname,
             "logger": record.name,
             "correlation_id": getattr(record, "correlation_id", "-"),
-            "msg": record.getMessage(),
+            "msg": redact(record.getMessage()),
         }
         if record.exc_info:
-            payload["exc"] = self.formatException(record.exc_info)
+            payload["exc"] = redact(self.formatException(record.exc_info))
         return json.dumps(payload, default=str)
+
+
+class RedactingFormatter(logging.Formatter):
+    """Plain-text formatter that masks credentials in messages and tracebacks."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact(super().format(record))
 
 
 def configure_logging(*, level: int | str | None = None, json_format: bool | None = None) -> None:
@@ -102,7 +112,7 @@ def configure_logging(*, level: int | str | None = None, json_format: bool | Non
         handler.setFormatter(JsonLogFormatter())
     else:
         handler.setFormatter(
-            logging.Formatter(
+            RedactingFormatter(
                 "%(asctime)s %(levelname)s [%(correlation_id)s] %(name)s: %(message)s"
             )
         )

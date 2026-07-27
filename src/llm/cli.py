@@ -1083,6 +1083,43 @@ def _enforce_budget_pre_call(purpose: str | None, *, force_budget_bypass: bool) 
             )
 
 
+def _authorize_metered_openrouter_fallback(
+    purpose: str | None, *, force_budget_bypass: bool
+) -> bool:
+    """Fail-closed authorization for automatic metered fallback.
+
+    A purpose must be in the reviewed allowlist and carry a positive,
+    hard-block budget. The normal budget-bypass escape hatch is deliberately
+    forbidden here: a subscription outage must never become unbounded spend.
+    Every authorized use emits an ERROR-level event plus its normal ledger row.
+    """
+    if purpose is None or purpose not in OPENROUTER_FALLBACK_PURPOSES:
+        return False
+    if force_budget_bypass:
+        raise LLMBudgetExceeded(
+            f"{purpose}: automatic metered fallback cannot bypass its hard budget"
+        )
+
+    from llm_budget import check_budget
+
+    check = check_budget(purpose)
+    if check.cap <= 0 or not check.hard_block:
+        raise LLMSetupError(
+            f"{purpose}: metered OpenRouter fallback is allowlisted but lacks "
+            "a positive hard-block budget"
+        )
+    _enforce_budget_pre_call(purpose, force_budget_bypass=False)
+    log.error(
+        {
+            "event": "llm_metered_openrouter_fallback_authorized",
+            "purpose": purpose,
+            "current_spend_usd": str(check.current_spend),
+            "cap_usd": str(check.cap),
+        }
+    )
+    return True
+
+
 def _stderr_tail(exc: BaseException, limit: int = 400) -> str:
     """Best-effort tail of a failed subprocess's captured stderr (falls back
     to stdout). ``str(subprocess.CalledProcessError)`` is just "Command '...'
@@ -1111,6 +1148,8 @@ def _call_claude(
     force_budget_bypass: bool = False,
     fallback_used: str | None = None,
     allow_codex_fallback: bool = True,
+    fallback_from_provider: str | None = None,
+    fallback_from_transport: str | None = None,
 ) -> str:
     """
     Single-shot LLM call. Tries the Claude Code CLI first. On any operational
@@ -1181,9 +1220,12 @@ def _call_claude(
             prompt=prompt,
             provider="anthropic",
             transport="subscription_cli",
+            auth_class="subscription",
             attempts=0,
             retries=0,
             failure_class="quota_blocked",
+            fallback_from_provider=fallback_from_provider,
+            fallback_from_transport=fallback_from_transport,
         )
         raise LLMQuotaExhausted(msg, blocked_until=blocked_until)
 
@@ -1251,8 +1293,11 @@ def _call_claude(
                 prompt=prompt,
                 provider="anthropic",
                 transport="subscription_cli",
+                auth_class="subscription",
                 attempts=attempt,
                 retries=attempt - 1,
+                fallback_from_provider=fallback_from_provider,
+                fallback_from_transport=fallback_from_transport,
             )
             # Opt-in full-text capture (off unless LLM_CAPTURE_DIR is set) — the
             # corpus source for execution/compare_backends.py --from-capture.
@@ -1313,9 +1358,12 @@ def _call_claude(
         prompt=prompt,
         provider="anthropic",
         transport="subscription_cli",
+        auth_class="subscription",
         attempts=attempt,
         retries=attempt - 1,
         failure_class=last_info.kind,
+        fallback_from_provider=fallback_from_provider,
+        fallback_from_transport=fallback_from_transport,
     )
     if (
         os.environ.get("LLM_FALLBACK_DISABLED", "").lower() in {"1", "true", "yes"}
@@ -1337,9 +1385,13 @@ def _call_claude(
             scope=scope,
             run_id=run_id,
             fallback_used="codex",
+            fallback_from_provider="anthropic",
+            fallback_from_transport="subscription_cli",
         )
     except Exception as codex_error:
-        if purpose not in OPENROUTER_FALLBACK_PURPOSES:
+        if not _authorize_metered_openrouter_fallback(
+            purpose, force_budget_bypass=force_budget_bypass
+        ):
             if last_info.kind == "usage_limit":
                 raise LLMQuotaExhausted(
                     "Claude quota is exhausted and the Codex subscription fallback failed",
@@ -1352,7 +1404,6 @@ def _call_claude(
             ) from codex_error
         from llm.openrouter_backend import call_openrouter
 
-        log.error({"event": "llm_metered_openrouter_fallback", "purpose": purpose})
         return call_openrouter(
             prompt,
             purpose=purpose,
@@ -1360,6 +1411,9 @@ def _call_claude(
             scope=scope,
             run_id=run_id,
             force_budget_bypass=force_budget_bypass,
+            fallback_used="openrouter",
+            fallback_from_provider="openai",
+            fallback_from_transport="subscription_cli",
         )
         # Typed so eval/judge callers can abort instead of scoring the outage;
         # production callers defer per-item (is_hard_stop → False).
@@ -1513,6 +1567,8 @@ def call_llm(
 
     codex_fell_back = False
     primary_codex_error: Exception | None = None
+    fallback_from_provider: str | None = None
+    fallback_from_transport: str | None = None
     if resolved_backend == "codex":
         from llm.codex_backend import call_codex_llm
 
@@ -1547,6 +1603,8 @@ def call_llm(
             resolved_backend = "claude"
             codex_fell_back = True
             primary_codex_error = codex_error
+            fallback_from_provider = "openai"
+            fallback_from_transport = "subscription_cli"
 
     if resolved_backend == "gemini":
         from llm.gemini_backend import call_gemini  # late — avoids import cycle
@@ -1574,6 +1632,8 @@ def call_llm(
                     "error": f"{type(gemini_error).__name__}: {str(gemini_error)[:200]}",
                 }
             )
+            fallback_from_provider = "google"
+            fallback_from_transport = "metered_api"
             # fall through to the Claude path below (its own ledger rows)
 
     if resolved_backend == "openrouter":
@@ -1603,6 +1663,8 @@ def call_llm(
                     "error": f"{type(openrouter_error).__name__}: {str(openrouter_error)[:200]}",
                 }
             )
+            fallback_from_provider = "openrouter"
+            fallback_from_transport = "metered_api"
             # fall through to the Claude path below (its own ledger rows)
 
     # Claude path. If resolved_model is a non-Claude ID (purpose pinned to Gemini
@@ -1626,8 +1688,10 @@ def call_llm(
             scope=scope,
             run_id=run_id,
             force_budget_bypass=force_budget_bypass,
-            fallback_used="claude" if codex_fell_back else None,
+            fallback_used="claude" if fallback_from_provider is not None else None,
             allow_codex_fallback=not codex_fell_back,
+            fallback_from_provider=fallback_from_provider,
+            fallback_from_transport=fallback_from_transport,
         )
     except LLMQuotaExhausted:
         raise
@@ -1739,6 +1803,7 @@ def call_llm_with_web(
             prompt=prompt,
             provider="anthropic",
             transport="subscription_cli",
+            auth_class="subscription",
             attempts=0,
             retries=0,
             failure_class="quota_blocked",
@@ -1805,6 +1870,7 @@ def call_llm_with_web(
             prompt=prompt,
             provider="anthropic",
             transport="subscription_cli",
+            auth_class="subscription",
             attempts=1,
             retries=0,
         )
@@ -1841,6 +1907,7 @@ def call_llm_with_web(
             prompt=prompt,
             provider="anthropic",
             transport="subscription_cli",
+            auth_class="subscription",
             attempts=1,
             retries=0,
             failure_class=web_info.kind,

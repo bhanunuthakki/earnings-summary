@@ -16,6 +16,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -88,9 +89,12 @@ def test_enumerate_strips_fence_and_caps_max_facts(monkeypatch: pytest.MonkeyPat
     assert len(rows) == 2  # capped
 
 
-def test_enumerate_returns_empty_on_non_array_or_blank(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_enumerate_rejects_non_array_but_blank_input_short_circuits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(kes, "call_llm_structured", _const_caller('{"not": "an array"}'))
-    assert _llm_extract_enumerate("NU", "Q1 2025", "text") == []
+    with pytest.raises(ValidationError, match="valid list"):
+        _llm_extract_enumerate("NU", "Q1 2025", "text")
     # Blank input short-circuits without even calling the model.
     calls: list[int] = []
 
@@ -103,14 +107,13 @@ def test_enumerate_returns_empty_on_non_array_or_blank(monkeypatch: pytest.Monke
     assert calls == []
 
 
-def test_enumerate_skips_malformed_items(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_enumerate_rejects_malformed_items(monkeypatch: pytest.MonkeyPatch) -> None:
     bad = (
         '[{"label": "Revenue", "value": 5, "unit": "actual"}, {"value": 9}, "junk", {"label": "X"}]'
     )
     monkeypatch.setattr(kes, "call_llm_structured", _const_caller(bad))
-    rows = _llm_extract_enumerate("NU", "Q1 2025", "text")
-    # Only the item with both label AND value survives.
-    assert rows == [{"label": "Revenue", "value": 5, "unit": "actual"}]
+    with pytest.raises(ValidationError, match="source_excerpt"):
+        _llm_extract_enumerate("NU", "Q1 2025", "text")
 
 
 # ---------------------------------------------------------------------------

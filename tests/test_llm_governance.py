@@ -54,7 +54,9 @@ def test_transport_provenance_is_written_when_schema_has_columns(tmp_path: Path)
           output_tokens INTEGER, elapsed_ms INTEGER, cost_estimate_usd REAL,
           cache_hit INTEGER, fallback_used TEXT, artifact_id INTEGER, error TEXT,
           run_id TEXT, provider TEXT, transport TEXT, attempts INTEGER,
-          retries INTEGER, outcome TEXT, failure_class TEXT
+          retries INTEGER, auth_class TEXT, attempt_count INTEGER,
+          retry_count INTEGER, outcome TEXT, failure_class TEXT,
+          fallback_from_provider TEXT, fallback_from_transport TEXT
         );
         """
     )
@@ -69,18 +71,69 @@ def test_transport_provenance_is_written_when_schema_has_columns(tmp_path: Path)
             purpose="kpi_summary_extract",
             provider="openai",
             transport="subscription_cli",
+            auth_class="membership",
             attempts=1,
             retries=0,
+            attempt_count=1,
+            retry_count=0,
             outcome="success",
+            fallback_from_provider="anthropic",
+            fallback_from_transport="subscription_cli",
         ),
         db_path=db,
     )
     conn = sqlite3.connect(db)
     row = conn.execute(
-        "SELECT provider, transport, attempts, retries, outcome FROM llm_calls"
+        "SELECT provider, transport, auth_class, attempts, retries, "
+        "attempt_count, retry_count, outcome, fallback_from_provider, "
+        "fallback_from_transport FROM llm_calls"
     ).fetchone()
     conn.close()
-    assert row == ("openai", "subscription_cli", 1, 0, "success")
+    assert row == (
+        "openai",
+        "subscription_cli",
+        "membership",
+        1,
+        0,
+        1,
+        0,
+        "success",
+        "anthropic",
+        "subscription_cli",
+    )
+
+
+def test_central_ledger_redacts_error_before_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from llm import ledger
+
+    records: list[LlmCallRecord] = []
+    monkeypatch.setattr("llm_call_ledger.record_call", lambda record: records.append(record))
+
+    ledger.record_llm_call(
+        started_at=datetime.now(UTC),
+        elapsed_ms=1,
+        model="gpt-5.6-terra",
+        prompt_sha="0" * 64,
+        prompt_chars=10,
+        purpose="kpi_summary_extract",
+        ticker=None,
+        scope=None,
+        run_id=None,
+        error="provider failed?api_key=do-not-store-this",
+        provider="openai",
+        transport="subscription_cli",
+        auth_class="membership",
+        attempts=1,
+        retries=0,
+    )
+
+    assert len(records) == 1
+    assert records[0].error is not None
+    assert "do-not-store-this" not in records[0].error
+    assert records[0].attempt_count == 1
+    assert records[0].retry_count == 0
 
 
 def test_private_claude_bypasses_are_absent() -> None:

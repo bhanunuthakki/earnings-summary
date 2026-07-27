@@ -33,14 +33,14 @@ import io
 import re
 import unicodedata
 import urllib.error
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-import requests
 from pypdf import PdfReader
 
-from ir_pipeline._net import UnsafeURLError, ensure_safe_public_url, safe_redirect_url
+from ir_pipeline._net import UnsafeURLError, build_public_opener, ensure_safe_public_url
 from ir_pipeline.config import IrConfig, get_config
 from ir_pipeline.discover import discover_history_hybrid
 from ir_pipeline.discover._docmeta import classify, filename_for_url
@@ -52,7 +52,6 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 _RENDER_TIMEOUT_MS = 60000
 _DOWNLOAD_TIMEOUT_S = 60
-_MAX_REDIRECTS = 5
 # A genuine full call is tens of KB; below this the extract is a stub / failure.
 _MIN_TRANSCRIPT_CHARS = 2000
 
@@ -136,8 +135,9 @@ def _match_transcript(
     """
     for url in urls:
         try:
+            ensure_safe_public_url(url)
             filename = fetch_filename(url)
-        except (urllib.error.URLError, OSError, ValueError):
+        except (urllib.error.URLError, UnsafeURLError, OSError, ValueError):
             continue  # header probe failed for this link — skip it, try the next
         if classify(filename) == "transcript" and _quarter_of(filename) == (quarter, year):
             return url, filename
@@ -160,6 +160,7 @@ def _locate_transcript(
     if hit is not None:
         return hit
 
+    ensure_safe_public_url(cfg.results_center_url)
     docs = discover_history_hybrid(
         ir_url=cfg.results_center_url, config=cfg, timeout_ms=_RENDER_TIMEOUT_MS
     )
@@ -180,32 +181,27 @@ def fetch_ir_transcript(
     if cfg is None or cfg.platform != "mz" or not cfg.results_center_url:
         return None
 
-    found = _locate_transcript(cfg, ticker, year, quarter, repo_root or _PROJECT_ROOT)
+    try:
+        found = _locate_transcript(cfg, ticker, year, quarter, repo_root or _PROJECT_ROOT)
+    except (UnsafeURLError, urllib.error.URLError, OSError, ValueError):
+        return None
     if found is None:
         return None
     url, filename = found
 
-    current_url = url
     try:
-        for _ in range(_MAX_REDIRECTS + 1):
-            ensure_safe_public_url(current_url)
-            resp = requests.get(
-                current_url,
-                headers={"User-Agent": _UA},
-                timeout=_DOWNLOAD_TIMEOUT_S,
-                allow_redirects=False,
-            )
-            if not 300 <= resp.status_code < 400:
-                break
-            current_url = safe_redirect_url(current_url, resp.headers.get("Location", ""))
-        else:
-            return None
-    except (requests.RequestException, UnsafeURLError, ValueError):
+        ensure_safe_public_url(url)
+        req = urllib.request.Request(url, headers={"User-Agent": _UA})
+        with build_public_opener().open(req, timeout=_DOWNLOAD_TIMEOUT_S) as resp:
+            status = resp.status
+            content = resp.read()
+            current_url = resp.geturl()
+    except (urllib.error.URLError, UnsafeURLError, OSError, ValueError):
         return None
-    if resp.status_code != 200 or not resp.content:
+    if status != 200 or not content:
         return None
 
-    text = _normalize(_extract_pdf_text(resp.content))
+    text = _normalize(_extract_pdf_text(content))
     if len(text) < _MIN_TRANSCRIPT_CHARS:
         return None
     return IrTranscriptHit(page_url=current_url, qa_text=_qa_segment(text), filename=filename)

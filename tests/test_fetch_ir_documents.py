@@ -153,9 +153,20 @@ def test_downloader_falls_back_to_curl_cffi_on_timeout(
         _ = (req, timeout)
         raise TimeoutError("tarpit: the read operation timed out")
 
-    def _cc_get(url: str, **_kw: object) -> _CurlResp:
-        _ = url
-        return _CurlResp()
+    class _FakeSession:
+        def __init__(self, **kwargs: object) -> None:
+            assert kwargs["trust_env"] is False
+            assert kwargs["curl_options"]
+
+        def __enter__(self) -> _FakeSession:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def get(self, url: str, **_kw: object) -> _CurlResp:
+            _ = url
+            return _CurlResp()
 
     def _fake_opener(*_args: object) -> _FakeOpener:
         return _FakeOpener(_timeout_urlopen)
@@ -164,6 +175,6 @@ def test_downloader_falls_back_to_curl_cffi_on_timeout(
         "execution.fetch_ir_documents.urllib.request.build_opener",
         _fake_opener,
     )
-    monkeypatch.setattr(ccr, "get", _cc_get)
+    monkeypatch.setattr(ccr, "Session", _FakeSession)
     summary = fid.process_ticker("LLY", root=root, db_path=tmp_path / "p.db", categorize=False)
     assert summary["downloaded"] == 1  # recovered via curl_cffi after urllib stalled

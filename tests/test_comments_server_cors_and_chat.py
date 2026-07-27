@@ -20,6 +20,7 @@ import sqlite3
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from flask.testing import FlaskClient
@@ -234,9 +235,83 @@ def test_chat_surfaces_subprocess_errors_as_sse(monkeypatch, client):
     body = resp.get_data(as_text=True)
     assert "partial" in body
     assert "chat stream failed" in body
+    assert '"correlation_id":' in body
     # The client gets a stable retry message, while the detailed exception is
     # retained only in the redacted server log.
     assert "subprocess died" not in body
+
+
+def test_chat_rejects_overlong_message_with_correlation_id(client: FlaskClient) -> None:
+    resp = client.post(
+        "/chat/NU",
+        json={"report_date": "2026-05-01", "message": "x" * 8_001},
+        headers={"X-Correlation-ID": "chat-limit-test"},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json() == {
+        "error": "message exceeds the 8000 character limit",
+        "correlation_id": "chat-limit-test",
+    }
+
+
+def test_ask_rejects_overlong_query_with_correlation_id(client: FlaskClient) -> None:
+    resp = client.post(
+        "/api/ask",
+        json={"query": "x" * 8_001},
+        headers={"X-Correlation-ID": "ask-limit-test"},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json() == {
+        "error": "query exceeds the 8000 character limit",
+        "correlation_id": "ask-limit-test",
+    }
+
+
+def test_ask_history_is_bounded_at_the_http_boundary(
+    monkeypatch: pytest.MonkeyPatch, client: FlaskClient
+) -> None:
+    captured: dict[str, comments_server.AskTurn] = {}
+
+    def _pack(*_a: object, **_k: object) -> SimpleNamespace:
+        return SimpleNamespace(default_tickers=[])
+
+    def _respond(turn: comments_server.AskTurn, *_a: object, **_k: object):
+        captured["turn"] = turn
+        yield {"type": "final", "text": "ok"}
+
+    monkeypatch.setattr(comments_server, "build_portfolio_pack", _pack)
+    monkeypatch.setattr(comments_server, "respond_turn", _respond)
+    history = [
+        {"role": "user" if i % 2 == 0 else "assistant", "text": "z" * 2_000} for i in range(20)
+    ]
+    resp = client.post("/api/ask", json={"query": "bounded", "history": history})
+    assert resp.status_code == 200
+    turn = captured["turn"]
+    assert len(turn.history) == 8
+    assert all(len(item["text"]) == 1_200 for item in turn.history)
+
+
+def test_buffered_ask_error_is_generic_and_correlated(
+    monkeypatch: pytest.MonkeyPatch, client: FlaskClient
+) -> None:
+    def _pack(*_a: object, **_k: object) -> SimpleNamespace:
+        return SimpleNamespace(default_tickers=[])
+
+    def _failed(*_a: object, **_k: object):
+        yield {"type": "error", "error": "provider failed?api_key=secret-value"}
+
+    monkeypatch.setattr(comments_server, "build_portfolio_pack", _pack)
+    monkeypatch.setattr(comments_server, "respond_turn", _failed)
+    resp = client.post(
+        "/api/ask",
+        json={"query": "what changed?"},
+        headers={"X-Correlation-ID": "buffered-error-test"},
+    )
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["message"] == "ask failed; retry the request"
+    assert payload["correlation_id"] == "buffered-error-test"
+    assert "secret-value" not in resp.get_data(as_text=True)
 
 
 def test_chat_data_question_streams_view_fragment(

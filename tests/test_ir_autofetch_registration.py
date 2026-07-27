@@ -86,6 +86,10 @@ def test_real_download_picks_xlsx_extension_from_content_disposition(
         return None
 
     monkeypatch.setattr("execution.fetch_ir_documents.time.sleep", _nosleep)
+    monkeypatch.setattr(
+        "execution.fetch_ir_documents.ensure_safe_public_url",
+        lambda url: url,
+    )
 
     class _FakeOpener:
         def open(self, req: object, timeout: int = 0) -> _FakeResp:

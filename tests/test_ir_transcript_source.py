@@ -12,6 +12,7 @@ logic via monkeypatch — never hitting the network.
 
 from __future__ import annotations
 
+import socket
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ import pytest
 import aggregator_sources
 from aggregator_sources import AggregatorHit, AggregatorSource
 from ir_pipeline import transcript
+from ir_pipeline._net import UnsafeURLError
 from ir_pipeline.config import IrConfig
 from ir_pipeline.discover._docmeta import CandidateDoc
 from ir_pipeline.manifest import ManifestEntry
@@ -33,6 +35,18 @@ from ir_pipeline.transcript import (
 )
 
 _MZ_CFG = IrConfig(ticker="NU", platform="mz", results_center_url="https://ir.example/rc/")
+
+
+@pytest.fixture(autouse=True)
+def public_test_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep transcript tests hermetic while the production guard resolves DNS."""
+
+    monkeypatch.setattr(
+        "ir_pipeline._net.socket.getaddrinfo",
+        lambda host, port, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -91,19 +105,25 @@ def test_qa_segment_returns_whole_text_without_marker() -> None:
 
 
 def test_match_transcript_picks_requested_quarter() -> None:
-    names = {"u_old": "Transcript 4Q25.pdf", "u_new": "Transcript 1Q26.pdf"}
+    names = {
+        "https://ir.example/old": "Transcript 4Q25.pdf",
+        "https://ir.example/new": "Transcript 1Q26.pdf",
+    }
 
     def _name(url: str) -> str:
         return names[url]
 
-    assert _match_transcript(["u_old", "u_new"], 2026, 1, _name) == ("u_new", "Transcript 1Q26.pdf")
+    assert _match_transcript(list(names), 2026, 1, _name) == (
+        "https://ir.example/new",
+        "Transcript 1Q26.pdf",
+    )
 
 
 def test_match_transcript_none_when_quarter_absent() -> None:
     def _name(_url: str) -> str:
         return "Transcript 1Q26.pdf"
 
-    assert _match_transcript(["u"], 2024, 2, _name) is None
+    assert _match_transcript(["https://ir.example/transcript"], 2024, 2, _name) is None
 
 
 def test_match_transcript_skips_non_transcript_files() -> None:
@@ -111,17 +131,31 @@ def test_match_transcript_skips_non_transcript_files() -> None:
     def _name(_url: str) -> str:
         return "Historical Data 1Q26.xlsx"
 
-    assert _match_transcript(["u"], 2026, 1, _name) is None
+    assert _match_transcript(["https://ir.example/spreadsheet"], 2026, 1, _name) is None
 
 
 def test_match_transcript_skips_unprobeable_link() -> None:
     # The first link's header probe fails; the second (a real transcript) wins.
     def _name(url: str) -> str:
-        if url == "bad":
+        if url.endswith("/bad"):
             raise OSError("header probe failed")
         return "Transcript 1Q26.pdf"
 
-    assert _match_transcript(["bad", "good"], 2026, 1, _name) == ("good", "Transcript 1Q26.pdf")
+    assert _match_transcript(
+        ["https://ir.example/bad", "https://ir.example/good"], 2026, 1, _name
+    ) == ("https://ir.example/good", "Transcript 1Q26.pdf")
+
+
+def test_match_transcript_blocks_unsafe_url_before_filename_probe() -> None:
+    called = False
+
+    def _name(_url: str) -> str:
+        nonlocal called
+        called = True
+        return "Transcript 1Q26.pdf"
+
+    assert _match_transcript(["http://127.0.0.1/private"], 2026, 1, _name) is None
+    assert called is False
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +167,13 @@ def test_locate_prefers_manifest_over_live_crawl(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     def _manifest(_root: Path, _ticker: str) -> list[ManifestEntry]:
-        return [ManifestEntry(ticker="NU", doc_type="transcript", url="man_url")]
+        return [
+            ManifestEntry(
+                ticker="NU",
+                doc_type="transcript",
+                url="https://ir.example/manifest",
+            )
+        ]
 
     def _name(_url: str) -> str:
         return "Transcript 1Q26.pdf"
@@ -146,7 +186,7 @@ def test_locate_prefers_manifest_over_live_crawl(
     monkeypatch.setattr(transcript, "discover_history_hybrid", _must_not_crawl)
 
     assert _locate_transcript(_MZ_CFG, "NU", 2026, 1, tmp_path) == (
-        "man_url",
+        "https://ir.example/manifest",
         "Transcript 1Q26.pdf",
     )
 
@@ -163,7 +203,7 @@ def test_locate_falls_back_to_hybrid_when_manifest_empty(
     def _crawl(**_kw: object) -> list[CandidateDoc]:
         return [
             CandidateDoc(
-                url="hyb_url",
+                url="https://ir.example/hybrid",
                 link_text="",
                 filename_hint="",
                 doc_type_guess="transcript",
@@ -178,9 +218,31 @@ def test_locate_falls_back_to_hybrid_when_manifest_empty(
     monkeypatch.setattr(transcript, "discover_history_hybrid", _crawl)
 
     assert _locate_transcript(_MZ_CFG, "NU", 2026, 1, tmp_path) == (
-        "hyb_url",
+        "https://ir.example/hybrid",
         "Transcript 1Q26.pdf",
     )
+
+
+def test_locate_guards_results_center_before_live_crawl(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    unsafe = IrConfig(
+        ticker="NU",
+        platform="mz",
+        results_center_url="http://127.0.0.1/private",
+    )
+
+    def _empty_manifest(_root: Path, _ticker: str) -> list[ManifestEntry]:
+        return []
+
+    monkeypatch.setattr(transcript, "load_manifest", _empty_manifest)
+
+    def _must_not_crawl(**_kw: object) -> list[CandidateDoc]:
+        raise AssertionError("unsafe results-center URL reached the crawler")
+
+    monkeypatch.setattr(transcript, "discover_history_hybrid", _must_not_crawl)
+    with pytest.raises(UnsafeURLError):
+        _locate_transcript(unsafe, "NU", 2026, 1, tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +254,24 @@ class _FakeResp:
     def __init__(self, content: bytes, status: int = 200) -> None:
         self.content = content
         self.status_code = status
+        self.status = status
+
+    def __enter__(self) -> _FakeResp:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self.content
+
+    def geturl(self) -> str:
+        return "https://files/abc"
+
+
+class _FakeOpener:
+    def open(self, *_args: object, **_kwargs: object) -> _FakeResp:
+        return _FakeResp(b"%PDF-bytes")
 
 
 def _cfg_nu(_ticker: str, _repo: Path | None = None) -> IrConfig:
@@ -206,9 +286,6 @@ def test_fetch_returns_none_for_unconfigured_ticker() -> None:
 def test_fetch_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     body = "Prepared remarks here, plenty. We will now start the Q&A session. " + ("x " * 1000)
 
-    def _get(*_a: object, **_k: object) -> _FakeResp:
-        return _FakeResp(b"%PDF-bytes")
-
     def _located(*_a: object, **_k: object) -> tuple[str, str]:
         return ("https://files/abc", "Transcript 1Q26.pdf")
 
@@ -217,7 +294,7 @@ def test_fetch_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(transcript, "get_config", _cfg_nu)
     monkeypatch.setattr(transcript, "_locate_transcript", _located)
-    monkeypatch.setattr(transcript.requests, "get", _get)
+    monkeypatch.setattr(transcript, "build_public_opener", _FakeOpener)
     monkeypatch.setattr(transcript, "_extract_pdf_text", _extract)
 
     hit = fetch_ir_transcript("NU", 2026, 1)

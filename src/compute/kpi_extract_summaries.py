@@ -41,9 +41,9 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, field_validator
 
 import parser  # first-party src/parser.py (untyped legacy module — read PDFs via _read_pdf_text)
 from compute.kpi_resolver import normalize_kpi_name
@@ -71,6 +71,41 @@ from provenance.llm_extracted_parent import resolve_parent
 # Named `logger` (not `log`) to avoid colliding with the `TickerExtractionLog`
 # locals named `log` throughout this module.
 logger = logging.getLogger("kpi_extract_summaries")
+
+
+class _KpiSummaryValue(BaseModel):
+    """Strict wire contract for one allowlisted KPI extraction."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    value: Decimal
+    unit: Literal["percent", "actual", "count", "ratio", "bps"]
+    confidence: float = Field(ge=0.0, le=1.0)
+    source_excerpt: str | None = Field(default=None, max_length=200)
+
+
+class _KpiSummaryResponse(RootModel[dict[str, _KpiSummaryValue]]):
+    pass
+
+
+class _EnumeratedKpi(BaseModel):
+    """Strict wire contract for one capture-every-number row."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1, max_length=200)
+    value: Decimal
+    unit: Literal["percent", "actual", "count", "ratio", "bps"]
+    source_excerpt: str = Field(min_length=1, max_length=200)
+
+    @field_validator("label", "source_excerpt")
+    @classmethod
+    def _strip_nonblank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
 
 # Both extraction stages below (allowlist Stage A / enumerate Stage B) read an
 # LLM-generated summary DOCUMENT, not the original filing/transcript text --
@@ -573,9 +608,14 @@ Return ONLY the JSON object — no markdown fence, no commentary."""
         prompt,
         purpose="kpi_summary_extract",
         expect="object",
-        schema=TypeAdapter(dict[str, dict[str, object]]),
+        schema=TypeAdapter(_KpiSummaryResponse),
     )
-    return {key: value for key, value in parsed.items() if "value" in value}
+    validated = _KpiSummaryResponse.model_validate(parsed)
+    return {
+        key: value.model_dump(mode="python", exclude_none=True)
+        for key, value in validated.root.items()
+        if key in kpi_names
+    }
 
 
 def parse_decimal_value(raw: object) -> Decimal | None:
@@ -798,19 +838,15 @@ Rules:
 
 Document text:
 {spotlighted}"""
-    parsed = cast(
-        list[dict[str, object]],
-        call_llm_structured(
-            prompt,
-            purpose="kpi_summary_enumerate",
-            expect="array",
-            schema=TypeAdapter(list[dict[str, object]]),
-        ),
+    parsed = call_llm_structured(
+        prompt,
+        purpose="kpi_summary_enumerate",
+        expect="array",
+        schema=TypeAdapter(list[_EnumeratedKpi]),
     )
     out: list[dict[str, object]] = []
-    for item in parsed:
-        if "label" in item and "value" in item:
-            out.append(item)
+    for item in TypeAdapter(list[_EnumeratedKpi]).validate_python(parsed):
+        out.append(item.model_dump(mode="python"))
         if len(out) >= max_facts:
             break
     return out

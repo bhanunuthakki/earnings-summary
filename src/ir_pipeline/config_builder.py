@@ -27,14 +27,28 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import openpyxl
+from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter
 
 from ir_pipeline.config import IrConfig, SheetKpi, save_config
 from ir_pipeline.spreadsheet import SheetDataRow, _header_row, enumerate_numeric_rows
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+class _SheetKpiMapping(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sheet: str = Field(min_length=1)
+    row_label: str = Field(min_length=1)
+    unit: Literal["percent", "actual", "usd", "count", "ratio"]
+    scale: Literal[1, 100]
+
+
+class _SheetKpiMapResponse(RootModel[dict[str, _SheetKpiMapping]]):
+    pass
 
 
 # Standard financials line items — these flow from FMP/SEC at higher tiers, so
@@ -152,19 +166,23 @@ Return ONLY the JSON object — no prose, no markdown fence."""
 
 def _llm_map(ticker: str, structure: str, kpi_names: list[str]) -> dict[str, dict[str, object]]:
     """Single LLM call → {kpi_name: {sheet, row_label, unit, scale}}."""
-    from pydantic import TypeAdapter
-
     from llm.structured import call_llm_structured  # lazy: heavy import chain
 
     # One-time per-ticker onboarding step; mapping a full sheet structure takes
     # the model ~1-3 min, so allow generous headroom over the default timeout.
-    return call_llm_structured(
+    parsed = call_llm_structured(
         _build_prompt(ticker, structure, kpi_names),
         purpose="ir_sheet_kpi_map",
         timeout_seconds=300,
         expect="object",
-        schema=TypeAdapter(dict[str, dict[str, object]]),
+        schema=TypeAdapter(_SheetKpiMapResponse),
     )
+    validated = _SheetKpiMapResponse.model_validate(parsed)
+    return {
+        name: spec.model_dump(mode="python")
+        for name, spec in validated.root.items()
+        if name in kpi_names
+    }
 
 
 def _analyst_kpis(ticker: str, xlsx_path: Path, repo_root: Path, label_col: int) -> list[SheetKpi]:
