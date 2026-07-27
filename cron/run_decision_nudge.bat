@@ -22,6 +22,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\decision_nudge_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\run_decision_nudge.py > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "decision-nudge" "portfolio-db" execution\run_decision_nudge.py > "%LOG_FILE%" 2>&1
 
 endlocal

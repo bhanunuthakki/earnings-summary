@@ -21,7 +21,7 @@ set LOG_FILE=%LOG_DIR%\red_team_%TS%.log
 cd /d "%PROJECT_ROOT%"
 
 echo === %DATE% %TIME% red_team starting === >> "%LOG_FILE%" 2>&1
-python execution\run_red_team.py --repo-root "%PROJECT_ROOT%" >> "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "red-team" "red-team-report" execution\run_red_team.py --repo-root "%PROJECT_ROOT%" >> "%LOG_FILE%" 2>&1
 echo === %DATE% %TIME% red_team done (exit %ERRORLEVEL%) === >> "%LOG_FILE%" 2>&1
 
 endlocal

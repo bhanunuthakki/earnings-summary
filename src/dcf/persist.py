@@ -32,7 +32,9 @@ from dataclasses import dataclass
 from datetime import date, datetime
 
 from dcf import valuation
+from dcf.provenance import DcfInputProvenance
 from model_provenance.versioning import mark_superseded_by, supersede_current
+from schema_compat import require_current_for_write
 
 
 @dataclass(frozen=True)
@@ -66,6 +68,7 @@ class DcfRunRow:
     run_id: str | None = None
     assumptions_sync_status: str | None = None
     assumptions_synced_at: datetime | None = None
+    provenance: DcfInputProvenance | None = None
 
 
 def derive_over_under(live_price: float | None, npv_per_share: float) -> float | None:
@@ -111,6 +114,17 @@ def _has_sanity_column(conn: sqlite3.Connection) -> bool:
     return "sanity_flag" in cols
 
 
+def _has_provenance_columns(conn: sqlite3.Connection) -> bool:
+    cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
+    return {
+        "input_sha256",
+        "workbook_sha256",
+        "engine_version",
+        "inputs_as_of",
+        "provenance_json",
+    }.issubset(cols)
+
+
 def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
     """Persist a new dcf_runs version for ``row.ticker``.
 
@@ -130,6 +144,13 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
         raise sqlite3.OperationalError(
             "dcf_runs is missing assumptions_sync_status/assumptions_synced_at — "
             "run `alembic upgrade head` (migration 0091) before refreshing"
+        )
+    has_provenance = _has_provenance_columns(conn)
+    if row.provenance is not None:
+        require_current_for_write(conn)
+    if row.provenance is not None and not has_provenance:
+        raise sqlite3.OperationalError(
+            "dcf_runs is missing DCF provenance columns — run `alembic upgrade head` before refreshing"
         )
     sync_cols = ", assumptions_sync_status, assumptions_synced_at" if has_sync else ""
     sync_vals = ", :assumptions_sync_status, :assumptions_synced_at" if has_sync else ""
@@ -162,6 +183,16 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
         params["assumptions_synced_at"] = (
             row.assumptions_synced_at.isoformat() if row.assumptions_synced_at else None
         )
+    if has_provenance and row.provenance is not None:
+        params.update(
+            {
+                "input_sha256": row.provenance.input_sha256,
+                "workbook_sha256": row.provenance.workbook_sha256,
+                "engine_version": row.provenance.engine_version,
+                "inputs_as_of": row.provenance.inputs_as_of_iso(),
+                "provenance_json": row.provenance.as_json(),
+            }
+        )
 
     base_cols = (
         "ticker, valuation_date, horizon_years, wacc, terminal_growth, "
@@ -175,6 +206,26 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
         ":live_price, :live_price_at, :over_under_pct, :mos_bar_used, "
         ":assumption_snapshot_json, '[]', 0"
     )
+    provenance_cols = (
+        ", input_sha256, workbook_sha256, engine_version, inputs_as_of, provenance_json"
+        if has_provenance
+        else ""
+    )
+    provenance_vals = (
+        ", :input_sha256, :workbook_sha256, :engine_version, :inputs_as_of, :provenance_json"
+        if has_provenance
+        else ""
+    )
+    if has_provenance and row.provenance is None:
+        params.update(
+            {
+                "input_sha256": None,
+                "workbook_sha256": None,
+                "engine_version": None,
+                "inputs_as_of": None,
+                "provenance_json": None,
+            }
+        )
 
     if _has_versioning_columns(conn):
         # Supersede the prior current run for this ticker (unsegmented — the Phase 3
@@ -186,8 +237,8 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
             entity_params={"ticker": params["ticker"]},
         )
         cur = conn.execute(
-            f"INSERT INTO dcf_runs ({base_cols}, is_latest{sync_cols}{sanity_cols}) "
-            f"VALUES ({base_vals}, 1{sync_vals}{sanity_vals})",
+            f"INSERT INTO dcf_runs ({base_cols}, is_latest{sync_cols}{sanity_cols}{provenance_cols}) "
+            f"VALUES ({base_vals}, 1{sync_vals}{sanity_vals}{provenance_vals})",
             params,
         )
         mark_superseded_by(
@@ -195,8 +246,8 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
         )
     else:
         conn.execute(
-            f"INSERT OR REPLACE INTO dcf_runs ({base_cols}{sync_cols}{sanity_cols}) "
-            f"VALUES ({base_vals}{sync_vals}{sanity_vals})",
+            f"INSERT OR REPLACE INTO dcf_runs ({base_cols}{sync_cols}{sanity_cols}{provenance_cols}) "
+            f"VALUES ({base_vals}{sync_vals}{sanity_vals}{provenance_vals})",
             params,
         )
     conn.commit()

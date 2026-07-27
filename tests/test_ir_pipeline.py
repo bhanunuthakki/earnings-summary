@@ -166,30 +166,21 @@ def test_build_ir_config_maps_rows_via_llm(tmp_path: Path, monkeypatch) -> None:
         ),
         encoding="utf-8",
     )
-    fake = (
-        "```json\n"
-        + json.dumps(
-            {
-                "Monthly ARPAC (USD)": {
-                    "sheet": "Managerial indicators",
-                    "row_label": "Average Revenue",
-                    "unit": "usd",
-                    "scale": 1,
-                },
-                "Risk-adjusted NIM (NIM minus cost of risk)": {
-                    "sheet": "Managerial indicators",
-                    "row_label": "Risk-adjusted NIM",
-                    "unit": "percent",
-                    "scale": 100,
-                },
-            }
-        )
-        + "\n```"
-    )
-
-    import llm_client
-
-    monkeypatch.setattr(llm_client, "_call_claude", lambda *a, **k: fake)
+    fake = {
+        "Monthly ARPAC (USD)": {
+            "sheet": "Managerial indicators",
+            "row_label": "Average Revenue",
+            "unit": "usd",
+            "scale": 1,
+        },
+        "Risk-adjusted NIM (NIM minus cost of risk)": {
+            "sheet": "Managerial indicators",
+            "row_label": "Risk-adjusted NIM",
+            "unit": "percent",
+            "scale": 100,
+        },
+    }
+    monkeypatch.setattr("llm.structured.call_llm_structured", lambda *a, **k: fake)
     cfg = config_builder.build_ir_config(
         "ZZ", sheet, platform="mz", results_center_url="https://x", repo_root=tmp_path
     )

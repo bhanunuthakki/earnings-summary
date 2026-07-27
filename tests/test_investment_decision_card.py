@@ -337,6 +337,31 @@ def test_llm_claiming_decision_ready_is_overwritten_false(
     assert "no KPI coverage on file" in result.card.evidence_readiness.blockers
 
 
+def test_blocked_evaluation_persists_explicit_blocker_without_llm_or_thesis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = _make_db(tmp_path)
+    blocked = _assessment(
+        eligible=False,
+        blocking=("no thesis on file", "no KPI coverage on file"),
+    )
+    _patch_inputs(monkeypatch, assessment=blocked, spec=None)
+
+    def _must_not_call(*args: object, **kwargs: object) -> object:
+        raise AssertionError("blocked evaluations must not spend an LLM call")
+
+    monkeypatch.setattr(ridc, "call_llm_structured", _must_not_call)
+    result = ridc.generate_card(db_path, tmp_path, TICKER)
+
+    assert result.selection_mode == "deterministic_fallback"
+    assert result.card is not None
+    assert result.card.evidence_readiness.decision_ready is False
+    assert result.card.company_hypothesis.directional_thesis.startswith(
+        "No directional hypothesis is on file"
+    )
+    assert "no thesis on file" in result.card.evidence_readiness.blockers
+
+
 # --------------------------------------------------------------------------- #
 # Generation never mutates disposition state
 # --------------------------------------------------------------------------- #

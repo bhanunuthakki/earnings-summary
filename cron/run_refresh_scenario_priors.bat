@@ -17,7 +17,7 @@ set LOG_FILE=%LOG_DIR%\refresh_scenario_priors_%TS%.log
 cd /d "%PROJECT_ROOT%"
 
 echo === %DATE% %TIME% refresh_scenario_priors starting === >> "%LOG_FILE%" 2>&1
-python execution\set_scenario_priors.py --only-changed --apply --repo-root "%PROJECT_ROOT%" >> "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "refresh_scenario_priors" "portfolio-db" execution\set_scenario_priors.py --only-changed --apply --repo-root "%PROJECT_ROOT%" >> "%LOG_FILE%" 2>&1
 echo === %DATE% %TIME% refresh_scenario_priors done (exit %ERRORLEVEL%) === >> "%LOG_FILE%" 2>&1
 
 endlocal

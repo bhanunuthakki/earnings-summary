@@ -13,6 +13,7 @@ from pathlib import Path
 
 from report.models import ReportSpec
 from report.renderers.workspace_sections._shared import _esc
+from server_runtime.access import ReportCapabilityStore
 
 __all__ = [
     "_chat_drawer_shell",
@@ -37,6 +38,7 @@ def _comment_boot_data(body: StringIO, spec: ReportSpec) -> None:
         "ticker": spec.ticker,
         "report_date": spec.generation_date.isoformat(),
         "server_url": "http://localhost:7421",
+        "report_capability": ReportCapabilityStore(Path(spec.repo_root)).load_or_create(),
     }
     body.write(f'<script id="workspace-boot" type="application/json">{_json.dumps(boot)}</script>')
     payload: dict[str, object]
@@ -130,7 +132,8 @@ def _chat_drawer_shell(body: StringIO, ticker: str, report_date: str) -> None:
         f'<div class="chat-sub">{_esc(report_date)} '
         "&middot; streams from comments_server &middot; "
         # P2.4 entry point: stances live behind the Socratic flow, never in chat.
-        f'<a href="http://localhost:7421/socratic/{_esc(ticker)}" target="_blank" '
+        f'<a href="/socratic/{_esc(ticker)}" '
+        f'data-server-path="/socratic/{_esc(ticker)}" target="_blank" '
         'rel="noopener">think it through &rarr;</a></div>'
         "</div>"
         '<button class="chat-close" id="chat-close" type="button" aria-label="close">&times;</button>'

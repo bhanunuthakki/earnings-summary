@@ -145,6 +145,54 @@ def test_mobile_groups_split_tracker_fills_into_one_review_card(tmp_path: Path) 
     assert "Confirm trade" in html
 
 
+def test_mobile_renders_current_allocation_artifact_id_and_preferred_plan(
+    tmp_path: Path,
+) -> None:
+    db_path = _make_db(tmp_path)
+    artifact_id, _ = llm_artifact_store.upsert(
+        llm_artifact_store.UpsertRequest(
+            ticker=None,
+            scope="portfolio",
+            purpose="incremental_dollar_recommendation",
+            content_json={
+                "status": "ready",
+                "preferred_plan": {
+                    "name": "Fund the highest-conviction eligible name",
+                    "allocations": [
+                        {"ticker": "NU", "pct_of_cash": 60.0},
+                        {"ticker": "WIX", "pct_of_cash": 25.0},
+                    ],
+                    "cash_retained_usd": 1500.0,
+                },
+            },
+            content_md="allocation",
+            cache_inputs=["allocation-input"],
+        ),
+        db_path=db_path,
+    )
+    assert artifact_id is not None
+
+    html = render_mobile_inbox(db_path)
+
+    assert f'data-artifact-id="{artifact_id}"' in html
+    assert "Fund the highest-conviction eligible name" in html
+    assert "NU 60%" in html
+    assert "WIX 25%" in html
+
+
+def test_mobile_brief_renders_explicit_empty_states_for_unfilled_sections(
+    tmp_path: Path,
+) -> None:
+    db_path = _make_db(tmp_path)
+    _seed_brief(db_path, now=datetime(2026, 7, 20, 9, 0, 0))
+
+    html = render_mobile_inbox(db_path)
+
+    assert "No material capital-use decision this week." in html
+    assert "No assumption challenge was sufficiently grounded." in html
+    assert "No prior Owner Decision is ready to revisit." in html
+
+
 def test_today_card_and_mobile_section_render_populated_artifact(tmp_path: Path) -> None:
     db_path = _make_db(tmp_path)
     now = datetime(2026, 7, 20, 9, 0, 0)

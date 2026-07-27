@@ -16,6 +16,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\monthly_advisor_memos_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\run_advisor_memos.py --kind all > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "monthly-advisor-memos" "portfolio-db" execution\run_advisor_memos.py --kind all > "%LOG_FILE%" 2>&1
 
 endlocal

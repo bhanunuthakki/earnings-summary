@@ -20,6 +20,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\session_distill_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\run_session_distill.py > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "session-distill" "portfolio-db" execution\run_session_distill.py > "%LOG_FILE%" 2>&1
 
 endlocal

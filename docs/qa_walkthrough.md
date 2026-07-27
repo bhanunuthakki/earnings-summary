@@ -47,7 +47,7 @@
 | `CAPTURE_WHISPER_MODEL` | default model (`transcribe.py:46`) | voice-note transcription model | ffmpeg auto-prepended to PATH from `C:\ffmpeg\bin` |
 | `CLAUDE_WEB_MAX_BUDGET_USD` | `2.0` (`llm/cli.py:566`) | hard ceiling per web-enabled Claude call; per-call `max_budget_usd` can only lower it | |
 | `CLAUDE_CLI_TIMEOUT_SECONDS` | `1200` | CLI transport subprocess timeout | |
-| `LLM_FALLBACK_DISABLED` | unset (`llm/fallback.py:60`) | disables Gemini fallback path | Gemini also needs `GEMINI_API_KEY`/`GOOGLE_API_KEY`; no prod purpose routes there (dormant) |
+| `LLM_FALLBACK_DISABLED` | unset (`llm/fallback.py:60`) | disables Gemini fallback path | Gemini credentials must also be configured externally; no prod purpose routes there (dormant) |
 | `GEMINI_BACKEND_PURPOSES` | empty (`gemini_backend.py:153`) | which purposes route to Gemini backend | |
 | `OPENROUTER_API_KEY` / `OPENROUTER_PROVIDER_ONLY` / `OPENROUTER_DATA_COLLECTION` | key live; collection `deny` | OpenRouter third backend | |
 | `LLM_CAPTURE_DIR` / `LLM_CAPTURE_PURPOSES` | unset (`llm/capture.py`) | prompt/response capture-to-disk tap | QA can use this to snapshot prompts without prod side-effects |

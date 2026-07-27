@@ -27,7 +27,7 @@ from __future__ import annotations
 import contextlib
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from capture import telegram
 from research.proposals import (
@@ -243,8 +243,120 @@ def dispatch_callback(
     (stamp + strip the keyboard) via :func:`_stamp_card` — a handled card stays
     visibly handled and its buttons stop doing anything. A stale/failed/
     malformed callback edits nothing."""
-    parsed = parse_callback(update.callback_data)
     cqid = update.callback_query_id
+    callback_data = update.callback_data or ""
+    if callback_data.startswith("spb:"):
+        parts = callback_data.split(":")
+        if len(parts) not in {2, 3} or (len(parts) == 3 and not parts[2].isdigit()):
+            if cqid:
+                answer(token, cqid, text="Unrecognized action.")
+            return None
+        verb = parts[1]
+        obj_id = int(parts[2]) if len(parts) == 3 else None
+        chat_id = update.chat_id
+
+        from advisor import senior_partner_brief as spb
+        from llm_artifact_store import read_artifact, read_current
+
+        artifact = (
+            read_artifact(obj_id, db_path=db_path)
+            if obj_id is not None and verb != "dismiss_item"
+            else None
+        )
+        if artifact is not None and (
+            artifact.purpose != spb.PURPOSE
+            or artifact.scope != "portfolio"
+            or artifact.ticker is not None
+        ):
+            artifact = None
+        if obj_id is not None and verb != "dismiss_item" and artifact is None:
+            if cqid:
+                answer(token, cqid, text="That brief is no longer available.")
+            return "spb_stale"
+
+        if verb == "review":
+            inbox_url = spb.private_mobile_inbox_url()
+            if cqid:
+                answer(
+                    token,
+                    cqid,
+                    text="Opening the private Inbox..."
+                    if inbox_url
+                    else "Inbox link not configured.",
+                )
+            if inbox_url and chat_id is not None:
+                send(token, chat_id, inbox_url)
+            return "spb_review" if inbox_url else "spb_review_unconfigured"
+
+        if verb == "dismiss_item" and obj_id is not None:
+            recorded, muted = spb.dismiss_routed_moment(obj_id, db_path=db_path)
+            if cqid:
+                if muted:
+                    answer(
+                        token,
+                        cqid,
+                        text=f"Dismissed; {muted.replace('_', ' ')} prompts are now muted.",
+                    )
+                else:
+                    answer(token, cqid, text="Dismissed." if recorded else "Already handled.")
+            return "spb_item_dismissed" if recorded else "spb_item_stale"
+
+        if verb == "why":
+            if artifact is None:
+                artifact = read_current(
+                    ticker=None,
+                    purpose=spb.PURPOSE,
+                    scope="portfolio",
+                    db_path=db_path,
+                )
+            if artifact is None or not isinstance(artifact.content_json, dict):
+                if cqid:
+                    answer(token, cqid, text="No current brief on file.")
+                return "spb_stale"
+            try:
+                brief = spb.SeniorPartnerBrief.model_validate(artifact.content_json)
+            except Exception:
+                if cqid:
+                    answer(token, cqid, text="Could not read the current brief.")
+                return "spb_stale"
+            items = brief.action_requested_items() or brief.what_changed[:3]
+            details = []
+            for item in items[:3]:
+                refs = ", ".join(item.source_refs[:3]) or "grounded current inputs"
+                details.append(f"{item.title}\nSources: {refs}")
+            if cqid:
+                answer(token, cqid, text="Sending the brief's grounding...")
+            if chat_id is not None:
+                send(
+                    token,
+                    chat_id,
+                    "\n\n".join(details)
+                    if details
+                    else "No material action was prioritized this week.",
+                )
+            return "spb_why"
+
+        if verb in {"defer", "dismiss"}:
+            recorded = spb.record_brief_action(
+                cast("Literal['defer', 'dismiss']", verb),
+                artifact_id=obj_id,
+                db_path=db_path,
+            )
+            if cqid:
+                answer(
+                    token,
+                    cqid,
+                    text=verb.capitalize() + ("." if recorded else " could not be recorded."),
+                )
+            if recorded:
+                _stamp_card(token, update, _state_stamp(verb), edit=edit)
+            return f"spb_{verb}" if recorded else "spb_stale"
+
+        if cqid:
+            answer(token, cqid, text="Unrecognized action.")
+        return None
+
+    parsed = parse_callback(update.callback_data)
     if parsed is None:
         if cqid:
             answer(token, cqid, text="Unrecognized action.")

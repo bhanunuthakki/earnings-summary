@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import threading
 import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 
 MAX_CONCURRENT_DEFAULT = 3
 POLL_INTERVAL_SEC = 0.1
@@ -44,6 +46,8 @@ class Job:
     # from the sibling checkout so it finds its own .env / data files). None →
     # inherit this server's cwd, the historical behavior for every other job.
     cwd: str | None = None
+    lock_repo_root: str | None = None
+    write_sets: tuple[str, ...] = ()
     _process: subprocess.Popen | None = field(default=None, repr=False)
     _done: threading.Event = field(default_factory=threading.Event, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -53,8 +57,20 @@ class Job:
         """Spawn the process and a background reader. Idempotent — second call is a no-op."""
         if self._process is not None:
             return
+        argv = self.argv
+        if self.lock_repo_root is not None and self.write_sets:
+            runtime = Path(self.lock_repo_root) / "src" / "runtime" / "job_runtime.py"
+            argv = [
+                sys.executable,
+                str(runtime),
+                "--job",
+                f"interactive-{self.kind}",
+            ]
+            for write_set in self.write_sets:
+                argv.extend(["--write-set", write_set])
+            argv.extend(["--repo-root", self.lock_repo_root, "--", *self.argv])
         self._process = subprocess.Popen(
-            self.argv,
+            argv,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             bufsize=1,
@@ -133,8 +149,14 @@ class RegistryConflict(Exception):
 class Registry:
     """Single-flight slot map keyed by (ticker, kind)."""
 
-    def __init__(self, *, max_concurrent: int = MAX_CONCURRENT_DEFAULT) -> None:
+    def __init__(
+        self,
+        *,
+        max_concurrent: int = MAX_CONCURRENT_DEFAULT,
+        repo_root: str | Path | None = None,
+    ) -> None:
         self._max_concurrent = max_concurrent
+        self._repo_root = str(Path(repo_root).resolve()) if repo_root is not None else None
         self._jobs: dict[str, Job] = {}  # job_id -> Job
         self._slots: dict[tuple[str, str], str] = {}  # (ticker, kind) -> job_id
         self._lock = threading.Lock()
@@ -147,11 +169,15 @@ class Registry:
         argv: list[str],
         spawn: bool = True,
         cwd: str | None = None,
+        write_sets: list[str] | None = None,
     ) -> Job:
         """Reserve a slot and start the job. Raises RegistryConflict on collision.
 
         `spawn=False` skips subprocess.Popen for tests that mock the runner.
         `cwd` sets the subprocess working directory (default: inherit).
+        A registry configured with ``repo_root`` routes jobs through the same
+        cross-process write-set lock as Task Scheduler. Pass ``write_sets=[]``
+        only for a process that does not mutate this repository.
         """
         ticker = ticker.upper()
         with self._lock:
@@ -180,6 +206,10 @@ class Registry:
                 argv=argv,
                 started_at=datetime.now(UTC),
                 cwd=cwd,
+                lock_repo_root=self._repo_root,
+                write_sets=tuple(
+                    sorted(set(["portfolio-db"] if write_sets is None else write_sets))
+                ),
             )
             self._jobs[job_id] = job
             self._slots[slot] = job_id

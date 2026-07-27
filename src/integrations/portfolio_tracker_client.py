@@ -136,6 +136,9 @@ class LiveTransaction:
     account_id: int | None = None
     price: float | None = None
     fees: float | None = None
+    # Stable provider identity. V1 supplies this for every transaction; legacy
+    # payloads may omit it and retain the deterministic signature fallback.
+    transaction_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -358,6 +361,7 @@ def _build_transactions(txns: list[dict[str, object]]) -> list[LiveTransaction]:
             account_id=_i(t.get("account_id")),
             price=_f(t.get("price")),
             fees=_f(t.get("fees")),
+            transaction_id=_s(t.get("transaction_id")),
         )
         for t in txns
     ]
@@ -1416,6 +1420,7 @@ def _live_transactions_from_v1(txns: Sequence[BaseModel]) -> list[LiveTransactio
                 account_id=_i(d.get("account_id")),
                 price=_f(d.get("price")),
                 fees=_f(d.get("fees")),
+                transaction_id=_s(d.get("transaction_id")),
             )
         )
     return out

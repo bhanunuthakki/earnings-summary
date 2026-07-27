@@ -189,20 +189,27 @@ def test_supported_ticker_end_to_end_writes_both_metrics(
 
     routed: dict[str, object] = {}
 
-    def fake_call_llm(prompt: str, **kwargs: object) -> str:
+    def fake_call_llm_structured(prompt: str, **kwargs: object) -> object:
         call_count["n"] += 1
         routed.update(kwargs)
-        return _NU_LLM_RESPONSE
+        return json.loads(_NU_LLM_RESPONSE)
 
-    monkeypatch.setattr(segment_quarterly_6k, "call_llm", fake_call_llm)
+    monkeypatch.setattr(
+        segment_quarterly_6k,
+        "call_llm_structured",
+        fake_call_llm_structured,
+    )
 
     result = extract_for_ticker("NU", 2026, "Q1", tmp_path, conn)
 
     assert result.skipped_reason is None
     assert call_count["n"] == 1
+    assert isinstance(routed.pop("schema"), segment_quarterly_6k.TypeAdapter)
     assert routed == {
         "purpose": "segment_6k_breakdown_extract",
         "ticker": "NU",
+        "expect": "object",
+        "required_keys": ("breakdowns",),
         "db_path": None,
     }
     assert result.periods_inserted == 1
@@ -403,7 +410,11 @@ def test_subtotal_rows_are_skipped_deterministically(
 
     monkeypatch.setattr(segment_quarterly_6k, "locate_6k_exhibit", lambda *a, **k: _NU_LOCATED)
     monkeypatch.setattr(segment_quarterly_6k, "fetch_6k_exhibit_text", lambda *a, **k: fetched)
-    monkeypatch.setattr(segment_quarterly_6k, "call_llm", lambda *a, **k: response_with_total)
+    monkeypatch.setattr(
+        segment_quarterly_6k,
+        "call_llm_structured",
+        lambda *a, **k: json.loads(response_with_total),
+    )
 
     result = extract_for_ticker("NU", 2024, "Q3", tmp_path, conn)
 

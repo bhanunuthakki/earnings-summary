@@ -17,6 +17,17 @@ from execution import ingest_filing_sections
 from execution import run_disclosure_change_sweep as sweep
 
 
+def test_task_definition_is_scheduler_compatible_and_least_privilege() -> None:
+    task_path = Path(__file__).resolve().parents[1] / "cron" / "disclosure_change_sweep.task.xml"
+    raw = task_path.read_bytes()
+
+    assert raw.startswith((b"\xff\xfe", b"\xfe\xff"))
+    text = raw.decode("utf-16")
+    assert '<?xml version="1.0" encoding="UTF-16"?>' in text
+    assert "<LogonType>InteractiveToken</LogonType>" in text
+    assert "<RunLevel>LeastPrivilege</RunLevel>" in text
+
+
 class _Result:
     def __init__(self, returncode: int = 0) -> None:
         self.returncode = returncode

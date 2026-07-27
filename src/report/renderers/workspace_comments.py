@@ -25,13 +25,28 @@ JS = r"""
   var commentStore = readJson('workspace-comments') || {comments: []};
   if (!boot) return;  // No boot data — comments feature disabled.
 
-  var SERVER_URL = boot.server_url || 'http://localhost:7421';
+  var SERVER_URL = /^https?:$/.test(window.location.protocol)
+    ? window.location.origin
+    : (boot.server_url || 'http://localhost:7421');
   var TICKER = boot.ticker;
   var REPORT_DATE = boot.report_date;
+  var MUTATION_HEADERS = {'Content-Type': 'application/json'};
+  if (boot.report_capability) {
+    MUTATION_HEADERS['X-Report-Capability'] = boot.report_capability;
+  }
+  window.__workspaceMutationHeaders = MUTATION_HEADERS;
 
   // Allow the chat module to share boot + comment refs.
   window.__workspaceCommentBoot = boot;
   window.__workspaceCommentStore = commentStore;
+
+  // Navigation links must follow the server that delivered an HTTP report
+  // (including a Tailscale address), while standalone file:// reports retain
+  // the configured localhost fallback.
+  document.querySelectorAll('a[data-server-path]').forEach(function(link) {
+    var path = link.getAttribute('data-server-path');
+    if (path && path.charAt(0) === '/') link.href = SERVER_URL + path;
+  });
 
   // ---------------------------------------------------------------
   // Draft autosave — survive tab close / refresh / server-down with
@@ -127,7 +142,7 @@ JS = r"""
           try {
             r = await fetch(SERVER_URL + '/comments', {
               method: 'POST',
-              headers: {'Content-Type': 'application/json'},
+              headers: MUTATION_HEADERS,
               body: JSON.stringify(it.payload)
             });
           } catch (err) {
@@ -274,7 +289,7 @@ JS = r"""
   // ---------------------------------------------------------------
   // Sidebar — static shell rendered by the Python template. Opens
   // when a pin / mark / floater-button is activated; lists comments
-  // for that anchor + a "new comment" form. Dismiss via the × button
+  // for that anchor + a "new comment" form. Dismiss via the close button
   // or Escape — no outside-click listener (it raced with mousedown-
   // triggered opens from the selection floater and closed the
   // sidebar on the same gesture that opened it).
@@ -483,7 +498,7 @@ JS = r"""
     var anchorAtSubmit = currentAnchor;
     fetch(SERVER_URL + '/comments', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: MUTATION_HEADERS,
       body: JSON.stringify(payload)
     }).then(function(r) { return r.json(); }).then(function(created) {
       commentStore.comments.push(created);
@@ -518,7 +533,7 @@ JS = r"""
     var anchorAtSubmit = currentAnchor;
     fetch(SERVER_URL + '/api/notes', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
+      headers: MUTATION_HEADERS,
       body: JSON.stringify({
         ticker: TICKER,
         kind: kind,
@@ -541,7 +556,7 @@ JS = r"""
   function updateComment(id, status) {
     fetch(SERVER_URL + '/comments/' + id, {
       method: 'PATCH',
-      headers: {'Content-Type': 'application/json'},
+      headers: MUTATION_HEADERS,
       body: JSON.stringify({ticker: TICKER, report_date: REPORT_DATE, status: status})
     }).then(function(r) { return r.json(); }).then(function(updated) {
       for (var i = 0; i < commentStore.comments.length; i++) {

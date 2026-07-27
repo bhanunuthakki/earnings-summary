@@ -19,6 +19,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\monthly_calibration_scorecard_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\run_calibration_scorecard.py > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "monthly-calibration-scorecard" "portfolio-db" execution\run_calibration_scorecard.py > "%LOG_FILE%" 2>&1
 
 endlocal

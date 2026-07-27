@@ -82,3 +82,19 @@ def test_clean_text_unchanged() -> None:
     assert redact("nothing sensitive here, just NU Q1 2026 revenue") == (
         "nothing sensitive here, just NU Q1 2026 revenue"
     )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "https://bucket.s3.amazonaws.com/x?X-Amz-Credential=AKIA...&X-Amz-Signature=deadbeef&X-Amz-Security-Token=session",
+        "https://account.blob.core.windows.net/c/x?sv=2024-01-01&sig=azure-signature&se=2026-01-01",
+        "https://storage.googleapis.com/bucket/x?X-Goog-Credential=abc&X-Goog-Signature=signature",
+    ],
+)
+def test_cloud_signed_url_credentials_masked(raw: str) -> None:
+    out = redact(raw)
+    assert "deadbeef" not in out
+    assert "azure-signature" not in out
+    assert "signature" not in out
+    assert "session" not in out

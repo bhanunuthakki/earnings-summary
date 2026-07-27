@@ -27,9 +27,9 @@ set LOG_FILE=%LOG_DIR%\submit_saydo_batch_%TS%.log
 cd /d "%PROJECT_ROOT%"
 
 echo === %TIME% Preparing SayDo batch JSONL === >> "%LOG_FILE%" 2>&1
-python execution\build_saydo_pairs.py --all --prepare-batch >> "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "submit-saydo-batch-prepare" "portfolio-db" execution\build_saydo_pairs.py --all --prepare-batch >> "%LOG_FILE%" 2>&1
 
 echo === %TIME% Submitting + polling SayDo batch === >> "%LOG_FILE%" 2>&1
-python execution\submit_saydo_batch.py >> "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "submit-saydo-batch-submit" "portfolio-db" execution\submit_saydo_batch.py >> "%LOG_FILE%" 2>&1
 
 endlocal

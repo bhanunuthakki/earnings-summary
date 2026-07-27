@@ -196,6 +196,35 @@ def read_current(
         conn.close()
 
 
+def read_artifact(
+    artifact_id: int,
+    *,
+    db_path: Path | str | None = None,
+) -> Artifact | None:
+    """Read one historical artifact by stable id, including superseded rows."""
+    conn = _open(db_path)
+    if conn is None:
+        return None
+    try:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM llm_artifacts WHERE id = ?",
+            (artifact_id,),
+        ).fetchone()
+        return _row_to_artifact(row) if row else None
+    except sqlite3.Error as exc:
+        log.warning(
+            {
+                "event": "artifact_read_by_id_failed",
+                "artifact_id": artifact_id,
+                "error": str(exc),
+            }
+        )
+        return None
+    finally:
+        conn.close()
+
+
 def upsert(
     req: UpsertRequest,
     *,

@@ -36,6 +36,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\discover_ir_failing_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\discover_ir_documents_all.py --only-failing > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "discover-ir-failing" "portfolio-db" execution\discover_ir_documents_all.py --only-failing > "%LOG_FILE%" 2>&1
 
 endlocal

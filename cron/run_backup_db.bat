@@ -20,6 +20,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\backup_db_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python cron\backup_db.py > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "backup_db" "portfolio-db" cron\backup_db.py > "%LOG_FILE%" 2>&1
 
 endlocal

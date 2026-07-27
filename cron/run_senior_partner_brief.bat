@@ -29,6 +29,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\senior_partner_brief_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\compose_senior_partner_brief.py > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "senior-partner-brief" "portfolio-db" execution\compose_senior_partner_brief.py > "%LOG_FILE%" 2>&1
 
 endlocal

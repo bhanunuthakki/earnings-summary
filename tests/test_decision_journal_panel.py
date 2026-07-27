@@ -109,8 +109,8 @@ def _build_db(tmp_path: Path) -> Path:
 def test_empty_state_renders_one_line(tmp_path: Path) -> None:
     db_path = _build_db(tmp_path)
     html = _decision_journal_section(db_path)
-    assert "Decision journal" in html
-    assert "No decisions recorded yet." in html
+    assert "Owner Decision journal" in html
+    assert "No Owner Decisions recorded yet." in html
 
 
 def test_populated_row_renders_advice_disposition_outcome(tmp_path: Path) -> None:
@@ -132,7 +132,7 @@ def test_populated_row_renders_advice_disposition_outcome(tmp_path: Path) -> Non
         conn.execute(
             "INSERT INTO decisions (ticker, recommendation_kind, decided_by, made_at, "
             "created_at, source_memo_id, user_action_kind, outcome_label, outcome_pct) VALUES "
-            "('NU','hold','advisor','2026-06-10T00:00:00','2026-06-10T00:00:00', ?, "
+            "('NU','hold','owner','2026-06-10T00:00:00','2026-06-10T00:00:00', ?, "
             "'followed', 'correct', 5.5)",
             (memo_id,),
         )
@@ -148,7 +148,7 @@ def test_populated_row_renders_advice_disposition_outcome(tmp_path: Path) -> Non
 
     html = _decision_journal_section(db_path)
     assert "NU" in html
-    assert "advisor: hold" in html
+    assert "owner: hold" in html
     assert "position_review" in html
     assert "guard" in html
     assert "attested" in html
@@ -185,7 +185,7 @@ def test_missing_view_degrades_to_empty_state(tmp_path: Path) -> None:
     db_path = tmp_path / "bare.db"
     sqlite3.connect(str(db_path)).close()
     html = _decision_journal_section(db_path)
-    assert "No decisions recorded yet." in html
+    assert "No Owner Decisions recorded yet." in html
 
 
 def test_compose_page_wires_journal_section_when_provided() -> None:

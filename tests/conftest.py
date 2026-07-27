@@ -33,6 +33,7 @@ os.environ.setdefault("FMP_TIER", "basic")
 # legacy tests never launch a real membership subprocess; dedicated routing
 # tests opt back into Codex and patch the transport seam.
 os.environ.setdefault("LLM_PRIMARY_SUBSCRIPTION_BACKEND", "claude")
+os.environ.setdefault("COMMENTS_SERVER_REPORT_CAPABILITY", "test-report-capability")
 
 
 @pytest.fixture(autouse=True)

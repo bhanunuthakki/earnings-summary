@@ -367,6 +367,10 @@ def call_openrouter(
             response_text=text,
             meta=usage_meta_from_openrouter(usage, model=resolved_model),
             prompt=prompt,
+            provider="openrouter",
+            transport="metered_api",
+            attempts=1,
+            retries=0,
         )
         return text
     except (requests.RequestException, RuntimeError, ValueError, OSError) as openrouter_error:
@@ -383,5 +387,10 @@ def call_openrouter(
             run_id=run_id,
             error=f"{type(openrouter_error).__name__}: {str(openrouter_error)[:500]}",
             prompt=prompt,
+            provider="openrouter",
+            transport="metered_api",
+            attempts=1,
+            retries=0,
+            failure_class="openrouter_transport",
         )
         raise

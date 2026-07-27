@@ -152,28 +152,19 @@ Return ONLY the JSON object — no prose, no markdown fence."""
 
 def _llm_map(ticker: str, structure: str, kpi_names: list[str]) -> dict[str, dict[str, object]]:
     """Single LLM call → {kpi_name: {sheet, row_label, unit, scale}}."""
-    from llm_client import (  # lazy: heavy import chain
-        FAST_CLASSIFIER_MODEL,
-        JSON_FENCE_RE,
-        _call_claude,
-    )
+    from pydantic import TypeAdapter
+
+    from llm.structured import call_llm_structured  # lazy: heavy import chain
 
     # One-time per-ticker onboarding step; mapping a full sheet structure takes
     # the model ~1-3 min, so allow generous headroom over the default timeout.
-    raw = _call_claude(
+    return call_llm_structured(
         _build_prompt(ticker, structure, kpi_names),
-        model=FAST_CLASSIFIER_MODEL,
+        purpose="ir_sheet_kpi_map",
         timeout_seconds=300,
-    ).strip()
-    if raw.startswith("```"):
-        raw = JSON_FENCE_RE.sub("", raw).strip()
-    start = raw.find("{")
-    if start < 0:
-        return {}
-    parsed, _ = json.JSONDecoder().raw_decode(raw[start:])
-    if not isinstance(parsed, dict):
-        return {}
-    return {str(k): v for k, v in parsed.items() if isinstance(v, dict)}
+        expect="object",
+        schema=TypeAdapter(dict[str, dict[str, object]]),
+    )
 
 
 def _analyst_kpis(ticker: str, xlsx_path: Path, repo_root: Path, label_col: int) -> list[SheetKpi]:

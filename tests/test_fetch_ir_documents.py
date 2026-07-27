@@ -14,6 +14,7 @@ import json
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import ClassVar
 
@@ -41,6 +42,18 @@ class _FakeResp:
 
     def read(self) -> bytes:
         return self._data
+
+
+class _FakeOpener:
+    """Minimal build_opener() result for URL-guarded downloader tests."""
+
+    def __init__(
+        self, open_fn: Callable[[urllib.request.Request, float | None], _FakeResp]
+    ) -> None:
+        self._open_fn = open_fn
+
+    def open(self, req: urllib.request.Request, timeout: float | None = None) -> _FakeResp:
+        return self._open_fn(req, timeout)
 
 
 def _no_registered_urls(*_a: object, **_k: object) -> set[str]:
@@ -76,7 +89,13 @@ def test_downloader_sends_browser_user_agent(
         captured["accept"] = req.get_header("Accept")
         return _FakeResp(b"%PDF-1.4 fake document bytes")
 
-    monkeypatch.setattr("execution.fetch_ir_documents.urllib.request.urlopen", _fake_urlopen)
+    def _fake_opener(*_args: object) -> _FakeOpener:
+        return _FakeOpener(_fake_urlopen)
+
+    monkeypatch.setattr(
+        "execution.fetch_ir_documents.urllib.request.build_opener",
+        _fake_opener,
+    )
     summary = fid.process_ticker("BN", root=root, db_path=tmp_path / "p.db", categorize=False)
 
     assert summary["downloaded"] == 1
@@ -96,7 +115,13 @@ def test_downloader_skips_on_http_403(tmp_path: Path, monkeypatch: pytest.Monkey
         _ = timeout
         raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", email.message.Message(), None)
 
-    monkeypatch.setattr("execution.fetch_ir_documents.urllib.request.urlopen", _raise_403)
+    def _fake_opener(*_args: object) -> _FakeOpener:
+        return _FakeOpener(_raise_403)
+
+    monkeypatch.setattr(
+        "execution.fetch_ir_documents.urllib.request.build_opener",
+        _fake_opener,
+    )
     summary = fid.process_ticker("ZZ", root=root, db_path=tmp_path / "p.db", categorize=False)
     assert summary["downloaded"] == 0
     assert summary["failed"] == 1
@@ -132,7 +157,13 @@ def test_downloader_falls_back_to_curl_cffi_on_timeout(
         _ = url
         return _CurlResp()
 
-    monkeypatch.setattr("execution.fetch_ir_documents.urllib.request.urlopen", _timeout_urlopen)
+    def _fake_opener(*_args: object) -> _FakeOpener:
+        return _FakeOpener(_timeout_urlopen)
+
+    monkeypatch.setattr(
+        "execution.fetch_ir_documents.urllib.request.build_opener",
+        _fake_opener,
+    )
     monkeypatch.setattr(ccr, "get", _cc_get)
     summary = fid.process_ticker("LLY", root=root, db_path=tmp_path / "p.db", categorize=False)
     assert summary["downloaded"] == 1  # recovered via curl_cffi after urllib stalled

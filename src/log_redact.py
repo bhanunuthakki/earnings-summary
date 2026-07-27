@@ -25,7 +25,12 @@ import re
 
 # ?apikey=… / &access_token=… in a URL query string.
 _CRED_RE = re.compile(
-    r"(?P<param>apikey|api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)=(?P<val>[^&\s]+)",
+    r"(?P<param>"
+    r"apikey|api[_-]?key|access[_-]?token|auth[_-]?token|password|secret|token|"
+    r"x-amz-(?:credential|signature|security-token)|"
+    r"x-goog-(?:credential|signature|security-token)|"
+    r"sig|signature|se|sp|sv|srt|ss|skoid|sktid|skt|ske|skv"
+    r")=(?P<val>[^&\s]+)",
     re.IGNORECASE,
 )
 
@@ -35,7 +40,7 @@ _BEARER_RE = re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._\-]{8,}")
 
 # JSON / dict body: "api_key": "…", "token": "…", etc. Masks the quoted value.
 _JSON_SECRET_RE = re.compile(
-    r'(?i)("(?:apikey|api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password)"'
+    r'(?i)("(?:apikey|api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|signature)"'
     r'\s*:\s*")[^"]*(")'
 )
 

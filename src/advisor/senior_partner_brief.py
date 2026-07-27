@@ -68,6 +68,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, cast
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, Field
 
@@ -85,6 +86,9 @@ ENGINE_VERSION = "v1"
 # current. Deliberately simple (age-based, not an input_sha re-derivation)
 # given this module's scope is COMPOSITION, not card freshness itself.
 _CARD_FRESH_DAYS = 14
+_PRIVATE_BASE_URL_PATH = (
+    Path(__file__).resolve().parents[2] / "data" / "secrets" / "private_mobile_base_url"
+)
 
 # "Active week" thresholds (PRD §9.1: "an active week increases visible
 # context, not ping frequency") — all deterministic, all over a rolling
@@ -1097,6 +1101,101 @@ def build_telegram_text(brief: SeniorPartnerBrief) -> str:
     return "\n\n".join(lines)
 
 
+def private_mobile_inbox_url(explicit: str | None = None) -> str | None:
+    """Return the private, phone-reachable Inbox URL.
+
+    ``/mobile/inbox`` by itself is not actionable inside Telegram. The
+    configured base must therefore be an absolute HTTP(S) URL (normally the
+    Tailscale Serve HTTPS origin). ``explicit`` is primarily for tests and
+    one-shot callers. Production first reads
+    ``EARNINGS_SUMMARY_PRIVATE_BASE_URL``, then the local
+    ``data/secrets/private_mobile_base_url`` service configuration. The file
+    fallback matters for Windows service deployments such as ``es-poller``:
+    service accounts do not inherit the interactive user's environment.
+    Interactive scheduled tasks may use their own user-scoped environment.
+    """
+    from server_runtime.access import private_mobile_origin
+
+    origin = private_mobile_origin(explicit=explicit, config_path=_PRIVATE_BASE_URL_PATH)
+    return f"{origin}/mobile/inbox" if origin else None
+
+
+def _validated_mobile_inbox_link(candidate: str | None) -> str | None:
+    """Accept only the canonical Inbox endpoint on a valid private origin."""
+    if candidate is None:
+        return private_mobile_inbox_url()
+    value = candidate.strip()
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return None
+    if parsed.path != "/mobile/inbox" or parsed.params or parsed.query or parsed.fragment:
+        return None
+    from server_runtime.access import private_mobile_origin
+
+    origin = private_mobile_origin(
+        explicit=f"{parsed.scheme}://{parsed.netloc}",
+        config_path=_PRIVATE_BASE_URL_PATH,
+    )
+    return f"{origin}/mobile/inbox" if origin else None
+
+
+def record_brief_action(
+    verb: Literal["defer", "dismiss"],
+    *,
+    artifact_id: int | None,
+    db_path: Path | str | None = None,
+) -> bool:
+    """Persist one idempotent brief-level owner action.
+
+    Delivery receipts stay untouched so a dismiss cannot accidentally make
+    the weekly sender think the brief was never delivered. Actions use their
+    own ``standup_messages`` signal kind and signature.
+    """
+    from user_state._db import now_naive_utc, open_conn
+
+    conn = open_conn(db_path)
+    try:
+        resolved_id = artifact_id
+        if resolved_id is None:
+            row = conn.execute(
+                "SELECT id FROM llm_artifacts "
+                "WHERE purpose = ? AND scope = 'portfolio' "
+                "AND superseded_by_id IS NULL ORDER BY generated_at DESC LIMIT 1",
+                (PURPOSE,),
+            ).fetchone()
+            resolved_id = int(row[0]) if row is not None else None
+        if resolved_id is None:
+            return False
+        artifact = conn.execute(
+            "SELECT 1 FROM llm_artifacts WHERE id = ? AND purpose = ?",
+            (resolved_id, PURPOSE),
+        ).fetchone()
+        if artifact is None:
+            return False
+        signature = hashlib.sha256(
+            f"senior_partner_brief_action:{resolved_id}:{verb}".encode()
+        ).hexdigest()
+        conn.execute(
+            "INSERT OR IGNORE INTO standup_messages "
+            "(user_id, ticker, signal_kind, signature_sha, status, headline, "
+            "evidence_json, created_at) VALUES "
+            "('bhanu', NULL, 'senior_partner_brief_action', ?, 'acted', ?, ?, ?)",
+            (
+                signature,
+                f"Senior Partner Brief {verb}",
+                json.dumps({"artifact_id": resolved_id, "action": verb}),
+                now_naive_utc().isoformat(),
+            ),
+        )
+        conn.commit()
+        return True
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+
+
 def dismiss_routed_moment(
     ping_id: int, *, db_path: Path | str | None = None
 ) -> tuple[bool, str | None]:
@@ -1124,7 +1223,11 @@ def dismiss_routed_moment(
 
 
 def build_telegram_keyboard(
-    brief: SeniorPartnerBrief, *, db_path: Path | str | None = None
+    brief: SeniorPartnerBrief,
+    *,
+    artifact_id: int | None = None,
+    inbox_url: str | None = None,
+    db_path: Path | str | None = None,
 ) -> dict[str, object]:
     """Why / Review in Inbox / Defer / Dismiss (brief-level) — the
     weekly-packet button pattern (``pipeline.weekly_packet.item_keyboard``),
@@ -1136,14 +1239,21 @@ def build_telegram_keyboard(
     ``db_path`` is optional (only used to resolve a friendly class label per
     ping — every pre-existing caller that omits it still gets a working,
     if generically-labeled, keyboard)."""
+    suffix = f":{artifact_id}" if artifact_id is not None else ""
+    resolved_inbox_url = _validated_mobile_inbox_link(inbox_url)
+    review_button: dict[str, object] = (
+        {"text": "Review in Inbox", "url": resolved_inbox_url}
+        if resolved_inbox_url
+        else {"text": "Review in Inbox", "callback_data": f"spb:review{suffix}"}
+    )
     rows: list[list[dict[str, object]]] = [
         [
-            {"text": "Why?", "callback_data": "spb:why"},
-            {"text": "Review in Inbox", "callback_data": "spb:review"},
+            {"text": "Why?", "callback_data": f"spb:why{suffix}"},
+            review_button,
         ],
         [
-            {"text": "Defer", "callback_data": "spb:defer"},
-            {"text": "Dismiss", "callback_data": "spb:dismiss"},
+            {"text": "Defer", "callback_data": f"spb:defer{suffix}"},
+            {"text": "Dismiss", "callback_data": f"spb:dismiss{suffix}"},
         ],
     ]
     if brief.routed_ping_ids:

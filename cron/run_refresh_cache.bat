@@ -19,6 +19,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\refresh_cache_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\refresh_cache.py run > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "refresh_cache" "portfolio-db" execution\refresh_cache.py run > "%LOG_FILE%" 2>&1
 
 endlocal

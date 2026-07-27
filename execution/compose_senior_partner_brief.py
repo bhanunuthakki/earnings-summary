@@ -203,7 +203,11 @@ def main(argv: list[str] | None = None) -> int:
             token,
             chat_id,
             build_telegram_text(brief),
-            reply_markup=build_telegram_keyboard(brief, db_path=db_path),
+            reply_markup=build_telegram_keyboard(
+                brief,
+                artifact_id=result.artifact_id,
+                db_path=db_path,
+            ),
         )
     except Exception as exc:
         _log("telegram_send_failed", error=str(exc))

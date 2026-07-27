@@ -266,7 +266,8 @@ def test_position_coaching_renders_guard_line_and_review_doorway() -> None:
     # test guards against: a literal "never run" beside a live non-zero count).
     assert "Guard: consulted during 3 position reviews" in html
     assert "never run" not in html
-    assert 'href="http://localhost:7421/socratic/TEST"' in html
+    assert 'href="/socratic/TEST"' in html
+    assert 'data-server-path="/socratic/TEST"' in html
     assert "Review this position" in html
     # No graded-sells line yet -- that ledger is a parallel, unmerged PR.
     assert "graded" not in html.lower()

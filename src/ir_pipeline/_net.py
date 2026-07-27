@@ -14,8 +14,11 @@ the obvious internal-host SSRF pivots.
 
 from __future__ import annotations
 
+import http.client
 import ipaddress
 import urllib.parse
+import urllib.request
+from typing import IO
 
 
 class UnsafeURLError(ValueError):
@@ -50,3 +53,31 @@ def ensure_safe_public_url(url: str) -> str:
     ):
         raise UnsafeURLError(f"non-public host blocked: {url!r}")
     return url
+
+
+def safe_redirect_url(current_url: str, location: str) -> str:
+    """Resolve and validate one HTTP redirect target.
+
+    Redirect ``Location`` is server-controlled input.  Call this before every
+    hop rather than relying on a client's automatic redirect support, which
+    would otherwise turn a safe issuer URL into an internal request.
+    """
+    if not location:
+        raise UnsafeURLError("redirect response has no Location header")
+    return ensure_safe_public_url(urllib.parse.urljoin(current_url, location))
+
+
+class GuardedHTTPRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """urllib redirect handler that checks every server-controlled hop."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: http.client.HTTPMessage,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        safe_redirect_url(req.full_url, newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)

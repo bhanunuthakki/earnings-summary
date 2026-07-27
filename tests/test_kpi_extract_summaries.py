@@ -58,11 +58,11 @@ def test_llm_extract_prompt_offers_only_valid_unit_enum_tokens(
     breaking every break-rule declared in `millions`."""
     captured: dict[str, str] = {}
 
-    def fake_call(prompt: str, model: str | None = None) -> str:
+    def fake_call(prompt: str, **_: object) -> dict[str, dict[str, object]]:
         captured["prompt"] = prompt
-        return '{"GMV": {"value": 1200000000, "unit": "actual", "confidence": 0.9}}'
+        return {"GMV": {"value": 1200000000, "unit": "actual", "confidence": 0.9}}
 
-    monkeypatch.setattr(kes, "_call_claude", fake_call)
+    monkeypatch.setattr(kes, "call_llm_structured", fake_call)
     out = _llm_extract("MELI", "Q1 2026", ["GMV"], "GMV reached $1.2 billion this quarter.")
 
     prompt = captured["prompt"]

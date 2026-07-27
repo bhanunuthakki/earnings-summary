@@ -3,6 +3,7 @@ outcome grading, and the batch recorder over llm_artifacts."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
@@ -776,6 +777,120 @@ def test_reconcile_tracker_fill_draft_is_idempotent(db: Path) -> None:
         conn.close()
     assert n == 1
     assert tally2["tracker_fill_drafted"] == 1  # idempotent create, not a failure
+
+
+def test_reconcile_preserves_identical_fills_with_distinct_transaction_ids(db: Path) -> None:
+    legacy = LivePortfolio(
+        available=True,
+        api_url="http://tracker.test",
+        transactions=[
+            LiveTransaction(
+                date="2026-02-20",
+                ticker="RBRK",
+                name=None,
+                type="buy",
+                subtype=None,
+                quantity=1.0,
+                amount=100.0,
+                account_name="x",
+            )
+        ],
+    )
+    reconcile_decision_actions(db_path=db, portfolio=legacy, now=_NOW)
+    transactions = [
+        LiveTransaction(
+            date="2026-02-20",
+            ticker="RBRK",
+            name=None,
+            type="buy",
+            subtype=None,
+            quantity=1.0,
+            amount=100.0,
+            account_name="x",
+            transaction_id=transaction_id,
+        )
+        for transaction_id in ("txn-a", "txn-b")
+    ]
+    portfolio = LivePortfolio(
+        available=True,
+        api_url="http://tracker.test",
+        transactions=transactions,
+    )
+
+    tally = reconcile_decision_actions(db_path=db, portfolio=portfolio, now=_NOW)
+
+    conn = sqlite3.connect(str(db))
+    try:
+        rows = conn.execute(
+            "SELECT idempotency_key, source_external_id, draft_json "
+            "FROM decision_drafts WHERE source_channel = 'tracker' ORDER BY id"
+        ).fetchall()
+    finally:
+        conn.close()
+    assert tally["tracker_fill_drafted"] == 2
+    assert len(rows) == 2
+    assert rows[0][0] != rows[1][0]
+    assert {row[1] for row in rows} == {"RBRK:2026-02-20:buy"}
+    assert sum(json.loads(row[2])["proposed_amount_usd"] for row in rows) == 200.0
+
+
+def test_reconcile_archives_verified_legacy_duplicate_and_carries_action(db: Path) -> None:
+    legacy = _portfolio([("2026-02-20", "RBRK", "buy")])
+    reconcile_decision_actions(db_path=db, portfolio=legacy, now=_NOW)
+    provider_key = "tracker-id:" + hashlib.sha256(b"id|txn-a").hexdigest()[:20]
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "UPDATE decision_drafts SET status = 'dismissed', "
+            "dismissed_at = '2026-02-21' WHERE source_channel = 'tracker'"
+        )
+        conn.execute(
+            "INSERT INTO decision_drafts "
+            "(user_id, source_note_id, source_channel, source_external_id, "
+            "idempotency_key, original_text, transcription_json, draft_json, "
+            "parse_confidence, status, prompt_version, model, llm_call_id, decision_id, "
+            "expires_at, created_at, updated_at, confirmed_at, dismissed_at) "
+            "SELECT user_id, source_note_id, source_channel, source_external_id, ?, "
+            "original_text, transcription_json, draft_json, parse_confidence, "
+            "'awaiting_confirmation', prompt_version, model, llm_call_id, decision_id, "
+            "expires_at, created_at, updated_at, NULL, NULL "
+            "FROM decision_drafts WHERE source_channel = 'tracker'",
+            (provider_key,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    provider_transaction = LiveTransaction(
+        date="2026-02-20",
+        ticker="RBRK",
+        name=None,
+        type="buy",
+        subtype=None,
+        quantity=1.0,
+        amount=-1.0,
+        account_name="x",
+        transaction_id="txn-a",
+    )
+    portfolio = LivePortfolio(
+        available=True,
+        api_url="http://tracker.test",
+        transactions=[provider_transaction],
+    )
+
+    reconcile_decision_actions(db_path=db, portfolio=portfolio, now=_NOW)
+
+    conn = sqlite3.connect(str(db))
+    try:
+        states = dict(
+            conn.execute(
+                "SELECT idempotency_key, status FROM decision_drafts "
+                "WHERE source_channel = 'tracker'"
+            ).fetchall()
+        )
+    finally:
+        conn.close()
+    assert states[provider_key] == "dismissed"
+    assert set(states.values()) == {"dismissed", "expired"}
 
 
 # ---------------------------------------------------------------------------

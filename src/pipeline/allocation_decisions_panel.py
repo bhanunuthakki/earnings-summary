@@ -1041,12 +1041,11 @@ _DECISION_JOURNAL_LIMIT = 30
 
 
 def _decision_journal_section(db_path: Path, *, limit: int = _DECISION_JOURNAL_LIMIT) -> str:
-    """ "Decision journal" -- the unified v_decision_journal read, reverse-chron.
-    One dense row per decision: ticker, what was decided, whether advice
-    existed before it (memo kind / guard / ping / nudge markers), disposition,
-    and graded outcome. Never raises: a DB stamped before 0179 (or a hand-DDL
-    test fixture) has no view at all, which degrades to the section's empty
-    state exactly like every other coach_pings/decision_nudges reader here."""
+    """Owner-first journal over ``v_decision_journal``.
+
+    Advisor-authored legacy rows remain preserved in the view and are counted,
+    but they never appear as Owner Decisions by default.
+    """
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     try:
@@ -1056,22 +1055,36 @@ def _decision_journal_section(db_path: Path, *, limit: int = _DECISION_JOURNAL_L
             "linked_memo_id, linked_memo_kind, advice_before_memo_id, advice_before_memo_kind, "
             "guard_override_flag, owner_attested_change, coach_ping_class, decision_nudge_id, "
             "user_action_kind, outcome_label, outcome_pct, stance_verdict "
-            "FROM v_decision_journal ORDER BY made_at DESC, decision_id DESC LIMIT ?",
+            "FROM v_decision_journal WHERE decided_by = 'owner' "
+            "ORDER BY made_at DESC, decision_id DESC LIMIT ?",
             (limit,),
+        )
+        advisor_count_rows = _safe_rows(
+            conn,
+            "SELECT COUNT(*) AS n FROM v_decision_journal "
+            "WHERE COALESCE(decided_by, 'advisor') <> 'owner'",
         )
     finally:
         conn.close()
+    advisor_count = int(advisor_count_rows[0]["n"]) if advisor_count_rows else 0
     head = (
-        '<section class="panel"><h2>Decision journal</h2>'
-        '<p class="sub">Every recorded decision, reverse-chronological -- whether advice '
-        "existed before it (review/Socratic memo, guard override, coach ping/nudge), what "
-        "you did, and how it graded. Most historical rows predate the advice machinery -- "
-        "absent advice reads as a dash, never a fabricated match.</p>"
+        '<section class="panel"><h2>Owner Decision journal</h2>'
+        '<p class="sub">Owner Decisions are the learning unit: what you decided, '
+        "the advice available beforehand, and how process and outcome graded. "
+        "Unadopted advisor views stay outside this default.</p>"
+    )
+    preserved = (
+        '<p class="muted">'
+        f"{advisor_count} advisor {'record' if advisor_count == 1 else 'records'} preserved "
+        "outside the Owner-default journal. "
+        '<a href="/api/panel/ledger_decisions?filter=advisor">Review advisor history</a>.</p>'
+        if advisor_count
+        else ""
     )
     if not rows:
-        return f'{head}<p class="muted">No decisions recorded yet.</p></section>'
+        return f'{head}{preserved}<p class="muted">No Owner Decisions recorded yet.</p></section>'
     lines = "".join(_journal_row(r) for r in rows)
-    return f'{head}<div class="cpnl-list">{lines}</div></section>'
+    return f'{head}{preserved}<div class="cpnl-list">{lines}</div></section>'
 
 
 def _journal_advice_chips(r: sqlite3.Row) -> str:

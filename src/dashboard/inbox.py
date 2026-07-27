@@ -415,15 +415,17 @@ def collect_inbox(
             if ticker is not None:
                 clauses.append("ticker = ?")
                 params.append(ticker.upper())
-            rows = conn.execute(
-                f"""
+            # Clause fragments are fixed here; ticker and limit remain parameters.
+            query = f"""
                 SELECT ticker, event_type, subject, subject_label, evidence_quote,
                        interpretation_md, source_doc_id, created_at
                 FROM disclosure_events
                 WHERE {" AND ".join(clauses)}
                 ORDER BY created_at DESC, id DESC
                 LIMIT ?
-                """,
+                """  # nosec B608
+            rows = conn.execute(
+                query,
                 (*params, limit),
             ).fetchall()
             conn.close()

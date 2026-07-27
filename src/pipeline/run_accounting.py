@@ -13,8 +13,23 @@ import json
 import sqlite3
 import uuid
 from datetime import datetime
+from hashlib import sha256
 
 from models.runs import StageName, StageStatus
+from schema_compat import require_current_for_write
+
+
+def make_pipeline_key(directive: str, ticker_scope: list[str]) -> str:
+    """Stable identity for the logical work, independent of retry attempts."""
+    canonical = json.dumps(
+        {"directive": directive.strip(), "tickers": sorted({t.upper() for t in ticker_scope})},
+        separators=(",", ":"),
+    )
+    return f"pipeline_{sha256(canonical.encode('utf-8')).hexdigest()[:24]}"
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
 def make_run_id(directive: str, ticker_scope: list[str]) -> str:
@@ -30,19 +45,38 @@ def start_run(
     ticker_scope: list[str],
 ) -> str:
     """Insert an ingestion_runs row with status=in_progress; return the run_id."""
-    run_id = make_run_id(directive, ticker_scope)
-    conn.execute(
-        "INSERT INTO ingestion_runs "
-        "(run_id, started_at, ended_at, directive, ticker_scope, status, error_summary) "
-        "VALUES (?, ?, NULL, ?, ?, ?, NULL)",
-        (
-            run_id,
-            datetime.now(),
-            directive,
-            json.dumps(sorted(ticker_scope)),
-            StageStatus.IN_PROGRESS.value,
-        ),
-    )
+    require_current_for_write(conn)
+    run_id = make_run_id(directive, ticker_scope)  # legacy alias for the attempt id
+    now = datetime.now()
+    scope = json.dumps(sorted({ticker.upper() for ticker in ticker_scope}))
+    columns = _columns(conn, "ingestion_runs")
+    if {"pipeline_key", "attempt_id"}.issubset(columns):
+        pipeline_key = make_pipeline_key(directive, ticker_scope)
+        # The normalized tables are additive. Keep the legacy ledger populated
+        # for readers that have not yet dual-read the new records.
+        conn.execute(
+            "INSERT OR IGNORE INTO pipeline_runs (pipeline_key, directive, ticker_scope, first_started_at) "
+            "VALUES (?, ?, ?, ?)",
+            (pipeline_key, directive, scope, now),
+        )
+        conn.execute(
+            "INSERT INTO pipeline_attempts (attempt_id, pipeline_key, started_at, ended_at, status, error_summary) "
+            "VALUES (?, ?, ?, NULL, ?, NULL)",
+            (run_id, pipeline_key, now, StageStatus.IN_PROGRESS.value),
+        )
+        conn.execute(
+            "INSERT INTO ingestion_runs "
+            "(run_id, attempt_id, pipeline_key, started_at, ended_at, directive, ticker_scope, status, error_summary) "
+            "VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL)",
+            (run_id, run_id, pipeline_key, now, directive, scope, StageStatus.IN_PROGRESS.value),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO ingestion_runs "
+            "(run_id, started_at, ended_at, directive, ticker_scope, status, error_summary) "
+            "VALUES (?, ?, NULL, ?, ?, ?, NULL)",
+            (run_id, now, directive, scope, StageStatus.IN_PROGRESS.value),
+        )
     conn.commit()
     return run_id
 
@@ -62,6 +96,7 @@ def record_stage(
     For OK / SKIPPED / NEEDS_REVIEW / FAILED: sets ended_at = now.
     For IN_PROGRESS: sets ended_at = NULL.
     """
+    require_current_for_write(conn)
     now = datetime.now()
     is_terminal = status is not StageStatus.IN_PROGRESS and status is not StageStatus.NOT_STARTED
     conn.execute(
@@ -79,6 +114,27 @@ def record_stage(
             error_msg,
         ),
     )
+    if _columns(conn, "stage_transitions") and _columns(conn, "ingestion_runs") >= {
+        "pipeline_key",
+        "attempt_id",
+    }:
+        # This FK-backed journal is the durable source for new writers; the
+        # original stage_transitions row remains the compatibility projection.
+        conn.execute(
+            "INSERT INTO pipeline_stage_transitions "
+            "(attempt_id, ticker, period_end, stage, status, started_at, ended_at, error_msg) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                run_id,
+                ticker.upper(),
+                period_end,
+                stage.value,
+                status.value,
+                started_at if started_at is not None else now,
+                now if is_terminal else None,
+                error_msg,
+            ),
+        )
     conn.commit()
 
 
@@ -89,10 +145,16 @@ def end_run(
     error_summary: str | None = None,
 ) -> None:
     """Update ingestion_runs.ended_at + status for the given run_id."""
+    require_current_for_write(conn)
     conn.execute(
         "UPDATE ingestion_runs SET ended_at = ?, status = ?, error_summary = ? WHERE run_id = ?",
         (datetime.now(), status.value, error_summary, run_id),
     )
+    if {"pipeline_key", "attempt_id"}.issubset(_columns(conn, "ingestion_runs")):
+        conn.execute(
+            "UPDATE pipeline_attempts SET ended_at = ?, status = ?, error_summary = ? WHERE attempt_id = ?",
+            (datetime.now(), status.value, error_summary, run_id),
+        )
     conn.commit()
 
 

@@ -15,6 +15,6 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\disclosure_change_sweep_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-python execution\run_disclosure_change_sweep.py > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "disclosure-change-sweep" "portfolio-db" execution\run_disclosure_change_sweep.py > "%LOG_FILE%" 2>&1
 
 endlocal

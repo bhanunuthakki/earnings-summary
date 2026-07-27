@@ -50,6 +50,11 @@ def record_llm_call(
     error: str | None = None,
     fallback_used: str | None = None,
     prompt: object | None = None,
+    provider: str | None = None,
+    transport: str | None = None,
+    attempts: int | None = None,
+    retries: int | None = None,
+    failure_class: str | None = None,
 ) -> None:
     """Best-effort write of one row into llm_calls. Never raises.
 
@@ -105,6 +110,12 @@ def record_llm_call(
                 span_id=span_id,
                 parent_span_id=parent_span_id,
                 stage=stage,
+                provider=provider,
+                transport=transport,
+                attempts=attempts,
+                retries=retries,
+                outcome="failure" if error else "success",
+                failure_class=failure_class,
             )
         )
     except Exception as exc:  # ImportError, unexpected attribute errors, …
@@ -160,6 +171,10 @@ def fallback_call_logged(
             response_text=text,
             fallback_used="gemini",
             prompt=prompt,
+            provider="google",
+            transport="metered_api",
+            attempts=1,
+            retries=0,
         )
         return text
     except Exception as gemini_err:
@@ -177,5 +192,10 @@ def fallback_call_logged(
             error=f"{type(gemini_err).__name__}: {str(gemini_err)[:500]}",
             fallback_used="gemini",
             prompt=prompt,
+            provider="google",
+            transport="metered_api",
+            attempts=1,
+            retries=0,
+            failure_class="gemini_transport",
         )
         raise
