@@ -4,7 +4,6 @@ REM serializes overlapping portfolio writes, and records JSON job health.
 setlocal EnableExtensions
 set "PROJECT_ROOT=%~dp0.."
 for %%I in ("%PROJECT_ROOT%") do set "PROJECT_ROOT=%%~fI"
-
 set "PYTHON_EXE=%PROJECT_ROOT%\venv\Scripts\python.exe"
 if not exist "%PYTHON_EXE%" set "PYTHON_EXE=%PROJECT_ROOT%\.venv\Scripts\python.exe"
 if exist "%PYTHON_EXE%" goto run

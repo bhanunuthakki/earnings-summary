@@ -26,6 +26,9 @@ setlocal
 set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
+REM Retain a bounded-purpose production corpus for the P0 material-news audit.
+REM The external env owns the private archive location.
+set LLM_CAPTURE_PURPOSES=material_news_classification
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 REM wmic was removed from Windows 11 24H2+; use PowerShell for the UTC stamp.

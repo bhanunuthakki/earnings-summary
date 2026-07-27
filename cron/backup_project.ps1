@@ -31,7 +31,14 @@ $dst = Join-Path $root 'tree'
 # Credentials are deliberately excluded even though this is a private Drive
 # mirror: project backups must never duplicate secret-bearing source files.
 # The consistent DB snapshot remains a separate, recoverable artifact.
-$xd = @('.git', 'venv', '.tmp', '.cache', 'cache', 'logs', '__pycache__', '.pytest_cache', '.claude', 'node_modules')
+$xd = @(
+    '.git', 'venv', '.tmp', '.cache', 'cache', 'logs', '__pycache__',
+    '.pytest_cache', '.claude', 'node_modules',
+    (Join-Path $repo 'data\llm_capture')
+)
 $xf = @('*.pyc', '*.db', '*.db-wal', '*.db-shm', 'portfolio.db.bak*', '.env', '.env.*', 'credentials.json', 'token.json', '*credential*', '*secret*', '*.pem', '*.key', '*.pfx', '*.p12')
 robocopy $repo $dst /MIR /XD $xd /XF $xf /R:1 /W:1 /NP /NFL /NDL
-if ($LASTEXITCODE -ge 8) { Write-Host "robocopy ERROR (exit $LASTEXITCODE)" } else { Write-Host "mirror OK (robocopy exit $LASTEXITCODE)" }
+if ($LASTEXITCODE -ge 8) {
+    throw "robocopy ERROR (exit $LASTEXITCODE)"
+}
+Write-Host "mirror OK (robocopy exit $LASTEXITCODE)"

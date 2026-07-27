@@ -206,6 +206,10 @@ def test_render_full_panel(tmp_path: Path) -> None:
     # Run bar: one button per runnable purpose, wired to /actions/run-eval.
     for p in RUNNABLE_PURPOSES:
         assert f'data-purpose="{p}"' in html
+    assert "P0 capture audits" in html
+    assert "P1 capture audits" in html
+    assert "P2 capture audits" in html
+    assert "default 20 cases" in html
     assert "/actions/run-eval" in html
     # Latest runs: v2 surfaced with pass-rate + cost; audit mode pill (kit).
     assert "16/16" in html

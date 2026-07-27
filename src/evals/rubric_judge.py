@@ -311,6 +311,7 @@ def judge_item(
     run_id: str,
     judge_model: str | None = None,
     caller: LlmCaller = call_llm,
+    sensitive: bool = False,
 ) -> CaseResult:
     """One rubric judgment. Hard stops raise EvalAbortError (config, not
     quality); everything else fails closed into the CaseResult."""
@@ -337,17 +338,19 @@ def judge_item(
             # Quota exhaustion is not a hard stop for PRODUCTION (pipelines
             # defer per-item), but a measurement run under an exhausted quota
             # measures the outage, not the subject — abort like a hard stop.
+            detail = type(exc).__name__ if sensitive else f"{type(exc).__name__}: {exc}"
             raise EvalAbortError(
                 f"eval_judge stop while auditing {item.item_id}: "
-                f"{type(exc).__name__}: {exc} — aborting instead of scoring 0s."
+                f"{detail} — aborting instead of scoring 0s."
             ) from exc
         latency_ms = int((time.monotonic() - t0) * 1000)
+        error_detail = type(exc).__name__ if sensitive else f"{type(exc).__name__}: {exc}"
         log.warning(
             {
                 "event": "rubric_judge_call_failed",
                 "purpose": rubric.purpose,
                 "item": item.item_id,
-                "error": f"{type(exc).__name__}: {exc}",
+                "error": error_detail,
             }
         )
         # score=None + judge_infra: the JUDGE failed, so nothing was measured
@@ -361,8 +364,10 @@ def judge_item(
             expected_json=expected_json,
             actual_json=None,
             failure_stage=JUDGE_INFRA_STAGE,
-            judge_rationale=f"judge call failed: {type(exc).__name__}: {exc}",
-            prompt_text=prompt,
+            judge_rationale=None
+            if sensitive
+            else f"judge call failed: {type(exc).__name__}: {exc}",
+            prompt_text=None if sensitive else prompt,
             response_text=None,
             latency_ms=latency_ms,
         )
@@ -370,14 +375,14 @@ def judge_item(
 
     verdict = parse_rubric_verdict(raw, rubric.facet_ids)
     if verdict is None:
-        log.warning(
-            {
-                "event": "rubric_judge_unparseable",
-                "purpose": rubric.purpose,
-                "item": item.item_id,
-                "raw_head": raw[:200],
-            }
-        )
+        event = {
+            "event": "rubric_judge_unparseable",
+            "purpose": rubric.purpose,
+            "item": item.item_id,
+        }
+        if not sensitive:
+            event["raw_head"] = raw[:200]
+        log.warning(event)
         return CaseResult(
             case_id=item.item_id,
             question=item.label,
@@ -386,10 +391,10 @@ def judge_item(
             expected_json=expected_json,
             actual_json=None,
             failure_stage="judge",
-            judge_verdict=raw or None,
+            judge_verdict=None if sensitive else raw or None,
             judge_rationale="judge failed: unparseable verdict",
-            prompt_text=prompt,
-            response_text=raw,
+            prompt_text=None if sensitive else prompt,
+            response_text=None if sensitive else raw,
             latency_ms=latency_ms,
         )
 
@@ -403,10 +408,10 @@ def judge_item(
         expected_json=expected_json,
         actual_json=dumps_compact({"facet_scores": verdict.facet_scores}),
         failure_stage=None if passed else "below_threshold",
-        judge_verdict=raw,
-        judge_rationale=verdict.rationale,
-        prompt_text=prompt,
-        response_text=raw,
+        judge_verdict=None if sensitive else raw,
+        judge_rationale=None if sensitive else verdict.rationale,
+        prompt_text=None if sensitive else prompt,
+        response_text=None if sensitive else raw,
         latency_ms=latency_ms,
     )
 

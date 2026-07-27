@@ -105,6 +105,17 @@ def _result_line(cost: float = 0.012, in_tok: int = 1000, out_tok: int = 200) ->
     )
 
 
+def _error_result_line() -> str:
+    return json.dumps(
+        {
+            "type": "result",
+            "subtype": "error",
+            "is_error": True,
+            "result": "transport failed after partial output",
+        }
+    )
+
+
 def _patch_model(monkeypatch: pytest.MonkeyPatch, model: str) -> None:
     def fake_model_for(_purpose: str) -> str:
         return model
@@ -147,6 +158,8 @@ def test_stream_pins_resolved_model_and_records_ledger(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(llm_cli.subprocess, "Popen", fake_popen)
     records = _patch_ledger(monkeypatch)
+    captures: list[dict[str, object]] = []
+    monkeypatch.setattr(llm_cli, "capture_exchange", lambda **kwargs: captures.append(kwargs))
 
     events = list(real_stream_llm_text("PROMPT"))
 
@@ -167,6 +180,11 @@ def test_stream_pins_resolved_model_and_records_ledger(monkeypatch: pytest.Monke
     assert rec.cost_estimate_usd == pytest.approx(0.012)
     assert rec.output_tokens == 200
     assert rec.error is None
+    assert len(captures) == 1
+    assert captures[0]["purpose"] == "ask_answer"
+    assert captures[0]["model"] == DEFAULT_MODEL
+    assert captures[0]["backend"] == "claude"
+    assert captures[0]["response"] == "Hello world"
 
 
 def test_stream_buffers_when_promoted_to_gemini(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -226,6 +244,35 @@ def test_stream_empty_response_records_error_row(monkeypatch: pytest.MonkeyPatch
     # The failed call still lands a ledger row (with the error) for Call Health.
     assert len(records) == 1
     assert records[0].error is not None
+
+
+@pytest.mark.parametrize("with_error_envelope", [False, True])
+def test_partial_failed_stream_is_never_captured_or_final(
+    monkeypatch: pytest.MonkeyPatch,
+    with_error_envelope: bool,
+) -> None:
+    _patch_model(monkeypatch, DEFAULT_MODEL)
+    _patch_budget_ok(monkeypatch)
+    monkeypatch.setattr(llm_cli.shutil, "which", _fake_which)
+    lines = [_assistant_line("partial")]
+    if with_error_envelope:
+        lines.append(_error_result_line())
+    proc = _FakeProc(lines)
+    if not with_error_envelope:
+        proc.returncode = 1
+
+    monkeypatch.setattr(llm_cli.subprocess, "Popen", lambda *_args, **_kwargs: proc)
+    records = _patch_ledger(monkeypatch)
+    captures: list[dict[str, object]] = []
+    monkeypatch.setattr(llm_cli, "capture_exchange", lambda **kwargs: captures.append(kwargs))
+
+    events = list(real_stream_llm_text("PROMPT"))
+
+    assert [event["type"] for event in events] == ["delta", "error"]
+    assert not captures
+    assert len(records) == 1
+    assert records[0].failure_class == "partial_response"
+    assert records[0].outcome == "partial"
 
 
 class _BlockingStdout:
@@ -291,6 +338,8 @@ def test_stream_generator_close_terminates_child(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(llm_cli.subprocess, "Popen", fake_popen)
     records = _patch_ledger(monkeypatch)
+    captures: list[dict[str, object]] = []
+    monkeypatch.setattr(llm_cli, "capture_exchange", lambda **kwargs: captures.append(kwargs))
 
     stream = real_stream_llm_text("PROMPT")
     assert isinstance(stream, GeneratorType)
@@ -303,6 +352,7 @@ def test_stream_generator_close_terminates_child(monkeypatch: pytest.MonkeyPatch
     assert records[0].outcome == "canceled"
     assert records[0].failure_class == "canceled"
     assert records[0].error == "[canceled] stream consumer disconnected"
+    assert not captures
 
 
 def test_windows_tree_kill_uses_safe_pid_argv(monkeypatch: pytest.MonkeyPatch) -> None:

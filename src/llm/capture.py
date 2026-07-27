@@ -12,15 +12,18 @@ Consumer: ``execution/compare_backends.py --from-capture`` replays the captured
 Claude prompts through Gemini ONLY (the Claude response is already captured), so
 a cross-purpose backend corpus costs zero extra Claude spend.
 
-One JSONL line per exchange in ``<LLM_CAPTURE_DIR>/capture_<YYYY-MM-DD>.jsonl``::
+One JSONL line per exchange in a process-and-purpose shard,
+``<LLM_CAPTURE_DIR>/capture_<YYYY-MM-DD>_<PID>_p<PURPOSE_SHA>.jsonl``::
 
-    {captured_at, purpose, ticker, scope, model, backend, run_id,
+    {captured_at, purpose, prompt_version, ticker, scope, model, backend, run_id,
      prompt, response, prompt_sha256}
 
 Filters:
   * ``LLM_CAPTURE_DIR`` unset ⇒ capture is off (the common case).
   * ``LLM_CAPTURE_PURPOSES`` (csv) ⇒ capture only those purposes; unset ⇒ all
     (minus the denylist).
+  * shards older than ``EARNINGS_SUMMARY_CAPTURE_RETENTION_DAYS`` (default 90)
+    are pruned at most once per UTC day in each process.
   * The judge/eval purposes are NEVER captured — they read a corpus, and capturing
     them would feed the grader's own traffic back into the next comparison.
 """
@@ -30,13 +33,22 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import UTC, datetime
+import re
+import threading
+from datetime import UTC, date, datetime
+from hashlib import sha256
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
 LLM_CAPTURE_DIR_ENV = "LLM_CAPTURE_DIR"
 LLM_CAPTURE_PURPOSES_ENV = "LLM_CAPTURE_PURPOSES"
+CAPTURE_ARCHIVE_DIR_ENV = "EARNINGS_SUMMARY_CAPTURE_ARCHIVE_DIR"
+CAPTURE_RETENTION_DAYS_ENV = "EARNINGS_SUMMARY_CAPTURE_RETENTION_DAYS"
+DEFAULT_CAPTURE_RETENTION_DAYS = 90
+_CAPTURE_FILE_RX = re.compile(r"^capture_(\d{4}-\d{2}-\d{2})(?:_\d+)?(?:_p[0-9a-f]{12})?\.jsonl$")
+_WRITE_LOCK = threading.Lock()
+_LAST_PRUNED_DAY: dict[Path, date] = {}
 
 # Never capture eval/judge/steering traffic — it would pollute a comparison
 # corpus with the grading calls that consume it (isolation invariant I4,
@@ -66,6 +78,30 @@ def capture_dir() -> Path | None:
     return Path(raw.strip())
 
 
+def default_capture_archive_dir(repo_root: Path) -> Path:
+    """Private archive location used by harvesters and replay audits.
+
+    Windows defaults outside the mirrored repository under LocalAppData. Other
+    platforms retain the historical repo-local default for portable CI/dev use.
+    """
+    configured = (
+        os.environ.get(CAPTURE_ARCHIVE_DIR_ENV, "").strip()
+        or os.environ.get(LLM_CAPTURE_DIR_ENV, "").strip()
+    )
+    if configured:
+        return Path(configured)
+    local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+    if os.name == "nt" and local_app_data:
+        return Path(local_app_data) / "earnings-summary" / "llm_capture"
+    return repo_root / "data" / "llm_capture"
+
+
+def capture_purpose_suffix(purpose: str) -> str:
+    """Stable filename-safe purpose partition for bounded replay scans."""
+    partition = "lens:*" if purpose.startswith("lens:") else purpose
+    return sha256(partition.encode("utf-8")).hexdigest()[:12]
+
+
 def _purpose_allowlist() -> frozenset[str] | None:
     raw = os.environ.get(LLM_CAPTURE_PURPOSES_ENV)
     if not raw or not raw.strip():
@@ -77,12 +113,43 @@ def should_capture(purpose: str | None) -> bool:
     """Whether this purpose's exchange should be captured right now."""
     if capture_dir() is None:
         return False
+    if purpose is None:
+        return False
     if purpose in CAPTURE_DENYLIST:
         return False
     allow = _purpose_allowlist()
     if allow is None:
         return True
-    return purpose is not None and purpose in allow
+    return purpose in allow
+
+
+def _retention_days() -> int:
+    raw = os.environ.get(CAPTURE_RETENTION_DAYS_ENV, "").strip()
+    if not raw:
+        return DEFAULT_CAPTURE_RETENTION_DAYS
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return DEFAULT_CAPTURE_RETENTION_DAYS
+
+
+def _prune_expired(directory: Path, *, today: datetime) -> None:
+    resolved = directory.resolve()
+    prune_day = today.date()
+    if _LAST_PRUNED_DAY.get(resolved) == prune_day:
+        return
+    cutoff = prune_day.toordinal() - _retention_days()
+    for path in directory.glob("capture_*.jsonl"):
+        match = _CAPTURE_FILE_RX.fullmatch(path.name)
+        if match is None:
+            continue
+        try:
+            file_day = datetime.strptime(match.group(1), "%Y-%m-%d").date()
+            if file_day.toordinal() < cutoff:
+                path.unlink()
+        except (OSError, ValueError):
+            continue
+    _LAST_PRUNED_DAY[resolved] = prune_day
 
 
 def capture_exchange(
@@ -95,6 +162,7 @@ def capture_exchange(
     model: str,
     run_id: str | None,
     backend: str = "claude",
+    prompt_version: str | None = None,
 ) -> None:
     """Best-effort append of one prompt/response exchange to the capture log.
 
@@ -110,13 +178,12 @@ def capture_exchange(
             return
         directory.mkdir(parents=True, exist_ok=True)
 
+        from llm.prompt_versions import prompt_version_for
         from llm_call_ledger import sha256_text
 
-        # Repo convention: naive-UTC stamps (project_naive_utc_datetime_convention).
-        now = datetime.now(UTC).replace(tzinfo=None)
         record = {
-            "captured_at": now.isoformat(),
             "purpose": purpose,
+            "prompt_version": prompt_version or prompt_version_for(purpose or ""),
             "ticker": ticker,
             "scope": scope,
             "model": model,
@@ -126,8 +193,27 @@ def capture_exchange(
             "response": response,
             "prompt_sha256": sha256_text(prompt),
         }
-        path = directory / f"capture_{now.strftime('%Y-%m-%d')}.jsonl"
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        # Serialize the potentially large exchange before taking the write
+        # lock. captured_at is injected while locked, so reverse file order
+        # stays timestamp order for concurrent threads in this process.
+        body = json.dumps(record, ensure_ascii=False)
+        with _WRITE_LOCK:
+            # Repo convention: naive-UTC stamps
+            # (project_naive_utc_datetime_convention).
+            now = datetime.now(UTC).replace(tzinfo=None)
+            purpose_suffix = capture_purpose_suffix(purpose or "")
+            path = directory / (
+                f"capture_{now.strftime('%Y-%m-%d')}_{os.getpid()}_p{purpose_suffix}.jsonl"
+            )
+            _prune_expired(directory, today=now)
+            line = (
+                '{"captured_at":'
+                + json.dumps(now.isoformat())
+                + ","
+                + body.removeprefix("{")
+                + "\n"
+            )
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(line)
     except Exception as exc:  # best-effort: telemetry never blocks the call
         log.debug({"event": "llm_capture_failed", "error": str(exc)})

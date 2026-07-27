@@ -8,6 +8,9 @@ setlocal
 set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
+REM Capture only the high-volume commitment extractor's real production
+REM exchanges. The external env owns the private archive location.
+set LLM_CAPTURE_PURPOSES=saydo_commitment_extract
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 REM wmic was removed from Windows 11 24H2+; use PowerShell for the UTC stamp.

@@ -24,8 +24,43 @@ def test_first_of_month_03_00_jobs_are_staggered() -> None:
     assert _start_boundary("refresh_scenario_priors.task.xml").endswith("03:40:00")
 
 
+def test_scenario_priors_wrapper_stays_on_invoking_checkout() -> None:
+    root = ET.parse(CRON / "refresh_scenario_priors.task.xml").getroot()
+    command = root.findtext(".//t:Actions/t:Exec/t:Command", namespaces=NS)
+    assert command is not None
+    assert r"\runtime\earnings-summary\cron\run_refresh_scenario_priors.bat" in command
+    assert r"\scratch\earnings-summary" not in command
+
+    wrapper = (CRON / "run_refresh_scenario_priors.bat").read_text(encoding="utf-8")
+    assert "%~dp0.." in wrapper
+    assert r"\scratch\earnings-summary" not in wrapper
+
+
+def test_production_capture_is_allowlisted_and_has_no_extra_llm_job() -> None:
+    expected = {
+        "run_backfill_transcripts.bat": {"saydo_commitment_extract"},
+        "run_refresh_dirty_artifacts.bat": {
+            "saydo_filter",
+            "valuation_basis",
+            "exec_comp_alignment",
+            "company_description",
+            "recent_developments",
+        },
+        "run_morning_pipeline.bat": {"material_news_classification"},
+    }
+    for filename, purposes in expected.items():
+        text = (CRON / filename).read_text(encoding="utf-8")
+        assert "set LLM_CAPTURE_DIR=" not in text
+        match = re.search(r"^set LLM_CAPTURE_PURPOSES=(.+)$", text, re.MULTILINE)
+        assert match is not None
+        assert set(match.group(1).strip().split(",")) == purposes
+        assert "run_llm_evals.py" not in text
+
+
 def test_project_backup_excludes_all_standard_credential_paths() -> None:
     backup = (CRON / "backup_project.ps1").read_text(encoding="utf-8")
+    assert r"data\llm_capture" in backup
+    assert 'throw "robocopy ERROR' in backup
     for forbidden in (".env", "credentials.json", "token.json", "*.pem", "*.key"):
         assert forbidden in backup
 
@@ -50,6 +85,7 @@ def test_shared_runtime_forwards_original_arguments_without_shift() -> None:
     assert "shift" not in text
     assert "--scheduler-wrapper" in text
     assert "-- %*" in text
+    assert "set llm_capture_dir=" not in text
 
 
 def test_scheduled_wrappers_do_not_invoke_path_dependent_python() -> None:

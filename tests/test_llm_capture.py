@@ -18,6 +18,8 @@ the suite never spawns a CLI and never spends. Coverage:
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -42,6 +44,7 @@ def test_capture_on_when_dir_set(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     monkeypatch.setenv(capture.LLM_CAPTURE_DIR_ENV, str(tmp_path))
     monkeypatch.delenv(capture.LLM_CAPTURE_PURPOSES_ENV, raising=False)
     assert capture.should_capture("bear_case") is True
+    assert capture.should_capture(None) is False
 
 
 def test_capture_denylist_blocks_judges(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -84,7 +87,106 @@ def test_capture_exchange_writes_jsonl(monkeypatch: pytest.MonkeyPatch, tmp_path
     assert row["prompt"] == "the prompt" and row["response"] == "the answer"
     assert row["purpose"] == "bear_case" and row["ticker"] == "NU"
     assert row["backend"] == "claude" and row["model"] == "claude-sonnet-4-6"
+    assert row["prompt_version"]
     assert row["prompt_sha256"]
+
+
+def test_capture_exchange_is_thread_safe_and_process_sharded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(capture.LLM_CAPTURE_DIR_ENV, str(tmp_path))
+    monkeypatch.delenv(capture.LLM_CAPTURE_PURPOSES_ENV, raising=False)
+    monkeypatch.setattr(capture.os, "getpid", lambda: 111)
+
+    def write(index: int) -> None:
+        capture.capture_exchange(
+            prompt=f"prompt-{index}",
+            response=f"response-{index}",
+            purpose="bear_case",
+            ticker="NU",
+            scope="test",
+            model="test-model",
+            run_id="threaded",
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(write, range(40)))
+
+    monkeypatch.setattr(capture.os, "getpid", lambda: 222)
+    write(40)
+
+    files = sorted(tmp_path.glob("capture_*.jsonl"))
+    assert len(files) == 2
+    rows = [
+        json.loads(line)
+        for path in files
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert len(rows) == 41
+    assert {row["prompt"] for row in rows} == {f"prompt-{index}" for index in range(41)}
+
+
+def test_capture_exchange_partitions_files_by_purpose(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(capture.LLM_CAPTURE_DIR_ENV, str(tmp_path))
+    monkeypatch.delenv(capture.LLM_CAPTURE_PURPOSES_ENV, raising=False)
+    monkeypatch.setattr(capture.os, "getpid", lambda: 111)
+
+    for purpose in ("annual_letter", "valuation_basis"):
+        capture.capture_exchange(
+            prompt=f"prompt-{purpose}",
+            response="response",
+            purpose=purpose,
+            ticker=None,
+            scope="test",
+            model="test-model",
+            run_id=None,
+        )
+
+    files = sorted(tmp_path.glob("capture_*.jsonl"))
+    assert len(files) == 2
+    assert all("_p" in path.stem for path in files)
+
+
+def test_capture_exchange_prunes_expired_shards_daily(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(capture.LLM_CAPTURE_DIR_ENV, str(tmp_path))
+    monkeypatch.setenv(capture.CAPTURE_RETENTION_DAYS_ENV, "30")
+    capture._LAST_PRUNED_DAY.clear()
+    old_day = (datetime.now(UTC) - timedelta(days=31)).strftime("%Y-%m-%d")
+    old = tmp_path / f"capture_{old_day}_999.jsonl"
+    old.write_text("{}\n", encoding="utf-8")
+
+    capture.capture_exchange(
+        prompt="p",
+        response="a",
+        purpose="bear_case",
+        ticker=None,
+        scope=None,
+        model="m",
+        run_id=None,
+    )
+
+    assert not old.exists()
+    assert list(tmp_path.glob("capture_*.jsonl"))
+
+    future = datetime.now(UTC) + timedelta(days=31)
+    newly_expired = tmp_path / f"capture_{datetime.now(UTC).strftime('%Y-%m-%d')}_998.jsonl"
+    newly_expired.write_text("{}\n", encoding="utf-8")
+    capture._prune_expired(tmp_path, today=future)
+    assert not newly_expired.exists()
+
+
+def test_default_archive_follows_writer_configuration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    configured = tmp_path / "private-captures"
+    monkeypatch.setenv(capture.LLM_CAPTURE_DIR_ENV, str(configured))
+    monkeypatch.delenv(capture.CAPTURE_ARCHIVE_DIR_ENV, raising=False)
+    assert capture.default_capture_archive_dir(tmp_path) == configured
 
 
 def test_capture_exchange_noop_when_off(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -130,6 +232,46 @@ def test_capture_exchange_never_raises(monkeypatch: pytest.MonkeyPatch, tmp_path
         model="m",
         run_id=None,
     )  # must not raise
+
+
+@pytest.mark.parametrize(
+    ("backend", "model"),
+    [
+        ("codex", "gpt-5.6-terra"),
+        ("gemini", "gemini-2.5-flash"),
+        ("openrouter", "deepseek/deepseek-chat"),
+    ],
+)
+def test_call_llm_captures_every_successful_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    backend: str,
+    model: str,
+) -> None:
+    from llm import cli, codex_backend, gemini_backend, openrouter_backend
+
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr(cli, "capture_exchange", lambda **kwargs: captured.append(kwargs))
+    monkeypatch.setattr(cli, "_enforce_budget_pre_call", lambda *_args, **_kwargs: None)
+    if backend == "codex":
+        monkeypatch.setenv(cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+        monkeypatch.setattr(codex_backend, "call_codex_llm", lambda *_args, **_kwargs: "answer")
+        result = cli.call_llm("prompt", purpose="bear_case")
+    elif backend == "gemini":
+        monkeypatch.setattr(gemini_backend, "call_gemini", lambda *_args, **_kwargs: "answer")
+        result = cli.call_llm("prompt", purpose="bear_case", model=model)
+    else:
+        monkeypatch.setattr(
+            openrouter_backend,
+            "call_openrouter",
+            lambda *_args, **_kwargs: "answer",
+        )
+        result = cli.call_llm("prompt", purpose="bear_case", model=model)
+
+    assert result == "answer"
+    assert len(captured) == 1
+    assert captured[0]["backend"] == backend
+    assert captured[0]["model"] == model
+    assert captured[0]["purpose"] == "bear_case"
 
 
 # ---------------------------------------------------------------------------
