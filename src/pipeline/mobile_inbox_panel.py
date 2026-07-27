@@ -55,6 +55,11 @@ body { margin:0; padding:var(--sp-3); background:var(--paper); font-family:var(-
   margin-bottom:var(--sp-1); }
 .mi-body { color:var(--fg-soft); font-size:var(--fs-body); line-height:1.5; margin:var(--sp-1) 0; }
 .mi-actions { display:flex; gap:var(--sp-2); flex-wrap:wrap; margin-top:var(--sp-2); }
+.mi-correct-form { display:grid; grid-template-columns:1fr 1fr; gap:var(--sp-2);
+  margin-top:var(--sp-2); }
+.mi-correct-form label { display:grid; gap:var(--sp-1); color:var(--muted);
+  font-size:var(--fs-caption); }
+.mi-correct-form .mi-wide { grid-column:1 / -1; }
 .mi-empty, .mi-failed, .mi-not-generated { color:var(--muted); font-size:var(--fs-body);
   padding:var(--sp-3) 0; }
 .mi-failed { color:var(--bad); }
@@ -100,6 +105,29 @@ def _draft_card(row: sqlite3.Row) -> str:
         else ""
     )
     is_tracker_group = str(row["source_channel"]) == "tracker" and row["source_external_id"]
+    ticker_value = escape(ticker, quote=True)
+    action_value = action.lower()
+    action_choices = (
+        ("buy", "sell")
+        if is_tracker_group
+        else (
+            "buy",
+            "sell",
+            "add",
+            "trim",
+            "hold",
+            "pass",
+            "watch",
+            "promote",
+        )
+    )
+    action_options = "".join(
+        f'<option value="{choice}"{" selected" if choice == action_value else ""}>'
+        f"{choice.title()}</option>"
+        for choice in action_choices
+    )
+    amount_value = "" if amount_raw is None else escape(f"{float(amount_raw):g}", quote=True)
+    rationale_value = escape(str(row["rationale"] or ""))
     data_attr = (
         f'data-draft-group-id="{int(row["id"])}"'
         if is_tracker_group
@@ -120,7 +148,23 @@ def _draft_card(row: sqlite3.Row) -> str:
         f'<button type="button" class="k-btn k-btn-quiet k-btn-sm" '
         f'data-mi-act="dismiss">{dismiss_label}</button>'
         '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-mi-act="defer">Defer</button>'
-        "</div></div>"
+        "</div>"
+        '<form class="mi-correct-form" data-mi-correct-form hidden>'
+        f'<label>Ticker<input type="text" name="proposed_ticker" value="{ticker_value}" '
+        'autocomplete="off" required></label>'
+        f'<label>Action<select name="proposed_action">{action_options}</select></label>'
+        f'<label>Total USD<input type="number" name="proposed_amount_usd" value="{amount_value}" '
+        'step="0.01" inputmode="decimal"></label>'
+        f'<label class="mi-wide">Rationale<textarea name="proposed_rationale" rows="3">'
+        f"{rationale_value}</textarea></label>"
+        '<div class="mi-actions mi-wide">'
+        '<button type="submit" class="k-btn k-btn-primary k-btn-sm">Save correction</button>'
+        '<button type="button" class="k-btn k-btn-quiet k-btn-sm" '
+        "data-mi-cancel-correction>Cancel</button>"
+        "</div>"
+        '<div class="mi-failed mi-wide" data-mi-correct-error hidden></div>'
+        "</form>"
+        "</div>"
     )
 
 
@@ -141,7 +185,8 @@ def _allocation_recommendation_section(db_path: Path) -> str:
         return '<div class="mi-not-generated">Allocation recommendation not generated yet.</div>'
     if not isinstance(artifact.content_json, dict):
         return '<div class="mi-failed">Allocation recommendation failed to read back.</div>'
-    plan_raw = artifact.content_json.get("preferred_plan")
+    content = cast("dict[str, object]", artifact.content_json)
+    plan_raw = content.get("preferred_plan")
     if not isinstance(plan_raw, dict):
         return '<div class="mi-failed">Allocation recommendation has no preferred plan.</div>'
     plan = cast("dict[str, object]", plan_raw)
@@ -191,36 +236,104 @@ def _drafts_section(db_path: Path) -> str:
             WHERE status = 'awaiting_confirmation'
             """
         ).fetchone()
-        rows = conn.execute(
-            """
-            WITH pending AS (
-                SELECT *,
+        if _table_exists(conn, "decisions"):
+            rows = conn.execute(
+                """
+                WITH pending AS (
+                    SELECT *,
+                           CASE
+                               WHEN source_channel = 'tracker'
+                                    AND source_external_id IS NOT NULL
+                               THEN 'tracker:' || source_external_id
+                               ELSE 'draft:' || CAST(id AS TEXT)
+                           END AS group_key
+                    FROM decision_drafts
+                    WHERE status = 'awaiting_confirmation'
+                ),
+                confirmed_totals AS (
+                    SELECT dd.source_external_id,
+                           MAX(d.size_usd) AS current_size_usd
+                    FROM decision_drafts dd
+                    JOIN decisions d ON d.id = dd.decision_id
+                    WHERE dd.source_channel = 'tracker'
+                      AND dd.source_external_id IS NOT NULL
+                      AND dd.status IN ('confirmed', 'corrected')
+                    GROUP BY dd.source_external_id
+                )
+                SELECT MIN(p.id) AS id,
+                       MAX(p.id) AS newest_id,
+                       MAX(p.source_channel) AS source_channel,
+                       MAX(p.source_external_id) AS source_external_id,
+                       MAX(p.original_text) AS original_text,
+                       MAX(json_extract(p.draft_json, '$.proposed_ticker')) AS ticker,
+                       MAX(COALESCE(
+                           json_extract(p.draft_json, '$.proposed_action'),
+                           json_extract(p.draft_json, '$.intent')
+                       )) AS action,
+                       MAX(json_extract(
+                           p.draft_json, '$.proposed_rationale'
+                       )) AS rationale,
                        CASE
-                           WHEN source_channel = 'tracker' AND source_external_id IS NOT NULL
-                           THEN 'tracker:' || source_external_id
-                           ELSE 'draft:' || CAST(id AS TEXT)
-                       END AS group_key
-                FROM decision_drafts
-                WHERE status = 'awaiting_confirmation'
-            )
-            SELECT MIN(id) AS id,
-                   MAX(id) AS newest_id,
-                   MAX(source_channel) AS source_channel,
-                   MAX(source_external_id) AS source_external_id,
-                   MAX(original_text) AS original_text,
-                   MAX(json_extract(draft_json, '$.proposed_ticker')) AS ticker,
-                   MAX(COALESCE(
-                       json_extract(draft_json, '$.proposed_action'),
-                       json_extract(draft_json, '$.intent')
-                   )) AS action,
-                   SUM(CAST(json_extract(draft_json, '$.proposed_amount_usd') AS REAL)) AS amount_usd,
-                   COUNT(*) AS fill_count
-            FROM pending
-            GROUP BY group_key
-            ORDER BY newest_id DESC
-            LIMIT 60
-            """
-        ).fetchall()
+                           WHEN MAX(ct.current_size_usd) IS NOT NULL
+                                AND SUM(CAST(json_extract(
+                                    p.draft_json, '$.proposed_amount_usd'
+                                ) AS REAL)) IS NOT NULL
+                           THEN MAX(ct.current_size_usd) + SUM(CAST(json_extract(
+                               p.draft_json, '$.proposed_amount_usd'
+                           ) AS REAL))
+                           WHEN MAX(ct.current_size_usd) IS NOT NULL
+                           THEN MAX(ct.current_size_usd)
+                           ELSE SUM(CAST(json_extract(
+                               p.draft_json, '$.proposed_amount_usd'
+                           ) AS REAL))
+                       END AS amount_usd,
+                       COUNT(*) AS fill_count
+                FROM pending p
+                LEFT JOIN confirmed_totals ct
+                  ON ct.source_external_id = p.source_external_id
+                 AND p.source_channel = 'tracker'
+                GROUP BY p.group_key
+                ORDER BY newest_id DESC
+                LIMIT 60
+                """
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                WITH pending AS (
+                    SELECT *,
+                           CASE
+                               WHEN source_channel = 'tracker'
+                                    AND source_external_id IS NOT NULL
+                               THEN 'tracker:' || source_external_id
+                               ELSE 'draft:' || CAST(id AS TEXT)
+                           END AS group_key
+                    FROM decision_drafts
+                    WHERE status = 'awaiting_confirmation'
+                )
+                SELECT MIN(id) AS id,
+                       MAX(id) AS newest_id,
+                       MAX(source_channel) AS source_channel,
+                       MAX(source_external_id) AS source_external_id,
+                       MAX(original_text) AS original_text,
+                       MAX(json_extract(draft_json, '$.proposed_ticker')) AS ticker,
+                       MAX(COALESCE(
+                           json_extract(draft_json, '$.proposed_action'),
+                           json_extract(draft_json, '$.intent')
+                       )) AS action,
+                       MAX(json_extract(
+                           draft_json, '$.proposed_rationale'
+                       )) AS rationale,
+                       SUM(CAST(json_extract(
+                           draft_json, '$.proposed_amount_usd'
+                       ) AS REAL)) AS amount_usd,
+                       COUNT(*) AS fill_count
+                FROM pending
+                GROUP BY group_key
+                ORDER BY newest_id DESC
+                LIMIT 60
+                """
+            ).fetchall()
     except sqlite3.Error:
         return '<div class="mi-failed">Decision drafts unavailable.</div>'
     finally:
@@ -435,7 +548,54 @@ def _inbox_stream_section(db_path: Path) -> str:
 _JS = """
 <script>
 (function () {
+  document.body.addEventListener('submit', function (ev) {
+    var form = ev.target.closest('[data-mi-correct-form]');
+    if (!form) return;
+    ev.preventDefault();
+    var card = form.closest('[data-draft-id], [data-draft-group-id]');
+    if (!card) return;
+    var id = card.getAttribute('data-draft-id');
+    var groupId = card.getAttribute('data-draft-group-id');
+    var submit = form.querySelector('button[type="submit"]');
+    var error = form.querySelector('[data-mi-correct-error]');
+    var fields = new FormData(form);
+    var amount = String(fields.get('proposed_amount_usd') || '').trim();
+    var payload = {
+      proposed_ticker: String(fields.get('proposed_ticker') || '').trim(),
+      proposed_action: String(fields.get('proposed_action') || '').trim(),
+      proposed_rationale: String(fields.get('proposed_rationale') || '').trim() || null
+    };
+    if (amount) payload.proposed_amount_usd = Number(amount);
+    submit.disabled = true;
+    submit.textContent = 'Saving...';
+    error.hidden = true;
+    var endpoint = groupId
+      ? ('/api/decision-draft-groups/' + groupId + '/correct')
+      : ('/api/decision-drafts/' + id + '/correct');
+    fetch(endpoint, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload)
+    }).then(function (r) {
+      return r.json().then(function (body) { return { r: r, body: body }; });
+    }).then(function (res) {
+      if (res.r.ok) { card.remove(); return; }
+      submit.disabled = false;
+      submit.textContent = 'Save correction';
+      error.textContent = res.body.error || 'Correction failed.';
+      error.hidden = false;
+    }).catch(function () {
+      submit.disabled = false;
+      submit.textContent = 'Save correction';
+      error.textContent = 'Correction failed.';
+      error.hidden = false;
+    });
+  });
   document.body.addEventListener('click', function (ev) {
+    var cancelCorrection = ev.target.closest('[data-mi-cancel-correction]');
+    if (cancelCorrection) {
+      var cancelForm = cancelCorrection.closest('[data-mi-correct-form]');
+      if (cancelForm) cancelForm.hidden = true;
+      return;
+    }
     var dispositionBtn = ev.target.closest('[data-card-disposition]');
     if (dispositionBtn) {
       var dispositionCard = dispositionBtn.closest('[data-card-artifact-id]');
@@ -490,7 +650,12 @@ _JS = """
     var groupId = card.getAttribute('data-draft-group-id');
     if (act === 'defer') { card.style.opacity = '0.4'; btn.disabled = true; return; }
     if (act === 'correct') {
-      window.location.href = '/#ledger-console?draft=' + (groupId || id);
+      var correctionForm = card.querySelector('[data-mi-correct-form]');
+      if (correctionForm) {
+        correctionForm.hidden = false;
+        var tickerInput = correctionForm.querySelector('[name="proposed_ticker"]');
+        if (tickerInput) tickerInput.focus();
+      }
       return;
     }
     btn.disabled = true;

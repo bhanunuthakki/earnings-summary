@@ -83,6 +83,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             source_note_id INTEGER,
             source_channel TEXT NOT NULL,
             source_external_id TEXT,
+            source_provider_id TEXT,
             idempotency_key TEXT NOT NULL UNIQUE,
             original_text TEXT NOT NULL,
             transcription_json TEXT,
@@ -822,7 +823,7 @@ def test_reconcile_preserves_identical_fills_with_distinct_transaction_ids(db: P
     conn = sqlite3.connect(str(db))
     try:
         rows = conn.execute(
-            "SELECT idempotency_key, source_external_id, draft_json "
+            "SELECT idempotency_key, source_external_id, source_provider_id, draft_json "
             "FROM decision_drafts WHERE source_channel = 'tracker' ORDER BY id"
         ).fetchall()
     finally:
@@ -831,7 +832,8 @@ def test_reconcile_preserves_identical_fills_with_distinct_transaction_ids(db: P
     assert len(rows) == 2
     assert rows[0][0] != rows[1][0]
     assert {row[1] for row in rows} == {"RBRK:2026-02-20:buy"}
-    assert sum(json.loads(row[2])["proposed_amount_usd"] for row in rows) == 200.0
+    assert {row[2] for row in rows} == {"txn-a", "txn-b"}
+    assert sum(json.loads(row[3])["proposed_amount_usd"] for row in rows) == 200.0
 
 
 def test_reconcile_archives_verified_legacy_duplicate_and_carries_action(db: Path) -> None:
@@ -891,6 +893,103 @@ def test_reconcile_archives_verified_legacy_duplicate_and_carries_action(db: Pat
         conn.close()
     assert states[provider_key] == "dismissed"
     assert set(states.values()) == {"dismissed", "expired"}
+
+
+def test_reconcile_marks_conflicting_decision_links_for_manual_review(db: Path) -> None:
+    legacy = _portfolio([("2026-02-20", "RBRK", "buy")])
+    reconcile_decision_actions(db_path=db, portfolio=legacy, now=_NOW)
+    provider_key = "tracker-id:" + hashlib.sha256(b"id|txn-a").hexdigest()[:20]
+    conn = sqlite3.connect(str(db))
+    try:
+        decision_ids: list[int] = []
+        for artifact_id in (901, 902):
+            cur = conn.execute(
+                "INSERT INTO decisions "
+                "(ticker, recommendation_kind, source_artifact_id, made_at, created_at) "
+                "VALUES ('RBRK', 'buy', ?, ?, ?)",
+                (artifact_id, _NOW.isoformat(), _NOW.isoformat()),
+            )
+            decision_ids.append(int(cur.lastrowid or 0))
+        legacy_id = int(
+            conn.execute(
+                "SELECT id FROM decision_drafts WHERE source_channel = 'tracker'"
+            ).fetchone()[0]
+        )
+        conn.execute(
+            "UPDATE decision_drafts SET status = 'confirmed', decision_id = ?, "
+            "confirmed_at = '2026-02-21' WHERE id = ?",
+            (decision_ids[0], legacy_id),
+        )
+        conn.execute(
+            "INSERT INTO decision_drafts "
+            "(user_id, source_note_id, source_channel, source_external_id, "
+            "source_provider_id, idempotency_key, original_text, transcription_json, "
+            "draft_json, parse_confidence, status, prompt_version, model, llm_call_id, "
+            "decision_id, expires_at, created_at, updated_at, confirmed_at, dismissed_at) "
+            "SELECT user_id, source_note_id, source_channel, source_external_id, "
+            "'txn-a', ?, original_text, transcription_json, draft_json, parse_confidence, "
+            "'confirmed', prompt_version, model, llm_call_id, ?, expires_at, created_at, "
+            "updated_at, '2026-02-21', NULL FROM decision_drafts WHERE id = ?",
+            (provider_key, decision_ids[1], legacy_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    provider_transaction = LiveTransaction(
+        date="2026-02-20",
+        ticker="RBRK",
+        name=None,
+        type="buy",
+        subtype=None,
+        quantity=1.0,
+        amount=-1.0,
+        account_name="x",
+        transaction_id="txn-a",
+    )
+
+    reconcile_decision_actions(
+        db_path=db,
+        portfolio=LivePortfolio(
+            available=True,
+            api_url="http://tracker.test",
+            transactions=[provider_transaction],
+        ),
+        now=_NOW,
+    )
+
+    conn = sqlite3.connect(str(db))
+    try:
+        states = conn.execute(
+            "SELECT status, decision_id FROM decision_drafts "
+            "WHERE source_channel = 'tracker' ORDER BY id"
+        ).fetchall()
+        notes = conn.execute(
+            "SELECT user_notes FROM decisions WHERE id IN (?, ?) ORDER BY id",
+            tuple(decision_ids),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert states == [("confirmed", decision_ids[0]), ("confirmed", decision_ids[1])]
+    assert all("Tracker identity conflict" in str(row[0]) for row in notes)
+
+    reconcile_decision_actions(
+        db_path=db,
+        portfolio=LivePortfolio(
+            available=True,
+            api_url="http://tracker.test",
+            transactions=[provider_transaction],
+        ),
+        now=_NOW,
+    )
+    conn = sqlite3.connect(str(db))
+    try:
+        repeated_notes = conn.execute(
+            "SELECT user_notes FROM decisions WHERE id IN (?, ?) ORDER BY id",
+            tuple(decision_ids),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert repeated_notes == notes
 
 
 # ---------------------------------------------------------------------------

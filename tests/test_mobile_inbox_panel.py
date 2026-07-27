@@ -55,3 +55,53 @@ def test_card_dispositions_render_every_unresolved_current_card(tmp_path: Path) 
 
     assert "/api/research/card/" in html
     assert "data-card-artifact-id" in html
+
+
+def test_decision_correction_is_inline_and_supports_tracker_groups(tmp_path: Path) -> None:
+    db_path = tmp_path / "portfolio.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript(
+        """
+        CREATE TABLE decision_drafts (
+            id INTEGER PRIMARY KEY,
+            source_channel TEXT NOT NULL,
+            source_external_id TEXT,
+            original_text TEXT NOT NULL,
+            draft_json TEXT,
+            status TEXT NOT NULL,
+            decision_id INTEGER
+        );
+        CREATE TABLE decisions (
+            id INTEGER PRIMARY KEY,
+            size_usd REAL
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO decision_drafts VALUES "
+        "(1, 'tracker', 'NU:2026-07-24:buy', 'Confirmed tracker fill', "
+        '\'{"proposed_ticker":"NU","proposed_action":"buy",'
+        '"proposed_amount_usd":100,"proposed_rationale":"Initial"}\', '
+        "'confirmed', 10)"
+    )
+    conn.execute("INSERT INTO decisions VALUES (10, 100)")
+    conn.execute(
+        "INSERT INTO decision_drafts VALUES "
+        "(2, 'tracker', 'NU:2026-07-24:buy', 'Late tracker fill', "
+        '\'{"proposed_ticker":"NU","proposed_action":"buy",'
+        '"proposed_amount_usd":250,"proposed_rationale":"Late"}\', '
+        "'awaiting_confirmation', NULL)"
+    )
+    conn.commit()
+    conn.close()
+
+    html = render_mobile_inbox(db_path)
+
+    assert 'data-draft-group-id="2"' in html
+    assert "data-mi-correct-form" in html
+    assert 'name="proposed_ticker" value="NU"' in html
+    assert 'name="proposed_amount_usd" value="350"' in html
+    assert "/api/decision-draft-groups/" in html
+    assert "/correct" in html
+    assert "#ledger-console?draft=" not in html
+    assert "if (amount) payload.proposed_amount_usd = Number(amount);" in html

@@ -1244,11 +1244,12 @@ def build_telegram_keyboard(
     if generically-labeled, keyboard)."""
     suffix = f":{artifact_id}" if artifact_id is not None else ""
     resolved_inbox_url = _validated_mobile_inbox_link(inbox_url)
-    review_button: dict[str, object] = (
-        {"text": "Review in Inbox", "url": resolved_inbox_url}
-        if resolved_inbox_url
-        else {"text": "Review in Inbox", "callback_data": f"spb:review{suffix}"}
-    )
+    if resolved_inbox_url is None:
+        raise ValueError("a validated private mobile Inbox URL is required for Telegram delivery")
+    review_button: dict[str, object] = {
+        "text": "Review in Inbox",
+        "url": resolved_inbox_url,
+    }
     rows: list[list[dict[str, object]]] = [
         [
             {"text": "Why?", "callback_data": f"spb:why{suffix}"},

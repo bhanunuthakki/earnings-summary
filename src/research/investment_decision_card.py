@@ -1011,6 +1011,7 @@ def act_on_card(
     *,
     db_path: Path | str | None = None,
     notes: str | None = None,
+    _connection: sqlite3.Connection | None = None,
 ) -> str:
     """The ONE action core for the four §8.1 owner verbs. Returns a short
     status string:
@@ -1029,13 +1030,16 @@ def act_on_card(
     if verb not in ACTION_VERBS:
         raise CardActionError(f"unknown verb {verb!r}; expected one of {ACTION_VERBS}")
 
-    conn = _open(db_path)
+    owns_connection = _connection is None
+    conn = _open(db_path) if _connection is None else _connection
     try:
         artifact = _load_artifact(conn, artifact_id)
         ticker = str(artifact["ticker"]).upper()
         rationale = _hypothesis_excerpt(artifact["content_json"])
 
         if verb == "research_further":
+            if not owns_connection:
+                raise CardActionError("research_further cannot share an owner-decision transaction")
             claim = rationale or f"Research further: {ticker} (Investment Decision Card)"
             existing = conn.execute(
                 "SELECT id FROM research_tasks WHERE UPPER(ticker) = ? AND claim = ? "
@@ -1080,7 +1084,9 @@ def act_on_card(
             """,
             (ticker, kind, artifact_id, rationale, notes, now, now),
         )
-        conn.commit()
+        if owns_connection:
+            conn.commit()
         return f"{kind}_recorded"
     finally:
-        conn.close()
+        if owns_connection:
+            conn.close()
