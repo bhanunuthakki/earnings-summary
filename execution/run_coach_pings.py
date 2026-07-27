@@ -84,7 +84,7 @@ def main() -> int:
         from capture.token_store import load_chat_id, load_token
 
         try:
-            token = load_token(repo_root / "data" / "secrets" / "telegram_bot_token")
+            token = load_token()
         except Exception:
             token = None
         chat_id = load_chat_id(repo_root / "data" / "capture" / "telegram_chat_id.json")

@@ -13,7 +13,15 @@ import gzip
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from execution import restore_drill
+from runtime.backup_crypto import encrypt_file, load_or_create_key
+
+
+@pytest.fixture(autouse=True)
+def _isolated_backup_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EARNINGS_SUMMARY_SECRETS_DIR", str(tmp_path / "secrets"))
 
 
 def _make_snapshot(
@@ -21,7 +29,7 @@ def _make_snapshot(
     *,
     populated: bool = True,
     version: str = "0113_x",
-    name: str = "portfolio.db.20260715T090000Z.gz",
+    name: str = "portfolio.db.20260715T090000Z.gz.enc",
 ) -> Path:
     """Write a gzipped SQLite snapshot restore_db.list_snapshots will discover."""
     raw = backup_dir / "_raw.db"
@@ -35,11 +43,14 @@ def _make_snapshot(
         conn.execute("INSERT INTO financial_facts VALUES (1)")
     conn.commit()
     conn.close()
-    gz = backup_dir / name
-    with open(raw, "rb") as f, gzip.open(gz, "wb") as g:
+    plain = backup_dir / "_snapshot.gz"
+    with open(raw, "rb") as f, gzip.open(plain, "wb") as g:
         g.write(f.read())
     raw.unlink()
-    return gz
+    encrypted = backup_dir / name
+    encrypt_file(plain, encrypted, key=load_or_create_key())
+    plain.unlink()
+    return encrypted
 
 
 def test_drill_passes_on_healthy_snapshot(tmp_path: Path) -> None:
@@ -81,7 +92,7 @@ def test_no_snapshot_reports_status(tmp_path: Path) -> None:
 def test_corrupt_snapshot_fails(tmp_path: Path) -> None:
     bdir = tmp_path / "backups"
     bdir.mkdir()
-    (bdir / "portfolio.db.20260715T090000Z.gz").write_bytes(b"this is not gzip")
+    (bdir / "portfolio.db.20260715T090000Z.gz.enc").write_bytes(b"this is not encrypted")
 
     ok, summary = restore_drill.run_drill(bdir, tmp_path / "absent.db")
 
@@ -131,3 +142,25 @@ def test_main_exit_codes(tmp_path: Path) -> None:
     # healthy snapshot → exit 0
     _make_snapshot(bdir)
     assert restore_drill.main(["--backup-dir", str(bdir), "--db", str(absent)]) == 0
+
+
+def test_main_defaults_to_canonical_env_db(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical = tmp_path / "canonical.db"
+    observed: list[Path] = []
+
+    def _fake_drill(
+        backup_dir: Path, live_db: Path, *, keep: bool = False
+    ) -> tuple[bool, dict[str, object]]:
+        del backup_dir, keep
+        observed.append(live_db)
+        return True, {"status": "ok"}
+
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(canonical))
+    monkeypatch.setattr(restore_drill, "run_drill", _fake_drill)
+    monkeypatch.setattr(restore_drill, "_record_run", lambda *args: None)
+
+    assert restore_drill.main([]) == 0
+    assert observed == [canonical]

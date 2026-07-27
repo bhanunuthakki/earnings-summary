@@ -31,9 +31,9 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -43,8 +43,9 @@ sys.path.append(SRC_DIR)
 
 import db  # noqa: E402
 from log_redact import redact as _redact  # noqa: E402
+from runtime.secrets import load_project_env  # noqa: E402
 
-load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+load_project_env(Path(PROJECT_ROOT))
 FMP_API_KEY = os.environ.get("FMP_API_KEY")
 
 FMP_BASE = "https://financialmodelingprep.com/stable"

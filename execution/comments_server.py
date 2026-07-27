@@ -126,6 +126,8 @@ from pipeline.ticker_command_center import (  # noqa: E402
     render_notes_drawer_fragment,
 )
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
+from runtime.job_runtime import portfolio_db_path  # noqa: E402
+from runtime.secrets import load_project_env, secret_read_path  # noqa: E402
 from server_runtime.access import (  # noqa: E402
     REPORT_CAPABILITY_HEADER,
     ReportCapabilityStore,
@@ -165,7 +167,7 @@ def _cors_allow_origin(origin: str, *, repo_root: Path = PROJECT_ROOT) -> str | 
         if o.strip()
     }
     configured_private_origin = private_mobile_origin(
-        config_path=repo_root / "data" / "secrets" / "private_mobile_base_url"
+        config_path=secret_read_path("private_mobile_base_url", repo_root=repo_root)
     )
     if configured_private_origin:
         whitelist.add(configured_private_origin)
@@ -385,12 +387,13 @@ def _record_dismiss_pass(
 def create_app(
     repo_root: Path,
     *,
+    db_path: Path | None = None,
     registry: Registry | None = None,
     chat_executor: concurrent.futures.Executor | None = None,
 ) -> Flask:
     app = Flask(__name__)
     app.config["MAX_CONTENT_LENGTH"] = 1_048_576
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = (db_path or repo_root / "data" / "portfolio.db").resolve()
     job_registry = registry or Registry(repo_root=repo_root)
     report_capability = ReportCapabilityStore(repo_root)
     report_capability.load_or_create()
@@ -496,18 +499,31 @@ def create_app(
         # request at this server; reject any unsafe-method request whose browser
         # Origin is cross-site (judged by the same loopback / "null" / whitelist
         # rule as CORS, via _cors_allow_origin). Safe methods and the OPTIONS
-        # preflight are exempt; an absent Origin (local CLI / curl / tests /
-        # same-origin non-browser caller) is allowed. This complements the
+        # preflight are exempt. An absent Origin remains allowed for loopback
+        # CLI callers, but is refused for a remote Tailnet client: remote
+        # mutations must come from a same-origin browser surface. This
+        # complements the
         # CORS-withholding in add_cors_headers, which only stops requests the
         # browser bothers to preflight — the Origin check also covers a simple
         # or forged cross-site request that skips preflight.
         if request.method in ("GET", "HEAD", "OPTIONS"):
             return None
+        remote_address = request.remote_addr or ""
         origin = request.headers.get("Origin", "")
         if origin == "null" and not report_capability.matches(
             request.headers.get(REPORT_CAPABILITY_HEADER, "")
         ):
             return ({"error": "static report capability required"}, 403)
+        if (
+            not origin
+            and tailscale_access_enabled()
+            and remote_address
+            not in (
+                "127.0.0.1",
+                "::1",
+            )
+        ):
+            return ({"error": "Origin required for remote state-changing request"}, 403)
         if origin and _cors_allow_origin(origin, repo_root=repo_root) is None:
             return ({"error": "cross-origin state-changing request refused"}, 403)
         return None
@@ -747,9 +763,7 @@ def create_app(
                 from capture import research_notify, token_store
                 from research.proposals import get_proposal
 
-                token = token_store.load_token(
-                    repo_root / "data" / "secrets" / "telegram_bot_token"
-                )
+                token = token_store.load_token()
                 chat_id = token_store.load_chat_id(
                     repo_root / "data" / "capture" / "telegram_chat_id.json"
                 )
@@ -5475,6 +5489,16 @@ def _parse_date(s: str) -> date:
     return date.fromisoformat(s[:10])
 
 
+def configure_runtime_db(repo_root: Path) -> Path:
+    """Bind implicit DB consumers to the same canonical DB as request handlers."""
+    import db
+
+    load_project_env(repo_root)
+    db_path = portfolio_db_path(repo_root)
+    db.set_db_path(db_path)
+    return db_path
+
+
 def main() -> int:
     configure_logging()  # structured root logging + correlation ids (sre-4)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -5489,6 +5513,7 @@ def main() -> int:
     args = parser.parse_args()
 
     repo_root = args.repo_root.resolve()
+    db_path = configure_runtime_db(repo_root)
     if args.tailscale:
         os.environ["COMMENTS_SERVER_ALLOW_TAILSCALE"] = "1"
     host = args.host or (resolve_tailscale_ipv4() if args.tailscale else "127.0.0.1")
@@ -5500,7 +5525,7 @@ def main() -> int:
         f"comments_server: repo_root={repo_root} host={host} port={args.port}",
         file=sys.stderr,
     )
-    app = create_app(repo_root)
+    app = create_app(repo_root, db_path=db_path)
     # Flask's built-in dev server is fine here — this is a single-user
     # localhost tool, not a production service.
     app.run(host=host, port=args.port, debug=False, threaded=True)

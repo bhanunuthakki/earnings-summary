@@ -1,13 +1,13 @@
 """Monthly DB restore drill — prove the daily backups actually restore.
 
-A backup you have never restored is not a backup. ``cron/backup_db.py`` writes a
-gzip snapshot of ``data/portfolio.db`` daily (02:45); this drill periodically
+A backup you have never restored is not a backup. ``cron/backup_db.py`` writes an
+authenticated encrypted snapshot of ``data/portfolio.db`` daily (02:45); this drill periodically
 restores the LATEST snapshot to a throwaway temp file and verifies it, so
 real-world rot — Drive-sync truncation, gzip corruption, a stale/old snapshot,
 or schema drift — surfaces on a schedule instead of during a real outage. It is
 the scheduled counterpart to ``cron/restore_db.py``'s on-demand restore, and the
 verification ``tests/test_backup_restore.py`` only ever exercises against
-synthetic tmp DBs, never the real ``.gz`` snapshots on Drive.
+synthetic tmp DBs, never the real ``.gz.enc`` snapshots on Drive.
 
 The drill NEVER touches the live DB's data — it restores to a temp path that is
 deleted afterward. It writes exactly one ``ingestion_runs`` bookkeeping row
@@ -16,8 +16,9 @@ clean-streak alongside ``backup_db`` (best-effort: skipped if the live DB is
 absent, which is itself the disaster case the drill is rehearsing for).
 
 Checks (all on the temp copy):
-  1. restore — gunzip the newest snapshot + ``PRAGMA integrity_check`` (reuses
-     ``cron/restore_db.py::restore_snapshot``; a corrupt restore is discarded).
+  1. restore — authenticate, decrypt, gunzip the newest snapshot, then run
+     ``PRAGMA integrity_check`` (reuses ``cron/restore_db.py::restore_snapshot``;
+     a corrupt restore is discarded).
   2. row-count sanity — core tables (``tracked_companies``, ``financial_facts``)
      are non-empty, catching a truncated/empty snapshot that still passes the
      integrity check.
@@ -51,7 +52,6 @@ sys.path.insert(0, str(PROJECT_ROOT / "cron"))
 
 import restore_db  # noqa: E402  (cron/restore_db.py — gunzip + integrity + list)
 
-_DEFAULT_DB = PROJECT_ROOT / "data" / "portfolio.db"
 # A healthy snapshot has rows here; an empty one signals truncation/corruption
 # that still slips past PRAGMA integrity_check (a valid-but-empty DB is "ok").
 _CORE_TABLES: tuple[str, ...] = ("tracked_companies", "financial_facts")
@@ -172,14 +172,22 @@ def _record_run(live_db: Path, ok: bool, summary: dict[str, object]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from runtime.job_runtime import portfolio_db_path
+    from runtime.secrets import load_project_env
+
+    load_project_env(PROJECT_ROOT)
+    configured_db = portfolio_db_path(PROJECT_ROOT)
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     p.add_argument(
-        "--backup-dir", type=Path, default=restore_db.DEFAULT_BACKUP_DIR, help="snapshot directory"
+        "--backup-dir",
+        type=Path,
+        default=restore_db.configured_backup_dir(),
+        help="snapshot directory",
     )
     p.add_argument(
-        "--db", type=Path, default=_DEFAULT_DB, help="live DB (read-only, for schema cmp)"
+        "--db", type=Path, default=configured_db, help="live DB (read-only, for schema cmp)"
     )
     p.add_argument("--keep", action="store_true", help="keep the temp restore (debugging)")
     args = p.parse_args(argv)

@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     db.set_db_path(db_path)  # so the predraft LLM cost rows land in THIS DB's ledger
 
     try:
-        token = token_store.load_token(repo_root / "data" / "secrets" / "telegram_bot_token")
+        token = token_store.load_token()
     except token_store.CaptureSetupError as exc:
         print(f"run_weekly_packet: not configured ({exc}); exiting cleanly", file=sys.stderr)
         return 0

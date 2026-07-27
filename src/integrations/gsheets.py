@@ -38,6 +38,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from runtime.secrets import secret_read_path, secret_write_path, write_private_text
+
 # Per-file Drive access — the app can create files and touch only the files it
 # created/opened. Sufficient for the export→edit→import round-trip; a Sheet the
 # user created by hand (not via export) is invisible under this scope.
@@ -46,12 +48,10 @@ SCOPES: tuple[str, ...] = ("https://www.googleapis.com/auth/drive.file",)
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _SHEET_MIME = "application/vnd.google-apps.spreadsheet"
 
-# Default on-disk locations (both under the gitignored data/ tree). Overridable
-# via env so a different machine / CI can point elsewhere.
+# Default on-disk locations are outside the repository. Overridable via env so
+# a different machine / CI can point elsewhere.
 _CREDENTIALS_ENV = "DCF_GSHEETS_CREDENTIALS"
 _TOKEN_ENV = "DCF_GSHEETS_TOKEN"
-_DEFAULT_CREDENTIALS_REL = Path("data") / "secrets" / "gsheets_credentials.json"
-_DEFAULT_TOKEN_REL = Path("data") / "secrets" / "gsheets_token.json"
 
 _SHEET_ID_RE = re.compile(r"/spreadsheets/d/([A-Za-z0-9_-]+)")
 
@@ -106,19 +106,27 @@ def parse_sheet_id(url_or_id: str) -> str:
 
 
 def default_credentials_path(repo_root: Path) -> Path:
-    """Resolved credentials path: ``$DCF_GSHEETS_CREDENTIALS`` or the data/ default."""
+    """Resolved credentials path: explicit env or external secret storage."""
     import os
 
     env = os.environ.get(_CREDENTIALS_ENV)
-    return Path(env) if env else repo_root / _DEFAULT_CREDENTIALS_REL
+    return Path(env) if env else secret_read_path("gsheets_credentials.json", repo_root=repo_root)
 
 
 def default_token_path(repo_root: Path) -> Path:
-    """Resolved OAuth token path: ``$DCF_GSHEETS_TOKEN`` or the data/ default."""
+    """Resolved OAuth token path: explicit env or external secret storage."""
     import os
 
     env = os.environ.get(_TOKEN_ENV)
-    return Path(env) if env else repo_root / _DEFAULT_TOKEN_REL
+    return Path(env) if env else secret_write_path("gsheets_token.json")
+
+
+def existing_token_path(repo_root: Path) -> Path:
+    """Read an existing token from external storage or the legacy migration path."""
+    import os
+
+    env = os.environ.get(_TOKEN_ENV)
+    return Path(env) if env else secret_read_path("gsheets_token.json", repo_root=repo_root)
 
 
 def credential_kind(credentials_path: Path) -> str:
@@ -200,13 +208,26 @@ def load_credentials(
 
     # OAuth: the actual credential lives in the token file; creds_path may be the
     # client-secrets (for the consent flow) or already a saved token.
-    tok_path = token_path or default_token_path(repo_root)
+    tok_path = token_path or existing_token_path(repo_root)
     if kind == "oauth_token":
         tok_path = creds_path
-    return _load_oauth_credentials(creds_path, tok_path, interactive=interactive)
+    write_path = token_path or default_token_path(repo_root)
+    return _load_oauth_credentials(
+        creds_path,
+        tok_path,
+        interactive=interactive,
+        token_write_path=write_path,
+    )
 
 
-def _load_oauth_credentials(client_secrets: Path, token_path: Path, *, interactive: bool) -> Any:
+def _load_oauth_credentials(
+    client_secrets: Path,
+    token_path: Path,
+    *,
+    interactive: bool,
+    token_write_path: Path | None = None,
+) -> Any:
+    write_path = token_write_path or token_path
     oauth_creds = _import("google.oauth2.credentials")
     creds: Any = None
     if token_path.exists():
@@ -223,7 +244,7 @@ def _load_oauth_credentials(client_secrets: Path, token_path: Path, *, interacti
             raise GSheetsAuthError(
                 f"OAuth token refresh failed ({exc}); re-run `python execution/dcf_sheets.py auth`"
             ) from exc
-        _save_token(creds, token_path)
+        _save_token(creds, write_path)
         return creds
 
     if not interactive:
@@ -235,13 +256,12 @@ def _load_oauth_credentials(client_secrets: Path, token_path: Path, *, interacti
     flow_mod = _import("google_auth_oauthlib.flow")
     flow = flow_mod.InstalledAppFlow.from_client_secrets_file(str(client_secrets), list(SCOPES))
     creds = flow.run_local_server(port=0)
-    _save_token(creds, token_path)
+    _save_token(creds, write_path)
     return creds
 
 
 def _save_token(creds: Any, token_path: Path) -> None:
-    token_path.parent.mkdir(parents=True, exist_ok=True)
-    token_path.write_text(creds.to_json(), encoding="utf-8")
+    write_private_text(token_path, creds.to_json())
 
 
 def authorize_interactive(

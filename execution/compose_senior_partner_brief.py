@@ -179,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        token = token_store.load_token(repo_root / "data" / "secrets" / "telegram_bot_token")
+        token = token_store.load_token()
     except token_store.CaptureSetupError as exc:
         _log("telegram_not_configured", error=str(exc))
         print(json.dumps({"artifact_id": result.artifact_id, "delivered": False}))

@@ -328,6 +328,7 @@ cryptography==49.0.0 \
     --hash=sha256:f89660a348f4f78a92366240a61404e337586ef7f5909a2fef59ca88ef505493 \
     --hash=sha256:fc1e275c2f1d97b1a6450b8b0ea3ebfa6e087a611c2b26cb2404d48588abab7b
     # via
+    #   -r requirements.txt
     #   google-auth
     #   pyjwt
 ctranslate2==4.8.1 \

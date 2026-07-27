@@ -36,13 +36,13 @@ from datetime import date
 from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from log_redact import redact as _redact  # noqa: E402
 from pipeline.fmp_doc_index import index_fmp_files_for_ticker  # noqa: E402
+from runtime.secrets import load_project_env, project_env_file  # noqa: E402
 
 # .env is loaded lazily in main(), AFTER --db-path is known — when running
 # from a worktree against the main checkout's DB (data/ is gitignored and a
@@ -161,10 +161,10 @@ def main() -> int:
         PROJECT_ROOT_DATA = DB_PATH.parent.parent
         FMP_DIR = DB_PATH.parent / "historical" / "fmp"
 
-    load_dotenv(PROJECT_ROOT_DATA / ".env")
+    load_project_env(PROJECT_ROOT_DATA)
     API_KEY = os.environ.get("FMP_API_KEY")
     if not API_KEY:
-        sys.stderr.write(f"FATAL: FMP_API_KEY not set in {PROJECT_ROOT_DATA / '.env'}\n")
+        sys.stderr.write(f"FATAL: FMP_API_KEY not set in {project_env_file(PROJECT_ROOT_DATA)}\n")
         return 1
 
     tickers = _resolve_tickers(args.tickers)

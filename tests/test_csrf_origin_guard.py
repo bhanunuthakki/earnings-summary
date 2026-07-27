@@ -21,6 +21,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import comments_server  # noqa: E402
 
+import db  # noqa: E402
+
 # A POST route that returns a clean 400 on an empty body — lets a test assert
 # "the guard let it through" (status != 403) without depending on handler internals.
 _POST_ROUTE = "/chat/NU/apply"
@@ -101,6 +103,22 @@ def test_absent_origin_passes_guard(client) -> None:
     assert r.status_code != 403
 
 
+def test_remote_tailnet_mutation_requires_origin(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("COMMENTS_SERVER_ALLOW_TAILSCALE", "1")
+    app = comments_server.create_app(tmp_path)
+    r = app.test_client().post(
+        _POST_ROUTE,
+        json={},
+        base_url="http://100.100.1.2:7421",
+        environ_base={"REMOTE_ADDR": "100.100.1.3"},
+    )
+    assert r.status_code == 403
+    assert b"Origin required" in r.data
+
+
 def test_options_preflight_is_exempt(client) -> None:
     r = client.options(_POST_ROUTE, headers={"Origin": "https://evil.example"})
     assert r.status_code != 403
@@ -109,3 +127,17 @@ def test_options_preflight_is_exempt(client) -> None:
 def test_safe_get_is_exempt(client) -> None:
     r = client.get("/healthz", headers={"Origin": "https://evil.example"})
     assert r.status_code == 200
+
+
+def test_runtime_configuration_binds_implicit_consumers_to_canonical_db(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical = tmp_path / "canonical.db"
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(canonical))
+    monkeypatch.setattr(db, "DB_PATH", tmp_path / "previous.db")
+
+    resolved = comments_server.configure_runtime_db(tmp_path)
+
+    assert resolved == canonical
+    assert Path(db.DB_PATH) == canonical

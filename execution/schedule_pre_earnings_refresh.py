@@ -35,18 +35,18 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import requests
-from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db as portfolio_db  # noqa: E402
 from log_redact import redact as _redact  # noqa: E402
+from runtime.secrets import load_project_env  # noqa: E402
 from sources.earnings_calendar import next_earnings_date  # noqa: E402
 
 log = logging.getLogger(__name__)
 
-load_dotenv(PROJECT_ROOT / ".env")
+load_project_env(PROJECT_ROOT)
 API_KEY = os.environ.get("FMP_API_KEY")
 
 CACHE_DIR = PROJECT_ROOT / ".tmp" / "cacher"

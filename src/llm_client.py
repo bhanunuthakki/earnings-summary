@@ -41,8 +41,6 @@ from datetime import date
 from pathlib import Path
 from typing import cast
 
-from dotenv import load_dotenv
-
 # ---------------------------------------------------------------------------
 # Re-exports from the src/llm/ submodules
 # ---------------------------------------------------------------------------
@@ -174,6 +172,7 @@ from llm.untrusted import (
 from llm.untrusted import (
     spotlight as spotlight,
 )
+from runtime.secrets import load_project_env
 
 # Load .env at module init so GEMINI_API_KEY is available without callers having
 # to import dotenv themselves. Silent no-op if .env doesn't exist. Every existing
@@ -181,7 +180,7 @@ from llm.untrusted import (
 # pre-split behavior where fallback.py / cli.py find env vars populated. Runs
 # AFTER the re-exports above because those don't actually read env vars at
 # import time — env reads happen lazily inside functions.
-load_dotenv()
+load_project_env(Path(__file__).resolve().parents[1])
 
 # Staleness threshold (days). When the most-recent evidence in the corpus is
 # older than this vs. the report date, the tracker switches to STALE-CORPUS

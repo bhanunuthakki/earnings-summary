@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        token = token_store.load_token(repo_root / "data" / "secrets" / "telegram_bot_token")
+        token = token_store.load_token()
     except token_store.CaptureSetupError as exc:
         print(f"run_decision_nudge: not configured ({exc}); exiting cleanly", file=sys.stderr)
         return 0

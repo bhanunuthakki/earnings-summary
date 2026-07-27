@@ -29,6 +29,16 @@ import pytest
 # monkeypatch (see test_fmp_tier_ladder) and are unaffected; setdefault (not a
 # hard write) means an explicitly-exported FMP_TIER still wins.
 os.environ.setdefault("FMP_TIER", "basic")
+os.environ.setdefault(
+    "EARNINGS_SUMMARY_ENV_FILE",
+    os.path.join(os.path.dirname(__file__), ".pytest-no-external-env"),
+)
+os.environ.setdefault(
+    "EARNINGS_SUMMARY_SECRETS_DIR",
+    os.path.join(
+        os.environ.get("TEMP", os.path.dirname(__file__)), "earnings-summary-pytest-secrets"
+    ),
+)
 # Production is Codex-first. Unit tests pin the reversible Claude mode so
 # legacy tests never launch a real membership subprocess; dedicated routing
 # tests opt back into Codex and patch the transport seam.

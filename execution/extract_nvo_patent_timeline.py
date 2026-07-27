@@ -33,13 +33,12 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
-from dotenv import load_dotenv  # noqa: E402
-
 from llm_client import call_llm  # noqa: E402
 from models.patents import NvoSelfDisclosedPatent, NvoSelfDisclosedTimeline  # noqa: E402
 from parser import extract_text_from_pdf  # noqa: E402
+from runtime.secrets import load_project_env  # noqa: E402
 
-load_dotenv(PROJECT_ROOT / ".env")
+load_project_env(PROJECT_ROOT)
 
 OUT_DIR = PROJECT_ROOT / ".tmp" / "nvo_patents"
 IR_DOCS_DIR = PROJECT_ROOT / "ir_documents" / "NVO"

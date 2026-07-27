@@ -15,6 +15,8 @@ from runtime.job_runtime import (
     JobAlreadyRunningError,
     JobLock,
     _windows_mutex_name,
+    _write_set_lock_path,
+    inherited_lock_is_valid,
     main,
     run_job,
 )
@@ -37,10 +39,32 @@ def test_different_write_sets_can_run_together(tmp_path: Path) -> None:
         pass
 
 
+def test_distinct_checkouts_share_lock_for_same_canonical_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = tmp_path / "checkout-one"
+    second = tmp_path / "checkout-two"
+    database = tmp_path / "shared" / "portfolio.db"
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(database))
+    with (
+        JobLock(first, "first", ["portfolio-db"]),
+        pytest.raises(JobAlreadyRunningError),
+        JobLock(second, "second", ["portfolio-db"]),
+    ):
+        pass
+
+
+def test_spoofed_inheritance_name_does_not_bypass_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("EARNINGS_SUMMARY_JOB_LOCKS", "portfolio-db")
+    monkeypatch.delenv("EARNINGS_SUMMARY_JOB_LOCK_PROOF", raising=False)
+    assert inherited_lock_is_valid(tmp_path, "portfolio-db") is False
+
+
 def test_stale_lock_is_reclaimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    lock_dir = tmp_path / ".tmp" / "job_locks"
-    lock_dir.mkdir(parents=True)
-    lock_path = lock_dir / "portfolio-db.lock"
+    lock_path = _write_set_lock_path(tmp_path, "portfolio-db")
+    lock_path.parent.mkdir(parents=True)
     lock_path.write_text(
         json.dumps({"job": "dead", "pid": 12345, "token": "stale-owner"}),
         encoding="utf-8",
@@ -59,9 +83,8 @@ def test_stale_lock_is_reclaimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_reused_pid_with_different_process_start_is_reclaimed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    lock_dir = tmp_path / ".tmp" / "job_locks"
-    lock_dir.mkdir(parents=True)
-    lock_path = lock_dir / "portfolio-db.lock"
+    lock_path = _write_set_lock_path(tmp_path, "portfolio-db")
+    lock_path.parent.mkdir(parents=True)
     lock_path.write_text(
         json.dumps(
             {
@@ -92,7 +115,7 @@ def test_reused_pid_with_different_process_start_is_reclaimed(
 def test_release_does_not_delete_successor_lock(tmp_path: Path) -> None:
     lock = JobLock(tmp_path, "first", ["portfolio-db"])
     lock.__enter__()
-    lock_path = tmp_path / ".tmp" / "job_locks" / "portfolio-db.lock"
+    lock_path = _write_set_lock_path(tmp_path, "portfolio-db")
     successor = {"job": "successor", "pid": 99999, "token": "successor-token"}
     lock_path.write_text(json.dumps(successor), encoding="utf-8")
 
@@ -104,9 +127,8 @@ def test_release_does_not_delete_successor_lock(tmp_path: Path) -> None:
 def test_concurrent_stale_lock_contenders_leave_one_owner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    lock_dir = tmp_path / ".tmp" / "job_locks"
-    lock_dir.mkdir(parents=True)
-    lock_path = lock_dir / "portfolio-db.lock"
+    lock_path = _write_set_lock_path(tmp_path, "portfolio-db")
+    lock_path.parent.mkdir(parents=True)
     lock_path.write_text(
         json.dumps({"job": "dead", "pid": 12345, "token": "stale-owner"}),
         encoding="utf-8",
