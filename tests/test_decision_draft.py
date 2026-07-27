@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import sys
-from datetime import UTC, datetime
+import threading
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 from alembic.config import Config
@@ -30,9 +35,12 @@ from capture.decision_draft_actions import (  # noqa: E402
     confirm_draft,
     confirm_tracker_fill_group,
     correct_draft,
+    correct_tracker_fill_group,
     dismiss_draft,
     dismiss_tracker_fill_group,
 )
+from decision_extractor import reconcile_decision_actions  # noqa: E402
+from integrations.portfolio_tracker_client import LivePortfolio, LiveTransaction  # noqa: E402
 
 _BOOTSTRAP_DDL = """
 CREATE TABLE IF NOT EXISTS tracked_companies (
@@ -384,6 +392,862 @@ def test_confirm_tracker_fill_group_is_idempotent(db_path: Path) -> None:
     assert count == 1
 
 
+def test_confirm_using_confirmed_tracker_id_processes_late_sibling(db_path: Path) -> None:
+    _seed_roster(db_path, ["NU"])
+    first_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=100.0,
+        key="tracker:stale-confirm-a",
+    )
+    first = confirm_tracker_fill_group(first_id, db_path=db_path)
+    late_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=250.0,
+        key="tracker:stale-confirm-b",
+    )
+
+    result = confirm_draft(first_id, db_path=db_path)
+
+    conn = _conn(db_path)
+    decision = conn.execute(
+        "SELECT size_usd FROM decisions WHERE id = ?",
+        (first["decision_id"],),
+    ).fetchone()
+    late = conn.execute(
+        "SELECT status, decision_id FROM decision_drafts WHERE id = ?",
+        (late_id,),
+    ).fetchone()
+    conn.close()
+    assert result["receipt"] == "decision_aggregate_corrected"
+    assert decision["size_usd"] == 350.0
+    assert late["status"] == "confirmed"
+    assert late["decision_id"] == first["decision_id"]
+
+
+def test_correct_using_confirmed_tracker_id_processes_late_sibling(db_path: Path) -> None:
+    _seed_roster(db_path, ["NU"])
+    first_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=100.0,
+        key="tracker:stale-correct-a",
+    )
+    first = confirm_tracker_fill_group(first_id, db_path=db_path)
+    late_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=250.0,
+        key="tracker:stale-correct-b",
+    )
+
+    result = correct_draft(
+        first_id,
+        {"proposed_amount_usd": 300.0},
+        db_path=db_path,
+    )
+
+    conn = _conn(db_path)
+    decision = conn.execute(
+        "SELECT size_usd FROM decisions WHERE id = ?",
+        (first["decision_id"],),
+    ).fetchone()
+    late = conn.execute(
+        "SELECT status, decision_id FROM decision_drafts WHERE id = ?",
+        (late_id,),
+    ).fetchone()
+    conn.close()
+    assert result["receipt"] == "tracker_group_corrected"
+    assert decision["size_usd"] == 300.0
+    assert late["status"] == "corrected"
+    assert late["decision_id"] == first["decision_id"]
+
+
+def _race_actions(
+    monkeypatch: pytest.MonkeyPatch,
+    action_calls: tuple[Callable[[], dict[str, object]], Callable[[], dict[str, object]]],
+) -> list[dict[str, object]]:
+    """Release two action requests together before either reads draft state."""
+    import capture.decision_draft_actions as action_module
+
+    real_open = action_module.open_conn
+    barrier = threading.Barrier(2)
+    local = threading.local()
+
+    def synchronized_open(db: Path | str | None) -> sqlite3.Connection:
+        conn = real_open(db)
+        if not getattr(local, "initial_open_complete", False):
+            local.initial_open_complete = True
+            barrier.wait(timeout=10)
+        return conn
+
+    monkeypatch.setattr(action_module, "open_conn", synchronized_open)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(action) for action in action_calls]
+        return [future.result(timeout=15) for future in futures]
+
+
+def _race_action(
+    monkeypatch: pytest.MonkeyPatch,
+    action: Callable[[], dict[str, object]],
+) -> list[dict[str, object]]:
+    return _race_actions(monkeypatch, (action, action))
+
+
+def _race_reconcile_and_action(
+    monkeypatch: pytest.MonkeyPatch,
+    action: Callable[[], dict[str, object]],
+    reconcile: Callable[[], dict[str, int]],
+) -> tuple[dict[str, object], dict[str, int]]:
+    import capture.decision_draft_actions as action_module
+    import decision_extractor as extractor_module
+
+    real_action_open = action_module.open_conn
+    real_reconcile_open = extractor_module._open
+    barrier = threading.Barrier(2)
+    action_local = threading.local()
+    reconcile_local = threading.local()
+
+    def synchronized_action_open(db: Path | str | None) -> sqlite3.Connection:
+        conn = real_action_open(db)
+        if not getattr(action_local, "initial_open_complete", False):
+            action_local.initial_open_complete = True
+            barrier.wait(timeout=10)
+        return conn
+
+    def synchronized_reconcile_open(db: Path | str | None) -> sqlite3.Connection | None:
+        conn = real_reconcile_open(db)
+        if not getattr(reconcile_local, "initial_open_complete", False):
+            reconcile_local.initial_open_complete = True
+            barrier.wait(timeout=10)
+        return conn
+
+    monkeypatch.setattr(action_module, "open_conn", synchronized_action_open)
+    monkeypatch.setattr(extractor_module, "_open", synchronized_reconcile_open)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        action_future = executor.submit(action)
+        reconcile_future = executor.submit(reconcile)
+        return action_future.result(timeout=15), reconcile_future.result(timeout=15)
+
+
+def test_confirm_draft_serializes_two_requests(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_roster(db_path, ["NU"])
+    draft_id = _make_draft(
+        db_path,
+        DecisionDraft(
+            intent="executed_change",
+            proposed_ticker="NU",
+            proposed_action="buy",
+            proposed_amount_usd=100.0,
+        ),
+    )
+
+    results = _race_action(monkeypatch, lambda: confirm_draft(draft_id, db_path=db_path))
+
+    conn = _conn(db_path)
+    decisions = conn.execute(
+        "SELECT id FROM decisions WHERE ticker = 'NU' AND recommendation_kind = 'buy'"
+    ).fetchall()
+    conn.close()
+    assert len(decisions) == 1
+    assert {result["decision_id"] for result in results} == {decisions[0]["id"]}
+    assert {result["receipt"] for result in results} == {
+        "decision_recorded",
+        "already_actioned",
+    }
+
+
+def test_confirm_tracker_group_serializes_two_requests(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_roster(db_path, ["NU"])
+    draft_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=100.0,
+        key="tracker:race-initial",
+    )
+
+    results = _race_action(
+        monkeypatch,
+        lambda: confirm_tracker_fill_group(draft_id, db_path=db_path),
+    )
+
+    conn = _conn(db_path)
+    decisions = conn.execute(
+        "SELECT id FROM decisions WHERE ticker = 'NU' AND recommendation_kind = 'buy'"
+    ).fetchall()
+    conn.close()
+    assert len(decisions) == 1
+    assert {result["decision_id"] for result in results} == {decisions[0]["id"]}
+    assert {result["receipt"] for result in results} == {
+        "decision_recorded",
+        "already_actioned",
+    }
+
+
+def test_generic_and_group_confirm_share_initial_tracker_action(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_roster(db_path, ["NU"])
+    draft_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=100.0,
+        key="tracker:race-mixed-initial",
+    )
+
+    results = _race_actions(
+        monkeypatch,
+        (
+            lambda: confirm_draft(draft_id, db_path=db_path),
+            lambda: confirm_tracker_fill_group(draft_id, db_path=db_path),
+        ),
+    )
+
+    conn = _conn(db_path)
+    decisions = conn.execute(
+        "SELECT id FROM decisions WHERE ticker = 'NU' AND recommendation_kind = 'buy'"
+    ).fetchall()
+    conn.close()
+    assert len(decisions) == 1
+    assert {result["decision_id"] for result in results} == {decisions[0]["id"]}
+    assert {result["receipt"] for result in results} == {
+        "decision_recorded",
+        "already_actioned",
+    }
+
+
+def test_confirm_tracker_fill_group_corrects_aggregate_for_late_fill(db_path: Path) -> None:
+    _seed_roster(db_path, ["NU"])
+    first_id = _make_tracker_fill(
+        db_path, external_id="NU:2026-07-24:buy", amount_usd=100.0, key="tracker:late-a"
+    )
+    first = confirm_tracker_fill_group(first_id, db_path=db_path)
+    late_id = _make_tracker_fill(
+        db_path, external_id="NU:2026-07-24:buy", amount_usd=250.0, key="tracker:late-b"
+    )
+
+    corrected = confirm_tracker_fill_group(late_id, db_path=db_path)
+
+    conn = _conn(db_path)
+    decision = conn.execute(
+        "SELECT size_usd, user_notes FROM decisions WHERE id = ?",
+        (first["decision_id"],),
+    ).fetchone()
+    linked = conn.execute(
+        "SELECT status, decision_id FROM decision_drafts WHERE id IN (?, ?) ORDER BY id",
+        (first_id, late_id),
+    ).fetchall()
+    conn.close()
+    assert corrected["receipt"] == "decision_aggregate_corrected"
+    assert corrected["added_fill_count"] == 1
+    assert decision["size_usd"] == 350.0
+    assert "attached 1 late fill(s)" in decision["user_notes"]
+    assert {row["status"] for row in linked} == {"confirmed"}
+    assert {row["decision_id"] for row in linked} == {first["decision_id"]}
+
+
+def test_confirm_late_tracker_fill_serializes_two_requests(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_roster(db_path, ["NU"])
+    first_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=100.0,
+        key="tracker:race-late-a",
+    )
+    first = confirm_tracker_fill_group(first_id, db_path=db_path)
+    late_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=250.0,
+        key="tracker:race-late-b",
+    )
+
+    results = _race_action(
+        monkeypatch,
+        lambda: confirm_tracker_fill_group(late_id, db_path=db_path),
+    )
+
+    conn = _conn(db_path)
+    decisions = conn.execute(
+        "SELECT id, size_usd FROM decisions WHERE ticker = 'NU' AND recommendation_kind = 'buy'"
+    ).fetchall()
+    conn.close()
+    assert len(decisions) == 1
+    assert decisions[0]["id"] == first["decision_id"]
+    assert decisions[0]["size_usd"] == 350.0
+    assert {result["decision_id"] for result in results} == {first["decision_id"]}
+    assert {result["receipt"] for result in results} == {
+        "decision_aggregate_corrected",
+        "already_actioned",
+    }
+
+
+def test_generic_and_group_confirm_share_late_tracker_action(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_roster(db_path, ["NU"])
+    first_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=100.0,
+        key="tracker:race-mixed-late-a",
+    )
+    first = confirm_tracker_fill_group(first_id, db_path=db_path)
+    late_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=250.0,
+        key="tracker:race-mixed-late-b",
+    )
+
+    results = _race_actions(
+        monkeypatch,
+        (
+            lambda: confirm_draft(late_id, db_path=db_path),
+            lambda: confirm_tracker_fill_group(late_id, db_path=db_path),
+        ),
+    )
+
+    conn = _conn(db_path)
+    decisions = conn.execute(
+        "SELECT id, size_usd FROM decisions WHERE ticker = 'NU' AND recommendation_kind = 'buy'"
+    ).fetchall()
+    conn.close()
+    assert len(decisions) == 1
+    assert decisions[0]["id"] == first["decision_id"]
+    assert decisions[0]["size_usd"] == 350.0
+    assert {result["decision_id"] for result in results} == {first["decision_id"]}
+    assert {result["receipt"] for result in results} == {
+        "decision_aggregate_corrected",
+        "already_actioned",
+    }
+
+
+def test_generic_correct_and_group_confirm_share_initial_tracker_action(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_roster(db_path, ["NU"])
+    first_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=100.0,
+        key="tracker:race-correct-initial-a",
+    )
+    _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=250.0,
+        key="tracker:race-correct-initial-b",
+    )
+
+    results = _race_actions(
+        monkeypatch,
+        (
+            lambda: correct_draft(
+                first_id,
+                {"proposed_amount_usd": 300.0},
+                db_path=db_path,
+            ),
+            lambda: confirm_tracker_fill_group(first_id, db_path=db_path),
+        ),
+    )
+
+    conn = _conn(db_path)
+    decisions = conn.execute(
+        "SELECT id, size_usd FROM decisions WHERE ticker = 'NU' AND recommendation_kind = 'buy'"
+    ).fetchall()
+    drafts = conn.execute(
+        "SELECT status, decision_id FROM decision_drafts "
+        "WHERE source_external_id = 'NU:2026-07-24:buy'"
+    ).fetchall()
+    conn.close()
+    assert len(decisions) == 1
+    assert decisions[0]["size_usd"] in {300.0, 350.0}
+    assert {row["decision_id"] for row in drafts} == {decisions[0]["id"]}
+    assert {row["status"] for row in drafts} in ({"corrected"}, {"confirmed"})
+    assert {result["decision_id"] for result in results} == {decisions[0]["id"]}
+
+
+def test_generic_correct_and_group_confirm_share_late_tracker_action(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_roster(db_path, ["NU"])
+    first_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=100.0,
+        key="tracker:race-correct-late-a",
+    )
+    first = confirm_tracker_fill_group(first_id, db_path=db_path)
+    late_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=250.0,
+        key="tracker:race-correct-late-b",
+    )
+
+    results = _race_actions(
+        monkeypatch,
+        (
+            lambda: correct_draft(
+                late_id,
+                {"proposed_amount_usd": 300.0},
+                db_path=db_path,
+            ),
+            lambda: confirm_tracker_fill_group(late_id, db_path=db_path),
+        ),
+    )
+
+    conn = _conn(db_path)
+    decisions = conn.execute(
+        "SELECT id, size_usd FROM decisions WHERE ticker = 'NU' AND recommendation_kind = 'buy'"
+    ).fetchall()
+    late = conn.execute(
+        "SELECT status, decision_id FROM decision_drafts WHERE id = ?",
+        (late_id,),
+    ).fetchone()
+    conn.close()
+    assert len(decisions) == 1
+    assert decisions[0]["id"] == first["decision_id"]
+    assert decisions[0]["size_usd"] in {300.0, 350.0}
+    assert decisions[0]["size_usd"] != 550.0
+    assert late["status"] in {"corrected", "confirmed"}
+    assert late["decision_id"] == first["decision_id"]
+    assert {result["decision_id"] for result in results} == {first["decision_id"]}
+
+
+def test_correct_tracker_group_defaults_to_current_decision_plus_pending(
+    db_path: Path,
+) -> None:
+    _seed_roster(db_path, ["NU"])
+    first_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=100.0,
+        key="tracker:correct-default-a",
+    )
+    first = confirm_tracker_fill_group(first_id, db_path=db_path)
+    late_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=250.0,
+        key="tracker:correct-default-b",
+    )
+
+    result = correct_draft(
+        late_id,
+        {"proposed_rationale": "Keep the computed aggregate."},
+        db_path=db_path,
+    )
+
+    conn = _conn(db_path)
+    decision = conn.execute(
+        "SELECT size_usd FROM decisions WHERE id = ?",
+        (first["decision_id"],),
+    ).fetchone()
+    conn.close()
+    assert result["receipt"] == "tracker_group_corrected"
+    assert result["decision_id"] == first["decision_id"]
+    assert decision["size_usd"] == 350.0
+
+
+def test_correct_tracker_group_updates_shared_decision_and_future_late_fill(
+    db_path: Path,
+) -> None:
+    _seed_roster(db_path, ["NU"])
+    first_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=100.0,
+        key="tracker:correct-group-a",
+    )
+    first = confirm_tracker_fill_group(first_id, db_path=db_path)
+    late_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=250.0,
+        key="tracker:correct-group-b",
+    )
+
+    corrected = correct_tracker_fill_group(
+        late_id,
+        {
+            "proposed_ticker": "NU",
+            "proposed_action": "buy",
+            "proposed_amount_usd": 300.0,
+            "proposed_rationale": "Broker total corrected.",
+        },
+        db_path=db_path,
+    )
+    newest_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=50.0,
+        key="tracker:correct-group-c",
+    )
+    after_late = confirm_tracker_fill_group(newest_id, db_path=db_path)
+
+    conn = _conn(db_path)
+    decisions = conn.execute(
+        "SELECT id, size_usd, rationale_excerpt FROM decisions "
+        "WHERE ticker = 'NU' AND recommendation_kind = 'buy'"
+    ).fetchall()
+    drafts = conn.execute(
+        "SELECT status, decision_id FROM decision_drafts "
+        "WHERE source_external_id = 'NU:2026-07-24:buy' ORDER BY id"
+    ).fetchall()
+    conn.close()
+    assert len(decisions) == 1
+    assert decisions[0]["id"] == first["decision_id"]
+    assert decisions[0]["size_usd"] == 350.0
+    assert decisions[0]["rationale_excerpt"] == "Broker total corrected."
+    assert corrected["receipt"] == "tracker_group_corrected"
+    assert after_late["receipt"] == "decision_aggregate_corrected"
+    assert {row["decision_id"] for row in drafts} == {first["decision_id"]}
+    assert [row["status"] for row in drafts] == ["confirmed", "corrected", "confirmed"]
+
+
+def test_correct_tracker_group_propagates_categories_but_preserves_fill_amounts(
+    db_path: Path,
+) -> None:
+    _seed_roster(db_path, ["NU", "MELI"])
+    first_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=100.0,
+        key="tracker:correct-category-a",
+    )
+    first = confirm_tracker_fill_group(first_id, db_path=db_path)
+    late_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=250.0,
+        key="tracker:correct-category-b",
+    )
+
+    correct_tracker_fill_group(
+        late_id,
+        {
+            "proposed_ticker": "MELI",
+            "proposed_action": "sell",
+            "proposed_amount_usd": 300.0,
+        },
+        db_path=db_path,
+    )
+    newest_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=50.0,
+        key="tracker:correct-category-c",
+    )
+    confirm_tracker_fill_group(newest_id, db_path=db_path)
+
+    conn = _conn(db_path)
+    decision = conn.execute(
+        "SELECT ticker, recommendation_kind, size_usd FROM decisions WHERE id = ?",
+        (first["decision_id"],),
+    ).fetchone()
+    raw_drafts = conn.execute(
+        "SELECT draft_json FROM decision_drafts "
+        "WHERE source_external_id = 'NU:2026-07-24:buy' ORDER BY id"
+    ).fetchall()
+    conn.close()
+    decoded = [json.loads(row["draft_json"]) for row in raw_drafts]
+    assert decision["ticker"] == "MELI"
+    assert decision["recommendation_kind"] == "sell"
+    assert decision["size_usd"] == 350.0
+    assert {row["proposed_ticker"] for row in decoded} == {"MELI"}
+    assert {row["proposed_action"] for row in decoded} == {"sell"}
+    assert [row["proposed_amount_usd"] for row in decoded] == [100.0, 250.0, 50.0]
+
+
+def _provider_fill(*, day: str, transaction_id: str, amount_usd: float) -> LiveTransaction:
+    return LiveTransaction(
+        date=day,
+        ticker="NU",
+        name=None,
+        type="buy",
+        subtype=None,
+        quantity=1.0,
+        amount=amount_usd,
+        account_name="x",
+        transaction_id=transaction_id,
+    )
+
+
+def test_reconcile_late_provider_fill_reaches_group_aggregate(db_path: Path) -> None:
+    _seed_roster(db_path, ["NU"])
+    now = datetime.now(UTC)
+    day = now.date().isoformat()
+    first_fill = _provider_fill(day=day, transaction_id="txn-a", amount_usd=100.0)
+    reconcile_decision_actions(
+        db_path=db_path,
+        portfolio=LivePortfolio(
+            available=True,
+            api_url="http://tracker.test",
+            transactions=[first_fill],
+        ),
+        now=now,
+    )
+    conn = _conn(db_path)
+    first_id = int(
+        conn.execute(
+            "SELECT id FROM decision_drafts WHERE source_provider_id = 'txn-a'"
+        ).fetchone()[0]
+    )
+    conn.close()
+    first = confirm_tracker_fill_group(first_id, db_path=db_path)
+
+    late_fill = _provider_fill(day=day, transaction_id="txn-b", amount_usd=250.0)
+    reconcile_decision_actions(
+        db_path=db_path,
+        portfolio=LivePortfolio(
+            available=True,
+            api_url="http://tracker.test",
+            transactions=[first_fill, late_fill],
+        ),
+        now=now,
+    )
+
+    conn = _conn(db_path)
+    provider_rows = conn.execute(
+        "SELECT id, source_provider_id FROM decision_drafts "
+        "WHERE source_channel = 'tracker' ORDER BY id"
+    ).fetchall()
+    conn.close()
+    assert {row["source_provider_id"] for row in provider_rows} == {"txn-a", "txn-b"}
+    late_id = next(int(row["id"]) for row in provider_rows if row["source_provider_id"] == "txn-b")
+
+    corrected = confirm_tracker_fill_group(late_id, db_path=db_path)
+
+    conn = _conn(db_path)
+    decision = conn.execute(
+        "SELECT size_usd FROM decisions WHERE id = ?",
+        (first["decision_id"],),
+    ).fetchone()
+    conn.close()
+    assert corrected["receipt"] == "decision_aggregate_corrected"
+    assert decision["size_usd"] == 350.0
+
+
+def test_reconcile_promotes_confirmed_legacy_over_expired_provider_twin(
+    db_path: Path,
+) -> None:
+    _seed_roster(db_path, ["NU"])
+    day = "2026-07-24"
+    legacy_fill = LiveTransaction(
+        date=day,
+        ticker="NU",
+        name=None,
+        type="buy",
+        subtype=None,
+        quantity=1.0,
+        amount=100.0,
+        account_name="Brokerage",
+    )
+    reconcile_decision_actions(
+        db_path=db_path,
+        portfolio=LivePortfolio(
+            available=True,
+            api_url="http://tracker.test",
+            transactions=[legacy_fill],
+        ),
+    )
+    conn = _conn(db_path)
+    legacy_id = int(
+        conn.execute("SELECT id FROM decision_drafts WHERE source_channel = 'tracker'").fetchone()[
+            0
+        ]
+    )
+    conn.close()
+    confirmed = confirm_tracker_fill_group(legacy_id, db_path=db_path)
+    legacy_row = get_draft(legacy_id, db_path=db_path)
+    assert legacy_row is not None and legacy_row.draft is not None
+
+    provider_key = "tracker-id:" + hashlib.sha256(b"id|txn-a").hexdigest()[:20]
+    provider_id = create_draft_row(
+        source_note_id=None,
+        source_channel="tracker",
+        source_external_id=legacy_row.source_external_id,
+        source_provider_id="txn-a",
+        idempotency_key=provider_key,
+        original_text=legacy_row.original_text,
+        draft=legacy_row.draft,
+        status="expired",
+        db_path=db_path,
+    )
+    provider_fill = _provider_fill(day=day, transaction_id="txn-a", amount_usd=100.0)
+    reconcile_decision_actions(
+        db_path=db_path,
+        portfolio=LivePortfolio(
+            available=True,
+            api_url="http://tracker.test",
+            transactions=[provider_fill],
+        ),
+    )
+
+    provider_row = get_draft(provider_id, db_path=db_path)
+    archived_legacy = get_draft(legacy_id, db_path=db_path)
+    assert provider_row is not None
+    assert provider_row.status == "confirmed"
+    assert provider_row.decision_id == confirmed["decision_id"]
+    assert archived_legacy is not None and archived_legacy.status == "expired"
+
+    late_fill = _provider_fill(day=day, transaction_id="txn-b", amount_usd=50.0)
+    reconcile_decision_actions(
+        db_path=db_path,
+        portfolio=LivePortfolio(
+            available=True,
+            api_url="http://tracker.test",
+            transactions=[provider_fill, late_fill],
+        ),
+    )
+    conn = _conn(db_path)
+    late_id = int(
+        conn.execute(
+            "SELECT id FROM decision_drafts WHERE source_provider_id = 'txn-b'"
+        ).fetchone()[0]
+    )
+    conn.close()
+    result = confirm_tracker_fill_group(late_id, db_path=db_path)
+
+    conn = _conn(db_path)
+    decisions = conn.execute(
+        "SELECT id, size_usd FROM decisions WHERE ticker = 'NU' AND recommendation_kind = 'buy'"
+    ).fetchall()
+    conn.close()
+    assert len(decisions) == 1
+    assert decisions[0]["id"] == confirmed["decision_id"]
+    assert decisions[0]["size_usd"] == 150.0
+    assert result["decision_id"] == confirmed["decision_id"]
+
+
+def test_reconcile_and_confirm_never_orphan_tracker_decision(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_roster(db_path, ["NU"])
+    day = "2026-07-24"
+    legacy_fill = LiveTransaction(
+        date=day,
+        ticker="NU",
+        name=None,
+        type="buy",
+        subtype=None,
+        quantity=1.0,
+        amount=100.0,
+        account_name="Brokerage",
+    )
+    reconcile_decision_actions(
+        db_path=db_path,
+        portfolio=LivePortfolio(
+            available=True,
+            api_url="http://tracker.test",
+            transactions=[legacy_fill],
+        ),
+    )
+    conn = _conn(db_path)
+    legacy_id = int(
+        conn.execute("SELECT id FROM decision_drafts WHERE source_channel = 'tracker'").fetchone()[
+            0
+        ]
+    )
+    conn.close()
+    dismiss_tracker_fill_group(legacy_id, db_path=db_path)
+    legacy_row = get_draft(legacy_id, db_path=db_path)
+    assert legacy_row is not None and legacy_row.draft is not None
+
+    provider_id = create_draft_row(
+        source_note_id=None,
+        source_channel="tracker",
+        source_external_id=legacy_row.source_external_id,
+        source_provider_id="txn-a",
+        idempotency_key="tracker-id:" + hashlib.sha256(b"id|txn-a").hexdigest()[:20],
+        original_text=legacy_row.original_text,
+        draft=legacy_row.draft,
+        status="awaiting_confirmation",
+        db_path=db_path,
+    )
+    provider_fill = _provider_fill(day=day, transaction_id="txn-a", amount_usd=100.0)
+    action_result, _ = _race_reconcile_and_action(
+        monkeypatch,
+        lambda: confirm_tracker_fill_group(provider_id, db_path=db_path),
+        lambda: reconcile_decision_actions(
+            db_path=db_path,
+            portfolio=LivePortfolio(
+                available=True,
+                api_url="http://tracker.test",
+                transactions=[provider_fill],
+            ),
+        ),
+    )
+
+    provider_row = get_draft(provider_id, db_path=db_path)
+    archived_legacy = get_draft(legacy_id, db_path=db_path)
+    conn = _conn(db_path)
+    decisions = conn.execute(
+        "SELECT id FROM decisions WHERE ticker = 'NU' AND recommendation_kind = 'buy'"
+    ).fetchall()
+    conn.close()
+    assert provider_row is not None
+    assert archived_legacy is not None and archived_legacy.status == "expired"
+    if decisions:
+        assert len(decisions) == 1
+        assert provider_row.status == "confirmed"
+        assert provider_row.decision_id == decisions[0]["id"]
+        assert action_result["decision_id"] == decisions[0]["id"]
+    else:
+        assert provider_row.status == "dismissed"
+        assert provider_row.decision_id is None
+        assert action_result["receipt"] == "already_actioned"
+
+
+def test_tracker_group_confirmation_rolls_back_orphan_decision(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_roster(db_path, ["NU"])
+    draft_id = _make_tracker_fill(
+        db_path, external_id="NU:2026-07-24:buy", amount_usd=100.0, key="tracker:atomic"
+    )
+    import capture.decision_draft_actions as actions
+
+    original_write = cast("Callable[..., int]", getattr(actions, "_write_owner_decision"))
+
+    def fail_after_insert(*args: object, **kwargs: object) -> int:
+        original_write(*args, **kwargs)
+        raise RuntimeError("injected failure after decision insert")
+
+    monkeypatch.setattr(actions, "_write_owner_decision", fail_after_insert)
+    with pytest.raises(RuntimeError, match="injected failure"):
+        confirm_tracker_fill_group(draft_id, db_path=db_path)
+
+    conn = _conn(db_path)
+    assert conn.execute("SELECT COUNT(*) FROM decisions WHERE ticker = 'NU'").fetchone()[0] == 0
+    draft = conn.execute(
+        "SELECT status, decision_id FROM decision_drafts WHERE id = ?", (draft_id,)
+    ).fetchone()
+    conn.close()
+    assert draft["status"] == "awaiting_confirmation"
+    assert draft["decision_id"] is None
+
+    monkeypatch.setattr(actions, "_write_owner_decision", original_write)
+    result = confirm_tracker_fill_group(draft_id, db_path=db_path)
+
+    conn = _conn(db_path)
+    count = conn.execute(
+        "SELECT COUNT(*) FROM decisions WHERE ticker = 'NU' AND recommendation_kind = 'buy'"
+    ).fetchone()[0]
+    conn.close()
+    assert count == 1
+    assert result["decision_id"] is not None
+
+
 def test_dismiss_tracker_fill_group_preserves_rows_without_decision(db_path: Path) -> None:
     first_id = _make_tracker_fill(
         db_path, external_id="NU:2026-07-24:buy", amount_usd=100.0, key="tracker:e"
@@ -405,6 +1269,43 @@ def test_dismiss_tracker_fill_group_preserves_rows_without_decision(db_path: Pat
     assert {row["decision_id"] for row in rows} == {None}
 
 
+def test_dismiss_late_tracker_fill_preserves_confirmed_decision(db_path: Path) -> None:
+    _seed_roster(db_path, ["NU"])
+    first_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=100.0,
+        key="tracker:dismiss-late-a",
+    )
+    first = confirm_tracker_fill_group(first_id, db_path=db_path)
+    late_id = _make_tracker_fill(
+        db_path,
+        external_id="NU:2026-07-24:buy",
+        amount_usd=250.0,
+        key="tracker:dismiss-late-b",
+    )
+
+    result = dismiss_tracker_fill_group(late_id, db_path=db_path)
+
+    conn = _conn(db_path)
+    rows = conn.execute(
+        "SELECT id, status, decision_id FROM decision_drafts WHERE id IN (?, ?) ORDER BY id",
+        (first_id, late_id),
+    ).fetchall()
+    decision = conn.execute(
+        "SELECT size_usd FROM decisions WHERE id = ?",
+        (first["decision_id"],),
+    ).fetchone()
+    conn.close()
+    assert result["receipt"] == "dismissed"
+    assert result["fill_count"] == 1
+    assert rows[0]["status"] == "confirmed"
+    assert rows[0]["decision_id"] == first["decision_id"]
+    assert rows[1]["status"] == "dismissed"
+    assert rows[1]["decision_id"] is None
+    assert decision["size_usd"] == 100.0
+
+
 def test_dismiss_never_creates_a_decision(db_path: Path) -> None:
     draft_id = _make_draft(
         db_path, DecisionDraft(intent="musing", proposed_ticker=None, proposed_action=None)
@@ -423,6 +1324,34 @@ def test_confirm_with_nothing_actionable_raises(db_path: Path) -> None:
         db_path, DecisionDraft(intent="rationale", proposed_ticker=None, proposed_action=None)
     )
     with pytest.raises(DraftActionError):
+        confirm_draft(draft_id, db_path=db_path)
+
+
+@pytest.mark.parametrize("ticker", ["NU", None])
+def test_rationale_draft_does_not_attach_beyond_lookback(db_path: Path, ticker: str | None) -> None:
+    if ticker:
+        _seed_roster(db_path, [ticker])
+    old = (datetime.now(UTC).replace(tzinfo=None) - timedelta(days=31)).isoformat()
+    conn = _conn(db_path)
+    conn.execute(
+        "INSERT INTO decisions "
+        "(ticker, recommendation_kind, decided_by, scope, made_at, created_at) "
+        "VALUES (?, 'hold', 'owner', ?, ?, ?)",
+        (ticker, "ticker" if ticker else "portfolio", old, old),
+    )
+    conn.commit()
+    conn.close()
+    draft_id = _make_draft(
+        db_path,
+        DecisionDraft(
+            intent="rationale",
+            proposed_ticker=ticker,
+            proposed_rationale="Old context should not absorb this note.",
+        ),
+        text=f"old-rationale-{ticker}",
+    )
+
+    with pytest.raises(DraftActionError, match="nothing decision-shaped"):
         confirm_draft(draft_id, db_path=db_path)
 
 

@@ -137,6 +137,7 @@ class DecisionDraftRow:
     source_note_id: int | None
     source_channel: str
     source_external_id: str | None
+    source_provider_id: str | None
     idempotency_key: str
     original_text: str
     transcription_json: dict[str, object] | None
@@ -181,6 +182,11 @@ def _row_to_dc(row: sqlite3.Row) -> DecisionDraftRow:
         source_external_id=(
             None if row["source_external_id"] is None else str(row["source_external_id"])
         ),
+        source_provider_id=(
+            None
+            if "source_provider_id" not in set(row.keys()) or row["source_provider_id"] is None
+            else str(row["source_provider_id"])
+        ),
         idempotency_key=str(row["idempotency_key"]),
         original_text=str(row["original_text"]),
         transcription_json=_decode_json(row["transcription_json"]),
@@ -202,15 +208,45 @@ def _row_to_dc(row: sqlite3.Row) -> DecisionDraftRow:
     )
 
 
-def get_draft(draft_id: int, *, db_path: Path | str | None = None) -> DecisionDraftRow | None:
-    conn = open_conn(db_path)
+def get_draft(
+    draft_id: int,
+    *,
+    db_path: Path | str | None = None,
+    connection: sqlite3.Connection | None = None,
+) -> DecisionDraftRow | None:
+    owns_connection = connection is None
+    conn = open_conn(db_path) if connection is None else connection
     try:
         row = conn.execute("SELECT * FROM decision_drafts WHERE id = ?", (draft_id,)).fetchone()
         return None if row is None else _row_to_dc(row)
     except sqlite3.Error:
         return None
     finally:
-        conn.close()
+        if owns_connection:
+            conn.close()
+
+
+def get_tracker_draft_group(
+    draft_id: int,
+    *,
+    connection: sqlite3.Connection,
+) -> tuple[DecisionDraftRow, list[DecisionDraftRow]] | None:
+    """Read one tracker group through the caller's serialized transaction."""
+    representative_row = connection.execute(
+        "SELECT * FROM decision_drafts WHERE id = ?",
+        (draft_id,),
+    ).fetchone()
+    if representative_row is None:
+        return None
+    representative = _row_to_dc(representative_row)
+    if representative.source_channel != "tracker" or not representative.source_external_id:
+        return representative, [representative]
+    group_rows = connection.execute(
+        "SELECT * FROM decision_drafts "
+        "WHERE source_channel = 'tracker' AND source_external_id = ? ORDER BY id",
+        (representative.source_external_id,),
+    ).fetchall()
+    return representative, [_row_to_dc(row) for row in group_rows]
 
 
 def get_draft_by_idempotency_key(
@@ -262,6 +298,7 @@ def _insert_row(
     source_note_id: int | None,
     source_channel: str,
     source_external_id: str | None,
+    source_provider_id: str | None,
     idempotency_key: str,
     original_text: str,
     transcription_json: dict[str, object] | None,
@@ -279,16 +316,17 @@ def _insert_row(
         now = now_iso()
         cur = conn.execute(
             "INSERT INTO decision_drafts ("
-            " user_id, source_note_id, source_channel, source_external_id,"
+            " user_id, source_note_id, source_channel, source_external_id, source_provider_id,"
             " idempotency_key, original_text, transcription_json, draft_json,"
             " parse_confidence, status, prompt_version, model, llm_call_id,"
             " expires_at, created_at, updated_at"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 user_id,
                 source_note_id,
                 source_channel,
                 source_external_id,
+                source_provider_id,
                 idempotency_key,
                 original_text,
                 json.dumps(transcription_json) if transcription_json is not None else None,
@@ -324,6 +362,7 @@ def create_draft_row(
     model: str | None = None,
     llm_call_id: int | None = None,
     expires_at: str | None = None,
+    source_provider_id: str | None = None,
     db_path: Path | str | None = None,
 ) -> int:
     """The one low-level writer both :func:`parse_note` (source_channel
@@ -341,6 +380,7 @@ def create_draft_row(
         source_note_id=source_note_id,
         source_channel=source_channel,
         source_external_id=source_external_id,
+        source_provider_id=source_provider_id,
         idempotency_key=idempotency_key,
         original_text=original_text,
         transcription_json=transcription_json,
@@ -681,6 +721,7 @@ __all__ = [
     "get_draft",
     "get_draft_by_idempotency_key",
     "get_draft_for_note",
+    "get_tracker_draft_group",
     "list_pending_drafts",
     "parse_note",
     "parse_note_for_eval",

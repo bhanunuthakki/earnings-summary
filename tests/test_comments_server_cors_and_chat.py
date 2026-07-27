@@ -31,6 +31,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import comments_server  # noqa: E402
 
+from capture import decision_draft_actions  # noqa: E402
+
 
 @pytest.fixture
 def app_repo(tmp_path: Path) -> Path:
@@ -158,6 +160,41 @@ def test_cors_methods_and_headers_always_set(client):
         resp = client.get("/healthz", base_url=base)
         assert "GET" in resp.headers.get("Access-Control-Allow-Methods", "")
         assert "Content-Type" in resp.headers.get("Access-Control-Allow-Headers", "")
+
+
+def test_tracker_group_correction_route_uses_shared_action_core(
+    monkeypatch: pytest.MonkeyPatch, client: FlaskClient
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_correct(
+        draft_id: int,
+        corrected_fields: dict[str, object],
+        *,
+        db_path: Path | str | None = None,
+    ) -> dict[str, object]:
+        captured.update(
+            {"draft_id": draft_id, "corrected_fields": corrected_fields, "db_path": db_path}
+        )
+        return {"draft_id": draft_id, "decision_id": 11, "receipt": "tracker_group_corrected"}
+
+    monkeypatch.setattr(
+        decision_draft_actions,
+        "correct_tracker_fill_group",
+        fake_correct,
+    )
+    payload = {
+        "proposed_ticker": "NU",
+        "proposed_action": "buy",
+        "proposed_amount_usd": 300.0,
+    }
+
+    response = client.post("/api/decision-draft-groups/7/correct", json=payload)
+
+    assert response.status_code == 200
+    assert response.get_json()["receipt"] == "tracker_group_corrected"
+    assert captured["draft_id"] == 7
+    assert captured["corrected_fields"] == payload
 
 
 # --- Security hardening (dashboard is network-reachable over Tailscale) ---

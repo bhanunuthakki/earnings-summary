@@ -736,6 +736,7 @@ def _reconcile_provider_fill_identity(
     *,
     provider_key: str,
     legacy_key: str,
+    provider_transaction_id: str,
 ) -> bool:
     """Adopt a legacy signature row or archive it behind its V1 identity twin.
 
@@ -744,8 +745,14 @@ def _reconcile_provider_fill_identity(
     writer path retains its behavior.
     """
     try:
+        # Identity state and any state transfer/archival are one serialized
+        # unit. Without the reserved writer lock, an Inbox action could commit
+        # after these reads and be overwritten by a stale reconciliation
+        # snapshot.
+        conn.execute("BEGIN IMMEDIATE")
         provider_row = conn.execute(
-            "SELECT id, status FROM decision_drafts WHERE idempotency_key = ?",
+            "SELECT id, status, decision_id, confirmed_at, dismissed_at, draft_json, "
+            "parse_confidence FROM decision_drafts WHERE idempotency_key = ?",
             (provider_key,),
         ).fetchone()
         legacy_row = conn.execute(
@@ -755,18 +762,90 @@ def _reconcile_provider_fill_identity(
         ).fetchone()
         if provider_row is None and legacy_row is not None:
             conn.execute(
-                "UPDATE decision_drafts SET idempotency_key = ?, updated_at = CURRENT_TIMESTAMP "
-                "WHERE id = ?",
-                (provider_key, int(legacy_row[0])),
+                "UPDATE decision_drafts SET idempotency_key = ?, source_provider_id = ?, "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (provider_key, provider_transaction_id, int(legacy_row[0])),
             )
             conn.commit()
             return True
         if provider_row is None:
+            conn.rollback()
             return False
+        conn.execute(
+            "UPDATE decision_drafts SET source_provider_id = COALESCE(source_provider_id, ?), "
+            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (provider_transaction_id, int(provider_row[0])),
+        )
         if legacy_row is not None and int(legacy_row[0]) != int(provider_row[0]):
             legacy_status = str(legacy_row[1])
             provider_status = str(provider_row[1])
+            legacy_decision_id = legacy_row[2]
+            provider_decision_id = provider_row[2]
+            legacy_is_decision = (
+                legacy_status in {"confirmed", "corrected"} and legacy_decision_id is not None
+            )
+            provider_is_decision = (
+                provider_status in {"confirmed", "corrected"} and provider_decision_id is not None
+            )
             if (
+                legacy_is_decision
+                and provider_is_decision
+                and legacy_decision_id is not None
+                and provider_decision_id is not None
+                and int(legacy_decision_id) != int(provider_decision_id)
+            ):
+                # Never erase either side of a conflicting, decision-linked
+                # identity pair. Mark both decisions durably so the conflict is
+                # visible in the journal even when no future late fill causes
+                # the group action core to raise.
+                conflict_ids = sorted((int(provider_decision_id), int(legacy_decision_id)))
+                conflict_marker = f"tracker_identity_conflict:{conflict_ids[0]}:{conflict_ids[1]}"
+                conflict_note = (
+                    "\n\n---\n"
+                    f"[{conflict_marker}] "
+                    "Tracker identity conflict: provider and legacy fill rows "
+                    f"link different decisions ({provider_decision_id}, "
+                    f"{legacy_decision_id}). Manual review required."
+                )
+                conn.execute(
+                    "UPDATE decisions SET user_notes = COALESCE(user_notes, '') || ? "
+                    "WHERE id IN (?, ?) AND instr(COALESCE(user_notes, ''), ?) = 0",
+                    (
+                        conflict_note,
+                        provider_decision_id,
+                        legacy_decision_id,
+                        conflict_marker,
+                    ),
+                )
+                log.error(
+                    {
+                        "event": "tracker_identity_decision_conflict",
+                        "provider_key": provider_key,
+                        "legacy_key": legacy_key,
+                        "provider_decision_id": provider_decision_id,
+                        "legacy_decision_id": legacy_decision_id,
+                    }
+                )
+                conn.commit()
+                return True
+            if legacy_is_decision and not provider_is_decision:
+                conn.execute(
+                    "UPDATE decision_drafts SET status = ?, decision_id = ?, confirmed_at = ?, "
+                    "dismissed_at = ?, draft_json = ?, parse_confidence = ?, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (
+                        legacy_status,
+                        legacy_row[2],
+                        legacy_row[3],
+                        legacy_row[4],
+                        legacy_row[5],
+                        legacy_row[6],
+                        int(provider_row[0]),
+                    ),
+                )
+                provider_status = legacy_status
+                provider_is_decision = True
+            elif (
                 legacy_status not in {"awaiting_confirmation", "expired"}
                 and provider_status == "awaiting_confirmation"
             ):
@@ -789,9 +868,11 @@ def _reconcile_provider_fill_identity(
                 "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (int(legacy_row[0]),),
             )
-            conn.commit()
+        conn.commit()
         return True
     except sqlite3.Error:
+        if conn.in_transaction:
+            conn.rollback()
         return False
 
 
@@ -846,12 +927,14 @@ def _draft_unmatched_fills(
                     conn,
                     provider_key=key,
                     legacy_key=legacy_key,
+                    provider_transaction_id=str(transaction_id),
                 ):
                     counts["tracker_fill_drafted"] += 1
                     continue
 
             lo = (day - timedelta(days=window_days)).isoformat()
             hi = day.isoformat()
+            source_external_id = f"{ticker}:{day.isoformat()}:{direction}"
             has_candidate = (
                 conn.execute(
                     "SELECT 1 FROM decisions WHERE UPPER(ticker) = ? "
@@ -860,6 +943,20 @@ def _draft_unmatched_fills(
                 ).fetchone()
                 is not None
             )
+            if has_candidate:
+                try:
+                    has_confirmed_tracker_group = (
+                        conn.execute(
+                            "SELECT 1 FROM decision_drafts "
+                            "WHERE source_channel = 'tracker' AND source_external_id = ? "
+                            "AND decision_id IS NOT NULL LIMIT 1",
+                            (source_external_id,),
+                        ).fetchone()
+                        is not None
+                    )
+                except sqlite3.Error:
+                    has_confirmed_tracker_group = False
+                has_candidate = not has_confirmed_tracker_group
             if has_candidate:
                 counts["tracker_fill_matched"] += 1
                 continue
@@ -877,7 +974,10 @@ def _draft_unmatched_fills(
                 create_draft_row(
                     source_note_id=None,
                     source_channel="tracker",
-                    source_external_id=f"{ticker}:{day.isoformat()}:{direction}",
+                    source_external_id=source_external_id,
+                    source_provider_id=(
+                        str(transaction_id) if transaction_id is not None else None
+                    ),
                     idempotency_key=key,
                     original_text=(
                         f"Tracker-detected {direction} fill: {ticker} on {day.isoformat()} "

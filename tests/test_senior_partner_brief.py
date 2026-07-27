@@ -487,12 +487,10 @@ def test_telegram_keyboard_links_review_to_private_mobile_inbox() -> None:
     ]
 
 
-def test_telegram_keyboard_falls_back_to_legacy_review_callback_without_url() -> None:
+def test_telegram_keyboard_refuses_delivery_without_private_url() -> None:
     brief = spb.SeniorPartnerBrief(as_of="x", iso_year=2026, iso_week=30, input_sha="sha")
-    kb = spb.build_telegram_keyboard(brief, artifact_id=2104, inbox_url="")
-    rows = cast("list[list[dict[str, object]]]", kb["inline_keyboard"])
-    buttons = [btn for row in rows for btn in row]
-    assert {"text": "Review in Inbox", "callback_data": "spb:review:2104"} in buttons
+    with pytest.raises(ValueError, match="private mobile Inbox URL is required"):
+        spb.build_telegram_keyboard(brief, artifact_id=2104, inbox_url="")
 
 
 def test_private_mobile_inbox_url_reads_service_config(

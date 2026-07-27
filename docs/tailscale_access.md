@@ -18,7 +18,9 @@ Safety properties:
 - Without `--tailscale`, the server binds to `127.0.0.1`.
 - Wildcard and ordinary LAN binds are rejected.
 - Requests must come from loopback or a Tailscale address.
-- Browser origins are limited to loopback, Tailscale addresses, and `.ts.net`.
+- Browser origins are limited to loopback, Tailscale addresses, and the exact
+  configured private HTTPS origin. An unrelated `.ts.net` hostname is not
+  trusted merely because it shares the suffix.
 - Any permitted Tailnet device can read and mutate the single-user workspace;
   use Tailscale ACLs or grants to restrict which devices can reach port 7421.
 - Static `file://` reports use a local bearer capability for writes. The

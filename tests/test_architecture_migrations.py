@@ -123,3 +123,41 @@ def test_0209_to_head_adds_governance_and_integrity_foundation(tmp_path: Path) -
     assert conn.execute("SELECT raised_at FROM validation_issues").fetchone()[0] == "2026-07-26"
     assert conn.execute("SELECT valuation_date FROM dcf_runs").fetchone()[0] == "2026-07-26"
     conn.close()
+
+
+def test_0213_preserves_provider_id_and_downgrades_cleanly(tmp_path: Path) -> None:
+    db_path = tmp_path / "provider-id.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE decision_drafts (
+            id INTEGER PRIMARY KEY,
+            source_channel TEXT NOT NULL,
+            original_text TEXT NOT NULL
+        );
+        INSERT INTO decision_drafts VALUES (1, 'tracker', 'legacy fill');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    config = _config(db_path)
+    command.stamp(config, "0211_data_integrity_foundation")
+    command.upgrade(config, "head")
+
+    conn = sqlite3.connect(db_path)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(decision_drafts)")}
+    indexes = {row[1] for row in conn.execute("PRAGMA index_list(decision_drafts)")}
+    assert "source_provider_id" in columns
+    assert "ix_decision_drafts_source_provider" in indexes
+    conn.execute("UPDATE decision_drafts SET source_provider_id = 'provider-txn-1' WHERE id = 1")
+    conn.commit()
+    conn.close()
+
+    command.downgrade(config, "0211_data_integrity_foundation")
+
+    conn = sqlite3.connect(db_path)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(decision_drafts)")}
+    assert "source_provider_id" not in columns
+    assert conn.execute("SELECT original_text FROM decision_drafts").fetchone()[0] == "legacy fill"
+    conn.close()
