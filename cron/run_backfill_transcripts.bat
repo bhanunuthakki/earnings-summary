@@ -9,7 +9,9 @@ set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 REM Capture only the high-volume commitment extractor's real production
-REM exchanges. The external env owns the private archive location.
+REM exchanges in the private retention-bounded archive outside the repo.
+if not defined LLM_CAPTURE_DIR set "LLM_CAPTURE_DIR=%LOCALAPPDATA%\earnings-summary\llm_capture"
+if not defined EARNINGS_SUMMARY_CAPTURE_RETENTION_DAYS set EARNINGS_SUMMARY_CAPTURE_RETENTION_DAYS=90
 set LLM_CAPTURE_PURPOSES=saydo_commitment_extract
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 

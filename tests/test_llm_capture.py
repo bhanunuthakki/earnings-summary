@@ -180,6 +180,51 @@ def test_capture_exchange_prunes_expired_shards_daily(
     assert not newly_expired.exists()
 
 
+def test_explicit_retention_sweep_prunes_quiet_archive_only(tmp_path: Path) -> None:
+    archive = tmp_path / "quiet_capture_archive"
+    archive.mkdir()
+    old = archive / "capture_2026-01-01_123.jsonl"
+    current = archive / "capture_2026-07-27_123.jsonl"
+    unrelated = archive / "notes.jsonl"
+    for path in (old, current, unrelated):
+        path.write_text("{}\n", encoding="utf-8")
+
+    deleted = capture.prune_capture_archive(
+        archive,
+        retention_days=90,
+        today=datetime(2026, 7, 27),
+    )
+
+    assert deleted == 1
+    assert not old.exists()
+    assert current.exists()
+    assert unrelated.exists()
+
+
+def test_strict_retention_sweep_surfaces_unlink_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    old = tmp_path / "capture_2026-01-01_123.jsonl"
+    old.write_text("{}\n", encoding="utf-8")
+    original_unlink = Path.unlink
+
+    def deny(path: Path, *args: object, **kwargs: object) -> None:
+        if path == old:
+            raise PermissionError("denied")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", deny)
+
+    with pytest.raises(PermissionError):
+        capture.prune_capture_archive(
+            tmp_path,
+            retention_days=90,
+            today=datetime(2026, 7, 27),
+            strict=True,
+        )
+    assert old.exists()
+
+
 def test_default_archive_follows_writer_configuration(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

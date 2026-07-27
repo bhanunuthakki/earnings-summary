@@ -133,12 +133,21 @@ def _retention_days() -> int:
         return DEFAULT_CAPTURE_RETENTION_DAYS
 
 
-def _prune_expired(directory: Path, *, today: datetime) -> None:
-    resolved = directory.resolve()
-    prune_day = today.date()
-    if _LAST_PRUNED_DAY.get(resolved) == prune_day:
-        return
-    cutoff = prune_day.toordinal() - _retention_days()
+def prune_capture_archive(
+    directory: Path,
+    *,
+    retention_days: int = DEFAULT_CAPTURE_RETENTION_DAYS,
+    today: datetime | None = None,
+    strict: bool = False,
+) -> int:
+    """Delete only recognized capture shards older than ``retention_days``."""
+    if retention_days <= 0:
+        raise ValueError("retention_days must be positive")
+    current = today or datetime.now(UTC).replace(tzinfo=None)
+    cutoff = current.date().toordinal() - retention_days
+    deleted = 0
+    if not directory.is_dir():
+        return deleted
     for path in directory.glob("capture_*.jsonl"):
         match = _CAPTURE_FILE_RX.fullmatch(path.name)
         if match is None:
@@ -147,8 +156,22 @@ def _prune_expired(directory: Path, *, today: datetime) -> None:
             file_day = datetime.strptime(match.group(1), "%Y-%m-%d").date()
             if file_day.toordinal() < cutoff:
                 path.unlink()
-        except (OSError, ValueError):
+                deleted += 1
+        except OSError:
+            if strict:
+                raise
             continue
+        except ValueError:
+            continue
+    return deleted
+
+
+def _prune_expired(directory: Path, *, today: datetime) -> None:
+    resolved = directory.resolve()
+    prune_day = today.date()
+    if _LAST_PRUNED_DAY.get(resolved) == prune_day:
+        return
+    prune_capture_archive(directory, retention_days=_retention_days(), today=today)
     _LAST_PRUNED_DAY[resolved] = prune_day
 
 

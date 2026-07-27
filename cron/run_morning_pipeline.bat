@@ -27,7 +27,9 @@ set PYTHONUTF8=1
 set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 REM Retain a bounded-purpose production corpus for the P0 material-news audit.
-REM The external env owns the private archive location.
+REM Keep private full-text outside the mirrored repo with bounded retention.
+if not defined LLM_CAPTURE_DIR set "LLM_CAPTURE_DIR=%LOCALAPPDATA%\earnings-summary\llm_capture"
+if not defined EARNINGS_SUMMARY_CAPTURE_RETENTION_DAYS set EARNINGS_SUMMARY_CAPTURE_RETENTION_DAYS=90
 set LLM_CAPTURE_PURPOSES=material_news_classification
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 

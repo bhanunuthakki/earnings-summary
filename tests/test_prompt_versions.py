@@ -25,6 +25,12 @@ def test_unknown_purpose_defaults_v1() -> None:
     assert prompt_version_for("does_not_exist") == "v1"
 
 
+def test_every_model_purpose_has_an_explicit_prompt_version() -> None:
+    from llm.cli import LLM_MODELS
+
+    assert set(LLM_MODELS) <= set(prompt_versions.registered_purposes())
+
+
 def test_registry_is_the_single_bump_point(monkeypatch: pytest.MonkeyPatch) -> None:
     # Bumping a graded prompt is a one-line change here; the new version then
     # flows into every record_score() for that purpose (no scattered literals).

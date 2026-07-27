@@ -103,7 +103,7 @@ _FACETS: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 
-def _rubric_for(spec: CaptureQualitySpec) -> Rubric:
+def rubric_for_capture(spec: CaptureQualitySpec) -> Rubric:
     facets = _FACETS[spec.family]
     facet_text = "\n".join(
         f"## Facet: {facet_id} — {description}\n"
@@ -296,6 +296,7 @@ def load_capture_quality_corpus(
     limit: int | None = None,
     since_days: int | None = None,
     required_prompt_version: str | None = None,
+    required_backend: str | None = None,
 ) -> list[CaptureAuditItem]:
     """Load newest unique captured exchanges for ``purpose``.
 
@@ -342,7 +343,9 @@ def load_capture_quality_corpus(
     while heap:
         _, iterator_index, item, identity = heapq.heappop(heap)
         cohort = (item.prompt_version, item.model, item.backend)
-        if required_prompt_version is not None and item.prompt_version != required_prompt_version:
+        if (
+            required_prompt_version is not None and item.prompt_version != required_prompt_version
+        ) or (required_backend is not None and item.backend != required_backend):
             pass
         elif selected_cohort is None:
             selected_cohort = cohort
@@ -376,6 +379,7 @@ def run_capture_quality_eval(
     code_root: Path,
     limit: int | None = None,
     since_days: int | None = None,
+    required_backend: str | None = None,
     caller: LlmCaller = call_llm,
 ) -> EvalRunSummary:
     """Judge a bounded replay sample without invoking the production purpose."""
@@ -385,7 +389,7 @@ def run_capture_quality_eval(
             f"no capture-quality spec for purpose {purpose!r}; "
             f"known: {sorted(CAPTURE_QUALITY_SPECS)}"
         )
-    rubric = _rubric_for(spec)
+    rubric = rubric_for_capture(spec)
     bounded_limit = spec.default_limit if limit is None else max(0, limit)
     current_prompt_version = prompt_version_for(purpose)
     items = load_capture_quality_corpus(
@@ -394,6 +398,7 @@ def run_capture_quality_eval(
         limit=bounded_limit,
         since_days=since_days,
         required_prompt_version=current_prompt_version,
+        required_backend=required_backend,
     )
 
     run_id = uuid4().hex
@@ -414,6 +419,7 @@ def run_capture_quality_eval(
             f"capture audit priority={spec.priority} traffic={spec.traffic_tier} "
             f"n={len(items)} limit={bounded_limit} backend={cohort_backend} "
             f"prompt_version={current_prompt_version}"
+            + (f" required_backend={required_backend}" if required_backend is not None else "")
             + (f" since_days={since_days}" if since_days is not None else "")
         ),
     )
