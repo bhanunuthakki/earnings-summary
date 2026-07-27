@@ -9,6 +9,7 @@ from server_runtime.access import (
     ReportCapabilityStore,
     is_allowed_client_address,
     is_allowed_origin,
+    private_mobile_origin,
     resolve_tailscale_ipv4,
 )
 
@@ -28,17 +29,17 @@ def test_network_policy_allows_tailnet_but_not_lan_when_enabled() -> None:
     assert not is_allowed_client_address("10.0.0.7", allow_tailscale=True)
 
 
-def test_origin_policy_accepts_tailnet_origins_only_in_tailnet_mode() -> None:
+def test_origin_policy_accepts_tailnet_ip_origins_only_in_tailnet_mode() -> None:
     origin = "http://100.100.1.2:7421"
     assert is_allowed_origin(origin, allow_tailscale=True, whitelist=frozenset()) == origin
     assert is_allowed_origin(origin, allow_tailscale=False, whitelist=frozenset()) is None
     assert (
         is_allowed_origin(
-            "https://laptop.example-tailnet.ts.net",
+            "https://attacker-funnel.example.ts.net",
             allow_tailscale=True,
             whitelist=frozenset(),
         )
-        == "https://laptop.example-tailnet.ts.net"
+        is None
     )
     assert (
         is_allowed_origin(
@@ -48,6 +49,36 @@ def test_origin_policy_accepts_tailnet_origins_only_in_tailnet_mode() -> None:
         )
         is None
     )
+
+
+def test_origin_policy_accepts_only_exact_configured_tailnet_origin() -> None:
+    configured = "https://desktop.example.ts.net"
+    assert (
+        is_allowed_origin(
+            configured,
+            allow_tailscale=True,
+            whitelist=frozenset({configured}),
+        )
+        == configured
+    )
+    assert (
+        is_allowed_origin(
+            "https://attacker.example.ts.net",
+            allow_tailscale=True,
+            whitelist=frozenset({configured}),
+        )
+        is None
+    )
+
+
+def test_private_mobile_origin_requires_secure_origin_only_url(tmp_path: Path) -> None:
+    config = tmp_path / "private_mobile_base_url"
+    config.write_text("https://desktop.example.ts.net\n", encoding="utf-8")
+    assert private_mobile_origin(config_path=config) == "https://desktop.example.ts.net"
+    assert private_mobile_origin(explicit="http://desktop.example.ts.net") is None
+    assert private_mobile_origin(explicit="https://desktop.example.ts.net/mobile/inbox") is None
+    assert private_mobile_origin(explicit="https://desktop.example.ts.net?next=evil") is None
+    assert private_mobile_origin(explicit="http://127.0.0.1:7421") == "http://127.0.0.1:7421"
 
 
 def test_report_capability_is_stable_and_never_empty(tmp_path: Path) -> None:

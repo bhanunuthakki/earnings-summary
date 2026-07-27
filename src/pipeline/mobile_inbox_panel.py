@@ -241,11 +241,17 @@ def _drafts_section(db_path: Path) -> str:
 def _card_disposition_card(row: sqlite3.Row) -> str:
     ticker_html = ticker_label(str(row["ticker"]))
     return (
-        f'<div class="mi-card">'
+        f'<div class="mi-card" data-card-artifact-id="{int(row["artifact_id"])}">'
         f'<div class="mi-card-head">{ticker_html}'
         '<span class="k-chip">investment decision card</span></div>'
         '<div class="mi-body">Current card has no Pass/Watch/Promote disposition yet.</div>'
         '<div class="mi-actions">'
+        '<button type="button" class="k-btn k-btn-quiet k-btn-sm" '
+        'data-card-disposition="pass">Pass</button>'
+        '<button type="button" class="k-btn k-btn-quiet k-btn-sm" '
+        'data-card-disposition="watch">Watch</button>'
+        '<button type="button" class="k-btn k-btn-primary k-btn-sm" '
+        'data-card-disposition="promote">Promote</button>'
         f'<a class="k-btn k-btn-quiet k-btn-sm" href="/ticker/{escape(str(row["ticker"]))}">'
         "Open full app</a>"
         "</div></div>"
@@ -273,7 +279,7 @@ def _card_dispositions_section(db_path: Path) -> str:
                 WHERE d.advice_artifact_id = la.id
                   AND d.recommendation_kind IN ('pass', 'watch', 'promote')
               )
-            ORDER BY la.generated_at DESC LIMIT 10
+            ORDER BY la.generated_at DESC
             """
         ).fetchall()
     except sqlite3.Error:
@@ -282,7 +288,12 @@ def _card_dispositions_section(db_path: Path) -> str:
         conn.close()
     if not rows:
         return '<div class="mi-empty">No evaluation names awaiting a disposition.</div>'
-    return "".join(_card_disposition_card(r) for r in rows)
+    summary = (
+        '<div class="k-well mi-body">'
+        f"{len(rows)} evaluation names await Pass, Watch, or Promote. "
+        "Every unresolved current card is shown below.</div>"
+    )
+    return summary + "".join(_card_disposition_card(r) for r in rows)
 
 
 _COACH_PING_REF_RX = "coach_ping:"
@@ -425,6 +436,29 @@ _JS = """
 <script>
 (function () {
   document.body.addEventListener('click', function (ev) {
+    var dispositionBtn = ev.target.closest('[data-card-disposition]');
+    if (dispositionBtn) {
+      var dispositionCard = dispositionBtn.closest('[data-card-artifact-id]');
+      if (!dispositionCard) return;
+      var artifactId = dispositionCard.getAttribute('data-card-artifact-id');
+      var disposition = dispositionBtn.getAttribute('data-card-disposition');
+      var buttons = dispositionCard.querySelectorAll('[data-card-disposition]');
+      buttons.forEach(function (button) { button.disabled = true; });
+      dispositionBtn.textContent = '...';
+      fetch('/api/research/card/' + artifactId + '/' + disposition, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
+      }).then(function (r) {
+        if (r.ok) { dispositionCard.remove(); }
+        else {
+          buttons.forEach(function (button) { button.disabled = false; });
+          dispositionBtn.textContent = disposition.charAt(0).toUpperCase() + disposition.slice(1);
+        }
+      }).catch(function () {
+        buttons.forEach(function (button) { button.disabled = false; });
+        dispositionBtn.textContent = disposition.charAt(0).toUpperCase() + disposition.slice(1);
+      });
+      return;
+    }
     var dismissBtn = ev.target.closest('[data-mi-dismiss-ping]');
     if (dismissBtn) {
       var pingId = dismissBtn.getAttribute('data-mi-dismiss-ping');

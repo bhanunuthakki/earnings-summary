@@ -1110,6 +1110,7 @@ def _call_claude(
     run_id: str | None = None,
     force_budget_bypass: bool = False,
     fallback_used: str | None = None,
+    allow_codex_fallback: bool = True,
 ) -> str:
     """
     Single-shot LLM call. Tries the Claude Code CLI first. On any operational
@@ -1316,7 +1317,10 @@ def _call_claude(
         retries=attempt - 1,
         failure_class=last_info.kind,
     )
-    if os.environ.get("LLM_FALLBACK_DISABLED", "").lower() in {"1", "true", "yes"}:
+    if (
+        os.environ.get("LLM_FALLBACK_DISABLED", "").lower() in {"1", "true", "yes"}
+        or not allow_codex_fallback
+    ):
         if last_info.kind == "usage_limit":
             raise LLMQuotaExhausted(
                 f"usage limit exhausted: {last_info.detail[:300]}",
@@ -1508,6 +1512,7 @@ def call_llm(
             resolved_backend = "claude"
 
     codex_fell_back = False
+    primary_codex_error: Exception | None = None
     if resolved_backend == "codex":
         from llm.codex_backend import call_codex_llm
 
@@ -1541,6 +1546,7 @@ def call_llm(
             )
             resolved_backend = "claude"
             codex_fell_back = True
+            primary_codex_error = codex_error
 
     if resolved_backend == "gemini":
         from llm.gemini_backend import call_gemini  # late — avoids import cycle
@@ -1610,17 +1616,29 @@ def call_llm(
             candidate if family_of(candidate) not in _non_claude_families else DEFAULT_MODEL
         )
 
-    return _call_claude(
-        prompt,
-        model=resolved_model,
-        timeout_seconds=timeout_seconds or DEFAULT_TIMEOUT_SECONDS,
-        purpose=purpose,
-        ticker=ticker,
-        scope=scope,
-        run_id=run_id,
-        force_budget_bypass=force_budget_bypass,
-        fallback_used="claude" if codex_fell_back else None,
-    )
+    try:
+        return _call_claude(
+            prompt,
+            model=resolved_model,
+            timeout_seconds=timeout_seconds or DEFAULT_TIMEOUT_SECONDS,
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope,
+            run_id=run_id,
+            force_budget_bypass=force_budget_bypass,
+            fallback_used="claude" if codex_fell_back else None,
+            allow_codex_fallback=not codex_fell_back,
+        )
+    except LLMQuotaExhausted:
+        raise
+    except (OSError, RuntimeError, ValueError) as claude_error:
+        if primary_codex_error is None:
+            raise
+        raise RuntimeError(
+            "Both subscription LLM transports failed "
+            f"(codex={type(primary_codex_error).__name__}, "
+            f"claude={type(claude_error).__name__})"
+        ) from claude_error
 
 
 def call_llm_with_web(

@@ -1076,7 +1076,8 @@ def _decision_journal_section(db_path: Path, *, limit: int = _DECISION_JOURNAL_L
     preserved = (
         '<p class="muted">'
         f"{advisor_count} advisor {'record' if advisor_count == 1 else 'records'} preserved "
-        "outside the Owner-default journal.</p>"
+        "outside the Owner-default journal. "
+        '<a href="/api/panel/ledger_decisions?filter=advisor">Review advisor history</a>.</p>'
         if advisor_count
         else ""
     )

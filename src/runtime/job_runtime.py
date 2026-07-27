@@ -45,10 +45,46 @@ def _pid_is_alive(pid: int) -> bool:
     return True
 
 
+def _process_start_identity(pid: int) -> str | None:
+    """Best-effort process creation identity used to detect PID reuse."""
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        process_query_limited_information = 0x1000
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            return None
+        created = wintypes.FILETIME()
+        exited = wintypes.FILETIME()
+        kernel = wintypes.FILETIME()
+        user = wintypes.FILETIME()
+        try:
+            if not kernel32.GetProcessTimes(
+                handle,
+                ctypes.byref(created),
+                ctypes.byref(exited),
+                ctypes.byref(kernel),
+                ctypes.byref(user),
+            ):
+                return None
+            ticks = (int(created.dwHighDateTime) << 32) | int(created.dwLowDateTime)
+            return f"win:{ticks}"
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()
+    except OSError:
+        return None
+    return f"proc:{fields[21]}" if len(fields) > 21 else None
+
+
 @dataclass(frozen=True, slots=True)
 class _LockOwner:
     pid: int
     token: str
+    process_start: str | None = None
 
 
 def _read_lock_owner(path: Path) -> _LockOwner | None:
@@ -59,28 +95,39 @@ def _read_lock_owner(path: Path) -> _LockOwner | None:
             return None
         pid = payload.get("pid")
         token = payload.get("token")
+        process_start = payload.get("process_start")
         if (
             not isinstance(pid, int)
             or isinstance(pid, bool)
             or pid <= 0
             or not isinstance(token, str)
             or not token
+            or (process_start is not None and not isinstance(process_start, str))
         ):
             return None
-        return _LockOwner(pid=pid, token=token)
+        return _LockOwner(pid=pid, token=token, process_start=process_start)
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return None
 
 
+def _owner_is_live(owner: _LockOwner) -> bool:
+    if not _pid_is_alive(owner.pid):
+        return False
+    if owner.process_start is None:
+        return True
+    observed_start = _process_start_identity(owner.pid)
+    return observed_start is None or observed_start == owner.process_start
+
+
 def _stale_lock(path: Path) -> bool:
-    """True only when a lock's recorded PID no longer exists.
+    """True only when a lock's recorded process identity no longer exists.
 
     A crashed process must not permanently disable every future scheduled run.
     Parse failures are deliberately treated as live locks: manual deletion is
     safer than guessing ownership from corrupt state.
     """
     owner = _read_lock_owner(path)
-    return owner is not None and not _pid_is_alive(owner.pid)
+    return owner is not None and not _owner_is_live(owner)
 
 
 @contextmanager
@@ -170,7 +217,7 @@ class JobLock(AbstractContextManager["JobLock"]):
                         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                     except FileExistsError as exc:
                         observed_owner = _read_lock_owner(path)
-                        if observed_owner is None or _pid_is_alive(observed_owner.pid):
+                        if observed_owner is None or _owner_is_live(observed_owner):
                             raise JobAlreadyRunningError(f"write set busy: {write_set}") from exc
                         # Compare the ownership token again immediately before
                         # deletion.  The OS guard serializes cooperating
@@ -184,7 +231,12 @@ class JobLock(AbstractContextManager["JobLock"]):
                         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
                     with os.fdopen(fd, "w", encoding="utf-8") as lock_file:
                         json.dump(
-                            {"job": self._job_name, "pid": os.getpid(), "token": token},
+                            {
+                                "job": self._job_name,
+                                "pid": os.getpid(),
+                                "token": token,
+                                "process_start": _process_start_identity(os.getpid()),
+                            },
                             lock_file,
                         )
                     self._owned.append((path, token))

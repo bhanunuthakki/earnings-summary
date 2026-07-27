@@ -971,6 +971,7 @@ def test_decision_journal_defaults_to_owner_and_preserves_advisor_count(
     assert "owner: watch" in html
     assert "advisor: buy" not in html
     assert "1 advisor record preserved outside the Owner-default journal" in html
+    assert 'href="/api/panel/ledger_decisions?filter=advisor"' in html
 
 
 def test_coach_unmute_route_calls_governor_and_row_disappears(

@@ -15,6 +15,7 @@ REPORT_CAPABILITY_HEADER = "X-Report-Capability"
 _TAILSCALE_V4 = ipaddress.ip_network("100.64.0.0/10")
 _TAILSCALE_V6 = ipaddress.ip_network("fd7a:115c:a1e0::/48")
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_PRIVATE_MOBILE_BASE_URL_ENV = "EARNINGS_SUMMARY_PRIVATE_BASE_URL"
 
 
 def tailscale_access_enabled() -> bool:
@@ -52,21 +53,74 @@ def is_allowed_origin(
         return None
     if origin == "null":
         return origin
-    if origin in whitelist:
-        return origin
     try:
         parsed = urlparse(origin)
         hostname = parsed.hostname or ""
     except ValueError:
         return None
-    if parsed.scheme not in {"http", "https"}:
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
         return None
+    if origin in whitelist:
+        return origin
     if hostname in {"localhost", "127.0.0.1", "::1"}:
         return origin
     if not allow_tailscale:
         return None
-    if is_tailscale_address(hostname) or hostname.lower().endswith(".ts.net"):
+    if is_tailscale_address(hostname):
         return origin
+    return None
+
+
+def private_mobile_origin(
+    *,
+    explicit: str | None = None,
+    config_path: Path | None = None,
+) -> str | None:
+    """Return one validated origin for the private mobile surface.
+
+    The value must be origin-only. HTTPS is mandatory except for an explicit
+    loopback development origin. A checked-in caller may provide the ignored
+    service-config path; the environment remains the first production source.
+    """
+    if explicit is not None:
+        raw = explicit
+    else:
+        raw = os.environ.get(_PRIVATE_MOBILE_BASE_URL_ENV, "")
+        if not raw.strip() and config_path is not None:
+            try:
+                raw = config_path.read_text(encoding="utf-8")
+            except OSError:
+                raw = ""
+    value = raw.strip().rstrip("/")
+    if not value:
+        return None
+    try:
+        parsed = urlparse(value)
+        hostname = parsed.hostname or ""
+    except ValueError:
+        return None
+    if (
+        not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+    ):
+        return None
+    if parsed.scheme == "https":
+        return f"https://{parsed.netloc.lower()}"
+    if parsed.scheme == "http" and hostname in {"localhost", "127.0.0.1", "::1"}:
+        return f"http://{parsed.netloc.lower()}"
     return None
 
 

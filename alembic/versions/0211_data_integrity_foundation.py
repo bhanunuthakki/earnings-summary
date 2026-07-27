@@ -41,18 +41,32 @@ def upgrade() -> None:
         op.create_table(
             "pipeline_attempts",
             sa.Column("attempt_id", sa.String(length=128), primary_key=True),
-            sa.Column("pipeline_key", sa.String(length=64), sa.ForeignKey("pipeline_runs.pipeline_key"), nullable=False),
+            sa.Column(
+                "pipeline_key",
+                sa.String(length=64),
+                sa.ForeignKey("pipeline_runs.pipeline_key"),
+                nullable=False,
+            ),
             sa.Column("started_at", sa.DateTime(), nullable=False),
             sa.Column("ended_at", sa.DateTime(), nullable=True),
             sa.Column("status", sa.String(length=32), nullable=False),
             sa.Column("error_summary", sa.Text(), nullable=True),
         )
-        op.create_index("ix_pipeline_attempts_pipeline_started", "pipeline_attempts", ["pipeline_key", "started_at"])
+        op.create_index(
+            "ix_pipeline_attempts_pipeline_started",
+            "pipeline_attempts",
+            ["pipeline_key", "started_at"],
+        )
     if "pipeline_stage_transitions" not in tables:
         op.create_table(
             "pipeline_stage_transitions",
             sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-            sa.Column("attempt_id", sa.String(length=128), sa.ForeignKey("pipeline_attempts.attempt_id"), nullable=False),
+            sa.Column(
+                "attempt_id",
+                sa.String(length=128),
+                sa.ForeignKey("pipeline_attempts.attempt_id"),
+                nullable=False,
+            ),
             sa.Column("ticker", sa.String(length=16), nullable=False),
             sa.Column("period_end", sa.DateTime(), nullable=True),
             sa.Column("stage", sa.String(length=64), nullable=False),
@@ -61,14 +75,22 @@ def upgrade() -> None:
             sa.Column("ended_at", sa.DateTime(), nullable=True),
             sa.Column("error_msg", sa.Text(), nullable=True),
         )
-        op.create_index("ix_pipeline_stage_attempt", "pipeline_stage_transitions", ["attempt_id", "ticker", "stage"])
+        op.create_index(
+            "ix_pipeline_stage_attempt",
+            "pipeline_stage_transitions",
+            ["attempt_id", "ticker", "stage"],
+        )
 
     if "ingestion_runs" in tables:
         columns = _columns(inspector, "ingestion_runs")
         if "pipeline_key" not in columns:
-            op.add_column("ingestion_runs", sa.Column("pipeline_key", sa.String(length=64), nullable=True))
+            op.add_column(
+                "ingestion_runs", sa.Column("pipeline_key", sa.String(length=64), nullable=True)
+            )
         if "attempt_id" not in columns:
-            op.add_column("ingestion_runs", sa.Column("attempt_id", sa.String(length=128), nullable=True))
+            op.add_column(
+                "ingestion_runs", sa.Column("attempt_id", sa.String(length=128), nullable=True)
+            )
         op.execute(
             "UPDATE ingestion_runs SET pipeline_key = 'legacy:' || directive || ':' || ticker_scope "
             "WHERE pipeline_key IS NULL"
@@ -123,7 +145,7 @@ def upgrade() -> None:
                 op.add_column("dcf_runs", column)
         op.execute(
             "UPDATE dcf_runs SET engine_version='legacy_pre_0211', inputs_as_of=valuation_date, "
-            "provenance_json='{\"backfill\":\"bhanu_compatible_legacy\"}' "
+            'provenance_json=\'{"backfill":"bhanu_compatible_legacy"}\' '
             "WHERE engine_version IS NULL"
         )
 
@@ -140,6 +162,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Non-destructive downgrade: these columns and historical ledgers are safe
-    # for older readers and dropping them would require SQLite table rebuilds.
-    return
+    raise RuntimeError(
+        "0211 is intentionally irreversible: downgrading would destroy durable "
+        "pipeline identity, validation history, and DCF provenance. Restore the "
+        "pre-0211 database backup if rollback is required."
+    )

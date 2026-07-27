@@ -63,3 +63,14 @@ def test_0209_to_head_adds_governance_and_integrity_foundation(tmp_path: Path) -
     with pytest.raises(sqlite3.IntegrityError, match="immutable"):
         conn.execute("UPDATE transcripts SET document_id=2 WHERE id=1")
     conn.close()
+
+    with pytest.raises(RuntimeError, match="intentionally irreversible"):
+        command.downgrade(config, "0210_llm_call_transport_provenance")
+
+    conn = sqlite3.connect(db_path)
+    assert (
+        conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+        == "0211_data_integrity_foundation"
+    )
+    assert conn.execute("SELECT COUNT(*) FROM pipeline_runs").fetchone()[0] == 1
+    conn.close()

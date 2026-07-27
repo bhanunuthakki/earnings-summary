@@ -2,10 +2,42 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from llm import cli as llm_cli
 from llm import codex_backend
+
+
+def test_empty_codex_response_is_ledgered_only_as_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded: list[dict[str, object]] = []
+    result = SimpleNamespace(
+        text="   ",
+        usage=SimpleNamespace(input_tokens=1, cached_input_tokens=0, output_tokens=0),
+    )
+
+    def call_empty(prompt: str, *, model: str, timeout_seconds: int) -> SimpleNamespace:
+        return result
+
+    def load_empty_wrapper() -> object:
+        return call_empty
+
+    def record(**kwargs: object) -> None:
+        recorded.append(kwargs)
+
+    monkeypatch.setattr(codex_backend, "_load_wrapper", load_empty_wrapper)
+    monkeypatch.setattr("llm.ledger.record_llm_call", record)
+
+    with pytest.raises(RuntimeError, match="empty response"):
+        codex_backend.call_codex_llm("question", purpose="bear_case")
+
+    assert len(recorded) == 1
+    assert recorded[0]["failure_class"] == "empty_response"
+    assert recorded[0]["error"] == "[codex] RuntimeError: empty response"
+    assert "response_text" not in recorded[0]
 
 
 def test_default_purpose_routes_to_codex_before_claude(
@@ -51,6 +83,32 @@ def test_codex_primary_failure_falls_back_to_claude(
     monkeypatch.setattr(llm_cli, "_call_claude", fake_claude)
 
     assert llm_cli.call_llm("question", purpose="bear_case") == "claude fallback"
+    assert calls == ["codex", "claude"]
+
+
+def test_codex_then_claude_failure_does_not_reenter_codex(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    calls: list[str] = []
+
+    def fail_codex(prompt: str, **kwargs: object) -> str:
+        calls.append("codex")
+        raise RuntimeError("codex unavailable")
+
+    def fail_claude(prompt: str, **kwargs: object) -> str:
+        calls.append("claude")
+        assert kwargs["allow_codex_fallback"] is False
+        raise OSError("claude unavailable")
+
+    monkeypatch.setattr(codex_backend, "call_codex_llm", fail_codex)
+    monkeypatch.setattr(llm_cli, "_call_claude", fail_claude)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"Both subscription LLM transports failed \(codex=RuntimeError, claude=OSError\)",
+    ):
+        llm_cli.call_llm("question", purpose="bear_case")
     assert calls == ["codex", "claude"]
 
 

@@ -12,6 +12,17 @@ from pydantic import TypeAdapter
 from llm.structured import call_llm_structured
 from llm_call_ledger import LlmCallRecord, record_call
 
+_SCHEMA_ONLY_EXTRACTORS = frozenset(
+    {
+        "kpi_summary_extract",
+        "kpi_summary_enumerate",
+        "segment_6k_breakdown_extract",
+        "segment_definition_extract",
+        "segment_crosstab_extract",
+        "ir_sheet_kpi_map",
+    }
+)
+
 
 def test_structured_call_repairs_once_then_validates_typeadapter(
     monkeypatch: pytest.MonkeyPatch,
@@ -83,3 +94,9 @@ def test_private_claude_bypasses_are_absent() -> None:
     )
     for relative in callers:
         assert "_call_claude(" not in (root / relative).read_text(encoding="utf-8"), relative
+
+
+def test_schema_validation_is_not_reported_as_golden_quality_coverage() -> None:
+    from evals.coverage import GOLDEN_PURPOSES
+
+    assert _SCHEMA_ONLY_EXTRACTORS.isdisjoint(GOLDEN_PURPOSES)

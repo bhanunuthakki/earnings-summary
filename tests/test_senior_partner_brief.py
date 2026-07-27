@@ -506,6 +506,18 @@ def test_private_mobile_inbox_url_reads_service_config(
     assert spb.private_mobile_inbox_url() == "https://desktop.example.ts.net/mobile/inbox"
 
 
+@pytest.mark.parametrize(
+    "configured",
+    [
+        "http://desktop.example.ts.net",
+        "https://desktop.example.ts.net/mobile/inbox",
+        "https://desktop.example.ts.net?next=other",
+    ],
+)
+def test_private_mobile_inbox_url_rejects_insecure_or_non_origin_base(configured: str) -> None:
+    assert spb.private_mobile_inbox_url(configured) is None
+
+
 # --------------------------------------------------------------------------- #
 # render_markdown — five distinct sections
 # --------------------------------------------------------------------------- #

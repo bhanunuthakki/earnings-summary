@@ -45,11 +45,48 @@ def test_stale_lock_is_reclaimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         json.dumps({"job": "dead", "pid": 12345, "token": "stale-owner"}),
         encoding="utf-8",
     )
-    monkeypatch.setattr(job_runtime, "_pid_is_alive", lambda _pid: False)
+
+    def dead_pid(_pid: int) -> bool:
+        return False
+
+    monkeypatch.setattr(job_runtime, "_pid_is_alive", dead_pid)
 
     with JobLock(tmp_path, "successor", ["portfolio-db"]):
         owner = json.loads(lock_path.read_text(encoding="utf-8"))
         assert owner["token"] != "stale-owner"
+
+
+def test_reused_pid_with_different_process_start_is_reclaimed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock_dir = tmp_path / ".tmp" / "job_locks"
+    lock_dir.mkdir(parents=True)
+    lock_path = lock_dir / "portfolio-db.lock"
+    lock_path.write_text(
+        json.dumps(
+            {
+                "job": "dead",
+                "pid": 12345,
+                "token": "stale-owner",
+                "process_start": "proc:old",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def live_pid(_pid: int) -> bool:
+        return True
+
+    def replacement_start(_pid: int) -> str:
+        return "proc:new"
+
+    monkeypatch.setattr(job_runtime, "_pid_is_alive", live_pid)
+    monkeypatch.setattr(job_runtime, "_process_start_identity", replacement_start)
+
+    with JobLock(tmp_path, "replacement", ["portfolio-db"]):
+        owner = json.loads(lock_path.read_text(encoding="utf-8"))
+        assert owner["token"] != "stale-owner"
+        assert owner["process_start"] == "proc:new"
 
 
 def test_release_does_not_delete_successor_lock(tmp_path: Path) -> None:
@@ -75,11 +112,11 @@ def test_concurrent_stale_lock_contenders_leave_one_owner(
         encoding="utf-8",
     )
     real_pid_is_alive = job_runtime._pid_is_alive
-    monkeypatch.setattr(
-        job_runtime,
-        "_pid_is_alive",
-        lambda pid: False if pid == 12345 else real_pid_is_alive(pid),
-    )
+
+    def pid_is_alive(pid: int) -> bool:
+        return False if pid == 12345 else real_pid_is_alive(pid)
+
+    monkeypatch.setattr(job_runtime, "_pid_is_alive", pid_is_alive)
     start = threading.Barrier(3)
     release = threading.Event()
     outcomes: list[str] = []

@@ -256,6 +256,23 @@ def dispatch_callback(
         chat_id = update.chat_id
 
         from advisor import senior_partner_brief as spb
+        from llm_artifact_store import read_artifact, read_current
+
+        artifact = (
+            read_artifact(obj_id, db_path=db_path)
+            if obj_id is not None and verb != "dismiss_item"
+            else None
+        )
+        if artifact is not None and (
+            artifact.purpose != spb.PURPOSE
+            or artifact.scope != "portfolio"
+            or artifact.ticker is not None
+        ):
+            artifact = None
+        if obj_id is not None and verb != "dismiss_item" and artifact is None:
+            if cqid:
+                answer(token, cqid, text="That brief is no longer available.")
+            return "spb_stale"
 
         if verb == "review":
             inbox_url = spb.private_mobile_inbox_url()
@@ -285,14 +302,13 @@ def dispatch_callback(
             return "spb_item_dismissed" if recorded else "spb_item_stale"
 
         if verb == "why":
-            from llm_artifact_store import read_current
-
-            artifact = read_current(
-                ticker=None,
-                purpose=spb.PURPOSE,
-                scope="portfolio",
-                db_path=db_path,
-            )
+            if artifact is None:
+                artifact = read_current(
+                    ticker=None,
+                    purpose=spb.PURPOSE,
+                    scope="portfolio",
+                    db_path=db_path,
+                )
             if artifact is None or not isinstance(artifact.content_json, dict):
                 if cqid:
                     answer(token, cqid, text="No current brief on file.")

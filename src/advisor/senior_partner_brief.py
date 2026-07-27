@@ -62,7 +62,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import sqlite3
 from dataclasses import dataclass
@@ -87,7 +86,6 @@ ENGINE_VERSION = "v1"
 # current. Deliberately simple (age-based, not an input_sha re-derivation)
 # given this module's scope is COMPOSITION, not card freshness itself.
 _CARD_FRESH_DAYS = 14
-_PRIVATE_BASE_URL_ENV = "EARNINGS_SUMMARY_PRIVATE_BASE_URL"
 _PRIVATE_BASE_URL_PATH = (
     Path(__file__).resolve().parents[2] / "data" / "secrets" / "private_mobile_base_url"
 )
@@ -1112,27 +1110,34 @@ def private_mobile_inbox_url(explicit: str | None = None) -> str | None:
     one-shot callers. Production first reads
     ``EARNINGS_SUMMARY_PRIVATE_BASE_URL``, then the local
     ``data/secrets/private_mobile_base_url`` service configuration. The file
-    fallback matters for the Windows poller service, which runs as LocalSystem
-    and therefore does not inherit the interactive user's environment.
+    fallback matters for Windows service deployments such as ``es-poller``:
+    service accounts do not inherit the interactive user's environment.
+    Interactive scheduled tasks may use their own user-scoped environment.
     """
-    if explicit is not None:
-        raw = explicit
-    else:
-        raw = os.environ.get(_PRIVATE_BASE_URL_ENV, "")
-        if not raw.strip():
-            try:
-                raw = _PRIVATE_BASE_URL_PATH.read_text(encoding="utf-8")
-            except OSError:
-                raw = ""
-    value = raw.strip().rstrip("/")
-    if not value:
+    from server_runtime.access import private_mobile_origin
+
+    origin = private_mobile_origin(explicit=explicit, config_path=_PRIVATE_BASE_URL_PATH)
+    return f"{origin}/mobile/inbox" if origin else None
+
+
+def _validated_mobile_inbox_link(candidate: str | None) -> str | None:
+    """Accept only the canonical Inbox endpoint on a valid private origin."""
+    if candidate is None:
+        return private_mobile_inbox_url()
+    value = candidate.strip()
+    try:
+        parsed = urlparse(value)
+    except ValueError:
         return None
-    parsed = urlparse(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+    if parsed.path != "/mobile/inbox" or parsed.params or parsed.query or parsed.fragment:
         return None
-    if parsed.path.rstrip("/").endswith("/mobile/inbox"):
-        return value
-    return f"{value}/mobile/inbox"
+    from server_runtime.access import private_mobile_origin
+
+    origin = private_mobile_origin(
+        explicit=f"{parsed.scheme}://{parsed.netloc}",
+        config_path=_PRIVATE_BASE_URL_PATH,
+    )
+    return f"{origin}/mobile/inbox" if origin else None
 
 
 def record_brief_action(
@@ -1235,7 +1240,7 @@ def build_telegram_keyboard(
     ping — every pre-existing caller that omits it still gets a working,
     if generically-labeled, keyboard)."""
     suffix = f":{artifact_id}" if artifact_id is not None else ""
-    resolved_inbox_url = private_mobile_inbox_url(inbox_url)
+    resolved_inbox_url = _validated_mobile_inbox_link(inbox_url)
     review_button: dict[str, object] = (
         {"text": "Review in Inbox", "url": resolved_inbox_url}
         if resolved_inbox_url

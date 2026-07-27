@@ -13,6 +13,7 @@ from llm_artifact_store import (
     drain_dirty,
     history,
     mark_dirty,
+    read_artifact,
     read_current,
     upsert,
 )
@@ -170,6 +171,12 @@ def test_upsert_supersedes_on_input_change(db: Path) -> None:
     assert hist[0].id == aid2
     assert hist[1].id == aid1
     assert hist[1].superseded_by_id == aid2
+
+    historical = read_artifact(aid1, db_path=db) if aid1 is not None else None
+    assert historical is not None
+    assert historical.id == aid1
+    assert historical.content_md == "v1"
+    assert historical.superseded_by_id == aid2
 
 
 def test_upsert_supersedes_when_dirty_even_if_inputs_match(db: Path) -> None:

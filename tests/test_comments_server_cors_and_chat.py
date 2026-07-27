@@ -124,6 +124,31 @@ def test_cors_empty_whitelist_blocks_non_localhost(monkeypatch, client):
     assert "Access-Control-Allow-Origin" not in resp.headers
 
 
+def test_cors_service_config_allows_only_exact_private_origin(
+    monkeypatch: pytest.MonkeyPatch, app_repo: Path
+) -> None:
+    monkeypatch.setenv("COMMENTS_SERVER_ALLOW_TAILSCALE", "1")
+    monkeypatch.delenv("COMMENTS_SERVER_CORS_WHITELIST", raising=False)
+    secret_dir = app_repo / "data" / "secrets"
+    secret_dir.mkdir()
+    (secret_dir / "private_mobile_base_url").write_text(
+        "https://desktop.example.ts.net\n",
+        encoding="utf-8",
+    )
+    local_client = comments_server.create_app(app_repo).test_client()
+
+    allowed = local_client.options(
+        "/healthz",
+        headers={"Origin": "https://desktop.example.ts.net"},
+    )
+    hostile = local_client.options(
+        "/healthz",
+        headers={"Origin": "https://attacker-funnel.example.ts.net"},
+    )
+    assert allowed.headers.get("Access-Control-Allow-Origin") == ("https://desktop.example.ts.net")
+    assert "Access-Control-Allow-Origin" not in hostile.headers
+
+
 def test_cors_methods_and_headers_always_set(client):
     """The Allow-Methods/Allow-Headers don't depend on host."""
     for base in ("http://localhost", "http://example.com"):

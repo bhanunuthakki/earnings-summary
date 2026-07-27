@@ -154,6 +154,28 @@ def call_codex_llm(
             "output_tokens": result.usage.output_tokens,
         }
     }
+    if not text:
+        record_llm_call(
+            started_at=started_at,
+            elapsed_ms=elapsed_ms,
+            model=f"codex:{model}",
+            prompt_sha=sha256_text(prompt),
+            prompt_chars=len(prompt),
+            purpose=purpose,
+            ticker=ticker,
+            scope=scope,
+            run_id=run_id,
+            error="[codex] RuntimeError: empty response",
+            meta=meta,
+            fallback_used=fallback_used,
+            prompt=prompt,
+            provider="openai",
+            transport="subscription_cli",
+            attempts=1,
+            retries=0,
+            failure_class="empty_response",
+        )
+        raise RuntimeError("Codex returned an empty response")
     record_llm_call(
         started_at=started_at,
         elapsed_ms=elapsed_ms,
@@ -173,6 +195,4 @@ def call_codex_llm(
         attempts=1,
         retries=0,
     )
-    if not text:
-        raise RuntimeError("Codex returned an empty response")
     return text

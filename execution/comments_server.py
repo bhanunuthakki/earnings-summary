@@ -131,6 +131,7 @@ from server_runtime.access import (  # noqa: E402
     ReportCapabilityStore,
     is_allowed_client_address,
     is_allowed_origin,
+    private_mobile_origin,
     resolve_tailscale_ipv4,
     tailscale_access_enabled,
     validate_bind_host,
@@ -149,7 +150,7 @@ _MAINTENANCE_ACTIONS: dict[str, list[str]] = {
 }
 
 
-def _cors_allow_origin(origin: str) -> str | None:
+def _cors_allow_origin(origin: str, *, repo_root: Path = PROJECT_ROOT) -> str | None:
     """Return the ``Access-Control-Allow-Origin`` value to echo for ``origin``, or None.
 
     Allows the file:// workspace renderer (Origin ``"null"``) and any loopback
@@ -158,15 +159,20 @@ def _cors_allow_origin(origin: str) -> str | None:
     (CSRF defense). For a non-loopback bind, an explicit comma-separated
     ``COMMENTS_SERVER_CORS_WHITELIST`` of allowed origins is honored.
     """
-    whitelist = frozenset(
+    whitelist = {
         o.strip()
         for o in os.environ.get("COMMENTS_SERVER_CORS_WHITELIST", "").split(",")
         if o.strip()
+    }
+    configured_private_origin = private_mobile_origin(
+        config_path=repo_root / "data" / "secrets" / "private_mobile_base_url"
     )
+    if configured_private_origin:
+        whitelist.add(configured_private_origin)
     return is_allowed_origin(
         origin,
         allow_tailscale=tailscale_access_enabled(),
-        whitelist=whitelist,
+        whitelist=frozenset(whitelist),
     )
 
 
@@ -502,7 +508,7 @@ def create_app(
             request.headers.get(REPORT_CAPABILITY_HEADER, "")
         ):
             return ({"error": "static report capability required"}, 403)
-        if origin and _cors_allow_origin(origin) is None:
+        if origin and _cors_allow_origin(origin, repo_root=repo_root) is None:
             return ({"error": "cross-origin state-changing request refused"}, 403)
         return None
 
@@ -517,7 +523,7 @@ def create_app(
         # JSON content-type, which forces a CORS preflight that "*" answered.
         # Withholding the header makes the preflight fail, so the cross-site
         # request never fires. (See _cors_allow_origin for the whitelist path.)
-        allowed = _cors_allow_origin(request.headers.get("Origin", ""))
+        allowed = _cors_allow_origin(request.headers.get("Origin", ""), repo_root=repo_root)
         if allowed is not None:
             response.headers["Access-Control-Allow-Origin"] = allowed
             response.headers["Vary"] = "Origin"

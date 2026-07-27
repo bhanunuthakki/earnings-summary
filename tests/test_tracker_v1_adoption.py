@@ -151,6 +151,7 @@ def test_live_portfolio_v1_adapts_positions_fixture(
     assert live.is_stale is False
     assert live.is_partial is False
     assert len(live.transactions) == 4
+    assert live.transactions[0].transaction_id == "fx-t4"
     assert legacy_guard == []
 
 

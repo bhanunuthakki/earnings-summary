@@ -709,7 +709,12 @@ def reconcile_decision_actions(
 
 
 def _fill_identity_key(
-    ticker: str, day: date, direction: str, quantity: float | None, amount: float | None
+    ticker: str,
+    day: date,
+    direction: str,
+    quantity: float | None,
+    amount: float | None,
+    transaction_id: str | None = None,
 ) -> str:
     """Deterministic idempotency key for one tracker fill (PRD §13.1 "capture
     coverage" measure) — ticker+date+type+quantity+amount, hashed so a
@@ -717,8 +722,77 @@ def _fill_identity_key(
     size differs, and re-running the sweep never redrafts the same fill."""
     import hashlib
 
-    raw = f"{ticker}|{day.isoformat()}|{direction}|{quantity}|{amount}"
-    return "tracker:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+    if transaction_id:
+        raw = f"id|{transaction_id}"
+        prefix = "tracker-id:"
+    else:
+        raw = f"{ticker}|{day.isoformat()}|{direction}|{quantity}|{amount}"
+        prefix = "tracker:"
+    return prefix + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:20]
+
+
+def _reconcile_provider_fill_identity(
+    conn: sqlite3.Connection,
+    *,
+    provider_key: str,
+    legacy_key: str,
+) -> bool:
+    """Adopt a legacy signature row or archive it behind its V1 identity twin.
+
+    Returns true when a provider-identity row already represents this fill.
+    Missing/pre-0195 draft schema degrades to false so the existing best-effort
+    writer path retains its behavior.
+    """
+    try:
+        provider_row = conn.execute(
+            "SELECT id, status FROM decision_drafts WHERE idempotency_key = ?",
+            (provider_key,),
+        ).fetchone()
+        legacy_row = conn.execute(
+            "SELECT id, status, decision_id, confirmed_at, dismissed_at, draft_json, "
+            "parse_confidence FROM decision_drafts WHERE idempotency_key = ?",
+            (legacy_key,),
+        ).fetchone()
+        if provider_row is None and legacy_row is not None:
+            conn.execute(
+                "UPDATE decision_drafts SET idempotency_key = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = ?",
+                (provider_key, int(legacy_row[0])),
+            )
+            conn.commit()
+            return True
+        if provider_row is None:
+            return False
+        if legacy_row is not None and int(legacy_row[0]) != int(provider_row[0]):
+            legacy_status = str(legacy_row[1])
+            provider_status = str(provider_row[1])
+            if (
+                legacy_status not in {"awaiting_confirmation", "expired"}
+                and provider_status == "awaiting_confirmation"
+            ):
+                conn.execute(
+                    "UPDATE decision_drafts SET status = ?, decision_id = ?, confirmed_at = ?, "
+                    "dismissed_at = ?, draft_json = ?, parse_confidence = ?, "
+                    "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (
+                        legacy_status,
+                        legacy_row[2],
+                        legacy_row[3],
+                        legacy_row[4],
+                        legacy_row[5],
+                        legacy_row[6],
+                        int(provider_row[0]),
+                    ),
+                )
+            conn.execute(
+                "UPDATE decision_drafts SET status = 'expired', "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (int(legacy_row[0]),),
+            )
+            conn.commit()
+        return True
+    except sqlite3.Error:
+        return False
 
 
 def _draft_unmatched_fills(
@@ -748,12 +822,33 @@ def _draft_unmatched_fills(
             day = _date_prefix(getattr(txn, "date", None))
             if not ticker or direction not in ("buy", "sell") or day is None:
                 continue
+            transaction_id = getattr(txn, "transaction_id", None)
             key = _fill_identity_key(
-                ticker, day, direction, getattr(txn, "quantity", None), getattr(txn, "amount", None)
+                ticker,
+                day,
+                direction,
+                getattr(txn, "quantity", None),
+                getattr(txn, "amount", None),
+                transaction_id,
             )
             if key in seen_keys:
                 continue  # a duplicate fill signature this run — already handled above
             seen_keys.add(key)
+            if transaction_id:
+                legacy_key = _fill_identity_key(
+                    ticker,
+                    day,
+                    direction,
+                    getattr(txn, "quantity", None),
+                    getattr(txn, "amount", None),
+                )
+                if _reconcile_provider_fill_identity(
+                    conn,
+                    provider_key=key,
+                    legacy_key=legacy_key,
+                ):
+                    counts["tracker_fill_drafted"] += 1
+                    continue
 
             lo = (day - timedelta(days=window_days)).isoformat()
             hi = day.isoformat()

@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from alembic.config import Config
 
+from advisor import senior_partner_brief as spb
 from alembic import command
 from capture import research_notify, telegram
 from research.proposals import ResearchTask, create_proposal, create_task, get_proposal, get_task
@@ -97,6 +99,82 @@ def test_dispatch_legacy_spb_review_sends_private_inbox_link(
     assert spy.sends == [
         (5, "https://desktop.example.ts.net/mobile/inbox", None),
     ]
+
+
+def _brief_artifact(artifact_id: int, title: str) -> SimpleNamespace:
+    brief = spb.SeniorPartnerBrief(
+        as_of="2026-07-26",
+        iso_year=2026,
+        iso_week=30,
+        input_sha=title,
+        highest_priority_decision=spb.BriefItem(
+            title=title,
+            body="Grounded rationale.",
+            disposition="action_requested",
+            source_refs=[f"source:{title}"],
+        ),
+    )
+    return SimpleNamespace(
+        id=artifact_id,
+        ticker=None,
+        purpose=spb.PURPOSE,
+        scope="portfolio",
+        content_json=brief.model_dump(mode="json"),
+    )
+
+
+def test_dispatch_qualified_spb_why_reads_exact_historical_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_id = 21
+
+    def historical_artifact(artifact_id: int, **kwargs: object) -> SimpleNamespace:
+        return _brief_artifact(artifact_id, "Old brief decision")
+
+    def current_must_not_run(**kwargs: object) -> None:
+        raise AssertionError("qualified callback must not resolve the current brief")
+
+    monkeypatch.setattr(
+        "llm_artifact_store.read_artifact",
+        historical_artifact,
+    )
+    monkeypatch.setattr("llm_artifact_store.read_current", current_must_not_run)
+    spy = _Spy()
+
+    status = research_notify.dispatch_callback(
+        "tok",
+        _cb(f"spb:why:{old_id}"),
+        send=spy.send,
+        answer=spy.answer,
+        edit=spy.edit,
+    )
+
+    assert status == "spb_why"
+    assert len(spy.sends) == 1
+    assert "Old brief decision" in spy.sends[0][1]
+    assert "New brief decision" not in spy.sends[0][1]
+
+
+def test_dispatch_qualified_spb_actions_reject_missing_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def missing_artifact(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr("llm_artifact_store.read_artifact", missing_artifact)
+    for verb in ("why", "review", "defer", "dismiss"):
+        spy = _Spy()
+        status = research_notify.dispatch_callback(
+            "tok",
+            _cb(f"spb:{verb}:999999"),
+            send=spy.send,
+            answer=spy.answer,
+            edit=spy.edit,
+        )
+        assert status == "spb_stale"
+        assert spy.answers == [("cq", "That brief is no longer available.")]
+        assert spy.sends == []
+        assert spy.edits == []
 
 
 def test_dispatch_spb_dismiss_item_uses_shared_action_core(
