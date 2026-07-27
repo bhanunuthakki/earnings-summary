@@ -52,15 +52,14 @@ def test_deepseek_judge_routes_through_openrouter(monkeypatch: pytest.MonkeyPatc
     assert seen.get("model") == DEEPSEEK_JUDGE_MODEL
 
 
-def test_codex_judge_uses_the_membership_wrapper(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Codex must NOT go through call_llm (which would bill the Claude
-    transport); it uses the membership wrapper and its own ledger row."""
+def test_codex_judge_uses_governed_membership_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Codex judging must use the canonical policy seam while explicitly
+    forcing its membership-backed transport."""
     import llm.backend_judge as bj
-    import llm.codex_backend as cb
 
     called: dict[str, object] = {}
 
-    def fake_codex(prompt: str, **kw: object) -> str:
+    def fake_call_llm(prompt: str, **kw: object) -> str:
         called["used"] = True
         called.update(kw)
         return (
@@ -68,13 +67,11 @@ def test_codex_judge_uses_the_membership_wrapper(monkeypatch: pytest.MonkeyPatch
             '"format": "tie", "conciseness": "tie", "reason": "y"}'
         )
 
-    def boom_call_llm(prompt: str, **kw: object) -> str:
-        raise AssertionError("Codex judge must not route through call_llm")
-
-    monkeypatch.setattr(cb, "call_codex_llm", fake_codex)
-    monkeypatch.setattr(bj, "call_llm", boom_call_llm)
+    monkeypatch.setattr(bj, "call_llm", fake_call_llm)
     bj._judge_once("p", "t", "a", "b", judge_backend=CODEX, run_id=None, max_prompt_chars=8000)
     assert called.get("used") is True
+    assert called.get("backend") == CODEX
+    assert called.get("purpose") == "backend_compare_judge"
     assert called.get("scope") == "backend_judge"
 
 

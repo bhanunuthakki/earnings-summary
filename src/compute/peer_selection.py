@@ -439,9 +439,11 @@ def _resolve_fmp_key(repo_root: Path) -> str | None:
         return key
     try:
         from dotenv import dotenv_values
+
+        from runtime.secrets import project_env_file
     except ImportError:
         return None
-    val = dotenv_values(repo_root / ".env").get("FMP_API_KEY")
+    val = dotenv_values(project_env_file(repo_root)).get("FMP_API_KEY")
     return val.strip() if isinstance(val, str) and val.strip() else None
 
 

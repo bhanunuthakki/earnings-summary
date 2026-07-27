@@ -15,16 +15,16 @@ from __future__ import annotations
 import io
 import json
 import sqlite3
+import subprocess
 import threading
 from collections.abc import Generator, Iterator
 from pathlib import Path
-from types import GeneratorType
+from types import GeneratorType, SimpleNamespace
 from typing import cast
 
 import pytest
 from alembic.config import Config
 
-import chat_session
 import llm.cli as llm_cli
 import llm_call_ledger
 from alembic import command
@@ -137,7 +137,7 @@ def _patch_ledger(monkeypatch: pytest.MonkeyPatch) -> list[LlmCallRecord]:
 def test_stream_pins_resolved_model_and_records_ledger(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_model(monkeypatch, DEFAULT_MODEL)
     _patch_budget_ok(monkeypatch)
-    monkeypatch.setattr(chat_session.shutil, "which", _fake_which)
+    monkeypatch.setattr(llm_cli.shutil, "which", _fake_which)
 
     captured: dict[str, list[str]] = {}
 
@@ -145,7 +145,7 @@ def test_stream_pins_resolved_model_and_records_ledger(monkeypatch: pytest.Monke
         captured["cmd"] = cmd
         return _FakeProc([_assistant_line("Hello "), _assistant_line("world"), _result_line()])
 
-    monkeypatch.setattr(chat_session.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(llm_cli.subprocess, "Popen", fake_popen)
     records = _patch_ledger(monkeypatch)
 
     events = list(real_stream_llm_text("PROMPT"))
@@ -183,7 +183,7 @@ def test_stream_buffers_when_promoted_to_gemini(monkeypatch: pytest.MonkeyPatch)
     def boom_which(_name: str) -> str:
         raise AssertionError("streaming CLI must not be reached on the Gemini path")
 
-    monkeypatch.setattr(chat_session.shutil, "which", boom_which)
+    monkeypatch.setattr(llm_cli.shutil, "which", boom_which)
 
     events = list(real_stream_llm_text("PROMPT"))
     assert [e["type"] for e in events] == ["delta", "final"]
@@ -201,7 +201,7 @@ def test_stream_hard_budget_block_yields_error(monkeypatch: pytest.MonkeyPatch) 
     def boom_which(_name: str) -> str:
         raise AssertionError("must not stream after a hard budget block")
 
-    monkeypatch.setattr(chat_session.shutil, "which", boom_which)
+    monkeypatch.setattr(llm_cli.shutil, "which", boom_which)
 
     events = list(real_stream_llm_text("PROMPT"))
     assert len(events) == 1
@@ -212,12 +212,12 @@ def test_stream_hard_budget_block_yields_error(monkeypatch: pytest.MonkeyPatch) 
 def test_stream_empty_response_records_error_row(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_model(monkeypatch, DEFAULT_MODEL)
     _patch_budget_ok(monkeypatch)
-    monkeypatch.setattr(chat_session.shutil, "which", _fake_which)
+    monkeypatch.setattr(llm_cli.shutil, "which", _fake_which)
 
     def fake_popen(_cmd: list[str], **_kwargs: object) -> _FakeProc:
         return _FakeProc([], stderr="model unavailable")
 
-    monkeypatch.setattr(chat_session.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(llm_cli.subprocess, "Popen", fake_popen)
     records = _patch_ledger(monkeypatch)
 
     events = list(real_stream_llm_text("PROMPT"))
@@ -260,14 +260,14 @@ def test_stream_watchdog_terminates_and_records_generic_timeout(
 ) -> None:
     _patch_model(monkeypatch, DEFAULT_MODEL)
     _patch_budget_ok(monkeypatch)
-    monkeypatch.setattr(chat_session.shutil, "which", _fake_which)
-    monkeypatch.setattr(chat_session, "_STREAM_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(llm_cli.shutil, "which", _fake_which)
+    monkeypatch.setattr(llm_cli, "_STREAM_TIMEOUT_SECONDS", 0.01)
     proc = _BlockingProc(stderr="failed?api_key=secret-value")
 
     def fake_popen(_cmd: list[str], **_kwargs: object) -> _BlockingProc:
         return proc
 
-    monkeypatch.setattr(chat_session.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(llm_cli.subprocess, "Popen", fake_popen)
     records = _patch_ledger(monkeypatch)
 
     events = list(real_stream_llm_text("PROMPT"))
@@ -283,13 +283,14 @@ def test_stream_watchdog_terminates_and_records_generic_timeout(
 def test_stream_generator_close_terminates_child(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_model(monkeypatch, DEFAULT_MODEL)
     _patch_budget_ok(monkeypatch)
-    monkeypatch.setattr(chat_session.shutil, "which", _fake_which)
+    monkeypatch.setattr(llm_cli.shutil, "which", _fake_which)
     proc = _FakeProc([_assistant_line("partial")])
 
     def fake_popen(_cmd: list[str], **_kwargs: object) -> _FakeProc:
         return proc
 
-    monkeypatch.setattr(chat_session.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(llm_cli.subprocess, "Popen", fake_popen)
+    records = _patch_ledger(monkeypatch)
 
     stream = real_stream_llm_text("PROMPT")
     assert isinstance(stream, GeneratorType)
@@ -298,6 +299,24 @@ def test_stream_generator_close_terminates_child(monkeypatch: pytest.MonkeyPatch
     stream_generator.close()
 
     assert proc.terminated is True
+    assert len(records) == 1
+    assert records[0].outcome == "canceled"
+    assert records[0].failure_class == "canceled"
+    assert records[0].error == "[canceled] stream consumer disconnected"
+
+
+def test_windows_tree_kill_uses_safe_pid_argv(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        captured.append(cmd)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(llm_cli.subprocess, "run", fake_run)
+    proc = cast("subprocess.Popen[str]", SimpleNamespace(pid=4312))
+
+    assert llm_cli._kill_windows_process_tree(proc) is True  # pyright: ignore[reportPrivateUsage]
+    assert captured == [["taskkill", "/PID", "4312", "/T", "/F"]]
 
 
 # ---------------------------------------------------------------------------

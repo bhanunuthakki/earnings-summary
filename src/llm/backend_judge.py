@@ -290,12 +290,12 @@ def _judge_once(
     )
     try:
         if judge_backend == CODEX:
-            # Membership transport, not a call_llm backend — its own wrapper
-            # (and its own ledger row) per llm.codex_backend.
-            from llm.codex_backend import call_codex_llm
-
-            raw = call_codex_llm(
-                prompt, purpose=JUDGE_PURPOSE, scope="backend_judge", run_id=run_id
+            raw = call_llm(
+                prompt,
+                purpose=JUDGE_PURPOSE,
+                scope="backend_judge",
+                run_id=run_id,
+                backend=CODEX,
             )
         elif judge_backend == DEEPSEEK:
             from llm.model_ladder import DEEPSEEK_JUDGE_MODEL
