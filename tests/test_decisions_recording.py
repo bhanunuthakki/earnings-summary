@@ -83,6 +83,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             source_note_id INTEGER,
             source_channel TEXT NOT NULL,
             source_external_id TEXT,
+            source_provider_id TEXT,
             idempotency_key TEXT NOT NULL UNIQUE,
             original_text TEXT NOT NULL,
             transcription_json TEXT,
@@ -822,7 +823,7 @@ def test_reconcile_preserves_identical_fills_with_distinct_transaction_ids(db: P
     conn = sqlite3.connect(str(db))
     try:
         rows = conn.execute(
-            "SELECT idempotency_key, source_external_id, draft_json "
+            "SELECT idempotency_key, source_external_id, source_provider_id, draft_json "
             "FROM decision_drafts WHERE source_channel = 'tracker' ORDER BY id"
         ).fetchall()
     finally:
@@ -831,7 +832,8 @@ def test_reconcile_preserves_identical_fills_with_distinct_transaction_ids(db: P
     assert len(rows) == 2
     assert rows[0][0] != rows[1][0]
     assert {row[1] for row in rows} == {"RBRK:2026-02-20:buy"}
-    assert sum(json.loads(row[2])["proposed_amount_usd"] for row in rows) == 200.0
+    assert {row[2] for row in rows} == {"txn-a", "txn-b"}
+    assert sum(json.loads(row[3])["proposed_amount_usd"] for row in rows) == 200.0
 
 
 def test_reconcile_archives_verified_legacy_duplicate_and_carries_action(db: Path) -> None:

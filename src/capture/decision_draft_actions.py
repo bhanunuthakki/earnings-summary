@@ -309,24 +309,89 @@ def confirm_tracker_fill_group(
     pending = [row for row in rows if row.status == "awaiting_confirmation"]
     if existing_ids:
         decision_id = next(iter(existing_ids))
-        if pending:
-            conn = open_conn(db_path)
-            try:
-                now = now_iso()
-                conn.executemany(
-                    "UPDATE decision_drafts SET status = 'confirmed', decision_id = ?, "
-                    "confirmed_at = ?, updated_at = ? WHERE id = ? "
-                    "AND status = 'awaiting_confirmation'",
-                    [(decision_id, now, now, row.id) for row in pending],
+        if not pending:
+            return {
+                "draft_id": draft_id,
+                "decision_id": decision_id,
+                "fill_count": len(rows),
+                "receipt": "already_actioned",
+            }
+        active = [
+            row for row in rows if row.status in {"awaiting_confirmation", "confirmed", "corrected"}
+        ]
+        ticker = representative.draft.proposed_ticker if representative.draft else None
+        action = representative.draft.proposed_action if representative.draft else None
+        if action not in {"buy", "sell"}:
+            raise DraftActionError(f"draft {draft_id} is not a tracker buy/sell fill")
+        for row in active:
+            if (
+                row.draft is None
+                or row.draft.proposed_ticker != ticker
+                or row.draft.proposed_action != action
+            ):
+                raise DraftActionError(
+                    f"tracker fill group {representative.source_external_id} "
+                    "has inconsistent fields"
                 )
-                conn.commit()
-            finally:
-                conn.close()
+        usd_values = [
+            row.draft.proposed_amount_usd
+            for row in active
+            if row.draft is not None and row.draft.proposed_amount_usd is not None
+        ]
+        pct_values = [
+            row.draft.proposed_amount_pct
+            for row in active
+            if row.draft is not None and row.draft.proposed_amount_pct is not None
+        ]
+        size_usd = sum(usd_values) if usd_values else None
+        size_pct = sum(pct_values) if pct_values else None
+        conn = open_conn(db_path)
+        try:
+            decision = conn.execute(
+                "SELECT ticker, recommendation_kind, decided_by FROM decisions WHERE id = ?",
+                (decision_id,),
+            ).fetchone()
+            if (
+                decision is None
+                or str(decision[2]) != "owner"
+                or str(decision[0]).upper() != str(ticker).upper()
+                or str(decision[1]) != action
+            ):
+                raise DraftActionError(
+                    f"tracker fill group {representative.source_external_id} "
+                    "does not match its confirmed owner decision"
+                )
+            now = now_iso()
+            audit_note = (
+                "\n\n---\n"
+                f"Tracker aggregate corrected at {now}: attached {len(pending)} "
+                f"late fill(s); group now contains {len(active)} active fill(s)."
+            )
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE decisions SET size_usd = ?, size_pct = ?, "
+                "recommendation_value = ?, "
+                "user_notes = COALESCE(user_notes, '') || ? WHERE id = ?",
+                (size_usd, size_pct, size_pct, audit_note, decision_id),
+            )
+            conn.executemany(
+                "UPDATE decision_drafts SET status = 'confirmed', decision_id = ?, "
+                "confirmed_at = ?, updated_at = ? WHERE id = ? "
+                "AND status = 'awaiting_confirmation'",
+                [(decision_id, now, now, row.id) for row in pending],
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
         return {
             "draft_id": draft_id,
             "decision_id": decision_id,
-            "fill_count": len(rows),
-            "receipt": "already_actioned",
+            "fill_count": len(active),
+            "added_fill_count": len(pending),
+            "receipt": "decision_aggregate_corrected",
         }
     if not pending:
         return {

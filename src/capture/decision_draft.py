@@ -137,6 +137,7 @@ class DecisionDraftRow:
     source_note_id: int | None
     source_channel: str
     source_external_id: str | None
+    source_provider_id: str | None
     idempotency_key: str
     original_text: str
     transcription_json: dict[str, object] | None
@@ -180,6 +181,11 @@ def _row_to_dc(row: sqlite3.Row) -> DecisionDraftRow:
         source_channel=str(row["source_channel"]),
         source_external_id=(
             None if row["source_external_id"] is None else str(row["source_external_id"])
+        ),
+        source_provider_id=(
+            None
+            if "source_provider_id" not in set(row.keys()) or row["source_provider_id"] is None
+            else str(row["source_provider_id"])
         ),
         idempotency_key=str(row["idempotency_key"]),
         original_text=str(row["original_text"]),
@@ -262,6 +268,7 @@ def _insert_row(
     source_note_id: int | None,
     source_channel: str,
     source_external_id: str | None,
+    source_provider_id: str | None,
     idempotency_key: str,
     original_text: str,
     transcription_json: dict[str, object] | None,
@@ -279,16 +286,17 @@ def _insert_row(
         now = now_iso()
         cur = conn.execute(
             "INSERT INTO decision_drafts ("
-            " user_id, source_note_id, source_channel, source_external_id,"
+            " user_id, source_note_id, source_channel, source_external_id, source_provider_id,"
             " idempotency_key, original_text, transcription_json, draft_json,"
             " parse_confidence, status, prompt_version, model, llm_call_id,"
             " expires_at, created_at, updated_at"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 user_id,
                 source_note_id,
                 source_channel,
                 source_external_id,
+                source_provider_id,
                 idempotency_key,
                 original_text,
                 json.dumps(transcription_json) if transcription_json is not None else None,
@@ -324,6 +332,7 @@ def create_draft_row(
     model: str | None = None,
     llm_call_id: int | None = None,
     expires_at: str | None = None,
+    source_provider_id: str | None = None,
     db_path: Path | str | None = None,
 ) -> int:
     """The one low-level writer both :func:`parse_note` (source_channel
@@ -341,6 +350,7 @@ def create_draft_row(
         source_note_id=source_note_id,
         source_channel=source_channel,
         source_external_id=source_external_id,
+        source_provider_id=source_provider_id,
         idempotency_key=idempotency_key,
         original_text=original_text,
         transcription_json=transcription_json,

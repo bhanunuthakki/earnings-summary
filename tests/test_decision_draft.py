@@ -384,6 +384,36 @@ def test_confirm_tracker_fill_group_is_idempotent(db_path: Path) -> None:
     assert count == 1
 
 
+def test_confirm_tracker_fill_group_corrects_aggregate_for_late_fill(db_path: Path) -> None:
+    _seed_roster(db_path, ["NU"])
+    first_id = _make_tracker_fill(
+        db_path, external_id="NU:2026-07-24:buy", amount_usd=100.0, key="tracker:late-a"
+    )
+    first = confirm_tracker_fill_group(first_id, db_path=db_path)
+    late_id = _make_tracker_fill(
+        db_path, external_id="NU:2026-07-24:buy", amount_usd=250.0, key="tracker:late-b"
+    )
+
+    corrected = confirm_tracker_fill_group(late_id, db_path=db_path)
+
+    conn = _conn(db_path)
+    decision = conn.execute(
+        "SELECT size_usd, user_notes FROM decisions WHERE id = ?",
+        (first["decision_id"],),
+    ).fetchone()
+    linked = conn.execute(
+        "SELECT status, decision_id FROM decision_drafts WHERE id IN (?, ?) ORDER BY id",
+        (first_id, late_id),
+    ).fetchall()
+    conn.close()
+    assert corrected["receipt"] == "decision_aggregate_corrected"
+    assert corrected["added_fill_count"] == 1
+    assert decision["size_usd"] == 350.0
+    assert "attached 1 late fill(s)" in decision["user_notes"]
+    assert {row["status"] for row in linked} == {"confirmed"}
+    assert {row["decision_id"] for row in linked} == {first["decision_id"]}
+
+
 def test_dismiss_tracker_fill_group_preserves_rows_without_decision(db_path: Path) -> None:
     first_id = _make_tracker_fill(
         db_path, external_id="NU:2026-07-24:buy", amount_usd=100.0, key="tracker:e"

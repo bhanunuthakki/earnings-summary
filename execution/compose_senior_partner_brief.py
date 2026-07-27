@@ -32,9 +32,10 @@ CLI:
 Exit 0 on a persisted brief (LLM-authored OR a labeled deterministic
 fallback — both are a successful compose; a Telegram send failure degrades
 the outcome but does not flip the exit code, mirroring
-``run_weekly_packet.py``'s "not configured / no chat id" degrade). Exit 1 on
-a missing DB or any hard-stop exception (auth/setup) propagating from the
-governed call.
+``run_weekly_packet.py``'s "not configured / no chat id" degrade). A missing
+private mobile Inbox URL refuses Telegram delivery and exits 1 rather than
+sending a dead Review action. Exit 1 also covers a missing DB or a hard-stop
+exception (auth/setup) propagating from the governed call.
 """
 
 from __future__ import annotations
@@ -51,9 +52,11 @@ SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from advisor.senior_partner_brief import (  # noqa: E402
+    SeniorPartnerBrief,
     build_telegram_keyboard,
     build_telegram_text,
     compose_brief,
+    private_mobile_inbox_url,
 )
 from capture import token_store  # noqa: E402
 from llm.cli import is_hard_stop  # noqa: E402
@@ -78,6 +81,24 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def _signature_sha(iso_year: int, iso_week: int) -> str:
     return hashlib.sha256(f"senior_partner_brief:{iso_year}-W{iso_week:02d}".encode()).hexdigest()
+
+
+def _telegram_reply_markup(
+    brief: SeniorPartnerBrief,
+    *,
+    artifact_id: int | None,
+    db_path: Path,
+) -> dict[str, object]:
+    """Build a Telegram keyboard only when Review is a real private URL."""
+    inbox_url = private_mobile_inbox_url()
+    if inbox_url is None:
+        raise RuntimeError("private mobile Inbox URL is not configured; refusing Telegram delivery")
+    return build_telegram_keyboard(
+        brief,
+        artifact_id=artifact_id,
+        inbox_url=inbox_url,
+        db_path=db_path,
+    )
 
 
 def _already_delivered_this_week(db_path: Path, *, iso_year: int, iso_week: int) -> bool:
@@ -199,15 +220,29 @@ def main(argv: list[str] | None = None) -> int:
         else (brief.what_changed[0].title if brief.what_changed else "Senior Partner Brief")
     )
     try:
+        reply_markup = _telegram_reply_markup(
+            brief,
+            artifact_id=result.artifact_id,
+            db_path=db_path,
+        )
+    except RuntimeError as exc:
+        _log("telegram_mobile_inbox_not_configured", error=str(exc))
+        _record_standup_message(
+            db_path,
+            iso_year=brief.iso_year,
+            iso_week=brief.iso_week,
+            status="compose_failed",
+            headline=headline,
+            artifact_id=result.artifact_id,
+        )
+        print(json.dumps({"artifact_id": result.artifact_id, "delivered": False}))
+        return 1
+    try:
         telegram.send_message(
             token,
             chat_id,
             build_telegram_text(brief),
-            reply_markup=build_telegram_keyboard(
-                brief,
-                artifact_id=result.artifact_id,
-                db_path=db_path,
-            ),
+            reply_markup=reply_markup,
         )
     except Exception as exc:
         _log("telegram_send_failed", error=str(exc))

@@ -736,6 +736,7 @@ def _reconcile_provider_fill_identity(
     *,
     provider_key: str,
     legacy_key: str,
+    provider_transaction_id: str,
 ) -> bool:
     """Adopt a legacy signature row or archive it behind its V1 identity twin.
 
@@ -755,14 +756,19 @@ def _reconcile_provider_fill_identity(
         ).fetchone()
         if provider_row is None and legacy_row is not None:
             conn.execute(
-                "UPDATE decision_drafts SET idempotency_key = ?, updated_at = CURRENT_TIMESTAMP "
-                "WHERE id = ?",
-                (provider_key, int(legacy_row[0])),
+                "UPDATE decision_drafts SET idempotency_key = ?, source_provider_id = ?, "
+                "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (provider_key, provider_transaction_id, int(legacy_row[0])),
             )
             conn.commit()
             return True
         if provider_row is None:
             return False
+        conn.execute(
+            "UPDATE decision_drafts SET source_provider_id = COALESCE(source_provider_id, ?), "
+            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (provider_transaction_id, int(provider_row[0])),
+        )
         if legacy_row is not None and int(legacy_row[0]) != int(provider_row[0]):
             legacy_status = str(legacy_row[1])
             provider_status = str(provider_row[1])
@@ -846,6 +852,7 @@ def _draft_unmatched_fills(
                     conn,
                     provider_key=key,
                     legacy_key=legacy_key,
+                    provider_transaction_id=str(transaction_id),
                 ):
                     counts["tracker_fill_drafted"] += 1
                     continue
@@ -878,6 +885,9 @@ def _draft_unmatched_fills(
                     source_note_id=None,
                     source_channel="tracker",
                     source_external_id=f"{ticker}:{day.isoformat()}:{direction}",
+                    source_provider_id=(
+                        str(transaction_id) if transaction_id is not None else None
+                    ),
                     idempotency_key=key,
                     original_text=(
                         f"Tracker-detected {direction} fill: {ticker} on {day.isoformat()} "
