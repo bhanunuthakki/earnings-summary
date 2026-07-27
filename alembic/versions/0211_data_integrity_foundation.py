@@ -175,10 +175,8 @@ def downgrade() -> None:
         if "ix_ingestion_runs_pipeline_key" in indexes:
             op.drop_index("ix_ingestion_runs_pipeline_key", table_name="ingestion_runs")
         removable = [name for name in ("attempt_id", "pipeline_key") if name in columns]
-        if removable:
-            with op.batch_alter_table("ingestion_runs") as batch:
-                for name in removable:
-                    batch.drop_column(name)
+        for name in removable:
+            op.drop_column("ingestion_runs", name)
 
     if "validation_issues" in tables:
         columns = _columns(inspector, "validation_issues")
@@ -195,10 +193,8 @@ def downgrade() -> None:
             )
             if name in columns
         ]
-        if removable:
-            with op.batch_alter_table("validation_issues") as batch:
-                for name in removable:
-                    batch.drop_column(name)
+        for name in removable:
+            op.drop_column("validation_issues", name)
 
     if "dcf_runs" in tables:
         columns = _columns(inspector, "dcf_runs")
@@ -213,10 +209,8 @@ def downgrade() -> None:
             )
             if name in columns
         ]
-        if removable:
-            with op.batch_alter_table("dcf_runs") as batch:
-                for name in removable:
-                    batch.drop_column(name)
+        for name in removable:
+            op.drop_column("dcf_runs", name)
 
     for table in (
         "pipeline_stage_transitions",

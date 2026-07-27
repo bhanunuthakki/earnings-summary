@@ -38,6 +38,8 @@ def test_0209_to_head_adds_governance_and_integrity_foundation(tmp_path: Path) -
             id INTEGER PRIMARY KEY, valuation_date TEXT
         );
         INSERT INTO dcf_runs VALUES (1, '2026-07-26');
+        CREATE VIEW v_decision_freshness AS
+            SELECT id, valuation_date FROM dcf_runs;
         CREATE TABLE documents (id INTEGER PRIMARY KEY);
         INSERT INTO documents VALUES (1);
         INSERT INTO documents VALUES (2);
@@ -101,6 +103,9 @@ def test_0209_to_head_adds_governance_and_integrity_foundation(tmp_path: Path) -
             "WHERE type = 'trigger' AND name = 'trg_transcripts_document_immutable'"
         ).fetchone()[0]
         == 0
+    )
+    assert conn.execute("SELECT valuation_date FROM v_decision_freshness").fetchone()[0] == (
+        "2026-07-26"
     )
     assert conn.execute("SELECT run_id FROM ingestion_runs").fetchone()[0] == "attempt-1"
     assert conn.execute("SELECT raised_at FROM validation_issues").fetchone()[0] == "2026-07-26"
