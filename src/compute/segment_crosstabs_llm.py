@@ -46,7 +46,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from llm.structured import call_llm_structured
 from llm_client import FAST_CLASSIFIER_MODEL
@@ -150,6 +150,31 @@ class Crosstab:
     subject_name: str | None
     secondary_axis: str
     cells: list[CrosstabCell] = field(default_factory=list)
+
+
+class _CrosstabCellWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    period_end: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    fiscal_period_type: str = Field(pattern=r"^(?:Q[1-4]|FY)$")
+    secondary_name: str = Field(min_length=1, max_length=200)
+    value: float
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+
+
+class _CrosstabWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    subject_axis: str | None = None
+    subject_name: str | None = None
+    secondary_axis: str = Field(min_length=1)
+    cells: list[_CrosstabCellWire] = Field(min_length=1)
+
+
+class _CrosstabResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    cross_tabs: list[_CrosstabWire]
 
 
 @dataclass
@@ -599,57 +624,26 @@ def _ask_claude(ticker: str, year: int | None, text: str) -> list[Crosstab]:
         purpose="segment_crosstab_extract",
         expect="object",
         required_keys=("cross_tabs",),
-        schema=TypeAdapter(dict[str, object]),
+        schema=TypeAdapter(_CrosstabResponse),
     )
-    items = parsed.get("cross_tabs")
-    if not isinstance(items, list):
-        return []
+    validated = _CrosstabResponse.model_validate(parsed)
     out: list[Crosstab] = []
-    for entry in items:
-        if not isinstance(entry, dict):
-            continue
-        subject_axis = entry.get("subject_axis")
-        subject_name = entry.get("subject_name")
-        secondary_axis = entry.get("secondary_axis")
-        cells_raw = entry.get("cells")
-        # secondary_axis + cells are required; subject_axis/subject_name are
-        # optional (null/None signals a 1-axis finer-grained breakdown).
-        if not (isinstance(secondary_axis, str) and isinstance(cells_raw, list)):
-            continue
-        subject_axis_str: str | None = subject_axis if isinstance(subject_axis, str) else None
-        subject_name_str: str | None = subject_name if isinstance(subject_name, str) else None
-        cells: list[CrosstabCell] = []
-        for cell in cells_raw:
-            if not isinstance(cell, dict):
-                continue
-            period_end = cell.get("period_end")
-            fiscal_period_type = cell.get("fiscal_period_type")
-            secondary_name = cell.get("secondary_name")
-            value = cell.get("value")
-            currency = cell.get("currency")
-            if not (
-                isinstance(period_end, str)
-                and isinstance(fiscal_period_type, str)
-                and isinstance(secondary_name, str)
-                and isinstance(value, (int, float))
-            ):
-                continue
-            cells.append(
-                CrosstabCell(
-                    period_end=period_end,
-                    fiscal_period_type=fiscal_period_type,
-                    secondary_name=secondary_name,
-                    value=float(value),
-                    currency=currency if isinstance(currency, str) else None,
-                )
+    for entry in validated.cross_tabs:
+        cells = [
+            CrosstabCell(
+                period_end=cell.period_end,
+                fiscal_period_type=cell.fiscal_period_type,
+                secondary_name=cell.secondary_name,
+                value=cell.value,
+                currency=cell.currency,
             )
-        if not cells:
-            continue
+            for cell in entry.cells
+        ]
         out.append(
             Crosstab(
-                subject_axis=subject_axis_str,
-                subject_name=subject_name_str,
-                secondary_axis=secondary_axis,
+                subject_axis=entry.subject_axis,
+                subject_name=entry.subject_name,
+                secondary_axis=entry.secondary_axis,
                 cells=cells,
             )
         )

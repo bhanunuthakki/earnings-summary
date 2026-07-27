@@ -39,6 +39,7 @@ import json
 import math
 import os
 import queue
+import re
 import sys
 import threading
 import urllib.parse
@@ -112,6 +113,7 @@ from identity import DEFAULT_USER_ID  # noqa: E402
 from llm.cli import LLMBudgetExceeded, is_hard_stop  # noqa: E402
 from logging_config import (  # noqa: E402
     configure_logging,
+    get_correlation_id,
     new_correlation_id,
     set_correlation_id,
 )
@@ -150,6 +152,11 @@ _MAINTENANCE_ACTIONS: dict[str, list[str]] = {
     "sweep_history": ["sweep_output_history.py"],
     "onboard_pending": ["onboard_pending_tickers.py"],
 }
+
+_MAX_REQUEST_BYTES = 262_144
+_MAX_USER_INPUT_CHARS = 8_000
+_STREAM_QUEUE_MAXSIZE = 64
+_CORRELATION_ID_RX = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 
 
 def _cors_allow_origin(origin: str, *, repo_root: Path = PROJECT_ROOT) -> str | None:
@@ -392,7 +399,7 @@ def create_app(
     chat_executor: concurrent.futures.Executor | None = None,
 ) -> Flask:
     app = Flask(__name__)
-    app.config["MAX_CONTENT_LENGTH"] = 1_048_576
+    app.config["MAX_CONTENT_LENGTH"] = _MAX_REQUEST_BYTES
     db_path = (db_path or repo_root / "data" / "portfolio.db").resolve()
     job_registry = registry or Registry(repo_root=repo_root)
     report_capability = ReportCapabilityStore(repo_root)
@@ -407,6 +414,38 @@ def create_app(
     )
     app.config["CHAT_EXECUTOR"] = chat_pool
 
+    def _client_error(message: str, status: int) -> tuple[dict[str, str], int]:
+        return ({"error": message, "correlation_id": get_correlation_id()}, status)
+
+    def _internal_failure(
+        message: str, exc: object, *, status: int = 502
+    ) -> tuple[dict[str, str], int]:
+        app.logger.error(
+            "%s: %s",
+            message,
+            exc,
+            exc_info=isinstance(exc, BaseException),
+        )
+        return _client_error(f"{message}; retry the request", status)
+
+    def _drain_stream(
+        events: Iterator[dict[str, object]],
+        chunks: queue.Queue[dict[str, object] | None],
+        stop: threading.Event,
+        correlation_id: str,
+    ) -> None:
+        set_correlation_id(correlation_id)
+        drain_events(events, chunks, stop)
+
+    def _sse_frame(item: dict[str, object], correlation_id: str) -> str:
+        if item.get("type") == "error":
+            item = {
+                "type": "error",
+                "error": "chat stream failed; retry the request",
+                "correlation_id": correlation_id,
+            }
+        return f"data: {json.dumps(item)}\n\n"
+
     def _stream_engine_events(events: Iterator[dict[str, object]]) -> Response:
         """Pump one ask-engine event stream into an SSE response.
 
@@ -416,9 +455,10 @@ def create_app(
         executes lazily, on the pool thread) and pipe its events through
         a Queue, then drain the queue into SSE frames. Shared by
         /chat/<ticker> and /api/ask/stream."""
-        chunks: queue.Queue[dict[str, object] | None] = queue.Queue(maxsize=64)
+        correlation_id = get_correlation_id()
+        chunks: queue.Queue[dict[str, object] | None] = queue.Queue(maxsize=_STREAM_QUEUE_MAXSIZE)
         stop = threading.Event()
-        chat_pool.submit(drain_events, events, chunks, stop)
+        chat_pool.submit(_drain_stream, events, chunks, stop, correlation_id)
 
         def generate():
             try:
@@ -426,7 +466,7 @@ def create_app(
                     item = chunks.get()
                     if item is None:
                         break
-                    yield f"data: {json.dumps(item)}\n\n"
+                    yield _sse_frame(item, correlation_id)
             finally:
                 stop.set()
 
@@ -445,9 +485,10 @@ def create_app(
         """Like ``_stream_engine_events`` but emits a leading
         ``{type: "session", session_id: "…"}`` frame so the client always
         knows which session this turn belongs to."""
-        chunks: queue.Queue[dict[str, object] | None] = queue.Queue(maxsize=64)
+        correlation_id = get_correlation_id()
+        chunks: queue.Queue[dict[str, object] | None] = queue.Queue(maxsize=_STREAM_QUEUE_MAXSIZE)
         stop = threading.Event()
-        chat_pool.submit(drain_events, events, chunks, stop)
+        chat_pool.submit(_drain_stream, events, chunks, stop, correlation_id)
 
         def generate():
             try:
@@ -456,7 +497,7 @@ def create_app(
                     item = chunks.get()
                     if item is None:
                         break
-                    yield f"data: {json.dumps(item)}\n\n"
+                    yield _sse_frame(item, correlation_id)
             finally:
                 stop.set()
 
@@ -486,11 +527,20 @@ def create_app(
     def bind_correlation_id() -> None:
         # Fresh correlation id per request so all log lines for one operation
         # stitch together (sre-4). Honor an upstream X-Correlation-ID if present.
-        incoming = request.headers.get("X-Correlation-ID", "")
-        if incoming:
+        incoming = request.headers.get("X-Correlation-ID", "").strip()
+        if _CORRELATION_ID_RX.fullmatch(incoming):
             set_correlation_id(incoming)
         else:
             new_correlation_id()
+
+    @app.errorhandler(413)
+    def request_too_large(_error: object):
+        return _client_error("request body is too large", 413)
+
+    @app.errorhandler(500)
+    def internal_server_error(error: object):
+        app.logger.error("unhandled request failure: %s", error, exc_info=True)
+        return _client_error("request failed; retry the request", 500)
 
     @app.before_request
     def csrf_origin_guard():
@@ -554,6 +604,7 @@ def create_app(
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers["X-Correlation-ID"] = get_correlation_id()
         return response
 
     @app.after_request
@@ -1163,7 +1214,7 @@ def create_app(
         try:
             counts = run_tenet_distill(db_path, user_id=DEFAULT_USER_ID)
         except Exception as exc:  # a distill failure must not 500 the tap
-            return ({"error": f"distill failed: {exc}"}, 500)
+            return _internal_failure("distillation failed", exc, status=500)
         return {"ok": True, **counts}
 
     # ----- DASHBOARD (unified tabbed command-center shell) -----
@@ -2672,7 +2723,10 @@ def create_app(
         Always 200 with a tri-state payload augmented with ``session_id``."""
         if request.method == "OPTIONS":
             return ("", 204)
-        turn, sess = _parse_ask_turn_with_session()
+        try:
+            turn, sess = _parse_ask_turn_with_session()
+        except ValueError as exc:
+            return _client_error(str(exc), 400)
         if turn is None:
             return ({"error": "query required"}, 400)
         pack = build_portfolio_pack(repo_root, db_path)
@@ -2680,6 +2734,12 @@ def create_app(
             turn, pack, db_path=db_path, repo_root=repo_root, registry=job_registry
         )
         result = fold_events(events)
+        if result.get("status") == "error":
+            result = {
+                "status": "error",
+                "message": "ask failed; retry the request",
+                "correlation_id": get_correlation_id(),
+            }
         result["session_id"] = sess.id if sess else turn.session_id
         return result
 
@@ -2691,7 +2751,10 @@ def create_app(
         the id and pass it back on the next turn."""
         if request.method == "OPTIONS":
             return ("", 204)
-        turn, sess = _parse_ask_turn_with_session()
+        try:
+            turn, sess = _parse_ask_turn_with_session()
+        except ValueError as exc:
+            return _client_error(str(exc), 400)
         if turn is None:
             return ({"error": "query required"}, 400)
         pack = build_portfolio_pack(repo_root, db_path)
@@ -2753,7 +2816,7 @@ def create_app(
         except Exception as exc:  # structured-call failures: hard stops propagate loud
             if is_hard_stop(exc):
                 raise
-            return (f"encode failed: {exc}", 502)
+            return _internal_failure("encode failed", exc)
         return Response(render_approval_form(proposal), mimetype="text/html")
 
     @app.route("/api/positioning/approve", methods=["POST"])
@@ -2882,7 +2945,7 @@ def create_app(
         except Exception as exc:
             if is_hard_stop(exc):
                 raise
-            return ({"error": f"recommendation generation failed: {exc}"}, 502)
+            return _internal_failure("recommendation generation failed", exc)
         return {
             "artifact_id": result.artifact_id,
             "selection_mode": result.selection_mode,
@@ -3012,15 +3075,9 @@ def create_app(
         except Exception as exc:
             if is_hard_stop(exc):
                 raise
-            return ({"error": f"card generation failed: {exc}"}, 502)
+            return _internal_failure("card generation failed", exc)
         if result.failure_reason is not None:
-            return (
-                {
-                    "error": result.failure_reason,
-                    "degraded_reasons": list(result.degraded_reasons),
-                },
-                502,
-            )
+            return _internal_failure("card generation failed", result.failure_reason)
         try:
             from build_investment_decision_card import (
                 rerender_workspace,  # sibling execution/ module
@@ -3185,7 +3242,13 @@ def create_app(
         try:
             rows = p3_data.load_peer_comp(sym, repo_root=repo_root)
         except Exception as exc:  # best-effort surface, never a 500
-            return {"ticker": sym, "peers": [], "error": f"peer lookup failed: {exc}"}
+            app.logger.error("peer lookup failed: %s", exc, exc_info=True)
+            return {
+                "ticker": sym,
+                "peers": [],
+                "error": "peer lookup failed; retry the request",
+                "correlation_id": get_correlation_id(),
+            }
         return {
             "ticker": sym,
             "peers": [
@@ -3204,6 +3267,8 @@ def create_app(
         query = str(body.get("query") or "").strip()
         if not query:
             return None
+        if len(query) > _MAX_USER_INPUT_CHARS:
+            raise ValueError(f"query exceeds the {_MAX_USER_INPUT_CHARS} character limit")
         raw_tickers = body.get("tickers")
         tickers = (
             [str(t) for t in cast("list[object]", raw_tickers)]
@@ -3232,6 +3297,8 @@ def create_app(
         query = str(body.get("query") or "").strip()
         if not query:
             return None, None
+        if len(query) > _MAX_USER_INPUT_CHARS:
+            raise ValueError(f"query exceeds the {_MAX_USER_INPUT_CHARS} character limit")
         raw_tickers = body.get("tickers")
         tickers = (
             [str(t) for t in cast("list[object]", raw_tickers)]
@@ -5169,7 +5236,7 @@ def create_app(
         try:
             prelude = generate_questions(repo_root, ticker)
         except Exception as exc:  # surface to the form; owner-driven retry
-            return ({"error": f"{type(exc).__name__}: {exc}"}, 502)
+            return _internal_failure("question generation failed", exc)
         return {
             "ticker": prelude.ticker,
             "questions": prelude.questions,
@@ -5210,9 +5277,12 @@ def create_app(
         except ValueError as exc:  # length mismatch / empty answers / bad horizon
             return ({"error": str(exc)}, 400)
         except Exception as exc:  # hard stops surface loudly to the form
-            return ({"error": f"{type(exc).__name__}: {exc}"}, 502)
+            return _internal_failure("memo generation failed", exc)
         if not result.ok or result.memo_id is None:
-            return ({"error": result.skipped_reason or "memo generation failed"}, 502)
+            return _internal_failure(
+                "memo generation failed",
+                result.skipped_reason or "no memo id returned",
+            )
         memo = get_memo(result.memo_id, db_path=db_path)
         return {
             "memo_id": result.memo_id,
@@ -5446,6 +5516,11 @@ def create_app(
             user_message = str(body["message"])
         except (KeyError, ValueError, TypeError) as e:
             return ({"error": f"bad payload: {e}"}, 400)
+        if len(user_message) > _MAX_USER_INPUT_CHARS:
+            return _client_error(
+                f"message exceeds the {_MAX_USER_INPUT_CHARS} character limit",
+                400,
+            )
 
         # The unified ask engine with this report's TICKER context pack
         # ("one brain, two entry points" — same engine as /api/ask).

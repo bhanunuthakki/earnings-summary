@@ -281,6 +281,9 @@ def call_openrouter(
     scope: str | None = None,
     run_id: str | None = None,
     force_budget_bypass: bool = False,
+    fallback_used: str | None = None,
+    fallback_from_provider: str | None = None,
+    fallback_from_transport: str | None = None,
 ) -> str:
     """Single-shot OpenRouter call. Same contract as ``llm.cli._call_claude`` /
     ``gemini_backend.call_gemini``: per-purpose budget gate up front, one
@@ -366,11 +369,15 @@ def call_openrouter(
             run_id=run_id,
             response_text=text,
             meta=usage_meta_from_openrouter(usage, model=resolved_model),
+            fallback_used=fallback_used,
             prompt=prompt,
             provider="openrouter",
             transport="metered_api",
+            auth_class="api_key_metered",
             attempts=1,
             retries=0,
+            fallback_from_provider=fallback_from_provider,
+            fallback_from_transport=fallback_from_transport,
         )
         return text
     except (requests.RequestException, RuntimeError, ValueError, OSError) as openrouter_error:
@@ -386,11 +393,15 @@ def call_openrouter(
             scope=scope,
             run_id=run_id,
             error=f"{type(openrouter_error).__name__}: {str(openrouter_error)[:500]}",
+            fallback_used=fallback_used,
             prompt=prompt,
             provider="openrouter",
             transport="metered_api",
+            auth_class="api_key_metered",
             attempts=1,
             retries=0,
             failure_class="openrouter_transport",
+            fallback_from_provider=fallback_from_provider,
+            fallback_from_transport=fallback_from_transport,
         )
         raise

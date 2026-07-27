@@ -13,6 +13,12 @@ quarter — so resolving just the latest quarter's spreadsheet is sufficient for
 
 from __future__ import annotations
 
+from ir_pipeline._net import (
+    PLAYWRIGHT_NETWORK_LOCKDOWN_ARG,
+    PLAYWRIGHT_NO_PROXY_ARG,
+    ensure_safe_public_url,
+    install_public_only_playwright_routing,
+)
 from ir_pipeline.config import IrConfig
 from ir_pipeline.discover._docmeta import classify, filename_for_url
 
@@ -23,10 +29,19 @@ _VISIBLE_HREFS_JS = "els => els.filter(a => a.offsetParent !== null).map(a => a.
 def _visible_filemanager_hrefs(url: str, timeout_ms: int = 60000) -> list[str]:
     from playwright.sync_api import sync_playwright  # lazy: optional `ir` extra
 
+    ensure_safe_public_url(url)
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True)
+        browser = pw.chromium.launch(
+            headless=True,
+            args=[PLAYWRIGHT_NETWORK_LOCKDOWN_ARG, PLAYWRIGHT_NO_PROXY_ARG],
+        )
         try:
-            page = browser.new_page(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                service_workers="block",
+            )
+            install_public_only_playwright_routing(context, timeout_s=timeout_ms / 1000)
+            page = context.new_page()
             page.goto(url, wait_until="networkidle", timeout=timeout_ms)
             raw = page.eval_on_selector_all("a[href*='mzfilemanager']", _VISIBLE_HREFS_JS)
         finally:

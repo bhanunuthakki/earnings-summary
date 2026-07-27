@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from datetime import UTC, datetime
@@ -47,8 +46,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
+from llm.cli import call_llm, is_hard_stop  # noqa: E402
 from llm_budget import check_budget, current_month_spend  # noqa: E402
 from llm_call_ledger import LlmCallRecord, record_call, sha256_text  # noqa: E402
+from log_redact import redact  # noqa: E402
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -94,24 +95,6 @@ class _MessagesAPI(Protocol):
 class _AnthropicClient(Protocol):
     @property
     def messages(self) -> _MessagesAPI: ...
-
-
-def _default_client_factory() -> _AnthropicClient:
-    """Construct the *explicitly approved* metered Anthropic Batch client.
-
-    Batch is not a subscription CLI transport.  It remains available only for
-    this named scheduler-compatible exception, which operators must opt into
-    per process after reviewing its hard budget gate.  Tests inject a fake and
-    do not need this flag because they never construct a billed client.
-    """
-    if os.environ.get("ES_APPROVED_ANTHROPIC_BATCH") != "1":
-        raise RuntimeError(
-            "Anthropic Batch is metered and disabled by default. Set "
-            "ES_APPROVED_ANTHROPIC_BATCH=1 only for an approved governed batch run."
-        )
-    from anthropic import Anthropic
-
-    return cast("_AnthropicClient", Anthropic())
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +184,8 @@ def submit_and_collect(
     repo_root: Path,
     dry_run: bool = False,
     force_overwrite: bool = False,
-    client_factory: Callable[[], _AnthropicClient] = _default_client_factory,
+    client_factory: Callable[[], _AnthropicClient] | None = None,
+    llm_call: Callable[..., str] = call_llm,
     sleep: Callable[[float], None] = time.sleep,
     poll_backoff: tuple[int, ...] = POLL_BACKOFF_SECONDS,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
@@ -257,6 +241,20 @@ def submit_and_collect(
             "requests_skipped_existing": skipped,
         }
 
+    if client_factory is None:
+        return _run_governed_requests(
+            pending,
+            jsonl_path=jsonl_path,
+            tmp_dir=tmp_dir,
+            batch_dir=batch_dir,
+            skipped=skipped,
+            force_overwrite=force_overwrite,
+            llm_call=llm_call,
+        )
+
+    # Backward-compatible injection seam for offline fake-client tests.
+    # Production cannot construct a provider client: this argument defaults
+    # to None and is not exposed through the CLI.
     client = client_factory()
     payloads = [_request_to_payload(r) for r in pending]
     batch = client.messages.batches.create(requests=payloads)
@@ -293,6 +291,74 @@ def submit_and_collect(
         "total_cost_usd_est": counts["total_cost_usd"],
         "requests_skipped_existing": skipped,
         "request_counts_final": request_counts,
+    }
+
+
+def _run_governed_requests(
+    requests: list[dict[str, object]],
+    *,
+    jsonl_path: Path,
+    tmp_dir: Path,
+    batch_dir: Path,
+    skipped: int,
+    force_overwrite: bool,
+    llm_call: Callable[..., str],
+) -> dict[str, object]:
+    """Run prepared prompts through the central subscription-backed entrypoint."""
+    succeeded = 0
+    errors: list[dict[str, str]] = []
+    for request in requests:
+        custom_id = cast("str", request["custom_id"])
+        params = cast("dict[str, object]", request["params"])
+        prompt = _prompt_text_from_params(params)
+        if not prompt:
+            errors.append({"custom_id": custom_id, "type": "invalid_request"})
+            continue
+        target = tmp_dir / f"{custom_id}.txt"
+        if target.exists() and not force_overwrite:
+            skipped += 1
+            continue
+        try:
+            response = llm_call(
+                prompt,
+                purpose="pairwise_analysis",
+                ticker=_ticker_from_custom_id(custom_id),
+                scope=f"saydo:{custom_id}",
+            )
+            if not response.strip():
+                raise RuntimeError("governed LLM returned an empty response")
+            target.write_text(response, encoding="utf-8")
+            succeeded += 1
+        except Exception as exc:
+            if is_hard_stop(exc):
+                raise
+            errors.append(
+                {
+                    "custom_id": custom_id,
+                    "type": "governed_call_failed",
+                    "error": redact(f"{type(exc).__name__}: {str(exc)[:300]}"),
+                }
+            )
+
+    errors_path: Path | None = None
+    if errors:
+        batch_dir.mkdir(parents=True, exist_ok=True)
+        errors_path = batch_dir / f"errors_governed_{datetime.now(UTC):%Y%m%dT%H%M%SZ}.json"
+        errors_path.write_text(json.dumps(errors, indent=2), encoding="utf-8")
+
+    return {
+        "status": "ended" if not errors else "ended_with_errors",
+        "transport": "subscription_cli",
+        "jsonl": str(jsonl_path),
+        "submitted": len(requests),
+        "succeeded": succeeded,
+        "failed": len(errors),
+        "errored": len(errors),
+        "expired": 0,
+        "canceled": 0,
+        "output_dir": str(tmp_dir),
+        "errors_path": str(errors_path) if errors_path is not None else None,
+        "requests_skipped_existing": skipped,
     }
 
 

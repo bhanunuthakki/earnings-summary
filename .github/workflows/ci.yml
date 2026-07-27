@@ -88,6 +88,11 @@ jobs:
           cache: pip
       - name: Install ruff
         run: pip install -e .[dev]
+      - name: LLM eval coverage - no new registered gaps
+        # Provider-free registry check: adding a purpose to either LLM_MODELS
+        # or prompt_versions must include a real quality eval in the same PR.
+        # Existing uncovered purposes are explicit debt and cannot grow.
+        run: python execution/run_llm_evals.py --coverage-gate --repo-root .
       - name: Compute changed Python files
         id: changed
         run: |

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -77,6 +79,9 @@ def test_codex_primary_failure_falls_back_to_claude(
 
     def fake_claude(prompt: str, **kwargs: object) -> str:
         calls.append("claude")
+        assert kwargs["fallback_used"] == "claude"
+        assert kwargs["fallback_from_provider"] == "openai"
+        assert kwargs["fallback_from_transport"] == "subscription_cli"
         return "claude fallback"
 
     monkeypatch.setattr(codex_backend, "call_codex_llm", fail_codex)
@@ -159,3 +164,59 @@ def test_explicit_claude_model_bypasses_codex_primary(
         == "explicit Claude"
     )
     assert seen["model"] == "claude-opus-4-8"
+
+
+def test_metered_fallback_requires_reviewed_purpose_and_hard_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(llm_cli, "OPENROUTER_FALLBACK_PURPOSES", frozenset({"approved_purpose"}))
+    monkeypatch.setattr(
+        "llm_budget.check_budget",
+        lambda purpose: SimpleNamespace(
+            cap=Decimal("5.00"),
+            hard_block=True,
+            current_spend=Decimal("1.25"),
+        ),
+    )
+    enforced: list[tuple[str | None, bool]] = []
+    monkeypatch.setattr(
+        llm_cli,
+        "_enforce_budget_pre_call",
+        lambda purpose, *, force_budget_bypass: enforced.append((purpose, force_budget_bypass)),
+    )
+
+    with caplog.at_level(logging.ERROR):
+        assert llm_cli._authorize_metered_openrouter_fallback(
+            "approved_purpose", force_budget_bypass=False
+        )
+
+    assert enforced == [("approved_purpose", False)]
+    assert "llm_metered_openrouter_fallback_authorized" in caplog.text
+
+
+def test_metered_fallback_fails_closed_without_hard_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(llm_cli, "OPENROUTER_FALLBACK_PURPOSES", frozenset({"approved_purpose"}))
+    monkeypatch.setattr(
+        "llm_budget.check_budget",
+        lambda purpose: SimpleNamespace(
+            cap=Decimal("5.00"),
+            hard_block=False,
+            current_spend=Decimal("0"),
+        ),
+    )
+
+    with pytest.raises(llm_cli.LLMSetupError, match="lacks a positive hard-block budget"):
+        llm_cli._authorize_metered_openrouter_fallback(
+            "approved_purpose", force_budget_bypass=False
+        )
+
+
+def test_metered_fallback_never_honors_budget_bypass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(llm_cli, "OPENROUTER_FALLBACK_PURPOSES", frozenset({"approved_purpose"}))
+    with pytest.raises(llm_cli.LLMBudgetExceeded, match="cannot bypass"):
+        llm_cli._authorize_metered_openrouter_fallback("approved_purpose", force_budget_bypass=True)

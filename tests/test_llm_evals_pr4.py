@@ -20,8 +20,16 @@ from typing import TypeVar
 
 import pytest
 
+import evals.coverage as coverage_module
 import llm.structured as structured
-from evals.coverage import META_PURPOSES, eval_coverage, render_coverage_text
+from evals.coverage import (
+    GRANDFATHERED_UNCOVERED_PURPOSES,
+    META_PURPOSES,
+    eval_coverage,
+    eval_coverage_gate,
+    render_coverage_gate_text,
+    render_coverage_text,
+)
 from evals.golden_classifiers import (
     CLASSIFIER_PURPOSES,
     ClassifierCase,
@@ -262,6 +270,102 @@ def test_eval_coverage_without_db(tmp_path: Path) -> None:
     assert rows  # registry-derived universe still reports
     assert all(r.observed_calls == 0 for r in rows)
     assert {r.purpose for r in rows} >= META_PURPOSES
+
+
+def test_eval_coverage_gate_accepts_only_the_explicit_existing_debt(
+    tmp_path: Path,
+) -> None:
+    result = eval_coverage_gate(eval_coverage(tmp_path / "missing.db"))
+    assert result.passed
+    assert not result.new_uncovered
+    assert not result.stale_grandfathered
+    assert len(GRANDFATHERED_UNCOVERED_PURPOSES) > 0
+    assert "PASS" in render_coverage_gate_text(result)
+
+
+def test_eval_coverage_gate_blocks_new_model_and_prompt_registrations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(
+        coverage_module.LLM_MODELS,
+        "new_model_without_quality_eval",
+        "test-model",
+    )
+    registered = coverage_module.registered_purposes()
+    monkeypatch.setattr(
+        coverage_module,
+        "registered_purposes",
+        lambda: registered | {"new_prompt_without_quality_eval"},
+    )
+
+    result = eval_coverage_gate(eval_coverage(tmp_path / "missing.db"))
+
+    assert result.new_uncovered == (
+        "new_model_without_quality_eval",
+        "new_prompt_without_quality_eval",
+    )
+    assert not result.passed
+    text = render_coverage_gate_text(result)
+    assert "golden/audit/outcome/meta" in text
+    assert "Schema validation alone is not a quality eval" in text
+
+
+def test_eval_coverage_gate_requires_stale_exemption_removal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    purpose = "annual_letter"
+    assert purpose in GRANDFATHERED_UNCOVERED_PURPOSES
+    monkeypatch.setattr(
+        coverage_module,
+        "GOLDEN_PURPOSES",
+        coverage_module.GOLDEN_PURPOSES | {purpose},
+    )
+
+    result = eval_coverage_gate(eval_coverage(tmp_path / "missing.db"))
+
+    assert result.stale_grandfathered == (purpose,)
+    assert not result.passed
+
+
+def test_coverage_cli_report_stays_nonblocking_but_gate_fails_new_gap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runner = _load_execution_module("run_llm_evals", "run_llm_evals_coverage_gate_check")
+    monkeypatch.setitem(
+        coverage_module.LLM_MODELS,
+        "new_cli_gap",
+        "test-model",
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_llm_evals.py",
+            "--coverage",
+            "--repo-root",
+            str(tmp_path),
+        ],
+    )
+    assert runner.main() == 0
+    assert "new_cli_gap" in capsys.readouterr().out
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_llm_evals.py",
+            "--coverage-gate",
+            "--repo-root",
+            str(tmp_path),
+        ],
+    )
+    assert runner.main() == 4
+    output = capsys.readouterr().out
+    assert "Eval coverage gate: FAIL" in output
+    assert "new_cli_gap" in output
 
 
 # ----------------------------------------------------------------------------

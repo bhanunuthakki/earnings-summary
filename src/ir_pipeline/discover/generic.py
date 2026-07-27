@@ -27,6 +27,14 @@ import urllib.request
 import urllib.robotparser
 from collections.abc import Callable
 
+from ir_pipeline._net import (
+    PLAYWRIGHT_NETWORK_LOCKDOWN_ARG,
+    PLAYWRIGHT_NO_PROXY_ARG,
+    UnsafeURLError,
+    build_public_opener,
+    ensure_safe_public_url,
+    install_public_only_playwright_routing,
+)
 from ir_pipeline.discover._docmeta import CandidateDoc, classify, filename_for_url
 
 # (href, visible anchor text) for one page; the unit a renderer returns.
@@ -268,6 +276,10 @@ def _allow_all(_url: str) -> bool:
     return True
 
 
+def _deny_all(_url: str) -> bool:
+    return False
+
+
 _ROBOTS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 _MAX_CRAWL_DELAY_S = 12.0
 
@@ -286,10 +298,13 @@ def _robots_policy(url: str) -> tuple[Callable[[str], bool], float]:
     robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
     rp = urllib.robotparser.RobotFileParser()
     try:
+        ensure_safe_public_url(robots_url)
         req = urllib.request.Request(robots_url, headers={"User-Agent": _ROBOTS_UA})
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with build_public_opener().open(req, timeout=15) as resp:
             raw = resp.read().decode("utf-8", "replace")
         rp.parse(raw.splitlines())
+    except UnsafeURLError:
+        return _deny_all, 0.0
     except Exception:  # missing / unreachable robots.txt → no rules → allow
         return _allow_all, 0.0
 
@@ -346,9 +361,17 @@ def _playwright_render(url: str, timeout_ms: int) -> list[Anchor]:
     with sync_playwright() as pw:
         # --disable-http2: some IR servers mis-negotiate HTTP/2 with headless
         # chromium (net::ERR_HTTP2_PROTOCOL_ERROR); forcing HTTP/1.1 is robust.
-        browser = pw.chromium.launch(headless=True, args=["--disable-http2"])
+        browser = pw.chromium.launch(
+            headless=True,
+            args=["--disable-http2", PLAYWRIGHT_NETWORK_LOCKDOWN_ARG, PLAYWRIGHT_NO_PROXY_ARG],
+        )
         try:
-            page = browser.new_page(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                service_workers="block",
+            )
+            install_public_only_playwright_routing(context, timeout_s=timeout_ms / 1000)
+            page = context.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
             try:
                 page.wait_for_selector(_DOC_LINK_SELECTOR, timeout=_DOC_WAIT_MS, state="attached")

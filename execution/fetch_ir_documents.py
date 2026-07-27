@@ -41,7 +41,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -49,8 +49,9 @@ SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from ir_pipeline._net import (  # noqa: E402
-    GuardedHTTPRedirectHandler,
     UnsafeURLError,
+    build_public_opener,
+    curl_resolve_entries,
     ensure_safe_public_url,
     safe_redirect_url,
 )
@@ -184,23 +185,31 @@ def _fetch_curl_cffi(url: str) -> tuple[bytes, str, str] | None:
     Returns ``(data, content_disposition, content_type)`` or None.
     """
     try:
+        from curl_cffi import CurlOpt
         from curl_cffi import requests as cc
     except ImportError:
         log.error({"event": "curl_cffi_unavailable", "url": redact(url)})
         return None
     current = url
+    cc_any = cast(Any, cc)
     for _ in range(_MAX_REDIRECTS + 1):
         try:
-            ensure_safe_public_url(current)
-            resp = cc.get(
-                current,
-                impersonate=_IMPERSONATE,
-                headers={
-                    "Accept": "application/pdf,application/vnd.ms-excel,application/octet-stream,*/*"
-                },
-                timeout=_CONNECT_READ_TIMEOUT,
-                allow_redirects=False,
-            )
+            with cc_any.Session(
+                trust_env=False,
+                curl_options={CurlOpt.RESOLVE: curl_resolve_entries(current)},
+            ) as session:
+                ensure_safe_public_url(current)
+                resp = session.get(
+                    current,
+                    impersonate=_IMPERSONATE,
+                    headers={
+                        "Accept": (
+                            "application/pdf,application/vnd.ms-excel,application/octet-stream,*/*"
+                        )
+                    },
+                    timeout=_CONNECT_READ_TIMEOUT,
+                    allow_redirects=False,
+                )
         except (UnsafeURLError, ValueError) as e:
             log.warning({"event": "unsafe_url_blocked", "url": redact(current), "error": redact(e)})
             return None
@@ -214,7 +223,11 @@ def _fetch_curl_cffi(url: str) -> tuple[bytes, str, str] | None:
                 current = safe_redirect_url(current, resp.headers.get("Location", "") or "")
             except UnsafeURLError as e:
                 log.warning(
-                    {"event": "unsafe_redirect_blocked", "url": redact(current), "error": redact(e)}
+                    {
+                        "event": "unsafe_redirect_blocked",
+                        "url": redact(current),
+                        "error": redact(e),
+                    }
                 )
                 return None
             continue
@@ -254,7 +267,8 @@ def _fetch_bytes(url: str) -> tuple[bytes, str, str] | None:
         },
     )
     try:
-        opener = urllib.request.build_opener(GuardedHTTPRedirectHandler())
+        opener = build_public_opener()
+        ensure_safe_public_url(url)
         with opener.open(req, timeout=_CONNECT_READ_TIMEOUT) as resp:
             return (
                 resp.read(),

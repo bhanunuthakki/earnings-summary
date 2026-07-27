@@ -17,6 +17,9 @@ Both persist the run + per-case transcripts to eval_runs/eval_case_results
 
 `--coverage` prints the eval-coverage report instead (which purposes have NO
 eval mode — the analogue of the unknown-purpose model warning).
+`--coverage-gate` prints the same report and applies the provider-free CI
+ratchet: pre-existing registered gaps are grandfathered, but a newly registered
+model/prompt purpose without a real quality eval fails.
 
 Examples:
     python execution/run_llm_evals.py --purpose viewspec_compile
@@ -26,10 +29,12 @@ Examples:
     python execution/run_llm_evals.py --purpose intake_classifier --no-persist
     python execution/run_llm_evals.py --purpose viewspec_compile --min-score 0.8  # gate
     python execution/run_llm_evals.py --coverage
+    python execution/run_llm_evals.py --coverage-gate
 
 Exit codes: 0 ok (including an empty audit corpus — nothing to grade) · 1 hard
 failure (bad golden set/rubric, missing DB/tables, abort) · 3 ran fine but
-avg_score below --min-score (the regression gate).
+avg_score below --min-score (the regression gate) · 4 eval-coverage ratchet
+failure.
 """
 
 from __future__ import annotations
@@ -185,10 +190,17 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Gate mode: exit 3 when avg_score falls below this threshold.",
     )
-    parser.add_argument(
+    coverage_mode = parser.add_mutually_exclusive_group()
+    coverage_mode.add_argument(
         "--coverage",
         action="store_true",
         help="Print the eval-coverage report (purposes with no eval mode) and exit. No LLM spend.",
+    )
+    coverage_mode.add_argument(
+        "--coverage-gate",
+        action="store_true",
+        help="Print coverage and fail if a new registered model/prompt purpose "
+        "lacks a real golden/audit/outcome/meta eval. No LLM spend.",
     )
     return parser.parse_args()
 
@@ -210,12 +222,23 @@ def main() -> int:
     repo_root = args.repo_root.resolve()
     db_path = repo_root / "data" / "portfolio.db"
 
-    if args.coverage:
+    if args.coverage or args.coverage_gate:
         # Observability only — works without a DB (registry-derived universe;
         # observed call counts just come back 0).
-        from evals.coverage import eval_coverage, render_coverage_text
+        from evals.coverage import (
+            eval_coverage,
+            eval_coverage_gate,
+            render_coverage_gate_text,
+            render_coverage_text,
+        )
 
-        print(render_coverage_text(eval_coverage(db_path)))
+        rows = eval_coverage(db_path)
+        print(render_coverage_text(rows))
+        if args.coverage_gate:
+            gate = eval_coverage_gate(rows)
+            print()
+            print(render_coverage_gate_text(gate))
+            return 0 if gate.passed else 4
         return 0
 
     if not args.purpose:

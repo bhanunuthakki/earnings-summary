@@ -429,6 +429,7 @@ def call_gemini(
                 prompt=prompt,
                 provider="google",
                 transport="metered_api",
+                auth_class="api_key_metered",
                 attempts=_attempt + 1,
                 retries=_attempt,
             )
@@ -454,6 +455,7 @@ def call_gemini(
                 prompt=prompt,
                 provider="google",
                 transport="metered_api",
+                auth_class="api_key_metered",
                 attempts=_attempt + 1,
                 retries=_attempt,
                 failure_class="gemini_transport",

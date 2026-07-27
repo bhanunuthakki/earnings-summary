@@ -24,6 +24,10 @@ from log_redact import redact  # noqa: E402
         ("https://x.com/p?access_token=ABC", "https://x.com/p?access_token=***"),
         ("https://x.com/p?auth_token=ABC", "https://x.com/p?auth_token=***"),
         ("https://x.com/p?password=hunter2", "https://x.com/p?password=***"),
+        ("https://x.com/p?client_secret=ABC", "https://x.com/p?client_secret=***"),
+        ("https://x.com/p?refresh_token=ABC", "https://x.com/p?refresh_token=***"),
+        ("https://x.com/p?session_id=ABC", "https://x.com/p?session_id=***"),
+        ("https://x.com/p?key=ABC", "https://x.com/p?key=***"),
     ],
 )
 def test_url_query_params_masked(raw: str, expected: str) -> None:
@@ -82,19 +86,21 @@ def test_clean_text_unchanged() -> None:
     assert redact("nothing sensitive here, just NU Q1 2026 revenue") == (
         "nothing sensitive here, just NU Q1 2026 revenue"
     )
+    assert redact("monkey=banana") == "monkey=banana"
 
 
 @pytest.mark.parametrize(
     "raw",
     [
-        "https://bucket.s3.amazonaws.com/x?X-Amz-Credential=AKIA...&X-Amz-Signature=deadbeef&X-Amz-Security-Token=session",
+        "https://bucket.s3.amazonaws.com/x?X-Amz-Credential=AKIA...&X-Amz-Signature=deadbeef&X-Amz-Security-Token=aws-session",
         "https://account.blob.core.windows.net/c/x?sv=2024-01-01&sig=azure-signature&se=2026-01-01",
-        "https://storage.googleapis.com/bucket/x?X-Goog-Credential=abc&X-Goog-Signature=signature",
+        "https://storage.googleapis.com/bucket/x?X-Goog-Credential=abc&X-Goog-Signature=gcs-signature&X-Goog-Security-Token=gcs-session",
     ],
 )
 def test_cloud_signed_url_credentials_masked(raw: str) -> None:
     out = redact(raw)
     assert "deadbeef" not in out
     assert "azure-signature" not in out
-    assert "signature" not in out
-    assert "session" not in out
+    assert "gcs-signature" not in out
+    assert "aws-session" not in out
+    assert "gcs-session" not in out

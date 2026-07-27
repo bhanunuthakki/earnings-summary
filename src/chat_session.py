@@ -27,6 +27,7 @@ import logging
 import shutil
 import subprocess
 import sys
+import threading
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -34,7 +35,12 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, Field
 
+from log_redact import redact
+
 log = logging.getLogger(__name__)
+
+_STREAM_TIMEOUT_SECONDS = 120.0
+_PROCESS_TERMINATE_GRACE_SECONDS = 2.0
 
 # We intentionally import the renderer + builder lazily inside functions to
 # avoid pulling the entire report graph at module-import time (the renderer
@@ -382,6 +388,31 @@ extract_diff = _extract_diff
 build_system_prompt = _system_prompt
 
 
+def _terminate_stream_process(proc: subprocess.Popen[str]) -> None:
+    """Bounded, idempotent shutdown for timeout and abandoned generators."""
+    if proc.poll() is not None:
+        return
+    try:
+        proc.terminate()
+    except OSError as exc:
+        if proc.poll() is not None:
+            return
+        log.warning({"event": "ask_stream_terminate_failed", "error": redact(exc)})
+        try:
+            proc.kill()
+        except OSError as kill_exc:
+            log.error({"event": "ask_stream_kill_failed", "error": redact(kill_exc)})
+            return
+    try:
+        proc.wait(timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            log.error({"event": "ask_stream_process_reap_failed"})
+
+
 def stream_llm_text(
     full_prompt: str, *, purpose: str = "ask_answer"
 ) -> Iterator[dict[str, object]]:
@@ -468,16 +499,42 @@ def stream_llm_text(
             bufsize=1,
         )
     except OSError as e:
-        yield {"type": "error", "error": f"failed to launch claude: {e}"}
+        safe_error = redact(e)
+        log.error({"event": "ask_stream_launch_failed", "error": safe_error})
+        _record_stream_call(
+            purpose,
+            model,
+            full_prompt,
+            "",
+            started_at,
+            error=f"launch: {safe_error[:160]}",
+        )
+        yield {"type": "error", "error": "answer failed; retry the request"}
         return
 
     assert proc.stdin and proc.stdout
-    proc.stdin.write(full_prompt)
-    proc.stdin.close()
-
     full_text_parts: list[str] = []
     result_meta: dict[str, object] | None = None
+    timed_out = threading.Event()
+    completed = False
+    transport_error: str | None = None
+    termination_lock = threading.Lock()
+
+    def _stop_process() -> None:
+        with termination_lock:
+            _terminate_stream_process(proc)
+
+    def _watchdog_expired() -> None:
+        if proc.poll() is None:
+            timed_out.set()
+            _stop_process()
+
+    watchdog = threading.Timer(_STREAM_TIMEOUT_SECONDS, _watchdog_expired)
+    watchdog.daemon = True
+    watchdog.start()
     try:
+        proc.stdin.write(full_prompt)
+        proc.stdin.close()
         for line in proc.stdout:
             line = line.strip()
             if not line:
@@ -501,16 +558,55 @@ def stream_llm_text(
                             yield {"type": "delta", "text": chunk}
             elif etype == "result" and isinstance(event, dict):
                 result_meta = cast("dict[str, object]", event)
+        completed = True
+    except GeneratorExit:
+        raise
+    except (OSError, ValueError) as exc:
+        transport_error = redact(exc)
     finally:
-        proc.wait()
+        if not completed and not timed_out.is_set():
+            _stop_process()
+        elif proc.poll() is None:
+            try:
+                proc.wait(timeout=_PROCESS_TERMINATE_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                timed_out.set()
+                _stop_process()
+        watchdog.cancel()
+        watchdog.join(timeout=(_PROCESS_TERMINATE_GRACE_SECONDS * 2) + 0.1)
 
     full_text = "".join(full_text_parts).strip()
+    if timed_out.is_set():
+        _record_stream_call(
+            purpose,
+            model,
+            full_prompt,
+            full_text,
+            started_at,
+            error="timeout",
+        )
+        yield {"type": "error", "error": "answer timed out; retry the request"}
+        return
+    if transport_error is not None:
+        log.error({"event": "ask_stream_transport_failed", "error": transport_error})
+        _record_stream_call(
+            purpose,
+            model,
+            full_prompt,
+            full_text,
+            started_at,
+            error=f"transport: {transport_error[:160]}",
+        )
+        yield {"type": "error", "error": "answer failed; retry the request"}
+        return
+
     if not full_text:
-        stderr_text = (proc.stderr.read() if proc.stderr else "").strip()[:300]
+        stderr_text = redact((proc.stderr.read() if proc.stderr else "").strip())[:300]
+        log.error({"event": "ask_stream_empty_response", "error": stderr_text[:160]})
         _record_stream_call(
             purpose, model, full_prompt, "", started_at, error=f"empty: {stderr_text[:160]}"
         )
-        yield {"type": "error", "error": f"empty response (stderr: {stderr_text})"}
+        yield {"type": "error", "error": "answer failed; retry the request"}
         return
 
     _record_stream_call(purpose, model, full_prompt, full_text, started_at, meta=result_meta)
@@ -584,7 +680,12 @@ def _record_stream_call(
             )
         )
     except Exception as exc:
-        log.debug({"event": "ask_stream_ledger_skipped", "error": f"{type(exc).__name__}: {exc}"})
+        log.debug(
+            {
+                "event": "ask_stream_ledger_skipped",
+                "error": redact(f"{type(exc).__name__}: {exc}"),
+            }
+        )
 
 
 def stream_response(

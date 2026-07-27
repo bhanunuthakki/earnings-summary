@@ -96,9 +96,9 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
-from pydantic import TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from compute.segment_crosstabs_llm import (
     _axis_to_dim_type,
@@ -172,6 +172,30 @@ class SixKBreakdown:
     axis: str
     metric: str
     cells: list[SixKCell] = field(default_factory=list[SixKCell])
+
+
+class _SixKCellWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    period_end: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    fiscal_period_type: Literal["Q1", "Q2", "Q3", "Q4"]
+    value: float
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+
+
+class _SixKBreakdownWire(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    axis: str = Field(min_length=1)
+    metric: str = Field(min_length=1)
+    cells: list[_SixKCellWire] = Field(min_length=1)
+
+
+class _SixKResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    breakdowns: list[_SixKBreakdownWire]
 
 
 @dataclass
@@ -509,60 +533,29 @@ def _ask_llm(
     db_path: Path | None,
 ) -> list[SixKBreakdown]:
     prompt = _build_prompt(ticker, year, quarter, text)
-    parsed_obj = cast(
-        dict[str, object],
-        call_llm_structured(
-            prompt,
-            purpose=LLM_PURPOSE,
-            ticker=ticker,
-            expect="object",
-            required_keys=("breakdowns",),
-            schema=TypeAdapter(dict[str, object]),
-            db_path=db_path,
-        ),
+    parsed_obj = call_llm_structured(
+        prompt,
+        purpose=LLM_PURPOSE,
+        ticker=ticker,
+        expect="object",
+        required_keys=("breakdowns",),
+        schema=TypeAdapter(_SixKResponse),
+        db_path=db_path,
     )
-    items = parsed_obj.get("breakdowns")
-    if not isinstance(items, list):
-        return []
+    validated = _SixKResponse.model_validate(parsed_obj)
     out: list[SixKBreakdown] = []
-    for entry in cast("list[object]", items):
-        if not isinstance(entry, dict):
-            continue
-        entry_obj = cast("dict[str, object]", entry)
-        axis = entry_obj.get("axis")
-        metric = entry_obj.get("metric")
-        cells_raw = entry_obj.get("cells")
-        if not (isinstance(axis, str) and isinstance(metric, str) and isinstance(cells_raw, list)):
-            continue
-        cells: list[SixKCell] = []
-        for cell in cast("list[object]", cells_raw):
-            if not isinstance(cell, dict):
-                continue
-            cell_obj = cast("dict[str, object]", cell)
-            name = cell_obj.get("name")
-            value = cell_obj.get("value")
-            period_end = cell_obj.get("period_end")
-            fiscal_period_type = cell_obj.get("fiscal_period_type")
-            currency = cell_obj.get("currency")
-            if not (
-                isinstance(name, str)
-                and isinstance(value, (int, float))
-                and isinstance(period_end, str)
-                and isinstance(fiscal_period_type, str)
-            ):
-                continue
-            cells.append(
-                SixKCell(
-                    name=name,
-                    period_end=period_end,
-                    fiscal_period_type=fiscal_period_type,
-                    value=float(value),
-                    currency=currency if isinstance(currency, str) else None,
-                )
+    for entry in validated.breakdowns:
+        cells = [
+            SixKCell(
+                name=cell.name,
+                period_end=cell.period_end,
+                fiscal_period_type=cell.fiscal_period_type,
+                value=cell.value,
+                currency=cell.currency,
             )
-        if not cells:
-            continue
-        out.append(SixKBreakdown(axis=axis, metric=metric.strip().lower(), cells=cells))
+            for cell in entry.cells
+        ]
+        out.append(SixKBreakdown(axis=entry.axis, metric=entry.metric.strip().lower(), cells=cells))
     return out
 
 

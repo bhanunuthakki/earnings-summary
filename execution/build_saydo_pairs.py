@@ -23,7 +23,7 @@ import re
 import sqlite3
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -88,7 +88,7 @@ def _prepare_batch_mode(tickers: list[str], repo_root: Path, *, refresh: bool) -
     tmp = repo_root / ".tmp"
     batch_dir = tmp / "saydo_batch"
     batch_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     jsonl_path = batch_dir / f"saydo_batch_{stamp}.jsonl"
     manifest_path = batch_dir / f"saydo_batch_{stamp}.manifest.json"
 
@@ -133,10 +133,10 @@ def _prepare_batch_mode(tickers: list[str], repo_root: Path, *, refresh: bool) -
                 "requests": manifest_entries,
                 "jsonl": str(jsonl_path.relative_to(repo_root)),
                 "submit_hint": (
-                    'Submit via: python -c "from anthropic import Anthropic; '
-                    "c = Anthropic(); "
-                    "import json; reqs = [json.loads(line) for line in open(JSONL_PATH)]; "
-                    'batch = c.messages.batches.create(requests=reqs); print(batch.id)"'
+                    "Submit via the governed subscription transport: "
+                    "python execution/submit_saydo_batch.py "
+                    f"--jsonl {jsonl_path.relative_to(repo_root)} "
+                    f"--repo-root {repo_root}"
                 ),
             },
             indent=2,
@@ -196,7 +196,7 @@ def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:
 
 
 def _process_ticker(ticker: str, repo_root: Path, refresh: bool) -> dict[str, object]:
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
     t0 = time.perf_counter()
     tmp = repo_root / ".tmp"
     summaries = _list_summaries(tmp, ticker)

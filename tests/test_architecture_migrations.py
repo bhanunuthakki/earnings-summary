@@ -58,7 +58,19 @@ def test_0209_to_head_adds_governance_and_integrity_foundation(tmp_path: Path) -
 
     conn = sqlite3.connect(db_path)
     llm_columns = {row[1] for row in conn.execute("PRAGMA table_info(llm_calls)")}
-    assert {"provider", "transport", "attempts", "retries", "outcome"} <= llm_columns
+    assert {
+        "provider",
+        "transport",
+        "auth_class",
+        "attempts",
+        "retries",
+        "attempt_count",
+        "retry_count",
+        "outcome",
+        "failure_class",
+        "fallback_from_provider",
+        "fallback_from_transport",
+    } <= llm_columns
     assert conn.execute("SELECT COUNT(*) FROM pipeline_runs").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM pipeline_attempts").fetchone()[0] == 1
     assert conn.execute("SELECT engine_version FROM dcf_runs").fetchone()[0] == "legacy_pre_0211"

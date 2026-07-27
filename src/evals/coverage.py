@@ -19,6 +19,14 @@ actually observed in llm_calls (so dynamic call sites surface too).
 Dynamic ``lens:*`` purposes roll up into one synthetic ``lens:*`` row —
 they share one generator (synthesis/lenses/_shared.py) and would otherwise
 drown the table in per-scenario noise.
+
+``eval_coverage`` remains an observability report: it shows every gap without
+failing. ``eval_coverage_gate`` is the CI ratchet. The ratchet carries an
+explicit snapshot of pre-existing registered gaps and blocks only new ones.
+Adding a purpose to either the model picker or the prompt-version registry
+therefore requires a real golden, rubric/audit, outcome, or meta eval in the
+same change. Schema validation is an output contract, not a quality eval, and
+is deliberately not a coverage mode.
 """
 
 from __future__ import annotations
@@ -86,6 +94,94 @@ META_PURPOSES: frozenset[str] = frozenset(
 # The fallback budget row's synthetic purpose — never an LLM call's own.
 _IGNORED: frozenset[str] = frozenset({"__default__"})
 
+# Explicit debt snapshot at the introduction of the no-new-gap ratchet
+# (2026-07-26). A purpose belongs here only when it was already registered and
+# uncovered at that point. This is intentionally verbose and checked in:
+#
+# * a new model-picker OR prompt-version purpose cannot silently join it;
+# * when a real eval lands, CI requires removing the now-stale exemption;
+# * adding Pydantic/schema validation alone never qualifies for removal.
+#
+# Pay this set down; never append to it merely to make CI green.
+GRANDFATHERED_UNCOVERED_PURPOSES: frozenset[str] = frozenset(
+    {
+        "advisor_socratic_memo",
+        "advisor_socratic_questions",
+        "advisor_swap_check",
+        "annual_letter",
+        "artifact_brief",
+        "ask_answer",
+        "business_factor_taxonomy",
+        "canonicalize_segments",
+        "coach_reply_intent",
+        "company_description",
+        "customer_concentration_extraction",
+        "dcf_assumption_extract",
+        "dcf_assumptions",
+        "diet_source_quality",
+        "drift_narrate",
+        "earnings_tone_diff",
+        "etf_role_synthesis",
+        "event_brief",
+        "exec_comp_alignment",
+        "exec_comp_extraction",
+        "exit_postmortem_draft",
+        "extract_8k_overrides",
+        "footnote_extraction",
+        "guidance_lifecycle_triage",
+        "investor_deck_extraction",
+        "ir_sheet_kpi_map",
+        "kpi_inflection_context",
+        "kpi_registry_auto_proposal",
+        "kpi_summary_enumerate",
+        "kpi_summary_extract",
+        "market_signals",
+        "material_news_classification",
+        "musing_decision_extract",
+        "pairwise_analysis",
+        "patent_timeline",
+        "platform_diagram",
+        "positioning_coach_turn",
+        "positioning_encode",
+        "presentation_brief",
+        "press_release_summary",
+        "pressure_test_thesis",
+        "qualitative_conditions_extract",
+        "recent_developments",
+        "red_team_attack",
+        "red_team_cross_book",
+        "research_adversarial_assess",
+        "research_code_spec",
+        "research_fetch",
+        "research_narrate",
+        "research_triage",
+        "risk_factor_classify",
+        "risk_factor_diff",
+        "saydo_commitment_extract",
+        "saydo_due_context",
+        "saydo_filter",
+        "saydo_importance",
+        "segment_6k_breakdown_extract",
+        "segment_crosstab_extract",
+        "segment_definition_extract",
+        "session_distill",
+        "strategic_analysis",
+        "tenet_accountability",
+        "tenet_distill",
+        "tenet_semantic_tension",
+        "theme_seed_cluster",
+        "theme_synthesis",
+        "thesis_collision",
+        "thesis_entry_draft",
+        "thesis_pass_a",
+        "thesis_pass_b",
+        "transcript_qa_judgment",
+        "transcript_topic_triage",
+        "valuation_basis",
+        "weekly_packet_predraft",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class CoverageRow:
@@ -99,6 +195,18 @@ class CoverageRow:
     @property
     def covered(self) -> bool:
         return bool(self.modes)
+
+
+@dataclass(frozen=True, slots=True)
+class CoverageGateResult:
+    """Result of the no-new-gap registered-purpose ratchet."""
+
+    new_uncovered: tuple[str, ...]
+    stale_grandfathered: tuple[str, ...]
+
+    @property
+    def passed(self) -> bool:
+        return not self.new_uncovered and not self.stale_grandfathered
 
 
 def _observed_call_purposes(db_path: Path) -> dict[str, int]:
@@ -182,4 +290,47 @@ def render_coverage_text(rows: list[CoverageRow]) -> str:
         lines.append(
             f"{r.purpose:<36} {modes:<24} {'yes' if r.model_pinned else 'no':<7} {r.observed_calls}"
         )
+    return "\n".join(lines)
+
+
+def eval_coverage_gate(rows: list[CoverageRow]) -> CoverageGateResult:
+    """Apply the no-new-gap ratchet to registered model/prompt purposes.
+
+    Observed-only purposes remain visible in the report but do not make CI
+    nondeterministic: the gate's input universe is the two checked-in
+    registries. Conversely, a purpose registered *only* in prompt_versions is
+    still gated, so adding a prompt cannot evade the model-picker side.
+
+    A stale exemption is also a failure. That makes coverage monotonic: after a
+    grandfathered purpose gains a real mode, its exemption must be deleted and
+    cannot later hide a regression.
+    """
+    registered = (set(LLM_MODELS) | set(registered_purposes())) - _IGNORED
+    uncovered_registered = {
+        row.purpose for row in rows if row.purpose in registered and not row.covered
+    }
+    return CoverageGateResult(
+        new_uncovered=tuple(sorted(uncovered_registered - GRANDFATHERED_UNCOVERED_PURPOSES)),
+        stale_grandfathered=tuple(sorted(GRANDFATHERED_UNCOVERED_PURPOSES - uncovered_registered)),
+    )
+
+
+def render_coverage_gate_text(result: CoverageGateResult) -> str:
+    """Human-readable CI result with an actionable failure explanation."""
+    if result.passed:
+        return "Eval coverage gate: PASS - no new registered purpose lacks a real quality eval."
+
+    lines = ["Eval coverage gate: FAIL."]
+    if result.new_uncovered:
+        lines.append("New registered purposes without a golden/audit/outcome/meta eval:")
+        lines.extend(f"  - {purpose}" for purpose in result.new_uncovered)
+    if result.stale_grandfathered:
+        lines.append(
+            "Stale grandfathered gaps (covered or no longer registered; remove their exemptions):"
+        )
+        lines.extend(f"  - {purpose}" for purpose in result.stale_grandfathered)
+    lines.append(
+        "Schema validation alone is not a quality eval. Add a real eval mode, "
+        "or remove an obsolete registration."
+    )
     return "\n".join(lines)

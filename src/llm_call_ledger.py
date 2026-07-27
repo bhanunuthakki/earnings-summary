@@ -74,10 +74,15 @@ class LlmCallRecord:
     # the governed entrypoint; new governed calls always populate them.
     provider: str | None = None
     transport: str | None = None
+    auth_class: str | None = None
     attempts: int | None = None
     retries: int | None = None
+    attempt_count: int | None = None
+    retry_count: int | None = None
     outcome: str | None = None
     failure_class: str | None = None
+    fallback_from_provider: str | None = None
+    fallback_from_transport: str | None = None
 
 
 def sha256_text(text: str) -> str:
@@ -189,10 +194,15 @@ _OPTIONAL_COLUMNS: tuple[str, ...] = (
     "stage",
     "provider",
     "transport",
+    "auth_class",
     "attempts",
     "retries",
+    "attempt_count",
+    "retry_count",
     "outcome",
     "failure_class",
+    "fallback_from_provider",
+    "fallback_from_transport",
 )
 
 _BASE_COLUMNS: tuple[str, ...] = (

@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 
 import logging_config
 from logging_config import (
     JsonLogFormatter,
+    RedactingFormatter,
     get_correlation_id,
     new_correlation_id,
     set_correlation_id,
@@ -66,3 +68,21 @@ def test_json_formatter_defaults_correlation_id_when_unset() -> None:
     # A record that never passed through the filter still formats (default "-").
     payload = json.loads(JsonLogFormatter().format(_record("x")))
     assert payload["correlation_id"] == "-"
+
+
+def test_json_formatter_redacts_message_and_exception() -> None:
+    try:
+        raise RuntimeError("failed https://x.test?X-Amz-Signature=secret-signature")
+    except RuntimeError:
+        exc_info = sys.exc_info()
+    rec = _record("request failed: https://x.test?client_secret=secret-client")
+    rec.exc_info = exc_info
+    rendered = JsonLogFormatter().format(rec)
+    assert "secret-signature" not in rendered
+    assert "secret-client" not in rendered
+
+
+def test_plain_formatter_redacts_rendered_record() -> None:
+    rec = _record("request failed: https://x.test?refresh_token=secret-refresh")
+    rendered = RedactingFormatter("%(message)s").format(rec)
+    assert "secret-refresh" not in rendered

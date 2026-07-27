@@ -13,7 +13,11 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
-from ir_pipeline._net import UnsafeURLError, ensure_safe_public_url
+from ir_pipeline._net import (
+    UnsafeURLError,
+    build_public_opener,
+    ensure_safe_public_url,
+)
 
 _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 
@@ -53,7 +57,8 @@ def filename_for_url(url: str, timeout: int = 30) -> str:
     except UnsafeURLError:
         return ""  # non-public / non-http(s) link harvested off the IR page — skip
     req = urllib.request.Request(url, headers={"User-Agent": _UA, "Range": "bytes=0-0"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    opener = build_public_opener()
+    with opener.open(req, timeout=timeout) as resp:
         cd = resp.headers.get("Content-Disposition", "") or ""
     m = re.search(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)", cd)
     return urllib.parse.unquote(m.group(1)).strip() if m else ""

@@ -52,9 +52,14 @@ def record_llm_call(
     prompt: object | None = None,
     provider: str | None = None,
     transport: str | None = None,
+    auth_class: str | None = None,
     attempts: int | None = None,
     retries: int | None = None,
+    attempt_count: int | None = None,
+    retry_count: int | None = None,
     failure_class: str | None = None,
+    fallback_from_provider: str | None = None,
+    fallback_from_transport: str | None = None,
 ) -> None:
     """Best-effort write of one row into llm_calls. Never raises.
 
@@ -77,10 +82,14 @@ def record_llm_call(
             sha256_text,
             usage_from_json_meta,
         )
+        from log_redact import redact
 
         template_id, template_version, vars_sha = template_meta(prompt)
         trace_id, span_id, parent_span_id, stage = context_fields()
         usage = usage_from_json_meta(meta) if meta else {}
+        resolved_attempt_count = attempt_count if attempt_count is not None else attempts
+        resolved_retry_count = retry_count if retry_count is not None else retries
+        safe_error = redact(error)[:500] if error else None
         record_call(
             LlmCallRecord(
                 called_at=started_at,
@@ -102,7 +111,7 @@ def record_llm_call(
                 output_tokens=cast("int | None", usage.get("output_tokens")),
                 cost_estimate_usd=cast("float | None", usage.get("cost_estimate_usd")),
                 fallback_used=fallback_used,
-                error=error,
+                error=safe_error,
                 template_id=template_id,
                 template_version=template_version,
                 template_vars_sha256=vars_sha,
@@ -112,10 +121,15 @@ def record_llm_call(
                 stage=stage,
                 provider=provider,
                 transport=transport,
+                auth_class=auth_class,
                 attempts=attempts,
                 retries=retries,
+                attempt_count=resolved_attempt_count,
+                retry_count=resolved_retry_count,
                 outcome="failure" if error else "success",
                 failure_class=failure_class,
+                fallback_from_provider=fallback_from_provider,
+                fallback_from_transport=fallback_from_transport,
             )
         )
     except Exception as exc:  # ImportError, unexpected attribute errors, …
@@ -134,6 +148,7 @@ def fallback_call_logged(
     ticker: str | None,
     scope: str | None,
     run_id: str | None,
+    metered_fallback_authorized: bool = False,
 ) -> str:
     """Wrap try_gemini_fallback with its own ledger row.
 
@@ -153,6 +168,11 @@ def fallback_call_logged(
 
     if not fallback_available():
         return try_gemini_fallback(prompt, claude_error)  # raises; no phantom row
+    if not metered_fallback_authorized:
+        raise RuntimeError(
+            "Gemini metered fallback is not authorized for this call; "
+            "the governed subscription chain failed closed."
+        ) from claude_error
     started_at = datetime.now(UTC)
     t0 = time.monotonic()
     try:
@@ -173,8 +193,11 @@ def fallback_call_logged(
             prompt=prompt,
             provider="google",
             transport="metered_api",
+            auth_class="api_key_metered",
             attempts=1,
             retries=0,
+            fallback_from_provider="anthropic",
+            fallback_from_transport="subscription_cli",
         )
         return text
     except Exception as gemini_err:
@@ -194,8 +217,11 @@ def fallback_call_logged(
             prompt=prompt,
             provider="google",
             transport="metered_api",
+            auth_class="api_key_metered",
             attempts=1,
             retries=0,
             failure_class="gemini_transport",
+            fallback_from_provider="anthropic",
+            fallback_from_transport="subscription_cli",
         )
         raise

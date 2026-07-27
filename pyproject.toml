@@ -21,7 +21,7 @@ dev = [
 # browser renders the JS results-center to resolve hash-keyed document URLs.
 # Install with `pip install -e .[ir] && playwright install chromium`.
 ir = [
-    "playwright>=1.40",
+    "playwright>=1.48",
     # curl_cffi replays a real Chrome TLS/HTTP2 fingerprint for the document
     # downloader — some issuer hosts (e.g. investor.lilly.com) tarpit any client
     # whose fingerprint isn't a browser's. See fetch_ir_documents._fetch_curl_cffi.

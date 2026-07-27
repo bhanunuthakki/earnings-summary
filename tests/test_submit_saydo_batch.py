@@ -36,6 +36,7 @@ from execution.submit_saydo_batch import (  # noqa: E402
     submit_and_collect,
 )
 from llm.batch import BatchRequest, write_jsonl  # noqa: E402
+from llm.cli import LLMSetupError  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fakes
@@ -510,6 +511,50 @@ def test_dry_run_does_not_submit(tmp_path: Path) -> None:
     assert batches.retrieve_calls == 0
     # Estimated cost reported.
     assert summary["estimated_cost_usd"] == "0.0105"
+
+
+def test_default_path_routes_each_request_through_governed_subscription_entrypoint(
+    tmp_path: Path,
+) -> None:
+    jsonl = _make_jsonl(
+        tmp_path,
+        ["SayDo_A_Q1_2025_Q2_2025", "SayDo_B_Q1_2025_Q2_2025"],
+    )
+    calls: list[dict[str, object]] = []
+
+    def fake_llm(prompt: str, **kwargs: object) -> str:
+        calls.append({"prompt": prompt, **kwargs})
+        return f"answer {len(calls)}"
+
+    summary = submit_and_collect(
+        jsonl,
+        repo_root=tmp_path,
+        llm_call=fake_llm,
+    )
+
+    assert summary["status"] == "ended"
+    assert summary["transport"] == "subscription_cli"
+    assert summary["succeeded"] == 2
+    assert [call["purpose"] for call in calls] == ["pairwise_analysis", "pairwise_analysis"]
+    assert [call["ticker"] for call in calls] == ["A", "B"]
+    assert all(str(call["scope"]).startswith("saydo:SayDo_") for call in calls)
+    assert (tmp_path / ".tmp" / "SayDo_A_Q1_2025_Q2_2025.txt").read_text(
+        encoding="utf-8"
+    ) == "answer 1"
+
+
+def test_default_path_propagates_hard_stops(tmp_path: Path) -> None:
+    jsonl = _make_jsonl(tmp_path, ["SayDo_A_Q1_2025_Q2_2025"])
+
+    def fail_hard(_prompt: str, **_kwargs: object) -> str:
+        raise LLMSetupError("provider is not configured")
+
+    with pytest.raises(LLMSetupError, match="not configured"):
+        submit_and_collect(
+            jsonl,
+            repo_root=tmp_path,
+            llm_call=fail_hard,
+        )
 
 
 def _init_budget_db(db_path: Path, *, purpose: str, cap_usd: float, current_spend: float) -> None:
