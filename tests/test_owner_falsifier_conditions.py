@@ -112,6 +112,14 @@ def db(tmp_path: Path) -> Path:
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
     command.stamp(cfg, PRIOR_HEAD)
     command.upgrade(cfg, HEAD)
+    conn = sqlite3.connect(str(path))
+    try:
+        # Deliberately minimal 0130 contract fixture, not a production
+        # versioned database; guarded writers enforce the local tables here.
+        conn.execute("DROP TABLE alembic_version")
+        conn.commit()
+    finally:
+        conn.close()
     return path
 
 

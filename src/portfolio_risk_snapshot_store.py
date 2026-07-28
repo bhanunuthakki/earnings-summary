@@ -210,7 +210,10 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
     if db_path is None or not Path(db_path).exists():
         return None
     try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+        # This cache intentionally supports the historical 0105/0185/0199
+        # table contracts below; requiring the checkout head here would make
+        # its documented best-effort compatibility branches unreachable.
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=False)
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         present = conn.execute(

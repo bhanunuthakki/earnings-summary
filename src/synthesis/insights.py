@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from user_state._db import now_iso, open_conn
+from user_state._db import now_iso, open_conn, open_read_conn
 
 # 'tenet' (Worldview, P2): a durable belief-unit about *how the owner invests*,
 # scope_key = 'tenet:<slug>'. Composes the Worldview; distinct from a `theme`
@@ -85,7 +85,7 @@ def current_watermark(
 ) -> int | None:
     """The watermark_id of the current insight for this scope+kind, or None — the
     incremental-synthesis gate (skip when no musing advanced past it)."""
-    conn = open_conn(db_path)
+    conn = open_read_conn(db_path)
     try:
         row = conn.execute(
             "SELECT watermark_id FROM insight_notes "
@@ -171,7 +171,7 @@ def record_insight(
 
 def get_insight(insight_id: int, *, db_path: Path | str | None = None) -> InsightRow | None:
     """One insight row by id, or None."""
-    conn = open_conn(db_path)
+    conn = open_read_conn(db_path)
     try:
         row = conn.execute("SELECT * FROM insight_notes WHERE id = ?", (insight_id,)).fetchone()
         return None if row is None else _decode(row)
@@ -186,7 +186,7 @@ def list_insights(
     status: str = "current",
     db_path: Path | str | None = None,
 ) -> list[InsightRow]:
-    conn = open_conn(db_path)
+    conn = open_read_conn(db_path)
     try:
         clauses = ["status = ?"]
         params: list[object] = [status]
@@ -220,7 +220,7 @@ def search_musings(
     q = query.strip()
     if not q:
         return []
-    conn = open_conn(db_path)
+    conn = open_read_conn(db_path)
     try:
         if _has_fts(conn):
             try:

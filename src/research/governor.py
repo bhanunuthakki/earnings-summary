@@ -765,7 +765,9 @@ def record_ping_message_id(
     un-migrated DB (column missing) never breaks a send; returns whether the
     write happened."""
     stamp = now_naive_utc().isoformat()
-    conn = open_conn(db_path)
+    # This method intentionally supports a pre-0188 compatibility window: the
+    # missing-column OperationalError below is the documented no-op signal.
+    conn = open_conn(db_path, schema_preflight=False)
     try:
         conn.execute(
             "UPDATE coach_pings SET telegram_message_id = ?, updated_at = ? WHERE id = ?",

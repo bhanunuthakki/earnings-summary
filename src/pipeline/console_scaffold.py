@@ -16,11 +16,13 @@ never blanks the whole console (same contract as the Provenance console).
 
 from __future__ import annotations
 
-import traceback
+import logging
 from collections.abc import Callable
 from html import escape
 
 from ui.controls import panel_toolbar
+
+log = logging.getLogger(__name__)
 
 # (anchor id, nav label, builder thunk). Order = display order.
 ConsoleSection = tuple[str, str, Callable[[], str]]
@@ -32,14 +34,14 @@ def _safe(name: str, fn: Callable[[], str]) -> str:
     try:
         return fn()
     except Exception as exc:
+        log.exception("console section failed to render: %s", name)
         detail = escape(f"{type(exc).__name__}: {exc}")
-        tb = escape(traceback.format_exc()[-1500:])
         return (
             '<section class="panel"><h2>'
             f"{escape(name)}</h2>"
             '<p class="muted">This section failed to render — the rest of the '
             "console is unaffected.</p>"
-            f"<details><summary>{detail}</summary><pre>{tb}</pre></details></section>"
+            f"<details><summary>{detail}</summary></details></section>"
         )
 
 

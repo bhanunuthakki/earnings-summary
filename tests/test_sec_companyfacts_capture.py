@@ -7,6 +7,8 @@ import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import pytest
 from alembic.config import Config
@@ -200,7 +202,7 @@ def test_capture_persists_exact_bytes_shared_snapshot_and_exact_replay(
         ).fetchone()
         assert blob is not None
         assert tuple(blob[:2]) == (digest, len(raw_body))
-        stored_path = Path(str(blob[2]).removeprefix("file:///"))
+        stored_path = Path(url2pathname(urlparse(str(blob[2])).path))
         assert stored_path.read_bytes() == raw_body
         assert (
             conn.execute(
