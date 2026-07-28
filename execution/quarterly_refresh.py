@@ -188,7 +188,12 @@ def main() -> int:
             print(json.dumps({"warning": "no tickers resolved"}, indent=2))
             return 0
 
-        run_id = start_run(conn, directive="quarterly_refresh", ticker_scope=tickers)
+        run_id = start_run(
+            conn,
+            directive="quarterly_refresh",
+            ticker_scope=tickers,
+            invocation_inputs={"fetch_sec": bool(args.fetch_sec)},
+        )
         report = refresh_portfolio(
             conn,
             tickers=tickers,

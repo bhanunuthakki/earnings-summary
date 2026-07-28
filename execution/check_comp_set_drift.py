@@ -128,7 +128,16 @@ def main() -> int:
 
     conn = open_db(args.db)
     try:
-        run_id = start_run(conn, directive="check_comp_set_drift", ticker_scope=[])
+        run_id = start_run(
+            conn,
+            directive="check_comp_set_drift",
+            ticker_scope=[],
+            invocation_inputs={
+                "as_of": as_of.isoformat(),
+                "repo_root": str(repo_root.resolve()),
+                "scopes": scopes,
+            },
+        )
         summary: dict[str, object] = {"run_id": run_id, "as_of": as_of.isoformat()}
         total_alerts = 0
         failed = False

@@ -94,7 +94,13 @@ def main() -> int:
             sys.stderr.write("No tickers resolved; nothing to do\n")
             return 0
 
-        run_id = start_run(conn, directive="build_comparable_sets", ticker_scope=tickers)
+        run_id = start_run(
+            conn,
+            directive="build_comparable_sets",
+            ticker_scope=tickers,
+            invocation_inputs={"repo_root": str(repo_root.resolve())},
+            force=bool(args.refresh),
+        )
         pool = load_pool(conn, repo_root)
 
         results: list[dict[str, object]] = []
