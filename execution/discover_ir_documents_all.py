@@ -41,6 +41,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import sqlite3
 import subprocess
@@ -56,6 +57,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import ir_fetch_status  # noqa: E402
 from ir_uploads import calendar_id_from_fye  # noqa: E402
+from log_redact import redact  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # Roster = the "briefed" active universe (portfolio + evaluation). Hardcoded to
@@ -70,7 +72,12 @@ _DEFAULT_DISCOVER_TIMEOUT_S = 300  # headless browser render
 # to download), so a high cap is harmless — it only bites when there is genuinely a lot to
 # fetch. The automated full-sweep + failing-rescan crons inherit this default, so AMZN-class
 # names now self-heal instead of timing out on every scheduled run.
-_DEFAULT_DOWNLOAD_TIMEOUT_S = 1200
+_DEFAULT_DOWNLOAD_TIMEOUT_S = 420
+_DEFAULT_PROCESS_TIMEOUT_S = 300
+_DEFAULT_DISCOVERY_WORKERS = 3
+_DEFAULT_TICKER_DEADLINE_S = 600
+_DEFAULT_WHOLE_RUN_DEADLINE_S = 1800
+_CHECKPOINT_VERSION = 1
 
 
 class TickerStatus(StrEnum):
@@ -88,6 +95,19 @@ class TickerResult:
     elapsed_seconds: float
     error: str | None = None
     processed: bool = False  # post-registration stage ran (anchor + summaries + brief_dirty)
+
+
+@dataclass(slots=True)
+class DiscoveryResult:
+    """Ticker-scoped crawl result handed to the serialized mutation phase."""
+
+    ticker: str
+    status: TickerStatus
+    discovered: int | None
+    elapsed_seconds: float
+    stdout: str = ""
+    stderr: str = ""
+    error: str | None = None
 
 
 def _resolve_roster(db_path: Path, requested: list[str] | None) -> tuple[list[str], list[str]]:
@@ -178,13 +198,27 @@ def _json_field(stdout: str, key: str) -> object:
     return cast("dict[str, object]", obj).get(key)
 
 
-def _fail(ticker: str, reason: str, elapsed: float) -> TickerResult:
+def _fail(
+    ticker: str,
+    reason: str,
+    elapsed: float,
+    *,
+    discovered: int | None = None,
+    downloaded: int | None = None,
+) -> TickerResult:
     sys.stderr.write(f"\n!!! [{ticker}] FAILED - {reason}\n")
     sys.stdout.write(f"[{ticker}] FAILED - {reason} ({elapsed}s)\n")
-    return TickerResult(ticker, TickerStatus.FAILED, None, None, elapsed, error=reason)
+    return TickerResult(
+        ticker,
+        TickerStatus.FAILED,
+        discovered,
+        downloaded,
+        elapsed,
+        error=reason,
+    )
 
 
-def _run_child(argv: list[str], timeout_s: int) -> subprocess.CompletedProcess[str]:
+def _run_child(argv: list[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         argv,
         cwd=str(PROJECT_ROOT),
@@ -197,17 +231,18 @@ def _run_child(argv: list[str], timeout_s: int) -> subprocess.CompletedProcess[s
     )
 
 
-def _run_tolerant(argv: list[str], timeout_s: int, label: str) -> bool:
+def _run_tolerant(argv: list[str], timeout_s: float, label: str) -> bool:
     """Run a best-effort sub-step; echo output, log+swallow any failure. Returns ok."""
     try:
         proc = _run_child(argv, timeout_s)
     except (subprocess.TimeoutExpired, OSError) as exc:
-        sys.stderr.write(f"{label} FAILED: {exc} (tolerated)\n")
+        sys.stderr.write(f"{label} FAILED: {redact(exc)} (tolerated)\n")
         return False
     if proc.stdout:
-        sys.stdout.write(proc.stdout if proc.stdout.endswith("\n") else proc.stdout + "\n")
+        safe_stdout = redact(proc.stdout)
+        sys.stdout.write(safe_stdout if safe_stdout.endswith("\n") else safe_stdout + "\n")
     if proc.stderr:
-        sys.stderr.write(proc.stderr)
+        sys.stderr.write(redact(proc.stderr))
     if proc.returncode != 0:
         sys.stderr.write(f"{label} rc={proc.returncode} (tolerated)\n")
         return False
@@ -215,7 +250,13 @@ def _run_tolerant(argv: list[str], timeout_s: int, label: str) -> bool:
 
 
 def _run_process_stage(
-    ticker: str, *, repo_root: Path, db_path: Path, summaries: bool, timeout_s: int
+    ticker: str,
+    *,
+    repo_root: Path,
+    db_path: Path,
+    summaries: bool,
+    timeout_s: float,
+    deadline_at: float | None = None,
 ) -> bool:
     """Feed newly-registered docs into the LLM pipeline. Best-effort; never raises.
 
@@ -225,6 +266,10 @@ def _run_process_stage(
     ``process_ir_documents.py`` (LLM per-doc summaries feeding the press-release /
     transcript sections — the cost step, opt-in).
     """
+    first_timeout = _remaining_timeout(timeout_s, deadline_at)
+    if first_timeout is None:
+        sys.stderr.write(f"[{ticker}] process deadline exhausted before ir_narrative\n")
+        return False
     nar = _run_tolerant(
         [
             sys.executable,
@@ -234,10 +279,14 @@ def _run_process_stage(
             "--repo-root",
             str(repo_root),
         ],
-        timeout_s,
+        first_timeout,
         f"[{ticker}] ir_narrative",
     )
     if summaries:
+        summary_timeout = _remaining_timeout(timeout_s, deadline_at)
+        if summary_timeout is None:
+            sys.stderr.write(f"[{ticker}] process deadline exhausted before summaries\n")
+            return False
         _run_tolerant(
             [
                 sys.executable,
@@ -245,32 +294,39 @@ def _run_process_stage(
                 "--ticker",
                 ticker,
             ],
-            timeout_s,
+            summary_timeout,
             f"[{ticker}] process_ir_documents",
         )
     dirty = _set_brief_dirty(db_path, ticker)
     return nar and dirty
 
 
-def _run_one(
+def _remaining_timeout(stage_timeout_s: float, deadline_at: float | None) -> float | None:
+    """Return a positive timeout bounded by an optional monotonic deadline."""
+    if deadline_at is None:
+        return stage_timeout_s
+    remaining = deadline_at - time.monotonic()
+    if remaining <= 0:
+        return None
+    return min(stage_timeout_s, remaining)
+
+
+def _run_discovery(
     ticker: str,
     *,
     repo_root: Path,
     db_path: Path,
     quarters: int,
-    discover_timeout: int,
-    download_timeout: int,
-    skip_download: bool,
-    process: bool = True,
-    summaries: bool = False,
-    process_timeout: int = 600,
-) -> TickerResult:
-    """Discover then fetch one ticker, subprocess-isolated. Never raises."""
-    sys.stdout.write(f"\n{'=' * 72}\n=== IR-document discovery - {ticker}\n{'=' * 72}\n")
-    sys.stdout.flush()
-    t0 = time.monotonic()
+    timeout_s: float,
+) -> DiscoveryResult:
+    """Run the network-heavy crawl without touching shared database state.
 
-    # --- Stage 1: discover ---
+    The child writes only ``.tmp/ir_url_manifest/<ticker>_urls.json``. Those
+    ticker-scoped paths have disjoint ownership, so they may be produced in
+    parallel. Registration, canonical document writes, and status persistence
+    remain serialized in the parent process.
+    """
+    t0 = time.monotonic()
     discover_argv = [
         sys.executable,
         str(PROJECT_ROOT / "execution" / "discover_ir_documents.py"),
@@ -284,30 +340,128 @@ def _run_one(
         str(db_path),
     ]
     try:
-        disc = _run_child(discover_argv, discover_timeout)
+        disc = _run_child(discover_argv, timeout_s)
     except subprocess.TimeoutExpired:
-        return _fail(ticker, f"discover timed out after {discover_timeout}s", _elapsed(t0))
+        return DiscoveryResult(
+            ticker,
+            TickerStatus.FAILED,
+            None,
+            _elapsed(t0),
+            error=f"discover timed out after {round(timeout_s, 3)}s",
+        )
     except OSError as exc:
-        return _fail(ticker, f"discover spawn failed: {exc}", _elapsed(t0))
-    if disc.stdout:
-        sys.stdout.write(disc.stdout if disc.stdout.endswith("\n") else disc.stdout + "\n")
-    if disc.stderr:
-        sys.stderr.write(disc.stderr)
-    if disc.returncode != 0:
-        return _fail(ticker, f"discover exited {disc.returncode}", _elapsed(t0))
+        return DiscoveryResult(
+            ticker,
+            TickerStatus.FAILED,
+            None,
+            _elapsed(t0),
+            error=f"discover spawn failed: {redact(exc)}",
+        )
 
     status = _json_field(disc.stdout, "status")
     discovered = _json_field(disc.stdout, "discovered")
     discovered_n = discovered if isinstance(discovered, int) else None
+    if disc.returncode != 0:
+        return DiscoveryResult(
+            ticker,
+            TickerStatus.FAILED,
+            discovered_n,
+            _elapsed(t0),
+            stdout=disc.stdout,
+            stderr=disc.stderr,
+            error=f"discover exited {disc.returncode}",
+        )
     if status == "no_ir_url":
+        return DiscoveryResult(
+            ticker,
+            TickerStatus.SKIPPED,
+            0,
+            _elapsed(t0),
+            stdout=disc.stdout,
+            stderr=disc.stderr,
+        )
+    return DiscoveryResult(
+        ticker,
+        TickerStatus.OK,
+        discovered_n,
+        _elapsed(t0),
+        stdout=disc.stdout,
+        stderr=disc.stderr,
+    )
+
+
+def _emit_discovery_output(discovery: DiscoveryResult) -> None:
+    sys.stdout.write(f"\n{'=' * 72}\n=== IR-document discovery - {discovery.ticker}\n{'=' * 72}\n")
+    if discovery.stdout:
+        safe_stdout = redact(discovery.stdout)
+        sys.stdout.write(safe_stdout if safe_stdout.endswith("\n") else safe_stdout + "\n")
+    if discovery.stderr:
+        sys.stderr.write(redact(discovery.stderr))
+
+
+def _finish_discovery(
+    discovery: DiscoveryResult,
+    *,
+    repo_root: Path,
+    db_path: Path,
+    skip_download: bool,
+    process: bool,
+    summaries: bool,
+    download_timeout: float,
+    process_timeout: float,
+    ticker_deadline: float,
+    whole_deadline_at: float | None,
+) -> TickerResult:
+    """Serialize fetch/register/process for one completed discovery result."""
+    ticker = discovery.ticker
+    _emit_discovery_output(discovery)
+    if discovery.status is TickerStatus.FAILED:
+        return _fail(
+            ticker,
+            discovery.error or "discover failed",
+            discovery.elapsed_seconds,
+            discovered=discovery.discovered,
+        )
+    if discovery.status is TickerStatus.SKIPPED:
         sys.stdout.write(f"[{ticker}] SKIPPED - no resolvable IR URL\n")
-        return TickerResult(ticker, TickerStatus.SKIPPED, 0, 0, _elapsed(t0))
-
+        return TickerResult(
+            ticker,
+            TickerStatus.SKIPPED,
+            0,
+            0,
+            discovery.elapsed_seconds,
+        )
     if skip_download:
-        sys.stdout.write(f"[{ticker}] OK (discovered={discovered_n}, download skipped)\n")
-        return TickerResult(ticker, TickerStatus.OK, discovered_n, None, _elapsed(t0))
+        sys.stdout.write(f"[{ticker}] OK (discovered={discovery.discovered}, download skipped)\n")
+        return TickerResult(
+            ticker,
+            TickerStatus.OK,
+            discovery.discovered,
+            None,
+            discovery.elapsed_seconds,
+        )
 
-    # --- Stage 2: fetch + categorize ---
+    active_remaining = ticker_deadline - discovery.elapsed_seconds
+    if active_remaining <= 0:
+        return _fail(
+            ticker,
+            f"per-ticker deadline exhausted after discovery ({ticker_deadline}s)",
+            discovery.elapsed_seconds,
+            discovered=discovery.discovered,
+        )
+    ticker_deadline_at = time.monotonic() + active_remaining
+    effective_deadline = ticker_deadline_at
+    if whole_deadline_at is not None:
+        effective_deadline = min(effective_deadline, whole_deadline_at)
+    fetch_timeout = _remaining_timeout(download_timeout, effective_deadline)
+    if fetch_timeout is None:
+        return _fail(
+            ticker,
+            "whole-run deadline exhausted before fetch",
+            discovery.elapsed_seconds,
+            discovered=discovery.discovered,
+        )
+
     calendar = calendar_id_from_fye(_ticker_fye(db_path, ticker))
     fetch_argv = [
         sys.executable,
@@ -322,40 +476,101 @@ def _run_one(
         "--db",
         str(db_path),
     ]
+    finish_t0 = time.monotonic()
     try:
-        fetch = _run_child(fetch_argv, download_timeout)
+        fetch = _run_child(fetch_argv, fetch_timeout)
     except subprocess.TimeoutExpired:
-        return _fail(ticker, f"fetch timed out after {download_timeout}s", _elapsed(t0))
+        return _fail(
+            ticker,
+            f"fetch timed out after {round(fetch_timeout, 3)}s (bounded deadline)",
+            round(discovery.elapsed_seconds + _elapsed(finish_t0), 3),
+            discovered=discovery.discovered,
+        )
     except OSError as exc:
-        return _fail(ticker, f"fetch spawn failed: {exc}", _elapsed(t0))
+        return _fail(
+            ticker,
+            f"fetch spawn failed: {redact(exc)}",
+            round(discovery.elapsed_seconds + _elapsed(finish_t0), 3),
+            discovered=discovery.discovered,
+        )
     if fetch.stdout:
-        sys.stdout.write(fetch.stdout if fetch.stdout.endswith("\n") else fetch.stdout + "\n")
+        safe_stdout = redact(fetch.stdout)
+        sys.stdout.write(safe_stdout if safe_stdout.endswith("\n") else safe_stdout + "\n")
     if fetch.stderr:
-        sys.stderr.write(fetch.stderr)
+        sys.stderr.write(redact(fetch.stderr))
     if fetch.returncode != 0:
-        return _fail(ticker, f"fetch exited {fetch.returncode}", _elapsed(t0))
+        return _fail(
+            ticker,
+            f"fetch exited {fetch.returncode}",
+            round(discovery.elapsed_seconds + _elapsed(finish_t0), 3),
+            discovered=discovery.discovered,
+        )
 
     downloaded = _json_field(fetch.stdout, "downloaded")
     downloaded_n = downloaded if isinstance(downloaded, int) else None
-
-    # --- Stage 3: feed new docs into the LLM pipeline (anchor + brief_dirty [+ summaries]) ---
     processed = False
     if process and downloaded_n:
-        processed = _run_process_stage(
-            ticker,
-            repo_root=repo_root,
-            db_path=db_path,
-            summaries=summaries,
-            timeout_s=process_timeout,
-        )
+        process_budget = _remaining_timeout(process_timeout, effective_deadline)
+        if process_budget is not None:
+            processed = _run_process_stage(
+                ticker,
+                repo_root=repo_root,
+                db_path=db_path,
+                summaries=summaries,
+                timeout_s=process_budget,
+                deadline_at=effective_deadline,
+            )
+        else:
+            sys.stderr.write(f"[{ticker}] process skipped: bounded deadline exhausted\n")
 
-    elapsed = _elapsed(t0)
+    elapsed = round(discovery.elapsed_seconds + _elapsed(finish_t0), 3)
     sys.stdout.write(
-        f"[{ticker}] OK (discovered={discovered_n}, downloaded={downloaded_n}, "
+        f"[{ticker}] OK (discovered={discovery.discovered}, downloaded={downloaded_n}, "
         f"processed={processed}, {elapsed}s)\n"
     )
     return TickerResult(
-        ticker, TickerStatus.OK, discovered_n, downloaded_n, elapsed, processed=processed
+        ticker,
+        TickerStatus.OK,
+        discovery.discovered,
+        downloaded_n,
+        elapsed,
+        processed=processed,
+    )
+
+
+def _run_one(
+    ticker: str,
+    *,
+    repo_root: Path,
+    db_path: Path,
+    quarters: int,
+    discover_timeout: float,
+    download_timeout: float,
+    skip_download: bool,
+    process: bool = True,
+    summaries: bool = False,
+    process_timeout: float = _DEFAULT_PROCESS_TIMEOUT_S,
+    ticker_deadline: float = _DEFAULT_TICKER_DEADLINE_S,
+) -> TickerResult:
+    """Discover then fetch one ticker, subprocess-isolated. Never raises."""
+    discovery = _run_discovery(
+        ticker,
+        repo_root=repo_root,
+        db_path=db_path,
+        quarters=quarters,
+        timeout_s=min(discover_timeout, ticker_deadline),
+    )
+    return _finish_discovery(
+        discovery,
+        repo_root=repo_root,
+        db_path=db_path,
+        skip_download=skip_download,
+        process=process,
+        summaries=summaries,
+        download_timeout=download_timeout,
+        process_timeout=process_timeout,
+        ticker_deadline=ticker_deadline,
+        whole_deadline_at=None,
     )
 
 
@@ -407,12 +622,13 @@ def run_ticker(
     repo_root: Path,
     db_path: Path,
     quarters: int = _DEFAULT_QUARTERS,
-    discover_timeout: int = _DEFAULT_DISCOVER_TIMEOUT_S,
-    download_timeout: int = _DEFAULT_DOWNLOAD_TIMEOUT_S,
+    discover_timeout: float = _DEFAULT_DISCOVER_TIMEOUT_S,
+    download_timeout: float = _DEFAULT_DOWNLOAD_TIMEOUT_S,
     skip_download: bool = False,
     process: bool = True,
     summaries: bool = False,
-    process_timeout: int = 600,
+    process_timeout: float = _DEFAULT_PROCESS_TIMEOUT_S,
+    ticker_deadline: float = _DEFAULT_TICKER_DEADLINE_S,
     record_status: bool = True,
 ) -> TickerResult:
     """Full single-ticker IR chain (discover → fetch+register → process), then
@@ -435,6 +651,7 @@ def run_ticker(
         process=process,
         summaries=summaries,
         process_timeout=process_timeout,
+        ticker_deadline=ticker_deadline,
     )
     if record_status:
         ir_fetch_status.record_attempt(
@@ -446,6 +663,148 @@ def run_ticker(
             reason=_reason_for(result),
         )
     return result
+
+
+def _discovery_to_checkpoint(result: DiscoveryResult) -> dict[str, object]:
+    """Serialize only bounded metadata; never persist child output or URLs."""
+    return {
+        "ticker": result.ticker,
+        "status": result.status.value,
+        "discovered": result.discovered,
+        "elapsed_seconds": result.elapsed_seconds,
+        "error": result.error,
+    }
+
+
+def _discovery_from_checkpoint(value: object) -> DiscoveryResult | None:
+    if not isinstance(value, dict):
+        return None
+    row = cast("dict[str, object]", value)
+    ticker = row.get("ticker")
+    status = row.get("status")
+    elapsed = row.get("elapsed_seconds")
+    if not isinstance(ticker, str) or not isinstance(status, str):
+        return None
+    if not isinstance(elapsed, int | float):
+        return None
+    try:
+        parsed_status = TickerStatus(status)
+    except ValueError:
+        return None
+    discovered = row.get("discovered")
+    error = row.get("error")
+    return DiscoveryResult(
+        ticker=ticker,
+        status=parsed_status,
+        discovered=discovered if isinstance(discovered, int) else None,
+        elapsed_seconds=float(elapsed),
+        error=error if isinstance(error, str) else None,
+    )
+
+
+def _result_to_checkpoint(result: TickerResult) -> dict[str, object]:
+    return {
+        "ticker": result.ticker,
+        "status": result.status.value,
+        "discovered": result.discovered,
+        "downloaded": result.downloaded,
+        "elapsed_seconds": result.elapsed_seconds,
+        "error": result.error,
+        "processed": result.processed,
+    }
+
+
+def _result_from_checkpoint(value: object) -> TickerResult | None:
+    if not isinstance(value, dict):
+        return None
+    row = cast("dict[str, object]", value)
+    ticker = row.get("ticker")
+    status = row.get("status")
+    elapsed = row.get("elapsed_seconds")
+    if not isinstance(ticker, str) or not isinstance(status, str):
+        return None
+    if not isinstance(elapsed, int | float):
+        return None
+    try:
+        parsed_status = TickerStatus(status)
+    except ValueError:
+        return None
+    discovered = row.get("discovered")
+    downloaded = row.get("downloaded")
+    error = row.get("error")
+    return TickerResult(
+        ticker=ticker,
+        status=parsed_status,
+        discovered=discovered if isinstance(discovered, int) else None,
+        downloaded=downloaded if isinstance(downloaded, int) else None,
+        elapsed_seconds=float(elapsed),
+        error=error if isinstance(error, str) else None,
+        processed=row.get("processed") is True,
+    )
+
+
+def _load_checkpoint(
+    path: Path, signature: dict[str, object]
+) -> tuple[dict[str, DiscoveryResult], dict[str, TickerResult]]:
+    if not path.exists():
+        return {}, {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        sys.stderr.write(f"IR checkpoint ignored: {redact(exc)}\n")
+        return {}, {}
+    if not isinstance(raw, dict):
+        return {}, {}
+    state = cast("dict[str, object]", raw)
+    if state.get("version") != _CHECKPOINT_VERSION or state.get("signature") != signature:
+        sys.stderr.write("IR checkpoint ignored: run parameters changed\n")
+        return {}, {}
+    discoveries: dict[str, DiscoveryResult] = {}
+    raw_discoveries = state.get("discoveries")
+    if isinstance(raw_discoveries, dict):
+        for ticker, value in cast("dict[str, object]", raw_discoveries).items():
+            parsed = _discovery_from_checkpoint(value)
+            if parsed is not None and parsed.ticker == ticker:
+                discoveries[ticker] = parsed
+    results: dict[str, TickerResult] = {}
+    raw_results = state.get("results")
+    if isinstance(raw_results, dict):
+        for ticker, value in cast("dict[str, object]", raw_results).items():
+            parsed = _result_from_checkpoint(value)
+            if parsed is not None and parsed.ticker == ticker:
+                results[ticker] = parsed
+    return discoveries, results
+
+
+def _save_checkpoint(
+    path: Path,
+    signature: dict[str, object],
+    discoveries: dict[str, DiscoveryResult],
+    results: dict[str, TickerResult],
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": _CHECKPOINT_VERSION,
+        "signature": signature,
+        "discoveries": {
+            ticker: _discovery_to_checkpoint(discoveries[ticker]) for ticker in sorted(discoveries)
+        },
+        "results": {ticker: _result_to_checkpoint(results[ticker]) for ticker in sorted(results)},
+    }
+    pending = path.with_suffix(path.suffix + ".pending")
+    pending.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    pending.replace(path)
+
+
+def _record_result(db_path: Path, result: TickerResult) -> None:
+    ir_fetch_status.record_attempt(
+        db_path,
+        result.ticker,
+        status=result.status.value,
+        discovered=result.discovered,
+        downloaded=result.downloaded,
+        reason=_reason_for(result),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -478,21 +837,127 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     sys.stdout.write(f"IR-document discovery for {len(selected)} ticker(s): {selected}\n")
-    results = [
-        run_ticker(
-            t,
+    whole_deadline_at = t0 + cast("float", args.whole_run_deadline)
+    checkpoint_path = (
+        cast("Path", args.checkpoint)
+        if args.checkpoint
+        else repo_root / ".tmp" / "ir_document_discovery_all" / "state.json"
+    )
+    signature: dict[str, object] = {
+        "selected": selected,
+        "quarters": cast("int", args.max_quarters),
+        "discover_timeout": cast("float", args.discover_timeout),
+        "download_timeout": cast("float", args.download_timeout),
+        "process_timeout": cast("float", args.process_timeout),
+        "per_ticker_deadline": cast("float", args.per_ticker_deadline),
+        "skip_download": cast("bool", args.skip_download),
+        "no_process": cast("bool", args.no_process),
+        "summaries": cast("bool", args.summaries),
+        "db_path": str(db_path.resolve()),
+    }
+    discoveries: dict[str, DiscoveryResult] = {}
+    completed: dict[str, TickerResult] = {}
+    if not cast("bool", args.no_resume):
+        discoveries, completed = _load_checkpoint(checkpoint_path, signature)
+        discoveries = {t: r for t, r in discoveries.items() if t in selected}
+        completed = {t: r for t, r in completed.items() if t in selected}
+        if discoveries or completed:
+            sys.stdout.write(
+                f"Resuming checkpoint: {len(discoveries)} crawled, "
+                f"{len(completed)} fully processed\n"
+            )
+
+    pending_discovery = [t for t in selected if t not in discoveries and t not in completed]
+    deadline_hit = False
+    if pending_discovery:
+        workers = min(cast("int", args.discovery_workers), len(pending_discovery))
+        executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=workers,
+            thread_name_prefix="ir-discovery",
+        )
+        futures = {
+            executor.submit(
+                _run_discovery,
+                ticker,
+                repo_root=repo_root,
+                db_path=db_path,
+                quarters=cast("int", args.max_quarters),
+                timeout_s=min(
+                    cast("float", args.discover_timeout),
+                    cast("float", args.per_ticker_deadline),
+                    max(0.001, whole_deadline_at - time.monotonic()),
+                ),
+            ): ticker
+            for ticker in pending_discovery
+        }
+        try:
+            timeout = max(0.001, whole_deadline_at - time.monotonic())
+            for future in concurrent.futures.as_completed(futures, timeout=timeout):
+                discovery = future.result()
+                discoveries[discovery.ticker] = discovery
+                _save_checkpoint(checkpoint_path, signature, discoveries, completed)
+        except TimeoutError:
+            deadline_hit = True
+            sys.stderr.write("Whole-run deadline reached during discovery; pending work canceled\n")
+            for future in futures:
+                future.cancel()
+        finally:
+            executor.shutdown(wait=True, cancel_futures=True)
+
+    results_by_ticker = dict(completed)
+    for ticker in selected:
+        if ticker in results_by_ticker:
+            sys.stdout.write(f"[{ticker}] resumed from checkpoint\n")
+            continue
+        discovery = discoveries.get(ticker)
+        if discovery is None:
+            results_by_ticker[ticker] = TickerResult(
+                ticker,
+                TickerStatus.FAILED,
+                None,
+                None,
+                _elapsed(t0),
+                error="whole-run deadline canceled discovery",
+            )
+            deadline_hit = True
+            continue
+        if time.monotonic() >= whole_deadline_at:
+            results_by_ticker[ticker] = TickerResult(
+                ticker,
+                TickerStatus.FAILED,
+                discovery.discovered,
+                None,
+                _elapsed(t0),
+                error="whole-run deadline exhausted before serialized mutation",
+            )
+            deadline_hit = True
+            continue
+        result = _finish_discovery(
+            discovery,
             repo_root=repo_root,
             db_path=db_path,
-            quarters=cast("int", args.max_quarters),
-            discover_timeout=cast("int", args.discover_timeout),
-            download_timeout=cast("int", args.download_timeout),
             skip_download=cast("bool", args.skip_download),
             process=not cast("bool", args.no_process),
             summaries=cast("bool", args.summaries),
-            process_timeout=cast("int", args.process_timeout),
+            download_timeout=cast("float", args.download_timeout),
+            process_timeout=cast("float", args.process_timeout),
+            ticker_deadline=cast("float", args.per_ticker_deadline),
+            whole_deadline_at=whole_deadline_at,
         )
-        for t in selected
-    ]
+        results_by_ticker[ticker] = result
+        _record_result(db_path, result)
+        if result.status is TickerStatus.FAILED:
+            if result.error and "deadline" in result.error:
+                deadline_hit = True
+            continue
+        completed[ticker] = result
+        _save_checkpoint(checkpoint_path, signature, discoveries, completed)
+
+    results = [results_by_ticker[t] for t in selected]
+    if not deadline_hit and len(completed) == len(selected):
+        checkpoint_path.unlink(missing_ok=True)
+    else:
+        _save_checkpoint(checkpoint_path, signature, discoveries, completed)
 
     summary = _summarize(
         results, skipped_not_in_roster=skipped_not_in_roster, elapsed_seconds=_elapsed(t0)
@@ -507,8 +972,26 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument("--tickers", nargs="*", help="Restrict to these (intersected with the roster)")
     p.add_argument("--max-quarters", type=int, default=_DEFAULT_QUARTERS)
-    p.add_argument("--discover-timeout", type=int, default=_DEFAULT_DISCOVER_TIMEOUT_S)
-    p.add_argument("--download-timeout", type=int, default=_DEFAULT_DOWNLOAD_TIMEOUT_S)
+    p.add_argument("--discover-timeout", type=float, default=_DEFAULT_DISCOVER_TIMEOUT_S)
+    p.add_argument("--download-timeout", type=float, default=_DEFAULT_DOWNLOAD_TIMEOUT_S)
+    p.add_argument(
+        "--discovery-workers",
+        type=int,
+        default=_DEFAULT_DISCOVERY_WORKERS,
+        help="Concurrent ticker-scoped discovery children (default: %(default)s)",
+    )
+    p.add_argument(
+        "--per-ticker-deadline",
+        type=float,
+        default=_DEFAULT_TICKER_DEADLINE_S,
+        help="Maximum active seconds across a ticker's discover/fetch/process chain",
+    )
+    p.add_argument(
+        "--whole-run-deadline",
+        type=float,
+        default=_DEFAULT_WHOLE_RUN_DEADLINE_S,
+        help="Maximum wall-clock seconds for the entire batch",
+    )
     p.add_argument("--skip-download", action="store_true", help="Discover + write manifests only")
     p.add_argument(
         "--only-failing",
@@ -530,15 +1013,37 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p.add_argument(
         "--process-timeout",
-        type=int,
-        default=600,
+        type=float,
+        default=_DEFAULT_PROCESS_TIMEOUT_S,
         help="Per-step timeout for the process stage (s)",
+    )
+    p.add_argument(
+        "--checkpoint",
+        type=Path,
+        help="Resume checkpoint (default: <repo-root>/.tmp/ir_document_discovery_all/state.json)",
+    )
+    p.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Ignore an existing compatible checkpoint and start a fresh batch",
     )
     p.add_argument(
         "--db", type=Path, help="portfolio.db path (default: <repo-root>/data/portfolio.db)"
     )
     p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    positive_fields = (
+        "discover_timeout",
+        "download_timeout",
+        "discovery_workers",
+        "per_ticker_deadline",
+        "whole_run_deadline",
+        "process_timeout",
+    )
+    for field in positive_fields:
+        if cast("float", getattr(args, field)) <= 0:
+            p.error(f"--{field.replace('_', '-')} must be greater than zero")
+    return args
 
 
 if __name__ == "__main__":

@@ -1,9 +1,9 @@
 """Verify that every cron/*.task.xml is registered and enabled in Windows Task Scheduler.
 
-Reads all *.task.xml files under the cron/ directory, extracts the registered
-task name (from the <URI> element), then queries ``schtasks /query /fo csv`` for
-the live state of each.  Reports five problem categories:
+Reads ``cron/task_manifest.json``, validates its exact XML/wrapper coverage and
+metadata, then queries ``schtasks /query /fo csv`` for each declared task.
 
+  manifest  â€” coverage, registration identity, action, or schedule drift
   unparseable — the .task.xml could not be read/parsed (e.g. the bytes are
                 UTF-8 but the XML declaration claims encoding="UTF-16"); a HARD
                 failure — never silently skipped, or the audit would give a
@@ -16,8 +16,8 @@ the live state of each.  Reports five problem categories:
 Human-readable table is printed to stdout.  Exit code:
 
   0  all tasks parsed, registered, enabled, and schedule matches
-  1  one or more tasks have a problem (unparseable / no_uri / missing /
-     disabled / mismatch)
+  1  one or more tasks have a problem (manifest / unparseable / no_uri /
+     missing / disabled / mismatch)
   2  could not query the scheduler (non-Windows or permission error)
 
 Intended to run weekly via Task Scheduler (see cron/verify_cron.task.xml) and
@@ -39,6 +39,17 @@ from typing import NamedTuple
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CRON_DIR = PROJECT_ROOT / "cron"
+SRC = PROJECT_ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from scheduler_manifest import (  # noqa: E402
+    TaskManifest,
+    load_manifest,
+    validate_source_tree,
+)
+
+MANIFEST_PATH = CRON_DIR / "task_manifest.json"
 
 # Windows Task Scheduler XML namespace
 _NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
@@ -65,6 +76,7 @@ class TaskReport:
     """Aggregated comparison result."""
 
     ok: list[str] = field(default_factory=list[str])
+    manifest_errors: list[str] = field(default_factory=list[str])
     unparseable: list[str] = field(default_factory=list[str])  # "name: error"
     no_uri: list[str] = field(default_factory=list[str])  # filenames
     missing: list[str] = field(default_factory=list[str])
@@ -72,11 +84,17 @@ class TaskReport:
     mismatch: list[tuple[str, str, str]] = field(
         default_factory=list[tuple[str, str, str]]
     )  # (name, xml_time, sched_time)
+    scheduler_unavailable: bool = False
 
     @property
     def has_problems(self) -> bool:
         return bool(
-            self.unparseable or self.no_uri or self.missing or self.disabled or self.mismatch
+            self.manifest_errors
+            or self.unparseable
+            or self.no_uri
+            or self.missing
+            or self.disabled
+            or self.mismatch
         )
 
 
@@ -210,8 +228,12 @@ def _extract_next_run_time(next_run: str) -> str | None:
     return None
 
 
-def compare(cron_dir: Path = CRON_DIR) -> tuple[TaskReport, list[_XmlTask]]:
-    """Parse all XMLs in cron_dir and compare against the live scheduler.
+def compare(
+    cron_dir: Path = CRON_DIR,
+    *,
+    manifest: TaskManifest | None = None,
+) -> tuple[TaskReport, list[_XmlTask]]:
+    """Parse manifest-declared XMLs and compare against the live scheduler.
 
     Returns (TaskReport, xml_tasks_list). Files that cannot be parsed are
     recorded under report.unparseable (a hard problem) rather than being
@@ -221,7 +243,22 @@ def compare(cron_dir: Path = CRON_DIR) -> tuple[TaskReport, list[_XmlTask]]:
     """
     report = TaskReport()
     xml_tasks: list[_XmlTask] = []
-    for p in sorted(cron_dir.glob("*.task.xml")):
+    if manifest is None and cron_dir.resolve() == CRON_DIR.resolve():
+        try:
+            manifest = load_manifest(MANIFEST_PATH)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            report.manifest_errors.append(f"{MANIFEST_PATH.name}: {exc}")
+
+    if manifest is not None:
+        report.manifest_errors.extend(validate_source_tree(manifest, cron_dir=cron_dir))
+        paths = [cron_dir / task.xml for task in manifest.tasks]
+    else:
+        # Compatibility seam for isolated unit fixtures. The production CLI
+        # always passes the canonical manifest and never discovers ownership
+        # from directory contents.
+        paths = sorted(cron_dir.glob("*.task.xml"))
+
+    for p in paths:
         try:
             xt = _parse_xml(p)
         except (ET.ParseError, OSError) as exc:
@@ -233,10 +270,16 @@ def compare(cron_dir: Path = CRON_DIR) -> tuple[TaskReport, list[_XmlTask]]:
         xml_tasks.append(xt)
 
     live = _query_schtasks()
+    report.scheduler_unavailable = live is None
 
     for xt in xml_tasks:
         key = xt.task_name.lower()
         if live is None or key not in live:
+            if key == _CAPTURE_POLLER_TASK and _windows_service_is_running(_CAPTURE_POLLER_SERVICE):
+                report.ok.append(
+                    f"{xt.task_name} (scheduler absent; {_CAPTURE_POLLER_SERVICE} service running)"
+                )
+                continue
             report.missing.append(xt.task_name)
             continue
 
@@ -294,6 +337,15 @@ def _print_report(report: TaskReport, xml_tasks: list[_XmlTask]) -> None:
     if report.ok:
         print(f"  OK ({len(report.ok)}): {', '.join(report.ok)}\n")
 
+    if report.manifest_errors:
+        print(
+            f"  MANIFEST ({len(report.manifest_errors)}) "
+            "â€” coverage, identity, action, or schedule drift:"
+        )
+        for desc in report.manifest_errors:
+            print(f"    x  {desc}")
+        print()
+
     if report.unparseable:
         print(f"  UNPARSEABLE ({len(report.unparseable)}) — could not read/parse the XML:")
         for desc in report.unparseable:
@@ -325,7 +377,8 @@ def _print_report(report: TaskReport, xml_tasks: list[_XmlTask]) -> None:
         print()
 
     problems = (
-        len(report.unparseable)
+        len(report.manifest_errors)
+        + len(report.unparseable)
         + len(report.no_uri)
         + len(report.missing)
         + len(report.disabled)
@@ -340,6 +393,7 @@ def report_payload(report: TaskReport, xml_tasks: list[_XmlTask]) -> dict[str, o
         "status": "ok" if not report.has_problems else "failed",
         "task_count": len(xml_tasks) + len(report.unparseable) + len(report.no_uri),
         "ok": report.ok,
+        "manifest_errors": report.manifest_errors,
         "unparseable": report.unparseable,
         "no_uri": report.no_uri,
         "missing": report.missing,
@@ -348,6 +402,7 @@ def report_payload(report: TaskReport, xml_tasks: list[_XmlTask]) -> dict[str, o
             {"task": name, "xml_time": xml_time, "scheduler_time": scheduler_time}
             for name, xml_time, scheduler_time in report.mismatch
         ],
+        "scheduler_unavailable": report.scheduler_unavailable,
     }
 
 
@@ -378,6 +433,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory containing *.task.xml files (default: cron/).",
     )
     parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=None,
+        help="Canonical task manifest (default: cron/task_manifest.json).",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Emit one machine-readable health record for an alert hook or dashboard.",
@@ -389,7 +450,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    report, xml_tasks = compare(args.cron_dir)
+    manifest: TaskManifest | None = None
+    manifest_path = args.manifest
+    if manifest_path is not None or args.cron_dir.resolve() == CRON_DIR.resolve():
+        try:
+            manifest = load_manifest(manifest_path or MANIFEST_PATH)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            sys.stderr.write(f"ERROR: cannot load task manifest: {exc}\n")
+            return 1
+    report, xml_tasks = compare(args.cron_dir, manifest=manifest)
 
     payload = report_payload(report, xml_tasks)
     if report.has_problems:
@@ -411,8 +480,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # If schtasks was unreachable, every task ends up in "missing" — return 2
     # (scheduler query failure) rather than 1 (task mismatch).
-    live = _query_schtasks()
-    if live is None:
+    if report.scheduler_unavailable:
         return 2
 
     return 1 if report.has_problems else 0

@@ -178,13 +178,18 @@ def test_all_roster_tickers_succeed(
     assert s["ok"] == 2
     assert s["failed"] == 0
     assert s["downloaded"] == 7
-    # Two stages per ticker, discover before fetch.
-    assert fake.stages == [
+    # Network-only discovery fans out first; shared fetch/register work stays
+    # serialized in deterministic ticker order.
+    assert [item for item in fake.stages if item[1] == "discover"] == [
         ("NU", "discover"),
-        ("NU", "fetch"),
         ("ORCL", "discover"),
+    ]
+    assert [item for item in fake.stages if item[1] == "fetch"] == [
+        ("NU", "fetch"),
         ("ORCL", "fetch"),
     ]
+    first_fetch = next(i for i, item in enumerate(fake.stages) if item[1] == "fetch")
+    assert all(item[1] == "discover" for item in fake.stages[:first_fetch])
 
 
 def test_no_ir_url_is_skipped_not_failed(
@@ -228,6 +233,23 @@ def test_discover_timeout_is_caught_and_batch_continues(
     assert s["failed"] == 1
     assert s["ok"] == 1
     assert ("NU", "discover") in fake.stages  # NU still ran after MELI timed out
+
+
+def test_checkpoint_resumes_after_fetch_failure_without_repeating_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first = _RecordingRun(fetch_rc={"NU": 3})
+    _install(monkeypatch, first, ["NU"])
+    assert batch.main(_argv(tmp_path)) == 1
+    checkpoint = tmp_path / ".tmp" / "ir_document_discovery_all" / "state.json"
+    assert checkpoint.is_file()
+
+    second = _RecordingRun(downloaded={"NU": 2})
+    monkeypatch.setattr("execution.discover_ir_documents_all.subprocess.run", second)
+    assert batch.main(_argv(tmp_path)) == 0
+    assert second.stages == [("NU", "fetch")]
+    assert not checkpoint.exists()
 
 
 def test_skip_download_runs_discover_only(

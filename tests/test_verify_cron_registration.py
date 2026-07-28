@@ -229,6 +229,25 @@ def test_capture_poller_disabled_is_ok_when_service_is_running(tmp_path: Path) -
     mock_service.assert_called_once_with("es-poller")
 
 
+def test_capture_poller_absent_is_ok_when_service_is_running(tmp_path: Path) -> None:
+    task_name = r"\earnings-summary\capture_poller"
+    _write_task_xml(tmp_path / "capture_poller.task.xml", task_name, "04:00:00")
+
+    with (
+        patch("execution.verify_cron_registration._query_schtasks", return_value={}),
+        patch(
+            "execution.verify_cron_registration._windows_service_is_running",
+            return_value=True,
+        ) as mock_service,
+    ):
+        report, _xml_tasks = compare(tmp_path)
+
+    assert not report.has_problems
+    assert report.missing == []
+    assert report.ok == [rf"{task_name} (scheduler absent; es-poller service running)"]
+    mock_service.assert_called_once_with("es-poller")
+
+
 def test_capture_poller_disabled_is_problem_when_service_is_stopped(
     tmp_path: Path,
 ) -> None:

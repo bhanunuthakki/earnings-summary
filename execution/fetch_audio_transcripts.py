@@ -29,7 +29,8 @@ import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+from urllib.parse import urlparse
 
 import yt_dlp
 from faster_whisper import WhisperModel
@@ -47,6 +48,8 @@ from compute.transcript_ingest import (  # noqa: E402
     detect_qa_section,
     qa_status_to_db_value,
 )
+from ir_pipeline._net import UnsafeURLError, ensure_safe_public_url  # noqa: E402
+from log_redact import redact  # noqa: E402
 from transcript_qa import (  # noqa: E402
     QaStatus,
     validate_audio_transcript,
@@ -90,6 +93,22 @@ WINDOWS_FFMPEG_DEFAULT = Path("C:/ffmpeg/bin")
 # Override via --whisper-model / --beam-size / WHISPER_MODEL / WHISPER_BEAM_SIZE.
 DEFAULT_WHISPER_MODEL = "distil-large-v3"
 DEFAULT_BEAM_SIZE = 1
+
+# Bound yt-dlp even for a curated URL. The duration gate catches search
+# candidates, while these limits also cover explicit URLs and incomplete
+# upstream metadata.
+YDL_SOCKET_TIMEOUT_SEC = 30
+YDL_RETRIES = 3
+MAX_AUDIO_BYTES = 512 * 1024 * 1024
+
+_ALLOWED_AUDIO_HOSTS = frozenset(
+    {
+        "youtu.be",
+        "youtube.com",
+        "youtube-nocookie.com",
+    }
+)
+_URL_IN_MESSAGE_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +166,84 @@ class TranscriptionResult:
     qa_section_signals: tuple[str, ...]
 
 
+class AudioFetchError(RuntimeError):
+    """A media URL was unsafe or yt-dlp could not fetch it within the bounds."""
+
+
+def _safe_external_message(value: object) -> str:
+    """Redact credentials and remove full URLs from third-party diagnostics."""
+    return _URL_IN_MESSAGE_RE.sub("[redacted-url]", redact(value))
+
+
+class _RedactingYdlLogger:
+    """Keep yt-dlp diagnostics useful without exposing curated URLs or tokens."""
+
+    @staticmethod
+    def debug(message: str) -> None:
+        if message.startswith("[debug] "):
+            return
+        sys.stderr.write(f"{_safe_external_message(message)}\n")
+
+    @staticmethod
+    def info(message: str) -> None:
+        sys.stderr.write(f"{_safe_external_message(message)}\n")
+
+    @staticmethod
+    def warning(message: str) -> None:
+        sys.stderr.write(f"WARN {_safe_external_message(message)}\n")
+
+    @staticmethod
+    def error(message: str) -> None:
+        sys.stderr.write(f"ERROR {_safe_external_message(message)}\n")
+
+
+def _validate_audio_url(url: str) -> str:
+    """Require a credential-free, public YouTube URL before yt-dlp sees it."""
+    try:
+        safe_url = ensure_safe_public_url(url)
+    except (UnsafeURLError, ValueError):
+        raise AudioFetchError("Refusing unsafe or non-public audio URL.") from None
+
+    parsed = urlparse(safe_url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.username is not None or parsed.password is not None:
+        raise AudioFetchError("Refusing an audio URL containing user credentials.")
+    if not any(host == allowed or host.endswith(f".{allowed}") for allowed in _ALLOWED_AUDIO_HOSTS):
+        raise AudioFetchError("Refusing a non-YouTube audio URL.")
+    return safe_url
+
+
+def _safe_url_label(url: str) -> str:
+    """Return only a hostname for progress output; never echo a path or query."""
+    return (urlparse(url).hostname or "approved media host").lower()
+
+
+def _bounded_ydl_options() -> dict[str, Any]:
+    return {
+        "logger": _RedactingYdlLogger(),
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "noplaylist": True,
+        "socket_timeout": YDL_SOCKET_TIMEOUT_SEC,
+        "retries": YDL_RETRIES,
+        "fragment_retries": YDL_RETRIES,
+        "extractor_retries": YDL_RETRIES,
+    }
+
+
+def _enforce_download_bound(status: dict[str, Any]) -> None:
+    observed = max(
+        int(status.get("downloaded_bytes") or 0),
+        int(status.get("total_bytes") or 0),
+        int(status.get("total_bytes_estimate") or 0),
+    )
+    if observed > MAX_AUDIO_BYTES:
+        raise AudioFetchError(
+            f"Audio download exceeded the {MAX_AUDIO_BYTES // (1024 * 1024)} MiB limit."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Smart search
 # ---------------------------------------------------------------------------
@@ -195,14 +292,20 @@ def _score_candidate(entry: dict[str, Any], ticker: str, year: int, quarter: int
 def smart_search_url(ticker: str, year: int, quarter: int, ffmpeg_location: Path | None) -> str:
     """Return the best matching YouTube URL via ytsearch5 + scoring. Raises if none qualify."""
     query = f"ytsearch5:{ticker} {_quarter_label(quarter)} {year} earnings conference call"
-    opts: dict[str, Any] = {"quiet": True, "skip_download": True, "extract_flat": False}
+    opts = _bounded_ydl_options()
+    opts.update({"skip_download": True, "extract_flat": False})
     if ffmpeg_location is not None:
         opts["ffmpeg_location"] = str(ffmpeg_location)
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(query, download=False)
+    try:
+        with yt_dlp.YoutubeDL(cast("Any", opts)) as ydl:
+            info = ydl.extract_info(query, download=False)
+    except Exception as exc:
+        raise AudioFetchError(
+            f"YouTube search failed: {type(exc).__name__}: {_safe_external_message(exc)}"
+        ) from None
 
-    entries = info.get("entries") if isinstance(info, dict) else None
+    entries = info.get("entries")
     if not entries:
         raise RuntimeError(f"No YouTube results for {ticker} {_quarter_label(quarter)} {year}")
 
@@ -210,9 +313,10 @@ def smart_search_url(ticker: str, year: int, quarter: int, ffmpeg_location: Path
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        score = _score_candidate(entry, ticker, year, quarter)
+        typed_entry = cast("dict[str, Any]", entry)
+        score = _score_candidate(typed_entry, ticker, year, quarter)
         if score is not None:
-            scored.append((score, entry))
+            scored.append((score, typed_entry))
 
     if not scored:
         raise RuntimeError(
@@ -225,8 +329,12 @@ def smart_search_url(ticker: str, year: int, quarter: int, ffmpeg_location: Path
     url = best.get("webpage_url") or best.get("url")
     if not url:
         raise RuntimeError(f"Best candidate has no URL: {best.get('id')}")
-    print(f"[search] picked '{best.get('title')}' ({int(best.get('duration', 0))}s) — {url}")
-    return url
+    safe_url = _validate_audio_url(str(url))
+    print(
+        f"[search] picked '{best.get('title')}' ({int(best.get('duration', 0))}s) "
+        f"from {_safe_url_label(safe_url)}"
+    )
+    return safe_url
 
 
 # ---------------------------------------------------------------------------
@@ -253,17 +361,28 @@ def _resolve_ffmpeg_location(cli_value: str | None) -> Path | None:
 
 def _download_audio(url: str, dest_stem: Path, ffmpeg_location: Path | None) -> Path:
     """Download audio to dest_stem.<ext>; return the actual produced file path."""
-    opts: dict[str, Any] = {
-        "format": "bestaudio/best",
-        "outtmpl": str(dest_stem) + ".%(ext)s",
-        "quiet": False,
-        "noprogress": False,
-    }
+    safe_url = _validate_audio_url(url)
+    opts = _bounded_ydl_options()
+    opts.update(
+        {
+            "format": "bestaudio/best",
+            "outtmpl": str(dest_stem) + ".%(ext)s",
+            "max_filesize": MAX_AUDIO_BYTES,
+            "progress_hooks": [_enforce_download_bound],
+        }
+    )
     if ffmpeg_location is not None:
         opts["ffmpeg_location"] = str(ffmpeg_location)
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.download([url])
+    try:
+        with yt_dlp.YoutubeDL(cast("Any", opts)) as ydl:
+            ydl.download([safe_url])
+    except AudioFetchError:
+        raise
+    except Exception as exc:
+        raise AudioFetchError(
+            f"Audio download failed: {type(exc).__name__}: {_safe_external_message(exc)}"
+        ) from None
 
     pattern = re.compile(re.escape(dest_stem.name) + r"\.[A-Za-z0-9]+$")
     candidates = [p for p in dest_stem.parent.iterdir() if pattern.match(p.name)]
@@ -296,7 +415,10 @@ def _ensure_qa_recorded(
     """For an existing transcript file, ensure index + QA are recorded.
     Returns the qa_status string ('ok' or 'failed'). Idempotent — if the
     index already shows ok/failed AND has_qa is set, it's a no-op."""
-    entry = index_manager.has_transcript(canonical_ticker, year, qlabel)
+    entry = cast(
+        "dict[str, object] | None",
+        index_manager.has_transcript(canonical_ticker, year, qlabel),
+    )
     if entry is None:
         # File on disk but not in index — register with a stub source so
         # validate_transcript can route. Caller will overwrite with real source
@@ -309,7 +431,10 @@ def _ensure_qa_recorded(
             filepath=output_path.name,
             has_qa=None,
         )
-        entry = index_manager.has_transcript(canonical_ticker, year, qlabel)
+        entry = cast(
+            "dict[str, object] | None",
+            index_manager.has_transcript(canonical_ticker, year, qlabel),
+        )
         if entry is None:
             raise RuntimeError(f"failed to register existing transcript {output_path}")
 
@@ -324,7 +449,7 @@ def _ensure_qa_recorded(
                 canonical_ticker,
                 year,
                 qlabel,
-                source=entry.get("source") or "unknown_legacy",
+                source=str(entry.get("source") or "unknown_legacy"),
                 filepath=output_path.name,
                 has_qa=qa_status_to_db_value(section.status),
             )
@@ -336,11 +461,12 @@ def _ensure_qa_recorded(
                     f"source before running downstream extraction.\n"
                 )
 
-    qa_status = entry.get("qa_status")
+    qa_status_raw = entry.get("qa_status")
+    qa_status = qa_status_raw if isinstance(qa_status_raw, str) else None
     if qa_status in ("ok", "failed"):
         return qa_status
 
-    result = validate_transcript(output_path, entry.get("source") or "unknown_legacy")
+    result = validate_transcript(output_path, str(entry.get("source") or "unknown_legacy"))
     index_manager.update_transcript_qa(
         canonical_ticker,
         year,
@@ -390,9 +516,12 @@ def fetch_and_transcribe(
     TMP_DIR.mkdir(parents=True, exist_ok=True)
 
     if spec.url is not None:
-        url = str(spec.url)
+        url = _validate_audio_url(str(spec.url))
         source = TranscriptSource.YT_DLP_WHISPER_URL
-        print(f"[{canonical_ticker} {qlabel} {spec.year}] Using curated URL: {url}")
+        print(
+            f"[{canonical_ticker} {qlabel} {spec.year}] "
+            f"Using curated source: {_safe_url_label(url)}"
+        )
     else:
         url = smart_search_url(spec.ticker, spec.year, spec.quarter, ffmpeg_location)
         source = TranscriptSource.YT_DLP_WHISPER_SEARCH
