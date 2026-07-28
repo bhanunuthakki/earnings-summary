@@ -1,63 +1,90 @@
 {
   "ticker": "UBER",
   "name": "Uber Technologies",
-  "last_updated": "2026-05-18",
-  "thesis": "Global mobility + delivery marketplace with structural compounding from trip frequency, cross-sell into membership (Uber One), and operating leverage on a now-profitable cost base. Asset-light take-rate × gross-bookings business with widening adj. EBITDA margins and rising FCF conversion. STUB — needs user review.",
-  "verdict": "Pending",
-  "verdict_color": "gray",
-  "key_driver": "Monthly Active Platform Consumers (MAPCs) × trips/MAPC × take-rate × segment mix (Mobility vs Delivery vs Freight)",
+  "last_updated": "2026-07-27",
+  "thesis": "Uber is a global mobility and delivery marketplace with structural compounding from audience growth, trip frequency, Uber One cross-sell, and operating leverage. The core business thesis is intact, but the holding is on Watch because autonomous vehicles can change distribution economics. Waymo is already a scaled, safety-evidenced direct competitor; Tesla is a credible but less-proven second threat. Uber wins if AV supply remains fragmented and its hybrid network earns an attractive, capital-light take rate. The thesis weakens if Waymo and Tesla keep dense-market demand in direct apps, Uber's AV take rate falls below 10% while it funds guarantees or fleet infrastructure, AV-overlap markets underperform matched controls by more than 5 points for two quarters, or AV capital at risk exceeds $2B / 20% of trailing FCF without contracted returns. Owner approved 2026-07-27. Position posture: hold around 2.0-2.5%, cap at 3.0% before AV economic proof, add toward 3.5-4.0% only after at least two proof points including one economic proof, and trim toward 1.0-1.5% when an approved warning trigger fires.",
+  "verdict": "Watch",
+  "verdict_color": "yellow",
+  "key_driver": "MAPCs × trips/MAPC × Mobility take rate, constrained by AV routing share, AV contribution profit, and AV capital at risk",
   "chart_priorities": [
     "Revenue",
     "Operating income",
     "Free cash flow",
     "FCF Margin (GAAP)"
   ],
-  "_status": "needs_user_review",
+  "_status": null,
   "tier_1_kpis": [
     {
       "name": "Gross bookings YoY growth (constant-currency)",
-      "current": "TBV from latest earnings release",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
+      "current": "21% YoY constant-currency (Q1 2026)",
+      "prior": "Above 21% for the prior two quarters per management",
+      "yoy": "healthy",
+      "status": "On track",
       "break_condition": "<12% YoY (cc) for 2 consecutive Qs",
       "source": "earnings release"
     },
     {
       "name": "Trips YoY growth",
-      "current": "TBV from latest earnings release",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
+      "current": "20% YoY (Q1 2026; 3.643B trips)",
+      "prior": "22% YoY (Q4 2025)",
+      "yoy": "decelerating but healthy",
+      "status": "On track",
       "break_condition": "<10% YoY for 2 consecutive Qs",
       "source": "earnings release"
     },
     {
       "name": "Monthly Active Platform Consumers (MAPCs) YoY growth",
-      "current": "TBV from latest earnings release",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
+      "current": "17% YoY (Q1 2026; 199M MAPCs)",
+      "prior": "18% YoY (Q4 2025)",
+      "yoy": "slightly decelerating",
+      "status": "On track",
       "break_condition": "<10% YoY for 2 consecutive Qs",
       "source": "earnings release"
     },
     {
       "name": "Adjusted EBITDA margin (% of gross bookings)",
-      "current": "TBV from latest earnings release",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
+      "current": "4.6% of gross bookings (Q1 2026)",
+      "prior": "4.4% (Q1 2025)",
+      "yoy": "expanding 20 bps",
+      "status": "On track",
       "break_condition": "Adj. EBITDA / gross bookings stops expanding YoY for 2 consecutive Qs",
       "source": "earnings release"
     },
     {
       "name": "Free cash flow margin (FCF / revenue, GAAP)",
-      "current": "TBV from latest earnings release",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
+      "current": "18.3% TTM through Q1 2026 (approximately $9.8B FCF / $53.7B revenue)",
+      "prior": "18.8% FY2025",
+      "yoy": "stable",
+      "status": "On track",
       "break_condition": "Below 12% on TTM basis",
       "source": "earnings release"
+    },
+    {
+      "name": "AV contribution profit and take rate",
+      "current": "Not disclosed as of Q1 2026",
+      "prior": null,
+      "yoy": null,
+      "status": "Watch - missing decision-critical disclosure",
+      "break_condition": "Approved 2026-07-27: trim if AV take rate is below 10% while Uber also funds material guarantees, incentives, vehicles, or depot economics; add proof requires non-negative contribution profit improving for 2 consecutive Qs.",
+      "source": "earnings release / 10-Q / earnings call"
+    },
+    {
+      "name": "AV-overlap market growth gap",
+      "current": "Management says SF/LA category position improved; no city-level data disclosed",
+      "prior": null,
+      "yoy": null,
+      "status": "Watch - qualitative only",
+      "break_condition": "Approved 2026-07-27: trim if Uber Mobility growth in AV-overlap cities trails matched non-overlap controls by more than 5 percentage points for 2 consecutive Qs; add proof requires performance within 3 points for 2 Qs.",
+      "source": "earnings call / third-party market data"
+    },
+    {
+      "name": "AV capital at risk",
+      "current": "Not separately disclosed as of Q1 2026",
+      "prior": null,
+      "yoy": null,
+      "status": "Watch - missing decision-critical disclosure",
+      "break_condition": "Approved 2026-07-27: trim above $2B or 20% of TTM FCF without contracted returns; add proof requires investments, purchase commitments, guarantees, fleet assets, and depot/charging leases below 15% of TTM FCF.",
+      "source": "10-Q / 10-K / commitments and contingencies"
     }
   ],
   "tier_2_kpis": [
@@ -71,6 +98,8 @@
     },
     {
       "name": "Uber One membership growth",
+      "current": "50M members, +50% YoY; members drive more than half of Mobility and Delivery gross bookings (Q1 2026)",
+      "status": "On track",
       "source": "earnings release commentary"
     },
     {
@@ -80,12 +109,50 @@
     {
       "name": "Insurance reserve true-ups (Mobility cost pressure)",
       "source": "10-Q"
+    },
+    {
+      "name": "AV trips and gross bookings on Uber",
+      "current": "Management disclosed more than 10x YoY AV Mobility trip growth but no absolute base",
+      "status": "Watch - denominator missing",
+      "break_condition": "Approved 2026-07-27: require absolute rider-only AV trips, percentage of Mobility trips, AV gross bookings, and Uber net revenue before sizing above 3%.",
+      "source": "earnings call / earnings release"
+    },
+    {
+      "name": "Commercial AV fleet and utilization on Uber",
+      "current": "More than 30 announced partners; active rider-only vehicles, paid trips, and vehicle-day utilization not disclosed",
+      "status": "Watch - announcements are not scaled proof",
+      "break_condition": "Approved 2026-07-27: add proof when at least 3 independent suppliers each exceed 100 rider-only commercial vehicles on Uber and AV gross bookings per vehicle-day are accretive without more than 50 bps of Mobility margin dilution.",
+      "source": "earnings call / partner disclosures / state AV registries"
+    },
+    {
+      "name": "AV partner concentration and direct-app leakage",
+      "current": "Waymo routes Austin and Atlanta through Uber but distributes directly in other markets; Tesla operates a direct Robotaxi app",
+      "status": "Watch",
+      "break_condition": "Approved 2026-07-27: trim if Waymo ends Uber exclusivity in Austin or Atlanta or if the largest AV partner exceeds 60% of Uber AV trips without scaled substitutes.",
+      "source": "partner announcements / app availability / earnings call"
     }
   ],
   "tier_3_kpis": [
     {
-      "name": "Autonomous-vehicle partnership rollouts (Waymo, etc.)",
-      "source": "10-K / 10-Q"
+      "name": "AV regulatory commercial footprint",
+      "current": "Waymo has California driverless deployment authorization; Tesla is listed only for testing with a driver in California as of the latest permit page",
+      "status": "Watch",
+      "break_condition": "Approved 2026-07-27: re-underwrite when direct competitors obtain commercial driverless approvals materially faster than Uber's non-Waymo partners.",
+      "source": "California DMV / CPUC / TxDMV / other state AV registries"
+    },
+    {
+      "name": "Exposure-normalized AV safety and reliability",
+      "current": "Waymo reports 220.6M rider-only miles through March 2026 and materially lower injury-crash rates versus matched human benchmarks; Tesla does not disclose normalized Robotaxi safety",
+      "status": "Waymo proven; Tesla untested",
+      "break_condition": "Approved 2026-07-27: do not compare raw incident counts without rider-only miles, active fleet, ODD, and reporting scope; halt adds after a statistically meaningful adverse safety trend at a material Uber AV partner.",
+      "source": "NHTSA SGO / company safety hubs / CPUC"
+    },
+    {
+      "name": "Scaled AV supplier count",
+      "current": "No supplier count meeting the approved scale definition is disclosed",
+      "status": "Watch",
+      "break_condition": "Approved 2026-07-27: the hybrid-network thesis requires at least 3 independent suppliers with more than 100 rider-only commercial vehicles and more than 10,000 paid trips; announcements do not count.",
+      "source": "earnings call / partner disclosures / state registries"
     },
     {
       "name": "Driver supply / earnings disclosures",
@@ -106,7 +173,12 @@
   ],
   "thesis_breakers_qualitative": [
     "Trips growth turns negative",
-    "Autonomous disintermediation (Waymo / Tesla taking dense urban markets)",
+    "Approved 2026-07-27: Uber Mobility growth in AV-overlap cities trails matched controls by >5 percentage points for 2 consecutive quarters",
+    "Approved 2026-07-27: Waymo ends Uber exclusivity in Austin or Atlanta or materially shifts those cities to its direct app",
+    "Approved 2026-07-27: Mobility margin compresses >100 bps YoY as AV volume rises and insurance is not the main cause",
+    "Approved 2026-07-27: AV capital at risk exceeds $2B or 20% of TTM FCF without contracted returns",
+    "Approved 2026-07-27: AV platform take rate is below 10% while Uber bears material guarantees, incentives, vehicle, or depot costs",
+    "Approved 2026-07-27: Waymo and Tesla each reach 5-10% of addressable rides in multiple major overlap cities while Uber is excluded from most of those trips",
     "Driver-classification ruling forcing W-2 in core US states (CA-style spread)",
     "Take-rate compression from regulator caps or competitive intensity",
     "Insurance cost inflation outrunning pricing power"
@@ -145,7 +217,7 @@
     "margin_delta_pp": -5.0,
     "exit_multiple_delta": -4.0,
     "terminal_g_delta_pp": -0.5,
-    "note": "AV-disintermediation + regulatory bear (2026-07 red team): Waymo/Tesla take dense urban markets, take-rate caps + W-2 reclassification spread, insurance inflation outruns pricing - growth -6pp, margin -5pp, exit -4 turns, terminal g -0.5pp. Implied bear FV ~$45/sh vs ~$74.5 live (-39%). Pending owner review."
+    "note": "Owner approved 2026-07-27 as the AV-disintermediation and regulatory bear overlay: Waymo/Tesla take dense urban markets, take-rate caps plus W-2 reclassification spread, and insurance inflation outruns pricing - growth -6pp, margin -5pp, exit -4 turns, terminal g -0.5pp."
   },
   "schema_version": 2,
   "wacc": null,
