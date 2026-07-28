@@ -71,7 +71,10 @@ def test_origin_policy_accepts_only_exact_configured_tailnet_origin() -> None:
     )
 
 
-def test_private_mobile_origin_requires_secure_origin_only_url(tmp_path: Path) -> None:
+def test_private_mobile_origin_requires_secure_origin_only_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("EARNINGS_SUMMARY_PRIVATE_BASE_URL", raising=False)
     config = tmp_path / "private_mobile_base_url"
     config.write_text("https://desktop.example.ts.net\n", encoding="utf-8")
     assert private_mobile_origin(config_path=config) == "https://desktop.example.ts.net"
