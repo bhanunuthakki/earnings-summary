@@ -1,13 +1,14 @@
 import contextlib
 import json
 import os
+from collections.abc import Mapping
 
 # Aliases file lives in project/.tmp alongside other cached state
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_DIR = os.path.join(PROJECT_ROOT, ".tmp")
 ALIASES_FILE = os.path.join(CACHE_DIR, "ticker_aliases.json")
 
-DEFAULT_ALIASES = {
+DEFAULT_ALIASES: dict[str, str] = {
     "GOOGL": "GOOG",
     "BRK.B": "BRK.A",
     "BRK-B": "BRK.A",
@@ -19,10 +20,10 @@ DEFAULT_ALIASES = {
     "ZILL": "Z",
 }
 
-_aliases_cache = None
+_aliases_cache: dict[str, str] | None = None
 
 
-def _load_aliases():
+def _load_aliases() -> dict[str, str]:
     global _aliases_cache
     if _aliases_cache is not None:
         return _aliases_cache
@@ -42,14 +43,16 @@ def _load_aliases():
 
     try:
         with open(ALIASES_FILE, encoding="utf-8") as f:
-            _aliases_cache = json.load(f)
+            loaded_aliases: dict[str, str] = json.load(f)
+            _aliases_cache = loaded_aliases
+            return loaded_aliases
     except Exception:
         _aliases_cache = DEFAULT_ALIASES
 
-    return _aliases_cache
+    return DEFAULT_ALIASES
 
 
-def update_aliases(new_dict):
+def update_aliases(new_dict: Mapping[str, str]) -> None:
     """
     Merges new aliases into the existing ticker_aliases.json file.
     Does nothing if all new aliases are already present.
@@ -75,7 +78,7 @@ def update_aliases(new_dict):
             print(f"Error saving updated aliases: {e}")
 
 
-def resolve_ticker(ticker):
+def resolve_ticker(ticker: str) -> str:
     """
     Returns the canonical ticker for a given ticker.
     (e.g., GOOGL -> GOOG).
