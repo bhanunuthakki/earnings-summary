@@ -299,6 +299,8 @@ CREATE TABLE dcf_runs (
     mos_bar_used REAL, assumption_snapshot_json TEXT,
     revenue_growths_json TEXT, fcf_margin REAL,
     assumptions_sync_status TEXT, assumptions_synced_at TEXT
+    , input_sha256 TEXT, workbook_sha256 TEXT, engine_version TEXT,
+    inputs_as_of TEXT, provenance_json TEXT
 );
 """
 
