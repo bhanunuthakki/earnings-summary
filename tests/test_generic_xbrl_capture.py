@@ -636,6 +636,12 @@ def test_extract_end_to_end(tmp_path: Path) -> None:
                 "WHERE f.period_end = '2024-12-31 00:00:00'"
             ).fetchall()
         }
+        assert [
+            row[0]
+            for row in conn.execute(
+                "SELECT status FROM ingestion_runs WHERE directive='capture_xbrl'"
+            ).fetchall()
+        ] == ["ok"]
     finally:
         conn.close()
     debt = rows["Debt - Long-Term Debt — Total long-term debt"]

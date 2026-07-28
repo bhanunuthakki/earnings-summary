@@ -31,6 +31,8 @@ from compute.kpi_extract_summaries import (  # noqa: E402
 )
 from models.facts import FiscalPeriodType, Unit  # noqa: E402
 from models.kpis import DefinitionOrigin  # noqa: E402
+from models.runs import StageStatus  # noqa: E402
+from pipeline.run_accounting import PipelineRunSuppressedError  # noqa: E402
 
 
 def _const_caller(response: str) -> Callable[..., object]:
@@ -267,6 +269,12 @@ def test_capture_for_ticker_persists_capture_facts_and_canonicalizes(
     # Facts carry provenance back to the registered brief doc.
     fact_count = conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0]
     assert fact_count == 3
+    assert [
+        row[0]
+        for row in conn.execute(
+            "SELECT status FROM ingestion_runs WHERE directive='capture_kpis_from_ir'"
+        ).fetchall()
+    ] == ["ok"]
 
     # PR3: a Stage-B coverage record was written (3 seen, 3 captured).
     from pipeline.capture_coverage import load_coverage
@@ -325,6 +333,32 @@ def test_capture_for_ticker_drops_absurd_actual_magnitude(
     assert cov[0].seen == 2
     assert cov[0].captured == 1
     assert cov[0].dropped_validation == 1  # the absurd value, accounted for
+    conn.close()
+
+
+def test_capture_surfaces_accounting_suppression(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "data" / "portfolio.db"
+    db.parent.mkdir(parents=True)
+    _make_capture_db(db)
+    _write_brief(tmp_path)
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    monkeypatch.setattr(kes, "call_llm_structured", _const_caller(_ENUMERATE_JSON))
+    suppressed = PipelineRunSuppressedError(
+        pipeline_key="pipeline_test",
+        attempt_id="attempt_live",
+        status=StageStatus.IN_PROGRESS,
+    )
+
+    def suppress(*_: object, **__: object) -> str:
+        raise suppressed
+
+    monkeypatch.setattr(kes, "start_run", suppress)
+    with pytest.raises(PipelineRunSuppressedError) as exc_info:
+        capture_for_ticker("NU", tmp_path, conn, source_group="ir")
+    assert exc_info.value is suppressed
     conn.close()
 
 

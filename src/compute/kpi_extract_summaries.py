@@ -36,7 +36,7 @@ import logging
 import re
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -53,24 +53,55 @@ from llm_client import FAST_CLASSIFIER_MODEL
 from models.documents import SourceType, tier_for_source_type
 from models.facts import FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import DefinitionOrigin
+from models.runs import StageStatus
 from models.unit_convert import same_family
 from models.validation import Severity, ValidationRule
 from pipeline.capture_coverage import CaptureCoverageRecord, record_coverage
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
     KpiValue,
+    PersistResult,
     guard_llm_extracted_parent,
     persist_manifest,
     record_validation_issue,
 )
 from pipeline.locators import html_span_locator, locate_char_span, verify_quote_in_source
 from pipeline.restatement_detector import _table_has_column
-from pipeline.run_accounting import start_run
+from pipeline.run_accounting import (
+    JsonValue,
+    PipelineRunSuppressedError,
+    end_run,
+    start_run,
+)
 from provenance.llm_extracted_parent import resolve_parent
 
 # Named `logger` (not `log`) to avoid colliding with the `TickerExtractionLog`
 # locals named `log` throughout this module.
 logger = logging.getLogger("kpi_extract_summaries")
+
+
+def _persist_accounted(
+    conn: sqlite3.Connection,
+    *,
+    directive: str,
+    ticker: str,
+    invocation_inputs: Mapping[str, JsonValue],
+    manifest: KpiExtractionManifest,
+) -> PersistResult:
+    """Persist one document manifest and close its run attempt exactly once."""
+    run_id = start_run(
+        conn,
+        directive=directive,
+        ticker_scope=[ticker],
+        invocation_inputs=invocation_inputs,
+    )
+    try:
+        result = persist_manifest(conn, run_id=run_id, manifest=manifest)
+    except Exception as exc:
+        end_run(conn, run_id, StageStatus.FAILED, error_summary=f"{type(exc).__name__}: {exc}")
+        raise
+    end_run(conn, run_id, StageStatus.OK)
+    return result
 
 
 class _KpiSummaryValue(BaseModel):
@@ -298,14 +329,21 @@ def extract_for_ticker(
                 conn=conn,
                 source_text=text,
             )
-            run_id = start_run(
+            result = _persist_accounted(
                 conn,
                 directive=f"extract_kpis_from_{source_group}",
-                ticker_scope=[ticker],
+                ticker=ticker,
+                invocation_inputs={
+                    "document_id": doc_id,
+                    "period_end": period_end.isoformat(),
+                    "refresh": refresh,
+                },
+                manifest=manifest,
             )
-            result = persist_manifest(conn, run_id=run_id, manifest=manifest)
             log.kpis_inserted_total += result.inserted
             log.quarters_extracted.append(period_label)
+        except PipelineRunSuppressedError:
+            raise
         except Exception as e:
             log.error = f"{period_label}: {type(e).__name__}: {e}"
             break
@@ -1005,12 +1043,17 @@ def capture_for_ticker(
                 conn=conn,
                 source_text=text,
             )
-            run_id = start_run(
+            result = _persist_accounted(
                 conn,
                 directive=f"capture_kpis_from_{source_group}",
-                ticker_scope=[ticker],
+                ticker=ticker,
+                invocation_inputs={
+                    "document_id": doc_id,
+                    "period_end": period_end.isoformat(),
+                    "refresh": refresh,
+                },
+                manifest=manifest,
             )
-            result = persist_manifest(conn, run_id=run_id, manifest=manifest)
             log.kpis_inserted_total += result.inserted
             log.quarters_extracted.append(period_label)
             cov_seen += len(rows)
@@ -1019,6 +1062,8 @@ def capture_for_ticker(
             # Rows the LLM returned but that didn't survive to a value (bad value
             # token / blank label) are dropped before persist — count them.
             cov_unparseable += len(rows) - len(manifest.values)
+        except PipelineRunSuppressedError:
+            raise
         except Exception as e:
             log.error = f"{period_label}: {type(e).__name__}: {e}"
             break
@@ -1194,14 +1239,21 @@ def capture_for_ir_pdf_docs(
                 primary_source=SourceType.IR_DOC,
                 locate_quote=PdfQuoteLocator(pdf_path),
             )
-            run_id = start_run(
+            result = _persist_accounted(
                 conn,
                 directive="capture_kpis_from_ir_supplement",
-                ticker_scope=[ticker],
+                ticker=ticker,
+                invocation_inputs={
+                    "document_id": doc_id,
+                    "period_end": period_end.isoformat(),
+                    "refresh": refresh,
+                },
+                manifest=manifest,
             )
-            result = persist_manifest(conn, run_id=run_id, manifest=manifest)
             log.kpis_inserted_total += result.inserted
             log.quarters_extracted.append(period_label)
+        except PipelineRunSuppressedError:
+            raise
         except Exception as e:
             log.error = f"{period_label}: {type(e).__name__}: {e}"
             break

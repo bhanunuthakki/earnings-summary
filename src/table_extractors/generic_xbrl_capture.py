@@ -60,10 +60,11 @@ from typing import cast
 from models.documents import SourceType
 from models.facts import FiscalPeriodType, Unit
 from models.kpis import DefinitionOrigin
+from models.runs import StageStatus
 from pipeline import locators
 from pipeline.capture_coverage import CaptureCoverageRecord, record_coverage
 from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue, persist_manifest
-from pipeline.run_accounting import start_run
+from pipeline.run_accounting import end_run, start_run
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from table_extractors.base import (
     ExtractionOutcome,
@@ -220,34 +221,53 @@ def extract(
                 notes=json.dumps(audit.as_dict()),
             )
 
-        run_id = start_run(conn, directive="capture_xbrl", ticker_scope=[ticker.upper()])
-        inserted = 0
-        for period_end, values in per_period.items():
-            manifest = KpiExtractionManifest(
-                ticker=ticker.upper(),
-                period_end=period_end,
-                fiscal_period_type=FiscalPeriodType.FY,
-                source_doc_id=doc_id,
-                primary_source=SourceType.SEC_XBRL,
-                extracted_by=EXTRACTED_BY,
-                origin=DefinitionOrigin.CAPTURE,
-                values=values,
-            )
-            result = persist_manifest(conn, run_id=run_id, manifest=manifest)
-            inserted += result.inserted
-            audit.dropped_validation += result.validation_issues
-        audit.captured = sum(len(v) for v in per_period.values())
-        _emit_coverage(repo_root, ticker, fiscal_year, audit)
-
-        return ExtractionOutcome(
-            table_kind=TABLE_KIND,
-            ticker=ticker.upper(),
-            fiscal_year=fiscal_year,
-            n_rows_proposed=audit.captured,
-            n_rows_inserted=inserted,
-            status="ok" if inserted > 0 else "no_data",
-            notes=json.dumps(audit.as_dict()),
+        run_id = start_run(
+            conn,
+            directive="capture_xbrl",
+            ticker_scope=[ticker.upper()],
+            invocation_inputs={
+                "document_id": doc_id,
+                "fiscal_year": fiscal_year,
+            },
         )
+        try:
+            inserted = 0
+            for period_end, values in per_period.items():
+                manifest = KpiExtractionManifest(
+                    ticker=ticker.upper(),
+                    period_end=period_end,
+                    fiscal_period_type=FiscalPeriodType.FY,
+                    source_doc_id=doc_id,
+                    primary_source=SourceType.SEC_XBRL,
+                    extracted_by=EXTRACTED_BY,
+                    origin=DefinitionOrigin.CAPTURE,
+                    values=values,
+                )
+                result = persist_manifest(conn, run_id=run_id, manifest=manifest)
+                inserted += result.inserted
+                audit.dropped_validation += result.validation_issues
+            audit.captured = sum(len(v) for v in per_period.values())
+            _emit_coverage(repo_root, ticker, fiscal_year, audit)
+
+            outcome = ExtractionOutcome(
+                table_kind=TABLE_KIND,
+                ticker=ticker.upper(),
+                fiscal_year=fiscal_year,
+                n_rows_proposed=audit.captured,
+                n_rows_inserted=inserted,
+                status="ok" if inserted > 0 else "no_data",
+                notes=json.dumps(audit.as_dict()),
+            )
+        except Exception as exc:
+            end_run(
+                conn,
+                run_id,
+                StageStatus.FAILED,
+                error_summary=f"{type(exc).__name__}: {exc}",
+            )
+            raise
+        end_run(conn, run_id, StageStatus.OK)
+        return outcome
     finally:
         conn.close()
 

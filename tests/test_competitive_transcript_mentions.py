@@ -118,6 +118,12 @@ def test_extract_for_ticker_writes_quarterly_counts(tmp_path: Path) -> None:
         assert r["fiscal_period_type"] == "Q4"
         assert str(r["period_end"]).startswith("2026-01-31")
     assert float(by_name["Named-competitor mentions — Cohesity/Veeam/Dell (count)"]["value"]) == 2.0
+    assert [
+        row[0]
+        for row in conn.execute(
+            "SELECT status FROM ingestion_runs WHERE directive='extract_competitive_mentions'"
+        ).fetchall()
+    ] == ["ok"]
 
 
 def test_extract_processed_wins_over_raw(tmp_path: Path) -> None:

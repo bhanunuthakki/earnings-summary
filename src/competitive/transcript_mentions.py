@@ -46,8 +46,9 @@ from compute.transcript_ingest import (
 )
 from models.documents import SourceType
 from models.facts import LegacyEscapeHatch, Unit
+from models.runs import StageStatus
 from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue, persist_manifest
-from pipeline.run_accounting import start_run
+from pipeline.run_accounting import end_run, start_run
 
 _DOC_TYPE = "competitive_transcript_mentions"
 _EXTRACTED_BY = "competitive_transcript_mentions"
@@ -256,59 +257,71 @@ def extract_for_ticker(
         return result
 
     run_id = start_run(
-        conn, directive="extract_competitive_mentions", ticker_scope=[ticker.upper()]
+        conn,
+        directive="extract_competitive_mentions",
+        ticker_scope=[ticker.upper()],
+        invocation_inputs={
+            "documents": [
+                f"Q{quarter}:{year}:{path.name}"
+                for (quarter, year), path in sorted(discovered.items())
+            ]
+        },
     )
-
-    for (q_idx, fy_label), path in sorted(discovered.items()):
-        try:
-            text = read_transcript_text(path)
-        except (ValueError, OSError):
-            continue
-        counts = count_mentions(text)
-        mapping = map_to_period(ParsedFilename(ticker.upper(), q_idx, fy_label))
-        doc_id = ensure_synthetic_document(
-            conn,
-            ticker=ticker,
-            source_type=SourceType.TRANSCRIPT_AUDIO,
-            doc_type=_DOC_TYPE,
-            source_key=f"{_DOC_TYPE}:{str(path).replace(chr(92), '/')}",
-            period_end=mapping.period_end,
-        )
-        metric_values = {
-            KPI_MENTIONS_DISPLACEMENT: counts.displacement,
-            KPI_MENTIONS_LARGE_WIN: counts.large_win,
-            KPI_MENTIONS_NAMED_COMPETITOR: counts.named_competitor,
-        }
-        values = [
-            KpiValue(
-                name=metric,
-                value=Decimal(count),
-                unit=Unit.COUNT,
-                confidence=1.0,
-                source_excerpt=_excerpt_for(metric, counts),
-                locator=_NO_LOCATOR,
+    try:
+        for (q_idx, fy_label), path in sorted(discovered.items()):
+            try:
+                text = read_transcript_text(path)
+            except (ValueError, OSError):
+                continue
+            counts = count_mentions(text)
+            mapping = map_to_period(ParsedFilename(ticker.upper(), q_idx, fy_label))
+            doc_id = ensure_synthetic_document(
+                conn,
+                ticker=ticker,
+                source_type=SourceType.TRANSCRIPT_AUDIO,
+                doc_type=_DOC_TYPE,
+                source_key=f"{_DOC_TYPE}:{str(path).replace(chr(92), '/')}",
+                period_end=mapping.period_end,
             )
-            for metric, count in metric_values.items()
-        ]
-        manifest = KpiExtractionManifest(
-            ticker=ticker.upper(),
-            period_end=mapping.period_end,
-            fiscal_period_type=mapping.fiscal_period_type,
-            source_doc_id=doc_id,
-            primary_source=SourceType.TRANSCRIPT_AUDIO,
-            extracted_by=_EXTRACTED_BY,
-            canonical_units={metric: Unit.COUNT for metric in metric_values},
-            values=values,
-        )
-        outcome = persist_manifest(conn, run_id=run_id, manifest=manifest)
-        result.quarters.append(
-            QuarterExtract(
-                quarter=f"Q{q_idx}",
-                fiscal_year_label=fy_label,
-                period_end=mapping.period_end.date().isoformat(),
-                counts=counts,
-                inserted=outcome.inserted,
-                source_path=str(path).replace("\\", "/"),
+            metric_values = {
+                KPI_MENTIONS_DISPLACEMENT: counts.displacement,
+                KPI_MENTIONS_LARGE_WIN: counts.large_win,
+                KPI_MENTIONS_NAMED_COMPETITOR: counts.named_competitor,
+            }
+            values = [
+                KpiValue(
+                    name=metric,
+                    value=Decimal(count),
+                    unit=Unit.COUNT,
+                    confidence=1.0,
+                    source_excerpt=_excerpt_for(metric, counts),
+                    locator=_NO_LOCATOR,
+                )
+                for metric, count in metric_values.items()
+            ]
+            manifest = KpiExtractionManifest(
+                ticker=ticker.upper(),
+                period_end=mapping.period_end,
+                fiscal_period_type=mapping.fiscal_period_type,
+                source_doc_id=doc_id,
+                primary_source=SourceType.TRANSCRIPT_AUDIO,
+                extracted_by=_EXTRACTED_BY,
+                canonical_units={metric: Unit.COUNT for metric in metric_values},
+                values=values,
             )
-        )
+            outcome = persist_manifest(conn, run_id=run_id, manifest=manifest)
+            result.quarters.append(
+                QuarterExtract(
+                    quarter=f"Q{q_idx}",
+                    fiscal_year_label=fy_label,
+                    period_end=mapping.period_end.date().isoformat(),
+                    counts=counts,
+                    inserted=outcome.inserted,
+                    source_path=str(path).replace("\\", "/"),
+                )
+            )
+    except Exception as exc:
+        end_run(conn, run_id, StageStatus.FAILED, error_summary=f"{type(exc).__name__}: {exc}")
+        raise
+    end_run(conn, run_id, StageStatus.OK)
     return result

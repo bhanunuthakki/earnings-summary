@@ -165,6 +165,12 @@ def test_capture_only_ticker_ingests_at_ir_doc_with_capture_origin(tmp_path: Pat
     # Decimal percent scaled (0.094 -> 9.4%).
     nim = _series(conn, int(defs["Net interest margin (%)"]["id"]))
     assert round(nim[_Q4], 1) == 9.4
+    assert [
+        row[0]
+        for row in conn.execute(
+            "SELECT status FROM ingestion_runs WHERE directive='ingest_ir_spreadsheet'"
+        ).fetchall()
+    ] == ["ok"]
 
 
 def test_curated_analyst_series_not_disturbed_by_widening(tmp_path: Path) -> None:

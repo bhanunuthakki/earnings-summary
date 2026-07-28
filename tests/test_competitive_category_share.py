@@ -12,6 +12,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import competitive.category_share as category_share  # noqa: E402
 from competitive.category_share import ingest_category_share, load_seed  # noqa: E402
 
 from ._competitive_fixtures import kpi_conn  # noqa: E402
@@ -100,6 +101,13 @@ def test_ingest_writes_grounded_facts_and_skips_null(tmp_path: Path) -> None:
 
     # The null-value Rubrik-share entry must NOT have created a fabricated fact.
     assert "Data-protection category share — Rubrik (%)" not in by_name
+    assert [
+        row[0]
+        for row in conn.execute(
+            "SELECT status FROM ingestion_runs "
+            "WHERE directive='ingest_competitive_category_share'"
+        ).fetchall()
+    ] == ["ok"]
 
 
 def test_ingest_is_idempotent(tmp_path: Path) -> None:
@@ -112,6 +120,28 @@ def test_ingest_is_idempotent(tmp_path: Path) -> None:
     assert second.skipped_existing == 2
     n = conn.execute("SELECT COUNT(*) FROM kpi_facts WHERE ticker = 'RBRK'").fetchone()[0]
     assert n == 2
+
+
+def test_ingest_failure_closes_attempt_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_seed(tmp_path)
+    conn = kpi_conn()
+
+    def fail_persist(*_: object, **__: object) -> None:
+        raise RuntimeError("persist failed")
+
+    monkeypatch.setattr(category_share, "persist_manifest", fail_persist)
+    with pytest.raises(RuntimeError, match="persist failed"):
+        ingest_category_share(conn, tmp_path, "RBRK")
+
+    row = conn.execute(
+        "SELECT status, ended_at, error_summary FROM ingestion_runs"
+    ).fetchone()
+    assert row is not None
+    assert row["status"] == "failed"
+    assert row["ended_at"] is not None
+    assert "persist failed" in str(row["error_summary"])
 
 
 def test_ingest_missing_seed_is_noop(tmp_path: Path) -> None:

@@ -34,13 +34,14 @@ from ir_pipeline.config import IrConfig, SheetKpi
 from models.documents import SourceType, tier_for_source_type
 from models.facts import FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import DefinitionOrigin
+from models.runs import StageStatus
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
     KpiValue,
     persist_manifest,
 )
 from pipeline.restatement_detector import _table_has_column
-from pipeline.run_accounting import start_run
+from pipeline.run_accounting import end_run, start_run
 
 _DOC_TYPE = "ir_historical_spreadsheet"
 
@@ -174,34 +175,47 @@ def ingest_spreadsheet_kpis(
         for period, val in series.items():
             by_period.setdefault(period, {})[kpi] = val
 
-    run_id = start_run(conn, directive="ingest_ir_spreadsheet", ticker_scope=[ticker])
+    run_id = start_run(
+        conn,
+        directive="ingest_ir_spreadsheet",
+        ticker_scope=[ticker],
+        invocation_inputs={
+            "document_id": doc_id,
+            "periods": [period.isoformat() for period in sorted(by_period)],
+        },
+    )
     inserted = 0
-    for period_end, kpis in sorted(by_period.items()):
-        values = [
-            KpiValue(
-                name=name,
-                value=Decimal(str(val)),
-                unit=unit_by_name.get(name, Unit.ACTUAL),
-                confidence=1.0,
-                locator=_NO_LOCATOR,
+    try:
+        for period_end, kpis in sorted(by_period.items()):
+            values = [
+                KpiValue(
+                    name=name,
+                    value=Decimal(str(val)),
+                    unit=unit_by_name.get(name, Unit.ACTUAL),
+                    confidence=1.0,
+                    locator=_NO_LOCATOR,
+                )
+                for name, val in kpis.items()
+            ]
+            manifest = KpiExtractionManifest(
+                ticker=ticker.upper(),
+                period_end=period_end,
+                fiscal_period_type=_fiscal_period_type(period_end),
+                source_doc_id=doc_id,
+                primary_source=SourceType.IR_DOC,
+                model_name=None,
+                extracted_by="ir_spreadsheet",
+                origins=origins,
+                values=values,
             )
-            for name, val in kpis.items()
-        ]
-        manifest = KpiExtractionManifest(
-            ticker=ticker.upper(),
-            period_end=period_end,
-            fiscal_period_type=_fiscal_period_type(period_end),
-            source_doc_id=doc_id,
-            primary_source=SourceType.IR_DOC,
-            model_name=None,
-            extracted_by="ir_spreadsheet",
-            origins=origins,
-            values=values,
-        )
-        result = persist_manifest(conn, run_id=run_id, manifest=manifest)
-        inserted += result.inserted
+            result = persist_manifest(conn, run_id=run_id, manifest=manifest)
+            inserted += result.inserted
 
-    _supersede_llm_incumbents(conn, ticker, doc_id, series_by_name)
+        _supersede_llm_incumbents(conn, ticker, doc_id, series_by_name)
+    except Exception as exc:
+        end_run(conn, run_id, StageStatus.FAILED, error_summary=f"{type(exc).__name__}: {exc}")
+        raise
+    end_run(conn, run_id, StageStatus.OK)
     return inserted, doc_id
 
 
