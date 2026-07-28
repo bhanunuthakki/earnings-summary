@@ -38,6 +38,7 @@ import threading
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
+from stat import S_ISDIR
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ LLM_CAPTURE_PURPOSES_ENV = "LLM_CAPTURE_PURPOSES"
 CAPTURE_ARCHIVE_DIR_ENV = "EARNINGS_SUMMARY_CAPTURE_ARCHIVE_DIR"
 CAPTURE_RETENTION_DAYS_ENV = "EARNINGS_SUMMARY_CAPTURE_RETENTION_DAYS"
 DEFAULT_CAPTURE_RETENTION_DAYS = 90
+DEFAULT_CAPTURE_MAX_BYTES = 1 << 30
 _CAPTURE_FILE_RX = re.compile(r"^capture_(\d{4}-\d{2}-\d{2})(?:_\d+)?(?:_p[0-9a-f]{12})?\.jsonl$")
 _WRITE_LOCK = threading.Lock()
 _LAST_PRUNED_DAY: dict[Path, date] = {}
@@ -139,6 +141,7 @@ def prune_capture_archive(
     retention_days: int = DEFAULT_CAPTURE_RETENTION_DAYS,
     today: datetime | None = None,
     strict: bool = False,
+    require_directory: bool = False,
 ) -> int:
     """Delete only recognized capture shards older than ``retention_days``."""
     if retention_days <= 0:
@@ -146,7 +149,11 @@ def prune_capture_archive(
     current = today or datetime.now(UTC).replace(tzinfo=None)
     cutoff = current.date().toordinal() - retention_days
     deleted = 0
-    if not directory.is_dir():
+    if not _archive_directory_available(
+        directory,
+        strict=strict,
+        require_directory=require_directory,
+    ):
         return deleted
     for path in directory.glob("capture_*.jsonl"):
         match = _CAPTURE_FILE_RX.fullmatch(path.name)
@@ -164,6 +171,54 @@ def prune_capture_archive(
         except ValueError:
             continue
     return deleted
+
+
+def _archive_directory_available(
+    directory: Path,
+    *,
+    strict: bool,
+    require_directory: bool,
+) -> bool:
+    try:
+        mode = directory.stat().st_mode
+    except FileNotFoundError:
+        if strict and require_directory:
+            raise
+        return False
+    except OSError:
+        if strict:
+            raise
+        return False
+    if S_ISDIR(mode):
+        return True
+    if strict:
+        raise NotADirectoryError("capture archive root is not a directory")
+    return False
+
+
+def capture_archive_bytes(
+    directory: Path,
+    *,
+    strict: bool = False,
+    require_directory: bool = False,
+) -> int:
+    """Total bytes in recognized capture shards, ignoring unrelated files."""
+    if not _archive_directory_available(
+        directory,
+        strict=strict,
+        require_directory=require_directory,
+    ):
+        return 0
+    total = 0
+    for path in directory.glob("capture_*.jsonl"):
+        if _CAPTURE_FILE_RX.fullmatch(path.name) is None:
+            continue
+        try:
+            total += path.stat().st_size
+        except OSError:
+            if strict:
+                raise
+    return total
 
 
 def _prune_expired(directory: Path, *, today: datetime) -> None:
