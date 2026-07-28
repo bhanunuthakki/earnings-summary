@@ -80,6 +80,7 @@ from llm.query_criteria import (  # noqa: E402
     derive_or_load,
     render_criteria_block,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("run_prompt_ab")
 
@@ -87,7 +88,7 @@ DEFAULT_N = 12
 
 
 def _experiment_row(db_path: Path, experiment_id: str) -> sqlite3.Row | None:
-    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         return conn.execute(
@@ -100,7 +101,7 @@ def _experiment_row(db_path: Path, experiment_id: str) -> sqlite3.Row | None:
 def _set_experiment_status(
     db_path: Path, experiment_id: str, status: str, *, decision: str | None = None
 ) -> None:
-    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         from datetime import UTC, datetime
 
@@ -118,7 +119,7 @@ def _set_experiment_status(
 
 def _prior_run_shas(db_path: Path, experiment_id: str) -> set[str]:
     """Shas sampled by prior runs of THIS experiment (§4.4 fresh-sample rule)."""
-    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     try:
         rows = conn.execute(
             "SELECT summary_json FROM prompt_ab_verdicts WHERE experiment_id = ?",

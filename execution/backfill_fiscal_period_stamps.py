@@ -61,6 +61,7 @@ from compute.kpi_extract_summaries import (  # noqa: E402
     _TICKER_QUARTER_PERIOD_END,
     _period_end,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # Matches the `.tmp/<TICKER>_Q<N>_<YYYY>_*.txt` filename convention that
 # `_period_end`'s (quarter, year) inputs come from — same regex shape as
@@ -94,7 +95,7 @@ def backfill(
 ) -> CorrectionResult:
     """Re-stamp llm_extracted documents (+ dependent kpi_facts) whose period_end
     doesn't match what `_period_end` now computes from their own filename."""
-    conn = sqlite3.connect(db_path)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     result = CorrectionResult()
     try:

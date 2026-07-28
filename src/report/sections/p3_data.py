@@ -29,6 +29,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import cast
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 log = logging.getLogger(__name__)
 
 
@@ -138,7 +140,7 @@ def _open(db_path: Path | str) -> sqlite3.Connection | None:
     if not p.exists():
         return None
     try:
-        conn = sqlite3.connect(str(p), timeout=5.0)
+        conn = connect_sqlite(p, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         return conn
     except sqlite3.Error as exc:
@@ -861,7 +863,7 @@ def _tracked_tickers(repo_root: Path) -> set[str]:
     if not db.exists():
         return set()
     try:
-        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return set()
     try:

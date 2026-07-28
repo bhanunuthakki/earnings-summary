@@ -75,6 +75,8 @@ from provenance.overrides import (
     OverrideAction,
     active_scalar_override_map,
 )
+from provenance.selection import selected_transcripts_relation
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from timeseries.loaders import reader_tier_join_sql, reader_tier_rank_sql
 
 log = logging.getLogger(__name__)
@@ -420,7 +422,7 @@ def _connect(db_path: Path) -> sqlite3.Connection | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     # Row factory so the provenance.overrides read API (which indexes rows by
@@ -1182,9 +1184,10 @@ def _transcript_docs(
         params.append(f"Q{quarter}")
     params.append(limit)
     try:
+        transcripts = selected_transcripts_relation(conn)
         rows = conn.execute(
             "SELECT t.document_id, d.file_path, t.fiscal_period_type, t.period_end "
-            "FROM transcripts t JOIN documents d ON d.id = t.document_id "
+            f"FROM {transcripts} t JOIN documents d ON d.id = t.document_id "
             f"WHERE {' AND '.join(clauses)} ORDER BY t.period_end DESC LIMIT ?",
             tuple(params),
         ).fetchall()

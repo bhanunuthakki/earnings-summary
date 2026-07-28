@@ -60,6 +60,8 @@ import sqlite3
 from pathlib import Path
 from typing import cast
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 log = logging.getLogger(__name__)
 
 # Hard cap on the assembled anchor blocks so a verbose holdings JSON cannot
@@ -254,7 +256,7 @@ def _statistical_patterns_block(
     db_path = repo_root / "data" / "portfolio.db"
     if db_path.exists():
         try:
-            conn = sqlite3.connect(str(db_path), timeout=5.0)
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
             try:
                 rows = conn.execute(
                     "SELECT name FROM kpi_definitions WHERE ticker = ? LIMIT 4",
@@ -688,7 +690,7 @@ def load_owner_profile_anchor(
     try:
         from owner_profile.store import get_current_profile
 
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             grouped = get_current_profile(conn)
         finally:

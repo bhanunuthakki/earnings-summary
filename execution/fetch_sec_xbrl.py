@@ -41,8 +41,16 @@ from models.runs import StageStatus  # noqa: E402
 from pipeline.queries import open_db, tracked_companies_for_user  # noqa: E402
 from pipeline.run_accounting import end_run, start_run  # noqa: E402
 from pipeline.sec_xbrl import CIK_MAP, NO_SEC_FILERS, ingest_for_ticker  # noqa: E402
+from provenance.sec_companyfacts_capture import CompanyFactsContractError  # noqa: E402
 
 _PER_TICKER_DELAY_S = 0.2
+
+
+def _integer_stat(row: dict[str, object], key: str) -> int:
+    value = row.get(key, 0)
+    if not isinstance(value, int):
+        raise TypeError(f"SEC XBRL result field {key!r} is not an integer")
+    return value
 
 
 def _flag_silent_staleness(conn: sqlite3.Connection, ticker: str) -> bool:
@@ -126,6 +134,19 @@ def main() -> int:
                 )
                 failed += 1
                 continue
+            except CompanyFactsContractError as e:
+                rows.append(
+                    {
+                        "ticker": ticker,
+                        "error": f"{type(e).__name__}: {e}"[:200],
+                        "class": "schema_drift",
+                        "raw_response_path": (
+                            None if e.raw_response_path is None else str(e.raw_response_path)
+                        ),
+                    }
+                )
+                failed += 1
+                continue
             except (ValueError, KeyError) as e:
                 # Schema drift: the SEC payload didn't parse as expected.
                 # Per GEMINI.md, capture the raw response location so the
@@ -186,8 +207,8 @@ def main() -> int:
             conn, run_id, terminal, error_summary=f"{failed} tickers failed" if failed else None
         )
 
-        total_accessions = sum(r.get("accessions_registered", 0) for r in rows)
-        total_facts = sum(r.get("facts_inserted", 0) for r in rows)
+        total_accessions = sum(_integer_stat(row, "accessions_registered") for row in rows)
+        total_facts = sum(_integer_stat(row, "facts_inserted") for row in rows)
         print(
             json.dumps(
                 {

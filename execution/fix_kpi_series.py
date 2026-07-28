@@ -65,6 +65,7 @@ from pipeline.kpi_persistence import (  # noqa: E402
     _decimal_unit_jump,  # pyright: ignore[reportPrivateUsage]
     _is_cumulative_kpi,  # pyright: ignore[reportPrivateUsage]
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 _DEFAULT_UNIT_ERROR_FLOOR = Decimal("1e6")
 _DEFAULT_UNIT_SCALE = Decimal("1e6")
@@ -331,7 +332,16 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: --apply cannot run against a mode=ro URI.", file=sys.stderr)
         return 2
 
-    conn = sqlite3.connect(db_target, uri=args.uri)
+    if args.uri:
+        # Intentional isolated-recovery seam: operators may supply a complete
+        # SQLite URI whose policy cannot be safely reconstructed from a path.
+        conn = sqlite3.connect(db_target, uri=True)
+    else:
+        conn = connect_sqlite(
+            Path(db_target),
+            role=(SQLiteConnectionRole.WRITER if args.apply else SQLiteConnectionRole.READ_ONLY),
+            schema_preflight=args.apply,
+        )
     conn.row_factory = sqlite3.Row
     try:
         definitions = _cumulative_definitions(conn, ticker=args.ticker, kpi_name=args.kpi_name)

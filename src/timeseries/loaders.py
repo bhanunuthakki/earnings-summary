@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
+from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import (
     FINANCIAL_FACT,
     KPI,
@@ -50,6 +51,7 @@ from provenance.overrides import (
     override_provenance,
     qualify_note,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from timeseries.primitives import Observation
 
 log = logging.getLogger(__name__)
@@ -105,7 +107,7 @@ def _open(db_path: Path) -> sqlite3.Connection | None:
         log.debug({"event": "timeseries_loader_db_missing", "path": str(db_path)})
         return None
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         return conn
     except sqlite3.Error as exc:
@@ -407,6 +409,7 @@ def load_financial_series(
     try:
         if not _has_table(conn, "financial_facts"):
             return []
+        fact_relation = canonical_fact_relation(conn, "financial_facts").sql
         has_documents = _has_table(conn, "documents")
         # On legacy schemas (no documents table, or no tier column), fall
         # back to the pre-0053 max(id) dedup so callers operating against
@@ -416,12 +419,12 @@ def load_financial_series(
             rows = conn.execute(
                 f"""
                 SELECT ff.period_end, ff.value
-                FROM financial_facts ff
+                FROM {fact_relation} ff
                 WHERE ff.ticker = ?
                   AND ff.line_item = ?
                   AND ff.fiscal_period_type IN ({placeholders})
                   AND ff.id = (
-                    SELECT MAX(ff2.id) FROM financial_facts ff2
+                    SELECT MAX(ff2.id) FROM {fact_relation} ff2
                     WHERE ff2.ticker = ff.ticker
                       AND ff2.line_item = ff.line_item
                       AND ff2.period_end = ff.period_end
@@ -450,7 +453,7 @@ def load_financial_series(
         rows = conn.execute(
             f"""
             SELECT ff.period_end, ff.value
-            FROM financial_facts ff
+            FROM {fact_relation} ff
             JOIN documents d ON d.id = ff.source_doc_id
             WHERE ff.ticker = ?
               AND ff.line_item = ?
@@ -458,7 +461,7 @@ def load_financial_series(
               {as_of_clause}
               AND ff.id = (
                 SELECT ff2.id
-                FROM financial_facts ff2
+                FROM {fact_relation} ff2
                 JOIN documents d2 ON d2.id = ff2.source_doc_id
                 WHERE ff2.ticker = ff.ticker
                   AND ff2.line_item = ff.line_item

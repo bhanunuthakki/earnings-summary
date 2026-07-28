@@ -41,6 +41,7 @@ import sqlite3
 from html import escape
 from pathlib import Path
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import panel_toolbar, ticker_label
 
 _PANEL_STYLE = """<style>
@@ -81,7 +82,7 @@ _WHERE_BY_FILTER: dict[str, str] = {
 
 def _open(db_path: Path) -> sqlite3.Connection | None:
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         conn.execute("SELECT 1 FROM v_decision_journal LIMIT 1")
         return conn

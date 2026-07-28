@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import cast
 
 from identity import DEFAULT_USER_ID
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -166,7 +167,7 @@ def build_lexicon(
     if not db_path.exists():
         return []
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return []
     try:
@@ -261,7 +262,7 @@ def portfolio_tickers(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> list[
     if not db_path.exists():
         return []
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return []
     try:
@@ -393,7 +394,7 @@ def mine_news(
     if not db_path.exists() or not holdings:
         return hits
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return hits
     marks = ",".join("?" * len(holdings))

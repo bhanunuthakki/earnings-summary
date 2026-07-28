@@ -52,6 +52,7 @@ from news.store import (  # noqa: E402
     drop_duplicate_stories,
     upsert_news_rows,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 DEFAULT_DAYS = 3
 MAX_WORKERS = 8  # yfinance is HTTP-bound; same threading idiom as the FMP feed
@@ -264,7 +265,7 @@ def run(tickers: list[str], *, db_path: str, days: int) -> int:
         }
         for future in as_completed(futures):
             all_rows.extend(future.result())
-    conn = sqlite3.connect(db_path)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         fresh = drop_duplicate_stories(conn, all_rows)
         inserted, deduped = upsert_news_rows(conn, fresh)

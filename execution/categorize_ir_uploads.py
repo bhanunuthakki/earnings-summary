@@ -61,6 +61,7 @@ from ir_uploads import (  # noqa: E402
     ticker_hint_from_path,
 )
 from models.documents import DocType, FetchStatus, SourceType  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 IR_DIR = PROJECT_ROOT / "ir_documents"
 UNSORTED_DIR = IR_DIR / "_unsorted"
@@ -110,7 +111,7 @@ def _connect_db(db_path: Path) -> sqlite3.Connection:
         raise FileNotFoundError(
             f"portfolio.db not found at {db_path}. Run `alembic upgrade head` first."
         )
-    conn = sqlite3.connect(db_path)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     return conn
 

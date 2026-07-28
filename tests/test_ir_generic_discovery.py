@@ -17,11 +17,13 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from ir_pipeline.authority import PublisherEndpointRule  # noqa: E402
 from ir_pipeline.config import IrConfig  # noqa: E402
 from ir_pipeline.discover import discover_history_hybrid  # noqa: E402
 from ir_pipeline.discover._docmeta import CandidateDoc  # noqa: E402
 from ir_pipeline.discover.generic import (  # noqa: E402
     discover_document_history,
+    discover_document_inventory,
     precise_to_candidates,
 )
 
@@ -160,6 +162,57 @@ def test_dead_page_returns_empty() -> None:
 
 def test_no_ir_url_returns_empty() -> None:
     assert discover_document_history(ir_url="") == []
+
+
+def test_inventory_is_untruncated_and_records_page_failure() -> None:
+    root = "https://ir.x/"
+    archive = "https://ir.x/results"
+    links = [
+        (f"https://ir.x/{year}-q{quarter}.pdf", f"Q{quarter} {year} Results")
+        for year in (2023, 2024, 2025)
+        for quarter in (1, 2, 3, 4)
+    ]
+
+    def _render(url: str, timeout_ms: int) -> list[tuple[str, str]]:
+        if url == root:
+            return [(archive, "Results Archive"), *links]
+        raise RuntimeError("archive unavailable")
+
+    inventory = discover_document_inventory(
+        ir_url=root,
+        render=_render,
+        fetch_filename=_no_fetch,
+        rate_limit_s=0,
+        check_robots=False,
+    )
+    assert len(inventory.candidates) == 12
+    assert inventory.crawl_stop_reason == "page_failure"
+    assert not inventory.crawl_complete
+    assert [page.outcome for page in inventory.pages] == ["succeeded", "failed"]
+    assert inventory.pages[1].failure_reason == "RuntimeError"
+
+
+def test_inventory_requires_explicit_authority_for_cross_host_files() -> None:
+    pages = {
+        "https://ir.x/": [
+            ("https://cdn.x/results/q4-2025.pdf#download", "Q4 2025 Results"),
+            ("https://evil.x/q4-2025.pdf", "Q4 2025 Results"),
+        ]
+    }
+    renderer = _Renderer(pages)
+    inventory = discover_document_inventory(
+        ir_url="https://ir.x/",
+        render=renderer,
+        fetch_filename=_no_fetch,
+        rate_limit_s=0,
+        check_robots=False,
+        publisher_file_rules=(PublisherEndpointRule(host="cdn.x", path_prefix="/results"),),
+    )
+    assert [candidate.url for candidate in inventory.candidates] == [
+        "https://cdn.x/results/q4-2025.pdf"
+    ]
+    assert inventory.crawl_complete
+    assert not inventory.authority_complete
 
 
 def test_precise_to_candidates_maps_aliases() -> None:

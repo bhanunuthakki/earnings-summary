@@ -65,6 +65,7 @@ from llm.structured import StructuredParseError, call_llm_structured
 from llm_budget import should_skip_for_budget
 from models.companies import ListType
 from portfolio_weights import read_materialized_weights
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 __all__ = [
     "ACTION_VERBS",
@@ -228,7 +229,7 @@ def _ro_conn(db_path: Path) -> sqlite3.Connection | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     conn.row_factory = sqlite3.Row
@@ -961,7 +962,7 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection:
     path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         raise CardActionError("portfolio DB not available")
-    conn = sqlite3.connect(str(path), timeout=5.0)
+    conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row
     return conn

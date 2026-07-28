@@ -64,6 +64,7 @@ from pipeline import locators
 from pipeline.capture_coverage import CaptureCoverageRecord, record_coverage
 from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue, persist_manifest
 from pipeline.run_accounting import start_run
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from table_extractors.base import (
     ExtractionOutcome,
     iter_xbrl_table,
@@ -179,7 +180,7 @@ def extract(
             notes="missing fmp_payload or fiscal_year",
         )
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     try:
         # The shared document_table_extractor._lookup_doc_id matches on

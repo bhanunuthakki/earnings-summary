@@ -49,6 +49,7 @@ from report.builder import build_report  # noqa: E402
 from report.models import ReportFlavor  # noqa: E402
 from report.renderers.workspace_html import render as render_workspace_html  # noqa: E402
 from research.investment_decision_card import generate_card  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def _log(event: str, **kwargs: object) -> None:
@@ -83,7 +84,7 @@ def _flavor_for_ticker(db_path: Path, ticker: str) -> ReportFlavor:
     if not db_path.exists():
         return ReportFlavor.PORTFOLIO
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return ReportFlavor.PORTFOLIO
     try:

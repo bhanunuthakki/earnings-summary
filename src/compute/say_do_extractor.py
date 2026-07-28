@@ -50,6 +50,7 @@ from pydantic import BaseModel, Field, ValidationError
 from compute.say_do import CommitmentExtractionManifest, CommitmentInput
 from compute.thesis_evaluator import Comparator
 from models.facts import Unit
+from provenance.selection import selected_transcripts_relation
 
 log = logging.getLogger(__name__)
 
@@ -127,9 +128,10 @@ def fetch_transcript_text_and_segment(
     conn: sqlite3.Connection, transcript_id: int
 ) -> tuple[str, int, datetime] | None:
     """Return (text, segment_id, period_end) for the transcript's longest segment, or None."""
+    transcripts = selected_transcripts_relation(conn)
     cur = conn.execute(
         "SELECT t.period_end, ts.id AS segment_id, ts.text "
-        "FROM transcripts t JOIN transcript_segments ts ON ts.transcript_id = t.id "
+        f"FROM {transcripts} t JOIN transcript_segments ts ON ts.transcript_id = t.id "
         "WHERE t.id = ? ORDER BY length(ts.text) DESC LIMIT 1",
         (transcript_id,),
     )
@@ -173,8 +175,9 @@ def transcripts_pending_extraction(
       - its ticker has at least one kpi_definitions row (an empty catalog
         makes the call's outcome predetermined: the prompt tells the model
         to return no commitments)."""
+    transcripts = selected_transcripts_relation(conn)
     sql = (
-        "SELECT t.id, t.ticker, t.period_end FROM transcripts t "
+        f"SELECT t.id, t.ticker, t.period_end FROM {transcripts} t "
         "WHERE NOT EXISTS ("
         "  SELECT 1 FROM management_commitments mc "
         "  JOIN transcript_segments ts ON ts.id = mc.transcript_segment_id "
@@ -362,7 +365,11 @@ def extract_for_transcript(
       - Unusable LLM response ⇒ ONE retry with explicit feedback, then
         CommitmentParseError. Callers must not record a scan for a transcript
         that raised."""
-    cur = conn.execute("SELECT t.ticker FROM transcripts t WHERE t.id = ?", (transcript_id,))
+    transcripts = selected_transcripts_relation(conn)
+    cur = conn.execute(
+        f"SELECT t.ticker FROM {transcripts} t WHERE t.id = ?",
+        (transcript_id,),
+    )
     row = cur.fetchone()
     if row is None:
         raise ValueError(f"transcript_id={transcript_id} not found")

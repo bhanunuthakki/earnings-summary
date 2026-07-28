@@ -29,11 +29,13 @@ governed artifacts and caches — no new LLM purpose, no render-path LLM call.
 
 from __future__ import annotations
 
+import sqlite3
 from html import escape
 from pathlib import Path
 
 from identity import DEFAULT_USER_ID
 from pipeline.console_scaffold import ConsoleSection, render_console
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # The D1 tile grid + Band-1 brief. Tokens only (design_language §2): auto-fit
 # tiles ≥460px so a wide desktop viewport gets 2-3 columns and a narrow one
@@ -132,13 +134,11 @@ def _jump_chip(anchor: str, label: str) -> str:
 def _health_brief(db_path: Path) -> str:
     """The Health read: where the theses stand, how fresh the risk picture is,
     and what the last red-team run left on the table."""
-    import sqlite3
-
     lines: list[str] = []
     links: list[str] = []
 
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         conn = None
     if conn is not None:

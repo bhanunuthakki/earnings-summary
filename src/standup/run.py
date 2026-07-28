@@ -42,6 +42,7 @@ from ask import store as ask_store
 from evals.rubric_judge import LlmCaller, Rubric
 from identity import DEFAULT_USER_ID
 from llm.cli import call_llm
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from standup.compose import ComposedMessage, EventsFn, compose
 from standup.config import StandupConfig
 from standup.gate import GateOutcome, gate_message
@@ -170,7 +171,7 @@ def run_standup(
     caller: LlmCaller = judge_caller if judge_caller is not None else call_llm
 
     report = StandupReport()
-    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
     try:

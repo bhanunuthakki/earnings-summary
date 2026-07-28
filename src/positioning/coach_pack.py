@@ -34,6 +34,7 @@ from ask.context import ContextPack
 from candidate_fit_cache import assemble_book_context
 from positioning.store import latest_intent
 from positioning.target import TargetContext, resolve_target_context
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 COACH_PURPOSE = "positioning_coach_turn"
 SESSION_SCOPE = "positioning"
@@ -216,7 +217,7 @@ def build_positioning_pack(repo_root: Path, db_path: Path) -> ContextPack:
 def coach_session_narrative(db_path: Path) -> str | None:
     """The active intent's narrative for surfaces that only need the words."""
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     try:

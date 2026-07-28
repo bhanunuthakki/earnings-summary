@@ -44,6 +44,7 @@ from typing import cast
 
 from llm.eval_scopes import EVAL_SCOPES
 from llm.model_ladder import estimated_call_usd, model_rank
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # The eval-machinery scopes — traffic these tables account for that is NOT real
 # production spend. Unified onto the canonical llm.eval_scopes.EVAL_SCOPES
@@ -602,7 +603,7 @@ def render_model_eval_panel(db_path: Path) -> str:
     health: SteeringHealth | None = None
     experiments: list[ExperimentRow] = []
     if db_path.exists():
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             costs = load_purpose_costs(conn)

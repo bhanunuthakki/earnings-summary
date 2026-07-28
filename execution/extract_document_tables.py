@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -45,6 +44,7 @@ from document_table_extractor import (  # noqa: E402
     extract_for_ticker,
     registered_table_kinds,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("extract_document_tables")
 
@@ -121,7 +121,7 @@ def _portfolio_tickers(repo_root: Path) -> list[str]:
     db_path = repo_root / "data" / "portfolio.db"
     if not db_path.exists():
         return []
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     try:
         rows = conn.execute(
             """

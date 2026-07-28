@@ -35,6 +35,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+
 _TABLES: tuple[str, ...] = ("financial_facts", "kpi_facts", "fact_overrides")
 
 
@@ -181,7 +184,7 @@ def main() -> int:
         return 1
 
     tables = [args.table] if args.table else list(_TABLES)
-    conn = sqlite3.connect(f"file:{args.db_path}?mode=ro", uri=True)
+    conn = connect_sqlite(args.db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         coverages = [
             cov for t in tables if (cov := audit_table(conn, t, ticker=args.ticker)) is not None

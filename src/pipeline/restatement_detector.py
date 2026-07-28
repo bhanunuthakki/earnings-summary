@@ -41,6 +41,8 @@ import sqlite3
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
+from provenance.financial_fact_resolution import resolve_fact_row
+
 log = logging.getLogger(__name__)
 
 
@@ -321,6 +323,7 @@ def _correct_same_document_fact(
             "new_unit": str(unit),
         }
     )
+    resolve_fact_row(conn, fact_table="financial_facts", fact_row_id=inc_id)
     return inc_id
 
 
@@ -496,10 +499,10 @@ def insert_with_restatement_detection(
             extracted_by=extracted_by,
         )
         return (None, None)
-    return (
-        int(cur.lastrowid) if cur.lastrowid is not None else None,
-        supersedes_id,
-    )
+    new_row_id = int(cur.lastrowid) if cur.lastrowid is not None else None
+    if new_row_id is not None:
+        resolve_fact_row(conn, fact_table="financial_facts", fact_row_id=new_row_id)
+    return (new_row_id, supersedes_id)
 
 
 def insert_kpi_with_restatement_detection(
@@ -658,10 +661,10 @@ def insert_kpi_with_restatement_detection(
         # Conflict on UNIQUE (same source_doc_id under provenance; same
         # logical key under legacy logical-only). No row written.
         return (None, None)
-    return (
-        int(cur.lastrowid) if cur.lastrowid is not None else None,
-        supersedes_id,
-    )
+    new_row_id = int(cur.lastrowid) if cur.lastrowid is not None else None
+    if new_row_id is not None:
+        resolve_fact_row(conn, fact_table="kpi_facts", fact_row_id=new_row_id)
+    return (new_row_id, supersedes_id)
 
 
 def latest_in_chain(

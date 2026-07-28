@@ -20,6 +20,8 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 # A $-figure asserted as the DCF/intrinsic/fair value, e.g. "fair value is $55",
 # "DCF fair value $55", "NPV/share of $21". Keyword-anchored so unrelated dollar
 # amounts in the prose are never matched.
@@ -70,7 +72,7 @@ def load_grounded_numbers(ticker: str, repo_root: Path) -> GroundedNumbers | Non
     db = repo_root / "data" / "portfolio.db"
     if not db.exists():
         return None
-    conn = sqlite3.connect(str(db))
+    conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     try:
         conn.row_factory = sqlite3.Row
         if not conn.execute(

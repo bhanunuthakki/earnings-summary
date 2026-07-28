@@ -24,6 +24,7 @@ from pathlib import Path
 
 from expected_earnings import upcoming_by_ticker
 from identity import DEFAULT_USER_ID
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from user_state.notes import AnalystNoteRow, list_notes
 
 __all__ = ["UPCOMING_CSS", "render_upcoming_strip", "upcoming_earnings"]
@@ -149,7 +150,7 @@ def upcoming_earnings(
     if db_path is None or not Path(db_path).exists():
         return []
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return []
     try:
@@ -255,7 +256,7 @@ def render_upcoming_strip(
     tiers: dict[str, str] = {}
     if db_path is not None and Path(db_path).exists():
         try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         except sqlite3.Error:
             conn = None
         if conn is not None:

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Literal
 
 from identity import DEFAULT_USER_ID
 from positioning.store import latest_intent
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 if TYPE_CHECKING:
     from allocation.candidate_fit import BookContext
@@ -71,7 +72,7 @@ def resolve_target_context(
     if not Path(db_path).exists():
         return book_default_target(book)
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return book_default_target(book)
     try:

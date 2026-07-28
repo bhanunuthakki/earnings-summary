@@ -24,6 +24,7 @@ from llm_artifact_store import (
     upsert,
 )
 from llm_client import call_llm
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 from ._shared import (
     LensContext,
@@ -95,7 +96,7 @@ def _ctx_portfolio_macro_stress(*, scenario_obj: object, repo_root: Path) -> Len
         from macro_store import fetch_sensitivities
     except ImportError:
         return None
-    conn = sqlite3.connect(str(db))
+    conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     try:
         conn.row_factory = sqlite3.Row
         tickers = [

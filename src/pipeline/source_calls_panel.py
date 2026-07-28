@@ -24,6 +24,7 @@ from sources.registry import (
     SourceCallSummary,
     cache_effectiveness_overview,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 
 _PANEL_STYLE = """<style>
@@ -268,7 +269,7 @@ def _read_action_usage(db_path: Path) -> list[ActionUsageRow]:
         " GROUP BY panel_id"
     )
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             rows = conn.execute(sql).fetchall()
         finally:

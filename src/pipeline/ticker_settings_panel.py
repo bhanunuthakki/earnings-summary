@@ -15,6 +15,8 @@ import sqlite3
 from html import escape
 from pathlib import Path
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 _SCRIPT = """<script>
 (function () {
   function setPill(cell, cls, text) {
@@ -113,7 +115,7 @@ def _load_rows(db_path: Path) -> list[tuple[str, bool, str]] | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     try:

@@ -56,6 +56,7 @@ from ir_pipeline._net import (  # noqa: E402
     safe_redirect_url,
 )
 from log_redact import redact  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 LOG_FORMAT = json.dumps({"level": "%(levelname)s", "ts": "%(asctime)s", "msg": "%(message)s"})
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stderr)
@@ -154,7 +155,7 @@ def _registered_source_urls(db_path: Path, ticker: str) -> set[str]:
     if not db_path.exists():
         return set()
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             rows = conn.execute(
                 "SELECT source_url FROM documents WHERE ticker = ? AND source_url IS NOT NULL",

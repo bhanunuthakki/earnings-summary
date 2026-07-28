@@ -38,6 +38,7 @@ from typing import cast
 from clock import now_iso
 from db_paths import resolve_db_path
 from identity import DEFAULT_USER_ID
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 ALERT_STATUS_PENDING = "pending"
 ALERT_STATUS_APPROVED = "approved"
@@ -680,7 +681,11 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection:
         )
     if not path.exists():
         raise FileNotFoundError(f"SQLite DB does not exist: {path}")
-    conn = sqlite3.connect(str(path), timeout=5.0)
+    conn = connect_sqlite(
+        path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA foreign_keys = ON")

@@ -141,7 +141,7 @@ from server_runtime.access import (  # noqa: E402
     validate_bind_host,
 )
 from server_runtime.streaming import drain_events  # noqa: E402
-from sqlite_runtime import connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # Repo-wide maintenance chores exposed on the dashboard, each dispatched as a
 # single-flight job running an existing CLI under execution/. (Onboarding a
@@ -511,7 +511,7 @@ def create_app(
         )
 
     def _open_db() -> sqlite3.Connection:
-        return connect_sqlite(db_path)
+        return connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
 
     @app.before_request
     def enforce_network_boundary():
@@ -1070,7 +1070,7 @@ def create_app(
             return ("", 204)
         from owner_profile.store import affirm_fact
 
-        conn = connect_sqlite(db_path)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             row = affirm_fact(conn, fact_id)
             conn.commit()
@@ -1096,7 +1096,7 @@ def create_app(
             return ("", 204)
         from owner_profile.store import reject_fact
 
-        conn = connect_sqlite(db_path)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             ok = reject_fact(conn, fact_id)
             conn.commit()
@@ -1117,7 +1117,7 @@ def create_app(
             return ("", 204)
         from owner_profile.store import reaffirm_fact
 
-        conn = connect_sqlite(db_path)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             row = reaffirm_fact(conn, fact_id)
             conn.commit()
@@ -1144,7 +1144,7 @@ def create_app(
             return ("", 204)
         from owner_profile.store import retire_fact
 
-        conn = connect_sqlite(db_path)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             ok = retire_fact(conn, fact_id)
             conn.commit()
@@ -1173,7 +1173,7 @@ def create_app(
         narrative = payload.get("narrative")
         if not isinstance(narrative, str) or not narrative.strip():
             return ({"ok": False, "error": "narrative is required"}, 400)
-        conn = connect_sqlite(db_path)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             old = get_fact(conn, fact_id)
             if old is None:
@@ -2841,7 +2841,7 @@ def create_app(
         except FormError as exc:
             return (str(exc), 400)
         session_id = (form.get("session_id") or "").strip() or None
-        conn = connect_sqlite(db_path)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             append_intent(
                 conn,
@@ -2875,7 +2875,7 @@ def create_app(
         if not narrative:
             return ({"error": "narrative required"}, 400)
         now = datetime.now(UTC).replace(tzinfo=None).isoformat()
-        conn = connect_sqlite(db_path)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             fact_id = append_fact(
                 conn,
@@ -3204,7 +3204,7 @@ def create_app(
         import sqlite3 as _sqlite3
 
         try:
-            conn = connect_sqlite(db_path)
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
             try:
                 row = conn.execute(
                     "SELECT distilled_at FROM ask_sessions WHERE id = ?", (sid,)

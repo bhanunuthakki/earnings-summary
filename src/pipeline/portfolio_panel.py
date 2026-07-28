@@ -125,6 +125,7 @@ from position_guard_cache import (
 )
 from risk_factors import BookFactorVector, book_factor_vector
 from risk_reward import RiskRewardGap, RiskRewardGapRow, build_risk_reward_gap
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from thesis_collision import CachedReport, read_cached_report
 from ui import living_grid as lg
 from ui.controls import chip_tone_class, thesis_status_tone, ticker_label
@@ -1173,7 +1174,7 @@ def _thesis_rollup_panel(db_path: Path) -> str:
     if not db_path.exists():
         return ""
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return ""
     try:
@@ -1225,7 +1226,7 @@ def _exposure_panel(db_path: Path, live: LivePortfolio) -> str:
     if not db_path.exists():
         return ""
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return ""
     try:
@@ -1297,7 +1298,7 @@ def render_next_dollar_panel(
     if not db_path.exists():
         return ""
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return ""
     memo: tuple[str, str, str] | None = None
@@ -2156,7 +2157,7 @@ def _cached_macro_digest_html(db_path: Path) -> str:
     if not db_path.exists():
         return ""
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return ""
     try:

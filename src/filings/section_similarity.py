@@ -106,6 +106,7 @@ from filings.item_diff import (  # intra-package reuse, see module docstring
     _similarity,  # pyright: ignore[reportPrivateUsage]
 )
 from filings.models import FilingSection, HardStopError
+from provenance.selection import selected_filing_sections_relation
 
 log = logging.getLogger(__name__)
 
@@ -271,7 +272,8 @@ def _tracked_tickers(conn: sqlite3.Connection) -> list[str]:
     ``cross_sectional_detrend.build_cross_sectional_corpus``'s default scope
     (every ticker present in the substrate table, not just the held
     portfolio) for the same statistical-power reason."""
-    rows = conn.execute("SELECT DISTINCT ticker FROM filing_sections ORDER BY ticker").fetchall()
+    filing_sections = selected_filing_sections_relation(conn)
+    rows = conn.execute(f"SELECT DISTINCT ticker FROM {filing_sections} ORDER BY ticker").fetchall()
     return [str(r[0]).upper() for r in rows]
 
 

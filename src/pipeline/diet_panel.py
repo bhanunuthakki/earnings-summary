@@ -39,6 +39,7 @@ from signals.store import (
     load_diet_signals,
     load_forward_agenda,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 from ui.controls import ticker_label
 
@@ -58,7 +59,7 @@ def _load_list_types(db_path: Path) -> dict[str, str]:
     owner's book to the top of the reading lane and mark it. Degrades to ``{}``
     on any read error (the panel then renders in plain recency order)."""
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return {}
     try:

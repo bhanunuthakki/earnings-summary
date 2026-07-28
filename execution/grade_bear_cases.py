@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -29,6 +28,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from bear_case_grader import grade_due_predictions, materialize_predictions  # noqa: E402
 from llm.calibration import CalibrationScore, record_score  # noqa: E402
 from llm.prompt_versions import prompt_version_for  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("grade_bear_cases")
 
@@ -51,7 +51,7 @@ def _portfolio_tickers(repo_root: Path) -> list[str]:
     db = repo_root / "data" / "portfolio.db"
     if not db.exists():
         return []
-    conn = sqlite3.connect(str(db))
+    conn = connect_sqlite(str(db), role=SQLiteConnectionRole.READ_ONLY)
     try:
         return [
             r[0]

@@ -144,6 +144,7 @@ import numpy.typing as npt
 from pydantic import BaseModel, Field
 
 from allocation.price_history import daily_log_returns, load_daily_closes
+from provenance.selection import selected_filing_sections_relation
 
 # ---------------------------------------------------------------------------
 # Pre-registered windows and buckets (see module docstring — do not add,
@@ -354,10 +355,11 @@ class _AnnualTimeline:
 
 
 def _build_annual_timeline(conn: sqlite3.Connection) -> _AnnualTimeline:
+    filing_sections = selected_filing_sections_relation(conn)
     rows = conn.execute(
-        """
+        f"""
         SELECT ticker, fiscal_year, MIN(filing_date) AS filing_date
-        FROM filing_sections
+        FROM {filing_sections}
         WHERE source = 'edgar_text' AND fiscal_period = 'FY' AND filing_date IS NOT NULL
         GROUP BY ticker, fiscal_year
         ORDER BY ticker, fiscal_year
@@ -373,10 +375,11 @@ def _build_annual_timeline(conn: sqlite3.Connection) -> _AnnualTimeline:
 
 def _item_event_filing_dates(conn: sqlite3.Connection) -> dict[str, str]:
     """accession number (source_ref) -> filing_date, edgar_text only."""
+    filing_sections = selected_filing_sections_relation(conn)
     rows = conn.execute(
-        """
+        f"""
         SELECT DISTINCT source_ref, filing_date
-        FROM filing_sections
+        FROM {filing_sections}
         WHERE source = 'edgar_text' AND filing_date IS NOT NULL
         """
     ).fetchall()

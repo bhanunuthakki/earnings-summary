@@ -53,6 +53,8 @@ from models.kpis import BreachStatus
 from pipeline.sec_xbrl import CIK_MAP
 from pipeline.sec_xbrl import ingest_for_ticker as ingest_sec_for_ticker
 from pipeline.segment_cache_audit import audit_ticker_cache, segment_cache_present
+from provenance.selection import selected_transcripts_relation
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from timeseries.signal_writer import compute_and_persist_signals
 
 _FACT_EXTRACTOR_DISPATCH: dict[str, Callable[[sqlite3.Connection, int, Path], int]] = {
@@ -226,7 +228,7 @@ def _stage_validate_segment_cache(*, ticker: str, project_root: Path) -> StageRe
     audit_conn: sqlite3.Connection | None = None
     if db_file.exists():
         try:
-            audit_conn = sqlite3.connect(str(db_file))
+            audit_conn = connect_sqlite(db_file, role=SQLiteConnectionRole.READ_ONLY)
             audit_conn.row_factory = sqlite3.Row
         except sqlite3.Error:
             audit_conn = None
@@ -548,10 +550,11 @@ def _stage_surface_pending_llm(
             )
         )
 
+    transcripts = selected_transcripts_relation(conn).sql
     cur = conn.execute(
         "SELECT t.id, t.period_end, "
         "       (SELECT COUNT(*) FROM transcript_segments s WHERE s.transcript_id = t.id) AS segs "
-        "FROM transcripts t "
+        f"FROM {transcripts} t "
         "WHERE t.ticker = ? "
         "AND NOT EXISTS ("
         "  SELECT 1 FROM management_commitments mc "

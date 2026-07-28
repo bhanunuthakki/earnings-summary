@@ -96,6 +96,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from filings.models import HardStopError
+from provenance.selection import selected_transcripts_relation
 
 log = logging.getLogger(__name__)
 
@@ -1453,8 +1454,9 @@ def prior_transcript_ids(
 ) -> list[int]:
     """Up to ``limit`` quarterly transcript ids strictly before
     ``before_period_end``, most-recent-first."""
+    transcripts = selected_transcripts_relation(conn).sql
     rows = conn.execute(
-        "SELECT id FROM transcripts WHERE UPPER(ticker) = ? "
+        f"SELECT id FROM {transcripts} WHERE UPPER(ticker) = ? "
         "AND fiscal_period_type IN ('Q1','Q2','Q3','Q4') AND period_end < ? "
         "ORDER BY period_end DESC LIMIT ?",
         (ticker.upper(), before_period_end.isoformat(), limit),

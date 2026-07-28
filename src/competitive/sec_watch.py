@@ -40,6 +40,7 @@ from news.store import (
     drop_duplicate_stories,
     upsert_news_rows,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 EFTS_SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
 _DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -291,7 +292,11 @@ def run(
     rows = check_s1_watch(watches, fetch_fn=fetch_fn, now=now)
     if not rows:
         return (0, 0)
-    conn = sqlite3.connect(db_path)
+    conn = connect_sqlite(
+        db_path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
     try:
         fresh = drop_duplicate_stories(conn, rows)
         inserted, deduped = upsert_news_rows(conn, fresh)

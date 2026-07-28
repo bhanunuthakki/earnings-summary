@@ -24,9 +24,13 @@ import argparse
 import json
 import re
 import sqlite3
+import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # Ordered most-specific first. The five_min_reread DCF snapshot renders
 # "NPV/share: $91 · Live: $78 · ..."; the extracted rationale says "vs. NPV $91".
@@ -56,7 +60,7 @@ def parse_fair_value(text: str | None) -> float | None:
 def backfill(db_path: Path | str, *, apply: bool) -> dict[str, int]:
     """Set a DCF basis snapshot on basis-less decisions from their rationale.
     Returns a tally. Raises if the schema predates 0137."""
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     try:
         cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(decisions)")}

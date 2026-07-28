@@ -44,6 +44,7 @@ from calibration_guard import (
     wilson_interval,
 )
 from integrations.portfolio_tracker_client import ExitQuality, PositionAlpha
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 CONVICTION_ORDER: tuple[str, ...] = ("high", "medium", "low", "unstated")
 GRADED_LABELS: frozenset[str] = frozenset({"correct", "wrong", "mixed"})
@@ -342,7 +343,11 @@ def _open(db_path: Path | str) -> sqlite3.Connection | None:
         path = Path(db_path)
         if not path.exists():
             return None
-        conn = sqlite3.connect(str(path), timeout=5.0)
+        conn = connect_sqlite(
+            path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         if (
@@ -869,7 +874,7 @@ def compute_advice_influence(
     — the caller renders/persists nothing rather than fabricating an all-zero
     read for a substrate that was never built."""
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(

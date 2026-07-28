@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import sys
 from collections import defaultdict
 from datetime import date
@@ -43,6 +42,7 @@ from dcf import analyst_segments as analyst_seg_mod
 from dcf import assumptions_doc, country_risk, fade_calibration, segment_coverage
 from dcf import global_assumptions as global_dcf
 from dcf import redesign as redesign_mod
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
 FMP = REPO / "data" / "historical" / "fmp"
@@ -472,7 +472,7 @@ nwc_pct = [0.005] * N_FC
 cache = REPO / "data" / "dcf_assumptions" / f"{T}.json"
 narr = json.loads(cache.read_text(encoding="utf-8")).get("narrative", "") if cache.exists() else ""
 try:
-    con = sqlite3.connect(str(REPO / "data" / "portfolio.db"))
+    con = connect_sqlite(str(REPO / "data" / "portfolio.db"), role=SQLiteConnectionRole.READ_ONLY)
     row = con.execute("SELECT live_price FROM dcf_runs WHERE ticker=?", (T,)).fetchone()
     price = (row[0] if row and row[0] else None) or prof.get("price") or 255.0
     con.close()

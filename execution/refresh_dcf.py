@@ -58,6 +58,7 @@ from dcf import persist as persist_mod  # noqa: E402
 from dcf import redesign as redesign_mod  # noqa: E402
 from dcf import reverse as reverse_mod  # noqa: E402
 from dcf import universe as universe_mod  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from ticker_validation import safe_ticker  # noqa: E402
 
 DCF_DIR_NAME = "dcf"
@@ -889,7 +890,7 @@ def _refresh_redesign(
         assumptions_sync_status=sync.as_status_text(),
         assumptions_synced_at=datetime.now(UTC).replace(tzinfo=None),
     )
-    with sqlite3.connect(str(db_path)) as conn:
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
         persist_mod.upsert(conn, row)
 
     return {
@@ -921,7 +922,7 @@ def _prior_live_price(db_path: Path, ticker: str) -> tuple[float | None, datetim
     if not db_path.exists():
         return None, None
     try:
-        with sqlite3.connect(str(db_path)) as conn:
+        with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
                 "SELECT live_price, live_price_at FROM dcf_runs WHERE ticker = ?", (ticker,)
@@ -1041,7 +1042,7 @@ def apply_edits(
         assumptions_sync_status=sync.as_status_text(),
         assumptions_synced_at=datetime.now(UTC).replace(tzinfo=None),
     )
-    with sqlite3.connect(str(db_path)) as conn:
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
         persist_mod.upsert(conn, row)
 
     return {

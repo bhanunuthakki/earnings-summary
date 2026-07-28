@@ -36,6 +36,7 @@ from pathlib import Path
 
 from evals.capture_quality_specs import CAPTURE_QUALITY_PURPOSES, CAPTURE_QUALITY_SPECS
 from llm.calibration import VersionSummary, summarize_by_prompt_version
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 from ui.controls import prov_case, prov_drawer
 
@@ -313,7 +314,7 @@ def render_evals_panel(db_path: Path) -> str:
     health: list[CallHealthRow] = []
     versions: list[VersionSummary] = []
     if db_path.exists():
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             runs = load_latest_runs(conn)

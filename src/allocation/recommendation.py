@@ -53,6 +53,7 @@ from integrations.portfolio_tracker_client import fetch_live_portfolio
 from owner_profile.models import HumanCapitalBucket
 from owner_profile.store import list_facts
 from portfolio_weights import read_materialized_weights, read_materialized_weights_as_of
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 __all__ = [
     "DeterministicFrontier",
@@ -140,7 +141,7 @@ def _ro_conn(db_path: Path) -> sqlite3.Connection | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     conn.row_factory = sqlite3.Row

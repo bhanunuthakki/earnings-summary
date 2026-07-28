@@ -40,6 +40,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from provenance.llm_extracted_parent import resolve_parent  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def _new_counter() -> Counter[str]:
@@ -67,7 +68,7 @@ def backfill(
     log: bool = True,
 ) -> BackfillResult:
     """Walk orphan llm_extracted documents rows and fill parent_document_id."""
-    conn = sqlite3.connect(db_path)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     try:
         sql = (

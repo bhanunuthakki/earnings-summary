@@ -58,6 +58,7 @@ from pipeline.research_cockpit import (  # noqa: E402
     render_research_cockpit,
 )
 from pipeline.tier_runner import tier_coverage_summary  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def _nearest_rank(values: list[float], q: float) -> float:
@@ -102,7 +103,7 @@ def main() -> int:
         return 1
 
     def _cockpit_rows() -> dict[str, list[CockpitRow]]:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             return build_cockpit_rows(conn, repo_root)

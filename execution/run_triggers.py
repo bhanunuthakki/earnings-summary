@@ -51,6 +51,7 @@ from alerts.store import (  # noqa: E402
     queue_action,
 )
 from identity import DEFAULT_USER_ID  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from triggers.base import (  # noqa: E402
     AlertDraft,
     Trigger,
@@ -130,7 +131,7 @@ def _load_portfolio_tickers(db_path: Path) -> list[str]:
     "nothing to do".
     """
     list_types_sql = _active_list_types_sql()
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     try:
         try:
             rows = conn.execute(
@@ -166,7 +167,7 @@ def _load_dismissed_signatures(db_path: Path, *, user_id: str, lookback_days: in
     # compare, so both sides must share the no-offset ISO format.
     naive_now = datetime.now(UTC).replace(tzinfo=None)
     threshold = (naive_now - timedelta(days=lookback_days)).isoformat()
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     try:
         try:
             rows = conn.execute(
@@ -238,7 +239,7 @@ def query_run_cost_usd(db_path: Path, run_started_at: datetime) -> Decimal:
         return Decimal("0")
     threshold = run_started_at.isoformat()
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             tables = {
                 r[0]
@@ -536,7 +537,7 @@ def _process_ticker_trigger(
     """
     summary.seen_tickers.add(ticker)
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             candidates = trigger.scan(ticker, conn)
         finally:

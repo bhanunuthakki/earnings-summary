@@ -51,6 +51,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 Cadence = Literal["daily", "weekly", "monthly"]
 
 
@@ -84,7 +86,7 @@ def tickers_due_for_refresh(
     now = now if now is not None else datetime.now()
     thresholds = _DUE_THRESHOLDS_DAYS[cadence]
 
-    with sqlite3.connect(str(db_path)) as conn:
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
         conn.row_factory = sqlite3.Row
         if not _has_processing_tier_column(conn):
             return []
@@ -118,7 +120,7 @@ def tickers_due_for_lens_regen(
     thresholds = _DUE_THRESHOLDS_DAYS[cadence]
     purpose = f"lens:{lens_name}"
 
-    with sqlite3.connect(str(db_path)) as conn:
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
         conn.row_factory = sqlite3.Row
         if not _has_processing_tier_column(conn):
             return []
@@ -245,7 +247,7 @@ def tier_coverage_summary(
     now = now if now is not None else datetime.now()
     thresholds = _DUE_THRESHOLDS_DAYS["daily"]
 
-    with sqlite3.connect(str(db_path)) as conn:
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
         conn.row_factory = sqlite3.Row
         if not _has_processing_tier_column(conn):
             return out

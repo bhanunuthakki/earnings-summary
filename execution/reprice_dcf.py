@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -28,6 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from dcf.reprice import reprice_runs  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def main() -> int:
@@ -67,7 +67,7 @@ def main() -> int:
     # shared (dashboard server, overlapping crons) — a brief concurrent writer
     # should stall this write, not kill the stage with "database is locked"
     # (observed live 2026-07-03 under sqlite's 5s default).
-    conn = sqlite3.connect(str(db_path), timeout=30.0)
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         results = reprice_runs(conn, repo_root, tickers=args.ticker)
     finally:

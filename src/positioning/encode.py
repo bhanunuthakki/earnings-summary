@@ -25,6 +25,7 @@ from typing import cast
 from ask.store import load_recent_history
 from positioning.profile import SLEEVE_KEYS, PositioningProfile
 from positioning.store import latest_intent
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # NOTE: ``llm.structured`` is imported function-locally in ``propose_profile``
 # (the only caller), NOT here. A module-level import drags the whole llm
@@ -163,7 +164,7 @@ def propose_profile(
 
     active: PositioningProfile | None = None
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         conn = None
     if conn is not None:

@@ -36,6 +36,7 @@ from credibility.observations import (  # noqa: E402
     backfill_disagreement_observations,
     backfill_restatement_observations,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -64,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: no DB at {db_path}", file=sys.stderr)
         return 2
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     try:
         restatements = backfill_restatement_observations(conn, user_id=args.user_id)

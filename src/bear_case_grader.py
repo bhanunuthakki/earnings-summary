@@ -39,6 +39,7 @@ from llm_client import call_llm
 from predictions_store import grade as grade_prediction
 from predictions_store import history as prediction_history
 from predictions_store import record as record_prediction
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -248,7 +249,7 @@ def _load_grading_corpus(ticker: str, repo_root: Path) -> dict[str, str]:
     fin_lines: list[str] = []
     insider_lines: list[str] = []
     if db_path.exists():
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             conn.row_factory = sqlite3.Row
             for r in conn.execute(

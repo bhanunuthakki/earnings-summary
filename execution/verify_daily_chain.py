@@ -21,6 +21,10 @@ from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+
 DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 STATUS_FILE = PROJECT_ROOT / ".tmp" / "daily_chain_status.json"
 
@@ -37,7 +41,7 @@ def check(db_path: Path = DB_PATH) -> dict[str, object]:
       latest_*    fields from the most recent row (absent when missing)
     """
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)

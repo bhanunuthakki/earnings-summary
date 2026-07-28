@@ -71,6 +71,8 @@ from llm_artifact_store import (
     upsert,
 )
 from llm_client import JSON_FENCE_RE, call_llm
+from provenance.selection import selected_transcripts_relation
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from triggers.base import (
     AlertDraft,
     Cadence,
@@ -299,8 +301,9 @@ def _load_prior_transcripts(
     would muddy the tone comparison.
     """
     try:
+        transcripts = selected_transcripts_relation(conn).sql
         rows = conn.execute(
-            "SELECT id, fiscal_period_type, period_end FROM transcripts "
+            f"SELECT id, fiscal_period_type, period_end FROM {transcripts} "
             + "WHERE ticker = ? "
             + "AND fiscal_period_type IN ('Q1','Q2','Q3','Q4') "
             + "AND period_end < ? "
@@ -675,9 +678,10 @@ class EarningsToneTrigger:
         now = datetime.now(UTC).replace(tzinfo=None)
         threshold = _format_threshold(now - _ARRIVAL_WINDOW)
         try:
+            transcripts = selected_transcripts_relation(db).sql
             row = db.execute(
                 "SELECT t.id, t.fiscal_period_type, t.period_end, d.fetched_at"
-                + " FROM transcripts t"
+                + f" FROM {transcripts} t"
                 + " JOIN documents d ON d.id = t.document_id"
                 + " WHERE t.ticker = ? AND d.fetched_at >= ?"
                 + " ORDER BY d.fetched_at DESC"
@@ -799,7 +803,7 @@ class EarningsToneTrigger:
         # Open a local connection. Protocol doesn't pass one in; the
         # store-side helpers each open their own anyway, so we manage
         # this connection only for the transcript loading window.
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             current_prepared, current_qa = _load_transcript_text(conn, current_transcript_id)
             prior_transcripts = _load_prior_transcripts(

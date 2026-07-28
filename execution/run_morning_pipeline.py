@@ -69,7 +69,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 import time
@@ -81,6 +80,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from llm import tracectx  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 DEFAULT_USER_ID = os.environ.get("CIO_USER_ID", "bhanu")
 DEFAULT_MAX_COST_USD = 10.0
@@ -863,7 +863,7 @@ def _record_run(
         from models.runs import StageStatus as RunStatus
         from pipeline.run_accounting import end_run, start_run
 
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             if start:
                 return start_run(conn, directive="run_morning_pipeline", ticker_scope=[])

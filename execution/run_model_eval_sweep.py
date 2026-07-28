@@ -96,6 +96,7 @@ from llm.query_criteria import (  # noqa: E402
     render_criteria_block,
 )
 from llm.workload_inventory import risk_note_for  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("run_model_eval_sweep")
 
@@ -227,7 +228,7 @@ def _discover_active_purposes(
     cutoff_str = (cutoff - timedelta(days=lookback_days)).isoformat()
 
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """

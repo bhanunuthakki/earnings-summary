@@ -39,6 +39,7 @@ from discovery.sources import SourceRow, active_investor_sources, load_source_ma
 from discovery.store import SignalWrite, replace_signals  # noqa: E402
 from discovery.thirteenf import InvestorHit, mine_13f  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 _INVESTOR_CLASS = "investor_13f"
 
@@ -103,7 +104,7 @@ def _write_tracked_news(
             _log("thirteenf_news_rejected", ticker=hit.ticker, source=hit.source_key)
     if not rows:
         return 0
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         fresh = drop_duplicate_stories(conn, rows)
         inserted, _deduped = upsert_news_rows(conn, fresh)

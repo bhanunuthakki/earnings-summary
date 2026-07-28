@@ -36,6 +36,7 @@ from typing import cast
 
 from llm.cli import call_llm
 from llm_budget import should_skip_for_budget
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from viewspec.engine import metric_catalog
 from viewspec.spec import (
     MAX_METRICS,
@@ -95,7 +96,7 @@ def _tracked_tickers(db_path: Path) -> set[str]:
     if not db_path.exists():
         return set()
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return set()
     try:

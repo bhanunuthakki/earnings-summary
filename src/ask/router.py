@@ -34,6 +34,7 @@ from ask import turn_cache
 from ask.packs import PACK_KEYS, PACKS
 from llm.structured import call_llm_structured
 from llm_budget import should_skip_for_budget
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ def _has_tracked_companies(db_path: Path) -> bool:
     if not db_path.exists():
         return False
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return False
     try:

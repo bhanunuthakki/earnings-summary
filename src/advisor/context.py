@@ -49,6 +49,7 @@ from pipeline.allocation_decisions_panel import (
     portfolio_holdings,
 )
 from pipeline.research_cockpit import latest_dcf_runs
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from user_state.notes import list_notes
 from user_state.sizing import list_intents
 
@@ -233,7 +234,7 @@ def build_advisor_context(
     degrade (the established client contract); DB reads tolerate missing
     tables via the underlying readers."""
     db_path = repo_root / "data" / "portfolio.db"
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         holdings = portfolio_holdings(conn)

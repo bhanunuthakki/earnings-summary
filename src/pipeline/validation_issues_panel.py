@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 from ui.controls import prov_row, prov_severity_tick
 
@@ -67,7 +68,7 @@ def load_validation_overview(db_path: Path) -> ValidationOverview | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     conn.row_factory = sqlite3.Row

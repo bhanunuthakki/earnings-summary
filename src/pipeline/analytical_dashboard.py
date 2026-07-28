@@ -25,6 +25,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 
 @dataclass(slots=True)
 class TriggerLadderRow:
@@ -201,7 +203,7 @@ def build_analytical_dashboard(
     def want(name: str) -> bool:
         return sections is None or name in sections
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         conn.row_factory = sqlite3.Row
         return AnalyticalDashboard(

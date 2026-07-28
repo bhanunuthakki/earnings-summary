@@ -48,6 +48,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from timeseries import (  # noqa: E402
     Observation,
     compute_and_persist_signals,
@@ -83,7 +84,7 @@ def _registered_kpi_names(ticker: str, db_path: Path, limit: int = 10) -> list[s
     if not db_path.exists():
         return []
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             rows = conn.execute(
                 "SELECT name FROM kpi_definitions WHERE ticker = ? LIMIT ?",
@@ -246,7 +247,9 @@ def main() -> int:
         db_path = repo_root / "data" / "portfolio.db"
         if db_path.exists():
             try:
-                conn = sqlite3.connect(str(db_path))
+                conn = connect_sqlite(
+                    str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True
+                )
                 try:
                     n = compute_and_persist_signals(ticker=ticker, db=conn, repo_root=repo_root)
                     report["signals_persisted"] = n

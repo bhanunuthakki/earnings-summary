@@ -61,6 +61,7 @@ from typing import Final, cast
 
 from alerts.store import compute_signature_sha, find_by_signature, fire_alert
 from identity import DEFAULT_USER_ID
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -152,7 +153,11 @@ class DriftFinding:
 # ---------------------------------------------------------------------------
 
 
-def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
+def _open(
+    db_path: Path | str | None,
+    *,
+    role: SQLiteConnectionRole = SQLiteConnectionRole.READ_ONLY,
+) -> sqlite3.Connection | None:
     """Best-effort read-write connection, matching every sibling store's
     degrade-don't-crash contract. ``None`` on a missing DB or any open error."""
     if db_path is None:
@@ -161,7 +166,11 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
     if not path.exists():
         return None
     try:
-        conn = sqlite3.connect(str(path), timeout=30.0)
+        conn = connect_sqlite(
+            path,
+            role=role,
+            schema_preflight=(role is SQLiteConnectionRole.WRITER),
+        )
         conn.execute("PRAGMA busy_timeout = 30000")
         return conn
     except sqlite3.Error as exc:
@@ -555,7 +564,7 @@ def append_factor_vector(
     if not vector_result.vector:
         return False
 
-    conn = _open(db_path)
+    conn = _open(db_path, role=SQLiteConnectionRole.WRITER)
     if conn is None:
         return False
     try:

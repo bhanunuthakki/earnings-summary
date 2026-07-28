@@ -44,6 +44,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 log = logging.getLogger(__name__)
 
 PROPOSE_PURPOSE = "prompt_variant_propose"
@@ -297,7 +299,11 @@ def create_experiment(
 ) -> str:
     """Insert a prompt_experiments row; returns the experiment_id."""
     experiment_id = uuid.uuid4().hex
-    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn = connect_sqlite(
+        db_path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
     try:
         conn.execute(
             """
@@ -389,7 +395,11 @@ def compose(
 
 def write_arms(db_path: Path, experiment_id: str, arms: tuple[PromptArm, ...]) -> None:
     """Persist an experiment's arms (mig 0200)."""
-    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn = connect_sqlite(
+        db_path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
     try:
         conn.executemany(
             """
@@ -425,7 +435,7 @@ def load_arms(db_path: Path, experiment_id: str) -> tuple[PromptArm, ...]:
     absent), so the legacy path is a visible fallback, not a silent
     reinterpretation of new-shape data.
     """
-    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         if _has_table(conn, "prompt_arms"):
@@ -524,7 +534,11 @@ def record_ab_verdict(
     function stays usable against a pre-0200 DB rather than raising, which keeps
     the legacy two-arm path and its tests working unchanged.
     """
-    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn = connect_sqlite(
+        db_path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
     try:
         has_arm_col = any(
             r[1] == "arm_label" for r in conn.execute("PRAGMA table_info(prompt_ab_verdicts)")
@@ -646,7 +660,7 @@ def promotion_ready(
     is disqualifying (the combination was measured, and it was worse).
     """
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             if not _has_table(conn, "prompt_ab_verdicts"):
@@ -704,7 +718,7 @@ def active_prompt_override(
     if path is None or not Path(path).exists():
         return None
     try:
-        conn = sqlite3.connect(str(path), timeout=5.0)
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             if not _has_table(conn, "prompt_pin_overrides"):
                 return None
@@ -744,7 +758,11 @@ def write_prompt_override(
     payload: dict[str, object] = dict(reason or {})
     payload.setdefault("experiment_id", experiment_id)
     payload.setdefault("edits", json.loads(edits_to_json(edits)))
-    conn = sqlite3.connect(str(path), timeout=10.0)
+    conn = connect_sqlite(
+        path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
     try:
         conn.execute(
             "UPDATE prompt_pin_overrides SET active = 0 WHERE purpose = ? AND active = 1",
@@ -788,7 +806,11 @@ def deactivate_prompt_override(purpose: str, *, db_path: Path | str | None = Non
     if path is None or not Path(path).exists():
         return False
     try:
-        conn = sqlite3.connect(str(path), timeout=10.0)
+        conn = connect_sqlite(
+            path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
         try:
             if not _has_table(conn, "prompt_pin_overrides"):
                 return False

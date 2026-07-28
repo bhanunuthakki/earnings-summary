@@ -27,6 +27,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
 from compute.segment_definitions import extract_for_ticker  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def main() -> int:
@@ -42,7 +43,7 @@ def main() -> int:
         print("[]")
         return 0
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     summary: list[dict[str, object]] = []
     try:
@@ -88,7 +89,7 @@ def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:
     if args.ticker:
         return [args.ticker.upper()]
     db_path = repo_root / "data" / "portfolio.db"
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     cur = conn.cursor()
     cur.execute(
         f"SELECT DISTINCT ticker FROM tracked_companies "

@@ -49,6 +49,9 @@ _NODASH_RE = re.compile(r"(?<![\d-])(\d{18})(?![\d-])")
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = SCRIPT_DIR.parent
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def normalize_accession(raw: str) -> str | None:
@@ -150,7 +153,7 @@ def backfill(
     log: bool = True,
 ) -> BackfillResult:
     """Walk incomplete documents rows and fill accession_number/filing_date."""
-    conn = sqlite3.connect(db_path)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     try:
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(documents)")}

@@ -51,6 +51,7 @@ from filings.section_similarity import (  # noqa: E402
     score_to_event,
     write_similarity_events,
 )
+from provenance.selection import selected_filing_sections_relation  # noqa: E402
 
 _DEFAULT_CANONICAL_IDS = ("risk_factors", "mdna")
 _EXIT_HARD_STOP = 1
@@ -81,7 +82,8 @@ log = logging.getLogger("detect_section_similarity")
 
 
 def _tracked_tickers(conn: sqlite3.Connection) -> list[str]:
-    rows = conn.execute("SELECT DISTINCT ticker FROM filing_sections ORDER BY ticker").fetchall()
+    relation = selected_filing_sections_relation(conn).sql
+    rows = conn.execute(f"SELECT DISTINCT ticker FROM {relation} ORDER BY ticker").fetchall()
     return [str(r[0]).upper() for r in rows]
 
 
@@ -116,7 +118,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         try:
             conn.execute("SELECT 1 FROM disclosure_events LIMIT 1").fetchone()
-            conn.execute("SELECT 1 FROM filing_sections LIMIT 1").fetchone()
+            relation = selected_filing_sections_relation(conn).sql
+            conn.execute(f"SELECT 1 FROM {relation} LIMIT 1").fetchone()
         except sqlite3.OperationalError as exc:
             log.error({"event": "hard_stop", "stage": "preflight", "error": str(exc)})
             return _EXIT_HARD_STOP

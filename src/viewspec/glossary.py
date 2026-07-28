@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from compute.kpi_resolver import engine_formula_definition
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 if TYPE_CHECKING:
     from viewspec.spec import MetricRef
@@ -109,7 +110,7 @@ def kpi_definition_titles(
         return out
 
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return out
     marks = ",".join("?" * len(remaining))

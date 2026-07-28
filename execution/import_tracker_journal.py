@@ -21,10 +21,15 @@ Idempotent on analyst_notes.source_ref. Safe to re-run.
 
 from __future__ import annotations
 
-import sqlite3
+import sys
 from pathlib import Path
 
-ES_DB = Path(__file__).resolve().parents[1] / "data" / "portfolio.db"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+
+ES_DB = PROJECT_ROOT / "data" / "portfolio.db"
 SOURCE_REF = "portfolio-tracker:trade_tags:1"
 
 BODY = (
@@ -43,7 +48,7 @@ ORIGINAL_TS = "2026-05-09 09:38:05"
 
 
 def main() -> None:
-    conn = sqlite3.connect(ES_DB)
+    conn = connect_sqlite(ES_DB, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         if conn.execute(
             "SELECT 1 FROM analyst_notes WHERE source_ref = ?", (SOURCE_REF,)

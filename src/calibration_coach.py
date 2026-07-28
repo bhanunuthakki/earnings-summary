@@ -62,6 +62,7 @@ from integrations.portfolio_tracker_client import fetch_portfolio_analytics
 from llm.cli import call_llm, is_hard_stop
 from llm.structured import StructuredParseError, call_llm_structured
 from position_lifecycle import list_entries
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -198,7 +199,7 @@ def _conviction_map(db_path: Path) -> dict[str, float]:
     cycle). Best-effort: any failure -> empty map (the decomposition lands every
     name in the 'unstated' bucket)."""
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
     except sqlite3.Error:
         return {}

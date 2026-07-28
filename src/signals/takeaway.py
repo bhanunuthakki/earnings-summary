@@ -28,6 +28,7 @@ from pathlib import Path
 
 from llm.cli import LLMSetupError, call_llm, is_hard_stop
 from llm.prompt_versions import prompt_version_for
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -118,7 +119,7 @@ def summarize_pending(
     """
     _now = now or datetime.now(UTC)
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     except sqlite3.Error as exc:
         log.warning({"event": "podcast_takeaway_db_open_failed", "error": str(exc)})
         return 0

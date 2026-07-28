@@ -48,6 +48,7 @@ from entity_store import (  # noqa: E402
     upsert_relationship,
 )
 from llm_client import JSON_FENCE_RE, call_llm  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("canonicalize_segments")
 
@@ -82,7 +83,9 @@ def _unmapped_by_ticker(repo_root: Path, tickers: list[str] | None) -> dict[str,
     column on segment_dimensions was carried over from segment_facts in
     migration 0056. dim_name plays the role of the old segment_name.
     """
-    conn = sqlite3.connect(str(repo_root / "data" / "portfolio.db"))
+    conn = connect_sqlite(
+        str(repo_root / "data" / "portfolio.db"), role=SQLiteConnectionRole.READ_ONLY
+    )
     try:
         conn.row_factory = sqlite3.Row
         if tickers:
@@ -281,7 +284,7 @@ def _apply_groups(
 
         # Backfill segment_dimensions for each alias (via segment_periods to
         # filter on ticker — segment_dimensions itself has no ticker column).
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             for alias in aliases:
                 cur = conn.execute(
@@ -334,7 +337,9 @@ def main() -> int:
     log.info({"event": "canon_start", "n_tickers": len(by_ticker)})
 
     total_mapped = 0
-    conn = sqlite3.connect(str(args.repo_root / "data" / "portfolio.db"))
+    conn = connect_sqlite(
+        str(args.repo_root / "data" / "portfolio.db"), role=SQLiteConnectionRole.READ_ONLY
+    )
     try:
         for ticker, segments in by_ticker.items():
             company_entity_id = _company_entity_id(conn, ticker)
@@ -379,7 +384,9 @@ def main() -> int:
         conn.close()
 
     # Final state
-    conn = sqlite3.connect(str(args.repo_root / "data" / "portfolio.db"))
+    conn = connect_sqlite(
+        str(args.repo_root / "data" / "portfolio.db"), role=SQLiteConnectionRole.READ_ONLY
+    )
     try:
         mapped = conn.execute(
             "SELECT COUNT(*) FROM segment_dimensions WHERE segment_entity_id IS NOT NULL"

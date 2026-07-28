@@ -59,6 +59,7 @@ from decision_calibration import bucket_for_conviction
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import PositionAlpha, PositionAlphaRow
 from position_lifecycle import PositionEntry, list_entries
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # Without a tracker window (offline / no alpha for the name), events still
 # get counted over a recent default window so the narrative degrades to
@@ -132,7 +133,7 @@ def gather_window_events(
     outcome_at), and the window bounds are dates, so the prefix compare is
     exact."""
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return WindowEvents()
     conn.row_factory = sqlite3.Row

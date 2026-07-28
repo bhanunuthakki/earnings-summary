@@ -70,6 +70,7 @@ from pathlib import Path
 from typing import cast
 
 from allocation.exposure import NameMix, latest_revenue_mix
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from thesis_collision import ThesisSnapshot, load_thesis_snapshot
 
 log = logging.getLogger(__name__)
@@ -536,7 +537,7 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
         path = resolve_db_path(db_path)
         if path is None or not Path(path).exists():
             return None
-        conn = sqlite3.connect(str(path), timeout=30.0)
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         conn.execute("PRAGMA busy_timeout = 30000")
         cur = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='business_factor_exposures'"
@@ -762,7 +763,7 @@ def portfolio_tickers(db_path: Path | str | None) -> list[str]:
     path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         return []
-    conn = sqlite3.connect(str(path))
+    conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         rows = conn.execute(
             "SELECT ticker FROM tracked_companies "

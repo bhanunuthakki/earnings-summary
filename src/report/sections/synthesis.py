@@ -25,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from report.models import SectionStatus, SynthesisLensRow, SynthesisSection
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -136,7 +137,7 @@ def build(ticker: str, repo_root: Path) -> SynthesisSection:
             citations: list[dict[str, object]] = []
             if art.source_doc_ids and _MARKER_RX.search(art.content_md):
                 if cite_conn is None and db_path.exists():
-                    cite_conn = sqlite3.connect(str(db_path))
+                    cite_conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
                 if cite_conn is not None:
                     citations = _citations_for_source_docs(
                         cite_conn, art.source_doc_ids, ticker=ticker

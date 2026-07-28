@@ -57,6 +57,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import db  # noqa: E402
 from llm_artifact_store import mark_artifacts_dirty_for_fact_change  # noqa: E402
 from pipeline.tier_runner import tickers_due_for_refresh  # noqa: E402
+from provenance.selection import selected_transcripts_relation  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 DEFAULT_EVAL_CADENCE_DAYS = 7
 DEFAULT_NO_CHANGE_TTL_DAYS = 7
@@ -70,7 +72,7 @@ def main() -> int:
         sys.stderr.write(f"FATAL: no DB at {db_path}\n")
         return 2
 
-    with sqlite3.connect(str(db_path)) as conn:
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
         conn.row_factory = sqlite3.Row
         all_tickers = _resolve_tickers(conn, args)
 
@@ -128,7 +130,7 @@ def _apply_tier_filter(
     skipped_by_tier: dict[str, int] = {}
     if skipped:
         db_path = repo_root / "data" / "portfolio.db"
-        with sqlite3.connect(str(db_path)) as conn:
+        with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
             conn.row_factory = sqlite3.Row
             placeholders = ",".join("?" * len(skipped))
             rows = conn.execute(
@@ -274,8 +276,9 @@ def _compute_brief_hash(conn: sqlite3.Connection, ticker: str, repo_root: Path) 
         row = conn.execute(sql, (ticker.upper(),)).fetchone()
         h.update(b"\x00")
         h.update(str(row[0] if row else "").encode())
+    transcripts_relation = selected_transcripts_relation(conn).sql
     for sql in (
-        "SELECT COUNT(*) FROM transcripts WHERE UPPER(ticker)=?",
+        f"SELECT COUNT(*) FROM {transcripts_relation} WHERE UPPER(ticker)=?",
         "SELECT COUNT(*) FROM management_commitments WHERE UPPER(ticker)=?",
     ):
         row = conn.execute(sql, (ticker.upper(),)).fetchone()
@@ -367,7 +370,7 @@ def _record_skip(db_path: Path, ticker: str, current_hash: str, reason: str) -> 
     skipping until either content changes (hash flips) or the TTL elapses.
     """
     now = datetime.now().isoformat(timespec="seconds")
-    with sqlite3.connect(str(db_path)) as conn:
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
         conn.execute(
             "UPDATE tracked_companies "
             "SET brief_dirty = 0, last_built_at = ?, last_brief_hash = ? "
@@ -389,7 +392,7 @@ def _refresh_one_ticker(
     # Per-ticker explicit invocation = force (bypass gates)
     forced = bool(args.force or args.ticker)
 
-    with sqlite3.connect(str(db_path)) as conn:
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
         conn.row_factory = sqlite3.Row
         skip, reason, current_hash = _check_skip_gates(
             conn,
@@ -501,7 +504,9 @@ def _refresh_one_ticker(
     if overall_ok:
         # Re-compute hash AFTER build because match_commitments / refresh_dcf
         # may have written new rows that should be reflected.
-        with sqlite3.connect(str(db_path)) as conn:
+        with connect_sqlite(
+            db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True
+        ) as conn:
             final_hash = _compute_brief_hash(conn, ticker, repo_root)
             conn.execute(
                 "UPDATE tracked_companies "

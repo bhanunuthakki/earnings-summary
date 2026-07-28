@@ -19,7 +19,6 @@ are unit-testable without the DCF engine or a DB.
 from __future__ import annotations
 
 import json
-import sqlite3
 from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
@@ -27,6 +26,7 @@ from typing import Any, cast
 
 from research.apply import register_mutating_applier
 from research.proposals import create_proposal, get_proposal
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # The DcfRunRow fields we round-trip through artifact_json to rebuild it on approve.
 _ROW_KEYS: tuple[str, ...] = (
@@ -156,7 +156,7 @@ def _default_persist(row: dict[str, object], *, db_path: Path | str | None = Non
     path = resolve_db_path(db_path)
     if path is None:
         raise RuntimeError("no DB path available for the DCF live write")
-    conn = sqlite3.connect(str(path))
+    conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         upsert(conn, dcf_row)
         conn.commit()

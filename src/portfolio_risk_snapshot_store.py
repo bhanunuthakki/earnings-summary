@@ -27,6 +27,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 _TABLE = "portfolio_risk_snapshots"
 _HISTORY_TABLE = "portfolio_risk_snapshot_history"
 _DEFAULT_USER = "bhanu"
@@ -208,7 +210,7 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
     if db_path is None or not Path(db_path).exists():
         return None
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         present = conn.execute(

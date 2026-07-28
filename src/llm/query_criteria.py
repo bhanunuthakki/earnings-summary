@@ -38,6 +38,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 log = logging.getLogger(__name__)
 
 CRITERIA_PURPOSE = "query_criteria_derive"
@@ -146,7 +148,7 @@ def load_cached_criteria(
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             if not _has_table(conn, "query_criteria"):
                 return None
@@ -187,7 +189,11 @@ def _persist_criteria(
         ensure_ascii=False,
     )
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(
+            db_path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
         try:
             if not _has_table(conn, "query_criteria"):
                 return

@@ -7,8 +7,9 @@ ranks by exposure, and flags cross-holding overlap.
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
+
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 from ._shared import (
     Lens,
@@ -63,7 +64,7 @@ def _ctx_customer_concentration_risk(ticker: str | None, repo_root: Path) -> Len
     db = repo_root / "data" / "portfolio.db"
     if not db.exists():
         return None
-    conn = sqlite3.connect(str(db))
+    conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     try:
         present = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='customer_concentrations'"

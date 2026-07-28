@@ -37,6 +37,7 @@ from industry_classifier import (
     SECTION_STRATEGIC_TARGETS,
     suppressed_sections_for_ticker,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 
 # Column order of the matrix: (key, short label). Sidecar-fed sections first,
@@ -182,7 +183,7 @@ def load_section_coverage(
     if not db_path.exists():
         return []
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return []
     try:

@@ -40,6 +40,8 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 # Beta(1,1) — uniform. A brand-new strategy is treated as a coin flip, which is
 # what makes the early cycles explore broadly instead of locking onto whichever
 # strategy happened to win first.
@@ -220,7 +222,7 @@ def load_strategy_stats(db_path: Path) -> dict[str, StrategyStat]:
     if not path.exists():
         return stats
     try:
-        conn = sqlite3.connect(str(path), timeout=10.0)
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             if not (_has_table(conn, "prompt_arms") and _has_table(conn, "prompt_ab_verdicts")):

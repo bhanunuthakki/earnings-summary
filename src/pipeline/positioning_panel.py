@@ -28,6 +28,7 @@ from candidate_fit_cache import read_materialized_fit_meta
 from positioning.encode import ProposedProfile
 from positioning.profile import SLEEVE_KEYS, PositioningProfile, SectorTarget
 from positioning.store import PositioningIntentRow, latest_intent, list_intents
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _PANEL_STYLE = """<style>
 .pos-grid { display:grid; grid-template-columns: 1fr 1fr; gap:16px; align-items:start; }
@@ -136,7 +137,7 @@ def render_active_target_card(db_path: Path, repo_root: Path) -> str:
 
     intent: PositioningIntentRow | None = None
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         conn = None
     if conn is not None:
@@ -243,7 +244,7 @@ def render_active_target_card(db_path: Path, repo_root: Path) -> str:
 def _history_well(db_path: Path) -> str:
     rows: list[PositioningIntentRow] = []
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         conn = None
     if conn is not None:

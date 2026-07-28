@@ -24,6 +24,7 @@ from collections.abc import Iterable
 from typing import cast
 
 from provenance.overrides import apply_segment_overrides
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # FMP segment-cache file suffix -> canonical override ``dim_type``. Mirrors
 # ``pipeline.segment_cache_audit.SEGMENT_SUFFIXES`` plus the annual rollups.
@@ -72,7 +73,7 @@ def apply_overrides(
     if not os.path.exists(path):
         return recs
     try:
-        own = sqlite3.connect(path)
+        own = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
         own.row_factory = sqlite3.Row
     except sqlite3.Error:
         return recs

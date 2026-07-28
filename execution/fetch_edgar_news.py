@@ -61,6 +61,7 @@ from news.store import (  # noqa: E402
     drop_duplicate_stories,
     upsert_news_rows,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 EDGAR_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 EDGAR_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
@@ -453,7 +454,7 @@ def run(
                 ticker, days=days, cache_dir=cache_dir, force_refresh=force_refresh
             )
         )
-    conn = sqlite3.connect(db_path)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         fresh = drop_duplicate_stories(conn, all_rows)
         inserted, deduped = upsert_news_rows(conn, fresh)

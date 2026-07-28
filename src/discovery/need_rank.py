@@ -48,6 +48,7 @@ from typing import Literal, cast
 
 from discovery.screens import TickerMetrics, load_ticker_metrics
 from identity import DEFAULT_USER_ID
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 Effort = Literal["light", "medium", "heavy"]
 
@@ -337,7 +338,7 @@ def load_eval_names(
     if not db_path.exists():
         return {}
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return {}
     try:

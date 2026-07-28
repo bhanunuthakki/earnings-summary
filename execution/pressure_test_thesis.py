@@ -37,6 +37,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
 from llm_client import call_llm  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 _JSON_FENCE_RX = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
@@ -133,7 +134,7 @@ def _assemble_corpus_md(ticker: str, repo_root: Path, db_path: Path) -> str:
     Trimmed aggressively so the prompt stays under the model's effective context.
     """
     out = StringIO()
-    with sqlite3.connect(str(db_path)) as conn:
+    with connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY) as conn:
         conn.row_factory = sqlite3.Row
         annual = _load_annual(conn, ticker, n=5)
     if annual:

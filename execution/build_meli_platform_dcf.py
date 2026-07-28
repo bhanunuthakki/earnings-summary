@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import sys
 from dataclasses import dataclass, field
 from datetime import date
@@ -58,6 +57,10 @@ DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 # at the DATA repo (which may be a different checkout, e.g. a worktree's data lives
 # in the main repo), so resolving code from it would load a stale/foreign copy.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+
 try:  # persistence is best-effort -- the workbook builds without a DB
     from dcf import persist as persist_mod
 except ImportError:  # pragma: no cover
@@ -797,7 +800,7 @@ def persist_dcf_run(s: Assum, m: Mirror, holdings: dict[str, object] | None = No
         assumption_snapshot_json=snap,
         notes=f"workbook={DEST.name} (MELI sum-of-the-parts platform DCF)",
     )
-    with sqlite3.connect(str(db)) as conn:
+    with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
         persist_mod.upsert(conn, row)
     return True
 

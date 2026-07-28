@@ -42,6 +42,7 @@ from pathlib import Path
 
 from db_paths import resolve_db_path
 from identity import DEFAULT_USER_ID
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from user_state.notes import AnalystNoteRow, get_note, resolve_note, set_note_links
 
 log = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ def _open_ro(db_path: Path | str | None) -> sqlite3.Connection | None:
         path = resolve_db_path(db_path)
         if path is None or not path.exists():
             return None
-        conn = sqlite3.connect(str(path), timeout=5.0)
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         return conn

@@ -19,6 +19,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 # The lists that auto-produce a full brief (and thus a §Valuation DCF card).
 # Mirror of ``db.BRIEFED_LIST_TYPES`` / ``pipeline.queries.BRIEFED_LIST_TYPES``,
 # duplicated here on purpose: importing ``db`` runs ``init_db()`` against the
@@ -39,7 +41,7 @@ def dcf_universe(repo_root: Path) -> list[str]:
         return []
     placeholders = ", ".join("?" for _ in BRIEFED_LIST_TYPES)
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return []
     # ETFs on the evaluation list are analyzed via the published-data lane

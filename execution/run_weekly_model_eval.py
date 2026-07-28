@@ -64,6 +64,7 @@ sys.path.insert(
 
 from llm.capture import default_capture_archive_dir  # noqa: E402
 from llm.model_ladder import DEFAULT_JUDGES  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("run_weekly_model_eval")
 
@@ -85,9 +86,7 @@ def _tracked_tickers(repo_root: Path) -> list[str]:
     if not db_path.exists():
         return []
     try:
-        import sqlite3
-
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             tables = {
                 r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -124,12 +123,11 @@ def _nominated_harvest_tickers(db_path: Path, purposes: list[str], cap: int) -> 
     if not purposes or cap <= 0 or not db_path.exists():
         return []
     try:
-        import sqlite3
         from datetime import timedelta
 
         cutoff = (datetime.now(UTC) - timedelta(days=30)).replace(tzinfo=None).isoformat()
         placeholders = ",".join("?" * len(purposes))
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             rows = conn.execute(
                 f"""

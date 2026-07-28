@@ -21,6 +21,8 @@ from datetime import date, datetime, timedelta
 from html import escape
 from pathlib import Path
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 log = logging.getLogger(__name__)
 
 _PANEL_STYLE = """<style>
@@ -50,7 +52,7 @@ def _query_runs(db_path: Path, since: datetime) -> dict[tuple[str, str], str]:
     """Return {(directive, "YYYY-MM-DD"): latest_status} for runs since *since*."""
     result: dict[tuple[str, str], str] = {}
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             cur = conn.execute(

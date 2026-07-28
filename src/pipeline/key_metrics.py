@@ -27,6 +27,8 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 # Combined ceiling on the rendered row — tier baseline first, then LLM picks
 # fill the remainder. Keeps the row to one scannable line, not a wall of chips.
 _MAX_BUBBLES = 12
@@ -81,7 +83,7 @@ def tier_graded_baseline(db_path: Path, tickers: list[str]) -> list[tuple[str, s
         return []
     marks = ",".join("?" * len(symbols))
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return []
     try:

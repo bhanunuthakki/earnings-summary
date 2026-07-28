@@ -37,6 +37,7 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import controls_css
 from ui.tokens import FAVICON_LINK, palette_css
 
@@ -148,7 +149,7 @@ def load_document(db_path: Path, doc_id: int) -> _DocRow | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     conn.row_factory = sqlite3.Row

@@ -9,6 +9,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 from ._shared import (
     Lens,
     LensContext,
@@ -88,7 +90,7 @@ def _ctx_cross_portfolio(ticker: str | None, repo_root: Path) -> LensContext | N
     db = repo_root / "data" / "portfolio.db"
     if not db.exists():
         return None
-    conn = sqlite3.connect(str(db))
+    conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     try:
         conn.row_factory = sqlite3.Row
         tickers = [

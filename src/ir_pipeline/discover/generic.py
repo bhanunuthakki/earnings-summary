@@ -26,6 +26,7 @@ import urllib.parse
 import urllib.request
 import urllib.robotparser
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from ir_pipeline._net import (
     PLAYWRIGHT_NETWORK_LOCKDOWN_ARG,
@@ -35,6 +36,7 @@ from ir_pipeline._net import (
     ensure_safe_public_url,
     install_public_only_playwright_routing,
 )
+from ir_pipeline.authority import PublisherEndpointRule
 from ir_pipeline.discover._docmeta import CandidateDoc, classify, filename_for_url
 
 # (href, visible anchor text) for one page; the unit a renderer returns.
@@ -45,7 +47,16 @@ FilenameFetcher = Callable[[str], str]
 # A "document" link: a PDF/XLSX(/XLS), or a known IR file-host path. A trailing
 # query/fragment after the extension is tolerated (...e.pdf?x=1).
 _DOC_HREF_RX = re.compile(
-    r"(?:\.pdf|\.xlsx|\.xls)(?:$|[?#])|mzfilemanager|q4cdn|/files/",
+    r"(?:\.pdf|\.xlsx|\.xls|\.pptx|\.ppt)(?:$|[?#])|mzfilemanager|q4cdn|/files/",
+    re.IGNORECASE,
+)
+_HTML_RELEASE_RX = re.compile(
+    r"(?:earnings|quarterly|annual|financial|press|results?)[-\s_]*"
+    r"(?:release|announcement)|news[-\s_]*release",
+    re.IGNORECASE,
+)
+_PERIOD_RESULTS_RX = re.compile(
+    r"\b(?:earnings|results?|financials?|report)\b",
     re.IGNORECASE,
 )
 
@@ -81,6 +92,152 @@ _MAX_DEPTH = 2  # homepage → IR landing → doc-bearing page
 _DEFAULT_TIME_BUDGET_S = 240.0  # wall-clock cap; return partials before the subprocess timeout
 
 
+@dataclass(frozen=True, slots=True)
+class CrawlPageOutcome:
+    page_url: str
+    outcome: str
+    anchor_count: int
+    failure_reason: str | None = None
+    anchors: tuple[Anchor, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DocumentDiscoveryInventory:
+    """Untruncated crawl output plus every bounded page disposition."""
+
+    candidates: tuple[CandidateDoc, ...]
+    pages: tuple[CrawlPageOutcome, ...]
+    crawl_complete: bool
+    crawl_stop_reason: str
+
+    @property
+    def complete(self) -> bool:
+        return self.crawl_complete
+
+    @property
+    def stop_reason(self) -> str:
+        return self.crawl_stop_reason
+
+    @property
+    def authority_complete(self) -> bool:
+        """Technical crawl closure never self-attests publisher authority."""
+
+        return False
+
+    @property
+    def authority_reason(self) -> str:
+        return "publisher_authority_evidence_required"
+
+
+def discover_document_inventory(
+    *,
+    ir_url: str,
+    timeout_ms: int = 60_000,
+    render: Renderer | None = None,
+    fetch_filename: FilenameFetcher | None = None,
+    rate_limit_s: float = _DEFAULT_RATE_LIMIT_S,
+    check_robots: bool = True,
+    time_budget_s: float = _DEFAULT_TIME_BUDGET_S,
+    max_pages: int = _MAX_PAGES,
+    publisher_file_rules: tuple[PublisherEndpointRule, ...] = (),
+) -> DocumentDiscoveryInventory:
+    """Crawl the bounded publisher graph without truncating the source inventory."""
+
+    if not ir_url:
+        return DocumentDiscoveryInventory((), (), False, "empty_ir_url")
+    if max_pages <= 0:
+        raise ValueError("max_pages must be positive")
+    started = time.monotonic()
+    do_render = render or _playwright_render
+    do_fetch = fetch_filename or _safe_filename_for_url
+    allows, robots_delay = robots_policy(ir_url) if check_robots else (_allow_all, 0.0)
+    effective_delay = max(rate_limit_s, robots_delay)
+    base_host = _hostname(ir_url)
+    frontier: list[tuple[str, int]] = [(ir_url, 0)]
+    visited: set[str] = set()
+    candidates: dict[str, CandidateDoc] = {}
+    pages: list[CrawlPageOutcome] = []
+    stop_reason = "frontier_exhausted"
+    while frontier:
+        if len(pages) >= max_pages:
+            stop_reason = "page_budget_exhausted"
+            break
+        if (time.monotonic() - started) > time_budget_s:
+            stop_reason = "time_budget_exhausted"
+            break
+        page_url, depth = frontier.pop(0)
+        if page_url in visited:
+            continue
+        visited.add(page_url)
+        if not allows(page_url):
+            pages.append(
+                CrawlPageOutcome(
+                    page_url=page_url,
+                    outcome="robots_denied",
+                    anchor_count=0,
+                    failure_reason="robots_txt",
+                )
+            )
+            continue
+        try:
+            anchors = do_render(page_url, timeout_ms)
+        except Exception as exc:
+            pages.append(
+                CrawlPageOutcome(
+                    page_url=page_url,
+                    outcome="failed",
+                    anchor_count=0,
+                    failure_reason=type(exc).__name__,
+                )
+            )
+            continue
+        pages.append(
+            CrawlPageOutcome(
+                page_url=page_url,
+                outcome="succeeded",
+                anchor_count=len(anchors),
+                anchors=tuple(anchors),
+            )
+        )
+        for href, text in anchors:
+            target = _document_url(urllib.parse.urljoin(page_url, href))
+            if (
+                href
+                and _is_document_anchor(
+                    target,
+                    text,
+                    publisher_host=base_host,
+                    publisher_file_rules=publisher_file_rules,
+                )
+                and target not in candidates
+            ):
+                candidates[target] = _to_candidate(target, text, page_url, do_fetch)
+        if depth < _MAX_DEPTH:
+            for href, text in anchors:
+                target = _document_url(urllib.parse.urljoin(page_url, href))
+                if not href or _is_document_anchor(
+                    target,
+                    text,
+                    publisher_host=base_host,
+                    publisher_file_rules=publisher_file_rules,
+                ):
+                    continue
+                if not _HISTORY_NAV_RX.search(f"{href} {text}"):
+                    continue
+                if _hostname(target) == base_host and target not in visited:
+                    frontier.append((target, depth + 1))
+        if effective_delay > 0:
+            time.sleep(effective_delay)
+    page_failures = any(page.outcome != "succeeded" for page in pages)
+    crawl_complete = stop_reason == "frontier_exhausted" and not page_failures
+    return DocumentDiscoveryInventory(
+        candidates=tuple(candidates.values()),
+        pages=tuple(pages),
+        crawl_complete=crawl_complete,
+        crawl_stop_reason=stop_reason if not page_failures else "page_failure",
+    )
+
+
 def discover_document_history(
     *,
     ir_url: str,
@@ -105,7 +262,7 @@ def discover_document_history(
     t0 = time.monotonic()
     do_render = render or _playwright_render
     do_fetch = fetch_filename or _safe_filename_for_url
-    allows, robots_delay = _robots_policy(ir_url) if check_robots else (_allow_all, 0.0)
+    allows, robots_delay = robots_policy(ir_url) if check_robots else (_allow_all, 0.0)
     effective_delay = max(rate_limit_s, robots_delay)  # honor robots Crawl-delay
 
     visited: set[str] = set()
@@ -260,7 +417,44 @@ def _filename_from_href(href: str) -> str:
 
 
 def _has_doc_ext(name: str) -> bool:
-    return name.lower().endswith((".pdf", ".xlsx", ".xls"))
+    return name.lower().endswith((".pdf", ".xlsx", ".xls", ".pptx", ".ppt"))
+
+
+def _document_url(url: str) -> str:
+    """Remove a non-request fragment while preserving the publisher query."""
+
+    parsed = urllib.parse.urlparse(url)
+    return urllib.parse.urlunparse(parsed._replace(fragment=""))
+
+
+def _is_document_anchor(
+    url: str,
+    text: str,
+    *,
+    publisher_host: str,
+    publisher_file_rules: tuple[PublisherEndpointRule, ...],
+) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname is None
+        or parsed.port is not None
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return False
+    authorized = _hostname(url) == publisher_host or any(
+        rule.allows(url) for rule in publisher_file_rules
+    )
+    if not authorized:
+        return False
+    combined = f"{parsed.path} {text}"
+    year, quarter = _guess_period(combined)
+    return bool(
+        _DOC_HREF_RX.search(url)
+        or _HTML_RELEASE_RX.search(combined)
+        or (year is not None and quarter is not None and _PERIOD_RESULTS_RX.search(combined))
+    )
 
 
 def _norm_year(s: str) -> int:
@@ -270,6 +464,11 @@ def _norm_year(s: str) -> int:
 
 def _host(url: str) -> str:
     return urllib.parse.urlparse(url).netloc.lower()
+
+
+def _hostname(url: str) -> str:
+    hostname = urllib.parse.urlparse(url).hostname
+    return "" if hostname is None else hostname.lower().rstrip(".")
 
 
 def _allow_all(_url: str) -> bool:
@@ -284,7 +483,7 @@ _ROBOTS_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 _MAX_CRAWL_DELAY_S = 12.0
 
 
-def _robots_policy(url: str) -> tuple[Callable[[str], bool], float]:
+def robots_policy(url: str) -> tuple[Callable[[str], bool], float]:
     """Return ``(can_fetch predicate, crawl_delay seconds)`` for ``url``'s origin.
 
     robots.txt is fetched with a browser User-Agent on purpose: many corporate
@@ -318,6 +517,11 @@ def _robots_policy(url: str) -> tuple[Callable[[str], bool], float]:
             return True
 
     return _can, delay_s
+
+
+# Compatibility for existing focused network-guard tests and callers while the
+# public source-authority batch API adopts ``robots_policy``.
+_robots_policy = robots_policy
 
 
 def _safe_filename_for_url(href: str) -> str:

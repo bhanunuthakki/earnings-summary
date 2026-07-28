@@ -39,6 +39,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from compute.kpi_resolver import normalize_kpi_name  # noqa: E402
 from models.facts import Unit  # noqa: E402
 from models.kpis import ReportingCadence  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # Year-end fact rows to promote to FY for an annual KPI: Dec-31 prints currently
 # tagged as the quarterly Q4 bucket (or the SEC 'quarterly' bucket).
@@ -166,7 +167,7 @@ def main() -> int:
     p.add_argument("--apply", action="store_true", help="Write changes (default: dry-run)")
     args = p.parse_args()
 
-    conn = sqlite3.connect(args.db)
+    conn = connect_sqlite(args.db, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     try:
         result = _convert(

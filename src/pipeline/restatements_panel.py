@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from html import escape
 from pathlib import Path
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 
 _PANEL_STYLE = """<style>
@@ -67,7 +68,7 @@ def load_restatements(db_path: Path, limit: int = _LIMIT) -> RestatementOverview
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     conn.row_factory = sqlite3.Row

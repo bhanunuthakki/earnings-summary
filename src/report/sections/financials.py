@@ -55,6 +55,7 @@ from report.sections._common import (
     open_repo_db,
     quarter_label,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from timeseries.loaders import (
     load_financial_cell_provenance,
     load_financial_fact_provenance,
@@ -312,7 +313,7 @@ def _resolve_priorities(
     db_path = repo_root / "data" / "portfolio.db"
     conn: sqlite3.Connection | None = None
     if db_path.exists():
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
 
     try:

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -38,6 +39,8 @@ from pathlib import Path
 from typing import cast
 
 import requests
+
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -232,7 +235,6 @@ def build_universe_resolver(db_path: Path, fmp_dir: Path) -> UniverseResolver:
 
     Reads only the profiles of the tracked names (a known list — never globs the
     110k-file FMP cache)."""
-    import sqlite3
 
     from discovery.adjacency import normalize_phrase
 
@@ -240,7 +242,7 @@ def build_universe_resolver(db_path: Path, fmp_dir: Path) -> UniverseResolver:
     if not db_path.exists():
         return resolver
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return resolver
     try:

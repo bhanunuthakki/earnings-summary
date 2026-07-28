@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import cast
 
 from clock import now_naive_utc
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # The "briefed" active universe — portfolio + evaluation (mirrors
 # db.BRIEFED_LIST_TYPES; duplicated as a literal to keep this module import-light
@@ -97,7 +98,11 @@ def record_attempt(
         return False
     ts = now_iso or _now_iso()
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(
+            db_path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
         try:
             if not _table_exists(conn, "ir_fetch_status"):
                 return False
@@ -131,7 +136,7 @@ def load_statuses(db_path: Path) -> dict[str, IrFetchStatus]:
     if not db_path.exists():
         return out
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             if not _table_exists(conn, "ir_fetch_status"):
@@ -166,7 +171,7 @@ def ir_doc_coverage(db_path: Path) -> dict[str, tuple[int, str | None, str | Non
     if not db_path.exists():
         return out
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             if not _table_exists(conn, "documents"):
@@ -208,7 +213,7 @@ def briefed_roster(db_path: Path) -> list[tuple[str, str, str]]:
         return out
     placeholders = ", ".join("?" for _ in BRIEFED_LIST_TYPES)
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             if not _table_exists(conn, "tracked_companies"):

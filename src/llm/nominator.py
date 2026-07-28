@@ -38,6 +38,7 @@ from typing import cast
 
 from llm.frontier import frontier_sha, merged_cheaper_candidates, promise_of
 from llm.workload_inventory import PurposeWorkload, build_workload_inventory, risk_note_for
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -160,7 +161,7 @@ def _recent_pair_verdicts(db_path: Path) -> dict[str, dict[str, list[str]]]:
     if not db_path.exists():
         return {}
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             if not _has_table(conn, "model_eval_verdicts"):
                 return {}
@@ -399,7 +400,11 @@ def _persist_run(db_path: Path, run_id: str, nominations: list[Nomination]) -> i
     now = _now_iso()
     sha = frontier_sha(db_path)
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(
+            db_path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
         try:
             if not _has_table(conn, "optimizer_nominations"):
                 log.warning("optimizer_nominations table absent — run not persisted")
@@ -500,7 +505,7 @@ def newest_run_info(db_path: Path) -> tuple[str, str] | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             if not _has_table(conn, "optimizer_nominations"):
                 return None
@@ -540,7 +545,7 @@ def pending_nominations(
         return []
     placeholders = ",".join("?" * len(kinds))
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             if not _has_table(conn, "optimizer_nominations"):
@@ -614,7 +619,7 @@ def excluded_purposes(db_path: Path) -> set[str]:
         return excluded
     # Rotation floor: force-reinclude anything unswept too long.
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             if not _has_table(conn, "model_eval_verdicts"):
                 return excluded
@@ -637,7 +642,11 @@ def excluded_purposes(db_path: Path) -> set[str]:
 def mark_nomination(db_path: Path, row_id: int, status: str) -> None:
     """Sweep bookkeeping: pending → swept | skipped. Best-effort."""
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(
+            db_path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
         try:
             if not _has_table(conn, "optimizer_nominations"):
                 return

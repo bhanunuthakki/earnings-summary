@@ -42,6 +42,7 @@ from pathlib import Path
 
 from dcf.fact_drivers import driver_field_options
 from identity import DEFAULT_USER_ID
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.cite_marks import CITE_MARKS_SNIPPET
 from user_state.saved_views import SavedViewRow, list_views
 from viewspec.engine import metric_catalog
@@ -999,7 +1000,7 @@ def _default_tickers(db_path: Path, user_id: str) -> list[str]:
     if not db_path.exists():
         return []
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return []
     try:

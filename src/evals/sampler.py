@@ -51,6 +51,7 @@ from typing import cast
 
 from llm.eval_scopes import EVAL_SCOPES
 from llm.model_eval import PromptCase
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -156,7 +157,7 @@ def load_census(
     scopes = sorted(EVAL_SCOPES)
     placeholders = ",".join("?" * len(scopes))
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(
@@ -260,7 +261,7 @@ def load_cached_features(db_path: Path, purpose: str, *, classifier_version: str
     if not db_path.exists():
         return {}
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             if not _has_table(conn, "eval_case_features"):
                 return {}
@@ -290,7 +291,11 @@ def _persist_feature(
 ) -> None:
     """Best-effort cache write (telemetry never blocks the sweep)."""
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(
+            db_path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
         try:
             if not _has_table(conn, "eval_case_features"):
                 return
@@ -448,7 +453,7 @@ def recent_sample_shas(db_path: Path, purpose: str, candidate: str, *, sweeps: i
     if not db_path.exists():
         return set()
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             if not _has_table(conn, "model_eval_verdicts"):
                 return set()

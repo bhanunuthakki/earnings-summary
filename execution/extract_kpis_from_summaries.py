@@ -41,6 +41,7 @@ from compute.kpi_extract_summaries import (  # noqa: E402
     extract_for_ticker,
     write_log,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def main() -> int:
@@ -56,7 +57,7 @@ def main() -> int:
         print("[]")
         return 0
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     results = []
     summary_lines: list[dict[str, object]] = []
@@ -134,7 +135,7 @@ def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:
     if args.ticker:
         return [args.ticker.upper()]
     db_path = repo_root / "data" / "portfolio.db"
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     cur = conn.cursor()
     cur.execute(
         f"SELECT DISTINCT ticker FROM tracked_companies "

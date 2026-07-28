@@ -27,6 +27,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from dcf.persist import SANITY_OVER_UNDER_LIMIT  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def _reported_currency(repo_root: Path, ticker: str) -> str | None:
@@ -63,7 +64,7 @@ def _snapshot_fx(snapshot_json: object) -> tuple[float | None, str | None]:
 
 def audit(repo_root: Path) -> list[dict[str, object]]:
     db = repo_root / "data" / "portfolio.db"
-    conn = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+    conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}

@@ -33,7 +33,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -43,6 +42,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from credibility.priors import MeasuredPriors, build_measured_priors  # noqa: E402
 from pipeline.confidence import RescoreOutcome, apply_confidence_scores  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: no DB at {db_path}", file=sys.stderr)
         return 2
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     priors: MeasuredPriors | None = None
     try:
         if args.use_measured_priors:

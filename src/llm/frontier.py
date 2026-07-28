@@ -48,6 +48,7 @@ from llm.model_ladder import (
     cheaper_candidates,
     model_rank,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -135,7 +136,7 @@ def load_candidate_models(db_path: Path) -> dict[str, CandidateModel]:
     if not db_path.exists():
         return {}
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             if not _has_table(conn, "candidate_models"):
@@ -341,7 +342,11 @@ def _upsert_candidates(
         )
     now = datetime.now(UTC).replace(tzinfo=None).isoformat()
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(
+            db_path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
         try:
             if not _has_table(conn, "candidate_models"):
                 log.warning("candidate_models table absent — research result not persisted")

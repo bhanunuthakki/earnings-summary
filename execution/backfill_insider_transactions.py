@@ -35,6 +35,7 @@ from insider_transactions import (  # noqa: E402
     fetch_form4_from_edgar,
     upsert,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("backfill_insider")
 
@@ -42,13 +43,12 @@ log = logging.getLogger("backfill_insider")
 def _load_tracked_tickers(repo_root: Path) -> list[tuple[str, str]]:
     """Return [(ticker, list_type)] for every active tracked company.
     Excludes index_member / etf / none."""
-    import sqlite3
 
     db = repo_root / "data" / "portfolio.db"
     if not db.exists():
         log.error({"event": "db_missing", "path": str(db)})
         return []
-    conn = sqlite3.connect(str(db))
+    conn = connect_sqlite(str(db), role=SQLiteConnectionRole.READ_ONLY)
     try:
         rows = conn.execute(
             """

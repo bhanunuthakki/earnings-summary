@@ -62,6 +62,7 @@ from allocation.price_history import (
     daily_log_returns,
     load_daily_closes,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 #: The UI's preset weight-chip menu (PRD §7.2, P0.2 extends this through the
 #: concentration-zone boundaries: 10/12/15/20/25%). This is a UI convenience,
@@ -434,7 +435,7 @@ def _ticker_factor_loadings(db_path: Path | str | None, ticker: str) -> dict[str
         resolved = resolve_db_path(db_path)
         if resolved is None or not Path(resolved).exists():
             return {}
-        conn = sqlite3.connect(f"file:{resolved}?mode=ro", uri=True)
+        conn = connect_sqlite(resolved, role=SQLiteConnectionRole.READ_ONLY)
     except (sqlite3.Error, OSError):
         return {}
     try:

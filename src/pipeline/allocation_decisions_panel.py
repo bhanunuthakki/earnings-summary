@@ -73,6 +73,7 @@ from integrations.portfolio_tracker_client import (
     fetch_portfolio_analytics,
 )
 from pipeline.research_cockpit import latest_dcf_runs, latest_dcf_scenarios
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 from ui.controls import chip_tone_class, pill_tone_class, thesis_status_tone, ticker_label
 from ui.prose import render_prose
@@ -485,7 +486,7 @@ def render_allocation_decisions_panel(
     families — ``only={"position_alpha"}`` skips the rest) and joins them onto
     the research holdings; never raises on a tracker problem.
     """
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         holdings = portfolio_holdings(conn)
@@ -679,7 +680,7 @@ def _query_coach_pnl(db_path: Path, *, user_id: str, now: datetime | None = None
     from advisor.position_review import AGENT_SOURCE, OWNER_ATTESTED_KEY, REVIEW_SOURCE_KEY
 
     now = now or datetime.now()
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         raw_rows = _safe_rows(
@@ -901,7 +902,7 @@ def _coach_pings_section(db_path: Path, *, now: datetime | None = None) -> str:
     coach_pings. One dense line per ping: class, ticker, status, date. Never
     raises: coach_pings is a 0131+ table, absent on any DB stamped before it."""
     start_iso, end_iso = _month_bounds_iso(now)
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         rows = _safe_rows(
@@ -938,7 +939,7 @@ def _ping_line(r: sqlite3.Row) -> str:
 def _coach_mutes_section(db_path: Path) -> str:
     """ "Active mutes" — coach_mutes rows with an inline Unmute button (REQ-12:
     visible AND reversible). Empty state is one muted line, not absent."""
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         rows = _safe_rows(
@@ -997,7 +998,7 @@ def _digest_tickers_and_ages(
     read directly off coach_pings by id (read-only; never raises)."""
     if not ping_ids:
         return {}
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         marks = ",".join("?" for _ in ping_ids)
@@ -1046,7 +1047,7 @@ def _decision_journal_section(db_path: Path, *, limit: int = _DECISION_JOURNAL_L
     Advisor-authored legacy rows remain preserved in the view and are counted,
     but they never appear as Owner Decisions by default.
     """
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         rows = _safe_rows(

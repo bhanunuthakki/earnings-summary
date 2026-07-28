@@ -28,7 +28,9 @@ from dashboard import render_alert_card
 from dashboard.evidence_drawer import load_brief_provenance
 from pipeline.analysis_log import AnalysisLog, build_analysis_log
 from pipeline.artifact_inventory import Artifact, build_artifact_inventory
+from provenance.selection import selected_transcripts_relation
 from report.renderers.numfmt import fmt_date, fmt_reltime
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import controls_css, pill_tone_class, thesis_status_tone, ticker_label
 from ui.prose import render_prose
 from ui.time import stamp_html
@@ -183,7 +185,7 @@ def build_ticker_command_center(repo_root: Path, ticker: str) -> TickerCommandCe
     db_path = repo_root / "data" / "portfolio.db"
     conn: sqlite3.Connection | None = None
     if db_path.exists():
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
     try:
         identity = _identity(conn, repo_root, t)
@@ -242,8 +244,10 @@ def _identity(conn: sqlite3.Connection | None, repo_root: Path, t: str) -> Ticke
         ).fetchone()
         ident.last_fmp_at = str(row["lp"]) if row and row["lp"] else None
     if _has(conn, "transcripts"):
+        transcripts = selected_transcripts_relation(conn).sql
         row = conn.execute(
-            "SELECT period_end FROM transcripts WHERE UPPER(ticker)=? AND period_end IS NOT NULL "
+            f"SELECT period_end FROM {transcripts} "
+            "WHERE UPPER(ticker)=? AND period_end IS NOT NULL "
             "ORDER BY period_end DESC LIMIT 1",
             (t,),
         ).fetchone()
@@ -950,7 +954,7 @@ def _disclosure_change_strip(db_path: Path, ticker: str) -> str:
     """Compact, drift-framed disclosure panel with verbatim source receipts."""
 
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(
