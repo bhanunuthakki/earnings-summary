@@ -59,6 +59,14 @@ def news_db(tmp_path: Path) -> Path:
     cfg = _build_config(db)
     command.stamp(cfg, "0064_queued_actions")
     command.upgrade(cfg, "0065_news")
+    conn = sqlite3.connect(str(db))
+    try:
+        # Deliberately minimal 0065 contract fixture, not a production
+        # versioned database.
+        conn.execute("DROP TABLE alembic_version")
+        conn.commit()
+    finally:
+        conn.close()
     return db
 
 

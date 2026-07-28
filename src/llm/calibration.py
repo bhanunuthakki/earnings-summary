@@ -70,7 +70,9 @@ def _open(db_path: Path | str) -> sqlite3.Connection | None:
         conn = connect_sqlite(
             p,
             role=SQLiteConnectionRole.WRITER,
-            schema_preflight=True,
+            # Calibration is an optional compatibility bridge introduced long
+            # before the current head; _table_exists gates the narrow write.
+            schema_preflight=False,
         )
         conn.row_factory = sqlite3.Row
         return conn

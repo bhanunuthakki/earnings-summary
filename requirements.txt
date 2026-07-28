@@ -15,6 +15,12 @@ cryptography>=49.0.0
 # attacker-reachable path and carries a heavy CVE stream — keep it current
 # (>=6.13.3 clears the 30+ CVEs flagged by the 2026-06-18 SCA).
 pypdf>=6.13.3
+# PyMuPDF powers bounded, position-preserving PDF table extraction and is
+# required by the evidence-processing runtime and its CI coverage.
+pymupdf>=1.27.2.3
+# OOXML packages and publisher feeds are untrusted XML. Use hardened parsers
+# that reject entity expansion and related XML attacks.
+defusedxml>=0.7.1
 # Security floor: reportlab renders PDFs — keep it past the 3.x toRGB RCE
 # (CVE-2023-33733, cleared by 4.x). CI installs latest.
 reportlab>=4.0.0

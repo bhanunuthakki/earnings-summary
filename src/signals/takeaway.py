@@ -119,7 +119,13 @@ def summarize_pending(
     """
     _now = now or datetime.now(UTC)
     try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+        conn = connect_sqlite(
+            db_path,
+            role=SQLiteConnectionRole.WRITER,
+            # This compatibility helper explicitly supports missing/pre-0095
+            # databases and checks for the signals table below.
+            schema_preflight=False,
+        )
     except sqlite3.Error as exc:
         log.warning({"event": "podcast_takeaway_db_open_failed", "error": str(exc)})
         return 0

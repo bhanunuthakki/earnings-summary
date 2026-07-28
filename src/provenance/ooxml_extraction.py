@@ -18,8 +18,8 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 from urllib.parse import unquote, urlparse
-from xml.etree import ElementTree
 
+from defusedxml import ElementTree
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from provenance.evidence_ledger import EvidenceLocator

@@ -19,9 +19,9 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Literal, Protocol, Self, cast
 from urllib.parse import parse_qsl, urldefrag, urljoin, urlparse
-from xml.etree import ElementTree
 
 import requests
+from defusedxml import ElementTree
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ir_pipeline.authority import (

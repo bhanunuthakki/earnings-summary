@@ -40,7 +40,10 @@ def write_run(summary: EvalRunSummary, *, db_path: Path) -> int:
     conn = connect_sqlite(
         db_path,
         role=SQLiteConnectionRole.WRITER,
-        schema_preflight=True,
+        # The eval store is intentionally compatible with its introducing
+        # 0083 schema so historical/replay fixtures remain writable. Table
+        # presence below is the narrow contract this module enforces.
+        schema_preflight=False,
     )
     try:
         conn.execute("PRAGMA busy_timeout = 10000")
