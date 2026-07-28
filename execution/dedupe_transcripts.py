@@ -25,13 +25,13 @@ compare against on every future run instead of NULL.
 For every (ticker, fiscal_period_type, period_end) group with more than one
 row: classify each row's source (src/transcripts/source_reliability.py),
 keep the highest-ranked (richer segment count, then more recent fetch, then
-lowest id as a final deterministic tiebreak), delete the rest — segments,
-transcript, and document rows, same as `ingest_one`'s live guard. Every row
+lowest id as a final deterministic tiebreak), supersede the rest while
+retaining their transcript, document, and segment evidence. Every row
 with a NULL `source` (duplicate or not) gets backfilled by the same
 classifier, so the sweep also leaves single, non-duplicated transcripts
 correctly labeled.
 
-Dry-run by default: reports every group and the keep/delete/backfill plan
+Dry-run by default: reports every group and the keep/supersede/backfill plan
 without writing anything. Pass --apply to actually mutate the database.
 
 Usage:
@@ -53,10 +53,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from compute.transcript_ingest import (  # noqa: E402
-    _delete_transcript_and_document,  # pyright: ignore[reportPrivateUsage]
-    read_transcript_text,
-)
+from compute.transcript_ingest import read_transcript_text, supersede_transcripts  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 from transcripts.source_reliability import (  # noqa: E402
     UNKNOWN_LEGACY,
@@ -84,7 +81,7 @@ class RowView:
 
 
 @dataclass
-class DeletedRow:
+class SupersededRow:
     transcript_id: int
     document_id: int
     file_path: str
@@ -101,7 +98,7 @@ class GroupReport:
     kept_transcript_id: int
     kept_source: str
     kept_segment_count: int
-    deleted: list[DeletedRow]
+    superseded: list[SupersededRow]
 
 
 def _read_text_safe(project_root: Path, rel_path: str) -> str | None:
@@ -191,8 +188,8 @@ def _sweep(
                 kept_transcript_id=int(winner_row["transcript_id"]),
                 kept_source=winner_source,
                 kept_segment_count=winner_seg_count,
-                deleted=[
-                    DeletedRow(
+                superseded=[
+                    SupersededRow(
                         transcript_id=int(row["transcript_id"]),
                         document_id=int(row["document_id"]),
                         file_path=str(row["file_path"]),
@@ -213,7 +210,7 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     p.add_argument("--ticker", default=None, help="Restrict the sweep to one ticker")
-    p.add_argument("--apply", action="store_true", help="Actually delete losers + backfill source")
+    p.add_argument("--apply", action="store_true", help="Supersede losers and backfill source")
     p.add_argument("--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"))
     p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     args = p.parse_args()
@@ -232,13 +229,13 @@ def main() -> int:
                         "period_end": g.period_end,
                         "kept_transcript_id": g.kept_transcript_id,
                         "kept_source": g.kept_source,
-                        "deleted_count": len(g.deleted),
+                        "superseded_count": len(g.superseded),
                     }
                 )
                 + "\n"
             )
 
-        deleted_rows = sum(len(g.deleted) for g in group_reports)
+        superseded_rows = sum(len(g.superseded) for g in group_reports)
         backfilled_rows = len(backfill)
 
         if args.apply:
@@ -247,10 +244,11 @@ def main() -> int:
                     "UPDATE transcripts SET source = ? WHERE id = ?", (source, transcript_id)
                 )
             for g in group_reports:
-                for d in g.deleted:
-                    _delete_transcript_and_document(
-                        conn, document_id=d.document_id, transcript_id=d.transcript_id
-                    )
+                supersede_transcripts(
+                    conn,
+                    winner_transcript_id=g.kept_transcript_id,
+                    loser_transcript_ids=[row.transcript_id for row in g.superseded],
+                )
             conn.commit()
 
         _MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
@@ -261,7 +259,7 @@ def main() -> int:
                     "applied": args.apply,
                     "ticker_scope": args.ticker,
                     "duplicate_groups": len(group_reports),
-                    "rows_deleted": deleted_rows,
+                    "rows_superseded": superseded_rows,
                     "rows_backfilled": backfilled_rows,
                     "solo_transcripts_untouched": solo_count,
                     "groups": [asdict(g) for g in group_reports],
@@ -275,8 +273,8 @@ def main() -> int:
         summary = {
             "applied": args.apply,
             "duplicate_groups": len(group_reports),
-            "rows_deleted": deleted_rows if args.apply else 0,
-            "rows_would_delete": deleted_rows,
+            "rows_superseded": superseded_rows if args.apply else 0,
+            "rows_would_supersede": superseded_rows,
             "rows_backfilled": backfilled_rows if args.apply else 0,
             "rows_would_backfill": backfilled_rows,
             "solo_transcripts": solo_count,

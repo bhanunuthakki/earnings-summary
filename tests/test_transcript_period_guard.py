@@ -1,7 +1,7 @@
 """Tests for the reliability-ranked period-level idempotency guard added to
 `ingest_one` / `ingest_existing_ir_transcript` (src/compute/transcript_ingest.py)
 after the 2026-07-25 transcript-duplication incident: two different documents
-must never both back a `transcripts` row for the same
+may retain multiple immutable versions, but exactly one is current for a
 (ticker, fiscal_period_type, period_end).
 """
 
@@ -52,7 +52,12 @@ def _conn() -> sqlite3.Connection:
             period_end TIMESTAMP,
             source_url TEXT,
             has_qa_section INTEGER,
-            source TEXT
+            source TEXT,
+            version_number INTEGER NOT NULL DEFAULT 1,
+            is_current INTEGER NOT NULL DEFAULT 1,
+            recorded_at TIMESTAMP,
+            superseded_at TIMESTAMP,
+            superseded_by_transcript_id INTEGER
         );
         CREATE TABLE transcript_segments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,6 +69,9 @@ def _conn() -> sqlite3.Connection:
             time_code_end TEXT,
             text TEXT NOT NULL
         );
+        CREATE UNIQUE INDEX uq_transcripts_current_ticker_period_type_end
+            ON transcripts(ticker, fiscal_period_type, period_end)
+            WHERE is_current = 1;
         """
     )
     return c
@@ -149,10 +157,10 @@ def test_no_conflict_inserts_normally(tmp_path: Path) -> None:
     assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 1
 
 
-def test_higher_tier_existing_row_wins_new_fetch_is_skipped_no_orphan(tmp_path: Path) -> None:
+def test_higher_tier_existing_row_wins_and_new_version_is_preserved(tmp_path: Path) -> None:
     """The NVDA-shaped real-world case: a manual PDF already on file must not
     be replaced by a fresh Q&A-only aggregator scrape, and the scrape must
-    not leave an orphan `documents` row behind."""
+    preserve the lower-ranked fetch as a linked historical version."""
     conn = _conn()
     old_doc_id, old_transcript_id = _seed_transcript(
         conn,
@@ -166,8 +174,6 @@ def test_higher_tier_existing_row_wins_new_fetch_is_skipped_no_orphan(tmp_path: 
     )
 
     raw_path = _write_pdf_like_txt(tmp_path, "transcripts/raw/NVDA_Q1_2025.txt", _SYNTH_ROIC_BODY)
-    docs_before = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
-
     result = ingest_one(
         conn, file_path=raw_path, project_root=tmp_path, tracked_tickers=frozenset({"NVDA"})
     )
@@ -176,8 +182,12 @@ def test_higher_tier_existing_row_wins_new_fetch_is_skipped_no_orphan(tmp_path: 
     assert result.skipped_existing
     assert result.document_id == old_doc_id
     assert result.transcript_id == old_transcript_id
-    # No new document row was created for the losing fetch.
-    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == docs_before
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 2
+    historical = conn.execute(
+        "SELECT is_current, superseded_by_transcript_id FROM transcripts WHERE id <> ?",
+        (old_transcript_id,),
+    ).fetchone()
+    assert tuple(historical) == (0, old_transcript_id)
     # The pre-existing winner is untouched.
     assert (
         conn.execute(
@@ -187,7 +197,7 @@ def test_higher_tier_existing_row_wins_new_fetch_is_skipped_no_orphan(tmp_path: 
     )
 
 
-def test_lower_tier_existing_row_is_superseded(tmp_path: Path) -> None:
+def test_lower_tier_existing_row_is_preserved_as_superseded(tmp_path: Path) -> None:
     """An old row with unrecoverable provenance (pre-dates the `source`
     column) must yield to a freshly-classified aggregator fetch for the
     same period."""
@@ -212,19 +222,26 @@ def test_lower_tier_existing_row_is_superseded(tmp_path: Path) -> None:
     assert result is not None
     assert not result.skipped_existing
     assert result.source == "aggregator_roic"
-    # The old document + transcript were deleted, not left behind.
-    assert (
-        conn.execute("SELECT COUNT(*) FROM documents WHERE id = ?", (old_doc_id,)).fetchone()[0]
-        == 0
-    )
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 2
+    old = conn.execute(
+        "SELECT is_current, superseded_at, superseded_by_transcript_id "
+        "FROM transcripts WHERE id = ?",
+        (old_transcript_id,),
+    ).fetchone()
+    assert tuple(old) == (0, old["superseded_at"], result.transcript_id)
+    assert old["superseded_at"] is not None
     assert (
         conn.execute(
-            "SELECT COUNT(*) FROM transcripts WHERE id = ?", (old_transcript_id,)
+            "SELECT COUNT(*) FROM transcript_segments WHERE transcript_id = ?",
+            (old_transcript_id,),
         ).fetchone()[0]
-        == 0
+        == 1
     )
-    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
-    assert conn.execute("SELECT COUNT(*) FROM transcripts").fetchone()[0] == 1
+    assert (
+        conn.execute("SELECT COUNT(*) FROM documents WHERE id = ?", (old_doc_id,)).fetchone()[0]
+        == 1
+    )
 
 
 def test_same_tier_richer_fetch_supersedes_thin_stub(tmp_path: Path) -> None:
@@ -253,6 +270,12 @@ def test_same_tier_richer_fetch_supersedes_thin_stub(tmp_path: Path) -> None:
     assert not result.skipped_existing
     assert (
         conn.execute("SELECT COUNT(*) FROM documents WHERE id = ?", (old_doc_id,)).fetchone()[0]
+        == 1
+    )
+    assert (
+        conn.execute(
+            "SELECT is_current FROM transcripts WHERE document_id = ?", (old_doc_id,)
+        ).fetchone()[0]
         == 0
     )
     # banner+header preamble (anonymous turn) + Operator/Analyst One/Operator/Analyst Two
@@ -289,7 +312,9 @@ def test_same_tier_thinner_fetch_is_skipped(tmp_path: Path) -> None:
     assert result.skipped_existing
     assert result.document_id == old_doc_id
     assert result.transcript_id == old_transcript_id
-    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM transcripts WHERE is_current = 1").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM transcripts WHERE is_current = 0").fetchone()[0] == 1
 
 
 def test_find_transcript_for_period_none_when_absent(tmp_path: Path) -> None:
