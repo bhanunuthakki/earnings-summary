@@ -207,7 +207,10 @@ def test_processor_uses_hash_pinned_os_sandbox_and_closed_sets(
         bundle_python=bundle,
         sandbox_launcher=launcher,
         runtime_root=runtime_root,
-        environment={"SYSTEMROOT": "C:\\Windows", "SECRET_TOKEN": "must-not-cross"},
+        environment={
+            "SYSTEMROOT": "C:\\Windows",
+            "SECRET_TOKEN": "must-not-cross",  # pragma: allowlist secret
+        },
     )
     assert result.runtime_artifact_sha256 == manifest.execution.runtime_artifact_sha256
     command = observed["command"]
