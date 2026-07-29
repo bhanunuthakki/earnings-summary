@@ -524,8 +524,14 @@ def test_panel_fragment_portfolio_window_args_flow_to_the_tracker_fetch(
         start_date: str | None = None,
         end_date: str | None = None,
         include_backfill: bool = False,
+        only: set[str] | frozenset[str] | None = None,
     ) -> PortfolioAnalytics:
-        captured.update(start=start_date, end=end_date, backfill=include_backfill)
+        captured.update(
+            start=start_date,
+            end=end_date,
+            backfill=include_backfill,
+            only=only,
+        )
         # Available (with an empty series) so the Performance panel — and its
         # embedded window controls — renders and echoes the applied window.
         return PortfolioAnalytics(
@@ -559,14 +565,24 @@ def test_panel_fragment_portfolio_window_args_flow_to_the_tracker_fetch(
         "/api/panel/portfolio?start_date=2026-01-01&end_date=2026-06-10&include_backfill=1"
     )
     assert resp.status_code == 200
-    assert captured == {"start": "2026-01-01", "end": "2026-06-10", "backfill": True}
+    assert captured == {
+        "start": "2026-01-01",
+        "end": "2026-06-10",
+        "backfill": True,
+        "only": {"performance", "position_alpha", "policy"},
+    }
     body = resp.get_data(as_text=True)
     assert 'value="2026-01-01"' in body and 'value="2026-06-10"' in body
     # Garbage dates are sanitized before the fetch (tracker defaults instead).
     captured.clear()
     resp = client.get("/api/panel/portfolio?start_date=garbage&end_date=2026-06-10")
     assert resp.status_code == 200
-    assert captured == {"start": None, "end": "2026-06-10", "backfill": False}
+    assert captured == {
+        "start": None,
+        "end": "2026-06-10",
+        "backfill": False,
+        "only": {"performance", "position_alpha", "policy"},
+    }
 
 
 # ----- L5: Portfolio → Risk panel + the run-scenario SSE route -----
