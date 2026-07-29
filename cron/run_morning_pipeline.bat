@@ -24,7 +24,8 @@ REM still producing the best-effort feed.
 
 setlocal
 set PYTHONUTF8=1
-set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
+set "PROJECT_ROOT=%~dp0.."
+for %%I in ("%PROJECT_ROOT%") do set "PROJECT_ROOT=%%~fI"
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 REM Retain a bounded-purpose production corpus for the P0 material-news audit.
 REM Keep private full-text outside the mirrored repo with bounded retention.

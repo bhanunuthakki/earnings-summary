@@ -134,6 +134,37 @@ def test_panel_shows_failed_run(tmp_path: Path) -> None:
     assert "failed" in html
 
 
+def test_panel_shows_abandoned_run_as_unhealthy(tmp_path: Path) -> None:
+    db_path = tmp_path / "abandoned.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE ingestion_runs "
+        "(id INTEGER PRIMARY KEY, run_id TEXT, started_at DATETIME, ended_at DATETIME, "
+        "directive TEXT, ticker_scope TEXT, status TEXT, error_summary TEXT)"
+    )
+    today = datetime.now().replace(hour=4, minute=0, second=0, microsecond=0)
+    conn.execute(
+        "INSERT INTO ingestion_runs VALUES (1,?,?,?,?,?,?,?)",
+        (
+            f"run_{today.isoformat()}",
+            today,
+            today,
+            "run_morning_pipeline",
+            "[]",
+            "abandoned",
+            "stale attempt reaped",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    from pipeline.cron_health_panel import render_cron_health_panel
+
+    html = render_cron_health_panel(db_path)
+    assert 'k-dot-bad" title="abandoned"' in html
+    assert 'class="ch-status-fail">abandoned<' in html
+
+
 def test_panel_streak_count(tmp_path: Path) -> None:
     db_path = tmp_path / "test.db"
     conn = sqlite3.connect(str(db_path))

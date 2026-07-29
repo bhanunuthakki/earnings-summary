@@ -664,6 +664,23 @@
       }
     },
     {
+      "task_name": "\\earnings-summary\\weekly_cleanup",
+      "xml": "weekly_cleanup.task.xml",
+      "wrapper": "run_weekly_cleanup.bat",
+      "schedule": {
+        "trigger": "CalendarTrigger",
+        "start_boundary": "2026-08-02T13:00:00",
+        "repetition_interval": null,
+        "days_interval": null,
+        "weeks_interval": 1,
+        "days_of_week": [
+          "Sunday"
+        ],
+        "days_of_month": [],
+        "months": []
+      }
+    },
+    {
       "task_name": "\\earnings-summary\\weekly_p2_lens_refresh",
       "xml": "weekly_p2_lens_refresh.task.xml",
       "wrapper": "run_weekly_p2_lens_refresh.bat",

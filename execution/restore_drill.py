@@ -125,7 +125,7 @@ def run_drill(
     live_db: Path,
     *,
     keep: bool = False,
-    snapshot: Path | None | _AutoSnapshot = _AUTO_SNAPSHOT,
+    snapshot: Path | _AutoSnapshot | None = _AUTO_SNAPSHOT,
 ) -> tuple[bool, dict[str, object]]:
     """Restore the newest snapshot to a temp file and verify it.
 

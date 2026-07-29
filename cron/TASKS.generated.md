@@ -41,6 +41,7 @@ Generated from `cron/task_manifest.json`; do not edit by hand.
 | `\earnings-summary\thesis_collision` | weekly Saturday at 11:00:00 | `thesis_collision.task.xml` | `run_thesis_collision.bat` | Task Scheduler |
 | `\earnings-summary\track_comp_metrics` | daily at 07:10:00 | `track_comp_metrics.task.xml` | `run_track_comp_metrics.bat` | Task Scheduler |
 | `\earnings-summary\verify_cron` | weekly Thursday at 07:00:00 | `verify_cron.task.xml` | `run_verify_cron.bat` | Task Scheduler |
+| `\earnings-summary\weekly_cleanup` | weekly Sunday at 13:00:00 | `weekly_cleanup.task.xml` | `run_weekly_cleanup.bat` | Task Scheduler |
 | `\earnings-summary\weekly_p2_lens_refresh` | weekly Sunday at 02:00:00 | `weekly_p2_lens_refresh.task.xml` | `run_weekly_p2_lens_refresh.bat` | Task Scheduler |
 | `\earnings-summary\weekly_packet` | weekly Sunday at 08:00:00 | `weekly_packet.task.xml` | `run_weekly_packet.bat` | Task Scheduler |
 | `\earnings-summary\weekly_score_stances` | weekly Sunday at 06:30:00 | `weekly_score_stances.task.xml` | `run_weekly_score_stances.bat` | Task Scheduler |

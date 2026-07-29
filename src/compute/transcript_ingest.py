@@ -359,6 +359,11 @@ def _sqlite_datetime(value: datetime | None) -> str | None:
     return str(value) if value is not None else None
 
 
+def _has_selection_lifecycle(conn: sqlite3.Connection) -> bool:
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(transcripts)").fetchall()}
+    return {"is_active", "superseded_by_id"} <= columns
+
+
 def find_transcript_for_period(
     conn: sqlite3.Connection,
     *,
@@ -391,21 +396,36 @@ def supersede_transcripts(
     """Make one transcript current while preserving every losing version."""
     loser_ids = sorted({item for item in loser_transcript_ids if item != winner_transcript_id})
     timestamp = _sqlite_datetime(superseded_at or datetime.now())
+    selection_lifecycle = _has_selection_lifecycle(conn)
     for transcript_id in loser_ids:
-        result = conn.execute(
-            "UPDATE transcripts "
-            "SET is_current = 0, superseded_at = ?, superseded_by_transcript_id = ? "
-            "WHERE id = ?",
-            (timestamp, winner_transcript_id, transcript_id),
-        )
+        if selection_lifecycle:
+            result = conn.execute(
+                "UPDATE transcripts SET is_current = 0, is_active = 0, "
+                "superseded_at = ?, superseded_by_transcript_id = ?, "
+                "superseded_by_id = ? WHERE id = ?",
+                (timestamp, winner_transcript_id, winner_transcript_id, transcript_id),
+            )
+        else:
+            result = conn.execute(
+                "UPDATE transcripts SET is_current = 0, superseded_at = ?, "
+                "superseded_by_transcript_id = ? WHERE id = ?",
+                (timestamp, winner_transcript_id, transcript_id),
+            )
         if result.rowcount != 1:
             raise ValueError(f"No transcript with id={transcript_id} to supersede")
-    result = conn.execute(
-        "UPDATE transcripts "
-        "SET is_current = 1, superseded_at = NULL, superseded_by_transcript_id = NULL "
-        "WHERE id = ?",
-        (winner_transcript_id,),
-    )
+    if selection_lifecycle:
+        result = conn.execute(
+            "UPDATE transcripts SET is_current = 1, is_active = 1, "
+            "superseded_at = NULL, superseded_by_transcript_id = NULL, "
+            "superseded_by_id = NULL WHERE id = ?",
+            (winner_transcript_id,),
+        )
+    else:
+        result = conn.execute(
+            "UPDATE transcripts SET is_current = 1, superseded_at = NULL, "
+            "superseded_by_transcript_id = NULL WHERE id = ?",
+            (winner_transcript_id,),
+        )
     if result.rowcount != 1:
         raise ValueError(f"No transcript with id={winner_transcript_id} to promote")
 
@@ -595,26 +615,38 @@ def insert_transcript(
     if not is_current and superseded_by_transcript_id is None:
         raise ValueError("A historical transcript requires a supersession target")
     superseded_at = None if is_current else _sqlite_datetime(datetime.now())
-    cur = conn.execute(
-        "INSERT INTO transcripts "
-        "(document_id, ticker, call_date, fiscal_period_type, period_end, "
-        " source_url, has_qa_section, source, version_number, is_current, recorded_at, "
-        " superseded_at, superseded_by_transcript_id) "
-        "VALUES (?, ?, NULL, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            document_id,
-            ticker,
-            fiscal_period_type.value,
-            _sqlite_datetime(period_end),
-            has_qa_section,
-            source,
-            version_number,
-            int(is_current),
-            _sqlite_datetime(datetime.now()),
-            superseded_at,
-            superseded_by_transcript_id,
-        ),
+    selection_lifecycle = _has_selection_lifecycle(conn)
+    values = (
+        document_id,
+        ticker,
+        fiscal_period_type.value,
+        _sqlite_datetime(period_end),
+        has_qa_section,
+        source,
+        version_number,
+        int(is_current),
+        _sqlite_datetime(datetime.now()),
+        superseded_at,
+        superseded_by_transcript_id,
     )
+    if selection_lifecycle:
+        cur = conn.execute(
+            "INSERT INTO transcripts "
+            "(document_id, ticker, call_date, fiscal_period_type, period_end, "
+            "source_url, has_qa_section, source, version_number, is_current, recorded_at, "
+            "superseded_at, superseded_by_transcript_id, is_active, superseded_by_id) "
+            "VALUES (?, ?, NULL, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (*values, int(is_current), superseded_by_transcript_id),
+        )
+    else:
+        cur = conn.execute(
+            "INSERT INTO transcripts "
+            "(document_id, ticker, call_date, fiscal_period_type, period_end, "
+            "source_url, has_qa_section, source, version_number, is_current, recorded_at, "
+            "superseded_at, superseded_by_transcript_id) "
+            "VALUES (?, ?, NULL, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+            values,
+        )
     return int(cur.lastrowid) if cur.lastrowid is not None else 0
 
 

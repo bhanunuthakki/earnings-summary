@@ -23,7 +23,7 @@ MANIFEST_PATH = CRON_DIR / "task_manifest.json"
 
 def test_manifest_has_exact_xml_and_wrapper_coverage() -> None:
     manifest = load_manifest(MANIFEST_PATH)
-    assert len(manifest.tasks) == 42
+    assert len(manifest.tasks) == 43
     assert validate_source_tree(manifest, cron_dir=CRON_DIR) == []
     assert {task.xml for task in manifest.tasks} == {
         path.name for path in CRON_DIR.glob("*.task.xml")
@@ -42,6 +42,13 @@ def test_generated_registration_and_inventory_are_deterministic_and_current() ->
     assert (CRON_DIR / "register_tasks.generated.ps1").read_text(encoding="utf-8") == first_script
     assert (CRON_DIR / "TASKS.generated.md").read_text(encoding="utf-8") == first_doc
     assert "/Create /TN '\\earnings-summary\\capture_poller'" not in first_script
+    registered_tasks = [
+        task
+        for task in manifest.tasks
+        if task.task_name.casefold() != r"\earnings-summary\capture_poller".casefold()
+    ]
+    assert first_script.count("schtasks.exe /Create") == len(registered_tasks)
+    assert first_script.count("Failed to register scheduled task") == len(registered_tasks)
     assert "| Windows service |" in first_doc
 
 
@@ -79,3 +86,23 @@ def test_validation_reports_orphan_xml_and_wrapper(tmp_path: Path) -> None:
     errors = validate_source_tree(one_task, cron_dir=tmp_path)
     assert "orphan XML not in manifest: orphan.task.xml" in errors
     assert "orphan wrapper not in manifest: run_orphan.bat" in errors
+
+
+def test_validation_rejects_wrapper_that_escapes_its_checkout(tmp_path: Path) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    source = manifest.tasks[0]
+    shutil.copy2(CRON_DIR / source.xml, tmp_path / source.xml)
+    (tmp_path / source.wrapper).write_text(
+        "set PROJECT_ROOT=%USERPROFILE%\\.gemini\\antigravity\\scratch\\earnings-summary\n",
+        encoding="utf-8",
+    )
+    one_task = TaskManifest(
+        version=manifest.version,
+        namespace=manifest.namespace,
+        tasks=(source,),
+    )
+
+    errors = validate_source_tree(one_task, cron_dir=tmp_path)
+
+    assert f"{source.wrapper}: wrapper does not resolve from its own checkout" in errors
+    assert f"{source.wrapper}: wrapper hardcodes a mutable checkout" in errors

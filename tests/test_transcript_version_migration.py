@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import importlib.util
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+
+from compute.transcript_ingest import insert_transcript, supersede_transcripts
+from models.facts import FiscalPeriodType
 
 
 def _legacy_database(path: Path) -> None:
@@ -73,6 +77,48 @@ def _upgrade(path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     engine.dispose()
 
 
+def _selected_lifecycle_database(path: Path) -> None:
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE documents (
+            id INTEGER PRIMARY KEY,
+            fetched_at TEXT,
+            file_path TEXT NOT NULL,
+            sha256 TEXT NOT NULL
+        );
+        CREATE TABLE transcripts (
+            id INTEGER PRIMARY KEY,
+            document_id INTEGER NOT NULL,
+            ticker TEXT NOT NULL,
+            call_date TEXT,
+            fiscal_period_type TEXT,
+            period_end TEXT,
+            source_url TEXT,
+            has_qa_section INTEGER,
+            source TEXT,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            superseded_by_id INTEGER,
+            superseded_at TEXT,
+            selection_reason TEXT
+        );
+        INSERT INTO documents VALUES
+            (1, '2026-01-01T00:00:00', 'old.txt', 'old-sha'),
+            (2, '2026-02-01T00:00:00', 'new.txt', 'new-sha');
+        INSERT INTO transcripts VALUES
+            (10, 1, 'NVDA', NULL, 'Q1', '2025-03-31 00:00:00', NULL, 1, 'legacy',
+             1, NULL, NULL, 'initial');
+        CREATE UNIQUE INDEX uq_transcripts_active_ticker_period_type_end
+            ON transcripts(ticker, fiscal_period_type, period_end)
+            WHERE is_active = 1;
+        CREATE VIEW v_active_transcripts AS
+            SELECT * FROM transcripts WHERE is_active = 1;
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
 def test_upgrade_normalizes_legacy_duplicates_before_unique_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -110,4 +156,45 @@ def test_upgrade_makes_evidence_append_only(
         conn.execute("UPDATE transcript_segments SET text = 'rewritten' WHERE id = 100")
     with pytest.raises(sqlite3.IntegrityError, match="source provenance is immutable"):
         conn.execute("UPDATE transcripts SET source = 'changed' WHERE id = 10")
+    conn.close()
+
+
+def test_upgrade_keeps_0214_selection_lifecycle_in_lockstep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "selected.db"
+    _selected_lifecycle_database(db_path)
+    _upgrade(db_path, monkeypatch)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    new_id = insert_transcript(
+        conn,
+        document_id=2,
+        ticker="NVDA",
+        fiscal_period_type=FiscalPeriodType.Q1,
+        period_end=datetime(2025, 3, 31),
+        source="manual_pdf",
+        is_current=False,
+        superseded_by_transcript_id=10,
+    )
+    supersede_transcripts(
+        conn,
+        winner_transcript_id=new_id,
+        loser_transcript_ids=[10],
+        superseded_at=datetime(2026, 2, 1),
+    )
+    conn.commit()
+
+    rows = conn.execute(
+        "SELECT id, is_active, is_current, superseded_by_id, "
+        "superseded_by_transcript_id FROM transcripts ORDER BY id"
+    ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        (10, 0, 0, new_id, new_id),
+        (new_id, 1, 1, None, None),
+    ]
+    assert conn.execute("SELECT id FROM v_active_transcripts").fetchone()[0] == new_id
+    with pytest.raises(sqlite3.IntegrityError, match="invalid transcript lifecycle"):
+        conn.execute("UPDATE transcripts SET is_active = 0 WHERE id = ?", (new_id,))
     conn.close()

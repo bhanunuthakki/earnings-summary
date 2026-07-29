@@ -325,6 +325,14 @@ def validate_source_tree(
             )
         if metadata.schedule != task.schedule:
             errors.append(f"{task.xml}: schedule differs from manifest")
+        wrapper_path = cron_dir / task.wrapper
+        if not wrapper_path.is_file():
+            continue
+        wrapper_text = wrapper_path.read_text(encoding="utf-8").casefold()
+        if "%~dp0" not in wrapper_text:
+            errors.append(f"{task.wrapper}: wrapper does not resolve from its own checkout")
+        if r"\.gemini\antigravity\scratch" in wrapper_text:
+            errors.append(f"{task.wrapper}: wrapper hardcodes a mutable checkout")
     return errors
 
 
@@ -378,6 +386,10 @@ def generated_registration_script(manifest: TaskManifest) -> str:
         lines.append(
             f"& schtasks.exe /Create /TN '{task.task_name}' "
             f"/XML (Join-Path $renderDir '{task.xml}') /F"
+        )
+        lines.append(
+            f"if ($LASTEXITCODE -ne 0) {{ "
+            f"throw 'Failed to register scheduled task {task.task_name}' }}"
         )
     return "\n".join(lines) + "\n"
 

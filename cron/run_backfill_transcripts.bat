@@ -6,7 +6,8 @@ REM (06:00) so daily_fetch_and_brief (06:30) sees the freshest §5/§6 inputs.
 
 setlocal
 set PYTHONUTF8=1
-set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
+set "PROJECT_ROOT=%~dp0.."
+for %%I in ("%PROJECT_ROOT%") do set "PROJECT_ROOT=%%~fI"
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 REM Capture only the high-volume commitment extractor's real production
 REM exchanges in the private retention-bounded archive outside the repo.

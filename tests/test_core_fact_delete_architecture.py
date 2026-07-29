@@ -2,8 +2,8 @@
 
 Alembic migrations are intentionally excluded: their historical destructive
 steps are reviewable, versioned compatibility work.  Production source is not.
-The three source exceptions below predate the append-only lifecycle and are
-explicit debt; execution scripts have an empty allowlist.
+The source exceptions below predate the append-only lifecycle and are explicit
+debt; execution scripts have an empty allowlist.
 """
 
 from __future__ import annotations
@@ -31,8 +31,6 @@ _DYNAMIC_CORE_TABLES = {
 # These are documented pre-0214 compatibility debt.  New source deletes must
 # not be added here; their removal is tracked by the data-infrastructure plan.
 _SRC_AUDITED_DELETE_DEBT = {
-    ("src/compute/transcript_ingest.py", "documents"),
-    ("src/compute/transcript_ingest.py", "transcripts"),
     ("src/pipeline/kpi_persistence.py", "kpi_facts"),
     ("src/ir_pipeline/ingest.py", "kpi_facts"),
     ("src/filings/store.py", "filing_sections"),

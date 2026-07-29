@@ -6,7 +6,7 @@ import ast
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-PRODUCTION_ROOTS = (PROJECT_ROOT / "execution", PROJECT_ROOT / "src")
+PRODUCTION_ROOTS = (PROJECT_ROOT / "cron", PROJECT_ROOT / "execution", PROJECT_ROOT / "src")
 
 # These jobs intentionally key only on their resolved ticker scope because the
 # upstream database/network state is mutable and completed attempts must not be
@@ -18,6 +18,7 @@ SCOPE_ONLY_START_RUN_CALLS = {
 }
 
 SCHEDULED_SUPPRESSION_BOUNDARIES = {
+    "cron/backup_db.py",
     "execution/check_comp_set_drift.py",
     "execution/fetch_sec_xbrl.py",
     "execution/quarterly_refresh.py",
@@ -43,12 +44,21 @@ def _production_python_files() -> list[Path]:
 
 def _start_run_calls(path: Path) -> list[ast.Call]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    start_names = {"start_run"}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.module != "pipeline.run_accounting":
+            continue
+        for alias in node.names:
+            if alias.name == "start_run":
+                start_names.add(alias.asname or alias.name)
     calls: list[ast.Call] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        if (isinstance(func, ast.Name) and func.id == "start_run") or (
+        if (isinstance(func, ast.Name) and func.id in start_names) or (
             isinstance(func, ast.Attribute) and func.attr == "start_run"
         ):
             calls.append(node)
@@ -72,7 +82,16 @@ def test_every_pipeline_run_callsite_has_terminal_accounting_in_its_module() -> 
         if not _start_run_calls(path):
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        if not any(isinstance(node, ast.Name) and node.id == "end_run" for node in ast.walk(tree)):
+        end_names = {"end_run"}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            if node.module != "pipeline.run_accounting":
+                continue
+            for alias in node.names:
+                if alias.name == "end_run":
+                    end_names.add(alias.asname or alias.name)
+        if not any(isinstance(node, ast.Name) and node.id in end_names for node in ast.walk(tree)):
             missing.add(path.relative_to(PROJECT_ROOT).as_posix())
 
     assert missing == set()

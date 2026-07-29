@@ -19,6 +19,7 @@ depends_on: str | Sequence[str] | None = None
 
 _TABLE = "transcripts"
 _LEGACY_UNIQUE = "uq_transcripts_ticker_period_type_end"
+_ACTIVE_UNIQUE = "uq_transcripts_active_ticker_period_type_end"
 _CURRENT_UNIQUE = "uq_transcripts_current_ticker_period_type_end"
 _LIFECYCLE_INDEX = "ix_transcripts_period_version"
 _TRIGGERS = (
@@ -76,39 +77,57 @@ def upgrade() -> None:
         if name not in columns:
             op.add_column(_TABLE, column)
 
+    columns = _columns(sa.inspect(bind), _TABLE)
+    selection_lifecycle = {"is_active", "superseded_by_id"} <= columns
+    document_recorded_at = "CURRENT_TIMESTAMP"
+    if "documents" in tables and "fetched_at" in _columns(sa.inspect(bind), "documents"):
+        document_recorded_at = (
+            "COALESCE((SELECT fetched_at FROM documents "
+            "WHERE documents.id = transcripts.document_id), CURRENT_TIMESTAMP)"
+        )
     op.execute(
-        "UPDATE transcripts SET recorded_at = COALESCE("
-        "(SELECT fetched_at FROM documents WHERE documents.id = transcripts.document_id), "
-        "CURRENT_TIMESTAMP) WHERE recorded_at IS NULL"
+        f"UPDATE transcripts SET recorded_at = {document_recorded_at} "  # nosec B608 -- trusted migration SQL shape
+        "WHERE recorded_at IS NULL"
     )
 
     # Normalize any rows from a partially migrated or pre-0209 database before
     # enforcing one current winner. The oldest observed evidence is version 1;
     # the newest (with id as the deterministic tie-breaker) is current.
+    selection_column = ", is_active" if selection_lifecycle else ""
     rows = bind.execute(
         sa.text(
             "SELECT id, ticker, fiscal_period_type, period_end, recorded_at "
-            "FROM transcripts ORDER BY ticker, fiscal_period_type, period_end, "
-            "recorded_at, id"
+            f"{selection_column} FROM transcripts "  # nosec B608 -- trusted migration SQL shape
+            "ORDER BY ticker, fiscal_period_type, period_end, recorded_at, id"
         )
     ).fetchall()
-    groups: dict[tuple[object, object, object], list[tuple[int, str]]] = {}
+    groups: dict[tuple[object, object, object], list[tuple[int, str, bool | None]]] = {}
     for row in rows:
         key = (row[1], row[2], row[3])
-        groups.setdefault(key, []).append((int(row[0]), str(row[4] or "")))
+        is_active = bool(row[5]) if selection_lifecycle else None
+        groups.setdefault(key, []).append((int(row[0]), str(row[4] or ""), is_active))
     for members in groups.values():
         members.sort(key=lambda item: (item[1], item[0]))
-        winner_id = members[-1][0]
-        for version_number, (transcript_id, _recorded_at) in enumerate(members, start=1):
+        active_ids = [transcript_id for transcript_id, _, active in members if active]
+        winner_id = active_ids[0] if len(active_ids) == 1 else members[-1][0]
+        for version_number, (transcript_id, _recorded_at, _active) in enumerate(members, start=1):
             is_current = transcript_id == winner_id
+            lifecycle_assignment = (
+                ", is_active = :is_current, "
+                "superseded_by_id = CASE WHEN :is_current = 1 THEN NULL "
+                "ELSE :winner_id END"
+                if selection_lifecycle
+                else ""
+            )
             bind.execute(
                 sa.text(
                     "UPDATE transcripts SET version_number = :version_number, "
                     "is_current = :is_current, "
                     "superseded_at = CASE WHEN :is_current = 1 THEN NULL "
-                    "ELSE CURRENT_TIMESTAMP END, "
+                    "ELSE COALESCE(superseded_at, CURRENT_TIMESTAMP) END, "
                     "superseded_by_transcript_id = CASE WHEN :is_current = 1 THEN NULL "
-                    "ELSE :winner_id END WHERE id = :transcript_id"
+                    f"ELSE :winner_id END{lifecycle_assignment} "  # nosec B608 -- trusted migration SQL shape
+                    "WHERE id = :transcript_id"
                 ),
                 {
                     "version_number": version_number,
@@ -128,6 +147,12 @@ def upgrade() -> None:
         "ON transcripts(ticker, fiscal_period_type, period_end, version_number)"
     )
 
+    selection_invalid = (
+        "OR (NEW.is_active != NEW.is_current) "
+        "OR (NEW.superseded_by_id IS NOT NEW.superseded_by_transcript_id) "
+        if selection_lifecycle
+        else ""
+    )
     lifecycle_invalid = (
         "(NEW.is_current NOT IN (0, 1)) "
         "OR (NEW.is_current = 1 AND "
@@ -140,7 +165,8 @@ def upgrade() -> None:
         "WHERE winner.id = NEW.superseded_by_transcript_id "
         "AND winner.ticker = NEW.ticker "
         "AND winner.fiscal_period_type IS NEW.fiscal_period_type "
-        "AND winner.period_end IS NEW.period_end))"
+        "AND winner.period_end IS NEW.period_end)) "
+        f"{selection_invalid}"
     )
     op.execute(
         "CREATE TRIGGER trg_transcripts_lifecycle_insert "
@@ -148,9 +174,14 @@ def upgrade() -> None:
         f"WHEN {lifecycle_invalid} "
         "BEGIN SELECT RAISE(ABORT, 'invalid transcript lifecycle'); END"
     )
+    lifecycle_update_columns = (
+        "is_current, is_active, superseded_at, superseded_by_id, superseded_by_transcript_id"
+        if selection_lifecycle
+        else "is_current, superseded_at, superseded_by_transcript_id"
+    )
     op.execute(
         "CREATE TRIGGER trg_transcripts_lifecycle_update "
-        "BEFORE UPDATE OF is_current, superseded_at, superseded_by_transcript_id ON transcripts "
+        f"BEFORE UPDATE OF {lifecycle_update_columns} ON transcripts "
         f"WHEN {lifecycle_invalid} "
         "BEGIN SELECT RAISE(ABORT, 'invalid transcript lifecycle'); END"
     )
@@ -211,12 +242,15 @@ def downgrade() -> None:
     # Historical rows deliberately remain. Restoring the pre-0250 strict
     # period-unique index would require deleting those evidence versions.
     columns = _columns(sa.inspect(bind), _TABLE)
-    for name in (
+    selection_lifecycle = {"is_active", "superseded_by_id"} <= columns
+    owned_columns = [
         "superseded_by_transcript_id",
-        "superseded_at",
         "recorded_at",
         "is_current",
         "version_number",
-    ):
+    ]
+    if not selection_lifecycle:
+        owned_columns.insert(1, "superseded_at")
+    for name in owned_columns:
         if name in columns:
             op.drop_column(_TABLE, name)
