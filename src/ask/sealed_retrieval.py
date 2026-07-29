@@ -537,6 +537,31 @@ _PROMOTION_COLUMNS = (
     "recorded_at",
 )
 
+_PROMOTION_INSERT_SQL = """
+    INSERT INTO ask_retrieval_scope_promotions (
+        promotion_id,idempotency_key,scope_key,revision,issuer_id,
+        reporting_entity_id,research_snapshot_id,research_snapshot_sha256,
+        fact_generation_id,fact_projection_seal_sha256,
+        source_inventory_set_json,source_inventory_set_sha256,
+        narrative_bundles_json,narrative_bundles_sha256,cutoff_at,
+        policy_version,verifier_name,verifier_version,verifier_code_sha256,
+        verifier_config_sha256,status,supersedes_promotion_id,recorded_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT DO NOTHING
+"""
+
+_PROMOTION_SELECT_BY_IDEMPOTENCY_SQL = """
+    SELECT promotion_id,idempotency_key,scope_key,revision,issuer_id,
+           reporting_entity_id,research_snapshot_id,research_snapshot_sha256,
+           fact_generation_id,fact_projection_seal_sha256,
+           source_inventory_set_json,source_inventory_set_sha256,
+           narrative_bundles_json,narrative_bundles_sha256,cutoff_at,
+           policy_version,verifier_name,verifier_version,verifier_code_sha256,
+           verifier_config_sha256,status,supersedes_promotion_id,recorded_at
+    FROM ask_retrieval_scope_promotions
+    WHERE idempotency_key=?
+"""
+
 
 def persist_retrieval_promotion(
     conn: sqlite3.Connection,
@@ -548,7 +573,6 @@ def persist_retrieval_promotion(
 
     promotion = RetrievalPromotion.model_validate(promotion.model_dump())
     values = _promotion_values(promotion)
-    placeholders = ",".join("?" for _ in _PROMOTION_COLUMNS)
     with _savepoint(conn, "persist_ask_retrieval_promotion"):
         conn.row_factory = sqlite3.Row
         existing_rows = conn.execute(
@@ -564,16 +588,10 @@ def persist_retrieval_promotion(
                 raise ValueError("immutable Ask retrieval promotion replay conflict")
             return stored
         verify_retrieval_promotion(conn, promotion, runtime=runtime)
-        cursor = conn.execute(
-            "INSERT INTO ask_retrieval_scope_promotions "
-            f"({','.join(_PROMOTION_COLUMNS)}) VALUES ({placeholders}) "
-            "ON CONFLICT DO NOTHING",
-            values,
-        )
+        cursor = conn.execute(_PROMOTION_INSERT_SQL, values)
         if cursor.rowcount == 0:
             row = conn.execute(
-                f"SELECT {','.join(_PROMOTION_COLUMNS)} "
-                "FROM ask_retrieval_scope_promotions WHERE idempotency_key=?",
+                _PROMOTION_SELECT_BY_IDEMPOTENCY_SQL,
                 (promotion.idempotency_key,),
             ).fetchone()
             if row is None or tuple(row) != values:

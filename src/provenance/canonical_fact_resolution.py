@@ -475,9 +475,9 @@ class CanonicalFactResolutionEngine:
     def _verify_scope_registry(self, scope: ResolutionSnapshotScope) -> None:
         rows = self._conn.execute(
             "SELECT reporting_entity_id,issuer_id FROM reporting_entities "
-            f"WHERE reporting_entity_id IN ({','.join('?' for _ in scope.reporting_entity_ids)}) "
+            "WHERE reporting_entity_id IN (SELECT value FROM json_each(?)) "
             "ORDER BY reporting_entity_id",
-            scope.reporting_entity_ids,
+            (_json(list(scope.reporting_entity_ids)),),
         ).fetchall()
         actual = tuple((str(row[0]), str(row[1])) for row in rows)
         expected = tuple(
@@ -502,8 +502,7 @@ class CanonicalFactResolutionEngine:
             "JOIN canonical_metric_cells cell "
             "ON cell.canonical_metric_cell_id=r.canonical_metric_cell_id "
             "WHERE r.knowledge_at<=? AND r.recorded_at<=? "
-            f"AND cell.reporting_entity_id IN "
-            f"({','.join('?' for _ in scope.reporting_entity_ids)}) "
+            "AND cell.reporting_entity_id IN (SELECT value FROM json_each(?)) "
             "AND NOT EXISTS (SELECT 1 "
             "FROM canonical_fact_resolution_revisions newer "
             "WHERE newer.canonical_metric_cell_id=r.canonical_metric_cell_id "
@@ -513,7 +512,7 @@ class CanonicalFactResolutionEngine:
             (
                 cutoff_s,
                 cutoff_s,
-                *scope.reporting_entity_ids,
+                _json(list(scope.reporting_entity_ids)),
                 cutoff_s,
                 cutoff_s,
             ),

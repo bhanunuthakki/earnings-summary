@@ -410,11 +410,9 @@ class SourceCoverageLedger:
             record.recorded_at,
             record.recorded_at,
             record.recorded_at,
+            record.source_obligation_revision_id,
+            record.source_obligation_revision_id,
         ]
-        exact = ""
-        if record.source_obligation_revision_id is not None:
-            exact = "AND obligation_revision_id=? "
-            params.append(record.source_obligation_revision_id)
         rows = self._conn.execute(
             "SELECT obligation_revision_id,reporting_entity_id,document_family "
             "FROM source_obligation_revisions "
@@ -424,8 +422,8 @@ class SourceCoverageLedger:
             "AND (active_to IS NULL OR datetime(active_to)>datetime(?)) "
             "AND datetime(knowledge_at)<=datetime(?) "
             "AND datetime(recorded_at)<=datetime(?) "
-            + exact
-            + "ORDER BY obligation_revision_id",
+            "AND (? IS NULL OR obligation_revision_id=?) "
+            "ORDER BY obligation_revision_id",
             tuple(params),
         ).fetchall()
         if len(rows) != 1:

@@ -418,7 +418,6 @@ def _plan_xbrl_zero_fact_promotions(
 ) -> tuple[list[_Promotion], int, bool]:
     if limit < 1 or "filing-native-xbrl" not in request.extractor_names:
         return [], 0, False
-    inventory_placeholders = ", ".join("?" for _ in request.inventory_keys)
     rows = conn.execute(
         "SELECT coverage.assessment_id,coverage.expected_document_id,"
         "coverage.revision,coverage.document_version_id,"
@@ -434,7 +433,7 @@ def _plan_xbrl_zero_fact_promotions(
         "ON input_seal.extraction_run_id=run.extraction_run_id "
         "JOIN filing_xbrl_extraction_disposition_seals disposition_seal "
         "ON disposition_seal.extraction_run_id=run.extraction_run_id "
-        f"WHERE inventory.inventory_key IN ({inventory_placeholders}) "
+        "WHERE inventory.inventory_key IN (SELECT value FROM json_each(?)) "
         "AND coverage.coverage_status='captured' "
         "AND run.extractor_name='filing-native-xbrl' "
         "AND run.outcome='succeeded' "
@@ -443,7 +442,7 @@ def _plan_xbrl_zero_fact_promotions(
         "AND disposition_seal.entry_count=0 "
         "AND disposition_seal.extraction_output_sha256=run.output_sha256 "
         "ORDER BY coverage.expected_document_id LIMIT ?",
-        (*request.inventory_keys, limit + 1),
+        (json.dumps(list(request.inventory_keys)), limit + 1),
     ).fetchall()
     has_more = len(rows) > limit
     promotions: list[_Promotion] = []

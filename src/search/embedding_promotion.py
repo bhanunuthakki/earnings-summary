@@ -287,19 +287,26 @@ def persist_promotion(conn: sqlite3.Connection, promotion: EmbeddingPromotion) -
 def current_promotion(
     conn: sqlite3.Connection, purpose: str = PURPOSE
 ) -> EmbeddingPromotion | None:
-    clock_columns = (
-        ",knowledge_at,recorded_at" if _has_bitemporal_clock_columns(conn) else ""
-    )
-    row = conn.execute(
-        "SELECT promotion_id,idempotency_key,purpose,revision,provider,model,"
-        "dimensions,golden_sha256,evaluation_artifact_sha256,evaluation_metrics_json,"
-        "runtime_artifact_json,runtime_artifact_sha256,"
-        "approved_by,approved_at,supersedes_promotion_id"
-        + clock_columns
-        + " "
-        "FROM v_search_embedding_model_promotion_current WHERE purpose = ?",
-        (purpose,),
-    ).fetchone()
+    if _has_bitemporal_clock_columns(conn):
+        row = conn.execute(
+            "SELECT promotion_id,idempotency_key,purpose,revision,provider,model,"
+            "dimensions,golden_sha256,evaluation_artifact_sha256,"
+            "evaluation_metrics_json,runtime_artifact_json,"
+            "runtime_artifact_sha256,approved_by,approved_at,"
+            "supersedes_promotion_id,knowledge_at,recorded_at "
+            "FROM v_search_embedding_model_promotion_current WHERE purpose = ?",
+            (purpose,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT promotion_id,idempotency_key,purpose,revision,provider,model,"
+            "dimensions,golden_sha256,evaluation_artifact_sha256,"
+            "evaluation_metrics_json,runtime_artifact_json,"
+            "runtime_artifact_sha256,approved_by,approved_at,"
+            "supersedes_promotion_id "
+            "FROM v_search_embedding_model_promotion_current WHERE purpose = ?",
+            (purpose,),
+        ).fetchone()
     if row is None:
         return None
     approved_at = datetime.fromisoformat(str(row[13]))

@@ -1873,10 +1873,9 @@ def _verify_research_universe(
         raise ValueError("research universe issuer does not exist")
     entity_rows = conn.execute(
         "SELECT reporting_entity_id,issuer_id FROM reporting_entities "
-        f"WHERE reporting_entity_id IN "
-        f"({','.join('?' for _ in universe.reporting_entity_ids)}) "
+        "WHERE reporting_entity_id IN (SELECT value FROM json_each(?)) "
         "ORDER BY reporting_entity_id",
-        universe.reporting_entity_ids,
+        (canonical_json(list(universe.reporting_entity_ids)),),
     ).fetchall()
     if tuple(str(row[0]) for row in entity_rows) != universe.reporting_entity_ids or any(
         str(row[1]) != universe.issuer_id for row in entity_rows
@@ -1898,13 +1897,12 @@ def _verify_research_universe(
             "must contain the exact same document set"
         )
 
-    placeholders = ",".join("?" for _ in universe.document_version_ids)
     document_rows = conn.execute(
         "SELECT document_version_id,issuer_id,reporting_entity_id "
         "FROM v_evidence_document_versions_canonical "
-        f"WHERE document_version_id IN ({placeholders}) "
+        "WHERE document_version_id IN (SELECT value FROM json_each(?)) "
         "ORDER BY document_version_id",
-        universe.document_version_ids,
+        (canonical_json(list(universe.document_version_ids)),),
     ).fetchall()
     if tuple(str(row[0]) for row in document_rows) != universe.document_version_ids:
         raise ValueError("research universe document versions are absent or duplicated")
