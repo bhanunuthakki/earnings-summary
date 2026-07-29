@@ -734,7 +734,7 @@ resolved as:
 | Source (rows) | Disposition | Rationale |
 | --- | --- | --- |
 | `trade_decisions` (0) | Nothing to migrate | Empty |
-| `trade_tags` (1) | **Migrated** → `analyst_notes` id 62 (`source_ref=portfolio-tracker:trade_tags:1`, idempotent via `execution/import_tracker_journal.py`) | The CPNG `bought_with_no_thesis` lesson is a genuine process-quality unit |
+| `trade_tags` (1) | **Migrated** → `analyst_notes` id 62 (`source_ref=portfolio-tracker:trade_tags:1`; one-shot importer retired after receipt verification) | The CPNG `bought_with_no_thesis` lesson is a genuine process-quality unit |
 | `action_queue` (29: 19 resolved / 9 snoozed / 1 dismissed) | Omitted; archive-only in the tracker backup | Stale operational signal history; underlying thesis/valuation data lives here already |
 | `chat_sessions`/`chat_turns` (1/9) | Omitted; archive-only | One low-stakes CIO chat |
 | `monthly_briefs` (2) | Omitted; archive-only | Rendered HTML artifacts; superseded by this repo's advisory briefs |

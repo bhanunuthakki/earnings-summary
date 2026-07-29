@@ -13,6 +13,7 @@ exercises the actual repurposed ``cost_usd``/``run_id`` columns.
 
 from __future__ import annotations
 
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -39,6 +40,7 @@ from research.proposals import (  # noqa: E402
     set_task_extras,
     set_task_status,
 )
+from schema_compat import SchemaRevisionMismatch  # noqa: E402
 
 
 def _cfg(db_path: Path) -> Config:
@@ -68,6 +70,12 @@ def _age(db_path: Path, task_id: int, created_at: str) -> None:
         conn.close()
 
 
+def _status(db_path: Path, task_id: int) -> str:
+    task = get_task(task_id, db_path=db_path)
+    assert task is not None
+    return task.status
+
+
 def test_never_packeted_task_expires_past_the_days_floor(db_path: Path) -> None:
     old_id = create_task(note_id=None, claim="stale wondering", ticker="NU", db_path=db_path)
     _age(db_path, old_id, "2020-01-01T00:00:00")
@@ -75,12 +83,12 @@ def test_never_packeted_task_expires_past_the_days_floor(db_path: Path) -> None:
 
     ids = expire_stale_tasks(days=21, apply=False, db_path=db_path)
     assert ids == [old_id]
-    assert get_task(old_id, db_path=db_path).status == "proposed"  # dry run changes nothing
+    assert _status(db_path, old_id) == "proposed"  # dry run changes nothing
 
     ids = expire_stale_tasks(days=21, apply=True, db_path=db_path)
     assert ids == [old_id]
-    assert get_task(old_id, db_path=db_path).status == "expired"
-    assert get_task(fresh_id, db_path=db_path).status == "proposed"
+    assert _status(db_path, old_id) == "expired"
+    assert _status(db_path, fresh_id) == "proposed"
 
     # Idempotent — an expired task never matches again.
     assert expire_stale_tasks(days=21, apply=True, db_path=db_path) == []
@@ -95,7 +103,7 @@ def test_packeted_once_task_survives_the_days_floor(db_path: Path) -> None:
     set_task_extras(tid, packeted_at="2020-01-08T00:00:00", unanswered_weeks=1, db_path=db_path)
 
     assert expire_stale_tasks(days=21, apply=True, db_path=db_path) == []
-    assert get_task(tid, db_path=db_path).status == "proposed"
+    assert _status(db_path, tid) == "proposed"
 
 
 def test_second_unanswered_week_expires_regardless_of_days_floor(db_path: Path) -> None:
@@ -106,7 +114,7 @@ def test_second_unanswered_week_expires_regardless_of_days_floor(db_path: Path) 
 
     ids = expire_stale_tasks(days=365, apply=True, db_path=db_path)
     assert ids == [tid]
-    assert get_task(tid, db_path=db_path).status == "expired"
+    assert _status(db_path, tid) == "expired"
 
 
 def test_non_proposed_tasks_are_never_candidates(db_path: Path) -> None:
@@ -124,8 +132,8 @@ def test_resurrect_expired_preview_is_read_only(db_path: Path) -> None:
     tasks = resurrect_expired_preview(db_path=db_path)
     assert [t.id for t in tasks] == [tid]
     # Never mutates — a second call sees the exact same state.
-    assert get_task(tid, db_path=db_path).status == "expired"
-    assert get_task(still_proposed, db_path=db_path).status == "proposed"
+    assert _status(db_path, tid) == "expired"
+    assert _status(db_path, still_proposed) == "proposed"
 
 
 def test_render_resurrect_section_formats_the_backlog(db_path: Path) -> None:
@@ -139,3 +147,17 @@ def test_render_resurrect_section_formats_the_backlog(db_path: Path) -> None:
 
 def test_render_resurrect_section_empty_backlog() -> None:
     assert "No expired research tasks" in render_resurrect_section([])
+
+
+def test_apply_refuses_a_database_behind_the_checkout_head(tmp_path: Path) -> None:
+    stale_db = tmp_path / "stale.db"
+    conn = sqlite3.connect(stale_db)
+    try:
+        conn.execute("CREATE TABLE alembic_version (version_num TEXT NOT NULL)")
+        conn.execute("INSERT INTO alembic_version VALUES ('older_revision')")
+        conn.commit()
+    finally:
+        conn.close()
+
+    with pytest.raises(SchemaRevisionMismatch):
+        expire_stale_tasks(days=21, apply=True, db_path=stale_db)
