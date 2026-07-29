@@ -229,11 +229,11 @@ class SnapshotSection(BaseModel):
     # rendering a stale read as fresh green (honest-grey, never fake-green).
     verdict_as_of: datetime | None = None
     valuation: ValuationSnapshot
-    tier_1_kpi_row: list[KpiSnapshotRow] = Field(default_factory=list)
+    tier_1_kpi_row: list[KpiSnapshotRow] = Field(default_factory=list[KpiSnapshotRow])
     # Last 3 LLM recommendations from the decisions audit ledger (migration
     # 0046). Empty when the table is absent or has no rows for this ticker —
     # the renderers omit the sidebar entirely in that case.
-    recent_decisions: list[DecisionBadge] = Field(default_factory=list)
+    recent_decisions: list[DecisionBadge] = Field(default_factory=list[DecisionBadge])
 
 
 # ---------------------------------------------------------------------------
@@ -274,8 +274,8 @@ class EvaluationSnapshotSection(BaseModel):
     sector: str | None = None
     market_cap: float | None = None
     current_price: float | None = None
-    rows: list[QuickCategorizationRow] = Field(default_factory=list)
-    fiscal_years: list[int] = Field(default_factory=list)  # 3 years [LFY-2, LFY-1, LFY]
+    rows: list[QuickCategorizationRow] = Field(default_factory=list[QuickCategorizationRow])
+    fiscal_years: list[int] = Field(default_factory=list[int])  # 3 years [LFY-2, LFY-1, LFY]
 
 
 # ---------------------------------------------------------------------------
@@ -328,8 +328,8 @@ class CompanyDescriptionSection(BaseModel):
     platform_caption: str | None = None  # 1-2 sentence caption under the diagram
     business_overview: str | None = None  # multi-paragraph: lines of business
     revenue_model: str | None = None  # how they make money
-    segment_breakdown: list[SegmentWeighting] = Field(default_factory=list)
-    geographic_breakdown: list[SegmentWeighting] = Field(default_factory=list)
+    segment_breakdown: list[SegmentWeighting] = Field(default_factory=list[SegmentWeighting])
+    geographic_breakdown: list[SegmentWeighting] = Field(default_factory=list[SegmentWeighting])
 
     # Provenance
     source_fiscal_year: int | None = None
@@ -357,7 +357,9 @@ class KpiLedgerRow(BaseModel):
     # name-keyed anchor).
     kpi_definition_id: int | None = None
     break_condition: str | None = None
-    history: list[tuple[str, float | None]] = Field(default_factory=list)  # [(period, value)]
+    history: list[tuple[str, float | None]] = Field(
+        default_factory=list[tuple[str, float | None]]
+    )  # [(period, value)]
     current_status: Literal["green", "yellow", "red", "unknown"] = "unknown"
     # Short gloss of what the metric measures, so the ledger reads as
     # definitions + data rather than a bare list of names. Populated by
@@ -395,7 +397,7 @@ class BreakRuleEvaluation(BaseModel):
     status: Literal["ok", "warn", "breach", "unresolved"]
     detail: str
     narrative: str
-    observations: list[BreakRuleObservation] = Field(default_factory=list)
+    observations: list[BreakRuleObservation] = Field(default_factory=list[BreakRuleObservation])
 
 
 class SoftRuleEvaluation(BaseModel):
@@ -427,13 +429,17 @@ class ThesisSection(BaseModel):
     # any other non-empty marker), the renderer shows a banner above the thesis
     # so the user knows the content is placeholder, not ground truth.
     stub_warning: str | None = None
-    break_conditions: list[str] = Field(default_factory=list)
-    competitive_watchlist: list[str] = Field(default_factory=list)
-    qualitative_breakers: list[str] = Field(default_factory=list)
-    kpi_ledger: list[KpiLedgerRow] = Field(default_factory=list)
+    break_conditions: list[str] = Field(default_factory=list[str])
+    competitive_watchlist: list[str] = Field(default_factory=list[str])
+    qualitative_breakers: list[str] = Field(default_factory=list[str])
+    kpi_ledger: list[KpiLedgerRow] = Field(default_factory=list[KpiLedgerRow])
     overall_breach_status: Literal["ok", "warn", "breach", "unresolved", "unknown"] = "unknown"
-    break_rule_evaluations: list[BreakRuleEvaluation] = Field(default_factory=list)
-    soft_rule_evaluations: list[SoftRuleEvaluation] = Field(default_factory=list)
+    break_rule_evaluations: list[BreakRuleEvaluation] = Field(
+        default_factory=list[BreakRuleEvaluation]
+    )
+    soft_rule_evaluations: list[SoftRuleEvaluation] = Field(
+        default_factory=list[SoftRuleEvaluation]
+    )
     last_evaluated_at: datetime | None = None
     # Pre-rendered markdown block of persisted time-series signals over
     # this ticker's tier-1 KPIs + revenue / OI / FCF. Empty string when
@@ -519,13 +525,15 @@ class QuarterlyLineItem(BaseModel):
     line_item: str  # e.g. "revenue", "operating_income"
     unit: str  # "USD millions" / "%" / etc
     digits: int = 0  # display precision (0 for $M, 2 for EPS / ratios)
-    quarters: list[str] = Field(default_factory=list)  # 12 period labels (oldest → newest)
-    values: list[float | None] = Field(default_factory=list)  # 12 values aligned to quarters
+    quarters: list[str] = Field(default_factory=list[str])  # 12 period labels (oldest → newest)
+    values: list[float | None] = Field(
+        default_factory=list[float | None]
+    )  # 12 values aligned to quarters
     growth: GrowthMetrics = Field(default_factory=GrowthMetrics)
     # Underlying levels for the YoY matrix renderer — includes YoY lookback +
     # 3y-CAGR base periods (i.e. up to 24 quarters). Empty when not populated
     # (older built reports / non-quarterly contexts).
-    levels_full: list[float | None] = Field(default_factory=list)
+    levels_full: list[float | None] = Field(default_factory=list[float | None])
     # Per-period source provenance aligned to levels_full (P3.3 source
     # chips). Empty on older built reports; None entries where the period
     # has no matching provenance row. Plain [] default (pydantic copies it
@@ -538,8 +546,8 @@ class AnnualLineItem(BaseModel):
     line_item: str
     unit: str
     digits: int = 0
-    years: list[int] = Field(default_factory=list)  # 10 fiscal years (oldest → newest)
-    values: list[float | None] = Field(default_factory=list)
+    years: list[int] = Field(default_factory=list[int])  # 10 fiscal years (oldest → newest)
+    values: list[float | None] = Field(default_factory=list[float | None])
 
 
 class KpiSeries(BaseModel):
@@ -551,12 +559,12 @@ class KpiSeries(BaseModel):
 
     name: str
     unit: str  # "%", "USD bn", etc.
-    quarters: list[str] = Field(default_factory=list)
-    values: list[float | None] = Field(default_factory=list)
+    quarters: list[str] = Field(default_factory=list[str])
+    values: list[float | None] = Field(default_factory=list[float | None])
     # Full-history values aligned to FinancialsSection.quarter_labels_full —
     # used by the paired-chart renderer to compute YoY%. Empty when KPI lacks
     # 4+ quarters of history.
-    levels_full: list[float | None] = Field(default_factory=list)
+    levels_full: list[float | None] = Field(default_factory=list[float | None])
     # Per-period provenance aligned to levels_full (KPI chip universality,
     # S2 PR2) — the kpi_facts twin of QuarterlyLineItem.sources_full. Empty
     # on older built reports / legacy DBs without a documents table; None
@@ -595,12 +603,12 @@ class AnnualKpiSeries(BaseModel):
 class FinancialsSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
-    quarter_labels: list[str] = Field(default_factory=list)  # 12 labels
-    line_items: list[QuarterlyLineItem] = Field(default_factory=list)
-    annual_years: list[int] = Field(default_factory=list)  # 10 fiscal years
-    annual_line_items: list[AnnualLineItem] = Field(default_factory=list)
-    chart_priorities: list[str] = Field(default_factory=list)  # display names, dynamic count
-    kpi_chart_series: list[KpiSeries] = Field(default_factory=list)
+    quarter_labels: list[str] = Field(default_factory=list[str])  # 12 labels
+    line_items: list[QuarterlyLineItem] = Field(default_factory=list[QuarterlyLineItem])
+    annual_years: list[int] = Field(default_factory=list[int])  # 10 fiscal years
+    annual_line_items: list[AnnualLineItem] = Field(default_factory=list[AnnualLineItem])
+    chart_priorities: list[str] = Field(default_factory=list[str])  # display names, dynamic count
+    kpi_chart_series: list[KpiSeries] = Field(default_factory=list[KpiSeries])
     # ANNUAL-cadence KPIs (kpi_definitions.reporting_cadence='annual') resolved
     # from chart_priorities — rendered on the fiscal-year axis below, not the
     # quarterly heatmap. `annual_kpi_years` is the shared year axis (oldest →
@@ -610,7 +618,7 @@ class FinancialsSection(BaseModel):
     annual_kpi_years: list[int] = []
     # Full-history quarter labels (parallel to QuarterlyLineItem.levels_full).
     # Used by the YoY matrix renderer; empty when not populated.
-    quarter_labels_full: list[str] = Field(default_factory=list)
+    quarter_labels_full: list[str] = Field(default_factory=list[str])
     # Reporting currency from the metrics view (e.g. "USD", "EUR", "BRL"). Drives
     # the "<ccy> millions" unit label instead of a hardcoded "USD millions".
     currency: str = "USD"
@@ -625,14 +633,14 @@ class SegmentSeries(BaseModel):
         "capex_by_segment",
         "headcount_by_segment",
     ]
-    quarters: list[str] = Field(default_factory=list)
-    values: list[float | None] = Field(default_factory=list)
+    quarters: list[str] = Field(default_factory=list[str])
+    values: list[float | None] = Field(default_factory=list[float | None])
     growth: GrowthMetrics = Field(default_factory=GrowthMetrics)
     unit: str = "USD millions"
     # Full-history values aligned to SegmentsSection.quarter_labels_full —
     # used by the YoY matrix renderer. Empty when section was built without
     # full-history support.
-    levels_full: list[float | None] = Field(default_factory=list)
+    levels_full: list[float | None] = Field(default_factory=list[float | None])
 
 
 class SegmentSecondaryExpansion(BaseModel):
@@ -648,30 +656,32 @@ class SegmentSecondaryExpansion(BaseModel):
 
     dim_type: str
     parent_label: str | None = None
-    rows: list[SegmentSeries] = Field(default_factory=list)
+    rows: list[SegmentSeries] = Field(default_factory=list[SegmentSeries])
 
 
 class SegmentsSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
-    quarter_labels: list[str] = Field(default_factory=list)
-    revenue_by_product: list[SegmentSeries] = Field(default_factory=list)
-    revenue_by_geography: list[SegmentSeries] = Field(default_factory=list)
-    operating_income: list[SegmentSeries] = Field(default_factory=list)
+    quarter_labels: list[str] = Field(default_factory=list[str])
+    revenue_by_product: list[SegmentSeries] = Field(default_factory=list[SegmentSeries])
+    revenue_by_geography: list[SegmentSeries] = Field(default_factory=list[SegmentSeries])
+    operating_income: list[SegmentSeries] = Field(default_factory=list[SegmentSeries])
     # Capex + headcount by segment land here when the 10-K segment-note
     # extractor emits the corresponding `capex` / `headcount` metric rows.
     # Empty list when the filing's segment notes don't break them out (most
     # service businesses) — surfaces a dedicated bucket only when populated.
-    capex_by_segment: list[SegmentSeries] = Field(default_factory=list)
-    headcount_by_segment: list[SegmentSeries] = Field(default_factory=list)
+    capex_by_segment: list[SegmentSeries] = Field(default_factory=list[SegmentSeries])
+    headcount_by_segment: list[SegmentSeries] = Field(default_factory=list[SegmentSeries])
     segment_definitions: dict[str, str] = Field(default_factory=dict)
     segment_definitions_fiscal_year: int | None = None
-    quarter_labels_full: list[str] = Field(default_factory=list)
+    quarter_labels_full: list[str] = Field(default_factory=list[str])
     # When junction data carries secondary-dim breakdowns (migration 0053+),
     # the section builder pushes them here and the renderer surfaces them as
     # collapsible subtables below the primary segments grid. Empty list when
     # the junction tables are empty or unavailable.
-    secondary_expansions: list[SegmentSecondaryExpansion] = Field(default_factory=list)
+    secondary_expansions: list[SegmentSecondaryExpansion] = Field(
+        default_factory=list[SegmentSecondaryExpansion]
+    )
     # Pre-rendered markdown block of persisted segment-level signals
     # (metric_kind='segment' rows in timeseries_signals). Empty string
     # when the signals table is absent or the writer hasn't produced
@@ -720,9 +730,9 @@ class SignalsSection(BaseModel):
 
     status: SectionStatus
     missing: MissingReason | None = None
-    red_signals: list[SignalRow] = Field(default_factory=list)
-    yellow_signals: list[SignalRow] = Field(default_factory=list)
-    green_signals: list[SignalRow] = Field(default_factory=list)
+    red_signals: list[SignalRow] = Field(default_factory=list[SignalRow])
+    yellow_signals: list[SignalRow] = Field(default_factory=list[SignalRow])
+    green_signals: list[SignalRow] = Field(default_factory=list[SignalRow])
 
 
 # ---------------------------------------------------------------------------
@@ -797,7 +807,7 @@ class ThemeRollup(BaseModel):
     theme_name: str
     last_4q_count: int
     mentions_per_quarter: dict[str, int] = Field(default_factory=dict)
-    evidence: list[QuoteSnippet] = Field(default_factory=list)
+    evidence: list[QuoteSnippet] = Field(default_factory=list[QuoteSnippet])
 
 
 class EarningsSection(BaseModel):
@@ -827,10 +837,12 @@ class EarningsSection(BaseModel):
     missing: MissingReason | None = None
     budget_skip: BudgetSkip | None = None  # set when the themes LLM was forgone (budget)
     surprise_scorecard: SurpriseScorecardCard | None = None
-    full_quarters: list[QuarterlyEarningsCard] = Field(default_factory=list)
-    digest_quarters: list[QuarterlyEarningsCard] = Field(default_factory=list)
-    prepared_remarks_themes: list[ThemeRollup] = Field(default_factory=list)
-    qa_themes: list[ThemeRollup] = Field(default_factory=list)
+    full_quarters: list[QuarterlyEarningsCard] = Field(default_factory=list[QuarterlyEarningsCard])
+    digest_quarters: list[QuarterlyEarningsCard] = Field(
+        default_factory=list[QuarterlyEarningsCard]
+    )
+    prepared_remarks_themes: list[ThemeRollup] = Field(default_factory=list[ThemeRollup])
+    qa_themes: list[ThemeRollup] = Field(default_factory=list[ThemeRollup])
     themes_note: str | None = None
 
 
@@ -879,8 +891,10 @@ class SayDoSection(BaseModel):
 
     status: SectionStatus
     missing: MissingReason | None = None
-    cards: list[SayDoCard] = Field(default_factory=list)
-    historical_metrics: list[SayDoHistoricalMetric] = Field(default_factory=list)
+    cards: list[SayDoCard] = Field(default_factory=list[SayDoCard])
+    historical_metrics: list[SayDoHistoricalMetric] = Field(
+        default_factory=list[SayDoHistoricalMetric]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -899,7 +913,7 @@ class MetricRedefinitionDetail(BaseModel):
 
 
 class ExecutiveCompAlignmentDetail(BaseModel):
-    metrics_used: list[str] = Field(default_factory=list)
+    metrics_used: list[str] = Field(default_factory=list[str])
     targets_and_thresholds: str | None = None
     alignment_verdict: str | None = None
 
@@ -927,7 +941,9 @@ class FilingIntelligenceSection(BaseModel):
     segment_changes: SegmentChangeDetail | None = None
     metric_redefinitions: MetricRedefinitionDetail | None = None
     executive_comp: ExecutiveCompAlignmentDetail | None = None
-    investment_signals: list[InvestmentSignalDetail] = Field(default_factory=list)
+    investment_signals: list[InvestmentSignalDetail] = Field(
+        default_factory=list[InvestmentSignalDetail]
+    )
     raw_synthesis_md: str | None = None
 
 
@@ -948,7 +964,7 @@ class IrDocCard(BaseModel):
 class IrDocsSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
-    cards: list[IrDocCard] = Field(default_factory=list)
+    cards: list[IrDocCard] = Field(default_factory=list[IrDocCard])
 
 
 # ---------------------------------------------------------------------------
@@ -968,9 +984,9 @@ class BearCaseSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
     budget_skip: BudgetSkip | None = None
-    failure_modes: list[FailureMode] = Field(default_factory=list)
+    failure_modes: list[FailureMode] = Field(default_factory=list[FailureMode])
     most_underweighted: str | None = None
-    out_of_scope_flags: list[str] = Field(default_factory=list)
+    out_of_scope_flags: list[str] = Field(default_factory=list[str])
 
 
 # ---------------------------------------------------------------------------
@@ -1037,10 +1053,10 @@ class ValidationIssueRow(BaseModel):
 class ProvenanceSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
-    coverage: list[CoverageRow] = Field(default_factory=list)
-    source_docs: list[SourceDocRow] = Field(default_factory=list)
+    coverage: list[CoverageRow] = Field(default_factory=list[CoverageRow])
+    source_docs: list[SourceDocRow] = Field(default_factory=list[SourceDocRow])
     open_validation_issues: int = 0
-    open_issues_detail: list[ValidationIssueRow] = Field(default_factory=list)
+    open_issues_detail: list[ValidationIssueRow] = Field(default_factory=list[ValidationIssueRow])
 
 
 # ---------------------------------------------------------------------------
@@ -1065,7 +1081,7 @@ class AppendixSection(BaseModel):
     """
 
     status: SectionStatus
-    transcripts: list[TranscriptEntry] = Field(default_factory=list)
+    transcripts: list[TranscriptEntry] = Field(default_factory=list[TranscriptEntry])
 
 
 # ---------------------------------------------------------------------------
@@ -1087,7 +1103,9 @@ class QAEntry(BaseModel):
     topic: str
     tag: str  # short uppercased keyword used as the colored chip in the design
     question: str
-    answers: list[tuple[str, str]] = Field(default_factory=list)  # [(speaker, text)]
+    answers: list[tuple[str, str]] = Field(
+        default_factory=list[tuple[str, str]]
+    )  # [(speaker, text)]
     follow_up: str | None = None
     transcript_ref: str | None = None  # offset / page when known
 
@@ -1097,7 +1115,7 @@ class QARosterQuarter(BaseModel):
 
     quarter: str
     year: int
-    entries: list[QAEntry] = Field(default_factory=list)
+    entries: list[QAEntry] = Field(default_factory=list[QAEntry])
 
 
 class QARosterSection(BaseModel):
@@ -1112,7 +1130,7 @@ class QARosterSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
     budget_skip: BudgetSkip | None = None  # set when the topic-labeling LLM was forgone (budget)
-    quarters: list[QARosterQuarter] = Field(default_factory=list)
+    quarters: list[QARosterQuarter] = Field(default_factory=list[QARosterQuarter])
 
 
 # ---------------------------------------------------------------------------
@@ -1155,7 +1173,7 @@ class SynthesisSection(BaseModel):
 
     status: SectionStatus
     ticker: str
-    lenses: list[SynthesisLensRow] = Field(default_factory=list)
+    lenses: list[SynthesisLensRow] = Field(default_factory=list[SynthesisLensRow])
 
 
 # ---------------------------------------------------------------------------
@@ -1303,7 +1321,9 @@ class PortfolioPositionSection(BaseModel):
     status: SectionStatus
     missing: MissingReason | None = None
     held: bool = False
-    accounts: list[PortfolioPositionAccountRow] = Field(default_factory=list)
+    accounts: list[PortfolioPositionAccountRow] = Field(
+        default_factory=list[PortfolioPositionAccountRow]
+    )
     total_quantity: float = 0.0
     total_cost_basis: float | None = None
     total_market_value: float | None = None
@@ -1313,9 +1333,15 @@ class PortfolioPositionSection(BaseModel):
     # this position. None when no dated snapshot rows were returned. The position
     # is a build-time snapshot, so this exposes how stale the figures are.
     position_as_of: date | None = None
-    recent_transactions: list[PortfolioPositionTransaction] = Field(default_factory=list)
-    open_decisions: list[PortfolioPositionDecision] = Field(default_factory=list)
-    closed_decisions: list[PortfolioPositionDecision] = Field(default_factory=list)
+    recent_transactions: list[PortfolioPositionTransaction] = Field(
+        default_factory=list[PortfolioPositionTransaction]
+    )
+    open_decisions: list[PortfolioPositionDecision] = Field(
+        default_factory=list[PortfolioPositionDecision]
+    )
+    closed_decisions: list[PortfolioPositionDecision] = Field(
+        default_factory=list[PortfolioPositionDecision]
+    )
 
 
 class ValuationBasisHistoricalPoint(BaseModel):
@@ -1354,7 +1380,9 @@ class ValuationBasisSection(BaseModel):
     peg_ratio: float | None = None
     peg_growth_pct: float | None = None
     current_period_end: date | None = None
-    history: list[ValuationBasisHistoricalPoint] = Field(default_factory=list)
+    history: list[ValuationBasisHistoricalPoint] = Field(
+        default_factory=list[ValuationBasisHistoricalPoint]
+    )
     historical_min: float | None = None
     historical_max: float | None = None
     historical_median: float | None = None
@@ -1420,12 +1448,14 @@ class ExecCompSectionModel(BaseModel):
     )
     ticker: str
     fiscal_year_latest: int | None = None
-    packages: list[ExecCompRowModel] = Field(default_factory=list)
-    insider_signals: list[InsiderSignalRowModel] = Field(default_factory=list)
+    packages: list[ExecCompRowModel] = Field(default_factory=list[ExecCompRowModel])
+    insider_signals: list[InsiderSignalRowModel] = Field(
+        default_factory=list[InsiderSignalRowModel]
+    )
     # LLM-driven alignment commentary. None when --no-llm or generation failed
     # (the section still renders the structured data, just without the memo).
     alignment_narrative_md: str | None = None
-    anomaly_flags: list[str] = Field(default_factory=list)
+    anomaly_flags: list[str] = Field(default_factory=list[str])
 
 
 class ReportSpec(BaseModel):
@@ -1443,14 +1473,14 @@ class ReportSpec(BaseModel):
     # Sections whose LLM analysis was forgone to stay under a monthly budget cap
     # (on_exceed='skip'). Drives the brief's "forgone due to budget" header
     # rollup + the dashboard indicator. Empty when nothing was budget-skipped.
-    forgone_due_to_budget: list[BudgetSkip] = Field(default_factory=list)
+    forgone_due_to_budget: list[BudgetSkip] = Field(default_factory=list[BudgetSkip])
     # Workspace section keys to OMIT for this ticker's business model (e.g. a
     # bank hides the operating-lease ladder + customer-concentration panels).
     # Computed once in the builder via
     # industry_classifier.suppressed_sections_for_ticker(); empty = show
     # everything (the default for unclassified tickers). The workspace renderer
     # gates the Company-tab P3 panels on this set.
-    suppressed_sections: list[str] = Field(default_factory=list)
+    suppressed_sections: list[str] = Field(default_factory=list[str])
 
     portfolio_position: PortfolioPositionSection | None = None
     valuation_basis: ValuationBasisSection | None = None
