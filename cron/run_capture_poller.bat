@@ -10,7 +10,8 @@ REM small.en transcribes proper nouns (ticker names: Nubank, MercadoLibre) far
 REM better than base.en, so the deterministic matcher auto-links them. ~480MB
 REM one-time model download on the first voice memo.
 set CAPTURE_WHISPER_MODEL=small.en
-set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
+set "PROJECT_ROOT=%~dp0.."
+for %%I in ("%PROJECT_ROOT%") do set "PROJECT_ROOT=%%~fI"
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 

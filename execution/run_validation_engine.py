@@ -31,7 +31,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from models.runs import StageStatus  # noqa: E402
 from models.validation import Severity  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
-from pipeline.run_accounting import end_run, start_run  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    PipelineRunSuppressedError,
+    end_run,
+    start_run,
+    suppression_payload,
+)
 from pipeline.validation_engine import run_all_checks  # noqa: E402
 
 # Exit code when --gate is set and the run produced HALT-severity issues. A
@@ -79,7 +84,16 @@ def main() -> int:
     conn = open_db(args.db)
     try:
         scope = [args.ticker.upper()] if args.ticker else ["ALL"]
-        run_id = start_run(conn, directive="run_validation_engine", ticker_scope=scope)
+        try:
+            run_id = start_run(
+                conn,
+                directive="run_validation_engine",
+                ticker_scope=scope,
+                invocation_inputs={"gate": bool(args.gate)},
+            )
+        except PipelineRunSuppressedError as exc:
+            print(json.dumps(suppression_payload(exc)))
+            return 0
         report = run_all_checks(conn, run_id=run_id, ticker=args.ticker)
         end_run(conn, run_id, StageStatus.OK, error_summary=None)
 

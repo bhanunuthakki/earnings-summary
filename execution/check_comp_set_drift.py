@@ -36,7 +36,9 @@ import json
 import sqlite3
 import sys
 from datetime import date, datetime
+from hashlib import sha256
 from pathlib import Path
+from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -44,7 +46,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from compute.comp_set_drift import (  # noqa: E402
     DRIFT_ALERT_THRESHOLD,
     DriftReport,
+    SnapshotEntry,
     compute_drift,
+    latest_scope_date,
     load_fmp_pe_snapshot,
     upsert_fmp_snapshot_rows,
 )
@@ -53,7 +57,148 @@ from models.runs import StageName, StageStatus  # noqa: E402
 from models.validation import Severity, ValidationRule  # noqa: E402
 from pipeline.kpi_persistence import record_validation_issue  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
-from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    PipelineRunSuppressedError,
+    end_run,
+    record_stage,
+    start_run,
+    suppression_payload,
+)
+
+_MAX_FINGERPRINT_ROWS = 20_000
+
+
+def _canonical_sha256(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _entry_payload(entry: SnapshotEntry) -> dict[str, object]:
+    return {
+        "as_of": entry.as_of.isoformat(),
+        "exchanges": list(entry.exchanges),
+        "kind": entry.kind,
+        "pe": entry.pe,
+        "scope_key": entry.scope_key,
+    }
+
+
+def _snapshot_kind(method_flags: object) -> str | None:
+    if not isinstance(method_flags, str) or not method_flags.strip():
+        return None
+    try:
+        raw: object = json.loads(method_flags)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    flags = cast("dict[str, object]", raw)
+    kind = flags.get("snapshot_kind")
+    return kind if isinstance(kind, str) else None
+
+
+def _drift_input_fingerprint(
+    conn: sqlite3.Connection,
+    *,
+    scopes: list[str],
+    as_of: date,
+    entries_by_scope: dict[str, list[SnapshotEntry]],
+) -> str:
+    """Hash exactly the rows/files that determine ingest and drift output."""
+    fingerprint_scopes: list[dict[str, object]] = []
+    row_count = sum(len(entries) for entries in entries_by_scope.values())
+    if row_count > _MAX_FINGERPRINT_ROWS:
+        raise ValueError("FMP snapshot fingerprint exceeds bounded row budget")
+
+    for scope in scopes:
+        entries = entries_by_scope[scope]
+        report_date = latest_scope_date(conn, scope, as_of, METHOD_VERSION)
+        bottom_rows: list[dict[str, object]] = []
+        selected_fmp: list[dict[str, object]] = []
+        if report_date is not None:
+            raw_bottom = conn.execute(
+                "SELECT scope_key, value, n_members, n_valid "
+                "FROM comp_set_metrics_daily "
+                "WHERE scope_type = ? AND metric = 'pe_ttm' AND stat_type = 'median' "
+                "AND method_version = ? AND as_of_date = ? ORDER BY scope_key",
+                (scope, METHOD_VERSION, report_date.isoformat()),
+            ).fetchall()
+            row_count += len(raw_bottom)
+            if row_count > _MAX_FINGERPRINT_ROWS:
+                raise ValueError("drift fingerprint exceeds bounded row budget")
+
+            loaded_by_key: dict[str, dict[str, SnapshotEntry]] = {}
+            for entry in entries:
+                if entry.as_of <= report_date:
+                    loaded_by_key.setdefault(entry.scope_key, {})[entry.as_of.isoformat()] = entry
+
+            for row in raw_bottom:
+                scope_key = str(row["scope_key"])
+                bottom_rows.append(
+                    {
+                        "n_members": int(row["n_members"]),
+                        "n_valid": int(row["n_valid"]),
+                        "scope_key": scope_key,
+                        "value": row["value"],
+                    }
+                )
+                candidates = conn.execute(
+                    "SELECT as_of_date, value, method_flags "
+                    "FROM comp_set_metrics_daily "
+                    "WHERE scope_type = 'fmp_snapshot' AND scope_key = ? "
+                    "AND metric = 'pe_ttm' AND stat_type = 'median' "
+                    "AND method_version = ? AND as_of_date <= ? AND value IS NOT NULL "
+                    "ORDER BY as_of_date DESC LIMIT ?",
+                    (
+                        scope_key,
+                        METHOD_VERSION,
+                        report_date.isoformat(),
+                        _MAX_FINGERPRINT_ROWS + 1,
+                    ),
+                ).fetchall()
+                row_count += len(candidates)
+                if row_count > _MAX_FINGERPRINT_ROWS:
+                    raise ValueError("drift fingerprint exceeds bounded row budget")
+
+                by_date: dict[str, dict[str, object]] = {
+                    str(candidate["as_of_date"]): {
+                        "as_of": str(candidate["as_of_date"]),
+                        "kind": _snapshot_kind(candidate["method_flags"]),
+                        "value": candidate["value"],
+                    }
+                    for candidate in candidates
+                }
+                for loaded_date, entry in loaded_by_key.get(scope_key, {}).items():
+                    by_date[loaded_date] = {
+                        "as_of": loaded_date,
+                        "kind": entry.kind,
+                        "value": entry.pe,
+                    }
+                selected = next(
+                    (
+                        candidate
+                        for _, candidate in sorted(by_date.items(), reverse=True)
+                        if candidate["kind"] in (None, scope)
+                    ),
+                    None,
+                )
+                selected_fmp.append({"scope_key": scope_key, "row": selected})
+
+        fingerprint_scopes.append(
+            {
+                "bottoms_up_rows": bottom_rows,
+                "fmp_source_rows": [_entry_payload(entry) for entry in entries],
+                "report_date": report_date.isoformat() if report_date is not None else None,
+                "scope": scope,
+                "selected_fmp_rows": selected_fmp,
+            }
+        )
+    return _canonical_sha256(fingerprint_scopes)
 
 
 def _log(event: dict[str, object]) -> None:
@@ -128,13 +273,37 @@ def main() -> int:
 
     conn = open_db(args.db)
     try:
-        run_id = start_run(conn, directive="check_comp_set_drift", ticker_scope=[])
+        entries_by_scope = {scope: load_fmp_pe_snapshot(repo_root, scope) for scope in scopes}
+        input_fingerprint = _drift_input_fingerprint(
+            conn,
+            scopes=scopes,
+            as_of=as_of,
+            entries_by_scope=entries_by_scope,
+        )
+        try:
+            run_id = start_run(
+                conn,
+                directive="check_comp_set_drift",
+                ticker_scope=[],
+                invocation_inputs={
+                    "as_of": as_of.isoformat(),
+                    "drift_alert_threshold": DRIFT_ALERT_THRESHOLD,
+                    "input_fingerprint": input_fingerprint,
+                    "method_version": METHOD_VERSION,
+                    "repo_root": str(repo_root.resolve()),
+                    "scopes": scopes,
+                },
+                deduplicate_completed=True,
+            )
+        except PipelineRunSuppressedError as exc:
+            print(json.dumps(suppression_payload(exc)))
+            return 0
         summary: dict[str, object] = {"run_id": run_id, "as_of": as_of.isoformat()}
         total_alerts = 0
         failed = False
         for scope in scopes:
             try:
-                entries = load_fmp_pe_snapshot(repo_root, scope)
+                entries = entries_by_scope[scope]
                 n_ingested = upsert_fmp_snapshot_rows(conn, entries, METHOD_VERSION)
                 report = compute_drift(conn, scope, as_of, METHOD_VERSION)
                 n_alerts = _report_alerts(conn, run_id, report)

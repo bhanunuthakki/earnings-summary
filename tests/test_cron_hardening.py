@@ -67,6 +67,8 @@ def test_production_capture_is_allowlisted_and_has_no_extra_llm_job() -> None:
 def test_project_backup_excludes_all_standard_credential_paths() -> None:
     backup = (CRON / "backup_project.ps1").read_text(encoding="utf-8")
     assert r"data\llm_capture" in backup
+    assert r"data\secrets" in backup
+    assert "Join-Path $repo 'data\\secrets'" in backup
     assert 'throw "robocopy ERROR' in backup
     for forbidden in (".env", "credentials.json", "token.json", "*.pem", "*.key"):
         assert forbidden in backup
@@ -93,6 +95,9 @@ def test_shared_runtime_forwards_original_arguments_without_shift() -> None:
     assert "--scheduler-wrapper" in text
     assert "-- %*" in text
     assert "set llm_capture_dir=" not in text
+    assert "where py" not in text
+    assert "py -3.11" not in text
+    assert r"venv\scripts\python.exe" in text
 
 
 def test_scheduled_wrappers_do_not_invoke_path_dependent_python() -> None:

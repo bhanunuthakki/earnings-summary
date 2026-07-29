@@ -19,7 +19,8 @@ REM Exit 2 = hard stop (budget/CLI setup).
 
 setlocal
 set PYTHONUTF8=1
-set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
+set "PROJECT_ROOT=%~dp0.."
+for %%I in ("%PROJECT_ROOT%") do set "PROJECT_ROOT=%%~fI"
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 

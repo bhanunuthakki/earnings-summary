@@ -152,7 +152,11 @@ def test_main_defaults_to_canonical_env_db(
     observed: list[Path] = []
 
     def _fake_drill(
-        backup_dir: Path, live_db: Path, *, keep: bool = False
+        backup_dir: Path,
+        live_db: Path,
+        *,
+        keep: bool = False,
+        **_kwargs: object,
     ) -> tuple[bool, dict[str, object]]:
         del backup_dir, keep
         observed.append(live_db)
@@ -160,7 +164,15 @@ def test_main_defaults_to_canonical_env_db(
 
     monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(canonical))
     monkeypatch.setattr(restore_drill, "run_drill", _fake_drill)
-    monkeypatch.setattr(restore_drill, "_record_run", lambda *args: None)
+
+    def no_snapshot(_backup_dir: Path) -> None:
+        return None
+
+    def no_accounting(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(restore_drill, "_latest_snapshot", no_snapshot)
+    monkeypatch.setattr(restore_drill, "_start_accounting", no_accounting)
 
     assert restore_drill.main([]) == 0
     assert observed == [canonical]

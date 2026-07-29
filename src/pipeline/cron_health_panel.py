@@ -80,6 +80,7 @@ def _dot(status: str | None) -> str:
     cls = {
         "ok": "k-dot-ok",
         "failed": "k-dot-bad",
+        "abandoned": "k-dot-bad",
         "in_progress": "k-dot-warn",
     }.get(status, "ch-dot-miss")
     return f'<span class="ch-dot k-dot {cls}" title="{escape(status)}"></span>'
@@ -146,6 +147,7 @@ def _timeline_table(
         status_cls = {
             "ok": "ch-status-ok",
             "failed": "ch-status-fail",
+            "abandoned": "ch-status-fail",
         }.get(latest or "", "ch-status-miss")
         status_txt = latest or "—"
         rows += (

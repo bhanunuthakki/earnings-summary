@@ -73,6 +73,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import date
 from enum import StrEnum
 from pathlib import Path
 
@@ -80,6 +81,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from llm import tracectx  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    PipelineRunSuppressedError,
+    suppression_payload,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 DEFAULT_USER_ID = os.environ.get("CIO_USER_ID", "bhanu")
@@ -847,6 +852,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "(non-zero pipeline exit) so monitoring catches egregious data; skip it "
         "to run the pipeline without the data check.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Supersede an already-running morning pipeline attempt.",
+    )
     return parser.parse_args(argv)
 
 
@@ -857,6 +867,8 @@ def _record_run(
     run_id: str | None = None,
     failed: bool = False,
     error_summary: str | None = None,
+    invocation_inputs: dict[str, str | float | bool] | None = None,
+    force: bool = False,
 ) -> str | None:
     """Wrap start_run / end_run so run accounting failures never crash the pipeline."""
     try:
@@ -866,12 +878,21 @@ def _record_run(
         conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             if start:
-                return start_run(conn, directive="run_morning_pipeline", ticker_scope=[])
+                return start_run(
+                    conn,
+                    directive="run_morning_pipeline",
+                    ticker_scope=[],
+                    invocation_inputs=invocation_inputs,
+                    force=force,
+                    deduplicate_completed=True,
+                )
             if run_id is not None:
                 status = RunStatus.FAILED if failed else RunStatus.OK
                 end_run(conn, run_id, status, error_summary)
         finally:
             conn.close()
+    except PipelineRunSuppressedError:
+        raise
     except Exception as exc:
         sys.stderr.write(f"WARNING: run_accounting failed: {exc}\n")
     return None
@@ -888,7 +909,25 @@ def main(argv: list[str] | None = None) -> int:
     # (verify_daily_chain.py) can confirm it ran today.
     run_id: str | None = None
     if db_path.exists():
-        run_id = _record_run(db_path, start=True)
+        try:
+            run_id = _record_run(
+                db_path,
+                start=True,
+                invocation_inputs={
+                    "max_cost_usd": args.max_cost_usd,
+                    "news_source": args.news_source,
+                    "run_date": date.today().isoformat(),
+                    "skip_news": args.skip_news,
+                    "skip_standup": args.skip_standup,
+                    "skip_triggers": args.skip_triggers,
+                    "skip_validation": args.skip_validation,
+                    "user_id": args.user_id,
+                },
+                force=args.force,
+            )
+        except PipelineRunSuppressedError as exc:
+            print(json.dumps(suppression_payload(exc)))
+            return 0
 
     # Stage preflight: run validate_environment.py before the main stages.
     # A failed preflight is loud (stderr banner + summary entry) but does NOT

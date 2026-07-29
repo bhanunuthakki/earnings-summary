@@ -6,7 +6,8 @@ REM the brief_dirty queue) and run_monthly_p3_refresh.bat (P3 monthly).
 
 setlocal
 set PYTHONUTF8=1
-set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
+set "PROJECT_ROOT=%~dp0.."
+for %%I in ("%PROJECT_ROOT%") do set "PROJECT_ROOT=%%~fI"
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 

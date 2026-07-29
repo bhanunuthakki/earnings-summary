@@ -93,7 +93,13 @@ def _run_compute(conn: sqlite3.Connection, args: argparse.Namespace) -> int:
         print(json.dumps({"warning": "no tickers in scope"}, indent=2))
         return 0
 
-    run_id = start_run(conn, directive="compute_derived_metrics", ticker_scope=tickers)
+    run_id = start_run(
+        conn,
+        directive="compute_derived_metrics",
+        ticker_scope=tickers,
+        invocation_inputs={"mode": "compute", "scope": args.scope},
+        force=bool(args.force),
+    )
     per_ticker: list[dict[str, object]] = []
     failed = 0
 

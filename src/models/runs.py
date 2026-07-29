@@ -34,6 +34,7 @@ class StageStatus(StrEnum):
     FAILED = "failed"
     NEEDS_REVIEW = "needs_review"
     SKIPPED = "skipped"
+    ABANDONED = "abandoned"
 
 
 class IngestionRun(BaseModel):

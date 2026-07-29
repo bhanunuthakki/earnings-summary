@@ -37,9 +37,14 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
 from compute.kpi_extract_summaries import (  # noqa: E402
+    TickerExtractionLog,
     capture_for_ticker,
     extract_for_ticker,
     write_log,
+)
+from pipeline.run_accounting import (  # noqa: E402
+    PipelineRunSuppressedError,
+    suppression_payload,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
@@ -59,7 +64,7 @@ def main() -> int:
 
     conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
-    results = []
+    results: list[TickerExtractionLog] = []
     summary_lines: list[dict[str, object]] = []
     try:
         for ticker in tickers:
@@ -97,6 +102,9 @@ def main() -> int:
                 f"elapsed={log.elapsed_ms}ms" + (f" error={log.error}" if log.error else ""),
                 file=sys.stderr,
             )
+    except PipelineRunSuppressedError as exc:
+        print(json.dumps(suppression_payload(exc)))
+        return 0
     finally:
         conn.close()
 

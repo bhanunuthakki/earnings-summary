@@ -28,6 +28,7 @@ from pypdf import PdfReader
 
 from models.documents import DocType, FetchStatus, SourceType
 from models.facts import FiscalPeriodType
+from provenance.selection import selected_transcripts_relation
 from transcripts.source_reliability import choose_winner, classify_transcript_source
 
 _FILENAME_RE = re.compile(r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<year>20\d{2})$")
@@ -353,6 +354,16 @@ def find_existing_transcript_id(conn: sqlite3.Connection, document_id: int) -> i
     return int(row["id"]) if row is not None else None
 
 
+def _sqlite_datetime(value: datetime | None) -> str | None:
+    """Match sqlite3's legacy datetime text format without its deprecated adapter."""
+    return str(value) if value is not None else None
+
+
+def _has_selection_lifecycle(conn: sqlite3.Connection) -> bool:
+    columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(transcripts)").fetchall()}
+    return {"is_active", "superseded_by_id"} <= columns
+
+
 def find_transcript_for_period(
     conn: sqlite3.Connection,
     *,
@@ -360,38 +371,63 @@ def find_transcript_for_period(
     fiscal_period_type: FiscalPeriodType,
     period_end: datetime,
 ) -> tuple[int, int, str | None, int] | None:
-    """Return (document_id, transcript_id, source, segment_count) for the
-    transcript currently on file for this real-world call, or None.
-
-    If stale duplicates already exist for this period (pre-dating this
-    guard), picks the richest by segment_count — always a safe choice: the
-    caller only ever compares a new fetch against it, never assumes it is
-    the sole row for the period.
-    """
-    rows = conn.execute(
-        "SELECT id, document_id, source FROM transcripts "
-        "WHERE ticker = ? AND fiscal_period_type = ? AND period_end = ?",
-        (ticker, fiscal_period_type.value, period_end),
-    ).fetchall()
-    if not rows:
+    """Return the one current transcript for this real-world call, or ``None``."""
+    transcripts = selected_transcripts_relation(conn).sql
+    row = conn.execute(
+        f"SELECT id, document_id, source FROM {transcripts} "  # nosec B608 -- trusted internal SQL shape; values remain bound
+        "WHERE ticker = ? AND fiscal_period_type = ? AND period_end = ? LIMIT 1",
+        (ticker, fiscal_period_type.value, _sqlite_datetime(period_end)),
+    ).fetchone()
+    if row is None:
         return None
-    best: tuple[int, int, str | None, int] | None = None
-    for row in rows:
-        seg_count = conn.execute(
-            "SELECT COUNT(*) FROM transcript_segments WHERE transcript_id = ?", (row["id"],)
-        ).fetchone()[0]
-        candidate = (int(row["document_id"]), int(row["id"]), row["source"], int(seg_count))
-        if best is None or candidate[3] > best[3]:
-            best = candidate
-    return best
+    seg_count = conn.execute(
+        "SELECT COUNT(*) FROM transcript_segments WHERE transcript_id = ?", (row["id"],)
+    ).fetchone()[0]
+    return (int(row["document_id"]), int(row["id"]), row["source"], int(seg_count))
 
 
-def _delete_transcript_and_document(
-    conn: sqlite3.Connection, *, document_id: int, transcript_id: int
+def supersede_transcripts(
+    conn: sqlite3.Connection,
+    *,
+    winner_transcript_id: int,
+    loser_transcript_ids: list[int],
+    superseded_at: datetime | None = None,
 ) -> None:
-    conn.execute("DELETE FROM transcript_segments WHERE transcript_id = ?", (transcript_id,))
-    conn.execute("DELETE FROM transcripts WHERE id = ?", (transcript_id,))
-    conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+    """Make one transcript current while preserving every losing version."""
+    loser_ids = sorted({item for item in loser_transcript_ids if item != winner_transcript_id})
+    timestamp = _sqlite_datetime(superseded_at or datetime.now())
+    selection_lifecycle = _has_selection_lifecycle(conn)
+    for transcript_id in loser_ids:
+        if selection_lifecycle:
+            result = conn.execute(
+                "UPDATE transcripts SET is_current = 0, is_active = 0, "
+                "superseded_at = ?, superseded_by_transcript_id = ?, "
+                "superseded_by_id = ? WHERE id = ?",
+                (timestamp, winner_transcript_id, winner_transcript_id, transcript_id),
+            )
+        else:
+            result = conn.execute(
+                "UPDATE transcripts SET is_current = 0, superseded_at = ?, "
+                "superseded_by_transcript_id = ? WHERE id = ?",
+                (timestamp, winner_transcript_id, transcript_id),
+            )
+        if result.rowcount != 1:
+            raise ValueError(f"No transcript with id={transcript_id} to supersede")
+    if selection_lifecycle:
+        result = conn.execute(
+            "UPDATE transcripts SET is_current = 1, is_active = 1, "
+            "superseded_at = NULL, superseded_by_transcript_id = NULL, "
+            "superseded_by_id = NULL WHERE id = ?",
+            (winner_transcript_id,),
+        )
+    else:
+        result = conn.execute(
+            "UPDATE transcripts SET is_current = 1, superseded_at = NULL, "
+            "superseded_by_transcript_id = NULL WHERE id = ?",
+            (winner_transcript_id,),
+        )
+    if result.rowcount != 1:
+        raise ValueError(f"No transcript with id={winner_transcript_id} to promote")
 
 
 def _index_source_hint(project_root: Path, ticker: str, year: int, quarter: int) -> str | None:
@@ -416,6 +452,15 @@ def _index_source_hint(project_root: Path, ticker: str, year: int, quarter: int)
     return None
 
 
+@dataclass(frozen=True)
+class PeriodConflictDecision:
+    """Reliability decision against the current period transcript."""
+
+    current_document_id: int | None
+    current_transcript_id: int | None
+    new_becomes_current: bool
+
+
 def _resolve_period_conflict(
     conn: sqlite3.Connection,
     *,
@@ -424,23 +469,13 @@ def _resolve_period_conflict(
     period_end: datetime,
     new_source: str,
     new_segment_count: int,
-) -> tuple[bool, tuple[int, int] | None]:
-    """Reliability-ranked idempotency guard for a real earnings call.
-
-    Returns (should_insert, existing_winner):
-      - should_insert=True, existing_winner=None: no conflict, proceed.
-      - should_insert=True, existing_winner=None: conflict resolved in the
-        new fetch's favor; the old document/transcript/segments are already
-        deleted — proceed to insert the new one.
-      - should_insert=False, existing_winner=(document_id, transcript_id):
-        an existing row outranks this fetch. Caller must not create a new
-        document/transcript row; report the existing winner instead.
-    """
+) -> PeriodConflictDecision:
+    """Choose the current version without mutating or discarding evidence."""
     conflict = find_transcript_for_period(
         conn, ticker=ticker, fiscal_period_type=fiscal_period_type, period_end=period_end
     )
     if conflict is None:
-        return True, None
+        return PeriodConflictDecision(None, None, True)
     old_document_id, old_transcript_id, old_source, old_segment_count = conflict
     replace = choose_winner(
         new_source=new_source,
@@ -468,13 +503,40 @@ def _resolve_period_conflict(
         )
         + "\n"
     )
-    if replace:
-        _delete_transcript_and_document(
-            conn, document_id=old_document_id, transcript_id=old_transcript_id
+    return PeriodConflictDecision(
+        current_document_id=old_document_id,
+        current_transcript_id=old_transcript_id,
+        new_becomes_current=replace,
+    )
+
+
+def _apply_period_conflict(
+    conn: sqlite3.Connection,
+    *,
+    decision: PeriodConflictDecision,
+    new_document_id: int,
+    new_transcript_id: int,
+) -> tuple[int, int, bool]:
+    """Link supersession and return the winning document/transcript identifiers."""
+    current_transcript_id = decision.current_transcript_id
+    if current_transcript_id is None:
+        return new_document_id, new_transcript_id, False
+    current_document_id = decision.current_document_id
+    if current_document_id is None:
+        raise ValueError("Current transcript is missing its document identity")
+    if decision.new_becomes_current:
+        supersede_transcripts(
+            conn,
+            winner_transcript_id=new_transcript_id,
+            loser_transcript_ids=[current_transcript_id],
         )
-        conn.commit()
-        return True, None
-    return False, (old_document_id, old_transcript_id)
+        return new_document_id, new_transcript_id, False
+    supersede_transcripts(
+        conn,
+        winner_transcript_id=current_transcript_id,
+        loser_transcript_ids=[new_transcript_id],
+    )
+    return current_document_id, current_transcript_id, True
 
 
 def find_document_for_path(conn: sqlite3.Connection, doc_id: int) -> tuple[str, datetime | None]:
@@ -511,10 +573,10 @@ def insert_document(
             ticker,
             SourceType.TRANSCRIPT_AUDIO.value,
             DocType.EARNINGS_CALL_TRANSCRIPT.value,
-            period_end,
+            _sqlite_datetime(period_end),
             rel_path,
             sha256,
-            datetime.now(),
+            _sqlite_datetime(datetime.now()),
             FetchStatus.OK.value,
             raw_size,
         ),
@@ -531,6 +593,8 @@ def insert_transcript(
     period_end: datetime,
     has_qa_section: bool | None = None,
     source: str | None = None,
+    is_current: bool = True,
+    superseded_by_transcript_id: int | None = None,
 ) -> int:
     """Insert one transcripts row; returns transcripts.id.
 
@@ -539,13 +603,50 @@ def insert_transcript(
     `source` is the provenance label from `classify_transcript_source` —
     the reliability-ranked idempotency guard's discriminating field.
     """
-    cur = conn.execute(
-        "INSERT INTO transcripts "
-        "(document_id, ticker, call_date, fiscal_period_type, period_end, "
-        " source_url, has_qa_section, source) "
-        "VALUES (?, ?, NULL, ?, ?, NULL, ?, ?)",
-        (document_id, ticker, fiscal_period_type.value, period_end, has_qa_section, source),
+    version_number = int(
+        conn.execute(
+            "SELECT COALESCE(MAX(version_number), 0) + 1 FROM transcripts "
+            "WHERE ticker = ? AND fiscal_period_type = ? AND period_end = ?",
+            (ticker, fiscal_period_type.value, _sqlite_datetime(period_end)),
+        ).fetchone()[0]
     )
+    if is_current and superseded_by_transcript_id is not None:
+        raise ValueError("A current transcript cannot have a supersession target")
+    if not is_current and superseded_by_transcript_id is None:
+        raise ValueError("A historical transcript requires a supersession target")
+    superseded_at = None if is_current else _sqlite_datetime(datetime.now())
+    selection_lifecycle = _has_selection_lifecycle(conn)
+    values = (
+        document_id,
+        ticker,
+        fiscal_period_type.value,
+        _sqlite_datetime(period_end),
+        has_qa_section,
+        source,
+        version_number,
+        int(is_current),
+        _sqlite_datetime(datetime.now()),
+        superseded_at,
+        superseded_by_transcript_id,
+    )
+    if selection_lifecycle:
+        cur = conn.execute(
+            "INSERT INTO transcripts "
+            "(document_id, ticker, call_date, fiscal_period_type, period_end, "
+            "source_url, has_qa_section, source, version_number, is_current, recorded_at, "
+            "superseded_at, superseded_by_transcript_id, is_active, superseded_by_id) "
+            "VALUES (?, ?, NULL, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (*values, int(is_current), superseded_by_transcript_id),
+        )
+    else:
+        cur = conn.execute(
+            "INSERT INTO transcripts "
+            "(document_id, ticker, call_date, fiscal_period_type, period_end, "
+            "source_url, has_qa_section, source, version_number, is_current, recorded_at, "
+            "superseded_at, superseded_by_transcript_id) "
+            "VALUES (?, ?, NULL, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+            values,
+        )
     return int(cur.lastrowid) if cur.lastrowid is not None else 0
 
 
@@ -598,11 +699,9 @@ def ingest_one(
 ) -> IngestResult | None:
     """Process one transcript file. Returns None for filename mismatches / out-of-scope tickers.
 
-    A reliability-ranked idempotency guard (`_resolve_period_conflict`) runs
-    before any document/transcript row is created for genuinely new bytes:
-    if a richer or more reliable representation of the same real call
-    already exists, this file is skipped (reported via `skipped_existing`,
-    pointing at the existing winner) rather than creating a duplicate row.
+    A reliability-ranked period guard chooses the current representation.
+    Every distinct byte version is retained; losing versions are linked to
+    the winner with supersession metadata.
     """
     parsed = parse_transcript_filename(file_path)
     if parsed is None:
@@ -636,7 +735,7 @@ def ingest_one(
                 project_root, parsed.ticker, parsed.fiscal_year_label, parsed.quarter_idx
             ),
         )
-        should_insert, existing_winner = _resolve_period_conflict(
+        decision = _resolve_period_conflict(
             conn,
             ticker=parsed.ticker,
             fiscal_period_type=period.fiscal_period_type,
@@ -644,19 +743,6 @@ def ingest_one(
             new_source=source,
             new_segment_count=len(turns),
         )
-        if not should_insert:
-            assert existing_winner is not None
-            winner_document_id, winner_transcript_id = existing_winner
-            return IngestResult(
-                file_path=file_path,
-                ticker=parsed.ticker,
-                period_end=period.period_end,
-                document_id=winner_document_id,
-                transcript_id=winner_transcript_id,
-                segment_count=0,
-                skipped_existing=True,
-                source=source,
-            )
         transcript_id = insert_transcript(
             conn,
             document_id=existing,
@@ -665,17 +751,25 @@ def ingest_one(
             period_end=period.period_end,
             has_qa_section=qa_status_to_db_value(qa.status),
             source=source,
+            is_current=decision.current_transcript_id is None,
+            superseded_by_transcript_id=decision.current_transcript_id,
         )
         segment_count = insert_segments(conn, transcript_id=transcript_id, turns=turns)
+        winner_document_id, winner_transcript_id, skipped_existing = _apply_period_conflict(
+            conn,
+            decision=decision,
+            new_document_id=existing,
+            new_transcript_id=transcript_id,
+        )
         conn.commit()
         return IngestResult(
             file_path=file_path,
             ticker=parsed.ticker,
             period_end=period.period_end,
-            document_id=existing,
-            transcript_id=transcript_id,
-            segment_count=segment_count,
-            skipped_existing=False,
+            document_id=winner_document_id,
+            transcript_id=winner_transcript_id,
+            segment_count=0 if skipped_existing else segment_count,
+            skipped_existing=skipped_existing,
             qa_status=qa.status,
             qa_signals=qa.signals,
             source=source,
@@ -692,7 +786,7 @@ def ingest_one(
         ),
     )
 
-    should_insert, existing_winner = _resolve_period_conflict(
+    decision = _resolve_period_conflict(
         conn,
         ticker=parsed.ticker,
         fiscal_period_type=period.fiscal_period_type,
@@ -700,11 +794,38 @@ def ingest_one(
         new_source=source,
         new_segment_count=len(turns),
     )
-    if not should_insert:
-        # A period-equal row already outranks this fetch. Nothing is written
-        # here — no orphan document row, unlike the pre-guard behavior.
-        assert existing_winner is not None
-        winner_document_id, winner_transcript_id = existing_winner
+    if not decision.new_becomes_current:
+        # Preserve the lower-ranked fetch as a historical evidence version.
+        winner_document_id = decision.current_document_id
+        winner_transcript_id = decision.current_transcript_id
+        assert winner_document_id is not None
+        assert winner_transcript_id is not None
+        losing_document_id = insert_document(
+            conn,
+            ticker=parsed.ticker,
+            file_path=file_path,
+            sha256=sha,
+            period_end=period.period_end,
+            project_root=project_root,
+        )
+        losing_transcript_id = insert_transcript(
+            conn,
+            document_id=losing_document_id,
+            ticker=parsed.ticker,
+            fiscal_period_type=period.fiscal_period_type,
+            period_end=period.period_end,
+            has_qa_section=qa_status_to_db_value(qa.status),
+            source=source,
+            is_current=False,
+            superseded_by_transcript_id=winner_transcript_id,
+        )
+        insert_segments(conn, transcript_id=losing_transcript_id, turns=turns)
+        supersede_transcripts(
+            conn,
+            winner_transcript_id=winner_transcript_id,
+            loser_transcript_ids=[losing_transcript_id],
+        )
+        conn.commit()
         return IngestResult(
             file_path=file_path,
             ticker=parsed.ticker,
@@ -732,17 +853,25 @@ def ingest_one(
         period_end=period.period_end,
         has_qa_section=qa_status_to_db_value(qa.status),
         source=source,
+        is_current=decision.current_transcript_id is None,
+        superseded_by_transcript_id=decision.current_transcript_id,
     )
     segment_count = insert_segments(conn, transcript_id=transcript_id, turns=turns)
+    winner_document_id, winner_transcript_id, skipped_existing = _apply_period_conflict(
+        conn,
+        decision=decision,
+        new_document_id=document_id,
+        new_transcript_id=transcript_id,
+    )
     conn.commit()
     return IngestResult(
         file_path=file_path,
         ticker=parsed.ticker,
         period_end=period.period_end,
-        document_id=document_id,
-        transcript_id=transcript_id,
-        segment_count=segment_count,
-        skipped_existing=False,
+        document_id=winner_document_id,
+        transcript_id=winner_transcript_id,
+        segment_count=0 if skipped_existing else segment_count,
+        skipped_existing=skipped_existing,
         qa_status=qa.status,
         qa_signals=qa.signals,
         source=source,
@@ -783,7 +912,7 @@ def ingest_existing_ir_transcript(
     fiscal_period_type = _infer_fiscal_period_type(period_end)
     source = classify_transcript_source(file_path, text, is_ir_transcript_doc=True)
 
-    should_insert, existing_winner = _resolve_period_conflict(
+    decision = _resolve_period_conflict(
         conn,
         ticker=ticker,
         fiscal_period_type=fiscal_period_type,
@@ -791,9 +920,29 @@ def ingest_existing_ir_transcript(
         new_source=source,
         new_segment_count=len(turns),
     )
-    if not should_insert:
-        assert existing_winner is not None
-        winner_document_id, winner_transcript_id = existing_winner
+    if not decision.new_becomes_current:
+        winner_document_id = decision.current_document_id
+        winner_transcript_id = decision.current_transcript_id
+        assert winner_document_id is not None
+        assert winner_transcript_id is not None
+        losing_transcript_id = insert_transcript(
+            conn,
+            document_id=document_id,
+            ticker=ticker,
+            fiscal_period_type=fiscal_period_type,
+            period_end=period_end,
+            has_qa_section=qa_status_to_db_value(qa.status),
+            source=source,
+            is_current=False,
+            superseded_by_transcript_id=winner_transcript_id,
+        )
+        insert_segments(conn, transcript_id=losing_transcript_id, turns=turns)
+        supersede_transcripts(
+            conn,
+            winner_transcript_id=winner_transcript_id,
+            loser_transcript_ids=[losing_transcript_id],
+        )
+        conn.commit()
         return IngestResult(
             file_path=file_path,
             ticker=ticker,
@@ -813,17 +962,25 @@ def ingest_existing_ir_transcript(
         period_end=period_end,
         has_qa_section=qa_status_to_db_value(qa.status),
         source=source,
+        is_current=decision.current_transcript_id is None,
+        superseded_by_transcript_id=decision.current_transcript_id,
     )
     segment_count = insert_segments(conn, transcript_id=transcript_id, turns=turns)
+    winner_document_id, winner_transcript_id, skipped_existing = _apply_period_conflict(
+        conn,
+        decision=decision,
+        new_document_id=document_id,
+        new_transcript_id=transcript_id,
+    )
     conn.commit()
     return IngestResult(
         file_path=file_path,
         ticker=ticker,
         period_end=period_end,
-        document_id=document_id,
-        transcript_id=transcript_id,
-        segment_count=segment_count,
-        skipped_existing=False,
+        document_id=winner_document_id,
+        transcript_id=winner_transcript_id,
+        segment_count=0 if skipped_existing else segment_count,
+        skipped_existing=skipped_existing,
         qa_status=qa.status,
         qa_signals=qa.signals,
         source=source,

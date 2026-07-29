@@ -39,7 +39,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from llm_artifact_store import mark_artifacts_dirty_for_fact_change  # noqa: E402
 from models.runs import StageStatus  # noqa: E402
 from pipeline.queries import open_db, tracked_companies_for_user  # noqa: E402
-from pipeline.run_accounting import end_run, start_run  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    PipelineRunSuppressedError,
+    end_run,
+    start_run,
+    suppression_payload,
+)
 from pipeline.sec_xbrl import CIK_MAP, NO_SEC_FILERS, ingest_for_ticker  # noqa: E402
 from provenance.sec_companyfacts_capture import CompanyFactsContractError  # noqa: E402
 
@@ -112,7 +117,11 @@ def main() -> int:
             print(json.dumps({"error": "no CIK for", "tickers": unmapped}, indent=2))
             return 1
 
-        run_id = start_run(conn, directive="fetch_sec_xbrl", ticker_scope=tickers)
+        try:
+            run_id = start_run(conn, directive="fetch_sec_xbrl", ticker_scope=tickers)
+        except PipelineRunSuppressedError as exc:
+            print(json.dumps(suppression_payload(exc)))
+            return 0
         rows: list[dict[str, object]] = []
         failed = 0
 

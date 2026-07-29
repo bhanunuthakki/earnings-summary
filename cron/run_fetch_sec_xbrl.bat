@@ -21,14 +21,15 @@ REM Runs Saturday 02:00 — clear of the Sunday maintenance block (refresh_ir_kp
 REM 01:00, discover_ir_documents 01:30, git cleanup 03:00). Edit
 REM fetch_sec_xbrl.task.xml to change cadence, then re-register from the MAIN
 REM checkout (editing the XML alone does NOT update the live task):
-REM   schtasks /create /tn "\earnings-summary\fetch_sec_xbrl" /xml "%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary\cron\fetch_sec_xbrl.task.xml" /f
+REM   schtasks /create /tn "\earnings-summary\fetch_sec_xbrl" /xml "%~dp0fetch_sec_xbrl.task.xml" /f
 REM
 REM Exit code: non-zero when any ticker failed (transient network failures are
 REM per-ticker; the run continues to the next ticker).
 
 setlocal
 set PYTHONUTF8=1
-set PROJECT_ROOT=%USERPROFILE%\.gemini\antigravity\scratch\earnings-summary
+set "PROJECT_ROOT=%~dp0.."
+for %%I in ("%PROJECT_ROOT%") do set "PROJECT_ROOT=%%~fI"
 set LOG_DIR=%PROJECT_ROOT%\.tmp\cron_logs
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 

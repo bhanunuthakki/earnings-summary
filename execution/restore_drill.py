@@ -44,6 +44,7 @@ import json
 import sqlite3
 import sys
 import tempfile
+from hashlib import sha256
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -52,11 +53,26 @@ sys.path.insert(0, str(PROJECT_ROOT / "cron"))
 
 import restore_db  # noqa: E402  (cron/restore_db.py — gunzip + integrity + list)
 
+from models.runs import StageStatus  # noqa: E402
+from pipeline.queries import open_db  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    PipelineRunSuppressedError,
+    end_run,
+    start_run,
+    suppression_payload,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # A healthy snapshot has rows here; an empty one signals truncation/corruption
 # that still slips past PRAGMA integrity_check (a valid-but-empty DB is "ok").
 _CORE_TABLES: tuple[str, ...] = ("tracked_companies", "financial_facts")
+
+
+class _AutoSnapshot:
+    """Sentinel type preserving run_drill's direct-call latest-snapshot API."""
+
+
+_AUTO_SNAPSHOT = _AutoSnapshot()
 
 
 def _alembic_version(db_path: Path) -> str | None:
@@ -91,8 +107,25 @@ def _row_counts(db_path: Path, tables: tuple[str, ...]) -> dict[str, int]:
     return out
 
 
+def _latest_snapshot(backup_dir: Path) -> Path | None:
+    snapshots = restore_db.list_snapshots(backup_dir)
+    return snapshots[-1] if snapshots else None
+
+
+def _snapshot_sha256(snapshot: Path) -> str:
+    digest = sha256()
+    with snapshot.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def run_drill(
-    backup_dir: Path, live_db: Path, *, keep: bool = False
+    backup_dir: Path,
+    live_db: Path,
+    *,
+    keep: bool = False,
+    snapshot: Path | _AutoSnapshot | None = _AUTO_SNAPSHOT,
 ) -> tuple[bool, dict[str, object]]:
     """Restore the newest snapshot to a temp file and verify it.
 
@@ -100,11 +133,11 @@ def run_drill(
     missing snapshot, a failed restore/integrity check, or an empty core table;
     a schema-version mismatch only adds a warning (still ``ok``).
     """
-    snaps = restore_db.list_snapshots(backup_dir)
-    if not snaps:
+    if isinstance(snapshot, _AutoSnapshot):
+        snapshot = _latest_snapshot(backup_dir)
+    if snapshot is None:
         return False, {"status": "no_snapshot", "error": f"no snapshots in {backup_dir}"}
 
-    snapshot = snaps[-1]
     tmpdir = Path(tempfile.mkdtemp(prefix="restore_drill."))
     target = tmpdir / "drill.db"
     try:
@@ -147,30 +180,69 @@ def run_drill(
                 tmpdir.rmdir()
 
 
-def _record_run(live_db: Path, ok: bool, summary: dict[str, object]) -> None:
-    """Best-effort ingestion_runs bookkeeping so the cron-health panel sees the
-    drill. Silently no-ops if the live DB / schema isn't available."""
+def _start_accounting(
+    live_db: Path,
+    *,
+    backup_dir: Path,
+    keep: bool,
+    snapshot_name: str | None,
+    snapshot_sha256: str | None,
+    live_schema: str | None,
+) -> tuple[sqlite3.Connection, str] | None:
+    """Start single-flight accounting before the restore/decrypt work begins."""
     if not live_db.exists():
         print("(live DB absent — skipping ingestion_runs bookkeeping)", file=sys.stderr)
-        return
+        return None
     try:
-        from models.runs import StageStatus
-        from pipeline.queries import open_db
-        from pipeline.run_accounting import end_run, start_run
-
         conn = open_db(live_db)
-        try:
-            run_id = start_run(conn, directive="restore_drill", ticker_scope=["ALL"])
-            end_run(
-                conn,
-                run_id,
-                StageStatus.OK if ok else StageStatus.FAILED,
-                error_summary=None if ok else json.dumps(summary)[:500],
-            )
-        finally:
-            conn.close()
     except Exception as exc:  # bookkeeping must never fail the drill
-        print(f"WARN: could not record ingestion_runs row: {exc}", file=sys.stderr)
+        print(f"WARN: could not open ingestion_runs ledger: {exc}", file=sys.stderr)
+        return None
+    try:
+        run_id = start_run(
+            conn,
+            directive="restore_drill",
+            ticker_scope=["ALL"],
+            invocation_inputs={
+                "backup_dir": str(backup_dir.resolve()),
+                "keep": keep,
+                "live_db": str(live_db.resolve()),
+                "live_schema": live_schema,
+                "snapshot_name": snapshot_name,
+                "snapshot_sha256": snapshot_sha256,
+            },
+            deduplicate_completed=True,
+        )
+    except PipelineRunSuppressedError:
+        conn.close()
+        raise
+    except Exception as exc:  # bookkeeping must never fail the drill
+        conn.close()
+        print(f"WARN: could not record ingestion_runs start: {exc}", file=sys.stderr)
+        return None
+    return conn, run_id
+
+
+def _finish_accounting(
+    accounting: tuple[sqlite3.Connection, str] | None,
+    ok: bool,
+    summary: dict[str, object],
+) -> None:
+    """Best-effort terminal accounting after the drill finishes."""
+    if accounting is None:
+        return
+    conn, run_id = accounting
+    try:
+        end_run(
+            conn,
+            run_id,
+            StageStatus.OK if ok else StageStatus.FAILED,
+            error_summary=None if ok else json.dumps(summary)[:500],
+        )
+    except Exception as exc:  # bookkeeping must never fail the drill
+        print(f"WARN: could not record ingestion_runs finish: {exc}", file=sys.stderr)
+    finally:
+        conn.close()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -194,8 +266,40 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--keep", action="store_true", help="keep the temp restore (debugging)")
     args = p.parse_args(argv)
 
-    ok, summary = run_drill(args.backup_dir, args.db, keep=args.keep)
-    _record_run(args.db, ok, summary)
+    snapshot = _latest_snapshot(args.backup_dir)
+    snapshot_digest = _snapshot_sha256(snapshot) if snapshot is not None else None
+    live_schema = _alembic_version(args.db) if args.db.exists() else None
+    try:
+        accounting = _start_accounting(
+            args.db,
+            backup_dir=args.backup_dir,
+            keep=args.keep,
+            snapshot_name=snapshot.name if snapshot is not None else None,
+            snapshot_sha256=snapshot_digest,
+            live_schema=live_schema,
+        )
+    except PipelineRunSuppressedError as exc:
+        print(json.dumps(suppression_payload(exc)))
+        return 0
+
+    try:
+        ok, summary = run_drill(
+            args.backup_dir,
+            args.db,
+            keep=args.keep,
+            snapshot=snapshot,
+        )
+    except Exception as exc:
+        _finish_accounting(
+            accounting,
+            False,
+            {
+                "status": "drill_error",
+                "error": f"{type(exc).__name__}: {exc}"[:500],
+            },
+        )
+        raise
+    _finish_accounting(accounting, ok, summary)
 
     print(json.dumps(summary, indent=2))
 

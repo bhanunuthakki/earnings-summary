@@ -30,8 +30,10 @@ from competitive._docs import ensure_synthetic_document
 from models.documents import SourceType
 from models.facts import FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import ReportingCadence
+from models.runs import StageStatus
+from pipeline.invocation_fingerprint import file_fingerprint
 from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue, persist_manifest
-from pipeline.run_accounting import start_run
+from pipeline.run_accounting import end_run, start_run
 
 _DOC_TYPE = "competitive_category_share"
 _EXTRACTED_BY = "competitive_category_share"
@@ -117,55 +119,65 @@ def ingest_category_share(conn: sqlite3.Connection, repo_root: Path, ticker: str
         return result
 
     run_id = start_run(
-        conn, directive="ingest_competitive_category_share", ticker_scope=[ticker.upper()]
+        conn,
+        directive="ingest_competitive_category_share",
+        ticker_scope=[ticker.upper()],
+        invocation_inputs={
+            "seed": file_fingerprint(seed_path(repo_root, ticker), root=repo_root),
+        },
+        deduplicate_completed=True,
     )
+    try:
+        # Group the writable (value-present) entries by fiscal year.
+        by_year: dict[int, list[CategoryShareEntry]] = {}
+        for entry in seed.entries:
+            if entry.value is None:
+                result.skipped_awaiting_source += 1
+                continue
+            by_year.setdefault(entry.fiscal_year, []).append(entry)
 
-    # Group the writable (value-present) entries by fiscal year.
-    by_year: dict[int, list[CategoryShareEntry]] = {}
-    for entry in seed.entries:
-        if entry.value is None:
-            result.skipped_awaiting_source += 1
-            continue
-        by_year.setdefault(entry.fiscal_year, []).append(entry)
-
-    for fiscal_year, entries in sorted(by_year.items()):
-        period_end = datetime(fiscal_year, 12, 31)  # naive-UTC fiscal-year end
-        doc_id = ensure_synthetic_document(
-            conn,
-            ticker=ticker,
-            source_type=SourceType.MANUAL_ENTRY,
-            doc_type=_DOC_TYPE,
-            source_key=f"{_DOC_TYPE}:{ticker.upper()}:{fiscal_year}",
-            period_end=period_end,
-        )
-        values = [
-            KpiValue(
-                name=e.metric,
-                value=cast("Decimal", e.value),
-                unit=e.unit,
-                confidence=1.0,
-                source_excerpt=_excerpt(e),
-                locator=_NO_LOCATOR,
+        for fiscal_year, entries in sorted(by_year.items()):
+            period_end = datetime(fiscal_year, 12, 31)  # naive-UTC fiscal-year end
+            doc_id = ensure_synthetic_document(
+                conn,
+                ticker=ticker,
+                source_type=SourceType.MANUAL_ENTRY,
+                doc_type=_DOC_TYPE,
+                source_key=f"{_DOC_TYPE}:{ticker.upper()}:{fiscal_year}",
+                period_end=period_end,
             )
-            for e in entries
-        ]
-        manifest = KpiExtractionManifest(
-            ticker=ticker.upper(),
-            period_end=period_end,
-            fiscal_period_type=FiscalPeriodType.FY,
-            source_doc_id=doc_id,
-            primary_source=SourceType.MANUAL_ENTRY,
-            extracted_by=_EXTRACTED_BY,
-            canonical_units={e.metric: e.unit for e in entries},
-            cadences={e.metric: ReportingCadence.ANNUAL for e in entries},
-            values=values,
-        )
-        outcome = persist_manifest(conn, run_id=run_id, manifest=manifest)
-        result.inserted += outcome.inserted
-        result.skipped_existing += outcome.skipped_existing
-        for e in entries:
-            if e.metric not in result.written_metrics:
-                result.written_metrics.append(e.metric)
+            values = [
+                KpiValue(
+                    name=e.metric,
+                    value=cast("Decimal", e.value),
+                    unit=e.unit,
+                    confidence=1.0,
+                    source_excerpt=_excerpt(e),
+                    locator=_NO_LOCATOR,
+                )
+                for e in entries
+            ]
+            manifest = KpiExtractionManifest(
+                ticker=ticker.upper(),
+                period_end=period_end,
+                fiscal_period_type=FiscalPeriodType.FY,
+                source_doc_id=doc_id,
+                primary_source=SourceType.MANUAL_ENTRY,
+                extracted_by=_EXTRACTED_BY,
+                canonical_units={e.metric: e.unit for e in entries},
+                cadences={e.metric: ReportingCadence.ANNUAL for e in entries},
+                values=values,
+            )
+            outcome = persist_manifest(conn, run_id=run_id, manifest=manifest)
+            result.inserted += outcome.inserted
+            result.skipped_existing += outcome.skipped_existing
+            for e in entries:
+                if e.metric not in result.written_metrics:
+                    result.written_metrics.append(e.metric)
+    except Exception as exc:
+        end_run(conn, run_id, StageStatus.FAILED, error_summary=f"{type(exc).__name__}: {exc}")
+        raise
+    end_run(conn, run_id, StageStatus.OK)
     return result
 
 

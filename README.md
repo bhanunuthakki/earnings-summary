@@ -48,7 +48,7 @@ Each stage is idempotent, resumable from `stage_transitions`, and writes typed o
 
 **Three trigger modes** drive when work happens:
 
-- **Cron** — 28 registered tasks (see `cron/*.task.xml` for the authoritative set): a daily data chain, daily standalones (morning pipeline, macro, DB backup), an hourly catch-up, several weekly jobs, a monthly refresh, and a quarterly 13F miner. The daily 03:00→06:30 chain refreshes data; the daily 06:30 worker drains a queue of "dirty" tickers and regenerates briefs.
+- **Cron** — 42 declared tasks (see `cron/task_manifest.json` for the authoritative set and `cron/TASKS.generated.md` for the generated inventory): a daily data chain, daily standalones (morning pipeline, macro, DB backup), an hourly catch-up, and weekly/monthly jobs. The daily 03:00→06:30 chain refreshes data; the daily 06:30 worker drains a queue of "dirty" tickers and regenerates briefs.
 - **Comment-driven** — when the analyst applies a comment with `--apply`, the comment processor edits holdings JSON, re-runs the affected stages synchronously, and rebuilds the brief inline.
 - **Manual CLI** — every step has a direct invocation. `.bat` launchers wrap the most common ones for cmd.exe.
 
@@ -101,7 +101,7 @@ INGEST ──┬── FMP fetchers ────┼── SEC XBRL fetcher ─�
 | `data/bear_case/`, `data/valuation_basis/`, `data/company_description/`, `data/qa_topics/` | LLM-output caches (SHA256-keyed; rebuilt on input change) |
 | `data/surprise/`, `data/report_comments/`, `data/report_chats/` | Surprise ledger + per-report comment/chat stores |
 | `data/portfolio.db` | SQLite store — facts, KPIs, segments, transcripts, validation issues, thesis evaluations, DCF runs, comments. Migrations in `alembic/versions/` (run `alembic heads` for the current revision) |
-| `cron/` | Windows Task Scheduler XMLs + `.bat` wrappers for the scheduled tasks (28 `*.task.xml` — the authoritative set) |
+| `cron/` | Canonical `task_manifest.json`, generated registration/inventory artifacts, and the 42 Windows Task Scheduler XML + `.bat` pairs |
 | `tests/` | Pytest suite — compute modules + pipeline contracts |
 | `evals/` | LLM eval harness — rubrics, goldens, weekly rung configs (see `directives/model_eval_loop.md`) |
 | `templates/industry/` | Industry onboarding templates (`bank`, `software_saas`, `pharma`, …) consumed by `execution/onboard_ticker.py` |
@@ -242,7 +242,7 @@ Every step is also a direct Python entrypoint. See [HOW_TO_USE_REPORTS.md §Full
 
 ## Cron jobs and automation
 
-28 scheduled tasks — see `cron/*.task.xml` for the authoritative set; the load-bearing ones are tabled below. Installation: [cron/SETUP_WINDOWS_SCHEDULER.md](cron/SETUP_WINDOWS_SCHEDULER.md). All run as `InteractiveToken` under `%USERNAME%`, log to `.tmp/cron_logs/<task>_<TS>.log`, and are registered under the `\earnings-summary\` namespace in Task Scheduler.
+42 declared tasks — see `cron/task_manifest.json` for the authoritative set and generated inventory; the load-bearing ones are tabled below. Installation: [cron/SETUP_WINDOWS_SCHEDULER.md](cron/SETUP_WINDOWS_SCHEDULER.md). All run as `InteractiveToken` under `%USERNAME%`, log to `.tmp/cron_logs/<task>_<TS>.log`, and are registered under the `\earnings-summary\` namespace in Task Scheduler.
 
 ### Daily chain (03:00 → 06:30)
 
@@ -320,7 +320,7 @@ The five daily tasks run as a chain. The 90/75/30/15-minute gaps absorb slow ups
 [quarterly]    fetch_13f (16th Feb/May/Aug/Nov: 13F miner → recalibrate weights → run_discovery)
 ```
 
-(Several more registered tasks — IR-doc discovery, podcast RSS, advisor memos, calibration grading, SayDo batch, stance scoring — are omitted from this map; `cron/*.task.xml` is the authoritative set.)
+(Several more declared tasks are omitted from this map; `cron/task_manifest.json` and its generated inventory are authoritative.)
 
 ---
 

@@ -38,8 +38,17 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import db  # noqa: E402
 from compute.segment_quarterly_10q import extract_for_ticker  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
-from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
+from pipeline.invocation_fingerprint import files_fingerprint, payload_sha256  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    JsonValue,
+    PipelineRunSuppressedError,
+    end_run,
+    record_stage,
+    start_run,
+    suppression_payload,
+)
 from pipeline.source_routing import plan_for_ticker  # noqa: E402
+from provenance.financial_fact_resolution import canonical_fact_relation  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from table_extractors.period_axis import NominalQuarter  # noqa: E402
 
@@ -64,9 +73,19 @@ def main() -> int:
         conn.close()
         return 0
 
-    run_id = start_run(
-        conn, directive="extract_segment_quarterly", ticker_scope=sorted({j[0] for j in jobs})
-    )
+    try:
+        run_id = start_run(
+            conn,
+            directive="extract_segment_quarterly",
+            ticker_scope=sorted({j[0] for j in jobs}),
+            invocation_inputs=_invocation_inputs(repo_root, conn, jobs),
+            force=bool(args.refresh),
+            deduplicate_completed=True,
+        )
+    except PipelineRunSuppressedError as exc:
+        print(json.dumps(suppression_payload(exc)))
+        conn.close()
+        return 0
     summary: list[dict[str, object]] = []
     final_status = StageStatus.OK
     error_summary: str | None = None
@@ -199,6 +218,72 @@ def _resolve_jobs(
                 continue
             jobs.append((ticker, year, quarter))
     return jobs
+
+
+def _rows_sha256(rows: list[sqlite3.Row]) -> str:
+    payload: list[JsonValue] = []
+    for row in rows:
+        payload.append(
+            [
+                value if value is None or isinstance(value, (str, int, float, bool)) else str(value)
+                for value in row
+            ]
+        )
+    return payload_sha256(payload)
+
+
+def _invocation_inputs(
+    repo_root: Path,
+    conn: sqlite3.Connection,
+    jobs: list[tuple[str, int, NominalQuarter]],
+) -> dict[str, JsonValue]:
+    """Capture as-filed bytes plus all mutable DB inputs used by derivation."""
+    tickers = sorted({job[0] for job in jobs})
+    placeholders = ",".join("?" for _ in tickers)
+    fmp_dir = repo_root / "data" / "historical" / "fmp"
+    source_paths = [
+        fmp_dir / f"{ticker}_form_10q_{year}_{quarter}.json" for ticker, year, quarter in jobs
+    ]
+    for ticker in tickers:
+        source_paths.extend(fmp_dir.glob(f"{ticker}_form_10k_*.json"))
+    financial_facts = canonical_fact_relation(conn, "financial_facts").sql
+    database_inputs = {
+        "tracked_companies": _rows_sha256(
+            conn.execute(
+                f"SELECT * FROM tracked_companies WHERE ticker IN ({placeholders}) "
+                "ORDER BY ticker, user_id",
+                tickers,
+            ).fetchall()
+        ),
+        "documents": _rows_sha256(
+            conn.execute(
+                f"SELECT * FROM documents WHERE ticker IN ({placeholders}) ORDER BY id",
+                tickers,
+            ).fetchall()
+        ),
+        "segment_facts": _rows_sha256(
+            conn.execute(
+                "SELECT sp.*, sd.* FROM segment_periods sp "
+                "LEFT JOIN segment_dimensions sd ON sd.period_id = sp.id "
+                f"WHERE sp.ticker IN ({placeholders}) ORDER BY sp.id, sd.id",
+                tickers,
+            ).fetchall()
+        ),
+        "financial_facts": _rows_sha256(
+            conn.execute(
+                f"SELECT * FROM {financial_facts} "  # nosec B608 -- trusted canonical relation; values remain bound
+                f"WHERE ticker IN ({placeholders}) ORDER BY id",
+                tickers,
+            ).fetchall()
+        ),
+    }
+    return {
+        "jobs": [
+            {"ticker": ticker, "year": year, "quarter": quarter} for ticker, year, quarter in jobs
+        ],
+        "source_files": files_fingerprint(source_paths, root=repo_root),
+        "database_inputs": database_inputs,
+    }
 
 
 if __name__ == "__main__":

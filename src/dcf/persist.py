@@ -27,9 +27,11 @@ same self-consistency on any raw write.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import cast
 
 from dcf import valuation
 from dcf.provenance import DcfInputProvenance
@@ -125,7 +127,162 @@ def _has_provenance_columns(conn: sqlite3.Connection) -> bool:
     }.issubset(cols)
 
 
-def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
+def _has_input_ledger(conn: sqlite3.Connection) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='dcf_run_inputs'"
+        ).fetchone()
+        is not None
+    )
+
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _nonempty_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _input_ledger_rows(provenance: DcfInputProvenance) -> list[dict[str, object]]:
+    """Normalize the source records carried by a DCF provenance envelope."""
+    detail = provenance.detail or {}
+    rows: list[dict[str, object]] = []
+    raw_sources = detail.get("sources")
+    if raw_sources is not None and not isinstance(raw_sources, list):
+        raise ValueError("DCF provenance sources must be a list")
+    sources = cast("list[object]", raw_sources or [])
+    for raw_source in sources:
+        if not isinstance(raw_source, dict):
+            raise ValueError("each DCF provenance source must be an object")
+        source = cast("dict[str, object]", raw_source)
+        role = _nonempty_text(source.get("role"))
+        locator = next(
+            (
+                value
+                for key in ("path", "locator", "url", "source")
+                if (value := _nonempty_text(source.get(key))) is not None
+            ),
+            None,
+        )
+        if role is None or locator is None:
+            raise ValueError("each DCF provenance source needs a non-empty role and locator")
+        sha256 = _nonempty_text(source.get("sha256"))
+        if sha256 is not None and _SHA256_RE.fullmatch(sha256) is None:
+            raise ValueError(f"invalid SHA-256 for DCF input source {role!r}")
+        raw_size = source.get("bytes")
+        if raw_size is not None and (
+            not isinstance(raw_size, int) or isinstance(raw_size, bool) or raw_size < 0
+        ):
+            raise ValueError(f"invalid byte size for DCF input source {role!r}")
+        rows.append(
+            {
+                "role": role,
+                "locator": locator,
+                "sha256": sha256,
+                "byte_size": raw_size,
+                "observed_at": _nonempty_text(source.get("observed_at")),
+                "detail_json": json.dumps(
+                    source,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            }
+        )
+
+    raw_market = detail.get("market_price")
+    if raw_market is not None and not isinstance(raw_market, dict):
+        raise ValueError("DCF market-price provenance must be an object")
+    market = cast("dict[str, object]", raw_market) if isinstance(raw_market, dict) else None
+    if market is not None and any(
+        market.get(key) is not None for key in ("price", "observed_at", "source")
+    ):
+        rows.append(
+            {
+                "role": "market_price",
+                "locator": _nonempty_text(market.get("source")) or "live_market_price",
+                "sha256": None,
+                "byte_size": None,
+                "observed_at": _nonempty_text(market.get("observed_at")),
+                "detail_json": json.dumps(
+                    market,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            }
+        )
+    return rows
+
+
+def _persist_input_ledger(
+    conn: sqlite3.Connection,
+    *,
+    dcf_run_id: int,
+    rows: list[dict[str, object]],
+) -> None:
+    if not rows:
+        return
+    conn.executemany(
+        """
+        INSERT INTO dcf_run_inputs
+            (dcf_run_id, role, locator, sha256, byte_size, observed_at, detail_json)
+        VALUES
+            (:dcf_run_id, :role, :locator, :sha256, :byte_size, :observed_at, :detail_json)
+        """,
+        [{"dcf_run_id": dcf_run_id, **source} for source in rows],
+    )
+
+
+def _same_current_version(
+    conn: sqlite3.Connection,
+    row: DcfRunRow,
+    params: dict[str, object],
+) -> bool:
+    """Whether the current row already represents this exact input set."""
+    if row.provenance is None:
+        return False
+    current = conn.execute(
+        """
+        SELECT valuation_date, horizon_years, wacc, npv, npv_per_share,
+               shares_outstanding, currency, notes, run_id, live_price,
+               live_price_at, over_under_pct, mos_bar_used,
+               assumption_snapshot_json, input_sha256, workbook_sha256,
+               engine_version, inputs_as_of, provenance_json
+        FROM dcf_runs
+        WHERE ticker = ? AND COALESCE(segment_name, '') = '' AND is_latest = 1
+        LIMIT 1
+        """,
+        (row.ticker.upper(),),
+    ).fetchone()
+    if current is None:
+        return False
+    expected = (
+        params["valuation_date"],
+        params["horizon_years"],
+        params["wacc"],
+        params["npv"],
+        params["npv_per_share"],
+        params["shares_outstanding"],
+        params["currency"],
+        params["notes"],
+        params["run_id"],
+        params["live_price"],
+        params["live_price_at"],
+        params["over_under_pct"],
+        params["mos_bar_used"],
+        params["assumption_snapshot_json"],
+        row.provenance.input_sha256,
+        row.provenance.workbook_sha256,
+        row.provenance.engine_version,
+        row.provenance.inputs_as_of_iso(),
+        row.provenance.as_json(),
+    )
+    return tuple(current) == expected
+
+
+def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> bool:
     """Persist a new dcf_runs version for ``row.ticker``.
 
     On the versioned schema (migration 0137+) the prior current run for the ticker
@@ -133,6 +290,9 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
     and a back-link to the new row — and the new run is inserted as is_latest=1, so
     valuation history is preserved. On a pre-0137 schema it falls back to the legacy
     INSERT-OR-REPLACE keyed on ticker.
+
+    Returns ``True`` when a version is written and ``False`` when the current
+    version already has the exact provenance and calculated values.
 
     A row carrying sync fields against a pre-0091 schema raises (loud, with
     the fix) rather than dropping them — a silently-unpersisted sync status
@@ -152,6 +312,11 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
         raise sqlite3.OperationalError(
             "dcf_runs is missing DCF provenance columns — run `alembic upgrade head` before refreshing"
         )
+    input_ledger_rows = (
+        _input_ledger_rows(row.provenance)
+        if row.provenance is not None and _has_input_ledger(conn)
+        else []
+    )
     sync_cols = ", assumptions_sync_status, assumptions_synced_at" if has_sync else ""
     sync_vals = ", :assumptions_sync_status, :assumptions_synced_at" if has_sync else ""
     has_sanity = _has_sanity_column(conn)
@@ -227,30 +392,48 @@ def upsert(conn: sqlite3.Connection, row: DcfRunRow) -> None:
             }
         )
 
-    if _has_versioning_columns(conn):
-        # Supersede the prior current run for this ticker (unsegmented — the Phase 3
-        # write leaves segment_name NULL), then insert the new run as is_latest=1.
-        superseded = supersede_current(
-            conn,
-            table="dcf_runs",
-            entity_where="ticker = :ticker AND COALESCE(segment_name, '') = ''",
-            entity_params={"ticker": params["ticker"]},
-        )
-        cur = conn.execute(
-            f"INSERT INTO dcf_runs ({base_cols}, is_latest{sync_cols}{sanity_cols}{provenance_cols}) "
-            f"VALUES ({base_vals}, 1{sync_vals}{sanity_vals}{provenance_vals})",
-            params,
-        )
-        mark_superseded_by(
-            conn, table="dcf_runs", superseded_ids=superseded, new_id=int(cur.lastrowid or 0)
-        )
-    else:
-        conn.execute(
-            f"INSERT OR REPLACE INTO dcf_runs ({base_cols}{sync_cols}{sanity_cols}{provenance_cols}) "
-            f"VALUES ({base_vals}{sync_vals}{sanity_vals}{provenance_vals})",
-            params,
-        )
+    if (
+        _has_versioning_columns(conn)
+        and has_provenance
+        and _same_current_version(conn, row, params)
+    ):
+        return False
+
+    conn.execute("SAVEPOINT dcf_run_upsert")
+    try:
+        if _has_versioning_columns(conn):
+            # Supersede the prior current run for this ticker (unsegmented — the
+            # Phase 3 write leaves segment_name NULL), then insert its successor.
+            superseded = supersede_current(
+                conn,
+                table="dcf_runs",
+                entity_where="ticker = :ticker AND COALESCE(segment_name, '') = ''",
+                entity_params={"ticker": params["ticker"]},
+            )
+            cur = conn.execute(
+                f"INSERT INTO dcf_runs "
+                f"({base_cols}, is_latest{sync_cols}{sanity_cols}{provenance_cols}) "
+                f"VALUES ({base_vals}, 1{sync_vals}{sanity_vals}{provenance_vals})",
+                params,
+            )
+            new_id = int(cur.lastrowid or 0)
+            mark_superseded_by(conn, table="dcf_runs", superseded_ids=superseded, new_id=new_id)
+        else:
+            cur = conn.execute(
+                f"INSERT OR REPLACE INTO dcf_runs "
+                f"({base_cols}{sync_cols}{sanity_cols}{provenance_cols}) "
+                f"VALUES ({base_vals}{sync_vals}{sanity_vals}{provenance_vals})",
+                params,
+            )
+            new_id = int(cur.lastrowid or 0)
+        _persist_input_ledger(conn, dcf_run_id=new_id, rows=input_ledger_rows)
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT dcf_run_upsert")
+        conn.execute("RELEASE SAVEPOINT dcf_run_upsert")
+        raise
+    conn.execute("RELEASE SAVEPOINT dcf_run_upsert")
     conn.commit()
+    return True
 
 
 def build_assumption_snapshot(

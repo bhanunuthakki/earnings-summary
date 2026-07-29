@@ -32,6 +32,10 @@ from ir_pipeline.config import configured_tickers, get_config, save_config  # no
 from ir_pipeline.download import download_spreadsheet  # noqa: E402
 from ir_pipeline.ingest import ingest_spreadsheet_kpis  # noqa: E402
 from ir_pipeline.spreadsheet import parse_spreadsheet  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    PipelineRunSuppressedError,
+    suppression_payload,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
@@ -106,6 +110,9 @@ def main() -> int:
     conn.row_factory = sqlite3.Row
     try:
         inserted, doc_id = ingest_spreadsheet_kpis(conn, args.ticker, cfg, parsed, path)
+    except PipelineRunSuppressedError as exc:
+        print(json.dumps(suppression_payload(exc)))
+        return 0
     finally:
         conn.close()
 

@@ -44,7 +44,15 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import db  # noqa: E402
 from compute.segment_quarterly_6k import extract_for_ticker  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
-from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
+from pipeline.invocation_fingerprint import payload_sha256  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    JsonValue,
+    PipelineRunSuppressedError,
+    end_run,
+    record_stage,
+    start_run,
+    suppression_payload,
+)
 from pipeline.source_routing import plan_for_ticker  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from table_extractors.period_axis import NominalQuarter  # noqa: E402
@@ -71,9 +79,17 @@ def main() -> int:
         conn.close()
         return 0
 
-    run_id = start_run(
-        conn, directive="extract_segment_quarterly_6k", ticker_scope=sorted({j[0] for j in jobs})
-    )
+    try:
+        run_id = start_run(
+            conn,
+            directive="extract_segment_quarterly_6k",
+            ticker_scope=sorted({j[0] for j in jobs}),
+            invocation_inputs=_invocation_inputs(jobs),
+        )
+    except PipelineRunSuppressedError as exc:
+        print(json.dumps(suppression_payload(exc)))
+        conn.close()
+        return 0
     summary: list[dict[str, object]] = []
     final_status = StageStatus.OK
     error_summary: str | None = None
@@ -229,6 +245,27 @@ def _resolve_jobs(
         for year, quarter in _recent_quarters(args.lookback_quarters):
             jobs.append((ticker, year, quarter, fye_month, fye_day))
     return jobs
+
+
+def _invocation_inputs(
+    jobs: list[tuple[str, int, NominalQuarter, int, int]],
+) -> dict[str, JsonValue]:
+    """Fingerprint the complete request; SEC bytes remain live and are not deduplicated."""
+    job_payload: list[JsonValue] = [
+        {
+            "ticker": ticker,
+            "year": year,
+            "quarter": quarter,
+            "fye_month": fye_month,
+            "fye_day": fye_day,
+        }
+        for ticker, year, quarter, fye_month, fye_day in jobs
+    ]
+    return {
+        "source": "live_sec_6k",
+        "jobs": job_payload,
+        "jobs_sha256": payload_sha256(job_payload),
+    }
 
 
 if __name__ == "__main__":

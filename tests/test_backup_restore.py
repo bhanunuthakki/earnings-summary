@@ -109,6 +109,13 @@ def test_backup_then_restore_end_to_end(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(live))
     monkeypatch.setenv("ES_DB_BACKUP_DIR", str(backup_dir))
     monkeypatch.setenv("EARNINGS_SUMMARY_SECRETS_DIR", str(tmp_path / "secrets"))
+    accounting = (sqlite3.connect(":memory:"), "backup-test")
+    monkeypatch.setattr(backup_db, "_start_accounting", lambda *_args: accounting)
+    monkeypatch.setattr(
+        backup_db,
+        "_finish_accounting",
+        lambda _accounting, *, success, error_msg=None: _accounting[0].close(),
+    )
     assert backup_db.main() == 0
 
     snaps = restore_db.list_snapshots(backup_dir)

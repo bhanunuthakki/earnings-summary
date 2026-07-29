@@ -40,13 +40,27 @@ def test_0209_to_head_adds_governance_and_integrity_foundation(tmp_path: Path) -
         INSERT INTO dcf_runs VALUES (1, '2026-07-26');
         CREATE VIEW v_decision_freshness AS
             SELECT id, valuation_date FROM dcf_runs;
-        CREATE TABLE documents (id INTEGER PRIMARY KEY);
-        INSERT INTO documents VALUES (1);
-        INSERT INTO documents VALUES (2);
-        CREATE TABLE transcripts (
-            id INTEGER PRIMARY KEY, document_id INTEGER REFERENCES documents(id)
+        CREATE TABLE documents (
+            id INTEGER PRIMARY KEY,
+            fetched_at TEXT,
+            file_path TEXT NOT NULL,
+            sha256 TEXT NOT NULL
         );
-        INSERT INTO transcripts VALUES (1, 1);
+        INSERT INTO documents VALUES (1, '2026-07-26', 'one.txt', 'sha-one');
+        INSERT INTO documents VALUES (2, '2026-07-26', 'two.txt', 'sha-two');
+        CREATE TABLE transcripts (
+            id INTEGER PRIMARY KEY,
+            document_id INTEGER REFERENCES documents(id),
+            ticker TEXT NOT NULL,
+            call_date TEXT,
+            fiscal_period_type TEXT,
+            period_end TEXT,
+            source_url TEXT,
+            has_qa_section INTEGER,
+            source TEXT
+        );
+        INSERT INTO transcripts VALUES
+            (1, 1, 'NU', NULL, 'Q1', '2026-03-31', NULL, 1, 'fixture');
         """
     )
     conn.commit()

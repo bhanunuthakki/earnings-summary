@@ -28,14 +28,23 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from compute.comparable_sets import (  # noqa: E402
+    METHOD_VERSION,
     freeze_comparable_set,
     load_pool,
     resolve_comparable_set,
 )
 from models.companies import ListType  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
+from pipeline.invocation_fingerprint import files_fingerprint, payload_sha256  # noqa: E402
 from pipeline.queries import open_db, tracked_companies_for_user  # noqa: E402
-from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    JsonValue,
+    PipelineRunSuppressedError,
+    end_run,
+    record_stage,
+    start_run,
+    suppression_payload,
+)
 
 # --all-tracked (Phase 2, §11): the subjects widen to watchlist+evaluation;
 # `index_member` names stay candidates-only (pool members, never subjects).
@@ -54,6 +63,40 @@ def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list
     )
     companies = tracked_companies_for_user(conn, only_classified=False, list_types=list_types)
     return sorted({c.ticker for c in companies})
+
+
+def _invocation_inputs(
+    conn: sqlite3.Connection, repo_root: Path, tickers: list[str]
+) -> dict[str, JsonValue]:
+    """Fingerprint the mutable pool roster and every on-disk resolver input."""
+    rows = conn.execute(
+        "SELECT ticker, user_id, list_type, instrument_type, archived_at "
+        "FROM tracked_companies ORDER BY ticker, user_id"
+    ).fetchall()
+    roster: list[JsonValue] = [
+        [
+            value if value is None or isinstance(value, (str, int, float, bool)) else str(value)
+            for value in row
+        ]
+        for row in rows
+    ]
+    pool_tickers = sorted({str(row[0]).upper() for row in rows})
+    source_paths = [
+        repo_root / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
+        for ticker in pool_tickers
+    ]
+    for ticker in tickers:
+        source_paths.extend(
+            (
+                repo_root / "data" / "peer_selection" / f"{ticker}.json",
+                repo_root / "micro_thesis" / "holdings" / f"{ticker}.json",
+            )
+        )
+    return {
+        "method_version": METHOD_VERSION,
+        "tracked_companies_sha256": payload_sha256(roster),
+        "source_files": files_fingerprint(source_paths, root=repo_root),
+    }
 
 
 def main() -> int:
@@ -94,7 +137,18 @@ def main() -> int:
             sys.stderr.write("No tickers resolved; nothing to do\n")
             return 0
 
-        run_id = start_run(conn, directive="build_comparable_sets", ticker_scope=tickers)
+        try:
+            run_id = start_run(
+                conn,
+                directive="build_comparable_sets",
+                ticker_scope=tickers,
+                invocation_inputs=_invocation_inputs(conn, repo_root, tickers),
+                force=bool(args.refresh),
+                deduplicate_completed=True,
+            )
+        except PipelineRunSuppressedError as exc:
+            print(json.dumps(suppression_payload(exc)))
+            return 0
         pool = load_pool(conn, repo_root)
 
         results: list[dict[str, object]] = []

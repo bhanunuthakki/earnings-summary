@@ -1,9 +1,27 @@
 # Tailscale access
 
-The cockpit has no application login. In Tailscale mode, Tailnet device
-membership and Tailscale ACLs are the access boundary.
+The cockpit has no application login. Tailnet device membership and Tailscale
+ACLs/grants are the access boundary.
 
-Start the server from the repository root:
+## Preferred long-running service topology
+
+Keep Flask bound to loopback and let Tailscale Serve terminate private HTTPS:
+
+```powershell
+tailscale serve --bg http://127.0.0.1:7421
+tailscale serve status
+```
+
+The dashboard service itself continues to start without `--tailscale`, so it is
+not reachable through the LAN or the machine's Tailnet IP directly. Tailscale
+Serve exposes the exact `https://<machine>.<tailnet>.ts.net` origin only inside
+the Tailnet and proxies it to loopback. Add that exact origin to
+`COMMENTS_SERVER_CORS_WHITELIST`; do not whitelist `*.ts.net`.
+
+## Direct Tailnet-IP mode
+
+For an interactive process without Tailscale Serve, start the server from the
+repository root:
 
 ```powershell
 python execution/comments_server.py --tailscale
@@ -26,5 +44,6 @@ Safety properties:
 - Static `file://` reports use a local bearer capability for writes. The
   capability is stored under the gitignored `data/secrets/` directory.
 
-This mode is intended for the owner's private Tailnet, not for public exposure,
-reverse proxies, subnet routers, or shared-user hosting.
+Both modes are intended for the owner's private Tailnet, not for public
+exposure, Funnel, ordinary reverse proxies, subnet-router exposure, or
+shared-user hosting.

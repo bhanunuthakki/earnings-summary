@@ -75,6 +75,7 @@ class DuplicatedKey:
     period_end: str  # YYYY-MM-DD
     fiscal_period_type: str
     line_item: str
+    candidate_snapshot: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -112,7 +113,20 @@ def sample_duplicated_keys(
         SELECT ff.ticker,
                substr(ff.period_end, 1, 10) AS pe,
                ff.fiscal_period_type,
-               ff.line_item
+               ff.line_item,
+               GROUP_CONCAT(
+                   hex(COALESCE(CAST(ff.id AS TEXT), '')) || ':' ||
+                   hex(COALESCE(CAST(ff.value AS TEXT), '')) || ':' ||
+                   hex(COALESCE(CAST(ff.currency AS TEXT), '')) || ':' ||
+                   hex(COALESCE(CAST(ff.unit AS TEXT), '')) || ':' ||
+                   hex(COALESCE(CAST(ff.source_doc_id AS TEXT), '')) || ':' ||
+                   hex(COALESCE(CAST(ff.locator AS TEXT), '')) || ':' ||
+                   hex(COALESCE(CAST(ff.confidence AS TEXT), '')) || ':' ||
+                   hex(COALESCE(CAST(d.source_type AS TEXT), '')) || ':' ||
+                   hex(COALESCE(CAST(d.doc_type AS TEXT), '')) || ':' ||
+                   hex(COALESCE(CAST(d.sha256 AS TEXT), '')) || ':' ||
+                   hex(COALESCE(CAST(d.source_quality_tier AS TEXT), ''))
+               ) AS candidate_snapshot
         FROM financial_facts ff
         JOIN documents d ON d.id = ff.source_doc_id
         {ticker_clause}
@@ -138,6 +152,7 @@ def sample_duplicated_keys(
             period_end=str(r[1]),
             fiscal_period_type=str(r[2]),
             line_item=str(r[3]),
+            candidate_snapshot=tuple(sorted(str(r[4] or "").split(","))),
         )
         for r in rows
     ]

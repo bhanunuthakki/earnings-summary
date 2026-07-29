@@ -16,19 +16,38 @@ from __future__ import annotations
 import datetime as dt
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import ParamSpec, TypeVar, cast
 
 import openpyxl
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+import ir_pipeline.ingest as ingest_module  # noqa: E402
 from ir_pipeline.config import IrConfig, SheetKpi  # noqa: E402
 from ir_pipeline.config_builder import build_ir_config, widen_config  # noqa: E402
 from ir_pipeline.ingest import ingest_spreadsheet_kpis  # noqa: E402
 from ir_pipeline.spreadsheet import parse_spreadsheet  # noqa: E402
 
 _Q = [dt.datetime(2025, 6, 30), dt.datetime(2025, 9, 30), dt.datetime(2025, 12, 31)]
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _capture_kwargs(
+    function: Callable[_P, _R],
+    captured: dict[str, object],
+) -> Callable[_P, _R]:
+    def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        captured.update(kwargs)
+        return function(*args, **kwargs)
+
+    return wrapped
+
 
 _SCHEMA = """
 CREATE TABLE kpi_definitions (
@@ -165,6 +184,39 @@ def test_capture_only_ticker_ingests_at_ir_doc_with_capture_origin(tmp_path: Pat
     # Decimal percent scaled (0.094 -> 9.4%).
     nim = _series(conn, int(defs["Net interest margin (%)"]["id"]))
     assert round(nim[_Q4], 1) == 9.4
+    assert [
+        row[0]
+        for row in conn.execute(
+            "SELECT status FROM ingestion_runs WHERE directive='ingest_ir_spreadsheet'"
+        ).fetchall()
+    ] == ["ok"]
+
+
+def test_ingest_fingerprints_source_config_and_parsed_values(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn = _conn()
+    path = tmp_path / "co.xlsx"
+    _write_sheet(path)
+    cfg = build_ir_config(
+        "CO", path, platform="mz", results_center_url="", repo_root=tmp_path, persist=False
+    )
+    parsed = parse_spreadsheet(path, cfg, max_quarters=8)
+    captured: dict[str, object] = {}
+    real_start = ingest_module.start_run
+    monkeypatch.setattr(ingest_module, "start_run", _capture_kwargs(real_start, captured))
+    ingest_spreadsheet_kpis(conn, "CO", cfg, parsed, path)
+
+    inputs_obj = captured["invocation_inputs"]
+    assert isinstance(inputs_obj, dict)
+    inputs = cast(dict[str, object], inputs_obj)
+    source_obj = inputs["source"]
+    assert isinstance(source_obj, dict)
+    source = cast(dict[str, object], source_obj)
+    assert isinstance(source["sha256"], str)
+    assert isinstance(inputs["config_sha256"], str)
+    assert isinstance(inputs["parsed_sha256"], str)
+    assert captured["deduplicate_completed"] is True
 
 
 def test_curated_analyst_series_not_disturbed_by_widening(tmp_path: Path) -> None:

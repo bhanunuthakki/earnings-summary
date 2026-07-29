@@ -43,7 +43,13 @@ def test_doc_type_distinct_from_source() -> None:
 
 def test_stage_status_partitions_cleanly() -> None:
     """Terminal and non-terminal stage statuses are disjoint and exhaustive."""
-    terminal = {StageStatus.OK, StageStatus.FAILED, StageStatus.SKIPPED, StageStatus.NEEDS_REVIEW}
+    terminal = {
+        StageStatus.OK,
+        StageStatus.FAILED,
+        StageStatus.SKIPPED,
+        StageStatus.NEEDS_REVIEW,
+        StageStatus.ABANDONED,
+    }
     in_flight = {StageStatus.NOT_STARTED, StageStatus.IN_PROGRESS}
     assert terminal.isdisjoint(in_flight)
     assert terminal | in_flight == set(StageStatus)

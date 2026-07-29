@@ -35,8 +35,16 @@ from compute.transcript_ingest import (  # noqa: E402
     sha256_of,
 )
 from models.runs import StageName, StageStatus  # noqa: E402
+from pipeline.invocation_fingerprint import files_fingerprint  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
-from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    JsonValue,
+    PipelineRunSuppressedError,
+    end_run,
+    record_stage,
+    start_run,
+    suppression_payload,
+)
 
 _TRANSCRIPT_DIRS = (
     PROJECT_ROOT / "transcripts" / "processed",
@@ -118,7 +126,7 @@ def _promote_raw_to_processed(
     return target
 
 
-def _load_tracked_tickers(conn) -> frozenset[str]:
+def _load_tracked_tickers(conn: sqlite3.Connection) -> frozenset[str]:
     """Return the set of active analyzed tickers (uppercased).
 
     Transcripts are ingested for everything we analyze (portfolio + watchlist +
@@ -154,7 +162,7 @@ def _candidate_files(restrict_ticker: str | None) -> list[tuple[Path, ParsedFile
 
 
 def _backfill_existing_ir_transcripts(
-    conn, run_id: str, restrict_ticker: str | None
+    conn: sqlite3.Connection, run_id: str, restrict_ticker: str | None
 ) -> tuple[list[dict[str, object]], int, int]:
     """Walk `documents WHERE doc_type='ir_transcript'` and emit transcripts/segments rows.
 
@@ -239,6 +247,53 @@ def _backfill_existing_ir_transcripts(
     return (ingested, skipped_existing, failed)
 
 
+def _ir_transcript_sources(
+    conn: sqlite3.Connection, restrict_ticker: str | None
+) -> list[tuple[int, str, str | None, Path]]:
+    sql = "SELECT id, ticker, period_end, file_path FROM documents WHERE doc_type = 'ir_transcript'"
+    params: tuple[str, ...] = ()
+    if restrict_ticker is not None:
+        sql += " AND ticker = ?"
+        params = (restrict_ticker.upper(),)
+    sql += " ORDER BY ticker, period_end, id"
+    rows = conn.execute(sql, params).fetchall()
+    sources: list[tuple[int, str, str | None, Path]] = []
+    for row in rows:
+        raw_path = str(row["file_path"]) if row["file_path"] else ""
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        sources.append(
+            (
+                int(row["id"]),
+                str(row["ticker"]).upper(),
+                str(row["period_end"]) if row["period_end"] is not None else None,
+                path,
+            )
+        )
+    return sources
+
+
+def _invocation_inputs(
+    in_scope: list[tuple[Path, ParsedFilename]],
+    ir_sources: list[tuple[int, str, str | None, Path]],
+    *,
+    include_ir_transcripts: bool,
+    no_promote: bool,
+) -> dict[str, JsonValue]:
+    source_paths = [path for path, _ in in_scope]
+    source_paths.extend(path for _, _, _, path in ir_sources)
+    return {
+        "include_ir_transcripts": include_ir_transcripts,
+        "no_promote": no_promote,
+        "candidate_files": files_fingerprint(source_paths, root=PROJECT_ROOT),
+        "ir_documents": [
+            {"document_id": doc_id, "ticker": ticker, "period_end": period_end}
+            for doc_id, ticker, period_end, _ in ir_sources
+        ],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ticker", help="Restrict to a single ticker (case-insensitive)")
@@ -256,6 +311,11 @@ def main() -> int:
         "--no-promote",
         action="store_true",
         help="Skip the raw/→processed/ promotion step (kill switch for the auto-mover).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Ingest again even when the same immutable transcript inputs already completed.",
     )
     args = parser.parse_args()
 
@@ -280,12 +340,33 @@ def main() -> int:
             print(json.dumps(plan, indent=2))
             return 0
 
-        if not in_scope:
+        ir_sources = (
+            _ir_transcript_sources(conn, args.ticker) if args.include_ir_transcripts else []
+        )
+        if not in_scope and not ir_sources:
             print(json.dumps({**plan, "ingested": 0, "skipped_existing": 0}, indent=2))
             return 0
 
-        ticker_scope = sorted({parsed.ticker for _, parsed in in_scope})
-        run_id = start_run(conn, directive="ingest_transcripts", ticker_scope=ticker_scope)
+        ticker_scope = sorted(
+            {parsed.ticker for _, parsed in in_scope} | {ticker for _, ticker, _, _ in ir_sources}
+        )
+        try:
+            run_id = start_run(
+                conn,
+                directive="ingest_transcripts",
+                ticker_scope=ticker_scope,
+                invocation_inputs=_invocation_inputs(
+                    in_scope,
+                    ir_sources,
+                    include_ir_transcripts=bool(args.include_ir_transcripts),
+                    no_promote=bool(args.no_promote),
+                ),
+                force=bool(args.force),
+                deduplicate_completed=True,
+            )
+        except PipelineRunSuppressedError as exc:
+            print(json.dumps(suppression_payload(exc)))
+            return 0
 
         ingested: list[dict[str, object]] = []
         skipped_existing = 0

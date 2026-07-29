@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import dataclasses
+import hashlib
 import json
 import os
 import sqlite3
@@ -58,6 +59,7 @@ from dcf import persist as persist_mod  # noqa: E402
 from dcf import redesign as redesign_mod  # noqa: E402
 from dcf import reverse as reverse_mod  # noqa: E402
 from dcf import universe as universe_mod  # noqa: E402
+from dcf.provenance import DcfInputProvenance  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from ticker_validation import safe_ticker  # noqa: E402
 
@@ -69,6 +71,153 @@ _HOLDCO_BUILDER = PROJECT_ROOT / "execution" / "build_holdco_sotp.py"
 _FINTECH_BUILDER = PROJECT_ROOT / "execution" / "build_fintech_sotp.py"
 _PLATFORM_BUILDER = PROJECT_ROOT / "execution" / "build_nu_platform_dcf.py"
 _MELI_SOTP_BUILDER = PROJECT_ROOT / "execution" / "build_meli_platform_dcf.py"
+DCF_ENGINE_VERSION = "redesign_fcff_v1"
+
+_DCF_SOURCE_SUFFIXES: tuple[tuple[str, str], ...] = (
+    ("income_statement_quarterly.json", "income_statement"),
+    ("balance_sheet_quarterly.json", "balance_sheet"),
+    ("cash_flow_quarterly.json", "cash_flow"),
+    ("product_segments_quarterly.json", "product_segments"),
+    ("geo_segments_quarterly.json", "geographic_segments"),
+    ("analyst_estimates_annual.json", "analyst_estimates"),
+    ("profile.json", "company_profile"),
+)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _iso_utc(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat()
+
+
+def _source_file(
+    path: Path,
+    *,
+    role: str,
+    repo_root: Path,
+) -> tuple[dict[str, object], datetime] | None:
+    if not path.is_file():
+        return None
+    stat = path.stat()
+    observed_at = datetime.fromtimestamp(stat.st_mtime, tz=UTC)
+    try:
+        display_path = str(path.relative_to(repo_root))
+    except ValueError:
+        display_path = str(path)
+    return (
+        {
+            "role": role,
+            "path": display_path.replace("\\", "/"),
+            "sha256": _sha256_file(path),
+            "bytes": stat.st_size,
+            "observed_at": observed_at.isoformat(),
+        },
+        observed_at,
+    )
+
+
+def _build_dcf_provenance(
+    *,
+    ticker: str,
+    repo_root: Path,
+    workbook_path: Path,
+    input_payload: Mapping[str, object],
+    assumption_snapshot_json: str,
+    live_price: float | None,
+    live_price_at: datetime | None,
+    live_price_source: str | None,
+    mos_bar: float | None,
+) -> DcfInputProvenance:
+    """Build reproducible lineage for the effective DCF input set."""
+    ticker = ticker.upper()
+    source_specs: list[tuple[Path, str]] = [
+        *[
+            (
+                repo_root / "data" / "historical" / "fmp" / f"{ticker}_{suffix}",
+                role,
+            )
+            for suffix, role in _DCF_SOURCE_SUFFIXES
+        ],
+        (
+            repo_root / "data" / "dcf_assumptions" / f"{ticker}.json",
+            "owner_assumptions",
+        ),
+        (
+            repo_root / "micro_thesis" / "holdings" / f"{ticker}.json",
+            "holding_policy",
+        ),
+    ]
+    sources: list[dict[str, object]] = []
+    observed_times: list[datetime] = []
+    for path, role in source_specs:
+        source = _source_file(path, role=role, repo_root=repo_root)
+        if source is not None:
+            detail, observed_at = source
+            sources.append(detail)
+            observed_times.append(observed_at)
+
+    workbook_sha256 = _sha256_file(workbook_path)
+    workbook_source = _source_file(
+        workbook_path,
+        role="calculation_workbook",
+        repo_root=repo_root,
+    )
+    if workbook_source is not None:
+        workbook_detail, workbook_observed_at = workbook_source
+        sources.append(workbook_detail)
+        observed_times.append(workbook_observed_at)
+
+    normalized_live_at: datetime | None = None
+    if live_price_at is not None:
+        normalized_live_at = (
+            live_price_at.replace(tzinfo=UTC)
+            if live_price_at.tzinfo is None
+            else live_price_at.astimezone(UTC)
+        )
+        observed_times.append(normalized_live_at)
+    market_price: dict[str, object] = {
+        "price": live_price,
+        "observed_at": _iso_utc(normalized_live_at),
+        "source": live_price_source,
+    }
+    canonical_inputs: dict[str, object] = {
+        "engine_version": DCF_ENGINE_VERSION,
+        "ticker": ticker,
+        "valuation_inputs": dict(input_payload),
+        "assumption_snapshot": json.loads(assumption_snapshot_json),
+        "market_price": market_price,
+        "mos_bar": mos_bar,
+        "workbook_sha256": workbook_sha256,
+    }
+    canonical = json.dumps(
+        canonical_inputs,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    input_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return DcfInputProvenance(
+        input_sha256=input_sha256,
+        workbook_sha256=workbook_sha256,
+        engine_version=DCF_ENGINE_VERSION,
+        inputs_as_of=max(observed_times, default=datetime.now(UTC)),
+        detail={
+            "market_price": market_price,
+            "sources": sources,
+            "ticker": ticker,
+        },
+    )
 
 
 def main() -> int:
@@ -514,7 +663,8 @@ def _reported_currency(repo_root: Path, ticker: str) -> str | None:
     except (OSError, ValueError):
         return None
     if isinstance(rows, list) and rows and isinstance(rows[0], dict):
-        ccy = rows[0].get("reportedCurrency")
+        row = cast("dict[str, object]", rows[0])
+        ccy = row.get("reportedCurrency")
         return str(ccy).upper() if isinstance(ccy, str) and ccy.strip() else None
     return None
 
@@ -864,6 +1014,26 @@ def _refresh_redesign(
     # rather than crash (the #291 guard). upsert() re-derives the same value
     # for the persisted row; this local copy only feeds the result payload.
     over_under = persist_mod.derive_over_under(live.price if live else None, fair_value)
+    assumption_snapshot = _redesign_snapshot(
+        rv,
+        str(dest),
+        reporting_currency=_reported_currency(repo_root, ticker),
+        scenarios=scenarios,
+        inp=inp,
+        scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
+        holdings=holdings,
+    )
+    input_provenance = _build_dcf_provenance(
+        ticker=ticker,
+        repo_root=repo_root,
+        workbook_path=dest,
+        input_payload=inp.to_dict(),
+        assumption_snapshot_json=assumption_snapshot,
+        live_price=live.price if live else None,
+        live_price_at=live.fetched_at if live else None,
+        live_price_source=getattr(live, "source_name", None) if live else None,
+        mos_bar=mos_bar_f,
+    )
 
     row = persist_mod.DcfRunRow(
         ticker=ticker,
@@ -877,21 +1047,14 @@ def _refresh_redesign(
         live_price=live.price if live else None,
         live_price_at=live.fetched_at if live else None,
         mos_bar_used=mos_bar_f,
-        assumption_snapshot_json=_redesign_snapshot(
-            rv,
-            str(dest),
-            reporting_currency=_reported_currency(repo_root, ticker),
-            scenarios=scenarios,
-            inp=inp,
-            scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
-            holdings=holdings,
-        ),
+        assumption_snapshot_json=assumption_snapshot,
         notes=f"workbook={dest.name} (redesigned)",
         assumptions_sync_status=sync.as_status_text(),
         assumptions_synced_at=datetime.now(UTC).replace(tzinfo=None),
+        provenance=input_provenance,
     )
     with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
-        persist_mod.upsert(conn, row)
+        persisted = persist_mod.upsert(conn, row)
 
     return {
         "ticker": ticker,
@@ -911,6 +1074,8 @@ def _refresh_redesign(
         "wacc": rv.wacc,
         "terminal_method": rv.terminal_method,
         "inputs_preserved": captured is not None,
+        "dcf_run_persisted": persisted,
+        "input_sha256": input_provenance.input_sha256,
     }
 
 
@@ -1016,6 +1181,26 @@ def apply_edits(
 
     fair_value = rv.value_per_share_usd
     over_under = persist_mod.derive_over_under(live_price, fair_value)
+    assumption_snapshot = _redesign_snapshot(
+        rv,
+        str(dest),
+        reporting_currency=_reported_currency(repo_root, ticker),
+        scenarios=scenarios,
+        inp=inp,
+        scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
+        holdings=holdings,
+    )
+    input_provenance = _build_dcf_provenance(
+        ticker=ticker,
+        repo_root=repo_root,
+        workbook_path=dest,
+        input_payload=inp.to_dict(),
+        assumption_snapshot_json=assumption_snapshot,
+        live_price=live_price,
+        live_price_at=prior_price_at,
+        live_price_source="prior_dcf_run",
+        mos_bar=mos_bar_f,
+    )
 
     row = persist_mod.DcfRunRow(
         ticker=ticker,
@@ -1029,21 +1214,14 @@ def apply_edits(
         live_price=live_price,
         live_price_at=prior_price_at,
         mos_bar_used=mos_bar_f,
-        assumption_snapshot_json=_redesign_snapshot(
-            rv,
-            str(dest),
-            reporting_currency=_reported_currency(repo_root, ticker),
-            scenarios=scenarios,
-            inp=inp,
-            scenario_prior_meta=_load_scenario_prior_meta(repo_root, ticker),
-            holdings=holdings,
-        ),
+        assumption_snapshot_json=assumption_snapshot,
         notes=f"workbook={dest.name} (redesigned; in-app edit)",
         assumptions_sync_status=sync.as_status_text(),
         assumptions_synced_at=datetime.now(UTC).replace(tzinfo=None),
+        provenance=input_provenance,
     )
     with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
-        persist_mod.upsert(conn, row)
+        persisted = persist_mod.upsert(conn, row)
 
     return {
         "ticker": ticker,
@@ -1061,6 +1239,8 @@ def apply_edits(
         "mos_bar": mos_bar_f,
         "wacc": rv.wacc,
         "terminal_method": rv.terminal_method,
+        "dcf_run_persisted": persisted,
+        "input_sha256": input_provenance.input_sha256,
     }
 
 

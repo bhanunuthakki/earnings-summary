@@ -66,6 +66,8 @@ CREATE TABLE dcf_runs (
     mos_bar_used REAL, assumption_snapshot_json TEXT,
     revenue_growths_json TEXT, fcf_margin REAL,
     assumptions_sync_status TEXT, assumptions_synced_at TEXT
+    , input_sha256 TEXT, workbook_sha256 TEXT, engine_version TEXT,
+    inputs_as_of TEXT, provenance_json TEXT
 );
 """
 
@@ -917,11 +919,25 @@ def test_refresh_redesign_seeds_then_persists(
     wb.close()
     conn = sqlite3.connect(str(db))
     row = conn.execute(
-        "SELECT npv_per_share, live_price FROM dcf_runs WHERE ticker='TESTCO'"
+        "SELECT npv_per_share, live_price, input_sha256, workbook_sha256, "
+        "engine_version, inputs_as_of, provenance_json "
+        "FROM dcf_runs WHERE ticker='TESTCO'"
     ).fetchone()
     conn.close()
     assert row is not None and row[0] is not None
     assert row[1] == pytest.approx(50.0)
+    assert isinstance(row[2], str) and len(row[2]) == 64
+    assert isinstance(row[3], str) and len(row[3]) == 64
+    assert row[4] == refresh_dcf.DCF_ENGINE_VERSION
+    assert row[5]
+    provenance_detail = json.loads(row[6])
+    assert provenance_detail["ticker"] == "TESTCO"
+    assert {source["role"] for source in provenance_detail["sources"]} >= {
+        "income_statement",
+        "balance_sheet",
+        "cash_flow",
+        "calculation_workbook",
+    }
 
 
 def test_sync_assumptions_json_mirrors_numbers_keeps_prose(tmp_path: Path) -> None:

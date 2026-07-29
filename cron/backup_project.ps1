@@ -34,7 +34,8 @@ $dst = Join-Path $root 'tree'
 $xd = @(
     '.git', 'venv', '.tmp', '.cache', 'cache', 'logs', '__pycache__',
     '.pytest_cache', '.claude', 'node_modules',
-    (Join-Path $repo 'data\llm_capture')
+    (Join-Path $repo 'data\llm_capture'),
+    (Join-Path $repo 'data\secrets')
 )
 $xf = @('*.pyc', '*.db', '*.db-wal', '*.db-shm', 'portfolio.db.bak*', '.env', '.env.*', 'credentials.json', 'token.json', '*credential*', '*secret*', '*.pem', '*.key', '*.pfx', '*.p12')
 robocopy $repo $dst /MIR /XD $xd /XF $xf /R:1 /W:1 /NP /NFL /NDL

@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 from dcf.persist import DcfRunRow, upsert
 from dcf.provenance import DcfInputProvenance
-from pipeline.run_accounting import make_pipeline_key, start_run
+from models.runs import StageStatus
+from pipeline.run_accounting import (
+    PipelineRunSuppressedError,
+    abandon_stale_runs,
+    end_run,
+    make_pipeline_key,
+    start_run,
+    suppression_payload,
+)
 from pipeline.validation_issue_store import record_issue
 from schema_compat import SchemaRevisionMismatch, require_current_for_write
 from timeseries.loaders import load_segment_junction_series
@@ -18,9 +28,21 @@ def test_pipeline_key_is_stable_across_attempts_and_scope_order() -> None:
     assert make_pipeline_key("refresh", ["meta", "GOOG"]) == make_pipeline_key(
         "refresh", ["GOOG", "META"]
     )
+    assert make_pipeline_key(
+        "refresh",
+        ["GOOG"],
+        {"as_of": "2026-07-28", "options": {"mode": "full", "fetch": True}},
+    ) == make_pipeline_key(
+        "refresh",
+        ["goog"],
+        {"options": {"fetch": True, "mode": "full"}, "as_of": "2026-07-28"},
+    )
+    assert make_pipeline_key("refresh", ["GOOG"], {"as_of": "2026-07-28"}) != make_pipeline_key(
+        "refresh", ["GOOG"], {"as_of": "2026-07-29"}
+    )
 
 
-def test_start_run_writes_separate_logical_run_and_attempt() -> None:
+def _run_accounting_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.execute(
         "CREATE TABLE ingestion_runs (run_id TEXT, attempt_id TEXT, pipeline_key TEXT, "
@@ -32,11 +54,107 @@ def test_start_run_writes_separate_logical_run_and_attempt() -> None:
     conn.execute(
         "CREATE TABLE pipeline_attempts (attempt_id TEXT PRIMARY KEY, pipeline_key TEXT, started_at TEXT, ended_at TEXT, status TEXT, error_summary TEXT)"
     )
+    return conn
+
+
+def test_start_run_suppresses_live_duplicate_and_force_supersedes() -> None:
+    conn = _run_accounting_conn()
     run_a = start_run(conn, "refresh", ["META", "GOOG"])
-    run_b = start_run(conn, "refresh", ["GOOG", "META"])
+    with pytest.raises(PipelineRunSuppressedError) as exc_info:
+        start_run(conn, "refresh", ["GOOG", "META"])
+    assert exc_info.value.attempt_id == run_a
+    assert exc_info.value.status is StageStatus.IN_PROGRESS
+
+    run_b = start_run(conn, "refresh", ["GOOG", "META"], force=True)
     assert run_a != run_b
     assert conn.execute("SELECT COUNT(*) FROM pipeline_runs").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM pipeline_attempts").fetchone()[0] == 2
+    statuses = dict(conn.execute("SELECT attempt_id, status FROM pipeline_attempts"))
+    assert statuses == {run_a: "abandoned", run_b: "in_progress"}
+    end_run(conn, run_a, StageStatus.OK)
+    assert conn.execute(
+        "SELECT status FROM pipeline_attempts WHERE attempt_id = ?", (run_a,)
+    ).fetchone() == ("abandoned",)
+
+
+def test_completed_deduplication_requires_complete_material_key_and_force_bypasses() -> None:
+    conn = _run_accounting_conn()
+    inputs = {"as_of": "2026-07-28", "source_ids": [3, 8]}
+    run_a = start_run(
+        conn,
+        "refresh",
+        ["GOOG"],
+        invocation_inputs=inputs,
+        deduplicate_completed=True,
+    )
+    end_run(conn, run_a, StageStatus.OK)
+
+    with pytest.raises(PipelineRunSuppressedError) as exc_info:
+        start_run(
+            conn,
+            "refresh",
+            ["GOOG"],
+            invocation_inputs=inputs,
+            deduplicate_completed=True,
+        )
+    assert exc_info.value.status is StageStatus.OK
+
+    run_b = start_run(
+        conn,
+        "refresh",
+        ["GOOG"],
+        invocation_inputs=inputs,
+        deduplicate_completed=True,
+        force=True,
+    )
+    assert run_b != run_a
+
+
+def test_suppression_payload_distinguishes_live_and_completed_noops() -> None:
+    live = PipelineRunSuppressedError("pipeline_live", "attempt_live", StageStatus.IN_PROGRESS)
+    complete = PipelineRunSuppressedError("pipeline_done", "attempt_done", StageStatus.OK)
+
+    assert suppression_payload(live) == {
+        "status": "already_running",
+        "pipeline_key": "pipeline_live",
+        "attempt_id": "attempt_live",
+    }
+    assert suppression_payload(complete) == {
+        "status": "already_done",
+        "pipeline_key": "pipeline_done",
+        "attempt_id": "attempt_done",
+    }
+
+
+def test_stale_reaper_is_bounded_and_updates_both_ledgers() -> None:
+    conn = _run_accounting_conn()
+    now = datetime(2026, 7, 28, 12, 0)
+    first = start_run(conn, "a", ["GOOG"], now=now - timedelta(hours=8))
+    second = start_run(conn, "b", ["META"], now=now - timedelta(hours=7))
+    fresh = start_run(conn, "c", ["AMZN"], now=now - timedelta(minutes=5))
+
+    abandoned = abandon_stale_runs(conn, stale_after=timedelta(hours=6), limit=1, now=now)
+    assert abandoned == [first]
+    statuses = dict(conn.execute("SELECT attempt_id, status FROM pipeline_attempts"))
+    assert statuses == {first: "abandoned", second: "in_progress", fresh: "in_progress"}
+    projection = dict(conn.execute("SELECT run_id, status FROM ingestion_runs"))
+    assert projection == statuses
+
+
+def test_start_run_reaps_same_key_stale_attempt_before_retry() -> None:
+    conn = _run_accounting_conn()
+    now = datetime(2026, 7, 28, 12, 0)
+    stale = start_run(conn, "refresh", ["GOOG"], now=now - timedelta(hours=7))
+    retry = start_run(
+        conn,
+        "refresh",
+        ["GOOG"],
+        stale_after=timedelta(hours=6),
+        now=now,
+    )
+    assert retry != stale
+    statuses = dict(conn.execute("SELECT attempt_id, status FROM pipeline_attempts"))
+    assert statuses == {stale: "abandoned", retry: "in_progress"}
 
 
 def test_validation_issue_fingerprint_advances_lifecycle_not_row_count() -> None:
