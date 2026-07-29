@@ -26,6 +26,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import sqlite3
+from dataclasses import asdict
 from decimal import Decimal
 from pathlib import Path
 
@@ -35,6 +36,7 @@ from models.documents import SourceType, tier_for_source_type
 from models.facts import FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import DefinitionOrigin
 from models.runs import StageStatus
+from pipeline.invocation_fingerprint import file_fingerprint, payload_sha256
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
     KpiValue,
@@ -181,8 +183,16 @@ def ingest_spreadsheet_kpis(
         ticker_scope=[ticker],
         invocation_inputs={
             "document_id": doc_id,
-            "periods": [period.isoformat() for period in sorted(by_period)],
+            "source": file_fingerprint(source_path),
+            "config_sha256": payload_sha256(asdict(config)),
+            "parsed_sha256": payload_sha256(
+                {
+                    name: {period.isoformat(): value for period, value in sorted(series.items())}
+                    for name, series in sorted(parsed.items())
+                }
+            ),
         },
+        deduplicate_completed=True,
     )
     inserted = 0
     try:

@@ -350,10 +350,15 @@ def test_main_promotes_after_fresh_ingest(
             call_date TIMESTAMP,
             fiscal_period_type TEXT,
             period_end TIMESTAMP,
-            source_url TEXT,
-            has_qa_section INTEGER,
-            source TEXT
-        );
+                source_url TEXT,
+                has_qa_section INTEGER,
+                source TEXT,
+                version_number INTEGER NOT NULL DEFAULT 1,
+                is_current INTEGER NOT NULL DEFAULT 1,
+                recorded_at TIMESTAMP,
+                superseded_at TIMESTAMP,
+                superseded_by_transcript_id INTEGER
+            );
         CREATE TABLE transcript_segments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             transcript_id INTEGER NOT NULL,

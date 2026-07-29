@@ -14,6 +14,7 @@ from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import pytest
 from pydantic import ValidationError
@@ -352,13 +353,27 @@ def test_capture_surfaces_accounting_suppression(
         status=StageStatus.IN_PROGRESS,
     )
 
-    def suppress(*_: object, **__: object) -> str:
+    captured: dict[str, object] = {}
+
+    def suppress(*_: object, **kwargs: object) -> str:
+        captured.update(kwargs)
         raise suppressed
 
     monkeypatch.setattr(kes, "start_run", suppress)
     with pytest.raises(PipelineRunSuppressedError) as exc_info:
-        capture_for_ticker("NU", tmp_path, conn, source_group="ir")
+        capture_for_ticker("NU", tmp_path, conn, source_group="ir", refresh=True)
     assert exc_info.value is suppressed
+    inputs_obj = captured["invocation_inputs"]
+    assert isinstance(inputs_obj, dict)
+    inputs = cast(dict[str, object], inputs_obj)
+    source_obj = inputs["source"]
+    assert isinstance(source_obj, dict)
+    source = cast(dict[str, object], source_obj)
+    assert isinstance(source["sha256"], str)
+    assert inputs["source_group"] == "ir"
+    assert inputs["max_facts_per_doc"] == kes._CAPTURE_MAX_FACTS
+    assert captured["deduplicate_completed"] is True
+    assert captured["force"] is True
     conn.close()
 
 

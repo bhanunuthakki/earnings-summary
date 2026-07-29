@@ -33,12 +33,20 @@ from compute.segments import extract_segment_facts  # noqa: E402
 from compute.segments_nu import extract_nu_segment_facts  # noqa: E402
 from models.companies import ListType  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
+from pipeline.invocation_fingerprint import file_fingerprint  # noqa: E402
 from pipeline.queries import (  # noqa: E402
     ANALYZED_LIST_TYPES,
     open_db,
     tracked_companies_for_user,
 )
-from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    JsonValue,
+    PipelineRunSuppressedError,
+    end_run,
+    record_stage,
+    start_run,
+    suppression_payload,
+)
 
 _Extractor = Callable[[sqlite3.Connection, int, Path], int]
 
@@ -100,6 +108,40 @@ def _documents_for_extraction(
     return [(r["id"], r["ticker"], r["doc_type"]) for r in cur.fetchall()]
 
 
+def _invocation_inputs(
+    conn: sqlite3.Connection,
+    docs: list[tuple[int, str, str]],
+    doc_types: list[str],
+    project_root: Path,
+) -> dict[str, JsonValue]:
+    """Fingerprint every registered immutable source document in this run."""
+    documents: list[JsonValue] = []
+    for doc_id, ticker, doc_type in docs:
+        row = conn.execute(
+            "SELECT file_path, sha256 FROM documents WHERE id = ?",
+            (doc_id,),
+        ).fetchone()
+        raw_path = str(row["file_path"]) if row is not None and row["file_path"] else ""
+        source_path = Path(raw_path)
+        if not source_path.is_absolute():
+            source_path = project_root / source_path
+        documents.append(
+            {
+                "document_id": doc_id,
+                "ticker": ticker,
+                "doc_type": doc_type,
+                "registered_sha256": (
+                    str(row["sha256"]) if row is not None and row["sha256"] else None
+                ),
+                "source": file_fingerprint(source_path, root=project_root),
+            }
+        )
+    return {
+        "doc_types": sorted(doc_types),
+        "documents": documents,
+    }
+
+
 def _run_extraction(
     conn: sqlite3.Connection,
     run_id: str,
@@ -152,6 +194,11 @@ def main() -> int:
         "active universe — portfolio+watchlist+evaluation). Required to fan "
         "extraction over the full universe.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-extract even when the same immutable document bytes already completed.",
+    )
     args = parser.parse_args()
 
     conn = open_db(args.db)
@@ -162,8 +209,19 @@ def main() -> int:
             sys.stderr.write("No tickers resolved; nothing to do\n")
             return 0
 
-        run_id = start_run(conn, directive="extract_facts", ticker_scope=tickers)
         docs = _documents_for_extraction(conn, tickers, doc_types)
+        try:
+            run_id = start_run(
+                conn,
+                directive="extract_facts",
+                ticker_scope=tickers,
+                invocation_inputs=_invocation_inputs(conn, docs, doc_types, PROJECT_ROOT),
+                force=bool(args.force),
+                deduplicate_completed=True,
+            )
+        except PipelineRunSuppressedError as exc:
+            print(json.dumps(suppression_payload(exc)))
+            return 0
         total, ok, failed = _run_extraction(conn, run_id, docs, PROJECT_ROOT)
 
         terminal = StageStatus.OK if failed == 0 else StageStatus.FAILED

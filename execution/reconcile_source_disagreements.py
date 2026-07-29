@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -36,14 +37,45 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from models.runs import StageStatus  # noqa: E402
+from pipeline.invocation_fingerprint import payload_sha256  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 from pipeline.reader_tier_audit import (  # noqa: E402
     DEFAULT_RECONCILE_THRESHOLD_PCT,
     audit_readers,
     open_source_disagreement_count,
     reconcile_source_disagreements,
+    sample_duplicated_keys,
 )
-from pipeline.run_accounting import end_run, start_run  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    JsonValue,
+    PipelineRunSuppressedError,
+    end_run,
+    start_run,
+    suppression_payload,
+)
+
+
+def _audit_snapshot_sha256(
+    conn: sqlite3.Connection,
+    *,
+    limit: int,
+    ticker: str | None,
+) -> str:
+    keys = sample_duplicated_keys(conn, limit=limit, ticker=ticker)
+    rows: list[JsonValue] = []
+    for key in keys:
+        rows.append(
+            {
+                "key": {
+                    "ticker": key.ticker,
+                    "period_end": key.period_end,
+                    "fiscal_period_type": key.fiscal_period_type,
+                    "line_item": key.line_item,
+                },
+                "candidates": list(key.candidate_snapshot),
+            }
+        )
+    return payload_sha256(rows)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -101,7 +133,25 @@ def main() -> int:
             run_id = (
                 "reader_tier_audit_dry_run"
                 if args.dry_run
-                else start_run(conn, directive="reader_tier_audit", ticker_scope=scope)
+                else start_run(
+                    conn,
+                    directive="reader_tier_audit",
+                    ticker_scope=scope,
+                    invocation_inputs={
+                        "audit": bool(args.audit),
+                        "reconcile": bool(args.reconcile),
+                        "ticker": args.ticker.upper() if args.ticker else None,
+                        "limit": args.limit,
+                        "threshold_pct": args.threshold_pct,
+                        "dry_run": bool(args.dry_run),
+                        "audit_snapshot_sha256": _audit_snapshot_sha256(
+                            conn,
+                            limit=args.limit,
+                            ticker=args.ticker,
+                        ),
+                    },
+                    deduplicate_completed=True,
+                )
             )
             a = audit_readers(
                 conn,
@@ -132,6 +182,9 @@ def main() -> int:
 
         out["open_source_disagreements"] = open_source_disagreement_count(conn)
         print(json.dumps(out, indent=2))
+        return 0
+    except PipelineRunSuppressedError as exc:
+        print(json.dumps(suppression_payload(exc)))
         return 0
     finally:
         conn.close()

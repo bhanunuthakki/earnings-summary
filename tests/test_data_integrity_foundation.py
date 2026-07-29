@@ -17,6 +17,7 @@ from pipeline.run_accounting import (
     end_run,
     make_pipeline_key,
     start_run,
+    suppression_payload,
 )
 from pipeline.validation_issue_store import record_issue
 from schema_compat import SchemaRevisionMismatch, require_current_for_write
@@ -107,6 +108,22 @@ def test_completed_deduplication_requires_complete_material_key_and_force_bypass
         force=True,
     )
     assert run_b != run_a
+
+
+def test_suppression_payload_distinguishes_live_and_completed_noops() -> None:
+    live = PipelineRunSuppressedError("pipeline_live", "attempt_live", StageStatus.IN_PROGRESS)
+    complete = PipelineRunSuppressedError("pipeline_done", "attempt_done", StageStatus.OK)
+
+    assert suppression_payload(live) == {
+        "status": "already_running",
+        "pipeline_key": "pipeline_live",
+        "attempt_id": "attempt_live",
+    }
+    assert suppression_payload(complete) == {
+        "status": "already_done",
+        "pipeline_key": "pipeline_done",
+        "attempt_id": "attempt_done",
+    }
 
 
 def test_stale_reaper_is_bounded_and_updates_both_ledgers() -> None:

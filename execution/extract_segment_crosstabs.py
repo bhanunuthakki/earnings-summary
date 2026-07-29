@@ -34,7 +34,15 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import db  # noqa: E402
 from compute.segment_crosstabs_llm import extract_for_ticker  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
-from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
+from pipeline.invocation_fingerprint import file_fingerprint  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    JsonValue,
+    PipelineRunSuppressedError,
+    end_run,
+    record_stage,
+    start_run,
+    suppression_payload,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
@@ -51,10 +59,26 @@ def main() -> int:
         print("[]")
         return 0
 
-    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
+    conn = connect_sqlite(
+        str(db_path),
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
     conn.row_factory = sqlite3.Row
 
-    run_id = start_run(conn, directive="extract_segment_crosstabs", ticker_scope=tickers)
+    try:
+        run_id = start_run(
+            conn,
+            directive="extract_segment_crosstabs",
+            ticker_scope=tickers,
+            invocation_inputs=_invocation_inputs(repo_root, tickers, args.year),
+            force=bool(args.refresh),
+            deduplicate_completed=True,
+        )
+    except PipelineRunSuppressedError as exc:
+        print(json.dumps(suppression_payload(exc)))
+        conn.close()
+        return 0
     summary: list[dict[str, object]] = []
     final_status = StageStatus.OK
     error_summary: str | None = None
@@ -132,6 +156,35 @@ def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:
     rows = cur.fetchall()
     conn.close()
     return [r[0] for r in rows]
+
+
+def _selected_form_10k(repo_root: Path, ticker: str, fiscal_year: int | None) -> Path:
+    fmp_dir = repo_root / "data" / "historical" / "fmp"
+    if fiscal_year is not None:
+        return fmp_dir / f"{ticker}_form_10k_{fiscal_year}.json"
+    candidates = sorted(fmp_dir.glob(f"{ticker}_form_10k_[0-9][0-9][0-9][0-9].json"))
+    if candidates:
+        return candidates[-1]
+    return fmp_dir / f"{ticker}_form_10k_latest.json"
+
+
+def _invocation_inputs(
+    repo_root: Path, tickers: list[str], fiscal_year: int | None
+) -> dict[str, JsonValue]:
+    """Fingerprint the immutable as-filed 10-K selected for each ticker."""
+    return {
+        "fiscal_year": fiscal_year,
+        "sources": [
+            {
+                "ticker": ticker,
+                "file": file_fingerprint(
+                    _selected_form_10k(repo_root, ticker, fiscal_year),
+                    root=repo_root,
+                ),
+            }
+            for ticker in tickers
+        ],
+    }
 
 
 if __name__ == "__main__":

@@ -32,10 +32,12 @@ import json
 import os
 import subprocess
 import sys
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
+from xml.etree.ElementTree import ParseError
+
+from defusedxml import ElementTree
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CRON_DIR = PROJECT_ROOT / "cron"
@@ -101,12 +103,12 @@ class TaskReport:
 def _parse_xml(path: Path) -> _XmlTask | None:
     """Extract task name and first trigger start time from a .task.xml file.
 
-    Raises ``ET.ParseError`` (or ``OSError``) when the file cannot be read or
+    Raises ``ParseError`` (or ``OSError``) when the file cannot be read or
     parsed — an unparseable task XML is a HARD failure that ``compare`` records
     as a problem, never a swallowed warning. Returns None only when the file
     parses cleanly but lacks a <URI> (a structurally incomplete task).
     """
-    tree = ET.parse(str(path))
+    tree = ElementTree.parse(str(path))
     root = tree.getroot()
     ns = f"{{{_NS}}}"
 
@@ -261,7 +263,7 @@ def compare(
     for p in paths:
         try:
             xt = _parse_xml(p)
-        except (ET.ParseError, OSError) as exc:
+        except (ParseError, OSError) as exc:
             report.unparseable.append(f"{p.name}: {exc}")
             continue
         if xt is None:

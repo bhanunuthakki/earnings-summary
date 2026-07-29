@@ -66,6 +66,7 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+from typing import cast
 
 from pydantic import BaseModel
 
@@ -75,6 +76,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from compute.kpi_extract_summaries import capture_for_ir_pdf_docs, write_log  # noqa: E402
 from models.facts import FactLocator, LocatorKind  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
+from pipeline.invocation_fingerprint import files_fingerprint, payload_sha256  # noqa: E402
 from pipeline.kpi_persistence import (  # noqa: E402
     KpiExtractionManifest,
     KpiValue,
@@ -84,7 +86,14 @@ from pipeline.locators import pdf_slide_locator  # noqa: E402
 from pipeline.pdf_render import find_quote_bbox  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 from pipeline.refresh_eval import refresh_for_tickers  # noqa: E402
-from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    JsonValue,
+    PipelineRunSuppressedError,
+    end_run,
+    record_stage,
+    start_run,
+    suppression_payload,
+)
 
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 
@@ -212,14 +221,25 @@ def _upgrade_pdf_locators(
 
 
 def _apply_manifest(
-    conn: sqlite3.Connection, manifest_file: ManifestFile, *, with_eval: bool = False
+    conn: sqlite3.Connection,
+    manifest_file: ManifestFile,
+    *,
+    with_eval: bool = False,
+    force: bool = False,
 ) -> dict[str, object]:
     """Apply each KpiExtractionManifest under one ingestion run."""
     if not manifest_file.manifests:
         return {"manifests": 0, "inserted": 0, "skipped_existing": 0, "validation_issues": 0}
 
     ticker_scope = sorted({m.ticker.upper() for m in manifest_file.manifests})
-    run_id = start_run(conn, directive="extract_kpis_from_ir", ticker_scope=ticker_scope)
+    run_id = start_run(
+        conn,
+        directive="extract_kpis_from_ir",
+        ticker_scope=ticker_scope,
+        invocation_inputs=_manifest_invocation_inputs(conn, manifest_file, with_eval=with_eval),
+        force=force,
+        deduplicate_completed=not with_eval,
+    )
 
     inserted = 0
     skipped = 0
@@ -280,6 +300,32 @@ def _apply_manifest(
         "failed": failed,
         "with_eval": with_eval,
         "eval_results": eval_results,
+    }
+
+
+def _manifest_invocation_inputs(
+    conn: sqlite3.Connection, manifest_file: ManifestFile, *, with_eval: bool
+) -> dict[str, JsonValue]:
+    """Fingerprint manifest content and PDFs used for locator enrichment."""
+    manifest_payload = cast(
+        "dict[str, JsonValue]",
+        manifest_file.model_dump(mode="json"),
+    )
+    pdf_paths = [
+        path
+        for manifest in manifest_file.manifests
+        if (
+            path := _source_pdf_path(
+                conn,
+                manifest.source_doc_id,
+            )
+        )
+        is not None
+    ]
+    return {
+        "manifest_sha256": payload_sha256(manifest_payload),
+        "source_pdfs": files_fingerprint(pdf_paths, root=PROJECT_ROOT),
+        "with_eval": with_eval,
     }
 
 
@@ -352,6 +398,11 @@ def main() -> int:
         action="store_true",
         help="After --apply, re-run the thesis evaluator for each affected ticker.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="With --apply, persist again even when the same immutable manifest already completed.",
+    )
     args = parser.parse_args()
 
     conn = open_db(args.db)
@@ -361,17 +412,26 @@ def main() -> int:
             print(json.dumps({"pending_count": len(pending), "documents": pending}, indent=2))
             return 0
 
-        if args.capture:
-            result = _run_capture(conn, ticker=args.ticker, refresh=args.refresh)
-            print(json.dumps(result, indent=2, default=str))
-            return 0 if result["ok"] else 1
+        try:
+            if args.capture:
+                result = _run_capture(conn, ticker=args.ticker, refresh=args.refresh)
+                print(json.dumps(result, indent=2, default=str))
+                return 0 if result["ok"] else 1
 
-        with open(args.apply, encoding="utf-8") as f:
-            payload = json.load(f)
-        manifest_file = ManifestFile.model_validate(payload)
-        result = _apply_manifest(conn, manifest_file, with_eval=args.with_eval)
-        print(json.dumps(result, indent=2, default=str))
-        return 0 if result.get("failed", 0) == 0 else 1
+            with open(args.apply, encoding="utf-8") as f:
+                payload = json.load(f)
+            manifest_file = ManifestFile.model_validate(payload)
+            result = _apply_manifest(
+                conn,
+                manifest_file,
+                with_eval=args.with_eval,
+                force=bool(args.force),
+            )
+            print(json.dumps(result, indent=2, default=str))
+            return 0 if result.get("failed", 0) == 0 else 1
+        except PipelineRunSuppressedError as exc:
+            print(json.dumps(suppression_payload(exc)))
+            return 0
     finally:
         conn.close()
 

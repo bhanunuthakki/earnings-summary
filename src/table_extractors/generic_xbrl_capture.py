@@ -63,8 +63,9 @@ from models.kpis import DefinitionOrigin
 from models.runs import StageStatus
 from pipeline import locators
 from pipeline.capture_coverage import CaptureCoverageRecord, record_coverage
+from pipeline.invocation_fingerprint import payload_sha256
 from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue, persist_manifest
-from pipeline.run_accounting import end_run, start_run
+from pipeline.run_accounting import JsonValue, end_run, start_run
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from table_extractors.base import (
     ExtractionOutcome,
@@ -228,7 +229,11 @@ def extract(
             invocation_inputs={
                 "document_id": doc_id,
                 "fiscal_year": fiscal_year,
+                "extractor_id": EXTRACTOR_ID,
+                "extractor_version": EXTRACTOR_VERSION,
+                "payload_sha256": payload_sha256(cast("dict[str, JsonValue]", fmp_payload)),
             },
+            deduplicate_completed=True,
         )
         try:
             inserted = 0

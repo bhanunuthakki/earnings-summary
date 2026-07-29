@@ -57,6 +57,7 @@ from models.runs import StageStatus
 from models.unit_convert import same_family
 from models.validation import Severity, ValidationRule
 from pipeline.capture_coverage import CaptureCoverageRecord, record_coverage
+from pipeline.invocation_fingerprint import file_fingerprint
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
     KpiValue,
@@ -87,6 +88,7 @@ def _persist_accounted(
     ticker: str,
     invocation_inputs: Mapping[str, JsonValue],
     manifest: KpiExtractionManifest,
+    force: bool = False,
 ) -> PersistResult:
     """Persist one document manifest and close its run attempt exactly once."""
     run_id = start_run(
@@ -94,6 +96,8 @@ def _persist_accounted(
         directive=directive,
         ticker_scope=[ticker],
         invocation_inputs=invocation_inputs,
+        deduplicate_completed=True,
+        force=force,
     )
     try:
         result = persist_manifest(conn, run_id=run_id, manifest=manifest)
@@ -255,9 +259,9 @@ class TickerExtractionLog:
     started_at: str = ""
     ended_at: str = ""
     elapsed_ms: int = 0
-    quarters_attempted: list[str] = field(default_factory=list)
-    quarters_extracted: list[str] = field(default_factory=list)
-    quarters_skipped_no_missing: list[str] = field(default_factory=list)
+    quarters_attempted: list[str] = field(default_factory=list[str])
+    quarters_extracted: list[str] = field(default_factory=list[str])
+    quarters_skipped_no_missing: list[str] = field(default_factory=list[str])
     kpis_inserted_total: int = 0
     error: str | None = None
 
@@ -336,9 +340,17 @@ def extract_for_ticker(
                 invocation_inputs={
                     "document_id": doc_id,
                     "period_end": period_end.isoformat(),
+                    "source_group": source_group,
+                    "source": file_fingerprint(source_path, root=repo_root),
+                    "holdings": file_fingerprint(
+                        repo_root / "micro_thesis" / "holdings" / f"{ticker}.json",
+                        root=repo_root,
+                    ),
+                    "requested_kpis": sorted(missing if not refresh else tier_1_names),
                     "refresh": refresh,
                 },
                 manifest=manifest,
+                force=refresh,
             )
             log.kpis_inserted_total += result.inserted
             log.quarters_extracted.append(period_label)
@@ -1050,9 +1062,14 @@ def capture_for_ticker(
                 invocation_inputs={
                     "document_id": doc_id,
                     "period_end": period_end.isoformat(),
+                    "source_group": source_group,
+                    "source": file_fingerprint(source_path, root=repo_root),
                     "refresh": refresh,
+                    "max_facts_per_doc": max_facts_per_doc,
+                    "max_input_chars": max_input_chars,
                 },
                 manifest=manifest,
+                force=refresh,
             )
             log.kpis_inserted_total += result.inserted
             log.quarters_extracted.append(period_label)
@@ -1246,9 +1263,14 @@ def capture_for_ir_pdf_docs(
                 invocation_inputs={
                     "document_id": doc_id,
                     "period_end": period_end.isoformat(),
+                    "doc_types": list(doc_types),
+                    "source": file_fingerprint(pdf_path, root=repo_root),
                     "refresh": refresh,
+                    "max_facts_per_doc": max_facts_per_doc,
+                    "max_input_chars": max_input_chars,
                 },
                 manifest=manifest,
+                force=refresh,
             )
             log.kpis_inserted_total += result.inserted
             log.quarters_extracted.append(period_label)

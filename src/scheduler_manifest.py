@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import cast
 
+from defusedxml import ElementTree
+
 TASK_NS = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 NS = f"{{{TASK_NS}}}"
 MANIFEST_VERSION = 1
@@ -205,7 +207,7 @@ def _child_names(element: ET.Element | None) -> tuple[str, ...]:
 
 
 def extract_xml_metadata(path: Path) -> XmlTaskMetadata:
-    root = ET.parse(path).getroot()
+    root = ElementTree.parse(path).getroot()
     uri = _text(root, f".//{NS}URI")
     if uri is None:
         raise ValueError("missing RegistrationInfo/URI")
@@ -328,7 +330,7 @@ def validate_source_tree(
 
 def rendered_xml_bytes(task: TaskSpec, *, cron_dir: Path, project_root: Path) -> bytes:
     """Render XML whose action is rooted in the checkout invoking generation."""
-    tree = ET.parse(cron_dir / task.xml)
+    tree = ElementTree.parse(cron_dir / task.xml)
     root = tree.getroot()
     command = root.find(f".//{NS}Actions/{NS}Exec/{NS}Command")
     if command is None:

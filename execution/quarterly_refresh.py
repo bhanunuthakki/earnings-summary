@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -36,12 +37,17 @@ from pipeline.quarterly_refresh import (  # noqa: E402
 )
 from pipeline.quarterly_refresh import StageStatus as RefreshStageStatus  # noqa: E402
 from pipeline.queries import open_db, tracked_companies_for_user  # noqa: E402
-from pipeline.run_accounting import end_run, start_run  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    PipelineRunSuppressedError,
+    end_run,
+    start_run,
+    suppression_payload,
+)
 
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 
 
-def _resolve_tickers(conn, args: argparse.Namespace) -> list[str]:
+def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:
     if args.ticker:
         return [args.ticker.upper()]
     companies = tracked_companies_for_user(conn, only_classified=True)
@@ -188,12 +194,16 @@ def main() -> int:
             print(json.dumps({"warning": "no tickers resolved"}, indent=2))
             return 0
 
-        run_id = start_run(
-            conn,
-            directive="quarterly_refresh",
-            ticker_scope=tickers,
-            invocation_inputs={"fetch_sec": bool(args.fetch_sec)},
-        )
+        try:
+            run_id = start_run(
+                conn,
+                directive="quarterly_refresh",
+                ticker_scope=tickers,
+                invocation_inputs={"fetch_sec": bool(args.fetch_sec)},
+            )
+        except PipelineRunSuppressedError as exc:
+            print(json.dumps(suppression_payload(exc)))
+            return 0
         report = refresh_portfolio(
             conn,
             tickers=tickers,

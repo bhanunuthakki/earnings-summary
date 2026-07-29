@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -43,6 +44,10 @@ def _sync_db_path(repo_root: Path) -> None:
 from document_table_extractor import (  # noqa: E402
     extract_for_ticker,
     registered_table_kinds,
+)
+from pipeline.run_accounting import (  # noqa: E402
+    PipelineRunSuppressedError,
+    suppression_payload,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
@@ -88,12 +93,16 @@ def main() -> int:
 
     grand_total_inserted = 0
     for t in tickers:
-        outcomes = extract_for_ticker(
-            ticker=t,
-            fiscal_year=args.fiscal_year,
-            table_kinds=args.table_kind,
-            repo_root=repo_root,
-        )
+        try:
+            outcomes = extract_for_ticker(
+                ticker=t,
+                fiscal_year=args.fiscal_year,
+                table_kinds=args.table_kind,
+                repo_root=repo_root,
+            )
+        except PipelineRunSuppressedError as exc:
+            print(json.dumps(suppression_payload(exc)))
+            return 0
         for outcome in outcomes:
             log.info(
                 {

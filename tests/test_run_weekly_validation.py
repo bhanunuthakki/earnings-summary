@@ -39,7 +39,12 @@ def test_runs_only_confidence_backfill_not_engine_scan(
     def _open_db(_db: object) -> _Conn:
         return _Conn()
 
-    def _start_run(conn: object, directive: str, ticker_scope: list[str]) -> str:
+    def _start_run(
+        conn: object,
+        directive: str,
+        ticker_scope: list[str],
+        **_kwargs: object,
+    ) -> str:
         return "RID"
 
     def _end_run(conn: object, rid: str, status: object, error_summary: str | None = None) -> None:

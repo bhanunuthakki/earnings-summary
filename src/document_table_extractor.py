@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from pipeline.run_accounting import PipelineRunSuppressedError
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from table_extractors import customer_concentration as cc_module
 from table_extractors import generic_xbrl_capture as gxc_module
@@ -144,6 +145,8 @@ def extract_for_ticker(
                 repo_root=repo_root,
                 filing_doc_id=filing_doc_id,
             )
+        except PipelineRunSuppressedError:
+            raise
         except Exception as exc:
             log.warning(
                 {

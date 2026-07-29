@@ -37,4 +37,3 @@ def test_missing_file_and_payload_hash_are_deterministic(tmp_path: Path) -> None
     missing = file_fingerprint(tmp_path / "missing.json", root=tmp_path)
     assert missing == {"path": "missing.json", "exists": False}
     assert payload_sha256({"files": [missing]}) == payload_sha256({"files": [missing]})
-

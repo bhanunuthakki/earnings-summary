@@ -37,6 +37,7 @@ import json
 import sqlite3
 import sys
 from datetime import date, datetime
+from hashlib import sha256
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -58,7 +59,13 @@ from compute.comparable_sets import (  # noqa: E402
 from models.companies import ListType  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
 from pipeline.queries import open_db, tracked_companies_for_user  # noqa: E402
-from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    PipelineRunSuppressedError,
+    end_run,
+    record_stage,
+    start_run,
+    suppression_payload,
+)
 
 # Phase 2 (§11): subjects widen to watchlist+evaluation with --all-tracked;
 # `index_member` names stay pool-candidates only, never subjects.
@@ -69,6 +76,58 @@ TRACKED_SUBJECT_LIST_TYPES = frozenset(
 # stage_transitions "ticker" tag for the pool-wide slice pass (one stage row
 # summarizes the whole pass; per-slice detail lives in the stdout JSON).
 POOL_SCOPES_STAGE_TICKER = "_pool_scopes"
+_MEMBER_SOURCE_SUFFIXES: tuple[str, ...] = (
+    "balance_sheet_quarterly",
+    "historical_market_cap",
+    "income_statement_quarterly",
+    "key_metrics_quarterly",
+)
+_MAX_FINGERPRINT_MEMBERSHIPS = 20_000
+_MAX_FINGERPRINT_FILES = 5_000
+
+FrozenSet = tuple[str, list[tuple[str, str, bool]]]
+ScopeSlices = dict[tuple[str, str], list[str]]
+
+
+def _canonical_sha256(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _file_sha256(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    digest = sha256()
+    try:
+        with path.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+    except OSError:
+        return None
+    return digest.hexdigest()
+
+
+def _source_files_fingerprint(repo_root: Path, tickers: set[str]) -> tuple[str, int]:
+    file_count = len(tickers) * len(_MEMBER_SOURCE_SUFFIXES)
+    if file_count > _MAX_FINGERPRINT_FILES:
+        raise ValueError("comparable-set source fingerprint exceeds bounded file budget")
+    rows: list[dict[str, object]] = []
+    for ticker in sorted(tickers):
+        for suffix in _MEMBER_SOURCE_SUFFIXES:
+            path = repo_root / "data" / "historical" / "fmp" / f"{ticker.upper()}_{suffix}.json"
+            rows.append(
+                {
+                    "sha256": _file_sha256(path),
+                    "suffix": suffix,
+                    "ticker": ticker.upper(),
+                }
+            )
+    return _canonical_sha256(rows), file_count
 
 
 def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:
@@ -87,6 +146,7 @@ def _run_scope_slices(
     conn: sqlite3.Connection,
     repo_root: Path,
     as_of: date,
+    slices: ScopeSlices,
 ) -> tuple[list[dict[str, object]], int]:
     """Compute + upsert the §6 pool-wide industry/sector slice rows.
 
@@ -94,8 +154,6 @@ def _run_scope_slices(
     reported and skipped, the rest still write. Returns (per-slice results,
     failed count).
     """
-    pool = load_pool(conn, repo_root)
-    slices = pool_scope_slices(pool)
     results: list[dict[str, object]] = []
     failed = 0
     for (scope_type, scope_key), member_tickers in slices.items():
@@ -146,7 +204,8 @@ def _load_frozen_set(
     metric_class = str(row["metric_class"])
     cur = conn.execute(
         "SELECT member_ticker, membership_reason, context_only FROM comparable_set_members "
-        "WHERE comparable_set_id = ? AND valid_to IS NULL",
+        "WHERE comparable_set_id = ? AND valid_to IS NULL "
+        "ORDER BY member_ticker, membership_reason, context_only",
         (set_id,),
     )
     members = [
@@ -154,6 +213,93 @@ def _load_frozen_set(
         for r in cur.fetchall()
     ]
     return metric_class, members
+
+
+def _metric_input_fingerprint(
+    conn: sqlite3.Connection,
+    *,
+    tickers: list[str],
+    repo_root: Path,
+    include_pool_scopes: bool,
+) -> tuple[dict[str, FrozenSet | None], ScopeSlices, str, str, int]:
+    """Select and hash bounded membership rows plus every member cache file."""
+    frozen_by_ticker = {ticker: _load_frozen_set(conn, ticker) for ticker in tickers}
+    membership_count = sum(
+        len(frozen[1]) for frozen in frozen_by_ticker.values() if frozen is not None
+    )
+    if membership_count > _MAX_FINGERPRINT_MEMBERSHIPS:
+        raise ValueError("comparable-set fingerprint exceeds bounded membership budget")
+
+    slices: ScopeSlices = {}
+    if include_pool_scopes:
+        slices = pool_scope_slices(load_pool(conn, repo_root))
+        membership_count += sum(len(members) for members in slices.values())
+        if membership_count > _MAX_FINGERPRINT_MEMBERSHIPS:
+            raise ValueError("pool-scope fingerprint exceeds bounded membership budget")
+
+    source_tickers: set[str] = set()
+    frozen_payload: list[dict[str, object]] = []
+    for ticker in sorted(frozen_by_ticker):
+        frozen = frozen_by_ticker[ticker]
+        if frozen is None:
+            frozen_payload.append(
+                {
+                    "comparable_set_id": comparable_set_id(ticker, METHOD_VERSION),
+                    "members": None,
+                    "metric_class": None,
+                    "ticker": ticker,
+                }
+            )
+            continue
+        metric_class, members = frozen
+        frozen_payload.append(
+            {
+                "comparable_set_id": comparable_set_id(ticker, METHOD_VERSION),
+                "members": [
+                    {
+                        "context_only": context_only,
+                        "member_ticker": member_ticker,
+                        "membership_reason": reason,
+                    }
+                    for member_ticker, reason, context_only in members
+                ],
+                "metric_class": metric_class,
+                "ticker": ticker,
+            }
+        )
+        if metric_class != "reit":
+            source_tickers.update(
+                member_ticker for member_ticker, _, context_only in members if not context_only
+            )
+
+    slice_payload: list[dict[str, object]] = []
+    for (scope_type, scope_key), members in sorted(slices.items()):
+        metric_class = scope_metric_class(scope_type, scope_key)
+        slice_payload.append(
+            {
+                "members": members,
+                "metric_class": metric_class,
+                "scope_key": scope_key,
+                "scope_type": scope_type,
+            }
+        )
+        if metric_class != "reit":
+            source_tickers.update(members)
+
+    selection_fingerprint = _canonical_sha256(
+        {
+            "frozen_sets": frozen_payload,
+            "pool_slices": slice_payload,
+        }
+    )
+    source_fingerprint, file_count = _source_files_fingerprint(repo_root, source_tickers)
+    return (
+        frozen_by_ticker,
+        slices,
+        selection_fingerprint,
+        source_fingerprint,
+        file_count,
+    )
 
 
 def main() -> int:
@@ -189,12 +335,42 @@ def main() -> int:
             sys.stderr.write("No tickers resolved; nothing to do\n")
             return 0
 
-        run_id = start_run(conn, directive="track_comp_metrics", ticker_scope=tickers)
+        (
+            frozen_by_ticker,
+            scope_slices,
+            selection_fingerprint,
+            source_fingerprint,
+            source_file_count,
+        ) = _metric_input_fingerprint(
+            conn,
+            tickers=tickers,
+            repo_root=repo_root,
+            include_pool_scopes=args.ticker is None,
+        )
+        try:
+            run_id = start_run(
+                conn,
+                directive="track_comp_metrics",
+                ticker_scope=tickers,
+                invocation_inputs={
+                    "as_of": as_of.isoformat(),
+                    "include_pool_scopes": args.ticker is None,
+                    "method_version": METHOD_VERSION,
+                    "repo_root": str(repo_root.resolve()),
+                    "selection_fingerprint": selection_fingerprint,
+                    "source_file_count": source_file_count,
+                    "source_files_fingerprint": source_fingerprint,
+                },
+                deduplicate_completed=True,
+            )
+        except PipelineRunSuppressedError as exc:
+            print(json.dumps(suppression_payload(exc)))
+            return 0
         results: list[dict[str, object]] = []
         skipped = 0
         failed = 0
         for ticker in tickers:
-            frozen = _load_frozen_set(conn, ticker)
+            frozen = frozen_by_ticker[ticker]
             if frozen is None:
                 record_stage(
                     conn,
@@ -256,7 +432,12 @@ def main() -> int:
         scope_results: list[dict[str, object]] = []
         scope_failed = 0
         if not args.ticker:
-            scope_results, scope_failed = _run_scope_slices(conn, repo_root, as_of)
+            scope_results, scope_failed = _run_scope_slices(
+                conn,
+                repo_root,
+                as_of,
+                scope_slices,
+            )
             record_stage(
                 conn,
                 run_id,

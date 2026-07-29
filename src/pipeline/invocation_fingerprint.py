@@ -38,9 +38,7 @@ def file_fingerprint(path: Path, *, root: Path | None = None) -> dict[str, JsonV
     }
 
 
-def files_fingerprint(
-    paths: Iterable[Path], *, root: Path | None = None
-) -> list[JsonValue]:
+def files_fingerprint(paths: Iterable[Path], *, root: Path | None = None) -> list[JsonValue]:
     """Fingerprint a path set in deterministic display-path order."""
     unique = {path.resolve(): path for path in paths}
     return [

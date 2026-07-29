@@ -1,10 +1,16 @@
-"""Security and resource-bound regressions for audio transcript fetching."""
+# pyright: reportPrivateUsage=false, reportUnknownArgumentType=false, reportUnknownLambdaType=false
+"""Security and resource-bound regressions for audio transcript fetching.
+
+The suite intentionally probes private URL/resource guards and replaces the
+third-party downloader with dynamic test doubles.
+"""
 
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlunsplit
 
 import pytest
 
@@ -32,7 +38,7 @@ def test_validate_audio_url_rejects_private_target(monkeypatch: pytest.MonkeyPat
     "url",
     [
         "https://example.com/watch?v=123",
-        "https://user:password@youtube.com/watch?v=123",
+        urlunsplit(("https", "user:password@youtube.com", "/watch", "v=123", "")),
     ],
 )
 def test_validate_audio_url_rejects_unapproved_or_credentialed_url(

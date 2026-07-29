@@ -33,7 +33,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from models.runs import StageStatus  # noqa: E402
 from pipeline.confidence import apply_confidence_scores  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
-from pipeline.run_accounting import end_run, start_run  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    PipelineRunSuppressedError,
+    end_run,
+    start_run,
+    suppression_payload,
+)
 
 _DB_DEFAULT = PROJECT_ROOT / "data" / "portfolio.db"
 
@@ -50,9 +55,14 @@ def main() -> int:
     args = parser.parse_args()
 
     conn = open_db(args.db)
-    run_id = start_run(conn, directive="weekly_validation", ticker_scope=["ALL"])
-
+    run_id: str | None = None
     try:
+        try:
+            run_id = start_run(conn, directive="weekly_validation", ticker_scope=["ALL"])
+        except PipelineRunSuppressedError as exc:
+            print(json.dumps(suppression_payload(exc)))
+            return 0
+
         t1 = time.monotonic()
         ff_outcome = apply_confidence_scores(conn, table="financial_facts", ticker=None, apply=True)
         kf_outcome = apply_confidence_scores(conn, table="kpi_facts", ticker=None, apply=True)
@@ -85,7 +95,8 @@ def main() -> int:
 
     except Exception as exc:
         error_summary = f"{type(exc).__name__}: {exc}"[:500]
-        end_run(conn, run_id, StageStatus.FAILED, error_summary=error_summary)
+        if run_id is not None:
+            end_run(conn, run_id, StageStatus.FAILED, error_summary=error_summary)
         print(f"ERROR: {error_summary}", file=sys.stderr)
         return 1
     finally:

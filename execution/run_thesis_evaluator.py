@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -27,14 +28,112 @@ from compute.thesis_evaluator import (  # noqa: E402
     persist_verdict,
 )
 from models.runs import StageName, StageStatus  # noqa: E402
+from pipeline.invocation_fingerprint import files_fingerprint, payload_sha256  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
-from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    JsonValue,
+    PipelineRunSuppressedError,
+    end_run,
+    record_stage,
+    start_run,
+    suppression_payload,
+)
+from provenance.financial_fact_resolution import canonical_fact_relation  # noqa: E402
 from thesis_reunderwrite_gate import ReUnderwriteBlockedError  # noqa: E402
 
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
+_MATERIAL_TABLE_QUERIES = {
+    "thesis_state": (
+        "PRAGMA table_info(thesis_state)",
+        "SELECT * FROM thesis_state WHERE UPPER(ticker) = ?",
+    ),
+    "kpi_definitions": (
+        "PRAGMA table_info(kpi_definitions)",
+        "SELECT * FROM kpi_definitions WHERE UPPER(ticker) = ?",
+    ),
+    "fact_overrides": (
+        "PRAGMA table_info(fact_overrides)",
+        "SELECT * FROM fact_overrides WHERE UPPER(ticker) = ?",
+    ),
+    "thesis_evaluations": (
+        "PRAGMA table_info(thesis_evaluations)",
+        "SELECT * FROM thesis_evaluations WHERE UPPER(ticker) = ?",
+    ),
+    "decisions": (
+        "PRAGMA table_info(decisions)",
+        "SELECT * FROM decisions WHERE UPPER(ticker) = ?",
+    ),
+}
 
 
-def _resolve_tickers(conn, args: argparse.Namespace) -> list[str]:
+def _json_cell(value: object) -> JsonValue:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, bytes):
+        return value.hex()
+    return str(value)
+
+
+def _table_snapshot_sha256(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    tickers: list[str],
+) -> str:
+    if table in {"financial_facts", "kpi_facts"}:
+        fact_table = "financial_facts" if table == "financial_facts" else "kpi_facts"
+        relation = canonical_fact_relation(conn, fact_table).sql
+        rows: list[list[JsonValue]] = []
+        columns: list[str] = []
+        for ticker in tickers:
+            cursor = conn.execute(
+                f"SELECT * FROM {relation} WHERE UPPER(ticker) = ?",  # nosec B608 -- trusted canonical relation; values remain bound
+                (ticker,),
+            )
+            if not columns and cursor.description is not None:
+                columns = [str(description[0]) for description in cursor.description]
+            rows.extend([_json_cell(value) for value in row] for row in cursor.fetchall())
+        rows.sort(key=lambda row: json.dumps(row, separators=(",", ":"), sort_keys=True))
+        return payload_sha256({"table": table, "columns": columns, "rows": rows})
+    try:
+        schema_query, row_query = _MATERIAL_TABLE_QUERIES[table]
+    except KeyError as exc:
+        raise ValueError(f"unsupported material input table: {table}") from exc
+    columns = [str(row[1]) for row in conn.execute(schema_query).fetchall()]
+    if not columns:
+        return payload_sha256({"table": table, "exists": False})
+    if "ticker" not in columns:
+        raise ValueError(f"material input table {table} has no ticker column")
+    rows = [
+        [_json_cell(value) for value in row]
+        for ticker in tickers
+        for row in conn.execute(row_query, (ticker,)).fetchall()
+    ]
+    rows.sort(key=lambda row: json.dumps(row, separators=(",", ":"), sort_keys=True))
+    return payload_sha256({"table": table, "columns": columns, "rows": rows})
+
+
+def _invocation_inputs(
+    conn: sqlite3.Connection,
+    args: argparse.Namespace,
+    tickers: list[str],
+) -> dict[str, JsonValue]:
+    holdings_dir = args.holdings_dir.resolve()
+    return {
+        "holdings": files_fingerprint(
+            [holdings_dir / f"{ticker}.json" for ticker in tickers],
+            root=holdings_dir,
+        ),
+        "db_snapshots": {
+            table: _table_snapshot_sha256(conn, table=table, tickers=tickers)
+            for table in (*_MATERIAL_TABLE_QUERIES, "financial_facts", "kpi_facts")
+        },
+        "dry_run": bool(args.dry_run),
+        "override": bool(args.override),
+    }
+
+
+def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:
     """Return the list of tickers to evaluate. --ticker overrides --all."""
     if args.ticker:
         return [args.ticker.upper()]
@@ -101,7 +200,12 @@ def main() -> int:
             print(json.dumps({"warning": "no tickers in thesis_state"}, indent=2))
             return 0
 
-        run_id = start_run(conn, directive="run_thesis_evaluator", ticker_scope=tickers)
+        run_id = start_run(
+            conn,
+            directive="run_thesis_evaluator",
+            ticker_scope=tickers,
+            invocation_inputs=_invocation_inputs(conn, args, tickers),
+        )
         verdicts: list[ThesisVerdict] = []
         skipped: list[dict[str, str]] = []
         failed = 0
@@ -185,6 +289,9 @@ def main() -> int:
             )
         )
         return 0 if failed == 0 else 1
+    except PipelineRunSuppressedError as exc:
+        print(json.dumps(suppression_payload(exc)))
+        return 0
     finally:
         conn.close()
 

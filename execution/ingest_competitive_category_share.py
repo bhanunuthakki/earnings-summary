@@ -25,6 +25,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from competitive.category_share import ingest_category_share  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    PipelineRunSuppressedError,
+    suppression_payload,
+)
 
 
 def _tickers_with_seed(repo_root: Path) -> list[str]:
@@ -55,6 +59,9 @@ def main() -> int:
     try:
         results = [ingest_category_share(conn, repo_root, t) for t in tickers]
         conn.commit()
+    except PipelineRunSuppressedError as exc:
+        print(json.dumps(suppression_payload(exc)))
+        return 0
     finally:
         conn.close()
 

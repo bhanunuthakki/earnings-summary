@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Tests for src/document_table_extractor.py.
 
 Exercises the orchestrator's dispatch logic, FMP-payload discovery
@@ -14,6 +15,8 @@ from pathlib import Path
 import pytest
 
 import document_table_extractor as dte
+from models.runs import StageStatus
+from pipeline.run_accounting import PipelineRunSuppressedError
 
 
 def _full_schema(conn: sqlite3.Connection) -> None:
@@ -251,9 +254,12 @@ def test_extract_for_ticker_runs_all_registered_by_default(
 ) -> None:
     # Mock the LLM so the customer_concentration extractor doesn't make
     # a real call. The lease extractor is deterministic.
+    def empty_llm(_prompt: str, **_kwargs: object) -> str:
+        return "[]"
+
     monkeypatch.setattr(
         "table_extractors.customer_concentration.call_llm",
-        lambda prompt, **kwargs: "[]",
+        empty_llm,
     )
     _seed_fmp_json(repo_root, "GOOG", 2024)
     outcomes = dte.extract_for_ticker(
@@ -289,6 +295,30 @@ def test_extract_for_ticker_rejects_unknown_kind(repo_root: Path) -> None:
             table_kinds=["nonexistent_kind"],
             repo_root=repo_root,
         )
+
+
+def test_extract_for_ticker_propagates_accounting_suppression(
+    repo_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed_fmp_json(repo_root, "GOOG", 2024)
+    suppressed = PipelineRunSuppressedError(
+        pipeline_key="pipeline_same",
+        attempt_id="attempt_live",
+        status=StageStatus.IN_PROGRESS,
+    )
+
+    def suppress(**_: object):
+        raise suppressed
+
+    monkeypatch.setattr(dte._REGISTRY["lease_commitments"], "extract_fn", suppress)
+    with pytest.raises(PipelineRunSuppressedError) as exc_info:
+        dte.extract_for_ticker(
+            ticker="GOOG",
+            fiscal_year=2024,
+            table_kinds=["lease_commitments"],
+            repo_root=repo_root,
+        )
+    assert exc_info.value is suppressed
 
 
 def test_extract_for_ticker_resolves_doc_id_from_documents_table(

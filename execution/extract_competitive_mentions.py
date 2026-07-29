@@ -24,6 +24,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from competitive.transcript_mentions import extract_for_ticker  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    PipelineRunSuppressedError,
+    suppression_payload,
+)
 
 
 def main() -> int:
@@ -51,6 +55,9 @@ def main() -> int:
             transcripts_root=args.transcripts_root,
         )
         conn.commit()
+    except PipelineRunSuppressedError as exc:
+        print(json.dumps(suppression_payload(exc)))
+        return 0
     finally:
         conn.close()
 

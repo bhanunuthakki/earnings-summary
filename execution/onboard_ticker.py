@@ -66,12 +66,19 @@ from pipeline.fmp_doc_index import (  # noqa: E402
     set_fiscal_year_end_from_fmp,
     set_instrument_type_from_fmp,
 )
+from pipeline.invocation_fingerprint import files_fingerprint  # noqa: E402
 from pipeline.quarterly_refresh import (  # noqa: E402
     StageStatus as RefreshStageStatus,
 )
 from pipeline.quarterly_refresh import refresh_ticker  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
-from pipeline.run_accounting import end_run, start_run  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    JsonValue,
+    PipelineRunSuppressedError,
+    end_run,
+    start_run,
+    suppression_payload,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger(__name__)
@@ -92,6 +99,31 @@ _LIST_TYPE_TO_TIER: dict[str, str] = {
     "index_member": "P3",
     "none": "P3",
 }
+
+
+def _onboard_invocation_inputs(
+    args: argparse.Namespace,
+    ticker: str,
+    *,
+    instrument: str | None,
+) -> dict[str, JsonValue]:
+    """Material files and behavior flags for the accounted onboarding run."""
+    fmp_dir = PROJECT_ROOT / "data" / "historical" / "fmp"
+    material_files = [
+        _HOLDINGS_DIR / f"{ticker}.json",
+        *sorted(fmp_dir.glob(f"{ticker}_*")),
+    ]
+    return {
+        "files": files_fingerprint(material_files, root=PROJECT_ROOT),
+        "skip_fmp": bool(args.skip_fmp),
+        "skip_transcripts": bool(args.skip_transcripts),
+        "skip_ir": bool(args.skip_ir),
+        "skip_saydo": bool(args.skip_saydo),
+        "force_saydo": bool(args.force_saydo),
+        "industry_template": args.industry_template,
+        "instrument_override": args.instrument,
+        "resolved_instrument": instrument,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -682,7 +714,20 @@ def main() -> int:
         # bottoms-up equity machinery that means nothing for a fund.
         instrument_value = getattr(instrument, "value", instrument)
         if str(instrument_value or "").lower() == "etf":
-            run_id = start_run(conn, directive="onboard_ticker", ticker_scope=[ticker])
+            try:
+                run_id = start_run(
+                    conn,
+                    directive="onboard_ticker",
+                    ticker_scope=[ticker],
+                    invocation_inputs=_onboard_invocation_inputs(
+                        args,
+                        ticker,
+                        instrument=str(instrument_value or "").lower() or None,
+                    ),
+                )
+            except PipelineRunSuppressedError as exc:
+                print(json.dumps(suppression_payload(exc)))
+                return 0
             rc = run_etf_onboarding(conn, ticker, PROJECT_ROOT)
             end_run(
                 conn,
@@ -695,7 +740,20 @@ def main() -> int:
             return rc
 
         print(f"[onboard] {ticker} stage=quarterly_refresh", flush=True)
-        run_id = start_run(conn, directive="onboard_ticker", ticker_scope=[ticker])
+        try:
+            run_id = start_run(
+                conn,
+                directive="onboard_ticker",
+                ticker_scope=[ticker],
+                invocation_inputs=_onboard_invocation_inputs(
+                    args,
+                    ticker,
+                    instrument=str(instrument_value or "").lower() or None,
+                ),
+            )
+        except PipelineRunSuppressedError as exc:
+            print(json.dumps(suppression_payload(exc)))
+            return 0
         report = refresh_ticker(
             conn,
             ticker=ticker,

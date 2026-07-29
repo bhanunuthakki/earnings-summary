@@ -47,6 +47,7 @@ from compute.transcript_ingest import (
 from models.documents import SourceType
 from models.facts import LegacyEscapeHatch, Unit
 from models.runs import StageStatus
+from pipeline.invocation_fingerprint import files_fingerprint
 from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue, persist_manifest
 from pipeline.run_accounting import end_run, start_run
 
@@ -261,11 +262,9 @@ def extract_for_ticker(
         directive="extract_competitive_mentions",
         ticker_scope=[ticker.upper()],
         invocation_inputs={
-            "documents": [
-                f"Q{quarter}:{year}:{path.name}"
-                for (quarter, year), path in sorted(discovered.items())
-            ]
+            "documents": files_fingerprint(discovered.values(), root=repo_root),
         },
+        deduplicate_completed=True,
     )
     try:
         for (q_idx, fy_label), path in sorted(discovered.items()):

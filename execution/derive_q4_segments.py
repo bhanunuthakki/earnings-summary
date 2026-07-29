@@ -38,10 +38,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
-from compute.segment_q4_derive import derive_for_ticker  # noqa: E402
+from compute.segment_q4_derive import METHOD_VERSION, derive_for_ticker  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
-from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
+from pipeline.invocation_fingerprint import payload_sha256  # noqa: E402
+from pipeline.run_accounting import (  # noqa: E402
+    JsonValue,
+    PipelineRunSuppressedError,
+    end_run,
+    record_stage,
+    start_run,
+    suppression_payload,
+)
 from pipeline.source_routing import plan_for_ticker  # noqa: E402
+from provenance.financial_fact_resolution import canonical_fact_relation  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
@@ -63,9 +72,17 @@ def main() -> int:
         conn.close()
         return 0
 
-    run_id = start_run(
-        conn, directive="derive_q4_segments", ticker_scope=sorted({j[0] for j in jobs})
-    )
+    try:
+        run_id = start_run(
+            conn,
+            directive="derive_q4_segments",
+            ticker_scope=sorted({j[0] for j in jobs}),
+            invocation_inputs=_invocation_inputs(conn, jobs),
+        )
+    except PipelineRunSuppressedError as exc:
+        print(json.dumps(suppression_payload(exc)))
+        conn.close()
+        return 0
     summary: list[dict[str, object]] = []
     final_status = StageStatus.OK
     error_summary: str | None = None
@@ -181,6 +198,61 @@ def _resolve_jobs(
         for year in _fy_years_on_file(conn, ticker):
             jobs.append((ticker, year))
     return jobs
+
+
+def _rows_sha256(rows: list[sqlite3.Row]) -> str:
+    payload: list[JsonValue] = []
+    for row in rows:
+        payload.append(
+            [
+                value if value is None or isinstance(value, (str, int, float, bool)) else str(value)
+                for value in row
+            ]
+        )
+    return payload_sha256(payload)
+
+
+def _invocation_inputs(
+    conn: sqlite3.Connection, jobs: list[tuple[str, int]]
+) -> dict[str, JsonValue]:
+    """Fingerprint every DB row that can affect FY-minus-Q1-Q3 derivation."""
+    tickers = sorted({ticker for ticker, _ in jobs})
+    placeholders = ",".join("?" for _ in tickers)
+    financial_facts = canonical_fact_relation(conn, "financial_facts").sql
+    return {
+        "jobs": [{"ticker": ticker, "fiscal_year": fiscal_year} for ticker, fiscal_year in jobs],
+        "method_version": METHOD_VERSION,
+        "database_inputs": {
+            "tracked_companies": _rows_sha256(
+                conn.execute(
+                    f"SELECT * FROM tracked_companies WHERE ticker IN ({placeholders}) "
+                    "ORDER BY ticker, user_id",
+                    tickers,
+                ).fetchall()
+            ),
+            "documents": _rows_sha256(
+                conn.execute(
+                    f"SELECT * FROM documents WHERE ticker IN ({placeholders}) ORDER BY id",
+                    tickers,
+                ).fetchall()
+            ),
+            "segment_facts": _rows_sha256(
+                conn.execute(
+                    "SELECT sp.*, sd.* FROM segment_periods sp "
+                    "LEFT JOIN segment_dimensions sd ON sd.period_id = sp.id "
+                    f"WHERE sp.ticker IN ({placeholders}) ORDER BY sp.id, sd.id",
+                    tickers,
+                ).fetchall()
+            ),
+            "financial_facts": _rows_sha256(
+                conn.execute(
+                    f"SELECT * FROM {financial_facts} "  # nosec B608 -- trusted canonical relation; values remain bound
+                    f"WHERE ticker IN ({placeholders}) ORDER BY id",
+                    tickers,
+                ).fetchall()
+            ),
+        },
+    }
 
 
 if __name__ == "__main__":

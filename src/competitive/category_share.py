@@ -31,6 +31,7 @@ from models.documents import SourceType
 from models.facts import FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import ReportingCadence
 from models.runs import StageStatus
+from pipeline.invocation_fingerprint import file_fingerprint
 from pipeline.kpi_persistence import KpiExtractionManifest, KpiValue, persist_manifest
 from pipeline.run_accounting import end_run, start_run
 
@@ -122,9 +123,9 @@ def ingest_category_share(conn: sqlite3.Connection, repo_root: Path, ticker: str
         directive="ingest_competitive_category_share",
         ticker_scope=[ticker.upper()],
         invocation_inputs={
-            "seed_file": seed_path(repo_root, ticker).name,
-            "entries": len(seed.entries),
+            "seed": file_fingerprint(seed_path(repo_root, ticker), root=repo_root),
         },
+        deduplicate_completed=True,
     )
     try:
         # Group the writable (value-present) entries by fiscal year.

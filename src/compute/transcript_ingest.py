@@ -28,6 +28,7 @@ from pypdf import PdfReader
 
 from models.documents import DocType, FetchStatus, SourceType
 from models.facts import FiscalPeriodType
+from provenance.selection import selected_transcripts_relation
 from transcripts.source_reliability import choose_winner, classify_transcript_source
 
 _FILENAME_RE = re.compile(r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<year>20\d{2})$")
@@ -366,10 +367,10 @@ def find_transcript_for_period(
     period_end: datetime,
 ) -> tuple[int, int, str | None, int] | None:
     """Return the one current transcript for this real-world call, or ``None``."""
+    transcripts = selected_transcripts_relation(conn).sql
     row = conn.execute(
-        "SELECT id, document_id, source FROM transcripts "
-        "WHERE ticker = ? AND fiscal_period_type = ? AND period_end = ? "
-        "AND is_current = 1 LIMIT 1",
+        f"SELECT id, document_id, source FROM {transcripts} "  # nosec B608 -- trusted internal SQL shape; values remain bound
+        "WHERE ticker = ? AND fiscal_period_type = ? AND period_end = ? LIMIT 1",
         (ticker, fiscal_period_type.value, _sqlite_datetime(period_end)),
     ).fetchone()
     if row is None:

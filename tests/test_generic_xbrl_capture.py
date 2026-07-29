@@ -14,9 +14,13 @@ import json
 import sqlite3
 import sys
 from collections import defaultdict
+from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import ParamSpec, TypeVar
+
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -30,6 +34,21 @@ from pipeline.kpi_persistence import (  # noqa: E402
     persist_manifest,
 )
 from table_extractors import generic_xbrl_capture as g  # noqa: E402
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _capture_kwargs(
+    function: Callable[_P, _R],
+    captured: dict[str, object],
+) -> Callable[_P, _R]:
+    def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        captured.update(kwargs)
+        return function(*args, **kwargs)
+
+    return wrapped
+
 
 # These fixtures exercise persist_manifest's validation/canonicalization
 # behavior directly (not the real generic_xbrl_capture walker, which builds a
@@ -561,7 +580,7 @@ def test_mis_scaled_count_and_percent_not_stored_at_face_confidence() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_extract_end_to_end(tmp_path: Path) -> None:
+def test_extract_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db = tmp_path / "p.db"
     conn = sqlite3.connect(str(db))
     conn.executescript(
@@ -609,6 +628,9 @@ def test_extract_end_to_end(tmp_path: Path) -> None:
     fmp_dir.mkdir(parents=True)
     (fmp_dir / "X_form_10k_2024.json").write_text(json.dumps(_payload()), encoding="utf-8")
 
+    captured: dict[str, object] = {}
+    real_start = g.start_run
+    monkeypatch.setattr(g, "start_run", _capture_kwargs(real_start, captured))
     outcome = g.extract(
         ticker="X",
         fiscal_year=2024,
@@ -620,6 +642,11 @@ def test_extract_end_to_end(tmp_path: Path) -> None:
     )
     assert outcome.status == "ok"
     assert outcome.n_rows_inserted > 0
+    inputs = captured["invocation_inputs"]
+    assert isinstance(inputs, dict)
+    assert inputs["payload_sha256"]
+    assert inputs["extractor_version"] == g.EXTRACTOR_VERSION
+    assert captured["deduplicate_completed"] is True
 
     conn = sqlite3.connect(str(db))
     conn.row_factory = sqlite3.Row

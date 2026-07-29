@@ -43,6 +43,16 @@ class PipelineRunSuppressedError(RuntimeError):
         )
 
 
+def suppression_payload(exc: PipelineRunSuppressedError) -> dict[str, JsonValue]:
+    """Return the stable CLI/scheduler response for an intentional no-op."""
+    status = "already_running" if exc.status is StageStatus.IN_PROGRESS else "already_done"
+    return {
+        "status": status,
+        "pipeline_key": exc.pipeline_key,
+        "attempt_id": exc.attempt_id,
+    }
+
+
 def _canonical_json_value(value: JsonValue) -> JsonValue:
     if isinstance(value, Mapping):
         return {

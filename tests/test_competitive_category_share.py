@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import ParamSpec, TypeVar, cast
 
 import pytest
 
@@ -16,6 +18,20 @@ import competitive.category_share as category_share  # noqa: E402
 from competitive.category_share import ingest_category_share, load_seed  # noqa: E402
 
 from ._competitive_fixtures import kpi_conn  # noqa: E402
+
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _capture_kwargs(
+    function: Callable[_P, _R],
+    captured: dict[str, object],
+) -> Callable[_P, _R]:
+    def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        captured.update(kwargs)
+        return function(*args, **kwargs)
+
+    return wrapped
 
 
 def _write_seed(repo_root: Path) -> None:
@@ -104,8 +120,7 @@ def test_ingest_writes_grounded_facts_and_skips_null(tmp_path: Path) -> None:
     assert [
         row[0]
         for row in conn.execute(
-            "SELECT status FROM ingestion_runs "
-            "WHERE directive='ingest_competitive_category_share'"
+            "SELECT status FROM ingestion_runs WHERE directive='ingest_competitive_category_share'"
         ).fetchall()
     ] == ["ok"]
 
@@ -135,13 +150,32 @@ def test_ingest_failure_closes_attempt_once(
     with pytest.raises(RuntimeError, match="persist failed"):
         ingest_category_share(conn, tmp_path, "RBRK")
 
-    row = conn.execute(
-        "SELECT status, ended_at, error_summary FROM ingestion_runs"
-    ).fetchone()
+    row = conn.execute("SELECT status, ended_at, error_summary FROM ingestion_runs").fetchone()
     assert row is not None
     assert row["status"] == "failed"
     assert row["ended_at"] is not None
     assert "persist failed" in str(row["error_summary"])
+
+
+def test_ingest_fingerprints_seed_bytes_and_enables_completed_dedupe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_seed(tmp_path)
+    conn = kpi_conn()
+    captured: dict[str, object] = {}
+    real_start = category_share.start_run
+    monkeypatch.setattr(category_share, "start_run", _capture_kwargs(real_start, captured))
+    ingest_category_share(conn, tmp_path, "RBRK")
+
+    inputs_obj = captured["invocation_inputs"]
+    assert isinstance(inputs_obj, dict)
+    inputs = cast(dict[str, object], inputs_obj)
+    seed_obj = inputs["seed"]
+    assert isinstance(seed_obj, dict)
+    seed = cast(dict[str, object], seed_obj)
+    assert seed["path"] == "micro_thesis/competitive/RBRK_category_share.json"
+    assert isinstance(seed["sha256"], str)
+    assert captured["deduplicate_completed"] is True
 
 
 def test_ingest_missing_seed_is_noop(tmp_path: Path) -> None:
