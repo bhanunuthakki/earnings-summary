@@ -18,12 +18,13 @@ from __future__ import annotations
 
 import json
 import math
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from functools import lru_cache
 from itertools import pairwise
 from pathlib import Path
+from threading import Lock
 from typing import Any, cast
 
 import numpy as np
@@ -36,18 +37,15 @@ def _fmp_directory_state(fmp_dir: Path) -> tuple[int, int]:
     return metadata.st_mtime_ns, metadata.st_ctime_ns
 
 
-@lru_cache(maxsize=32)
-def _legacy_chart_manifest(
-    fmp_dir: Path, directory_state: tuple[int, int]
-) -> dict[str, tuple[Path, ...]]:
-    """Index legacy FMP names once for an observed directory state.
+_LEGACY_MANIFEST_CACHE_MAXSIZE = 32
+_legacy_manifest_cache: OrderedDict[Path, tuple[tuple[int, int], dict[str, tuple[Path, ...]]]] = (
+    OrderedDict()
+)
+_legacy_manifest_cache_lock = Lock()
 
-    A legacy filename has no stable endpoint contract, so it cannot be resolved
-    directly. One bounded manifest amortizes a directory scan across a panel
-    render, while the directory state in the cache key exposes newly written
-    charts to the next request.
-    """
-    del directory_state  # Deliberately a cache-key input, not payload data.
+
+def _scan_legacy_chart_manifest(fmp_dir: Path) -> dict[str, tuple[Path, ...]]:
+    """Build one deterministic index of the legacy chart filenames."""
     by_ticker: dict[str, list[Path]] = {}
     try:
         for path in fmp_dir.iterdir():
@@ -63,6 +61,31 @@ def _legacy_chart_manifest(
         ticker: tuple(sorted(paths, key=lambda path: path.name))
         for ticker, paths in by_ticker.items()
     }
+
+
+def _legacy_chart_manifest(
+    fmp_dir: Path, directory_state: tuple[int, int], *, force_refresh: bool = False
+) -> tuple[dict[str, tuple[Path, ...]], bool]:
+    """Index legacy FMP names once for an observed directory state.
+
+    A legacy filename has no stable endpoint contract, so it cannot be resolved
+    directly. One bounded manifest amortizes a directory scan across a panel
+    render, while the directory state in the cache key exposes newly written
+    charts to the next request.
+    """
+    with _legacy_manifest_cache_lock:
+        cached = _legacy_manifest_cache.get(fmp_dir)
+        if not force_refresh and cached is not None and cached[0] == directory_state:
+            _legacy_manifest_cache.move_to_end(fmp_dir)
+            return cached[1], True
+
+    manifest = _scan_legacy_chart_manifest(fmp_dir)
+    with _legacy_manifest_cache_lock:
+        _legacy_manifest_cache[fmp_dir] = (directory_state, manifest)
+        _legacy_manifest_cache.move_to_end(fmp_dir)
+        while len(_legacy_manifest_cache) > _LEGACY_MANIFEST_CACHE_MAXSIZE:
+            _legacy_manifest_cache.popitem(last=False)
+    return manifest, False
 
 
 def load_daily_closes(ticker: str, repo_root: Path) -> list[tuple[date, float]]:
@@ -96,12 +119,24 @@ def load_daily_closes(ticker: str, repo_root: Path) -> list[tuple[date, float]]:
     ]
     if not candidates:
         try:
-            manifest = _legacy_chart_manifest(fmp_dir, _fmp_directory_state(fmp_dir))
+            directory_state = _fmp_directory_state(fmp_dir)
+            manifest, was_cached = _legacy_chart_manifest(fmp_dir, directory_state)
         except OSError:
             return _load_proxy_store_closes(repo_root, upper)
         # Preserve established symbol precedence (GOOG before GOOGL) while
         # making each legacy symbol's filename choice deterministic.
         candidates = [*manifest.get(upper, ()), *manifest.get(f"{upper}L", ())]
+        if not candidates:
+            proxy_closes = _load_proxy_store_closes(repo_root, upper)
+            if proxy_closes:
+                return proxy_closes
+            # Windows can retain the same directory timestamps for two writes
+            # within one clock tick. Refresh a cached negative lookup once so
+            # a newly written legacy chart is visible without a restart. This
+            # path is skipped for proxy-backed tickers, the common FMP misses.
+            if was_cached:
+                manifest, _ = _legacy_chart_manifest(fmp_dir, directory_state, force_refresh=True)
+                candidates = [*manifest.get(upper, ()), *manifest.get(f"{upper}L", ())]
     for path in candidates:
         try:
             data: object = json.loads(path.read_text(encoding="utf-8"))

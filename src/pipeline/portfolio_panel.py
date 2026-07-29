@@ -44,6 +44,7 @@ from dataclasses import dataclass
 from datetime import date
 from html import escape
 from pathlib import Path
+from typing import cast
 
 from allocation import FACTOR_LABELS, NextDollarModel, build_next_dollar_model
 from bear_lint import (
@@ -1257,9 +1258,13 @@ def _exposure_panel(db_path: Path, live: LivePortfolio) -> str:
         if profile.exists():
             try:
                 payload: object = json.loads(profile.read_text(encoding="utf-8"))
-                rec: object = payload[0] if isinstance(payload, list) and payload else payload
+                if isinstance(payload, list):
+                    records = cast("list[object]", payload)
+                    rec: object = records[0] if records else {}
+                else:
+                    rec = payload
                 if isinstance(rec, dict):
-                    raw = rec.get("sector")  # pyright: ignore[reportUnknownMemberType]
+                    raw = cast("dict[str, object]", rec).get("sector")
                     if isinstance(raw, str) and raw.strip():
                         sector = raw.strip()
             except (OSError, ValueError):
@@ -2062,9 +2067,9 @@ def _persist_risk_snapshot(
     # capture must carry the sections the snapshot's substance comes from.
     if analytics.performance is None or analytics.positioning is None:
         return
-    if drawdown is None and analytics.performance is not None:
+    if drawdown is None:
         drawdown = compute_drawdown(analytics.performance.points)
-    if factor is None and analytics.positioning is not None:
+    if factor is None:
         factor = factor_exposure_rollup(analytics.positioning.correlations)
     # §7.1.9 provenance: this opportunistic render-path write derives
     # rebase_basis the identical way the authoritative scheduled writer does
