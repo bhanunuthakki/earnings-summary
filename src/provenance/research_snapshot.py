@@ -194,9 +194,32 @@ class CorpusProjectionBundle(_Frozen):
         return self
 
 
+class ResearchUniverse(_Frozen):
+    """The exact legal/reporting subject and evidence boundary for one answer."""
+
+    issuer_id: str = Field(min_length=1, max_length=128)
+    reporting_entity_ids: tuple[str, ...] = Field(min_length=1)
+    document_version_ids: tuple[str, ...] = Field(min_length=1)
+    source_obligation_revision_ids: tuple[str, ...] = Field(min_length=1)
+
+    @field_validator(
+        "reporting_entity_ids",
+        "document_version_ids",
+        "source_obligation_revision_ids",
+    )
+    @classmethod
+    def _sorted_unique(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not item for item in value):
+            raise ValueError("research universe identifiers must be non-empty")
+        if tuple(sorted(set(value))) != value:
+            raise ValueError("research universe identifiers must be sorted and unique")
+        return value
+
+
 class ResearchSnapshotRequest(_Frozen):
     research_snapshot_id: str = Field(min_length=1, max_length=128)
     idempotency_key: str = Field(min_length=1, max_length=256)
+    research_universe: ResearchUniverse
     processing_snapshot_ids: tuple[str, ...]
     corpus_bundles: tuple[CorpusProjectionBundle, ...]
     source_fact_publication_ids: tuple[str, ...]
@@ -1332,8 +1355,11 @@ def verify_processing_snapshot(
 
 def _research_lanes(request: ResearchSnapshotRequest) -> list[tuple[str, str]]:
     lanes: list[tuple[str, str]] = [
-        (f"processing:{item}", item) for item in request.processing_snapshot_ids
+        ("research_universe", request.research_snapshot_id)
     ]
+    lanes.extend(
+        (f"processing:{item}", item) for item in request.processing_snapshot_ids
+    )
     for bundle in request.corpus_bundles:
         coordinate = bundle.corpus_manifest_id
         lanes.append((f"corpus:{coordinate}", bundle.corpus_manifest_id))
@@ -1403,6 +1429,22 @@ class _DefaultResearchReferenceVerifier:
         cutoff_at: datetime,
         request: ResearchSnapshotRequest,
     ) -> VerifiedResearchReference:
+        if requested_lane == "research_universe":
+            canonical = canonical_json(_universe_payload(request.research_universe))
+            return VerifiedResearchReference(
+                requested_lane=requested_lane,
+                reference_table="research_snapshot_universe_commitments",
+                reference_id=reference_id,
+                commitment_sha256=_digest_text(canonical),
+                knowledge_at=request.cutoff_at,
+                recorded_at=request.recorded_at,
+                attributes={
+                    "issuer_id": request.research_universe.issuer_id,
+                    "reporting_entity_ids": list(
+                        request.research_universe.reporting_entity_ids
+                    ),
+                },
+            )
         if requested_lane.startswith("processing:"):
             receipt = verify_processing_snapshot(conn, reference_id)
             row = conn.execute(
@@ -1666,11 +1708,338 @@ class _DefaultResearchReferenceVerifier:
         )
 
 
+def _assert_disjoint(
+    named_sets: tuple[tuple[str, frozenset[str]], ...],
+    *,
+    label: str,
+) -> frozenset[str]:
+    union: set[str] = set()
+    for name, identifiers in named_sets:
+        overlap = union.intersection(identifiers)
+        if overlap:
+            raise ValueError(
+                f"{label} sets must not overlap; {name} repeats "
+                + ", ".join(sorted(overlap))
+            )
+        union.update(identifiers)
+    return frozenset(union)
+
+
+def _processing_document_sets(
+    conn: sqlite3.Connection,
+    processing_snapshot_ids: tuple[str, ...],
+) -> tuple[tuple[str, frozenset[str]], ...]:
+    return tuple(
+        (
+            snapshot_id,
+            frozenset(
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT DISTINCT document_version_id "
+                    "FROM document_processing_snapshot_members "
+                    "WHERE processing_snapshot_id=? ORDER BY document_version_id",
+                    (snapshot_id,),
+                )
+            ),
+        )
+        for snapshot_id in processing_snapshot_ids
+    )
+
+
+def _corpus_document_sets(
+    conn: sqlite3.Connection,
+    bundles: tuple[CorpusProjectionBundle, ...],
+) -> tuple[tuple[str, frozenset[str]], ...]:
+    return tuple(
+        (
+            bundle.corpus_manifest_id,
+            frozenset(
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT document_version_id "
+                    "FROM search_corpus_document_memberships "
+                    "WHERE manifest_id=? AND membership_status='included' "
+                    "ORDER BY document_version_id",
+                    (bundle.corpus_manifest_id,),
+                )
+                if row[0] is not None
+            ),
+        )
+        for bundle in bundles
+    )
+
+
+def _corpus_obligation_bindings(
+    conn: sqlite3.Connection,
+    bundles: tuple[CorpusProjectionBundle, ...],
+) -> tuple[sqlite3.Row, ...]:
+    all_rows: list[sqlite3.Row] = []
+    expected_documents: set[str] = set()
+    for bundle in bundles:
+        manifest_id = bundle.corpus_manifest_id
+        memberships = conn.execute(
+            "SELECT membership_id FROM search_corpus_document_memberships "
+            "WHERE manifest_id=? ORDER BY membership_id",
+            (manifest_id,),
+        ).fetchall()
+        for membership in memberships:
+            rows = conn.execute(
+                "SELECT expected.expected_document_id,"
+                "binding.source_obligation_revision_id,binding.issuer_id,"
+                "binding.reporting_entity_id,binding.document_family,"
+                "membership.document_version_id,membership.membership_status "
+                "FROM search_corpus_document_memberships AS membership "
+                "JOIN search_manifest_source_inventories AS inventory "
+                "ON inventory.manifest_id=membership.manifest_id "
+                "JOIN expected_documents AS expected "
+                "ON expected.snapshot_id=inventory.snapshot_id "
+                "AND expected.expected_document_key=membership.expected_document_key "
+                "JOIN expected_document_obligation_bindings AS binding "
+                "ON binding.expected_document_id=expected.expected_document_id "
+                "WHERE membership.membership_id=? "
+                "ORDER BY expected.expected_document_id",
+                (str(membership[0]),),
+            ).fetchall()
+            if len(rows) != 1:
+                raise ValueError(
+                    "every corpus membership must resolve to exactly one "
+                    "expected-document source-obligation binding"
+                )
+            expected_document_id = str(rows[0][0])
+            if expected_document_id in expected_documents:
+                raise ValueError(
+                    "corpus manifests must not overlap expected documents: "
+                    + expected_document_id
+                )
+            expected_documents.add(expected_document_id)
+            all_rows.append(rows[0])
+    return tuple(all_rows)
+
+
+def _validate_document_obligation_subject_pairs(
+    document_subjects: dict[str, tuple[str, str]],
+    binding_rows: tuple[sqlite3.Row | tuple[object, ...], ...],
+) -> None:
+    for row in binding_rows:
+        if str(row[6]) != "included":
+            continue
+        document_version_id = None if row[5] is None else str(row[5])
+        subject = (
+            None
+            if document_version_id is None
+            else document_subjects.get(document_version_id)
+        )
+        if subject != (str(row[2]), str(row[3])):
+            raise ValueError(
+                "each included document must match its exact source-obligation "
+                "issuer and reporting entity"
+            )
+
+
+def _verify_research_universe(
+    conn: sqlite3.Connection,
+    request: ResearchSnapshotRequest,
+    *,
+    verify_fact_subjects: bool,
+) -> None:
+    required = {
+        "document_processing_snapshot_members",
+        "expected_document_obligation_bindings",
+        "reporting_entities",
+        "research_snapshot_universe_commitments",
+        "search_corpus_document_memberships",
+        "search_manifest_source_inventories",
+        "v_evidence_document_versions_canonical",
+    }
+    missing = sorted(required - _tables(conn))
+    if missing:
+        raise RuntimeError(
+            "research universe closure schema is unavailable: " + ", ".join(missing)
+        )
+    universe = request.research_universe
+    issuer = conn.execute(
+        "SELECT issuer_id FROM issuer_entities WHERE issuer_id=?",
+        (universe.issuer_id,),
+    ).fetchone()
+    if issuer is None:
+        raise ValueError("research universe issuer does not exist")
+    entity_rows = conn.execute(
+        "SELECT reporting_entity_id,issuer_id FROM reporting_entities "
+        f"WHERE reporting_entity_id IN "
+        f"({','.join('?' for _ in universe.reporting_entity_ids)}) "
+        "ORDER BY reporting_entity_id",
+        universe.reporting_entity_ids,
+    ).fetchall()
+    if tuple(str(row[0]) for row in entity_rows) != universe.reporting_entity_ids or any(
+        str(row[1]) != universe.issuer_id for row in entity_rows
+    ):
+        raise ValueError("research universe reporting entities must belong to its issuer")
+
+    processing = _assert_disjoint(
+        _processing_document_sets(conn, request.processing_snapshot_ids),
+        label="processing snapshot document",
+    )
+    corpus = _assert_disjoint(
+        _corpus_document_sets(conn, request.corpus_bundles),
+        label="corpus manifest document",
+    )
+    requested_documents = frozenset(universe.document_version_ids)
+    if processing != corpus or processing != requested_documents:
+        raise ValueError(
+            "processing snapshots, corpus manifests, and research universe "
+            "must contain the exact same document set"
+        )
+
+    placeholders = ",".join("?" for _ in universe.document_version_ids)
+    document_rows = conn.execute(
+        "SELECT document_version_id,issuer_id,reporting_entity_id "
+        "FROM v_evidence_document_versions_canonical "
+        f"WHERE document_version_id IN ({placeholders}) "
+        "ORDER BY document_version_id",
+        universe.document_version_ids,
+    ).fetchall()
+    if tuple(str(row[0]) for row in document_rows) != universe.document_version_ids:
+        raise ValueError("research universe document versions are absent or duplicated")
+    document_entities: set[str] = set()
+    document_subjects: dict[str, tuple[str, str]] = {}
+    for row in document_rows:
+        if str(row[1]) != universe.issuer_id or row[2] is None:
+            raise ValueError(
+                "every research document must have the exact issuer and reporting entity"
+            )
+        document_entities.add(str(row[2]))
+        document_subjects[str(row[0])] = (str(row[1]), str(row[2]))
+    if document_entities != set(universe.reporting_entity_ids):
+        raise ValueError(
+            "document reporting-entity set must equal the research universe"
+        )
+
+    binding_rows = _corpus_obligation_bindings(conn, request.corpus_bundles)
+    obligation_ids = tuple(sorted({str(row[1]) for row in binding_rows}))
+    if obligation_ids != universe.source_obligation_revision_ids:
+        raise ValueError(
+            "corpus source obligations must exactly match the research universe"
+        )
+    obligation_entities: set[str] = set()
+    for row in binding_rows:
+        if str(row[2]) != universe.issuer_id or row[3] is None:
+            raise ValueError(
+                "every expected-document obligation must have the exact issuer "
+                "and reporting entity"
+            )
+        obligation_entities.add(str(row[3]))
+    _validate_document_obligation_subject_pairs(document_subjects, binding_rows)
+    if obligation_entities != set(universe.reporting_entity_ids):
+        raise ValueError(
+            "source-obligation reporting-entity set must equal the research universe"
+        )
+
+    if not verify_fact_subjects or not request.source_fact_publication_ids:
+        return
+    fact_rows = conn.execute(
+        "SELECT DISTINCT cell.reporting_entity_id,entity.issuer_id "
+        "FROM canonical_fact_resolution_snapshot_members AS member "
+        "JOIN canonical_metric_cells AS cell "
+        "ON cell.canonical_metric_cell_id=member.canonical_metric_cell_id "
+        "JOIN reporting_entities AS entity "
+        "ON entity.reporting_entity_id=cell.reporting_entity_id "
+        "WHERE member.resolution_snapshot_id=? "
+        "ORDER BY cell.reporting_entity_id",
+        (request.canonical_fact_resolution_snapshot_id,),
+    ).fetchall()
+    fact_entities = {str(row[0]) for row in fact_rows}
+    if not fact_rows or fact_entities != set(universe.reporting_entity_ids) or any(
+        str(row[1]) != universe.issuer_id for row in fact_rows
+    ):
+        raise ValueError(
+            "canonical fact reporting-entity set must equal the research universe"
+        )
+
+
+def _universe_payload(universe: ResearchUniverse) -> dict[str, object]:
+    return {
+        "document_version_ids": list(universe.document_version_ids),
+        "issuer_id": universe.issuer_id,
+        "reporting_entity_ids": list(universe.reporting_entity_ids),
+        "source_obligation_revision_ids": list(
+            universe.source_obligation_revision_ids
+        ),
+    }
+
+
+def _persist_research_universe(
+    conn: sqlite3.Connection,
+    request: ResearchSnapshotRequest,
+) -> None:
+    payload = _universe_payload(request.research_universe)
+    canonical = canonical_json(payload)
+    row = (
+        request.research_snapshot_id,
+        request.research_universe.issuer_id,
+        canonical_json(list(request.research_universe.reporting_entity_ids)),
+        canonical_json(list(request.research_universe.document_version_ids)),
+        canonical_json(list(request.research_universe.source_obligation_revision_ids)),
+        canonical,
+        _digest_text(canonical),
+        _db_time(request.cutoff_at),
+        _db_time(request.recorded_at),
+    )
+    existing = conn.execute(
+        "SELECT research_snapshot_id,issuer_id,reporting_entity_ids_json,"
+        "document_version_ids_json,source_obligation_revision_ids_json,"
+        "canonical_universe_json,universe_sha256,cutoff_at,recorded_at "
+        "FROM research_snapshot_universe_commitments "
+        "WHERE research_snapshot_id=?",
+        (request.research_snapshot_id,),
+    ).fetchone()
+    if existing is None:
+        conn.execute(
+            "INSERT INTO research_snapshot_universe_commitments "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            row,
+        )
+    elif tuple(existing) != row:
+        raise ValueError("Research Snapshot universe commitment conflict")
+
+
+def _verify_stored_research_universe(
+    conn: sqlite3.Connection,
+    request: ResearchSnapshotRequest,
+) -> None:
+    row = conn.execute(
+        "SELECT issuer_id,reporting_entity_ids_json,document_version_ids_json,"
+        "source_obligation_revision_ids_json,canonical_universe_json,"
+        "universe_sha256,cutoff_at,recorded_at "
+        "FROM research_snapshot_universe_commitments "
+        "WHERE research_snapshot_id=?",
+        (request.research_snapshot_id,),
+    ).fetchone()
+    payload = _universe_payload(request.research_universe)
+    canonical = canonical_json(payload)
+    expected = (
+        request.research_universe.issuer_id,
+        canonical_json(list(request.research_universe.reporting_entity_ids)),
+        canonical_json(list(request.research_universe.document_version_ids)),
+        canonical_json(list(request.research_universe.source_obligation_revision_ids)),
+        canonical,
+        _digest_text(canonical),
+        _db_time(request.cutoff_at),
+        _db_time(request.recorded_at),
+    )
+    if row is None or tuple(row) != expected:
+        raise ValueError("Research Snapshot universe commitment mismatch")
+
+
 def _verify_research_references(
     conn: sqlite3.Connection,
     request: ResearchSnapshotRequest,
     verifier: _ResearchReferenceVerifier,
 ) -> tuple[VerifiedResearchReference, ...]:
+    _verify_research_universe(
+        conn,
+        request,
+        verify_fact_subjects=isinstance(verifier, _DefaultResearchReferenceVerifier),
+    )
     required_publications = _required_source_fact_publications(
         conn, request.canonical_fact_resolution_snapshot_id
     )
@@ -1679,7 +2048,11 @@ def _verify_research_references(
             "Source Fact Publications must exactly match the requested 0244 candidate universes"
         )
     references = tuple(
-        verifier.verify(
+        (
+            _DefaultResearchReferenceVerifier()
+            if lane == "research_universe"
+            else verifier
+        ).verify(
             conn,
             requested_lane=lane,
             reference_id=reference_id,
@@ -1693,6 +2066,16 @@ def _verify_research_references(
     if actual_lanes != expected_lanes:
         raise ValueError("research verifier changed or reordered requested lanes")
     for reference in references:
+        if reference.requested_lane == "research_universe":
+            if (
+                _utc(reference.knowledge_at) != _utc(request.cutoff_at)
+                or _utc(reference.recorded_at) != _utc(request.recorded_at)
+            ):
+                raise ValueError(
+                    "research universe reference must use the exact cutoff and "
+                    "sealed commitment clock"
+                )
+            continue
         if _utc(reference.knowledge_at) > _utc(request.cutoff_at) or _utc(
             reference.recorded_at
         ) > _utc(request.cutoff_at):
@@ -1793,6 +2176,7 @@ def _build_research_snapshot_with_verifier(
             ),
             idempotency_key=request.idempotency_key,
         )
+        _persist_research_universe(conn, request)
         existing_count = conn.execute(
             "SELECT COUNT(*) FROM research_snapshot_members WHERE research_snapshot_id=?",
             (request.research_snapshot_id,),
@@ -1849,6 +2233,7 @@ def _verify_research_snapshot_with_verifier(
     ):
         raise ValueError("Research Snapshot header commitment mismatch")
     request = ResearchSnapshotRequest.model_validate(request_payload)
+    _verify_stored_research_universe(conn, request)
     if (
         _parse_time(header["cutoff_at"]) != _utc(request.cutoff_at)
         or _parse_time(header["recorded_at"]) != _utc(request.recorded_at)

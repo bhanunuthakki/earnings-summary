@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import sqlite3
 from collections.abc import Iterator
@@ -31,9 +32,11 @@ from provenance.research_snapshot import (
     DocumentProcessingScope,
     ProcessingEvidenceReference,
     ResearchSnapshotRequest,
+    ResearchUniverse,
     VerifiedResearchReference,
     _build_research_snapshot_with_verifier,
     _DefaultResearchReferenceVerifier,
+    _validate_document_obligation_subject_pairs,
     _verify_research_snapshot_with_verifier,
     admit,
     derive_obligations,
@@ -41,6 +44,14 @@ from provenance.research_snapshot import (
     seal_disposition,
     seal_processing_snapshot,
     verify_processing_snapshot,
+)
+from provenance.source_coverage import (
+    ExpectedDocument as CoverageExpectedDocument,
+)
+from provenance.source_coverage import (
+    SourceCoverageLedger,
+    SourceInventorySnapshot,
+    _expected_document_family,
 )
 from provenance.source_fact_publication import PublicationVerificationError
 from tests.test_document_processing_evidence import (
@@ -66,7 +77,7 @@ from tests.test_filing_xbrl_extraction_ledger import (
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_REVISION = "0213_decision_draft_provider_id"
-PROCESSING_EVIDENCE_REVISION = "0248_native_processing_closure_adapters"
+PROCESSING_EVIDENCE_REVISION = "0252_research_universe_closure"
 T1 = datetime(2026, 7, 27, 13, 0, tzinfo=UTC)
 T2 = T1 + timedelta(days=1)
 POLICY = DocumentProcessingPolicy(policy_name="test", policy_version="v1")
@@ -131,8 +142,174 @@ def _insert_foundation(conn: sqlite3.Connection) -> None:
         "INSERT INTO issuer_entities VALUES (?,?,?,?)",
         ("issuer-1", "issuer-1", "operating_company", at),
     )
+    conn.execute(
+        "INSERT INTO reporting_entities VALUES (?,?,?,?,?,?)",
+        (
+            "reporting-1",
+            "reporting-1",
+            "issuer-1",
+            "legal_registrant",
+            "Test Reporting Entity",
+            at,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO recorded_subject_binding_revisions ("
+        "binding_revision_id,idempotency_key,recorded_issuer_id,revision,"
+        "issuer_id,reporting_entity_id,security_id,outcome,decision_kind,"
+        "reason_code,reason_details_json,material_dissent,effective_at,"
+        "knowledge_at,recorded_at,supersedes_binding_revision_id) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "subject-binding-1",
+            "subject-binding-1",
+            "issuer-1",
+            1,
+            "issuer-1",
+            "reporting-1",
+            None,
+            "selected",
+            "deterministic",
+            "test",
+            "{}",
+            False,
+            at,
+            at,
+            at,
+            None,
+        ),
+    )
     _insert_document(conn, version=1, at=at)
     _insert_source_obligation(conn, key="obligation-a", at=at)
+    _insert_research_corpus_foundation(conn, at=at)
+
+
+def _insert_research_corpus_foundation(
+    conn: sqlite3.Connection,
+    *,
+    at: datetime,
+) -> None:
+    conn.execute(
+        "INSERT INTO source_inventory_snapshots VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "inventory-research",
+            "inventory-research",
+            "inventory-research",
+            1,
+            "issuer-1",
+            "TEST",
+            "ir_crawl",
+            "https://example.test/inventory",
+            "observation-1",
+            "succeeded",
+            True,
+            "a" * 64,
+            "test",
+            at,
+            at,
+            at,
+            None,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO expected_documents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "expected-document-1",
+            "expected-document-1",
+            "inventory-research",
+            "TEST:document-1",
+            "issuer-1",
+            "TEST",
+            "ir_document",
+            "web_page",
+            "other",
+            None,
+            "https://example.test/1",
+            None,
+            None,
+            None,
+            None,
+            at,
+            "authoritative",
+            at,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO source_inventory_components VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "inventory-component-research",
+            "inventory-component-research",
+            "inventory-research",
+            "primary",
+            "primary",
+            "https://example.test/inventory",
+            "observation-1",
+            "succeeded",
+            True,
+            None,
+            0,
+            at,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO source_inventory_snapshot_seals VALUES (?,?,?,?,?)",
+        ("inventory-research", 1, "c" * 64, "complete", at),
+    )
+    binding_payload = (
+        '{"document_family":"continuous_disclosure",'
+        '"expected_document_id":"expected-document-1",'
+        '"issuer_id":"issuer-1","reporting_entity_id":"reporting-1",'
+        '"source_obligation_revision_id":"obligation-a:v1"}'
+    )
+    conn.execute(
+        "INSERT INTO expected_document_obligation_bindings VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "expected-binding-1",
+            "expected-binding-1",
+            "expected-document-1",
+            "obligation-a:v1",
+            "issuer-1",
+            "reporting-1",
+            "continuous_disclosure",
+            binding_payload,
+            hashlib.sha256(binding_payload.encode()).hexdigest(),
+            at,
+            at,
+            at,
+        ),
+    )
+    for ordinal, manifest_id in enumerate(("manifest-a", "manifest-b"), start=1):
+        conn.execute(
+            "INSERT INTO search_corpus_manifests VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                manifest_id,
+                manifest_id,
+                manifest_id,
+                1,
+                "b" * 64,
+                "test",
+                at,
+                None,
+                at,
+            ),
+        )
+        if ordinal == 1:
+            conn.execute(
+                "INSERT INTO search_manifest_source_inventories VALUES (?,?,?)",
+                (manifest_id, "inventory-research", at),
+            )
+    conn.execute(
+        "INSERT INTO search_corpus_document_memberships VALUES (?,?,?,?,?,?,?)",
+        (
+            "membership-1",
+            "manifest-a",
+            "TEST:document-1",
+            "document-1",
+            "included",
+            "test",
+            at,
+        ),
+    )
 
 
 def _insert_document(
@@ -210,7 +387,7 @@ def _insert_source_obligation(
             key,
             1,
             "issuer-1",
-            None,
+            "reporting-1",
             "issuer_publisher",
             document_family,
             "required",
@@ -336,7 +513,17 @@ def _processing_snapshot(conn: sqlite3.Connection) -> str:
 
 def _sealed_filing_processing_snapshot(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[sqlite3.Connection, str, str]:
+    real_upgrade = command.upgrade
+
+    def _bounded_fixture_upgrade(config: Config, revision: str) -> None:
+        real_upgrade(
+            config,
+            "0246_source_fact_publication_stream" if revision == "head" else revision,
+        )
+
+    monkeypatch.setattr(command, "upgrade", _bounded_fixture_upgrade)
     output = _filing_output((_filing_entry(0),))
     conn = _filing_database(tmp_path, output)
     conn.execute("DROP TRIGGER trg_evidence_content_blobs_append_only")
@@ -556,6 +743,12 @@ def _research_request(processing_snapshot_id: str) -> ResearchSnapshotRequest:
     return ResearchSnapshotRequest(
         research_snapshot_id="research:t1",
         idempotency_key="research:t1",
+        research_universe=ResearchUniverse(
+            issuer_id="issuer-1",
+            reporting_entity_ids=("reporting-1",),
+            document_version_ids=("document-1",),
+            source_obligation_revision_ids=("obligation-a:v1",),
+        ),
         processing_snapshot_ids=(processing_snapshot_id,),
         corpus_bundles=(
             CorpusProjectionBundle(
@@ -955,8 +1148,12 @@ def test_native_transcript_evidence_admits_exactly_and_tampering_blocks_snapshot
 
 def test_filing_xbrl_native_seal_admits_and_tampering_blocks(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    conn, snapshot_id, publication_id = _sealed_filing_processing_snapshot(tmp_path)
+    conn, snapshot_id, publication_id = _sealed_filing_processing_snapshot(
+        tmp_path,
+        monkeypatch,
+    )
     assert verify_processing_snapshot(conn, snapshot_id).member_count == 14
     assert (
         conn.execute(
@@ -1046,6 +1243,462 @@ def test_multi_manifest_and_multi_publication_research_snapshot(
         "source_fact_publication:publication-a",
         "source_fact_publication:publication-b",
     } <= set(admission.requested_lanes)
+
+
+def test_research_universe_reference_uses_actual_post_cutoff_seal_clock(
+    conn: sqlite3.Connection,
+) -> None:
+    processing = _processing_snapshot(conn)
+    sealed_at = T1 + timedelta(minutes=5)
+    request = _research_request(processing).model_copy(
+        update={
+            "research_snapshot_id": "research:post-cutoff-seal",
+            "idempotency_key": "research:post-cutoff-seal",
+            "recorded_at": sealed_at,
+        }
+    )
+    admission = _build_research_snapshot_with_verifier(
+        conn,
+        request,
+        verifier=_SealedDoubleVerifier(),
+    )
+    member = conn.execute(
+        "SELECT reference_knowledge_at,reference_recorded_at "
+        "FROM research_snapshot_members WHERE research_snapshot_id=? "
+        "AND requested_lane='research_universe'",
+        (request.research_snapshot_id,),
+    ).fetchone()
+    universe = conn.execute(
+        "SELECT cutoff_at,recorded_at FROM research_snapshot_universe_commitments "
+        "WHERE research_snapshot_id=?",
+        (request.research_snapshot_id,),
+    ).fetchone()
+    assert member is not None and universe is not None
+    assert datetime.fromisoformat(str(member[0])).replace(tzinfo=UTC) == T1
+    assert datetime.fromisoformat(str(member[1])).replace(tzinfo=UTC) == sealed_at
+    assert tuple(str(value) for value in universe) == (
+        T1.replace(tzinfo=None).isoformat(sep=" "),
+        sealed_at.replace(tzinfo=None).isoformat(sep=" "),
+    )
+    assert admission.research_snapshot_id == request.research_snapshot_id
+
+
+def test_document_obligation_subject_pairing_rejects_two_entity_cross_swap() -> None:
+    document_subjects = {
+        "document-a": ("issuer-1", "reporting-1"),
+        "document-b": ("issuer-1", "reporting-2"),
+    }
+    cross_swapped: tuple[tuple[object, ...], ...] = (
+        (
+            "expected-a",
+            "obligation-reporting-2",
+            "issuer-1",
+            "reporting-2",
+            "issuer_presentations",
+            "document-a",
+            "included",
+        ),
+        (
+            "expected-b",
+            "obligation-reporting-1",
+            "issuer-1",
+            "reporting-1",
+            "issuer_presentations",
+            "document-b",
+            "included",
+        ),
+    )
+    with pytest.raises(ValueError, match="exact source-obligation issuer"):
+        _validate_document_obligation_subject_pairs(
+            document_subjects,
+            cross_swapped,
+        )
+
+
+@pytest.mark.parametrize(
+    ("form_type", "issuer_kind", "expected_family"),
+    (
+        ("10-K", "operating_company", "operating_company_periodic"),
+        ("N-CSR", "fund", "investment_company_periodic"),
+        ("N-PORT/A", "fund", "investment_company_periodic"),
+        ("8-K/A", "operating_company", "continuous_disclosure"),
+    ),
+)
+def test_sec_source_duty_map_is_closed_and_issuer_kind_aware(
+    form_type: str,
+    issuer_kind: str,
+    expected_family: str,
+) -> None:
+    record = CoverageExpectedDocument(
+        expected_document_id="expected-policy",
+        idempotency_key="expected-policy",
+        snapshot_id="inventory-policy",
+        expected_document_key=f"TEST:{form_type}",
+        issuer_id="issuer-policy",
+        source_kind="sec_filing",
+        document_type="filing",
+        form_type=form_type,
+        expectation_basis="authoritative",
+        recorded_at=T1,
+    )
+    assert (
+        _expected_document_family(record, issuer_kind=issuer_kind)
+        == expected_family
+    )
+
+
+@pytest.mark.parametrize(
+    ("form_type", "issuer_kind"),
+    (
+        ("S-1", "operating_company"),
+        ("N-CSR", "operating_company"),
+        ("10-K", "fund"),
+    ),
+)
+def test_sec_source_duty_map_rejects_unknown_or_wrong_issuer_kind(
+    form_type: str,
+    issuer_kind: str,
+) -> None:
+    record = CoverageExpectedDocument(
+        expected_document_id="expected-policy-reject",
+        idempotency_key="expected-policy-reject",
+        snapshot_id="inventory-policy",
+        expected_document_key=f"TEST:{form_type}",
+        issuer_id="issuer-policy",
+        source_kind="sec_filing",
+        document_type="filing",
+        form_type=form_type,
+        expectation_basis="authoritative",
+        recorded_at=T1,
+    )
+    with pytest.raises(ValueError):
+        _expected_document_family(record, issuer_kind=issuer_kind)
+
+
+def test_research_snapshot_rejects_processing_corpus_document_overlap(
+    conn: sqlite3.Connection,
+) -> None:
+    processing = _processing_snapshot(conn)
+    conn.execute(
+        "INSERT INTO search_manifest_source_inventories VALUES (?,?,?)",
+        ("manifest-b", "inventory-research", T1),
+    )
+    conn.execute(
+        "INSERT INTO search_corpus_document_memberships VALUES (?,?,?,?,?,?,?)",
+        (
+            "membership-overlap",
+            "manifest-b",
+            "TEST:document-1",
+            "document-1",
+            "included",
+            "test overlap",
+            T1,
+        ),
+    )
+    with pytest.raises(ValueError, match="must not overlap"):
+        _build_research_snapshot_with_verifier(
+            conn,
+            _research_request(processing),
+            verifier=_SealedDoubleVerifier(),
+        )
+
+
+def test_research_snapshot_rejects_missing_or_extra_universe_document(
+    conn: sqlite3.Connection,
+) -> None:
+    processing = _processing_snapshot(conn)
+    request = _research_request(processing)
+    request = request.model_copy(
+        update={
+            "research_universe": request.research_universe.model_copy(
+                update={"document_version_ids": ("document-1", "document-extra")}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="exact same document set"):
+        _build_research_snapshot_with_verifier(
+            conn,
+            request,
+            verifier=_SealedDoubleVerifier(),
+        )
+
+
+def test_research_snapshot_rejects_cross_reporting_entity_documents(
+    conn: sqlite3.Connection,
+) -> None:
+    conn.execute(
+        "INSERT INTO reporting_entities VALUES (?,?,?,?,?,?)",
+        (
+            "reporting-2",
+            "reporting-2",
+            "issuer-1",
+            "legal_registrant",
+            "Other Reporting Entity",
+            T1,
+        ),
+    )
+    processing = _processing_snapshot(conn)
+    request = _research_request(processing)
+    request = request.model_copy(
+        update={
+            "research_universe": request.research_universe.model_copy(
+                update={"reporting_entity_ids": ("reporting-2",)}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="document reporting-entity set"):
+        _build_research_snapshot_with_verifier(
+            conn,
+            request,
+            verifier=_SealedDoubleVerifier(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("snapshot_id", "reporting_ids", "document_ids"),
+    (
+        ("research:duplicate-subject", ("reporting-1", "reporting-1"), ("document-1",)),
+        ("research:missing-document", ("reporting-1",), ("document-missing",)),
+        ("research:cross-issuer", ("reporting-other",), ("document-1",)),
+    ),
+)
+def test_universe_trigger_rejects_duplicate_nonexistent_or_cross_issuer_ids(
+    conn: sqlite3.Connection,
+    snapshot_id: str,
+    reporting_ids: tuple[str, ...],
+    document_ids: tuple[str, ...],
+) -> None:
+    if (
+        conn.execute(
+            "SELECT 1 FROM issuer_entities WHERE issuer_id='issuer-other'"
+        ).fetchone()
+        is None
+    ):
+        conn.execute(
+            "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+            ("issuer-other", "issuer-other", "operating_company", T1),
+        )
+        conn.execute(
+            "INSERT INTO reporting_entities VALUES (?,?,?,?,?,?)",
+            (
+                "reporting-other",
+                "reporting-other",
+                "issuer-other",
+                "legal_registrant",
+                "Other Issuer",
+                T1,
+            ),
+        )
+    universe = {
+        "document_version_ids": list(document_ids),
+        "issuer_id": "issuer-1",
+        "reporting_entity_ids": list(reporting_ids),
+        "source_obligation_revision_ids": ["obligation-a:v1"],
+    }
+    request_json = json.dumps(
+        {"research_universe": universe},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    conn.execute(
+        "INSERT INTO research_snapshot_headers VALUES (?,?,?,?,?,?)",
+        (
+            snapshot_id,
+            snapshot_id,
+            request_json,
+            hashlib.sha256(request_json.encode()).hexdigest(),
+            T1,
+            T1,
+        ),
+    )
+    canonical = json.dumps(universe, sort_keys=True, separators=(",", ":"))
+    with pytest.raises(sqlite3.IntegrityError, match="commitment mismatch"):
+        conn.execute(
+            "INSERT INTO research_snapshot_universe_commitments VALUES "
+            "(?,?,?,?,?,?,?,?,?)",
+            (
+                snapshot_id,
+                "issuer-1",
+                json.dumps(list(reporting_ids), separators=(",", ":")),
+                json.dumps(list(document_ids), separators=(",", ":")),
+                '["obligation-a:v1"]',
+                canonical,
+                hashlib.sha256(canonical.encode()).hexdigest(),
+                T1,
+                T1,
+            ),
+        )
+
+
+def test_universe_trigger_rejects_false_digest(
+    conn: sqlite3.Connection,
+) -> None:
+    universe = {
+        "document_version_ids": ["document-1"],
+        "issuer_id": "issuer-1",
+        "reporting_entity_ids": ["reporting-1"],
+        "source_obligation_revision_ids": ["obligation-a:v1"],
+    }
+    request_json = json.dumps(
+        {"research_universe": universe},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    conn.execute(
+        "INSERT INTO research_snapshot_headers VALUES (?,?,?,?,?,?)",
+        (
+            "research:false-universe-digest",
+            "research:false-universe-digest",
+            request_json,
+            hashlib.sha256(request_json.encode()).hexdigest(),
+            T1,
+            T1,
+        ),
+    )
+    canonical = json.dumps(universe, sort_keys=True, separators=(",", ":"))
+    with pytest.raises(sqlite3.IntegrityError, match="commitment mismatch"):
+        conn.execute(
+            "INSERT INTO research_snapshot_universe_commitments VALUES "
+            "(?,?,?,?,?,?,?,?,?)",
+            (
+                "research:false-universe-digest",
+                "issuer-1",
+                '["reporting-1"]',
+                '["document-1"]',
+                '["obligation-a:v1"]',
+                canonical,
+                "f" * 64,
+                T1,
+                T1,
+            ),
+        )
+
+
+def test_expected_document_binding_trigger_rejects_false_digest(
+    conn: sqlite3.Connection,
+) -> None:
+    conn.execute(
+        "INSERT INTO source_inventory_snapshots VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "inventory:false-binding-digest",
+            "inventory:false-binding-digest",
+            "inventory:false-binding-digest",
+            1,
+            "issuer-1",
+            "TEST",
+            "ir_crawl",
+            "https://example.test/digest-inventory",
+            "observation-1",
+            "succeeded",
+            True,
+            "a" * 64,
+            "test",
+            T1,
+            T1,
+            T1,
+            None,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO expected_documents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "expected:false-binding-digest",
+            "expected:false-binding-digest",
+            "inventory:false-binding-digest",
+            "TEST:false-binding-digest",
+            "issuer-1",
+            "TEST",
+            "ir_document",
+            "presentation",
+            "other",
+            None,
+            "https://example.test/digest-document",
+            None,
+            None,
+            None,
+            None,
+            T1,
+            "authoritative",
+            T1,
+        ),
+    )
+    payload = (
+        '{"document_family":"continuous_disclosure",'
+        '"expected_document_id":"expected:false-binding-digest",'
+        '"issuer_id":"issuer-1","reporting_entity_id":"reporting-1",'
+        '"source_obligation_revision_id":"obligation-a:v1"}'
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="commitment mismatch"):
+        conn.execute(
+            "INSERT INTO expected_document_obligation_bindings VALUES "
+            "(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "binding:false-digest",
+                "binding:false-digest",
+                "expected:false-binding-digest",
+                "obligation-a:v1",
+                "issuer-1",
+                "reporting-1",
+                "continuous_disclosure",
+                payload,
+                "f" * 64,
+                T1,
+                T1,
+                T1,
+            ),
+        )
+
+
+def test_sec_8k_expected_document_binds_continuous_disclosure_revision(
+    conn: sqlite3.Connection,
+) -> None:
+    at = T1 - timedelta(minutes=30)
+    ledger = SourceCoverageLedger(conn)
+    ledger.persist(
+        SourceInventorySnapshot(
+            snapshot_id="inventory-8k",
+            idempotency_key="inventory-8k",
+            inventory_key="inventory-8k",
+            revision=1,
+            issuer_id="issuer-1",
+            ticker="TEST",
+            source_kind="sec_submissions",
+            source_url="https://www.sec.gov/Archives/edgar/data/test/submissions.json",
+            source_observation_id="observation-1",
+            outcome="succeeded",
+            authoritative=True,
+            retrieval_config_sha256="9" * 64,
+            collector_code_version="test",
+            started_at=at,
+            completed_at=at,
+            recorded_at=at,
+        )
+    )
+    ledger.persist(
+        CoverageExpectedDocument(
+            expected_document_id="expected-8k",
+            idempotency_key="expected-8k",
+            snapshot_id="inventory-8k",
+            expected_document_key="TEST:8-K:0001",
+            issuer_id="issuer-1",
+            ticker="TEST",
+            source_kind="sec_filing",
+            document_type="filing",
+            form_type="8-K",
+            accession_number="0001",
+            source_url="https://www.sec.gov/Archives/edgar/data/test/0001",
+            expectation_basis="authoritative",
+            recorded_at=at,
+            source_obligation_revision_id="obligation-a:v1",
+        )
+    )
+    row = conn.execute(
+        "SELECT source_obligation_revision_id,document_family "
+        "FROM expected_document_obligation_bindings "
+        "WHERE expected_document_id='expected-8k'"
+    ).fetchone()
+    assert row is not None
+    assert tuple(row) == ("obligation-a:v1", "continuous_disclosure")
 
 
 @pytest.mark.parametrize(
@@ -1233,10 +1886,10 @@ def test_raw_source_fact_publication_never_admits_without_public_verifier(
         )
 
 
-def test_embedding_promotion_without_bitemporal_clocks_fails_closed(
+def test_embedding_promotion_absent_at_cutoff_fails_closed(
     conn: sqlite3.Connection,
 ) -> None:
-    with pytest.raises(RuntimeError, match="lacks clocks/commitments"):
+    with pytest.raises(ValueError, match="absent at cutoff"):
         _DefaultResearchReferenceVerifier().verify(
             conn,
             requested_lane="embedding_promotion:manifest-a",
