@@ -1418,6 +1418,11 @@ def _persist_reporting_boundary(
             "regulator_inventory",
         ),
         (
+            "sec_edgar",
+            "continuous_disclosure",
+            "regulator_inventory",
+        ),
+        (
             "issuer_publisher",
             "issuer_financial_statements",
             "publisher_surface_exhaustion",

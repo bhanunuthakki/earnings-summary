@@ -1,0 +1,40 @@
+{
+  "bundle_name": "earnings-summary-filing-xbrl",
+  "bridge_module": "earnings_summary_xbrl_bridge",
+  "bridge_protocol_version": "filing-xbrl-bridge.v1",
+  "coordinates": {
+    "arelle": "2.39.8",
+    "edgar": "26.1",
+    "xule": "30052"
+  },
+  "execution": {
+    "isolated_python": true,
+    "internet_connectivity": "os_denied",
+    "sandbox_contract_version": "earnings-xbrl-os-sandbox.v1",
+    "sandbox_launcher_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "bundle_python_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "bundle_python_relative_path": "Scripts/python.exe",
+    "runtime_members": [
+      {
+        "relative_path": "Scripts/python.exe",
+        "blob_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        "byte_size": 0
+      }
+    ],
+    "runtime_artifact_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "maximum_stdout_bytes": 104857600,
+    "maximum_stderr_bytes": 1048576,
+    "timeout_seconds": 600
+  },
+  "qualification": {
+    "profile": "sec-inline-xbrl-investor-grade.v1",
+    "require_os_network_denial": true,
+    "require_runtime_artifact_sha256": true,
+    "require_exact_coordinates": true,
+    "require_sec_filing_identity": true,
+    "require_source_locator_commitments": true,
+    "require_network_artifact_commitments": true,
+    "require_footnote_commitments": true,
+    "require_zero_fact_host_verification": true
+  }
+}

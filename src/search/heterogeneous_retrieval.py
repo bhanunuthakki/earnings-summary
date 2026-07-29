@@ -13,7 +13,7 @@ from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from provenance.research_snapshot import verify_research_snapshot
+from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
 from provenance.search_index_lineage import load_projection_seal
 from provenance.verifier_identity import verifier_source_artifact_sha256
 from search.canonical_fact_projection import (
@@ -205,43 +205,13 @@ def audit_research_snapshot_for_retrieval(
     """Run the strict concrete verifier once and seal a read-admission receipt."""
 
     admission = verify_research_snapshot(conn, research_snapshot_id)
-    seal = _row(
-        conn,
-        "SELECT member_set_sha256 FROM research_snapshot_seals WHERE research_snapshot_id=?",
-        (research_snapshot_id,),
-    )
-    if seal is None:
-        raise HeterogeneousRetrievalError("research_snapshot_seal_missing")
-    projection_members = _rows(
-        conn,
-        "SELECT reference_commitment_sha256 FROM research_snapshot_members "
-        "WHERE research_snapshot_id=? "
-        "AND requested_lane LIKE 'canonical_fact_projection:%'",
-        (research_snapshot_id,),
-    )
-    if len(projection_members) != 1:
-        raise HeterogeneousRetrievalError("research_snapshot_projection_coordinate_missing")
-    projection_audit = _row(
-        conn,
-        "SELECT audit_payload_sha256 FROM canonical_fact_projection_audit_receipts "
-        "WHERE projection_seal_sha256=?",
-        (projection_members[0]["reference_commitment_sha256"],),
-    )
-    if projection_audit is None:
-        raise HeterogeneousRetrievalError("research_snapshot_projection_not_strictly_audited")
-    payload = canonical_json(
-        {
-            "audit_version": "research_snapshot_admission_audit.v1",
-            "member_count": admission.member_count,
-            "projection_audit_payload_sha256": projection_audit["audit_payload_sha256"],
-            "research_snapshot_id": research_snapshot_id,
-            "research_snapshot_sha256": seal["member_set_sha256"],
-        }
-    )
+    seal_sha256, payload = _research_snapshot_admission_payload(conn, research_snapshot_id)
+    if admission.member_count != _research_snapshot_member_count(conn, research_snapshot_id):
+        raise HeterogeneousRetrievalError("research_snapshot_admission_member_count_changed")
     config_sha = digest_text("research_snapshot_admission_audit.default.v1")
     values = (
         research_snapshot_id,
-        seal["member_set_sha256"],
+        seal_sha256,
         _RESEARCH_AUDITOR_NAME,
         _RESEARCH_AUDITOR_VERSION,
         _RESEARCH_AUDITOR_CODE_SHA256,
@@ -277,6 +247,59 @@ def audit_research_snapshot_for_retrieval(
         elif tuple(existing[column] for column in columns) != values:
             raise HeterogeneousRetrievalError("research_snapshot_admission_receipt_conflict")
     return digest_text(payload)
+
+
+def _research_snapshot_member_count(conn: sqlite3.Connection, research_snapshot_id: str) -> int:
+    seal = _row(
+        conn,
+        "SELECT member_count FROM research_snapshot_seals WHERE research_snapshot_id=?",
+        (research_snapshot_id,),
+    )
+    if seal is None:
+        raise HeterogeneousRetrievalError("research_snapshot_seal_missing")
+    return _int(seal["member_count"])
+
+
+def _research_snapshot_admission_payload(
+    conn: sqlite3.Connection,
+    research_snapshot_id: str,
+) -> tuple[str, str]:
+    seal = _row(
+        conn,
+        "SELECT member_count,member_set_sha256 FROM research_snapshot_seals "
+        "WHERE research_snapshot_id=?",
+        (research_snapshot_id,),
+    )
+    if seal is None:
+        raise HeterogeneousRetrievalError("research_snapshot_seal_missing")
+    projection_members = _rows(
+        conn,
+        "SELECT reference_commitment_sha256 FROM research_snapshot_members "
+        "WHERE research_snapshot_id=? "
+        "AND requested_lane LIKE 'canonical_fact_projection:%'",
+        (research_snapshot_id,),
+    )
+    if len(projection_members) != 1:
+        raise HeterogeneousRetrievalError("research_snapshot_projection_coordinate_missing")
+    projection_audits = _rows(
+        conn,
+        "SELECT audit_payload_sha256 FROM canonical_fact_projection_audit_receipts "
+        "WHERE projection_seal_sha256=? ORDER BY generation_id LIMIT 2",
+        (projection_members[0]["reference_commitment_sha256"],),
+    )
+    if len(projection_audits) != 1:
+        raise HeterogeneousRetrievalError("research_snapshot_projection_not_strictly_audited")
+    seal_sha256 = str(seal["member_set_sha256"])
+    payload = canonical_json(
+        {
+            "audit_version": "research_snapshot_admission_audit.v1",
+            "member_count": _int(seal["member_count"]),
+            "projection_audit_payload_sha256": projection_audits[0]["audit_payload_sha256"],
+            "research_snapshot_id": research_snapshot_id,
+            "research_snapshot_sha256": seal_sha256,
+        }
+    )
+    return seal_sha256, payload
 
 
 def retrieve_heterogeneous(
@@ -639,15 +662,58 @@ def _verify_research_coordinates(
         "SELECT member_set_sha256 FROM research_snapshot_seals WHERE research_snapshot_id=?",
         (request.research_snapshot_id,),
     )
+    research_header = _row(
+        conn,
+        "SELECT request_json FROM research_snapshot_headers WHERE research_snapshot_id=?",
+        (request.research_snapshot_id,),
+    )
+    universe = _row(
+        conn,
+        "SELECT issuer_id,reporting_entity_ids_json,document_version_ids_json,"
+        "source_obligation_revision_ids_json,canonical_universe_json,"
+        "universe_sha256,cutoff_at,recorded_at "
+        "FROM research_snapshot_universe_commitments "
+        "WHERE research_snapshot_id=?",
+        (request.research_snapshot_id,),
+    )
     generation = _row(
         conn,
         "SELECT resolution_snapshot_id,ontology_snapshot_id,cutoff_at "
         "FROM canonical_fact_projection_generations WHERE generation_id=?",
         (request.fact_generation_id,),
     )
-    if research_seal is None or generation is None:
+    if research_seal is None or research_header is None or universe is None or generation is None:
         raise HeterogeneousRetrievalError(
             "retrieval_bound_snapshot_missing", trace_id=request.trace_id
+        )
+    snapshot_request = ResearchSnapshotRequest.model_validate_json(
+        str(research_header["request_json"])
+    )
+    universe_payload = canonical_json(snapshot_request.research_universe.model_dump(mode="json"))
+    if (
+        str(universe["issuer_id"]) != snapshot_request.research_universe.issuer_id
+        or str(universe["reporting_entity_ids_json"])
+        != canonical_json(list(snapshot_request.research_universe.reporting_entity_ids))
+        or str(universe["document_version_ids_json"])
+        != canonical_json(list(snapshot_request.research_universe.document_version_ids))
+        or str(universe["source_obligation_revision_ids_json"])
+        != canonical_json(list(snapshot_request.research_universe.source_obligation_revision_ids))
+        or str(universe["canonical_universe_json"]) != universe_payload
+        or str(universe["universe_sha256"]) != digest_text(universe_payload)
+        or canonical_time(universe["cutoff_at"]) != canonical_time(snapshot_request.cutoff_at)
+        or canonical_time(universe["recorded_at"]) != canonical_time(snapshot_request.recorded_at)
+    ):
+        raise HeterogeneousRetrievalError(
+            "retrieval_research_universe_tampered", trace_id=request.trace_id
+        )
+    if (
+        request.filters.reporting_entity_id is not None
+        and request.filters.reporting_entity_id
+        not in snapshot_request.research_universe.reporting_entity_ids
+    ):
+        raise HeterogeneousRetrievalError(
+            "retrieval_reporting_entity_outside_research_universe",
+            trace_id=request.trace_id,
         )
     verified_generation = admit_canonical_projection_for_read(conn, request.fact_generation_id)
     members = _rows(
@@ -798,6 +864,10 @@ def _admit_research_snapshot_for_read(
     )
     if header is None or seal is None or receipt is None:
         raise HeterogeneousRetrievalError("research_snapshot_strict_admission_receipt_missing")
+    expected_seal_sha256, expected_audit_payload = _research_snapshot_admission_payload(
+        conn, research_snapshot_id
+    )
+    expected_config_sha256 = digest_text("research_snapshot_admission_audit.default.v1")
     member_count = _int(seal["member_count"])
     members = _rows(
         conn,
@@ -822,10 +892,13 @@ def _admit_research_snapshot_for_read(
             for member in members
         )
         or str(receipt["research_snapshot_sha256"]) != str(seal["member_set_sha256"])
+        or str(receipt["research_snapshot_sha256"]) != expected_seal_sha256
         or str(receipt["verifier_name"]) != _RESEARCH_AUDITOR_NAME
         or str(receipt["verifier_version"]) != _RESEARCH_AUDITOR_VERSION
         or str(receipt["verifier_code_sha256"]) != _RESEARCH_AUDITOR_CODE_SHA256
-        or str(receipt["audit_payload_sha256"]) != digest_text(str(receipt["audit_payload_json"]))
+        or str(receipt["verifier_config_sha256"]) != expected_config_sha256
+        or str(receipt["audit_payload_json"]) != expected_audit_payload
+        or str(receipt["audit_payload_sha256"]) != digest_text(expected_audit_payload)
     ):
         raise HeterogeneousRetrievalError("research_snapshot_bounded_admission_tampered")
 
@@ -841,7 +914,13 @@ def _collect_candidates(
     lane_limit = max(1, request.candidate_limit // max(1, len(request.narrative_bundles) + 1))
     if request.filters.include_narrative:
         for bundle in request.narrative_bundles:
-            for candidate in _lexical_candidates(conn, bundle, request.query_text, lane_limit):
+            for candidate in _lexical_candidates(
+                conn,
+                bundle,
+                request.query_text,
+                lane_limit,
+                reporting_entity_id=request.filters.reporting_entity_id,
+            ):
                 collected[("narrative", str(candidate["candidate_id"]))] = candidate
             if bundle.vector_index_run_id is not None:
                 runtime = _semantic_runtime(
@@ -890,7 +969,14 @@ def _collect_candidates(
                 )
                 semantic_receipts.append(semantic.model_dump(mode="json"))
                 for candidate in semantic.candidates:
-                    semantic_item = _semantic_candidate(conn, bundle, candidate)
+                    semantic_item = _semantic_candidate(
+                        conn,
+                        bundle,
+                        candidate,
+                        reporting_entity_id=request.filters.reporting_entity_id,
+                    )
+                    if semantic_item is None:
+                        continue
                     key = ("narrative", candidate.chunk_id)
                     existing = collected.get(key)
                     if existing is None:
@@ -1047,6 +1133,8 @@ def _lexical_candidates(
     bundle: NarrativeBundle,
     query_text: str,
     limit: int,
+    *,
+    reporting_entity_id: str | None = None,
 ) -> list[dict[str, object]]:
     expression = " OR ".join(
         f'"{token.replace(chr(34), chr(34) * 2)}"' for token in query_text.split() if token.strip()
@@ -1064,11 +1152,16 @@ def _lexical_candidates(
         "JOIN evidence_nodes node ON node.node_id=chunk.evidence_node_id "
         "JOIN evidence_extraction_runs run "
         "ON run.extraction_run_id=node.extraction_run_id "
+        "JOIN v_evidence_document_versions_canonical document "
+        "ON document.document_version_id=run.document_version_id "
         "WHERE search_lexical_chunks MATCH ? AND chunk.manifest_id=? "
+        "AND (? IS NULL OR document.reporting_entity_id=?) "
         "ORDER BY lexical_rank,chunk.chunk_id LIMIT ?",
         (
             expression,
             bundle.corpus_manifest_id,
+            reporting_entity_id,
+            reporting_entity_id,
             limit,
         ),
     )
@@ -1096,7 +1189,9 @@ def _semantic_candidate(
     conn: sqlite3.Connection,
     bundle: NarrativeBundle,
     candidate: SemanticCandidate,
-) -> dict[str, object]:
+    *,
+    reporting_entity_id: str | None = None,
+) -> dict[str, object] | None:
     assert bundle.vector_index_run_id is not None
     row = _row(
         conn,
@@ -1114,14 +1209,21 @@ def _semantic_candidate(
         "JOIN evidence_nodes node ON node.node_id=chunk.evidence_node_id "
         "JOIN evidence_extraction_runs run "
         "ON run.extraction_run_id=node.extraction_run_id "
-        "WHERE chunk.chunk_id=? AND chunk.manifest_id=?",
+        "JOIN v_evidence_document_versions_canonical document "
+        "ON document.document_version_id=run.document_version_id "
+        "WHERE chunk.chunk_id=? AND chunk.manifest_id=? "
+        "AND (? IS NULL OR document.reporting_entity_id=?)",
         (
             bundle.vector_index_run_id,
             candidate.chunk_id,
             bundle.corpus_manifest_id,
+            reporting_entity_id,
+            reporting_entity_id,
         ),
     )
     if row is None:
+        if reporting_entity_id is not None:
+            return None
         raise HeterogeneousRetrievalError("semantic_candidate_not_in_sealed_index")
     return {
         "candidate_id": candidate.chunk_id,
@@ -1320,12 +1422,14 @@ def _verify_candidate_source(
         row = _row(
             conn,
             "SELECT chunk.content_sha256,chunk.evidence_node_id,chunk.char_start,"
-            "chunk.char_end,run.document_version_id "
+            "chunk.char_end,run.document_version_id,document.reporting_entity_id "
             "FROM search_chunks chunk "
             "JOIN evidence_nodes node "
             "ON node.node_id=chunk.evidence_node_id "
             "JOIN evidence_extraction_runs run "
             "ON run.extraction_run_id=node.extraction_run_id "
+            "JOIN v_evidence_document_versions_canonical document "
+            "ON document.document_version_id=run.document_version_id "
             "WHERE chunk.chunk_id=? AND chunk.manifest_id=?",
             (candidate["candidate_id"], manifest_id),
         )
@@ -1338,6 +1442,7 @@ def _verify_candidate_source(
                         bundle,
                         request.query_text,
                         request.candidate_limit,
+                        reporting_entity_id=request.filters.reporting_entity_id,
                     )
                     if item["candidate_id"] == candidate["candidate_id"]
                 ),
@@ -1362,18 +1467,24 @@ def _verify_candidate_source(
                     chunk_id=str(candidate["candidate_id"]),
                     score=str(semantic_score),
                 ),
+                reporting_entity_id=request.filters.reporting_entity_id,
             )
-            semantic_lineage = cast(dict[str, object], semantic_candidate["lineage"])
-            semantic_valid = (
-                str(semantic_score) == semantic[0]
-                and str(lineage.get("vector_index_run_id")) == semantic[1]
-                and str(lineage.get("vector_sha256")) == str(semantic_lineage["vector_sha256"])
-            )
+            if semantic_candidate is not None:
+                semantic_lineage = cast(dict[str, object], semantic_candidate["lineage"])
+                semantic_valid = (
+                    str(semantic_score) == semantic[0]
+                    and str(lineage.get("vector_index_run_id")) == semantic[1]
+                    and str(lineage.get("vector_sha256")) == str(semantic_lineage["vector_sha256"])
+                )
         if (
             row is None
             or str(row["content_sha256"]) != str(candidate["source_commitment_sha256"])
             or locator != _narrative_locator(row)
             or str(lineage.get("evidence_node_id")) != str(row["evidence_node_id"])
+            or (
+                request.filters.reporting_entity_id is not None
+                and str(row["reporting_entity_id"]) != request.filters.reporting_entity_id
+            )
             or (
                 candidate["lexical_score"] is not None
                 and (

@@ -370,6 +370,7 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # capture cohorts and eval attribution auditable.
     "advisor_swap_check": "v1",
     "ask_answer": "v1",
+    "ask_claim_audit": "v1",
     "bear_case_grading": "v1",
     "canonicalize_segments": "v1",
     "customer_concentration_extraction": "v1",

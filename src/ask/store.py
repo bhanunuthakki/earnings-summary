@@ -245,13 +245,13 @@ def append_turn(
     citations: Sequence[object] | None = None,
     model: str | None = None,
     db_path: Path,
-) -> None:
+) -> int:
     """Append one turn to a session and bump the session's updated_at."""
     now = _now_iso()
     citations_json = json.dumps(citations) if citations is not None else None
     conn = _open(db_path)
     try:
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO ask_turns"
             " (session_id, role, text, citations_json, model, created_at)"
             " VALUES (?, ?, ?, ?, ?, ?)",
@@ -262,6 +262,93 @@ def append_turn(
             (now, session_id),
         )
         conn.commit()
+        if cursor.lastrowid is None:
+            raise RuntimeError("Ask turn insert did not return a row identity")
+        turn_id = int(cursor.lastrowid)
+    finally:
+        conn.close()
+    return turn_id
+
+
+def assert_user_turn_is_tail(
+    *,
+    session_id: str,
+    user_turn_id: int,
+    user_text: str,
+    db_path: Path,
+) -> AskTurnRow:
+    """Fail unless the exact request-bound user turn is still the session tail."""
+
+    conn = _open(db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM ask_turns WHERE session_id=? ORDER BY id DESC LIMIT 1",
+            (session_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if (
+        row is None
+        or int(row["id"]) != user_turn_id
+        or str(row["role"]) != "user"
+        or str(row["text"]) != user_text
+    ):
+        raise ValueError("authoritative Ask user turn is no longer the session tail")
+    return _row_to_turn(row)
+
+
+def append_assistant_turn_if_user_tail(
+    *,
+    session_id: str,
+    user_turn_id: int,
+    user_text: str,
+    text: str,
+    citations: Sequence[object] | None = None,
+    model: str | None = None,
+    db_path: Path,
+) -> int:
+    """Atomically append an assistant turn only behind its exact user request.
+
+    The conditional insert is the cross-process compare-and-swap. A concurrent
+    request that advances the same session prevents a stale answer from being
+    attached or emitted.
+    """
+
+    now = _now_iso()
+    citations_json = json.dumps(citations) if citations is not None else None
+    conn = _open(db_path)
+    try:
+        cursor = conn.execute(
+            "INSERT INTO ask_turns "
+            "(session_id,role,text,citations_json,model,created_at) "
+            "SELECT ?, 'assistant', ?, ?, ?, ? "
+            "WHERE EXISTS ("
+            "SELECT 1 FROM ask_turns tail "
+            "WHERE tail.id=? AND tail.session_id=? AND tail.role='user' "
+            "AND tail.text=? AND tail.id=("
+            "SELECT MAX(latest.id) FROM ask_turns latest "
+            "WHERE latest.session_id=?))",
+            (
+                session_id,
+                text,
+                citations_json,
+                model,
+                now,
+                user_turn_id,
+                session_id,
+                user_text,
+                session_id,
+            ),
+        )
+        if cursor.rowcount != 1 or cursor.lastrowid is None:
+            conn.rollback()
+            raise ValueError("authoritative Ask session advanced before final append")
+        conn.execute(
+            "UPDATE ask_sessions SET updated_at=? WHERE id=?",
+            (now, session_id),
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
     finally:
         conn.close()
 
@@ -335,7 +422,9 @@ def _row_to_turn(row: sqlite3.Row) -> AskTurnRow:
 __all__ = [
     "AskSession",
     "AskTurnRow",
+    "append_assistant_turn_if_user_tail",
     "append_turn",
+    "assert_user_turn_is_tail",
     "create_session",
     "delete_session",
     "ensure_session",

@@ -36,9 +36,32 @@ remain explicit user actions:
 - `execution/fetch_ir_documents.py` — refresh IR docs (URL manifest required)
 - `execution/fetch_audio_transcripts.py` — pull yt-dlp + Whisper transcribe
 - `execution/fetch_sec_xbrl.py --all-mapped` — SEC XBRL backfill
+- `execution/sync_sec_filing_inventory.py` — capture and seal the authoritative
+  SEC submissions/package inventory for one issuer.
+- `execution/capture_expected_sec_documents.py` — fetch a bounded accession
+  batch into the immutable evidence store. A real `EDGAR_USER_AGENT` is
+  required; there is no placeholder identity.
+- `execution/ingest_sec_filing_xbrl.py` — validate one completely captured
+  accession with the pinned Arelle 2.39.8 / EDGAR 26.1 / XULE 30052 processor
+  bundle. The bundle Python, runtime artifact, and OS-sandbox launcher each
+  require an independently pinned SHA-256. The launcher contract must enforce
+  network denial; an unavailable or mismatched launcher is a hard stop rather
+  than an environment-variable claim of offline execution. Ingestion commits
+  every raw-fact disposition plus explicit network-artifact, raw-fact, and
+  footnote counts/set digests (including empty-set commitments), then atomically
+  publishes the accepted facts and coverage promotion. Dry-run is the default;
+  `--apply` is explicit.
 
-After any of those land new bytes on disk, the cron will pick them up on the
-next scheduled run.
+SEC filing-native facts are not inferred from loose files. Inventory, capture,
+and ingestion must succeed in that order under the same accession identity.
+Transient SEC fetch failures remain deferred for the next bounded capture run;
+identity, package, schema, processor-coordinate, or taxonomy-artifact failures
+are hard stops. Zero extracted facts are accepted only when the processor emits
+a no-Inline-XBRL disposition and an independent host scan confirms the primary
+document has no Inline-XBRL markers. Exact ingestion replay reuses the original
+immutable timestamp, validates every ledger field, and creates no new rows.
+After a sealed publication exists, downstream quarterly processing can consume
+its canonical projection on the next scheduled run.
 
 ## Schedule
 

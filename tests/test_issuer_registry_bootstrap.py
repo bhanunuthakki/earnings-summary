@@ -149,7 +149,7 @@ def test_apply_captures_evidence_and_exact_replay_creates_nothing(
     )
     conn.commit()
 
-    assert first.records_created == 17
+    assert first.records_created == 18
     assert second.records_created == 0
     row = conn.execute(
         "SELECT i.issuer_id, i.normalized_value, r.outcome "
@@ -181,6 +181,7 @@ def test_apply_captures_evidence_and_exact_replay_creates_nothing(
         "SELECT authority_kind, document_family, obligation_state "
         "FROM source_obligation_revisions ORDER BY document_family"
     ).fetchall() == [
+        ("sec_edgar", "continuous_disclosure", "required"),
         ("issuer_publisher", "issuer_earnings_materials", "required"),
         ("issuer_publisher", "issuer_financial_statements", "required"),
         ("issuer_publisher", "issuer_presentations", "required"),

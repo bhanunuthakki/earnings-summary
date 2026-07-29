@@ -55,6 +55,7 @@ GOLDEN_PURPOSES: frozenset[str] = frozenset(
         "ask_pack_router",
         "ask_evidence_followup",
         "ask_claim_grounding",
+        "ask_claim_audit",
         "injection_canaries",
         "provenance_caution",
         "news_structuring",

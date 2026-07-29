@@ -15,12 +15,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from provenance.source_fact_publication import verify_source_fact_publication
 
 Status = Literal["resolved", "unresolved", "retired"]
 MAX_CANDIDATES_PER_CANONICAL_CELL = 500
+_RESOLUTION_SCOPE_VERSION = "canonical-resolution-snapshot-scope.v1"
 
 
 def _json(value: object) -> str:
@@ -68,6 +69,47 @@ class ResolutionReceipt(BaseModel):
     status: Status
     selected_observation_id: str | None
     exact_replay: bool
+
+
+class ResolutionSnapshotScope(BaseModel):
+    """The explicit, immutable issuer universe committed by a resolution snapshot."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    issuer_id: str = Field(min_length=1, max_length=128)
+    reporting_entity_ids: tuple[str, ...] = Field(min_length=1)
+    scope_version: Literal["canonical-resolution-snapshot-scope.v1"] = _RESOLUTION_SCOPE_VERSION
+
+    @field_validator("reporting_entity_ids")
+    @classmethod
+    def _ordered_unique_entities(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not entity_id or len(entity_id) > 128 for entity_id in value):
+            raise ValueError("reporting entity ids must be non-empty and at most 128 chars")
+        if tuple(sorted(set(value))) != value:
+            raise ValueError("reporting entity ids must be sorted and unique")
+        return value
+
+    @property
+    def canonical_json(self) -> str:
+        return _json(self)
+
+    @property
+    def scope_sha256(self) -> str:
+        return _sha(self.canonical_json)
+
+
+class VerifiedResolutionSnapshot(BaseModel):
+    """Exact verification receipt for a sealed, issuer-scoped snapshot."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    resolution_snapshot_id: str
+    scope: ResolutionSnapshotScope
+    cutoff_at: datetime
+    recorded_at: datetime
+    member_count: int
+    member_set_sha256: str
+    scope_member_set_sha256: str
+    scope_sha256: str
+    snapshot_commitment_sha256: str
 
 
 @dataclass(frozen=True)
@@ -210,14 +252,31 @@ class CanonicalFactResolutionEngine:
         )
 
     def seal_snapshot(
-        self, resolution_snapshot_id: str, cutoff_at: datetime, recorded_at: datetime
-    ) -> None:
+        self,
+        resolution_snapshot_id: str,
+        cutoff_at: datetime,
+        recorded_at: datetime,
+        scope: ResolutionSnapshotScope,
+    ) -> VerifiedResolutionSnapshot:
         cutoff, recorded = _utc(cutoff_at), _utc(recorded_at)
         if recorded < cutoff:
             raise ValueError("snapshot recorded_at must not precede cutoff_at")
-        members = self._latest_resolution_members(cutoff)
+        self._verify_scope_registry(scope)
+        members = self._latest_resolution_members(cutoff, scope)
         member_json = _json(members)
         key = f"snapshot:{resolution_snapshot_id}"
+        scope_key = f"snapshot-scope:{resolution_snapshot_id}"
+        scope_members = [
+            {"reporting_entity_id": entity_id} for entity_id in scope.reporting_entity_ids
+        ]
+        scope_member_json = _json(scope_members)
+        scope_commitment = {
+            "cutoff_at": _time(cutoff),
+            "member_set_sha256": _sha(member_json),
+            "resolution_snapshot_id": resolution_snapshot_id,
+            "scope_member_set_sha256": _sha(scope_member_json),
+            "scope_sha256": scope.scope_sha256,
+        }
         existing = self._conn.execute(
             "SELECT cutoff_at,member_count,canonical_member_set_json,member_set_sha256,recorded_at FROM canonical_fact_resolution_snapshot_seals WHERE idempotency_key=?",
             (key,),
@@ -226,10 +285,33 @@ class CanonicalFactResolutionEngine:
         if existing is not None:
             if tuple(existing) != expected:
                 raise ValueError("canonical snapshot idempotency conflict")
-            self.verify_snapshot(resolution_snapshot_id, cutoff)
-            return
+            return self.verify_snapshot(resolution_snapshot_id, cutoff)
         self._conn.execute("SAVEPOINT seal_canonical_resolution_snapshot")
         try:
+            self._conn.execute(
+                "INSERT INTO canonical_fact_resolution_snapshot_scope_headers "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    resolution_snapshot_id,
+                    scope_key,
+                    scope.issuer_id,
+                    scope.scope_version,
+                    scope.canonical_json,
+                    scope.scope_sha256,
+                    _time(cutoff),
+                    _time(recorded),
+                ),
+            )
+            for ordinal, member in enumerate(scope_members):
+                self._conn.execute(
+                    "INSERT INTO canonical_fact_resolution_snapshot_scope_members VALUES (?,?,?,?)",
+                    (
+                        resolution_snapshot_id,
+                        ordinal,
+                        member["reporting_entity_id"],
+                        _sha(member),
+                    ),
+                )
             for ordinal, member in enumerate(members):
                 digest = _sha(member)
                 self._conn.execute(
@@ -248,14 +330,50 @@ class CanonicalFactResolutionEngine:
                 "INSERT INTO canonical_fact_resolution_snapshot_seals VALUES (?,?,?,?,?,?,?)",
                 (resolution_snapshot_id, key, *expected),
             )
-            self.verify_snapshot(resolution_snapshot_id, cutoff)
+            self._conn.execute(
+                "INSERT INTO canonical_fact_resolution_snapshot_scope_seals VALUES (?,?,?,?,?,?,?)",
+                (
+                    resolution_snapshot_id,
+                    len(scope_members),
+                    scope_member_json,
+                    _sha(scope_member_json),
+                    _json(scope_commitment),
+                    _sha(scope_commitment),
+                    _time(recorded),
+                ),
+            )
+            receipt = self.verify_snapshot(resolution_snapshot_id, cutoff)
         except Exception:
             self._conn.execute("ROLLBACK TO SAVEPOINT seal_canonical_resolution_snapshot")
             self._conn.execute("RELEASE SAVEPOINT seal_canonical_resolution_snapshot")
             raise
         self._conn.execute("RELEASE SAVEPOINT seal_canonical_resolution_snapshot")
+        return receipt
 
-    def verify_snapshot(self, resolution_snapshot_id: str, cutoff_at: datetime) -> None:
+    def verify_snapshot(
+        self, resolution_snapshot_id: str, cutoff_at: datetime
+    ) -> VerifiedResolutionSnapshot:
+        scope_row = self._conn.execute(
+            "SELECT issuer_id,scope_version,canonical_scope_json,scope_sha256,"
+            "cutoff_at,recorded_at "
+            "FROM canonical_fact_resolution_snapshot_scope_headers "
+            "WHERE resolution_snapshot_id=?",
+            (resolution_snapshot_id,),
+        ).fetchone()
+        if scope_row is None:
+            raise ValueError("canonical snapshot scope is missing")
+        try:
+            parsed_scope = ResolutionSnapshotScope.model_validate_json(str(scope_row[2]))
+        except ValueError as exc:
+            raise ValueError("canonical snapshot scope is malformed") from exc
+        if (
+            parsed_scope.issuer_id != str(scope_row[0])
+            or parsed_scope.scope_version != str(scope_row[1])
+            or parsed_scope.canonical_json != str(scope_row[2])
+            or parsed_scope.scope_sha256 != str(scope_row[3])
+        ):
+            raise ValueError("canonical snapshot scope is missing or tampered")
+        self._verify_scope_registry(parsed_scope)
         row = self._conn.execute(
             "SELECT cutoff_at,member_count,canonical_member_set_json,member_set_sha256,recorded_at FROM canonical_fact_resolution_snapshot_seals WHERE resolution_snapshot_id=?",
             (resolution_snapshot_id,),
@@ -263,8 +381,24 @@ class CanonicalFactResolutionEngine:
         if row is None:
             raise ValueError("canonical snapshot is missing")
         cutoff = _time(_utc(cutoff_at))
-        if str(row[0]) != cutoff:
+        if str(row[0]) != cutoff or str(scope_row[4]) != cutoff:
             raise ValueError("snapshot cutoff must be explicit and exact")
+        scope_member_rows = self._conn.execute(
+            "SELECT reporting_entity_id,member_sha256 "
+            "FROM canonical_fact_resolution_snapshot_scope_members "
+            "WHERE resolution_snapshot_id=? ORDER BY member_ordinal",
+            (resolution_snapshot_id,),
+        ).fetchall()
+        scope_members = [
+            {"reporting_entity_id": scope_member[0]} for scope_member in scope_member_rows
+        ]
+        if tuple(
+            member["reporting_entity_id"] for member in scope_members
+        ) != parsed_scope.reporting_entity_ids or any(
+            _sha(member) != scope_member[1]
+            for member, scope_member in zip(scope_members, scope_member_rows, strict=True)
+        ):
+            raise ValueError("canonical snapshot scope members are missing or tampered")
         members = self._conn.execute(
             "SELECT canonical_metric_cell_id,candidate_universe_id,relation_set_id,canonical_resolution_revision_id,member_sha256 FROM canonical_fact_resolution_snapshot_members WHERE resolution_snapshot_id=? ORDER BY member_ordinal",
             (resolution_snapshot_id,),
@@ -285,31 +419,93 @@ class CanonicalFactResolutionEngine:
             or any(_sha(item) != member[4] for item, member in zip(payload, members, strict=True))
         ):
             raise ValueError("canonical snapshot members are missing or tampered")
-        live_payload = self._latest_resolution_members(_utc(cutoff_at))
+        live_payload = self._latest_resolution_members(_utc(cutoff_at), parsed_scope)
         if _json(payload) != _json(live_payload):
             raise ValueError("canonical snapshot is not exhaustive latest-as-known state")
         for member in payload:
             self._verify_universe(str(member["candidate_universe_id"]), None)
             self._verify_relation_set(str(member["relation_set_id"]), None)
             self._verify_resolution(str(member["canonical_resolution_revision_id"]))
+        scope_seal = self._conn.execute(
+            "SELECT member_count,canonical_member_set_json,member_set_sha256,"
+            "canonical_snapshot_commitment_json,snapshot_commitment_sha256,sealed_at "
+            "FROM canonical_fact_resolution_snapshot_scope_seals "
+            "WHERE resolution_snapshot_id=?",
+            (resolution_snapshot_id,),
+        ).fetchone()
+        scope_member_json = _json(scope_members)
+        commitment = {
+            "cutoff_at": cutoff,
+            "member_set_sha256": str(row[3]),
+            "resolution_snapshot_id": resolution_snapshot_id,
+            "scope_member_set_sha256": _sha(scope_member_json),
+            "scope_sha256": parsed_scope.scope_sha256,
+        }
+        if (
+            scope_seal is None
+            or int(scope_seal[0]) != len(scope_members)
+            or str(scope_seal[1]) != scope_member_json
+            or str(scope_seal[2]) != _sha(scope_member_json)
+            or str(scope_seal[3]) != _json(commitment)
+            or str(scope_seal[4]) != _sha(commitment)
+        ):
+            raise ValueError("canonical snapshot scope seal is missing or tampered")
+        return VerifiedResolutionSnapshot(
+            resolution_snapshot_id=resolution_snapshot_id,
+            scope=parsed_scope,
+            cutoff_at=_utc(cutoff_at),
+            recorded_at=datetime.fromisoformat(str(row[4])),
+            member_count=int(row[1]),
+            member_set_sha256=str(row[3]),
+            scope_member_set_sha256=str(scope_seal[2]),
+            scope_sha256=parsed_scope.scope_sha256,
+            snapshot_commitment_sha256=str(scope_seal[4]),
+        )
+
+    def _verify_scope_registry(self, scope: ResolutionSnapshotScope) -> None:
+        rows = self._conn.execute(
+            "SELECT reporting_entity_id,issuer_id FROM reporting_entities "
+            "WHERE reporting_entity_id IN (SELECT value FROM json_each(?)) "
+            "ORDER BY reporting_entity_id",
+            (_json(list(scope.reporting_entity_ids)),),
+        ).fetchall()
+        actual = tuple((str(row[0]), str(row[1])) for row in rows)
+        expected = tuple(
+            (reporting_entity_id, scope.issuer_id)
+            for reporting_entity_id in scope.reporting_entity_ids
+        )
+        if actual != expected:
+            raise ValueError(
+                "canonical resolution snapshot scope is not an exact registered issuer universe"
+            )
 
     def _latest_resolution_members(
         self,
         cutoff: datetime,
+        scope: ResolutionSnapshotScope,
     ) -> list[dict[str, object]]:
         cutoff_s = _time(cutoff)
         rows = self._conn.execute(
             "SELECT r.canonical_metric_cell_id,r.candidate_universe_id,"
             "r.relation_set_id,r.canonical_resolution_revision_id "
             "FROM canonical_fact_resolution_revisions r "
+            "JOIN canonical_metric_cells cell "
+            "ON cell.canonical_metric_cell_id=r.canonical_metric_cell_id "
             "WHERE r.knowledge_at<=? AND r.recorded_at<=? "
+            "AND cell.reporting_entity_id IN (SELECT value FROM json_each(?)) "
             "AND NOT EXISTS (SELECT 1 "
             "FROM canonical_fact_resolution_revisions newer "
             "WHERE newer.canonical_metric_cell_id=r.canonical_metric_cell_id "
             "AND newer.knowledge_at<=? AND newer.recorded_at<=? "
             "AND newer.revision>r.revision) "
             "ORDER BY r.canonical_metric_cell_id",
-            (cutoff_s, cutoff_s, cutoff_s, cutoff_s),
+            (
+                cutoff_s,
+                cutoff_s,
+                _json(list(scope.reporting_entity_ids)),
+                cutoff_s,
+                cutoff_s,
+            ),
         ).fetchall()
         return [
             {

@@ -90,7 +90,13 @@ from refresh_dispatch import STEP_NAMES  # noqa: E402
 import comments  # noqa: E402
 import ticker_validation  # noqa: E402
 from ask.context import build_portfolio_pack, build_ticker_pack  # noqa: E402
-from ask.engine import AskTurn, fold_events, respond_turn, sanitize_history  # noqa: E402
+from ask.engine import (  # noqa: E402
+    AskTurn,
+    ask_retrieval_mode,
+    fold_events,
+    respond_turn,
+    sanitize_history,
+)
 from ask.store import (  # noqa: E402
     AskSession as _AskSession,
 )
@@ -2318,7 +2324,12 @@ def create_app(
             return ({"error": "query required"}, 400)
         pack = build_portfolio_pack(repo_root, db_path)
         events = respond_turn(
-            turn, pack, db_path=db_path, repo_root=repo_root, registry=job_registry
+            turn,
+            pack,
+            db_path=db_path,
+            repo_root=repo_root,
+            registry=job_registry,
+            retrieval_mode=ask_retrieval_mode(),
         )
         result = fold_events(events)
         # A forced /view compile is deterministic local validation, not an
@@ -2349,7 +2360,12 @@ def create_app(
             return ({"error": "query required"}, 400)
         pack = build_portfolio_pack(repo_root, db_path)
         events = respond_turn(
-            turn, pack, db_path=db_path, repo_root=repo_root, registry=job_registry
+            turn,
+            pack,
+            db_path=db_path,
+            repo_root=repo_root,
+            registry=job_registry,
+            retrieval_mode=ask_retrieval_mode(),
         )
         sid = sess.id if sess else (turn.session_id or "")
         return _stream_engine_events_with_session(events, sid)

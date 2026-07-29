@@ -42,6 +42,7 @@ from provenance.research_snapshot import (
     DocumentProcessingPolicy,
     DocumentProcessingScope,
     ResearchSnapshotRequest,
+    ResearchUniverse,
     build_research_snapshot,
     derive_obligations,
     record_disposition,
@@ -98,6 +99,7 @@ from search.heterogeneous_retrieval import (
     _lexical_candidates,
     _rank_candidates,
     _require_recomputable_semantic_receipt,
+    _verify_candidate_source,
     audit_research_snapshot_for_retrieval,
     retrieve_heterogeneous,
     verify_heterogeneous_retrieval_trace,
@@ -105,6 +107,7 @@ from search.heterogeneous_retrieval import (
 from search.local_vector import vector_records_digest, vector_sha256
 from tests.test_canonical_fact_resolution import (
     NOW,
+    SCOPE,
     _component,
     _mapping,
     _persist_taxonomy_assertion,
@@ -392,26 +395,36 @@ def test_candidates_excluded_over_cap_receive_persisted_dispositions() -> None:
 
 
 class _ExactFakeEncoder:
+    def __init__(self, expected_query: str = "revenue") -> None:
+        self._expected_query = expected_query
+
     def encode_passages(self, texts: list[str]) -> list[list[float]]:
         raise AssertionError("exact retrieval must not encode passages")
 
     def encode_queries(self, texts: list[str]) -> list[list[float]]:
-        assert texts == ["revenue"]
+        assert texts == [self._expected_query]
         return [[1.0, 0.0]]
 
 
 class _ExactFakeIndex:
-    def __init__(self, rows: list[dict[str, object]], storage_uri: str) -> None:
+    def __init__(
+        self,
+        rows: list[dict[str, object]],
+        storage_uri: str,
+        *,
+        index_run_id: str = "vector-1",
+    ) -> None:
         self.rows = rows
         self.storage_uri = storage_uri
+        self.index_run_id = index_run_id
 
     def read_projection(self, index_run_id: str, *, expected_count: int) -> list[dict[str, object]]:
-        assert index_run_id == "vector-1"
+        assert index_run_id == self.index_run_id
         assert expected_count == len(self.rows)
         return [dict(row) for row in self.rows]
 
     def published_storage_uri(self, index_run_id: str) -> str:
-        assert index_run_id == "vector-1"
+        assert index_run_id == self.index_run_id
         return self.storage_uri
 
 
@@ -464,7 +477,9 @@ def _exact_semantic_runtime(
             runtime_artifact_sha256 TEXT,
             approved_by TEXT NOT NULL,
             approved_at DATETIME NOT NULL,
-            supersedes_promotion_id TEXT
+            supersedes_promotion_id TEXT,
+            knowledge_at DATETIME NOT NULL,
+            recorded_at DATETIME NOT NULL
         );
         CREATE VIEW v_search_embedding_model_promotion_current AS
         SELECT promotion.* FROM search_embedding_model_promotions AS promotion
@@ -496,6 +511,10 @@ def _exact_semantic_runtime(
             node_id TEXT PRIMARY KEY,
             extraction_run_id TEXT NOT NULL
         );
+        CREATE VIEW v_evidence_document_versions_canonical AS
+        SELECT 'document-1' AS document_version_id,
+               'issuer-1' AS issuer_id,
+               'reporting-1' AS reporting_entity_id;
         CREATE TABLE search_embedding_artifacts (
             index_run_id TEXT NOT NULL,
             chunk_id TEXT NOT NULL,
@@ -1149,7 +1168,7 @@ def _seed_resolved_periods(
             recorded_at=NOW,
         )
     )
-    resolver.seal_snapshot("resolution:checkpoint", NOW, NOW)
+    resolver.seal_snapshot("resolution:checkpoint", NOW, NOW, SCOPE)
     return bindings, tuple(canonical_cells)
 
 
@@ -1238,7 +1257,7 @@ def _processing_snapshot(conn: sqlite3.Connection) -> str:
             "management-obligation",
             1,
             "issuer-1",
-            None,
+            "reporting-1",
             "issuer_publisher",
             "issuer_presentations",
             "required",
@@ -1288,10 +1307,372 @@ def _processing_snapshot(conn: sqlite3.Connection) -> str:
     return snapshot_id
 
 
+def _bind_management_manifest_source_obligation(
+    conn: sqlite3.Connection,
+    *,
+    manifest_id: str,
+) -> None:
+    conn.execute(
+        "INSERT INTO source_inventory_snapshots VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "management-inventory",
+            "management-inventory",
+            "management-inventory",
+            1,
+            "issuer-1",
+            "ACME",
+            "ir_crawl",
+            "https://example.test/management",
+            "management-observation",
+            "succeeded",
+            True,
+            "a" * 64,
+            "test",
+            NOW,
+            NOW,
+            NOW,
+            None,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO expected_documents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "management-expected-document",
+            "management-expected-document",
+            "management-inventory",
+            "management-presentation",
+            "issuer-1",
+            "ACME",
+            "ir_document",
+            "investor_presentation",
+            "presentation",
+            None,
+            "https://example.test/management",
+            None,
+            None,
+            None,
+            None,
+            NOW,
+            "authoritative",
+            NOW,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO source_inventory_components VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "management-inventory-component",
+            "management-inventory-component",
+            "management-inventory",
+            "primary",
+            "primary",
+            "https://example.test/management",
+            "management-observation",
+            "succeeded",
+            True,
+            None,
+            0,
+            NOW,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO source_inventory_snapshot_seals VALUES (?,?,?,?,?)",
+        ("management-inventory", 1, "b" * 64, "complete", NOW),
+    )
+    binding_json = canonical_json(
+        {
+            "document_family": "issuer_presentations",
+            "expected_document_id": "management-expected-document",
+            "issuer_id": "issuer-1",
+            "reporting_entity_id": "reporting-1",
+            "source_obligation_revision_id": "management-obligation:v1",
+        }
+    )
+    conn.execute(
+        "INSERT INTO expected_document_obligation_bindings VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "management-expected-binding",
+            "management-expected-binding",
+            "management-expected-document",
+            "management-obligation:v1",
+            "issuer-1",
+            "reporting-1",
+            "issuer_presentations",
+            binding_json,
+            digest_text(binding_json),
+            NOW,
+            NOW,
+            NOW,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO search_manifest_source_inventories VALUES (?,?,?)",
+        (manifest_id, "management-inventory", NOW),
+    )
+
+
+def _seed_management_semantic_projection(
+    conn: sqlite3.Connection,
+    *,
+    manifest_id: str,
+    lexical_index_run_id: str,
+) -> tuple[NarrativeBundle, ExactSemanticRuntime]:
+    runtime_artifact = _semantic_runtime_artifact()
+    promotion = EmbeddingPromotion(
+        promotion_id="promotion:management",
+        idempotency_key="promotion:management",
+        revision=1,
+        provider="local-test",
+        model="deterministic-two-dimensional",
+        dimensions=2,
+        golden_sha256="a" * 64,
+        evaluation_artifact_sha256="b" * 64,
+        evaluation_metrics_json="{}",
+        runtime_artifact_json=runtime_artifact.canonical_json(),
+        runtime_artifact_sha256=runtime_artifact.sha256(),
+        approved_by="owner",
+        approved_at=NOW,
+        knowledge_at=NOW,
+        recorded_at=NOW,
+    )
+    persist_promotion(conn, promotion)
+    vector_run_id = "vector:management"
+    conn.execute(
+        "INSERT INTO search_index_runs ("
+        "index_run_id,idempotency_key,index_key,revision,manifest_id,index_kind,"
+        "config_sha256,code_version,outcome,failure_reason,started_at,completed_at"
+        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            vector_run_id,
+            vector_run_id,
+            vector_run_id,
+            1,
+            manifest_id,
+            "vector",
+            "c" * 64,
+            "test",
+            "succeeded",
+            None,
+            NOW,
+            NOW,
+        ),
+    )
+    chunk = conn.execute(
+        "SELECT chunk_id,content_sha256 FROM search_chunks WHERE manifest_id=? ORDER BY chunk_id",
+        (manifest_id,),
+    ).fetchone()
+    assert chunk is not None
+    chunk_id, input_sha256 = str(chunk[0]), str(chunk[1])
+    vector = [1.0, 0.0]
+    vector_digest = vector_sha256(vector, dimensions=2)
+    storage_uri = "fake://published/vector-management"
+    conn.execute(
+        "INSERT INTO search_embedding_artifacts ("
+        "embedding_artifact_id,idempotency_key,index_run_id,chunk_id,purpose,"
+        "provider,model,dimensions,vector_sha256,storage_uri,input_sha256,"
+        "request_config_sha256,outcome,failure_reason,cost_usd,latency_ms,"
+        "started_at,completed_at,runtime_artifact_sha256"
+        ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "artifact:management",
+            "artifact:management",
+            vector_run_id,
+            chunk_id,
+            "passage",
+            promotion.provider,
+            promotion.model,
+            promotion.dimensions,
+            vector_digest,
+            storage_uri,
+            input_sha256,
+            "c" * 64,
+            "succeeded",
+            None,
+            None,
+            1,
+            NOW,
+            NOW,
+            runtime_artifact.sha256(),
+        ),
+    )
+    conn.execute(
+        "INSERT INTO search_index_memberships "
+        "(index_run_id,chunk_id,membership_status,failure_reason,recorded_at) "
+        "VALUES (?,?,?,?,?)",
+        (vector_run_id, chunk_id, "included", None, NOW),
+    )
+    record = _exact_vector_record(chunk_id, vector)
+    record.update(
+        {
+            "input_sha256": input_sha256,
+            "manifest_id": manifest_id,
+            "runtime_artifact_sha256": runtime_artifact.sha256(),
+        }
+    )
+    records = [record]
+    chunk_count, chunk_sha256 = manifest_chunk_commitment(conn, manifest_id=manifest_id)
+    artifact_count, artifact_sha256 = vector_artifact_commitment(conn, index_run_id=vector_run_id)
+    assert artifact_count == chunk_count == 1
+    persist_projection_seal(
+        conn,
+        SearchProjectionSeal(
+            projection_seal_id="seal:management",
+            idempotency_key="seal:management",
+            index_run_id=vector_run_id,
+            manifest_id=manifest_id,
+            index_kind="vector",
+            chunk_count=chunk_count,
+            chunk_set_sha256=chunk_sha256,
+            projection_records_sha256=vector_records_digest(records),
+            artifact_set_sha256=artifact_sha256,
+            provider=promotion.provider,
+            model=promotion.model,
+            dimensions=promotion.dimensions,
+            runtime_artifact_sha256=runtime_artifact.sha256(),
+            config_sha256="c" * 64,
+            storage_uri=storage_uri,
+            sealed_at=NOW,
+        ),
+    )
+    bundle = NarrativeBundle(
+        corpus_manifest_id=manifest_id,
+        lexical_index_run_id=lexical_index_run_id,
+        vector_index_run_id=vector_run_id,
+        embedding_promotion_id=promotion.promotion_id,
+    )
+    runtime = ExactSemanticRuntime.from_verified_components_for_test(
+        conn,
+        vector_index_run_id=vector_run_id,
+        embedding_promotion_id=promotion.promotion_id,
+        index=_ExactFakeIndex(
+            records,
+            storage_uri,
+            index_run_id=vector_run_id,
+        ),
+        encoder=_ExactFakeEncoder(
+            "Revenue growth in 2024 versus 2023 and management's explanation"
+        ),
+    )
+    return bundle, runtime
+
+
+def test_narrative_reporting_entity_filter_applies_to_collection_and_trace() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        """
+        CREATE VIRTUAL TABLE search_lexical_chunks
+        USING fts5(chunk_id UNINDEXED, text);
+        CREATE TABLE search_chunks (
+            chunk_id TEXT PRIMARY KEY,
+            content_sha256 TEXT NOT NULL,
+            evidence_node_id TEXT NOT NULL,
+            char_start INTEGER NOT NULL,
+            char_end INTEGER NOT NULL,
+            manifest_id TEXT NOT NULL
+        );
+        CREATE TABLE evidence_nodes (
+            node_id TEXT PRIMARY KEY,
+            extraction_run_id TEXT NOT NULL
+        );
+        CREATE TABLE evidence_extraction_runs (
+            extraction_run_id TEXT PRIMARY KEY,
+            document_version_id TEXT NOT NULL
+        );
+        CREATE TABLE v_evidence_document_versions_canonical (
+            document_version_id TEXT PRIMARY KEY,
+            reporting_entity_id TEXT NOT NULL
+        );
+        """
+    )
+    for ordinal, reporting_entity_id in enumerate(
+        ("reporting-1", "reporting-2"),
+        start=1,
+    ):
+        chunk_id = f"chunk-{ordinal}"
+        node_id = f"node-{ordinal}"
+        run_id = f"run-{ordinal}"
+        document_id = f"document-{ordinal}"
+        conn.execute(
+            "INSERT INTO search_lexical_chunks VALUES (?,?)",
+            (chunk_id, "Revenue growth and management explanation"),
+        )
+        conn.execute(
+            "INSERT INTO search_chunks VALUES (?,?,?,?,?,?)",
+            (chunk_id, str(ordinal) * 64, node_id, 0, 41, "manifest"),
+        )
+        conn.execute("INSERT INTO evidence_nodes VALUES (?,?)", (node_id, run_id))
+        conn.execute(
+            "INSERT INTO evidence_extraction_runs VALUES (?,?)",
+            (run_id, document_id),
+        )
+        conn.execute(
+            "INSERT INTO v_evidence_document_versions_canonical VALUES (?,?)",
+            (document_id, reporting_entity_id),
+        )
+    bundle = NarrativeBundle(
+        corpus_manifest_id="manifest",
+        lexical_index_run_id="lexical",
+    )
+    filtered = _lexical_candidates(
+        conn,
+        bundle,
+        "Revenue",
+        10,
+        reporting_entity_id="reporting-1",
+    )
+    assert [item["candidate_id"] for item in filtered] == ["chunk-1"]
+    unfiltered = _lexical_candidates(conn, bundle, "Revenue", 10)
+    wrong = next(item for item in unfiltered if item["candidate_id"] == "chunk-2")
+    request = HeterogeneousRetrievalRequest(
+        trace_id="trace-filter",
+        idempotency_key="trace-filter",
+        research_snapshot_id="research",
+        fact_generation_id="facts",
+        narrative_bundles=(bundle,),
+        query_text="Revenue",
+        candidate_limit=10,
+        result_limit=10,
+        filters=RetrievalFilters(
+            reporting_entity_id="reporting-1",
+            include_narrative=True,
+            include_facts=False,
+        ),
+        cutoff_at=NOW,
+        recorded_at=NOW,
+    )
+    with pytest.raises(
+        HeterogeneousRetrievalError,
+        match="narrative_candidate_evidence_mismatch",
+    ):
+        _verify_candidate_source(
+            conn,
+            request,
+            {
+                "candidate_id": wrong["candidate_id"],
+                "candidate_kind": "narrative",
+                "evidence_locator_json": canonical_json(wrong["evidence_locator"]),
+                "lexical_score": wrong["lexical_score"],
+                "lineage_json": canonical_json(wrong["lineage"]),
+                "semantic_score": None,
+                "source_commitment_sha256": wrong["source_commitment_sha256"],
+            },
+            semantic_expected={},
+        )
+    conn.close()
+
+
 def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    real_upgrade = command.upgrade
+
+    def _bounded_fixture_upgrade(config: Config, revision: str) -> None:
+        real_upgrade(
+            config,
+            "0244_canonical_fact_resolution" if revision == "head" else revision,
+        )
+
+    monkeypatch.setattr(command, "upgrade", _bounded_fixture_upgrade)
     output = _two_period_output()
     conn = _resolution_database(tmp_path, output)
     path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
@@ -1303,9 +1684,14 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
         FilingXbrlExtractionLedger(conn).publish(output)
         bindings, canonical_cells = _seed_resolved_periods(conn)
         conn.close()
-        _upgrade(path, "0247_bounded_canonical_retrieval")
+        _upgrade(path, "0252_research_universe_closure")
         conn = sqlite3.connect(path)
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.create_function(
+            "fact_sha256",
+            1,
+            lambda value: hashlib.sha256(str(value).encode()).hexdigest(),
+        )
         bind_resolution_snapshot_watermark(
             conn,
             resolution_snapshot_id="resolution:checkpoint",
@@ -1374,7 +1760,7 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
                 recorded_at=later,
             )
         )
-        resolver.seal_snapshot("resolution:delta", later, later)
+        resolver.seal_snapshot("resolution:delta", later, later, SCOPE)
         bind_resolution_snapshot_watermark(
             conn,
             resolution_snapshot_id="resolution:delta",
@@ -1434,6 +1820,15 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
             ),
         )
         processing_snapshot_id = _processing_snapshot(conn)
+        _bind_management_manifest_source_obligation(
+            conn,
+            manifest_id=corpus.manifest_id,
+        )
+        bundle, semantic_runtime = _seed_management_semantic_projection(
+            conn,
+            manifest_id=corpus.manifest_id,
+            lexical_index_run_id=corpus.lexical_index_run_id,
+        )
         publication_ids = tuple(
             str(row[0])
             for row in conn.execute(
@@ -1446,10 +1841,6 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
                 "ORDER BY disposition.source_publication_id",
                 ("resolution:checkpoint",),
             )
-        )
-        bundle = NarrativeBundle(
-            corpus_manifest_id=corpus.manifest_id,
-            lexical_index_run_id=corpus.lexical_index_run_id,
         )
         assert corpus.chunks_planned == 1
         assert len(_lexical_candidates(conn, bundle, "Revenue", 5)) == 1
@@ -1469,11 +1860,19 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
             ResearchSnapshotRequest(
                 research_snapshot_id="research:checkpoint",
                 idempotency_key="research:checkpoint",
+                research_universe=ResearchUniverse(
+                    issuer_id="issuer-1",
+                    reporting_entity_ids=("reporting-1",),
+                    document_version_ids=("management-document",),
+                    source_obligation_revision_ids=("management-obligation:v1",),
+                ),
                 processing_snapshot_ids=(processing_snapshot_id,),
                 corpus_bundles=(
                     CorpusProjectionBundle(
                         corpus_manifest_id=corpus.manifest_id,
                         lexical_index_run_id=corpus.lexical_index_run_id,
+                        vector_index_run_id=bundle.vector_index_run_id,
+                        embedding_promotion_id=bundle.embedding_promotion_id,
                     ),
                 ),
                 source_fact_publication_ids=publication_ids,
@@ -1497,11 +1896,30 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
             cutoff_at=NOW,
             recorded_at=NOW,
         )
-        trace = retrieve_heterogeneous(conn, request)
+        trace = retrieve_heterogeneous(
+            conn,
+            request,
+            semantic_runtimes=(semantic_runtime,),
+        )
         assert trace.candidate_count >= 3
         kinds = {str(result["candidate_kind"]) for result in trace.ordered_results}
         assert kinds == {"fact", "narrative"}
-        assert verify_heterogeneous_retrieval_trace(conn, trace.trace_id) == trace
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM heterogeneous_retrieval_trace_candidates "
+                "WHERE trace_id=? AND semantic_score IS NOT NULL",
+                (trace.trace_id,),
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            verify_heterogeneous_retrieval_trace(
+                conn,
+                trace.trace_id,
+                semantic_runtimes=(semantic_runtime,),
+            )
+            == trace
+        )
         with monkeypatch.context() as verifier_change:
             verifier_change.setattr(
                 retrieval_module,
@@ -1512,7 +1930,41 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
                 HeterogeneousRetrievalError,
                 match="research_snapshot_bounded_admission_tampered",
             ):
-                verify_heterogeneous_retrieval_trace(conn, trace.trace_id)
+                verify_heterogeneous_retrieval_trace(
+                    conn,
+                    trace.trace_id,
+                    semantic_runtimes=(semantic_runtime,),
+                )
+
+        admission_receipt = conn.execute(
+            "SELECT verifier_config_sha256,audit_payload_json,audit_payload_sha256 "
+            "FROM research_snapshot_admission_receipts "
+            "WHERE research_snapshot_id='research:checkpoint'"
+        ).fetchone()
+        assert admission_receipt is not None
+        conn.execute("DROP TRIGGER trg_research_snapshot_admission_receipts_append_only")
+        false_payload = "{}"
+        conn.execute(
+            "UPDATE research_snapshot_admission_receipts "
+            "SET verifier_config_sha256=?,audit_payload_json=?,audit_payload_sha256=? "
+            "WHERE research_snapshot_id='research:checkpoint'",
+            ("f" * 64, false_payload, digest_text(false_payload)),
+        )
+        with pytest.raises(
+            HeterogeneousRetrievalError,
+            match="research_snapshot_bounded_admission_tampered",
+        ):
+            verify_heterogeneous_retrieval_trace(
+                conn,
+                trace.trace_id,
+                semantic_runtimes=(semantic_runtime,),
+            )
+        conn.execute(
+            "UPDATE research_snapshot_admission_receipts "
+            "SET verifier_config_sha256=?,audit_payload_json=?,audit_payload_sha256=? "
+            "WHERE research_snapshot_id='research:checkpoint'",
+            tuple(admission_receipt),
+        )
 
         with pytest.raises(
             HeterogeneousRetrievalError,
@@ -1543,6 +1995,10 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
             HeterogeneousRetrievalError,
             match="retrieval_candidate_commitment_tampered",
         ):
-            verify_heterogeneous_retrieval_trace(conn, trace.trace_id)
+            verify_heterogeneous_retrieval_trace(
+                conn,
+                trace.trace_id,
+                semantic_runtimes=(semantic_runtime,),
+            )
     finally:
         conn.close()
