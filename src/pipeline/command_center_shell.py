@@ -163,12 +163,10 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
         "portfolio",
         "Portfolio",
         (
-            # Health — thesis health & what could break it: Synthesis (thesis
-            # rollup + allocation, the landing) + the whole-book Risk cockpit +
-            # the monthly adversarial Red Team brief.
-            ("portfolio_health", "Health", "/api/panel/portfolio_health", False, False),
-            # Allocation — where capital goes & how it's doing: the durable
-            # target book (Positioning) + the tracker-fed Performance page.
+            # Allocation lands the section because the first question on a
+            # portfolio page is performance versus the matched benchmark;
+            # the compact scorecard leads this composite before allocation
+            # actions and target-setting detail.
             (
                 "portfolio_allocation",
                 "Allocation",
@@ -176,6 +174,10 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
                 False,
                 False,
             ),
+            # Health — thesis health & what could break it: Synthesis (thesis
+            # rollup + allocation, the landing) + the whole-book Risk cockpit +
+            # the monthly adversarial Red Team brief.
+            ("portfolio_health", "Health", "/api/panel/portfolio_health", False, False),
             # Record — the audit trail: the allocation-decisions record (sizing
             # audit + merged decisions timeline) + advisor Memos + the Triggers
             # ladder (the old `holdings` panel).

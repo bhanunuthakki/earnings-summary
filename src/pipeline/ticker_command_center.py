@@ -1122,7 +1122,7 @@ _COMBO_SCRIPT = """<script>
   combo.dataset.wired = '1';
   var input = combo.querySelector('.cc-combo-input');
   var list = combo.querySelector('.cc-combo-list');
-  var all = null, matches = [], sel = -1;
+  var all = null, loading = null, matches = [], sel = -1;
   var current = combo.getAttribute('data-current') || '';
   var display = input.value;
   function esc(s) {
@@ -1131,22 +1131,50 @@ _COMBO_SCRIPT = """<script>
   }
   function fetchT() {
     if (all) return Promise.resolve(all);
-    return fetch('/api/tickers').then(function (r) { return r.json(); })
+    if (loading) return loading;
+    loading = fetch('/api/tickers').then(function (r) { return r.json(); })
       .then(function (j) { all = (j && j.tickers) || []; return all; })
       .catch(function () { all = []; return all; });
+    return loading;
   }
-  function render(q) {
+  function listPriority(t) {
+    if (t.list_type === 'portfolio') return 0;
+    if (t.list_type === 'evaluation') return 1;
+    if (t.list_type === 'watchlist') return 2;
+    return 9;
+  }
+  function matchScore(t, ql) {
+    var ticker = (t.ticker || '').toLowerCase();
+    var name = (t.name || '').toLowerCase();
+    if (!ql) return 100;
+    if (ticker === ql) return 0;
+    if (ticker.indexOf(ql) === 0) return 10;
+    if (name === ql) return 20;
+    if (name.indexOf(ql) === 0) return 30;
+    if (name.split(/\\s+/).some(function (word) { return word.indexOf(ql) === 0; })) return 35;
+    if (ticker.indexOf(ql) !== -1) return 40;
+    if (name.indexOf(ql) !== -1) return 50;
+    return null;
+  }
+  function render(q, resetSelection) {
     var ql = (q || '').trim().toLowerCase();
-    matches = (all || []).filter(function (t) {
-      if (!ql) return true;
-      return t.ticker.toLowerCase().indexOf(ql) !== -1
-        || (t.name && t.name.toLowerCase().indexOf(ql) !== -1);
-    }).slice(0, 50);
-    if (sel >= matches.length) sel = matches.length - 1;
+    matches = (all || []).map(function (t) {
+      return { ticker: t, score: matchScore(t, ql) };
+    }).filter(function (row) {
+      return row.score !== null;
+    }).sort(function (a, b) {
+      return a.score - b.score
+        || listPriority(a.ticker) - listPriority(b.ticker)
+        || a.ticker.ticker.localeCompare(b.ticker.ticker);
+    }).slice(0, 12).map(function (row) { return row.ticker; });
+    if (resetSelection) sel = matches.length ? 0 : -1;
+    else if (sel >= matches.length) sel = matches.length - 1;
     var html = '';
     for (var i = 0; i < matches.length; i++) {
       var t = matches[i];
-      html += '<li role="option" class="' + (i === sel ? 'sel' : '') + '" data-i="' + i
+      html += '<li role="option" id="cc-combo-opt-' + i + '" aria-selected="'
+        + (i === sel ? 'true' : 'false') + '" class="' + (i === sel ? 'sel' : '')
+        + '" data-i="' + i
         + '" data-tk="' + esc(t.ticker) + '"><span class="cc-combo-tk">' + esc(t.ticker)
         + '</span>' + (t.name ? '<span class="cc-combo-nm">' + esc(t.name) + '</span>' : '')
         + '</li>';
@@ -1154,19 +1182,27 @@ _COMBO_SCRIPT = """<script>
     list.innerHTML = html || '<li class="cc-combo-none">No match.</li>';
     list.hidden = false;
     input.setAttribute('aria-expanded', 'true');
+    if (sel >= 0) input.setAttribute('aria-activedescendant', 'cc-combo-opt-' + sel);
+    else input.removeAttribute('aria-activedescendant');
   }
-  function open() { fetchT().then(function () { render(''); }); }
-  function close() { list.hidden = true; input.setAttribute('aria-expanded', 'false'); }
+  function open() { fetchT().then(function () { render(input.value, true); }); }
+  function close() {
+    list.hidden = true;
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
+  }
   function pick(tk) {
     if (tk && tk !== current) { location.hash = '#holding=' + encodeURIComponent(tk); }
     else { input.value = display; close(); }
   }
   input.addEventListener('focus', function () { sel = -1; input.select(); open(); });
-  input.addEventListener('input', function () { sel = -1; fetchT().then(function () { render(input.value); }); });
+  input.addEventListener('input', function () {
+    fetchT().then(function () { render(input.value, true); });
+  });
   input.addEventListener('keydown', function (ev) {
-    if (ev.key === 'ArrowDown') { ev.preventDefault(); if (matches.length) { sel = Math.min(sel + 1, matches.length - 1); render(input.value); } }
-    else if (ev.key === 'ArrowUp') { ev.preventDefault(); if (matches.length) { sel = Math.max(sel - 1, 0); render(input.value); } }
-    else if (ev.key === 'Enter') { ev.preventDefault(); if (sel >= 0 && matches[sel]) pick(matches[sel].ticker); else if (matches.length === 1) pick(matches[0].ticker); }
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); if (matches.length) { sel = Math.min(sel + 1, matches.length - 1); render(input.value, false); } }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); if (matches.length) { sel = Math.max(sel - 1, 0); render(input.value, false); } }
+    else if (ev.key === 'Enter') { ev.preventDefault(); if (sel >= 0 && matches[sel]) pick(matches[sel].ticker); }
     else if (ev.key === 'Escape') { input.value = display; close(); input.blur(); }
   });
   list.addEventListener('mousedown', function (ev) {

@@ -493,6 +493,17 @@ def test_holding_picker_band_is_search_first(repo: Path) -> None:
     # Arrow/Enter keyboard selection is wired.
     assert "ArrowDown" in band
     assert "ArrowUp" in band
+    # Results are relevance-ranked, current research lists win tie-breaks,
+    # and the first result is immediately Enter-selectable.
+    assert "function matchScore" in band
+    assert "listPriority(a.ticker) - listPriority(b.ticker)" in band
+    assert ".slice(0, 12)" in band
+    assert "if (resetSelection) sel = matches.length ? 0 : -1" in band
+    assert "aria-activedescendant" in band
+    # Focus and input share one in-flight fetch; the late focus result renders
+    # the current input value instead of overwriting typed results with "all".
+    assert "if (loading) return loading" in band
+    assert "render(input.value, true)" in band
 
 
 def test_holding_band_combobox_prefills_current_ticker(repo: Path) -> None:

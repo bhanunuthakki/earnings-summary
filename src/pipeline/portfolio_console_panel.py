@@ -351,6 +351,11 @@ def render_portfolio_allocation_panel(
     sections: list[ConsoleSection] = [
         ("brief", "Read", lambda: _allocation_brief(db_path, root)),
         (
+            "performance",
+            "Performance",
+            lambda: _lazy_section_placeholder("/api/panel/portfolio", "Performance"),
+        ),
+        (
             "allocation_recommendation",
             "Next dollar",
             lambda: render_allocation_recommendation_section(db_path, root),
@@ -358,11 +363,6 @@ def render_portfolio_allocation_panel(
         ("risk_budget", "Risk Budget", lambda: render_risk_budget_section(db_path, root)),
         ("posture", "Posture", lambda: render_portfolio_posture_section(db_path, root)),
         ("positioning", "Positioning", lambda: render_positioning_panel(db_path, root)),
-        (
-            "performance",
-            "Performance",
-            lambda: _lazy_section_placeholder("/api/panel/portfolio", "Performance"),
-        ),
     ]
     return _CONSOLE_CSS + render_console(
         "Allocation",

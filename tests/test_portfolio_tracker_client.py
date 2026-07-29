@@ -975,11 +975,16 @@ def test_fetch_analytics_partial_failure_isolates_the_failed_endpoint(
 def test_render_analytics_sections_populated(mock_tracker: None) -> None:
     a = fetch_portfolio_analytics(api_url="http://tracker.test")
     html = render_portfolio_analytics_sections(a)
-    # Performance: signed TWR card, the excess-vs-SPY readout, legend + chart,
-    # and the policy-mix context line.
+    # Performance leads with dollar-legible, same-day matched attribution,
+    # then the Modified-Dietz chart and policy-mix context.
     assert "Performance vs benchmarks" in html
     assert "+18.2%" in html
-    assert "+6.7pp" in html  # 18.2 - 11.5, a display delta of two API values
+    assert "Actual P&amp;L" in html
+    assert "Matched SPY P&amp;L" in html
+    assert "Alpha vs SPY" in html
+    assert "same-day buys &amp; sells" in html
+    assert "Money-weighted return (Modified Dietz)" in html
+    assert "Time-weighted return (Modified Dietz)" not in html
     assert 'class="pf-chart"' in html
     assert "Policy mix:" in html and "VOO 70%" in html
     assert "+4.2%" in html  # policy falls back to its last valid point
@@ -995,6 +1000,7 @@ def test_render_analytics_sections_populated(mock_tracker: None) -> None:
     # Alpha table: sorted by alpha (NU first), incomplete flag, totals, the
     # has_policy=True column.
     assert "Per-position alpha" in html
+    assert "<summary>Position drivers (2)</summary>" in html
     assert html.index("research/NU/") < html.index("research/AAPL/")
     assert "pf-total" in html
     # The has_policy=True column renders, now as a sortable living-grid header.
@@ -1180,6 +1186,8 @@ def test_compose_page_offline_leads_with_start_banner() -> None:
     # the Health console, so an id would collide across the document).
     assert "pf-live-offline" in html and "Start tracker" in html
     assert "__pfTrackerAutostart" in html  # auto-starts when the page opens
+    assert 'data-refresh-endpoint="/api/panel/portfolio"' in html
+    assert "banner.closest('.console-sec')" in html
     assert 'id="pf-window-bar"' not in html  # no chart, so no window controls
     assert html.count("<section") == 1  # just the banner — nothing buried below it
 
