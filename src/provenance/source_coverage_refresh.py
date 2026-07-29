@@ -83,49 +83,71 @@ class _Promotion(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     assessment: CoverageAssessment
-    target_status: Literal["extracted", "indexed"]
+    target_status: Literal["extracted", "indexed", "unsupported"]
 
 
 def refresh_source_coverage(
     conn: sqlite3.Connection,
     request: CoverageRefreshRequest,
+    *,
+    caller_owns_transaction: bool = False,
 ) -> CoverageRefreshResult:
     """Plan or append bounded monotonic extraction and indexing revisions."""
 
     _require_schema(conn)
+    if "filing-native-xbrl" in request.extractor_names:
+        _require_xbrl_schema(conn)
     index_promotions, index_considered, index_has_more = _plan_index_promotions(
         conn,
         request,
         limit=request.batch_size,
     )
     remaining = request.batch_size - len(index_promotions)
+    zero_fact_promotions: list[_Promotion] = []
+    zero_fact_considered = 0
+    zero_fact_has_more = False
+    if remaining > 0 and not index_has_more:
+        (
+            zero_fact_promotions,
+            zero_fact_considered,
+            zero_fact_has_more,
+        ) = _plan_xbrl_zero_fact_promotions(conn, request, limit=remaining)
+        remaining -= len(zero_fact_promotions)
     extraction_promotions: list[_Promotion] = []
     extraction_considered = 0
     extraction_has_more = False
-    if remaining > 0 and not index_has_more:
+    if remaining > 0 and not index_has_more and not zero_fact_has_more:
         (
             extraction_promotions,
             extraction_considered,
             extraction_has_more,
         ) = _plan_extraction_promotions(conn, request, limit=remaining)
-    promotions = [*index_promotions, *extraction_promotions]
-    considered = index_considered + extraction_considered
-    has_more = index_has_more or extraction_has_more
+    promotions = [
+        *index_promotions,
+        *zero_fact_promotions,
+        *extraction_promotions,
+    ]
+    considered = index_considered + zero_fact_considered + extraction_considered
+    has_more = index_has_more or zero_fact_has_more or extraction_has_more
     created = 0
     replayed = 0
     if request.apply and promotions:
-        if conn.in_transaction:
+        if caller_owns_transaction and not conn.in_transaction:
+            raise RuntimeError("caller-owned source coverage refresh requires a transaction")
+        if not caller_owns_transaction and conn.in_transaction:
             raise RuntimeError("source coverage refresh requires an idle SQLite connection")
-        conn.execute("BEGIN IMMEDIATE")
+        if not caller_owns_transaction:
+            conn.execute("BEGIN IMMEDIATE")
         try:
             ledger = SourceCoverageLedger(conn)
             for promotion in promotions:
                 persisted = ledger.persist(promotion.assessment)
                 created += int(persisted.created)
                 replayed += int(not persisted.created)
-            conn.commit()
+            if not caller_owns_transaction:
+                conn.commit()
         except Exception:
-            if conn.in_transaction:
+            if not caller_owns_transaction and conn.in_transaction:
                 conn.rollback()
             raise
     counts = Counter(promotion.target_status for promotion in promotions)
@@ -388,6 +410,109 @@ def _plan_extraction_promotions(
     return promotions, len(considered_expected_ids), has_more
 
 
+def _plan_xbrl_zero_fact_promotions(
+    conn: sqlite3.Connection,
+    request: CoverageRefreshRequest,
+    *,
+    limit: int,
+) -> tuple[list[_Promotion], int, bool]:
+    if limit < 1 or "filing-native-xbrl" not in request.extractor_names:
+        return [], 0, False
+    inventory_placeholders = ", ".join("?" for _ in request.inventory_keys)
+    rows = conn.execute(
+        "SELECT coverage.assessment_id,coverage.expected_document_id,"
+        "coverage.revision,coverage.document_version_id,"
+        "expected.expected_document_key,run.extraction_run_id,run.completed_at "
+        "FROM v_source_coverage_current coverage "
+        "JOIN v_expected_documents_current expected "
+        "ON expected.expected_document_id=coverage.expected_document_id "
+        "JOIN v_source_inventory_current inventory "
+        "ON inventory.snapshot_id=expected.snapshot_id "
+        "JOIN evidence_extraction_runs run "
+        "ON run.document_version_id=coverage.document_version_id "
+        "JOIN filing_xbrl_extraction_input_seals input_seal "
+        "ON input_seal.extraction_run_id=run.extraction_run_id "
+        "JOIN filing_xbrl_extraction_disposition_seals disposition_seal "
+        "ON disposition_seal.extraction_run_id=run.extraction_run_id "
+        f"WHERE inventory.inventory_key IN ({inventory_placeholders}) "
+        "AND coverage.coverage_status='captured' "
+        "AND run.extractor_name='filing-native-xbrl' "
+        "AND run.outcome='succeeded' "
+        "AND input_seal.raw_fact_count=0 "
+        "AND input_seal.zero_fact_disposition='verified_no_inline_xbrl' "
+        "AND disposition_seal.entry_count=0 "
+        "AND disposition_seal.extraction_output_sha256=run.output_sha256 "
+        "ORDER BY coverage.expected_document_id LIMIT ?",
+        (*request.inventory_keys, limit + 1),
+    ).fetchall()
+    has_more = len(rows) > limit
+    promotions: list[_Promotion] = []
+    for row in rows[:limit]:
+        expected_document_id = _text(row[1], "expected_document_id")
+        document_version_id = _text(row[3], "document_version_id")
+        extraction_run_id = _text(row[5], "extraction_run_id")
+        if not _approved_filing_xbrl_run(
+            conn,
+            extraction_run_id=extraction_run_id,
+            document_version_id=document_version_id,
+            require_facts=False,
+        ):
+            raise ValueError(
+                "zero-fact filing-XBRL extraction lacks qualified terminal closure"
+            )
+        completed_at = _datetime(row[6], "extraction completed_at")
+        if _timeline(request.recorded_at) < _timeline(completed_at):
+            raise ValueError("coverage refresh recorded_at precedes extraction completion")
+        revision = _integer(row[2], "coverage revision") + 1
+        semantic = {
+            "expected_document_id": expected_document_id,
+            "target_status": "unsupported",
+            "document_version_id": document_version_id,
+            "extraction_run_id": extraction_run_id,
+            "recorded_at": request.recorded_at,
+            "policy_name": _POLICY_NAME,
+            "policy_version": _POLICY_VERSION,
+        }
+        fingerprint = _sha_json(semantic)
+        assessment = CoverageAssessment(
+            assessment_id=(
+                f"coverage-assessment:{_sha_text(fingerprint + chr(0) + str(revision))}"
+            ),
+            idempotency_key=f"coverage-assessment:{fingerprint}",
+            expected_document_id=expected_document_id,
+            revision=revision,
+            coverage_status="unsupported",
+            document_version_id=document_version_id,
+            extraction_run_id=extraction_run_id,
+            manifest_id=None,
+            index_run_id=None,
+            reason_code="verified_no_inline_xbrl",
+            reason_details=(
+                ("document_version_id", document_version_id),
+                ("expected_document_key", _text(row[4], "expected_document_key")),
+                ("extraction_run_id", extraction_run_id),
+                ("zero_fact_disposition", "verified_no_inline_xbrl"),
+            ),
+            decision_kind="deterministic",
+            policy_name=_POLICY_NAME,
+            policy_version=_POLICY_VERSION,
+            policy_config_sha256=_policy_sha(
+                request.extractor_names,
+                request.index_kinds,
+                transition="verified_no_inline_xbrl",
+            ),
+            effective_at=completed_at,
+            knowledge_at=request.recorded_at,
+            recorded_at=request.recorded_at,
+            supersedes_assessment_id=_text(row[0], "assessment_id"),
+            material_dissent=False,
+        )
+        promotions.append(
+            _Promotion(assessment=assessment, target_status="unsupported")
+        )
+    return promotions, len(rows), has_more
+
+
 def _approved_extraction_run(
     conn: sqlite3.Connection,
     row: sqlite3.Row | tuple[object, ...],
@@ -443,7 +568,104 @@ def _approved_extraction_run(
             ).fetchone()
             is not None
         )
+    if extractor_name == "filing-native-xbrl":
+        return _approved_filing_xbrl_run(
+            conn,
+            extraction_run_id=extraction_run_id,
+            document_version_id=document_version_id,
+            require_facts=True,
+        )
     return True
+
+
+def _approved_filing_xbrl_run(
+    conn: sqlite3.Connection,
+    *,
+    extraction_run_id: str,
+    document_version_id: str,
+    require_facts: bool,
+) -> bool:
+    fact_predicate = (
+        "input_seal.raw_fact_count>0"
+        if require_facts
+        else (
+            "input_seal.raw_fact_count=0 "
+            "AND input_seal.zero_fact_disposition='verified_no_inline_xbrl'"
+        )
+    )
+    return (
+        conn.execute(
+            "SELECT 1 FROM filing_xbrl_extraction_input_seals input_seal "
+            "JOIN filing_xbrl_processor_artifacts artifact "
+            "ON artifact.processor_artifact_id=input_seal.processor_artifact_id "
+            "JOIN filing_xbrl_extraction_disposition_seals disposition_seal "
+            "ON disposition_seal.extraction_run_id=input_seal.extraction_run_id "
+            "JOIN evidence_extraction_runs run "
+            "ON run.extraction_run_id=input_seal.extraction_run_id "
+            "WHERE input_seal.extraction_run_id=? "
+            "AND run.document_version_id=? "
+            "AND run.extractor_name='filing-native-xbrl' AND run.outcome='succeeded' "
+            f"AND {fact_predicate} "  # nosec B608 -- closed internal predicate
+            "AND artifact.arelle_version='2.39.8' AND artifact.edgar_version='26.1' "
+            "AND artifact.xule_version='30052' "
+            "AND artifact.bridge_protocol_version='filing-xbrl-bridge.v1' "
+            "AND json_extract(artifact.canonical_manifest_json,"
+            "'$.qualification.profile')='sec-inline-xbrl-investor-grade.v1' "
+            "AND json_extract(artifact.canonical_manifest_json,"
+            "'$.qualification.require_os_network_denial')=1 "
+            "AND json_extract(input_seal.canonical_execution_evidence_json,"
+            "'$.internet_connectivity')='os_denied' "
+            "AND json_extract(input_seal.canonical_execution_evidence_json,"
+            "'$.network_requests_observed')=0 "
+            "AND json_extract(input_seal.canonical_execution_evidence_json,"
+            "'$.accession_number')=input_seal.accession_number "
+            "AND json_extract(input_seal.canonical_execution_evidence_json,"
+            "'$.expected_cik')=input_seal.expected_cik "
+            "AND EXISTS (SELECT 1 FROM issuer_identifier_resolution_outcomes resolution "
+            "JOIN issuer_identifier_assertions assertion "
+            "ON assertion.assertion_id=resolution.selected_assertion_id "
+            "WHERE resolution.resolution_key='sec_cik:'||input_seal.expected_cik "
+            "AND resolution.outcome='selected' "
+            "AND assertion.issuer_id=input_seal.issuer_id "
+            "AND resolution.knowledge_at<=input_seal.recorded_at "
+            "AND assertion.knowledge_at<=input_seal.recorded_at "
+            "AND NOT EXISTS (SELECT 1 FROM issuer_identifier_resolution_outcomes newer "
+            "WHERE newer.resolution_key=resolution.resolution_key "
+            "AND newer.knowledge_at<=input_seal.recorded_at "
+            "AND newer.revision>resolution.revision)) "
+            "AND json_extract(input_seal.canonical_execution_evidence_json,"
+            "'$.package_member_set_sha256')=input_seal.member_set_sha256 "
+            "AND json_extract(input_seal.canonical_execution_evidence_json,"
+            "'$.runtime_artifact_sha256')=artifact.artifact_sha256 "
+            "AND disposition_seal.entry_count=input_seal.raw_fact_count "
+            "AND disposition_seal.extraction_output_sha256=run.output_sha256 "
+            "AND (SELECT COUNT(*) FROM filing_xbrl_extraction_input_members member "
+            "WHERE member.extraction_run_id=input_seal.extraction_run_id)"
+            "=input_seal.member_count "
+            "AND (SELECT COUNT(*) FROM filing_xbrl_raw_fact_commitments raw "
+            "WHERE raw.extraction_run_id=input_seal.extraction_run_id)"
+            "=input_seal.raw_fact_count "
+            "AND (SELECT COUNT(*) FROM filing_xbrl_footnote_commitments footnote "
+            "WHERE footnote.extraction_run_id=input_seal.extraction_run_id)"
+            "=input_seal.footnote_count "
+            "AND (SELECT COUNT(*) FROM filing_xbrl_extraction_dispositions disposition "
+            "WHERE disposition.extraction_run_id=input_seal.extraction_run_id)"
+            "=input_seal.raw_fact_count "
+            "AND (SELECT COUNT(*) FROM evidence_nodes node "
+            "WHERE node.extraction_run_id=input_seal.extraction_run_id)"
+            "=input_seal.raw_fact_count "
+            "AND EXISTS (SELECT 1 FROM filing_xbrl_extraction_input_members primary_member "
+            "WHERE primary_member.extraction_run_id=input_seal.extraction_run_id "
+            "AND primary_member.member_ordinal=0 "
+            "AND primary_member.member_role='primary_document' "
+            "AND primary_member.document_version_id=run.document_version_id "
+            "AND EXISTS (SELECT 1 FROM evidence_document_versions document "
+            "WHERE document.document_version_id=primary_member.document_version_id "
+            "AND document.issuer_id=input_seal.issuer_id))",
+            (extraction_run_id, document_version_id),
+        ).fetchone()
+        is not None
+    )
 
 
 def _require_schema(conn: sqlite3.Connection) -> None:
@@ -466,6 +688,22 @@ def _require_schema(conn: sqlite3.Connection) -> None:
         raise RuntimeError("source coverage refresh schema is incomplete: " + ", ".join(missing))
 
 
+def _require_xbrl_schema(conn: sqlite3.Connection) -> None:
+    required = {
+        "filing_xbrl_extraction_input_seals",
+        "filing_xbrl_extraction_disposition_seals",
+    }
+    present = {
+        str(row[0])
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if missing := sorted(required - present):
+        raise RuntimeError(
+            "filing-XBRL coverage refresh schema is incomplete: "
+            + ", ".join(missing)
+        )
+
+
 def _policy_sha(
     extractor_names: tuple[str, ...],
     index_kinds: tuple[IndexKind, ...],
@@ -474,6 +712,7 @@ def _policy_sha(
         "authoritative_extraction_lineage",
         "captured_to_extracted",
         "extracted_to_indexed",
+        "verified_no_inline_xbrl",
     ],
 ) -> str:
     return _sha_json(

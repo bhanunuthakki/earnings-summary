@@ -341,7 +341,9 @@ class FilingXbrlExtractionLedger:
             or extraction_seals[0].extraction_run_id != output.extraction.extraction_run_id
         ):
             raise ValueError("filing-XBRL publication must seal the represented extraction run")
-        entries = tuple(sorted(output.entries, key=lambda item: item.ordinal))
+        entries = tuple(
+            sorted((*output.entries, *output.rejections), key=lambda item: item.ordinal)
+        )
         if tuple(item.ordinal for item in entries) != tuple(
             item.ordinal for item in result.entry_commitments
         ):
@@ -370,7 +372,9 @@ class FilingXbrlExtractionLedger:
         output: FilingXbrlNormalizedOutput,
         result: FilingXbrlAdapterResult,
     ) -> tuple[FilingXbrlExtractionDispositionRecord, ...]:
-        entries_by_ordinal = {item.ordinal: item for item in output.entries}
+        entries_by_ordinal = {
+            item.ordinal: item for item in (*output.entries, *output.rejections)
+        }
         records: list[FilingXbrlExtractionDispositionRecord] = []
         for commitment in result.entry_commitments:
             entry = entries_by_ordinal[commitment.ordinal]

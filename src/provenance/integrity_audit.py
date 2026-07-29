@@ -459,6 +459,9 @@ _CUTOVER_GATE_TABLES: dict[str, tuple[str, ...]] = {
     ),
 }
 _JSON_OBJECT_ADAPTER: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
+_JSON_OBJECT_LIST_ADAPTER: TypeAdapter[list[dict[str, JsonValue]]] = TypeAdapter(
+    list[dict[str, JsonValue]]
+)
 
 
 def exit_code(*, has_blockers: bool, strict: bool) -> int:
@@ -482,6 +485,7 @@ def audit_connection(conn: sqlite3.Connection, options: AuditOptions) -> Integri
     _audit_fact_resolution_cutover(conn, tables, findings, options)
     _audit_fact_match_proofs(conn, tables, findings, options)
     _audit_fact_plane_v2(conn, tables, findings, options)
+    _audit_filing_xbrl_processor_closure(conn, tables, findings, options)
     _audit_fact_selection(conn, tables, findings, options)
     _audit_issuer_registry(conn, tables, findings, options)
     _audit_reporting_identity(conn, tables, findings, options)
@@ -500,6 +504,499 @@ def audit_connection(conn: sqlite3.Connection, options: AuditOptions) -> Integri
         findings=tuple(findings),
         has_blockers=any(finding.severity is Severity.BLOCKER for finding in findings),
         tables_present=tuple(sorted(tables)),
+    )
+
+
+def _audit_filing_xbrl_processor_closure(
+    conn: sqlite3.Connection,
+    tables: set[str],
+    findings: list[IntegrityFinding],
+    options: AuditOptions,
+) -> None:
+    required = {
+        "filing_xbrl_processor_artifacts",
+        "filing_xbrl_extraction_input_members",
+        "filing_xbrl_extraction_input_seals",
+        "filing_xbrl_raw_fact_commitments",
+        "filing_xbrl_footnote_commitments",
+    }
+    present = required & tables
+    if not present:
+        return
+    missing = sorted(required - present)
+    _add(
+        findings,
+        code="FILING_XBRL_PROCESSOR_SCHEMA_PARTIAL",
+        severity=Severity.BLOCKER,
+        remediation=RemediationClass.HARD_STOP,
+        count=len(missing),
+        query_context="0254 filing-XBRL processor closure tables",
+        samples=tuple(missing[: options.sample_limit]),
+    )
+    if missing:
+        return
+    _query_finding(
+        conn,
+        findings,
+        options,
+        code="FILING_XBRL_PROCESSOR_COORDINATES_UNQUALIFIED",
+        severity=Severity.BLOCKER,
+        remediation=RemediationClass.REINGEST,
+        query=(
+            "SELECT processor_artifact_id FROM filing_xbrl_processor_artifacts "
+            "WHERE arelle_version<>'2.39.8' OR edgar_version<>'26.1' "
+            "OR xule_version<>'30052' "
+            "OR bridge_protocol_version<>'filing-xbrl-bridge.v1'"
+        ),
+    )
+    _query_finding(
+        conn,
+        findings,
+        options,
+        code="FILING_XBRL_INPUT_SEAL_INCOMPLETE",
+        severity=Severity.BLOCKER,
+        remediation=RemediationClass.REINGEST,
+        query=(
+            "SELECT seal.extraction_run_id FROM filing_xbrl_extraction_input_seals seal "
+            "LEFT JOIN filing_xbrl_extraction_input_members member "
+            "ON member.extraction_run_id=seal.extraction_run_id "
+            "GROUP BY seal.extraction_run_id,seal.member_count "
+            "HAVING COUNT(member.input_member_id)<>seal.member_count "
+            "OR MIN(member.member_ordinal)<>0 "
+            "OR MAX(member.member_ordinal)<>seal.member_count-1 "
+            "OR json_array_length(seal.canonical_member_set_json)<>seal.member_count "
+            "OR json_array_length(seal.canonical_network_artifact_set_json)"
+            "<>seal.network_artifact_count "
+            "OR json_array_length(seal.canonical_footnote_set_json)<>seal.footnote_count"
+        ),
+    )
+    _query_finding(
+        conn,
+        findings,
+        options,
+        code="FILING_XBRL_RESULT_SEAL_INCOMPLETE",
+        severity=Severity.BLOCKER,
+        remediation=RemediationClass.REINGEST,
+        query=(
+            "SELECT seal.extraction_run_id FROM filing_xbrl_extraction_input_seals seal "
+            "LEFT JOIN filing_xbrl_raw_fact_commitments raw "
+            "ON raw.extraction_run_id=seal.extraction_run_id "
+            "LEFT JOIN filing_xbrl_footnote_commitments footnote "
+            "ON footnote.extraction_run_id=raw.extraction_run_id "
+            "AND footnote.input_ordinal=raw.input_ordinal "
+            "GROUP BY seal.extraction_run_id,seal.raw_fact_count,seal.footnote_count,"
+            "seal.zero_fact_disposition "
+            "HAVING COUNT(DISTINCT raw.raw_fact_commitment_id)<>seal.raw_fact_count "
+            "OR COUNT(footnote.footnote_commitment_id)<>seal.footnote_count "
+            "OR (seal.raw_fact_count=0 "
+            "AND seal.zero_fact_disposition<>'verified_no_inline_xbrl') "
+            "OR (seal.raw_fact_count>0 AND seal.zero_fact_disposition IS NOT NULL)"
+        ),
+    )
+    _query_finding(
+        conn,
+        findings,
+        options,
+        code="FILING_XBRL_RAW_FACT_ORPHANED",
+        severity=Severity.BLOCKER,
+        remediation=RemediationClass.REINGEST,
+        query=(
+            "SELECT raw.raw_fact_commitment_id "
+            "FROM filing_xbrl_raw_fact_commitments raw "
+            "LEFT JOIN evidence_nodes node ON node.node_id=raw.evidence_node_id "
+            "LEFT JOIN filing_xbrl_extraction_input_members member "
+            "ON member.extraction_run_id=raw.extraction_run_id "
+            "AND member.member_ordinal=raw.package_member_ordinal "
+            "AND member.blob_sha256=raw.package_member_blob_sha256 "
+            "LEFT JOIN filing_xbrl_extraction_input_seals seal "
+            "ON seal.extraction_run_id=raw.extraction_run_id "
+            "WHERE node.node_id IS NULL OR node.extraction_run_id<>raw.extraction_run_id "
+            "OR node.locator_sha256<>raw.source_locator_sha256 "
+            "OR member.input_member_id IS NULL "
+            "OR seal.accession_number<>raw.accession_number "
+            "OR seal.expected_cik<>raw.observed_cik"
+        ),
+    )
+    _query_finding(
+        conn,
+        findings,
+        options,
+        code="FILING_XBRL_FOOTNOTE_ORPHANED",
+        severity=Severity.BLOCKER,
+        remediation=RemediationClass.REINGEST,
+        query=(
+            "SELECT footnote.footnote_commitment_id "
+            "FROM filing_xbrl_footnote_commitments footnote "
+            "LEFT JOIN filing_xbrl_raw_fact_commitments raw "
+            "ON raw.extraction_run_id=footnote.extraction_run_id "
+            "AND raw.input_ordinal=footnote.input_ordinal "
+            "WHERE raw.raw_fact_commitment_id IS NULL"
+        ),
+    )
+    digest_mismatches: list[str] = []
+    def canonical_json(value: object) -> str:
+        return json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+    for artifact in conn.execute(
+        "SELECT processor_artifact_id,bundle_name,arelle_version,edgar_version,"
+        "xule_version,bridge_protocol_version,artifact_sha256,"
+        "sandbox_launcher_sha256,bundle_python_sha256,"
+        "canonical_manifest_json,manifest_sha256 "
+        "FROM filing_xbrl_processor_artifacts ORDER BY processor_artifact_id"
+    ):
+        artifact_id = str(artifact[0])
+        try:
+            manifest_json = str(artifact[9])
+            manifest = _JSON_OBJECT_ADAPTER.validate_json(manifest_json)
+            execution = _JSON_OBJECT_ADAPTER.validate_python(manifest["execution"])
+            coordinates = _JSON_OBJECT_ADAPTER.validate_python(
+                manifest["coordinates"]
+            )
+            qualification = _JSON_OBJECT_ADAPTER.validate_python(
+                manifest["qualification"]
+            )
+            runtime_members = _JSON_OBJECT_LIST_ADAPTER.validate_python(
+                execution["runtime_members"]
+            )
+            exact = (
+                canonical_json(manifest) == manifest_json
+                and hashlib.sha256(manifest_json.encode()).hexdigest()
+                == str(artifact[10])
+                and str(manifest["bundle_name"]) == str(artifact[1])
+                and str(coordinates["arelle"]) == str(artifact[2])
+                and str(coordinates["edgar"]) == str(artifact[3])
+                and str(coordinates["xule"]) == str(artifact[4])
+                and str(manifest["bridge_protocol_version"]) == str(artifact[5])
+                and str(execution["sandbox_launcher_sha256"]) == str(artifact[7])
+                and str(execution["bundle_python_sha256"]) == str(artifact[8])
+                and str(execution["runtime_artifact_sha256"]) == str(artifact[6])
+                and hashlib.sha256(canonical_json(runtime_members).encode()).hexdigest()
+                == str(artifact[6])
+                and qualification
+                == {
+                    "profile": "sec-inline-xbrl-investor-grade.v1",
+                    "require_exact_coordinates": True,
+                    "require_footnote_commitments": True,
+                    "require_network_artifact_commitments": True,
+                    "require_os_network_denial": True,
+                    "require_runtime_artifact_sha256": True,
+                    "require_sec_filing_identity": True,
+                    "require_source_locator_commitments": True,
+                    "require_zero_fact_host_verification": True,
+                }
+                and execution["internet_connectivity"] == "os_denied"
+                and execution["sandbox_contract_version"]
+                == "earnings-xbrl-os-sandbox.v1"
+                and execution["isolated_python"] is True
+            )
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            exact = False
+        if not exact:
+            digest_mismatches.append(artifact_id)
+    for row in conn.execute(
+        "SELECT extraction_run_id,canonical_member_set_json,member_set_sha256,"
+        "canonical_network_artifact_set_json,network_artifact_set_sha256,"
+        "canonical_footnote_set_json,footnote_set_sha256,"
+        "canonical_execution_evidence_json,execution_evidence_sha256,"
+        "raw_fact_set_sha256,accession_number,expected_cik,processor_artifact_id,"
+        "issuer_id "
+        "FROM filing_xbrl_extraction_input_seals ORDER BY extraction_run_id"
+    ):
+        run_id = str(row[0])
+        committed_sets = (
+            (str(row[1]), str(row[2])),
+            (str(row[3]), str(row[4])),
+            (str(row[5]), str(row[6])),
+            (str(row[7]), str(row[8])),
+        )
+        if any(
+            hashlib.sha256(canonical.encode()).hexdigest() != expected
+            for canonical, expected in committed_sets
+        ):
+            digest_mismatches.append(run_id)
+            continue
+        member_payload: list[dict[str, object]] = []
+        member_mismatch = False
+        for member in conn.execute(
+            "SELECT member_ordinal,member_role,document_version_id,source_url,"
+            "blob_sha256,byte_size,media_type,canonical_member_json,member_sha256 "
+            "FROM filing_xbrl_extraction_input_members "
+            "WHERE extraction_run_id=? ORDER BY member_ordinal",
+            (run_id,),
+        ):
+            payload: dict[str, object] = {
+                "blob_sha256": str(member[4]),
+                "byte_size": int(member[5]),
+                "document_version_id": (
+                    None if member[2] is None else str(member[2])
+                ),
+                "media_type": str(member[6]),
+                "member_ordinal": int(member[0]),
+                "member_role": str(member[1]),
+                "source_url": str(member[3]),
+            }
+            canonical_member = canonical_json(payload)
+            if (
+                canonical_member != str(member[7])
+                or hashlib.sha256(canonical_member.encode()).hexdigest()
+                != str(member[8])
+            ):
+                member_mismatch = True
+            member_payload.append(payload)
+        canonical_members = canonical_json(member_payload)
+        try:
+            sealed_network = _JSON_OBJECT_LIST_ADAPTER.validate_json(str(row[3]))
+        except ValueError:
+            sealed_network = None
+        expected_network = sorted(
+            (
+                str(member["source_url"]),
+                str(member["blob_sha256"]),
+            )
+            for member in member_payload
+            if member["member_role"]
+            in {"issuer_taxonomy", "standard_taxonomy", "network_artifact"}
+        )
+        network_shape_exact = sealed_network is not None and all(
+            set(item) == {"source_url", "blob_sha256"} for item in sealed_network
+        )
+        actual_network: list[tuple[str, str]] | None = None
+        if network_shape_exact and sealed_network is not None:
+            actual_network = sorted(
+                (str(item["source_url"]), str(item["blob_sha256"]))
+                for item in sealed_network
+            )
+        raw_payload: list[dict[str, object]] = []
+        source_entry_mismatch = False
+        for raw in conn.execute(
+            "SELECT input_ordinal,raw_fact_sha256,source_entry_sha256,"
+            "source_locator_sha256,accession_number,observed_cik,"
+            "package_member_ordinal,package_member_blob_sha256,"
+            "canonical_raw_fact_json "
+            "FROM filing_xbrl_raw_fact_commitments "
+            "WHERE extraction_run_id=? ORDER BY input_ordinal",
+            (run_id,),
+        ):
+            raw_payload.append(
+                {
+                    "input_ordinal": int(raw[0]),
+                    "raw_fact_sha256": str(raw[1]),
+                    "source_entry_sha256": str(raw[2]),
+                    "source_locator_sha256": str(raw[3]),
+                }
+            )
+            source_entry = {
+                "accession_number": str(raw[4]),
+                "observed_cik": str(raw[5]),
+                "package_member_blob_sha256": str(raw[7]),
+                "package_member_ordinal": int(raw[6]),
+                "raw_fact_sha256": str(raw[1]),
+                "source_locator_sha256": str(raw[3]),
+            }
+            canonical_entry = json.dumps(
+                source_entry,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            )
+            if hashlib.sha256(canonical_entry.encode()).hexdigest() != str(raw[2]):
+                source_entry_mismatch = True
+            if hashlib.sha256(str(raw[8]).encode()).hexdigest() != str(raw[1]):
+                source_entry_mismatch = True
+        canonical_raw = json.dumps(
+            raw_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        footnote_payload: list[dict[str, object]] = []
+        footnote_mismatch = False
+        for footnote in conn.execute(
+            "SELECT input_ordinal,footnote_ordinal,canonical_footnote_json,"
+            "footnote_sha256 FROM filing_xbrl_footnote_commitments "
+            "WHERE extraction_run_id=? ORDER BY input_ordinal,footnote_ordinal",
+            (run_id,),
+        ):
+            try:
+                footnote_body = json.loads(str(footnote[2]))
+            except json.JSONDecodeError:
+                footnote_mismatch = True
+                continue
+            canonical_footnote = canonical_json(footnote_body)
+            if (
+                canonical_footnote != str(footnote[2])
+                or hashlib.sha256(canonical_footnote.encode()).hexdigest()
+                != str(footnote[3])
+            ):
+                footnote_mismatch = True
+            footnote_payload.append(
+                {
+                    "canonical_footnote": footnote_body,
+                    "footnote_ordinal": int(footnote[1]),
+                    "footnote_sha256": str(footnote[3]),
+                    "input_ordinal": int(footnote[0]),
+                }
+            )
+        canonical_footnotes = canonical_json(footnote_payload)
+        try:
+            execution_evidence = _JSON_OBJECT_ADAPTER.validate_json(str(row[7]))
+        except ValueError:
+            execution_evidence = None
+        artifact_runtime = conn.execute(
+            "SELECT artifact_sha256 FROM filing_xbrl_processor_artifacts "
+            "WHERE processor_artifact_id=?",
+            (str(row[12]),),
+        ).fetchone()
+        execution_evidence_exact = (
+            isinstance(execution_evidence, dict)
+            and execution_evidence
+            == {
+                "accession_number": str(row[10]),
+                "expected_cik": str(row[11]),
+                "internet_connectivity": "os_denied",
+                "network_requests_observed": 0,
+                "package_member_set_sha256": str(row[2]),
+                "runtime_artifact_sha256": (
+                    None if artifact_runtime is None else str(artifact_runtime[0])
+                ),
+                "sandbox_contract_version": "earnings-xbrl-os-sandbox.v1",
+            }
+        )
+        if (
+            member_mismatch
+            or canonical_members != str(row[1])
+            or actual_network != expected_network
+            or source_entry_mismatch
+            or hashlib.sha256(canonical_raw.encode()).hexdigest() != str(row[9])
+            or footnote_mismatch
+            or canonical_footnotes != str(row[5])
+            or not execution_evidence_exact
+        ):
+            digest_mismatches.append(run_id)
+    _add(
+        findings,
+        code="FILING_XBRL_RESULT_COMMITMENT_DIGEST_MISMATCH",
+        severity=Severity.BLOCKER,
+        remediation=RemediationClass.REINGEST,
+        count=len(digest_mismatches),
+        query_context="recomputed filing-XBRL input/network/raw-fact/footnote sets",
+        samples=tuple(digest_mismatches[: options.sample_limit]),
+    )
+    _query_finding(
+        conn,
+        findings,
+        options,
+        code="FILING_XBRL_RAW_FACT_DISPOSITION_GAP",
+        severity=Severity.BLOCKER,
+        remediation=RemediationClass.REINGEST,
+        query=(
+            "SELECT raw.extraction_run_id,raw.input_ordinal "
+            "FROM filing_xbrl_raw_fact_commitments raw "
+            "LEFT JOIN filing_xbrl_extraction_dispositions disposition "
+            "ON disposition.extraction_run_id=raw.extraction_run_id "
+            "AND disposition.input_ordinal=raw.input_ordinal "
+            "WHERE disposition.disposition_id IS NULL "
+            "OR (raw.normalization_outcome='rejected' "
+            "AND disposition.disposition<>'quarantined')"
+        ),
+    )
+    _query_finding(
+        conn,
+        findings,
+        options,
+        code="FILING_XBRL_EVIDENCE_OR_CLOCK_BINDING_GAP",
+        severity=Severity.BLOCKER,
+        remediation=RemediationClass.REINGEST,
+        query=(
+            "SELECT member.input_member_id "
+            "FROM filing_xbrl_extraction_input_members member "
+            "JOIN filing_xbrl_extraction_input_seals seal "
+            "ON seal.extraction_run_id=member.extraction_run_id "
+            "LEFT JOIN evidence_content_blobs blob ON blob.sha256=member.blob_sha256 "
+            "LEFT JOIN evidence_document_versions document "
+            "ON document.document_version_id=member.document_version_id "
+            "LEFT JOIN evidence_extraction_runs run "
+            "ON run.extraction_run_id=member.extraction_run_id "
+            "WHERE blob.sha256 IS NULL OR blob.byte_size<>member.byte_size "
+            "OR blob.media_type<>member.media_type "
+            "OR julianday(blob.recorded_at)>julianday(seal.recorded_at) "
+            "OR julianday(member.recorded_at)<>julianday(seal.recorded_at) "
+            "OR run.extractor_name<>'filing-native-xbrl' OR run.outcome<>'succeeded' "
+            "OR julianday(run.started_at)<>julianday(seal.recorded_at) "
+            "OR julianday(run.completed_at)<>julianday(seal.recorded_at) "
+            "OR (member.document_version_id IS NOT NULL "
+            "AND (document.document_version_id IS NULL "
+            "OR document.blob_sha256<>member.blob_sha256 "
+            "OR (member.member_role='primary_document' "
+            "AND document.issuer_id<>seal.issuer_id) "
+            "OR julianday(document.recorded_at)>julianday(seal.recorded_at))) "
+            "OR (member.document_version_id IS NULL AND NOT EXISTS (SELECT 1 "
+            "FROM evidence_source_observations observation "
+            "WHERE observation.source_url=member.source_url "
+            "AND observation.blob_sha256=member.blob_sha256 "
+            "AND julianday(observation.retrieved_at)<=julianday(seal.recorded_at)))"
+        ),
+    )
+    _query_finding(
+        conn,
+        findings,
+        options,
+        code="FILING_XBRL_CIK_ISSUER_BINDING_GAP",
+        severity=Severity.BLOCKER,
+        remediation=RemediationClass.REINGEST,
+        query=(
+            "SELECT seal.extraction_run_id "
+            "FROM filing_xbrl_extraction_input_seals seal "
+            "WHERE NOT EXISTS (SELECT 1 "
+            "FROM issuer_identifier_resolution_outcomes resolution "
+            "JOIN issuer_identifier_assertions assertion "
+            "ON assertion.assertion_id=resolution.selected_assertion_id "
+            "WHERE resolution.resolution_key='sec_cik:'||seal.expected_cik "
+            "AND resolution.outcome='selected' "
+            "AND assertion.issuer_id=seal.issuer_id "
+            "AND resolution.knowledge_at<=seal.recorded_at "
+            "AND assertion.knowledge_at<=seal.recorded_at "
+            "AND NOT EXISTS (SELECT 1 "
+            "FROM issuer_identifier_resolution_outcomes newer "
+            "WHERE newer.resolution_key=resolution.resolution_key "
+            "AND newer.knowledge_at<=seal.recorded_at "
+            "AND newer.revision>resolution.revision))"
+        ),
+    )
+    _query_finding(
+        conn,
+        findings,
+        options,
+        code="FILING_XBRL_PUBLICATION_CLOCK_OR_CLOSURE_GAP",
+        severity=Severity.BLOCKER,
+        remediation=RemediationClass.REINGEST,
+        query=(
+            "SELECT seal.extraction_run_id "
+            "FROM filing_xbrl_extraction_input_seals seal "
+            "LEFT JOIN filing_xbrl_extraction_disposition_seals disposition_seal "
+            "ON disposition_seal.extraction_run_id=seal.extraction_run_id "
+            "WHERE disposition_seal.extraction_run_id IS NULL "
+            "OR disposition_seal.entry_count<>seal.raw_fact_count "
+            "OR julianday(disposition_seal.recorded_at)<>julianday(seal.recorded_at) "
+            "OR julianday(disposition_seal.knowledge_at)<>julianday(seal.recorded_at) "
+            "OR EXISTS (SELECT 1 FROM evidence_nodes node "
+            "WHERE node.extraction_run_id=seal.extraction_run_id "
+            "AND julianday(node.recorded_at)<>julianday(seal.recorded_at)) "
+            "OR EXISTS (SELECT 1 FROM filing_xbrl_raw_fact_commitments raw "
+            "WHERE raw.extraction_run_id=seal.extraction_run_id "
+            "AND julianday(raw.recorded_at)<>julianday(seal.recorded_at)) "
+            "OR EXISTS (SELECT 1 FROM filing_xbrl_footnote_commitments footnote "
+            "WHERE footnote.extraction_run_id=seal.extraction_run_id "
+            "AND julianday(footnote.recorded_at)<>julianday(seal.recorded_at)) "
+            "OR EXISTS (SELECT 1 FROM filing_xbrl_extraction_dispositions disposition "
+            "WHERE disposition.extraction_run_id=seal.extraction_run_id "
+            "AND (julianday(disposition.recorded_at)<>julianday(seal.recorded_at) "
+            "OR julianday(disposition.knowledge_at)<>julianday(seal.recorded_at)))"
+        ),
     )
 
 

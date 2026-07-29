@@ -49,6 +49,7 @@ DimensionMemberKind = Literal["explicit", "typed"]
 QuarantineReason = Literal[
     "conflicting_source_entry_identity",
     "invalid_fact_graph",
+    "normalization_rejected",
 ]
 
 _ADAPTER_NAME = "filing-native-xbrl-publication"
@@ -265,10 +266,44 @@ class NormalizedFilingXbrlFact(_FrozenModel):
         return self
 
 
+class FilingXbrlNormalizationRejection(_FrozenModel):
+    """One raw source fact that deterministically failed normalization."""
+
+    ordinal: int = Field(ge=0)
+    evidence_node_id: str = Field(min_length=1, max_length=128)
+    canonical_raw_fact_json: str = Field(min_length=2)
+    raw_fact_sha256: str
+    source_entry_sha256: str
+    source_locator_sha256: str
+    reason_code: str = Field(min_length=1, max_length=128)
+    detail: str = Field(min_length=1, max_length=4096)
+    knowledge_at: datetime
+    recorded_at: datetime
+
+    _raw_sha = field_validator("raw_fact_sha256")(_validate_sha256)
+    _entry_sha = field_validator("source_entry_sha256")(_validate_sha256)
+    _locator_sha = field_validator("source_locator_sha256")(_validate_sha256)
+
+    @model_validator(mode="after")
+    def _exact_raw_commitment(self) -> Self:
+        try:
+            parsed = _JSON_OBJECT.validate_json(self.canonical_raw_fact_json)
+        except ValueError as exc:
+            raise ValueError("canonical raw fact must be valid JSON") from exc
+        if _canonical_json(parsed) != self.canonical_raw_fact_json:
+            raise ValueError("raw fact JSON must be canonical")
+        if _digest(parsed) != self.raw_fact_sha256:
+            raise ValueError("raw fact SHA does not match its payload")
+        if self.recorded_at < self.knowledge_at:
+            raise ValueError("rejection recorded_at must not precede knowledge_at")
+        return self
+
+
 def _normalized_output_payload(
     extraction: FilingXbrlExtractionIdentity,
     subject: FilingXbrlSubjectIdentity,
     entries: tuple[NormalizedFilingXbrlFact, ...],
+    rejections: tuple[FilingXbrlNormalizationRejection, ...],
 ) -> dict[str, JsonValue]:
     return {
         "entries": [
@@ -281,6 +316,10 @@ def _normalized_output_payload(
         ),
         "normalized_output_schema_name": (FILING_XBRL_NORMALIZED_OUTPUT_SCHEMA),
         "normalized_output_schema_version": (FILING_XBRL_NORMALIZED_OUTPUT_VERSION),
+        "rejections": [
+            rejection.model_dump(mode="json")
+            for rejection in sorted(rejections, key=lambda item: item.ordinal)
+        ],
         "subject": subject.model_dump(mode="json"),
     }
 
@@ -291,6 +330,7 @@ class FilingXbrlNormalizedOutput(_FrozenModel):
     extraction: FilingXbrlExtractionIdentity
     subject: FilingXbrlSubjectIdentity
     entries: tuple[NormalizedFilingXbrlFact, ...]
+    rejections: tuple[FilingXbrlNormalizationRejection, ...] = ()
 
     @classmethod
     def with_computed_digest(
@@ -299,20 +339,25 @@ class FilingXbrlNormalizedOutput(_FrozenModel):
         extraction: FilingXbrlExtractionIdentity,
         subject: FilingXbrlSubjectIdentity,
         entries: tuple[NormalizedFilingXbrlFact, ...],
+        rejections: tuple[FilingXbrlNormalizationRejection, ...] = (),
     ) -> FilingXbrlNormalizedOutput:
-        output_sha256 = _digest(_normalized_output_payload(extraction, subject, entries))
+        output_sha256 = _digest(
+            _normalized_output_payload(extraction, subject, entries, rejections)
+        )
         return cls(
             extraction=extraction.model_copy(update={"extraction_output_sha256": output_sha256}),
             subject=subject,
             entries=entries,
+            rejections=rejections,
         )
 
     @model_validator(mode="after")
     def _unique_ordinals_and_clocks(self) -> Self:
-        ordinals = tuple(entry.ordinal for entry in self.entries)
+        items = (*self.entries, *self.rejections)
+        ordinals = tuple(item.ordinal for item in items)
         if len(ordinals) != len(set(ordinals)):
             raise ValueError("normalized filing entry ordinals must be unique")
-        for entry in self.entries:
+        for entry in items:
             if entry.knowledge_at < self.extraction.knowledge_at:
                 raise ValueError("fact knowledge_at must not precede extraction knowledge_at")
             if entry.recorded_at < self.extraction.recorded_at:
@@ -338,6 +383,7 @@ class FilingXbrlNormalizedOutput(_FrozenModel):
                 self.extraction,
                 self.subject,
                 self.entries,
+                self.rejections,
             )
         )
 
@@ -514,9 +560,18 @@ class FilingXbrlFactAdapter:
 
     def adapt(self, output: FilingXbrlNormalizedOutput) -> FilingXbrlAdapterResult:
         entries = tuple(sorted(output.entries, key=lambda entry: entry.ordinal))
+        rejections = tuple(sorted(output.rejections, key=lambda entry: entry.ordinal))
         duplicate_primaries, conflict_dispositions = self._source_identity_groups(entries)
         reported: list[ReportedSourceFact] = []
-        dispositions: list[FilingXbrlDisposition] = []
+        dispositions: list[FilingXbrlDisposition] = [
+            QuarantinedFilingXbrlDisposition(
+                ordinal=rejection.ordinal,
+                source_entry_sha256=rejection.source_entry_sha256,
+                reason="normalization_rejected",
+                detail=f"{rejection.reason_code}: {rejection.detail}",
+            )
+            for rejection in rejections
+        ]
         published_by_ordinal: dict[int, ReportedSourceFact] = {}
 
         for entry in entries:
@@ -601,25 +656,26 @@ class FilingXbrlFactAdapter:
             item for item in dispositions if isinstance(item, DuplicateFilingXbrlDisposition)
         )
         dispositions_by_ordinal = {item.ordinal: item for item in dispositions}
+        source_items = tuple(sorted((*entries, *rejections), key=lambda item: item.ordinal))
         entry_commitments = tuple(
             FilingXbrlEntryDispositionCommitment(
-                ordinal=entry.ordinal,
-                canonical_normalized_entry_json=_canonical_json(entry),
-                normalized_entry_sha256=_digest(entry),
+                ordinal=item.ordinal,
+                canonical_normalized_entry_json=_canonical_json(item),
+                normalized_entry_sha256=_digest(item),
                 normalized_entry_identity_sha256=_digest(
-                    entry.model_dump(mode="json", exclude={"ordinal"})
+                    item.model_dump(mode="json", exclude={"ordinal"})
                 ),
-                source_entry_sha256=entry.source_entry_sha256,
-                source_locator_sha256=entry.source_locator_sha256,
-                disposition=dispositions_by_ordinal[entry.ordinal],
+                source_entry_sha256=item.source_entry_sha256,
+                source_locator_sha256=item.source_locator_sha256,
+                disposition=dispositions_by_ordinal[item.ordinal],
             )
-            for entry in entries
+            for item in source_items
         )
         return FilingXbrlAdapterResult(
             publication=publication,
             dispositions=tuple(dispositions),
             entry_commitments=entry_commitments,
-            total_count=len(entries),
+            total_count=len(source_items),
             published_count=len(published),
             duplicate_count=len(duplicates),
             quarantined_count=len(quarantined),

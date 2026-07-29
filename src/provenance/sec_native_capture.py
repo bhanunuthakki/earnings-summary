@@ -213,6 +213,23 @@ class CaptureItemResult(_ClosedModel):
     records_replayed: int = Field(default=0, ge=0)
 
 
+class CapturedSecPackageMember(_ClosedModel):
+    """One current hash-addressed member of a completely captured accession."""
+
+    expected_document_id: str
+    expected_document_key: str
+    issuer_id: str
+    document_version_id: str
+    document_type: str
+    accession_number: str = Field(pattern=_ACCESSION_PATTERN)
+    primary_document: str
+    source_url: str
+    blob_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    byte_size: int = Field(ge=0)
+    media_type: str
+    storage_uri: str
+
+
 class SecNativeCaptureResult(_ClosedModel):
     task_id: str
     mode: Literal["dry_run", "apply"]
@@ -226,6 +243,74 @@ class SecNativeCaptureResult(_ClosedModel):
     has_more: bool
     sec_only_boundary: str
     items: tuple[CaptureItemResult, ...]
+
+
+def load_captured_sec_filing_package(
+    conn: sqlite3.Connection,
+    *,
+    inventory_key: str,
+    accession_number: str,
+) -> tuple[CapturedSecPackageMember, ...]:
+    """Load a complete primary/financial package from the current sealed inventory."""
+
+    rows = conn.execute(
+        "SELECT expected.expected_document_id,expected.expected_document_key,"
+        "coverage.document_version_id,coverage.coverage_status,"
+        "expected.issuer_id,expected.document_type,"
+        "expected.accession_number,expected.primary_document,expected.source_url,"
+        "document.blob_sha256,blob.byte_size,blob.media_type,blob.storage_uri "
+        "FROM v_expected_documents_current AS expected "
+        "JOIN v_source_inventory_sealed_complete AS inventory "
+        "ON inventory.snapshot_id=expected.snapshot_id "
+        "LEFT JOIN v_source_coverage_current AS coverage "
+        "ON coverage.expected_document_id=expected.expected_document_id "
+        "LEFT JOIN evidence_document_versions AS document "
+        "ON document.document_version_id=coverage.document_version_id "
+        "LEFT JOIN evidence_content_blobs AS blob ON blob.sha256=document.blob_sha256 "
+        "WHERE inventory.inventory_key=? AND expected.accession_number=? "
+        "AND expected.document_type IN ('filing','sec_financial_report') "
+        "ORDER BY CASE expected.document_type WHEN 'filing' THEN 0 ELSE 1 END,"
+        "expected.expected_document_key",
+        (inventory_key, accession_number),
+    ).fetchall()
+    if not rows:
+        raise SecNativeCaptureError("sealed inventory has no filing package for accession")
+    admitted_statuses = {"captured", "extracted", "indexed"}
+    missing = tuple(
+        str(row[0])
+        for row in rows
+        if row[2] is None
+        or str(row[3]) not in admitted_statuses
+        or any(row[index] is None for index in (9, 10, 11, 12))
+    )
+    if missing:
+        raise SecNativeCaptureError(
+            "filing package is not completely captured: " + ", ".join(missing)
+        )
+    members = tuple(
+        CapturedSecPackageMember(
+            expected_document_id=str(row[0]),
+            expected_document_key=str(row[1]),
+            document_version_id=str(row[2]),
+            issuer_id=str(row[4]),
+            document_type=str(row[5]),
+            accession_number=str(row[6]),
+            primary_document=str(row[7]),
+            source_url=str(row[8]),
+            blob_sha256=str(row[9]),
+            byte_size=int(row[10]),
+            media_type=str(row[11]),
+            storage_uri=str(row[12]),
+        )
+        for row in rows
+    )
+    if sum(item.document_type == "filing" for item in members) != 1:
+        raise SecNativeCaptureError("captured filing package requires exactly one primary")
+    if len({item.issuer_id for item in members}) != 1:
+        raise SecNativeCaptureError("captured filing package crosses issuer identities")
+    if any(item.accession_number != accession_number for item in members):
+        raise SecNativeCaptureError("captured filing package crosses accession identities")
+    return members
 
 
 def load_expected_sec_documents(

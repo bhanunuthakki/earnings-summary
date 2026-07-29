@@ -116,10 +116,30 @@ class EvidenceLocator(_LedgerRecord):
     transcript_time_code_end: str | None = Field(default=None, min_length=1, max_length=64)
     transcript_start_seconds: float | None = Field(default=None, ge=0)
     transcript_end_seconds: float | None = Field(default=None, ge=0)
+    xbrl_package_member: str | None = Field(default=None, min_length=1, max_length=1024)
+    xbrl_fact_id: str | None = Field(default=None, min_length=1, max_length=512)
+    xbrl_element_path: str | None = Field(default=None, min_length=1, max_length=4096)
+    xbrl_concept_namespace: str | None = Field(default=None, min_length=1, max_length=2048)
+    xbrl_concept_name: str | None = Field(default=None, min_length=1, max_length=512)
+    xbrl_context_id: str | None = Field(default=None, min_length=1, max_length=512)
+    xbrl_unit_id: str | None = Field(default=None, min_length=1, max_length=512)
+    xbrl_target: str | None = Field(default=None, min_length=1, max_length=512)
+    xbrl_continuation_ids: tuple[str, ...] | None = None
     legacy_table: str | None = Field(default=None, min_length=1, max_length=128)
     legacy_row_id: int | None = Field(default=None, gt=0)
 
     _office_part_sha256 = field_validator("office_part_sha256")(_validate_optional_sha256)
+
+    @field_validator("xbrl_continuation_ids")
+    @classmethod
+    def _unique_xbrl_continuations(
+        cls, value: tuple[str, ...] | None
+    ) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        if any(not item.strip() for item in value) or len(value) != len(set(value)):
+            raise ValueError("XBRL continuation IDs must be non-empty and unique")
+        return value
 
     @field_validator("office_package_part")
     @classmethod
@@ -136,6 +156,33 @@ class EvidenceLocator(_LedgerRecord):
 
     @model_validator(mode="after")
     def _validate_ranges(self) -> Self:
+        xbrl_identity_fields = (
+            self.xbrl_package_member,
+            self.xbrl_fact_id,
+            self.xbrl_element_path,
+            self.xbrl_concept_namespace,
+            self.xbrl_concept_name,
+            self.xbrl_context_id,
+        )
+        if any(value is not None for value in xbrl_identity_fields):
+            if self.source_ref is None or any(
+                value is None for value in xbrl_identity_fields
+            ):
+                raise ValueError(
+                    "XBRL locators require source, package member, fact, element, "
+                    "concept, and context identity"
+                )
+            if self.source_ref != self.xbrl_package_member:
+                raise ValueError("XBRL package member must equal the admitted source")
+        elif any(
+            value is not None
+            for value in (
+                self.xbrl_unit_id,
+                self.xbrl_target,
+                self.xbrl_continuation_ids,
+            )
+        ):
+            raise ValueError("XBRL locator details require the complete XBRL identity")
         if (self.legacy_table is None) != (self.legacy_row_id is None):
             raise ValueError("legacy_table and legacy_row_id must be supplied together")
         if self.shape_index is not None and self.slide_number is None:
