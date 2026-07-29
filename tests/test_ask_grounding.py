@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from ask.grounding import (
     question_terms,
     used_citation_items,
 )
+from pipeline.confidence import IssuesByTicker
 
 _DDL = """
 CREATE TABLE documents (
@@ -552,6 +554,27 @@ def test_disagreement_without_displayed_tier_names_both_sides(repo: Path) -> Non
     conn.close()
     fin = next(i for i in _gather(repo, "TST revenue trend") if i.label == "TST · Revenue")
     assert "FMP $149M vs SEC $150M (0.67% delta)" in fin.text
+
+
+def test_ask_scopes_unresolved_issues_to_fact_evidence_tickers(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ask passes its bounded fact-ticker set to the issue loader instead of
+    requesting a full-ledger parse before it retrieves the fact series."""
+    captured_scopes: list[tuple[str, ...]] = []
+
+    def _capture_issue_scope(
+        _conn: sqlite3.Connection,
+        *,
+        tickers: Iterable[str] | None = None,
+    ) -> IssuesByTicker:
+        captured_scopes.append(tuple(tickers or ()))
+        return {}
+
+    monkeypatch.setattr("ask.grounding.load_unresolved_issues", _capture_issue_scope)
+    _gather(repo, "TST revenue trend")
+
+    assert captured_scopes == [("TST",)]
 
 
 def test_enrichment_is_inert_without_a_validation_issues_table(repo: Path) -> None:

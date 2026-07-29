@@ -39,10 +39,12 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date
 from html import escape
 from pathlib import Path
+from typing import cast
 
 from allocation import FACTOR_LABELS, NextDollarModel, build_next_dollar_model
 from bear_lint import (
@@ -207,13 +209,19 @@ def render_portfolio_panel(
     # painted. Down → skip the fetchers entirely and render the banner now.
     alive, base = probe_tracker(api_url)
     if alive:
-        analytics = fetch_portfolio_analytics(
-            api_url=api_url,
-            start_date=window.start_date,
-            end_date=window.end_date,
-            include_backfill=window.include_backfill,
-        )
-        live = fetch_live_portfolio(api_url=api_url)
+        # Analytics and live-book reads are independent tracker snapshots. They
+        # previously formed a serial waterfall after the liveness probe.
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="portfolio-panel") as pool:
+            analytics_future = pool.submit(
+                fetch_portfolio_analytics,
+                api_url=api_url,
+                start_date=window.start_date,
+                end_date=window.end_date,
+                include_backfill=window.include_backfill,
+            )
+            live_future = pool.submit(fetch_live_portfolio, api_url=api_url)
+            analytics = analytics_future.result()
+            live = live_future.result()
     else:
         analytics = PortfolioAnalytics(
             available=False, api_url=base, errors={"performance": _PROBE_DOWN_ERROR}
@@ -1250,9 +1258,13 @@ def _exposure_panel(db_path: Path, live: LivePortfolio) -> str:
         if profile.exists():
             try:
                 payload: object = json.loads(profile.read_text(encoding="utf-8"))
-                rec: object = payload[0] if isinstance(payload, list) and payload else payload
+                if isinstance(payload, list):
+                    records = cast("list[object]", payload)
+                    rec: object = records[0] if records else {}
+                else:
+                    rec = payload
                 if isinstance(rec, dict):
-                    raw = rec.get("sector")  # pyright: ignore[reportUnknownMemberType]
+                    raw = cast("dict[str, object]", rec).get("sector")
                     if isinstance(raw, str) and raw.strip():
                         sector = raw.strip()
             except (OSError, ValueError):
@@ -2055,9 +2067,9 @@ def _persist_risk_snapshot(
     # capture must carry the sections the snapshot's substance comes from.
     if analytics.performance is None or analytics.positioning is None:
         return
-    if drawdown is None and analytics.performance is not None:
+    if drawdown is None:
         drawdown = compute_drawdown(analytics.performance.points)
-    if factor is None and analytics.positioning is not None:
+    if factor is None:
         factor = factor_exposure_rollup(analytics.positioning.correlations)
     # §7.1.9 provenance: this opportunistic render-path write derives
     # rebase_basis the identical way the authoritative scheduled writer does

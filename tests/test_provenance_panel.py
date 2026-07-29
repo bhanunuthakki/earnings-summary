@@ -68,16 +68,19 @@ def test_coverage_leads_prominently(tmp_path: Path) -> None:
     assert html.index('id="prov-validation"') < html.index('id="prov-evals"')
 
 
-def test_assembler_degrades_on_empty_db(tmp_path: Path) -> None:
+def test_assembler_defers_each_diagnostic_until_revealed(tmp_path: Path) -> None:
     """Every builder degrades to a stub on missing tables — the console renders
     rather than crashing on a bare DB."""
     html = render_provenance_panel(_empty_db(tmp_path), tmp_path)
-    assert len(html) > 0
+    assert html.count('hx-trigger="revealed"') == 11
+    assert 'hx-get="/api/panel/section_coverage"' in html
+    assert 'hx-get="/api/panel/validation"' in html
+    assert 'hx-get="/api/panel/credibility"' in html
     # A bare DB still produces each builder's missing/empty state, not a 500.
     assert "Validation" in html
 
 
-def test_one_broken_builder_does_not_blank_the_console(
+def test_assembler_does_not_call_diagnostic_builders(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """_safe isolates a raised builder into an error card; the rest still render.
@@ -89,8 +92,8 @@ def test_one_broken_builder_does_not_blank_the_console(
 
     monkeypatch.setattr("pipeline.validation_issues_panel.render_validation_panel", _boom)
     html = render_provenance_panel(_empty_db(tmp_path), tmp_path)
-    assert "synthetic builder failure" in html  # the error card
-    assert "This diagnostic failed to render" in html
+    assert "synthetic builder failure" not in html
+    assert 'hx-get="/api/panel/validation"' in html
     assert 'id="prov-coverage"' in html  # the other sections survived
 
 
@@ -145,5 +148,12 @@ def test_old_system_panel_routes_still_serve(tmp_path: Path) -> None:
     (tmp_path / "data").mkdir()
     _empty_db(tmp_path / "data")
     client = comments_server.create_app(tmp_path).test_client()
-    for panel_id in ("section_coverage", "validation", "evals", "restatements"):
+    for panel_id in (
+        "section_coverage",
+        "validation",
+        "evals",
+        "restatements",
+        "overrides",
+        "credibility",
+    ):
         assert client.get(f"/api/panel/{panel_id}").status_code == 200

@@ -1539,7 +1539,11 @@ def _part_names(panes: list[str]) -> list[str]:
 
 
 _STYLE_RX = re.compile(r"<style>(.*?)</style>", re.DOTALL)
-_SCRIPT_RX = re.compile(r"<script>(.*?)</script>", re.DOTALL)
+_SCRIPT_RX = re.compile(
+    r"<script(?P<attrs>[^>]*)>(?P<body>.*?)</script>",
+    re.DOTALL,
+)
+_JSON_SCRIPT_TYPE_RX = re.compile(r"""\btype=["']application/json["']""", re.IGNORECASE)
 _PANE_OPEN_RX = re.compile(r'<div class="tab-pane subtab-pane(?: active)?" data-tab="([^"]+)">')
 _DIV_TOKEN_RX = re.compile(r"<div\b|</div>")
 _RELTIME_RX = re.compile(r"\b(?:just now|in \d+(?:mo|m|h|d)|\d+(?:mo|m|h|d) ago)\b")
@@ -1596,8 +1600,19 @@ def _decompose(doc: str, repo_root: str) -> dict[str, str]:
 
     styles = "\n".join(m.group(1) for m in _STYLE_RX.finditer(doc))
     doc = _STYLE_RX.sub("<style>[EXTRACTED]</style>", doc)
-    scripts = "\n".join(m.group(1) for m in _SCRIPT_RX.finditer(doc))
-    doc = _SCRIPT_RX.sub("<script>[EXTRACTED]</script>", doc)
+    scripts = "\n".join(
+        match.group("body")
+        for match in _SCRIPT_RX.finditer(doc)
+        if _JSON_SCRIPT_TYPE_RX.search(match.group("attrs")) is None
+    )
+    doc = _SCRIPT_RX.sub(
+        lambda match: (
+            match.group(0)
+            if _JSON_SCRIPT_TYPE_RX.search(match.group("attrs"))
+            else f"<script{match.group('attrs')}>[EXTRACTED]</script>"
+        ),
+        doc,
+    )
 
     parts: dict[str, str] = {}
     skeleton: list[str] = []

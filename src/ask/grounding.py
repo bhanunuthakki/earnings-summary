@@ -510,6 +510,24 @@ def _named_tracked_tickers(question: str, db_path: Path) -> list[str]:
     return list(out)
 
 
+def _issue_scope_for_question(question: str, fact_tickers: list[str]) -> list[str]:
+    """Fact evidence tickers plus authoritative fact-ref ticker handles.
+
+    Fact-ref handles intentionally bypass the ordinary named-ticker/surface
+    scope heuristic, so their embedded ticker must join the issue lookup scope
+    as well. The returned order is stable for repeatable parameter binding.
+    """
+    scope: dict[str, None] = {}
+    for ticker in fact_tickers:
+        normalized = ticker.strip().upper()
+        if normalized:
+            scope.setdefault(normalized, None)
+    for pattern in (_FACT_REF_KPI_RX, _FACT_REF_FIN_RX):
+        for match in pattern.finditer(question):
+            scope.setdefault(match.group(1).upper(), None)
+    return list(scope)
+
+
 # ---------------------------------------------------------------------------
 # Channel 1: facts (kpi_facts + financial_facts)
 # ---------------------------------------------------------------------------
@@ -1359,11 +1377,14 @@ def gather_evidence(
         conn = _connect(db_path)
         try:
             if conn is not None:
-                # Unresolved validation issues for the whole DB, parsed once
+                # Unresolved validation issues for relevant fact tickers, parsed once
                 # (best-effort: {} when the table is absent) and shared across
                 # every fact item so a cross-source ⚠ disagreement reaches the
                 # model's text, not only the UI popover.
-                issues_by_ticker = load_unresolved_issues(conn)
+                issues_by_ticker = load_unresolved_issues(
+                    conn,
+                    tickers=_issue_scope_for_question(q, tickers),
+                )
                 # PK fast-path first: fact_ref tokens resolve the EXACT series
                 # and lead the fact channel; the NL name-match then fills the
                 # rest, deduped by label so a token doesn't double its metric.
@@ -1456,7 +1477,17 @@ def gather_requested_evidence(
         try:
             # Parsed once, shared across this round's fact needs (see
             # gather_evidence); {} when conn/table is absent.
-            issues_by_ticker = load_unresolved_issues(conn) if conn is not None else {}
+            issue_scope = list(
+                dict.fromkeys(
+                    ticker
+                    for need in needs
+                    if need.kind == "fact"
+                    for ticker in ([need.ticker] if need.ticker else scope)
+                )
+            )
+            issues_by_ticker = (
+                load_unresolved_issues(conn, tickers=issue_scope) if conn is not None else {}
+            )
             for need in needs:
                 if need.kind not in NEED_DOC_KINDS:
                     continue

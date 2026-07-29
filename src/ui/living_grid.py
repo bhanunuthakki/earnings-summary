@@ -110,10 +110,18 @@ window.livingGrid = window.livingGrid || function () {
 
 
 def head_assets() -> str:
-    """Alpine + the ``livingGrid`` factory + the grid CSS, inlined once per
-    document. Self-contained (no asset fetches) so it works in the live shell
-    AND in the offline ``file://`` report."""
-    return f"<script>{_ALPINE_JS}</script><script>{_LIVING_GRID_JS}</script>{LIVING_GRID_CSS}"
+    """Inline the grid assets once without blocking body parsing.
+
+    The factory is available before Alpine starts. Alpine itself is a module
+    script, so its microtask-based boot sees the parsed ``<body>`` in both the
+    live shell and an offline ``file://`` report. Everything remains inline:
+    the report has no server from which to fetch an asset.
+    """
+    return (
+        f"<script>{_LIVING_GRID_JS}</script>"
+        f'<script type="module">{_ALPINE_JS}</script>'
+        f"{LIVING_GRID_CSS}"
+    )
 
 
 def grid_open() -> str:

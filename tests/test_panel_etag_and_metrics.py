@@ -64,6 +64,61 @@ def test_panel_fragment_revalidation_is_a_304(client: FlaskClient) -> None:
     assert stale.data == first.data
 
 
+def test_fresh_panel_revalidation_skips_the_expensive_renderer(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A matching validator must short-circuit before the route builder runs.
+
+    A post-render ``make_conditional`` still pays the database/calculation cost,
+    which is the dominant latency on the heavy panels.
+    """
+    from pipeline import dashboard_html
+
+    calls = 0
+
+    def _render() -> str:
+        nonlocal calls
+        calls += 1
+        return "<section>cached actions</section>"
+
+    monkeypatch.setattr(dashboard_html, "render_actions_panel", _render)
+    first = client.get("/api/panel/actions")
+    again = client.get(
+        "/api/panel/actions",
+        headers={"If-None-Match": first.headers["ETag"]},
+    )
+    assert first.status_code == 200
+    assert again.status_code == 304
+    assert calls == 1
+
+
+def test_state_change_invalidates_panel_response_cache(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pipeline import dashboard_html
+
+    calls = 0
+
+    def _render() -> str:
+        nonlocal calls
+        calls += 1
+        return f"<section>actions render {calls}</section>"
+
+    monkeypatch.setattr(dashboard_html, "render_actions_panel", _render)
+    assert client.get("/api/panel/actions").status_code == 200
+    assert (
+        client.post(
+            "/api/metrics/panel",
+            json={"panel": "actions", "cache": "cold", "total_ms": 1},
+        ).status_code
+        == 204
+    )
+    second = client.get("/api/panel/actions")
+    assert second.status_code == 200
+    assert calls == 2
+    assert b"render 2" in second.data
+
+
 def test_etag_scope_is_panel_gets_only(client: FlaskClient) -> None:
     """The hook must not touch non-panel routes (e.g. the JSON healthz) —
     they keep their default cache headers."""
@@ -73,6 +128,13 @@ def test_etag_scope_is_panel_gets_only(client: FlaskClient) -> None:
     # 404 panels pass through the hook untouched.
     missing = client.get("/api/panel/definitely_not_a_panel")
     assert missing.status_code == 404
+
+
+def test_responses_expose_server_timing(client: FlaskClient) -> None:
+    resp = client.get("/healthz")
+    timing = resp.headers.get("Server-Timing", "")
+    assert timing.startswith("app;dur=")
+    assert float(timing.removeprefix("app;dur=")) >= 0
 
 
 # ---------------------------------------------------------------------------

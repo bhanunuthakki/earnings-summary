@@ -558,6 +558,10 @@ def render_shell(
             # The persistent Ask dock (Ask v5): shell chrome, not panel
             # content — outside .cc-panels so it survives every tab switch.
             render_ask_dock(),
+            # HTMX is live-shell-only. Keep its self-contained runtime at body
+            # end so first paint wins over a framework that only discovers the
+            # already-rendered DOM.
+            htmx_runtime.htmx_body_assets(),
             f"<script>{SHELL_JS}</script>",
             _DOC_FOOT,
         ]
@@ -1878,7 +1882,7 @@ SHELL_JS = r"""
   var INFLIGHT = {};        // cache key -> in-flight fragment promise
   var LOAD_GENERATION = {}; // panel id -> most recent requested navigation
   var FRESH_MS = 30000;     // just-fetched window: skip revalidation
-  var WARM_PANELS = ['portfolio_health', 'explore'];
+  var WARM_PANELS = ['portfolio_health'];
 
   panels.forEach(function (p) {
     if (p.getAttribute('data-loaded') !== '1') {
@@ -2072,8 +2076,8 @@ SHELL_JS = r"""
   });
 
   // Idle warm-start after first paint: Portfolio (the tracker round-trip
-  // makes it the slowest first hit) and Ask, one at a time so a burst of
-  // panel builds never competes with the visible page.
+  // makes it the slowest first hit). Ask/Explore is intentionally opt-in:
+  // building its large surface in the background competes with Today.
   function warmStart() {
     WARM_PANELS.reduce(function (chain, pid) {
       return chain.then(function () { return prefetchPanel(pid); });
@@ -2982,16 +2986,13 @@ _DOC_HEAD = (
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>{css}</style>
 {alpine_head}
-{htmx_head}
 </head>
 <body>
 <a class="cc-skip" href="#cc-main">Skip to content</a>
 <h1 class="cc-sr-only">Portfolio &middot; command center</h1>
 <div id="cc-live" class="cc-sr-only" aria-live="polite" aria-atomic="true"></div>
 <div id="cc-offline-banner" class="cc-offline-banner" hidden aria-live="polite">Offline — data panels cannot reload until you reconnect</div>
-""".replace("{css}", SHELL_CSS)
-    .replace("{alpine_head}", living_grid.head_assets())
-    .replace("{htmx_head}", htmx_runtime.htmx_head())
+""".replace("{css}", SHELL_CSS).replace("{alpine_head}", living_grid.head_assets())
 )
 
 _DOC_FOOT = "</body></html>"

@@ -115,6 +115,88 @@ def client(app_repo: Path):
     return app.test_client()
 
 
+def test_extracted_routes_preserve_endpoint_contract(client):
+    """Extracted registrars keep the monolith's public Flask names."""
+    rules = {
+        rule.endpoint: rule.rule
+        for rule in client.application.url_map.iter_rules()
+        if rule.endpoint != "static"
+    }
+    assert len(rules) == 148
+    assert {
+        endpoint: rules[endpoint]
+        for endpoint in (
+            "source_viewer",
+            "source_pdf_page_image",
+            "peek_alert",
+            "peek_alerts",
+            "peek_ticker",
+            "peek_memo",
+            "peek_review",
+            "peek_provenance",
+            "peek_documents",
+            "peek_score",
+            "peek_earnings_prep",
+            "peek_fit",
+            "peek_whatif",
+            "peek_etf_workup",
+            "peek_discovery_compare",
+            "peek_fact_provenance",
+            "ticker_api",
+            "ticker_page",
+            "latest_report_for_ticker",
+            "latest_dcf_for_ticker",
+            "tickers_api",
+            "digest_page",
+            "feed_page",
+            "alerts_page",
+            "approve_or_dismiss_action",
+            "dismiss_alert_api",
+            "uncancel_action_api",
+            "llm_budgets_api",
+            "set_llm_budget",
+            "dcf_globals_api",
+            "ticker_settings_api",
+            "notes_api",
+            "notes_action_api",
+        )
+    } == {
+        "source_viewer": "/source/<int:doc_id>",
+        "source_pdf_page_image": "/source/<int:doc_id>/page/<int:page>.png",
+        "peek_alert": "/api/peek/alert/<int:alert_id>",
+        "peek_alerts": "/api/peek/alerts",
+        "peek_ticker": "/api/peek/ticker/<ticker>",
+        "peek_memo": "/api/peek/memo/<kind>",
+        "peek_review": "/api/peek/review/<ticker>",
+        "peek_provenance": "/api/peek/provenance",
+        "peek_documents": "/api/peek/documents",
+        "peek_score": "/api/peek/score",
+        "peek_earnings_prep": "/api/peek/earnings-prep",
+        "peek_fit": "/api/peek/fit",
+        "peek_whatif": "/api/peek/whatif",
+        "peek_etf_workup": "/api/peek/etf_workup",
+        "peek_discovery_compare": "/api/peek/discovery-compare",
+        "peek_fact_provenance": "/api/peek/provenance/<fact_ref>",
+        "ticker_api": "/api/ticker/<ticker>",
+        "ticker_page": "/ticker/<ticker>",
+        "latest_report_for_ticker": "/reports/<ticker>",
+        "latest_dcf_for_ticker": "/dcf/<ticker>",
+        "tickers_api": "/api/tickers",
+        "digest_page": "/digest",
+        "feed_page": "/feed",
+        "alerts_page": "/alerts",
+        "approve_or_dismiss_action": "/approve",
+        "dismiss_alert_api": "/api/alerts/<int:alert_id>/dismiss",
+        "uncancel_action_api": "/api/actions/<int:action_id>/uncancel",
+        "llm_budgets_api": "/api/llm-budgets",
+        "set_llm_budget": "/api/llm-budgets/<purpose>",
+        "dcf_globals_api": "/api/dcf-globals",
+        "ticker_settings_api": "/api/ticker-settings/<ticker>",
+        "notes_api": "/api/notes",
+        "notes_action_api": "/api/notes/<int:note_id>/<action>",
+    }
+
+
 def test_dashboard_page_returns_shell(client):
     """GET / now serves the unified tabbed command-center shell, with the
     Overview tab server-inlined (the Research cockpit, P1.2) for first paint
@@ -135,11 +217,16 @@ def test_dashboard_page_returns_shell(client):
     # Overview is inlined → the seeded tickers appear on first paint, as
     # cockpit rows (this minimal schema lacks the enrichment tables — the
     # cockpit degrades to base fields rather than 500-ing).
-    assert "cockpit-section" in body
-    assert "NU" in body
-    assert "MELI" in body
+    assert 'hx-get="/api/panel/overview"' in body
+    assert 'hx-trigger="load"' in body
+    overview = client.get("/api/panel/overview")
+    assert overview.status_code == 200
+    overview_body = overview.get_data(as_text=True)
+    assert "cockpit-section" in overview_body
+    assert "NU" in overview_body
+    assert "MELI" in overview_body
     # The seeded thesis verdict renders as a kit status pill (.k-pill).
-    assert "k-pill" in body
+    assert "k-pill" in overview_body
 
 
 def test_dashboard_overview_excludes_action_blocks(client):

@@ -516,10 +516,7 @@ def test_dismiss_alert_reason_supplied_on_first_call(client: FlaskClient, db_pat
 def test_home_rail_renders_ranked_inbox_with_chips_and_quick_actions(
     client: FlaskClient, db_path: Path
 ) -> None:
-    """GET / inlines the Inbox rail: category filter chips, the unread badge
-    hook, hover quick ✓/✕ on the pending draft, and the per-card ranking
-    tooltip — the route-level integration of the pieces the unit suites lock
-    individually."""
+    """The lazy Overview fragment renders the complete Inbox rail."""
     import sqlite3
 
     # The cockpit half of / reads init_db-owned tables the alembic-built
@@ -554,7 +551,9 @@ def test_home_rail_renders_ranked_inbox_with_chips_and_quick_actions(
     conn.close()
     action_id = _seed_pending_action(db_path, ticker="NU")
 
-    body = client.get("/").data.decode()
+    shell = client.get("/").data.decode()
+    assert 'hx-get="/api/panel/overview"' in shell
+    body = client.get("/api/panel/overview").data.decode()
     assert 'data-ix-badge="home"' in body  # unread count badge hook in the rail head
     assert 'class="ix-cats"' in body  # category chips on the rail
     assert 'data-cat="thesis"' in body  # the kpi_inflection alert's facet

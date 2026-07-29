@@ -17,6 +17,8 @@ instead of duplicating the full cross-portfolio memo.
 
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -103,19 +105,33 @@ def test_probe_down_risk_panel_degrades_without_calling_analytics(
 def test_probe_up_still_uses_the_fetchers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pp, "probe_tracker", lambda api_url=None: (True, "http://x"))
     calls: list[str] = []
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def _mark_active(name: str) -> None:
+        nonlocal active, max_active
+        with lock:
+            calls.append(name)
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.04)
+        with lock:
+            active -= 1
 
     def _fake_analytics(**kwargs: object) -> PortfolioAnalytics:
-        calls.append("analytics")
+        _mark_active("analytics")
         return PortfolioAnalytics(available=False, api_url="http://x", errors={"performance": "e"})
 
     def _fake_live(**kwargs: object) -> LivePortfolio:
-        calls.append("live")
+        _mark_active("live")
         return LivePortfolio(available=False, api_url="http://x", error="e")
 
     monkeypatch.setattr(pp, "fetch_portfolio_analytics", _fake_analytics)
     monkeypatch.setattr(pp, "fetch_live_portfolio", _fake_live)
     pp.render_portfolio_panel(db_path=None)
-    assert calls == ["analytics", "live"]
+    assert set(calls) == {"analytics", "live"}
+    assert max_active == 2
 
 
 # --------------------------------------------------------------------------- #

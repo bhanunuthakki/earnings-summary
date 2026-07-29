@@ -98,7 +98,7 @@ AUDITED_LEGACY_FACT_READS = {
     "src/pipeline/peeks.py": 3,
     "src/pipeline/quarterly_refresh.py": 1,
     "src/pipeline/reader_tier_audit.py": 1,
-    "src/pipeline/research_cockpit.py": 2,
+    "src/pipeline/research_cockpit.py": 1,
     "src/pipeline/restatement_detector.py": 3,
     "src/pipeline/restatements_panel.py": 4,
     "src/pipeline/validation_engine.py": 4,

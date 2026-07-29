@@ -978,13 +978,26 @@ def test_hashless_boot_restores_last_tab_within_the_session() -> None:
 def test_shell_js_prefetch_and_warm_start() -> None:
     """S14: hover on a section/sub-tab button warms its landing panel; after
     first paint an idle pass warms Portfolio's landing (the Health composite —
-    the tracker round-trip) and Ask. In-flight fetches are shared so activation
+    the tracker round-trip) only. Explore stays opt-in so its large panel cannot
+    compete with visible Today work. In-flight fetches are shared so activation
     never double-fetches."""
     assert "function prefetchPanel" in SHELL_JS
     assert "'.cc-theme-tab, .cc-tab[data-tab-target]'" in SHELL_JS
-    assert "WARM_PANELS = ['portfolio_health', 'explore']" in SHELL_JS
+    assert "WARM_PANELS = ['portfolio_health']" in SHELL_JS
+    assert "WARM_PANELS = ['portfolio_health', 'explore']" not in SHELL_JS
     assert "requestIdleCallback" in SHELL_JS
     assert "INFLIGHT" in SHELL_JS
+
+
+def test_shell_defers_framework_execution_until_the_document_is_available() -> None:
+    """The self-contained runtimes stay inline, but do not block body parsing."""
+    html = render_shell(overview_html="x", generated_at=datetime(2026, 6, 1, tzinfo=UTC))
+    head = html.split("</head>", 1)[0]
+
+    assert '<script type="module">' in head
+    assert head.index("window.livingGrid") < head.index('<script type="module">')
+    assert "var htmx=function" not in head
+    assert html.index("var htmx=function") > html.index("</main>")
 
 
 def test_shell_js_instruments_panel_timings() -> None:
