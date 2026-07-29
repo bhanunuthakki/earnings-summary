@@ -816,10 +816,12 @@ def test_portfolio_collapses_to_three_composites_in_order() -> None:
     for pid in ("portfolio_health", "portfolio_allocation", "portfolio_record"):
         assert f'data-endpoint="/api/panel/{pid}"' in html
         assert f'data-tab-target="{pid}" data-cc-theme="portfolio"' in html
-    health = html.index('data-tab-target="portfolio_health"')
     allocation = html.index('data-tab-target="portfolio_allocation"')
+    health = html.index('data-tab-target="portfolio_health"')
     record = html.index('data-tab-target="portfolio_record"')
-    assert health < allocation < record
+    # Portfolio lands on the place that answers how the book is doing; Health
+    # and the audit record remain adjacent destinations.
+    assert allocation < health < record
 
 
 def test_content_width_is_wide() -> None:

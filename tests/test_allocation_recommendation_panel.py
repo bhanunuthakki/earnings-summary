@@ -277,6 +277,8 @@ def test_fresh_llm_recommendation_shows_full_card(tmp_path: Path) -> None:
     assert "Why this plan" in html
     assert "confidence: moderate" in html
     assert "Main uncertainty" in html
+    assert '<details class="alloc-rationale">' in html
+    assert "uncertainties &amp; disconfirmers</summary>" in html
     # Actions row: all seven owner actions present.
     assert 'id="alloc-compare-toggle"' in html
     assert 'id="alloc-change-amount"' in html

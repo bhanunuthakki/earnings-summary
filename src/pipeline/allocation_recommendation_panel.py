@@ -73,6 +73,8 @@ _STYLE = """<style>
 .alloc-compare-table th, .alloc-compare-table td { padding:5px 8px; text-align:left;
   border-bottom:1px solid var(--border); }
 .alloc-fallback-banner { margin-bottom:10px; }
+.alloc-rationale { margin-top:10px; }
+.alloc-rationale > summary { cursor:pointer; color:var(--fg); font-weight:600; padding:8px 0; }
 .risk-cat-grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
 @media (max-width: 900px) { .risk-cat-grid { grid-template-columns: 1fr; } }
 .risk-cat { padding:4px 0; }
@@ -281,11 +283,9 @@ def _card_body(artifact_id: int, rec: IncrementalDollarRecommendation) -> str:
     )
     unknowns = "".join(f"<li>{escape(u)}</li>" for u in rec.main_unknowns)
     disconfirm = "".join(f"<li>{escape(d)}</li>" for d in rec.disconfirming_evidence)
-    return (
-        f"{fallback_banner}"
-        f'<div class="k-well"><h3>Preferred plan &middot; '
-        f'<span class="k-chip k-chip-mono">{escape(rec.status.replace("_", " "))}</span></h3>'
-        f"{_plan_html(rec.preferred_plan, label='Preferred')}</div>"
+    rationale = (
+        '<details class="alloc-rationale"><summary>Why this plan &middot; '
+        "uncertainties &amp; disconfirmers</summary>"
         f'<div class="k-well"><h3>Why this plan</h3>'
         f"{render_prose(rec.central_hypothesis)}"
         f"{render_prose(rec.personalization_why)}"
@@ -301,7 +301,14 @@ def _card_body(artifact_id: int, rec: IncrementalDollarRecommendation) -> str:
             if disconfirm
             else ""
         )
-        + f"<p>{render_prose(rec.confidence_basis)}</p></div>"
+        + f"<p>{render_prose(rec.confidence_basis)}</p></div></details>"
+    )
+    return (
+        f"{fallback_banner}"
+        f'<div class="k-well"><h3>Preferred plan &middot; '
+        f'<span class="k-chip k-chip-mono">{escape(rec.status.replace("_", " "))}</span></h3>'
+        f"{_plan_html(rec.preferred_plan, label='Preferred')}</div>"
+        f"{rationale}"
         + (f'<div class="alloc-alt-grid">{alts}</div>' if alts else "")
         + _actions_row(artifact_id, rec)
         + _details_expansion(rec)

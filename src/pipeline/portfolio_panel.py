@@ -39,7 +39,6 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date
 from html import escape
@@ -196,46 +195,36 @@ def render_portfolio_panel(
     include_backfill: bool = False,
     db_path: Path | None = None,
 ) -> str:
-    """The Portfolio → Performance tab fragment: tracker analytics (performance /
-    risk / positioning / alpha) over the requested window, then the live
-    positions/taxable view. The window args come from the page's own window bar
-    (via ``/api/panel/portfolio`` query params) and pass through to the tracker
-    verbatim after validation. ``db_path`` keeps the risk snapshot fresh (and
-    serves the cached read when the tracker is down). The synthesis layer lives
-    on its own sub-tab — ``render_portfolio_synthesis_panel``."""
+    """The Portfolio → Performance fragment: the benchmark scorecard plus
+    expandable position drivers.
+
+    Risk, positioning, and live-holdings detail have first-class destinations
+    elsewhere in the Portfolio console; fetching and rendering them again here
+    made this one fragment a seven-screen duplicate. The window args come from
+    the page's own window bar and pass through to the tracker verbatim after
+    validation. ``db_path`` remains in the signature for the route contract."""
     window = validated_window(start_date, end_date, include_backfill)
     # ONE cheap liveness probe first (wave B B4b): a down tracker used to cost
     # a serial walk of every data GET's failure path before the offline banner
     # painted. Down → skip the fetchers entirely and render the banner now.
     alive, base = probe_tracker(api_url)
     if alive:
-        # Analytics and live-book reads are independent tracker snapshots. They
-        # previously formed a serial waterfall after the liveness probe.
-        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="portfolio-panel") as pool:
-            analytics_future = pool.submit(
-                fetch_portfolio_analytics,
-                api_url=api_url,
-                start_date=window.start_date,
-                end_date=window.end_date,
-                include_backfill=window.include_backfill,
-            )
-            live_future = pool.submit(fetch_live_portfolio, api_url=api_url)
-            analytics = analytics_future.result()
-            live = live_future.result()
+        analytics = fetch_portfolio_analytics(
+            api_url=api_url,
+            start_date=window.start_date,
+            end_date=window.end_date,
+            include_backfill=window.include_backfill,
+            only={"performance", "position_alpha", "policy"},
+        )
+        # The liveness probe already established availability. This compact
+        # surface does not need a second holdings/transactions walk.
+        live = LivePortfolio(available=True, api_url=base)
     else:
         analytics = PortfolioAnalytics(
             available=False, api_url=base, errors={"performance": _PROBE_DOWN_ERROR}
         )
         live = LivePortfolio(available=False, api_url=base, error=_PROBE_DOWN_ERROR)
-    # Keep the risk snapshot fresh on a successful read; fall back to it (stamped)
-    # when the analytics are down so the page still carries a risk read (L5 PR2).
-    snapshot: RiskSnapshot | None = None
-    if db_path is not None:
-        if analytics.available:
-            _persist_risk_snapshot(analytics, db_path)
-        else:
-            snapshot = read_latest_snapshot(db_path=db_path)
-    return compose_portfolio_page(analytics, live, window=window, snapshot=snapshot)
+    return compose_portfolio_page(analytics, live, window=window, include_live=False)
 
 
 def compose_portfolio_page(
@@ -243,6 +232,8 @@ def compose_portfolio_page(
     live: LivePortfolio,
     window: WindowSelection | None = None,
     snapshot: RiskSnapshot | None = None,
+    *,
+    include_live: bool = True,
 ) -> str:
     """Pure page assembly (testable without network or DB).
 
@@ -273,7 +264,7 @@ def compose_portfolio_page(
             )
     # Live positions render at the bottom only when the tracker answered (the
     # offline state is the top banner, not a second panel down here).
-    if live.available:
+    if live.available and include_live:
         parts.append(render_live_portfolio_section(live))
     return "".join(parts)
 
@@ -320,6 +311,9 @@ _ANALYTICS_CSS = (
 .pf-flag { color: var(--warn); margin-left: 4px; cursor: help; }
 .pf-total td { font-weight: 600; border-top: 2px solid var(--border); }
 .pf-degraded { font-size: var(--fs-caption); }
+.pf-alpha-details { margin-top: var(--sp-2); }
+.pf-alpha-details > summary { cursor: pointer; color: var(--fg);
+  font-weight: 600; padding: 8px 0; }
 /* Performance panel header: title (+ hover note) on the left, the window
    controls on the right — ONE operating band, not a separate top bar
    (design_language §6.1). The window cluster dropped its card chrome: in-panel
@@ -499,9 +493,13 @@ _START_TRACKER_JS = """
       btn.disabled = false;
       return;
     }
-    fetch('/api/panel/portfolio').then(function (r) { return r.text(); }).then(function (html) {
+    var endpoint = banner.getAttribute('data-refresh-endpoint') || '/api/panel/portfolio';
+    fetch(endpoint).then(function (r) { return r.text(); }).then(function (html) {
       if (html.indexOf('pf-live-offline') === -1) {
-        var target = banner.closest('.cc-panel-body');
+        // A tracker gate can live inside one section of a composite console.
+        // Refresh only that section; replacing .cc-panel-body destroys the
+        // entire Health/Allocation page around it.
+        var target = banner.closest('.console-sec') || banner.closest('.cc-panel-body');
         if (target) { reinject(target, html); } else { location.reload(); }
       } else {
         setTimeout(function () { pollPanel(tries - 1); }, 3000);
@@ -547,6 +545,12 @@ _START_TRACKER_JS = """
   if (!window.__pfTrackerAutostart) {
     window.__pfTrackerAutostart = true;
     startTracker(true);
+  } else {
+    // Another mounted banner already started the shared tracker. This banner
+    // still refreshes its own section when the service becomes reachable.
+    btn.disabled = true;
+    msg.textContent = 'starting — waiting for :8000 to answer…';
+    pollPanel(30);
   }
   }
 })();
@@ -607,15 +611,20 @@ def render_portfolio_analytics_sections(
     w = window or _DEFAULT_WINDOW
     out: list[str] = []
     if a.performance is not None:
-        out.append(_performance_section(a.performance, a.policy, w))
+        out.append(_performance_section(a.performance, a.policy, w, a.position_alpha))
     elif any(x is not None for x in (a.beta, a.positioning, a.position_alpha)):
         out.append(f'<div class="pf-window-standalone">{_window_bar(w)}</div>')
+    if a.position_alpha is not None:
+        out.append(
+            '<details class="pf-alpha-details"><summary>'
+            f"Position drivers ({len(a.position_alpha.rows)})"
+            "</summary>"
+            f"{_alpha_section(a.position_alpha)}</details>"
+        )
     if a.beta is not None:
         out.append(_risk_section(a.beta))
     if a.positioning is not None:
         out.append(_positioning_section(a.positioning))
-    if a.position_alpha is not None:
-        out.append(_alpha_section(a.position_alpha))
     failed = [label for key, label in _SECTION_LABELS.items() if key in a.errors]
     if failed:
         out.append(
@@ -626,13 +635,16 @@ def render_portfolio_analytics_sections(
 
 
 def _performance_section(
-    perf: PerformanceSeries, policy: PolicyMix | None, window: WindowSelection
+    perf: PerformanceSeries,
+    policy: PolicyMix | None,
+    window: WindowSelection,
+    position_alpha: PositionAlpha | None = None,
 ) -> str:
     window_label = f"{perf.start_date or '?'} → {perf.end_date or '?'}"
     # The methodology note rides a hover affordance on the title, not permanent
     # prose; the window controls share the title's band (one operating band).
     note = (
-        "Time-weighted return (Modified Dietz) from the tracker. Each benchmark "
+        "Money-weighted return (Modified Dietz) from the tracker. Each benchmark "
         "is a synthetic book receiving the same external cashflows; net external "
         f"inflow {_money(perf.net_external_cashflow_in)} over the window."
     )
@@ -654,26 +666,39 @@ def _performance_section(
         label: next((v for p in reversed(perf.points) if (v := get(p)) is not None), None)
         for label, _color, _sw, get in _CHART_SPECS
     }
-    cards: list[str] = [
+    cards: list[str] = []
+    if position_alpha is not None:
+        alpha_window = f"{position_alpha.start_date or '?'} → {position_alpha.end_date or '?'}"
+        cards.extend(
+            [
+                _kpi_card(
+                    "Actual P&L",
+                    _money(position_alpha.total_actual_pl),
+                    sub=alpha_window,
+                    tone=_tone(position_alpha.total_actual_pl),
+                ),
+                _kpi_card(
+                    "Matched SPY P&L",
+                    _money(position_alpha.total_spy_pl),
+                    sub="same-day buys & sells",
+                    tone=_tone(position_alpha.total_spy_pl),
+                ),
+                _kpi_card(
+                    "Alpha vs SPY",
+                    _money(position_alpha.total_alpha),
+                    sub="actual minus matched SPY",
+                    tone=_tone(position_alpha.total_alpha),
+                ),
+            ]
+        )
+    cards.append(
         _kpi_card(
-            "Portfolio TWR",
+            "Modified Dietz",
             _pct(finals["Portfolio"], signed=True),
             sub=window_label,
             tone=_tone(finals["Portfolio"]),
         )
-    ]
-    # Display delta of two tracker-computed returns (the dollar/regression alpha
-    # readouts come from /position-alpha and /beta — never recomputed here).
-    excess = (
-        finals["Portfolio"] - finals["SPY"]
-        if finals["Portfolio"] is not None and finals["SPY"] is not None
-        else None
     )
-    cards.append(_kpi_card("vs SPY", _pp(excess), sub="excess return", tone=_tone(excess)))
-    # Per-benchmark endpoints (SPY / QQQ / Policy) are NOT duplicated as hero
-    # cards — they read off the colour-keyed chart legend below, so the strip
-    # carries only the two decision numbers (return + excess), keeping one
-    # dominant type tier instead of five competing display-size stats.
     warn = (
         '<p class="muted">⚠ The window start value looks incomplete (backfill unreliable) — '
         "early benchmark gaps may overstate or understate relative performance.</p>"
@@ -739,7 +764,7 @@ def _benchmark_chart(points: list[PerformancePoint]) -> str:
 
     parts: list[str] = [
         f'<svg class="pf-chart" viewBox="0 0 {width:.0f} {height:.0f}" role="img" '
-        'aria-label="Cumulative time-weighted return vs SPY, QQQ, and policy benchmarks">'
+        'aria-label="Cumulative Modified-Dietz return vs SPY, QQQ, and policy benchmarks">'
     ]
     for frac in (0.0, 1 / 3, 2 / 3, 1.0):
         tick = y0 + frac * (y1 - y0)
@@ -1151,7 +1176,9 @@ def compose_synthesis_page(
     parts: list[str] = [_INSIGHTS_CSS]
     if not live.available:
         parts.append(_TRACKER_BANNER_CSS)
-        parts.append(_tracker_offline_banner(live))
+        parts.append(
+            _tracker_offline_banner(live, refresh_endpoint="/api/panel/portfolio_synthesis")
+        )
     if grid:
         parts.append(f'<div class="pf-insights">{grid}</div>')
     parts.append(
@@ -3249,7 +3276,9 @@ def _macro_stress_section(scenarios: list[tuple[str, str]], digest: str) -> str:
     )
 
 
-def _tracker_offline_banner(live: LivePortfolio) -> str:
+def _tracker_offline_banner(
+    live: LivePortfolio, *, refresh_endpoint: str = "/api/panel/portfolio"
+) -> str:
     """The page's gate: the whole Portfolio page reads from the companion
     tracker, so when it is down this LEADS the page (prominent, not buried) and
     auto-starts on open. One-click start runs ``/actions/start-tracker`` (the
@@ -3260,7 +3289,8 @@ def _tracker_offline_banner(live: LivePortfolio) -> str:
         # the Health console (Synthesis) and the Allocation console
         # (Performance); duplicate ids left the second instance's Start button
         # dead. _START_TRACKER_JS wires every unwired .pf-live-offline subtree.
-        '<section class="panel pf-tracker-banner pf-live-offline">'
+        '<section class="panel pf-tracker-banner pf-live-offline" '
+        f'data-refresh-endpoint="{escape(refresh_endpoint, quote=True)}">'
         "<h2>Portfolio tracker</h2>"
         '<p class="sub">This whole page reads from the companion portfolio-tracker — '
         "live positions, performance vs benchmarks, risk, and allocation. It isn't "

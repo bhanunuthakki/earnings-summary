@@ -91,6 +91,7 @@ def test_probe_down_synthesis_banners_without_calling_live_fetch(
     monkeypatch.setattr(pp, "fetch_live_portfolio", _boom)
     html = pp.render_portfolio_synthesis_panel(tmp_path / "missing.db")
     assert "pf-live-offline" in html
+    assert 'data-refresh-endpoint="/api/panel/portfolio_synthesis"' in html
 
 
 def test_probe_down_risk_panel_degrades_without_calling_analytics(
@@ -130,8 +131,10 @@ def test_probe_up_still_uses_the_fetchers(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(pp, "fetch_portfolio_analytics", _fake_analytics)
     monkeypatch.setattr(pp, "fetch_live_portfolio", _fake_live)
     pp.render_portfolio_panel(db_path=None)
-    assert set(calls) == {"analytics", "live"}
-    assert max_active == 2
+    # Performance is now a compact benchmark surface. The probe supplies its
+    # availability gate; holdings/transactions belong to Positioning and are
+    # not fetched again here.
+    assert calls == ["analytics"]
 
 
 # --------------------------------------------------------------------------- #
@@ -194,6 +197,9 @@ def test_allocation_console_is_brief_plus_grid(tmp_path: Path, probe_down: None)
     assert 'class="console-sec csec-wide" id="csec-allocation_recommendation"' in html
     assert 'class="console-sec" id="csec-risk_budget"' in html
     assert 'class="console-sec" id="csec-positioning"' in html
+    # The benchmark answer leads before the recommendation and target-setting
+    # detail instead of sitting below the fold.
+    assert html.index('id="csec-performance"') < html.index('id="csec-allocation_recommendation"')
 
 
 def test_allocation_console_whatif_signpost_is_gone(tmp_path: Path, probe_down: None) -> None:
