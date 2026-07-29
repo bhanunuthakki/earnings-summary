@@ -178,7 +178,7 @@ def persist_projection_seal(conn: sqlite3.Connection, seal: SearchProjectionSeal
     columns = tuple(SearchProjectionSeal.model_fields)
     values = tuple(getattr(seal, column) for column in columns)
     existing = conn.execute(
-        f"SELECT {', '.join(columns)} FROM search_projection_seals WHERE idempotency_key = ?",
+        f"SELECT {', '.join(columns)} FROM search_projection_seals WHERE idempotency_key = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
         (seal.idempotency_key,),
     ).fetchone()
     if existing is not None:
@@ -186,7 +186,7 @@ def persist_projection_seal(conn: sqlite3.Connection, seal: SearchProjectionSeal
             raise ValueError("immutable search projection seal conflicts with existing data")
         return False
     conn.execute(
-        f"INSERT INTO search_projection_seals ({', '.join(columns)}) "
+        f"INSERT INTO search_projection_seals ({', '.join(columns)}) "  # nosec B608 -- trusted internal SQL shape; values remain bound
         f"VALUES ({', '.join('?' for _ in columns)})",
         values,
     )
@@ -261,7 +261,7 @@ def sealed_index_lineage(
         raise ValueError("index kinds must be unique")
     placeholders = ", ".join("?" for _ in index_kinds)
     rows = conn.execute(
-        "SELECT run.manifest_id, run.index_run_id, run.index_kind, "
+        "SELECT run.manifest_id, run.index_run_id, run.index_kind, "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "run.config_sha256, run.code_version, run.completed_at "
         "FROM search_corpus_document_memberships AS membership "
         "JOIN search_corpus_manifest_seals AS seal "

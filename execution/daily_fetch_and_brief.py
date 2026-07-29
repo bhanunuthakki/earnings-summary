@@ -278,7 +278,7 @@ def _compute_brief_hash(conn: sqlite3.Connection, ticker: str, repo_root: Path) 
         h.update(str(row[0] if row else "").encode())
     transcripts_relation = selected_transcripts_relation(conn).sql
     for sql in (
-        f"SELECT COUNT(*) FROM {transcripts_relation} WHERE UPPER(ticker)=?",
+        f"SELECT COUNT(*) FROM {transcripts_relation} WHERE UPPER(ticker)=?",  # nosec B608 -- trusted internal SQL shape; values remain bound
         "SELECT COUNT(*) FROM management_commitments WHERE UPPER(ticker)=?",
     ):
         row = conn.execute(sql, (ticker.upper(),)).fetchone()

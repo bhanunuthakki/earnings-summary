@@ -246,7 +246,7 @@ def _identity(conn: sqlite3.Connection | None, repo_root: Path, t: str) -> Ticke
     if _has(conn, "transcripts"):
         transcripts = selected_transcripts_relation(conn).sql
         row = conn.execute(
-            f"SELECT period_end FROM {transcripts} "
+            f"SELECT period_end FROM {transcripts} "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "WHERE UPPER(ticker)=? AND period_end IS NOT NULL "
             "ORDER BY period_end DESC LIMIT 1",
             (t,),

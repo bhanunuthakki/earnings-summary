@@ -730,7 +730,7 @@ def _exact_document(
             filing_clause = " AND observation.filing_at = ?"
             filing_params = (imported.filing_at,)
         query = (
-            "SELECT document_version_id, document_key, version_sequence, recorded_issuer_id "
+            "SELECT document_version_id, document_key, version_sequence, recorded_issuer_id "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "FROM ("
             "SELECT DISTINCT document.document_version_id, document.document_key, "
             "document.version_sequence, document.issuer_id AS recorded_issuer_id "
@@ -780,7 +780,7 @@ def _exact_document(
                 f"%/{imported.primary_document}?%",
             )
         query = (
-            "SELECT document.document_version_id, document.document_key, "
+            "SELECT document.document_version_id, document.document_key, "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "document.version_sequence, document.issuer_id "
             "FROM evidence_document_versions AS document "
             "JOIN evidence_source_observations AS observation "

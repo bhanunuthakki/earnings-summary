@@ -142,7 +142,7 @@ def _ticker_transcript_ids(conn: sqlite3.Connection, ticker: str) -> list[int]:
     """
     transcripts_relation = selected_transcripts_relation(conn).sql
     rows = conn.execute(
-        f"SELECT id, fiscal_period_type, period_end FROM {transcripts_relation} "
+        f"SELECT id, fiscal_period_type, period_end FROM {transcripts_relation} "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "WHERE UPPER(ticker) = ? "
         "AND fiscal_period_type IN ('Q1','Q2','Q3','Q4') AND period_end IS NOT NULL "
         "ORDER BY period_end ASC",

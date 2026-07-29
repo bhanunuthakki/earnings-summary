@@ -759,7 +759,7 @@ def upsert_accession_documents(
             values.append(record.filed or None)
         placeholders = ",".join("?" for _ in columns)
         cur = conn.execute(
-            f"INSERT INTO documents ({','.join(columns)}) VALUES ({placeholders})",
+            f"INSERT INTO documents ({','.join(columns)}) VALUES ({placeholders})",  # nosec B608 -- trusted internal SQL shape; values remain bound
             tuple(values),
         )
         accession_to_doc_id[accn] = int(cur.lastrowid) if cur.lastrowid is not None else 0

@@ -153,7 +153,7 @@ def _plan_index_promotions(
     inventory_placeholders = ", ".join("?" for _ in request.inventory_keys)
     index_placeholders = ", ".join("?" for _ in request.index_kinds)
     rows = conn.execute(
-        "SELECT coverage.assessment_id, coverage.expected_document_id, "
+        "SELECT coverage.assessment_id, coverage.expected_document_id, "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "coverage.revision, coverage.document_version_id, "
         "coverage.extraction_run_id, expected.expected_document_key "
         "FROM v_source_coverage_current AS coverage "
@@ -260,7 +260,7 @@ def _plan_extraction_promotions(
     inventory_placeholders = ", ".join("?" for _ in request.inventory_keys)
     extractor_placeholders = ", ".join("?" for _ in request.extractor_names)
     rows = conn.execute(
-        "SELECT coverage.assessment_id, "
+        "SELECT coverage.assessment_id, "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "coverage.expected_document_id, coverage.revision, coverage.coverage_status, "
         "coverage.document_version_id, coverage.extraction_run_id, "
         "expected.expected_document_key, "

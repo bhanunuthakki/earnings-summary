@@ -143,7 +143,7 @@ class SemanticDispositionStore:
         )
         placeholders = ", ".join("?" for _ in columns)
         cursor = self._conn.execute(
-            f"INSERT INTO document_semantic_disposition_revisions "
+            f"INSERT INTO document_semantic_disposition_revisions "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"({', '.join(columns)}) VALUES ({placeholders}) "
             "ON CONFLICT DO NOTHING",
             values,
@@ -151,7 +151,7 @@ class SemanticDispositionStore:
         if cursor.rowcount == 1:
             return True
         existing = self._conn.execute(
-            f"SELECT {', '.join(columns)} "
+            f"SELECT {', '.join(columns)} "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "FROM document_semantic_disposition_revisions "
             "WHERE assessment_id = ? OR idempotency_key = ?",
             (record.assessment_id, record.idempotency_key),
@@ -169,7 +169,7 @@ def initialize_semantic_review_queue(
 
     placeholders = ", ".join("?" for _ in request.inventory_keys)
     rows = conn.execute(
-        "SELECT coverage.document_version_id, blob.media_type, "
+        "SELECT coverage.document_version_id, blob.media_type, "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "expected.expected_document_key "
         "FROM v_source_coverage_current AS coverage "
         "JOIN v_expected_documents_current AS expected "

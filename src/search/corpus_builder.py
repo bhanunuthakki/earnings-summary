@@ -602,7 +602,7 @@ def _has_approved_substantive_extraction(
 ) -> bool:
     placeholders = ", ".join("?" for _ in extractor_names)
     rows = conn.execute(
-        "SELECT DISTINCT node.node_id, run.extractor_name, run.extractor_code_version, "
+        "SELECT DISTINCT node.node_id, run.extractor_name, run.extractor_code_version, "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "run.extractor_config_sha256 FROM v_evidence_current AS node "
         "JOIN evidence_extraction_runs AS run "
         "ON run.extraction_run_id = node.extraction_run_id "
@@ -826,7 +826,7 @@ def _selected_substantive_nodes(
     fulltext_identity = resolve_fulltext_extractor_identity(str(media_row[0]), str(media_row[1]))
     placeholders = ", ".join("?" for _ in extractor_names)
     raw_rows = conn.execute(
-        "SELECT node.node_id, node.text, run.completed_at "
+        "SELECT node.node_id, node.text, run.completed_at "  # nosec B608 -- trusted internal SQL shape; values remain bound
         ", node.node_kind, node.locator_json, run.extractor_name "
         ", node.parent_node_id, run.extractor_code_version "
         ", run.extractor_config_sha256, run.extraction_run_id "
@@ -1241,7 +1241,7 @@ def _require_exact_chunk(conn: sqlite3.Connection, chunk: SearchChunk) -> None:
         chunk.recorded_at,
     )
     row = conn.execute(
-        f"SELECT {', '.join(columns)} FROM search_chunks WHERE chunk_id = ?",
+        f"SELECT {', '.join(columns)} FROM search_chunks WHERE chunk_id = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
         (chunk.chunk_id,),
     ).fetchone()
     if row is None:
@@ -1316,7 +1316,7 @@ def _chunk_count_and_digest(
     manifest_id: str,
 ) -> tuple[int, str]:
     cursor = conn.execute(
-        f"SELECT {', '.join(_CHUNK_DIGEST_COLUMNS)} FROM search_chunks "
+        f"SELECT {', '.join(_CHUNK_DIGEST_COLUMNS)} FROM search_chunks "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "WHERE manifest_id = ? ORDER BY chunk_id",
         (manifest_id,),
     )
@@ -1558,7 +1558,7 @@ def _persist_unsealed_replay_safe(
     else:
         return store.persist(record).created
     existing = conn.execute(
-        f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",
+        f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
         (identity_value,),
     ).fetchone()
     if existing is None:

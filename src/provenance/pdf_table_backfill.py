@@ -248,7 +248,7 @@ def _select_candidates(
         request.batch_size,
     )
     rows = conn.execute(
-        "SELECT document.rowid AS evidence_rowid, document.document_version_id, "
+        "SELECT document.rowid AS evidence_rowid, document.document_version_id, "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "lower(document.blob_sha256) AS blob_sha256, blob.byte_size, "
         "blob.media_type, blob.storage_uri "
         "FROM evidence_document_versions AS document "
@@ -260,7 +260,7 @@ def _select_candidates(
     found_any = {
         str(row[0])
         for row in conn.execute(
-            "SELECT document_version_id FROM evidence_document_versions "
+            "SELECT document_version_id FROM evidence_document_versions "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"WHERE document_version_id IN ({placeholders})",
             request.document_version_ids,
         )
@@ -291,7 +291,7 @@ def _has_more_candidates(
     placeholders = ",".join("?" for _ in request.document_version_ids)
     return (
         conn.execute(
-            "SELECT 1 FROM evidence_document_versions "
+            "SELECT 1 FROM evidence_document_versions "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"WHERE document_version_id IN ({placeholders}) AND rowid > ? LIMIT 1",
             (*request.document_version_ids, after_rowid),
         ).fetchone()

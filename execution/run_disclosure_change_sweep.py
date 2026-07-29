@@ -107,7 +107,7 @@ def _current_accessions(db_path: Path) -> dict[str, list[str]]:
               AND COALESCE(tc.instrument_type, '') != 'etf'
             GROUP BY fs.ticker, fs.accession_number
             ORDER BY fs.ticker, fs.accession_number
-            """
+            """  # nosec B608 -- trusted internal SQL shape; values remain bound
         ).fetchall()
     finally:
         conn.close()

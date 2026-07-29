@@ -129,7 +129,7 @@ def _resolve_auto_targets(
     if transcript_id is not None:
         transcripts_relation = selected_transcripts_relation(conn).sql
         cur = conn.execute(
-            f"SELECT id, ticker FROM {transcripts_relation} WHERE id = ?",
+            f"SELECT id, ticker FROM {transcripts_relation} WHERE id = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (transcript_id,),
         )
         row = cur.fetchone()

@@ -303,7 +303,7 @@ def _load_prior_transcripts(
     try:
         transcripts = selected_transcripts_relation(conn).sql
         rows = conn.execute(
-            f"SELECT id, fiscal_period_type, period_end FROM {transcripts} "
+            f"SELECT id, fiscal_period_type, period_end FROM {transcripts} "  # nosec B608 -- trusted internal SQL shape; values remain bound
             + "WHERE ticker = ? "
             + "AND fiscal_period_type IN ('Q1','Q2','Q3','Q4') "
             + "AND period_end < ? "

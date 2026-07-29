@@ -564,7 +564,7 @@ def _legacy_resolved_keys(
           ON outcome.resolution_id=resolution.resolution_id
          AND outcome.resolution_status='resolved'
         WHERE link.row_rank=1
-        """,
+        """,  # nosec B608 -- trusted internal SQL shape; values remain bound
         (cutoff, *params, cutoff, cutoff),
     ).fetchall()
     return {(str(row[0]), int(row[1])) for row in rows}
@@ -588,7 +588,7 @@ def _latest_matches(
             AND ({clause})
         )
         SELECT * FROM ranked WHERE row_rank=1
-        """,
+        """,  # nosec B608 -- trusted internal SQL shape; values remain bound
         (cutoff, cutoff, *params),
     ).fetchall()
     return {(str(row["fact_table"]), int(row["fact_row_id"])): row for row in rows}
@@ -615,7 +615,7 @@ def _current_document_bindings(
             AND legacy_document_id IN ({placeholders})
         )
         SELECT * FROM ranked WHERE row_rank=1
-        """,
+        """,  # nosec B608 -- trusted internal SQL shape; values remain bound
         (cutoff, cutoff, *document_ids),
     ).fetchall()
     return {int(row["legacy_document_id"]): row for row in rows}
@@ -646,7 +646,7 @@ def _v2_bridges(
           AND datetime(observation.knowledge_at) <= datetime(?)
           AND datetime(observation.recorded_at) <= datetime(?)
         ORDER BY observation.legacy_match_revision_id,observation.observation_id
-        """,
+        """,  # nosec B608 -- trusted internal SQL shape; values remain bound
         (*match_ids, cutoff, cutoff),
     ).fetchall()
     grouped: defaultdict[str, list[sqlite3.Row]] = defaultdict(list)
@@ -675,7 +675,7 @@ def _ontology_bindings(
             AND datetime(recorded_at) <= datetime(?)
         )
         SELECT * FROM ranked WHERE row_rank=1
-        """,
+        """,  # nosec B608 -- trusted internal SQL shape; values remain bound
         (*observation_ids, cutoff, cutoff),
     ).fetchall()
     result: dict[str, sqlite3.Row | None] = {
@@ -706,7 +706,7 @@ def _canonical_resolutions(
             AND datetime(recorded_at) <= datetime(?)
         )
         SELECT * FROM ranked WHERE row_rank=1
-        """,
+        """,  # nosec B608 -- trusted internal SQL shape; values remain bound
         (*unique, cutoff, cutoff),
     ).fetchall()
     result: dict[str, sqlite3.Row | None] = {coordinate: None for coordinate in unique}

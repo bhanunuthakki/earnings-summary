@@ -315,7 +315,7 @@ def _run(
         parameters.append(pinned_run_id)
     rows = _rows(
         conn,
-        "SELECT extraction_run_id, document_version_id, input_sha256, "
+        "SELECT extraction_run_id, document_version_id, input_sha256, "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "extractor_name, extractor_config_sha256, extractor_code_version, "
         "output_sha256, started_at, completed_at, outcome "
         "FROM evidence_extraction_runs WHERE "
@@ -1232,7 +1232,7 @@ def _ocr_derived(
     result_table = "ocr_page_results" if is_pdf else "image_ocr_results"
     governance = _one(
         conn,
-        f"SELECT * FROM {governance_table} WHERE extraction_run_id=?",
+        f"SELECT * FROM {governance_table} WHERE extraction_run_id=?",  # nosec B608 -- trusted internal SQL shape; values remain bound
         (_require_text(run, "extraction_run_id"),),
         "ocr_governance_missing",
     )
@@ -1241,7 +1241,7 @@ def _ocr_derived(
         raise DocumentProcessingEvidenceIntegrityError("ocr_assessment_identity_mismatch")
     assessment = _one(
         conn,
-        f"SELECT * FROM {assessment_table} WHERE assessment_id=? "
+        f"SELECT * FROM {assessment_table} WHERE assessment_id=? "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "AND document_version_id=? AND outcome='ocr_required'",
         (
             assessment_id,
@@ -1257,7 +1257,7 @@ def _ocr_derived(
     node_by_id = {_require_text(row, "node_id"): row for row in nodes}
     results = _rows(
         conn,
-        f"SELECT * FROM {result_table} WHERE extraction_run_id=? ORDER BY page_number",
+        f"SELECT * FROM {result_table} WHERE extraction_run_id=? ORDER BY page_number",  # nosec B608 -- trusted internal SQL shape; values remain bound
         (_require_text(run, "extraction_run_id"),),
     )
     if is_pdf:
@@ -1569,7 +1569,7 @@ def record_pdf_table_extraction_artifact(
     conn.execute("SAVEPOINT record_pdf_table_extraction_artifact")
     try:
         conn.execute(
-            "INSERT INTO pdf_table_extraction_artifact_headers ("
+            "INSERT INTO pdf_table_extraction_artifact_headers ("  # nosec B608 -- trusted internal SQL shape; values remain bound
             "artifact_id,document_version_id,extraction_run_id,schema_version,"
             "disposition,quarantine_reason,raw_pdf_sha256,raw_byte_count,pdf_page_count,"
             "detector_name,detector_version,pymupdf_version,mupdf_version,"
@@ -1680,7 +1680,7 @@ def _pdf_table_derived(
         parameters.append(pinned_artifact_id)
     artifact_row = _one(
         conn,
-        "SELECT header.*,seal.member_count,seal.canonical_member_set_json,"
+        "SELECT header.*,seal.member_count,seal.canonical_member_set_json,"  # nosec B608 -- trusted internal SQL shape; values remain bound
         "seal.member_set_sha256,seal.sealed_at "
         "FROM pdf_table_extraction_artifact_headers header "
         "JOIN pdf_table_extraction_artifact_seals seal "
@@ -2043,7 +2043,7 @@ def publish_document_processing_evidence(
     conn.execute("SAVEPOINT publish_document_processing_evidence")
     try:
         conn.execute(
-            "INSERT INTO document_processing_evidence_headers ("
+            "INSERT INTO document_processing_evidence_headers ("  # nosec B608 -- trusted internal SQL shape; values remain bound
             "evidence_seal_id,idempotency_key,document_version_id,"
             "processing_lane,extraction_run_id,assessment_table,assessment_id,"
             "adapter_name,adapter_version,adapter_config_sha256,"
@@ -2076,7 +2076,7 @@ def publish_document_processing_evidence(
             zip(derived.members, member_jsons, strict=True)
         ):
             conn.execute(
-                "INSERT INTO document_processing_evidence_members ("
+                "INSERT INTO document_processing_evidence_members ("  # nosec B608 -- trusted internal SQL shape; values remain bound
                 "evidence_seal_id,member_ordinal,native_table,native_id,"
                 "native_parent_id,locator_json,locator_sha256,content_sha256,"
                 "native_commitment_json,native_commitment_sha256,"

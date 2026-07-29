@@ -611,14 +611,14 @@ def bind_resolution_snapshot_watermark(
     with _savepoint(conn, "bind_resolution_snapshot_watermark"):
         existing = _fetchone(
             conn,
-            "SELECT " + ",".join(columns) + " "
+            "SELECT " + ",".join(columns) + " "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "FROM canonical_fact_resolution_snapshot_watermarks "
             "WHERE resolution_snapshot_id=? OR idempotency_key=?",
             (resolution_snapshot_id, idempotency_key),
         )
         if existing is None:
             conn.execute(
-                "INSERT INTO canonical_fact_resolution_snapshot_watermarks "
+                "INSERT INTO canonical_fact_resolution_snapshot_watermarks "  # nosec B608 -- trusted internal SQL shape; values remain bound
                 f"({','.join(columns)}) VALUES "
                 f"({','.join('?' for _ in columns)})",
                 values,

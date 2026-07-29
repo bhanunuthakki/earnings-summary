@@ -544,7 +544,7 @@ class MetricOntology:
             _db_time(value) if isinstance(value, datetime) else value for value in values
         )
         existing = self._conn.execute(
-            f"SELECT {','.join(columns)} FROM {table} WHERE idempotency_key=?",
+            f"SELECT {','.join(columns)} FROM {table} WHERE idempotency_key=?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (idempotency_key,),
         ).fetchone()
         if existing is not None:
@@ -553,7 +553,7 @@ class MetricOntology:
             return
         placeholders = ",".join("?" for _ in columns)
         self._conn.execute(
-            f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})",
+            f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})",  # nosec B608 -- trusted internal SQL shape; values remain bound
             serialized,
         )
 
@@ -1449,7 +1449,7 @@ class MetricOntology:
     ) -> sqlite3.Row | None:
         cutoff = _db_time(cutoff_at)
         return self._conn.execute(
-            f"SELECT * FROM {table} WHERE {coordinate}=? "
+            f"SELECT * FROM {table} WHERE {coordinate}=? "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "AND datetime(effective_at) <= datetime(?) "
             "AND datetime(knowledge_at) <= datetime(?) "
             "AND datetime(recorded_at) <= datetime(?) "

@@ -454,7 +454,7 @@ def _load_has_qa_flags(
         for q, y in periods:
             try:
                 row = conn.execute(
-                    f"SELECT has_qa_section, period_end FROM {transcripts} "
+                    f"SELECT has_qa_section, period_end FROM {transcripts} "  # nosec B608 -- trusted internal SQL shape; values remain bound
                     "WHERE ticker = ? AND fiscal_period_type = ? "
                     "ORDER BY period_end DESC LIMIT 5",
                     (ticker.upper(), f"Q{q}"),

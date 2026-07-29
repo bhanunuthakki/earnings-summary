@@ -203,7 +203,7 @@ def load_observed_ir_documents(
 
     placeholders = ", ".join("?" for _ in inventory_keys)
     inventories = conn.execute(
-        "SELECT inventory.inventory_key, inventory.snapshot_id, inventory.source_url, "
+        "SELECT inventory.inventory_key, inventory.snapshot_id, inventory.source_url, "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "seal.completion_status, inventory.source_kind "
         "FROM v_source_inventory_current AS inventory "
         "JOIN source_inventory_snapshot_seals AS seal "
@@ -225,7 +225,7 @@ def load_observed_ir_documents(
         str(row[1]): _raw_candidate_urls(conn, str(row[1])) for row in inventories
     }
     rows = conn.execute(
-        "SELECT expected.expected_document_id, expected.snapshot_id, "
+        "SELECT expected.expected_document_id, expected.snapshot_id, "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "inventory.inventory_key, inventory.source_url, seal.completion_status, "
         "expected.expected_document_key, expected.issuer_id, expected.ticker, "
         "expected.document_type, expected.source_url, expected.expected_at "
@@ -957,7 +957,7 @@ def _inventory_completion(
 ) -> dict[str, Literal["complete", "incomplete"]]:
     placeholders = ", ".join("?" for _ in inventory_keys)
     rows = conn.execute(
-        "SELECT inventory.inventory_key, seal.completion_status "
+        "SELECT inventory.inventory_key, seal.completion_status "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "FROM v_source_inventory_current AS inventory "
         "JOIN source_inventory_snapshot_seals AS seal "
         "ON seal.snapshot_id = inventory.snapshot_id "

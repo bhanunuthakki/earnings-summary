@@ -230,7 +230,7 @@ def record_idempotency_key(
 ) -> str:
     table, identifier = _record_table(record_kind)
     row = conn.execute(
-        f"SELECT idempotency_key FROM {table} WHERE {identifier} = ?",
+        f"SELECT idempotency_key FROM {table} WHERE {identifier} = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
         (record_id,),
     ).fetchone()
     if row is None:

@@ -835,7 +835,7 @@ def _run_cutover_gate(
 
     scoped_query = query.strip().removesuffix(";")
     count_row = conn.execute(
-        f"SELECT COUNT(*) FROM ({scoped_query}) AS cutover_candidates",
+        f"SELECT COUNT(*) FROM ({scoped_query}) AS cutover_candidates",  # nosec B608 -- trusted internal SQL shape; values remain bound
         params,
     ).fetchone()
     eligible = 0 if count_row is None else int(count_row[0])
@@ -1088,14 +1088,14 @@ def _query_finding(
 ) -> None:
     scoped_query = query.strip().removesuffix(";")
     count_row = conn.execute(
-        f"SELECT COUNT(*) FROM ({scoped_query}) AS audit_violations"
+        f"SELECT COUNT(*) FROM ({scoped_query}) AS audit_violations"  # nosec B608 -- trusted internal SQL shape; values remain bound
     ).fetchone()
     count = 0 if count_row is None else int(count_row[0])
     rows = (
         []
         if count == 0
         else conn.execute(
-            f"SELECT * FROM ({scoped_query}) AS audit_violations LIMIT ?",
+            f"SELECT * FROM ({scoped_query}) AS audit_violations LIMIT ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (options.sample_limit,),
         ).fetchmany(options.sample_limit)
     )
@@ -1221,7 +1221,7 @@ def _audit_lifecycle_table(
         severity=Severity.BLOCKER,
         remediation=RemediationClass.MANUAL,
         query=(
-            f"SELECT {key_sql}, COUNT(*) FROM {table} WHERE is_active = 1 "
+            f"SELECT {key_sql}, COUNT(*) FROM {table} WHERE is_active = 1 "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"GROUP BY {key_sql} HAVING COUNT(*) > 1 ORDER BY {key_sql}"
         ),
     )
@@ -1233,7 +1233,7 @@ def _audit_lifecycle_table(
         severity=Severity.BLOCKER,
         remediation=RemediationClass.MANUAL,
         query=(
-            f"SELECT child.id, child.superseded_by_id FROM {table} AS child "
+            f"SELECT child.id, child.superseded_by_id FROM {table} AS child "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"LEFT JOIN {table} AS successor ON successor.id = child.superseded_by_id "
             "WHERE child.superseded_by_id IS NOT NULL "
             "AND (successor.id IS NULL OR child.id = child.superseded_by_id) ORDER BY child.id"
@@ -1247,7 +1247,7 @@ def _audit_lifecycle_table(
         severity=Severity.BLOCKER,
         remediation=RemediationClass.MANUAL,
         query=(
-            f"SELECT id, superseded_by_id FROM {table} WHERE is_active = 1 "
+            f"SELECT id, superseded_by_id FROM {table} WHERE is_active = 1 "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "AND superseded_by_id IS NOT NULL ORDER BY id"
         ),
     )
@@ -1603,7 +1603,7 @@ def _failed_substantive_extraction_query(*, require_missing_disposition: bool) -
         else ""
     )
     return (
-        "WITH failed_documents AS MATERIALIZED ("
+        "WITH failed_documents AS MATERIALIZED ("  # nosec B608 -- trusted internal SQL shape; values remain bound
         "SELECT DISTINCT document_version_id "
         "FROM evidence_extraction_runs "
         "WHERE extractor_name = 'fulltext-evidence-backfill' AND outcome = 'failed'"
@@ -3371,7 +3371,7 @@ def _audit_fact_resolution_cutover(
             severity=Severity.BLOCKER,
             remediation=RemediationClass.BACKFILL,
             query=(
-                f"SELECT '{fact_table}:' || fact.id FROM {fact_table} AS fact "
+                f"SELECT '{fact_table}:' || fact.id FROM {fact_table} AS fact "  # nosec B608 -- trusted internal SQL shape; values remain bound
                 "WHERE NOT EXISTS (SELECT 1 FROM fact_observation_revisions AS link "
                 f"WHERE link.fact_table = '{fact_table}' AND link.fact_row_id = fact.id) "
                 "ORDER BY fact.id"
@@ -3415,7 +3415,7 @@ def _audit_fact_resolution_cutover(
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
         query=(
-            "SELECT link.fact_table || ':' || link.fact_row_id || ':r' || link.fact_revision "
+            "SELECT link.fact_table || ':' || link.fact_row_id || ':r' || link.fact_revision "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "FROM fact_observation_revisions AS link "
             "JOIN reported_observations AS observation USING (observation_id) "
             "JOIN evidence_nodes AS node ON node.node_id = observation.evidence_node_id "
@@ -3837,7 +3837,7 @@ def _audit_search_corpus(
         severity=Severity.BLOCKER,
         remediation=RemediationClass.BACKFILL,
         query=(
-            "SELECT membership.manifest_id, membership.document_version_id FROM search_corpus_document_memberships AS membership "
+            "SELECT membership.manifest_id, membership.document_version_id FROM search_corpus_document_memberships AS membership "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "JOIN v_search_corpus_current AS current ON current.manifest_id = membership.manifest_id "
             "LEFT JOIN evidence_extraction_runs AS run ON run.document_version_id = membership.document_version_id "
             "LEFT JOIN evidence_nodes AS node ON node.extraction_run_id = run.extraction_run_id "

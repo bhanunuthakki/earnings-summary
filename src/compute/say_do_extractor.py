@@ -130,7 +130,7 @@ def fetch_transcript_text_and_segment(
     """Return (text, segment_id, period_end) for the transcript's longest segment, or None."""
     transcripts = selected_transcripts_relation(conn)
     cur = conn.execute(
-        "SELECT t.period_end, ts.id AS segment_id, ts.text "
+        "SELECT t.period_end, ts.id AS segment_id, ts.text "  # nosec B608 -- trusted internal SQL shape; values remain bound
         f"FROM {transcripts} t JOIN transcript_segments ts ON ts.transcript_id = t.id "
         "WHERE t.id = ? ORDER BY length(ts.text) DESC LIMIT 1",
         (transcript_id,),
@@ -177,7 +177,7 @@ def transcripts_pending_extraction(
         to return no commitments)."""
     transcripts = selected_transcripts_relation(conn)
     sql = (
-        f"SELECT t.id, t.ticker, t.period_end FROM {transcripts} t "
+        f"SELECT t.id, t.ticker, t.period_end FROM {transcripts} t "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "WHERE NOT EXISTS ("
         "  SELECT 1 FROM management_commitments mc "
         "  JOIN transcript_segments ts ON ts.id = mc.transcript_segment_id "
@@ -367,7 +367,7 @@ def extract_for_transcript(
         that raised."""
     transcripts = selected_transcripts_relation(conn)
     cur = conn.execute(
-        f"SELECT t.ticker FROM {transcripts} t WHERE t.id = ?",
+        f"SELECT t.ticker FROM {transcripts} t WHERE t.id = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
         (transcript_id,),
     )
     row = cur.fetchone()

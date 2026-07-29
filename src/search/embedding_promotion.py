@@ -247,7 +247,7 @@ def persist_promotion(conn: sqlite3.Connection, promotion: EmbeddingPromotion) -
         promotion.supersedes_promotion_id,
     )
     existing = conn.execute(
-        f"SELECT {', '.join(columns)} FROM search_embedding_model_promotions "
+        f"SELECT {', '.join(columns)} FROM search_embedding_model_promotions "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "WHERE idempotency_key = ?",
         (promotion.idempotency_key,),
     ).fetchone()
@@ -256,7 +256,7 @@ def persist_promotion(conn: sqlite3.Connection, promotion: EmbeddingPromotion) -
             raise ValueError("immutable embedding promotion conflicts with existing data")
         return PersistResult(promotion.promotion_id, False)
     conn.execute(
-        f"INSERT INTO search_embedding_model_promotions ({', '.join(columns)}) "
+        f"INSERT INTO search_embedding_model_promotions ({', '.join(columns)}) "  # nosec B608 -- trusted internal SQL shape; values remain bound
         f"VALUES ({', '.join('?' for _ in columns)})",
         values,
     )

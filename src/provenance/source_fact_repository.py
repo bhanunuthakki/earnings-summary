@@ -467,7 +467,7 @@ class SourceFactRepository:
             publication.recorded_at,
         )
         existing = self._conn.execute(
-            "SELECT " + ",".join(header_columns) + " "
+            "SELECT " + ",".join(header_columns) + " "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "FROM source_fact_publications "
             "WHERE publication_id = ? OR idempotency_key = ?",
             (publication.publication_id, publication.idempotency_key),
@@ -516,7 +516,7 @@ class SourceFactRepository:
 
         placeholders = ",".join("?" for _ in header_columns)
         self._conn.execute(
-            "INSERT INTO source_fact_publications "
+            "INSERT INTO source_fact_publications "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"({','.join(header_columns)}) VALUES ({placeholders})",
             header_values,
         )
@@ -525,7 +525,7 @@ class SourceFactRepository:
         for member in members:
             values = tuple(getattr(member, column) for column in member_columns)
             self._conn.execute(
-                "INSERT INTO source_fact_publication_members "
+                "INSERT INTO source_fact_publication_members "  # nosec B608 -- trusted internal SQL shape; values remain bound
                 f"({','.join(member_columns)}) "
                 f"VALUES ({member_placeholders})",
                 values,

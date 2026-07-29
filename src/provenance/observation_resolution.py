@@ -238,7 +238,7 @@ class ObservationResolutionLedger:
             columns, values = self._resolution_values(resolution)
             placeholders = ", ".join("?" for _ in columns)
             self._conn.execute(
-                "INSERT INTO observation_resolution_revisions "
+                "INSERT INTO observation_resolution_revisions "  # nosec B608 -- trusted internal SQL shape; values remain bound
                 f"({', '.join(columns)}) VALUES ({placeholders})",
                 values,
             )
@@ -261,13 +261,13 @@ class ObservationResolutionLedger:
     ) -> PersistResult:
         placeholders = ", ".join("?" for _ in columns)
         cursor = self._conn.execute(
-            f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",
+            f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",  # nosec B608 -- trusted internal SQL shape; values remain bound
             values,
         )
         if cursor.rowcount == 1:
             return PersistResult(record_id=record_id, created=True)
         existing = self._conn.execute(
-            f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",
+            f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (identity_value,),
         ).fetchone()
         if existing is None or not _matches_stored_values(tuple(existing), values):
@@ -279,7 +279,7 @@ class ObservationResolutionLedger:
     def _verify_resolution_replay(self, resolution: ResolutionRevision) -> PersistResult:
         columns, values = self._resolution_values(resolution)
         existing = self._conn.execute(
-            f"SELECT {', '.join(columns)} FROM observation_resolution_revisions "
+            f"SELECT {', '.join(columns)} FROM observation_resolution_revisions "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "WHERE idempotency_key = ?",
             (resolution.idempotency_key,),
         ).fetchone()
@@ -302,7 +302,7 @@ class ObservationResolutionLedger:
     def _require_observations(self, observation_ids: tuple[str, ...]) -> None:
         placeholders = ", ".join("?" for _ in observation_ids)
         rows = self._conn.execute(
-            f"SELECT observation_id FROM reported_observations WHERE observation_id IN ({placeholders})",
+            f"SELECT observation_id FROM reported_observations WHERE observation_id IN ({placeholders})",  # nosec B608 -- trusted internal SQL shape; values remain bound
             observation_ids,
         ).fetchall()
         found = {str(row[0]) for row in rows}
@@ -320,8 +320,10 @@ class ObservationResolutionLedger:
         if row is None:
             return
         table_name = str(row[0]).replace('"', '""')
+        legacy_row_sql = f'SELECT 1 FROM "{table_name}" WHERE rowid = ?'  # nosec B608 -- trusted internal SQL shape; values remain bound
         legacy_row = self._conn.execute(
-            f'SELECT 1 FROM "{table_name}" WHERE rowid = ?', (observation.legacy_row_id,)
+            legacy_row_sql,
+            (observation.legacy_row_id,),
         ).fetchone()
         if legacy_row is None:
             raise ValueError(

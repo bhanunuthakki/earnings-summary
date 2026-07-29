@@ -147,15 +147,17 @@ class FactSelectionLedger:
         self._validate_supersedes(decision)
         placeholders = ", ".join("?" for _ in columns)
         self._conn.execute(
-            f"INSERT INTO fact_selection_decisions ({', '.join(columns)}) VALUES ({placeholders})",
+            f"INSERT INTO fact_selection_decisions ({', '.join(columns)}) VALUES ({placeholders})",  # nosec B608 -- trusted internal SQL shape; values remain bound
             values,
         )
         return PersistResult(decision_id=decision.decision_id, created=True)
 
     def _validate_references(self, decision: FactSelectionDecision) -> None:
         if self._table_exists(decision.target_table):
+            target_sql = f"SELECT 1 FROM {decision.target_table} WHERE id = ?"  # nosec B608 -- trusted internal SQL shape; values remain bound
             target = self._conn.execute(
-                f"SELECT 1 FROM {decision.target_table} WHERE id = ?", (decision.target_row_id,)
+                target_sql,
+                (decision.target_row_id,),
             ).fetchone()
             if target is None:
                 raise ValueError(
@@ -197,7 +199,7 @@ class FactSelectionLedger:
         values: tuple[object, ...],
     ) -> PersistResult:
         existing = self._conn.execute(
-            f"SELECT {', '.join(columns)} FROM fact_selection_decisions WHERE idempotency_key = ?",
+            f"SELECT {', '.join(columns)} FROM fact_selection_decisions WHERE idempotency_key = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (decision.idempotency_key,),
         ).fetchone()
         if existing is None or not _matches_stored_values(tuple(existing), values):

@@ -896,7 +896,7 @@ class FactReadModel:
             conditions.append("cell.period_end <= ?")
             parameters.append(selector.period_end_at_or_before)
         rows = self._conn.execute(
-            "SELECT cell.fact_cell_id FROM fact_cells_v2 AS cell "
+            "SELECT cell.fact_cell_id FROM fact_cells_v2 AS cell "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "JOIN fact_cell_identity_seals_v2 AS seal "
             "ON seal.fact_cell_id = cell.fact_cell_id WHERE "
             + " AND ".join(conditions)

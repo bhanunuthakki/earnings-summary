@@ -269,7 +269,7 @@ def audit_research_snapshot_for_retrieval(
         )
         if existing is None:
             conn.execute(
-                "INSERT INTO research_snapshot_admission_receipts "
+                "INSERT INTO research_snapshot_admission_receipts "  # nosec B608 -- trusted internal SQL shape; values remain bound
                 f"({','.join(columns)}) VALUES "
                 f"({','.join('?' for _ in columns)})",
                 values,
@@ -355,7 +355,7 @@ def retrieve_heterogeneous(
     )
     with _savepoint(conn, "heterogeneous_retrieval_trace"):
         conn.execute(
-            "INSERT INTO heterogeneous_retrieval_trace_headers "
+            "INSERT INTO heterogeneous_retrieval_trace_headers "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"({','.join(_HEADER_COLUMNS)}) VALUES "
             f"({','.join('?' for _ in _HEADER_COLUMNS)})",
             header_values,

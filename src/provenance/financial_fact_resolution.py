@@ -1041,7 +1041,7 @@ def _next_rows(
     while table_index < len(_TABLES) and len(rows) < batch_size:
         table = _TABLES[table_index]
         available = conn.execute(
-            f"SELECT fact.id FROM {table} AS fact "
+            f"SELECT fact.id FROM {table} AS fact "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "WHERE fact.id > ? AND NOT EXISTS ("
             "SELECT 1 FROM fact_observation_revisions AS link "
             "WHERE link.fact_table = ? AND link.fact_row_id = fact.id"
@@ -1052,7 +1052,7 @@ def _next_rows(
         if available:
             last_row_id = int(available[-1][0])
         has_more = conn.execute(
-            f"SELECT 1 FROM {table} AS fact "
+            f"SELECT 1 FROM {table} AS fact "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "WHERE fact.id > ? AND NOT EXISTS ("
             "SELECT 1 FROM fact_observation_revisions AS link "
             "WHERE link.fact_table = ? AND link.fact_row_id = fact.id"
@@ -1094,7 +1094,7 @@ def _is_complete(conn: sqlite3.Connection, checkpoint: FactCutoverCheckpoint) ->
 def _has_unresolved_rows(conn: sqlite3.Connection) -> bool:
     return any(
         conn.execute(
-            f"SELECT 1 FROM {table} AS fact WHERE NOT EXISTS ("
+            f"SELECT 1 FROM {table} AS fact WHERE NOT EXISTS ("  # nosec B608 -- trusted internal SQL shape; values remain bound
             "SELECT 1 FROM fact_observation_revisions AS link "
             "WHERE link.fact_table = ? AND link.fact_row_id = fact.id"
             ") LIMIT 1",

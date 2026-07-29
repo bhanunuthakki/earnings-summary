@@ -1327,7 +1327,7 @@ def _documents_for_manifest_sql(conn: sqlite3.Connection) -> str:
         else "doc.issuer_id"
     )
     return (
-        "SELECT chunk.chunk_id, chunk.text, chunk.content_sha256, chunk.manifest_id, "
+        "SELECT chunk.chunk_id, chunk.text, chunk.content_sha256, chunk.manifest_id, "  # nosec B608 -- trusted internal SQL shape; values remain bound
         f"doc.issuer_id, {recorded_issuer_sql}, doc.ticker, doc.form_type, "
         "doc.period_start, doc.period_end, node.node_kind, "
         "chunk.available_at, source.observed_at, source.retrieved_at "

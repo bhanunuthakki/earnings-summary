@@ -1141,8 +1141,10 @@ def _persist_exact(
     summary: OCRBackfillSummary,
 ) -> None:
     where = " AND ".join(f"{column} = ?" for column in identity_columns)
+    select_sql = f"SELECT {', '.join(columns)} FROM {table} WHERE {where}"  # nosec B608 -- trusted internal SQL shape; values remain bound
     existing = conn.execute(
-        f"SELECT {', '.join(columns)} FROM {table} WHERE {where}", identity_values
+        select_sql,
+        identity_values,
     ).fetchone()
     if existing is not None:
         if not _stored_values_match(tuple(existing), values):
@@ -1150,7 +1152,7 @@ def _persist_exact(
         summary.records_replayed += 1
         return
     placeholders = ", ".join("?" for _ in columns)
-    conn.execute(f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})", values)
+    conn.execute(f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})", values)  # nosec B608 -- trusted internal SQL shape; values remain bound
     summary.records_created += 1
 
 

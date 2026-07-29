@@ -238,7 +238,7 @@ def load_expected_sec_documents(
 
     placeholders = ", ".join("?" for _ in inventory_keys)
     inventory_rows = conn.execute(
-        "SELECT inventory_key, source_kind FROM v_source_inventory_sealed_complete "
+        "SELECT inventory_key, source_kind FROM v_source_inventory_sealed_complete "  # nosec B608 -- trusted internal SQL shape; values remain bound
         f"WHERE inventory_key IN ({placeholders}) ORDER BY inventory_key",
         inventory_keys,
     ).fetchall()
@@ -257,7 +257,7 @@ def load_expected_sec_documents(
         )
 
     rows = conn.execute(
-        "SELECT expected.expected_document_id, expected.snapshot_id, inventory.inventory_key, "
+        "SELECT expected.expected_document_id, expected.snapshot_id, inventory.inventory_key, "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "expected.expected_document_key, expected.issuer_id, expected.ticker, "
         "expected.document_type, expected.form_type, expected.accession_number, "
         "expected.source_url, expected.primary_document, expected.period_start, "

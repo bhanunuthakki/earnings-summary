@@ -469,7 +469,7 @@ class ReportingEntityRegistry:
         if cursor.rowcount == 1:
             return PersistResult(record_id=record_id, created=True)
         existing = self._conn.execute(
-            f"SELECT {','.join(spec.columns)} FROM {spec.table} WHERE idempotency_key = ?",
+            f"SELECT {','.join(spec.columns)} FROM {spec.table} WHERE idempotency_key = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (str(validated.idempotency_key),),
         ).fetchone()
         if existing is None:

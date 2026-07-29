@@ -121,7 +121,7 @@ def _last_fmp_pulled_for(conn: sqlite3.Connection, ticker: str) -> str | None:
 def _last_transcript_for(conn: sqlite3.Connection, ticker: str) -> TranscriptStatus | None:
     transcripts = selected_transcripts_relation(conn).sql
     cur = conn.execute(
-        f"SELECT period_end, has_qa_section, call_date FROM {transcripts} "
+        f"SELECT period_end, has_qa_section, call_date FROM {transcripts} "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "WHERE ticker = ? AND period_end IS NOT NULL "
         "ORDER BY period_end DESC LIMIT 1",
         (ticker.upper(),),

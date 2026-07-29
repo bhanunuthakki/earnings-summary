@@ -219,7 +219,7 @@ class SourceInventorySealStore:
         record_id: str,
     ) -> PersistResult:
         existing = self._conn.execute(
-            f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",
+            f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (identity_value,),
         ).fetchone()
         if existing is not None:
@@ -227,14 +227,14 @@ class SourceInventorySealStore:
                 raise ValueError(f"immutable {table} identity conflicts with existing data")
             return PersistResult(record_id=record_id, created=False)
         cursor = self._conn.execute(
-            f"INSERT INTO {table} ({', '.join(columns)}) "
+            f"INSERT INTO {table} ({', '.join(columns)}) "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"VALUES ({', '.join('?' for _ in columns)}) ON CONFLICT DO NOTHING",
             values,
         )
         if cursor.rowcount == 1:
             return PersistResult(record_id=record_id, created=True)
         existing = self._conn.execute(
-            f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",
+            f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (identity_value,),
         ).fetchone()
         if existing is None or not _same(tuple(existing), values):

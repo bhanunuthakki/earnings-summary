@@ -164,14 +164,14 @@ class LegacyDocumentEvidenceBindingLedger:
         )
         placeholders = ",".join("?" for _ in columns)
         cursor = self._conn.execute(
-            "INSERT INTO legacy_document_evidence_binding_revisions "
+            "INSERT INTO legacy_document_evidence_binding_revisions "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"({','.join(columns)}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",
             values,
         )
         if cursor.rowcount == 1:
             return PersistResult(validated.binding_revision_id, True)
         existing = self._conn.execute(
-            "SELECT " + ",".join(columns) + " "
+            "SELECT " + ",".join(columns) + " "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "FROM legacy_document_evidence_binding_revisions "
             "WHERE idempotency_key = ?",
             (validated.idempotency_key,),

@@ -1119,7 +1119,7 @@ def _persist_exact(
 ) -> None:
     placeholders = ", ".join("?" for _ in columns)
     cursor = conn.execute(
-        f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders}) "
+        f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders}) "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "ON CONFLICT DO NOTHING",
         values,
     )
@@ -1128,7 +1128,7 @@ def _persist_exact(
         return
     where = " AND ".join(f"{column} = ?" for column in key_columns)
     stored = conn.execute(
-        f"SELECT {', '.join(columns)} FROM {table} WHERE {where}",
+        f"SELECT {', '.join(columns)} FROM {table} WHERE {where}",  # nosec B608 -- trusted internal SQL shape; values remain bound
         key_values,
     ).fetchone()
     if stored is None or not _stored_values_match(tuple(stored), values):

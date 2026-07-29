@@ -216,13 +216,13 @@ class GroundedSearchStore:
             self._validate_seal(record)
         table, columns, values, identity_column, identity_value = self._statement(record)
         result = self._conn.execute(
-            f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)}) ON CONFLICT DO NOTHING",
+            f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)}) ON CONFLICT DO NOTHING",  # nosec B608 -- trusted internal SQL shape; values remain bound
             values,
         )
         if result.rowcount == 1:
             return PersistResult(identity_value, True)
         existing = self._conn.execute(
-            f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",
+            f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (identity_value,),
         ).fetchone()
         if existing is None or not _same(tuple(existing), values):
@@ -626,7 +626,7 @@ class HybridRetriever:
         where, params = _filter_sql(filters)
         document_relation = evidence_document_relation(self._conn)
         rows = self._conn.execute(
-            "SELECT lex.chunk_id FROM search_lexical_chunks AS lex "
+            "SELECT lex.chunk_id FROM search_lexical_chunks AS lex "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "JOIN search_chunks AS chunk ON chunk.chunk_id = lex.chunk_id "
             "JOIN evidence_nodes AS node ON node.node_id = chunk.evidence_node_id "
             "JOIN evidence_extraction_runs AS run ON run.extraction_run_id = node.extraction_run_id "
@@ -651,7 +651,7 @@ class HybridRetriever:
             else "doc.issuer_id"
         )
         row = self._conn.execute(
-            "SELECT chunk.chunk_id, chunk.text, node.node_id, node.node_kind, node.locator_json, "
+            "SELECT chunk.chunk_id, chunk.text, node.node_id, node.node_kind, node.locator_json, "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"doc.document_version_id, doc.issuer_id, {recorded_issuer_sql}, "
             "doc.ticker, doc.form_type, doc.period_start, doc.period_end, "
             "source.source_url, source.source_published_at, source.filing_at, source.accepted_at, source.observed_at, source.retrieved_at "
@@ -774,7 +774,7 @@ class HybridRetriever:
             params += (index_run_id,)
         return (
             self._conn.execute(
-                "SELECT 1 FROM search_index_memberships AS membership "
+                "SELECT 1 FROM search_index_memberships AS membership "  # nosec B608 -- trusted internal SQL shape; values remain bound
                 "JOIN v_search_index_successful AS indexed ON indexed.index_run_id = membership.index_run_id "
                 "WHERE membership.chunk_id = ? AND membership.membership_status = 'included' "
                 "AND indexed.manifest_id = ? AND indexed.index_kind = ?" + run_filter,

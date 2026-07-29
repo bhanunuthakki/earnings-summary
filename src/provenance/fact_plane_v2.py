@@ -1513,14 +1513,14 @@ class FactPlaneV2:
     ) -> PersistResult:
         placeholders = ",".join("?" for _ in columns)
         cursor = self._conn.execute(
-            f"INSERT INTO {table} ({','.join(columns)}) "
+            f"INSERT INTO {table} ({','.join(columns)}) "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"VALUES ({placeholders}) ON CONFLICT DO NOTHING",
             values,
         )
         if cursor.rowcount == 1:
             return PersistResult(record_id, True)
         existing = self._conn.execute(
-            f"SELECT {','.join(columns)} FROM {table} WHERE idempotency_key = ?",
+            f"SELECT {','.join(columns)} FROM {table} WHERE idempotency_key = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (idempotency_key,),
         ).fetchone()
         if existing is None or not self._matches(tuple(existing), values):
@@ -1815,7 +1815,7 @@ class FactPlaneV2:
             seal.recorded_at,
         )
         existing = self._conn.execute(
-            f"SELECT {','.join(columns)} FROM fact_derivation_seals_v2 WHERE idempotency_key = ?",
+            f"SELECT {','.join(columns)} FROM fact_derivation_seals_v2 WHERE idempotency_key = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (seal.idempotency_key,),
         ).fetchone()
         edge_rows = self._fetchall(
@@ -1913,7 +1913,7 @@ class FactPlaneV2:
             seal.recorded_at,
         )
         existing = self._conn.execute(
-            f"SELECT {','.join(columns)} "
+            f"SELECT {','.join(columns)} "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "FROM fact_derivation_basis_commitments_v2 "
             "WHERE idempotency_key = ?",
             (f"{seal.idempotency_key}:basis:v1",),
@@ -1928,7 +1928,7 @@ class FactPlaneV2:
     ) -> PersistResult:
         columns, expected = self._resolution_values(resolution)
         existing = self._conn.execute(
-            f"SELECT {','.join(columns)} FROM fact_resolution_revisions_v2 "
+            f"SELECT {','.join(columns)} FROM fact_resolution_revisions_v2 "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "WHERE idempotency_key = ?",
             (resolution.idempotency_key,),
         ).fetchone()

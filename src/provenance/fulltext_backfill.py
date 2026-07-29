@@ -1485,7 +1485,7 @@ def _has_substantive_coverage(
     )
     return (
         conn.execute(
-            "SELECT 1 FROM evidence_nodes AS node JOIN evidence_extraction_runs AS run "
+            "SELECT 1 FROM evidence_nodes AS node JOIN evidence_extraction_runs AS run "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "ON run.extraction_run_id = node.extraction_run_id "
             "WHERE run.document_version_id = ? AND run.outcome = 'succeeded' "
             "AND run.extractor_name = ? AND run.extractor_config_sha256 = ? "

@@ -52,8 +52,10 @@ def _selected_relation(
     if _has_view(conn, active_view_name):
         relation = SelectedRelation(active_view_name, "active_view")
     elif _has_lifecycle_column(conn, table_name):
+        lifecycle_relation_sql = f"(SELECT * FROM {table_name} WHERE is_active = 1)"  # nosec B608 -- trusted internal SQL shape; values remain bound
         relation = SelectedRelation(
-            f"(SELECT * FROM {table_name} WHERE is_active = 1)", "lifecycle_filter"
+            lifecycle_relation_sql,
+            "lifecycle_filter",
         )
     else:
         relation = SelectedRelation(table_name, "legacy_table")

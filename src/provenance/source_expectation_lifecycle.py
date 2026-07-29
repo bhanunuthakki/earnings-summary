@@ -113,7 +113,7 @@ def persist_expected_document_lifecycle(
         record.supersedes_lifecycle_id,
     )
     existing = conn.execute(
-        f"SELECT {', '.join(columns)} FROM expected_document_lifecycle_revisions "
+        f"SELECT {', '.join(columns)} FROM expected_document_lifecycle_revisions "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "WHERE idempotency_key = ?",
         (record.idempotency_key,),
     ).fetchone()
@@ -122,7 +122,7 @@ def persist_expected_document_lifecycle(
             raise ValueError("immutable expected document lifecycle conflicts")
         return PersistResult(record.lifecycle_id, False)
     conn.execute(
-        f"INSERT INTO expected_document_lifecycle_revisions ({', '.join(columns)}) "
+        f"INSERT INTO expected_document_lifecycle_revisions ({', '.join(columns)}) "  # nosec B608 -- trusted internal SQL shape; values remain bound
         f"VALUES ({', '.join('?' for _ in columns)})",
         values,
     )

@@ -187,13 +187,13 @@ class EvidenceLinkLedger:
     ) -> PersistResult:
         placeholders = ", ".join("?" for _ in columns)
         cursor = self._conn.execute(
-            f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",
+            f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",  # nosec B608 -- trusted internal SQL shape; values remain bound
             values,
         )
         if cursor.rowcount == 1:
             return PersistResult(record_id=record_id, created=True)
         existing = self._conn.execute(
-            f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",
+            f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (identity_value,),
         ).fetchone()
         if existing is None or not _matches_stored_values(tuple(existing), values):

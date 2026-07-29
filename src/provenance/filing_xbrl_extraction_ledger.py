@@ -481,7 +481,7 @@ class FilingXbrlExtractionLedger:
         record: FilingXbrlExtractionDispositionRecord,
     ) -> bool:
         existing = self._conn.execute(
-            "SELECT "
+            "SELECT "  # nosec B608 -- trusted internal SQL shape; values remain bound
             + ",".join(_DISPOSITION_COLUMNS)
             + " FROM filing_xbrl_extraction_dispositions "
             "WHERE disposition_id = ? OR idempotency_key = ? "
@@ -502,7 +502,7 @@ class FilingXbrlExtractionLedger:
             return False
         placeholders = ",".join("?" for _ in _DISPOSITION_COLUMNS)
         self._conn.execute(
-            "INSERT INTO filing_xbrl_extraction_dispositions ("
+            "INSERT INTO filing_xbrl_extraction_dispositions ("  # nosec B608 -- trusted internal SQL shape; values remain bound
             + ",".join(_DISPOSITION_COLUMNS)
             + ") VALUES ("
             + placeholders
@@ -516,7 +516,7 @@ class FilingXbrlExtractionLedger:
         seal: FilingXbrlExtractionDispositionSeal,
     ) -> bool:
         existing = self._conn.execute(
-            "SELECT " + ",".join(_SEAL_COLUMNS) + " FROM filing_xbrl_extraction_disposition_seals "
+            "SELECT " + ",".join(_SEAL_COLUMNS) + " FROM filing_xbrl_extraction_disposition_seals "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "WHERE disposition_seal_id = ? OR idempotency_key = ? "
             "OR extraction_run_id = ? OR publication_id = ?",
             (
@@ -537,7 +537,7 @@ class FilingXbrlExtractionLedger:
             return False
         placeholders = ",".join("?" for _ in _SEAL_COLUMNS)
         self._conn.execute(
-            "INSERT INTO filing_xbrl_extraction_disposition_seals ("
+            "INSERT INTO filing_xbrl_extraction_disposition_seals ("  # nosec B608 -- trusted internal SQL shape; values remain bound
             + ",".join(_SEAL_COLUMNS)
             + ") VALUES ("
             + placeholders

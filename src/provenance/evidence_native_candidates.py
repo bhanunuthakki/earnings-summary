@@ -124,7 +124,7 @@ def select_evidence_native_candidates_by_id(
         raise ValueError("document version IDs must be unique")
     placeholders = ", ".join("?" for _ in document_version_ids)
     rows = conn.execute(
-        "SELECT document.rowid AS evidence_rowid, document.document_version_id, "
+        "SELECT document.rowid AS evidence_rowid, document.document_version_id, "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "lower(document.blob_sha256) AS blob_sha256, blob.byte_size, blob.media_type, "
         "COALESCE((SELECT location.storage_uri "
         "FROM v_evidence_blob_locations_current AS location "

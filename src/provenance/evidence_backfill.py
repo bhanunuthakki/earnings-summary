@@ -422,7 +422,7 @@ def _active_filing_sections(
     relation = selected_filing_sections_relation(conn)
     selection_modes["filing_sections"] = relation.selection_mode
     return conn.execute(
-        "SELECT * FROM " + relation.sql + " WHERE doc_id = ? ORDER BY id",
+        "SELECT * FROM " + relation.sql + " WHERE doc_id = ? ORDER BY id",  # nosec B608 -- trusted internal SQL shape; values remain bound
         (document_id,),
     ).fetchall()
 
@@ -437,7 +437,7 @@ def _active_transcript_segments(
     transcript_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(transcripts)")}
     call_date = "transcript.call_date" if "call_date" in transcript_columns else "NULL"
     return conn.execute(
-        "SELECT segment.*, "
+        "SELECT segment.*, "  # nosec B608 -- trusted internal SQL shape; values remain bound
         + call_date
         + " AS transcript_call_date FROM transcript_segments AS segment JOIN "
         + relation.sql

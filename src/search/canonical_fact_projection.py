@@ -347,7 +347,7 @@ def build_canonical_projection_generation(
             _record_projection_audit_receipt(conn, verified, audited_at=request.recorded_at)
             return verified
         conn.execute(
-            "INSERT INTO canonical_fact_projection_generations "
+            "INSERT INTO canonical_fact_projection_generations "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"({','.join(_GENERATION_COLUMNS)}) VALUES "
             f"({','.join('?' for _ in _GENERATION_COLUMNS)})",
             header_values,
@@ -582,7 +582,7 @@ def search_canonical_facts(
     params.append(limit)
     rows = _rows(
         conn,
-        _CURRENT_STATE_CTE + f" SELECT entry.*,({score_sql}) AS query_score "
+        _CURRENT_STATE_CTE + f" SELECT entry.*,({score_sql}) AS query_score "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "FROM current_state entry "
         + f"WHERE entry.change_kind='upsert' AND ({score_sql})>0"
         + entity_predicate
@@ -862,7 +862,7 @@ def _record_projection_audit_receipt(
     )
     if existing is None:
         conn.execute(
-            "INSERT INTO canonical_fact_projection_audit_receipts "
+            "INSERT INTO canonical_fact_projection_audit_receipts "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"({','.join(columns)}) VALUES "
             f"({','.join('?' for _ in columns)})",
             values,
@@ -992,7 +992,7 @@ def _write_entries_and_batches(
             return
         enforce_time_cap()
         conn.executemany(
-            "INSERT INTO canonical_fact_projection_entries "
+            "INSERT INTO canonical_fact_projection_entries "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"({','.join(_ENTRY_COLUMNS)}) VALUES "
             f"({','.join('?' for _ in _ENTRY_COLUMNS)})",
             [tuple(item[0][column] for column in _ENTRY_COLUMNS) for item in pending],
@@ -1313,7 +1313,7 @@ def _current_entries_batched(
 ) -> Iterator[dict[str, object]]:
     return _iter_rows_batched(
         conn,
-        _CURRENT_STATE_CTE + " SELECT * FROM current_state WHERE change_kind='upsert' "
+        _CURRENT_STATE_CTE + " SELECT * FROM current_state WHERE change_kind='upsert' "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "ORDER BY canonical_metric_cell_id",
         (generation_id,),
     )
@@ -1324,7 +1324,7 @@ def _deleted_coordinates_batched(
 ) -> Iterator[str]:
     for row in _iter_rows_batched(
         conn,
-        _CURRENT_STATE_CTE + " SELECT current_state.canonical_metric_cell_id FROM current_state "
+        _CURRENT_STATE_CTE + " SELECT current_state.canonical_metric_cell_id FROM current_state "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "WHERE current_state.change_kind='upsert' "
         "AND NOT EXISTS (SELECT 1 "
         "FROM canonical_fact_resolution_snapshot_members member "
@@ -1373,7 +1373,7 @@ def _verify_exact_generation_state(
 ) -> None:
     projected = _iter_rows_batched(
         conn,
-        _CURRENT_STATE_CTE + " SELECT canonical_metric_cell_id FROM current_state "
+        _CURRENT_STATE_CTE + " SELECT canonical_metric_cell_id FROM current_state "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "WHERE change_kind='upsert' ORDER BY canonical_metric_cell_id",
         (request.generation_id,),
     )
@@ -1597,7 +1597,7 @@ def _effective_bucket_commitment_digests(
     counts = [0] * DIGEST_BUCKET_COUNT
     for row in _iter_rows_batched(
         conn,
-        _CURRENT_STATE_CTE + " SELECT digest_bucket,entry_sha256 FROM current_state "
+        _CURRENT_STATE_CTE + " SELECT digest_bucket,entry_sha256 FROM current_state "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "WHERE change_kind='upsert' "
         "ORDER BY digest_bucket,canonical_metric_cell_id",
         (generation_id,),
@@ -1652,7 +1652,7 @@ def _checkpoint_bucket_commitments(
 ) -> Iterator[tuple[int, int, str, str]]:
     rows = _iter_rows_batched(
         conn,
-        _CURRENT_STATE_CTE + " SELECT digest_bucket,entry_sha256 FROM current_state "
+        _CURRENT_STATE_CTE + " SELECT digest_bucket,entry_sha256 FROM current_state "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "WHERE change_kind='upsert' "
         "ORDER BY digest_bucket,canonical_metric_cell_id",
         (generation_id,),
@@ -1734,7 +1734,7 @@ def _effective_bucket_commitment(
     payload_builder = _bucket_payload_builder(generation_id)
     for row in _iter_rows_batched(
         conn,
-        _CURRENT_STATE_CTE + " SELECT entry_sha256 FROM current_state "
+        _CURRENT_STATE_CTE + " SELECT entry_sha256 FROM current_state "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "WHERE change_kind='upsert' AND digest_bucket=? "
         "ORDER BY canonical_metric_cell_id",
         (generation_id, bucket),

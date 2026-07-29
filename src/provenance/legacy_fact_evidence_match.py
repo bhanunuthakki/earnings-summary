@@ -488,7 +488,7 @@ class LegacyFactEvidenceMatchLedger:
         values = self._values(validated)
         placeholders = ",".join("?" for _ in self._COLUMNS)
         cursor = self._conn.execute(
-            "INSERT INTO legacy_fact_evidence_match_revisions "
+            "INSERT INTO legacy_fact_evidence_match_revisions "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"({','.join(self._COLUMNS)}) VALUES ({placeholders}) "
             "ON CONFLICT DO NOTHING",
             values,
@@ -496,7 +496,7 @@ class LegacyFactEvidenceMatchLedger:
         if cursor.rowcount == 1:
             return PersistResult(validated.match_revision_id, True)
         existing = self._conn.execute(
-            "SELECT " + ",".join(self._COLUMNS) + " "
+            "SELECT " + ",".join(self._COLUMNS) + " "  # nosec B608 -- trusted internal SQL shape; values remain bound
             "FROM legacy_fact_evidence_match_revisions "
             "WHERE idempotency_key = ?",
             (validated.idempotency_key,),
@@ -587,7 +587,7 @@ class LegacyFactEvidenceMatchLedger:
             )
         )
         row = self._conn.execute(
-            f"SELECT {','.join(columns)} FROM {fact_table} WHERE id = ?",
+            f"SELECT {','.join(columns)} FROM {fact_table} WHERE id = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (fact_row_id,),
         ).fetchone()
         if row is None:

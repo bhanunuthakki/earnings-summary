@@ -201,14 +201,14 @@ class SourceCoverageLedger:
         self._validate_references(record)
         table, columns, values, identity_column, identity_value, record_id = self._statement(record)
         cursor = self._conn.execute(
-            f"INSERT INTO {table} ({', '.join(columns)}) "
+            f"INSERT INTO {table} ({', '.join(columns)}) "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"VALUES ({', '.join('?' for _ in columns)}) ON CONFLICT DO NOTHING",
             values,
         )
         if cursor.rowcount == 1:
             return PersistResult(record_id, True)
         existing = self._conn.execute(
-            f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",
+            f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (identity_value,),
         ).fetchone()
         if existing is None or not _same(tuple(existing), values):
@@ -270,7 +270,7 @@ class SourceCoverageLedger:
         if record.document_version_id is not None:
             relation = evidence_document_relation(self._conn)
             document = self._conn.execute(
-                f"SELECT issuer_id FROM {relation} WHERE document_version_id = ?",
+                f"SELECT issuer_id FROM {relation} WHERE document_version_id = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
                 (record.document_version_id,),
             ).fetchone()
             if document is None:

@@ -999,10 +999,10 @@ def _percentile(values: list[float], percentile: float) -> float:
 def _row_counts(conn: sqlite3.Connection) -> BenchmarkRowCounts:
     def count(table: str, generation_id: str | None = None) -> int:
         if generation_id is None:
-            row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+            row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()  # nosec B608 -- trusted internal SQL shape; values remain bound
         else:
             row = conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE generation_id=?",
+                f"SELECT COUNT(*) FROM {table} WHERE generation_id=?",  # nosec B608 -- trusted internal SQL shape; values remain bound
                 (generation_id,),
             ).fetchone()
         if row is None:
@@ -1023,10 +1023,10 @@ def _production_row_counts(
 ) -> BenchmarkRowCounts:
     def count(table: str, generation_id: str | None = None) -> int:
         if generation_id is None:
-            row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+            row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()  # nosec B608 -- trusted internal SQL shape; values remain bound
         else:
             row = conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE generation_id=?",
+                f"SELECT COUNT(*) FROM {table} WHERE generation_id=?",  # nosec B608 -- trusted internal SQL shape; values remain bound
                 (generation_id,),
             ).fetchone()
         if row is None:

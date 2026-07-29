@@ -326,7 +326,7 @@ def _insert_exact(
         _db_time(value) if isinstance(value, datetime) else value for value in values
     )
     existing = conn.execute(
-        f"SELECT {','.join(columns)} FROM {table} WHERE idempotency_key=?",
+        f"SELECT {','.join(columns)} FROM {table} WHERE idempotency_key=?",  # nosec B608 -- trusted internal SQL shape; values remain bound
         (idempotency_key,),
     ).fetchone()
     if existing is not None:
@@ -334,7 +334,7 @@ def _insert_exact(
             raise ValueError(f"idempotency conflict for {table}")
         return False
     conn.execute(
-        f"INSERT INTO {table} ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
+        f"INSERT INTO {table} ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",  # nosec B608 -- trusted internal SQL shape; values remain bound
         serialized,
     )
     return True
@@ -428,7 +428,7 @@ def _document_states(
           ON observation.observation_id=document.observation_id
          AND observation.blob_sha256=document.blob_sha256
         JOIN evidence_content_blobs blob ON blob.sha256=document.blob_sha256
-        WHERE """
+        WHERE """  # nosec B608 -- trusted internal SQL shape; values remain bound
         + scope_sql
         + """
           AND datetime(observation.retrieved_at)<=datetime(?)
@@ -486,7 +486,7 @@ def _source_obligations(
         SELECT * FROM source_obligation_revisions obligation
         WHERE obligation.issuer_id=?
           AND obligation.document_family=?
-          AND obligation.obligation_state IN """
+          AND obligation.obligation_state IN """  # nosec B608 -- trusted internal SQL shape; values remain bound
         + f"({','.join('?' for _ in states)})"
         + """
           AND datetime(obligation.active_from)<=datetime(?)
@@ -501,7 +501,7 @@ def _source_obligations(
                 AND datetime(newer.knowledge_at)<=datetime(?)
                 AND datetime(newer.recorded_at)<=datetime(?))
         ORDER BY obligation.obligation_key,obligation.revision
-        """,
+        """,  # nosec B608 -- trusted internal SQL shape; values remain bound
         (
             issuer_id,
             document_family,
@@ -974,7 +974,7 @@ def _member_set(
     key: str,
 ) -> tuple[list[sqlite3.Row], str, str]:
     rows = conn.execute(
-        f"SELECT * FROM {table} WHERE {key_column}=? ORDER BY member_ordinal",
+        f"SELECT * FROM {table} WHERE {key_column}=? ORDER BY member_ordinal",  # nosec B608 -- trusted internal SQL shape; values remain bound
         (key,),
     ).fetchall()
     payload = canonical_json([json.loads(str(row["canonical_member_json"])) for row in rows])

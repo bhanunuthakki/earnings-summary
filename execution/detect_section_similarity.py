@@ -83,7 +83,7 @@ log = logging.getLogger("detect_section_similarity")
 
 def _tracked_tickers(conn: sqlite3.Connection) -> list[str]:
     relation = selected_filing_sections_relation(conn).sql
-    rows = conn.execute(f"SELECT DISTINCT ticker FROM {relation} ORDER BY ticker").fetchall()
+    rows = conn.execute(f"SELECT DISTINCT ticker FROM {relation} ORDER BY ticker").fetchall()  # nosec B608 -- trusted internal SQL shape; values remain bound
     return [str(r[0]).upper() for r in rows]
 
 
@@ -119,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             conn.execute("SELECT 1 FROM disclosure_events LIMIT 1").fetchone()
             relation = selected_filing_sections_relation(conn).sql
-            conn.execute(f"SELECT 1 FROM {relation} LIMIT 1").fetchone()
+            conn.execute(f"SELECT 1 FROM {relation} LIMIT 1").fetchone()  # nosec B608 -- trusted internal SQL shape; values remain bound
         except sqlite3.OperationalError as exc:
             log.error({"event": "hard_stop", "stage": "preflight", "error": str(exc)})
             return _EXIT_HARD_STOP

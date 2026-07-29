@@ -517,7 +517,7 @@ def _ready_key_sql(
         raise CompanyFactsFactMatcherError(f"unsupported readiness lane: {lane}")
     order = "prior.revision, fact.id" if lane == "retryable" else "fact.id"
     sql = (
-        "SELECT fact.id AS fact_row_id, "
+        "SELECT fact.id AS fact_row_id, "  # nosec B608 -- trusted internal SQL shape; values remain bound
         "COALESCE(prior.revision, 0) AS prior_revision "
         f"FROM {fact_table} AS fact "
         "JOIN documents AS legacy ON legacy.id = fact.source_doc_id "
@@ -551,7 +551,7 @@ def _target_sql(
         )
     )
     return (
-        "SELECT "
+        "SELECT "  # nosec B608 -- trusted internal SQL shape; values remain bound
         f"'{fact_table}' AS fact_table, fact.*, "
         "binding.binding_revision_id, binding.revision AS binding_revision, "
         "binding.scope_content_sha256, binding.evidence_node_id, "

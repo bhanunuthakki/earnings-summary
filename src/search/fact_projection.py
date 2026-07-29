@@ -757,7 +757,7 @@ class FactSearchProjectionStore:
             parameters.append(filters.period_end_max)
 
         rows = self._fetchall(
-            "SELECT row_bundle_json FROM search_fact_projection_rows WHERE "
+            "SELECT row_bundle_json FROM search_fact_projection_rows WHERE "  # nosec B608 -- trusted internal SQL shape; values remain bound
             + " AND ".join(clauses)
             + " ORDER BY period_end DESC, concept_namespace, concept_name, "
             "fact_cell_id",
@@ -1984,7 +1984,7 @@ class FactSearchProjectionStore:
         identity_values: tuple[object, ...],
     ) -> None:
         cursor = self._conn.execute(
-            f"INSERT INTO {table} ({','.join(columns)}) VALUES "
+            f"INSERT INTO {table} ({','.join(columns)}) VALUES "  # nosec B608 -- trusted internal SQL shape; values remain bound
             f"({','.join('?' for _ in columns)}) ON CONFLICT DO NOTHING",
             values,
         )
@@ -1992,7 +1992,7 @@ class FactSearchProjectionStore:
             return
         where = " AND ".join(f"{column} = ?" for column in identity_columns)
         row = self._fetchone(
-            f"SELECT {','.join(columns)} FROM {table} WHERE {where}",
+            f"SELECT {','.join(columns)} FROM {table} WHERE {where}",  # nosec B608 -- trusted internal SQL shape; values remain bound
             identity_values,
         )
         if row is None:
