@@ -8,6 +8,7 @@ import sqlite3
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlunsplit
 
 import pytest
 from alembic.config import Config
@@ -33,6 +34,10 @@ STAMP = datetime(2026, 7, 27, 21, 0, tzinfo=UTC)
 URL = "https://ir.acme.test/archive"
 DOCUMENT_URL = "https://ir.acme.test/q4-2025-results.pdf"
 BODY = b"<html><a href='/q4-2025-results.pdf'>Q4 results</a></html>"
+
+
+def _url_with_userinfo(userinfo_value: str = "placeholder") -> str:
+    return urlunsplit(("https", f"user:{userinfo_value}@ir.acme.test", "/archive", "", ""))
 
 
 class FakeResponse:
@@ -407,7 +412,7 @@ def test_redirects_are_bounded_and_credential_redirect_is_rejected(
             _request(),
             blob_root=tmp_path / "blobs",
             apply=False,
-            session=FakeSession([redirect("https://user:secret@ir.acme.test/archive")]),
+            session=FakeSession([redirect(_url_with_userinfo())]),
         )
         assert credentialed.items[0].reason_code == "credentialed_url"
         assert credentialed.authority_evidence is None
@@ -418,7 +423,7 @@ def test_redirects_are_bounded_and_credential_redirect_is_rejected(
 @pytest.mark.parametrize(
     "source_url",
     [
-        "https://user:password@ir.acme.test/archive",
+        _url_with_userinfo(),
         "https://ir.acme.test/archive?api_key=secret",
         "http://ir.acme.test/archive",
     ],
