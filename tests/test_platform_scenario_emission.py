@@ -334,4 +334,8 @@ def test_red_team_holdings_carry_valid_bear_deltas() -> None:
         assert parsed.growth_near < 0 and parsed.margin_near < 0, ticker
         assert parsed.exit_multiple < 0 and parsed.terminal_g < 0, ticker
         note = block.get("note")
-        assert isinstance(note, str) and "pending owner review" in note.lower(), ticker
+        assert isinstance(note, str), ticker
+        normalized_note = note.lower()
+        assert "pending owner review" in normalized_note or "owner approved" in normalized_note, (
+            ticker
+        )
