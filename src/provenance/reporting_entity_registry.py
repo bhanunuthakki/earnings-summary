@@ -351,6 +351,7 @@ class ResolvedSecurityIdentifier(_Record):
 
 
 class CanonicalEvidenceSubject(_Record):
+    binding_revision_id: str = Field(min_length=1, max_length=128)
     recorded_issuer_id: str
     issuer_id: str
     reporting_entity_id: str | None = None
@@ -660,8 +661,8 @@ class ReportingEntityRegistry:
     ) -> CanonicalEvidenceSubject:
         row = self._conn.execute(
             """
-            SELECT recorded_issuer_id, issuer_id, reporting_entity_id,
-                   security_id, material_dissent
+            SELECT binding_revision_id, recorded_issuer_id, issuer_id,
+                   reporting_entity_id, security_id, material_dissent
             FROM recorded_subject_binding_revisions AS binding
             WHERE binding.recorded_issuer_id = ?
               AND binding.outcome = 'selected'
@@ -679,11 +680,12 @@ class ReportingEntityRegistry:
             raise LookupError("recorded evidence subject has no selected resolution")
         return CanonicalEvidenceSubject.model_validate(
             {
-                "recorded_issuer_id": str(row[0]),
-                "issuer_id": str(row[1]),
-                "reporting_entity_id": None if row[2] is None else str(row[2]),
-                "security_id": None if row[3] is None else str(row[3]),
-                "material_dissent": bool(row[4]),
+                "binding_revision_id": str(row[0]),
+                "recorded_issuer_id": str(row[1]),
+                "issuer_id": str(row[2]),
+                "reporting_entity_id": None if row[3] is None else str(row[3]),
+                "security_id": None if row[4] is None else str(row[4]),
+                "material_dissent": bool(row[5]),
             }
         )
 
