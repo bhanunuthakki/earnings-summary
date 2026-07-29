@@ -699,6 +699,10 @@ LLM_MODELS: dict[str, str] = {
     # worse); the ask_advisory_answer mode-B eval is the quality gate before
     # any cheaper model is promoted in.
     "ask_answer": DEFAULT_MODEL,
+    # Exact-span, schema-bound claim/citation audit for sealed Ask answers.
+    # Hard-blocked by migration 0253: failure prevents the answer from being
+    # surfaced, so the cheap classifier tier is safe only behind strict decode.
+    "ask_claim_audit": FAST_CLASSIFIER_MODEL,
     # Ask evidence follow-up (src/ask/followup.py, fund-grade build S7): when
     # a narrative ask turn's first pass replies with a structured evidence
     # request instead of an answer, the engine retrieves the requested items

@@ -245,13 +245,13 @@ def append_turn(
     citations: Sequence[object] | None = None,
     model: str | None = None,
     db_path: Path,
-) -> None:
+) -> int:
     """Append one turn to a session and bump the session's updated_at."""
     now = _now_iso()
     citations_json = json.dumps(citations) if citations is not None else None
     conn = _open(db_path)
     try:
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO ask_turns"
             " (session_id, role, text, citations_json, model, created_at)"
             " VALUES (?, ?, ?, ?, ?, ?)",
@@ -262,8 +262,12 @@ def append_turn(
             (now, session_id),
         )
         conn.commit()
+        if cursor.lastrowid is None:
+            raise RuntimeError("Ask turn insert did not return a row identity")
+        turn_id = int(cursor.lastrowid)
     finally:
         conn.close()
+    return turn_id
 
 
 def load_turns(session_id: str, *, db_path: Path) -> list[AskTurnRow]:

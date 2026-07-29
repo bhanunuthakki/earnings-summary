@@ -51,6 +51,7 @@ _CORE_RUNNABLE_PURPOSES: tuple[str, ...] = (
     "ask_pack_router",
     "ask_evidence_followup",
     "ask_claim_grounding",
+    "ask_claim_audit",
     "injection_canaries",
     "provenance_caution",
     "peer_selection",

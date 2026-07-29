@@ -61,6 +61,7 @@ GOLDEN_PURPOSES = (
     "ask_pack_router",
     "ask_evidence_followup",
     "ask_claim_grounding",
+    "ask_claim_audit",
     "injection_canaries",
     "provenance_caution",
     "key_metrics",
@@ -391,6 +392,21 @@ def main() -> int:
                 code_root=PROJECT_ROOT,
                 limit=args.limit,
                 include_answer_cases=not args.no_judge,
+            )
+        elif args.purpose == "ask_claim_audit":
+            from evals.ask_claim_audit import (
+                DEFAULT_GOLDEN_RELPATH as CLAIM_AUDIT_GOLDEN,
+            )
+            from evals.ask_claim_audit import run_claim_audit_eval
+
+            golden_path = (
+                args.golden or (PROJECT_ROOT / CLAIM_AUDIT_GOLDEN)
+            ).resolve()
+            summary = run_claim_audit_eval(
+                db_path=db_path,
+                golden_path=golden_path,
+                code_root=PROJECT_ROOT,
+                limit=args.limit,
             )
         elif args.purpose == "injection_canaries":
             # Security invariant graded by code (no canary leak / no spurious

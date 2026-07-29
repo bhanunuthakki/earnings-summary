@@ -29,8 +29,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, TypeVar, cast
+from typing import Generic, Literal, TypeVar, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -60,6 +62,15 @@ class StructuredParseError(ValueError):
     def __init__(self, message: str, *, raw_head: str = "") -> None:
         super().__init__(message)
         self.raw_head = raw_head
+
+
+@dataclass(frozen=True, slots=True)
+class StructuredCallResult(Generic[T]):
+    """Validated value plus the exact final governed exchange."""
+
+    value: T
+    raw_response: str
+    prompt: str
 
 
 def _first_json_value(text: str, expect: Literal["object", "array"]) -> object:
@@ -194,4 +205,80 @@ def call_llm_structured(
         raise StructuredParseError(
             f"{purpose}: LLM returned unusable JSON on both attempts: {retry_exc}",
             raw_head=raw_retry[:500],
+        ) from retry_exc
+
+
+def call_llm_structured_with_raw(
+    prompt: str,
+    *,
+    purpose: str,
+    schema: TypeAdapter[T],
+    repair_prompt: Callable[[str], str],
+    ticker: str | None = None,
+    scope: str | None = None,
+    run_id: str | None = None,
+    db_path: Path | str | None = None,
+) -> StructuredCallResult[T]:
+    """Schema-decode with one governed repair while preserving exact exchange bytes.
+
+    The repair callback is required so a versioned ``RenderedPrompt`` can
+    remain versioned on the second attempt; blindly prefixing a string would
+    erase the prompt-registry identity from the ledger.
+    """
+
+    current_prompt = prompt
+    raw = call_llm(
+        current_prompt,
+        purpose=purpose,
+        ticker=ticker,
+        scope=scope,
+        run_id=run_id,
+        db_path=db_path,
+    )
+    try:
+        payload = parse_json_payload(raw, expect="object")
+        return StructuredCallResult(
+            value=schema.validate_python(payload),
+            raw_response=raw,
+            prompt=current_prompt,
+        )
+    except (ValueError, ValidationError) as first_exc:
+        log.warning(
+            {
+                "event": "llm_structured_parse_failed_retrying",
+                "purpose": purpose,
+                "ticker": ticker,
+                "error": str(first_exc),
+                "raw_head": raw[:200],
+            }
+        )
+        current_prompt = repair_prompt(str(first_exc))
+    raw = call_llm(
+        current_prompt,
+        purpose=purpose,
+        ticker=ticker,
+        scope=scope,
+        run_id=run_id,
+        db_path=db_path,
+    )
+    try:
+        payload = parse_json_payload(raw, expect="object")
+        return StructuredCallResult(
+            value=schema.validate_python(payload),
+            raw_response=raw,
+            prompt=current_prompt,
+        )
+    except (ValueError, ValidationError) as retry_exc:
+        log.error(
+            {
+                "event": "llm_structured_parse_failed_twice",
+                "purpose": purpose,
+                "ticker": ticker,
+                "error": str(retry_exc),
+                "raw_head": raw[:200],
+            }
+        )
+        raise StructuredParseError(
+            f"{purpose}: LLM returned unusable JSON on both attempts: {retry_exc}",
+            raw_head=raw[:500],
         ) from retry_exc
