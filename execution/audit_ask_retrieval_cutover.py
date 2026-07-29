@@ -112,6 +112,20 @@ def _verify_registry_against_live(
         )
 
 
+def _verify_claim_audit_budget(conn: sqlite3.Connection) -> None:
+    try:
+        row = conn.execute(
+            "SELECT hard_block,on_exceed FROM llm_budgets "
+            "WHERE purpose='ask_claim_audit'"
+        ).fetchone()
+    except sqlite3.Error as exc:
+        raise SystemExit(f"ask_claim_audit budget governance is unavailable: {exc}") from exc
+    if row is None or int(row[0]) != 1 or str(row[1]) != "block":
+        raise SystemExit(
+            "ask_claim_audit budget must be configured hard_block/on_exceed=block"
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if (args.index_root is None) != (args.runtime_root is None):
@@ -134,6 +148,7 @@ def main(argv: list[str] | None = None) -> int:
             conn,
             registry_path=PRODUCTION_SCOPE_REGISTRY,
         )
+        _verify_claim_audit_budget(conn)
         integrity = audit_answer_audit_integrity(conn)
         if not integrity.ready:
             print(

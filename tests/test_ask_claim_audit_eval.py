@@ -31,7 +31,9 @@ def test_provider_free_claim_audit_golden_and_injection_canary() -> None:
     assert payload["purpose"] == "ask_claim_audit"
     cases = payload["cases"]
     assert isinstance(cases, list)
-    for raw_case in cast(list[object], cases):
+    case_items = cast(list[object], cases)
+    assert len(case_items) >= 10
+    for raw_case in case_items:
         assert isinstance(raw_case, dict)
         case = cast(dict[str, object], raw_case)
         verdict = CLAIM_AUDIT_ADAPTER.validate_python(case["verdict"])

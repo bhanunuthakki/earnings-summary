@@ -14,6 +14,7 @@ from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.pool import StaticPool
 
 import ask.audit_store as audit_store
+import ask.engine as ask_engine
 from ask.audit_store import (
     AnswerAuditPackage,
     AnswerAuditRecord,
@@ -21,8 +22,10 @@ from ask.audit_store import (
     AnswerClaim,
     AnswerClaimCitation,
     AnswerContextTurn,
+    AnswerPromptVariables,
     AnswerRetrieval,
     CitationAuditPayload,
+    ClaimAuditPromptVariables,
     RetrievalAssemblyItem,
     audit_answer_audit_integrity,
     digest_text,
@@ -53,12 +56,14 @@ def _schema(conn: sqlite3.Connection) -> None:
         );
         CREATE TABLE llm_calls (
             id INTEGER PRIMARY KEY,
+            run_id TEXT NOT NULL,
             purpose TEXT,
             model TEXT NOT NULL,
             provider TEXT,
             transport TEXT,
             template_id TEXT,
             template_version TEXT,
+            template_vars_sha256 TEXT,
             prompt_sha256 TEXT NOT NULL,
             response_sha256 TEXT,
             error TEXT
@@ -143,37 +148,58 @@ def _schema(conn: sqlite3.Connection) -> None:
 def _seed_trace(conn: sqlite3.Connection) -> None:
     query_sha256 = retrieval_query_sha256("question")
     answer = "Revenue grew 20%."
+    answer_variables = AnswerPromptVariables(
+        system_context="context",
+        thread_text="(first turn)",
+        evidence_block="fragment",
+        question="question",
+    )
+    answer_prompt = ask_engine._SEALED_ANSWER_TEMPLATE.render(
+        **answer_variables.model_dump()
+    )
+    claim_variables = ClaimAuditPromptVariables(
+        repair_feedback="",
+        answer=answer,
+        evidence="fragment",
+    )
+    claim_prompt = ask_engine.CLAIM_AUDIT_TEMPLATE.render(
+        **claim_variables.model_dump()
+    )
     conn.execute("INSERT INTO ask_sessions VALUES (?,?)", ("session-1", "portfolio"))
     conn.execute(
         "INSERT INTO ask_turns VALUES (?,?,?,?,?)",
         (1, "session-1", "user", "question", NOW.isoformat()),
     )
     conn.execute(
-        "INSERT INTO llm_calls VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO llm_calls VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             1,
+            "ask-answer:request-1",
             "ask_answer",
             "model",
             "openai",
             "subscription_cli",
-            "ask.sealed",
-            "1",
-            digest_text("prompt"),
+            answer_prompt.template_id,
+            answer_prompt.template_version,
+            answer_prompt.vars_sha256,
+            digest_text(str(answer_prompt)),
             digest_text(answer),
             None,
         ),
     )
     conn.execute(
-        "INSERT INTO llm_calls VALUES (?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO llm_calls VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             2,
+            "ask-claim-audit:request-1",
             "ask_claim_audit",
             "auditor",
             "openai",
             "subscription_cli",
-            "ask.claim-audit",
-            "1",
-            digest_text("audit prompt"),
+            claim_prompt.template_id,
+            claim_prompt.template_version,
+            claim_prompt.vars_sha256,
+            digest_text(str(claim_prompt)),
             digest_text("audit response"),
             None,
         ),
@@ -262,6 +288,23 @@ def _seed_trace(conn: sqlite3.Connection) -> None:
 
 def _package() -> AnswerAuditPackage:
     answer = "Revenue grew 20%."
+    answer_variables = AnswerPromptVariables(
+        system_context="context",
+        thread_text="(first turn)",
+        evidence_block="fragment",
+        question="question",
+    )
+    answer_prompt = ask_engine._SEALED_ANSWER_TEMPLATE.render(
+        **answer_variables.model_dump()
+    )
+    claim_variables = ClaimAuditPromptVariables(
+        repair_feedback="",
+        answer=answer,
+        evidence="fragment",
+    )
+    claim_prompt = ask_engine.CLAIM_AUDIT_TEMPLATE.render(
+        **claim_variables.model_dump()
+    )
     return AnswerAuditPackage(
         record=AnswerAuditRecord(
             answer_id="answer-1",
@@ -270,9 +313,11 @@ def _package() -> AnswerAuditPackage:
             session_id="session-1",
             surface="portfolio",
             query_sha256=retrieval_query_sha256("question"),
-            prompt_sha256=digest_text("prompt"),
-            prompt_template_id="ask.sealed",
-            prompt_template_version="1",
+            prompt_sha256=digest_text(str(answer_prompt)),
+            prompt_template_id=answer_prompt.template_id,
+            prompt_template_version=answer_prompt.template_version,
+            prompt_template_vars_sha256=answer_prompt.vars_sha256,
+            prompt_variables=answer_variables,
             context_turns=(
                 AnswerContextTurn(
                     turn_id=1,
@@ -293,22 +338,27 @@ def _package() -> AnswerAuditPackage:
                     prompt_text_sha256=digest_text("fragment"),
                 ),
             ),
+            retrieval_prompt_fragments=("fragment",),
             answer_text=answer,
             llm_purpose="ask_answer",
             llm_model="model",
             llm_provider="openai",
             llm_transport="subscription_cli",
             llm_call_id=1,
+            llm_run_id="ask-answer:request-1",
             claim_auditor_version="2",
             claim_audit_purpose="ask_claim_audit",
-            claim_audit_template_id="ask.claim-audit",
-            claim_audit_template_version="1",
+            claim_audit_template_id=claim_prompt.template_id,
+            claim_audit_template_version=claim_prompt.template_version,
+            claim_audit_template_vars_sha256=claim_prompt.vars_sha256,
+            claim_audit_prompt_variables=claim_variables,
             claim_auditor_model="auditor",
             claim_audit_provider="openai",
             claim_audit_transport="subscription_cli",
-            claim_audit_prompt_sha256=digest_text("audit prompt"),
+            claim_audit_prompt_sha256=digest_text(str(claim_prompt)),
             claim_audit_response_sha256=digest_text("audit response"),
             claim_audit_llm_call_id=2,
+            claim_audit_run_id="ask-claim-audit:request-1",
             recorded_at=NOW,
         ),
         retrievals=(
@@ -504,13 +554,15 @@ def test_claim_span_trigger_and_verifier_reject_out_of_answer_text() -> None:
         }
     )
     conn.execute(
-        "INSERT INTO llm_calls SELECT 3,purpose,model,provider,transport,"
-        "template_id,template_version,prompt_sha256,response_sha256,error "
+        "INSERT INTO llm_calls SELECT 3,run_id,purpose,model,provider,transport,"
+        "template_id,template_version,template_vars_sha256,prompt_sha256,"
+        "response_sha256,error "
         "FROM llm_calls WHERE id=1"
     )
     conn.execute(
-        "INSERT INTO llm_calls SELECT 4,purpose,model,provider,transport,"
-        "template_id,template_version,prompt_sha256,response_sha256,error "
+        "INSERT INTO llm_calls SELECT 4,run_id,purpose,model,provider,transport,"
+        "template_id,template_version,template_vars_sha256,prompt_sha256,"
+        "response_sha256,error "
         "FROM llm_calls WHERE id=2"
     )
     columns, values = audit_store._record_values(second_record)
@@ -535,6 +587,22 @@ def test_claim_span_trigger_and_verifier_reject_out_of_answer_text() -> None:
                 NOW.isoformat(),
             ),
         )
+
+
+def test_exact_llm_run_ids_are_part_of_the_audit_identity() -> None:
+    conn = sqlite3.connect(":memory:")
+    _schema(conn)
+    _seed_trace(conn)
+    package = _package()
+    bad = package.model_copy(
+        update={
+            "record": package.record.model_copy(
+                update={"llm_run_id": "ask-answer:different-request"}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="governed llm_calls"):
+        persist_answer_audit(conn, bad)
 
     persist_answer_audit(conn, package)
     conn.execute("DROP TRIGGER trg_ask_answer_audit_claims_append_only")

@@ -109,6 +109,19 @@ class CitationAuditPayload(_Frozen):
     _source_hash = field_validator("source_commitment_sha256")(_sha)
 
 
+class AnswerPromptVariables(_Frozen):
+    system_context: str
+    thread_text: str
+    evidence_block: str
+    question: str
+
+
+class ClaimAuditPromptVariables(_Frozen):
+    repair_feedback: str
+    answer: str
+    evidence: str
+
+
 class AnswerAuditRecord(_Frozen):
     answer_id: str = Field(min_length=1, max_length=128)
     idempotency_key: str = Field(min_length=1, max_length=256)
@@ -119,24 +132,31 @@ class AnswerAuditRecord(_Frozen):
     prompt_sha256: str
     prompt_template_id: str = Field(min_length=1, max_length=128)
     prompt_template_version: str = Field(min_length=1, max_length=64)
+    prompt_template_vars_sha256: str
+    prompt_variables: AnswerPromptVariables
     context_turns: tuple[AnswerContextTurn, ...] = ()
     retrieval_assembly: tuple[RetrievalAssemblyItem, ...]
+    retrieval_prompt_fragments: tuple[str, ...]
     answer_text: str = Field(min_length=1)
     llm_purpose: str = Field(min_length=1, max_length=128)
     llm_model: str = Field(min_length=1, max_length=128)
     llm_provider: str = Field(min_length=1, max_length=64)
     llm_transport: str = Field(min_length=1, max_length=64)
     llm_call_id: int = Field(gt=0)
+    llm_run_id: str = Field(min_length=1, max_length=256)
     claim_auditor_version: str = Field(min_length=1, max_length=64)
     claim_audit_purpose: str = Field(min_length=1, max_length=128)
     claim_audit_template_id: str = Field(min_length=1, max_length=128)
     claim_audit_template_version: str = Field(min_length=1, max_length=64)
+    claim_audit_template_vars_sha256: str
+    claim_audit_prompt_variables: ClaimAuditPromptVariables
     claim_auditor_model: str = Field(min_length=1, max_length=128)
     claim_audit_provider: str = Field(min_length=1, max_length=64)
     claim_audit_transport: str = Field(min_length=1, max_length=64)
     claim_audit_prompt_sha256: str
     claim_audit_response_sha256: str
     claim_audit_llm_call_id: int = Field(gt=0)
+    claim_audit_run_id: str = Field(min_length=1, max_length=256)
     no_claim_exemption: Literal["deterministic_non_substantive.v1"] | None = None
     recorded_at: datetime
 
@@ -145,6 +165,8 @@ class AnswerAuditRecord(_Frozen):
         "prompt_sha256",
         "claim_audit_prompt_sha256",
         "claim_audit_response_sha256",
+        "prompt_template_vars_sha256",
+        "claim_audit_template_vars_sha256",
     )(_sha)
 
     @model_validator(mode="after")
@@ -163,6 +185,24 @@ class AnswerAuditRecord(_Frozen):
                 raise ValueError("the final authoritative context turn must be the user request")
         elif self.context_turns:
             raise ValueError("sessionless answers cannot assert Ask context turns")
+        if len(self.retrieval_prompt_fragments) != len(self.retrieval_assembly):
+            raise ValueError("retrieval prompt fragments must match the exact inventory")
+        for fragment, item in zip(
+            self.retrieval_prompt_fragments, self.retrieval_assembly, strict=True
+        ):
+            if digest_text(fragment) != item.prompt_text_sha256:
+                raise ValueError("retrieval prompt fragment commitment mismatch")
+        if "\n\n".join(self.retrieval_prompt_fragments) != self.prompt_variables.evidence_block:
+            raise ValueError("answer prompt evidence block differs from retrieval inventory")
+        if self.claim_audit_prompt_variables.answer != self.answer_text:
+            raise ValueError("claim-audit prompt answer differs from the delivered answer")
+        if (
+            self.claim_audit_prompt_variables.evidence
+            != self.prompt_variables.evidence_block
+        ):
+            raise ValueError("claim-audit evidence differs from the answer evidence")
+        if retrieval_query_sha256(self.prompt_variables.question) != self.query_sha256:
+            raise ValueError("answer prompt question differs from the retrieval query")
         return self
 
 
@@ -233,10 +273,9 @@ class AnswerAuditPackage(_Frozen):
             range(len(self.retrievals))
         ):
             raise ValueError("retrieval ordinals must be contiguous")
-        if tuple(item.citation_number for item in self.citations) != tuple(
-            range(1, len(self.citations) + 1)
-        ):
-            raise ValueError("citation numbers must be contiguous")
+        citation_numbers = tuple(item.citation_number for item in self.citations)
+        if citation_numbers != tuple(sorted(set(citation_numbers))):
+            raise ValueError("used citation numbers must be unique and sorted")
         if tuple(item.claim_ordinal for item in self.claims) != tuple(range(len(self.claims))):
             raise ValueError("claim ordinals must be contiguous")
         if tuple(item.citation_number for item in self.record.retrieval_assembly) != tuple(
@@ -288,6 +327,15 @@ class AnswerAuditPackage(_Frozen):
             has_edges = bool(edges_by_claim.get(ordinal))
             if claim.supported != has_edges:
                 raise ValueError("supported claims need citations and unsupported claims need none")
+        referenced_citations = {
+            citation_number
+            for numbers in edges_by_claim.values()
+            for citation_number in numbers
+        }
+        if referenced_citations != citations:
+            raise ValueError(
+                "used citations must be distinct from retrieval inventory and claim-referenced"
+            )
         if self.claims:
             if self.record.no_claim_exemption is not None:
                 raise ValueError("claim-bearing answers cannot carry a no-claim exemption")
@@ -312,19 +360,11 @@ def deterministic_no_claim_exemption(
 
     This is intentionally not a fuzzy classifier.  A substantive response,
     including an unsupported answer, must carry audited claims and citations.
-    Only bounded acknowledgements or explicit fail-closed no-answer messages
-    qualify.
+    Only the exact fail-closed no-answer message qualifies.
     """
 
     normalized = " ".join(answer_text.strip().lower().split())
-    exact = {
-        "thanks.",
-        "thank you.",
-        "understood.",
-        "i don't have enough sealed evidence to answer that.",
-        "i do not have enough sealed evidence to answer that.",
-        "no grounded answer is available from the sealed evidence.",
-    }
+    exact = {"i don't have enough sealed evidence to answer that."}
     return "deterministic_non_substantive.v1" if normalized in exact else None
 
 
@@ -402,6 +442,9 @@ def _insert_exact(
 def _record_values(record: AnswerAuditRecord) -> tuple[tuple[str, ...], tuple[object, ...]]:
     context_json = canonical_json(record.context_turns)
     assembly_json = canonical_json(record.retrieval_assembly)
+    fragment_json = canonical_json(record.retrieval_prompt_fragments)
+    prompt_variables_json = canonical_json(record.prompt_variables)
+    claim_prompt_variables_json = canonical_json(record.claim_audit_prompt_variables)
     columns = (
         "answer_id",
         "idempotency_key",
@@ -412,10 +455,15 @@ def _record_values(record: AnswerAuditRecord) -> tuple[tuple[str, ...], tuple[ob
         "prompt_sha256",
         "prompt_template_id",
         "prompt_template_version",
+        "prompt_template_vars_sha256",
+        "prompt_variables_json",
+        "prompt_variables_sha256",
         "context_turn_set_json",
         "context_turn_set_sha256",
         "retrieval_assembly_json",
         "retrieval_assembly_sha256",
+        "retrieval_prompt_fragments_json",
+        "retrieval_prompt_fragments_sha256",
         "answer_text",
         "answer_sha256",
         "llm_purpose",
@@ -423,16 +471,21 @@ def _record_values(record: AnswerAuditRecord) -> tuple[tuple[str, ...], tuple[ob
         "llm_provider",
         "llm_transport",
         "llm_call_id",
+        "llm_run_id",
         "claim_auditor_version",
         "claim_audit_purpose",
         "claim_audit_template_id",
         "claim_audit_template_version",
+        "claim_audit_template_vars_sha256",
+        "claim_audit_prompt_variables_json",
+        "claim_audit_prompt_variables_sha256",
         "claim_auditor_model",
         "claim_audit_provider",
         "claim_audit_transport",
         "claim_audit_prompt_sha256",
         "claim_audit_response_sha256",
         "claim_audit_llm_call_id",
+        "claim_audit_run_id",
         "no_claim_exemption",
         "recorded_at",
     )
@@ -446,10 +499,15 @@ def _record_values(record: AnswerAuditRecord) -> tuple[tuple[str, ...], tuple[ob
         record.prompt_sha256,
         record.prompt_template_id,
         record.prompt_template_version,
+        record.prompt_template_vars_sha256,
+        prompt_variables_json,
+        digest_text(prompt_variables_json),
         context_json,
         digest_text(context_json),
         assembly_json,
         digest_text(assembly_json),
+        fragment_json,
+        digest_text(fragment_json),
         record.answer_text,
         digest_text(record.answer_text),
         record.llm_purpose,
@@ -457,16 +515,21 @@ def _record_values(record: AnswerAuditRecord) -> tuple[tuple[str, ...], tuple[ob
         record.llm_provider,
         record.llm_transport,
         record.llm_call_id,
+        record.llm_run_id,
         record.claim_auditor_version,
         record.claim_audit_purpose,
         record.claim_audit_template_id,
         record.claim_audit_template_version,
+        record.claim_audit_template_vars_sha256,
+        claim_prompt_variables_json,
+        digest_text(claim_prompt_variables_json),
         record.claim_auditor_model,
         record.claim_audit_provider,
         record.claim_audit_transport,
         record.claim_audit_prompt_sha256,
         record.claim_audit_response_sha256,
         record.claim_audit_llm_call_id,
+        record.claim_audit_run_id,
         record.no_claim_exemption,
         _db_time(record.recorded_at),
     )
@@ -480,35 +543,62 @@ def _verify_llm_call(
     conn: sqlite3.Connection,
     *,
     call_id: int,
+    run_id: str,
     purpose: str,
     model: str,
     provider: str,
     transport: str,
     template_id: str,
     template_version: str,
+    template_vars_sha256: str,
     prompt_sha256: str,
     response_sha256: str,
     label: str,
 ) -> None:
     row = conn.execute(
-        "SELECT purpose,model,provider,transport,template_id,template_version,"
+        "SELECT run_id,purpose,model,provider,transport,template_id,template_version,"
+        "template_vars_sha256,"
         "prompt_sha256,response_sha256,error "
         "FROM llm_calls WHERE id=?",
         (call_id,),
     ).fetchone()
     expected = (
+        run_id,
         purpose,
         model,
         provider,
         transport,
         template_id,
         template_version,
+        template_vars_sha256,
         prompt_sha256,
         response_sha256,
         None,
     )
     if row is None or tuple(row) != expected:
         raise ValueError(f"{label} does not match its governed llm_calls row")
+
+
+def _verify_rendered_prompt(
+    *,
+    template_id: str,
+    template_version: str,
+    template_vars_sha256: str,
+    prompt_sha256: str,
+    variables: dict[str, object],
+) -> None:
+    from llm.prompt_registry import REGISTRY
+
+    template = REGISTRY.get(template_id)
+    if template is None:
+        raise ValueError(f"governed prompt template {template_id} is not registered")
+    rendered = template.render(**variables)
+    if (
+        rendered.template_version != template_version
+        or rendered.vars_sha256 != template_vars_sha256
+        or digest_text(str(rendered)) != prompt_sha256
+    ):
+        raise ValueError("governed prompt cannot be reconstructed from committed variables")
 
 
 def _verify_record_references(
@@ -540,15 +630,51 @@ def _verify_record_references(
             )
             if actual_turn != expected_turn:
                 raise ValueError("Ask answer context turn identity mismatch")
+        current_question = conn.execute(
+            "SELECT text FROM ask_turns WHERE id=?",
+            (record.context_turns[-1].turn_id,),
+        ).fetchone()
+        if current_question is None or str(current_question[0]) != record.prompt_variables.question:
+            raise ValueError("answer prompt question does not equal its authoritative turn")
+        prior_texts: list[tuple[str, str]] = []
+        for item in record.context_turns[:-1]:
+            row = conn.execute(
+                "SELECT role,text FROM ask_turns WHERE id=?",
+                (item.turn_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("answer prompt thread is missing an authoritative turn")
+            prior_texts.append((str(row[0]), str(row[1])))
+        expected_thread = "\n\n".join(
+            f"[{role.upper()}] {text}" for role, text in prior_texts
+        ) or "(first turn)"
+        if expected_thread != record.prompt_variables.thread_text:
+            raise ValueError("answer prompt thread differs from authoritative context")
+    _verify_rendered_prompt(
+        template_id=record.prompt_template_id,
+        template_version=record.prompt_template_version,
+        template_vars_sha256=record.prompt_template_vars_sha256,
+        prompt_sha256=record.prompt_sha256,
+        variables=record.prompt_variables.model_dump(),
+    )
+    _verify_rendered_prompt(
+        template_id=record.claim_audit_template_id,
+        template_version=record.claim_audit_template_version,
+        template_vars_sha256=record.claim_audit_template_vars_sha256,
+        prompt_sha256=record.claim_audit_prompt_sha256,
+        variables=record.claim_audit_prompt_variables.model_dump(),
+    )
     _verify_llm_call(
         conn,
         call_id=record.llm_call_id,
+        run_id=record.llm_run_id,
         purpose=record.llm_purpose,
         model=record.llm_model,
         provider=record.llm_provider,
         transport=record.llm_transport,
         template_id=record.prompt_template_id,
         template_version=record.prompt_template_version,
+        template_vars_sha256=record.prompt_template_vars_sha256,
         prompt_sha256=record.prompt_sha256,
         response_sha256=digest_text(record.answer_text),
         label="Ask answer LLM call",
@@ -556,12 +682,14 @@ def _verify_record_references(
     _verify_llm_call(
         conn,
         call_id=record.claim_audit_llm_call_id,
+        run_id=record.claim_audit_run_id,
         purpose=record.claim_audit_purpose,
         model=record.claim_auditor_model,
         provider=record.claim_audit_provider,
         transport=record.claim_audit_transport,
         template_id=record.claim_audit_template_id,
         template_version=record.claim_audit_template_version,
+        template_vars_sha256=record.claim_audit_template_vars_sha256,
         prompt_sha256=record.claim_audit_prompt_sha256,
         response_sha256=record.claim_audit_response_sha256,
         label="Ask claim-audit LLM call",
@@ -898,11 +1026,27 @@ def verify_answer_audit(conn: sqlite3.Connection, answer_id: str) -> VerifiedAns
         != str(record["context_turn_set_sha256"])
         or digest_text(str(record["retrieval_assembly_json"]))
         != str(record["retrieval_assembly_sha256"])
+        or digest_text(str(record["prompt_variables_json"]))
+        != str(record["prompt_variables_sha256"])
+        or digest_text(str(record["retrieval_prompt_fragments_json"]))
+        != str(record["retrieval_prompt_fragments_sha256"])
+        or digest_text(str(record["claim_audit_prompt_variables_json"]))
+        != str(record["claim_audit_prompt_variables_sha256"])
     ):
         raise ValueError("Ask answer header commitment mismatch")
     try:
         context_payload = json.loads(str(record["context_turn_set_json"]))
         assembly_payload = json.loads(str(record["retrieval_assembly_json"]))
+        prompt_variables = AnswerPromptVariables.model_validate_json(
+            str(record["prompt_variables_json"])
+        )
+        fragments = tuple(
+            str(item)
+            for item in json.loads(str(record["retrieval_prompt_fragments_json"]))
+        )
+        claim_prompt_variables = ClaimAuditPromptVariables.model_validate_json(
+            str(record["claim_audit_prompt_variables_json"])
+        )
         context_turns = tuple(AnswerContextTurn.model_validate(item) for item in context_payload)
         assembly_items = tuple(
             RetrievalAssemblyItem.model_validate(item) for item in assembly_payload
@@ -913,6 +1057,25 @@ def verify_answer_audit(conn: sqlite3.Connection, answer_id: str) -> VerifiedAns
         assembly_items
     ) != str(record["retrieval_assembly_json"]):
         raise ValueError("Ask answer header JSON is not canonical")
+    if (
+        canonical_json(prompt_variables) != str(record["prompt_variables_json"])
+        or canonical_json(fragments) != str(record["retrieval_prompt_fragments_json"])
+        or canonical_json(claim_prompt_variables)
+        != str(record["claim_audit_prompt_variables_json"])
+    ):
+        raise ValueError("Ask answer prompt JSON is not canonical")
+    if (
+        len(fragments) != len(assembly_items)
+        or any(
+            digest_text(fragment) != item.prompt_text_sha256
+            for fragment, item in zip(fragments, assembly_items, strict=True)
+        )
+        or "\n\n".join(fragments) != prompt_variables.evidence_block
+        or claim_prompt_variables.evidence != prompt_variables.evidence_block
+        or claim_prompt_variables.answer != str(record["answer_text"])
+        or retrieval_query_sha256(prompt_variables.question) != str(record["query_sha256"])
+    ):
+        raise ValueError("Ask answer prompt assembly commitment mismatch")
     if record["session_id"] is not None:
         session = conn.execute(
             "SELECT scope FROM ask_sessions WHERE id=?",
@@ -920,6 +1083,7 @@ def verify_answer_audit(conn: sqlite3.Connection, answer_id: str) -> VerifiedAns
         ).fetchone()
         if session is None or str(session[0]) != str(record["surface"]):
             raise ValueError("Ask answer session identity mismatch")
+        context_rows: list[tuple[str, str]] = []
         for item in context_turns:
             turn = conn.execute(
                 "SELECT session_id,role,text,created_at FROM ask_turns WHERE id=?",
@@ -929,17 +1093,43 @@ def verify_answer_audit(conn: sqlite3.Connection, answer_id: str) -> VerifiedAns
                 (str(turn[0]), str(turn[1]), digest_text(str(turn[2])), str(turn[3]))
             ) != (item.session_id, item.role, item.text_sha256, item.created_at):
                 raise ValueError("Ask answer context turn identity mismatch")
+            context_rows.append((str(turn[1]), str(turn[2])))
+        expected_thread = "\n\n".join(
+            f"[{role.upper()}] {text}" for role, text in context_rows[:-1]
+        ) or "(first turn)"
+        if (
+            not context_rows
+            or context_rows[-1] != ("user", prompt_variables.question)
+            or expected_thread != prompt_variables.thread_text
+        ):
+            raise ValueError("Ask answer prompt differs from authoritative context")
     for item in assembly_items:
         _verify_assembly_reference(conn, item)
+    _verify_rendered_prompt(
+        template_id=str(record["prompt_template_id"]),
+        template_version=str(record["prompt_template_version"]),
+        template_vars_sha256=str(record["prompt_template_vars_sha256"]),
+        prompt_sha256=str(record["prompt_sha256"]),
+        variables=prompt_variables.model_dump(),
+    )
+    _verify_rendered_prompt(
+        template_id=str(record["claim_audit_template_id"]),
+        template_version=str(record["claim_audit_template_version"]),
+        template_vars_sha256=str(record["claim_audit_template_vars_sha256"]),
+        prompt_sha256=str(record["claim_audit_prompt_sha256"]),
+        variables=claim_prompt_variables.model_dump(),
+    )
     _verify_llm_call(
         conn,
         call_id=int(record["llm_call_id"]),
+        run_id=str(record["llm_run_id"]),
         purpose=str(record["llm_purpose"]),
         model=str(record["llm_model"]),
         provider=str(record["llm_provider"]),
         transport=str(record["llm_transport"]),
         template_id=str(record["prompt_template_id"]),
         template_version=str(record["prompt_template_version"]),
+        template_vars_sha256=str(record["prompt_template_vars_sha256"]),
         prompt_sha256=str(record["prompt_sha256"]),
         response_sha256=str(record["answer_sha256"]),
         label="Ask answer LLM call",
@@ -947,12 +1137,14 @@ def verify_answer_audit(conn: sqlite3.Connection, answer_id: str) -> VerifiedAns
     _verify_llm_call(
         conn,
         call_id=int(record["claim_audit_llm_call_id"]),
+        run_id=str(record["claim_audit_run_id"]),
         purpose=str(record["claim_audit_purpose"]),
         model=str(record["claim_auditor_model"]),
         provider=str(record["claim_audit_provider"]),
         transport=str(record["claim_audit_transport"]),
         template_id=str(record["claim_audit_template_id"]),
         template_version=str(record["claim_audit_template_version"]),
+        template_vars_sha256=str(record["claim_audit_template_vars_sha256"]),
         prompt_sha256=str(record["claim_audit_prompt_sha256"]),
         response_sha256=str(record["claim_audit_response_sha256"]),
         label="Ask claim-audit LLM call",

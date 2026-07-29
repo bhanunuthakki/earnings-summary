@@ -157,10 +157,15 @@ def upgrade() -> None:
         sa.Column("prompt_sha256", sa.String(64), nullable=False),
         sa.Column("prompt_template_id", sa.String(128), nullable=False),
         sa.Column("prompt_template_version", sa.String(64), nullable=False),
+        sa.Column("prompt_template_vars_sha256", sa.String(64), nullable=False),
+        sa.Column("prompt_variables_json", sa.Text, nullable=False),
+        sa.Column("prompt_variables_sha256", sa.String(64), nullable=False),
         sa.Column("context_turn_set_json", sa.Text, nullable=False),
         sa.Column("context_turn_set_sha256", sa.String(64), nullable=False),
         sa.Column("retrieval_assembly_json", sa.Text, nullable=False),
         sa.Column("retrieval_assembly_sha256", sa.String(64), nullable=False),
+        sa.Column("retrieval_prompt_fragments_json", sa.Text, nullable=False),
+        sa.Column("retrieval_prompt_fragments_sha256", sa.String(64), nullable=False),
         sa.Column("answer_text", sa.Text, nullable=False),
         sa.Column("answer_sha256", sa.String(64), nullable=False),
         sa.Column("llm_purpose", sa.String(128), nullable=False),
@@ -174,10 +179,14 @@ def upgrade() -> None:
             nullable=False,
             unique=True,
         ),
+        sa.Column("llm_run_id", sa.String(256), nullable=False),
         sa.Column("claim_auditor_version", sa.String(64), nullable=False),
         sa.Column("claim_audit_purpose", sa.String(128), nullable=False),
         sa.Column("claim_audit_template_id", sa.String(128), nullable=False),
         sa.Column("claim_audit_template_version", sa.String(64), nullable=False),
+        sa.Column("claim_audit_template_vars_sha256", sa.String(64), nullable=False),
+        sa.Column("claim_audit_prompt_variables_json", sa.Text, nullable=False),
+        sa.Column("claim_audit_prompt_variables_sha256", sa.String(64), nullable=False),
         sa.Column("claim_auditor_model", sa.String(128), nullable=False),
         sa.Column("claim_audit_provider", sa.String(64), nullable=False),
         sa.Column("claim_audit_transport", sa.String(64), nullable=False),
@@ -190,6 +199,7 @@ def upgrade() -> None:
             nullable=False,
             unique=True,
         ),
+        sa.Column("claim_audit_run_id", sa.String(256), nullable=False),
         sa.Column("no_claim_exemption", sa.String(64)),
         sa.Column("recorded_at", sa.DateTime, nullable=False),
         sa.CheckConstraint(
@@ -204,8 +214,14 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "json_valid(context_turn_set_json) "
             "AND json_type(context_turn_set_json)='array' "
+            "AND json_valid(prompt_variables_json) "
+            "AND json_type(prompt_variables_json)='object' "
             "AND json_valid(retrieval_assembly_json) "
-            "AND json_type(retrieval_assembly_json)='array'",
+            "AND json_type(retrieval_assembly_json)='array' "
+            "AND json_valid(retrieval_prompt_fragments_json) "
+            "AND json_type(retrieval_prompt_fragments_json)='array' "
+            "AND json_valid(claim_audit_prompt_variables_json) "
+            "AND json_type(claim_audit_prompt_variables_json)='object'",
             name="ck_ask_answer_audit_record_json",
         ),
         sa.CheckConstraint(
@@ -213,15 +229,25 @@ def upgrade() -> None:
             + " AND "
             + _hex("prompt_sha256")
             + " AND "
+            + _hex("prompt_template_vars_sha256")
+            + " AND "
+            + _hex("prompt_variables_sha256")
+            + " AND "
             + _hex("context_turn_set_sha256")
             + " AND "
             + _hex("retrieval_assembly_sha256")
+            + " AND "
+            + _hex("retrieval_prompt_fragments_sha256")
             + " AND "
             + _hex("answer_sha256")
             + " AND "
             + _hex("claim_audit_prompt_sha256")
             + " AND "
-            + _hex("claim_audit_response_sha256"),
+            + _hex("claim_audit_response_sha256")
+            + " AND "
+            + _hex("claim_audit_template_vars_sha256")
+            + " AND "
+            + _hex("claim_audit_prompt_variables_sha256"),
             name="ck_ask_answer_audit_record_hashes",
         ),
     )
@@ -472,10 +498,12 @@ def upgrade() -> None:
         "BEFORE INSERT ON ask_answer_audit_records "
         "WHEN NOT EXISTS (SELECT 1 FROM llm_calls call "
         "WHERE call.id=NEW.llm_call_id AND call.purpose=NEW.llm_purpose "
+        "AND call.run_id=NEW.llm_run_id "
         "AND call.model=NEW.llm_model AND call.provider=NEW.llm_provider "
         "AND call.transport=NEW.llm_transport "
         "AND call.template_id=NEW.prompt_template_id "
         "AND call.template_version=NEW.prompt_template_version "
+        "AND call.template_vars_sha256=NEW.prompt_template_vars_sha256 "
         "AND call.prompt_sha256=NEW.prompt_sha256 "
         "AND call.response_sha256=NEW.answer_sha256 "
         "AND call.error IS NULL) "
@@ -486,9 +514,11 @@ def upgrade() -> None:
         "BEFORE INSERT ON ask_answer_audit_records "
         "WHEN NOT EXISTS (SELECT 1 FROM llm_calls call "
         "WHERE call.id=NEW.claim_audit_llm_call_id "
+        "AND call.run_id=NEW.claim_audit_run_id "
         "AND call.purpose=NEW.claim_audit_purpose "
         "AND call.template_id=NEW.claim_audit_template_id "
         "AND call.template_version=NEW.claim_audit_template_version "
+        "AND call.template_vars_sha256=NEW.claim_audit_template_vars_sha256 "
         "AND call.model=NEW.claim_auditor_model "
         "AND call.provider=NEW.claim_audit_provider "
         "AND call.transport=NEW.claim_audit_transport "
@@ -557,11 +587,6 @@ def upgrade() -> None:
         "WHERE answer_id=NEW.answer_id)<>0 OR "
         "(SELECT MAX(trace_ordinal) FROM ask_answer_audit_retrievals "
         "WHERE answer_id=NEW.answer_id)<>NEW.retrieval_count-1)) OR "
-        "(NEW.citation_count>0 AND ("
-        "(SELECT MIN(citation_number) FROM ask_answer_audit_citations "
-        "WHERE answer_id=NEW.answer_id)<>1 OR "
-        "(SELECT MAX(citation_number) FROM ask_answer_audit_citations "
-        "WHERE answer_id=NEW.answer_id)<>NEW.citation_count)) OR "
         "(NEW.claim_count>0 AND ("
         "(SELECT MIN(claim_ordinal) FROM ask_answer_audit_claims "
         "WHERE answer_id=NEW.answer_id)<>0 OR "
@@ -582,6 +607,11 @@ def upgrade() -> None:
         "FROM ask_answer_audit_claim_citations edge "
         "WHERE edge.answer_id=claim.answer_id "
         "AND edge.claim_ordinal=claim.claim_ordinal)))) "
+        "OR EXISTS (SELECT 1 FROM ask_answer_audit_citations citation "
+        "WHERE citation.answer_id=NEW.answer_id AND NOT EXISTS ("
+        "SELECT 1 FROM ask_answer_audit_claim_citations edge "
+        "WHERE edge.answer_id=citation.answer_id "
+        "AND edge.citation_number=citation.citation_number)) "
         "BEGIN SELECT RAISE(ABORT, 'Ask answer support graph is incomplete'); END"
     )
     op.execute(
@@ -639,22 +669,17 @@ def upgrade() -> None:
             for item in sa.inspect(bind).get_columns("llm_budgets")
         }
         now = datetime.now(UTC).isoformat()
-        if "on_exceed" in columns:
-            statement = sa.text(
-                "INSERT INTO llm_budgets "
-                "(purpose,monthly_cap_usd,warn_threshold_pct,hard_block,"
-                "on_exceed,created_at,updated_at,notes) "
-                "VALUES (:purpose,5.0,0.80,1,'block',:now,:now,:notes) "
-                "ON CONFLICT(purpose) DO NOTHING"
+        if "on_exceed" not in columns:
+            raise RuntimeError(
+                "ask_claim_audit requires llm_budgets.on_exceed fail-closed support"
             )
-        else:
-            statement = sa.text(
-                "INSERT INTO llm_budgets "
-                "(purpose,monthly_cap_usd,warn_threshold_pct,hard_block,"
-                "created_at,updated_at,notes) "
-                "VALUES (:purpose,5.0,0.80,1,:now,:now,:notes) "
-                "ON CONFLICT(purpose) DO NOTHING"
-            )
+        statement = sa.text(
+            "INSERT INTO llm_budgets "
+            "(purpose,monthly_cap_usd,warn_threshold_pct,hard_block,"
+            "on_exceed,created_at,updated_at,notes) "
+            "VALUES (:purpose,5.0,0.80,1,'block',:now,:now,:notes) "
+            "ON CONFLICT(purpose) DO NOTHING"
+        )
         bind.execute(
             statement,
             {
@@ -666,6 +691,19 @@ def upgrade() -> None:
                 ),
             },
         )
+        budget = bind.execute(
+            sa.text(
+                "SELECT hard_block,on_exceed FROM llm_budgets WHERE purpose=:purpose"
+            ),
+            {"purpose": _CLAIM_AUDIT_PURPOSE},
+        ).one_or_none()
+        if budget is None or int(budget[0]) != 1 or str(budget[1]) != "block":
+            raise RuntimeError(
+                "ask_claim_audit budget must be configured hard_block/on_exceed=block"
+            )
+    # Minimal historical migration fixtures may intentionally omit the LLM
+    # governance plane. Production cutover independently requires this table
+    # and the exact fail-closed row before sealed mode can activate.
 
 
 def downgrade() -> None:

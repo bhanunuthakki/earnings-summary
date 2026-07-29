@@ -88,6 +88,71 @@
         "claims": []
       },
       "accepted": true
+    },
+    {
+      "id": "complete-two-clause-coverage",
+      "answer": "Revenue grew [1]. Margin fell [2].",
+      "evidence_numbers": [1, 2],
+      "verdict": {
+        "claims": [
+          {"char_start": 0, "char_end": 17, "quote": "Revenue grew [1].", "cites": [1], "supported": true},
+          {"char_start": 18, "char_end": 34, "quote": "Margin fell [2].", "cites": [2], "supported": true}
+        ]
+      },
+      "accepted": true
+    },
+    {
+      "id": "omitted-second-clause",
+      "answer": "Revenue grew [1]. Margin fell [2].",
+      "evidence_numbers": [1, 2],
+      "verdict": {
+        "claims": [
+          {"char_start": 0, "char_end": 17, "quote": "Revenue grew [1].", "cites": [1], "supported": true}
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "id": "overlapping-claim-spans",
+      "answer": "Revenue grew [1]. Margin fell [2].",
+      "evidence_numbers": [1, 2],
+      "verdict": {
+        "claims": [
+          {"char_start": 0, "char_end": 17, "quote": "Revenue grew [1].", "cites": [1], "supported": true},
+          {"char_start": 16, "char_end": 34, "quote": ". Margin fell [2].", "cites": [2], "supported": true}
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "id": "gap-in-claim-spans",
+      "answer": "Revenue grew [1]. Margin fell [2].",
+      "evidence_numbers": [1, 2],
+      "verdict": {
+        "claims": [
+          {"char_start": 0, "char_end": 17, "quote": "Revenue grew [1].", "cites": [1], "supported": true},
+          {"char_start": 19, "char_end": 34, "quote": "argin fell [2].", "cites": [2], "supported": true}
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "id": "complete-but-unsupported-claim",
+      "answer": "Revenue grew [1].",
+      "evidence_numbers": [1],
+      "verdict": {
+        "claims": [
+          {"char_start": 0, "char_end": 17, "quote": "Revenue grew [1].", "cites": [], "supported": false}
+        ]
+      },
+      "accepted": false
+    },
+    {
+      "id": "near-no-answer-is-not-exempt",
+      "answer": "I don't have enough sealed evidence to answer that. Probably.",
+      "evidence_numbers": [],
+      "verdict": {"claims": []},
+      "accepted": false
     }
   ]
 }

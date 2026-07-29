@@ -64,8 +64,10 @@ from ask.audit_store import (
     AnswerClaim,
     AnswerClaimCitation,
     AnswerContextTurn,
+    AnswerPromptVariables,
     AnswerRetrieval,
     CitationAuditPayload,
+    ClaimAuditPromptVariables,
     RetrievalAssemblyItem,
     deterministic_no_claim_exemption,
     digest_text,
@@ -91,7 +93,9 @@ from ask.sealed_retrieval import (
     load_production_scopes,
     load_verified_trace_evidence,
 )
+from ask.store import append_assistant_turn_if_user_tail as _store_append_assistant_cas
 from ask.store import append_turn as _store_append_turn
+from ask.store import assert_user_turn_is_tail as _store_assert_user_tail
 from ask.store import load_recent_history as _store_load_history
 from ask.store import load_turns as _store_load_turns
 from dispatch_registry import Registry
@@ -182,11 +186,13 @@ evidence. Return ONLY JSON:
 {{"claims":[{{"char_start":0,"char_end":10,"quote":"exact answer substring",
 "cites":[1],"supported":true}}]}}
 
-For every checkable factual sentence, copy the exact substring and its
-zero-based [char_start,char_end) offsets. `cites` may contain only evidence
+Return exactly one claim for every non-whitespace clause or sentence in the
+answer, in answer order, including its punctuation and citation markers. Copy
+the exact substring and its zero-based [char_start,char_end) offsets. Do not
+omit, overlap, combine, or partially cover clauses. `cites` may contain only evidence
 numbers that directly support the claim. supported=true requires at least one
-cite; supported=false requires cites=[]. Pure acknowledgements or the explicit
-no-evidence sentence may return {{"claims":[]}}.
+cite; supported=false requires cites=[]. Only the exact explicit no-evidence
+sentence may return {{"claims":[]}}.
 
 BEGIN UNTRUSTED SEALED EVIDENCE
 {evidence}
@@ -229,6 +235,7 @@ CLAIM_AUDIT_ADAPTER = TypeAdapter(_ClaimAuditOutput)
 @dataclass(frozen=True, slots=True)
 class _GovernedCallIdentity:
     call_id: int
+    run_id: str
     model: str
     provider: str
     transport: str
@@ -236,6 +243,7 @@ class _GovernedCallIdentity:
     response_sha256: str
     template_id: str
     template_version: str
+    template_vars_sha256: str
 
 
 @dataclass(slots=True)
@@ -339,6 +347,37 @@ def respond_turn(
     if not text:
         yield {"type": "error", "error": "empty message"}
         return
+    if retrieval_mode not in {"legacy", "shadow", "sealed"}:
+        yield {"type": "error", "error": "invalid Ask retrieval mode"}
+        return
+    if retrieval_mode == "sealed":
+        if pack.narrative_purpose != "ask_answer":
+            yield {
+                "type": "error",
+                "error": "sealed retrieval is available only for the governed Ask answer purpose",
+            }
+            return
+        if pack.scope != "portfolio" or not turn.session_id:
+            yield {
+                "type": "error",
+                "error": "sealed Ask requires an authoritative portfolio session",
+            }
+            return
+        if text.startswith("/"):
+            yield {
+                "type": "error",
+                "error": "sealed Ask accepts narrative questions, not commands or view directives",
+            }
+            return
+        yield from _sealed_or_shadow_narrative_events(
+            text,
+            turn,
+            pack,
+            repo_root=repo_root,
+            db_path=db_path,
+            mode="sealed",
+        )
+        return
 
     low_text = text.lower()
     forced_view = low_text == "/view" or low_text.startswith("/view ")
@@ -393,7 +432,7 @@ def respond_turn(
         )
         return
 
-    if retrieval_mode != "legacy":
+    if retrieval_mode == "shadow":
         if pack.narrative_purpose != "ask_answer":
             yield {
                 "type": "error",
@@ -693,11 +732,19 @@ def _sealed_runtime() -> LocalVectorRuntimeConfig | None:
 def _authoritative_context(
     session_id: str,
     *,
+    user_turn_id: int,
+    user_text: str,
     db_path: Path,
 ) -> tuple[tuple[AnswerContextTurn, ...], str]:
     turns = _store_load_turns(session_id, db_path=db_path)
-    if not turns or turns[-1].role != "user":
+    if (
+        not turns
+        or turns[-1].id != user_turn_id
+        or turns[-1].role != "user"
+        or turns[-1].text != user_text
+    ):
         raise ValueError("authoritative Ask context is missing the current user turn")
+    selected = turns[-21:]
     identities = tuple(
         AnswerContextTurn(
             turn_id=item.id,
@@ -706,9 +753,9 @@ def _authoritative_context(
             text_sha256=digest_text(item.text),
             created_at=item.created_at,
         )
-        for item in turns
+        for item in selected
     )
-    prior = turns[:-1]
+    prior = selected[:-1]
     thread_text = "\n\n".join(
         f"[{item.role.upper()}] {item.text}" for item in prior[-20:]
     )
@@ -735,8 +782,8 @@ def _governed_call_identity(
     conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         rows = conn.execute(
-            "SELECT id,model,provider,transport,prompt_sha256,response_sha256,"
-            "template_id,template_version "
+            "SELECT id,run_id,model,provider,transport,prompt_sha256,response_sha256,"
+            "template_id,template_version,template_vars_sha256 "
             "FROM llm_calls WHERE run_id=? AND purpose=? AND response_sha256=? "
             "AND error IS NULL ORDER BY id DESC",
             (run_id, purpose, response_sha),
@@ -753,6 +800,7 @@ def _governed_call_identity(
         raise ValueError(f"{purpose} llm_calls identity is incomplete")
     return _GovernedCallIdentity(
         call_id=int(row["id"]),
+        run_id=str(row["run_id"]),
         model=str(row["model"]),
         provider=str(row["provider"]),
         transport=str(row["transport"]),
@@ -760,6 +808,7 @@ def _governed_call_identity(
         response_sha256=str(row["response_sha256"]),
         template_id=str(row["template_id"]),
         template_version=str(row["template_version"]),
+        template_vars_sha256=str(row["template_vars_sha256"]),
     )
 
 
@@ -767,14 +816,27 @@ def _claim_audit(
     answer: str,
     evidence_block: str,
     *,
+    evidence_numbers: frozenset[int],
     db_path: Path,
     run_id: str,
-) -> tuple[_ClaimAuditOutput, _GovernedCallIdentity]:
-    prompt = CLAIM_AUDIT_TEMPLATE.render(
-        repair_feedback="",
-        answer=answer,
-        evidence=evidence_block,
+) -> tuple[_ClaimAuditOutput, _GovernedCallIdentity, ClaimAuditPromptVariables]:
+    prompt_variables = ClaimAuditPromptVariables(
+        repair_feedback="", answer=answer, evidence=evidence_block
     )
+    prompt = CLAIM_AUDIT_TEMPLATE.render(**prompt_variables.model_dump())
+
+    def repair_prompt(error: str) -> str:
+        nonlocal prompt_variables
+        prompt_variables = ClaimAuditPromptVariables(
+            repair_feedback=(
+                "Your prior response failed schema validation: "
+                f"{error}. Return only corrected JSON.\n\n"
+            ),
+            answer=answer,
+            evidence=evidence_block,
+        )
+        return CLAIM_AUDIT_TEMPLATE.render(**prompt_variables.model_dump())
+
     result = call_llm_structured_with_raw(
         prompt,
         purpose="ask_claim_audit",
@@ -782,21 +844,10 @@ def _claim_audit(
         run_id=run_id,
         db_path=db_path,
         schema=CLAIM_AUDIT_ADAPTER,
-        repair_prompt=lambda error: CLAIM_AUDIT_TEMPLATE.render(
-            repair_feedback=(
-                "Your prior response failed schema validation: "
-                f"{error}. Return only corrected JSON.\n\n"
-            ),
-            answer=answer,
-            evidence=evidence_block,
-        ),
+        repair_prompt=repair_prompt,
     )
     audited = result.value
-    valid_numbers = {
-        int(match)
-        for match in re.findall(r"\[(\d+)\]", evidence_block)
-    }
-    _validate_claim_audit_output(answer, valid_numbers, audited)
+    _validate_claim_audit_output(answer, set(evidence_numbers), audited)
     identity = _governed_call_identity(
         db_path,
         run_id=run_id,
@@ -805,7 +856,7 @@ def _claim_audit(
     )
     if identity.prompt_sha256 != digest_text(str(result.prompt)):
         raise ValueError("claim-audit ledger prompt differs from the validated prompt")
-    return audited, identity
+    return audited, identity, prompt_variables
 
 
 def _validate_claim_audit_output(
@@ -815,16 +866,57 @@ def _validate_claim_audit_output(
 ) -> None:
     """Deterministic delivery gate over a schema-decoded auditor verdict."""
 
+    expected_spans = _required_claim_spans(answer)
+    actual_spans = tuple(
+        (claim.char_start, claim.char_end, claim.quote) for claim in audited.claims
+    )
     for claim in audited.claims:
         if claim.char_end > len(answer) or answer[claim.char_start : claim.char_end] != claim.quote:
             raise ValueError("claim audit quote does not equal its exact answer span")
         if any(number not in valid_numbers for number in claim.cites):
             raise ValueError("claim audit cites evidence outside the sealed prompt")
     exemption = deterministic_no_claim_exemption(answer)
-    if not audited.claims and exemption is None:
-        raise ValueError("substantive sealed answers require at least one audited claim")
+    if exemption is not None:
+        if audited.claims:
+            raise ValueError("the exact no-answer exemption must contain zero claims")
+        return
+    if actual_spans != expected_spans:
+        raise ValueError(
+            "claim audit must cover every substantive clause exactly once without gaps"
+        )
     if any(not claim.supported for claim in audited.claims):
         raise ValueError("sealed answer contains an unsupported substantive claim")
+
+
+def _required_claim_spans(answer: str) -> tuple[tuple[int, int, str], ...]:
+    """Partition all non-whitespace answer text into exact clause/sentence spans."""
+
+    spans: list[tuple[int, int, str]] = []
+    start: int | None = None
+    for index, char in enumerate(answer):
+        if start is None and not char.isspace():
+            start = index
+        if start is None:
+            continue
+        boundary = char == "\n" or (
+            char in ".!?;"
+            and (index + 1 == len(answer) or answer[index + 1].isspace())
+        )
+        if not boundary:
+            continue
+        end = index if char == "\n" else index + 1
+        while end > start and answer[end - 1].isspace():
+            end -= 1
+        if end > start:
+            spans.append((start, end, answer[start:end]))
+        start = None
+    if start is not None:
+        end = len(answer)
+        while end > start and answer[end - 1].isspace():
+            end -= 1
+        if end > start:
+            spans.append((start, end, answer[start:end]))
+    return tuple(spans)
 
 
 def _shadow_retrieval(
@@ -900,14 +992,28 @@ def _sealed_or_shadow_narrative_events(
         }
         return
     try:
-        _store_append_turn(
+        user_turn_id = _store_append_turn(
             session_id=turn.session_id,
             role="user",
             text=text,
             db_path=db_path,
         )
+        bound_turn = _store_assert_user_tail(
+            session_id=turn.session_id,
+            user_turn_id=user_turn_id,
+            user_text=text,
+            db_path=db_path,
+        )
+        if (
+            bound_turn.id != user_turn_id
+            or bound_turn.text != text
+            or retrieval_query_sha256(bound_turn.text) != retrieval_query_sha256(text)
+        ):
+            raise ValueError("sealed Ask request does not bind the appended user turn")
         context_turns, thread_text = _authoritative_context(
             turn.session_id,
+            user_turn_id=user_turn_id,
+            user_text=text,
             db_path=db_path,
         )
         request_id = uuid4().hex
@@ -965,13 +1071,14 @@ def _sealed_or_shadow_narrative_events(
 
         fragments = tuple(_evidence_prompt_fragment(item) for item in evidence)
         evidence_block = "\n\n".join(fragments)
-        prompt = _SEALED_ANSWER_TEMPLATE.render(
+        prompt_variables = AnswerPromptVariables(
             system_context=pack.system_context
             or "You are a portfolio research assistant.",
             thread_text=thread_text or "(first turn)",
             evidence_block=evidence_block,
             question=text,
         )
+        prompt = _SEALED_ANSWER_TEMPLATE.render(**prompt_variables.model_dump())
         answer_run_id = f"ask-answer:{request_id}"
         final_text = call_llm(
             prompt,
@@ -982,6 +1089,12 @@ def _sealed_or_shadow_narrative_events(
         )
         if not final_text.strip():
             raise ValueError("sealed Ask answer is empty")
+        _store_assert_user_tail(
+            session_id=turn.session_id,
+            user_turn_id=user_turn_id,
+            user_text=text,
+            db_path=db_path,
+        )
         answer_identity = _governed_call_identity(
             db_path,
             run_id=answer_run_id,
@@ -991,9 +1104,10 @@ def _sealed_or_shadow_narrative_events(
         if answer_identity.prompt_sha256 != digest_text(str(prompt)):
             raise ValueError("answer ledger prompt differs from the sealed prompt")
         claim_run_id = f"ask-claim-audit:{request_id}"
-        audited, claim_identity = _claim_audit(
+        audited, claim_identity, claim_prompt_variables = _claim_audit(
             final_text,
             evidence_block,
+            evidence_numbers=frozenset(item.n for item in evidence),
             db_path=db_path,
             run_id=claim_run_id,
         )
@@ -1032,6 +1146,7 @@ def _sealed_or_shadow_narrative_events(
                 recorded_at=recorded_at,
             )
             for item in evidence
+            if item.n in used_numbers
         )
         claims = tuple(
             AnswerClaim(
@@ -1080,24 +1195,31 @@ def _sealed_or_shadow_narrative_events(
                 prompt_sha256=answer_identity.prompt_sha256,
                 prompt_template_id=answer_identity.template_id,
                 prompt_template_version=answer_identity.template_version,
+                prompt_template_vars_sha256=answer_identity.template_vars_sha256,
+                prompt_variables=prompt_variables,
                 context_turns=context_turns,
                 retrieval_assembly=assembly,
+                retrieval_prompt_fragments=fragments,
                 answer_text=final_text,
                 llm_purpose="ask_answer",
                 llm_model=answer_identity.model,
                 llm_provider=answer_identity.provider,
                 llm_transport=answer_identity.transport,
                 llm_call_id=answer_identity.call_id,
+                llm_run_id=answer_identity.run_id,
                 claim_auditor_version="claim-span-audit.v1",
                 claim_audit_purpose="ask_claim_audit",
                 claim_audit_template_id=claim_identity.template_id,
                 claim_audit_template_version=claim_identity.template_version,
+                claim_audit_template_vars_sha256=claim_identity.template_vars_sha256,
+                claim_audit_prompt_variables=claim_prompt_variables,
                 claim_auditor_model=claim_identity.model,
                 claim_audit_provider=claim_identity.provider,
                 claim_audit_transport=claim_identity.transport,
                 claim_audit_prompt_sha256=claim_identity.prompt_sha256,
                 claim_audit_response_sha256=claim_identity.response_sha256,
                 claim_audit_llm_call_id=claim_identity.call_id,
+                claim_audit_run_id=claim_identity.run_id,
                 no_claim_exemption=deterministic_no_claim_exemption(final_text),
                 recorded_at=recorded_at,
             ),
@@ -1124,9 +1246,10 @@ def _sealed_or_shadow_narrative_events(
             evidence_by_number[number].citation_payload()
             for number in used_numbers
         ]
-        _store_append_turn(
+        _store_append_assistant_cas(
             session_id=turn.session_id,
-            role="assistant",
+            user_turn_id=user_turn_id,
+            user_text=text,
             text=final_text,
             citations=ui_citations,
             model=answer_identity.model,

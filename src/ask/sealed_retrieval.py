@@ -50,6 +50,7 @@ ReasonCode = Literal[
 ASK_RETRIEVAL_POLICY_VERSION = "ask-sealed-retrieval.v1"
 ASK_RETRIEVAL_VERIFIER_NAME = "ask.sealed_retrieval.verify_retrieval_promotion"
 ASK_RETRIEVAL_VERIFIER_VERSION = "1"
+ASK_RETRIEVAL_VERIFIER_MANIFEST_VERSION = "ask-verifier-manifest.v1"
 PRODUCTION_SCOPE_REGISTRY_ID = "ask-retrieval-production-scopes"
 PRODUCTION_SCOPE_SCHEMA_VERSION = 1
 PRODUCTION_SUPPORTED_COHORT = ("operating_company:legal_registrant",)
@@ -60,12 +61,45 @@ _VERIFIER_CONFIG = {
     "research_snapshot_admission_required": True,
     "source_inventory_closure_required": True,
 }
+_VERIFIER_ARTIFACTS = (
+    ("src/ask/audit_store.py", "ask-audit-store.v1"),
+    ("src/ask/sealed_retrieval.py", "ask-sealed-retrieval.v1"),
+    ("src/provenance/research_snapshot.py", "research-snapshot-verifier.v1"),
+    ("src/search/exact_semantic.py", "exact-semantic-verifier.v1"),
+    ("src/search/heterogeneous_retrieval.py", "heterogeneous-trace-verifier.v1"),
+)
+
+
+def _canonical_artifact_sha256(path: Path) -> str:
+    """Hash repository text with Git-style LF canonicalization."""
+
+    text = path.read_text(encoding="utf-8")
+    canonical = text.replace("\r\n", "\n").replace("\r", "\n")
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def current_verifier_manifest() -> dict[str, object]:
+    """Return all load-bearing verifier artifacts and their explicit versions."""
+
+    repo_root = Path(__file__).resolve().parents[2]
+    artifacts = [
+        {
+            "path": relative_path,
+            "artifact_version": artifact_version,
+            "sha256": _canonical_artifact_sha256(repo_root / relative_path),
+        }
+        for relative_path, artifact_version in _VERIFIER_ARTIFACTS
+    ]
+    return {
+        "manifest_version": ASK_RETRIEVAL_VERIFIER_MANIFEST_VERSION,
+        "artifacts": artifacts,
+    }
 
 
 def current_verifier_identity() -> tuple[str, str, str, str, str]:
     """Return the current policy/verifier identity promotion specs must pin."""
 
-    code_sha256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    code_sha256 = digest_text(canonical_json(current_verifier_manifest()))
     config_sha256 = digest_text(canonical_json(_VERIFIER_CONFIG))
     return (
         ASK_RETRIEVAL_POLICY_VERSION,
@@ -288,39 +322,51 @@ def derive_production_scope_registry(
 ) -> dict[str, object]:
     """Derive the complete supported production Ask scope set from live registries."""
 
-    rows = conn.execute(
-        "SELECT scope.scope_revision_id,scope.scope_key,scope.issuer_id,"
-        "entity.reporting_entity_id,listing.normalized_ticker "
-        "FROM v_issuer_reporting_scope_current scope "
-        "JOIN issuer_entities issuer ON issuer.issuer_id=scope.issuer_id "
-        "JOIN reporting_entities entity ON entity.issuer_id=scope.issuer_id "
-        "JOIN v_security_listings_canonical listing "
-        "ON listing.issuer_id=scope.issuer_id "
-        "WHERE scope.inclusion_state='core' "
-        "AND issuer.entity_kind='operating_company' "
-        "AND entity.reporting_entity_kind='legal_registrant' "
-        "AND listing.status='listed' "
-        "ORDER BY scope.scope_key,scope.issuer_id,"
-        "entity.reporting_entity_id,listing.normalized_ticker"
+    core_rows = conn.execute(
+        "SELECT scope_revision_id,scope_key,issuer_id "
+        "FROM v_issuer_reporting_scope_current "
+        "WHERE inclusion_state='core' "
+        "ORDER BY scope_key,issuer_id,scope_revision_id"
     ).fetchall()
-    if not rows:
+    if not core_rows:
         raise ValueError("canonical registry has no enabled core Ask scopes")
-    grouped: dict[tuple[str, str], list[tuple[object, ...]]] = {}
-    for raw in rows:
-        row = tuple(raw)
-        grouped.setdefault((str(row[1]), str(row[2])), []).append(row)
+    core_identities = [(str(row[1]), str(row[2])) for row in core_rows]
+    if len(core_identities) != len(set(core_identities)):
+        raise ValueError("canonical registry has duplicate core scope identities")
     scopes: list[RetrievalScope] = []
     revisions: list[str] = []
-    for (scope_key, issuer_id), candidates in sorted(grouped.items()):
-        identities = {
-            (str(row[3]), str(row[4]).strip().upper()) for row in candidates
-        }
-        revision_ids = {str(row[0]) for row in candidates}
-        if len(identities) != 1 or len(revision_ids) != 1:
+    for raw in core_rows:
+        revision_id, scope_key, issuer_id = (str(value) for value in raw)
+        issuer_rows = conn.execute(
+            "SELECT entity_kind FROM issuer_entities WHERE issuer_id=?",
+            (issuer_id,),
+        ).fetchall()
+        reporting_rows = conn.execute(
+            "SELECT reporting_entity_id FROM reporting_entities "
+            "WHERE issuer_id=? AND reporting_entity_kind='legal_registrant'",
+            (issuer_id,),
+        ).fetchall()
+        listing_rows = conn.execute(
+            "SELECT normalized_ticker FROM v_security_listings_canonical "
+            "WHERE issuer_id=? AND status='listed'",
+            (issuer_id,),
+        ).fetchall()
+        if (
+            len(issuer_rows) != 1
+            or str(issuer_rows[0][0]) != "operating_company"
+            or len(reporting_rows) != 1
+            or len(listing_rows) != 1
+        ):
             raise ValueError(
-                f"core scope {scope_key}/{issuer_id} has ambiguous reporting identity"
+                f"core scope {scope_key}/{issuer_id} has missing, duplicate, "
+                "or unsupported reporting identity"
             )
-        reporting_entity_id, ticker = identities.pop()
+        reporting_entity_id = str(reporting_rows[0][0])
+        ticker = str(listing_rows[0][0]).strip().upper()
+        if not reporting_entity_id or not ticker:
+            raise ValueError(
+                f"core scope {scope_key}/{issuer_id} has an empty reporting identity"
+            )
         scopes.append(
             RetrievalScope(
                 scope_key=scope_key,
@@ -329,7 +375,7 @@ def derive_production_scope_registry(
                 reporting_entity_id=reporting_entity_id,
             )
         )
-        revisions.append(revision_ids.pop())
+        revisions.append(revision_id)
     canonical_scopes = canonical_json(
         [item.model_dump(mode="json") for item in scopes]
     )

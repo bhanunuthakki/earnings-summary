@@ -84,3 +84,30 @@ def test_cutover_rejects_operator_or_registry_digest_mismatch(
             registry_path=path,
             expected_sha256=str(registry["scope_set_sha256"]),
         )
+
+
+@pytest.mark.parametrize(
+    "delete_sql",
+    [
+        "DELETE FROM issuer_entities",
+        "DELETE FROM reporting_entities",
+        "DELETE FROM v_security_listings_canonical",
+    ],
+)
+def test_every_core_scope_fails_closed_when_identity_plane_is_missing(
+    delete_sql: str,
+) -> None:
+    conn = _registry_db()
+    conn.execute(delete_sql)
+    with pytest.raises(ValueError, match="missing, duplicate, or unsupported"):
+        _derive_registry(conn)
+
+
+def test_duplicate_core_identity_is_not_collapsed() -> None:
+    conn = _registry_db()
+    conn.execute(
+        "INSERT INTO reporting_entities VALUES "
+        "('reporting-duplicate','issuer-1','legal_registrant')"
+    )
+    with pytest.raises(ValueError, match="missing, duplicate, or unsupported"):
+        _derive_registry(conn)

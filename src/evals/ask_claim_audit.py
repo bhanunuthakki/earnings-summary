@@ -12,13 +12,14 @@ from uuid import uuid4
 from ask.engine import CLAIM_AUDIT_ADAPTER, CLAIM_AUDIT_TEMPLATE
 from evals.harness import (
     CaseResult,
+    EvalAbortError,
     EvalRunSummary,
     dumps_compact,
     now_naive_utc,
     resolve_git_sha,
     sha256_file,
 )
-from llm.cli import DEFAULT_MODEL, LLM_MODELS
+from llm.cli import DEFAULT_MODEL, LLM_MODELS, is_hard_stop
 from llm.prompt_versions import prompt_version_for
 from llm.structured import call_llm_structured_with_raw
 
@@ -123,6 +124,10 @@ def run_claim_audit_eval(
             failure_stage = None if passed else "mismatch"
             response_text = result.raw_response
         except Exception as exc:
+            if is_hard_stop(exc):
+                raise EvalAbortError(
+                    f"{PURPOSE}/{case.case_id} could not run: {exc}"
+                ) from exc
             actual = {"error": str(exc)}
             passed = False
             failure_stage = "call"

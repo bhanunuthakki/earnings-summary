@@ -4,6 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -235,3 +236,23 @@ def test_trace_loader_verifies_before_reading(
     monkeypatch.setattr(sealed, "verify_heterogeneous_retrieval_trace", _blocked)
     with pytest.raises(ValueError, match="tampered"):
         sealed.load_verified_trace_evidence(conn, "trace-tampered")
+
+
+def test_verifier_artifact_hash_is_line_ending_insensitive(tmp_path: Path) -> None:
+    lf = tmp_path / "lf.py"
+    crlf = tmp_path / "crlf.py"
+    lf.write_bytes(b"one\ntwo\n")
+    crlf.write_bytes(b"one\r\ntwo\r\n")
+    assert sealed._canonical_artifact_sha256(lf) == sealed._canonical_artifact_sha256(
+        crlf
+    )
+    manifest = sealed.current_verifier_manifest()
+    artifacts = cast(list[dict[str, object]], manifest["artifacts"])
+    paths = {str(item["path"]) for item in artifacts}
+    assert {
+        "src/ask/audit_store.py",
+        "src/ask/sealed_retrieval.py",
+        "src/provenance/research_snapshot.py",
+        "src/search/exact_semantic.py",
+        "src/search/heterogeneous_retrieval.py",
+    } == paths
