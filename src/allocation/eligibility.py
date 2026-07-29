@@ -57,6 +57,7 @@ from pipeline.queries import tracked_companies_for_user
 from portfolio_risk_snapshot_store import read_latest_snapshot
 from portfolio_weights import read_materialized_weights_as_of
 from risk_reward import PRICE_STALE_DAYS
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 __all__ = [
     "CHECK_CANDIDATE_FIT",
@@ -165,7 +166,7 @@ def _ro_conn(db_path: Path) -> sqlite3.Connection | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     conn.row_factory = sqlite3.Row

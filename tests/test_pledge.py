@@ -98,6 +98,10 @@ def db(tmp_path: Path) -> Path:
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
     command.stamp(cfg, PRIOR_HEAD)
     command.upgrade(cfg, HEAD)
+    # This fixture intentionally exercises the historical 0130 contract while
+    # current runtime writers enforce the repository's present Alembic head.
+    with sqlite3.connect(str(path)) as marker_conn:
+        marker_conn.execute("DROP TABLE alembic_version")
     return path
 
 

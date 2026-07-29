@@ -38,6 +38,7 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import controls_css, ticker_label
 from ui.tokens import palette_css
 
@@ -84,7 +85,7 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
 
 def _open(db_path: Path) -> sqlite3.Connection | None:
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         return conn
     except sqlite3.Error:

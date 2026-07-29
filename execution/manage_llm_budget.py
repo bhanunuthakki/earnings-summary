@@ -25,7 +25,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import sqlite3
 import sys
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -41,6 +40,7 @@ from llm_budget import (  # noqa: E402
     month_report,
     set_cap,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def _fmt_usd(v: Decimal | float | None) -> str:
@@ -135,7 +135,7 @@ def _cmd_set(db_path: Path, purpose: str, cap: float | None, hard_block: bool | 
         print(f"Set cap for {purpose!r} ->{_fmt_usd(cap)}/mo")
         updated_any = True
     if hard_block is not None:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             cur = conn.execute(
                 """

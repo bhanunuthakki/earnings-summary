@@ -69,6 +69,7 @@ from compute.say_do_extractor import (  # noqa: E402
 from llm.prompt_versions import prompt_version_for  # noqa: E402
 from llm_client import call_llm  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
+from provenance.selection import selected_transcripts_relation  # noqa: E402
 
 log = logging.getLogger("extract_commitments")
 
@@ -97,10 +98,11 @@ def _list_pending(conn: sqlite3.Connection, ticker: str | None) -> list[dict[str
     pending = {tid for tid, _tk, _pe in transcripts_pending_extraction(conn, ticker=ticker)}
     if not pending:
         return []
+    transcripts_relation = selected_transcripts_relation(conn).sql
     sql = (
         "SELECT t.id, t.ticker, t.period_end, t.fiscal_period_type, "
         "       (SELECT COUNT(*) FROM transcript_segments s WHERE s.transcript_id = t.id) AS segments "
-        "FROM transcripts t "
+        f"FROM {transcripts_relation} t "
         f"WHERE t.id IN ({','.join('?' * len(pending))}) "
         "ORDER BY t.ticker, t.period_end"
     )
@@ -125,7 +127,11 @@ def _resolve_auto_targets(
     --transcript-id wins; otherwise pull the pending list (optionally filtered
     by --ticker) and cap at --max."""
     if transcript_id is not None:
-        cur = conn.execute("SELECT id, ticker FROM transcripts WHERE id = ?", (transcript_id,))
+        transcripts_relation = selected_transcripts_relation(conn).sql
+        cur = conn.execute(
+            f"SELECT id, ticker FROM {transcripts_relation} WHERE id = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
+            (transcript_id,),
+        )
         row = cur.fetchone()
         if row is None:
             return []

@@ -49,6 +49,8 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 
 # Marginal $/call estimate, used only to translate the cache-skip COUNT into a
 # "cost avoided" figure. FMP/SEC are flat-rate and yfinance is free, so the true
@@ -106,7 +108,7 @@ def log_call(
         return
     status_str = status.value if isinstance(status, CallStatus) else str(status)
     try:
-        conn = sqlite3.connect(str(_DB_PATH))
+        conn = connect_sqlite(_DB_PATH, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             conn.execute(
                 """
@@ -183,7 +185,7 @@ def log_calls_batch(calls: list[PendingSourceCall]) -> None:
         for c in calls
     ]
     try:
-        conn = sqlite3.connect(str(_DB_PATH))
+        conn = connect_sqlite(_DB_PATH, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             conn.executemany(
                 """
@@ -286,7 +288,7 @@ def summarize_source_calls(
         sql += " WHERE called_at >= ?"
         params = (since,)
     try:
-        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             rows = conn.execute(sql, params).fetchall()
         finally:

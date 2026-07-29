@@ -27,6 +27,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from table_extractors.base import (
     ExtractionOutcome,
     XbrlRow,
@@ -319,7 +320,7 @@ def _persist(rows: list[dict[str, object]], *, db_path: Path) -> tuple[int, int]
         return 0, 0
     inserted = 0
     logged = 0
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         for row in rows:
             try:

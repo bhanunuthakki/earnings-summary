@@ -33,13 +33,16 @@ from pathlib import Path
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def _open_db(db_path: Path) -> sqlite3.Connection:
     if not db_path.exists():
         sys.stderr.write(f"DB not found at {db_path}\n")
         sys.exit(2)
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     # Verify the ledger table exists — gives a clearer error than a SQL failure.
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}

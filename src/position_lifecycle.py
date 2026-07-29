@@ -49,6 +49,7 @@ from typing import cast
 from clock import now_iso
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import LivePortfolio, fetch_live_portfolio
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -100,7 +101,7 @@ def _open(db_path: Path | str) -> sqlite3.Connection | None:
         path = Path(db_path)
         if not path.exists():
             return None
-        conn = sqlite3.connect(str(path), timeout=5.0)
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         if (

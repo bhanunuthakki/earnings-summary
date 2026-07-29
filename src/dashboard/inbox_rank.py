@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from signals.store import SIGNAL_CONSENSUS_RATING
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 if TYPE_CHECKING:
     from dashboard.inbox import InboxItem
@@ -359,7 +360,7 @@ def _thesis_tones(db_path: Path | None) -> dict[str, str]:
 
 def _compute_thesis_tones(db_path: Path) -> dict[str, str]:
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return {}
     try:
@@ -410,7 +411,7 @@ def _compute_news_meta(db_path: Path, news_ids: list[int]) -> dict[int, tuple[st
     if not news_ids:
         return {}
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return {}
     try:
@@ -438,7 +439,7 @@ def _signal_types_by_news(db_path: Path | None, news_ids: list[int]) -> dict[int
     if db_path is None or not news_ids or not Path(db_path).exists():
         return {}
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return {}
     try:

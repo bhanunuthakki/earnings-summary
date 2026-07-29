@@ -20,7 +20,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import sqlite3
 import sys
 import time
 from contextlib import suppress
@@ -43,6 +42,7 @@ from llm_client import (  # noqa: E402
     load_ir_anchor,
     load_thesis_anchor,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 _SUMMARY_RX = re.compile(
     r"^(?P<ticker>[A-Z][A-Z0-9.]*)_Q(?P<q>[1-4])_(?P<y>\d{4})_(?:investor_update_)?summary\.txt$"
@@ -185,7 +185,7 @@ def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:
     if args.ticker:
         return [args.ticker.upper()]
     db_path = repo_root / "data" / "portfolio.db"
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     cur = conn.cursor()
     cur.execute(
         f"SELECT DISTINCT ticker FROM tracked_companies "

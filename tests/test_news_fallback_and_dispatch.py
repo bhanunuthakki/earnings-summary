@@ -87,6 +87,9 @@ def news_db(tmp_path: Path) -> Path:
     conn = sqlite3.connect(str(db))
     try:
         _ = conn.execute(_LLM_ARTIFACTS_DDL)
+        # Deliberately minimal 0065 + cache contract fixture, not a production
+        # versioned DB; guarded writers enforce the local tables exercised here.
+        conn.execute("DROP TABLE alembic_version")
         conn.commit()
     finally:
         conn.close()

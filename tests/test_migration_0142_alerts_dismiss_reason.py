@@ -107,6 +107,10 @@ def test_dismiss_reason_round_trips_via_store(db_at_prior: Path) -> None:
     """The migration's whole point: alerts.store.dismiss_alert(reason=) can
     now persist and read back a reason."""
     command.upgrade(_build_config(db_at_prior), NEW_HEAD)
+    # Keep this store round-trip scoped to the historical 0142 schema without
+    # representing the fixture as the current production migration head.
+    with sqlite3.connect(str(db_at_prior)) as marker_conn:
+        marker_conn.execute("DROP TABLE alembic_version")
     import sys as _sys
 
     _sys.path.insert(0, str(PROJECT_ROOT / "src"))

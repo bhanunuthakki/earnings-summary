@@ -42,6 +42,7 @@ from typing import cast
 
 from llm_client import JSON_FENCE_RE, call_llm
 from parser import extract_text_from_pdf
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -372,7 +373,7 @@ def _doc_id_lookup_maps(*, db: Path, ticker: str) -> tuple[dict[str, int], dict[
     sha_map: dict[str, int] = {}
     path_map: dict[str, int] = {}
     try:
-        conn = sqlite3.connect(str(db))
+        conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
         try:
             present = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='documents'"
@@ -502,7 +503,7 @@ def _has_existing_rows(*, db: Path, ticker: str, deck_doc_id: int) -> bool:
     if not db.exists():
         return False
     try:
-        conn = sqlite3.connect(str(db))
+        conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
         try:
             row = conn.execute(
                 """
@@ -538,7 +539,7 @@ def _persist(
     strategic_inserted = 0
     forward_inserted = 0
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     has_strategic = _table_present(conn, "strategic_targets")
     has_forward = _table_present(conn, "forward_looking_statements")
     try:

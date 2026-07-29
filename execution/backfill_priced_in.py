@@ -31,6 +31,7 @@ from db_paths import resolve_db_path  # noqa: E402
 from dcf import redesign as redesign_mod  # noqa: E402
 from dcf import reverse as reverse_mod  # noqa: E402
 from dcf import universe as universe_mod  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 DCF_DIR_NAME = "dcf"
 
@@ -79,7 +80,7 @@ def backfill(repo_root: Path, db_path: Path, *, apply: bool) -> dict[str, int]:
     row. Returns a small counts summary. Read-only unless ``apply`` is True."""
     tickers = universe_mod.dcf_universe(repo_root)
     counts = {"eligible": 0, "patched": 0, "skipped_no_workbook": 0, "no_row": 0, "unchanged": 0}
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     try:
         for ticker in tickers:

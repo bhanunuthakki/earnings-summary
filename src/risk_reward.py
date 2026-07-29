@@ -32,6 +32,7 @@ from statistics import median
 from allocation.book_risk import BookRisk, build_book_risk
 from dcf.scenario_reward import scenario_reward
 from identity import DEFAULT_USER_ID
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # Ranking thresholds — coarse by design (they rank attention, they don't measure
 # anything), each gated on its inputs, each emitting an explainable chip.
@@ -261,7 +262,7 @@ def _dcf_reward_legs(db_path: Path, tickers: Sequence[str], today: date) -> dict
     if not db_path.exists():
         return {}
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return {}
     try:
@@ -352,7 +353,7 @@ def _entry_convictions(db_path: Path, tickers: Sequence[str]) -> dict[str, float
     want = {t.upper() for t in tickers}
     out: dict[str, float] = {}
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             rows = conn.execute(
                 "SELECT ticker, entry_conviction FROM position_entries "

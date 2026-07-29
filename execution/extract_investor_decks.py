@@ -30,7 +30,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -51,6 +50,7 @@ def _sync_db_path(repo_root: Path) -> None:
     db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
 
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from table_extractors.investor_decks import extract_for_ticker  # noqa: E402
 
 LOG_FORMAT = json.dumps({"level": "%(levelname)s", "ts": "%(asctime)s", "msg": "%(message)s"})
@@ -62,7 +62,7 @@ def _tracked_tickers(db_path: Path) -> list[str]:
     """Active tracked tickers — portfolio, watchlist, evaluation; archived excluded."""
     if not db_path.exists():
         return []
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     try:
         rows = conn.execute(
             """

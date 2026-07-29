@@ -78,6 +78,7 @@ from llm.prompt_versions import prompt_version_for
 from llm.structured import StructuredParseError, call_llm_structured
 from llm.untrusted import spotlight
 from runtime.secrets import secret_file
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 PURPOSE = "senior_partner_brief"
 ENGINE_VERSION = "v1"
@@ -255,7 +256,7 @@ def _ro_conn(db_path: Path) -> sqlite3.Connection | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     conn.row_factory = sqlite3.Row

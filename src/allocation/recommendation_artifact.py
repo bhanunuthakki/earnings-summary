@@ -49,6 +49,7 @@ from llm.prompt_versions import prompt_version_for
 from llm.structured import StructuredParseError, call_llm_structured
 from llm_budget import should_skip_for_budget
 from owner_profile.store import list_facts
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 PURPOSE = "incremental_dollar_recommendation"
 ENGINE_VERSION = "v1"
@@ -77,7 +78,7 @@ def _owner_context_labels(db_path: Path) -> list[str]:
     for the LLM's judgment, never a source of blocking truth (that's the
     frontier's job). Best-effort: any failure yields an empty list."""
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return []
     try:

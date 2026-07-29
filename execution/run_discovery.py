@@ -62,6 +62,7 @@ from discovery.store import (  # noqa: E402
     upsert_candidate,
 )
 from identity import DEFAULT_USER_ID  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 #: How many interim-ranked candidates get the (heavier, price-history-reading)
 #: coarse diversifier leg each run — the PRD's "reusing the candidate-fit/ΔSR
@@ -362,7 +363,7 @@ def _ticker_names(db_path: Path, user_id: str) -> dict[str, str]:
     if not db_path.exists():
         return {}
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return {}
     try:

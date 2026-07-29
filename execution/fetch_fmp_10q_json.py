@@ -29,7 +29,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sqlite3
 import sys
 import time
 from datetime import date
@@ -43,6 +42,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from log_redact import redact as _redact  # noqa: E402
 from pipeline.fmp_doc_index import index_fmp_files_for_ticker  # noqa: E402
 from runtime.secrets import load_project_env, project_env_file  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # .env is loaded lazily in main(), AFTER --db-path is known — when running
 # from a worktree against the main checkout's DB (data/ is gitignored and a
@@ -103,7 +103,7 @@ def _fetch_once(symbol: str, year: int, quarter: str) -> tuple[int, dict | list 
 def _resolve_tickers(arg_tickers: str | None) -> list[str]:
     if arg_tickers:
         return [t.strip().upper() for t in arg_tickers.split(",") if t.strip()]
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = connect_sqlite(str(DB_PATH), role=SQLiteConnectionRole.READ_ONLY)
     cur = conn.cursor()
     cur.execute(
         "SELECT ticker FROM tracked_companies "
@@ -203,7 +203,7 @@ def main() -> int:
 
     indexed = 0
     if not args.no_index:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = connect_sqlite(str(DB_PATH), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             for ticker in tickers:
                 indexed += index_fmp_files_for_ticker(conn, ticker, PROJECT_ROOT_DATA)

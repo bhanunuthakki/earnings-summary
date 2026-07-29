@@ -34,6 +34,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 log = logging.getLogger(__name__)
 
 
@@ -294,7 +296,7 @@ def _lookup_sector_from_db(
     if not db_path.exists():
         return (None, None)
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         # Verify entities table exists before querying
         check = conn.execute(

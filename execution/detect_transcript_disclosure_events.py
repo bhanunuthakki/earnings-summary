@@ -64,6 +64,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import db  # noqa: E402
 from filings.models import HardStopError  # noqa: E402
 from llm.cli import is_hard_stop  # noqa: E402
+from provenance.selection import selected_transcripts_relation  # noqa: E402
 from transcripts.longitudinal import (  # noqa: E402
     ABTONE_MIN_OBSERVATIONS,
     ABTONE_RESIDUAL_MATERIALITY,
@@ -139,8 +140,10 @@ def _ticker_transcript_ids(conn: sqlite3.Connection, ticker: str) -> list[int]:
     symptom in the ingestion path (out of this module's ownership to fix at
     the source); this is a defensive read-side dedup only.
     """
+    transcripts_relation = selected_transcripts_relation(conn).sql
     rows = conn.execute(
-        "SELECT id, fiscal_period_type, period_end FROM transcripts WHERE UPPER(ticker) = ? "
+        f"SELECT id, fiscal_period_type, period_end FROM {transcripts_relation} "  # nosec B608 -- trusted internal SQL shape; values remain bound
+        "WHERE UPPER(ticker) = ? "
         "AND fiscal_period_type IN ('Q1','Q2','Q3','Q4') AND period_end IS NOT NULL "
         "ORDER BY period_end ASC",
         (ticker.upper(),),

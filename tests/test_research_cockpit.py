@@ -11,6 +11,7 @@ so staleness/relative-time assertions hold on any run date. The disk caches
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sqlite3
@@ -38,6 +39,14 @@ from pipeline.research_cockpit import (  # noqa: E402
     compute_attractiveness,
     eval_attractiveness,
     render_research_cockpit,
+)
+from provenance.evidence_ledger import (  # noqa: E402
+    ContentBlob,
+    DocumentVersion,
+    EvidenceLedger,
+    EvidenceNode,
+    ExtractionRun,
+    SourceObservation,
 )
 from report.renderers.numfmt import fmt_date  # noqa: E402
 
@@ -71,6 +80,101 @@ def conn(head_template: Path, tmp_path: Path) -> Iterator[sqlite3.Connection]:
     _seed(c)
     yield c
     c.close()
+
+
+def _bind_document_evidence(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    document_id: int,
+) -> None:
+    """Give a legacy test document the evidence required by current head."""
+
+    stamp = datetime(2026, 1, 1, tzinfo=UTC)
+    row = conn.execute(
+        "SELECT sha256, raw_bytes_size FROM documents WHERE id = ?", (document_id,)
+    ).fetchone()
+    assert row is not None
+    blob_sha = str(row[0])
+    config_sha = hashlib.sha256(b"research-cockpit-test").hexdigest()
+    output_sha = hashlib.sha256(f"output:{ticker}:{document_id}".encode()).hexdigest()
+    ledger = EvidenceLedger(conn)
+    ledger.persist(
+        ContentBlob(
+            sha256=blob_sha,
+            byte_size=int(row[1]),
+            media_type="application/json",
+            storage_uri=f"file:///test/{ticker}-{document_id}.json",
+            recorded_at=stamp,
+        )
+    )
+    ledger.persist(
+        SourceObservation(
+            observation_id=f"source:{ticker}:{document_id}",
+            idempotency_key=f"source:{ticker}:{document_id}",
+            source_kind="vendor_api",
+            source_url=f"https://example.test/{ticker}/{document_id}",
+            blob_sha256=blob_sha,
+            source_published_at=stamp,
+            filing_at=None,
+            accepted_at=None,
+            observed_at=stamp,
+            retrieved_at=stamp,
+            retrieval_config_sha256=config_sha,
+            collector_code_version="test@1",
+        )
+    )
+    ledger.persist(
+        DocumentVersion(
+            document_version_id=f"document:{ticker}:{document_id}",
+            document_key=f"{ticker}:vendor:{document_id}",
+            version_sequence=1,
+            observation_id=f"source:{ticker}:{document_id}",
+            blob_sha256=blob_sha,
+            issuer_id=f"issuer:{ticker}",
+            ticker=ticker,
+            document_type="vendor_statement",
+            form_type="vendor_json",
+            accession_number=None,
+            exhibit_id=None,
+            period_start=None,
+            period_end=stamp,
+            as_of_at=stamp,
+            language="en",
+            replaces_document_version_id=None,
+            legacy_document_id=document_id,
+            recorded_at=stamp,
+        )
+    )
+    ledger.persist(
+        ExtractionRun(
+            extraction_run_id=f"run:{ticker}:{document_id}",
+            idempotency_key=f"run:{ticker}:{document_id}",
+            document_version_id=f"document:{ticker}:{document_id}",
+            input_sha256=blob_sha,
+            extractor_name="test-fixture",
+            extractor_config_sha256=config_sha,
+            extractor_code_version="test@1",
+            output_sha256=output_sha,
+            started_at=stamp,
+            completed_at=stamp,
+            outcome="succeeded",
+        )
+    )
+    ledger.persist(
+        EvidenceNode(
+            node_id=f"node:{ticker}:{document_id}",
+            evidence_key=f"node:{ticker}:{document_id}",
+            revision=1,
+            extraction_run_id=f"run:{ticker}:{document_id}",
+            parent_node_id=None,
+            supersedes_node_id=None,
+            node_kind="document",
+            text=f"{ticker} vendor statement",
+            locator=None,
+            recorded_at=stamp,
+        )
+    )
 
 
 def _seed(c: sqlite3.Connection) -> None:
@@ -140,6 +244,8 @@ def _seed(c: sqlite3.Connection) -> None:
     )
     tier2_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
     doc_ids = [int(r[0]) for r in c.execute("SELECT id FROM documents ORDER BY id")]
+    for doc_id in doc_ids:
+        _bind_document_evidence(c, ticker="NU", document_id=doc_id)
     c.execute(
         "INSERT INTO transcripts (document_id, ticker, period_end, has_qa_section) "
         "VALUES (?, 'NU', '2026-03-31', 1)",
@@ -438,9 +544,15 @@ def _seed_fact_quarters(
         "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
         "fetched_at, fetch_status, raw_bytes_size) "
         "VALUES (?, 'fmp', 'fmp_statements', ?, ?, ?, 'ok', 10)",
-        (ticker, f"data/{ticker}_facts.json", f"{ticker:0>64}", _iso(NOW)),
+        (
+            ticker,
+            f"data/{ticker}_facts.json",
+            hashlib.sha256(f"{ticker}:facts".encode()).hexdigest(),
+            _iso(NOW),
+        ),
     )
     doc_id = int(c.execute("SELECT last_insert_rowid()").fetchone()[0])
+    _bind_document_evidence(c, ticker=ticker, document_id=doc_id)
     items = ("revenue", "operating_cash_flow", "capital_expenditure", "free_cash_flow")
     for period_end, fpt, *vals in periods:
         for item, val in zip(items, vals, strict=True):

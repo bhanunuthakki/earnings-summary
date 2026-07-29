@@ -33,6 +33,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from db_paths import resolve_db_path
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ def current_month_spend(
         return Decimal("0")
     start_iso, _ = _month_start_iso(now)
     try:
-        conn = sqlite3.connect(str(path), timeout=5.0)
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             row = conn.execute(
                 """
@@ -168,7 +169,7 @@ def _load_budget(purpose: str, *, db_path: Path | str | None = None) -> _BudgetR
     if path is None or not Path(path).exists():
         return None
     try:
-        conn = sqlite3.connect(str(path), timeout=5.0)
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             conn.row_factory = sqlite3.Row
             has_mode = _has_on_exceed(conn)
@@ -376,7 +377,11 @@ def record_alert(
     _, month = _month_start_iso(now)
     alerted_at = (now or datetime.now(UTC)).isoformat()
     try:
-        conn = sqlite3.connect(str(path), timeout=5.0)
+        conn = connect_sqlite(
+            path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
         try:
             conn.execute("PRAGMA busy_timeout = 5000")
             cur = conn.execute(
@@ -420,7 +425,7 @@ def list_budgets(
     if path is None or not Path(path).exists():
         return []
     try:
-        conn = sqlite3.connect(str(path), timeout=5.0)
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             conn.row_factory = sqlite3.Row
             has_mode = _has_on_exceed(conn)
@@ -491,7 +496,11 @@ def set_cap(
     cap_str = str(Decimal(str(new_cap_usd)).quantize(Decimal("0.01")))
     updated_at = (now or datetime.now(UTC)).isoformat()
     try:
-        conn = sqlite3.connect(str(path), timeout=5.0)
+        conn = connect_sqlite(
+            path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
         try:
             cur = conn.execute(
                 """
@@ -537,7 +546,11 @@ def set_mode(
         return False
     updated_at = (now or datetime.now(UTC)).isoformat()
     try:
-        conn = sqlite3.connect(str(path), timeout=5.0)
+        conn = connect_sqlite(
+            path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
         try:
             cur = conn.execute(
                 "UPDATE llm_budgets SET on_exceed = ?, hard_block = ?, updated_at = ? "
@@ -582,7 +595,7 @@ def month_report(
     start_iso = f"{year:04d}-{mnum:02d}-01T00:00:00+00:00"
     end_iso = f"{next_year:04d}-{next_mnum:02d}-01T00:00:00+00:00"
     try:
-        conn = sqlite3.connect(str(path), timeout=5.0)
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(

@@ -7,11 +7,13 @@ when present; DB scan fires as fallback when cache is absent).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sqlite3
 import sys
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -27,6 +29,14 @@ from cockpit_fundamentals import (  # noqa: E402
     compute_from_db,
     materialize_fundamentals,
     read_materialized_fundamentals,
+)
+from provenance.evidence_ledger import (  # noqa: E402
+    ContentBlob,
+    DocumentVersion,
+    EvidenceLedger,
+    EvidenceNode,
+    ExtractionRun,
+    SourceObservation,
 )
 
 # ---------------------------------------------------------------------------
@@ -83,12 +93,15 @@ def _seed_quarters(
     )
     for i, (period_end, fp_type, rev, ocf, capex, fcf) in enumerate(rows):
         doc_id = i + 1
-        conn.execute(
+        document = conn.execute(
             "INSERT OR IGNORE INTO documents "
             "(ticker, source_type, doc_type, file_path, sha256, fetched_at, fetch_status, "
             "raw_bytes_size) VALUES (?, 'fmp', 'fmp_statements', ?, ?, '2026-01-01', 'ok', 10)",
             (ticker, f"data/{ticker}_{i}.json", f"{hash(ticker + str(i)):064x}"[:64]),
         )
+        assert document.lastrowid is not None
+        doc_id = int(document.lastrowid)
+        _bind_document_evidence(conn, ticker=ticker, document_id=doc_id)
         for line_item, value in [
             ("revenue", rev),
             ("operating_cash_flow", ocf),
@@ -103,6 +116,97 @@ def _seed_quarters(
                     (ticker, period_end, fp_type, line_item, value, doc_id),
                 )
     conn.commit()
+
+
+def _bind_document_evidence(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    document_id: int,
+) -> None:
+    """Give each legacy test document the exact evidence required by head."""
+
+    stamp = datetime(2026, 1, 1, tzinfo=UTC)
+    blob_sha = hashlib.sha256(f"{ticker}:{document_id}".encode()).hexdigest()
+    config_sha = hashlib.sha256(b"cockpit-fundamentals-test").hexdigest()
+    output_sha = hashlib.sha256(f"output:{ticker}:{document_id}".encode()).hexdigest()
+    ledger = EvidenceLedger(conn)
+    ledger.persist(
+        ContentBlob(
+            sha256=blob_sha,
+            byte_size=10,
+            media_type="application/json",
+            storage_uri=f"file:///test/{ticker}-{document_id}.json",
+            recorded_at=stamp,
+        )
+    )
+    ledger.persist(
+        SourceObservation(
+            observation_id=f"source:{ticker}:{document_id}",
+            idempotency_key=f"source:{ticker}:{document_id}",
+            source_kind="vendor_api",
+            source_url=f"https://example.test/{ticker}/{document_id}",
+            blob_sha256=blob_sha,
+            source_published_at=stamp,
+            filing_at=None,
+            accepted_at=None,
+            observed_at=stamp,
+            retrieved_at=stamp,
+            retrieval_config_sha256=config_sha,
+            collector_code_version="test@1",
+        )
+    )
+    ledger.persist(
+        DocumentVersion(
+            document_version_id=f"document:{ticker}:{document_id}",
+            document_key=f"{ticker}:vendor:{document_id}",
+            version_sequence=1,
+            observation_id=f"source:{ticker}:{document_id}",
+            blob_sha256=blob_sha,
+            issuer_id=f"issuer:{ticker}",
+            ticker=ticker,
+            document_type="vendor_statement",
+            form_type="vendor_json",
+            accession_number=None,
+            exhibit_id=None,
+            period_start=None,
+            period_end=stamp,
+            as_of_at=stamp,
+            language="en",
+            replaces_document_version_id=None,
+            legacy_document_id=document_id,
+            recorded_at=stamp,
+        )
+    )
+    ledger.persist(
+        ExtractionRun(
+            extraction_run_id=f"run:{ticker}:{document_id}",
+            idempotency_key=f"run:{ticker}:{document_id}",
+            document_version_id=f"document:{ticker}:{document_id}",
+            input_sha256=blob_sha,
+            extractor_name="test-fixture",
+            extractor_config_sha256=config_sha,
+            extractor_code_version="test@1",
+            output_sha256=output_sha,
+            started_at=stamp,
+            completed_at=stamp,
+            outcome="succeeded",
+        )
+    )
+    ledger.persist(
+        EvidenceNode(
+            node_id=f"node:{ticker}:{document_id}",
+            evidence_key=f"node:{ticker}:{document_id}",
+            revision=1,
+            extraction_run_id=f"run:{ticker}:{document_id}",
+            parent_node_id=None,
+            supersedes_node_id=None,
+            node_kind="document",
+            text=f"{ticker} vendor statement",
+            locator=None,
+            recorded_at=stamp,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------

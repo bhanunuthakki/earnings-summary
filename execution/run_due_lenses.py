@@ -55,6 +55,7 @@ def _sync_db_path(repo_root: Path) -> None:
 
 
 from pipeline.tier_runner import tickers_due_for_lens_regen  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from synthesis_lenses import (  # noqa: E402
     LENSES,
     list_lenses_for_ticker,
@@ -194,7 +195,7 @@ def _build_plan(repo_root: Path, cadence: Cadence) -> list[tuple[str, str, str]]
     db_path = repo_root / "data" / "portfolio.db"
     tier_by_ticker: dict[str, str] = {}
     if db_path.exists():
-        with sqlite3.connect(str(db_path)) as conn:
+        with connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY) as conn:
             conn.row_factory = sqlite3.Row
             if _has_processing_tier_column(conn):
                 rows = conn.execute(
@@ -247,7 +248,7 @@ def _portfolio_synthesis_is_due(repo_root: Path, cadence: Cadence) -> bool:
     db_path = repo_root / "data" / "portfolio.db"
     if not db_path.exists():
         return False
-    with sqlite3.connect(str(db_path)) as conn:
+    with connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='llm_artifacts'"

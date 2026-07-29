@@ -42,6 +42,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from models.companies import ListType  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 
@@ -204,7 +205,7 @@ def main() -> int:
         unique.append((t, n))
     summary["unique_tickers"] = len(unique)
 
-    conn = sqlite3.connect(args.db)
+    conn = connect_sqlite(args.db, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         stats = upsert_index_members(conn, unique, dry_run=args.dry_run)
     finally:

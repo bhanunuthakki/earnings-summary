@@ -12,6 +12,7 @@ import sqlite3
 from pathlib import Path
 
 from evals.harness import CaseResult, EvalRunSummary
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _RUN_INSERT = """
 INSERT INTO eval_runs(
@@ -36,7 +37,14 @@ def write_run(summary: EvalRunSummary, *, db_path: Path) -> int:
     are missing; lets other sqlite errors propagate (loud by design)."""
     if not Path(db_path).exists():
         raise RuntimeError(f"eval store: DB not found at {db_path}")
-    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn = connect_sqlite(
+        db_path,
+        role=SQLiteConnectionRole.WRITER,
+        # The eval store is intentionally compatible with its introducing
+        # 0083 schema so historical/replay fixtures remain writable. Table
+        # presence below is the narrow contract this module enforces.
+        schema_preflight=False,
+    )
     try:
         conn.execute("PRAGMA busy_timeout = 10000")
         try:

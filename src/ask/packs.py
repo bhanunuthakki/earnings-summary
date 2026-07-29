@@ -61,6 +61,7 @@ from integrations.portfolio_tracker_client import (
     fetch_live_portfolio,
     fetch_portfolio_analytics,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -262,7 +263,7 @@ def _rows(db_path: Path, sql: str, params: tuple[object, ...] = ()) -> list[sqli
     if not db_path.exists():
         return []
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return []
     conn.row_factory = sqlite3.Row

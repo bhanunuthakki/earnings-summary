@@ -57,6 +57,7 @@ from dashboard.inbox_rank import (
     note_semantic_kind,
 )
 from identity import DEFAULT_USER_ID
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.time import stamp_html
 from user_state.ledger import list_recent_entries
 from user_state.notes import list_notes
@@ -403,7 +404,7 @@ def collect_inbox(
 
     if "disclosure" in kinds:
         try:
-            conn = sqlite3.connect(f"file:{Path(db_path)}?mode=ro", uri=True)
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
             conn.row_factory = sqlite3.Row
             clauses = [
                 "status != 'dismissed'",
@@ -544,7 +545,7 @@ def _synthesis_items(db_path: Path, *, now: datetime) -> list[InboxItem]:
     only while it is fresh (≤ ``_SYNTHESIS_FRESH_DAYS`` old). Best-effort:
     a missing table / artifact / unparsable timestamp yields []."""
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return []
     try:

@@ -45,6 +45,10 @@ DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 FMP = REPO / "data" / "historical" / "fmp"
 
 sys.path.insert(0, str(REPO / "src"))
+
+
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+
 try:  # persistence is best-effort — the workbook builds without a DB
     from dcf import persist as persist_mod
 except ImportError:  # pragma: no cover
@@ -177,7 +181,7 @@ def load_kpis(ticker: str) -> dict[str, float]:
     db = REPO / "data" / "portfolio.db"
     if not db.exists():
         return {}
-    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         has_cadence = any(
@@ -959,7 +963,7 @@ def persist_dcf_run(a: Actuals, s: Assum, m: Mirror) -> bool:
         assumption_snapshot_json=snap,
         notes=f"workbook={DEST.name} (bank credit model)",
     )
-    with sqlite3.connect(str(db)) as conn:
+    with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
         persist_mod.upsert(conn, row)
     return True
 

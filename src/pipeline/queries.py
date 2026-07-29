@@ -12,6 +12,7 @@ from pathlib import Path
 from identity import DEFAULT_USER_ID
 from models.companies import Company, FilingRegime, InstrumentType, ListType
 from models.documents import DocType, SourceType
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 def latest_document_for(
@@ -175,7 +176,10 @@ def documents_count_by_doc_type(
 
 
 def open_db(db_path: str | Path) -> sqlite3.Connection:
-    """Open a portfolio.db connection with row_factory set to sqlite3.Row."""
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Open the pipeline's writer-capable portfolio connection.
+
+    Pipeline entrypoints use this helper for both reads and mutations, so its
+    historical contract remains writer-capable while inheriting the central
+    concurrency, integrity, and schema-compatibility policy.
+    """
+    return connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER)

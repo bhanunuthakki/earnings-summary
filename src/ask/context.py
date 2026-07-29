@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from identity import DEFAULT_USER_ID
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # Caps keep the portfolio system prompt interactive-sized even when the
 # tracked universe is large (the watchlist sweep added ~60 eval names).
@@ -81,7 +82,7 @@ def tracked_tickers(db_path: Path) -> set[str]:
     if not db_path.exists():
         return set()
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return set()
     try:
@@ -98,7 +99,7 @@ def _tracked_by_list(db_path: Path) -> dict[str, list[str]]:
     if not db_path.exists():
         return {}
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return {}
     try:

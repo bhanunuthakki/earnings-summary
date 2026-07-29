@@ -25,6 +25,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 log = logging.getLogger(__name__)
 
 # Defensive cap on the text handed to the judge. The real artifacts sit far
@@ -193,7 +195,7 @@ def load_advisor_next_dollar_corpus(repo_root: Path) -> list[AuditItem]:
     if not db_path.exists():
         return out
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error as exc:
         log.warning({"event": "eval_corpus_db_open_failed", "error": str(exc)})
         return out
@@ -322,7 +324,7 @@ def load_ask_advisory_answer_corpus(repo_root: Path) -> list[AuditItem]:
     if not db_path.exists():
         return out
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
     except sqlite3.Error as exc:
         log.warning({"event": "eval_corpus_db_open_failed", "error": str(exc)})
@@ -553,7 +555,7 @@ def load_position_review_corpus(repo_root: Path) -> list[AuditItem]:
     if not db_path.exists():
         return out
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error as exc:
         log.warning({"event": "eval_corpus_db_open_failed", "error": str(exc)})
         return out
@@ -608,7 +610,7 @@ def load_behavior_distill_corpus(repo_root: Path) -> list[AuditItem]:
     if not db_path.exists():
         return out
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error as exc:
         log.warning({"event": "eval_corpus_db_open_failed", "error": str(exc)})
         return out
@@ -659,7 +661,7 @@ def load_incremental_dollar_recommendation_corpus(repo_root: Path) -> list[Audit
     if not db_path.exists():
         return out
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error as exc:
         log.warning({"event": "eval_corpus_db_open_failed", "error": str(exc)})
         return out
@@ -711,7 +713,7 @@ def load_investment_decision_card_corpus(repo_root: Path) -> list[AuditItem]:
     if not db_path.exists():
         return out
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error as exc:
         log.warning({"event": "eval_corpus_db_open_failed", "error": str(exc)})
         return out
@@ -764,7 +766,7 @@ def load_senior_partner_brief_corpus(repo_root: Path) -> list[AuditItem]:
     if not db_path.exists():
         return out
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error as exc:
         log.warning({"event": "eval_corpus_db_open_failed", "error": str(exc)})
         return out

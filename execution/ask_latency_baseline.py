@@ -36,7 +36,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import sqlite3
 import sys
 import tempfile
 import time
@@ -48,6 +47,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from ask import grounding, turn_cache  # noqa: E402
 from ask.router import PackRoute  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 _TICKER = "TST"
 
@@ -109,7 +109,7 @@ def _build_corpus(root: Path, *, sections: int, lines: int) -> tuple[Path, list[
     (root / transcript_rel).write_text("\n".join(body), encoding="utf-8")
 
     db_path = root / "data" / "portfolio.db"
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.SNAPSHOT_DESTINATION)
     conn.executescript(
         """
         CREATE TABLE documents (

@@ -48,6 +48,8 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 __all__ = [
     "CADENCES",
     "CADENCE_EVENT",
@@ -264,7 +266,7 @@ def _open_ro(db_path: Path | str | None) -> sqlite3.Connection | None:
     if db_path is None or not Path(db_path).exists():
         return None
     try:
-        return sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        return connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
 

@@ -50,6 +50,7 @@ from news.store import (  # noqa: E402
     NewsRow,
     upsert_news_rows,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # yfinance is HTTP-bound; the same worker count the grades feed uses.
 _WORKERS = 8
@@ -191,12 +192,10 @@ def main(argv: list[str] | None = None) -> int:
     cli_tickers = cast("list[str]", args.tickers or [])
     tickers: list[str] = [t.upper() for t in cli_tickers]
     if not tickers:
-        import sqlite3
-
         from db import DB_PATH
 
         db = args.db_path or DB_PATH
-        conn = sqlite3.connect(str(db))
+        conn = connect_sqlite(str(db), role=SQLiteConnectionRole.READ_ONLY)
         try:
             rows_raw = cast(
                 "list[tuple[object, ...]]",
@@ -215,11 +214,12 @@ def main(argv: list[str] | None = None) -> int:
         for row in rows[:10]:
             print(f"{row.ticker:6s} {row.published_at}  {row.headline[:70]}")
         return 0
-    import sqlite3 as _sqlite3
 
     from db import DB_PATH as _DB_PATH
 
-    conn = _sqlite3.connect(str(args.db_path or _DB_PATH))
+    conn = connect_sqlite(
+        str(args.db_path or _DB_PATH), role=SQLiteConnectionRole.WRITER, schema_preflight=True
+    )
     try:
         inserted, deduped = upsert_news_rows(conn, rows)
         conn.commit()

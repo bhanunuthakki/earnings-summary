@@ -62,6 +62,7 @@ from provenance.overrides import (
     OverrideAction,
     get_active_overrides,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from timeseries.loaders import (
     SourcedObservation,
     load_financial_series_with_provenance,
@@ -385,7 +386,7 @@ def _override_only_latest(
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     conn.row_factory = sqlite3.Row
@@ -439,7 +440,7 @@ def resolve_fact_value(
         load_key = metric.key
         if db_path.exists():
             try:
-                conn = sqlite3.connect(str(db_path), timeout=5.0)
+                conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
                 conn.row_factory = sqlite3.Row
                 try:
                     load_key = _resolve_kpi_load_name(conn, t, metric.key)

@@ -43,6 +43,7 @@ import numpy as np
 from allocation.book_risk import build_book_risk
 from dcf.scenario_reward import scenario_reward
 from macro_store import Sensitivity, fetch_sensitivities, fetch_series
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # The blend, in plain sight. Keys are factor ids used throughout; values are
 # the target weights when every factor is live. Renormalized (a) model-wide
@@ -151,7 +152,7 @@ def _effective_blend_weights(db_path: Path) -> tuple[dict[str, float], str]:
         from owner_profile.models import NextDollarBlendWeights
         from owner_profile.store import get_current_profile
 
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             grouped = get_current_profile(conn)
         finally:
@@ -333,7 +334,7 @@ def _dcf_upside(db_path: Path, tickers: Sequence[str]) -> dict[str, tuple[float,
     if not db_path.exists():
         return {}
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return {}
     try:

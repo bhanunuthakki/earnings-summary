@@ -26,6 +26,7 @@ import sqlite3
 from pathlib import Path
 
 from ir_uploads import ISSUER_REGISTRY, calendar_id_from_fye
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # Active list types whose tickers get an auto registry entry. Mirrors
 # db.ACTIVE_LIST_TYPES (kept local to avoid importing the heavier db module).
@@ -119,7 +120,11 @@ def register_issuer(
         return False
     owns = conn is None
     if owns:
-        conn = sqlite3.connect(str(_db_path(repo_root, db_path)))
+        conn = connect_sqlite(
+            _db_path(repo_root, db_path),
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
     try:
         row = conn.execute(
             "SELECT name, fiscal_year_end FROM tracked_companies WHERE ticker = ? LIMIT 1",
@@ -160,7 +165,11 @@ def sync_all(repo_root: Path, *, db_path: Path | None = None) -> dict:
     reflect the current list regardless of how tickers were added/removed
     (including raw-SQL ``list_type`` edits the trigger path wouldn't catch).
     """
-    conn = sqlite3.connect(str(_db_path(repo_root, db_path)))
+    conn = connect_sqlite(
+        _db_path(repo_root, db_path),
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
     try:
         placeholders = ",".join("?" * len(ACTIVE_LIST_TYPES))
         rows = conn.execute(

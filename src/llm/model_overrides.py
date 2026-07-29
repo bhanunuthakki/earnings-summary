@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from db_paths import resolve_db_path
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ def active_override(purpose: str, *, db_path: Path | str | None = None) -> str |
     if path is None or not Path(path).exists():
         return None
     try:
-        conn = sqlite3.connect(str(path), timeout=5.0)
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             row = conn.execute(
                 """
@@ -92,7 +93,11 @@ def write_pin_override(
         raise RuntimeError("write_pin_override: no DB path available")
     now_iso = datetime.now(UTC).replace(tzinfo=None).isoformat()
     reason_json = json.dumps(reason or {}, ensure_ascii=False)
-    conn = sqlite3.connect(str(path), timeout=10.0)
+    conn = connect_sqlite(
+        path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
     try:
         conn.execute(
             "UPDATE model_pin_overrides SET active = 0 WHERE purpose = ? AND active = 1",
@@ -131,7 +136,11 @@ def deactivate_override(
     path = resolve_db_path(db_path)
     if path is None:
         raise RuntimeError("deactivate_override: no DB path available")
-    conn = sqlite3.connect(str(path), timeout=10.0)
+    conn = connect_sqlite(
+        path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
     try:
         cur = conn.execute(
             "UPDATE model_pin_overrides SET active = 0 WHERE purpose = ? AND active = 1",
@@ -172,7 +181,11 @@ def record_verdict(
     if path is None:
         raise RuntimeError("record_verdict: no DB path available")
     now_iso = datetime.now(UTC).replace(tzinfo=None).isoformat()
-    conn = sqlite3.connect(str(path), timeout=10.0)
+    conn = connect_sqlite(
+        path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
     try:
         conn.execute(
             """

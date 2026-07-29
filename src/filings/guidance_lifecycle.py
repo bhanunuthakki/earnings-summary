@@ -103,6 +103,7 @@ from pydantic import BaseModel
 from filings import section_items
 from filings.metric_lifecycle import StandardTransitionCorpus, gap_calibration
 from filings.models import HardStopError
+from provenance.selection import selected_transcripts_relation
 
 log = logging.getLogger(__name__)
 
@@ -215,12 +216,13 @@ def load_commitment_periods(conn: sqlite3.Connection, ticker: str) -> list[Commi
     pull; treating those as separate periods would fabricate phantom gaps),
     counting commitments across ANY of that period's transcripts and marking
     coverage-known when ANY of them has a commitment or a scan-log row."""
+    transcripts = selected_transcripts_relation(conn)
     rows = conn.execute(
-        """
+        f"""
         SELECT tr.period_end,
                COUNT(DISTINCT mc.id) AS n_commit,
                MAX(CASE WHEN csl.transcript_id IS NOT NULL THEN 1 ELSE 0 END) AS any_scanned
-        FROM transcripts tr
+        FROM {transcripts} tr
         LEFT JOIN transcript_segments ts ON ts.transcript_id = tr.id
         LEFT JOIN management_commitments mc ON mc.transcript_segment_id = ts.id
         LEFT JOIN commitment_scan_log csl ON csl.transcript_id = tr.id
@@ -250,10 +252,11 @@ def all_commitment_tickers(conn: sqlite3.Connection) -> list[str]:
     wave gate. Deliberately the full set with ANY signal, not just tickers
     with commitments, so a ticker that was scanned and found nothing still
     counts as a real (negative) comparison point."""
+    transcripts = selected_transcripts_relation(conn)
     rows = conn.execute(
-        """
+        f"""
         SELECT DISTINCT tr.ticker
-        FROM transcripts tr
+        FROM {transcripts} tr
         WHERE EXISTS (
             SELECT 1 FROM transcript_segments ts
             JOIN management_commitments mc ON mc.transcript_segment_id = ts.id

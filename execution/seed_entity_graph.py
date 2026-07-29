@@ -50,6 +50,7 @@ from entity_store import (  # noqa: E402
     upsert_entity,
     upsert_relationship,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("seed_entity_graph")
 
@@ -219,7 +220,7 @@ def backfill_segment_facts_entity_id(repo_root: Path) -> tuple[int, int]:
     db_path = repo_root / "data" / "portfolio.db"
     if not db_path.exists():
         return (0, 0)
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     try:
         # For each (ticker, dim_name) with NULL segment_entity_id → look up
@@ -387,7 +388,11 @@ def main() -> int:
     )
 
     # Final state
-    conn = sqlite3.connect(str(args.repo_root / "data" / "portfolio.db"))
+    conn = connect_sqlite(
+        str(args.repo_root / "data" / "portfolio.db"),
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
     try:
         ent = conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0]
         aliases = conn.execute("SELECT COUNT(*) FROM entity_aliases").fetchone()[0]

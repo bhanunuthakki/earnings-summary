@@ -47,6 +47,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from pipeline.cadence_policy import STATEMENT_STALE_DAYS  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 Mode = Literal["full", "stale"]
 
@@ -165,7 +166,7 @@ def _check_fmp_freshness(
     """
     if not db_path.exists():
         return (None, None)
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute(

@@ -77,6 +77,7 @@ from clock import now_iso
 from llm.cli import is_hard_stop
 from llm.structured import StructuredParseError, call_llm_structured
 from models.facts import Unit
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 if TYPE_CHECKING:
     from compute.thesis_evaluator import KpiObservation
@@ -629,7 +630,11 @@ def _open(db_path: Path | str) -> sqlite3.Connection | None:
         path = Path(db_path)
         if not path.exists():
             return None
-        conn = sqlite3.connect(str(path), timeout=5.0)
+        conn = connect_sqlite(
+            path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.row_factory = sqlite3.Row
         cols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)").fetchall()}

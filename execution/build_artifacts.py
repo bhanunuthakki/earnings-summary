@@ -53,6 +53,7 @@ from report.renderers.workspace_html import render as render_workspace_html  # n
 from report.sections import financials as financials_section_mod  # noqa: E402
 from report.sections import snapshot as snapshot_section_mod  # noqa: E402
 from report.sections.etf_holdings import build_etf_brief  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # Ticker-specific extractors that auto-populate data/ticker_specific/<T>/
 # Each entry maps a ticker to a list of (script_name, extra_args) pairs.
@@ -125,7 +126,7 @@ def _ensure_segment_definitions(ticker: str, repo_root: Path) -> None:
     if not db_path.exists():
         _emit("segment_defs_skipped", {"ticker": ticker, "reason": "no DB"})
         return
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         result = _extract_segment_definitions(ticker, repo_root, conn)
@@ -164,7 +165,7 @@ def _ensure_peer_selection(ticker: str, repo_root: Path) -> None:
     if not db_path.exists():
         _emit("peer_selection_skipped", {"ticker": ticker, "reason": "no DB"})
         return
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         result = _extract_peer_selection(ticker, repo_root, conn)
@@ -198,7 +199,7 @@ def _ensure_key_metrics(ticker: str, repo_root: Path) -> None:
     if not db_path.exists():
         _emit("key_metrics_skipped", {"ticker": ticker, "reason": "no DB"})
         return
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         result = _extract_key_metrics(ticker, repo_root, conn)
@@ -365,7 +366,7 @@ def _is_tracked(repo_root: Path, ticker: str) -> bool:
     db_path = repo_root / "data" / "portfolio.db"
     if not db_path.exists():
         return False
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     cursor = conn.cursor()
     cursor.execute("SELECT 1 FROM tracked_companies WHERE ticker = ? LIMIT 1", (ticker,))
     row = cursor.fetchone()
@@ -377,7 +378,7 @@ def _all_tracked(repo_root: Path) -> list[str]:
     db_path = repo_root / "data" / "portfolio.db"
     if not db_path.exists():
         return []
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     cursor = conn.cursor()
     cursor.execute(
         f"SELECT DISTINCT ticker FROM tracked_companies "
@@ -561,7 +562,7 @@ def _log_brief_provenance(
     db_path = repo_root / "data" / "portfolio.db"
     if not db_path.exists():
         return
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         table_present = conn.execute(
             "SELECT name FROM sqlite_master "
@@ -619,7 +620,7 @@ def _resolve_kind(repo_root: Path, ticker: str) -> InstrumentType | None:
     db_path = repo_root / "data" / "portfolio.db"
     if not db_path.exists():
         return None
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         return get_instrument_kind(conn, ticker)

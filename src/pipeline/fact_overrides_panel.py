@@ -20,6 +20,7 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 
 _PANEL_STYLE = """<style>
@@ -81,7 +82,7 @@ def collect_rows(db_path: Path) -> list[_OverrideRow]:
     if not db_path.exists():
         return []
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return []
     conn.row_factory = sqlite3.Row

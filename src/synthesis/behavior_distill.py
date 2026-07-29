@@ -56,6 +56,7 @@ from calibration_guard import confidence_note
 from identity import DEFAULT_USER_ID
 from owner_profile.models import BehavioralRule
 from owner_profile.store import OwnerProfileFactRow, append_fact, list_facts
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ def graded_decision_corpus(
     if db_path is None or not Path(db_path).exists():
         return []
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except (sqlite3.Error, OSError, ValueError):
         return []
     try:
@@ -345,7 +346,7 @@ def run_behavior_distill(
         row.key for row in list_facts_safe(db_path, status="affirmed", category="behavioral")
     }
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.execute("PRAGMA busy_timeout = 30000")  # see reference_platform_invariants memory
     try:
         # ``proposals`` is already dict-only by the DistillCall contract (the
@@ -406,7 +407,7 @@ def list_facts_safe(
     if db_path is None or not Path(db_path).exists():
         return []
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except (sqlite3.Error, OSError, ValueError):
         return []
     try:

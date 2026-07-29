@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import cast
 
 from llm_client import JSON_FENCE_RE, call_llm
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from table_extractors.base import ExtractionOutcome
 
 # Aliases for the entity_store callables we lazy-import per call.
@@ -327,7 +328,7 @@ def _persist(
     # connection while we hold this one. ----
     inserted = 0
     logged = 0
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     has_extractions = _table_present(conn, "customer_concentrations")
     has_ext_log = _table_present(conn, "extractions")
     try:

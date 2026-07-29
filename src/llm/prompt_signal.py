@@ -29,6 +29,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 WINDOW_DAYS = 60
 
 # Deficit blend. Eval evidence dominates; operational noise is a small nudge.
@@ -223,7 +225,7 @@ def build_improvement_signal(db_path: Path, purpose: str) -> ImprovementSignal:
     if not Path(db_path).exists():
         return _prior_only(purpose, "DB not found — deficit is a prior, not a measurement")
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             avg_score, fail_rate, failures, n_infra = _eval_evidence(conn, purpose)

@@ -50,6 +50,7 @@ for _p in (str(PROJECT_ROOT), str(PROJECT_ROOT / "src")):
 
 from signals.store import record_media_appearance  # noqa: E402
 from sources.registry import CallStatus, log_call  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Curated show allowlist — (show_name, rss_url).
@@ -280,7 +281,13 @@ def run(
     cutoff_ts = _now.timestamp() - days * 86400.0
 
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(
+            str(db_path),
+            role=SQLiteConnectionRole.WRITER,
+            # The feed adapter intentionally supports its historical
+            # signals-only schema for deterministic replay.
+            schema_preflight=False,
+        )
         conn.execute("PRAGMA foreign_keys = ON")
     except sqlite3.Error as exc:
         _log("db_open_failed", db_path=str(db_path), error=str(exc))

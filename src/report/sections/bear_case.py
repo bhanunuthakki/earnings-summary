@@ -46,6 +46,7 @@ from report.sections._ts_signals import (
     format_signals_as_prompt_block,
     load_all_signals,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -285,7 +286,7 @@ def _strategic_targets_md(ticker: str, repo_root: Path) -> str:
     if not db_path.exists():
         return ""
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             present = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='strategic_targets'"

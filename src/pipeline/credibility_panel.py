@@ -23,6 +23,7 @@ from calibration_guard import confidence_note
 from credibility.calibration import ReliabilityTable, build_reliability_table
 from credibility.priors import MeasuredPriors, build_measured_priors
 from pipeline.confidence import TIER_BASE, UNKNOWN_TIER_BASE
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _PANEL_STYLE = """<style>
 .cred-note { margin-top:14px; }
@@ -72,7 +73,7 @@ def _load(db_path: Path, *, user_id: str) -> tuple[ReliabilityTable | None, Meas
     if not db_path.exists():
         return None, None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None, None
     conn.row_factory = sqlite3.Row

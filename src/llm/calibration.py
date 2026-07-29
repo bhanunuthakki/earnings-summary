@@ -19,6 +19,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 if TYPE_CHECKING:
     pass
 
@@ -65,7 +67,13 @@ def _open(db_path: Path | str) -> sqlite3.Connection | None:
     if not p.exists():
         return None
     try:
-        conn = sqlite3.connect(str(p), timeout=5.0)
+        conn = connect_sqlite(
+            p,
+            role=SQLiteConnectionRole.WRITER,
+            # Calibration is an optional compatibility bridge introduced long
+            # before the current head; _table_exists gates the narrow write.
+            schema_preflight=False,
+        )
         conn.row_factory = sqlite3.Row
         return conn
     except sqlite3.Error as exc:

@@ -49,6 +49,7 @@ from allocation.concentration import classify_zone
 from allocation.recommendation_schema import IncrementalDollarRecommendation, RecommendationPlan
 from owner_profile.store import list_facts
 from portfolio_weights import read_materialized_weights, read_materialized_weights_as_of
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import ticker_label
 from ui.prose import render_prose
 from ui.time import stamp_html
@@ -660,7 +661,7 @@ def render_risk_budget_section(db_path: Path, repo_root: Path) -> str:
 
 def _affirmed_capacity_limits(db_path: Path) -> str:
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return ""
     try:
@@ -761,7 +762,7 @@ def render_portfolio_posture_section(db_path: Path, repo_root: Path) -> str:
 
 def _affirmed_constraint_lines(db_path: Path) -> str:
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return ""
     try:

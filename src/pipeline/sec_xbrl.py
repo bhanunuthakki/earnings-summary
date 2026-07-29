@@ -42,16 +42,19 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import sqlite3
+import tempfile
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal, NamedTuple, cast
+from typing import Literal, NamedTuple, Self, cast
 
 import requests
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from credibility.observations import FINANCIAL_FACTS, record_restatement_observation
 from models.documents import (
@@ -66,9 +69,18 @@ from pipeline import locators
 from pipeline.confidence import score_confidence
 from pipeline.kpi_persistence import record_validation_issue
 from pipeline.restatement_detector import (
-    _table_has_column,
     insert_with_restatement_detection,
 )
+from provenance.issuer_registry import IssuerRegistry
+from provenance.sec_companyfacts_capture import (
+    CompanyFactsAccessionDocument,
+    CompanyFactsContractError,
+    CompanyFactsPayload,
+    SecCompanyFactsCaptureRequest,
+    capture_sec_companyfacts,
+    parse_companyfacts_body,
+)
+from sec_identity import sec_user_agent
 
 log = logging.getLogger(__name__)
 
@@ -550,35 +562,62 @@ _FORM_TO_DOC_TYPE: dict[str, DocType] = {
 _ANNUAL_FORMS = frozenset({"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"})
 
 
-_HEADERS = {
-    "User-Agent": "EarningsSummary/1.0 (research@example.com)",
-    "Accept-Encoding": "gzip, deflate",
-}
-
 _CURRENCY_CODES = frozenset(c.value for c in Currency)
 
 
-def fetch_companyfacts(cik: str, *, timeout: int = 30) -> dict[str, object]:
+class FetchedCompanyFacts(BaseModel):
+    """Exact HTTP response bytes and retrieval clocks before schema parsing."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_url: str = Field(min_length=1)
+    raw_body: bytes = Field(min_length=1)
+    observed_at: datetime
+    retrieved_at: datetime
+
+    @model_validator(mode="after")
+    def _validate_clocks(self) -> Self:
+        if self.retrieved_at < self.observed_at:
+            raise ValueError("retrieved_at must not precede observed_at")
+        return self
+
+
+def fetch_companyfacts(cik: str, *, timeout: int = 30) -> FetchedCompanyFacts:
     """Hit /api/xbrl/companyfacts/CIK{cik}.json. CIK must be 10-digit zero-padded."""
     url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
-    response = requests.get(url, headers=_HEADERS, timeout=timeout)
+    observed_at = datetime.now(UTC)
+    response = requests.get(
+        url,
+        headers={
+            "User-Agent": sec_user_agent(),
+            "Accept-Encoding": "gzip, deflate",
+        },
+        timeout=timeout,
+    )
     response.raise_for_status()
-    return response.json()
+    retrieved_at = datetime.now(UTC)
+    return FetchedCompanyFacts(
+        source_url=url,
+        raw_body=response.content,
+        observed_at=observed_at,
+        retrieved_at=retrieved_at,
+    )
 
 
 def write_companyfacts_to_disk(
     payload: dict[str, object], *, ticker: str, project_root: Path
 ) -> Path:
-    """Persist companyfacts JSON; returns the absolute path."""
+    """Persist the compatibility latest-cache atomically; not a provenance anchor."""
     out_dir = project_root / "data" / "historical" / "sec"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{ticker.upper()}_companyfacts.json"
-    out_path.write_text(json.dumps(payload), encoding="utf-8")
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    _atomic_write_bytes(out_path, body)
     return out_path
 
 
 @dataclass(frozen=True)
-class _AccessionRecord:
+class CompanyFactsAccessionRecord:
     """One SEC filing's metadata extracted from companyfacts entries."""
 
     accession: str
@@ -588,50 +627,72 @@ class _AccessionRecord:
     fp: str | None
 
 
-def _enumerate_accessions(payload: dict[str, object]) -> dict[str, _AccessionRecord]:
+def enumerate_companyfacts_accessions(
+    payload: dict[str, object],
+) -> dict[str, CompanyFactsAccessionRecord]:
     """Walk every fact in companyfacts, collect unique accession numbers + their metadata."""
-    out: dict[str, _AccessionRecord] = {}
+    out: dict[str, CompanyFactsAccessionRecord] = {}
     facts = payload.get("facts", {})
     if not isinstance(facts, dict):
         return out
-    for namespace_facts in facts.values():
-        if not isinstance(namespace_facts, dict):
+    for namespace_facts_raw in cast("dict[str, object]", facts).values():
+        if not isinstance(namespace_facts_raw, dict):
             continue
-        for tag_data in namespace_facts.values():
-            if not isinstance(tag_data, dict):
+        namespace_facts = cast("dict[str, object]", namespace_facts_raw)
+        for tag_data_raw in namespace_facts.values():
+            if not isinstance(tag_data_raw, dict):
                 continue
+            tag_data = cast("dict[str, object]", tag_data_raw)
             units = tag_data.get("units", {})
             if not isinstance(units, dict):
                 continue
-            for entries in units.values():
-                if not isinstance(entries, list):
+            for entries_raw in cast("dict[str, object]", units).values():
+                if not isinstance(entries_raw, list):
                     continue
-                for entry in entries:
-                    accn = entry.get("accn")
-                    form = entry.get("form")
-                    if not accn or not form:
+                for entry_raw in cast("list[object]", entries_raw):
+                    if not isinstance(entry_raw, dict):
                         continue
+                    entry = cast("dict[str, object]", entry_raw)
+                    accn_raw = entry.get("accn")
+                    form_raw = entry.get("form")
+                    if not isinstance(accn_raw, str) or not isinstance(form_raw, str):
+                        continue
+                    accn = accn_raw
+                    form = form_raw
                     if accn in out:
                         continue
-                    out[accn] = _AccessionRecord(
+                    fy_raw = entry.get("fy")
+                    fp_raw = entry.get("fp")
+                    out[accn] = CompanyFactsAccessionRecord(
                         accession=accn,
                         form=form,
                         filed=str(entry.get("filed", "")),
-                        fy=entry.get("fy"),
-                        fp=entry.get("fp"),
+                        fy=fy_raw if isinstance(fy_raw, int) else None,
+                        fp=fp_raw if isinstance(fp_raw, str) else None,
                     )
     return out
+
+
+# Compatibility aliases for existing imports while callers migrate to the
+# public, typed accession API.
+_AccessionRecord = CompanyFactsAccessionRecord
+_enumerate_accessions = enumerate_companyfacts_accessions
 
 
 def upsert_accession_documents(
     conn: sqlite3.Connection,
     *,
     ticker: str,
-    accessions: dict[str, _AccessionRecord],
+    accessions: dict[str, CompanyFactsAccessionRecord],
     project_root: Path,
+    normalized_cik: str | None = None,
+    snapshot_relative_path: str | None = None,
+    snapshot_byte_size: int = 0,
+    fetched_at: datetime | None = None,
 ) -> dict[str, int]:
     """Insert one `documents` row per unique accession; returns accession -> documents.id map."""
     accession_to_doc_id: dict[str, int] = {}
+    captured_at = fetched_at or datetime.now()
     for accn, record in accessions.items():
         doc_type = _FORM_TO_DOC_TYPE.get(record.form)
         if doc_type is None:
@@ -642,42 +703,66 @@ def upsert_accession_documents(
         if row is not None:
             accession_to_doc_id[accn] = int(row["id"])
             continue
-        rel_path = f"data/historical/sec/{ticker.upper()}_companyfacts.json#accn={accn}"
+        base_path = (
+            snapshot_relative_path
+            if snapshot_relative_path is not None
+            else f"data/historical/sec/{ticker.upper()}_companyfacts.json"
+        )
+        rel_path = f"{base_path}#accn={accn}"
         source_url = (
-            f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
-            f"&CIK={ticker}&type={record.form}&dateb=&owner=include&count=40"
+            f"https://data.sec.gov/api/xbrl/companyfacts/CIK{normalized_cik}.json"
+            if normalized_cik is not None
+            else (
+                f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany"
+                f"&CIK={ticker}&type={record.form}&dateb=&owner=include&count=40"
+            )
         )
         tier = tier_for_source_type(SourceType.SEC_XBRL).value
-        common_args = (
+        columns = [
+            "ticker",
+            "source_type",
+            "doc_type",
+            "period_start",
+            "period_end",
+            "file_path",
+            "sha256",
+            "fetched_at",
+            "fetch_status",
+            "http_code",
+            "raw_bytes_size",
+            "source_url",
+            "parent_document_id",
+        ]
+        values: list[object] = [
             ticker.upper(),
             SourceType.SEC_XBRL.value,
             doc_type.value,
+            None,
+            None,
             rel_path,
             sha256,
-            datetime.now(),
+            captured_at,
             FetchStatus.OK.value,
+            None,
+            snapshot_byte_size,
             source_url,
+            None,
+        ]
+        if _has_column(conn, "documents", "source_quality_tier"):
+            columns.append("source_quality_tier")
+            values.append(tier)
+        if _has_column(conn, "documents", "accession_number"):
+            columns.append("accession_number")
+            values.append(accn)
+        if _has_column(conn, "documents", "filing_date"):
+            columns.append("filing_date")
+            values.append(record.filed or None)
+        placeholders = ",".join("?" for _ in columns)
+        cur = conn.execute(
+            f"INSERT INTO documents ({','.join(columns)}) VALUES ({placeholders})",  # nosec B608 -- trusted internal SQL shape; values remain bound
+            tuple(values),
         )
-        if _table_has_column(conn, "documents", "source_quality_tier"):
-            cur = conn.execute(
-                "INSERT INTO documents "
-                "(ticker, source_type, doc_type, period_start, period_end, file_path, "
-                " sha256, fetched_at, fetch_status, http_code, raw_bytes_size, source_url, "
-                " parent_document_id, source_quality_tier) "
-                "VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, NULL, 0, ?, NULL, ?)",
-                (*common_args, tier),
-            )
-        else:
-            cur = conn.execute(
-                "INSERT INTO documents "
-                "(ticker, source_type, doc_type, period_start, period_end, file_path, "
-                " sha256, fetched_at, fetch_status, http_code, raw_bytes_size, source_url, "
-                " parent_document_id) "
-                "VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, NULL, 0, ?, NULL)",
-                common_args,
-            )
         accession_to_doc_id[accn] = int(cur.lastrowid) if cur.lastrowid is not None else 0
-    conn.commit()
     return accession_to_doc_id
 
 
@@ -1127,8 +1212,90 @@ def insert_facts_from_companyfacts(
                     superseded_id=superseded_id,
                     new_value=pf.value,
                 )
-    conn.commit()
     return inserted
+
+
+def _has_table(conn: sqlite3.Connection, table: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        is not None
+    )
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    return any(
+        str(row[1]) == column for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    )
+
+
+def _has_trigger(conn: sqlite3.Connection, trigger: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+            (trigger,),
+        ).fetchone()
+        is not None
+    )
+
+
+def _validated_legacy_payload(payload: CompanyFactsPayload) -> dict[str, object]:
+    """Expose validated SEC JSON to the legacy deterministic parser."""
+
+    return cast(
+        "dict[str, object]",
+        payload.model_dump(mode="json", by_alias=True),
+    )
+
+
+def _companyfacts_snapshot_relative_path(digest: str) -> str:
+    return f"data/historical/sec/snapshots/{digest[:2]}/{digest}.json"
+
+
+def _atomic_write_bytes(path: Path, body: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, path)
+    finally:
+        temporary = Path(temporary_name)
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _quarantine_contract_failure(
+    *,
+    project_root: Path,
+    ticker: str,
+    raw_body: bytes,
+) -> Path:
+    digest = hashlib.sha256(raw_body).hexdigest()
+    path = (
+        project_root
+        / ".tmp"
+        / "sec_companyfacts_contract_failures"
+        / f"{ticker.upper()}_{digest}.json"
+    )
+    _atomic_write_bytes(path, raw_body)
+    log.error(
+        {
+            "event": "sec_companyfacts_contract_failure_quarantined",
+            "ticker": ticker.upper(),
+            "sha256": digest,
+            "raw_response_path": str(path),
+        }
+    )
+    return path
 
 
 def ingest_for_ticker(
@@ -1138,7 +1305,7 @@ def ingest_for_ticker(
     project_root: Path,
     run_id: str = "sec_xbrl_ingest",
 ) -> IngestStats:
-    """End-to-end: fetch + write to disk + insert documents + insert facts.
+    """End-to-end: fetch + immutable capture + documents + financial facts.
 
     ``run_id`` flows to the unit sanity guard (see
     :func:`insert_facts_from_companyfacts`); the fetch driver passes its
@@ -1146,17 +1313,98 @@ def ingest_for_ticker(
     cik = CIK_MAP.get(ticker.upper())
     if cik is None:
         raise ValueError(f"No CIK registered for {ticker}; add to CIK_MAP")
-    payload = fetch_companyfacts(cik)
-    write_companyfacts_to_disk(payload, ticker=ticker, project_root=project_root)
-    accessions = _enumerate_accessions(payload)
-    accession_to_doc_id = upsert_accession_documents(
-        conn, ticker=ticker, accessions=accessions, project_root=project_root
-    )
-    facts_inserted = insert_facts_from_companyfacts(
+    fetched = fetch_companyfacts(cik)
+    try:
+        validated_payload = parse_companyfacts_body(
+            fetched.raw_body,
+            expected_cik=cik,
+        )
+    except CompanyFactsContractError as exc:
+        quarantine_path = _quarantine_contract_failure(
+            project_root=project_root,
+            ticker=ticker,
+            raw_body=fetched.raw_body,
+        )
+        raise CompanyFactsContractError(
+            str(exc),
+            raw_response_path=quarantine_path,
+        ) from None
+    payload = _validated_legacy_payload(validated_payload)
+    digest = hashlib.sha256(fetched.raw_body).hexdigest()
+    snapshot_relative_path = _companyfacts_snapshot_relative_path(digest)
+    accessions = enumerate_companyfacts_accessions(payload)
+    evidence_binding_ready = _has_table(
         conn,
-        ticker=ticker,
-        payload=payload,
-        accession_to_doc_id=accession_to_doc_id,
-        run_id=run_id,
+        "legacy_document_evidence_binding_revisions",
     )
+    post_cutover_trigger = _has_trigger(
+        conn,
+        "trg_financial_facts_observation_insert",
+    )
+    if post_cutover_trigger and not evidence_binding_ready:
+        raise RuntimeError(
+            "SEC CompanyFacts ingestion requires migration "
+            "0231_legacy_document_evidence_bindings after fact cutover"
+        )
+    try:
+        accession_to_doc_id = upsert_accession_documents(
+            conn,
+            ticker=ticker,
+            accessions=accessions,
+            project_root=project_root,
+            normalized_cik=cik,
+            snapshot_relative_path=snapshot_relative_path,
+            snapshot_byte_size=len(fetched.raw_body),
+            fetched_at=fetched.retrieved_at,
+        )
+        if evidence_binding_ready:
+            canonical_issuer = IssuerRegistry(conn).resolve_identifier(
+                "sec_cik",
+                cik,
+                knowledge_at=fetched.retrieved_at,
+            )
+            capture_sec_companyfacts(
+                conn,
+                SecCompanyFactsCaptureRequest(
+                    ticker=ticker,
+                    normalized_cik=cik,
+                    issuer_id=canonical_issuer.issuer_id,
+                    source_url=fetched.source_url,
+                    raw_body=fetched.raw_body,
+                    payload=validated_payload,
+                    accession_documents=tuple(
+                        CompanyFactsAccessionDocument(
+                            accession_number=accession,
+                            legacy_document_id=document_id,
+                        )
+                        for accession, document_id in sorted(accession_to_doc_id.items())
+                    ),
+                    blob_root=project_root / "data" / "historical" / "sec" / "snapshots",
+                    observed_at=fetched.observed_at,
+                    retrieved_at=fetched.retrieved_at,
+                ),
+            )
+        else:
+            log.warning(
+                {
+                    "event": "sec_companyfacts_legacy_provenance_path",
+                    "ticker": ticker.upper(),
+                    "reason": "evidence_binding_schema_not_installed",
+                }
+            )
+        facts_inserted = insert_facts_from_companyfacts(
+            conn,
+            ticker=ticker,
+            payload=payload,
+            accession_to_doc_id=accession_to_doc_id,
+            run_id=run_id,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    latest_cache = (
+        project_root / "data" / "historical" / "sec" / f"{ticker.upper()}_companyfacts.json"
+    )
+    _atomic_write_bytes(latest_cache, fetched.raw_body)
     return IngestStats(accessions_inserted=len(accession_to_doc_id), facts_inserted=facts_inserted)

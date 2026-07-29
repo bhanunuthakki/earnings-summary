@@ -15,7 +15,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -23,6 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from etf_role_synthesis import generate_role_synthesis  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def main() -> int:
@@ -43,7 +43,7 @@ def main() -> int:
         print(f"[etf-workup] DB not found: {db_path}", flush=True)
         return 1
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     try:
         artifact_id, status = generate_role_synthesis(
             conn, repo_root, db_path, ticker, force=args.force

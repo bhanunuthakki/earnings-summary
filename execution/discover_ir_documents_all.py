@@ -56,6 +56,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import ir_fetch_status  # noqa: E402
 from ir_uploads import calendar_id_from_fye  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # Roster = the "briefed" active universe (portfolio + evaluation). Hardcoded to
 # match db.BRIEFED_LIST_TYPES (the import is avoided to keep this orchestrator
@@ -99,7 +100,7 @@ def _resolve_roster(db_path: Path, requested: list[str] | None) -> tuple[list[st
     roster: list[str] = []
     if db_path.exists():
         try:
-            conn = sqlite3.connect(str(db_path))
+            conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
             conn.row_factory = sqlite3.Row
             try:
                 rows = conn.execute(
@@ -126,7 +127,7 @@ def _ticker_fye(db_path: Path, ticker: str) -> str | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             row = conn.execute(
@@ -148,7 +149,7 @@ def _set_brief_dirty(db_path: Path, ticker: str) -> bool:
     if not db_path.exists():
         return False
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             conn.execute(
                 "UPDATE tracked_companies SET brief_dirty = 1 WHERE ticker = ?",

@@ -65,6 +65,7 @@ from execution.fetch_news_websearch import fetch_websearch_news_for_ticker  # no
 from llm.cli import is_hard_stop  # noqa: E402
 from news.store import NewsRow, drop_duplicate_stories, upsert_news_rows  # noqa: E402
 from signals.quality import score_unscored_signals  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 SOURCES = ("fmp", "websearch", "auto")
 DEFAULT_SOURCE = "auto"
@@ -160,7 +161,7 @@ def portfolio_tickers(db_path: str) -> frozenset[str]:
     """Held names (list_type='portfolio', not archived) — the websearch-fallback
     eligibility set under the default 'portfolio' scope. Empty set if the table
     is absent (then NO ticker gets the costly fallback, the safe direction)."""
-    conn = sqlite3.connect(db_path)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         try:
             rows = conn.execute(
@@ -369,7 +370,7 @@ def _fire_deadman_if_stale(db_path: str, *, tickers_n: int, inserted_total: int)
     if tickers_n < 5:
         return
     try:
-        conn = sqlite3.connect(db_path, timeout=30.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             row = conn.execute("SELECT MAX(published_at) FROM news").fetchone()
         finally:
@@ -455,7 +456,7 @@ def run(
     # collection — a brief concurrent writer must stall a write, not throw a
     # ticker's rows away with "database is locked" (default busy wait is 5s;
     # lock contention observed live 2026-07-03).
-    conn = sqlite3.connect(db_path, timeout=30.0)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     inserted_total = 0
     deduped_total = 0
     persist_failures = 0

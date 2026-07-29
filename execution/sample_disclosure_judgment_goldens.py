@@ -46,6 +46,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from filings.specificity import extract_diff_hunk  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("sample_disclosure_judgment_goldens")
 
@@ -251,8 +252,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    db_uri = f"file:{Path(args.db).resolve().as_posix()}?mode=ro"
-    conn = sqlite3.connect(db_uri, uri=True)
+    conn = connect_sqlite(Path(args.db), role=SQLiteConnectionRole.READ_ONLY)
     try:
         sample = build_sample(conn, seed=args.seed)
     finally:

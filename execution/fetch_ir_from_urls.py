@@ -46,6 +46,7 @@ import ir_fetch_status  # noqa: E402
 from execution.fetch_ir_documents import process_ticker  # noqa: E402
 from ir_pipeline.manifest import ManifestEntry, merge_write  # noqa: E402
 from ir_uploads import calendar_id_from_fye  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def _ticker_fye(db_path: Path, ticker: str) -> str | None:
@@ -53,7 +54,7 @@ def _ticker_fye(db_path: Path, ticker: str) -> str | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             row = conn.execute(
@@ -75,7 +76,7 @@ def _set_brief_dirty(db_path: Path, ticker: str) -> None:
     if not db_path.exists():
         return
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             conn.execute(
                 "UPDATE tracked_companies SET brief_dirty = 1 WHERE ticker = ?", (ticker.upper(),)

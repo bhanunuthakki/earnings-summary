@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import sys
 from pathlib import Path
 from typing import cast
@@ -29,6 +30,7 @@ from report.models import (
     SectionStatus,
 )
 from report.sections._common import budget_gate, missing
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -157,9 +159,7 @@ def build(
 def _load_packages(ticker: str, db_path: Path) -> list[dict[str, object]]:
     if not db_path.exists():
         return []
-    import sqlite3
-
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         conn.row_factory = sqlite3.Row
         # Verify table exists

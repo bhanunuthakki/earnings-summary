@@ -36,6 +36,7 @@ from typing import cast
 from llm.cli import is_hard_stop
 from llm.structured import StructuredParseError, call_llm_structured
 from signals.store import NEWS_MIRRORED_TYPES
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -144,7 +145,7 @@ def score_unscored_signals(
         tally["db_unavailable"] = 1
         return tally
     try:
-        conn = sqlite3.connect(str(path), timeout=30.0)
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     except sqlite3.Error:
         tally["db_unavailable"] = 1
         return tally

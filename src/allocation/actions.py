@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from db_paths import resolve_db_path
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 __all__ = ["ACTION_VERBS", "act_on_recommendation"]
 
@@ -66,7 +67,11 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection:
     path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         raise RecommendationActionError("portfolio DB not available")
-    conn = sqlite3.connect(str(path), timeout=5.0)
+    conn = connect_sqlite(
+        path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.row_factory = sqlite3.Row
     return conn

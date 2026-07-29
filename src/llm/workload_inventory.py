@@ -32,6 +32,7 @@ from evals.coverage import META_PURPOSES, eval_coverage
 from llm.cli import DEFAULT_MODEL, LLM_MODELS
 from llm.eval_scopes import EVAL_SCOPES
 from llm.model_ladder import cheaper_candidates, model_cost
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 WINDOW_DAYS = 30
 _VERDICTS_PER_PURPOSE = 6
@@ -242,7 +243,7 @@ def build_workload_inventory(
     anywhere)."""
     if not db_path.exists():
         return []
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         raw = _load_purpose_rows(conn, window_days=window_days)

@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -30,6 +29,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 UPCOMING_WINDOW_DAYS = 90
 RECENT_WINDOW_DAYS = 45
@@ -106,7 +106,7 @@ def _parse_args() -> argparse.Namespace:
 
 def _load_tracked(repo_root: Path) -> list[tuple[str, str, str]]:
     db_path = repo_root / "data" / "portfolio.db"
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     c = conn.cursor()
     c.execute(
         f"SELECT ticker, name, list_type FROM tracked_companies "

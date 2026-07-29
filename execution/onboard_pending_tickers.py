@@ -91,6 +91,7 @@ from pipeline.cadence_policy import (  # noqa: E402
     check_onboarding_budget,
 )
 from pipeline.queries import open_db  # noqa: E402
+from provenance.selection import selected_transcripts_relation  # noqa: E402
 
 _DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
@@ -133,15 +134,16 @@ _SCAN_LOG_FILTER = (
 )
 
 
-def _commitments_pending_predicate(scan_log_exists: bool) -> str:
+def _commitments_pending_predicate(conn: sqlite3.Connection, scan_log_exists: bool) -> str:
     """The no_commitments arm, mirroring the extractor's own target selection
     (compute.say_do_extractor.transcripts_pending_extraction). Any predicate
     looser than the extractor's flags tickers whose --auto run returns
     targets=0, and those churn as hourly no-op subprocesses forever."""
     scan_filter = _SCAN_LOG_FILTER if scan_log_exists else ""
+    transcripts_relation = selected_transcripts_relation(conn).sql
     return f"""(
       EXISTS (
-        SELECT 1 FROM transcripts t
+        SELECT 1 FROM {transcripts_relation} t
         WHERE UPPER(t.ticker) = UPPER(tc.ticker){scan_filter}
       )
       AND NOT EXISTS (
@@ -153,8 +155,8 @@ def _commitments_pending_predicate(scan_log_exists: bool) -> str:
     )"""
 
 
-def _pending_sql(scan_log_exists: bool) -> str:
-    commitments_pending = _commitments_pending_predicate(scan_log_exists)
+def _pending_sql(conn: sqlite3.Connection, scan_log_exists: bool) -> str:
+    commitments_pending = _commitments_pending_predicate(conn, scan_log_exists)
     return f"""
 SELECT
   tc.ticker,
@@ -207,7 +209,7 @@ def find_pending_tickers(db_path: Path) -> list[tuple[str, str]]:
     """Return [(ticker, pending_reason), ...] for every P+W ticker still missing onboard data."""
     conn = open_db(db_path)
     try:
-        cur = conn.execute(_pending_sql(_scan_log_exists(conn)))
+        cur = conn.execute(_pending_sql(conn, _scan_log_exists(conn)))
         return [(row["ticker"], row["pending_reason"]) for row in cur.fetchall()]
     finally:
         conn.close()

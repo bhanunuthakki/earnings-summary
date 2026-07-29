@@ -19,7 +19,7 @@ from datetime import datetime
 from html import escape
 from pathlib import Path
 
-from user_state._db import now_naive_utc, open_conn
+from user_state._db import now_naive_utc, open_read_conn
 
 # One line per item, at most this many — the strip is a glance, not a console.
 _MAX_ROWS = 4
@@ -50,7 +50,7 @@ def _rows(db_path: Path | str | None, *, now: datetime | None = None) -> list[tu
     P2.2 governor adapter landed, even though the owner used to see them."""
     stamp = now or now_naive_utc()
     day_start = stamp.date().isoformat()
-    conn = open_conn(db_path)
+    conn = open_read_conn(db_path)
     try:
         sent = conn.execute(
             "SELECT class_, body FROM coach_pings "

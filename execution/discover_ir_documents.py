@@ -34,6 +34,7 @@ from ir_pipeline.discover import discover_history_hybrid  # noqa: E402
 from ir_pipeline.discover._docmeta import CandidateDoc  # noqa: E402
 from ir_pipeline.ir_url_overrides import resolve_ir_url  # noqa: E402
 from ir_pipeline.manifest import ManifestEntry, manifest_path, merge_write  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def _db_ir_url(db_path: Path, ticker: str) -> str | None:
@@ -45,7 +46,7 @@ def _db_ir_url(db_path: Path, ticker: str) -> str | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             row = conn.execute(

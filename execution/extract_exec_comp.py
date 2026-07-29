@@ -25,7 +25,6 @@ import argparse
 import json
 import logging
 import os
-import sqlite3
 import sys
 from pathlib import Path
 from typing import cast
@@ -37,6 +36,7 @@ import db  # noqa: E402
 from exec_comp_store import ExecCompPackage, PerformanceMetric, upsert_package  # noqa: E402
 from filing_text_fetcher import fetch_latest_def14a_text  # noqa: E402
 from llm_client import JSON_FENCE_RE, call_llm  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("extract_exec_comp")
 
@@ -269,7 +269,9 @@ def main() -> int:
     if args.ticker:
         tickers = [args.ticker.upper()]
     else:
-        conn = sqlite3.connect(str(args.repo_root / "data" / "portfolio.db"))
+        conn = connect_sqlite(
+            str(args.repo_root / "data" / "portfolio.db"), role=SQLiteConnectionRole.READ_ONLY
+        )
         tickers = [
             r[0]
             for r in conn.execute(

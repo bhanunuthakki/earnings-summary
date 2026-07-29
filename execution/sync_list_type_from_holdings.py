@@ -41,6 +41,7 @@ from list_type_reconcile import (  # noqa: E402
     compute_reclassification,
     load_pins,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def _money(v: float) -> str:
@@ -149,9 +150,9 @@ def main() -> int:
         return 0
 
     pins = load_pins(repo_root)
-    es_conn = sqlite3.connect(str(db_path))
+    es_conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     es_conn.row_factory = sqlite3.Row
-    tracker_conn = sqlite3.connect(f"file:{tracker_db.as_posix()}?mode=ro", uri=True)
+    tracker_conn = connect_sqlite(tracker_db, role=SQLiteConnectionRole.READ_ONLY)
     tracker_conn.row_factory = sqlite3.Row
     try:
         plan = compute_reclassification(

@@ -37,6 +37,9 @@ from typing import TextIO
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+
 _SNIPPET_CHARS = 900  # terminal-friendly head of long texts
 
 
@@ -62,7 +65,7 @@ def load_judged_cases(db_path: Path, *, purpose: str | None, n: int) -> list[Jud
     """The N most recent judged cases (judge_verdict NOT NULL), optionally
     scoped to one purpose. Newest first — recency over random sampling so a
     re-run audits the same window it just produced."""
-    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         sql = """

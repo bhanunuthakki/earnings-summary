@@ -23,6 +23,7 @@ from typing import cast
 from uuid import uuid4
 
 from clock import now_iso
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # ---------------------------------------------------------------------------
 # Naive-UTC convention
@@ -35,7 +36,11 @@ def _now_iso() -> str:
 
 
 def _open(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path), timeout=5.0)
+    conn = connect_sqlite(
+        db_path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=True,
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA foreign_keys = ON")

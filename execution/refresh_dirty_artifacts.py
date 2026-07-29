@@ -38,6 +38,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from llm_artifact_store import Artifact, drain_dirty  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("refresh_dirty_artifacts")
 
@@ -186,7 +187,7 @@ def _accrued_cost_usd(db_path: Path, since: datetime) -> float:
     if not db_path.exists():
         return 0.0
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             tables = {
                 r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")

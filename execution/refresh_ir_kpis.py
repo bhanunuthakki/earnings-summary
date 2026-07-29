@@ -32,6 +32,7 @@ from ir_pipeline.config import configured_tickers, get_config, save_config  # no
 from ir_pipeline.download import download_spreadsheet  # noqa: E402
 from ir_pipeline.ingest import ingest_spreadsheet_kpis  # noqa: E402
 from ir_pipeline.spreadsheet import parse_spreadsheet  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def main() -> int:
@@ -101,7 +102,7 @@ def main() -> int:
 
     parsed = parse_spreadsheet(path, cfg, max_quarters=args.quarters)
     db_path = repo_root / "data" / "portfolio.db"
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     try:
         inserted, doc_id = ingest_spreadsheet_kpis(conn, args.ticker, cfg, parsed, path)

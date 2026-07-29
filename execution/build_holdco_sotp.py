@@ -47,7 +47,6 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
-import sqlite3
 import sys
 from dataclasses import dataclass
 from datetime import date
@@ -64,6 +63,10 @@ T = os.environ.get("DCF_TICKER", "BN")
 DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 
 sys.path.insert(0, str(REPO / "src"))
+
+
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+
 try:  # persistence is best-effort — the workbook builds without a DB
     from dcf import persist as persist_mod
 except ImportError:  # pragma: no cover
@@ -204,7 +207,7 @@ def persist_dcf_run(
         assumption_snapshot_json=json.dumps({**snapshot, "workbook": str(DEST)}, indent=2),
         notes=f"workbook={DEST.name} ({snapshot.get('model', 'holdco SOTP')})",
     )
-    with sqlite3.connect(str(db)) as conn:
+    with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
         persist_mod.upsert(conn, row)
     return True
 

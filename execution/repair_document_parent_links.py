@@ -39,6 +39,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from runtime.secrets import load_project_env  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def _int_list() -> list[int]:
@@ -95,7 +96,7 @@ def _quote_identifier(value: str) -> str:
 
 def _open_readonly(path: Path) -> sqlite3.Connection:
     resolved = path.resolve(strict=True)
-    conn = sqlite3.connect(f"file:{resolved.as_posix()}?mode=ro", uri=True)
+    conn = connect_sqlite(resolved, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -103,7 +104,13 @@ def _open_readonly(path: Path) -> sqlite3.Connection:
 def _open_target(path: Path, *, readonly: bool) -> sqlite3.Connection:
     if readonly:
         return _open_readonly(path)
-    conn = sqlite3.connect(str(path.resolve(strict=True)), timeout=30.0)
+    conn = connect_sqlite(
+        str(path.resolve(strict=True)),
+        role=SQLiteConnectionRole.WRITER,
+        # Explicit recovery tooling must be able to repair a database at the
+        # historical revision selected by the operator.
+        schema_preflight=False,
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 30000")

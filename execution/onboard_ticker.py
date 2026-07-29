@@ -72,6 +72,7 @@ from pipeline.quarterly_refresh import (  # noqa: E402
 from pipeline.quarterly_refresh import refresh_ticker  # noqa: E402
 from pipeline.queries import open_db  # noqa: E402
 from pipeline.run_accounting import end_run, start_run  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -325,7 +326,7 @@ def _set_processing_tier(*, ticker: str, db_path: Path) -> str | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         conn.row_factory = sqlite3.Row
         # Bail if the column isn't present (migration 0044 hasn't run yet)
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(tracked_companies)").fetchall()}
@@ -419,7 +420,7 @@ def _lookup_list_type(ticker: str) -> str | None:
     if not _DB_PATH.exists():
         return None
     try:
-        conn = sqlite3.connect(str(_DB_PATH), timeout=5.0)
+        conn = connect_sqlite(str(_DB_PATH), role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             "SELECT list_type FROM tracked_companies WHERE ticker = ? LIMIT 1",

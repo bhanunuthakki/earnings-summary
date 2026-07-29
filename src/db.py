@@ -14,6 +14,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+from pathlib import Path
 from urllib.parse import unquote
 
 import requests
@@ -27,7 +28,7 @@ from models.artifacts import (
     parse_transcript_processed,
 )
 from sec_identity import sec_user_agent
-from sqlite_runtime import connect_sqlite
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
@@ -98,7 +99,11 @@ def get_connection() -> sqlite3.Connection:
     # write transactions can briefly hold the lock. Without it, any concurrent
     # writer immediately raises OperationalError("database is locked") and
     # kills long-running pulls. 30s is well above any normal transaction.
-    return connect_sqlite(DB_PATH)
+    return connect_sqlite(
+        DB_PATH,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=Path(DB_PATH).exists(),
+    )
 
 
 def init_db() -> None:

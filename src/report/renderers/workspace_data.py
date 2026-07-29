@@ -46,6 +46,7 @@ from report.models import (
     SayDoCard,
 )
 from report.renderers.charts_v2 import fmt_compact
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # Editorial-typography characters hoisted to module constants so the call
 # sites don't trip ruff's RUF001 (ambiguous unicode in code). Built via chr()
@@ -1006,7 +1007,7 @@ def load_standing_rules(ticker: str, db_path: Path, repo_root: Path) -> Standing
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     conn.row_factory = sqlite3.Row

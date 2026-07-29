@@ -31,6 +31,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from db_paths import resolve_db_path
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ def _read_stored(db_path: Path | str | None) -> dict[str, float]:
     if path is None or not Path(path).exists():
         return {}
     try:
-        conn = sqlite3.connect(str(path), timeout=5.0)
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             rows = conn.execute("SELECT field, value FROM global_dcf_assumptions").fetchall()
         finally:
@@ -200,7 +201,11 @@ def set_value(
         return False
     updated_at = (now or datetime.now(UTC).replace(tzinfo=None)).isoformat()
     try:
-        conn = sqlite3.connect(str(path), timeout=5.0)
+        conn = connect_sqlite(
+            path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
         try:
             conn.execute("PRAGMA busy_timeout = 5000")
             cur = conn.execute(

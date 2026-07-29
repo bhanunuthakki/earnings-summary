@@ -42,6 +42,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from discovery.store import list_candidates, set_status  # noqa: E402
 from identity import DEFAULT_USER_ID  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # A bulk approval is deliberately capped: each build is ~25 minutes + LLM
 # spend, so ten names is already a ~4-hour, multi-dollar commitment — a
@@ -71,7 +72,7 @@ def _candidate_id(db_path: Path, user_id: str, ticker: str) -> int | None:
 def _promote_to_evaluation(db_path: Path, user_id: str, ticker: str) -> bool:
     """index_member/none → evaluation (P2 tier). Already-active names pass
     through untouched — building an existing watchlist name is fine."""
-    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         row = conn.execute(
             "SELECT list_type FROM tracked_companies WHERE user_id = ? AND ticker = ?",

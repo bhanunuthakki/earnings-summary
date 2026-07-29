@@ -45,6 +45,7 @@ if _OVERRIDE:
     PROJECT_ROOT = Path(_OVERRIDE).resolve()
 
 from ir_uploads import detect_sec_form, fingerprint  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 _IR_DOC_TYPES = (
     "ir_press_release",
@@ -171,7 +172,7 @@ def main() -> int:
     args = parser.parse_args()
 
     repo_root = args.repo_root.resolve()
-    conn = sqlite3.connect(args.db)
+    conn = connect_sqlite(args.db, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     try:
         plan = plan_retypes(conn, repo_root)

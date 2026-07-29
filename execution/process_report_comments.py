@@ -108,6 +108,7 @@ from llm_client import (  # noqa: E402
     load_ir_anchor,
     load_thesis_anchor,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Routing
@@ -1297,7 +1298,7 @@ def _route_extract_kpi(repo_root: Path, ticker: str, c: Comment, apply: bool) ->
     # (the comment was attached to a specific row); fall back to scanning the
     # comment body for a KPI name match.
     kpi_name = (c.anchor.key or "").strip() if c.anchor else ""
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     try:
         kdef_row = conn.execute(

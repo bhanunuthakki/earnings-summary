@@ -41,6 +41,7 @@ from pathlib import Path
 
 from dcf.scenario_reward import parse_scenario_bear_provenance, parse_scenario_fair_values
 from portfolio_weights import read_materialized_weights
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 __all__ = [
     "SHALLOW_BEAR_FLOOR_PCT",
@@ -114,7 +115,7 @@ def _latest_top_level_rows(db_path: Path, tickers: Sequence[str]) -> dict[str, _
     if not db_path.exists():
         return {}
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return {}
     try:

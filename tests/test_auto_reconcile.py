@@ -88,6 +88,9 @@ def db(tmp_path: Path) -> Path:
     # inferred falsifiers — one held (VEEV), one not (MU).
     conn = sqlite3.connect(str(path))
     try:
+        # Deliberately minimal 0131 contract fixture, not a production
+        # versioned database; guarded stores may enforce their local tables.
+        conn.execute("DROP TABLE alembic_version")
         conn.execute(
             "INSERT INTO analyst_notes (kind, body, source, source_ref, created_at, "
             "updated_at) VALUES ('decision','sold MU','capture','seed:decision:1',"

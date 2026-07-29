@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -25,6 +24,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from cockpit_fundamentals import materialize_fundamentals  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("refresh_cockpit_fundamentals")
 
@@ -60,7 +60,7 @@ def main() -> int:
         log.error("DB not found: %s", db_path)
         return 1
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     try:
         n = materialize_fundamentals(conn, repo_root)
     finally:

@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import sqlite3
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -32,6 +31,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from log_redact import redact  # noqa: E402
+from provenance.selection import selected_filing_sections_relation  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 class _Completed(Protocol):
@@ -93,19 +94,20 @@ def _save_state(path: Path, state: SweepState) -> None:
 
 
 def _current_accessions(db_path: Path) -> dict[str, list[str]]:
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     try:
+        filing_sections_relation = selected_filing_sections_relation(conn).sql
         rows = conn.execute(
-            """
+            f"""
             SELECT fs.ticker, fs.accession_number
-            FROM filing_sections AS fs
+            FROM {filing_sections_relation} AS fs
             JOIN tracked_companies AS tc ON tc.ticker = fs.ticker
             WHERE fs.accession_number IS NOT NULL
               AND TRIM(fs.accession_number) != ''
               AND COALESCE(tc.instrument_type, '') != 'etf'
             GROUP BY fs.ticker, fs.accession_number
             ORDER BY fs.ticker, fs.accession_number
-            """
+            """  # nosec B608 -- trusted internal SQL shape; values remain bound
         ).fetchall()
     finally:
         conn.close()

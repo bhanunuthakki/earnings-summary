@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from table_extractors import customer_concentration as cc_module
 from table_extractors import generic_xbrl_capture as gxc_module
 from table_extractors import lease_commitments as lc_module
@@ -215,7 +216,7 @@ def _lookup_doc_id(*, db: Path, ticker: str, fiscal_year: int | None) -> int | N
     """
     if fiscal_year is None or not db.exists():
         return None
-    conn = sqlite3.connect(str(db))
+    conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     try:
         present = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='documents'"

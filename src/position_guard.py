@@ -98,6 +98,7 @@ from bear_lint import (
 )
 from portfolio_montecarlo import CASH_LIKE_TICKERS
 from portfolio_weights import read_materialized_weights
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 __all__ = [
     "CHECK_ADD",
@@ -394,7 +395,7 @@ def _ro_conn(db_path: Path) -> sqlite3.Connection | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     conn.row_factory = sqlite3.Row

@@ -34,6 +34,7 @@ from advisor.context import (
 from advisor.store import AdvisorMemoRow, StanceScoreRow, list_memos, list_scores_for_memos
 from identity import DEFAULT_USER_ID
 from pipeline.allocation_decisions_panel import portfolio_holdings
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 from ui.controls import controls_css
 from ui.prose import render_prose
@@ -56,7 +57,7 @@ def render_advisor_memos_panel(
 ) -> str:
     """The Memos tab fragment. Pure DB reads — memo generation only ever
     happens through the run bar's explicit POST (LLM spend stays deliberate)."""
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         holdings_val, candidates_val = load_valuations(conn)

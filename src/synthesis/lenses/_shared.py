@@ -36,6 +36,7 @@ from llm_artifact_store import (
     upsert,
 )
 from llm_client import call_llm
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from synthesis.grounded_numbers import (
     check_numeric_drift,
     grounding_footnote,
@@ -329,7 +330,7 @@ def load_recent_insider_transactions(
     db = repo_root / "data" / "portfolio.db"
     if not db.exists():
         return []
-    conn = sqlite3.connect(str(db))
+    conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     try:
         conn.row_factory = sqlite3.Row
         if (
@@ -360,7 +361,7 @@ def load_predictions(ticker: str, repo_root: Path) -> list[dict[str, object]]:
     db = repo_root / "data" / "portfolio.db"
     if not db.exists():
         return []
-    conn = sqlite3.connect(str(db))
+    conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     try:
         conn.row_factory = sqlite3.Row
         if (
@@ -396,7 +397,7 @@ def load_dcf(ticker: str, repo_root: Path) -> dict[str, object] | None:
     db = repo_root / "data" / "portfolio.db"
     if not db.exists():
         return None
-    conn = sqlite3.connect(str(db))
+    conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     try:
         conn.row_factory = sqlite3.Row
         cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
@@ -434,7 +435,7 @@ def load_latest_financials_snapshot(
     db = repo_root / "data" / "portfolio.db"
     if not db.exists():
         return []
-    conn = sqlite3.connect(str(db))
+    conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     try:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(

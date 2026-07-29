@@ -30,6 +30,7 @@ from typing import cast
 
 from alerts import AlertRow
 from dashboard.inbox_rank import decisive_alert_reason
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _CITATION_KIND_LABELS: dict[str, str] = {
     "transcript_line": "Transcript line",
@@ -118,7 +119,7 @@ def load_brief_provenance(ticker: str, *, db_path: Path) -> Mapping[str, object]
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(db_path)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     try:

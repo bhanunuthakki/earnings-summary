@@ -51,6 +51,7 @@ from allocation.concentration import (
 )
 from calibration_guard import confidence_note, is_confident
 from identity import DEFAULT_USER_ID
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 if TYPE_CHECKING:
     from advisor.position_tax import PositionTaxView
@@ -744,7 +745,7 @@ def _build_risk_context(
         if resolved is None or not Path(resolved).exists():
             degraded.append("no database on file for business-factor exposures")
         else:
-            conn = sqlite3.connect(f"file:{resolved}?mode=ro", uri=True)
+            conn = connect_sqlite(resolved, role=SQLiteConnectionRole.READ_ONLY)
             try:
                 rows = conn.execute(
                     "SELECT factor, loading FROM business_factor_exposures "
@@ -1068,7 +1069,7 @@ def graded_sell_record(db_path: Path | str | None) -> str | None:
     if db_path is None or not Path(db_path).exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except (sqlite3.Error, OSError, ValueError):
         return None
     try:
@@ -1167,7 +1168,7 @@ def _affirmed_behavioral_rows(db_path: Path | str | None) -> list[OwnerProfileFa
     try:
         from owner_profile.store import get_current_profile
 
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             grouped = get_current_profile(conn)
         finally:
@@ -1566,7 +1567,11 @@ def attest_review_changed(
     if resolved is None or not Path(resolved).exists():
         return False
     try:
-        conn = sqlite3.connect(str(resolved))
+        conn = connect_sqlite(
+            resolved,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
     except sqlite3.Error:
         return False
     try:

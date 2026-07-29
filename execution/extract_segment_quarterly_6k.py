@@ -46,6 +46,7 @@ from compute.segment_quarterly_6k import extract_for_ticker  # noqa: E402
 from models.runs import StageName, StageStatus  # noqa: E402
 from pipeline.run_accounting import end_run, record_stage, start_run  # noqa: E402
 from pipeline.source_routing import plan_for_ticker  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from table_extractors.period_axis import NominalQuarter  # noqa: E402
 
 _QUARTERS: tuple[NominalQuarter, ...] = ("Q1", "Q2", "Q3")
@@ -60,7 +61,7 @@ def main() -> int:
         print(f"[error] no DB at {db_path}", file=sys.stderr)
         return 1
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
 
     tickers = _resolve_tickers(conn, args)

@@ -209,9 +209,11 @@ def test_run_under_lock_propagates_fmp_tier_to_subprocess(
 
     monkeypatch.setattr(rc.subprocess, "run", fake_run)
 
+    db_path = tmp_path / "portfolio.db"
+    db_path.touch()
     args = argparse.Namespace(
         tier="free",
-        db=":memory:",
+        db=str(db_path),
         only=None,
         tickers=None,
         force=False,

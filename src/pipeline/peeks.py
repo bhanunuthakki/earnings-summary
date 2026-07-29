@@ -70,6 +70,7 @@ from pipeline.source_viewers import (
 )
 from pipeline.source_viewers import _DocRow as _SourceDocRow  # pyright: ignore[reportPrivateUsage]
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_reltime
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import pill_tone_class, thesis_status_tone, ticker_label
 from ui.prose import render_prose
 from ui.time import stamp_html
@@ -211,7 +212,7 @@ def _new_doc_rows(db_path: Path, t: str, limit: int) -> list[_DocRow]:
     if not db_path.exists():
         return []
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return []
     try:
@@ -889,7 +890,7 @@ def render_memo_peek(db_path: Path, kind: str) -> str | None:
     if kind not in _MEMO_KINDS or not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     try:
@@ -1149,7 +1150,7 @@ def render_provenance_peek(db_path: Path, ticker: str | None) -> str:
     conn: sqlite3.Connection | None = None
     if db_path.exists():
         try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         except sqlite3.Error:
             conn = None
     try:
@@ -1559,7 +1560,7 @@ def _load_fact_row(db_path: Path, table: str, fact_id: int) -> _FactRow | None:
     if not db_path.exists():
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     try:
@@ -1880,7 +1881,7 @@ def _render_vendor_field_peek(
     if db_path.exists():
         conn: sqlite3.Connection | None
         try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         except sqlite3.Error:
             conn = None
         if conn is not None:
@@ -2100,7 +2101,7 @@ def render_earnings_prep_peek(db_path: Path, repo_root: Path, ticker: str) -> st
     if not t:
         return None
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     try:

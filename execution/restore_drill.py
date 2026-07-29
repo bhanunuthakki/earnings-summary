@@ -52,6 +52,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "cron"))
 
 import restore_db  # noqa: E402  (cron/restore_db.py — gunzip + integrity + list)
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+
 # A healthy snapshot has rows here; an empty one signals truncation/corruption
 # that still slips past PRAGMA integrity_check (a valid-but-empty DB is "ok").
 _CORE_TABLES: tuple[str, ...] = ("tracked_companies", "financial_facts")
@@ -61,7 +63,7 @@ def _alembic_version(db_path: Path) -> str | None:
     """The single ``alembic_version.version_num`` for *db_path*, or None if the
     file isn't a readable SQLite DB / has no alembic_version table."""
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return None
     try:
@@ -77,7 +79,7 @@ def _row_counts(db_path: Path, tables: tuple[str, ...]) -> dict[str, int]:
     """Row count per table; -1 if the table is missing/unreadable. Table names
     are module-level literals, never user input (so the f-string is safe)."""
     out: dict[str, int] = {}
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     try:
         for tbl in tables:
             try:

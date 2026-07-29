@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sqlite3
 import sys
 from pathlib import Path
 
@@ -28,6 +27,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from candidate_fit_cache import materialize_candidate_fit  # noqa: E402
 from etf_score_cache import materialize_etf_scores  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("refresh_candidate_fit")
 
@@ -79,7 +79,7 @@ def main() -> int:
         log.error("DB not found: %s", db_path)
         return 1
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     try:
         n = materialize_candidate_fit(conn, repo_root, db_path=db_path, api_url=args.api_url)
         # ETF sibling (same Stage 0f budget, no new pipeline stage): the

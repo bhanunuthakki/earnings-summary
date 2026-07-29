@@ -48,6 +48,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+
 DISMISS_REASON = "auto: pre-gate advisor/evaluation tripwire noise (2026-07-15)"
 DEFAULT_STALE_DAYS = 135
 _ORPHAN_SQL = """
@@ -247,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
         _emit({"event": "db_missing", "db_path": str(db_path)})
         return 1
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     try:
         alert_cols = _columns(conn, "alerts")

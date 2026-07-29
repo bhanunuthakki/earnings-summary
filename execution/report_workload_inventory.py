@@ -31,6 +31,7 @@ from llm.workload_inventory import (  # noqa: E402
     render_inventory_text,
     risk_note_for,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def _resolve_db(repo_root: Path, db_override: Path | None) -> Path:
@@ -47,7 +48,7 @@ def _anon_footer(db_path: Path, since_days: int) -> str | None:
     try:
         from pipeline.model_eval_panel import load_anon_costs
 
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
             anon = load_anon_costs(conn, window_days=since_days)

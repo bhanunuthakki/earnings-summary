@@ -30,6 +30,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from dcf.scenario_reward import parse_scenario_fair_values
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 __all__ = [
     "COVERAGE_BAD_PCT",
@@ -115,7 +116,7 @@ def _latest_dcf_legs(db_path: Path, tickers: Sequence[str]) -> dict[str, _DcfLeg
     if not db_path.exists():
         return {}
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return {}
     try:

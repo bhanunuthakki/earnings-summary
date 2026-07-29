@@ -57,6 +57,7 @@ from llm.model_overrides import (  # noqa: E402
     deactivate_override,
     write_pin_override,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("apply_model_switches")
 
@@ -113,7 +114,7 @@ def _recent_verdicts(
     a thin or infra-broken week neither extends nor resets a streak.  Empty
     list if no rows or table missing."""
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             not_in = ""
             params: list[object] = [purpose, candidate]
@@ -155,7 +156,7 @@ def _pooled_parity_evidence(
     mixing granularities would double-count.  Empty dict when nothing is
     parseable (the gate then fails closed)."""
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             not_in = ",".join("?" * len(STREAK_NEUTRAL))
             rows = conn.execute(
@@ -225,7 +226,7 @@ def _pooled_parity_evidence(
 def _all_evaluated_pairs(db_path: Path) -> list[tuple[str, str]]:
     """Return distinct (purpose, candidate) pairs that have any verdict."""
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             rows = conn.execute(
                 "SELECT DISTINCT purpose, candidate FROM model_eval_verdicts"
@@ -242,7 +243,7 @@ def _latest_incumbent(db_path: Path, purpose: str, candidate: str) -> str | None
     """Retrieve the incumbent model id from the most recent verdict for this
     (purpose, candidate) — needed to label regression alerts."""
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             row = conn.execute(
                 """
@@ -266,7 +267,7 @@ def _latest_verdict_with_time(
     """(verdict, recorded_at) of the newest verdict for (purpose, candidate),
     or None."""
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             row = conn.execute(
                 """
@@ -310,7 +311,7 @@ def _fire_switch_alert(
     fired_at = datetime.now(UTC).replace(tzinfo=None).isoformat()
     evidence_json = json.dumps(evidence, ensure_ascii=False)
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             tables = {
                 r[0]
@@ -361,7 +362,7 @@ def _active_override_set_by(db_path: Path, purpose: str) -> str | None:
     A ``manual``-prefixed setter is a HUMAN decision the auto loop must respect
     (§10 Q3 remediation: one-command revert + lock via revert_model_switch.py)."""
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             row = conn.execute(
                 "SELECT set_by FROM model_pin_overrides "

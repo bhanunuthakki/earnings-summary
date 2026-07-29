@@ -11,10 +11,11 @@ a partial-schema test DB must upgrade cleanly without the fact tables.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -47,6 +48,14 @@ from models.facts import (  # noqa: E402
 from pipeline.restatement_detector import (  # noqa: E402
     insert_kpi_with_restatement_detection,
     insert_with_restatement_detection,
+)
+from provenance.evidence_ledger import (  # noqa: E402
+    ContentBlob,
+    DocumentVersion,
+    EvidenceLedger,
+    EvidenceNode,
+    ExtractionRun,
+    SourceObservation,
 )
 
 PERIOD_END = datetime(2025, 12, 31)
@@ -179,6 +188,101 @@ def _insert_document(
         )
     assert cur.lastrowid is not None
     return int(cur.lastrowid)
+
+
+def _bind_document_evidence(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    document_id: int,
+) -> None:
+    """Give a migrated legacy document the evidence required by current head."""
+
+    row = conn.execute(
+        "SELECT sha256, raw_bytes_size FROM documents WHERE id = ?", (document_id,)
+    ).fetchone()
+    assert row is not None
+    stamp = datetime(2026, 1, 1, tzinfo=UTC)
+    blob_sha = str(row[0])
+    config_sha = hashlib.sha256(b"locator-schema-test").hexdigest()
+    output_sha = hashlib.sha256(f"output:{ticker}:{document_id}".encode()).hexdigest()
+    ledger = EvidenceLedger(conn)
+    ledger.persist(
+        ContentBlob(
+            sha256=blob_sha,
+            byte_size=int(row[1]),
+            media_type="application/json",
+            storage_uri=f"file:///test/{ticker}-{document_id}.json",
+            recorded_at=stamp,
+        )
+    )
+    ledger.persist(
+        SourceObservation(
+            observation_id=f"source:{ticker}:{document_id}",
+            idempotency_key=f"source:{ticker}:{document_id}",
+            source_kind="vendor_api",
+            source_url=f"https://example.test/{ticker}/{document_id}",
+            blob_sha256=blob_sha,
+            source_published_at=stamp,
+            filing_at=None,
+            accepted_at=None,
+            observed_at=stamp,
+            retrieved_at=stamp,
+            retrieval_config_sha256=config_sha,
+            collector_code_version="test@1",
+        )
+    )
+    ledger.persist(
+        DocumentVersion(
+            document_version_id=f"document:{ticker}:{document_id}",
+            document_key=f"{ticker}:vendor:{document_id}",
+            version_sequence=1,
+            observation_id=f"source:{ticker}:{document_id}",
+            blob_sha256=blob_sha,
+            issuer_id=f"issuer:{ticker}",
+            ticker=ticker,
+            document_type="vendor_statement",
+            form_type="vendor_json",
+            accession_number=None,
+            exhibit_id=None,
+            period_start=None,
+            period_end=stamp,
+            as_of_at=stamp,
+            language="en",
+            replaces_document_version_id=None,
+            legacy_document_id=document_id,
+            recorded_at=stamp,
+        )
+    )
+    ledger.persist(
+        ExtractionRun(
+            extraction_run_id=f"run:{ticker}:{document_id}",
+            idempotency_key=f"run:{ticker}:{document_id}",
+            document_version_id=f"document:{ticker}:{document_id}",
+            input_sha256=blob_sha,
+            extractor_name="test-fixture",
+            extractor_config_sha256=config_sha,
+            extractor_code_version="test@1",
+            output_sha256=output_sha,
+            started_at=stamp,
+            completed_at=stamp,
+            outcome="succeeded",
+        )
+    )
+    ledger.persist(
+        EvidenceNode(
+            node_id=f"node:{ticker}:{document_id}",
+            evidence_key=f"node:{ticker}:{document_id}",
+            revision=1,
+            extraction_run_id=f"run:{ticker}:{document_id}",
+            parent_node_id=None,
+            supersedes_node_id=None,
+            node_kind="document",
+            text=f"{ticker} vendor statement",
+            locator=None,
+            recorded_at=stamp,
+        )
+    )
 
 
 # ----------------------------------------------------------------------------
@@ -504,6 +608,7 @@ def test_locator_round_trips_through_financial_fact_store(tmp_path: Path) -> Non
 
     conn = _connect(db)
     doc_id = _insert_document(conn)
+    _bind_document_evidence(conn, ticker="TST", document_id=doc_id)
     loc = FactLocator(section="Consolidated Statements of Oper", json_path="[3].netIncome")
 
     new_id, _ = insert_with_restatement_detection(
@@ -570,6 +675,7 @@ def test_locator_round_trips_through_kpi_fact_store(tmp_path: Path) -> None:
 
     conn = _connect(db)
     doc_id = _insert_document(conn)
+    _bind_document_evidence(conn, ticker="TST", document_id=doc_id)
     loc = FactLocator(transcript_line=42)
 
     new_id, _ = insert_kpi_with_restatement_detection(

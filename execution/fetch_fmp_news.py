@@ -52,6 +52,7 @@ from log_redact import redact as _redact  # noqa: E402
 from models.fmp_payloads import FmpStockNewsRecord  # noqa: E402
 from news.store import SOURCE_FEED_FMP, NewsRow, upsert_news_rows  # noqa: E402
 from runtime.secrets import load_project_env  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 load_project_env(PROJECT_ROOT)
 FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
@@ -274,7 +275,7 @@ def default_tickers(db_path: str) -> list[str]:
 
     Public so the dispatcher (execution/fetch_news.py) reuses one ticker-selection
     rule across both feeds."""
-    conn = sqlite3.connect(db_path)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         try:
             rows = conn.execute(
@@ -316,7 +317,13 @@ def run(tickers: list[str], *, db_path: str, days: int, limit: int) -> int:
             errors += 1
         all_rows.extend(res.rows)
 
-    conn = sqlite3.connect(db_path)
+    conn = connect_sqlite(
+        db_path,
+        role=SQLiteConnectionRole.WRITER,
+        # This legacy single-table importer is also used to advance bounded
+        # historical fixtures; migration ownership remains outside the CLI.
+        schema_preflight=False,
+    )
     try:
         inserted, deduped = upsert_news_rows(conn, all_rows)
     except sqlite3.OperationalError as exc:

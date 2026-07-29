@@ -45,6 +45,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 import db  # noqa: E402
 from filing_text_fetcher import fetch_latest_10k_text  # noqa: E402
 from llm_client import JSON_FENCE_RE, call_llm  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("extract_footnotes")
 
@@ -147,7 +148,7 @@ def _persist_rows(*, ticker: str, fiscal_year: int, rows: list[object], db_path:
     if not db_path.exists():
         return 0
     period_end = datetime(fiscal_year, 12, 31).isoformat()  # rough; FMP gives precise dates
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     inserted = 0
     try:
         for row in rows:
@@ -227,7 +228,9 @@ def main() -> int:
     if args.ticker:
         tickers = [args.ticker.upper()]
     else:
-        conn = sqlite3.connect(str(args.repo_root / "data" / "portfolio.db"))
+        conn = connect_sqlite(
+            str(args.repo_root / "data" / "portfolio.db"), role=SQLiteConnectionRole.READ_ONLY
+        )
         tickers = [
             r[0]
             for r in conn.execute(

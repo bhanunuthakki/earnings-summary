@@ -64,6 +64,7 @@ import predictions_store  # noqa: E402
 from compute.kpi_resolver import resolve_kpi_definition_name  # noqa: E402
 from llm.calibration import CalibrationScore, record_score  # noqa: E402
 from llm.prompt_versions import prompt_version_for  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("grade_predictions")
 
@@ -231,7 +232,7 @@ def grade_pending(
     if not pending:
         return tally
     run_id = f"auto:grade_predictions:{(as_of or datetime.now(UTC)).date().isoformat()}"
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     try:
         for p in pending:

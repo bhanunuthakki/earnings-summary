@@ -59,6 +59,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 import save_fmp_data as fmp_save  # noqa: E402
 
 from pipeline import cadence_policy as _cadence_policy  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 CACHE_DIR = PROJECT_ROOT / ".tmp" / "cacher"
@@ -514,7 +515,7 @@ def _release_lock() -> None:
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
-    conn = sqlite3.connect(args.db)
+    conn = connect_sqlite(args.db, role=SQLiteConnectionRole.READ_ONLY)
     try:
         report = audit(
             conn,
@@ -651,7 +652,7 @@ def _maybe_refresh_earnings_hints() -> None:
 def _run_under_lock(args: argparse.Namespace) -> int:
     tier = resolve_tier(args.tier)
     _maybe_refresh_earnings_hints()
-    conn = sqlite3.connect(args.db)
+    conn = connect_sqlite(args.db, role=SQLiteConnectionRole.READ_ONLY)
     try:
         report = audit(
             conn,

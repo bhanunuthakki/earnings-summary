@@ -44,6 +44,7 @@ from filing_text_fetcher import (  # noqa: E402
 from llm.cli import is_hard_stop  # noqa: E402
 from llm.structured import call_llm_structured  # noqa: E402
 from llm_client import call_llm  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("extract_risk_factors")
 
@@ -289,7 +290,7 @@ def extract_for_ticker(
     if not db_path.exists():
         return {"ticker": ticker, "status": "no_db", "n": 0}
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         prior = (
             _prior_year_index(conn, ticker=ticker, fiscal_year=result.fiscal_year)
@@ -422,7 +423,9 @@ def main() -> int:
     if args.ticker:
         tickers = [args.ticker.upper()]
     else:
-        conn = sqlite3.connect(str(args.repo_root / "data" / "portfolio.db"))
+        conn = connect_sqlite(
+            str(args.repo_root / "data" / "portfolio.db"), role=SQLiteConnectionRole.READ_ONLY
+        )
         list_types = ["portfolio"] if args.all_portfolio else ["portfolio", "watchlist"]
         placeholders = ",".join("?" * len(list_types))
         tickers = [

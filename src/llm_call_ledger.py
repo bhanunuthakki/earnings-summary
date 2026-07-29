@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import cast
 
 from db_paths import resolve_db_path
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
 
@@ -304,7 +305,11 @@ def record_call(record: LlmCallRecord, *, db_path: Path | str | None = None) -> 
         # the #873 Diet/alert/ledger writes), logging "database is locked" and
         # dropping cost rows. 30s clears the burst without ever blocking the LLM
         # call itself (this runs after the call has already succeeded).
-        conn = sqlite3.connect(str(path), timeout=30.0)
+        conn = connect_sqlite(
+            path,
+            role=SQLiteConnectionRole.WRITER,
+            schema_preflight=True,
+        )
         try:
             conn.execute("PRAGMA busy_timeout = 30000")
             base_values: tuple[object, ...] = (

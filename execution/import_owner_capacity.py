@@ -94,6 +94,7 @@ from owner_profile.models import (  # noqa: E402
     TaxBucketBalances,
 )
 from owner_profile.store import append_fact  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 _DEFAULT_WEALTHPLAN_ROOT = Path(r"C:\Users\Bhanu\.gemini\antigravity\scratch\wealthplan")
 _DEFAULT_CIO_CONTEXT_PATH = Path(
@@ -495,7 +496,7 @@ def _apply_facts(db_path: Path, facts: list[StagedFact]) -> dict[str, int]:
     """Write every staged fact via the idempotent store; returns a
     {new, unchanged} tally. Runs in ONE transaction so a mid-batch failure
     never leaves a half-imported snapshot."""
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     tally = {"new": 0, "unchanged": 0}
     try:

@@ -13,6 +13,7 @@ from datetime import date
 from pathlib import Path
 
 from report.models import BudgetSkip, GrowthMetrics, MissingReason
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 DISPLAY_QUARTERS = 12
 UNDERLYING_QUARTERS = 16  # 12 display + 4 prior for TTM-1Y CAGR baseline
@@ -112,7 +113,7 @@ def open_repo_db(repo_root: Path) -> sqlite3.Connection | None:
     db_path = repo_root / "data" / "portfolio.db"
     if not db_path.exists():
         return None
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -132,8 +133,7 @@ def open_portfolio_tracker_db(repo_root: Path) -> sqlite3.Connection | None:
     db_path = repo_root.parent / "portfolio-tracker" / "portfolio.db"
     if not db_path.exists():
         return None
-    uri = f"file:{db_path.as_posix()}?mode=ro"
-    conn = sqlite3.connect(uri, uri=True)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     return conn
 

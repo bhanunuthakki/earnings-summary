@@ -42,6 +42,7 @@ from evals.golden_classifiers import CLASSIFIER_PURPOSES
 from evals.rubric_judge import AUDIT_SPECS
 from llm.cli import LLM_MODELS
 from llm.prompt_versions import registered_purposes
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # Mode-A purposes with checked-in golden sets. viewspec is the pilot grader;
 # the classifier trio landed in PR 4; ask_pack_router (evals.ask_router) in S4;
@@ -142,7 +143,7 @@ def _observed_call_purposes(db_path: Path) -> dict[str, int]:
     if not db_path.exists():
         return {}
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return {}
     try:

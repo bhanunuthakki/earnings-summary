@@ -48,6 +48,7 @@ from typing import Literal
 from clock import now_naive_utc
 from redteam.models import RedTeamItemRow, Status
 from redteam.store import list_responded_items
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 DEFAULT_MIN_QUARTERS = 2
 _DAYS_PER_QUARTER = 91  # documented approximation — a legible cutoff, not a fiscal calendar
@@ -261,7 +262,7 @@ def build_decision_pnl(
         except Exception:  # best-effort — an unresolved weight degrades to unweighted
             weights = {}
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         rows: list[DecisionPnlRow] = []
@@ -374,7 +375,7 @@ def _cut_discipline_number(db_path: Path | str, *, user_id: str) -> ScorecardNum
                 f"rule/break; found {len(rule_exits)} of {len(entries)} closed positions."
             ),
         )
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         hits = 0

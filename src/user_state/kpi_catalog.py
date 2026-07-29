@@ -28,6 +28,8 @@ import sqlite3
 from pathlib import Path
 from typing import cast
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 log = logging.getLogger(__name__)
 
 # Mirrors ``triggers.kpi_inflection._MIN_SERIES_LEN`` (kpi_inflection.py:81):
@@ -53,7 +55,7 @@ def _open(db_path: Path) -> sqlite3.Connection | None:
         log.debug({"event": "kpi_catalog_db_missing", "path": str(db_path)})
         return None
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5.0)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         return conn
     except sqlite3.Error as exc:

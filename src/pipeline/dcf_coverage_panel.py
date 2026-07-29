@@ -36,6 +36,7 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 
 FRESH_DAYS = 7  # refreshed within a week = fresh
@@ -128,7 +129,7 @@ def _query_runs(db_path: Path) -> dict[str, dict[str, object]]:
     if not db_path.exists():
         return out
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return out
     conn.row_factory = sqlite3.Row
@@ -237,7 +238,7 @@ def _active_list_types(db_path: Path) -> dict[str, str]:
         return out
     placeholders = ", ".join("?" for _ in _ACTIVE_LIST_TYPES)
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
         return out
     try:

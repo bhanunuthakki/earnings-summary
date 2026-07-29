@@ -52,6 +52,7 @@ import db  # noqa: E402
 from models.companies import FilingRegime  # noqa: E402
 from pipeline.segment_quarterly_coverage import record_coverage  # noqa: E402
 from pipeline.source_routing import segment_pipeline_for_regime  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 from table_extractors.period_axis import NominalQuarter, expected_period_ends  # noqa: E402
 
 AUDIT_METHOD_VERSION = "audit_segment_quarterly_coverage_v1"
@@ -67,7 +68,7 @@ def main() -> int:
         print(f"[error] no DB at {db_path}", file=sys.stderr)
         return 1
 
-    conn = sqlite3.connect(str(db_path))
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
 
     tickers = _resolve_tickers(conn, args)

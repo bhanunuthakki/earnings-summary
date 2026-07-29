@@ -78,6 +78,7 @@ from llm.prompt_strategies import (  # noqa: E402
     render_strategy_directive,
 )
 from llm.prompt_versions import prompt_version_for  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("run_prompt_ab_cycle")
 
@@ -129,7 +130,7 @@ def meta_spend_this_month(db_path: Path) -> float:
     scopes = sorted(EVAL_SCOPES)
     placeholders = ",".join("?" * len(scopes))
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             row = conn.execute(
                 f"SELECT COALESCE(SUM(cost_estimate_usd), 0) FROM llm_calls "
@@ -158,7 +159,7 @@ def _live_experiment_purposes(db_path: Path, *, max_age_days: int = 14) -> set[s
         return set()
     cutoff = (datetime.now(UTC) - timedelta(days=max_age_days)).replace(tzinfo=None).isoformat()
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             if not conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='prompt_experiments'"
@@ -184,7 +185,7 @@ def _purpose_costs(db_path: Path, *, window_days: int = 30) -> dict[str, float]:
     placeholders = ",".join("?" * len(scopes))
     cutoff = (datetime.now(UTC) - timedelta(days=window_days)).replace(tzinfo=None).isoformat()
     try:
-        conn = sqlite3.connect(str(db_path), timeout=10.0)
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         try:
             rows = conn.execute(
                 f"SELECT purpose, COALESCE(SUM(cost_estimate_usd), 0) AS c FROM llm_calls "
@@ -448,7 +449,7 @@ def persist_plan(db_path: Path, plan: CyclePlan) -> str:
         frozen_model=plan.frozen_model,
     )
     write_arms(db_path, experiment_id, plan.arms)
-    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     try:
         conn.execute(
             "UPDATE prompt_experiments SET cycle_id = ?, rng_seed = ?, signal_json = ? "

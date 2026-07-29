@@ -23,15 +23,11 @@ from pathlib import Path
 
 from clock import now_naive_utc, to_naive_utc
 from db_paths import resolve_db_path
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
-def open_conn(db_path: Path | str | None) -> sqlite3.Connection:
-    """Open a connection to the Personal CIO SQLite DB.
-
-    Raises ``FileNotFoundError`` when the resolved path doesn't exist and
-    ``RuntimeError`` when no path is configured. The caller owns closing
-    the connection (use try/finally).
-    """
+def _resolved_path(db_path: Path | str | None) -> Path:
+    """Resolve and validate a configured Personal CIO SQLite path."""
     path = resolve_db_path(db_path)
     if path is None:
         raise RuntimeError(
@@ -40,7 +36,32 @@ def open_conn(db_path: Path | str | None) -> sqlite3.Connection:
         )
     if not path.exists():
         raise FileNotFoundError(f"SQLite DB does not exist: {path}")
-    conn = sqlite3.connect(str(path), timeout=5.0)
+    return path
+
+
+def open_conn(db_path: Path | str | None, *, schema_preflight: bool = True) -> sqlite3.Connection:
+    """Open a connection to the Personal CIO SQLite DB.
+
+    Raises ``FileNotFoundError`` when the resolved path doesn't exist and
+    ``RuntimeError`` when no path is configured. The caller owns closing
+    the connection (use try/finally).
+    """
+    path = _resolved_path(db_path)
+    conn = connect_sqlite(
+        path,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=schema_preflight,
+    )
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def open_read_conn(db_path: Path | str | None) -> sqlite3.Connection:
+    """Open a read-only connection without demanding current writer schema."""
+    path = _resolved_path(db_path)
+    conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA foreign_keys = ON")

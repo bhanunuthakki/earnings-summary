@@ -39,7 +39,7 @@ from typing import cast
 
 from research.intent import IntentCall, classify_intent
 from research.triage import TriageCall, build_session_prompt, classify_triage, estimate_cost_usd
-from user_state._db import now_iso, open_conn
+from user_state._db import now_iso, open_conn, open_read_conn
 from user_state.notes import get_note, patch_note_context
 
 TASK_STATUSES: tuple[str, ...] = (
@@ -193,7 +193,7 @@ def _row_to_task(row: sqlite3.Row) -> ResearchTask:
 
 
 def get_task(task_id: int, *, db_path: Path | str | None = None) -> ResearchTask | None:
-    conn = open_conn(db_path)
+    conn = open_read_conn(db_path)
     try:
         row = conn.execute("SELECT * FROM research_tasks WHERE id = ?", (task_id,)).fetchone()
         return None if row is None else _row_to_task(row)
@@ -204,7 +204,7 @@ def get_task(task_id: int, *, db_path: Path | str | None = None) -> ResearchTask
 def get_task_for_note(note_id: int, *, db_path: Path | str | None = None) -> ResearchTask | None:
     """The newest research_task for a note, or None. The idempotency key for the
     On My Mind 'incorporate' action — one note must never spawn two tasks."""
-    conn = open_conn(db_path)
+    conn = open_read_conn(db_path)
     try:
         row = conn.execute(
             "SELECT * FROM research_tasks WHERE note_id = ? ORDER BY id DESC LIMIT 1",
@@ -226,7 +226,7 @@ def get_tasks_for_notes(
     ids = [int(n) for n in note_ids]
     if not ids:
         return {}
-    conn = open_conn(db_path)
+    conn = open_read_conn(db_path)
     try:
         placeholders = ", ".join("?" * len(ids))
         rows = conn.execute(
@@ -280,7 +280,7 @@ def ensure_task_for_note(
 def list_tasks(
     *, status: str | None = None, db_path: Path | str | None = None
 ) -> list[ResearchTask]:
-    conn = open_conn(db_path)
+    conn = open_read_conn(db_path)
     try:
         if status is not None:
             rows = conn.execute(
@@ -437,7 +437,7 @@ def _row_to_proposal(row: sqlite3.Row) -> ResearchProposal:
 
 
 def get_proposal(proposal_id: int, *, db_path: Path | str | None = None) -> ResearchProposal | None:
-    conn = open_conn(db_path)
+    conn = open_read_conn(db_path)
     try:
         row = conn.execute(
             "SELECT * FROM research_proposals WHERE id = ?", (proposal_id,)
@@ -450,7 +450,7 @@ def get_proposal(proposal_id: int, *, db_path: Path | str | None = None) -> Rese
 def list_proposals(
     *, status: str | None = "pending", db_path: Path | str | None = None
 ) -> list[ResearchProposal]:
-    conn = open_conn(db_path)
+    conn = open_read_conn(db_path)
     try:
         if status is not None:
             rows = conn.execute(

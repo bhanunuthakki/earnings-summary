@@ -26,6 +26,7 @@ from evals.p0_capture_runner import (  # noqa: E402
     run_p0_capture_plan,
 )
 from schema_compat import require_current_for_write  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
 def _parse_args() -> argparse.Namespace:
@@ -49,7 +50,7 @@ def _parse_args() -> argparse.Namespace:
 def _preflight_write(db_path: Path) -> None:
     if not db_path.is_file():
         raise RuntimeError(f"no DB at {db_path}")
-    with sqlite3.connect(db_path) as conn:
+    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
         require_current_for_write(conn)
 
 
