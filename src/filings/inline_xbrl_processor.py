@@ -234,8 +234,7 @@ class ProcessorRawFact(_Closed):
         )
         if missing_locator_fields:
             raise ValueError(
-                "XBRL source locator is incomplete: "
-                + ", ".join(missing_locator_fields)
+                "XBRL source locator is incomplete: " + ", ".join(missing_locator_fields)
             )
         if _sha(_canonical(self.source_locator).encode()) != self.source_locator_sha256:
             raise ValueError("source locator digest does not match")
@@ -258,9 +257,7 @@ class ProcessorRawFact(_Closed):
             self.rejection_reason_code is not None or self.rejection_detail is not None
         ):
             raise ValueError("normalized facts cannot carry rejection details")
-        if not normalized and (
-            self.rejection_reason_code is None or self.rejection_detail is None
-        ):
+        if not normalized and (self.rejection_reason_code is None or self.rejection_detail is None):
             raise ValueError("rejected facts require a reason and detail")
         footnote_ordinals = tuple(item.footnote_ordinal for item in self.footnotes)
         if footnote_ordinals != tuple(range(len(self.footnotes))):
@@ -290,16 +287,12 @@ class InlineXbrlProcessorResult(_Closed):
             raise ValueError("raw fact ordinals must be contiguous")
         if self.network_artifact_count != len(self.network_artifacts):
             raise ValueError("network artifact completeness count does not match")
-        if self.network_artifact_set_sha256 != network_artifact_set_sha256(
-            self.network_artifacts
-        ):
+        if self.network_artifact_set_sha256 != network_artifact_set_sha256(self.network_artifacts):
             raise ValueError("network artifact set digest does not match")
         if self.raw_fact_set_sha256 != raw_fact_set_sha256(self.facts):
             raise ValueError("raw fact set digest does not match")
         footnotes = tuple(
-            (fact.input_ordinal, footnote)
-            for fact in self.facts
-            for footnote in fact.footnotes
+            (fact.input_ordinal, footnote) for fact in self.facts for footnote in fact.footnotes
         )
         if self.footnote_count != len(footnotes):
             raise ValueError("footnote completeness count does not match")
@@ -337,8 +330,7 @@ def network_artifact_set_sha256(
     artifacts: Sequence[ProcessorNetworkArtifact],
 ) -> str:
     payload = [
-        {"blob_sha256": item.blob_sha256, "source_url": item.source_url}
-        for item in artifacts
+        {"blob_sha256": item.blob_sha256, "source_url": item.source_url} for item in artifacts
     ]
     return _sha(_canonical(payload).encode())
 
@@ -406,9 +398,7 @@ def run_inline_xbrl_processor(
         manifest.execution.runtime_members,
         expected_sha256=manifest.execution.runtime_artifact_sha256,
     )
-    expected_python = runtime_root / PurePosixPath(
-        manifest.execution.bundle_python_relative_path
-    )
+    expected_python = runtime_root / PurePosixPath(manifest.execution.bundle_python_relative_path)
     if bundle_python.resolve() != expected_python.resolve():
         raise InlineXbrlProcessorError(
             "qualified filing-XBRL bundle Python is outside its runtime lock"
@@ -473,16 +463,11 @@ def run_inline_xbrl_processor(
     expected_network = {
         (member.source_url, member.blob_sha256)
         for member in request.members
-        if member.member_role
-        in {"issuer_taxonomy", "standard_taxonomy", "network_artifact"}
+        if member.member_role in {"issuer_taxonomy", "standard_taxonomy", "network_artifact"}
     }
-    observed_network = {
-        (item.source_url, item.blob_sha256) for item in result.network_artifacts
-    }
+    observed_network = {(item.source_url, item.blob_sha256) for item in result.network_artifacts}
     if observed_network != expected_network:
-        raise InlineXbrlProcessorError(
-            "processor network/taxonomy artifact closure is not exact"
-        )
+        raise InlineXbrlProcessorError("processor network/taxonomy artifact closure is not exact")
     for fact in result.facts:
         if fact.package_member_ordinal >= len(request.members):
             raise InlineXbrlProcessorError("raw fact references an undeclared package member")
@@ -544,7 +529,9 @@ def _verify_runtime_closure(
     try:
         candidates = sorted(root.rglob("*"))
     except OSError as exc:
-        raise InlineXbrlProcessorError("qualified filing-XBRL runtime cannot be enumerated") from exc
+        raise InlineXbrlProcessorError(
+            "qualified filing-XBRL runtime cannot be enumerated"
+        ) from exc
     for path in candidates:
         if path.is_symlink():
             raise InlineXbrlProcessorError("qualified filing-XBRL runtime cannot contain symlinks")

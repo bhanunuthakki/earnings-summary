@@ -57,16 +57,12 @@ def _load_authoritative_scopes(
     payload = cast(dict[str, object], decoded)
     if payload.get("registry_id") != "ask-retrieval-production-scopes":
         raise SystemExit("production scope registry identity is invalid")
-    if (
-        payload.get("schema_version") != 1
-        or payload.get("supported_cohort")
-        != ["operating_company:legal_registrant"]
-    ):
+    if payload.get("schema_version") != 1 or payload.get("supported_cohort") != [
+        "operating_company:legal_registrant"
+    ]:
         raise SystemExit("production scope registry cohort contract is invalid")
     stored_registry_sha256 = payload.get("registry_sha256")
-    registry_core = {
-        key: value for key, value in payload.items() if key != "registry_sha256"
-    }
+    registry_core = {key: value for key, value in payload.items() if key != "registry_sha256"}
     if (
         not isinstance(stored_registry_sha256, str)
         or digest_text(canonical_json(registry_core)) != stored_registry_sha256
@@ -83,9 +79,7 @@ def _load_authoritative_scopes(
         raise SystemExit(f"production scope registry is invalid: {exc}") from exc
     if tuple(sorted(scopes, key=lambda item: item.scope_key)) != scopes:
         raise SystemExit("production scopes must be sorted by scope_key")
-    canonical = canonical_json(
-        [item.model_dump(mode="json") for item in scopes]
-    )
+    canonical = canonical_json([item.model_dump(mode="json") for item in scopes])
     computed_sha256 = digest_text(canonical)
     if (
         not isinstance(committed_sha256, str)
@@ -115,15 +109,12 @@ def _verify_registry_against_live(
 def _verify_claim_audit_budget(conn: sqlite3.Connection) -> None:
     try:
         row = conn.execute(
-            "SELECT hard_block,on_exceed FROM llm_budgets "
-            "WHERE purpose='ask_claim_audit'"
+            "SELECT hard_block,on_exceed FROM llm_budgets WHERE purpose='ask_claim_audit'"
         ).fetchone()
     except sqlite3.Error as exc:
         raise SystemExit(f"ask_claim_audit budget governance is unavailable: {exc}") from exc
     if row is None or int(row[0]) != 1 or str(row[1]) != "block":
-        raise SystemExit(
-            "ask_claim_audit budget must be configured hard_block/on_exceed=block"
-        )
+        raise SystemExit("ask_claim_audit budget must be configured hard_block/on_exceed=block")
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -125,9 +125,7 @@ def run_claim_audit_eval(
             response_text = result.raw_response
         except Exception as exc:
             if is_hard_stop(exc):
-                raise EvalAbortError(
-                    f"{PURPOSE}/{case.case_id} could not run: {exc}"
-                ) from exc
+                raise EvalAbortError(f"{PURPOSE}/{case.case_id} could not run: {exc}") from exc
             actual = {"error": str(exc)}
             passed = False
             failure_stage = "call"

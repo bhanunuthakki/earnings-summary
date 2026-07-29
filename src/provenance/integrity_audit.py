@@ -638,6 +638,7 @@ def _audit_filing_xbrl_processor_closure(
         ),
     )
     digest_mismatches: list[str] = []
+
     def canonical_json(value: object) -> str:
         return json.dumps(
             value,
@@ -645,6 +646,7 @@ def _audit_filing_xbrl_processor_closure(
             separators=(",", ":"),
             ensure_ascii=False,
         )
+
     for artifact in conn.execute(
         "SELECT processor_artifact_id,bundle_name,arelle_version,edgar_version,"
         "xule_version,bridge_protocol_version,artifact_sha256,"
@@ -657,19 +659,14 @@ def _audit_filing_xbrl_processor_closure(
             manifest_json = str(artifact[9])
             manifest = _JSON_OBJECT_ADAPTER.validate_json(manifest_json)
             execution = _JSON_OBJECT_ADAPTER.validate_python(manifest["execution"])
-            coordinates = _JSON_OBJECT_ADAPTER.validate_python(
-                manifest["coordinates"]
-            )
-            qualification = _JSON_OBJECT_ADAPTER.validate_python(
-                manifest["qualification"]
-            )
+            coordinates = _JSON_OBJECT_ADAPTER.validate_python(manifest["coordinates"])
+            qualification = _JSON_OBJECT_ADAPTER.validate_python(manifest["qualification"])
             runtime_members = _JSON_OBJECT_LIST_ADAPTER.validate_python(
                 execution["runtime_members"]
             )
             exact = (
                 canonical_json(manifest) == manifest_json
-                and hashlib.sha256(manifest_json.encode()).hexdigest()
-                == str(artifact[10])
+                and hashlib.sha256(manifest_json.encode()).hexdigest() == str(artifact[10])
                 and str(manifest["bundle_name"]) == str(artifact[1])
                 and str(coordinates["arelle"]) == str(artifact[2])
                 and str(coordinates["edgar"]) == str(artifact[3])
@@ -693,8 +690,7 @@ def _audit_filing_xbrl_processor_closure(
                     "require_zero_fact_host_verification": True,
                 }
                 and execution["internet_connectivity"] == "os_denied"
-                and execution["sandbox_contract_version"]
-                == "earnings-xbrl-os-sandbox.v1"
+                and execution["sandbox_contract_version"] == "earnings-xbrl-os-sandbox.v1"
                 and execution["isolated_python"] is True
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
@@ -735,20 +731,16 @@ def _audit_filing_xbrl_processor_closure(
             payload: dict[str, object] = {
                 "blob_sha256": str(member[4]),
                 "byte_size": int(member[5]),
-                "document_version_id": (
-                    None if member[2] is None else str(member[2])
-                ),
+                "document_version_id": (None if member[2] is None else str(member[2])),
                 "media_type": str(member[6]),
                 "member_ordinal": int(member[0]),
                 "member_role": str(member[1]),
                 "source_url": str(member[3]),
             }
             canonical_member = canonical_json(payload)
-            if (
-                canonical_member != str(member[7])
-                or hashlib.sha256(canonical_member.encode()).hexdigest()
-                != str(member[8])
-            ):
+            if canonical_member != str(member[7]) or hashlib.sha256(
+                canonical_member.encode()
+            ).hexdigest() != str(member[8]):
                 member_mismatch = True
             member_payload.append(payload)
         canonical_members = canonical_json(member_payload)
@@ -762,8 +754,7 @@ def _audit_filing_xbrl_processor_closure(
                 str(member["blob_sha256"]),
             )
             for member in member_payload
-            if member["member_role"]
-            in {"issuer_taxonomy", "standard_taxonomy", "network_artifact"}
+            if member["member_role"] in {"issuer_taxonomy", "standard_taxonomy", "network_artifact"}
         )
         network_shape_exact = sealed_network is not None and all(
             set(item) == {"source_url", "blob_sha256"} for item in sealed_network
@@ -771,8 +762,7 @@ def _audit_filing_xbrl_processor_closure(
         actual_network: list[tuple[str, str]] | None = None
         if network_shape_exact and sealed_network is not None:
             actual_network = sorted(
-                (str(item["source_url"]), str(item["blob_sha256"]))
-                for item in sealed_network
+                (str(item["source_url"]), str(item["blob_sha256"])) for item in sealed_network
             )
         raw_payload: list[dict[str, object]] = []
         source_entry_mismatch = False
@@ -831,11 +821,9 @@ def _audit_filing_xbrl_processor_closure(
                 footnote_mismatch = True
                 continue
             canonical_footnote = canonical_json(footnote_body)
-            if (
-                canonical_footnote != str(footnote[2])
-                or hashlib.sha256(canonical_footnote.encode()).hexdigest()
-                != str(footnote[3])
-            ):
+            if canonical_footnote != str(footnote[2]) or hashlib.sha256(
+                canonical_footnote.encode()
+            ).hexdigest() != str(footnote[3]):
                 footnote_mismatch = True
             footnote_payload.append(
                 {
@@ -855,21 +843,17 @@ def _audit_filing_xbrl_processor_closure(
             "WHERE processor_artifact_id=?",
             (str(row[12]),),
         ).fetchone()
-        execution_evidence_exact = (
-            isinstance(execution_evidence, dict)
-            and execution_evidence
-            == {
-                "accession_number": str(row[10]),
-                "expected_cik": str(row[11]),
-                "internet_connectivity": "os_denied",
-                "network_requests_observed": 0,
-                "package_member_set_sha256": str(row[2]),
-                "runtime_artifact_sha256": (
-                    None if artifact_runtime is None else str(artifact_runtime[0])
-                ),
-                "sandbox_contract_version": "earnings-xbrl-os-sandbox.v1",
-            }
-        )
+        execution_evidence_exact = isinstance(execution_evidence, dict) and execution_evidence == {
+            "accession_number": str(row[10]),
+            "expected_cik": str(row[11]),
+            "internet_connectivity": "os_denied",
+            "network_requests_observed": 0,
+            "package_member_set_sha256": str(row[2]),
+            "runtime_artifact_sha256": (
+                None if artifact_runtime is None else str(artifact_runtime[0])
+            ),
+            "sandbox_contract_version": "earnings-xbrl-os-sandbox.v1",
+        }
         if (
             member_mismatch
             or canonical_members != str(row[1])

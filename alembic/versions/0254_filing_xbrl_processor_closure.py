@@ -66,8 +66,7 @@ def upgrade() -> None:
             name="ck_filing_xbrl_processor_artifact_hashes",
         ),
         sa.CheckConstraint(
-            "json_valid(canonical_manifest_json) "
-            "AND json_type(canonical_manifest_json) = 'object'",
+            "json_valid(canonical_manifest_json) AND json_type(canonical_manifest_json) = 'object'",
             name="ck_filing_xbrl_processor_artifact_manifest",
         ),
     )
@@ -125,8 +124,7 @@ def upgrade() -> None:
             name="ck_filing_xbrl_input_hashes",
         ),
         sa.CheckConstraint(
-            "json_valid(canonical_member_json) "
-            "AND json_type(canonical_member_json) = 'object'",
+            "json_valid(canonical_member_json) AND json_type(canonical_member_json) = 'object'",
             name="ck_filing_xbrl_input_member_json",
         ),
     )
@@ -279,8 +277,7 @@ def upgrade() -> None:
             name="ck_filing_xbrl_raw_fact_hashes",
         ),
         sa.CheckConstraint(
-            "json_valid(canonical_raw_fact_json) "
-            "AND json_type(canonical_raw_fact_json) = 'object'",
+            "json_valid(canonical_raw_fact_json) AND json_type(canonical_raw_fact_json) = 'object'",
             name="ck_filing_xbrl_raw_fact_json",
         ),
     )
@@ -319,8 +316,7 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(_hex("footnote_sha256"), name="ck_filing_xbrl_footnote_hash"),
         sa.CheckConstraint(
-            "json_valid(canonical_footnote_json) "
-            "AND json_type(canonical_footnote_json) = 'object'",
+            "json_valid(canonical_footnote_json) AND json_type(canonical_footnote_json) = 'object'",
             name="ck_filing_xbrl_footnote_json",
         ),
     )
@@ -528,9 +524,7 @@ def downgrade() -> None:
     op.execute("DROP TRIGGER IF EXISTS trg_filing_xbrl_raw_fact_binding")
     op.execute("DROP TRIGGER IF EXISTS trg_filing_xbrl_footnote_raw_fact")
     op.execute("DROP TRIGGER IF EXISTS trg_filing_xbrl_disposition_input_binding")
-    op.execute(
-        "DROP TRIGGER IF EXISTS trg_filing_xbrl_disposition_seal_input_binding"
-    )
+    op.execute("DROP TRIGGER IF EXISTS trg_filing_xbrl_disposition_seal_input_binding")
     for table in (
         "filing_xbrl_footnote_commitments",
         "filing_xbrl_raw_fact_commitments",

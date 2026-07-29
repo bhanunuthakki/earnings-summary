@@ -1354,12 +1354,8 @@ def verify_processing_snapshot(
 
 
 def _research_lanes(request: ResearchSnapshotRequest) -> list[tuple[str, str]]:
-    lanes: list[tuple[str, str]] = [
-        ("research_universe", request.research_snapshot_id)
-    ]
-    lanes.extend(
-        (f"processing:{item}", item) for item in request.processing_snapshot_ids
-    )
+    lanes: list[tuple[str, str]] = [("research_universe", request.research_snapshot_id)]
+    lanes.extend((f"processing:{item}", item) for item in request.processing_snapshot_ids)
     for bundle in request.corpus_bundles:
         coordinate = bundle.corpus_manifest_id
         lanes.append((f"corpus:{coordinate}", bundle.corpus_manifest_id))
@@ -1440,9 +1436,7 @@ class _DefaultResearchReferenceVerifier:
                 recorded_at=request.recorded_at,
                 attributes={
                     "issuer_id": request.research_universe.issuer_id,
-                    "reporting_entity_ids": list(
-                        request.research_universe.reporting_entity_ids
-                    ),
+                    "reporting_entity_ids": list(request.research_universe.reporting_entity_ids),
                 },
             )
         if requested_lane.startswith("processing:"):
@@ -1510,12 +1504,9 @@ class _DefaultResearchReferenceVerifier:
                 CanonicalFactResolutionEngine,
             )
 
-            verified = CanonicalFactResolutionEngine(conn).verify_snapshot(
-                reference_id, cutoff_at
-            )
-            if (
-                _utc(verified.cutoff_at) > _utc(cutoff_at)
-                or _utc(verified.recorded_at) > _utc(cutoff_at)
+            verified = CanonicalFactResolutionEngine(conn).verify_snapshot(reference_id, cutoff_at)
+            if _utc(verified.cutoff_at) > _utc(cutoff_at) or _utc(verified.recorded_at) > _utc(
+                cutoff_at
             ):
                 raise ValueError("Canonical Fact Resolution Snapshot is absent at cutoff")
             return VerifiedResearchReference(
@@ -1527,9 +1518,7 @@ class _DefaultResearchReferenceVerifier:
                 recorded_at=verified.recorded_at,
                 attributes={
                     "issuer_id": verified.scope.issuer_id,
-                    "reporting_entity_ids": list(
-                        verified.scope.reporting_entity_ids
-                    ),
+                    "reporting_entity_ids": list(verified.scope.reporting_entity_ids),
                     "scope_sha256": verified.scope_sha256,
                 },
             )
@@ -1726,8 +1715,7 @@ def _assert_disjoint(
         overlap = union.intersection(identifiers)
         if overlap:
             raise ValueError(
-                f"{label} sets must not overlap; {name} repeats "
-                + ", ".join(sorted(overlap))
+                f"{label} sets must not overlap; {name} repeats " + ", ".join(sorted(overlap))
             )
         union.update(identifiers)
     return frozenset(union)
@@ -1816,8 +1804,7 @@ def _corpus_obligation_bindings(
             expected_document_id = str(rows[0][0])
             if expected_document_id in expected_documents:
                 raise ValueError(
-                    "corpus manifests must not overlap expected documents: "
-                    + expected_document_id
+                    "corpus manifests must not overlap expected documents: " + expected_document_id
                 )
             expected_documents.add(expected_document_id)
             all_rows.append(rows[0])
@@ -1833,9 +1820,7 @@ def _validate_document_obligation_subject_pairs(
             continue
         document_version_id = None if row[5] is None else str(row[5])
         subject = (
-            None
-            if document_version_id is None
-            else document_subjects.get(document_version_id)
+            None if document_version_id is None else document_subjects.get(document_version_id)
         )
         if subject != (str(row[2]), str(row[3])):
             raise ValueError(
@@ -1861,9 +1846,7 @@ def _verify_research_universe(
     }
     missing = sorted(required - _tables(conn))
     if missing:
-        raise RuntimeError(
-            "research universe closure schema is unavailable: " + ", ".join(missing)
-        )
+        raise RuntimeError("research universe closure schema is unavailable: " + ", ".join(missing))
     universe = request.research_universe
     issuer = conn.execute(
         "SELECT issuer_id FROM issuer_entities WHERE issuer_id=?",
@@ -1916,29 +1899,22 @@ def _verify_research_universe(
         document_entities.add(str(row[2]))
         document_subjects[str(row[0])] = (str(row[1]), str(row[2]))
     if document_entities != set(universe.reporting_entity_ids):
-        raise ValueError(
-            "document reporting-entity set must equal the research universe"
-        )
+        raise ValueError("document reporting-entity set must equal the research universe")
 
     binding_rows = _corpus_obligation_bindings(conn, request.corpus_bundles)
     obligation_ids = tuple(sorted({str(row[1]) for row in binding_rows}))
     if obligation_ids != universe.source_obligation_revision_ids:
-        raise ValueError(
-            "corpus source obligations must exactly match the research universe"
-        )
+        raise ValueError("corpus source obligations must exactly match the research universe")
     obligation_entities: set[str] = set()
     for row in binding_rows:
         if str(row[2]) != universe.issuer_id or row[3] is None:
             raise ValueError(
-                "every expected-document obligation must have the exact issuer "
-                "and reporting entity"
+                "every expected-document obligation must have the exact issuer and reporting entity"
             )
         obligation_entities.add(str(row[3]))
     _validate_document_obligation_subject_pairs(document_subjects, binding_rows)
     if obligation_entities != set(universe.reporting_entity_ids):
-        raise ValueError(
-            "source-obligation reporting-entity set must equal the research universe"
-        )
+        raise ValueError("source-obligation reporting-entity set must equal the research universe")
 
     if not verify_fact_subjects or not request.source_fact_publication_ids:
         return
@@ -1954,12 +1930,12 @@ def _verify_research_universe(
         (request.canonical_fact_resolution_snapshot_id,),
     ).fetchall()
     fact_entities = {str(row[0]) for row in fact_rows}
-    if not fact_rows or fact_entities != set(universe.reporting_entity_ids) or any(
-        str(row[1]) != universe.issuer_id for row in fact_rows
+    if (
+        not fact_rows
+        or fact_entities != set(universe.reporting_entity_ids)
+        or any(str(row[1]) != universe.issuer_id for row in fact_rows)
     ):
-        raise ValueError(
-            "canonical fact reporting-entity set must equal the research universe"
-        )
+        raise ValueError("canonical fact reporting-entity set must equal the research universe")
 
 
 def _universe_payload(universe: ResearchUniverse) -> dict[str, object]:
@@ -1967,9 +1943,7 @@ def _universe_payload(universe: ResearchUniverse) -> dict[str, object]:
         "document_version_ids": list(universe.document_version_ids),
         "issuer_id": universe.issuer_id,
         "reporting_entity_ids": list(universe.reporting_entity_ids),
-        "source_obligation_revision_ids": list(
-            universe.source_obligation_revision_ids
-        ),
+        "source_obligation_revision_ids": list(universe.source_obligation_revision_ids),
     }
 
 
@@ -2000,8 +1974,7 @@ def _persist_research_universe(
     ).fetchone()
     if existing is None:
         conn.execute(
-            "INSERT INTO research_snapshot_universe_commitments "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO research_snapshot_universe_commitments VALUES (?,?,?,?,?,?,?,?,?)",
             row,
         )
     elif tuple(existing) != row:
@@ -2059,8 +2032,7 @@ def _verify_research_references(
             != request.research_universe.reporting_entity_ids
         ):
             raise ValueError(
-                "canonical resolution snapshot scope must exactly match "
-                "the research universe"
+                "canonical resolution snapshot scope must exactly match the research universe"
             )
     required_publications = _required_source_fact_publications(
         conn, request.canonical_fact_resolution_snapshot_id
@@ -2070,11 +2042,7 @@ def _verify_research_references(
             "Source Fact Publications must exactly match the requested 0244 candidate universes"
         )
     references = tuple(
-        (
-            _DefaultResearchReferenceVerifier()
-            if lane == "research_universe"
-            else verifier
-        ).verify(
+        (_DefaultResearchReferenceVerifier() if lane == "research_universe" else verifier).verify(
             conn,
             requested_lane=lane,
             reference_id=reference_id,
@@ -2089,10 +2057,9 @@ def _verify_research_references(
         raise ValueError("research verifier changed or reordered requested lanes")
     for reference in references:
         if reference.requested_lane == "research_universe":
-            if (
-                _utc(reference.knowledge_at) != _utc(request.cutoff_at)
-                or _utc(reference.recorded_at) != _utc(request.recorded_at)
-            ):
+            if _utc(reference.knowledge_at) != _utc(request.cutoff_at) or _utc(
+                reference.recorded_at
+            ) != _utc(request.recorded_at):
                 raise ValueError(
                     "research universe reference must use the exact cutoff and "
                     "sealed commitment clock"
@@ -2116,9 +2083,7 @@ def _verify_research_references(
             and (
                 projection_attributes.get("resolution_scope_sha256")
                 != verified_resolution.scope_sha256
-                or projection_attributes.get(
-                    "resolution_snapshot_commitment_sha256"
-                )
+                or projection_attributes.get("resolution_snapshot_commitment_sha256")
                 != verified_resolution.snapshot_commitment_sha256
             )
         )

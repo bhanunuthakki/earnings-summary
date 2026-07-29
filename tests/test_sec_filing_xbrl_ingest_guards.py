@@ -45,9 +45,7 @@ def test_exact_replay_preserves_original_recorded_at_and_rejects_conflict() -> N
         columns=columns,
         values=("row-1", "key-1", "sealed", replayed_at),
     )
-    assert conn.execute("SELECT recorded_at FROM ledger").fetchone() == (
-        str(original),
-    )
+    assert conn.execute("SELECT recorded_at FROM ledger").fetchone() == (str(original),)
     with pytest.raises(ValueError, match="conflicts"):
         persist_exact(
             conn,
@@ -147,10 +145,8 @@ def test_replay_refuses_incomplete_or_non_atomic_durable_closure() -> None:
         "CREATE TABLE filing_xbrl_extraction_input_members "
         "(extraction_run_id TEXT,recorded_at TEXT)",
         "CREATE TABLE evidence_nodes (extraction_run_id TEXT,recorded_at TEXT)",
-        "CREATE TABLE filing_xbrl_raw_fact_commitments "
-        "(extraction_run_id TEXT,recorded_at TEXT)",
-        "CREATE TABLE filing_xbrl_footnote_commitments "
-        "(extraction_run_id TEXT,recorded_at TEXT)",
+        "CREATE TABLE filing_xbrl_raw_fact_commitments (extraction_run_id TEXT,recorded_at TEXT)",
+        "CREATE TABLE filing_xbrl_footnote_commitments (extraction_run_id TEXT,recorded_at TEXT)",
         "CREATE TABLE filing_xbrl_extraction_dispositions "
         "(extraction_run_id TEXT,recorded_at TEXT,knowledge_at TEXT)",
         "CREATE TABLE filing_xbrl_extraction_input_seals "

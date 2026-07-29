@@ -61,10 +61,7 @@ def test_0252_empty_upgrade_and_downgrade_round_trip(tmp_path: Path) -> None:
     command.upgrade(config, UNIVERSE_REVISION)
     conn = _connection(path)
     assert {
-        str(row[0])
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        )
+        str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     } >= {
         "expected_document_obligation_bindings",
         "research_snapshot_universe_commitments",
@@ -152,8 +149,7 @@ def test_0252_backfills_and_enforces_embedding_promotion_clocks(
     command.downgrade(config, PRE_UNIVERSE_REVISION)
     conn = _connection(path)
     columns = {
-        str(row[1])
-        for row in conn.execute("PRAGMA table_info(search_embedding_model_promotions)")
+        str(row[1]) for row in conn.execute("PRAGMA table_info(search_embedding_model_promotions)")
     }
     assert "knowledge_at" not in columns
     assert "recorded_at" not in columns
@@ -258,8 +254,7 @@ def test_0252_downgrade_refuses_committed_universe(tmp_path: Path) -> None:
     )
     conn.execute("DROP TRIGGER trg_research_snapshot_universe_exact")
     conn.execute(
-        "INSERT INTO research_snapshot_universe_commitments VALUES "
-        "(?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO research_snapshot_universe_commitments VALUES (?,?,?,?,?,?,?,?,?)",
         (
             "research-1",
             "issuer-1",

@@ -196,10 +196,7 @@ class AnswerAuditRecord(_Frozen):
             raise ValueError("answer prompt evidence block differs from retrieval inventory")
         if self.claim_audit_prompt_variables.answer != self.answer_text:
             raise ValueError("claim-audit prompt answer differs from the delivered answer")
-        if (
-            self.claim_audit_prompt_variables.evidence
-            != self.prompt_variables.evidence_block
-        ):
+        if self.claim_audit_prompt_variables.evidence != self.prompt_variables.evidence_block:
             raise ValueError("claim-audit evidence differs from the answer evidence")
         if retrieval_query_sha256(self.prompt_variables.question) != self.query_sha256:
             raise ValueError("answer prompt question differs from the retrieval query")
@@ -216,9 +213,7 @@ class AnswerRetrieval(_Frozen):
     research_snapshot_sha256: str
     recorded_at: datetime
 
-    _hashes = field_validator(
-        "query_sha256", "trace_sha256", "research_snapshot_sha256"
-    )(_sha)
+    _hashes = field_validator("query_sha256", "trace_sha256", "research_snapshot_sha256")(_sha)
 
 
 class AnswerCitation(_Frozen):
@@ -291,9 +286,7 @@ class AnswerAuditPackage(_Frozen):
             raise ValueError("retrieval traces must bind the exact answer request and query")
         if any(item.trace_id not in trace_ids for item in self.citations):
             raise ValueError("every citation must belong to a bound retrieval")
-        assembly_by_number = {
-            item.citation_number: item for item in self.record.retrieval_assembly
-        }
+        assembly_by_number = {item.citation_number: item for item in self.record.retrieval_assembly}
         for citation in self.citations:
             assembly = assembly_by_number.get(citation.citation_number)
             payload = citation.citation
@@ -304,14 +297,12 @@ class AnswerAuditPackage(_Frozen):
                 or payload.result_ordinal != citation.result_ordinal
                 or payload.candidate_kind != citation.candidate_kind
                 or payload.candidate_id != citation.candidate_id
-                or payload.source_commitment_sha256
-                != citation.source_commitment_sha256
+                or payload.source_commitment_sha256 != citation.source_commitment_sha256
                 or assembly.trace_id != citation.trace_id
                 or assembly.result_ordinal != citation.result_ordinal
                 or assembly.candidate_kind != citation.candidate_kind
                 or assembly.candidate_id != citation.candidate_id
-                or assembly.source_commitment_sha256
-                != citation.source_commitment_sha256
+                or assembly.source_commitment_sha256 != citation.source_commitment_sha256
             ):
                 raise ValueError("citation must equal its exact retrieval assembly item")
         claims = {item.claim_ordinal: item for item in self.claims}
@@ -328,9 +319,7 @@ class AnswerAuditPackage(_Frozen):
             if claim.supported != has_edges:
                 raise ValueError("supported claims need citations and unsupported claims need none")
         referenced_citations = {
-            citation_number
-            for numbers in edges_by_claim.values()
-            for citation_number in numbers
+            citation_number for numbers in edges_by_claim.values() for citation_number in numbers
         }
         if referenced_citations != citations:
             raise ValueError(
@@ -345,8 +334,7 @@ class AnswerAuditPackage(_Frozen):
             exemption = deterministic_no_claim_exemption(self.record.answer_text)
             if exemption is None or self.record.no_claim_exemption != exemption:
                 raise ValueError(
-                    "zero-claim sealed answers require the deterministic "
-                    "non-substantive exemption"
+                    "zero-claim sealed answers require the deterministic non-substantive exemption"
                 )
         if _time(self.sealed_at) < _time(self.record.recorded_at):
             raise ValueError("answer seal cannot predate its record")
@@ -418,9 +406,7 @@ def _insert_exact(
     identity_column: str,
     identity_value: object,
 ) -> None:
-    select_sql = (
-        f"SELECT {','.join(columns)} FROM {table} WHERE {identity_column}=?"  # nosec B608 -- closed internal schema
-    )
+    select_sql = f"SELECT {','.join(columns)} FROM {table} WHERE {identity_column}=?"  # nosec B608 -- closed internal schema
     existing = conn.execute(select_sql, (identity_value,)).fetchone()
     if existing is not None:
         if tuple(existing) != values:
@@ -645,9 +631,9 @@ def _verify_record_references(
             if row is None:
                 raise ValueError("answer prompt thread is missing an authoritative turn")
             prior_texts.append((str(row[0]), str(row[1])))
-        expected_thread = "\n\n".join(
-            f"[{role.upper()}] {text}" for role, text in prior_texts
-        ) or "(first turn)"
+        expected_thread = (
+            "\n\n".join(f"[{role.upper()}] {text}" for role, text in prior_texts) or "(first turn)"
+        )
         if expected_thread != record.prompt_variables.thread_text:
             raise ValueError("answer prompt thread differs from authoritative context")
     _verify_rendered_prompt(
@@ -714,10 +700,7 @@ def _verify_retrieval_reference(
         "WHERE header.trace_id=?",
         (retrieval.promotion_id, retrieval.trace_id),
     ).fetchone()
-    expected_key = (
-        f"ask-request:{record.request_id}:{record.query_sha256}:"
-        f"{retrieval.promotion_id}"
-    )
+    expected_key = f"ask-request:{record.request_id}:{record.query_sha256}:{retrieval.promotion_id}"
     expected = (
         expected_key,
         record.query_sha256,
@@ -892,12 +875,8 @@ def persist_answer_audit(
                 "ask_answer_audit_claim_citations",
                 ("answer_id", "claim_ordinal", "citation_number", "recorded_at"),
                 child,
-                identity_column=(
-                    "answer_id || ':' || claim_ordinal || ':' || citation_number"
-                ),
-                identity_value=(
-                    f"{answer_id}:{item.claim_ordinal}:{item.citation_number}"
-                ),
+                identity_column=("answer_id || ':' || claim_ordinal || ':' || citation_number"),
+                identity_value=(f"{answer_id}:{item.claim_ordinal}:{item.citation_number}"),
             )
         seal_columns, seal_values = _seal_values(package)
         _insert_exact(
@@ -1041,8 +1020,7 @@ def verify_answer_audit(conn: sqlite3.Connection, answer_id: str) -> VerifiedAns
             str(record["prompt_variables_json"])
         )
         fragments = tuple(
-            str(item)
-            for item in json.loads(str(record["retrieval_prompt_fragments_json"]))
+            str(item) for item in json.loads(str(record["retrieval_prompt_fragments_json"]))
         )
         claim_prompt_variables = ClaimAuditPromptVariables.model_validate_json(
             str(record["claim_audit_prompt_variables_json"])
@@ -1094,9 +1072,10 @@ def verify_answer_audit(conn: sqlite3.Connection, answer_id: str) -> VerifiedAns
             ) != (item.session_id, item.role, item.text_sha256, item.created_at):
                 raise ValueError("Ask answer context turn identity mismatch")
             context_rows.append((str(turn[1]), str(turn[2])))
-        expected_thread = "\n\n".join(
-            f"[{role.upper()}] {text}" for role, text in context_rows[:-1]
-        ) or "(first turn)"
+        expected_thread = (
+            "\n\n".join(f"[{role.upper()}] {text}" for role, text in context_rows[:-1])
+            or "(first turn)"
+        )
         if (
             not context_rows
             or context_rows[-1] != ("user", prompt_variables.question)
@@ -1150,18 +1129,15 @@ def verify_answer_audit(conn: sqlite3.Connection, answer_id: str) -> VerifiedAns
         label="Ask claim-audit LLM call",
     )
     retrieval_rows = conn.execute(
-        "SELECT * FROM ask_answer_audit_retrievals "
-        "WHERE answer_id=? ORDER BY trace_ordinal",
+        "SELECT * FROM ask_answer_audit_retrievals WHERE answer_id=? ORDER BY trace_ordinal",
         (answer_id,),
     ).fetchall()
     citation_rows = conn.execute(
-        "SELECT * FROM ask_answer_audit_citations "
-        "WHERE answer_id=? ORDER BY citation_number",
+        "SELECT * FROM ask_answer_audit_citations WHERE answer_id=? ORDER BY citation_number",
         (answer_id,),
     ).fetchall()
     claim_rows = conn.execute(
-        "SELECT * FROM ask_answer_audit_claims "
-        "WHERE answer_id=? ORDER BY claim_ordinal",
+        "SELECT * FROM ask_answer_audit_claims WHERE answer_id=? ORDER BY claim_ordinal",
         (answer_id,),
     ).fetchall()
     edge_rows = conn.execute(
@@ -1183,8 +1159,7 @@ def verify_answer_audit(conn: sqlite3.Connection, answer_id: str) -> VerifiedAns
             (row["promotion_id"], row["trace_id"]),
         ).fetchone()
         expected_key = (
-            f"ask-request:{record['request_id']}:{record['query_sha256']}:"
-            f"{row['promotion_id']}"
+            f"ask-request:{record['request_id']}:{record['query_sha256']}:{row['promotion_id']}"
         )
         expected_trace = (
             expected_key,
@@ -1260,8 +1235,7 @@ def verify_answer_audit(conn: sqlite3.Connection, answer_id: str) -> VerifiedAns
         if (
             digest_text(claim_text) != str(row["claim_sha256"])
             or digest_text(claim_json) != str(row["claim_json_sha256"])
-            or answer_text[int(row["char_start"]) : int(row["char_end"])]
-            != claim_text
+            or answer_text[int(row["char_start"]) : int(row["char_end"])] != claim_text
         ):
             raise ValueError("Ask claim commitment mismatch")
         claims.append(
@@ -1280,9 +1254,7 @@ def verify_answer_audit(conn: sqlite3.Connection, answer_id: str) -> VerifiedAns
         }
         for row in edge_rows
     ]
-    edges_by_claim = {
-        int(row["claim_ordinal"]) for row in edge_rows
-    }
+    edges_by_claim = {int(row["claim_ordinal"]) for row in edge_rows}
     if any(
         bool(row["supported"]) != (int(row["claim_ordinal"]) in edges_by_claim)
         for row in claim_rows
@@ -1322,11 +1294,7 @@ def verify_answer_audit(conn: sqlite3.Connection, answer_id: str) -> VerifiedAns
         sum(not bool(row["supported"]) for row in claim_rows),
         len(edges),
     )
-    exemption = (
-        None
-        if record["no_claim_exemption"] is None
-        else str(record["no_claim_exemption"])
-    )
+    exemption = None if record["no_claim_exemption"] is None else str(record["no_claim_exemption"])
     if expected_counts[2] > 0:
         if expected_counts[1] == 0 or exemption is not None:
             raise ValueError("substantive Ask answer claim/citation contract is incomplete")
@@ -1344,12 +1312,15 @@ def verify_answer_audit(conn: sqlite3.Connection, answer_id: str) -> VerifiedAns
     if (
         stored_counts != expected_counts
         or str(seal["record_sha256"]) != record_commitment_sha256
-        or tuple(str(seal[name]) for name in (
-            "retrieval_set_sha256",
-            "citation_set_sha256",
-            "claim_set_sha256",
-            "claim_citation_set_sha256",
-        ))
+        or tuple(
+            str(seal[name])
+            for name in (
+                "retrieval_set_sha256",
+                "citation_set_sha256",
+                "claim_set_sha256",
+                "claim_citation_set_sha256",
+            )
+        )
         != hashes
         or str(seal["audit_json"]) != expected_audit
         or str(seal["audit_sha256"]) != digest_text(expected_audit)

@@ -43,9 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     output = args.output.resolve()
     if args.apply:
         if output != PRODUCTION_OUTPUT.resolve():
-            raise SystemExit(
-                "--apply may write only config/ask_retrieval_production_scopes.json"
-            )
+            raise SystemExit("--apply may write only config/ask_retrieval_production_scopes.json")
     elif output != DEFAULT_DRY_RUN_OUTPUT.resolve():
         raise SystemExit("dry-run output is fixed under .tmp for review")
     conn = connect_sqlite(args.db, role=SQLiteConnectionRole.READ_ONLY)

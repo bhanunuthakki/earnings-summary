@@ -241,12 +241,10 @@ class SealedRetrievalPlan(_Frozen):
             if (
                 request.idempotency_key != expected_key
                 or request.query_text != self.question
-                or request.research_snapshot_id
-                != scope.promotion.research_snapshot_id
+                or request.research_snapshot_id != scope.promotion.research_snapshot_id
                 or request.fact_generation_id != scope.promotion.fact_generation_id
                 or request.narrative_bundles != scope.promotion.narrative_bundles
-                or request.filters.reporting_entity_id
-                != scope.promotion.reporting_entity_id
+                or request.filters.reporting_entity_id != scope.promotion.reporting_entity_id
             ):
                 raise ValueError("sealed retrieval request differs from its promotion")
         return self
@@ -364,9 +362,7 @@ def derive_production_scope_registry(
         reporting_entity_id = str(reporting_rows[0][0])
         ticker = str(listing_rows[0][0]).strip().upper()
         if not reporting_entity_id or not ticker:
-            raise ValueError(
-                f"core scope {scope_key}/{issuer_id} has an empty reporting identity"
-            )
+            raise ValueError(f"core scope {scope_key}/{issuer_id} has an empty reporting identity")
         scopes.append(
             RetrievalScope(
                 scope_key=scope_key,
@@ -376,9 +372,7 @@ def derive_production_scope_registry(
             )
         )
         revisions.append(revision_id)
-    canonical_scopes = canonical_json(
-        [item.model_dump(mode="json") for item in scopes]
-    )
+    canonical_scopes = canonical_json([item.model_dump(mode="json") for item in scopes])
     core: dict[str, object] = {
         "registry_id": PRODUCTION_SCOPE_REGISTRY_ID,
         "schema_version": PRODUCTION_SCOPE_SCHEMA_VERSION,
@@ -413,10 +407,7 @@ def load_production_scopes(
         raise ValueError("production scope registry contract is invalid")
     registry_sha256 = payload.get("registry_sha256")
     core = {key: value for key, value in payload.items() if key != "registry_sha256"}
-    if (
-        not isinstance(registry_sha256, str)
-        or digest_text(canonical_json(core)) != registry_sha256
-    ):
+    if not isinstance(registry_sha256, str) or digest_text(canonical_json(core)) != registry_sha256:
         raise ValueError("production scope registry commitment mismatch")
     if canonical_json(payload) != canonical_json(derive_production_scope_registry(conn)):
         raise ValueError(
@@ -446,9 +437,7 @@ def load_production_scopes(
     for ticker in normalized:
         candidates = by_ticker.get(ticker, [])
         if len(candidates) != 1:
-            raise ValueError(
-                f"production Ask scope for {ticker} is missing or ambiguous"
-            )
+            raise ValueError(f"production Ask scope for {ticker} is missing or ambiguous")
         selected.append(candidates[0])
     return tuple(sorted(selected, key=lambda item: item.scope_key))
 
@@ -481,9 +470,7 @@ def _promotion_payloads(
 
 
 def _promotion_values(promotion: RetrievalPromotion) -> tuple[object, ...]:
-    inventory_json, inventory_sha, bundles_json, bundles_sha = _promotion_payloads(
-        promotion
-    )
+    inventory_json, inventory_sha, bundles_json, bundles_sha = _promotion_payloads(promotion)
     return (
         promotion.promotion_id,
         promotion.idempotency_key,
@@ -689,16 +676,14 @@ def verify_retrieval_promotion(
         or expected_bundles != promotion.narrative_bundles
         or _utc(request.cutoff_at) != _utc(promotion.cutoff_at)
         or request.research_universe.issuer_id != promotion.issuer_id
-        or promotion.reporting_entity_id
-        not in request.research_universe.reporting_entity_ids
+        or promotion.reporting_entity_id not in request.research_universe.reporting_entity_ids
     ):
         raise PromotionVerificationError(
             "promotion_invalid",
             "promotion coordinates differ from its Research Snapshot request",
         )
     projection = conn.execute(
-        "SELECT projection_seal_sha256 FROM canonical_fact_projection_seals "
-        "WHERE generation_id=?",
+        "SELECT projection_seal_sha256 FROM canonical_fact_projection_seals WHERE generation_id=?",
         (promotion.fact_generation_id,),
     ).fetchone()
     if projection is None or str(projection[0]) != promotion.fact_projection_seal_sha256:
@@ -827,10 +812,7 @@ def _promotion_from_row(row: sqlite3.Row) -> RetrievalPromotion:
         fact_generation_id=str(row["fact_generation_id"]),
         fact_projection_seal_sha256=str(row["fact_projection_seal_sha256"]),
         source_inventory_ids=tuple(inventory_payload),
-        narrative_bundles=tuple(
-            NarrativeBundle.model_validate(item)
-            for item in bundle_payload
-        ),
+        narrative_bundles=tuple(NarrativeBundle.model_validate(item) for item in bundle_payload),
         cutoff_at=_datetime(row["cutoff_at"]),
         policy_version=str(row["policy_version"]),
         verifier_name=str(row["verifier_name"]),
@@ -839,9 +821,7 @@ def _promotion_from_row(row: sqlite3.Row) -> RetrievalPromotion:
         verifier_config_sha256=str(row["verifier_config_sha256"]),
         status=cast(Literal["promoted", "withdrawn"], str(row["status"])),
         supersedes_promotion_id=(
-            None
-            if row["supersedes_promotion_id"] is None
-            else str(row["supersedes_promotion_id"])
+            None if row["supersedes_promotion_id"] is None else str(row["supersedes_promotion_id"])
         ),
         recorded_at=_datetime(row["recorded_at"]),
     )
@@ -987,9 +967,7 @@ def build_sealed_retrieval_plan(
                 query_text=normalized_question,
                 candidate_limit=candidate_limit,
                 result_limit=result_limit,
-                filters=RetrievalFilters(
-                    reporting_entity_id=scope.scope.reporting_entity_id
-                ),
+                filters=RetrievalFilters(reporting_entity_id=scope.scope.reporting_entity_id),
                 cutoff_at=scope.promotion.cutoff_at,
                 recorded_at=created_at,
             )
@@ -1014,9 +992,7 @@ def execute_sealed_retrieval_plan(
     receipts: list[HeterogeneousRetrievalReceipt] = []
     with _savepoint(conn, "execute_sealed_ask_retrieval"):
         conn.row_factory = sqlite3.Row
-        for planned_scope, request in zip(
-            plan.scopes, plan.requests, strict=True
-        ):
+        for planned_scope, request in zip(plan.scopes, plan.requests, strict=True):
             current_row = conn.execute(
                 "SELECT * FROM v_ask_retrieval_scope_current WHERE scope_key=?",
                 (planned_scope.scope.scope_key,),

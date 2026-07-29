@@ -122,10 +122,7 @@ def _schema(conn: sqlite3.Connection) -> None:
         """
     )
     migration_path = (
-        Path(__file__).parents[1]
-        / "alembic"
-        / "versions"
-        / "0253_ask_sealed_answer_audit.py"
+        Path(__file__).parents[1] / "alembic" / "versions" / "0253_ask_sealed_answer_audit.py"
     )
     spec = importlib.util.spec_from_file_location(
         "migration_0253_ask_sealed_answer_audit", migration_path
@@ -154,17 +151,13 @@ def _seed_trace(conn: sqlite3.Connection) -> None:
         evidence_block="fragment",
         question="question",
     )
-    answer_prompt = ask_engine._SEALED_ANSWER_TEMPLATE.render(
-        **answer_variables.model_dump()
-    )
+    answer_prompt = ask_engine._SEALED_ANSWER_TEMPLATE.render(**answer_variables.model_dump())
     claim_variables = ClaimAuditPromptVariables(
         repair_feedback="",
         answer=answer,
         evidence="fragment",
     )
-    claim_prompt = ask_engine.CLAIM_AUDIT_TEMPLATE.render(
-        **claim_variables.model_dump()
-    )
+    claim_prompt = ask_engine.CLAIM_AUDIT_TEMPLATE.render(**claim_variables.model_dump())
     conn.execute("INSERT INTO ask_sessions VALUES (?,?)", ("session-1", "portfolio"))
     conn.execute(
         "INSERT INTO ask_turns VALUES (?,?,?,?,?)",
@@ -294,17 +287,13 @@ def _package() -> AnswerAuditPackage:
         evidence_block="fragment",
         question="question",
     )
-    answer_prompt = ask_engine._SEALED_ANSWER_TEMPLATE.render(
-        **answer_variables.model_dump()
-    )
+    answer_prompt = ask_engine._SEALED_ANSWER_TEMPLATE.render(**answer_variables.model_dump())
     claim_variables = ClaimAuditPromptVariables(
         repair_feedback="",
         answer=answer,
         evidence="fragment",
     )
-    claim_prompt = ask_engine.CLAIM_AUDIT_TEMPLATE.render(
-        **claim_variables.model_dump()
-    )
+    claim_prompt = ask_engine.CLAIM_AUDIT_TEMPLATE.render(**claim_variables.model_dump())
     return AnswerAuditPackage(
         record=AnswerAuditRecord(
             answer_id="answer-1",
@@ -423,8 +412,7 @@ def test_answer_audit_is_exact_idempotent_and_append_only() -> None:
     assert verify_answer_audit(conn, "answer-1") == first
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         conn.execute(
-            "UPDATE ask_answer_audit_records SET answer_text='changed' "
-            "WHERE answer_id='answer-1'"
+            "UPDATE ask_answer_audit_records SET answer_text='changed' WHERE answer_id='answer-1'"
         )
     with pytest.raises(sqlite3.IntegrityError, match="sealed Ask answer"):
         conn.execute(
@@ -471,23 +459,20 @@ def test_substantive_answer_cannot_claim_zero_audited_claims() -> None:
                 "citations": [],
             }
         )
+
+
 def test_citation_source_substitution_and_incomplete_support_fail_closed() -> None:
     conn = sqlite3.connect(":memory:")
     _schema(conn)
     _seed_trace(conn)
     package = _package()
-    bad_citation = package.citations[0].model_copy(
-        update={"source_commitment_sha256": "e" * 64}
-    )
+    bad_citation = package.citations[0].model_copy(update={"source_commitment_sha256": "e" * 64})
     with pytest.raises(ValueError, match="exact retrieval assembly item"):
         persist_answer_audit(
             conn,
             package.model_copy(update={"citations": (bad_citation,)}),
         )
-    assert (
-        conn.execute("SELECT COUNT(*) FROM ask_answer_audit_records").fetchone()[0]
-        == 0
-    )
+    assert conn.execute("SELECT COUNT(*) FROM ask_answer_audit_records").fetchone()[0] == 0
 
 
 def test_claim_span_trace_identity_and_llm_identity_fail_closed() -> None:
@@ -498,22 +483,12 @@ def test_claim_span_trace_identity_and_llm_identity_fail_closed() -> None:
     with pytest.raises(ValueError, match="exact answer span"):
         AnswerAuditPackage.model_validate(
             package.model_dump()
-            | {
-                "claims": [
-                    package.claims[0].model_dump()
-                    | {"claim_text": "Revenue fell 20%."}
-                ]
-            }
+            | {"claims": [package.claims[0].model_dump() | {"claim_text": "Revenue fell 20%."}]}
         )
     with pytest.raises(ValueError, match="exact answer request and query"):
         AnswerAuditPackage.model_validate(
             package.model_dump()
-            | {
-                "retrievals": [
-                    package.retrievals[0].model_dump()
-                    | {"query_sha256": "9" * 64}
-                ]
-            }
+            | {"retrievals": [package.retrievals[0].model_dump() | {"query_sha256": "9" * 64}]}
         )
     wrong_model = package.record.model_copy(update={"llm_model": "self-asserted"})
     with pytest.raises(ValueError, match="governed llm_calls"):

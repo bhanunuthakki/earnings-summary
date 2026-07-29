@@ -399,9 +399,7 @@ def main() -> int:
             )
             from evals.ask_claim_audit import run_claim_audit_eval
 
-            golden_path = (
-                args.golden or (PROJECT_ROOT / CLAIM_AUDIT_GOLDEN)
-            ).resolve()
+            golden_path = (args.golden or (PROJECT_ROOT / CLAIM_AUDIT_GOLDEN)).resolve()
             summary = run_claim_audit_eval(
                 db_path=db_path,
                 golden_path=golden_path,

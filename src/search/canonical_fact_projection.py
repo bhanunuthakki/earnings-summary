@@ -533,9 +533,7 @@ def verify_canonical_projection_generation(
         resolution_snapshot_id=resolution_snapshot_id,
         resolution_snapshot_sha256=str(header["resolution_snapshot_sha256"]),
         resolution_scope_sha256=references["resolution_scope_sha256"],
-        resolution_snapshot_commitment_sha256=references[
-            "resolution_snapshot_commitment_sha256"
-        ],
+        resolution_snapshot_commitment_sha256=references["resolution_snapshot_commitment_sha256"],
         resolution_watermark_sha256=str(header["resolution_watermark_sha256"]),
         ontology_snapshot_id=ontology_snapshot_id,
         ontology_snapshot_sha256=str(header["ontology_snapshot_sha256"]),
@@ -740,9 +738,7 @@ def admit_canonical_projection_for_read(
         resolution_snapshot_id=str(header["resolution_snapshot_id"]),
         resolution_snapshot_sha256=str(header["resolution_snapshot_sha256"]),
         resolution_scope_sha256=str(binding["resolution_scope_sha256"]),
-        resolution_snapshot_commitment_sha256=str(
-            binding["resolution_snapshot_commitment_sha256"]
-        ),
+        resolution_snapshot_commitment_sha256=str(binding["resolution_snapshot_commitment_sha256"]),
         resolution_watermark_sha256=str(header["resolution_watermark_sha256"]),
         ontology_snapshot_id=str(header["ontology_snapshot_id"]),
         ontology_snapshot_sha256=str(header["ontology_snapshot_sha256"]),
@@ -922,9 +918,7 @@ def _projection_audit_payload(
         "projection_seal_sha256": seal["projection_seal_sha256"],
         "resolution_snapshot_sha256": header["resolution_snapshot_sha256"],
         "resolution_scope_sha256": binding["resolution_scope_sha256"],
-        "resolution_snapshot_commitment_sha256": binding[
-            "resolution_snapshot_commitment_sha256"
-        ],
+        "resolution_snapshot_commitment_sha256": binding["resolution_snapshot_commitment_sha256"],
         "resolution_watermark_sha256": header["resolution_watermark_sha256"],
         "tombstone_count": _int(seal["tombstone_count"]),
         "upsert_count": _int(seal["upsert_count"]),
@@ -975,8 +969,7 @@ def _verify_generation_references(
         )
         if (
             parent_binding is None
-            or str(parent_binding["resolution_scope_sha256"])
-            != resolution_receipt.scope_sha256
+            or str(parent_binding["resolution_scope_sha256"]) != resolution_receipt.scope_sha256
         ):
             raise CanonicalFactProjectionError(
                 "projection_parent_scope_mismatch",
@@ -986,9 +979,7 @@ def _verify_generation_references(
         "ontology_snapshot_sha256": str(ontology["member_set_sha256"]),
         "resolution_snapshot_sha256": str(resolution["member_set_sha256"]),
         "resolution_scope_sha256": resolution_receipt.scope_sha256,
-        "resolution_snapshot_commitment_sha256": (
-            resolution_receipt.snapshot_commitment_sha256
-        ),
+        "resolution_snapshot_commitment_sha256": (resolution_receipt.snapshot_commitment_sha256),
         "resolution_watermark_sha256": watermark.watermark_sha256,
     }
 

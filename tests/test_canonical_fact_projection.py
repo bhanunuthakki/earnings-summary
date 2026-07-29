@@ -648,9 +648,7 @@ def test_delta_rejects_parent_from_another_issuer_scope(tmp_path: Path) -> None:
             issuer_id="issuer-other",
             reporting_entity_ids=("reporting-other",),
         )
-        CanonicalFactResolutionEngine(conn).seal_snapshot(
-            "resolution-other", T0, T0, other_scope
-        )
+        CanonicalFactResolutionEngine(conn).seal_snapshot("resolution-other", T0, T0, other_scope)
         bind_resolution_snapshot_watermark(
             conn,
             resolution_snapshot_id="resolution-other",

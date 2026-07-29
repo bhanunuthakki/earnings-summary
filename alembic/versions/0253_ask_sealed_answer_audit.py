@@ -31,10 +31,7 @@ _CLAIM_AUDIT_PURPOSE = "ask_claim_audit"
 
 
 def _hex(column: str) -> str:
-    return (
-        f"length({column})=64 AND lower({column})={column} "
-        f"AND {column} NOT GLOB '*[^0-9a-f]*'"
-    )
+    return f"length({column})=64 AND lower({column})={column} AND {column} NOT GLOB '*[^0-9a-f]*'"
 
 
 def _append_only(table: str) -> None:
@@ -362,10 +359,7 @@ def upgrade() -> None:
             "claim_ordinal>=0 AND char_start>=0 AND char_end>char_start "
             "AND length(claim_text)=char_end-char_start "
             "AND json_valid(claim_json) AND json_type(claim_json)='object' "
-            "AND "
-            + _hex("claim_sha256")
-            + " AND "
-            + _hex("claim_json_sha256"),
+            "AND " + _hex("claim_sha256") + " AND " + _hex("claim_json_sha256"),
             name="ck_ask_answer_audit_claim_shape",
         ),
     )
@@ -649,8 +643,7 @@ def upgrade() -> None:
     )
     _reject_identity_replace(
         "ask_answer_audit_claims",
-        "existing.answer_id=NEW.answer_id "
-        "AND existing.claim_ordinal=NEW.claim_ordinal",
+        "existing.answer_id=NEW.answer_id AND existing.claim_ordinal=NEW.claim_ordinal",
     )
     _reject_identity_replace(
         "ask_answer_audit_claim_citations",
@@ -664,15 +657,10 @@ def upgrade() -> None:
     )
     bind = op.get_bind()
     if "llm_budgets" in set(sa.inspect(bind).get_table_names()):
-        columns = {
-            str(item["name"])
-            for item in sa.inspect(bind).get_columns("llm_budgets")
-        }
+        columns = {str(item["name"]) for item in sa.inspect(bind).get_columns("llm_budgets")}
         now = datetime.now(UTC).isoformat()
         if "on_exceed" not in columns:
-            raise RuntimeError(
-                "ask_claim_audit requires llm_budgets.on_exceed fail-closed support"
-            )
+            raise RuntimeError("ask_claim_audit requires llm_budgets.on_exceed fail-closed support")
         statement = sa.text(
             "INSERT INTO llm_budgets "
             "(purpose,monthly_cap_usd,warn_threshold_pct,hard_block,"
@@ -692,9 +680,7 @@ def upgrade() -> None:
             },
         )
         budget = bind.execute(
-            sa.text(
-                "SELECT hard_block,on_exceed FROM llm_budgets WHERE purpose=:purpose"
-            ),
+            sa.text("SELECT hard_block,on_exceed FROM llm_budgets WHERE purpose=:purpose"),
             {"purpose": _CLAIM_AUDIT_PURPOSE},
         ).one_or_none()
         if budget is None or int(budget[0]) != 1 or str(budget[1]) != "block":

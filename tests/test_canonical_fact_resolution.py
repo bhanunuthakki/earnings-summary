@@ -763,9 +763,7 @@ def test_resolution_snapshots_are_exactly_issuer_scoped(tmp_path: Path) -> None:
                 metric_id=str(first[0]),
                 reporting_entity_id="reporting-2",
                 period_kind=cast(PeriodKind, str(first[1])),
-                period_start=(
-                    None if first[2] is None else datetime.fromisoformat(str(first[2]))
-                ),
+                period_start=(None if first[2] is None else datetime.fromisoformat(str(first[2]))),
                 period_end=datetime.fromisoformat(str(first[3])),
                 unit_family=str(first[4]),
                 accounting_basis=str(first[5]),
@@ -786,9 +784,7 @@ def test_resolution_snapshots_are_exactly_issuer_scoped(tmp_path: Path) -> None:
             reporting_entity_ids=("reporting-2",),
         )
         first_receipt = engine.seal_snapshot("snapshot:issuer-1", NOW, NOW, SCOPE)
-        second_receipt = engine.seal_snapshot(
-            "snapshot:issuer-2", NOW, NOW, second_scope
-        )
+        second_receipt = engine.seal_snapshot("snapshot:issuer-2", NOW, NOW, second_scope)
         assert first_receipt.scope == SCOPE
         assert second_receipt.scope == second_scope
         assert {

@@ -1457,8 +1457,7 @@ def _seed_management_semantic_projection(
         ),
     )
     chunk = conn.execute(
-        "SELECT chunk_id,content_sha256 FROM search_chunks "
-        "WHERE manifest_id=? ORDER BY chunk_id",
+        "SELECT chunk_id,content_sha256 FROM search_chunks WHERE manifest_id=? ORDER BY chunk_id",
         (manifest_id,),
     ).fetchone()
     assert chunk is not None
@@ -1510,12 +1509,8 @@ def _seed_management_semantic_projection(
         }
     )
     records = [record]
-    chunk_count, chunk_sha256 = manifest_chunk_commitment(
-        conn, manifest_id=manifest_id
-    )
-    artifact_count, artifact_sha256 = vector_artifact_commitment(
-        conn, index_run_id=vector_run_id
-    )
+    chunk_count, chunk_sha256 = manifest_chunk_commitment(conn, manifest_id=manifest_id)
+    artifact_count, artifact_sha256 = vector_artifact_commitment(conn, index_run_id=vector_run_id)
     assert artifact_count == chunk_count == 1
     persist_projection_seal(
         conn,
@@ -1658,9 +1653,7 @@ def test_narrative_reporting_entity_filter_applies_to_collection_and_trace() -> 
                 "lexical_score": wrong["lexical_score"],
                 "lineage_json": canonical_json(wrong["lineage"]),
                 "semantic_score": None,
-                "source_commitment_sha256": wrong[
-                    "source_commitment_sha256"
-                ],
+                "source_commitment_sha256": wrong["source_commitment_sha256"],
             },
             semantic_expected={},
         )
@@ -1949,9 +1942,7 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
             "WHERE research_snapshot_id='research:checkpoint'"
         ).fetchone()
         assert admission_receipt is not None
-        conn.execute(
-            "DROP TRIGGER trg_research_snapshot_admission_receipts_append_only"
-        )
+        conn.execute("DROP TRIGGER trg_research_snapshot_admission_receipts_append_only")
         false_payload = "{}"
         conn.execute(
             "UPDATE research_snapshot_admission_receipts "

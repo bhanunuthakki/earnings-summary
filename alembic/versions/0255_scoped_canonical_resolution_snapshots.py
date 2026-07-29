@@ -62,8 +62,7 @@ def upgrade() -> None:
     if nonempty:
         raise RuntimeError(
             "0255 refuses to infer issuer scope for existing canonical snapshots "
-            "or downstream artifacts; export and rebuild: "
-            + ", ".join(nonempty)
+            "or downstream artifacts; export and rebuild: " + ", ".join(nonempty)
         )
 
     op.create_table(
@@ -153,9 +152,7 @@ def upgrade() -> None:
         sa.Column(
             "resolution_snapshot_id",
             sa.String(128),
-            sa.ForeignKey(
-                "canonical_fact_resolution_snapshot_scope_seals.resolution_snapshot_id"
-            ),
+            sa.ForeignKey("canonical_fact_resolution_snapshot_scope_seals.resolution_snapshot_id"),
             nullable=False,
         ),
         sa.Column("resolution_scope_sha256", sa.String(64), nullable=False),
@@ -362,8 +359,7 @@ def downgrade() -> None:
     nonempty = _nonempty_tables(_NEW_TABLES)
     if nonempty:
         raise RuntimeError(
-            "0255 refuses to discard committed scoped snapshot state: "
-            + ", ".join(nonempty)
+            "0255 refuses to discard committed scoped snapshot state: " + ", ".join(nonempty)
         )
     for trigger in (
         "trg_canonical_fact_projection_scope_bindings_delete_append_only",

@@ -132,9 +132,7 @@ class EvidenceLocator(_LedgerRecord):
 
     @field_validator("xbrl_continuation_ids")
     @classmethod
-    def _unique_xbrl_continuations(
-        cls, value: tuple[str, ...] | None
-    ) -> tuple[str, ...] | None:
+    def _unique_xbrl_continuations(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
         if value is None:
             return None
         if any(not item.strip() for item in value) or len(value) != len(set(value)):
@@ -165,9 +163,7 @@ class EvidenceLocator(_LedgerRecord):
             self.xbrl_context_id,
         )
         if any(value is not None for value in xbrl_identity_fields):
-            if self.source_ref is None or any(
-                value is None for value in xbrl_identity_fields
-            ):
+            if self.source_ref is None or any(value is None for value in xbrl_identity_fields):
                 raise ValueError(
                     "XBRL locators require source, package member, fact, element, "
                     "concept, and context identity"

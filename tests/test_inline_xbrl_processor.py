@@ -66,9 +66,7 @@ def _qualified_manifest(
     bundle.parent.mkdir(parents=True)
     launcher.write_bytes(b"qualified OS sandbox launcher")
     bundle.write_bytes(b"qualified bundle Python")
-    manifest = load_processor_bundle_manifest(
-        ROOT / "config" / "filing_xbrl_processor_bundle.json"
-    )
+    manifest = load_processor_bundle_manifest(ROOT / "config" / "filing_xbrl_processor_bundle.json")
     runtime_members = (
         RuntimeArtifactMember(
             relative_path="Scripts/python.exe",
@@ -169,9 +167,7 @@ def _fact_output(
 
 
 def test_qualified_bundle_manifest_is_exact_and_fail_closed_by_default() -> None:
-    manifest = load_processor_bundle_manifest(
-        ROOT / "config" / "filing_xbrl_processor_bundle.json"
-    )
+    manifest = load_processor_bundle_manifest(ROOT / "config" / "filing_xbrl_processor_bundle.json")
     assert manifest.coordinates.model_dump() == {
         "arelle": "2.39.8",
         "edgar": "26.1",
@@ -200,9 +196,7 @@ def test_processor_uses_hash_pinned_os_sandbox_and_closed_sets(
         observed["payload"] = payload
         return (
             0,
-            _canonical(
-                _fact_output(request, manifest.execution.runtime_artifact_sha256)
-            ).encode(),
+            _canonical(_fact_output(request, manifest.execution.runtime_artifact_sha256)).encode(),
             b"",
         )
 
@@ -215,10 +209,7 @@ def test_processor_uses_hash_pinned_os_sandbox_and_closed_sets(
         runtime_root=runtime_root,
         environment={"SYSTEMROOT": "C:\\Windows", "SECRET_TOKEN": "must-not-cross"},
     )
-    assert (
-        result.runtime_artifact_sha256
-        == manifest.execution.runtime_artifact_sha256
-    )
+    assert result.runtime_artifact_sha256 == manifest.execution.runtime_artifact_sha256
     command = observed["command"]
     assert isinstance(command, tuple)
     assert command[:5] == (
@@ -276,6 +267,7 @@ def test_processor_rejects_zero_facts_for_independently_detected_inline_xbrl(
         "footnote_set_sha256": _sha([]),
         "zero_fact_disposition": "verified_no_inline_xbrl",
     }
+
     def fake_empty(
         command: object,
         payload: object,
@@ -326,6 +318,7 @@ def test_processor_rejects_fact_bound_to_wrong_cik(
             }
         ]
     )
+
     def fake_wrong_cik(
         command: object,
         payload: object,

@@ -372,9 +372,7 @@ class FilingXbrlExtractionLedger:
         output: FilingXbrlNormalizedOutput,
         result: FilingXbrlAdapterResult,
     ) -> tuple[FilingXbrlExtractionDispositionRecord, ...]:
-        entries_by_ordinal = {
-            item.ordinal: item for item in (*output.entries, *output.rejections)
-        }
+        entries_by_ordinal = {item.ordinal: item for item in (*output.entries, *output.rejections)}
         records: list[FilingXbrlExtractionDispositionRecord] = []
         for commitment in result.entry_commitments:
             entry = entries_by_ordinal[commitment.ordinal]

@@ -92,8 +92,7 @@ class EmbeddingPromotion(BaseModel):
         recorded_at = self.recorded_at or self.approved_at
         if self.approved_at > knowledge_at or knowledge_at > recorded_at:
             raise ValueError(
-                "embedding promotion clocks must satisfy "
-                "approved_at <= knowledge_at <= recorded_at"
+                "embedding promotion clocks must satisfy approved_at <= knowledge_at <= recorded_at"
             )
         return self
 
@@ -341,8 +340,7 @@ def current_promotion(
 
 def _has_bitemporal_clock_columns(conn: sqlite3.Connection) -> bool:
     columns = {
-        str(row[1])
-        for row in conn.execute("PRAGMA table_info(search_embedding_model_promotions)")
+        str(row[1]) for row in conn.execute("PRAGMA table_info(search_embedding_model_promotions)")
     }
     return {"knowledge_at", "recorded_at"} <= columns
 

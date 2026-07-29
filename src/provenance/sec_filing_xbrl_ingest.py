@@ -128,9 +128,7 @@ def ingest_sec_filing_xbrl(
         run_id=run_id,
         proposed=request.recorded_at,
     )
-    effective_request = request.model_copy(
-        update={"recorded_at": effective_recorded_at}
-    )
+    effective_request = request.model_copy(update={"recorded_at": effective_recorded_at})
     _verify_package_evidence_clock(
         conn,
         members=members,
@@ -141,10 +139,7 @@ def ingest_sec_filing_xbrl(
         request.expected_cik,
         knowledge_at=effective_recorded_at,
     )
-    if (
-        canonical_cik.issuer_id != primary.issuer_id
-        or canonical_cik.material_dissent
-    ):
+    if canonical_cik.issuer_id != primary.issuer_id or canonical_cik.material_dissent:
         raise ValueError("filing-XBRL CIK conflicts with the canonical filing issuer")
     subject = ReportingEntityRegistry(conn).canonicalize_recorded_subject(
         primary.issuer_id,
@@ -238,9 +233,7 @@ def ingest_sec_filing_xbrl(
     except Exception:
         conn.rollback()
         raise
-    return _result_from_receipt(
-        request, processor_result, members, output, receipt
-    )
+    return _result_from_receipt(request, processor_result, members, output, receipt)
 
 
 def _normalized_output(
@@ -350,9 +343,7 @@ def _persist_processor_artifact(
     result: InlineXbrlProcessorResult,
     recorded_at: datetime,
 ) -> str:
-    identity = _sha(
-        f"{manifest.manifest_sha256}|{result.runtime_artifact_sha256}".encode()
-    )
+    identity = _sha(f"{manifest.manifest_sha256}|{result.runtime_artifact_sha256}".encode())
     artifact_id = f"filing-xbrl-processor:{identity}"
     persist_exact(
         conn,
@@ -470,9 +461,7 @@ def _persist_input_closure(
         for footnote in fact.footnotes
     ]
     canonical_footnotes = _canonical(footnote_payload)
-    execution_evidence_json = _canonical(
-        processor.execution_evidence.model_dump(mode="json")
-    )
+    execution_evidence_json = _canonical(processor.execution_evidence.model_dump(mode="json"))
     seal_id = f"filing-xbrl-input-seal:{_sha(run_id.encode())}"
     persist_exact(
         conn,
@@ -654,8 +643,7 @@ def _original_recorded_at(
     proposed: datetime,
 ) -> datetime:
     row = conn.execute(
-        "SELECT started_at,completed_at FROM evidence_extraction_runs "
-        "WHERE extraction_run_id=?",
+        "SELECT started_at,completed_at FROM evidence_extraction_runs WHERE extraction_run_id=?",
         (run_id,),
     ).fetchone()
     if row is None:
@@ -724,8 +712,7 @@ def _append_offline_artifacts(
         }:
             raise ValueError("offline artifacts may contain only taxonomy/network roles")
         blob = conn.execute(
-            "SELECT byte_size,media_type,storage_uri FROM evidence_content_blobs "
-            "WHERE sha256=?",
+            "SELECT byte_size,media_type,storage_uri FROM evidence_content_blobs WHERE sha256=?",
             (member.blob_sha256,),
         ).fetchone()
         if blob is None:
@@ -749,9 +736,7 @@ def _append_offline_artifacts(
             (member.source_url, member.blob_sha256, knowledge_cutoff),
         ).fetchone()
         if source is None:
-            raise ValueError(
-                "offline artifact lacks a source observation available at the cutoff"
-            )
+            raise ValueError("offline artifact lacks a source observation available at the cutoff")
         if member.member_role == "issuer_taxonomy":
             document = conn.execute(
                 "SELECT document.issuer_id,document.accession_number,"
@@ -773,9 +758,7 @@ def _append_offline_artifacts(
                 member.blob_sha256,
                 member.source_url,
             ):
-                raise ValueError(
-                    "issuer-taxonomy artifact is outside the captured filing identity"
-                )
+                raise ValueError("issuer-taxonomy artifact is outside the captured filing identity")
         result.append(member.model_copy(update={"member_ordinal": len(result)}))
     return tuple(result)
 
@@ -812,12 +795,8 @@ def _verify_package_evidence_clock(
             "WHERE document_version_id=? AND blob_sha256=?",
             (member.document_version_id, member.blob_sha256),
         ).fetchone()
-        if document is None or _utc_datetime(document[0]) > _utc_datetime(
-            knowledge_cutoff
-        ):
-            raise ValueError(
-                "filing-XBRL document identity was unavailable at the effective clock"
-            )
+        if document is None or _utc_datetime(document[0]) > _utc_datetime(knowledge_cutoff):
+            raise ValueError("filing-XBRL document identity was unavailable at the effective clock")
 
 
 def _verify_existing_run_closure(
@@ -902,8 +881,7 @@ def _captured_member_role(
         return "primary_document"
     name = Path(urlparse(source_url).path).name.lower()
     if name.endswith(".xsd") or any(
-        name.endswith(suffix)
-        for suffix in ("_cal.xml", "_def.xml", "_lab.xml", "_pre.xml")
+        name.endswith(suffix) for suffix in ("_cal.xml", "_def.xml", "_lab.xml", "_pre.xml")
     ):
         return "issuer_taxonomy"
     return "filing_attachment"
@@ -921,16 +899,10 @@ def _validate_normalized_locator(
     )
     for normalized_field, locator_field in exact_pairs:
         if payload.get(normalized_field) != locator.get(locator_field):
-            raise ValueError(
-                f"normalized {normalized_field} conflicts with its XBRL locator"
-            )
+            raise ValueError(f"normalized {normalized_field} conflicts with its XBRL locator")
     if payload.get("value_kind") == "numeric":
         unit_id = payload.get("source_unit_id")
-        if (
-            not isinstance(unit_id, str)
-            or not unit_id
-            or unit_id != locator.get("xbrl_unit_id")
-        ):
+        if not isinstance(unit_id, str) or not unit_id or unit_id != locator.get("xbrl_unit_id"):
             raise ValueError("normalized numeric fact conflicts with its XBRL unit locator")
 
 

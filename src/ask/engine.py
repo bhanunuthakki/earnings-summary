@@ -141,9 +141,7 @@ _DATA_RX = re.compile(
 )
 
 _PRODUCTION_SCOPE_REGISTRY = (
-    Path(__file__).resolve().parents[2]
-    / "config"
-    / "ask_retrieval_production_scopes.json"
+    Path(__file__).resolve().parents[2] / "config" / "ask_retrieval_production_scopes.json"
 )
 
 _SEALED_ANSWER_TEMPLATE = register(
@@ -220,7 +218,9 @@ class _AuditClaim(BaseModel):
         if self.cites != tuple(sorted(set(self.cites))):
             raise ValueError("claim citations must be unique and sorted")
         if self.supported != bool(self.cites):
-            raise ValueError("supported claims require citations and unsupported claims require none")
+            raise ValueError(
+                "supported claims require citations and unsupported claims require none"
+            )
         return self
 
 
@@ -756,9 +756,7 @@ def _authoritative_context(
         for item in selected
     )
     prior = selected[:-1]
-    thread_text = "\n\n".join(
-        f"[{item.role.upper()}] {item.text}" for item in prior[-20:]
-    )
+    thread_text = "\n\n".join(f"[{item.role.upper()}] {item.text}" for item in prior[-20:])
     return identities, thread_text
 
 
@@ -791,9 +789,7 @@ def _governed_call_identity(
     finally:
         conn.close()
     if len(rows) != 1:
-        raise ValueError(
-            f"{purpose} must resolve to exactly one governed successful llm_calls row"
-        )
+        raise ValueError(f"{purpose} must resolve to exactly one governed successful llm_calls row")
     row = rows[0]
     values = tuple(row)
     if any(value is None for value in values):
@@ -899,8 +895,7 @@ def _required_claim_spans(answer: str) -> tuple[tuple[int, int, str], ...]:
         if start is None:
             continue
         boundary = char == "\n" or (
-            char in ".!?;"
-            and (index + 1 == len(answer) or answer[index + 1].isspace())
+            char in ".!?;" and (index + 1 == len(answer) or answer[index + 1].isspace())
         )
         if not boundary:
             continue
@@ -1072,8 +1067,7 @@ def _sealed_or_shadow_narrative_events(
         fragments = tuple(_evidence_prompt_fragment(item) for item in evidence)
         evidence_block = "\n\n".join(fragments)
         prompt_variables = AnswerPromptVariables(
-            system_context=pack.system_context
-            or "You are a portfolio research assistant.",
+            system_context=pack.system_context or "You are a portfolio research assistant.",
             thread_text=thread_text or "(first turn)",
             evidence_block=evidence_block,
             question=text,
@@ -1112,9 +1106,7 @@ def _sealed_or_shadow_narrative_events(
             run_id=claim_run_id,
         )
         evidence_by_number = {item.n: item for item in evidence}
-        used_numbers = tuple(
-            sorted({number for claim in audited.claims for number in claim.cites})
-        )
+        used_numbers = tuple(sorted({number for claim in audited.claims for number in claim.cites}))
         assembly = tuple(
             RetrievalAssemblyItem(
                 citation_number=item.n,
@@ -1242,10 +1234,7 @@ def _sealed_or_shadow_narrative_events(
             raise
         finally:
             conn.close()
-        ui_citations = [
-            evidence_by_number[number].citation_payload()
-            for number in used_numbers
-        ]
+        ui_citations = [evidence_by_number[number].citation_payload() for number in used_numbers]
         _store_append_assistant_cas(
             session_id=turn.session_id,
             user_turn_id=user_turn_id,

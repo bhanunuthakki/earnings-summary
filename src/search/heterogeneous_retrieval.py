@@ -205,9 +205,7 @@ def audit_research_snapshot_for_retrieval(
     """Run the strict concrete verifier once and seal a read-admission receipt."""
 
     admission = verify_research_snapshot(conn, research_snapshot_id)
-    seal_sha256, payload = _research_snapshot_admission_payload(
-        conn, research_snapshot_id
-    )
+    seal_sha256, payload = _research_snapshot_admission_payload(conn, research_snapshot_id)
     if admission.member_count != _research_snapshot_member_count(conn, research_snapshot_id):
         raise HeterogeneousRetrievalError("research_snapshot_admission_member_count_changed")
     config_sha = digest_text("research_snapshot_admission_audit.default.v1")
@@ -251,9 +249,7 @@ def audit_research_snapshot_for_retrieval(
     return digest_text(payload)
 
 
-def _research_snapshot_member_count(
-    conn: sqlite3.Connection, research_snapshot_id: str
-) -> int:
+def _research_snapshot_member_count(conn: sqlite3.Connection, research_snapshot_id: str) -> int:
     seal = _row(
         conn,
         "SELECT member_count FROM research_snapshot_seals WHERE research_snapshot_id=?",
@@ -292,17 +288,13 @@ def _research_snapshot_admission_payload(
         (projection_members[0]["reference_commitment_sha256"],),
     )
     if len(projection_audits) != 1:
-        raise HeterogeneousRetrievalError(
-            "research_snapshot_projection_not_strictly_audited"
-        )
+        raise HeterogeneousRetrievalError("research_snapshot_projection_not_strictly_audited")
     seal_sha256 = str(seal["member_set_sha256"])
     payload = canonical_json(
         {
             "audit_version": "research_snapshot_admission_audit.v1",
             "member_count": _int(seal["member_count"]),
-            "projection_audit_payload_sha256": projection_audits[0][
-                "audit_payload_sha256"
-            ],
+            "projection_audit_payload_sha256": projection_audits[0]["audit_payload_sha256"],
             "research_snapshot_id": research_snapshot_id,
             "research_snapshot_sha256": seal_sha256,
         }
@@ -672,8 +664,7 @@ def _verify_research_coordinates(
     )
     research_header = _row(
         conn,
-        "SELECT request_json FROM research_snapshot_headers "
-        "WHERE research_snapshot_id=?",
+        "SELECT request_json FROM research_snapshot_headers WHERE research_snapshot_id=?",
         (request.research_snapshot_id,),
     )
     universe = _row(
@@ -691,39 +682,26 @@ def _verify_research_coordinates(
         "FROM canonical_fact_projection_generations WHERE generation_id=?",
         (request.fact_generation_id,),
     )
-    if (
-        research_seal is None
-        or research_header is None
-        or universe is None
-        or generation is None
-    ):
+    if research_seal is None or research_header is None or universe is None or generation is None:
         raise HeterogeneousRetrievalError(
             "retrieval_bound_snapshot_missing", trace_id=request.trace_id
         )
     snapshot_request = ResearchSnapshotRequest.model_validate_json(
         str(research_header["request_json"])
     )
-    universe_payload = canonical_json(
-        snapshot_request.research_universe.model_dump(mode="json")
-    )
+    universe_payload = canonical_json(snapshot_request.research_universe.model_dump(mode="json"))
     if (
         str(universe["issuer_id"]) != snapshot_request.research_universe.issuer_id
         or str(universe["reporting_entity_ids_json"])
-        != canonical_json(
-            list(snapshot_request.research_universe.reporting_entity_ids)
-        )
+        != canonical_json(list(snapshot_request.research_universe.reporting_entity_ids))
         or str(universe["document_version_ids_json"])
         != canonical_json(list(snapshot_request.research_universe.document_version_ids))
         or str(universe["source_obligation_revision_ids_json"])
-        != canonical_json(
-            list(snapshot_request.research_universe.source_obligation_revision_ids)
-        )
+        != canonical_json(list(snapshot_request.research_universe.source_obligation_revision_ids))
         or str(universe["canonical_universe_json"]) != universe_payload
         or str(universe["universe_sha256"]) != digest_text(universe_payload)
-        or canonical_time(universe["cutoff_at"])
-        != canonical_time(snapshot_request.cutoff_at)
-        or canonical_time(universe["recorded_at"])
-        != canonical_time(snapshot_request.recorded_at)
+        or canonical_time(universe["cutoff_at"]) != canonical_time(snapshot_request.cutoff_at)
+        or canonical_time(universe["recorded_at"]) != canonical_time(snapshot_request.recorded_at)
     ):
         raise HeterogeneousRetrievalError(
             "retrieval_research_universe_tampered", trace_id=request.trace_id
@@ -886,12 +864,10 @@ def _admit_research_snapshot_for_read(
     )
     if header is None or seal is None or receipt is None:
         raise HeterogeneousRetrievalError("research_snapshot_strict_admission_receipt_missing")
-    expected_seal_sha256, expected_audit_payload = (
-        _research_snapshot_admission_payload(conn, research_snapshot_id)
+    expected_seal_sha256, expected_audit_payload = _research_snapshot_admission_payload(
+        conn, research_snapshot_id
     )
-    expected_config_sha256 = digest_text(
-        "research_snapshot_admission_audit.default.v1"
-    )
+    expected_config_sha256 = digest_text("research_snapshot_admission_audit.default.v1")
     member_count = _int(seal["member_count"])
     members = _rows(
         conn,
@@ -1498,8 +1474,7 @@ def _verify_candidate_source(
                 semantic_valid = (
                     str(semantic_score) == semantic[0]
                     and str(lineage.get("vector_index_run_id")) == semantic[1]
-                    and str(lineage.get("vector_sha256"))
-                    == str(semantic_lineage["vector_sha256"])
+                    and str(lineage.get("vector_sha256")) == str(semantic_lineage["vector_sha256"])
                 )
         if (
             row is None
@@ -1508,8 +1483,7 @@ def _verify_candidate_source(
             or str(lineage.get("evidence_node_id")) != str(row["evidence_node_id"])
             or (
                 request.filters.reporting_entity_id is not None
-                and str(row["reporting_entity_id"])
-                != request.filters.reporting_entity_id
+                and str(row["reporting_entity_id"]) != request.filters.reporting_entity_id
             )
             or (
                 candidate["lexical_score"] is not None

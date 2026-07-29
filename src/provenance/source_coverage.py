@@ -111,9 +111,7 @@ class ExpectedDocument(_CoverageRecord):
     expected_at: datetime | None = None
     expectation_basis: ExpectationBasis
     recorded_at: datetime
-    source_obligation_revision_id: str | None = Field(
-        default=None, min_length=1, max_length=128
-    )
+    source_obligation_revision_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def _validate_period(self) -> Self:
@@ -173,9 +171,7 @@ def _expected_document_family(
         if form in continuous_disclosure:
             return "continuous_disclosure"
         if form in operating_periodic | investment_company_periodic:
-            raise ValueError(
-                f"SEC form {form} is incompatible with issuer kind {issuer_kind}"
-            )
+            raise ValueError(f"SEC form {form} is incompatible with issuer kind {issuer_kind}")
         raise ValueError(f"SEC form is outside the governed source-duty map: {form}")
     if record.source_kind == "earnings_call":
         return "issuer_earnings_materials"
@@ -190,9 +186,7 @@ def _expected_document_family(
         "presentation": "issuer_presentations",
     }
     if document_type not in families:
-        raise ValueError(
-            "IR expected document requires an explicit governed document_type"
-        )
+        raise ValueError("IR expected document requires an explicit governed document_type")
     return families[document_type]
 
 
@@ -350,9 +344,12 @@ class SourceCoverageLedger:
             ensure_ascii=False,
         )
         digest = hashlib.sha256(canonical.encode()).hexdigest()
-        binding_id = "expected-obligation-binding:" + hashlib.sha256(
-            f"{record.expected_document_id}\0{obligation_revision_id}".encode()
-        ).hexdigest()
+        binding_id = (
+            "expected-obligation-binding:"
+            + hashlib.sha256(
+                f"{record.expected_document_id}\0{obligation_revision_id}".encode()
+            ).hexdigest()
+        )
         columns = (
             "binding_id",
             "idempotency_key",

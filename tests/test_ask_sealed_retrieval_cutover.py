@@ -134,10 +134,12 @@ def test_multi_issuer_requires_common_cutoff_and_builds_exact_requests() -> None
     )
     assert len(plan.requests) == 2
     assert plan.question == "compare revenue"
-    assert {
-        request.filters.reporting_entity_id for request in plan.requests
-    } == {"reporter-AAA", "reporter-BBB"}
+    assert {request.filters.reporting_entity_id for request in plan.requests} == {
+        "reporter-AAA",
+        "reporter-BBB",
+    }
     assert all(request.narrative_bundles[0].vector_index_run_id for request in plan.requests)
+
 
 def test_promotion_json_hash_tampering_returns_stable_fail_closed_reason() -> None:
     conn = sqlite3.connect(":memory:")
@@ -192,8 +194,7 @@ def test_execution_rechecks_current_promotion_before_retrieval() -> None:
         created_at=NOW,
     )
     conn.execute(
-        "UPDATE ask_retrieval_scope_promotions SET status='withdrawn' "
-        "WHERE scope_key='AAA'"
+        "UPDATE ask_retrieval_scope_promotions SET status='withdrawn' WHERE scope_key='AAA'"
     )
     with pytest.raises(PromotionVerificationError, match="promotion_stale"):
         execute_sealed_retrieval_plan(conn, plan)
@@ -204,8 +205,7 @@ def test_vector_projection_must_be_under_configured_index_root(
 ) -> None:
     conn = sqlite3.connect(":memory:")
     conn.execute(
-        "CREATE TABLE search_projection_seals ("
-        "index_run_id TEXT,index_kind TEXT,storage_uri TEXT)"
+        "CREATE TABLE search_projection_seals (index_run_id TEXT,index_kind TEXT,storage_uri TEXT)"
     )
     allowed = tmp_path / "indexes"
     escaped = tmp_path / "other" / "run-1"
@@ -243,9 +243,7 @@ def test_verifier_artifact_hash_is_line_ending_insensitive(tmp_path: Path) -> No
     crlf = tmp_path / "crlf.py"
     lf.write_bytes(b"one\ntwo\n")
     crlf.write_bytes(b"one\r\ntwo\r\n")
-    assert sealed._canonical_artifact_sha256(lf) == sealed._canonical_artifact_sha256(
-        crlf
-    )
+    assert sealed._canonical_artifact_sha256(lf) == sealed._canonical_artifact_sha256(crlf)
     manifest = sealed.current_verifier_manifest()
     artifacts = cast(list[dict[str, object]], manifest["artifacts"])
     paths = {str(item["path"]) for item in artifacts}

@@ -77,9 +77,7 @@ class ResolutionSnapshotScope(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     issuer_id: str = Field(min_length=1, max_length=128)
     reporting_entity_ids: tuple[str, ...] = Field(min_length=1)
-    scope_version: Literal["canonical-resolution-snapshot-scope.v1"] = (
-        _RESOLUTION_SCOPE_VERSION
-    )
+    scope_version: Literal["canonical-resolution-snapshot-scope.v1"] = _RESOLUTION_SCOPE_VERSION
 
     @field_validator("reporting_entity_ids")
     @classmethod
@@ -269,8 +267,7 @@ class CanonicalFactResolutionEngine:
         key = f"snapshot:{resolution_snapshot_id}"
         scope_key = f"snapshot-scope:{resolution_snapshot_id}"
         scope_members = [
-            {"reporting_entity_id": entity_id}
-            for entity_id in scope.reporting_entity_ids
+            {"reporting_entity_id": entity_id} for entity_id in scope.reporting_entity_ids
         ]
         scope_member_json = _json(scope_members)
         scope_commitment = {
@@ -307,8 +304,7 @@ class CanonicalFactResolutionEngine:
             )
             for ordinal, member in enumerate(scope_members):
                 self._conn.execute(
-                    "INSERT INTO canonical_fact_resolution_snapshot_scope_members "
-                    "VALUES (?,?,?,?)",
+                    "INSERT INTO canonical_fact_resolution_snapshot_scope_members VALUES (?,?,?,?)",
                     (
                         resolution_snapshot_id,
                         ordinal,
@@ -335,8 +331,7 @@ class CanonicalFactResolutionEngine:
                 (resolution_snapshot_id, key, *expected),
             )
             self._conn.execute(
-                "INSERT INTO canonical_fact_resolution_snapshot_scope_seals "
-                "VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO canonical_fact_resolution_snapshot_scope_seals VALUES (?,?,?,?,?,?,?)",
                 (
                     resolution_snapshot_id,
                     len(scope_members),
@@ -395,18 +390,13 @@ class CanonicalFactResolutionEngine:
             (resolution_snapshot_id,),
         ).fetchall()
         scope_members = [
-            {"reporting_entity_id": scope_member[0]}
-            for scope_member in scope_member_rows
+            {"reporting_entity_id": scope_member[0]} for scope_member in scope_member_rows
         ]
-        if (
-            tuple(member["reporting_entity_id"] for member in scope_members)
-            != parsed_scope.reporting_entity_ids
-            or any(
-                _sha(member) != scope_member[1]
-                for member, scope_member in zip(
-                    scope_members, scope_member_rows, strict=True
-                )
-            )
+        if tuple(
+            member["reporting_entity_id"] for member in scope_members
+        ) != parsed_scope.reporting_entity_ids or any(
+            _sha(member) != scope_member[1]
+            for member, scope_member in zip(scope_members, scope_member_rows, strict=True)
         ):
             raise ValueError("canonical snapshot scope members are missing or tampered")
         members = self._conn.execute(

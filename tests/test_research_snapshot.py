@@ -1341,10 +1341,7 @@ def test_sec_source_duty_map_is_closed_and_issuer_kind_aware(
         expectation_basis="authoritative",
         recorded_at=T1,
     )
-    assert (
-        _expected_document_family(record, issuer_kind=issuer_kind)
-        == expected_family
-    )
+    assert _expected_document_family(record, issuer_kind=issuer_kind) == expected_family
 
 
 @pytest.mark.parametrize(
@@ -1469,9 +1466,7 @@ def test_universe_trigger_rejects_duplicate_nonexistent_or_cross_issuer_ids(
     document_ids: tuple[str, ...],
 ) -> None:
     if (
-        conn.execute(
-            "SELECT 1 FROM issuer_entities WHERE issuer_id='issuer-other'"
-        ).fetchone()
+        conn.execute("SELECT 1 FROM issuer_entities WHERE issuer_id='issuer-other'").fetchone()
         is None
     ):
         conn.execute(
@@ -1514,8 +1509,7 @@ def test_universe_trigger_rejects_duplicate_nonexistent_or_cross_issuer_ids(
     canonical = json.dumps(universe, sort_keys=True, separators=(",", ":"))
     with pytest.raises(sqlite3.IntegrityError, match="commitment mismatch"):
         conn.execute(
-            "INSERT INTO research_snapshot_universe_commitments VALUES "
-            "(?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO research_snapshot_universe_commitments VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 snapshot_id,
                 "issuer-1",
@@ -1558,8 +1552,7 @@ def test_universe_trigger_rejects_false_digest(
     canonical = json.dumps(universe, sort_keys=True, separators=(",", ":"))
     with pytest.raises(sqlite3.IntegrityError, match="commitment mismatch"):
         conn.execute(
-            "INSERT INTO research_snapshot_universe_commitments VALUES "
-            "(?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO research_snapshot_universe_commitments VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 "research:false-universe-digest",
                 "issuer-1",
@@ -1630,8 +1623,7 @@ def test_expected_document_binding_trigger_rejects_false_digest(
     )
     with pytest.raises(sqlite3.IntegrityError, match="commitment mismatch"):
         conn.execute(
-            "INSERT INTO expected_document_obligation_bindings VALUES "
-            "(?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO expected_document_obligation_bindings VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 "binding:false-digest",
                 "binding:false-digest",

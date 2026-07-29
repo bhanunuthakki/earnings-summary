@@ -456,9 +456,7 @@ def _plan_xbrl_zero_fact_promotions(
             document_version_id=document_version_id,
             require_facts=False,
         ):
-            raise ValueError(
-                "zero-fact filing-XBRL extraction lacks qualified terminal closure"
-            )
+            raise ValueError("zero-fact filing-XBRL extraction lacks qualified terminal closure")
         completed_at = _datetime(row[6], "extraction completed_at")
         if _timeline(request.recorded_at) < _timeline(completed_at):
             raise ValueError("coverage refresh recorded_at precedes extraction completion")
@@ -506,9 +504,7 @@ def _plan_xbrl_zero_fact_promotions(
             supersedes_assessment_id=_text(row[0], "assessment_id"),
             material_dissent=False,
         )
-        promotions.append(
-            _Promotion(assessment=assessment, target_status="unsupported")
-        )
+        promotions.append(_Promotion(assessment=assessment, target_status="unsupported"))
     return promotions, len(rows), has_more
 
 
@@ -693,13 +689,11 @@ def _require_xbrl_schema(conn: sqlite3.Connection) -> None:
         "filing_xbrl_extraction_disposition_seals",
     }
     present = {
-        str(row[0])
-        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
     if missing := sorted(required - present):
         raise RuntimeError(
-            "filing-XBRL coverage refresh schema is incomplete: "
-            + ", ".join(missing)
+            "filing-XBRL coverage refresh schema is incomplete: " + ", ".join(missing)
         )
 
 

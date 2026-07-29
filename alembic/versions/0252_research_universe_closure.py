@@ -130,13 +130,11 @@ def upgrade() -> None:
         sa.Column("knowledge_at", sa.DateTime(), nullable=False),
         sa.Column("recorded_at", sa.DateTime(), nullable=False),
         sa.CheckConstraint(
-            "json_valid(canonical_binding_json) "
-            "AND json_type(canonical_binding_json)='object'",
+            "json_valid(canonical_binding_json) AND json_type(canonical_binding_json)='object'",
             name="ck_expected_document_obligation_binding_json",
         ),
         sa.CheckConstraint(
-            "length(binding_sha256)=64 "
-            "AND binding_sha256 NOT GLOB '*[^0-9a-f]*'",
+            "length(binding_sha256)=64 AND binding_sha256 NOT GLOB '*[^0-9a-f]*'",
             name="ck_expected_document_obligation_binding_hash",
         ),
         sa.CheckConstraint(
@@ -223,8 +221,7 @@ def upgrade() -> None:
             name="ck_research_snapshot_universe_json",
         ),
         sa.CheckConstraint(
-            "length(universe_sha256)=64 "
-            "AND universe_sha256 NOT GLOB '*[^0-9a-f]*'",
+            "length(universe_sha256)=64 AND universe_sha256 NOT GLOB '*[^0-9a-f]*'",
             name="ck_research_snapshot_universe_hash",
         ),
         sa.CheckConstraint(
@@ -328,9 +325,7 @@ def downgrade() -> None:
         or 0
     )
     binding_count = int(
-        bind.execute(
-            sa.text("SELECT COUNT(*) FROM expected_document_obligation_bindings")
-        ).scalar()
+        bind.execute(sa.text("SELECT COUNT(*) FROM expected_document_obligation_bindings")).scalar()
         or 0
     )
     if universe_count or binding_count:
@@ -354,9 +349,7 @@ def downgrade() -> None:
         table_name="expected_document_obligation_bindings",
     )
     op.drop_table("expected_document_obligation_bindings")
-    op.execute(
-        "DROP TRIGGER IF EXISTS trg_search_embedding_model_promotions_bitemporal"
-    )
+    op.execute("DROP TRIGGER IF EXISTS trg_search_embedding_model_promotions_bitemporal")
     # SQLite reparses every trigger in the database during DROP COLUMN. Legacy
     # fixture schemas can intentionally omit columns referenced by unrelated
     # later triggers, so preserve/drop/recreate the surviving trigger set around

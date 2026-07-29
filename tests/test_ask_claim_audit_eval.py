@@ -19,12 +19,7 @@ from llm.structured import call_llm_structured_with_raw
 
 
 def test_provider_free_claim_audit_golden_and_injection_canary() -> None:
-    path = (
-        Path(__file__).parents[1]
-        / "evals"
-        / "golden"
-        / "ask_claim_audit.json"
-    )
+    path = Path(__file__).parents[1] / "evals" / "golden" / "ask_claim_audit.json"
     raw = json.loads(path.read_text(encoding="utf-8"))
     assert isinstance(raw, dict)
     payload = cast(dict[str, object], raw)
@@ -85,19 +80,11 @@ def test_claim_audit_schema_repair_preserves_prompt_identity(
     assert result.value.claims == ()
     assert len(prompts) == 2
     assert all(isinstance(prompt, RenderedPrompt) for prompt in prompts)
-    assert {
-        cast(RenderedPrompt, prompt).template_id
-        for prompt in prompts
-    } == {"ask.claim-audit"}
+    assert {cast(RenderedPrompt, prompt).template_id for prompt in prompts} == {"ask.claim-audit"}
 
 
 def test_live_eval_contract_loads_without_provider_calls() -> None:
-    path = (
-        Path(__file__).parents[1]
-        / "evals"
-        / "golden"
-        / "ask_claim_audit.json"
-    )
+    path = Path(__file__).parents[1] / "evals" / "golden" / "ask_claim_audit.json"
     cases = load_claim_audit_golden(path)
     assert [case.case_id for case in cases] == [
         "supported-revenue-span",
