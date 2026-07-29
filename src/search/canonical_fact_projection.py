@@ -39,7 +39,7 @@ MAX_BUCKET_ENTRY_COUNT = 250_000
 MAX_BUCKET_SERIALIZED_BYTES = 16 * 1024 * 1024
 MAX_BATCH_VECTOR_COUNT = 250_000
 MAX_BATCH_VECTOR_SERIALIZED_BYTES = 64 * 1024 * 1024
-_GENERATION_VERSION = "canonical_fact_projection_generation.v1"
+_GENERATION_VERSION = "canonical_fact_projection_generation.v2"
 _ENTRY_VERSION = "canonical_fact_projection_entry.v1"
 _AUDIT_VERIFIER_NAME = "strict-canonical-fact-projection-auditor"
 _AUDIT_VERIFIER_VERSION = "1"
@@ -150,6 +150,8 @@ class VerifiedCanonicalProjectionGeneration(_Frozen):
     parent_generation_id: str | None
     resolution_snapshot_id: str
     resolution_snapshot_sha256: str
+    resolution_scope_sha256: str
+    resolution_snapshot_commitment_sha256: str
     resolution_watermark_sha256: str
     ontology_snapshot_id: str
     ontology_snapshot_sha256: str
@@ -298,6 +300,10 @@ def build_canonical_projection_generation(
         "ontology_snapshot_sha256": references["ontology_snapshot_sha256"],
         "parent_generation_id": request.parent_generation_id,
         "resolution_snapshot_id": request.resolution_snapshot_id,
+        "resolution_scope_sha256": references["resolution_scope_sha256"],
+        "resolution_snapshot_commitment_sha256": references[
+            "resolution_snapshot_commitment_sha256"
+        ],
         "resolution_snapshot_sha256": references["resolution_snapshot_sha256"],
         "resolution_watermark_sha256": references["resolution_watermark_sha256"],
     }
@@ -325,6 +331,7 @@ def build_canonical_projection_generation(
         db_time(request.recorded_at),
     )
     with _savepoint(conn, "build_canonical_fact_projection"):
+        _ensure_projection_scope_binding(conn, request, references)
         existing = _row(
             conn,
             "SELECT * FROM canonical_fact_projection_generations "
@@ -442,6 +449,10 @@ def verify_canonical_projection_generation(
             "ontology_snapshot_sha256": references["ontology_snapshot_sha256"],
             "parent_generation_id": request.parent_generation_id,
             "resolution_snapshot_id": resolution_snapshot_id,
+            "resolution_scope_sha256": references["resolution_scope_sha256"],
+            "resolution_snapshot_commitment_sha256": references[
+                "resolution_snapshot_commitment_sha256"
+            ],
             "resolution_snapshot_sha256": references["resolution_snapshot_sha256"],
             "resolution_watermark_sha256": references["resolution_watermark_sha256"],
         }
@@ -521,6 +532,10 @@ def verify_canonical_projection_generation(
         parent_generation_id=request.parent_generation_id,
         resolution_snapshot_id=resolution_snapshot_id,
         resolution_snapshot_sha256=str(header["resolution_snapshot_sha256"]),
+        resolution_scope_sha256=references["resolution_scope_sha256"],
+        resolution_snapshot_commitment_sha256=references[
+            "resolution_snapshot_commitment_sha256"
+        ],
         resolution_watermark_sha256=str(header["resolution_watermark_sha256"]),
         ontology_snapshot_id=ontology_snapshot_id,
         ontology_snapshot_sha256=str(header["ontology_snapshot_sha256"]),
@@ -693,11 +708,16 @@ def admit_canonical_projection_for_read(
         "SELECT * FROM canonical_fact_projection_audit_receipts WHERE generation_id=?",
         (generation_id,),
     )
-    if header is None or seal is None or receipt is None:
+    binding = _row(
+        conn,
+        "SELECT * FROM canonical_fact_projection_scope_bindings WHERE generation_id=?",
+        (generation_id,),
+    )
+    if header is None or seal is None or receipt is None or binding is None:
         raise CanonicalFactProjectionError(
             "projection_strict_audit_receipt_missing", generation_id=generation_id
         )
-    expected_payload = _projection_audit_payload(header, seal)
+    expected_payload = _projection_audit_payload(header, seal, binding)
     expected_json = canonical_json(expected_payload)
     if (
         str(receipt["projection_seal_sha256"]) != str(seal["projection_seal_sha256"])
@@ -719,6 +739,10 @@ def admit_canonical_projection_for_read(
         parent_generation_id=_optional_text(header["parent_generation_id"]),
         resolution_snapshot_id=str(header["resolution_snapshot_id"]),
         resolution_snapshot_sha256=str(header["resolution_snapshot_sha256"]),
+        resolution_scope_sha256=str(binding["resolution_scope_sha256"]),
+        resolution_snapshot_commitment_sha256=str(
+            binding["resolution_snapshot_commitment_sha256"]
+        ),
         resolution_watermark_sha256=str(header["resolution_watermark_sha256"]),
         ontology_snapshot_id=str(header["ontology_snapshot_id"]),
         ontology_snapshot_sha256=str(header["ontology_snapshot_sha256"]),
@@ -832,7 +856,16 @@ def _record_projection_audit_receipt(
         raise CanonicalFactProjectionError(
             "projection_audit_target_missing", generation_id=verified.generation_id
         )
-    payload_json = canonical_json(_projection_audit_payload(header, seal))
+    binding = _row(
+        conn,
+        "SELECT * FROM canonical_fact_projection_scope_bindings WHERE generation_id=?",
+        (verified.generation_id,),
+    )
+    if binding is None:
+        raise CanonicalFactProjectionError(
+            "projection_scope_binding_missing", generation_id=verified.generation_id
+        )
+    payload_json = canonical_json(_projection_audit_payload(header, seal, binding))
     values = (
         verified.generation_id,
         verified.projection_seal_sha256,
@@ -875,10 +908,12 @@ def _record_projection_audit_receipt(
 
 
 def _projection_audit_payload(
-    header: dict[str, object], seal: dict[str, object]
+    header: dict[str, object],
+    seal: dict[str, object],
+    binding: dict[str, object],
 ) -> dict[str, object]:
     return {
-        "audit_version": "canonical_fact_projection_full_audit.v1",
+        "audit_version": "canonical_fact_projection_full_audit.v2",
         "change_count": _int(seal["change_count"]),
         "effective_entry_count": _int(seal["effective_entry_count"]),
         "generation_id": header["generation_id"],
@@ -886,6 +921,10 @@ def _projection_audit_payload(
         "ontology_snapshot_sha256": header["ontology_snapshot_sha256"],
         "projection_seal_sha256": seal["projection_seal_sha256"],
         "resolution_snapshot_sha256": header["resolution_snapshot_sha256"],
+        "resolution_scope_sha256": binding["resolution_scope_sha256"],
+        "resolution_snapshot_commitment_sha256": binding[
+            "resolution_snapshot_commitment_sha256"
+        ],
         "resolution_watermark_sha256": header["resolution_watermark_sha256"],
         "tombstone_count": _int(seal["tombstone_count"]),
         "upsert_count": _int(seal["upsert_count"]),
@@ -895,7 +934,7 @@ def _projection_audit_payload(
 def _verify_generation_references(
     conn: sqlite3.Connection, request: ProjectionGenerationRequest
 ) -> dict[str, str]:
-    CanonicalFactResolutionEngine(conn).verify_snapshot(
+    resolution_receipt = CanonicalFactResolutionEngine(conn).verify_snapshot(
         request.resolution_snapshot_id, request.cutoff_at
     )
     watermark = verify_resolution_snapshot_watermark(
@@ -927,11 +966,70 @@ def _verify_generation_references(
             "projection_upstream_snapshot_mismatch",
             generation_id=request.generation_id,
         )
+    if request.parent_generation_id is not None:
+        parent_binding = _row(
+            conn,
+            "SELECT resolution_scope_sha256 "
+            "FROM canonical_fact_projection_scope_bindings WHERE generation_id=?",
+            (request.parent_generation_id,),
+        )
+        if (
+            parent_binding is None
+            or str(parent_binding["resolution_scope_sha256"])
+            != resolution_receipt.scope_sha256
+        ):
+            raise CanonicalFactProjectionError(
+                "projection_parent_scope_mismatch",
+                generation_id=request.generation_id,
+            )
     return {
         "ontology_snapshot_sha256": str(ontology["member_set_sha256"]),
         "resolution_snapshot_sha256": str(resolution["member_set_sha256"]),
+        "resolution_scope_sha256": resolution_receipt.scope_sha256,
+        "resolution_snapshot_commitment_sha256": (
+            resolution_receipt.snapshot_commitment_sha256
+        ),
         "resolution_watermark_sha256": watermark.watermark_sha256,
     }
+
+
+def _ensure_projection_scope_binding(
+    conn: sqlite3.Connection,
+    request: ProjectionGenerationRequest,
+    references: dict[str, str],
+) -> None:
+    values = (
+        request.generation_id,
+        request.resolution_snapshot_id,
+        references["resolution_scope_sha256"],
+        references["resolution_snapshot_commitment_sha256"],
+        db_time(request.recorded_at),
+    )
+    existing = _row(
+        conn,
+        "SELECT generation_id,resolution_snapshot_id,resolution_scope_sha256,"
+        "resolution_snapshot_commitment_sha256,recorded_at "
+        "FROM canonical_fact_projection_scope_bindings WHERE generation_id=?",
+        (request.generation_id,),
+    )
+    if existing is None:
+        conn.execute(
+            "INSERT INTO canonical_fact_projection_scope_bindings VALUES (?,?,?,?,?)",
+            values,
+        )
+        return
+    columns = (
+        "generation_id",
+        "resolution_snapshot_id",
+        "resolution_scope_sha256",
+        "resolution_snapshot_commitment_sha256",
+        "recorded_at",
+    )
+    if tuple(existing[column] for column in columns) != values:
+        raise CanonicalFactProjectionError(
+            "projection_scope_binding_conflict",
+            generation_id=request.generation_id,
+        )
 
 
 def _parent_depth(conn: sqlite3.Connection, request: ProjectionGenerationRequest) -> int:

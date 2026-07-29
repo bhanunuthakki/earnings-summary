@@ -11,7 +11,10 @@ from alembic.config import Config
 
 import search.canonical_fact_projection as projection
 from alembic import command
-from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
+from provenance.canonical_fact_resolution import (
+    CanonicalFactResolutionEngine,
+    ResolutionSnapshotScope,
+)
 from provenance.metric_ontology import MetricOntology, OntologySnapshot
 from provenance.source_fact_stream import bind_resolution_snapshot_watermark
 from search.canonical_fact_projection import (
@@ -28,8 +31,12 @@ from search.canonical_fact_projection import (
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_REVISION = "0213_decision_draft_provider_id"
-HEAD = "0247_bounded_canonical_retrieval"
+HEAD = "0255_scoped_canonical_resolution_snapshots"
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
+EMPTY_SCOPE = ResolutionSnapshotScope(
+    issuer_id="issuer-empty",
+    reporting_entity_ids=("reporting-empty",),
+)
 
 
 def _config(path: Path) -> Config:
@@ -51,6 +58,16 @@ def _empty_database(path: Path) -> sqlite3.Connection:
             id INTEGER PRIMARY KEY,
             source_doc_id INTEGER NOT NULL
         );
+        CREATE TABLE llm_budgets (
+            purpose TEXT PRIMARY KEY,
+            monthly_cap_usd REAL NOT NULL,
+            warn_threshold_pct REAL NOT NULL,
+            hard_block INTEGER NOT NULL,
+            on_exceed TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            notes TEXT
+        );
         """
     )
     legacy.commit()
@@ -60,6 +77,21 @@ def _empty_database(path: Path) -> sqlite3.Connection:
     command.upgrade(config, HEAD)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute(
+        "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+        ("issuer-empty", "issuer-empty", "operating_company", T0.isoformat()),
+    )
+    conn.execute(
+        "INSERT INTO reporting_entities VALUES (?,?,?,?,?,?)",
+        (
+            "reporting-empty",
+            "reporting-empty",
+            "issuer-empty",
+            "legal_registrant",
+            "Empty issuer",
+            T0.isoformat(),
+        ),
+    )
     MetricOntology(conn).seal_snapshot(
         OntologySnapshot(
             ontology_snapshot_id="ontology-empty",
@@ -69,7 +101,7 @@ def _empty_database(path: Path) -> sqlite3.Connection:
         )
     )
     resolver = CanonicalFactResolutionEngine(conn)
-    resolver.seal_snapshot("resolution-empty", T0, T0)
+    resolver.seal_snapshot("resolution-empty", T0, T0, EMPTY_SCOPE)
     bind_resolution_snapshot_watermark(
         conn,
         resolution_snapshot_id="resolution-empty",
@@ -590,6 +622,124 @@ def test_unchanged_delta_prefetches_parent_state_once_and_resets_scan_cap(
         )
     finally:
         conn.close()
+
+
+def test_delta_rejects_parent_from_another_issuer_scope(tmp_path: Path) -> None:
+    conn = _empty_database(tmp_path / "scope-mismatch.db")
+    try:
+        parent = build_canonical_projection_generation(conn, _request("generation-parent"))
+        assert parent.resolution_scope_sha256 == EMPTY_SCOPE.scope_sha256
+        conn.execute(
+            "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+            ("issuer-other", "issuer-other", "operating_company", T0.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO reporting_entities VALUES (?,?,?,?,?,?)",
+            (
+                "reporting-other",
+                "reporting-other",
+                "issuer-other",
+                "legal_registrant",
+                "Other issuer",
+                T0.isoformat(),
+            ),
+        )
+        other_scope = ResolutionSnapshotScope(
+            issuer_id="issuer-other",
+            reporting_entity_ids=("reporting-other",),
+        )
+        CanonicalFactResolutionEngine(conn).seal_snapshot(
+            "resolution-other", T0, T0, other_scope
+        )
+        bind_resolution_snapshot_watermark(
+            conn,
+            resolution_snapshot_id="resolution-other",
+            cutoff_at=T0,
+            recorded_at=T0,
+        )
+        with pytest.raises(
+            CanonicalFactProjectionError,
+            match="projection_parent_scope_mismatch",
+        ):
+            build_canonical_projection_generation(
+                conn,
+                ProjectionGenerationRequest(
+                    generation_id="generation-cross-issuer-delta",
+                    idempotency_key="generation-cross-issuer-delta",
+                    generation_kind="delta",
+                    parent_generation_id=parent.generation_id,
+                    resolution_snapshot_id="resolution-other",
+                    ontology_snapshot_id="ontology-empty",
+                    cutoff_at=T0,
+                    recorded_at=T0,
+                ),
+            )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM canonical_fact_projection_scope_bindings "
+                "WHERE generation_id='generation-cross-issuer-delta'"
+            ).fetchone()[0]
+            == 0
+        )
+    finally:
+        conn.close()
+
+
+def test_0255_refuses_inferred_upgrade_and_nonempty_downgrade(tmp_path: Path) -> None:
+    legacy_path = tmp_path / "legacy-populated.db"
+    legacy = sqlite3.connect(legacy_path)
+    legacy.executescript(
+        """
+        CREATE TABLE financial_facts (
+            id INTEGER PRIMARY KEY,
+            source_doc_id INTEGER NOT NULL
+        );
+        CREATE TABLE kpi_facts (
+            id INTEGER PRIMARY KEY,
+            source_doc_id INTEGER NOT NULL
+        );
+        CREATE TABLE llm_budgets (
+            purpose TEXT PRIMARY KEY,
+            monthly_cap_usd REAL NOT NULL,
+            warn_threshold_pct REAL NOT NULL,
+            hard_block INTEGER NOT NULL,
+            on_exceed TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            notes TEXT
+        );
+        """
+    )
+    legacy.close()
+    legacy_config = _config(legacy_path)
+    command.stamp(legacy_config, BASE_REVISION)
+    command.upgrade(legacy_config, "0254_filing_xbrl_processor_closure")
+    legacy = sqlite3.connect(legacy_path)
+    legacy.execute("DROP TRIGGER trg_canonical_fact_snapshot_exact")
+    empty_json = canonical_json([])
+    legacy.execute(
+        "INSERT INTO canonical_fact_resolution_snapshot_seals VALUES (?,?,?,?,?,?,?)",
+        (
+            "legacy-global-snapshot",
+            "legacy-global-snapshot",
+            T0.isoformat(),
+            0,
+            empty_json,
+            digest_text(empty_json),
+            T0.isoformat(),
+        ),
+    )
+    legacy.commit()
+    legacy.close()
+    with pytest.raises(RuntimeError, match="refuses to infer issuer scope"):
+        command.upgrade(legacy_config, HEAD)
+
+    scoped_path = tmp_path / "scoped-populated.db"
+    scoped = _empty_database(scoped_path)
+    scoped.commit()
+    scoped.close()
+    with pytest.raises(RuntimeError, match="refuses to discard committed scoped"):
+        command.downgrade(_config(scoped_path), "0254_filing_xbrl_processor_closure")
 
 
 def test_failed_generation_is_atomic_and_replay_conflicts_fail(

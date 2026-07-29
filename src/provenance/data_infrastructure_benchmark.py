@@ -38,6 +38,7 @@ from alembic import command
 from provenance.canonical_fact_resolution import (
     CanonicalFactResolutionEngine,
     ResolutionPolicy,
+    ResolutionSnapshotScope,
 )
 from provenance.filing_xbrl_extraction_ledger import (
     FilingXbrlExtractionLedger,
@@ -1814,6 +1815,10 @@ def _seed_production_ontology_and_resolutions(
         "production-resolution-checkpoint",
         PRODUCTION_STAMP,
         PRODUCTION_STAMP,
+        ResolutionSnapshotScope(
+            issuer_id="production-issuer",
+            reporting_entity_ids=("production-reporting-entity",),
+        ),
     )
     conn.commit()
     if resolved != config.fact_count:
@@ -2135,6 +2140,10 @@ def run_production_contract_benchmark(
                 "production-resolution-delta",
                 later,
                 later,
+                ResolutionSnapshotScope(
+                    issuer_id="production-issuer",
+                    reporting_entity_ids=("production-reporting-entity",),
+                ),
             )
             bind_resolution_snapshot_watermark(
                 conn,

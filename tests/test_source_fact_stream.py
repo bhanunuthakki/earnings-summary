@@ -14,6 +14,7 @@ import provenance.source_fact_repository as repository_module
 from alembic import command
 from provenance.canonical_fact_resolution import (
     CanonicalFactResolutionEngine,
+    ResolutionSnapshotScope,
 )
 from provenance.source_fact_publication import (
     PUBLICATION_PAYLOAD_VERSION,
@@ -47,6 +48,10 @@ from provenance.source_fact_stream import (
 ROOT = Path(__file__).resolve().parents[1]
 BASE_REVISION = "0213_decision_draft_provider_id"
 STAMP = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
+EMPTY_SCOPE = ResolutionSnapshotScope(
+    issuer_id="stream-issuer",
+    reporting_entity_ids=("stream-reporting-entity",),
+)
 
 
 def _config(path: Path) -> Config:
@@ -72,6 +77,16 @@ def migrated_template(
             id INTEGER PRIMARY KEY,
             source_doc_id INTEGER NOT NULL
         );
+        CREATE TABLE llm_budgets (
+            purpose TEXT PRIMARY KEY,
+            monthly_cap_usd REAL NOT NULL,
+            warn_threshold_pct REAL NOT NULL,
+            hard_block INTEGER NOT NULL,
+            on_exceed TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            notes TEXT
+        );
         """
     )
     conn.commit()
@@ -91,6 +106,26 @@ def conn(
     shutil.copy2(migrated_template, path)
     database = sqlite3.connect(path, timeout=30)
     database.execute("PRAGMA foreign_keys=ON")
+    database.execute(
+        "INSERT OR IGNORE INTO issuer_entities VALUES (?,?,?,?)",
+        (
+            "stream-issuer",
+            "stream-issuer",
+            "operating_company",
+            STAMP.isoformat(),
+        ),
+    )
+    database.execute(
+        "INSERT OR IGNORE INTO reporting_entities VALUES (?,?,?,?,?,?)",
+        (
+            "stream-reporting-entity",
+            "stream-reporting-entity",
+            "stream-issuer",
+            "legal_registrant",
+            "Stream test issuer",
+            STAMP.isoformat(),
+        ),
+    )
     SourceFactRepository(database)
     try:
         yield database
@@ -562,7 +597,7 @@ def test_resolution_snapshot_watermark_is_exact_and_time_complete(
     second = repository.publish(_publication("publication-watermark-2"))
     cutoff = STAMP + timedelta(minutes=1)
     engine = CanonicalFactResolutionEngine(conn)
-    engine.seal_snapshot("resolution-snapshot-1", cutoff, cutoff)
+    engine.seal_snapshot("resolution-snapshot-1", cutoff, cutoff, EMPTY_SCOPE)
 
     bound = bind_resolution_snapshot_watermark(
         conn,
@@ -594,6 +629,7 @@ def test_resolution_watermark_excludes_events_after_cutoff(
         "resolution-snapshot-before",
         STAMP,
         after,
+        EMPTY_SCOPE,
     )
 
     bound = bind_resolution_snapshot_watermark(
@@ -620,6 +656,7 @@ def test_empty_stream_resolution_watermark_uses_initial_cursor(
         "resolution-snapshot-empty",
         STAMP,
         STAMP,
+        EMPTY_SCOPE,
     )
 
     bound = bind_resolution_snapshot_watermark(

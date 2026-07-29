@@ -107,6 +107,7 @@ from search.heterogeneous_retrieval import (
 from search.local_vector import vector_records_digest, vector_sha256
 from tests.test_canonical_fact_resolution import (
     NOW,
+    SCOPE,
     _component,
     _mapping,
     _persist_taxonomy_assertion,
@@ -1167,7 +1168,7 @@ def _seed_resolved_periods(
             recorded_at=NOW,
         )
     )
-    resolver.seal_snapshot("resolution:checkpoint", NOW, NOW)
+    resolver.seal_snapshot("resolution:checkpoint", NOW, NOW, SCOPE)
     return bindings, tuple(canonical_cells)
 
 
@@ -1766,7 +1767,7 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
                 recorded_at=later,
             )
         )
-        resolver.seal_snapshot("resolution:delta", later, later)
+        resolver.seal_snapshot("resolution:delta", later, later, SCOPE)
         bind_resolution_snapshot_watermark(
             conn,
             resolution_snapshot_id="resolution:delta",

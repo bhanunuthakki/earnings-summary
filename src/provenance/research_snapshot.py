@@ -1510,24 +1510,28 @@ class _DefaultResearchReferenceVerifier:
                 CanonicalFactResolutionEngine,
             )
 
-            CanonicalFactResolutionEngine(conn).verify_snapshot(reference_id, cutoff_at)
-            row = conn.execute(
-                "SELECT cutoff_at,recorded_at,member_set_sha256 "
-                "FROM canonical_fact_resolution_snapshot_seals "
-                "WHERE resolution_snapshot_id=? "
-                "AND datetime(cutoff_at)<=datetime(?) "
-                "AND datetime(recorded_at)<=datetime(?)",
-                (reference_id, _db_time(cutoff_at), _db_time(cutoff_at)),
-            ).fetchone()
-            if row is None:
+            verified = CanonicalFactResolutionEngine(conn).verify_snapshot(
+                reference_id, cutoff_at
+            )
+            if (
+                _utc(verified.cutoff_at) > _utc(cutoff_at)
+                or _utc(verified.recorded_at) > _utc(cutoff_at)
+            ):
                 raise ValueError("Canonical Fact Resolution Snapshot is absent at cutoff")
             return VerifiedResearchReference(
                 requested_lane=requested_lane,
-                reference_table="canonical_fact_resolution_snapshot_seals",
+                reference_table="canonical_fact_resolution_snapshot_scope_seals",
                 reference_id=reference_id,
-                commitment_sha256=str(row[2]),
-                knowledge_at=_parse_time(row[0]),
-                recorded_at=_parse_time(row[1]),
+                commitment_sha256=verified.snapshot_commitment_sha256,
+                knowledge_at=verified.cutoff_at,
+                recorded_at=verified.recorded_at,
+                attributes={
+                    "issuer_id": verified.scope.issuer_id,
+                    "reporting_entity_ids": list(
+                        verified.scope.reporting_entity_ids
+                    ),
+                    "scope_sha256": verified.scope_sha256,
+                },
             )
         if requested_lane.startswith("canonical_fact_projection:"):
             from search.canonical_fact_projection import (
@@ -1551,6 +1555,10 @@ class _DefaultResearchReferenceVerifier:
                 attributes={
                     "ontology_snapshot_id": verified.ontology_snapshot_id,
                     "resolution_snapshot_id": verified.resolution_snapshot_id,
+                    "resolution_scope_sha256": verified.resolution_scope_sha256,
+                    "resolution_snapshot_commitment_sha256": (
+                        verified.resolution_snapshot_commitment_sha256
+                    ),
                 },
             )
         if requested_lane.startswith("embedding_promotion:"):
@@ -2040,6 +2048,22 @@ def _verify_research_references(
         request,
         verify_fact_subjects=isinstance(verifier, _DefaultResearchReferenceVerifier),
     )
+    verified_resolution = None
+    if isinstance(verifier, _DefaultResearchReferenceVerifier):
+        from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
+
+        verified_resolution = CanonicalFactResolutionEngine(conn).verify_snapshot(
+            request.canonical_fact_resolution_snapshot_id, request.cutoff_at
+        )
+        if (
+            verified_resolution.scope.issuer_id != request.research_universe.issuer_id
+            or verified_resolution.scope.reporting_entity_ids
+            != request.research_universe.reporting_entity_ids
+        ):
+            raise ValueError(
+                "canonical resolution snapshot scope must exactly match "
+                "the research universe"
+            )
     required_publications = _required_source_fact_publications(
         conn, request.canonical_fact_resolution_snapshot_id
     )
@@ -2089,6 +2113,17 @@ def _verify_research_references(
         projection_attributes.get("resolution_snapshot_id")
         != request.canonical_fact_resolution_snapshot_id
         or projection_attributes.get("ontology_snapshot_id") != request.ontology_snapshot_id
+        or (
+            verified_resolution is not None
+            and (
+                projection_attributes.get("resolution_scope_sha256")
+                != verified_resolution.scope_sha256
+                or projection_attributes.get(
+                    "resolution_snapshot_commitment_sha256"
+                )
+                != verified_resolution.snapshot_commitment_sha256
+            )
+        )
     ):
         raise ValueError(
             "canonical fact projection is not bound to the requested ontology "

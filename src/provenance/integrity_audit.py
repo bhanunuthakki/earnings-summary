@@ -413,6 +413,9 @@ _CUTOVER_GATE_TABLES: dict[str, tuple[str, ...]] = {
     "canonical_resolution_snapshots": (
         "canonical_fact_resolution_snapshot_seals",
         "canonical_fact_resolution_snapshot_members",
+        "canonical_fact_resolution_snapshot_scope_headers",
+        "canonical_fact_resolution_snapshot_scope_members",
+        "canonical_fact_resolution_snapshot_scope_seals",
         "canonical_fact_resolution_snapshot_watermarks",
     ),
     "canonical_projection_generations": (
@@ -421,6 +424,7 @@ _CUTOVER_GATE_TABLES: dict[str, tuple[str, ...]] = {
         "canonical_fact_projection_batches",
         "canonical_fact_projection_buckets",
         "canonical_fact_projection_seals",
+        "canonical_fact_projection_scope_bindings",
     ),
     "document_processing_evidence": (
         "document_processing_evidence_headers",

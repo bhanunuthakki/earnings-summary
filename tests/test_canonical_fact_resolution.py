@@ -6,6 +6,7 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import pytest
 from alembic.config import Config
@@ -14,6 +15,7 @@ from alembic import command
 from provenance.canonical_fact_resolution import (
     CanonicalFactResolutionEngine,
     ResolutionPolicy,
+    ResolutionSnapshotScope,
 )
 from provenance.fact_plane_v2 import FactPlaneV2
 from provenance.filing_xbrl_extraction_ledger import FilingXbrlExtractionLedger
@@ -28,6 +30,7 @@ from provenance.metric_ontology import (
     CanonicalMetricDefinitionRevision,
     MappingRevision,
     MetricOntology,
+    PeriodKind,
     SourceObservationTaxonomyAssertion,
     SourceTaxonomyComponent,
 )
@@ -44,14 +47,19 @@ from tests.test_filing_xbrl_extraction_ledger import (
 
 NOW = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
 ROOT = Path(__file__).resolve().parents[1]
+SCOPE = ResolutionSnapshotScope(
+    issuer_id="issuer-1",
+    reporting_entity_ids=("reporting-1",),
+)
 
 
 class _DuplicateSnapshotEngine(CanonicalFactResolutionEngine):
     def _latest_resolution_members(
         self,
         cutoff: datetime,
+        scope: ResolutionSnapshotScope,
     ) -> list[dict[str, object]]:
-        members = super()._latest_resolution_members(cutoff)
+        members = super()._latest_resolution_members(cutoff, scope)
         return [*members, *members]
 
 
@@ -59,13 +67,37 @@ def _resolution_database(
     tmp_path: Path,
     output: FilingXbrlNormalizedOutput,
 ) -> sqlite3.Connection:
-    conn = _database(tmp_path, output)
+    real_upgrade = command.upgrade
+
+    def _bounded_upgrade(config: Config, revision: str) -> None:
+        real_upgrade(
+            config,
+            "0244_canonical_fact_resolution" if revision == "head" else revision,
+        )
+
+    command.upgrade = _bounded_upgrade
+    try:
+        conn = _database(tmp_path, output)
+    finally:
+        command.upgrade = real_upgrade
     path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
+    conn.execute(
+        "CREATE TABLE llm_budgets ("
+        "purpose TEXT PRIMARY KEY,"
+        "monthly_cap_usd REAL NOT NULL,"
+        "warn_threshold_pct REAL NOT NULL,"
+        "hard_block INTEGER NOT NULL,"
+        "on_exceed TEXT NOT NULL,"
+        "created_at TEXT NOT NULL,"
+        "updated_at TEXT NOT NULL,"
+        "notes TEXT)"
+    )
+    conn.commit()
     conn.close()
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.upgrade(config, "0244_canonical_fact_resolution")
+    command.upgrade(config, "0255_scoped_canonical_resolution_snapshots")
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -627,6 +659,7 @@ def test_final_seals_reject_omission_and_snapshot_binds_live_latest(
                 "snapshot-atomic-failure",
                 NOW,
                 NOW,
+                SCOPE,
             )
         assert tuple(
             conn.execute(
@@ -635,7 +668,7 @@ def test_final_seals_reject_omission_and_snapshot_binds_live_latest(
                 "WHERE resolution_snapshot_id='snapshot-atomic-failure'"
             ).fetchone()
         ) == (0,)
-        engine.seal_snapshot("snapshot-1", NOW, NOW)
+        engine.seal_snapshot("snapshot-1", NOW, NOW, SCOPE)
         engine.verify_snapshot("snapshot-1", NOW)
         engine.resolve(
             cell,
@@ -683,5 +716,96 @@ def test_final_seals_reject_omission_and_snapshot_binds_live_latest(
                 ),
             )
         assert receipt.canonical_resolution_revision_id
+    finally:
+        conn.close()
+
+
+def test_resolution_snapshots_are_exactly_issuer_scoped(tmp_path: Path) -> None:
+    output = _output((_entry(0),))
+    conn = _resolution_database(tmp_path, output)
+    try:
+        FilingXbrlExtractionLedger(conn).publish(output)
+        first_cell_id = _bind_every_published_cell(conn)
+        engine = CanonicalFactResolutionEngine(conn)
+        engine.resolve(
+            first_cell_id,
+            NOW,
+            ResolutionPolicy(name="scoped", version="v1", config={}),
+            recorded_at=NOW,
+        )
+        conn.execute(
+            "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+            ("issuer-2", "issuer-2", "operating_company", NOW.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO reporting_entities VALUES (?,?,?,?,?,?)",
+            (
+                "reporting-2",
+                "reporting-2",
+                "issuer-2",
+                "legal_registrant",
+                "Issuer two",
+                NOW.isoformat(),
+            ),
+        )
+        first = conn.execute(
+            "SELECT metric_id,period_kind,period_start,period_end,unit_family,"
+            "accounting_basis,consolidation_scope,effective_at,knowledge_at,recorded_at "
+            "FROM canonical_metric_cells WHERE canonical_metric_cell_id=?",
+            (first_cell_id,),
+        ).fetchone()
+        assert first is not None
+        second_cell_id = "canonical-cell:issuer-2"
+        MetricOntology(conn).persist_canonical_metric_cell(
+            CanonicalMetricCell(
+                canonical_metric_cell_id=second_cell_id,
+                idempotency_key=second_cell_id,
+                metric_id=str(first[0]),
+                reporting_entity_id="reporting-2",
+                period_kind=cast(PeriodKind, str(first[1])),
+                period_start=(
+                    None if first[2] is None else datetime.fromisoformat(str(first[2]))
+                ),
+                period_end=datetime.fromisoformat(str(first[3])),
+                unit_family=str(first[4]),
+                accounting_basis=str(first[5]),
+                consolidation_scope=str(first[6]),
+                effective_at=datetime.fromisoformat(str(first[7])),
+                knowledge_at=datetime.fromisoformat(str(first[8])),
+                recorded_at=datetime.fromisoformat(str(first[9])),
+            )
+        )
+        engine.resolve(
+            second_cell_id,
+            NOW,
+            ResolutionPolicy(name="scoped", version="v1", config={}),
+            recorded_at=NOW,
+        )
+        second_scope = ResolutionSnapshotScope(
+            issuer_id="issuer-2",
+            reporting_entity_ids=("reporting-2",),
+        )
+        first_receipt = engine.seal_snapshot("snapshot:issuer-1", NOW, NOW, SCOPE)
+        second_receipt = engine.seal_snapshot(
+            "snapshot:issuer-2", NOW, NOW, second_scope
+        )
+        assert first_receipt.scope == SCOPE
+        assert second_receipt.scope == second_scope
+        assert {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT canonical_metric_cell_id "
+                "FROM canonical_fact_resolution_snapshot_members "
+                "WHERE resolution_snapshot_id='snapshot:issuer-1'"
+            )
+        } == {first_cell_id}
+        assert {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT canonical_metric_cell_id "
+                "FROM canonical_fact_resolution_snapshot_members "
+                "WHERE resolution_snapshot_id='snapshot:issuer-2'"
+            )
+        } == {second_cell_id}
     finally:
         conn.close()
