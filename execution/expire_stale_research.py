@@ -48,6 +48,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from clock import now_naive_utc
 from research.proposals import ResearchTask, list_tasks, set_task_status
+from schema_compat import require_current_for_write
+from user_state._db import open_conn
 
 
 def _log(event: dict[str, object]) -> None:
@@ -75,6 +77,12 @@ def expire_stale_tasks(*, days: int, apply: bool, db_path: Path | None = None) -
     ``apply``). ``created_at`` is the repo's naive-UTC ISO text, so a
     lexicographic compare against a naive-UTC cutoff is exact (matches the
     store convention used throughout ``research.proposals``)."""
+    if apply:
+        preflight_conn = open_conn(db_path)
+        try:
+            require_current_for_write(preflight_conn)
+        finally:
+            preflight_conn.close()
     cutoff = (now_naive_utc() - timedelta(days=days)).isoformat()
     tasks = list_tasks(status="proposed", db_path=db_path)
     expiring = _expiring(tasks, cutoff=cutoff)
