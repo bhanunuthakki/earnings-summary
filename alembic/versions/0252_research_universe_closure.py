@@ -14,7 +14,7 @@ from alembic import op
 
 revision: str = "0252_research_universe_closure"
 # Provisional until the architecture branch containing 0250/0251 is rebased.
-down_revision: str | Sequence[str] | None = "0249_embedding_runtime_artifact_binding"
+down_revision: str | Sequence[str] | None = "0251_dcf_run_inputs"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
