@@ -7,7 +7,9 @@ import json
 import os
 import sqlite3
 import tempfile
+import urllib.error
 import urllib.parse
+import urllib.request
 import urllib.robotparser
 from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
@@ -17,6 +19,11 @@ from typing import Literal, Protocol, Self, cast
 import requests
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ir_pipeline._net import (
+    UnsafeURLError,
+    build_public_opener,
+    ensure_safe_public_url,
+)
 from ir_pipeline.authority import IRAuthorityEvidence, PublisherEndpointRule
 from provenance.evidence_ledger import (
     ContentBlob,
@@ -35,6 +42,7 @@ _COLLECTOR = "ir-evidence-capture@1"
 _POLICY = "observed-ir-document-capture"
 _POLICY_VERSION = "1"
 _REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
+_MAX_ROBOTS_BYTES = 1_000_000
 
 CaptureOutcome = Literal[
     "fetched",
@@ -1002,12 +1010,29 @@ def _robots_allows(url: str, user_agent: str) -> bool:
     parsed = urllib.parse.urlparse(url)
     robots_url = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, "/robots.txt", "", "", ""))
     parser = urllib.robotparser.RobotFileParser()
-    parser.set_url(robots_url)
     try:
-        parser.read()
-    except OSError:
+        ensure_safe_public_url(robots_url)
+        request = urllib.request.Request(
+            robots_url,
+            headers={
+                "User-Agent": user_agent,
+                "Accept": "text/plain, */*;q=0.1",
+            },
+        )
+        with build_public_opener().open(request, timeout=15) as response:
+            content = response.read(_MAX_ROBOTS_BYTES + 1)
+        if len(content) > _MAX_ROBOTS_BYTES:
+            return False
+        parser.parse(content.decode("utf-8", errors="replace").splitlines())
+        return parser.can_fetch(user_agent, url)
+    except (
+        UnsafeURLError,
+        urllib.error.URLError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ):
         return False
-    return parser.can_fetch(user_agent, url)
 
 
 def _promote_raw(
