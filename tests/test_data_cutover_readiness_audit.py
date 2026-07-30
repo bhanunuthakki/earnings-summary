@@ -70,6 +70,7 @@ def test_cutover_audit_pins_publication_and_stream_coverage_to_cutoff(
         cutoff: datetime,
         observed_through: datetime,
     ) -> object:
+        _conn.create_function("cutover_audit_probe", 1, lambda value: value)
         verified_publications.append((publication_id, cutoff, observed_through))
         return object()
 
@@ -78,6 +79,7 @@ def test_cutover_audit_pins_publication_and_stream_coverage_to_cutoff(
         *,
         publication_id: str,
     ) -> object:
+        _conn.create_function("cutover_audit_probe", 1, lambda value: value)
         verified_stream.append(publication_id)
         return object()
 
@@ -98,6 +100,7 @@ def test_cutover_audit_pins_publication_and_stream_coverage_to_cutoff(
             knowledge_cutoff=CUTOFF,
             observed_through=CUTOFF,
             sample_limit=2,
+            fetch_size=1,
         ),
     )
 

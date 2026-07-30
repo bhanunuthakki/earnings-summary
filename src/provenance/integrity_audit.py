@@ -1494,13 +1494,29 @@ def _run_cutover_gate(
         ).encode()
     )
     candidate_count = 0
-    cursor = conn.execute(scoped_query, params)
-    while rows := cursor.fetchmany(options.fetch_size):
+    after_key: str | None = None
+    page_query = (
+        "SELECT * FROM ("  # nosec B608 -- validated internal selector and key identifier; temporal values remain bound
+        f"{scoped_query}) AS cutover_candidates "
+        f"WHERE (:_cutover_after_key IS NULL OR {spec.key_column}>:_cutover_after_key) "
+        f"ORDER BY {spec.key_column} LIMIT :_cutover_page_size"
+    )
+    while True:
+        page_params = {
+            **params,
+            "_cutover_after_key": after_key,
+            "_cutover_page_size": options.fetch_size,
+        }
+        rows = conn.execute(page_query, page_params).fetchall()
+        if not rows:
+            break
         for row in rows:
             candidate_digest.update(b"\n")
             candidate_digest.update(_canonical_commitment_json(dict(row)).encode())
             candidate_count += 1
             key = str(row[spec.key_column])
+            if after_key is not None and key <= after_key:
+                raise RuntimeError("cutover gate keyset is not strictly increasing")
             try:
                 verifier(row)
             except (
@@ -1515,6 +1531,7 @@ def _run_cutover_gate(
                     samples.append(_cutover_failure_sample(key, exc))
             else:
                 verified += 1
+            after_key = key
     if candidate_count != eligible:
         raise RuntimeError("cutover gate candidate count changed during verification")
     candidate_commitments.append(
