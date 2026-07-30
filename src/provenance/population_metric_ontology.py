@@ -30,7 +30,7 @@ from provenance.metric_ontology import (
 from provenance.population_completeness import PopulationTemporalScope
 
 _POLICY_NAME = "deterministic_legacy_metric_admission"
-_POLICY_VERSION = "4"
+_POLICY_VERSION = "5"
 _TAXONOMY_NAME = "earnings-summary-legacy"
 _TAXONOMY_VERSION = "legacy-observation-contract.v2"
 _AUDITED_POLICY_PATH = "src/provenance/population_metric_ontology.py"
@@ -564,11 +564,13 @@ def _registry_rows(
             "AND datetime(cell.recorded_at)<=datetime(?) "
             "AND datetime(observation.knowledge_at)<=datetime(?) "
             "AND datetime(observation.recorded_at)<=datetime(?) "
+            "AND datetime(anchor.recorded_at)<=datetime(?) "
         )
-        params = (knowledge, observed, knowledge, observed)
+        params = (knowledge, observed, knowledge, observed, observed)
     query = """
         WITH source_cells AS (
             SELECT cell.*,seal.semantic_key_sha256,
+                   anchor.source_taxonomy_version,
                    MIN(CASE WHEN observation.value_kind<>'nil'
                             THEN observation.value_kind END) AS value_kind,
                    COUNT(DISTINCT CASE WHEN observation.value_kind<>'nil'
@@ -579,10 +581,12 @@ def _registry_rows(
             JOIN fact_observations_v2 observation
               ON observation.fact_cell_id=cell.fact_cell_id
              AND observation.observation_kind='reported'
+            JOIN fact_reported_observation_anchors_v2 anchor
+              ON anchor.observation_id=observation.observation_id
     """
     query += scope_filter
     query += """
-            GROUP BY cell.fact_cell_id
+            GROUP BY cell.fact_cell_id,anchor.source_taxonomy_version
         ),
         ranked AS (
             SELECT source_cells.*,
@@ -600,7 +604,9 @@ def _registry_rows(
                                    THEN lower(unit_key)
                                ELSE unit_key
                            END,
-                           value_kind
+                           value_kind,
+                           taxonomy_name,
+                           source_taxonomy_version
                        ORDER BY datetime(recorded_at),datetime(knowledge_at),
                                 datetime(effective_at),fact_cell_id
                    ) AS source_rank
@@ -686,12 +692,10 @@ def _persist_metric_stack(
             idempotency_key=component_id,
             component_kind="concept",
             taxonomy_namespace=str(row["concept_namespace"]),
-            local_name=_bounded_name(
-                str(row["concept_name"]),
-                _source_definition_commitment(row),
-            ),
-            taxonomy_name=_TAXONOMY_NAME,
-            taxonomy_version=_concept_taxonomy_version(row),
+            local_name=str(row["concept_name"]),
+            taxonomy_name=str(row["taxonomy_name"]),
+            taxonomy_version=str(row["source_taxonomy_version"]),
+            definition_qualifier_sha256=_source_definition_commitment(row),
             reporting_entity_id=str(row["reporting_entity_id"]),
             is_extension=True,
             data_type=str(row["value_kind"]),
@@ -708,6 +712,9 @@ def _persist_metric_stack(
                 "fact_cell_semantic_key_sha256": str(row["semantic_key_sha256"]),
                 "policy_name": _POLICY_NAME,
                 "policy_version": _POLICY_VERSION,
+                "source_exact_local_name": str(row["concept_name"]),
+                "source_exact_taxonomy_name": str(row["taxonomy_name"]),
+                "source_exact_taxonomy_version": str(row["source_taxonomy_version"]),
                 "source_definition_commitment_sha256": (_source_definition_commitment(row)),
             },
             effective_at=component_clock[0],
@@ -797,8 +804,9 @@ def _persist_dimension_registry(
                 component_kind="axis",
                 taxonomy_namespace=str(row["axis_namespace"]),
                 local_name=str(row["axis_name"]),
-                taxonomy_name=_TAXONOMY_NAME,
-                taxonomy_version=_TAXONOMY_VERSION,
+                taxonomy_name=str(row["taxonomy_name"]),
+                taxonomy_version=str(row["source_taxonomy_version"]),
+                definition_qualifier_sha256=_dimension_definition_qualifier("axis", row),
                 reporting_entity_id=None,
                 is_extension=False,
                 evidence_locator={"policy_config_sha256": policy_sha},
@@ -854,8 +862,9 @@ def _persist_dimension_registry(
                 component_kind="member",
                 taxonomy_namespace=str(row["explicit_member_namespace"]),
                 local_name=str(row["explicit_member_name"]),
-                taxonomy_name=_TAXONOMY_NAME,
-                taxonomy_version=_TAXONOMY_VERSION,
+                taxonomy_name=str(row["taxonomy_name"]),
+                taxonomy_version=str(row["source_taxonomy_version"]),
+                definition_qualifier_sha256=_dimension_definition_qualifier("member", row),
                 reporting_entity_id=None,
                 is_extension=False,
                 evidence_locator={"policy_config_sha256": policy_sha},
@@ -903,17 +912,23 @@ def _axis_registry_rows(
             "WHERE datetime(cell.knowledge_at)<=datetime(?) "
             "AND datetime(cell.recorded_at)<=datetime(?) "
             "AND datetime(dimension.recorded_at)<=datetime(?) "
+            "AND datetime(observation.knowledge_at)<=datetime(?) "
+            "AND datetime(observation.recorded_at)<=datetime(?) "
+            "AND datetime(anchor.recorded_at)<=datetime(?) "
         )
-        params = (knowledge, observed, observed)
+        params = (knowledge, observed, observed, knowledge, observed, observed)
     query = """
         SELECT * FROM (
             SELECT dimension.fact_cell_id,dimension.axis_namespace,
-                   dimension.axis_name,
+                   dimension.axis_name,cell.taxonomy_name,
+                   anchor.source_taxonomy_version,
                    cell.effective_at AS source_effective_at,
                    cell.knowledge_at AS source_knowledge_at,
                    cell.recorded_at AS source_recorded_at,
                    ROW_NUMBER() OVER (
-                       PARTITION BY dimension.axis_namespace,dimension.axis_name
+                       PARTITION BY dimension.axis_namespace,dimension.axis_name,
+                                    cell.taxonomy_name,
+                                    anchor.source_taxonomy_version
                        ORDER BY datetime(cell.recorded_at),
                                 datetime(cell.knowledge_at),
                                 datetime(cell.effective_at),
@@ -922,6 +937,11 @@ def _axis_registry_rows(
             FROM fact_dimensions_normalized_v2 dimension
             JOIN fact_cells_v2 cell
               ON cell.fact_cell_id=dimension.fact_cell_id
+            JOIN fact_observations_v2 observation
+              ON observation.fact_cell_id=cell.fact_cell_id
+             AND observation.observation_kind='reported'
+            JOIN fact_reported_observation_anchors_v2 anchor
+              ON anchor.observation_id=observation.observation_id
     """
     query += scope_filter
     query += """
@@ -947,20 +967,26 @@ def _member_registry_rows(
             "WHERE datetime(cell.knowledge_at)<=datetime(?) "
             "AND datetime(cell.recorded_at)<=datetime(?) "
             "AND datetime(dimension.recorded_at)<=datetime(?) "
+            "AND datetime(observation.knowledge_at)<=datetime(?) "
+            "AND datetime(observation.recorded_at)<=datetime(?) "
+            "AND datetime(anchor.recorded_at)<=datetime(?) "
         )
-        params = (knowledge, observed, observed)
+        params = (knowledge, observed, observed, knowledge, observed, observed)
     query = """
         SELECT * FROM (
             SELECT dimension.fact_cell_id,dimension.axis_namespace,
                    dimension.axis_name,dimension.explicit_member_namespace,
-                   dimension.explicit_member_name,
+                   dimension.explicit_member_name,cell.taxonomy_name,
+                   anchor.source_taxonomy_version,
                    cell.effective_at AS source_effective_at,
                    cell.knowledge_at AS source_knowledge_at,
                    cell.recorded_at AS source_recorded_at,
                    ROW_NUMBER() OVER (
                        PARTITION BY dimension.axis_namespace,dimension.axis_name,
                                     dimension.explicit_member_namespace,
-                                    dimension.explicit_member_name
+                                    dimension.explicit_member_name,
+                                    cell.taxonomy_name,
+                                    anchor.source_taxonomy_version
                        ORDER BY datetime(cell.recorded_at),
                                 datetime(cell.knowledge_at),
                                 datetime(cell.effective_at),
@@ -969,6 +995,11 @@ def _member_registry_rows(
             FROM fact_dimensions_normalized_v2 dimension
             JOIN fact_cells_v2 cell
               ON cell.fact_cell_id=dimension.fact_cell_id
+            JOIN fact_observations_v2 observation
+              ON observation.fact_cell_id=cell.fact_cell_id
+             AND observation.observation_kind='reported'
+            JOIN fact_reported_observation_anchors_v2 anchor
+              ON anchor.observation_id=observation.observation_id
             WHERE dimension.member_kind='explicit'
     """
     if scope_filter:
@@ -1133,6 +1164,7 @@ def _binding_rows(
         SELECT observation.observation_id,
                observation.recorded_at AS observation_recorded_at,
                cell.recorded_at AS cell_recorded_at,
+               anchor.source_taxonomy_version,
                kind.value_kind,
                cell.*
         FROM fact_observations_v2 observation
@@ -1144,6 +1176,8 @@ def _binding_rows(
             GROUP BY fact_cell_id
             HAVING COUNT(DISTINCT value_kind)=1
         ) kind ON kind.fact_cell_id=cell.fact_cell_id
+        JOIN fact_reported_observation_anchors_v2 anchor
+          ON anchor.observation_id=observation.observation_id
         JOIN source_observation_taxonomy_assertions assertion
           ON assertion.observation_id=observation.observation_id
         WHERE observation.observation_kind='reported'
@@ -1317,13 +1351,33 @@ def _concept_component_id(row: Mapping[str, object] | sqlite3.Row) -> str:
         str(row["reporting_entity_id"]),
         str(row["concept_namespace"]),
         str(row["concept_name"]),
-        _TAXONOMY_VERSION,
+        str(row["taxonomy_name"]),
+        str(row["source_taxonomy_version"]),
         _source_definition_commitment(row),
     )
 
 
-def _concept_taxonomy_version(row: Mapping[str, object] | sqlite3.Row) -> str:
-    return _bounded_name(_TAXONOMY_VERSION, _source_definition_commitment(row))
+def _dimension_definition_qualifier(
+    component_kind: Literal["axis", "member"],
+    row: Mapping[str, object] | sqlite3.Row,
+) -> str:
+    if component_kind == "axis":
+        namespace = str(row["axis_namespace"])
+        local_name = str(row["axis_name"])
+    else:
+        namespace = str(row["explicit_member_namespace"])
+        local_name = str(row["explicit_member_name"])
+    return _digest(
+        _canonical_json(
+            {
+                "component_kind": component_kind,
+                "local_name": local_name,
+                "taxonomy_name": str(row["taxonomy_name"]),
+                "taxonomy_namespace": namespace,
+                "taxonomy_version": str(row["source_taxonomy_version"]),
+            }
+        )
+    )
 
 
 def _mapping_id(row: Mapping[str, object] | sqlite3.Row) -> str:
@@ -1383,7 +1437,9 @@ def _axis_component_id(row: Mapping[str, object] | sqlite3.Row) -> str:
         "source-axis",
         str(row["axis_namespace"]),
         str(row["axis_name"]),
-        _TAXONOMY_VERSION,
+        str(row["taxonomy_name"]),
+        str(row["source_taxonomy_version"]),
+        _dimension_definition_qualifier("axis", row),
     )
 
 
@@ -1392,7 +1448,9 @@ def _member_component_id(row: Mapping[str, object] | sqlite3.Row) -> str:
         "source-member",
         str(row["explicit_member_namespace"]),
         str(row["explicit_member_name"]),
-        _TAXONOMY_VERSION,
+        str(row["taxonomy_name"]),
+        str(row["source_taxonomy_version"]),
+        _dimension_definition_qualifier("member", row),
     )
 
 

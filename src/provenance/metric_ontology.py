@@ -140,6 +140,7 @@ class SourceTaxonomyComponent(_Bitemporal):
     local_name: str = Field(min_length=1)
     taxonomy_name: str = Field(min_length=1)
     taxonomy_version: str = Field(min_length=1)
+    definition_qualifier_sha256: str | None = None
     reporting_entity_id: str | None = None
     is_extension: bool
     data_type: str | None = None
@@ -165,7 +166,37 @@ class SourceTaxonomyComponent(_Bitemporal):
             )
         ):
             raise ValueError("only source concepts may carry concept metadata")
+        if self.definition_qualifier_sha256 is None:
+            object.__setattr__(
+                self,
+                "definition_qualifier_sha256",
+                _digest(
+                    canonical_json(
+                        {
+                            "balance": self.balance,
+                            "component_kind": self.component_kind,
+                            "data_type": self.data_type,
+                            "is_abstract": self.is_abstract,
+                            "local_name": self.local_name,
+                            "period_type": self.period_type,
+                            "reporting_entity_id": self.reporting_entity_id,
+                            "taxonomy_name": self.taxonomy_name,
+                            "taxonomy_namespace": self.taxonomy_namespace,
+                            "taxonomy_version": self.taxonomy_version,
+                        }
+                    )
+                ),
+            )
+        else:
+            _validate_digest(self.definition_qualifier_sha256)
         return self
+
+    @property
+    def exact_definition_qualifier_sha256(self) -> str:
+        qualifier = self.definition_qualifier_sha256
+        if qualifier is None:  # pragma: no cover - enforced by model validation
+            raise ValueError("source definition qualifier is required")
+        return qualifier
 
     @property
     def reporting_entity_scope_key(self) -> str:
@@ -177,6 +208,7 @@ class SourceTaxonomyComponent(_Bitemporal):
             "balance": self.balance,
             "component_kind": self.component_kind,
             "data_type": self.data_type,
+            "definition_qualifier_sha256": self.exact_definition_qualifier_sha256,
             "definition_text": self.definition_text,
             "evidence_locator": self.evidence_locator,
             "is_abstract": self.is_abstract,
@@ -660,6 +692,7 @@ class MetricOntology:
                     "local_name",
                     "taxonomy_name",
                     "taxonomy_version",
+                    "definition_qualifier_sha256",
                     "reporting_entity_id",
                     "reporting_entity_scope_key",
                     "is_extension",
@@ -683,6 +716,7 @@ class MetricOntology:
                     component.local_name,
                     component.taxonomy_name,
                     component.taxonomy_version,
+                    component.exact_definition_qualifier_sha256,
                     component.reporting_entity_id,
                     component.reporting_entity_scope_key,
                     int(component.is_extension),
@@ -1198,7 +1232,10 @@ class MetricOntology:
                    source.local_name AS component_local_name,
                    source.taxonomy_name AS component_taxonomy_name,
                    source.taxonomy_version AS component_taxonomy_version,
+                   source.definition_qualifier_sha256
+                       AS component_definition_qualifier_sha256,
                    source.reporting_entity_scope_key AS component_entity_scope,
+                   source_kind.value_kind AS source_value_kind,
                    mapping.metric_id AS mapping_metric_id,
                    mapping.disposition AS mapping_disposition,
                    target.metric_id AS target_metric_id,
@@ -1215,6 +1252,14 @@ class MetricOntology:
               ON observation.observation_id=?
              AND observation.fact_cell_id=source_cell.fact_cell_id
              AND observation.observation_kind='reported'
+            JOIN (
+                SELECT fact_cell_id,MIN(value_kind) AS value_kind
+                FROM fact_observations_v2
+                WHERE observation_kind='reported' AND value_kind<>'nil'
+                GROUP BY fact_cell_id
+                HAVING COUNT(DISTINCT value_kind)=1
+            ) source_kind
+              ON source_kind.fact_cell_id=source_cell.fact_cell_id
             JOIN fact_reported_observation_anchors_v2 anchor
               ON anchor.observation_id=observation.observation_id
             JOIN source_observation_taxonomy_assertions taxonomy
@@ -1278,6 +1323,20 @@ class MetricOntology:
             if str(row["source_unit_key"]).lower() in {"pure", "shares"}
             else str(row["source_unit_key"])
         )
+        source_definition_qualifier = _digest(
+            canonical_json(
+                {
+                    "accounting_basis": str(row["source_accounting_basis"]),
+                    "concept_name": str(row["source_concept_name"]),
+                    "concept_namespace": str(row["source_concept_namespace"]),
+                    "consolidation_scope": str(row["source_consolidation_scope"]),
+                    "period_kind": str(row["source_period_kind"]),
+                    "reporting_entity_id": str(row["source_reporting_entity_id"]),
+                    "unit_family": source_unit_family,
+                    "value_kind": str(row["source_value_kind"]),
+                }
+            )
+        )
         expected = (
             row["observation_kind"] == "reported",
             row["source_concept_namespace"] == row["component_taxonomy_namespace"],
@@ -1285,6 +1344,7 @@ class MetricOntology:
             row["anchor_taxonomy_version"] == row["assertion_taxonomy_version"],
             row["anchor_taxonomy_version"] == row["component_taxonomy_version"],
             row["assertion_taxonomy_name"] == row["component_taxonomy_name"],
+            source_definition_qualifier == row["component_definition_qualifier_sha256"],
             row["component_entity_scope"] in {"__global__", row["source_reporting_entity_id"]},
             row["mapping_disposition"] in {"exact", "equivalent", "derived"},
             row["mapping_metric_id"] == row["target_metric_id"],
@@ -1321,26 +1381,26 @@ class MetricOntology:
             JOIN fact_observations_v2 observation
               ON observation.observation_id=?
              AND observation.fact_cell_id=dim.fact_cell_id
+            JOIN fact_cells_v2 source_cell
+              ON source_cell.fact_cell_id=dim.fact_cell_id
             JOIN fact_reported_observation_anchors_v2 anchor
               ON anchor.observation_id=observation.observation_id
             LEFT JOIN source_taxonomy_components axis
               ON axis.component_kind='axis'
              AND axis.taxonomy_namespace=dim.axis_namespace
              AND axis.local_name=dim.axis_name
+             AND axis.taxonomy_name=source_cell.taxonomy_name
              AND axis.taxonomy_version=anchor.source_taxonomy_version
              AND axis.reporting_entity_scope_key IN (
-                 '__global__',
-                 (SELECT reporting_entity_id FROM fact_cells_v2
-                  WHERE fact_cell_id=dim.fact_cell_id))
+                 '__global__', source_cell.reporting_entity_id)
             LEFT JOIN source_taxonomy_components member
               ON member.component_kind='member'
              AND member.taxonomy_namespace=dim.explicit_member_namespace
              AND member.local_name=dim.explicit_member_name
+             AND member.taxonomy_name=source_cell.taxonomy_name
              AND member.taxonomy_version=anchor.source_taxonomy_version
              AND member.reporting_entity_scope_key IN (
-                 '__global__',
-                 (SELECT reporting_entity_id FROM fact_cells_v2
-                  WHERE fact_cell_id=dim.fact_cell_id))
+                 '__global__', source_cell.reporting_entity_id)
             WHERE dim.fact_cell_id=?
             ORDER BY dim.dimension_ordinal
             """,

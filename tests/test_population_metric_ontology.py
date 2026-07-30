@@ -316,6 +316,8 @@ def _metric_cell(
         "recorded_at": recorded_at.isoformat(),
         "reporting_entity_id": reporting_entity_id,
         "semantic_key_sha256": f"seal-{reporting_entity_id}",
+        "source_taxonomy_version": "2026",
+        "taxonomy_name": "issuer-taxonomy",
         "unit_key": "pure",
         "value_kind": "numeric",
     }

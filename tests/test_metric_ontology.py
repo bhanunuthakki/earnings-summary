@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import shutil
 import sqlite3
 from collections.abc import Generator
@@ -26,6 +28,7 @@ from src.provenance.metric_ontology import (
     SourceDimensionMappingRevision,
     SourceObservationTaxonomyAssertion,
     SourceTaxonomyComponent,
+    canonical_json,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +41,26 @@ OBSERVATION_SHA = "3" * 64
 EXTRACTION_OUTPUT_SHA = "4" * 64
 RAW_ENTRY_SHA = "5" * 64
 OBSERVATION_SET_SHA = "6" * 64
+SOURCE_DEFINITION_QUALIFIER = hashlib.sha256(
+    json.dumps(
+        {
+            "accounting_basis": "us_gaap",
+            "concept_name": "Revenue",
+            "concept_namespace": "urn:test",
+            "consolidation_scope": "consolidated",
+            "period_kind": "duration",
+            "reporting_entity_id": "entity-1",
+            "unit_family": "currency",
+            "value_kind": "numeric",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+).hexdigest()
+
+
+def _sql_sha256(value: object) -> str:
+    return hashlib.sha256(str(value).encode()).hexdigest()
 
 
 def _ensure_reporting_entity(conn: sqlite3.Connection) -> None:
@@ -86,7 +109,7 @@ def ontology_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     conn.close()
     config = _config(path)
     command.stamp(config, BASE_REVISION)
-    command.upgrade(config, "0243_metric_ontology")
+    command.upgrade(config, "0259_source_definition_identity")
     return path
 
 
@@ -578,6 +601,7 @@ def _binding_probe(*, persist_assertions: bool = True) -> tuple[sqlite3.Connecti
             observation_id TEXT PRIMARY KEY,
             fact_cell_id TEXT NOT NULL,
             observation_kind TEXT NOT NULL,
+            value_kind TEXT NOT NULL,
             source_entry_sha256 TEXT,
             recorded_at TEXT NOT NULL
         );
@@ -630,6 +654,7 @@ def _binding_probe(*, persist_assertions: bool = True) -> tuple[sqlite3.Connecti
             local_name TEXT NOT NULL,
             taxonomy_name TEXT NOT NULL,
             taxonomy_version TEXT NOT NULL,
+            definition_qualifier_sha256 TEXT NOT NULL,
             reporting_entity_scope_key TEXT NOT NULL,
             effective_at TEXT NOT NULL,
             knowledge_at TEXT NOT NULL,
@@ -764,11 +789,11 @@ def _binding_probe(*, persist_assertions: bool = True) -> tuple[sqlite3.Connecti
         ),
     )
     conn.executemany(
-        "INSERT INTO fact_observations_v2 VALUES (?,?,?,?,?)",
+        "INSERT INTO fact_observations_v2 VALUES (?,?,?,?,?,?)",
         (
-            ("observation:1", "fact-cell", "reported", RAW_ENTRY_SHA, at),
-            ("observation:2", "fact-cell", "reported", RAW_ENTRY_SHA, at),
-            ("observation:derived", "fact-cell", "derived", None, at),
+            ("observation:1", "fact-cell", "reported", "numeric", RAW_ENTRY_SHA, at),
+            ("observation:2", "fact-cell", "reported", "numeric", RAW_ENTRY_SHA, at),
+            ("observation:derived", "fact-cell", "derived", "numeric", None, at),
         ),
     )
     conn.executemany(
@@ -824,9 +849,10 @@ def _binding_probe(*, persist_assertions: bool = True) -> tuple[sqlite3.Connecti
         ("concept:revenue", "Revenue", "test-taxonomy"),
         ("concept:wrong", "WrongQName", "test-taxonomy"),
         ("concept:wrong-taxonomy", "Revenue", "other-taxonomy"),
+        ("concept:wrong-definition", "Revenue", "test-taxonomy"),
     ):
         conn.execute(
-            "INSERT INTO source_taxonomy_components VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO source_taxonomy_components VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
                 component_id,
                 "concept",
@@ -834,6 +860,11 @@ def _binding_probe(*, persist_assertions: bool = True) -> tuple[sqlite3.Connecti
                 local_name,
                 taxonomy_name,
                 "2025",
+                (
+                    "f" * 64
+                    if component_id == "concept:wrong-definition"
+                    else SOURCE_DEFINITION_QUALIFIER
+                ),
                 "__global__",
                 at,
                 at,
@@ -973,6 +1004,13 @@ def test_binding_proves_qname_period_and_cutoff_compatibility() -> None:
                     component_id="concept:wrong-taxonomy",
                 )
             )
+        with pytest.raises(ValueError, match="incompatible"):
+            repository.persist_binding(
+                _binding(
+                    binding_id="binding:wrong-definition",
+                    component_id="concept:wrong-definition",
+                )
+            )
         second = _binding(
             binding_id="binding:2",
             revision=2,
@@ -982,6 +1020,87 @@ def test_binding_proves_qname_period_and_cutoff_compatibility() -> None:
         repository.persist_binding(second)
         assert repository.binding_as_known("observation:1", T1) == first
         assert repository.binding_as_known("observation:1", T2) == second
+    finally:
+        conn.close()
+
+
+def test_binding_trigger_accepts_exact_and_rejects_wrong_definition_qualifier(
+    ontology_template: Path,
+) -> None:
+    migrated = sqlite3.connect(ontology_template)
+    try:
+        trigger_sql = migrated.execute(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' "
+            "AND name='trg_binding_exact_coordinate'"
+        ).fetchone()
+        assert trigger_sql is not None
+    finally:
+        migrated.close()
+
+    conn, _repository = _binding_probe()
+    conn.create_function("fact_sha256", 1, _sql_sha256)
+    conn.execute(str(trigger_sql[0]))
+    try:
+        exact = _binding(binding_id="binding:sql-exact")
+        exact_payload = canonical_json(exact.commitment_payload)
+        conn.execute(
+            "INSERT INTO fact_cell_canonical_binding_revisions VALUES "
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                exact.binding_revision_id,
+                exact.idempotency_key,
+                exact.fact_cell_id,
+                exact.source_observation_id,
+                exact.revision,
+                exact.supersedes_binding_revision_id,
+                exact.canonical_metric_cell_id,
+                exact.mapping_revision_id,
+                exact.source_component_id,
+                exact.binding_status,
+                exact.reason_code,
+                None,
+                None,
+                exact_payload,
+                hashlib.sha256(exact_payload.encode()).hexdigest(),
+                exact.effective_at,
+                exact.knowledge_at,
+                exact.recorded_at,
+            ),
+        )
+        wrong = _binding(
+            binding_id="binding:sql-wrong-definition",
+            observation_id="observation:2",
+            component_id="concept:wrong-definition",
+        )
+        payload = canonical_json(wrong.commitment_payload)
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="binding source assertion is incompatible",
+        ):
+            conn.execute(
+                "INSERT INTO fact_cell_canonical_binding_revisions VALUES "
+                "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    wrong.binding_revision_id,
+                    wrong.idempotency_key,
+                    wrong.fact_cell_id,
+                    wrong.source_observation_id,
+                    wrong.revision,
+                    wrong.supersedes_binding_revision_id,
+                    wrong.canonical_metric_cell_id,
+                    wrong.mapping_revision_id,
+                    wrong.source_component_id,
+                    wrong.binding_status,
+                    wrong.reason_code,
+                    None,
+                    None,
+                    payload,
+                    hashlib.sha256(payload.encode()).hexdigest(),
+                    wrong.effective_at,
+                    wrong.knowledge_at,
+                    wrong.recorded_at,
+                ),
+            )
     finally:
         conn.close()
 
