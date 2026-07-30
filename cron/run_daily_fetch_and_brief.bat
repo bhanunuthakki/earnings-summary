@@ -27,5 +27,6 @@ set LOG_FILE=%LOG_DIR%\daily_fetch_and_brief_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
 call "%PROJECT_ROOT%\cron\run_python.bat" "daily_fetch_and_brief" "portfolio-db" execution\daily_fetch_and_brief.py --enable-llm > "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
 
-endlocal
+endlocal & exit /b %RC%

@@ -21,5 +21,6 @@ set LOG_FILE=%LOG_DIR%\refresh_cache_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
 call "%PROJECT_ROOT%\cron\run_python.bat" "refresh_cache" "portfolio-db" execution\refresh_cache.py run > "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
 
-endlocal
+endlocal & exit /b %RC%
