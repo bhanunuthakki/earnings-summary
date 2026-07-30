@@ -30,9 +30,9 @@ from provenance.metric_ontology import (
 from provenance.population_completeness import PopulationTemporalScope
 
 _POLICY_NAME = "deterministic_legacy_metric_admission"
-_POLICY_VERSION = "3"
+_POLICY_VERSION = "4"
 _TAXONOMY_NAME = "earnings-summary-legacy"
-_TAXONOMY_VERSION = "legacy-observation-contract.v1"
+_TAXONOMY_VERSION = "legacy-observation-contract.v2"
 _AUDITED_POLICY_PATH = "src/provenance/population_metric_ontology.py"
 _INPUT_MANIFEST_TABLES = (
     "evidence_extraction_runs",
@@ -512,8 +512,6 @@ def _source_cell_reason_codes(
         ).fetchone()[0]
     ):
         reasons.add("typed_source_dimension_requires_review")
-    if _source_component_conflict_exists(conn, knowledge_cutoff, observed_through):
-        reasons.add("source_concept_metric_conflict")
     return tuple(sorted(reasons))
 
 
@@ -525,8 +523,6 @@ def _populate_registry(
     operation_recorded_at: datetime,
 ) -> None:
     policy_sha = _policy_sha()
-    if _source_component_conflict_exists(conn, knowledge_cutoff, operation_recorded_at):
-        raise ValueError("a source concept maps to multiple canonical metric definitions")
     for row in _registry_rows(conn, knowledge_cutoff, operation_recorded_at):
         clock = _cell_clock(row)
         _persist_metric_stack(
@@ -552,51 +548,6 @@ def _populate_registry(
                 operation_recorded_at=operation_recorded_at,
             )
         )
-
-
-def _source_component_conflict_exists(
-    conn: sqlite3.Connection,
-    knowledge_cutoff: datetime,
-    observed_through: datetime,
-) -> bool:
-    knowledge, observed = _scope_bounds(knowledge_cutoff, observed_through)
-    row = conn.execute(
-        """
-        WITH source_cells AS (
-            SELECT cell.*,
-                   MIN(CASE WHEN observation.value_kind<>'nil'
-                            THEN observation.value_kind END) AS value_kind,
-                   COUNT(DISTINCT CASE WHEN observation.value_kind<>'nil'
-                                       THEN observation.value_kind END) AS kind_count
-            FROM fact_cells_v2 cell
-            JOIN fact_observations_v2 observation
-              ON observation.fact_cell_id=cell.fact_cell_id
-             AND observation.observation_kind='reported'
-            WHERE datetime(cell.knowledge_at)<=datetime(?)
-              AND datetime(cell.recorded_at)<=datetime(?)
-              AND datetime(observation.knowledge_at)<=datetime(?)
-              AND datetime(observation.recorded_at)<=datetime(?)
-            GROUP BY cell.fact_cell_id
-        )
-        SELECT 1
-        FROM source_cells
-        WHERE kind_count=1
-        GROUP BY reporting_entity_id,concept_namespace,concept_name
-        HAVING COUNT(DISTINCT json_array(
-            accounting_basis,concept_name,concept_namespace,period_kind,
-            reporting_entity_id,
-            CASE
-                WHEN currency IS NOT NULL THEN 'currency'
-                WHEN lower(unit_key) IN ('pure','shares') THEN lower(unit_key)
-                ELSE unit_key
-            END,
-            value_kind
-        ))<>1
-        LIMIT 1
-        """,
-        (knowledge, observed, knowledge, observed),
-    ).fetchone()
-    return row is not None
 
 
 def _registry_rows(
@@ -636,7 +587,20 @@ def _registry_rows(
         ranked AS (
             SELECT source_cells.*,
                    ROW_NUMBER() OVER (
-                       PARTITION BY reporting_entity_id,concept_namespace,concept_name
+                       PARTITION BY
+                           reporting_entity_id,
+                           concept_namespace,
+                           concept_name,
+                           accounting_basis,
+                           consolidation_scope,
+                           period_kind,
+                           CASE
+                               WHEN currency IS NOT NULL THEN 'currency'
+                               WHEN lower(unit_key) IN ('pure','shares')
+                                   THEN lower(unit_key)
+                               ELSE unit_key
+                           END,
+                           value_kind
                        ORDER BY datetime(recorded_at),datetime(knowledge_at),
                                 datetime(effective_at),fact_cell_id
                    ) AS source_rank
@@ -722,9 +686,12 @@ def _persist_metric_stack(
             idempotency_key=component_id,
             component_kind="concept",
             taxonomy_namespace=str(row["concept_namespace"]),
-            local_name=str(row["concept_name"]),
+            local_name=_bounded_name(
+                str(row["concept_name"]),
+                _source_definition_commitment(row),
+            ),
             taxonomy_name=_TAXONOMY_NAME,
-            taxonomy_version=_TAXONOMY_VERSION,
+            taxonomy_version=_concept_taxonomy_version(row),
             reporting_entity_id=str(row["reporting_entity_id"]),
             is_extension=True,
             data_type=str(row["value_kind"]),
@@ -1351,7 +1318,12 @@ def _concept_component_id(row: Mapping[str, object] | sqlite3.Row) -> str:
         str(row["concept_namespace"]),
         str(row["concept_name"]),
         _TAXONOMY_VERSION,
+        _source_definition_commitment(row),
     )
+
+
+def _concept_taxonomy_version(row: Mapping[str, object] | sqlite3.Row) -> str:
+    return _bounded_name(_TAXONOMY_VERSION, _source_definition_commitment(row))
 
 
 def _mapping_id(row: Mapping[str, object] | sqlite3.Row) -> str:
@@ -1446,9 +1418,9 @@ def _policy_sha() -> str:
                 "recording_clock_policy": "explicit_population_operation_clock",
                 "cross_issuer_policy": "issuer_scoped_provisional_metrics",
                 "input_manifest_version": "metric-ontology-input.v2",
-                "mapping_rule": "exact_preserved_source_coordinate",
+                "mapping_rule": "exact_preserved_source_definition_coordinate",
                 "nil_policy": "nil_is_absence_not_metric_type",
-                "output_manifest_version": "metric-ontology-output.v2",
+                "output_manifest_version": "metric-ontology-output.v3",
                 "policy_name": _POLICY_NAME,
                 "policy_version": _POLICY_VERSION,
                 "snapshot_identity": "cutoff_policy_member_set",
@@ -1781,14 +1753,14 @@ def _plan_commitment(
 ) -> str:
     """Commit to every deterministic object identity before any write."""
 
-    fold = _CommitmentFold("metric-ontology-plan.v3")
+    fold = _CommitmentFold("metric-ontology-plan.v4")
     fold.add(
         "manifest",
         {
             "input_commitment_sha256": input_sha,
             "knowledge_cutoff": _utc(knowledge_cutoff).isoformat(),
             "operation_recorded_at": _utc(operation_recorded_at).isoformat(),
-            "plan_version": "metric-ontology-plan.v3",
+            "plan_version": "metric-ontology-plan.v4",
             "policy_config_sha256": policy_sha,
         },
     )
