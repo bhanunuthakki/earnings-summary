@@ -361,19 +361,21 @@ def _scope_database(
           revision INTEGER,knowledge_at TEXT,recorded_at TEXT
         );
         CREATE TABLE canonical_fact_resolution_snapshot_scope_headers (
-          issuer_id TEXT,resolution_snapshot_id TEXT,cutoff_at TEXT
+          issuer_id TEXT,resolution_snapshot_id TEXT,cutoff_at TEXT,recorded_at TEXT
         );
         CREATE TABLE canonical_fact_resolution_snapshot_scope_seals (
-          resolution_snapshot_id TEXT
+          resolution_snapshot_id TEXT,sealed_at TEXT
         );
         CREATE TABLE canonical_fact_projection_scope_bindings (
-          resolution_snapshot_id TEXT,generation_id TEXT
+          resolution_snapshot_id TEXT,generation_id TEXT,recorded_at TEXT
         );
         CREATE TABLE canonical_fact_projection_generations (
-          generation_id TEXT,cutoff_at TEXT
+          generation_id TEXT,cutoff_at TEXT,recorded_at TEXT
         );
-        CREATE TABLE canonical_fact_projection_seals (generation_id TEXT);
-        CREATE TABLE canonical_fact_projection_audit_receipts (generation_id TEXT);
+        CREATE TABLE canonical_fact_projection_seals (generation_id TEXT,sealed_at TEXT);
+        CREATE TABLE canonical_fact_projection_audit_receipts (
+          generation_id TEXT,audited_at TEXT
+        );
         """
     )
     issuers = ("issuer-1", "issuer-2") if reused_ticker else ("issuer-1",)
@@ -399,25 +401,28 @@ def _scope_database(
             )
         snapshot, generation = f"snapshot-{index}", f"generation-{index}"
         conn.execute(
-            "INSERT INTO canonical_fact_resolution_snapshot_scope_headers VALUES (?,?,?)",
-            (issuer, snapshot, STAMP.isoformat()),
+            "INSERT INTO canonical_fact_resolution_snapshot_scope_headers VALUES (?,?,?,?)",
+            (issuer, snapshot, STAMP.isoformat(), STAMP.isoformat()),
         )
         conn.execute(
-            "INSERT INTO canonical_fact_resolution_snapshot_scope_seals VALUES (?)",
-            (snapshot,),
+            "INSERT INTO canonical_fact_resolution_snapshot_scope_seals VALUES (?,?)",
+            (snapshot, STAMP.isoformat()),
         )
         conn.execute(
-            "INSERT INTO canonical_fact_projection_scope_bindings VALUES (?,?)",
-            (snapshot, generation),
+            "INSERT INTO canonical_fact_projection_scope_bindings VALUES (?,?,?)",
+            (snapshot, generation, STAMP.isoformat()),
         )
         conn.execute(
-            "INSERT INTO canonical_fact_projection_generations VALUES (?,?)",
+            "INSERT INTO canonical_fact_projection_generations VALUES (?,?,?)",
+            (generation, STAMP.isoformat(), STAMP.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO canonical_fact_projection_seals VALUES (?,?)",
             (generation, STAMP.isoformat()),
         )
-        conn.execute("INSERT INTO canonical_fact_projection_seals VALUES (?)", (generation,))
         conn.execute(
-            "INSERT INTO canonical_fact_projection_audit_receipts VALUES (?)",
-            (generation,),
+            "INSERT INTO canonical_fact_projection_audit_receipts VALUES (?,?)",
+            (generation, STAMP.isoformat()),
         )
     if post_cutoff_fact:
         conn.execute(
@@ -426,6 +431,41 @@ def _scope_database(
         )
         conn.execute("INSERT INTO financial_facts VALUES (99,'OLD',99)")
     return conn
+
+
+def _add_projection_candidate(
+    conn: sqlite3.Connection,
+    *,
+    suffix: str,
+    timestamps: Mapping[str, datetime],
+) -> str:
+    snapshot = f"snapshot-{suffix}"
+    generation = f"generation-{suffix}"
+    conn.execute(
+        "INSERT INTO canonical_fact_resolution_snapshot_scope_headers VALUES (?,?,?,?)",
+        ("issuer-1", snapshot, STAMP.isoformat(), timestamps["scope"].isoformat()),
+    )
+    conn.execute(
+        "INSERT INTO canonical_fact_resolution_snapshot_scope_seals VALUES (?,?)",
+        (snapshot, timestamps["scope_seal"].isoformat()),
+    )
+    conn.execute(
+        "INSERT INTO canonical_fact_projection_scope_bindings VALUES (?,?,?)",
+        (snapshot, generation, timestamps["binding"].isoformat()),
+    )
+    conn.execute(
+        "INSERT INTO canonical_fact_projection_generations VALUES (?,?,?)",
+        (generation, STAMP.isoformat(), timestamps["generation"].isoformat()),
+    )
+    conn.execute(
+        "INSERT INTO canonical_fact_projection_seals VALUES (?,?)",
+        (generation, timestamps["projection_seal"].isoformat()),
+    )
+    conn.execute(
+        "INSERT INTO canonical_fact_projection_audit_receipts VALUES (?,?)",
+        (generation, timestamps["audit"].isoformat()),
+    )
+    return generation
 
 
 def test_historical_ticker_fact_is_scoped_by_durable_issuer_match() -> None:
@@ -454,6 +494,54 @@ def test_late_recorded_issuer_match_is_visible_through_observed_clock() -> None:
 
     assert blockers == []
     assert scopes[0].legacy_fact_count == 1
+
+
+def test_retained_projection_history_selects_latest_complete_generation() -> None:
+    conn = _scope_database()
+    current = datetime(2026, 7, 29, 12, 30, tzinfo=UTC)
+    generation = _add_projection_candidate(
+        conn,
+        suffix="current",
+        timestamps={
+            "scope": current,
+            "scope_seal": current,
+            "binding": current,
+            "generation": current,
+            "projection_seal": current,
+            "audit": current,
+        },
+    )
+
+    scopes, blockers = discover_issuer_projection_scopes(conn, SCOPE)
+
+    assert blockers == []
+    assert scopes[0].projection_generation_id == generation
+
+
+@pytest.mark.parametrize(
+    "late_clock",
+    ("scope", "scope_seal", "binding", "generation", "projection_seal", "audit"),
+)
+def test_projection_scope_excludes_candidate_with_artifact_after_observed_through(
+    late_clock: str,
+) -> None:
+    conn = _scope_database()
+    visible = datetime(2026, 7, 29, 12, 30, tzinfo=UTC)
+    timestamps = {
+        "scope": visible,
+        "scope_seal": visible,
+        "binding": visible,
+        "generation": visible,
+        "projection_seal": visible,
+        "audit": visible,
+    }
+    timestamps[late_clock] = datetime(2026, 7, 29, 13, 30, tzinfo=UTC)
+    _add_projection_candidate(conn, suffix=f"late-{late_clock}", timestamps=timestamps)
+
+    scopes, blockers = discover_issuer_projection_scopes(conn, SCOPE)
+
+    assert blockers == []
+    assert scopes[0].projection_generation_id == "generation-1"
 
 
 @pytest.mark.parametrize(

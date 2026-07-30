@@ -502,7 +502,8 @@ def verify_canonical_projection_generation(
         verify_source_fact_publication(
             conn,
             publication_id=str(publication["source_publication_id"]),
-            cutoff=observed,
+            cutoff=request.cutoff_at,
+            observed_through=observed,
         )
     bucket_payload = _verify_buckets_streaming(conn, request, entry_audit.changed_buckets)
     ordered_entry_set_sha = entry_audit.ordered_entry_set_sha256

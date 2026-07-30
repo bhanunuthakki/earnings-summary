@@ -401,7 +401,7 @@ def test_equal_cardinality_swapped_issuer_cells_fail_exact_scope_gate(
     for issuer_id, wrong_cell in (("issuer-a", "cell-b"), ("issuer-b", "cell-a")):
         conn.execute(
             "INSERT INTO canonical_fact_resolution_snapshot_members VALUES (?,?)",
-            (population._snapshot_id(issuer_id, NOW), wrong_cell),
+            (population._snapshot_id(issuer_id, NOW, NOW), wrong_cell),
         )
 
     class _FakeEngine:
@@ -419,7 +419,10 @@ def test_equal_cardinality_swapped_issuer_cells_fail_exact_scope_gate(
                 "issuer-a"
                 if snapshot_id.endswith(
                     population._digest(
-                        "issuer-a", population._db_time(NOW), population._POLICY.config_sha256
+                        "issuer-a",
+                        population._db_time(NOW),
+                        population._db_time(NOW),
+                        population._POLICY.config_sha256,
                     )
                 )
                 else "issuer-b"
@@ -448,3 +451,18 @@ def test_equal_cardinality_swapped_issuer_cells_fail_exact_scope_gate(
 def test_ontology_manifest_hash_is_canonical() -> None:
     payload = json.dumps([], separators=(",", ":"))
     assert hashlib.sha256(payload.encode()).hexdigest() == population._sha(payload)
+
+
+def test_population_artifact_ids_include_observation_horizon() -> None:
+    later_observation = NOW + timedelta(hours=1)
+
+    assert population._snapshot_id("issuer-a", NOW, NOW) != population._snapshot_id(
+        "issuer-a",
+        NOW,
+        later_observation,
+    )
+    assert population._projection_id("issuer-a", NOW, NOW) != population._projection_id(
+        "issuer-a",
+        NOW,
+        later_observation,
+    )

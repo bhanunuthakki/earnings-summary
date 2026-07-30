@@ -72,6 +72,7 @@ class VerifiedSourceFactPublication(_FrozenModel):
     publication_id: str
     publication_seal_id: str
     cutoff: datetime
+    observed_through: datetime
     created_at: datetime
     recorded_at: datetime
     sealed_at: datetime
@@ -484,14 +485,16 @@ def verify_source_fact_publication(
     *,
     publication_id: str,
     cutoff: datetime,
+    observed_through: datetime | None = None,
 ) -> VerifiedSourceFactPublication:
-    """Recompute and admit one complete publication at an explicit cutoff."""
+    """Recompute one publication under explicit knowledge and system clocks."""
 
     try:
         return _verify_source_fact_publication(
             conn,
             publication_id=publication_id,
             cutoff=cutoff,
+            observed_through=observed_through,
         )
     except PublicationVerificationError:
         raise
@@ -514,8 +517,12 @@ def _verify_source_fact_publication(
     *,
     publication_id: str,
     cutoff: datetime,
+    observed_through: datetime | None,
 ) -> VerifiedSourceFactPublication:
     bounded_cutoff = _utc(cutoff)
+    bounded_observed = bounded_cutoff if observed_through is None else _utc(observed_through)
+    if bounded_observed < bounded_cutoff:
+        raise ValueError("observed_through must not precede cutoff")
     try:
         header = _fetchone(
             conn,
@@ -570,7 +577,9 @@ def _verify_source_fact_publication(
             publication_id,
             "quarantined",
         )
-    if any(clock > bounded_cutoff for clock in (created_at, recorded_at, sealed_at)):
+    if created_at > bounded_cutoff or any(
+        clock > bounded_observed for clock in (recorded_at, sealed_at)
+    ):
         raise _verification_error(
             "publication_graph_after_cutoff",
             publication_id,
@@ -665,7 +674,8 @@ def _verify_source_fact_publication(
             publication_id=publication_id,
             publication_idempotency_key=str(header["idempotency_key"]),
             publication_recorded_at=recorded_at,
-            cutoff=bounded_cutoff,
+            knowledge_cutoff=bounded_cutoff,
+            observed_through=bounded_observed,
             member=member,
             coordinate=coordinate,
         )
@@ -716,6 +726,7 @@ def _verify_source_fact_publication(
         publication_id=publication_id,
         publication_seal_id=str(seal["publication_seal_id"]),
         cutoff=bounded_cutoff,
+        observed_through=bounded_observed,
         created_at=created_at,
         recorded_at=recorded_at,
         sealed_at=sealed_at,
@@ -731,7 +742,8 @@ def _verify_member(
     publication_id: str,
     publication_idempotency_key: str,
     publication_recorded_at: datetime,
-    cutoff: datetime,
+    knowledge_cutoff: datetime,
+    observed_through: datetime,
     member: dict[str, object],
     coordinate: tuple[str, str, dict[str, object]] | None = None,
 ) -> tuple[VerifiedPublicationMember, dict[str, object]]:
@@ -763,7 +775,7 @@ def _verify_member(
             kind,
             record_id,
         )
-    if member_recorded_at > cutoff:
+    if member_recorded_at > observed_through:
         raise _verification_error(
             "publication_graph_after_cutoff",
             publication_id,
@@ -827,7 +839,8 @@ def _verify_member(
         ) from exc
     _require_bundle_before_cutoff(
         bundle,
-        cutoff=cutoff,
+        knowledge_cutoff=knowledge_cutoff,
+        observed_through=observed_through,
         publication_id=publication_id,
         record_kind=kind,
         record_id=record_id,
@@ -876,7 +889,8 @@ def _verify_member(
 def _require_bundle_before_cutoff(
     value: object,
     *,
-    cutoff: datetime,
+    knowledge_cutoff: datetime,
+    observed_through: datetime,
     publication_id: str,
     record_kind: PublicationMemberKind,
     record_id: str,
@@ -895,7 +909,8 @@ def _require_bundle_before_cutoff(
                         record_kind,
                         record_id,
                     ) from exc
-                if clock > cutoff:
+                applicable_cutoff = knowledge_cutoff if key == "knowledge_at" else observed_through
+                if clock > applicable_cutoff:
                     raise _verification_error(
                         "publication_record_after_cutoff",
                         publication_id,
@@ -910,7 +925,8 @@ def _require_bundle_before_cutoff(
                     continue
                 _require_bundle_before_cutoff(
                     nested,
-                    cutoff=cutoff,
+                    knowledge_cutoff=knowledge_cutoff,
+                    observed_through=observed_through,
                     publication_id=publication_id,
                     record_kind=record_kind,
                     record_id=record_id,
@@ -918,7 +934,8 @@ def _require_bundle_before_cutoff(
             else:
                 _require_bundle_before_cutoff(
                     item,
-                    cutoff=cutoff,
+                    knowledge_cutoff=knowledge_cutoff,
+                    observed_through=observed_through,
                     publication_id=publication_id,
                     record_kind=record_kind,
                     record_id=record_id,
@@ -928,7 +945,8 @@ def _require_bundle_before_cutoff(
         for item in items:
             _require_bundle_before_cutoff(
                 item,
-                cutoff=cutoff,
+                knowledge_cutoff=knowledge_cutoff,
+                observed_through=observed_through,
                 publication_id=publication_id,
                 record_kind=record_kind,
                 record_id=record_id,

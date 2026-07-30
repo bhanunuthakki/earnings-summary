@@ -428,6 +428,77 @@ def test_public_verifier_rejects_publication_after_cutoff_as_missing(
     assert captured.value.disposition == "missing_provenance"
 
 
+def test_repository_replays_and_verifies_distinct_knowledge_and_observation_clocks(
+    conn: sqlite3.Connection,
+) -> None:
+    observed = STAMP + timedelta(hours=2)
+    base = make_publication()
+    source_fact = base.reported_facts[0]
+    cell = source_fact.cell.model_copy(
+        update={
+            "recorded_at": observed,
+            "dimensions": tuple(
+                dimension.model_copy(update={"recorded_at": observed})
+                for dimension in source_fact.cell.dimensions
+            ),
+        }
+    )
+    report = source_fact.observation.model_copy(update={"recorded_at": observed})
+    resolution = base.resolutions[0].model_copy(
+        update={
+            "recorded_at": observed,
+            "candidates": tuple(
+                candidate.model_copy(update={"recorded_at": observed})
+                for candidate in base.resolutions[0].candidates
+            ),
+        }
+    )
+    publication = base.model_copy(
+        update={
+            "created_at": STAMP,
+            "recorded_at": observed,
+            "reported_facts": (ReportedSourceFact(cell=cell, observation=report),),
+            "extraction_seals": tuple(
+                seal.model_copy(update={"recorded_at": observed}) for seal in base.extraction_seals
+            ),
+            "resolutions": (resolution,),
+        }
+    )
+    repository = SourceFactRepository(conn)
+
+    first = repository.publish(publication)
+    replay = repository.publish(publication)
+    verified = verify_source_fact_publication(
+        conn,
+        publication_id=publication.publication_id,
+        cutoff=STAMP,
+        observed_through=observed,
+    )
+
+    assert not first.exact_replay
+    assert replay.exact_replay
+    assert verified.cutoff == STAMP
+    assert verified.observed_through == observed
+    assert verified.created_at == STAMP
+    assert verified.recorded_at == observed
+    with pytest.raises(PublicationVerificationError) as early_observation:
+        verify_source_fact_publication(
+            conn,
+            publication_id=publication.publication_id,
+            cutoff=STAMP,
+            observed_through=STAMP,
+        )
+    assert early_observation.value.reason_code == "publication_graph_after_cutoff"
+    with pytest.raises(PublicationVerificationError) as future_knowledge:
+        verify_source_fact_publication(
+            conn,
+            publication_id=publication.publication_id,
+            cutoff=STAMP - timedelta(microseconds=1),
+            observed_through=observed,
+        )
+    assert future_knowledge.value.reason_code == "publication_graph_after_cutoff"
+
+
 def test_exact_replay_uses_public_verifier_and_rejects_member_tamper(
     conn: sqlite3.Connection,
 ) -> None:

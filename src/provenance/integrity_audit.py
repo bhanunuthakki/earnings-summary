@@ -1112,6 +1112,7 @@ def audit_cutover_readiness(
                 conn,
                 publication_id=str(row["publication_id"]),
                 cutoff=options.cutoff_at,
+                observed_through=options.observed_through,
             ),
         )
         _run_cutover_gate(
@@ -1162,6 +1163,7 @@ def audit_cutover_readiness(
                 conn,
                 extraction_run_id=str(row["extraction_run_id"]),
                 cutoff_at=options.cutoff_at,
+                observed_through=options.observed_through,
             ),
         )
         _run_cutover_gate(
@@ -1589,6 +1591,7 @@ def _verify_filing_disposition_cutover(
     *,
     extraction_run_id: str,
     cutoff_at: datetime,
+    observed_through: datetime,
 ) -> None:
     seal_row = conn.execute(
         "SELECT * FROM filing_xbrl_extraction_disposition_seals WHERE extraction_run_id=?",
@@ -1635,6 +1638,7 @@ def _verify_filing_disposition_cutover(
         conn,
         publication_id=seal.publication_id,
         cutoff=cutoff_at,
+        observed_through=observed_through,
     )
 
 

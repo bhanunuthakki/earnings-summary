@@ -918,7 +918,8 @@ def _verify_processing_evidence(
     verify_source_fact_publication(
         conn,
         publication_id=seal.publication_id,
-        cutoff=observed,
+        cutoff=reference.knowledge_at,
+        observed_through=observed,
     )
     commitment = seal.disposition_set_sha256
     if commitment != reference.evidence_commitment_sha256:
@@ -1574,7 +1575,8 @@ class _DefaultResearchReferenceVerifier:
             verified = verify_source_fact_publication(
                 conn,
                 publication_id=reference_id,
-                cutoff=request.recorded_at,
+                cutoff=request.cutoff_at,
+                observed_through=request.recorded_at,
             )
             return VerifiedResearchReference(
                 requested_lane=requested_lane,

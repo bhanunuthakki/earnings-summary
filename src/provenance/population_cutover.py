@@ -669,23 +669,52 @@ def discover_issuer_projection_scopes(
         SELECT scope.issuer_id,scope.resolution_snapshot_id,generation.generation_id,
                scope_seal.resolution_snapshot_id AS sealed_scope_id,
                projection_seal.generation_id AS sealed_generation_id,
-               audit.generation_id AS audited_generation_id
+               audit.generation_id AS audited_generation_id,
+               scope.recorded_at AS scope_recorded_at,
+               scope_seal.sealed_at AS scope_sealed_at,
+               binding.recorded_at AS binding_recorded_at,
+               generation.recorded_at AS generation_recorded_at,
+               projection_seal.sealed_at AS projection_sealed_at,
+               audit.audited_at AS audited_at
         FROM canonical_fact_resolution_snapshot_scope_headers scope
         LEFT JOIN canonical_fact_resolution_snapshot_scope_seals scope_seal
           ON scope_seal.resolution_snapshot_id=scope.resolution_snapshot_id
+         AND datetime(scope_seal.sealed_at)<=datetime(?)
         LEFT JOIN canonical_fact_projection_scope_bindings binding
           ON binding.resolution_snapshot_id=scope.resolution_snapshot_id
+         AND datetime(binding.recorded_at)<=datetime(?)
         LEFT JOIN canonical_fact_projection_generations generation
           ON generation.generation_id=binding.generation_id
-         AND datetime(generation.cutoff_at)=datetime(scope.cutoff_at)
+         AND datetime(generation.cutoff_at)=datetime(?)
+         AND datetime(generation.recorded_at)<=datetime(?)
         LEFT JOIN canonical_fact_projection_seals projection_seal
           ON projection_seal.generation_id=generation.generation_id
+         AND datetime(projection_seal.sealed_at)<=datetime(?)
         LEFT JOIN canonical_fact_projection_audit_receipts audit
           ON audit.generation_id=generation.generation_id
+         AND datetime(audit.audited_at)<=datetime(?)
         WHERE datetime(scope.cutoff_at)=datetime(?)
-        ORDER BY scope.issuer_id,scope.resolution_snapshot_id,generation.generation_id
+          AND datetime(scope.recorded_at)<=datetime(?)
+        ORDER BY scope.issuer_id,
+                 datetime(generation.recorded_at) DESC,
+                 datetime(audit.audited_at) DESC,
+                 datetime(projection_seal.sealed_at) DESC,
+                 datetime(binding.recorded_at) DESC,
+                 datetime(scope_seal.sealed_at) DESC,
+                 datetime(scope.recorded_at) DESC,
+                 generation.generation_id DESC,
+                 scope.resolution_snapshot_id DESC
         """,
-        (knowledge_cutoff,),
+        (
+            observed_through,
+            observed_through,
+            knowledge_cutoff,
+            observed_through,
+            observed_through,
+            observed_through,
+            knowledge_cutoff,
+            observed_through,
+        ),
     )
     blockers: list[CutoverBlocker] = []
     if not projection_rows:
@@ -724,16 +753,15 @@ def discover_issuer_projection_scopes(
             and row["sealed_generation_id"] is not None
             and row["audited_generation_id"] is not None
         ]
-        if len(candidates) != 1 or len(complete) != 1 or not fact_counts.get(issuer_id):
+        if not complete or not fact_counts.get(issuer_id):
             blockers.append(
                 CutoverBlocker(
-                    code=(
-                        CutoverBlockerCode.PROJECTION_SCOPE_AMBIGUOUS
-                        if len(candidates) > 1
-                        else CutoverBlockerCode.PROJECTION_SCOPE_INCOMPLETE
-                    ),
+                    code=CutoverBlockerCode.PROJECTION_SCOPE_INCOMPLETE,
                     subject=issuer_id,
-                    message="issuer requires one generation and nonempty bound legacy facts",
+                    message=(
+                        "issuer requires a complete generation visible through the observation "
+                        "clock and nonempty bound legacy facts"
+                    ),
                 )
             )
             continue

@@ -207,7 +207,7 @@ def verify_canonical_resolution(
     )
     terminal_ids = _terminal_resolution_ids(conn, knowledge, observed)
     expected_ids = tuple(
-        _snapshot_id(item.issuer_id, knowledge)
+        _snapshot_id(item.issuer_id, knowledge, observed)
         for item in _scope_manifest(conn, knowledge, observed)
     )
     _require_terminal_artifact_ids(
@@ -278,7 +278,7 @@ def verify_canonical_projection(
         raise ValueError("canonical projection artifact scope is ambiguous at K,O")
     terminal_ids = _terminal_projection_ids(conn, knowledge, observed)
     expected_ids = tuple(
-        _projection_id(item.issuer_id, knowledge)
+        _projection_id(item.issuer_id, knowledge, observed)
         for item in _scope_manifest(conn, knowledge, observed)
     )
     _require_terminal_artifact_ids(
@@ -384,9 +384,9 @@ def populate_canonical_resolution(
             processed_cell_count=processed,
             last_canonical_metric_cell_id=last_cell,
             expected_issuer_count=len(manifest.issuer_scopes),
-            resolution_snapshot_count=_owned_snapshot_count(conn, cutoff, manifest),
-            projection_count=_owned_projection_count(conn, cutoff, manifest),
-            projection_entry_count=_owned_projection_entry_count(conn, cutoff, manifest),
+            resolution_snapshot_count=_owned_snapshot_count(conn, cutoff, recorded, manifest),
+            projection_count=_owned_projection_count(conn, cutoff, recorded, manifest),
+            projection_entry_count=_owned_projection_entry_count(conn, cutoff, recorded, manifest),
             input_commitment_sha256=input_sha,
             plan_commitment_sha256=plan_sha,
             output_commitment_sha256=_output_commitment(conn, cutoff, recorded, manifest),
@@ -725,7 +725,7 @@ def _seal_snapshots(
     engine = CanonicalFactResolutionEngine(conn)
     with conn:
         for scope in manifest.issuer_scopes:
-            snapshot_id = _snapshot_id(scope.issuer_id, cutoff)
+            snapshot_id = _snapshot_id(scope.issuer_id, cutoff, recorded)
             engine.seal_snapshot(
                 snapshot_id,
                 cutoff,
@@ -751,7 +751,7 @@ def _verify_snapshot_sets(
 ) -> None:
     engine = CanonicalFactResolutionEngine(conn)
     for scope in manifest.issuer_scopes:
-        snapshot_id = _snapshot_id(scope.issuer_id, cutoff)
+        snapshot_id = _snapshot_id(scope.issuer_id, cutoff, recorded)
         receipt = engine.verify_snapshot(
             snapshot_id,
             cutoff,
@@ -782,14 +782,14 @@ def _build_projections(
 ) -> None:
     with conn:
         for scope in manifest.issuer_scopes:
-            generation_id = _projection_id(scope.issuer_id, cutoff)
+            generation_id = _projection_id(scope.issuer_id, cutoff, recorded)
             build_canonical_projection_generation(
                 conn,
                 ProjectionGenerationRequest(
                     generation_id=generation_id,
                     idempotency_key=generation_id,
                     generation_kind="checkpoint",
-                    resolution_snapshot_id=_snapshot_id(scope.issuer_id, cutoff),
+                    resolution_snapshot_id=_snapshot_id(scope.issuer_id, cutoff, recorded),
                     ontology_snapshot_id=manifest.ontology_snapshot_id,
                     cutoff_at=cutoff,
                     recorded_at=recorded,
@@ -805,11 +805,11 @@ def _verify_projection_sets(
     manifest: CanonicalResolutionPrewriteManifest,
 ) -> None:
     for scope in manifest.issuer_scopes:
-        generation_id = _projection_id(scope.issuer_id, cutoff)
+        generation_id = _projection_id(scope.issuer_id, cutoff, recorded)
         verify_canonical_projection_generation(
             conn,
             generation_id,
-            resolution_snapshot_id=_snapshot_id(scope.issuer_id, cutoff),
+            resolution_snapshot_id=_snapshot_id(scope.issuer_id, cutoff, recorded),
             ontology_snapshot_id=manifest.ontology_snapshot_id,
             cutoff_at=cutoff,
             observed_through=recorded,
@@ -1022,13 +1022,13 @@ def _projection_scope_is_exact(
             *params,
             issuer_id,
             _db_time(cutoff),
-            _db_time(cutoff),
+            _db_time(recorded),
             generation_id,
             generation_id,
             *params,
             issuer_id,
             _db_time(cutoff),
-            _db_time(cutoff),
+            _db_time(recorded),
         ),
     ).fetchone()
     return mismatch is None
@@ -1037,13 +1037,14 @@ def _projection_scope_is_exact(
 def _owned_snapshot_count(
     conn: sqlite3.Connection,
     cutoff: datetime,
+    recorded: datetime,
     manifest: CanonicalResolutionPrewriteManifest,
 ) -> int:
     return sum(
         conn.execute(
             "SELECT COUNT(*) FROM canonical_fact_resolution_snapshot_seals "
             "WHERE resolution_snapshot_id=?",
-            (_snapshot_id(scope.issuer_id, cutoff),),
+            (_snapshot_id(scope.issuer_id, cutoff, recorded),),
         ).fetchone()[0]
         for scope in manifest.issuer_scopes
     )
@@ -1052,12 +1053,13 @@ def _owned_snapshot_count(
 def _owned_projection_count(
     conn: sqlite3.Connection,
     cutoff: datetime,
+    recorded: datetime,
     manifest: CanonicalResolutionPrewriteManifest,
 ) -> int:
     return sum(
         conn.execute(
             "SELECT COUNT(*) FROM canonical_fact_projection_seals WHERE generation_id=?",
-            (_projection_id(scope.issuer_id, cutoff),),
+            (_projection_id(scope.issuer_id, cutoff, recorded),),
         ).fetchone()[0]
         for scope in manifest.issuer_scopes
     )
@@ -1066,35 +1068,38 @@ def _owned_projection_count(
 def _owned_projection_entry_count(
     conn: sqlite3.Connection,
     cutoff: datetime,
+    recorded: datetime,
     manifest: CanonicalResolutionPrewriteManifest,
 ) -> int:
     return sum(
         conn.execute(
             "SELECT effective_entry_count FROM canonical_fact_projection_seals "
             "WHERE generation_id=?",
-            (_projection_id(scope.issuer_id, cutoff),),
+            (_projection_id(scope.issuer_id, cutoff, recorded),),
         ).fetchone()[0]
         for scope in manifest.issuer_scopes
         if conn.execute(
             "SELECT 1 FROM canonical_fact_projection_seals WHERE generation_id=?",
-            (_projection_id(scope.issuer_id, cutoff),),
+            (_projection_id(scope.issuer_id, cutoff, recorded),),
         ).fetchone()
         is not None
     )
 
 
-def _snapshot_id(issuer_id: str, cutoff: datetime) -> str:
+def _snapshot_id(issuer_id: str, cutoff: datetime, recorded: datetime) -> str:
     return "population-resolution-snapshot:" + _digest(
         issuer_id,
         _db_time(cutoff),
+        _db_time(recorded),
         _POLICY.config_sha256,
     )
 
 
-def _projection_id(issuer_id: str, cutoff: datetime) -> str:
+def _projection_id(issuer_id: str, cutoff: datetime, recorded: datetime) -> str:
     return "population-projection:" + _digest(
         issuer_id,
         _db_time(cutoff),
+        _db_time(recorded),
         _POLICY.config_sha256,
     )
 
@@ -1118,7 +1123,7 @@ def _output_commitment(
             )
         )
     for scope in manifest.issuer_scopes:
-        snapshot_id = _snapshot_id(scope.issuer_id, cutoff)
+        snapshot_id = _snapshot_id(scope.issuer_id, cutoff, recorded)
         snapshot = conn.execute(
             "SELECT member_set_sha256 FROM canonical_fact_resolution_snapshot_seals "
             "WHERE resolution_snapshot_id=?",
@@ -1126,7 +1131,7 @@ def _output_commitment(
         ).fetchone()
         if snapshot is not None:
             fold.add(("snapshot", snapshot_id, str(snapshot[0])))
-        generation_id = _projection_id(scope.issuer_id, cutoff)
+        generation_id = _projection_id(scope.issuer_id, cutoff, recorded)
         projection = conn.execute(
             "SELECT generation_sha256 FROM canonical_fact_projection_generations "
             "WHERE generation_id=?",

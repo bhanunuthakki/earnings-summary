@@ -479,6 +479,428 @@ def test_retrieval_coordinate_binds_exact_promoted_runtime_artifact() -> None:
     )
 
 
+def test_current_corpus_and_retrieval_coordinates_ignore_retained_and_future_history() -> None:
+    conn = _connection()
+    observed = _CUTOFF + timedelta(hours=2)
+    conn.executescript(
+        """
+        CREATE TABLE search_corpus_manifests (
+            manifest_id TEXT PRIMARY KEY,
+            revision INTEGER NOT NULL,
+            knowledge_cutoff TEXT,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE search_corpus_manifest_seals (
+            manifest_id TEXT PRIMARY KEY,
+            completion_status TEXT NOT NULL,
+            sealed_at TEXT NOT NULL
+        );
+        CREATE TABLE search_corpus_document_memberships (
+            manifest_id TEXT NOT NULL,
+            document_version_id TEXT,
+            membership_status TEXT NOT NULL
+        );
+        CREATE TABLE search_projection_seals (
+            index_run_id TEXT PRIMARY KEY,
+            manifest_id TEXT NOT NULL,
+            index_kind TEXT NOT NULL,
+            provider TEXT,
+            model TEXT,
+            dimensions INTEGER,
+            runtime_artifact_sha256 TEXT,
+            sealed_at TEXT NOT NULL
+        );
+        CREATE TABLE search_embedding_model_promotions (
+            promotion_id TEXT PRIMARY KEY,
+            purpose TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            dimensions INTEGER NOT NULL,
+            runtime_artifact_sha256 TEXT NOT NULL,
+            approved_at TEXT NOT NULL,
+            knowledge_at TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
+        );
+        """
+    )
+    corpus_rows = (
+        ("manifest-old", 1, _CUTOFF, _CUTOFF + timedelta(minutes=30)),
+        ("manifest-current", 2, _CUTOFF, _CUTOFF + timedelta(hours=1)),
+        ("manifest-future", 3, _CUTOFF, _CUTOFF + timedelta(hours=3)),
+    )
+    for manifest_id, revision, knowledge_at, recorded_at in corpus_rows:
+        conn.execute(
+            "INSERT INTO search_corpus_manifests VALUES (?,?,?,?)",
+            (manifest_id, revision, knowledge_at.isoformat(), recorded_at.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO search_corpus_manifest_seals VALUES (?,?,?)",
+            (manifest_id, "complete", recorded_at.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO search_corpus_document_memberships VALUES (?,?,?)",
+            (manifest_id, "document-a", "included"),
+        )
+    projection_rows = (
+        (
+            "lexical-old",
+            "lexical",
+            None,
+            None,
+            None,
+            None,
+            _CUTOFF + timedelta(minutes=30),
+        ),
+        (
+            "lexical-current",
+            "lexical",
+            None,
+            None,
+            None,
+            None,
+            _CUTOFF + timedelta(hours=1),
+        ),
+        (
+            "lexical-future",
+            "lexical",
+            None,
+            None,
+            None,
+            None,
+            _CUTOFF + timedelta(hours=3),
+        ),
+        (
+            "vector-old",
+            "vector",
+            "local",
+            "model-a",
+            768,
+            _SHA,
+            _CUTOFF + timedelta(minutes=30),
+        ),
+        (
+            "vector-current",
+            "vector",
+            "local",
+            "model-a",
+            768,
+            _SHA,
+            _CUTOFF + timedelta(hours=1),
+        ),
+        (
+            "vector-future",
+            "vector",
+            "local",
+            "model-a",
+            768,
+            _SHA,
+            _CUTOFF + timedelta(hours=3),
+        ),
+    )
+    conn.executemany(
+        "INSERT INTO search_projection_seals VALUES (?,?,?,?,?,?,?,?)",
+        [
+            (
+                index_run_id,
+                "manifest-current",
+                kind,
+                provider,
+                model,
+                dimensions,
+                artifact_sha,
+                sealed_at.isoformat(),
+            )
+            for (
+                index_run_id,
+                kind,
+                provider,
+                model,
+                dimensions,
+                artifact_sha,
+                sealed_at,
+            ) in projection_rows
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO search_embedding_model_promotions VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [
+            (
+                "promotion-current",
+                "evidence_vector_retrieval",
+                1,
+                "local",
+                "model-a",
+                768,
+                _SHA,
+                _CUTOFF.isoformat(),
+                _CUTOFF.isoformat(),
+                (_CUTOFF + timedelta(hours=1)).isoformat(),
+            ),
+            (
+                "promotion-future",
+                "evidence_vector_retrieval",
+                2,
+                "local",
+                "model-a",
+                768,
+                _SHA,
+                _CUTOFF.isoformat(),
+                _CUTOFF.isoformat(),
+                (_CUTOFF + timedelta(hours=3)).isoformat(),
+            ),
+        ],
+    )
+
+    assert (
+        select_exact_corpus_coordinate(
+            conn,
+            ("document-a",),
+            _CUTOFF,
+            observed_through=observed,
+        )
+        == "manifest-current"
+    )
+    assert select_retrieval_coordinates(
+        conn,
+        "manifest-current",
+        _CUTOFF,
+        observed_through=observed,
+    ) == ("lexical-current", "vector-current", "promotion-current")
+
+
+def test_current_processing_and_fact_coordinates_select_latest_complete_as_of_o() -> None:
+    conn = _connection()
+    observed = _CUTOFF + timedelta(hours=2)
+    conn.executescript(
+        """
+        CREATE TABLE document_processing_snapshot_headers (
+            processing_snapshot_id TEXT PRIMARY KEY,
+            cutoff_at TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE document_processing_snapshot_seals (
+            processing_snapshot_id TEXT PRIMARY KEY,
+            sealed_at TEXT NOT NULL
+        );
+        CREATE TABLE document_processing_snapshot_members (
+            processing_snapshot_id TEXT NOT NULL,
+            document_version_id TEXT NOT NULL
+        );
+        CREATE TABLE v_evidence_document_versions_canonical (
+            document_version_id TEXT PRIMARY KEY,
+            issuer_id TEXT NOT NULL
+        );
+        CREATE TABLE ontology_snapshot_headers (
+            ontology_snapshot_id TEXT PRIMARY KEY,
+            cutoff_at TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE ontology_snapshot_seals (
+            ontology_snapshot_id TEXT PRIMARY KEY,
+            sealed_at TEXT NOT NULL
+        );
+        CREATE TABLE canonical_fact_resolution_snapshot_scope_headers (
+            resolution_snapshot_id TEXT PRIMARY KEY,
+            issuer_id TEXT NOT NULL,
+            cutoff_at TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE canonical_fact_resolution_snapshot_scope_seals (
+            resolution_snapshot_id TEXT PRIMARY KEY,
+            sealed_at TEXT NOT NULL
+        );
+        CREATE TABLE canonical_fact_resolution_snapshot_seals (
+            resolution_snapshot_id TEXT PRIMARY KEY,
+            sealed_at TEXT NOT NULL
+        );
+        CREATE TABLE canonical_fact_resolution_snapshot_scope_members (
+            resolution_snapshot_id TEXT NOT NULL,
+            reporting_entity_id TEXT NOT NULL
+        );
+        CREATE TABLE canonical_fact_projection_generations (
+            generation_id TEXT PRIMARY KEY,
+            resolution_snapshot_id TEXT NOT NULL,
+            ontology_snapshot_id TEXT NOT NULL,
+            cutoff_at TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE canonical_fact_projection_seals (
+            generation_id TEXT PRIMARY KEY,
+            sealed_at TEXT NOT NULL
+        );
+        CREATE TABLE canonical_fact_projection_audit_receipts (
+            generation_id TEXT PRIMARY KEY,
+            audited_at TEXT NOT NULL
+        );
+        CREATE TABLE canonical_fact_projection_scope_bindings (
+            generation_id TEXT PRIMARY KEY,
+            resolution_snapshot_id TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
+        );
+        INSERT INTO v_evidence_document_versions_canonical VALUES (
+            'document-a','issuer-a'
+        );
+        """
+    )
+    versions = (
+        ("old", _CUTOFF + timedelta(minutes=30)),
+        ("current", _CUTOFF + timedelta(hours=1)),
+        ("future", _CUTOFF + timedelta(hours=3)),
+    )
+    for suffix, clock in versions:
+        processing_id = f"processing-{suffix}"
+        ontology_id = f"ontology-{suffix}"
+        resolution_id = f"resolution-{suffix}"
+        conn.execute(
+            "INSERT INTO document_processing_snapshot_headers VALUES (?,?,?)",
+            (processing_id, _CUTOFF.isoformat(), clock.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO document_processing_snapshot_seals VALUES (?,?)",
+            (processing_id, clock.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO document_processing_snapshot_members VALUES (?,?)",
+            (processing_id, "document-a"),
+        )
+        conn.execute(
+            "INSERT INTO ontology_snapshot_headers VALUES (?,?,?)",
+            (ontology_id, _CUTOFF.isoformat(), clock.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO ontology_snapshot_seals VALUES (?,?)",
+            (ontology_id, clock.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO canonical_fact_resolution_snapshot_scope_headers VALUES (?,?,?,?)",
+            (resolution_id, "issuer-a", _CUTOFF.isoformat(), clock.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO canonical_fact_resolution_snapshot_scope_seals VALUES (?,?)",
+            (resolution_id, clock.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO canonical_fact_resolution_snapshot_seals VALUES (?,?)",
+            (resolution_id, clock.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO canonical_fact_resolution_snapshot_scope_members VALUES (?,?)",
+            (resolution_id, "entity-a"),
+        )
+    for suffix, clock in versions:
+        generation_id = f"projection-{suffix}"
+        conn.execute(
+            "INSERT INTO canonical_fact_projection_generations VALUES (?,?,?,?,?)",
+            (
+                generation_id,
+                "resolution-current",
+                "ontology-current",
+                _CUTOFF.isoformat(),
+                clock.isoformat(),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO canonical_fact_projection_seals VALUES (?,?)",
+            (generation_id, clock.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO canonical_fact_projection_audit_receipts VALUES (?,?)",
+            (generation_id, clock.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO canonical_fact_projection_scope_bindings VALUES (?,?,?)",
+            (generation_id, "resolution-current", clock.isoformat()),
+        )
+
+    assert population._processing_coordinate(
+        conn,
+        "issuer-a",
+        _CUTOFF,
+        observed,
+    ) == ("processing-current", ("document-a",))
+    assert population._ontology_coordinate(conn, _CUTOFF, observed) == "ontology-current"
+    assert (
+        population._resolution_coordinate(
+            conn,
+            "issuer-a",
+            ("entity-a",),
+            _CUTOFF,
+            observed,
+        )
+        == "resolution-current"
+    )
+    assert (
+        population._canonical_projection_coordinate(
+            conn,
+            "resolution-current",
+            "ontology-current",
+            _CUTOFF,
+            observed,
+        )
+        == "projection-current"
+    )
+
+
+def test_source_publication_coordinate_uses_knowledge_and_observation_clocks() -> None:
+    conn = _connection()
+    observed = _CUTOFF + timedelta(hours=2)
+    conn.executescript(
+        """
+        CREATE TABLE canonical_fact_resolution_snapshot_members (
+            resolution_snapshot_id TEXT NOT NULL,
+            candidate_universe_id TEXT NOT NULL
+        );
+        CREATE TABLE canonical_fact_candidate_dispositions (
+            candidate_universe_id TEXT NOT NULL,
+            source_publication_id TEXT
+        );
+        CREATE TABLE source_fact_publications (
+            publication_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE source_fact_publication_seals (
+            publication_id TEXT PRIMARY KEY,
+            sealed_at TEXT NOT NULL
+        );
+        INSERT INTO canonical_fact_resolution_snapshot_members VALUES (
+            'resolution','candidate'
+        );
+        INSERT INTO canonical_fact_candidate_dispositions VALUES (
+            'candidate','publication'
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO source_fact_publications VALUES (?,?,?)",
+        ("publication", _CUTOFF.isoformat(), observed.isoformat()),
+    )
+    conn.execute(
+        "INSERT INTO source_fact_publication_seals VALUES (?,?)",
+        ("publication", observed.isoformat()),
+    )
+
+    assert population._publication_coordinates(
+        conn,
+        "resolution",
+        _CUTOFF,
+        observed,
+    ) == ("publication",)
+
+    conn.execute(
+        "UPDATE source_fact_publications SET created_at=? WHERE publication_id='publication'",
+        ((_CUTOFF + timedelta(hours=1)).isoformat(),),
+    )
+    with pytest.raises(ResearchSnapshotPlanError, match="source_fact_publication_seal_missing"):
+        population._publication_coordinates(
+            conn,
+            "resolution",
+            _CUTOFF,
+            observed,
+        )
+
+
 def test_expected_issuer_universe_comes_from_active_reporting_obligations() -> None:
     conn = _connection()
     conn.executescript(
@@ -605,7 +1027,8 @@ def test_stale_generation_coordinates_are_not_admitted() -> None:
         );
         CREATE TABLE canonical_fact_projection_scope_bindings (
             generation_id TEXT PRIMARY KEY,
-            resolution_snapshot_id TEXT NOT NULL
+            resolution_snapshot_id TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
         );
         INSERT INTO canonical_fact_projection_generations VALUES (
             'stale-projection','stale-resolution','stale-ontology',
@@ -618,7 +1041,7 @@ def test_stale_generation_coordinates_are_not_admitted() -> None:
             'stale-projection','2026-07-28T00:00:00+00:00'
         );
         INSERT INTO canonical_fact_projection_scope_bindings VALUES (
-            'stale-projection','stale-resolution'
+            'stale-projection','stale-resolution','2026-07-28T00:00:00+00:00'
         );
         """
     )

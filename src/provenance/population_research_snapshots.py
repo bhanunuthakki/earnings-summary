@@ -564,7 +564,8 @@ def _processing_coordinate(
         "WHERE document.issuer_id=? AND datetime(header.cutoff_at)=datetime(?) "
         "AND datetime(header.recorded_at)<=datetime(?) "
         "AND datetime(seal.sealed_at)<=datetime(?) "
-        "ORDER BY header.processing_snapshot_id",
+        "ORDER BY datetime(header.recorded_at) DESC,"
+        "datetime(seal.sealed_at) DESC,header.processing_snapshot_id DESC",
         (
             issuer_id,
             _db_time(cutoff),
@@ -572,7 +573,7 @@ def _processing_coordinate(
             _db_time(observed),
         ),
     ).fetchall()
-    if len(rows) != 1:
+    if not rows:
         raise ResearchSnapshotPlanError("processing_snapshot_missing_or_ambiguous")
     snapshot_id = str(rows[0][0])
     documents = tuple(
@@ -651,7 +652,7 @@ def select_exact_corpus_coordinate(
         )
         if included == expected:
             matches.append(manifest_id)
-    if len(matches) != 1:
+    if not matches:
         raise ResearchSnapshotPlanError("exact_search_corpus_missing_or_ambiguous")
     return matches[0]
 
@@ -674,9 +675,9 @@ def select_retrieval_coordinates(
         by_kind.setdefault(str(row["index_kind"]), []).append(row)
     lexical_rows = by_kind.get("lexical", [])
     vector_rows = by_kind.get("vector", [])
-    if len(lexical_rows) != 1:
+    if not lexical_rows:
         raise ResearchSnapshotPlanError("lexical_projection_seal_missing_or_ambiguous")
-    if len(vector_rows) != 1:
+    if not vector_rows:
         raise ResearchSnapshotPlanError("vector_projection_seal_missing_or_ambiguous")
     lexical = lexical_rows[0]
     vector = vector_rows[0]
@@ -706,7 +707,11 @@ def select_retrieval_coordinates(
             str(vector["model"]),
             int(vector["dimensions"]),
             str(vector["runtime_artifact_sha256"]),
-            *(_db_time(observed),) * 5,
+            _db_time(cutoff),
+            _db_time(cutoff),
+            _db_time(observed),
+            _db_time(cutoff),
+            _db_time(observed),
         ),
     ).fetchall()
     if len(promotions) != 1:
@@ -728,10 +733,11 @@ def _ontology_coordinate(
         "WHERE datetime(header.cutoff_at)=datetime(?) "
         "AND datetime(header.recorded_at)<=datetime(?) "
         "AND datetime(seal.sealed_at)<=datetime(?) "
-        "ORDER BY header.ontology_snapshot_id",
+        "ORDER BY datetime(header.recorded_at) DESC,"
+        "datetime(seal.sealed_at) DESC,header.ontology_snapshot_id DESC",
         (_db_time(cutoff), _db_time(observed), _db_time(observed)),
     ).fetchall()
-    if len(rows) != 1:
+    if not rows:
         raise ResearchSnapshotPlanError("ontology_snapshot_missing_or_ambiguous")
     return str(rows[0][0])
 
@@ -745,7 +751,8 @@ def _resolution_coordinate(
 ) -> str:
     observed = cutoff if observed_through is None else _utc(observed_through)
     rows = conn.execute(
-        "SELECT header.resolution_snapshot_id "
+        "SELECT header.resolution_snapshot_id,header.recorded_at,"
+        "scope_seal.sealed_at,fact_seal.sealed_at "
         "FROM canonical_fact_resolution_snapshot_scope_headers header "
         "JOIN canonical_fact_resolution_snapshot_scope_seals scope_seal "
         "ON scope_seal.resolution_snapshot_id=header.resolution_snapshot_id "
@@ -755,7 +762,10 @@ def _resolution_coordinate(
         "AND datetime(header.recorded_at)<=datetime(?) "
         "AND datetime(scope_seal.sealed_at)<=datetime(?) "
         "AND datetime(fact_seal.sealed_at)<=datetime(?) "
-        "ORDER BY header.resolution_snapshot_id",
+        "ORDER BY datetime(header.recorded_at) DESC,"
+        "datetime(scope_seal.sealed_at) DESC,"
+        "datetime(fact_seal.sealed_at) DESC,"
+        "header.resolution_snapshot_id DESC",
         (
             issuer_id,
             _db_time(cutoff),
@@ -778,7 +788,7 @@ def _resolution_coordinate(
         )
         if members == reporting_entities:
             matches.append(snapshot_id)
-    if len(matches) != 1:
+    if not matches:
         raise ResearchSnapshotPlanError("issuer_scoped_canonical_resolution_missing_or_ambiguous")
     return matches[0]
 
@@ -805,9 +815,14 @@ def _canonical_projection_coordinate(
         "AND scope.resolution_snapshot_id=? "
         "AND datetime(generation.cutoff_at)=datetime(?) "
         "AND datetime(generation.recorded_at)<=datetime(?) "
+        "AND datetime(scope.recorded_at)<=datetime(?) "
         "AND datetime(seal.sealed_at)<=datetime(?) "
         "AND datetime(audit.audited_at)<=datetime(?) "
-        "ORDER BY generation.generation_id",
+        "ORDER BY datetime(generation.recorded_at) DESC,"
+        "datetime(scope.recorded_at) DESC,"
+        "datetime(seal.sealed_at) DESC,"
+        "datetime(audit.audited_at) DESC,"
+        "generation.generation_id DESC",
         (
             resolution_id,
             ontology_id,
@@ -816,9 +831,10 @@ def _canonical_projection_coordinate(
             _db_time(observed),
             _db_time(observed),
             _db_time(observed),
+            _db_time(observed),
         ),
     ).fetchall()
-    if len(rows) != 1:
+    if not rows:
         raise ResearchSnapshotPlanError("audited_canonical_projection_missing_or_ambiguous")
     return str(rows[0][0])
 
@@ -884,7 +900,12 @@ def _publication_coordinates(
         "AND datetime(publication.recorded_at)<=datetime(?) "
         "AND datetime(seal.sealed_at)<=datetime(?) "
         "ORDER BY publication.publication_id",
-        (json.dumps(required), *(_db_time(observed),) * 3),
+        (
+            json.dumps(required),
+            _db_time(cutoff),
+            _db_time(observed),
+            _db_time(observed),
+        ),
     ).fetchall()
     sealed = tuple(str(row[0]) for row in rows)
     if sealed != required:

@@ -692,12 +692,16 @@ class CanonicalFactResolutionEngine:
                 "m.publication_member_id,m.canonical_member_sha256,"
                 "m.record_commitment_sha256 "
                 "FROM source_fact_publication_members m "
+                "JOIN source_fact_publications p "
+                "ON p.publication_id=m.publication_id "
                 "JOIN source_fact_publication_seals s "
                 "ON s.publication_id=m.publication_id "
                 "WHERE m.record_kind='fact_observation' AND m.record_id=? "
-                "AND s.sealed_at<=? "
+                "AND datetime(p.created_at)<=datetime(?) "
+                "AND datetime(p.recorded_at)<=datetime(?) "
+                "AND datetime(s.sealed_at)<=datetime(?) "
                 "ORDER BY s.sealed_at DESC,m.publication_id DESC LIMIT 1",
-                (observation_id, observed_s),
+                (observation_id, cutoff_s, observed_s, observed_s),
             ).fetchone()
             observation_kind = str(row[2])
             if observation_kind != "reported":
@@ -713,7 +717,8 @@ class CanonicalFactResolutionEngine:
                 verified = verify_source_fact_publication(
                     self._conn,
                     publication_id=str(publication[0]),
-                    cutoff=_utc(cutoff if observed_through is None else observed_through),
+                    cutoff=_utc(cutoff),
+                    observed_through=_utc(cutoff if observed_through is None else observed_through),
                 )
                 if verified.publication_seal_id != str(publication[1]):
                     raise ValueError("source publication seal identity changed")

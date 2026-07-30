@@ -736,7 +736,8 @@ class SourceFactRepository:
             verified = verify_source_fact_publication(
                 self._conn,
                 publication_id=publication.publication_id,
-                cutoff=publication.recorded_at,
+                cutoff=publication.created_at,
+                observed_through=publication.recorded_at,
             )
             return (
                 verified.publication_payload_sha256,
@@ -777,7 +778,8 @@ class SourceFactRepository:
         verified = verify_source_fact_publication(
             self._conn,
             publication_id=publication.publication_id,
-            cutoff=publication.recorded_at,
+            cutoff=publication.created_at,
+            observed_through=publication.recorded_at,
         )
         return (
             verified.publication_payload_sha256,
