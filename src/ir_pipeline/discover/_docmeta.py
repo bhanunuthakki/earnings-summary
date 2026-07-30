@@ -45,7 +45,10 @@ class CandidateDoc:
 _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("spreadsheet", (r"historical data", r"\.xlsx?", r"\.xls")),
     ("deck", (r"presentation", r"webslides", r"\bslides\b")),
-    ("press_release", (r"press release", r"earnings release", r"earnings-release")),
+    (
+        "press_release",
+        (r"press release", r"earnings release", r"earnings-release", r"\bfinancial results\b"),
+    ),
     ("transcript", (r"transcript",)),
 )
 

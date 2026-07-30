@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from ir_pipeline.authority import PublisherEndpointRule
+from ir_pipeline.discover._docmeta import classify
 from ir_pipeline.discover.generic import discover_document_inventory
 
 
@@ -61,3 +62,15 @@ def test_publisher_endpoint_rule_rejects_normalized_path_escape() -> None:
     )
     assert rule.allows("https://assets.publisher-cdn.test/reports/q4.pdf")
     assert not rule.allows("https://assets.publisher-cdn.test/reports/../private/q4.pdf")
+
+
+def test_financial_results_reporting_page_is_a_press_release() -> None:
+    assert (
+        classify("Rubrik Reports Fourth Quarter and Fiscal Year 2026 Financial Results")
+        == "press_release"
+    )
+
+
+def test_generic_results_and_url_only_hints_are_not_press_releases() -> None:
+    assert classify("Rubrik Reports Fourth Quarter Results") is None
+    assert classify("financial-results-q4-2026") is None
