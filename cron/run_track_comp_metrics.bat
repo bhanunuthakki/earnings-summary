@@ -24,6 +24,9 @@ set LOG_FILE=%LOG_DIR%\track_comp_metrics_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
 call "%PROJECT_ROOT%\cron\run_python.bat" "track-comp-metrics-build-sets" "portfolio-db" execution\build_comparable_sets.py --all-tracked > "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
 call "%PROJECT_ROOT%\cron\run_python.bat" "track-comp-metrics-record" "portfolio-db" execution\track_comp_metrics.py --all-tracked >> "%LOG_FILE%" 2>&1
+set "STEP_RC=%ERRORLEVEL%"
+if "%RC%"=="0" set "RC=%STEP_RC%"
 
-endlocal
+endlocal & exit /b %RC%

@@ -42,31 +42,100 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sqlite3
 import subprocess
 import sys
+from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from sqlite3 import Connection
+from typing import Literal, TypedDict, cast
+
+from dotenv import dotenv_values
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
 
-# Import the canonical endpoint catalog from save_fmp_data so audit knows
-# what's expected per ticker. save_fmp_data is the source of truth.
-import save_fmp_data as fmp_save  # noqa: E402
-
+from log_redact import redact  # noqa: E402
 from pipeline import cadence_policy as _cadence_policy  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
+ENV_FILE = PROJECT_ROOT / ".env"
 CACHE_DIR = PROJECT_ROOT / ".tmp" / "cacher"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 LOCK_PATH = CACHE_DIR / ".lock"
 QUEUE_PATH = CACHE_DIR / "queue.json"
 HINTS_PATH = CACHE_DIR / "forced_stale.json"
+
+
+@dataclass(frozen=True)
+class FmpAuthConfig:
+    """Validated FMP credential plus its non-secret configuration source."""
+
+    api_key: str = field(repr=False)
+    source: Literal["environment", "project_dotenv"]
+
+
+class FmpAuthError(RuntimeError):
+    """The cache cannot dispatch because no FMP credential is configured."""
+
+
+class _FmpJob(TypedDict):
+    path: str
+    period: str | None
+    suffix: str
+
+
+def load_fmp_auth(
+    *,
+    environ: Mapping[str, str] | None = None,
+    env_file: Path | None = None,
+) -> FmpAuthConfig:
+    """Resolve FMP auth from the process environment, then project ``.env``.
+
+    Scheduled processes can receive credentials through their environment and
+    must not be forced to keep a checkout-local secret file. The project
+    ``.env`` remains the compatibility fallback used by the rest of the FMP
+    fleet.
+    """
+    source_environment = os.environ if environ is None else environ
+    environment_value = source_environment.get("FMP_API_KEY", "").strip()
+    if environment_value:
+        return FmpAuthConfig(api_key=environment_value, source="environment")
+
+    dotenv_path = ENV_FILE if env_file is None else env_file
+    try:
+        dotenv_value = dotenv_values(dotenv_path).get("FMP_API_KEY")
+    except (OSError, UnicodeError) as exc:
+        raise FmpAuthError(f"unable to read FMP configuration: {redact(exc)}") from None
+    if isinstance(dotenv_value, str) and dotenv_value.strip():
+        return FmpAuthConfig(api_key=dotenv_value.strip(), source="project_dotenv")
+
+    raise FmpAuthError(
+        "FMP_API_KEY is missing from the process environment and project dotenv configuration"
+    )
+
+
+def _prepare_fmp_auth() -> bool:
+    """Load validated auth into the environment inherited by the fetcher."""
+    try:
+        config = load_fmp_auth()
+    except FmpAuthError as exc:
+        print(
+            json.dumps(
+                {
+                    "event": "refresh_cache_config_error",
+                    "error": redact(exc),
+                }
+            ),
+            file=sys.stderr,
+        )
+        return False
+    os.environ["FMP_API_KEY"] = config.api_key
+    return True
 
 
 def _load_force_stale_hints() -> set[str]:
@@ -265,14 +334,14 @@ class QueueItem:
 class AuditReport:
     generated_at: datetime
     items: list[QueueItem]
-    counts: dict[str, int] = field(default_factory=dict)
+    counts: dict[str, int] = field(default_factory=dict[str, int])
 
     def queueable(self) -> list[QueueItem]:
         return [i for i in self.items if i.bucket in ("missing", "stale", "failed_retry_ok")]
 
 
 def _all_active_tickers(
-    conn: sqlite3.Connection,
+    conn: Connection,
     only_list_types: frozenset[str] | None,
     explicit_tickers: list[str] | None,
 ) -> list[tuple[str, str]]:
@@ -294,7 +363,7 @@ def _all_active_tickers(
 
 
 def _existing_status_rows(
-    conn: sqlite3.Connection, tickers: list[str]
+    conn: Connection, tickers: list[str]
 ) -> dict[tuple[str, str, str], tuple[str, datetime | None]]:
     """Map (ticker, endpoint, period) -> (status, last_pulled) for given tickers."""
     if not tickers:
@@ -365,7 +434,7 @@ def _priority(list_type: str, endpoint_class: str, bucket: str, days_overdue: in
 
 
 def audit(
-    conn: sqlite3.Connection,
+    conn: Connection,
     *,
     only_list_types: frozenset[str] | None = None,
     explicit_tickers: list[str] | None = None,
@@ -373,6 +442,11 @@ def audit(
     now: datetime | None = None,
 ) -> AuditReport:
     """Build the full audit report. Cheap (~sub-second on 2,500 tickers)."""
+    # Imported lazily because save_fmp_data validates network credentials at
+    # module import. Non-fetching commands such as status/archive must remain
+    # usable when FMP auth is intentionally unavailable.
+    import save_fmp_data as fmp_save
+
     now = now or datetime.now()
     active = _all_active_tickers(conn, only_list_types, explicit_tickers)
     tickers = [t for t, _ in active]
@@ -381,7 +455,8 @@ def audit(
 
     items: list[QueueItem] = []
     for ticker, list_type in active:
-        for job in fmp_save.per_ticker_jobs(ticker, list_type=list_type):
+        jobs = cast(list[_FmpJob], fmp_save.per_ticker_jobs(ticker, list_type=list_type))
+        for job in jobs:
             endpoint = job["path"]
             period = job["period"] or ""
             suffix = job["suffix"]
@@ -515,7 +590,11 @@ def _release_lock() -> None:
 
 
 def cmd_audit(args: argparse.Namespace) -> int:
-    conn = connect_sqlite(args.db, role=SQLiteConnectionRole.READ_ONLY)
+    conn = connect_sqlite(
+        args.db,
+        role=SQLiteConnectionRole.READ_ONLY,
+        schema_preflight=False,
+    )
     try:
         report = audit(
             conn,
@@ -527,12 +606,13 @@ def cmd_audit(args: argparse.Namespace) -> int:
         conn.close()
 
     queueable = report.queueable()
-    summary = {
+    by_list_type: dict[str, int] = {}
+    summary: dict[str, object] = {
         "generated_at": report.generated_at.isoformat(timespec="seconds"),
         "total_endpoints": len(report.items),
         "by_bucket": report.counts,
         "queueable": len(queueable),
-        "by_list_type": {},
+        "by_list_type": by_list_type,
         "top_10_priority": [
             {
                 "priority": i.priority,
@@ -548,7 +628,7 @@ def cmd_audit(args: argparse.Namespace) -> int:
         ],
     }
     for item in queueable:
-        summary["by_list_type"][item.list_type] = summary["by_list_type"].get(item.list_type, 0) + 1
+        by_list_type[item.list_type] = by_list_type.get(item.list_type, 0) + 1
 
     print(json.dumps(summary, indent=2, default=str))
     return 0
@@ -652,7 +732,11 @@ def _maybe_refresh_earnings_hints() -> None:
 def _run_under_lock(args: argparse.Namespace) -> int:
     tier = resolve_tier(args.tier)
     _maybe_refresh_earnings_hints()
-    conn = connect_sqlite(args.db, role=SQLiteConnectionRole.READ_ONLY)
+    conn = connect_sqlite(
+        args.db,
+        role=SQLiteConnectionRole.READ_ONLY,
+        schema_preflight=False,
+    )
     try:
         report = audit(
             conn,
@@ -855,6 +939,9 @@ def main() -> int:
     if args.cmd is None:
         # Re-parse with `run` injected
         args = ap.parse_args(["run", *sys.argv[1:]])
+
+    if args.cmd in {"audit", "run"} and not _prepare_fmp_auth():
+        return 2
 
     if args.cmd == "audit":
         return cmd_audit(args)

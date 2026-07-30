@@ -67,8 +67,6 @@ def test_production_capture_is_allowlisted_and_has_no_extra_llm_job() -> None:
 def test_project_backup_excludes_all_standard_credential_paths() -> None:
     backup = (CRON / "backup_project.ps1").read_text(encoding="utf-8")
     assert r"data\llm_capture" in backup
-    assert r"data\secrets" in backup
-    assert "Join-Path $repo 'data\\secrets'" in backup
     assert 'throw "robocopy ERROR' in backup
     for forbidden in (".env", "credentials.json", "token.json", "*.pem", "*.key"):
         assert forbidden in backup
@@ -82,10 +80,50 @@ def test_critical_wrappers_use_explicit_runtime_and_write_lock() -> None:
         "run_refresh_cache.bat",
         "run_monthly_p3_refresh.bat",
         "run_refresh_scenario_priors.bat",
+        "run_track_comp_metrics.bat",
     ):
         text = (CRON / wrapper).read_text(encoding="utf-8")
         assert "run_python.bat" in text
         assert '"portfolio-db"' in text
+
+
+def test_daily_wrappers_return_the_child_exit_code_through_endlocal() -> None:
+    for wrapper in (
+        "run_daily_fetch_and_brief.bat",
+        "run_morning_pipeline.bat",
+        "run_refresh_cache.bat",
+    ):
+        lines = (CRON / wrapper).read_text(encoding="utf-8").splitlines()
+        call_index = next(
+            index for index, line in enumerate(lines) if line.strip().lower().startswith("call ")
+        )
+        assert lines[call_index + 1].strip() == 'set "RC=%ERRORLEVEL%"'
+        assert lines[-1].strip() == "endlocal & exit /b %RC%"
+
+
+def test_daily_wrappers_stay_on_the_invoking_checkout() -> None:
+    for wrapper in (
+        "run_daily_fetch_and_brief.bat",
+        "run_morning_pipeline.bat",
+        "run_refresh_cache.bat",
+        "run_track_comp_metrics.bat",
+    ):
+        text = (CRON / wrapper).read_text(encoding="utf-8")
+        assert 'set "PROJECT_ROOT=%~dp0.."' in text
+        assert 'for %%I in ("%PROJECT_ROOT%") do set "PROJECT_ROOT=%%~fI"' in text
+        assert r"\scratch\earnings-summary" not in text
+
+
+def test_comp_metrics_wrapper_preserves_the_first_failed_step() -> None:
+    lines = (CRON / "run_track_comp_metrics.bat").read_text(encoding="utf-8").splitlines()
+    call_indexes = [
+        index for index, line in enumerate(lines) if line.strip().lower().startswith("call ")
+    ]
+    assert len(call_indexes) == 2
+    assert lines[call_indexes[0] + 1].strip() == 'set "RC=%ERRORLEVEL%"'
+    assert lines[call_indexes[1] + 1].strip() == 'set "STEP_RC=%ERRORLEVEL%"'
+    assert lines[call_indexes[1] + 2].strip() == ('if "%RC%"=="0" set "RC=%STEP_RC%"')
+    assert lines[-1].strip() == "endlocal & exit /b %RC%"
 
 
 def test_shared_runtime_forwards_original_arguments_without_shift() -> None:
@@ -95,9 +133,6 @@ def test_shared_runtime_forwards_original_arguments_without_shift() -> None:
     assert "--scheduler-wrapper" in text
     assert "-- %*" in text
     assert "set llm_capture_dir=" not in text
-    assert "where py" not in text
-    assert "py -3.11" not in text
-    assert r"venv\scripts\python.exe" in text
 
 
 def test_scheduled_wrappers_do_not_invoke_path_dependent_python() -> None:

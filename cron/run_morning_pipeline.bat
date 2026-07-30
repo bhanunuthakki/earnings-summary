@@ -41,5 +41,6 @@ set LOG_FILE=%LOG_DIR%\run_morning_pipeline_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
 call "%PROJECT_ROOT%\cron\run_python.bat" "morning_pipeline" "portfolio-db" execution\run_morning_pipeline.py --max-cost-usd 10 > "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
 
-endlocal
+endlocal & exit /b %RC%
