@@ -33,6 +33,7 @@ from provenance.metric_ontology import (
     PeriodKind,
     SourceObservationTaxonomyAssertion,
     SourceTaxonomyComponent,
+    canonical_json,
 )
 from provenance.source_fact_repository import (
     SourceFactPublication,
@@ -103,13 +104,27 @@ def _resolution_database(
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.upgrade(config, "0255_scoped_canonical_resolution_snapshots")
+    command.upgrade(config, "0259_source_definition_identity")
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
 def _component(name: str) -> SourceTaxonomyComponent:
+    definition_qualifier_sha256 = hashlib.sha256(
+        canonical_json(
+            {
+                "accounting_basis": "us_gaap",
+                "concept_name": name,
+                "concept_namespace": "https://fasb.org/us-gaap/2026",
+                "consolidation_scope": "consolidated",
+                "period_kind": "duration",
+                "reporting_entity_id": "reporting-1",
+                "unit_family": "currency",
+                "value_kind": "numeric",
+            }
+        ).encode()
+    ).hexdigest()
     return SourceTaxonomyComponent(
         component_id=f"component:{name}",
         idempotency_key=f"component:{name}",
@@ -126,6 +141,7 @@ def _component(name: str) -> SourceTaxonomyComponent:
         standard_label=name,
         definition_text=name,
         references=(),
+        definition_qualifier_sha256=definition_qualifier_sha256,
         reporting_entity_id="reporting-1",
         evidence_locator={"source": "test"},
         effective_at=NOW,

@@ -1306,6 +1306,17 @@ def _upgrade(path: Path, revision: str) -> None:
     command.upgrade(config, revision)
 
 
+def _downgrade(path: Path, revision: str) -> None:
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(ROOT / "alembic"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
+    command.downgrade(config, revision)
+
+
+def _sql_sha256(value: object) -> str:
+    return hashlib.sha256(str(value).encode()).hexdigest()
+
+
 def _two_period_output() -> FilingXbrlNormalizedOutput:
     period_2023 = datetime(2023, 12, 31, tzinfo=UTC)
     period_2024 = datetime(2024, 12, 31, tzinfo=UTC)
@@ -1958,13 +1969,8 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
         conn.create_function(
             "fact_sha256",
             1,
-            lambda value: hashlib.sha256(str(value).encode()).hexdigest(),
+            _sql_sha256,
         )
-        # This broad retrieval fixture intentionally stops before the population
-        # migrations. Remove the obsolete 0246 single-clock trigger so the
-        # current K/O runtime verifier, whose head trigger is covered by the
-        # migration-chain tests, can bind the correct empty prefix at O.
-        conn.execute("DROP TRIGGER trg_canonical_resolution_snapshot_watermark_exact")
         bind_resolution_snapshot_watermark(
             conn,
             resolution_snapshot_id="resolution:checkpoint",
@@ -2070,6 +2076,19 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
             )
         ] == ["canonical:revenue:2024"]
 
+        # The K/O projection assertions above exercise the real 0259 schema.
+        # The remaining mixed-retrieval fixture intentionally models a
+        # historical pre-population promotion, so return to its 0255 boundary.
+        conn.commit()
+        conn.close()
+        _downgrade(path, "0255_scoped_canonical_resolution_snapshots")
+        conn = sqlite3.connect(path)
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.create_function(
+            "fact_sha256",
+            1,
+            _sql_sha256,
+        )
         _seed_management_narrative(conn)
         corpus = build_grounded_search_corpus(
             conn,

@@ -5,15 +5,19 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 import urllib.parse
-from collections.abc import Iterator, Mapping
+import urllib.request
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 from alembic.config import Config
 
 from alembic import command
 from execution import capture_observed_ir_documents as cli
+from ir_pipeline import evidence_capture
+from ir_pipeline._net import UnsafeURLError
 from ir_pipeline.authority import PublisherEndpointRule
 from ir_pipeline.discover._docmeta import CandidateDoc
 from ir_pipeline.discover.generic import CrawlPageOutcome, DocumentDiscoveryInventory
@@ -31,6 +35,10 @@ CONFIG_SHA = "d" * 64
 INVENTORY_KEY = "issuer-acme:ir-crawl"
 URL = "https://ir.acme.test/q4-2025-results.pdf"
 BODY = b"%PDF-1.7 investor presentation bytes"
+ROBOTS_ALLOWS = cast(
+    Callable[[str, str], bool],
+    getattr(evidence_capture, "_robots_allows"),
+)
 
 
 class FakeResponse:
@@ -86,6 +94,42 @@ class FakeSession:
 
     def __exit__(self, *_args: object) -> None:
         return None
+
+
+class FakeRobotsResponse:
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    def read(self, maximum: int) -> bytes:
+        return self.body[:maximum]
+
+    def __enter__(self) -> FakeRobotsResponse:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+
+class FakeRobotsOpener:
+    def __init__(self, body: bytes | Exception) -> None:
+        self.body = body
+        self.requests: list[urllib.request.Request] = []
+
+    def open(
+        self,
+        request: urllib.request.Request,
+        *,
+        timeout: int,
+    ) -> FakeRobotsResponse:
+        assert timeout == 15
+        self.requests.append(request)
+        if isinstance(self.body, Exception):
+            raise self.body
+        return FakeRobotsResponse(self.body)
+
+
+def _safe_public_url(url: str) -> str:
+    return url
 
 
 def _config(path: Path) -> Config:
@@ -237,6 +281,62 @@ def test_robots_denial_is_explicit_and_prevents_network_access(tmp_path: Path) -
         )
     finally:
         conn.close()
+
+
+def test_robots_fetch_uses_caller_agent_and_honors_permissive_wildcard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opener = FakeRobotsOpener(b"User-agent: *\nAllow: /\n")
+    monkeypatch.setattr(evidence_capture, "ensure_safe_public_url", _safe_public_url)
+    monkeypatch.setattr(evidence_capture, "build_public_opener", lambda: opener)
+
+    assert ROBOTS_ALLOWS(
+        URL,
+        "research-agent test@example.test",
+    )
+    request = opener.requests[0]
+    assert request.full_url == "https://ir.acme.test/robots.txt"
+    assert request.get_header("User-agent") == "research-agent test@example.test"
+
+
+def test_robots_fetch_honors_explicit_disallow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opener = FakeRobotsOpener(b"User-agent: research-agent\nDisallow: /private/\n")
+    monkeypatch.setattr(evidence_capture, "ensure_safe_public_url", _safe_public_url)
+    monkeypatch.setattr(evidence_capture, "build_public_opener", lambda: opener)
+
+    assert not ROBOTS_ALLOWS(
+        "https://ir.acme.test/private/q4.pdf",
+        "research-agent test@example.test",
+    )
+
+
+@pytest.mark.parametrize(
+    ("guard_error", "network_error"),
+    [
+        (UnsafeURLError("private address"), None),
+        (None, OSError("network unavailable")),
+    ],
+)
+def test_robots_fetch_fails_closed_on_unsafe_or_network_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    guard_error: Exception | None,
+    network_error: Exception | None,
+) -> None:
+    def _guard(url: str) -> str:
+        if guard_error is not None:
+            raise guard_error
+        return url
+
+    opener = FakeRobotsOpener(network_error or b"User-agent: *\nAllow: /\n")
+    monkeypatch.setattr(evidence_capture, "ensure_safe_public_url", _guard)
+    monkeypatch.setattr(evidence_capture, "build_public_opener", lambda: opener)
+
+    assert not ROBOTS_ALLOWS(
+        URL,
+        "research-agent test@example.test",
+    )
 
 
 def test_streaming_byte_budget_rejects_oversized_response_without_raw_artifact(

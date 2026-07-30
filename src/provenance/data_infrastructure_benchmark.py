@@ -1581,6 +1581,20 @@ def _append_production_empty_publications(
 
 
 def _production_component() -> SourceTaxonomyComponent:
+    definition_qualifier_sha256 = digest_text(
+        canonical_json(
+            {
+                "accounting_basis": "us_gaap",
+                "concept_name": "Revenue",
+                "concept_namespace": "https://fasb.org/us-gaap/2026",
+                "consolidation_scope": "consolidated",
+                "period_kind": "duration",
+                "reporting_entity_id": "production-reporting-entity",
+                "unit_family": "currency",
+                "value_kind": "numeric",
+            }
+        )
+    )
     return SourceTaxonomyComponent(
         component_id="production-component:Revenue",
         idempotency_key="production-component:Revenue",
@@ -1597,6 +1611,7 @@ def _production_component() -> SourceTaxonomyComponent:
         standard_label="Revenue",
         definition_text="Production benchmark revenue.",
         references=(),
+        definition_qualifier_sha256=definition_qualifier_sha256,
         reporting_entity_id="production-reporting-entity",
         evidence_locator={"source": "production_contract_benchmark"},
         effective_at=PRODUCTION_STAMP,

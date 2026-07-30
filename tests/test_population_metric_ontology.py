@@ -48,6 +48,10 @@ _binding = cast(
     Callable[[Mapping[str, object], datetime], BindingRevision],
     getattr(population, "_binding"),
 )
+_concept_component_id = cast(
+    Callable[[Mapping[str, object]], str],
+    getattr(population, "_concept_component_id"),
+)
 _input_commitment = cast(
     Callable[[sqlite3.Connection], str],
     getattr(population, "_input_commitment"),
@@ -312,6 +316,8 @@ def _metric_cell(
         "recorded_at": recorded_at.isoformat(),
         "reporting_entity_id": reporting_entity_id,
         "semantic_key_sha256": f"seal-{reporting_entity_id}",
+        "source_taxonomy_version": "2026",
+        "taxonomy_name": "issuer-taxonomy",
         "unit_key": "pure",
         "value_kind": "numeric",
     }
@@ -323,6 +329,25 @@ def test_provisional_management_metric_identity_is_issuer_scoped() -> None:
 
     assert _metric_id(issuer_a) != _metric_id(issuer_b)
     assert _source_definition_commitment(issuer_a) != _source_definition_commitment(issuer_b)
+
+
+def test_legacy_source_concept_variants_have_distinct_component_identity() -> None:
+    currency_variant = {
+        **_metric_cell(),
+        "currency": "USD",
+        "unit_key": "actual",
+    }
+    unknown_unit_variant = {
+        **_metric_cell(),
+        "currency": None,
+        "unit_key": "actual",
+    }
+
+    assert _concept_component_id(currency_variant) != _concept_component_id(unknown_unit_variant)
+    assert _metric_id(currency_variant) != _metric_id(unknown_unit_variant)
+    assert _source_definition_commitment(currency_variant) != _source_definition_commitment(
+        unknown_unit_variant
+    )
 
 
 def test_object_clock_is_stable_when_later_cells_arrive() -> None:

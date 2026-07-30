@@ -13,7 +13,7 @@ from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_REVISION = "0213_decision_draft_provider_id"
-HEAD = "0258_fact_anchor_run_lookup_index"
+HEAD = "0259_source_definition_identity"
 ADDITIVE_TABLES_0245_0248 = {
     "document_processing_obligation_revisions",
     "document_processing_disposition_headers",

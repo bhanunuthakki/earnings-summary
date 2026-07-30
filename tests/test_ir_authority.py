@@ -44,7 +44,7 @@ def _conn(tmp_path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _inventory() -> DocumentDiscoveryInventory:
+def _inventory(*, crawl_complete: bool = True) -> DocumentDiscoveryInventory:
     return DocumentDiscoveryInventory(
         candidates=(
             CandidateDoc(
@@ -65,8 +65,8 @@ def _inventory() -> DocumentDiscoveryInventory:
                 anchors=((URL, "Q4 2025 Results"),),
             ),
         ),
-        crawl_complete=True,
-        crawl_stop_reason="frontier_exhausted",
+        crawl_complete=crawl_complete,
+        crawl_stop_reason=("frontier_exhausted" if crawl_complete else "page_budget_exhausted"),
     )
 
 
@@ -131,13 +131,14 @@ def _request(
     *,
     authority: IRAuthorityEvidence | None,
     apply: bool,
+    crawl_complete: bool = True,
 ):
     return source_inventory_request(
         issuer_id="issuer-acme",
         ticker="ACME",
         ir_url="https://ir.acme.test/",
         revision=1,
-        inventory=_inventory(),
+        inventory=_inventory(crawl_complete=crawl_complete),
         authority=authority,
         retrieval_config_sha256=CONFIG_SHA,
         collector_code_version="sync-ir-source-inventory@2",
@@ -204,6 +205,81 @@ def test_hash_bound_authority_can_seal_complete_publisher_universe(
             "SELECT required, outcome FROM source_inventory_components "
             "WHERE component_key = 'authority:archive'"
         ).fetchone() == (1, "succeeded")
+    finally:
+        conn.close()
+
+
+def test_complete_authority_supersedes_generic_crawl_budget_exhaustion(
+    tmp_path: Path,
+) -> None:
+    conn = _conn(tmp_path)
+    observation_id, digest = _persist_authority_observation(conn, tmp_path)
+    try:
+        result = sync_ir_source_inventory(
+            conn,
+            _request(
+                authority=_authority(observation_id, digest),
+                apply=True,
+                crawl_complete=False,
+            ),
+            blob_root=tmp_path / "blobs",
+        )
+        assert result.complete
+        assert conn.execute(
+            "SELECT authoritative, outcome FROM source_inventory_snapshots"
+        ).fetchone() == (1, "succeeded")
+        assert conn.execute(
+            "SELECT completion_status FROM source_inventory_snapshot_seals"
+        ).fetchone() == ("complete",)
+        assert (
+            conn.execute(
+                "SELECT 1 FROM source_inventory_components "
+                "WHERE component_key = 'crawl-completeness'"
+            ).fetchone()
+            is None
+        )
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("authority_variant", ["mismatched", "incomplete"])
+def test_non_complete_authority_preserves_generic_crawl_budget_failure(
+    tmp_path: Path,
+    authority_variant: str,
+) -> None:
+    conn = _conn(tmp_path)
+    observation_id, digest = _persist_authority_observation(conn, tmp_path)
+    authority = _authority(observation_id, digest)
+    surface_update: dict[str, object]
+    if authority_variant == "mismatched":
+        surface_update = {"observed_document_urls": ("https://ir.acme.test/q3-2025-results.pdf",)}
+    else:
+        surface_update = {"outcome": "observed", "terminal_condition": None}
+    non_complete = authority.model_copy(
+        update={"surfaces": (authority.surfaces[0].model_copy(update=surface_update),)}
+    )
+    try:
+        result = sync_ir_source_inventory(
+            conn,
+            _request(
+                authority=non_complete,
+                apply=True,
+                crawl_complete=False,
+            ),
+            blob_root=tmp_path / "blobs",
+        )
+        assert not result.complete
+        assert conn.execute(
+            "SELECT authoritative, outcome FROM source_inventory_snapshots"
+        ).fetchone() == (0, "partial")
+        assert conn.execute(
+            "SELECT completion_status FROM source_inventory_snapshot_seals"
+        ).fetchone() == ("incomplete",)
+        assert conn.execute(
+            "SELECT outcome, required, failure_reason "
+            "FROM source_inventory_components "
+            "WHERE component_key = 'crawl-completeness'"
+        ).fetchone() == ("failed", 1, "page_budget_exhausted")
     finally:
         conn.close()
 

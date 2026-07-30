@@ -517,7 +517,7 @@ def _coverage_request(
             )
         )
         ordinal += 1
-    if not request.discovery.crawl_complete:
+    if not request.discovery.crawl_complete and not authority_complete:
         components.append(
             InventoryComponentImport(
                 component_key="crawl-completeness",
@@ -608,7 +608,7 @@ def _sha_json(value: object) -> str:
 
 
 def _authority_complete(request: IRSourceInventoryRequest) -> bool:
-    if request.authority is None or not request.discovery.crawl_complete:
+    if request.authority is None:
         return False
     return authority_is_complete(
         request.authority,
