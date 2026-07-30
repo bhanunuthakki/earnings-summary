@@ -1482,8 +1482,17 @@ class MetricOntology:
             if existing is not None:
                 self.verify_snapshot(snapshot.ontology_snapshot_id)
                 return
-            members = list(self._expected_snapshot_members(snapshot))
-            for ordinal, (kind, member_id, digest) in enumerate(members):
+            member_digest = hashlib.sha256()
+            member_digest.update(b"[")
+            member_count = 0
+            for ordinal, (kind, member_id, digest) in enumerate(
+                self._expected_snapshot_members(snapshot)
+            ):
+                if ordinal:
+                    member_digest.update(b",")
+                member_digest.update(
+                    canonical_json({"id": member_id, "kind": kind, "sha256": digest}).encode()
+                )
                 self._conn.execute(
                     "INSERT INTO ontology_snapshot_members "
                     "(ontology_snapshot_id,member_ordinal,member_kind,"
@@ -1496,21 +1505,24 @@ class MetricOntology:
                         digest,
                     ),
                 )
-            payload = canonical_json(
-                [
-                    {"id": member_id, "kind": kind, "sha256": digest}
-                    for kind, member_id, digest in members
-                ]
-            )
+                member_count += 1
+            member_digest.update(b"]")
             self._conn.execute(
                 "INSERT INTO ontology_snapshot_seals "
                 "(ontology_snapshot_id,member_count,canonical_member_set_json,"
-                "member_set_sha256,sealed_at) VALUES (?,?,?,?,?)",
+                "member_set_sha256,sealed_at) "
+                "SELECT ?,?,COALESCE(("
+                "SELECT json_group_array(json(item)) FROM ("
+                "SELECT json_object('id',member_id,'kind',member_kind,"
+                "'sha256',member_sha256) AS item "
+                "FROM ontology_snapshot_members WHERE ontology_snapshot_id=? "
+                "ORDER BY member_ordinal"
+                ")), '[]'),?,?",
                 (
                     snapshot.ontology_snapshot_id,
-                    len(members),
-                    payload,
-                    _digest(payload),
+                    member_count,
+                    snapshot.ontology_snapshot_id,
+                    member_digest.hexdigest(),
                     _db_time(snapshot.recorded_at),
                 ),
             )
@@ -1538,41 +1550,68 @@ class MetricOntology:
         ).fetchone()
         if seal is None:
             raise ValueError("ontology snapshot is missing its final seal")
-        members = self._conn.execute(
-            "SELECT member_kind,member_id,member_sha256 "
+        member_digest = hashlib.sha256()
+        member_digest.update(b"[")
+        member_count = 0
+        ordinal_is_contiguous = True
+        for row in self._conn.execute(
+            "SELECT member_ordinal,member_kind,member_id,member_sha256 "
             "FROM ontology_snapshot_members WHERE ontology_snapshot_id=? "
             "ORDER BY member_ordinal",
             (snapshot_id,),
-        ).fetchall()
-        payload = canonical_json(
-            [
-                {
-                    "id": str(row["member_id"]),
-                    "kind": str(row["member_kind"]),
-                    "sha256": str(row["member_sha256"]),
-                }
-                for row in members
-            ]
+        ):
+            if int(row["member_ordinal"]) != member_count:
+                ordinal_is_contiguous = False
+            if member_count:
+                member_digest.update(b",")
+            member_digest.update(
+                canonical_json(
+                    {
+                        "id": str(row["member_id"]),
+                        "kind": str(row["member_kind"]),
+                        "sha256": str(row["member_sha256"]),
+                    }
+                ).encode()
+            )
+            member_count += 1
+        member_digest.update(b"]")
+        exact_set = bool(
+            self._conn.execute(
+                "SELECT NOT EXISTS ("
+                "SELECT member_kind,member_id,member_sha256 "
+                "FROM v_ontology_snapshot_expected_members "
+                "WHERE ontology_snapshot_id=? EXCEPT "
+                "SELECT member_kind,member_id,member_sha256 "
+                "FROM ontology_snapshot_members WHERE ontology_snapshot_id=?"
+                ") AND NOT EXISTS ("
+                "SELECT member_kind,member_id,member_sha256 "
+                "FROM ontology_snapshot_members WHERE ontology_snapshot_id=? EXCEPT "
+                "SELECT member_kind,member_id,member_sha256 "
+                "FROM v_ontology_snapshot_expected_members "
+                "WHERE ontology_snapshot_id=?"
+                ")",
+                (snapshot_id,) * 4,
+            ).fetchone()[0]
         )
-        expected = self._conn.execute(
-            "SELECT member_kind,member_id,member_sha256 "
-            "FROM v_ontology_snapshot_expected_members "
-            "WHERE ontology_snapshot_id=? ORDER BY member_kind,member_id",
-            (snapshot_id,),
-        ).fetchall()
-        actual_set = {
-            (str(row["member_kind"]), str(row["member_id"]), str(row["member_sha256"]))
-            for row in members
-        }
-        expected_set = {
-            (str(row["member_kind"]), str(row["member_id"]), str(row["member_sha256"]))
-            for row in expected
-        }
+        exact_payload = bool(
+            self._conn.execute(
+                "SELECT canonical_member_set_json=COALESCE(("
+                "SELECT json_group_array(json(item)) FROM ("
+                "SELECT json_object('id',member_id,'kind',member_kind,"
+                "'sha256',member_sha256) AS item "
+                "FROM ontology_snapshot_members WHERE ontology_snapshot_id=? "
+                "ORDER BY member_ordinal"
+                ")), '[]') FROM ontology_snapshot_seals "
+                "WHERE ontology_snapshot_id=?",
+                (snapshot_id, snapshot_id),
+            ).fetchone()[0]
+        )
         if (
-            int(seal["member_count"]) != len(members)
-            or str(seal["canonical_member_set_json"]) != payload
-            or str(seal["member_set_sha256"]) != _digest(payload)
-            or actual_set != expected_set
+            int(seal["member_count"]) != member_count
+            or str(seal["member_set_sha256"]) != member_digest.hexdigest()
+            or not ordinal_is_contiguous
+            or not exact_payload
+            or not exact_set
         ):
             raise ValueError("ontology snapshot has missing, extra, or tampered members")
 

@@ -1546,6 +1546,14 @@ class FactPlaneV2:
         return True
 
     @staticmethod
+    def observation_values(
+        observation: FactObservationV2,
+    ) -> tuple[tuple[str, ...], tuple[object, ...]]:
+        """Return the database row shape for a validated observation."""
+
+        return FactPlaneV2._observation_values(observation)
+
+    @staticmethod
     def _observation_values(
         observation: FactObservationV2,
     ) -> tuple[tuple[str, ...], tuple[object, ...]]:

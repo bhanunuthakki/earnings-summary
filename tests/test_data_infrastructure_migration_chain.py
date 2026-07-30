@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
@@ -12,7 +13,7 @@ from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_REVISION = "0213_decision_draft_provider_id"
-HEAD = "0255_scoped_canonical_resolution_snapshots"
+HEAD = "0258_fact_anchor_run_lookup_index"
 ADDITIVE_TABLES_0245_0248 = {
     "document_processing_obligation_revisions",
     "document_processing_disposition_headers",
@@ -94,6 +95,10 @@ def test_evidence_search_migrations_have_one_reversible_head(tmp_path: Path) -> 
             "source_inventory_snapshots",
             "source_inventory_snapshot_seals",
             "ask_retrieval_traces",
+            "population_run_headers",
+            "population_plane_receipts",
+            "population_parity_receipts",
+            "population_cutover_receipts",
             "ocr_document_assessments",
             "search_embedding_model_promotions",
             "expected_document_lifecycle_revisions",
@@ -162,7 +167,126 @@ def test_evidence_search_migrations_have_one_reversible_head(tmp_path: Path) -> 
             "canonical_fact_resolution_snapshot_seals",
             "canonical_fact_resolution_snapshot_members",
         } <= tables
+        anchor_indexes = {
+            str(row[1])
+            for row in conn.execute("PRAGMA index_list('fact_reported_observation_anchors_v2')")
+        }
+        assert "ix_fact_reported_anchors_v2_extraction_observation" in anchor_indexes
         assert tables >= ADDITIVE_TABLES_0245_0248
+        view_sql = str(
+            conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='view' "
+                "AND name='v_population_cutover_current'"
+            ).fetchone()[0]
+        ).upper()
+        assert "ORDER BY DATETIME(RUN.KNOWLEDGE_CUTOFF) DESC" in view_sql
+        assert "DATETIME(RUN.OBSERVED_THROUGH) DESC" in view_sql
+        assert "DATETIME(RECEIPT.SEALED_AT) DESC" in view_sql
+        assert "RECEIPT.POPULATION_RUN_ID DESC LIMIT 1" in view_sql
+        plane_trigger_sql = str(
+            conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' "
+                "AND name='trg_population_plane_receipt_exact'"
+            ).fetchone()[0]
+        )
+        assert "$.result" in plane_trigger_sql
+        assert "fact_sha256(json_extract" in plane_trigger_sql
+        audit_trigger_sql = str(
+            conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' "
+                "AND name='trg_population_cutover_audit_receipt_exact'"
+            ).fetchone()[0]
+        )
+        assert "$.gate_evidence" in audit_trigger_sql
+        assert "$.watermark_material" in audit_trigger_sql
+        assert "<>13" in audit_trigger_sql
+        watermark_trigger_sql = str(
+            conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' "
+                "AND name='trg_canonical_resolution_snapshot_watermark_exact'"
+            ).fetchone()[0]
+        )
+        assert "included.assigned_at" in watermark_trigger_sql
+        assert "event.assigned_at" in watermark_trigger_sql
+        assert "later.assigned_at" in watermark_trigger_sql
+        assert "NEW.recorded_at" in watermark_trigger_sql
+        ask_promotion_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(ask_retrieval_scope_promotions)")
+        }
+        assert {
+            "population_run_id",
+            "population_receipt_set_sha256",
+            "population_observed_through",
+        } <= ask_promotion_columns
+        ask_population_trigger_sql = str(
+            conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' "
+                "AND name="
+                "'trg_ask_retrieval_scope_promotion_population_cutover'"
+            ).fetchone()[0]
+        )
+        assert "population_run_headers" in ask_population_trigger_sql
+        assert "population_cutover_receipts" in ask_population_trigger_sql
+        assert "v_population_cutover_current" in ask_population_trigger_sql
+        trace_population_columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(heterogeneous_retrieval_trace_headers)")
+        }
+        assert {
+            "population_run_id",
+            "population_receipt_set_sha256",
+            "population_observed_through",
+        } <= trace_population_columns
+        trace_population_trigger_sql = str(
+            conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' "
+                "AND name='trg_heterogeneous_trace_population_cutover'"
+            ).fetchone()[0]
+        )
+        assert "population_run_headers" in trace_population_trigger_sql
+        assert "population_cutover_receipts" in trace_population_trigger_sql
+        assert "NEW.population_observed_through" in trace_population_trigger_sql
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="heterogeneous trace population cutover mismatch",
+        ):
+            conn.execute(
+                "INSERT INTO heterogeneous_retrieval_trace_headers ("
+                "trace_id,idempotency_key,research_snapshot_id,"
+                "research_snapshot_sha256,fact_generation_id,"
+                "fact_projection_seal_sha256,narrative_commitments_json,"
+                "narrative_commitments_sha256,semantic_receipts_json,"
+                "semantic_receipts_sha256,query_sha256,query_json,ranker_json,"
+                "ranker_sha256,filters_json,filters_sha256,candidate_limit,"
+                "result_limit,cutoff_at,recorded_at,population_run_id,"
+                "population_receipt_set_sha256,population_observed_through"
+                ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    "trace:invalid-population",
+                    "trace:invalid-population",
+                    "research:missing",
+                    "a" * 64,
+                    "generation:missing",
+                    "b" * 64,
+                    "[]",
+                    "c" * 64,
+                    "[]",
+                    "d" * 64,
+                    "e" * 64,
+                    "{}",
+                    "{}",
+                    "f" * 64,
+                    "{}",
+                    "0" * 64,
+                    1,
+                    1,
+                    "2026-07-29 12:00:00",
+                    "2026-07-29 12:00:00",
+                    "population-run:missing",
+                    "1" * 64,
+                    "2026-07-29 12:00:00",
+                ),
+            )
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
     finally:
         conn.close()
@@ -205,6 +329,15 @@ def test_evidence_search_migrations_have_one_reversible_head(tmp_path: Path) -> 
             }
             assert removed_table not in tables
             assert retained_table in tables
+            if revision == "0247_bounded_canonical_retrieval":
+                watermark_trigger_sql = str(
+                    conn.execute(
+                        "SELECT sql FROM sqlite_master WHERE type='trigger' "
+                        "AND name="
+                        "'trg_canonical_resolution_snapshot_watermark_exact'"
+                    ).fetchone()[0]
+                )
+                assert "assigned_at" not in watermark_trigger_sql
             assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
         finally:
             conn.close()

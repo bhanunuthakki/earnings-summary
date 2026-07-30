@@ -14,6 +14,7 @@ from urllib.parse import quote
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ask.audit_store import canonical_json, digest_text, retrieval_query_sha256
+from provenance.population_completeness import PopulationCompletenessLedger
 from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
 from search.embedding_promotion import LocalVectorRuntimeConfig
 from search.exact_semantic import ExactSemanticRuntime
@@ -43,14 +44,17 @@ ReasonCode = Literal[
     "semantic_projection_unsealed",
     "semantic_runtime_unavailable",
     "incomparable_snapshot_cutoffs",
+    "population_cutover_missing",
+    "population_cutover_invalid",
+    "population_cutover_stale",
     "retrieval_failed",
     "trace_verification_failed",
 ]
 
-ASK_RETRIEVAL_POLICY_VERSION = "ask-sealed-retrieval.v1"
+ASK_RETRIEVAL_POLICY_VERSION = "ask-sealed-retrieval.v2"
 ASK_RETRIEVAL_VERIFIER_NAME = "ask.sealed_retrieval.verify_retrieval_promotion"
-ASK_RETRIEVAL_VERIFIER_VERSION = "1"
-ASK_RETRIEVAL_VERIFIER_MANIFEST_VERSION = "ask-verifier-manifest.v1"
+ASK_RETRIEVAL_VERIFIER_VERSION = "2"
+ASK_RETRIEVAL_VERIFIER_MANIFEST_VERSION = "ask-verifier-manifest.v2"
 PRODUCTION_SCOPE_REGISTRY_ID = "ask-retrieval-production-scopes"
 PRODUCTION_SCOPE_SCHEMA_VERSION = 1
 PRODUCTION_SUPPORTED_COHORT = ("operating_company:legal_registrant",)
@@ -58,12 +62,14 @@ _VERIFIER_CONFIG = {
     "common_cutoff_required": True,
     "exact_semantic_recompute_required": True,
     "fact_projection_seal_required": True,
+    "population_cutover_receipt_required": True,
     "research_snapshot_admission_required": True,
     "source_inventory_closure_required": True,
 }
 _VERIFIER_ARTIFACTS = (
     ("src/ask/audit_store.py", "ask-audit-store.v1"),
-    ("src/ask/sealed_retrieval.py", "ask-sealed-retrieval.v1"),
+    ("src/ask/sealed_retrieval.py", "ask-sealed-retrieval.v2"),
+    ("src/provenance/population_completeness.py", "population-cutover-verifier.v1"),
     ("src/provenance/research_snapshot.py", "research-snapshot-verifier.v1"),
     ("src/search/exact_semantic.py", "exact-semantic-verifier.v1"),
     ("src/search/heterogeneous_retrieval.py", "heterogeneous-trace-verifier.v1"),
@@ -164,6 +170,9 @@ class RetrievalPromotion(_Frozen):
     source_inventory_ids: tuple[str, ...]
     narrative_bundles: tuple[NarrativeBundle, ...]
     cutoff_at: datetime
+    population_run_id: str = Field(min_length=1, max_length=128)
+    population_receipt_set_sha256: str
+    population_observed_through: datetime
     policy_version: str = Field(min_length=1, max_length=64)
     verifier_name: str = Field(min_length=1, max_length=128)
     verifier_version: str = Field(min_length=1, max_length=64)
@@ -176,6 +185,7 @@ class RetrievalPromotion(_Frozen):
     _hashes = field_validator(
         "research_snapshot_sha256",
         "fact_projection_seal_sha256",
+        "population_receipt_set_sha256",
         "verifier_code_sha256",
         "verifier_config_sha256",
     )(_sha)
@@ -196,6 +206,10 @@ class RetrievalPromotion(_Frozen):
             raise ValueError("promotion revision chain is incomplete")
         if _utc(self.recorded_at) < _utc(self.cutoff_at):
             raise ValueError("promotion cannot predate its cutoff")
+        if _utc(self.population_observed_through) < _utc(self.cutoff_at) or _utc(
+            self.recorded_at
+        ) < _utc(self.population_observed_through):
+            raise ValueError("promotion cannot predate its population cutover")
         return self
 
 
@@ -217,6 +231,16 @@ class RetrievalReadiness(_Frozen):
                 raise ValueError("ready retrieval requires at least one exact scope")
             if len({_utc(item.promotion.cutoff_at) for item in self.scopes}) != 1:
                 raise ValueError("ready retrieval scopes require one common cutoff")
+            population_coordinates = {
+                (
+                    item.promotion.population_run_id,
+                    item.promotion.population_receipt_set_sha256,
+                    _utc(item.promotion.population_observed_through),
+                )
+                for item in self.scopes
+            }
+            if len(population_coordinates) != 1:
+                raise ValueError("ready retrieval scopes require one exact population cutover")
         elif self.scopes:
             raise ValueError("non-ready retrieval cannot expose partial scopes")
         return self
@@ -245,6 +269,11 @@ class SealedRetrievalPlan(_Frozen):
                 or request.fact_generation_id != scope.promotion.fact_generation_id
                 or request.narrative_bundles != scope.promotion.narrative_bundles
                 or request.filters.reporting_entity_id != scope.promotion.reporting_entity_id
+                or request.population_run_id != scope.promotion.population_run_id
+                or request.population_receipt_set_sha256
+                != scope.promotion.population_receipt_set_sha256
+                or request.population_observed_through
+                != scope.promotion.population_observed_through
             ):
                 raise ValueError("sealed retrieval request differs from its promotion")
         return self
@@ -313,6 +342,132 @@ class PromotionVerificationError(RuntimeError):
         self.reason_code = reason_code
         self.details = details
         super().__init__(f"{reason_code}: {details}")
+
+
+def _admit_population_cutover(
+    conn: sqlite3.Connection,
+    *,
+    promotion: RetrievalPromotion,
+    require_current: bool,
+) -> None:
+    """Verify the exact population seal bound into an Ask promotion."""
+
+    try:
+        row = conn.execute(
+            "SELECT run.knowledge_cutoff,run.observed_through,"
+            "receipt.receipt_set_sha256 "
+            "FROM population_run_headers run "
+            "JOIN population_cutover_receipts receipt USING (population_run_id) "
+            "WHERE run.population_run_id=?",
+            (promotion.population_run_id,),
+        ).fetchone()
+    except sqlite3.Error as exc:
+        raise PromotionVerificationError(
+            "population_cutover_missing",
+            "investor-grade population cutover ledger is unavailable",
+        ) from exc
+    if row is None:
+        raise PromotionVerificationError(
+            "population_cutover_missing",
+            "the promotion's exact investor-grade population receipt is missing",
+        )
+    if (
+        _utc(_datetime(row[0])) != _utc(promotion.cutoff_at)
+        or _utc(_datetime(row[1])) != _utc(promotion.population_observed_through)
+        or str(row[2]) != promotion.population_receipt_set_sha256
+    ):
+        raise PromotionVerificationError(
+            "population_cutover_stale",
+            "population cutover coordinates differ from the retrieval promotion",
+        )
+    try:
+        verified = PopulationCompletenessLedger(conn).verify(promotion.population_run_id)
+    except (sqlite3.Error, ValueError) as exc:
+        raise PromotionVerificationError(
+            "population_cutover_invalid",
+            "current population cutover receipt failed exact verification",
+        ) from exc
+    if (
+        verified.receipt_set_sha256 != promotion.population_receipt_set_sha256
+        or _utc(verified.temporal_scope.knowledge_cutoff) != _utc(promotion.cutoff_at)
+        or _utc(verified.temporal_scope.observed_through)
+        != _utc(promotion.population_observed_through)
+    ):
+        raise PromotionVerificationError(
+            "population_cutover_invalid",
+            "promotion population coordinates differ from their verified receipt",
+        )
+    if not require_current:
+        return
+    try:
+        current = conn.execute(
+            "SELECT population_run_id,knowledge_cutoff,observed_through,"
+            "receipt_set_sha256 FROM v_population_cutover_current"
+        ).fetchall()
+    except sqlite3.Error as exc:
+        raise PromotionVerificationError(
+            "population_cutover_missing",
+            "investor-grade population cutover view is unavailable",
+        ) from exc
+    expected_current = (
+        promotion.population_run_id,
+        _db_time(promotion.cutoff_at),
+        _db_time(promotion.population_observed_through),
+        promotion.population_receipt_set_sha256,
+    )
+    if (
+        len(current) != 1
+        or (
+            str(current[0][0]),
+            _db_time(_datetime(current[0][1])),
+            _db_time(_datetime(current[0][2])),
+            str(current[0][3]),
+        )
+        != expected_current
+    ):
+        raise PromotionVerificationError(
+            "population_cutover_stale",
+            "a newer or different population cutover superseded the promotion",
+        )
+
+
+def _admit_current_population_cutover(
+    conn: sqlite3.Connection,
+    *,
+    promotion: RetrievalPromotion,
+) -> None:
+    _admit_population_cutover(conn, promotion=promotion, require_current=True)
+
+
+def _population_coordinate(
+    promotion: RetrievalPromotion,
+) -> tuple[str, str, datetime, datetime]:
+    return (
+        promotion.population_run_id,
+        promotion.population_receipt_set_sha256,
+        _utc(promotion.cutoff_at),
+        _utc(promotion.population_observed_through),
+    )
+
+
+def _admit_common_current_population_cutover(
+    conn: sqlite3.Connection,
+    *,
+    promotions: tuple[RetrievalPromotion, ...],
+) -> None:
+    if not promotions:
+        raise PromotionVerificationError(
+            "population_cutover_missing",
+            "no retrieval promotion supplied a population cutover coordinate",
+        )
+    if len({_population_coordinate(promotion) for promotion in promotions}) != 1:
+        raise PromotionVerificationError(
+            "population_cutover_stale",
+            "multi-issuer Ask requires one exact common population cutover "
+            "(run, receipt, knowledge cutoff, observed through)",
+        )
+    for promotion in promotions:
+        _admit_current_population_cutover(conn, promotion=promotion)
 
 
 def derive_production_scope_registry(
@@ -487,6 +642,9 @@ def _promotion_values(promotion: RetrievalPromotion) -> tuple[object, ...]:
         bundles_json,
         bundles_sha,
         _db_time(promotion.cutoff_at),
+        promotion.population_run_id,
+        promotion.population_receipt_set_sha256,
+        _db_time(promotion.population_observed_through),
         promotion.policy_version,
         promotion.verifier_name,
         promotion.verifier_version,
@@ -514,6 +672,9 @@ _PROMOTION_COLUMNS = (
     "narrative_bundles_json",
     "narrative_bundles_sha256",
     "cutoff_at",
+    "population_run_id",
+    "population_receipt_set_sha256",
+    "population_observed_through",
     "policy_version",
     "verifier_name",
     "verifier_version",
@@ -531,9 +692,10 @@ _PROMOTION_INSERT_SQL = """
         fact_generation_id,fact_projection_seal_sha256,
         source_inventory_set_json,source_inventory_set_sha256,
         narrative_bundles_json,narrative_bundles_sha256,cutoff_at,
+        population_run_id,population_receipt_set_sha256,population_observed_through,
         policy_version,verifier_name,verifier_version,verifier_code_sha256,
         verifier_config_sha256,status,supersedes_promotion_id,recorded_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT DO NOTHING
 """
 
@@ -543,6 +705,7 @@ _PROMOTION_SELECT_BY_IDEMPOTENCY_SQL = """
            fact_generation_id,fact_projection_seal_sha256,
            source_inventory_set_json,source_inventory_set_sha256,
            narrative_bundles_json,narrative_bundles_sha256,cutoff_at,
+           population_run_id,population_receipt_set_sha256,population_observed_through,
            policy_version,verifier_name,verifier_version,verifier_code_sha256,
            verifier_config_sha256,status,supersedes_promotion_id,recorded_at
     FROM ask_retrieval_scope_promotions
@@ -640,6 +803,11 @@ def verify_retrieval_promotion(
             "promotion_verifier_mismatch",
             "promotion policy/verifier identity differs from the current verifier artifacts",
         )
+    _admit_population_cutover(
+        conn,
+        promotion=promotion,
+        require_current=False,
+    )
 
     try:
         admission = verify_research_snapshot(conn, promotion.research_snapshot_id)
@@ -814,6 +982,9 @@ def _promotion_from_row(row: sqlite3.Row) -> RetrievalPromotion:
         source_inventory_ids=tuple(inventory_payload),
         narrative_bundles=tuple(NarrativeBundle.model_validate(item) for item in bundle_payload),
         cutoff_at=_datetime(row["cutoff_at"]),
+        population_run_id=str(row["population_run_id"]),
+        population_receipt_set_sha256=str(row["population_receipt_set_sha256"]),
+        population_observed_through=_datetime(row["population_observed_through"]),
         policy_version=str(row["policy_version"]),
         verifier_name=str(row["verifier_name"]),
         verifier_version=str(row["verifier_version"]),
@@ -921,6 +1092,17 @@ def assess_retrieval_readiness(
             reason_code="incomparable_snapshot_cutoffs",
             details="multi-issuer Ask requires one common research cutoff",
         )
+    try:
+        _admit_common_current_population_cutover(
+            conn,
+            promotions=tuple(item.promotion for item in ready),
+        )
+    except PromotionVerificationError as exc:
+        return RetrievalReadiness(
+            outcome="unavailable",
+            reason_code=exc.reason_code,
+            details=exc.details,
+        )
     return RetrievalReadiness(
         outcome="ready",
         reason_code="ready",
@@ -970,6 +1152,9 @@ def build_sealed_retrieval_plan(
                 filters=RetrievalFilters(reporting_entity_id=scope.scope.reporting_entity_id),
                 cutoff_at=scope.promotion.cutoff_at,
                 recorded_at=created_at,
+                population_run_id=scope.promotion.population_run_id,
+                population_receipt_set_sha256=(scope.promotion.population_receipt_set_sha256),
+                population_observed_through=(scope.promotion.population_observed_through),
             )
         )
     return SealedRetrievalPlan(
@@ -992,6 +1177,10 @@ def execute_sealed_retrieval_plan(
     receipts: list[HeterogeneousRetrievalReceipt] = []
     with _savepoint(conn, "execute_sealed_ask_retrieval"):
         conn.row_factory = sqlite3.Row
+        _admit_common_current_population_cutover(
+            conn,
+            promotions=tuple(scope.promotion for scope in plan.scopes),
+        )
         for planned_scope, request in zip(plan.scopes, plan.requests, strict=True):
             current_row = conn.execute(
                 "SELECT * FROM v_ask_retrieval_scope_current WHERE scope_key=?",

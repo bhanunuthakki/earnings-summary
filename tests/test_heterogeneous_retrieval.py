@@ -6,6 +6,7 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from alembic.config import Config
@@ -75,7 +76,6 @@ from search.corpus_builder import (
 from search.embedding_promotion import (
     EmbeddingPromotion,
     LocalVectorRuntimeConfig,
-    persist_promotion,
 )
 from search.embedding_runtime_artifact import (
     EmbeddingRuntimeArtifact,
@@ -118,6 +118,84 @@ from tests.test_filing_xbrl_extraction_ledger import _entry, _output
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _trace_tables(
+    conn: sqlite3.Connection,
+    *,
+    population_columns: bool,
+) -> None:
+    population_sql = (
+        ",population_run_id TEXT,population_receipt_set_sha256 TEXT,"
+        "population_observed_through TEXT"
+        if population_columns
+        else ""
+    )
+    conn.executescript(
+        f"""
+        CREATE TABLE heterogeneous_retrieval_trace_headers (
+            trace_id TEXT PRIMARY KEY,
+            idempotency_key TEXT UNIQUE,
+            research_snapshot_id TEXT,
+            research_snapshot_sha256 TEXT,
+            fact_generation_id TEXT,
+            fact_projection_seal_sha256 TEXT,
+            narrative_commitments_json TEXT,
+            narrative_commitments_sha256 TEXT,
+            semantic_receipts_json TEXT,
+            semantic_receipts_sha256 TEXT,
+            query_sha256 TEXT,
+            query_json TEXT,
+            ranker_json TEXT,
+            ranker_sha256 TEXT,
+            filters_json TEXT,
+            filters_sha256 TEXT,
+            candidate_limit INTEGER,
+            result_limit INTEGER,
+            cutoff_at TEXT,
+            recorded_at TEXT
+            {population_sql}
+        );
+        CREATE TABLE heterogeneous_retrieval_trace_candidates (
+            trace_id TEXT,
+            candidate_ordinal INTEGER,
+            candidate_kind TEXT,
+            candidate_id TEXT,
+            source_commitment_sha256 TEXT,
+            lexical_score TEXT,
+            semantic_score TEXT,
+            normalized_score TEXT,
+            ranker_name TEXT,
+            filter_outcome TEXT,
+            filter_reason TEXT,
+            evidence_locator_json TEXT,
+            lineage_json TEXT,
+            lineage_sha256 TEXT,
+            candidate_json TEXT,
+            candidate_sha256 TEXT
+        );
+        CREATE TABLE heterogeneous_retrieval_trace_results (
+            trace_id TEXT,
+            result_ordinal INTEGER,
+            candidate_ordinal INTEGER,
+            final_score TEXT,
+            result_json TEXT,
+            result_sha256 TEXT
+        );
+        CREATE TABLE heterogeneous_retrieval_trace_seals (
+            trace_id TEXT,
+            candidate_count INTEGER,
+            result_count INTEGER,
+            canonical_candidate_set_json TEXT,
+            candidate_set_sha256 TEXT,
+            canonical_result_set_json TEXT,
+            result_set_sha256 TEXT,
+            trace_json TEXT,
+            trace_sha256 TEXT,
+            sealed_at TEXT
+        );
+        """
+    )
+
+
 def _semantic_runtime_artifact(
     model: str = "deterministic-two-dimensional",
 ) -> EmbeddingRuntimeArtifact:
@@ -136,6 +214,42 @@ def _semantic_runtime_artifact(
                 sha256="9" * 64,
             ),
         ),
+    )
+
+
+def _insert_legacy_promotion(
+    conn: sqlite3.Connection,
+    promotion: EmbeddingPromotion,
+) -> None:
+    """Seed one historical pre-0257 promotion without weakening the live writer."""
+
+    values: dict[str, object] = {
+        "promotion_id": promotion.promotion_id,
+        "idempotency_key": promotion.idempotency_key,
+        "purpose": promotion.purpose,
+        "revision": promotion.revision,
+        "provider": promotion.provider,
+        "model": promotion.model,
+        "dimensions": promotion.dimensions,
+        "golden_sha256": promotion.golden_sha256,
+        "evaluation_artifact_sha256": promotion.evaluation_artifact_sha256,
+        "evaluation_metrics_json": promotion.evaluation_metrics_json,
+        "runtime_artifact_json": promotion.runtime_artifact_json,
+        "runtime_artifact_sha256": promotion.runtime_artifact_sha256,
+        "approved_by": promotion.approved_by,
+        "approved_at": promotion.approved_at,
+        "supersedes_promotion_id": promotion.supersedes_promotion_id,
+        "knowledge_at": promotion.knowledge_at or promotion.approved_at,
+        "recorded_at": promotion.recorded_at or promotion.approved_at,
+    }
+    schema_columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(search_embedding_model_promotions)")
+    }
+    columns = tuple(name for name in values if name in schema_columns)
+    conn.execute(
+        "INSERT INTO search_embedding_model_promotions "  # nosec B608 -- test-only fixed legacy column allowlist
+        f"({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
+        tuple(values[name] for name in columns),
     )
 
 
@@ -278,6 +392,160 @@ def test_candidate_union_is_ranked_before_candidate_limit(
         ]
     finally:
         conn.close()
+
+
+def test_population_bound_trace_persists_v2_seal_and_conflicts_on_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    _trace_tables(conn, population_columns=True)
+    request = HeterogeneousRetrievalRequest(
+        trace_id="trace:population",
+        idempotency_key="trace:population",
+        research_snapshot_id="research:population",
+        fact_generation_id="facts:population",
+        narrative_bundles=(),
+        query_text="Revenue",
+        candidate_limit=10,
+        result_limit=10,
+        filters=RetrievalFilters(
+            include_narrative=False,
+            include_facts=True,
+        ),
+        cutoff_at=NOW,
+        recorded_at=NOW,
+        population_run_id="population-run:" + "a" * 64,
+        population_receipt_set_sha256="b" * 64,
+        population_observed_through=NOW,
+    )
+    monkeypatch.setattr(
+        retrieval_module,
+        "_verify_research_coordinates",
+        lambda _conn, _request: {
+            "fact_projection_seal_sha256": "c" * 64,
+            "narrative": [],
+            "research_snapshot_sha256": "d" * 64,
+        },
+    )
+    monkeypatch.setattr(
+        retrieval_module,
+        "_collect_candidates",
+        lambda _conn, _request, _runtimes, _local_runtime: ([], []),
+    )
+    monkeypatch.setattr(
+        retrieval_module,
+        "verify_heterogeneous_retrieval_trace",
+        lambda *_args, **_kwargs: "verified",
+    )
+    try:
+        assert retrieve_heterogeneous(conn, request) == "verified"
+        header = conn.execute(
+            "SELECT population_run_id,population_receipt_set_sha256,"
+            "population_observed_through "
+            "FROM heterogeneous_retrieval_trace_headers"
+        ).fetchone()
+        assert header == (
+            request.population_run_id,
+            request.population_receipt_set_sha256,
+            retrieval_module.db_time(request.population_observed_through),
+        )
+        trace_payload = json.loads(
+            str(
+                conn.execute(
+                    "SELECT trace_json FROM heterogeneous_retrieval_trace_seals"
+                ).fetchone()[0]
+            )
+        )
+        assert trace_payload["trace_version"] == "heterogeneous_retrieval_trace.v2"
+        assert trace_payload["population_cutover"] == {
+            "observed_through": retrieval_module.canonical_time(NOW),
+            "population_run_id": request.population_run_id,
+            "receipt_set_sha256": request.population_receipt_set_sha256,
+        }
+        assert retrieve_heterogeneous(conn, request) == "verified"
+        with pytest.raises(
+            HeterogeneousRetrievalError,
+            match="retrieval_trace_idempotency_conflict",
+        ):
+            retrieve_heterogeneous(
+                conn,
+                request.model_copy(
+                    update={"population_observed_through": NOW + timedelta(seconds=1)}
+                ),
+            )
+    finally:
+        conn.close()
+
+
+def test_trace_population_schema_and_receipt_verification_fail_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy = sqlite3.connect(":memory:")
+    _trace_tables(legacy, population_columns=False)
+    population_request = HeterogeneousRetrievalRequest(
+        trace_id="trace:population",
+        idempotency_key="trace:population",
+        research_snapshot_id="research:population",
+        fact_generation_id="facts:population",
+        narrative_bundles=(),
+        query_text="Revenue",
+        filters=RetrievalFilters(
+            include_narrative=False,
+            include_facts=True,
+        ),
+        cutoff_at=NOW,
+        recorded_at=NOW,
+        population_run_id="population-run:" + "a" * 64,
+        population_receipt_set_sha256="b" * 64,
+        population_observed_through=NOW,
+    )
+    try:
+        with pytest.raises(
+            HeterogeneousRetrievalError,
+            match="retrieval_trace_population_schema_missing",
+        ):
+            retrieval_module._request_population_db_values(
+                population_request,
+                retrieval_module._trace_population_columns(legacy),
+            )
+        legacy.execute(
+            "ALTER TABLE heterogeneous_retrieval_trace_headers ADD COLUMN population_run_id TEXT"
+        )
+        with pytest.raises(
+            HeterogeneousRetrievalError,
+            match="retrieval_trace_population_schema_partial",
+        ):
+            retrieval_module._trace_population_columns(legacy)
+    finally:
+        legacy.close()
+
+    class _Ledger:
+        def __init__(self, _conn: sqlite3.Connection) -> None:
+            pass
+
+        def verify(self, population_run_id: str) -> SimpleNamespace:
+            assert population_run_id == population_request.population_run_id
+            return SimpleNamespace(
+                receipt_set_sha256="e" * 64,
+                temporal_scope=SimpleNamespace(
+                    knowledge_cutoff=NOW,
+                    observed_through=NOW,
+                ),
+            )
+
+    monkeypatch.setattr(retrieval_module, "PopulationCompletenessLedger", _Ledger)
+    in_memory = sqlite3.connect(":memory:")
+    try:
+        with pytest.raises(
+            HeterogeneousRetrievalError,
+            match="retrieval_trace_population_cutover_mismatch",
+        ):
+            retrieval_module._verify_trace_population_cutover(
+                in_memory,
+                population_request,
+            )
+    finally:
+        in_memory.close()
 
 
 def test_candidates_excluded_over_cap_receive_persisted_dispositions() -> None:
@@ -570,7 +838,7 @@ def _exact_semantic_runtime(
         approved_by="owner",
         approved_at=NOW,
     )
-    persist_promotion(conn, promotion)
+    _insert_legacy_promotion(conn, promotion)
     records = [
         _exact_vector_record("chunk-1", [1.0, 0.0]),
         _exact_vector_record("chunk-2", [0.0, 1.0]),
@@ -821,7 +1089,7 @@ def test_exact_semantic_candidates_enter_the_heterogeneous_pool(
 def test_exact_runtime_rejects_superseded_promotion() -> None:
     conn, _index, runtime = _exact_semantic_runtime()
     try:
-        persist_promotion(
+        _insert_legacy_promotion(
             conn,
             EmbeddingPromotion(
                 promotion_id="promotion-2",
@@ -1434,7 +1702,7 @@ def _seed_management_semantic_projection(
         knowledge_at=NOW,
         recorded_at=NOW,
     )
-    persist_promotion(conn, promotion)
+    _insert_legacy_promotion(conn, promotion)
     vector_run_id = "vector:management"
     conn.execute(
         "INSERT INTO search_index_runs ("
@@ -1692,6 +1960,11 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
             1,
             lambda value: hashlib.sha256(str(value).encode()).hexdigest(),
         )
+        # This broad retrieval fixture intentionally stops before the population
+        # migrations. Remove the obsolete 0246 single-clock trigger so the
+        # current K/O runtime verifier, whose head trigger is covered by the
+        # migration-chain tests, can bind the correct empty prefix at O.
+        conn.execute("DROP TRIGGER trg_canonical_resolution_snapshot_watermark_exact")
         bind_resolution_snapshot_watermark(
             conn,
             resolution_snapshot_id="resolution:checkpoint",
@@ -1900,6 +2173,18 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
             conn,
             request,
             semantic_runtimes=(semantic_runtime,),
+        )
+        assert (
+            json.loads(
+                str(
+                    conn.execute(
+                        "SELECT trace_json FROM heterogeneous_retrieval_trace_seals "
+                        "WHERE trace_id=?",
+                        (trace.trace_id,),
+                    ).fetchone()[0]
+                )
+            )["trace_version"]
+            == "heterogeneous_retrieval_trace.v1"
         )
         assert trace.candidate_count >= 3
         kinds = {str(result["candidate_kind"]) for result in trace.ordered_results}

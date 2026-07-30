@@ -371,7 +371,7 @@ def _document_family(document_type: str, form_type: str) -> str:
         return "issuer_earnings_materials"
     if any(token in value for token in ("10-k", "10-q", "20-f", "40-f", "periodic")):
         return "operating_company_periodic"
-    if any(token in value for token in ("annual_report", "financial_statement")):
+    if any(token in value for token in ("annual_report", "financial_statement", "supplement")):
         return "issuer_financial_statements"
     return "continuous_disclosure"
 
@@ -415,6 +415,7 @@ def _document_states(
     conn: sqlite3.Connection,
     scope: DocumentProcessingScope,
     cutoff_at: datetime,
+    observed_through: datetime,
 ) -> tuple[_DocumentState, ...]:
     for table, columns in (
         (
@@ -440,6 +441,7 @@ def _document_states(
         _require_columns(conn, table, columns)
     scope_sql, parameters = _scope_filter(scope)
     cutoff = _db_time(cutoff_at)
+    observed = _db_time(observed_through)
     rows = conn.execute(
         """
         SELECT document.document_version_id,document.issuer_id,
@@ -459,7 +461,7 @@ def _document_states(
           AND datetime(blob.recorded_at)<=datetime(?)
         ORDER BY document.document_version_id
         """,
-        (*parameters, cutoff, cutoff, cutoff),
+        (*parameters, cutoff, observed, observed),
     ).fetchall()
     return tuple(
         _DocumentState(
@@ -483,6 +485,7 @@ def _source_obligations(
     issuer_id: str,
     document_family: str,
     cutoff_at: datetime,
+    observed_through: datetime,
     include_optional: bool,
 ) -> tuple[sqlite3.Row, ...]:
     _require_columns(
@@ -503,6 +506,7 @@ def _source_obligations(
         },
     )
     cutoff = _db_time(cutoff_at)
+    observed = _db_time(observed_through)
     states = ("required", "optional") if include_optional else ("required",)
     rows = conn.execute(
         """
@@ -532,9 +536,9 @@ def _source_obligations(
             cutoff,
             cutoff,
             cutoff,
+            observed,
             cutoff,
-            cutoff,
-            cutoff,
+            observed,
         ),
     ).fetchall()
     if not rows:
@@ -548,10 +552,17 @@ def _derive_obligations(
     cutoff: datetime,
     policy: DocumentProcessingPolicy,
     *,
+    observed_through: datetime,
+    operation_recorded_at: datetime,
     persist: bool,
 ) -> tuple[DocumentProcessingObligation, ...]:
     conn.row_factory = sqlite3.Row
-    states = _document_states(conn, scope, cutoff)
+    knowledge = _utc(cutoff)
+    observed = _utc(observed_through)
+    written = _utc(operation_recorded_at)
+    if not knowledge <= observed <= written:
+        raise ValueError("document processing clocks must satisfy K <= O <= W")
+    states = _document_states(conn, scope, knowledge, observed)
     obligations: list[DocumentProcessingObligation] = []
     with _savepoint(conn, "derive_document_processing_obligations"):
         for document in states:
@@ -559,7 +570,8 @@ def _derive_obligations(
                 conn,
                 issuer_id=document.issuer_id,
                 document_family=_document_family(document.document_type, document.form_type),
-                cutoff_at=cutoff,
+                cutoff_at=knowledge,
+                observed_through=observed,
                 include_optional=policy.include_optional_source_obligations,
             )
             applicable = _applicable_lanes(document)
@@ -567,12 +579,17 @@ def _derive_obligations(
                 source_knowledge = _parse_time(source["knowledge_at"])
                 source_recorded = _parse_time(source["recorded_at"])
                 knowledge_at = max(source_knowledge, document.evidence_knowledge_at)
-                recorded_at = max(
-                    source_recorded,
-                    document.document_recorded_at,
-                    document.evidence_recorded_at,
-                    knowledge_at,
-                )
+                if (
+                    max(
+                        source_recorded,
+                        document.document_recorded_at,
+                        document.evidence_recorded_at,
+                        knowledge_at,
+                    )
+                    > observed
+                ):
+                    raise ValueError("document processing input exceeds observed_through")
+                recorded_at = written
                 for lane in _LANES:
                     key = f"{source['obligation_key']}:{document.document_version_id}:{lane}"
                     applicability = "applicable" if lane in applicable else "not_applicable"
@@ -615,8 +632,8 @@ def _derive_obligations(
                         (
                             key,
                             commitment_sha256,
-                            _db_time(cutoff),
-                            _db_time(cutoff),
+                            _db_time(knowledge),
+                            _db_time(observed),
                         ),
                     ).fetchone()
                     if replay is not None:
@@ -744,18 +761,33 @@ def derive_obligations(
     scope: DocumentProcessingScope,
     cutoff: datetime,
     policy: DocumentProcessingPolicy,
+    *,
+    observed_through: datetime | None = None,
+    recorded_at: datetime | None = None,
 ) -> tuple[DocumentProcessingObligation, ...]:
     """Prepare and persist every lane from as-known source/document evidence."""
 
-    return _derive_obligations(conn, scope, cutoff, policy, persist=True)
+    observed = _utc(cutoff if observed_through is None else observed_through)
+    written = observed if recorded_at is None else _utc(recorded_at)
+    return _derive_obligations(
+        conn,
+        scope,
+        cutoff,
+        policy,
+        observed_through=observed,
+        operation_recorded_at=written,
+        persist=True,
+    )
 
 
 def _verify_processing_evidence(
     conn: sqlite3.Connection,
     obligation: sqlite3.Row,
     reference: ProcessingEvidenceReference,
-    cutoff_at: datetime,
+    knowledge_cutoff: datetime,
+    observed_through: datetime | None = None,
 ) -> None:
+    observed = _utc(knowledge_cutoff) if observed_through is None else _utc(observed_through)
     if obligation["processing_lane"] != "filing_xbrl":
         if reference.evidence_table != "document_processing_evidence_seals":
             raise ValueError("processing evidence source lacks an approved exact verifier")
@@ -768,7 +800,8 @@ def _verify_processing_evidence(
             reference.evidence_id,
             document_version_id=str(obligation["document_version_id"]),
             processing_lane=str(obligation["processing_lane"]),
-            cutoff_at=cutoff_at,
+            cutoff_at=knowledge_cutoff,
+            observed_through=observed,
         )
         if verified.member_set_sha256 != reference.evidence_commitment_sha256:
             raise ValueError("processing evidence commitment is missing or mismatched")
@@ -821,7 +854,8 @@ def _verify_processing_evidence(
             "disposition_sha256",
         },
     )
-    cutoff = _db_time(cutoff_at)
+    cutoff = _db_time(knowledge_cutoff)
+    observed_at = _db_time(observed)
     seal_row = conn.execute(
         "SELECT * FROM filing_xbrl_extraction_disposition_seals "
         "WHERE disposition_seal_id=? "
@@ -830,7 +864,7 @@ def _verify_processing_evidence(
         (
             reference.evidence_id,
             cutoff,
-            cutoff,
+            observed_at,
         ),
     ).fetchone()
     if seal_row is None:
@@ -884,7 +918,8 @@ def _verify_processing_evidence(
     verify_source_fact_publication(
         conn,
         publication_id=seal.publication_id,
-        cutoff=cutoff_at,
+        cutoff=reference.knowledge_at,
+        observed_through=observed,
     )
     commitment = seal.disposition_set_sha256
     if commitment != reference.evidence_commitment_sha256:
@@ -913,7 +948,13 @@ def record_disposition(
         if obligation["applicability"] != "applicable":
             raise ValueError("only applicable obligations may succeed")
         for reference in disposition.evidence:
-            _verify_processing_evidence(conn, obligation, reference, disposition.knowledge_at)
+            _verify_processing_evidence(
+                conn,
+                obligation,
+                reference,
+                disposition.knowledge_at,
+                disposition.recorded_at,
+            )
     elif disposition.terminal_status == "not_applicable":
         if obligation["applicability"] != "not_applicable":
             raise ValueError("not_applicable requires a non-applicable obligation")
@@ -1041,7 +1082,13 @@ def seal_disposition(
             knowledge_at=_parse_time(row["evidence_knowledge_at"]),
             recorded_at=_parse_time(row["evidence_recorded_at"]),
         )
-        _verify_processing_evidence(conn, header, reference, sealed_at)
+        _verify_processing_evidence(
+            conn,
+            header,
+            reference,
+            _parse_time(header["knowledge_at"]),
+            sealed_at,
+        )
     existing = conn.execute(
         "SELECT member_count,canonical_member_set_json,member_set_sha256,sealed_at "
         "FROM document_processing_disposition_seals "
@@ -1063,8 +1110,10 @@ def _verify_disposition(
     conn: sqlite3.Connection,
     processing_disposition_id: str,
     cutoff_at: datetime,
+    observed_through: datetime | None = None,
 ) -> sqlite3.Row:
     conn.row_factory = sqlite3.Row
+    observed = _utc(cutoff_at if observed_through is None else observed_through)
     header = conn.execute(
         "SELECT header.*,obligation.document_version_id,"
         "obligation.processing_lane,obligation.applicability "
@@ -1078,7 +1127,7 @@ def _verify_disposition(
         (
             processing_disposition_id,
             _db_time(cutoff_at),
-            _db_time(cutoff_at),
+            _db_time(observed),
         ),
     ).fetchone()
     if header is None:
@@ -1094,7 +1143,7 @@ def _verify_disposition(
         "FROM document_processing_disposition_seals "
         "WHERE processing_disposition_id=? "
         "AND datetime(sealed_at)<=datetime(?)",
-        (processing_disposition_id, _db_time(cutoff_at)),
+        (processing_disposition_id, _db_time(observed)),
     ).fetchone()
     if seal is None or tuple(seal[:3]) != (len(rows), payload, digest):
         raise ValueError("Document Processing Disposition seal mismatch")
@@ -1129,7 +1178,13 @@ def _verify_disposition(
         ) != _digest_text(member_json):
             raise ValueError("processing evidence member commitment mismatch")
         evidence_payload.append(reference.model_dump(mode="json"))
-        _verify_processing_evidence(conn, header, reference, cutoff_at)
+        _verify_processing_evidence(
+            conn,
+            header,
+            reference,
+            _parse_time(header["knowledge_at"]),
+            observed,
+        )
     reason_json = canonical_json(json.loads(str(header["reason_details_json"])))
     commitment_json = canonical_json(
         {
@@ -1160,7 +1215,15 @@ def seal_processing_snapshot(
     policy: DocumentProcessingPolicy,
     recorded_at: datetime,
 ) -> DocumentProcessingSnapshotReceipt:
-    obligations = _derive_obligations(conn, scope, cutoff_at, policy, persist=False)
+    obligations = _derive_obligations(
+        conn,
+        scope,
+        cutoff_at,
+        policy,
+        observed_through=recorded_at,
+        operation_recorded_at=recorded_at,
+        persist=False,
+    )
     scope_json = canonical_json(scope)
     policy_json = canonical_json(policy)
     members: list[dict[str, object]] = []
@@ -1178,14 +1241,19 @@ def seal_processing_snapshot(
             (
                 obligation.processing_obligation_revision_id,
                 _db_time(cutoff_at),
-                _db_time(cutoff_at),
-                _db_time(cutoff_at),
+                _db_time(recorded_at),
+                _db_time(recorded_at),
             ),
         ).fetchall()
         if len(matches) != 1:
             raise ValueError("every processing lane requires exactly one terminal seal")
         disposition_id = str(matches[0][0])
-        header = _verify_disposition(conn, disposition_id, cutoff_at)
+        header = _verify_disposition(
+            conn,
+            disposition_id,
+            cutoff_at,
+            observed_through=recorded_at,
+        )
         if header["terminal_status"] not in {"succeeded", "not_applicable"}:
             raise ValueError("only succeeded or valid not_applicable admits a document")
         member: dict[str, object] = {
@@ -1261,7 +1329,7 @@ def seal_processing_snapshot(
             )
         elif tuple(seal) != expected:
             raise ValueError("Document Processing Snapshot seal conflict")
-    verify_processing_snapshot(conn, processing_snapshot_id)
+        verify_processing_snapshot(conn, processing_snapshot_id)
     return DocumentProcessingSnapshotReceipt(
         processing_snapshot_id=processing_snapshot_id,
         member_count=len(rows),
@@ -1273,6 +1341,9 @@ def seal_processing_snapshot(
 def verify_processing_snapshot(
     conn: sqlite3.Connection,
     processing_snapshot_id: str,
+    *,
+    cutoff_at: datetime | None = None,
+    observed_through: datetime | None = None,
 ) -> DocumentProcessingSnapshotReceipt:
     conn.row_factory = sqlite3.Row
     header = conn.execute(
@@ -1299,11 +1370,26 @@ def verify_processing_snapshot(
     scope = DocumentProcessingScope.model_validate(scope_payload)
     policy = DocumentProcessingPolicy.model_validate(policy_payload)
     cutoff = _parse_time(header["cutoff_at"])
-    if _parse_time(header["recorded_at"]) < cutoff or _parse_time(seal["sealed_at"]) < _parse_time(
-        header["recorded_at"]
-    ):
+    recorded = _parse_time(header["recorded_at"])
+    sealed = _parse_time(seal["sealed_at"])
+    observed = recorded if observed_through is None else _utc(observed_through)
+    if cutoff_at is not None and _utc(cutoff_at) != cutoff:
+        raise ValueError("Document Processing Snapshot cutoff is not exact")
+    if observed < cutoff:
+        raise ValueError("observed_through must not precede cutoff_at")
+    if recorded > observed or sealed > observed:
+        raise ValueError("Document Processing Snapshot was not visible by observed_through")
+    if recorded < cutoff or sealed < recorded:
         raise ValueError("Document Processing Snapshot seal clocks are invalid")
-    obligations = _derive_obligations(conn, scope, cutoff, policy, persist=False)
+    obligations = _derive_obligations(
+        conn,
+        scope,
+        cutoff,
+        policy,
+        observed_through=observed,
+        operation_recorded_at=observed,
+        persist=False,
+    )
     rows, payload, digest = _member_set(
         conn,
         "document_processing_snapshot_members",
@@ -1317,7 +1403,12 @@ def verify_processing_snapshot(
             "Document Processing Snapshot has omitted, extra, or reordered obligations"
         )
     for row, obligation in zip(rows, obligations, strict=True):
-        disposition = _verify_disposition(conn, str(row["processing_disposition_id"]), cutoff)
+        disposition = _verify_disposition(
+            conn,
+            str(row["processing_disposition_id"]),
+            cutoff,
+            observed_through=observed,
+        )
         if (
             str(disposition["processing_obligation_revision_id"])
             != obligation.processing_obligation_revision_id
@@ -1440,7 +1531,12 @@ class _DefaultResearchReferenceVerifier:
                 },
             )
         if requested_lane.startswith("processing:"):
-            receipt = verify_processing_snapshot(conn, reference_id)
+            receipt = verify_processing_snapshot(
+                conn,
+                reference_id,
+                cutoff_at=cutoff_at,
+                observed_through=request.recorded_at,
+            )
             row = conn.execute(
                 "SELECT recorded_at FROM document_processing_snapshot_headers "
                 "WHERE processing_snapshot_id=?",
@@ -1456,23 +1552,38 @@ class _DefaultResearchReferenceVerifier:
                 recorded_at=_parse_time(row[0]),
             )
         if requested_lane.startswith("corpus:"):
-            return self._corpus(conn, requested_lane, reference_id, cutoff_at)
+            return self._corpus(
+                conn,
+                requested_lane,
+                reference_id,
+                cutoff_at,
+                request.recorded_at,
+            )
         if requested_lane.startswith(("lexical_projection:", "vector_projection:")):
-            return self._search_projection(conn, requested_lane, reference_id, cutoff_at)
+            return self._search_projection(
+                conn,
+                requested_lane,
+                reference_id,
+                cutoff_at,
+                request.recorded_at,
+            )
         if requested_lane.startswith("source_fact_publication:"):
             from provenance.source_fact_publication import (
                 verify_source_fact_publication,
             )
 
             verified = verify_source_fact_publication(
-                conn, publication_id=reference_id, cutoff=cutoff_at
+                conn,
+                publication_id=reference_id,
+                cutoff=request.cutoff_at,
+                observed_through=request.recorded_at,
             )
             return VerifiedResearchReference(
                 requested_lane=requested_lane,
                 reference_table="source_fact_publication_seals",
                 reference_id=verified.publication_seal_id,
                 commitment_sha256=verified.member_set_sha256,
-                knowledge_at=verified.cutoff,
+                knowledge_at=request.cutoff_at,
                 recorded_at=max(verified.recorded_at, verified.sealed_at),
             )
         if requested_lane == "ontology_snapshot":
@@ -1480,14 +1591,21 @@ class _DefaultResearchReferenceVerifier:
 
             MetricOntology(conn).verify_snapshot(reference_id)
             row = conn.execute(
-                "SELECT header.cutoff_at,header.recorded_at,seal.member_set_sha256 "
+                "SELECT header.cutoff_at,header.recorded_at,seal.member_set_sha256,"
+                "seal.sealed_at "
                 "FROM ontology_snapshot_headers header "
                 "JOIN ontology_snapshot_seals seal "
                 "ON seal.ontology_snapshot_id=header.ontology_snapshot_id "
                 "WHERE header.ontology_snapshot_id=? "
-                "AND datetime(header.cutoff_at)<=datetime(?) "
-                "AND datetime(header.recorded_at)<=datetime(?)",
-                (reference_id, _db_time(cutoff_at), _db_time(cutoff_at)),
+                "AND datetime(header.cutoff_at)=datetime(?) "
+                "AND datetime(header.recorded_at)<=datetime(?) "
+                "AND datetime(seal.sealed_at)<=datetime(?)",
+                (
+                    reference_id,
+                    _db_time(cutoff_at),
+                    _db_time(request.recorded_at),
+                    _db_time(request.recorded_at),
+                ),
             ).fetchone()
             if row is None:
                 raise ValueError("Ontology Snapshot is absent at cutoff")
@@ -1497,16 +1615,20 @@ class _DefaultResearchReferenceVerifier:
                 reference_id=reference_id,
                 commitment_sha256=str(row[2]),
                 knowledge_at=_parse_time(row[0]),
-                recorded_at=_parse_time(row[1]),
+                recorded_at=max(_parse_time(row[1]), _parse_time(row[3])),
             )
         if requested_lane == "canonical_fact_resolution_snapshot":
             from provenance.canonical_fact_resolution import (
                 CanonicalFactResolutionEngine,
             )
 
-            verified = CanonicalFactResolutionEngine(conn).verify_snapshot(reference_id, cutoff_at)
+            verified = CanonicalFactResolutionEngine(conn).verify_snapshot(
+                reference_id,
+                cutoff_at,
+                observed_through=request.recorded_at,
+            )
             if _utc(verified.cutoff_at) > _utc(cutoff_at) or _utc(verified.recorded_at) > _utc(
-                cutoff_at
+                request.recorded_at
             ):
                 raise ValueError("Canonical Fact Resolution Snapshot is absent at cutoff")
             return VerifiedResearchReference(
@@ -1533,6 +1655,7 @@ class _DefaultResearchReferenceVerifier:
                 resolution_snapshot_id=(request.canonical_fact_resolution_snapshot_id),
                 ontology_snapshot_id=request.ontology_snapshot_id,
                 cutoff_at=cutoff_at,
+                observed_through=request.recorded_at,
             )
             return VerifiedResearchReference(
                 requested_lane=requested_lane,
@@ -1551,7 +1674,12 @@ class _DefaultResearchReferenceVerifier:
                 },
             )
         if requested_lane.startswith("embedding_promotion:"):
-            return self._embedding_promotion(conn, requested_lane, reference_id, cutoff_at)
+            return self._embedding_promotion(
+                conn,
+                requested_lane,
+                reference_id,
+                request.recorded_at,
+            )
         raise ValueError(f"unsupported research lane {requested_lane!r}")
 
     @staticmethod
@@ -1560,6 +1688,7 @@ class _DefaultResearchReferenceVerifier:
         requested_lane: str,
         manifest_id: str,
         cutoff_at: datetime,
+        observed_through: datetime,
     ) -> VerifiedResearchReference:
         row = conn.execute(
             "SELECT manifest.knowledge_cutoff,manifest.recorded_at,"
@@ -1570,14 +1699,14 @@ class _DefaultResearchReferenceVerifier:
             "ON seal.manifest_id=manifest.manifest_id "
             "WHERE manifest.manifest_id=? "
             "AND manifest.knowledge_cutoff IS NOT NULL "
-            "AND datetime(manifest.knowledge_cutoff)<=datetime(?) "
+            "AND datetime(manifest.knowledge_cutoff)=datetime(?) "
             "AND datetime(manifest.recorded_at)<=datetime(?) "
             "AND datetime(seal.sealed_at)<=datetime(?)",
             (
                 manifest_id,
                 _db_time(cutoff_at),
-                _db_time(cutoff_at),
-                _db_time(cutoff_at),
+                _db_time(observed_through),
+                _db_time(observed_through),
             ),
         ).fetchone()
         if row is None or str(row[4]) != "complete":
@@ -1611,6 +1740,7 @@ class _DefaultResearchReferenceVerifier:
         requested_lane: str,
         index_run_id: str,
         cutoff_at: datetime,
+        observed_through: datetime,
     ) -> VerifiedResearchReference:
         from provenance.search_index_lineage import (
             load_projection_seal,
@@ -1622,19 +1752,19 @@ class _DefaultResearchReferenceVerifier:
         if (
             seal is None
             or seal.index_kind != expected_kind
-            or _utc(seal.sealed_at) > _utc(cutoff_at)
+            or _utc(seal.sealed_at) > _utc(observed_through)
         ):
             raise ValueError(f"{expected_kind} projection seal is absent at cutoff")
         verify_ledger_projection_seal(conn, seal)
         manifest = conn.execute(
             "SELECT knowledge_cutoff,recorded_at FROM search_corpus_manifests "
             "WHERE manifest_id=? AND knowledge_cutoff IS NOT NULL "
-            "AND datetime(knowledge_cutoff)<=datetime(?) "
+            "AND datetime(knowledge_cutoff)=datetime(?) "
             "AND datetime(recorded_at)<=datetime(?)",
             (
                 seal.manifest_id,
                 _db_time(cutoff_at),
-                _db_time(cutoff_at),
+                _db_time(observed_through),
             ),
         ).fetchone()
         if manifest is None:
@@ -2024,7 +2154,9 @@ def _verify_research_references(
         from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 
         verified_resolution = CanonicalFactResolutionEngine(conn).verify_snapshot(
-            request.canonical_fact_resolution_snapshot_id, request.cutoff_at
+            request.canonical_fact_resolution_snapshot_id,
+            request.cutoff_at,
+            observed_through=request.recorded_at,
         )
         if (
             verified_resolution.scope.issuer_id != request.research_universe.issuer_id
@@ -2065,9 +2197,14 @@ def _verify_research_references(
                     "sealed commitment clock"
                 )
             continue
-        if _utc(reference.knowledge_at) > _utc(request.cutoff_at) or _utc(
+        knowledge_limit = (
+            request.recorded_at
+            if reference.requested_lane.startswith("embedding_promotion:")
+            else request.cutoff_at
+        )
+        if _utc(reference.knowledge_at) > _utc(knowledge_limit) or _utc(
             reference.recorded_at
-        ) > _utc(request.cutoff_at):
+        ) > _utc(request.recorded_at):
             raise ValueError("research reference postdates the requested cutoff")
     if len({item.requested_lane for item in references}) != len(references):
         raise ValueError("every requested research lane must have exactly one member")

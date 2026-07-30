@@ -2003,6 +2003,7 @@ def publish_document_processing_evidence(
             document_version_id=document_version_id,
             processing_lane=str(processing_lane),
             cutoff_at=cutoff,
+            observed_through=recorded,
         )
         return DocumentProcessingEvidenceReceipt(
             evidence_seal_id=verified.evidence_seal_id,
@@ -2135,6 +2136,7 @@ def verify_document_processing_evidence(
     document_version_id: str,
     processing_lane: DocumentProcessingLane | str,
     cutoff_at: datetime,
+    observed_through: datetime | None = None,
 ) -> VerifiedDocumentProcessingEvidence:
     """Recompute a sealed publication from its exact pinned native rows."""
 
@@ -2151,6 +2153,19 @@ def verify_document_processing_evidence(
         "processing_evidence_final_seal_missing",
     )
     cutoff = _utc(cutoff_at)
+    header_recorded = _datetime(header["recorded_at"], "header.recorded_at")
+    seal_recorded = _datetime(seal["sealed_at"], "seal.sealed_at")
+    observed = (
+        max(header_recorded, seal_recorded) if observed_through is None else _utc(observed_through)
+    )
+    if observed < cutoff:
+        raise DocumentProcessingEvidenceIntegrityError(
+            "processing_evidence_observed_through_precedes_cutoff"
+        )
+    if header_recorded > observed or seal_recorded > observed:
+        raise DocumentProcessingEvidenceIntegrityError(
+            "processing_evidence_absent_at_observed_through"
+        )
     if (
         _require_text(header, "document_version_id") != document_version_id
         or _require_text(header, "processing_lane") != str(processing_lane)

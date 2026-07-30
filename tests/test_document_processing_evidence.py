@@ -892,6 +892,18 @@ def test_pptx_slides_are_exact_ordered_replay_and_row_factory_neutral(
     assert verified.recorded_at == T2
     with pytest.raises(
         DocumentProcessingEvidenceIntegrityError,
+        match="processing_evidence_absent_at_observed_through",
+    ):
+        verify_document_processing_evidence(
+            conn,
+            receipt.evidence_seal_id,
+            document_version_id="deck-v1",
+            processing_lane="pptx_slides",
+            cutoff_at=T1,
+            observed_through=T1,
+        )
+    with pytest.raises(
+        DocumentProcessingEvidenceIntegrityError,
         match="processing_evidence_coordinate_mismatch",
     ):
         verify_document_processing_evidence(

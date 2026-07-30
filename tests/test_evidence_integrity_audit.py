@@ -14,6 +14,7 @@ from typing import cast
 import pytest
 from alembic.config import Config
 
+import provenance.integrity_audit as integrity_audit
 from alembic import command
 from execution.audit_evidence_integrity import (
     configure_read_only_audit_connection,
@@ -37,6 +38,56 @@ from provenance.source_inventory_seal import (
     SourceInventorySealStore,
     component_digest,
 )
+
+
+def test_resolution_cutover_verifier_propagates_observed_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cutoff = datetime(2026, 7, 29, 0, 0)
+    observed = datetime(2026, 7, 29, 2, 0)
+    calls: list[tuple[str, datetime]] = []
+
+    class _Engine:
+        def __init__(self, _conn: sqlite3.Connection) -> None:
+            pass
+
+        def verify_snapshot(
+            self,
+            snapshot_id: str,
+            cutoff_at: datetime,
+            *,
+            observed_through: datetime,
+        ) -> None:
+            assert snapshot_id == "resolution"
+            assert cutoff_at == cutoff
+            calls.append(("snapshot", observed_through))
+
+    def _verify_watermark(
+        _conn: sqlite3.Connection,
+        *,
+        resolution_snapshot_id: str,
+        cutoff_at: datetime,
+        observed_through: datetime,
+    ) -> None:
+        assert resolution_snapshot_id == "resolution"
+        assert cutoff_at == cutoff
+        calls.append(("watermark", observed_through))
+
+    monkeypatch.setattr(integrity_audit, "CanonicalFactResolutionEngine", _Engine)
+    monkeypatch.setattr(
+        integrity_audit,
+        "verify_resolution_snapshot_watermark",
+        _verify_watermark,
+    )
+
+    integrity_audit._verify_resolution_cutover(
+        sqlite3.connect(":memory:"),
+        resolution_snapshot_id="resolution",
+        cutoff_at=cutoff,
+        observed_through=observed,
+    )
+
+    assert calls == [("snapshot", observed), ("watermark", observed)]
 
 
 def _database(path: Path) -> None:

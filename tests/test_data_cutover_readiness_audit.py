@@ -24,6 +24,7 @@ def _publication_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE source_fact_publications (
             publication_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
             recorded_at TEXT NOT NULL
         );
         CREATE TABLE source_fact_publication_members (
@@ -52,14 +53,14 @@ def test_cutover_audit_pins_publication_and_stream_coverage_to_cutoff(
         ("after", CUTOFF + timedelta(seconds=1)),
     ):
         conn.execute(
-            "INSERT INTO source_fact_publications VALUES (?,?)",
-            (publication_id, recorded_at.isoformat()),
+            "INSERT INTO source_fact_publications VALUES (?,?,?)",
+            (publication_id, recorded_at.isoformat(), recorded_at.isoformat()),
         )
         conn.execute(
             "INSERT INTO source_fact_publication_seals VALUES (?,?)",
             (publication_id, recorded_at.isoformat()),
         )
-    verified_publications: list[tuple[str, datetime]] = []
+    verified_publications: list[tuple[str, datetime, datetime]] = []
     verified_stream: list[str] = []
 
     def verify_publication(
@@ -67,8 +68,10 @@ def test_cutover_audit_pins_publication_and_stream_coverage_to_cutoff(
         *,
         publication_id: str,
         cutoff: datetime,
+        observed_through: datetime,
     ) -> object:
-        verified_publications.append((publication_id, cutoff))
+        _conn.create_function("cutover_audit_probe", 1, lambda value: value)
+        verified_publications.append((publication_id, cutoff, observed_through))
         return object()
 
     def verify_stream(
@@ -76,6 +79,7 @@ def test_cutover_audit_pins_publication_and_stream_coverage_to_cutoff(
         *,
         publication_id: str,
     ) -> object:
+        _conn.create_function("cutover_audit_probe", 1, lambda value: value)
         verified_stream.append(publication_id)
         return object()
 
@@ -92,7 +96,12 @@ def test_cutover_audit_pins_publication_and_stream_coverage_to_cutoff(
 
     summary = audit_cutover_readiness(
         conn,
-        CutoverAuditOptions(cutoff_at=CUTOFF, sample_limit=2),
+        CutoverAuditOptions(
+            knowledge_cutoff=CUTOFF,
+            observed_through=CUTOFF,
+            sample_limit=2,
+            fetch_size=1,
+        ),
     )
 
     publication = next(item for item in summary.coverage if item.gate == "source_fact_publications")
@@ -102,7 +111,10 @@ def test_cutover_audit_pins_publication_and_stream_coverage_to_cutoff(
     assert publication.eligible_count == publication.verified_count == 2
     assert stream.eligible_count == stream.verified_count == 2
     assert publication.failed_count == stream.failed_count == 0
-    assert verified_publications == [("before", CUTOFF), ("exact", CUTOFF)]
+    assert verified_publications == [
+        ("before", CUTOFF, CUTOFF),
+        ("exact", CUTOFF, CUTOFF),
+    ]
     assert verified_stream == ["before", "exact"]
     conn.close()
 
@@ -112,7 +124,11 @@ def test_cutover_audit_reports_exact_missing_schema_with_bounded_samples() -> No
 
     summary = audit_cutover_readiness(
         conn,
-        CutoverAuditOptions(cutoff_at=CUTOFF, sample_limit=2),
+        CutoverAuditOptions(
+            knowledge_cutoff=CUTOFF,
+            observed_through=CUTOFF,
+            sample_limit=2,
+        ),
     )
 
     finding = next(
@@ -148,4 +164,5 @@ def test_cutover_cli_always_exits_nonzero_on_blockers(
     assert status == 2
     payload = json.loads(capsys.readouterr().out)
     assert payload["has_blockers"] is True
-    assert payload["cutoff_at"] == CUTOFF.isoformat().replace("+00:00", "Z")
+    assert payload["knowledge_cutoff"] == CUTOFF.isoformat().replace("+00:00", "Z")
+    assert payload["observed_through"] == CUTOFF.isoformat().replace("+00:00", "Z")

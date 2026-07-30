@@ -11,10 +11,11 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import cast
 from urllib.parse import unquote, urlparse
 
 from pydantic import (
@@ -36,6 +37,7 @@ from provenance.filing_xbrl_extraction_ledger import (
     FilingXbrlExtractionDispositionSeal,
 )
 from provenance.metric_ontology import MetricOntology
+from provenance.population_completeness import PopulationTemporalScope
 from provenance.research_snapshot import (
     verify_processing_snapshot,
     verify_research_snapshot,
@@ -122,19 +124,46 @@ class IntegrityAuditSummary(BaseModel):
 
 
 class CutoverAuditOptions(BaseModel):
-    """One immutable cutoff and bounded materialization budget for cutover gates."""
+    """One immutable dual-clock scope and bounded materialization budget."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    cutoff_at: datetime
+    knowledge_cutoff: datetime
+    observed_through: datetime
     sample_limit: int = Field(default=20, ge=1, le=500)
     fetch_size: int = Field(default=250, ge=1, le=1_000)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_single_clock(cls, value: object) -> object:
+        if isinstance(value, dict) and "cutoff_at" in value:
+            migrated = dict(cast(dict[str, object], value))
+            cutoff = migrated.pop("cutoff_at")
+            migrated.setdefault("knowledge_cutoff", cutoff)
+            migrated.setdefault("observed_through", cutoff)
+            return migrated
+        return cast(object, value)
+
     @model_validator(mode="after")
     def _require_timezone(self) -> CutoverAuditOptions:
-        if self.cutoff_at.tzinfo is None or self.cutoff_at.utcoffset() is None:
-            raise ValueError("cutover cutoff_at must be timezone-aware")
+        PopulationTemporalScope(
+            knowledge_cutoff=self.knowledge_cutoff,
+            observed_through=self.observed_through,
+        )
         return self
+
+    @property
+    def temporal_scope(self) -> PopulationTemporalScope:
+        return PopulationTemporalScope(
+            knowledge_cutoff=self.knowledge_cutoff,
+            observed_through=self.observed_through,
+        )
+
+    @property
+    def cutoff_at(self) -> datetime:
+        """Compatibility name for verifier APIs whose cutoff is the K clock."""
+
+        return self.knowledge_cutoff
 
 
 class CutoverGateCoverage(BaseModel):
@@ -154,18 +183,64 @@ class CutoverGateCoverage(BaseModel):
         return self
 
 
+class CutoverGateCandidateCommitment(BaseModel):
+    """Exact ordered candidate-set commitment for one governed gate query."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    gate: str = Field(pattern=r"^[a-z0-9_]+$")
+    selection_policy_id: str = Field(min_length=1, max_length=256)
+    row_count: int = Field(ge=0)
+    rows_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class CutoverReadinessSummary(BaseModel):
     """Closed output contract for the operational cutover readiness command."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: str = "data-cutover-readiness-audit/v1"
-    cutoff_at: datetime
+    knowledge_cutoff: datetime
+    observed_through: datetime
     generated_at: datetime
     coverage: tuple[CutoverGateCoverage, ...]
+    candidate_commitments: tuple[CutoverGateCandidateCommitment, ...]
     findings: tuple[IntegrityFinding, ...]
     has_blockers: bool
     tables_present: tuple[str, ...]
+
+    @property
+    def temporal_scope(self) -> PopulationTemporalScope:
+        return PopulationTemporalScope(
+            knowledge_cutoff=self.knowledge_cutoff,
+            observed_through=self.observed_through,
+        )
+
+    @property
+    def cutoff_at(self) -> datetime:
+        return self.knowledge_cutoff
+
+
+class CutoverGateQuerySpec(BaseModel):
+    """Closed, versioned selector for one gate's dual-clock candidate universe."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    gate: str = Field(pattern=r"^[a-z0-9_]+$")
+    selection_policy_id: str = Field(min_length=1, max_length=256)
+    query: str
+    key_column: str = Field(pattern=r"^[a-z0-9_]+$")
+
+    @model_validator(mode="after")
+    def _explicit_scope(self) -> CutoverGateQuerySpec:
+        normalized = " ".join(self.query.strip().split()).upper()
+        if not normalized.startswith("SELECT "):
+            raise ValueError("cutover gate query must be an explicit SELECT")
+        if " ORDER BY " not in f" {normalized} ":
+            raise ValueError("cutover gate query must declare deterministic ordering")
+        if ":KNOWLEDGE_CUTOFF" not in normalized or ":OBSERVED_THROUGH" not in normalized:
+            raise ValueError("cutover gate query must explicitly bind both temporal clocks")
+        return self
 
 
 _EVIDENCE_TABLES = (
@@ -1005,8 +1080,13 @@ def audit_cutover_readiness(
     tables = _table_names(conn)
     findings: list[IntegrityFinding] = []
     coverage: list[CutoverGateCoverage] = []
-    cutoff = _canonical_datetime(options.cutoff_at)
-    params = (cutoff,)
+    candidate_commitments: list[CutoverGateCandidateCommitment] = []
+    knowledge_cutoff = _canonical_datetime(options.knowledge_cutoff)
+    observed_through = _canonical_datetime(options.observed_through)
+    params = {
+        "knowledge_cutoff": knowledge_cutoff,
+        "observed_through": observed_through,
+    }
 
     try:
         _run_cutover_gate(
@@ -1015,17 +1095,24 @@ def audit_cutover_readiness(
             findings,
             coverage,
             options,
-            gate="source_fact_publications",
-            query=(
-                "SELECT publication_id FROM source_fact_publications "
-                "WHERE julianday(recorded_at)<=julianday(?) ORDER BY publication_id"
+            candidate_commitments=candidate_commitments,
+            spec=CutoverGateQuerySpec(
+                gate="source_fact_publications",
+                selection_policy_id="source-fact-publications.K-created.O-recorded.v1",
+                key_column="publication_id",
+                query=(
+                    "SELECT publication_id FROM source_fact_publications "
+                    "WHERE julianday(created_at)<=julianday(:knowledge_cutoff) "
+                    "AND julianday(recorded_at)<=julianday(:observed_through) "
+                    "ORDER BY publication_id"
+                ),
             ),
             params=params,
-            key_column="publication_id",
             verifier=lambda row: verify_source_fact_publication(
                 conn,
                 publication_id=str(row["publication_id"]),
                 cutoff=options.cutoff_at,
+                observed_through=options.observed_through,
             ),
         )
         _run_cutover_gate(
@@ -1034,13 +1121,19 @@ def audit_cutover_readiness(
             findings,
             coverage,
             options,
-            gate="source_fact_publication_stream",
-            query=(
-                "SELECT publication_id FROM source_fact_publications "
-                "WHERE julianday(recorded_at)<=julianday(?) ORDER BY publication_id"
+            candidate_commitments=candidate_commitments,
+            spec=CutoverGateQuerySpec(
+                gate="source_fact_publication_stream",
+                selection_policy_id="source-fact-publication-stream.K-created.O-recorded.v1",
+                key_column="publication_id",
+                query=(
+                    "SELECT publication_id FROM source_fact_publications "
+                    "WHERE julianday(created_at)<=julianday(:knowledge_cutoff) "
+                    "AND julianday(recorded_at)<=julianday(:observed_through) "
+                    "ORDER BY publication_id"
+                ),
             ),
             params=params,
-            key_column="publication_id",
             verifier=lambda row: publication_event_for_publication(
                 conn,
                 publication_id=str(row["publication_id"]),
@@ -1052,22 +1145,25 @@ def audit_cutover_readiness(
             findings,
             coverage,
             options,
-            gate="filing_xbrl_dispositions",
-            query=(
-                "SELECT extraction_run_id FROM ("
-                "SELECT extraction_run_id FROM filing_xbrl_extraction_dispositions "
-                "WHERE julianday(recorded_at)<=julianday(?) "
-                "UNION SELECT extraction_run_id "
-                "FROM filing_xbrl_extraction_disposition_seals "
-                "WHERE julianday(recorded_at)<=julianday(?)"
-                ") ORDER BY extraction_run_id"
+            candidate_commitments=candidate_commitments,
+            spec=CutoverGateQuerySpec(
+                gate="filing_xbrl_dispositions",
+                selection_policy_id="filing-xbrl-dispositions.K-knowledge.O-recorded.v1",
+                key_column="extraction_run_id",
+                query=(
+                    "SELECT DISTINCT extraction_run_id "
+                    "FROM filing_xbrl_extraction_dispositions "
+                    "WHERE julianday(knowledge_at)<=julianday(:knowledge_cutoff) "
+                    "AND julianday(recorded_at)<=julianday(:observed_through) "
+                    "ORDER BY extraction_run_id"
+                ),
             ),
-            params=(cutoff, cutoff),
-            key_column="extraction_run_id",
+            params=params,
             verifier=lambda row: _verify_filing_disposition_cutover(
                 conn,
                 extraction_run_id=str(row["extraction_run_id"]),
                 cutoff_at=options.cutoff_at,
+                observed_through=options.observed_through,
             ),
         )
         _run_cutover_gate(
@@ -1076,15 +1172,19 @@ def audit_cutover_readiness(
             findings,
             coverage,
             options,
-            gate="ontology_snapshots",
-            query=(
-                "SELECT ontology_snapshot_id FROM ontology_snapshot_headers "
-                "WHERE julianday(cutoff_at)=julianday(?) "
-                "AND julianday(recorded_at)<=julianday(?) "
-                "ORDER BY ontology_snapshot_id"
+            candidate_commitments=candidate_commitments,
+            spec=CutoverGateQuerySpec(
+                gate="ontology_snapshots",
+                selection_policy_id="ontology-snapshots.K-cutoff.O-recorded.v1",
+                key_column="ontology_snapshot_id",
+                query=(
+                    "SELECT ontology_snapshot_id FROM ontology_snapshot_headers "
+                    "WHERE julianday(cutoff_at)=julianday(:knowledge_cutoff) "
+                    "AND julianday(recorded_at)<=julianday(:observed_through) "
+                    "ORDER BY ontology_snapshot_id"
+                ),
             ),
-            params=(cutoff, cutoff),
-            key_column="ontology_snapshot_id",
+            params=params,
             verifier=lambda row: MetricOntology(conn).verify_snapshot(
                 str(row["ontology_snapshot_id"])
             ),
@@ -1095,20 +1195,25 @@ def audit_cutover_readiness(
             findings,
             coverage,
             options,
-            gate="canonical_resolution_snapshots",
-            query=(
-                "SELECT resolution_snapshot_id "
-                "FROM canonical_fact_resolution_snapshot_seals "
-                "WHERE julianday(cutoff_at)=julianday(?) "
-                "AND julianday(recorded_at)<=julianday(?) "
-                "ORDER BY resolution_snapshot_id"
+            candidate_commitments=candidate_commitments,
+            spec=CutoverGateQuerySpec(
+                gate="canonical_resolution_snapshots",
+                selection_policy_id="canonical-resolution.K-cutoff.O-recorded.v1",
+                key_column="resolution_snapshot_id",
+                query=(
+                    "SELECT resolution_snapshot_id "
+                    "FROM canonical_fact_resolution_snapshot_seals "
+                    "WHERE julianday(cutoff_at)=julianday(:knowledge_cutoff) "
+                    "AND julianday(recorded_at)<=julianday(:observed_through) "
+                    "ORDER BY resolution_snapshot_id"
+                ),
             ),
-            params=(cutoff, cutoff),
-            key_column="resolution_snapshot_id",
+            params=params,
             verifier=lambda row: _verify_resolution_cutover(
                 conn,
                 resolution_snapshot_id=str(row["resolution_snapshot_id"]),
                 cutoff_at=options.cutoff_at,
+                observed_through=options.observed_through,
             ),
         )
         _run_cutover_gate(
@@ -1117,15 +1222,20 @@ def audit_cutover_readiness(
             findings,
             coverage,
             options,
-            gate="canonical_projection_generations",
-            query=(
-                "SELECT generation_id,resolution_snapshot_id,ontology_snapshot_id "
-                "FROM canonical_fact_projection_generations "
-                "WHERE julianday(cutoff_at)=julianday(?) "
-                "AND julianday(recorded_at)<=julianday(?) ORDER BY generation_id"
+            candidate_commitments=candidate_commitments,
+            spec=CutoverGateQuerySpec(
+                gate="canonical_projection_generations",
+                selection_policy_id="canonical-projection.K-cutoff.O-recorded.v1",
+                key_column="generation_id",
+                query=(
+                    "SELECT generation_id,resolution_snapshot_id,ontology_snapshot_id "
+                    "FROM canonical_fact_projection_generations "
+                    "WHERE julianday(cutoff_at)=julianday(:knowledge_cutoff) "
+                    "AND julianday(recorded_at)<=julianday(:observed_through) "
+                    "ORDER BY generation_id"
+                ),
             ),
-            params=(cutoff, cutoff),
-            key_column="generation_id",
+            params=params,
             verifier=lambda row: verify_canonical_projection_generation(
                 conn,
                 str(row["generation_id"]),
@@ -1140,15 +1250,20 @@ def audit_cutover_readiness(
             findings,
             coverage,
             options,
-            gate="document_processing_evidence",
-            query=(
-                "SELECT evidence_seal_id,document_version_id,processing_lane "
-                "FROM document_processing_evidence_headers "
-                "WHERE julianday(cutoff_at)=julianday(?) "
-                "AND julianday(recorded_at)<=julianday(?) ORDER BY evidence_seal_id"
+            candidate_commitments=candidate_commitments,
+            spec=CutoverGateQuerySpec(
+                gate="document_processing_evidence",
+                selection_policy_id="document-processing-evidence.K-cutoff.O-recorded.v1",
+                key_column="evidence_seal_id",
+                query=(
+                    "SELECT evidence_seal_id,document_version_id,processing_lane "
+                    "FROM document_processing_evidence_headers "
+                    "WHERE julianday(cutoff_at)=julianday(:knowledge_cutoff) "
+                    "AND julianday(recorded_at)<=julianday(:observed_through) "
+                    "ORDER BY evidence_seal_id"
+                ),
             ),
-            params=(cutoff, cutoff),
-            key_column="evidence_seal_id",
+            params=params,
             verifier=lambda row: verify_document_processing_evidence(
                 conn,
                 str(row["evidence_seal_id"]),
@@ -1163,16 +1278,20 @@ def audit_cutover_readiness(
             findings,
             coverage,
             options,
-            gate="document_processing_snapshots",
-            query=(
-                "SELECT processing_snapshot_id "
-                "FROM document_processing_snapshot_headers "
-                "WHERE julianday(cutoff_at)=julianday(?) "
-                "AND julianday(recorded_at)<=julianday(?) "
-                "ORDER BY processing_snapshot_id"
+            candidate_commitments=candidate_commitments,
+            spec=CutoverGateQuerySpec(
+                gate="document_processing_snapshots",
+                selection_policy_id="document-processing-snapshots.K-cutoff.O-recorded.v1",
+                key_column="processing_snapshot_id",
+                query=(
+                    "SELECT processing_snapshot_id "
+                    "FROM document_processing_snapshot_headers "
+                    "WHERE julianday(cutoff_at)=julianday(:knowledge_cutoff) "
+                    "AND julianday(recorded_at)<=julianday(:observed_through) "
+                    "ORDER BY processing_snapshot_id"
+                ),
             ),
-            params=(cutoff, cutoff),
-            key_column="processing_snapshot_id",
+            params=params,
             verifier=lambda row: verify_processing_snapshot(
                 conn, str(row["processing_snapshot_id"])
             ),
@@ -1183,14 +1302,19 @@ def audit_cutover_readiness(
             findings,
             coverage,
             options,
-            gate="research_snapshots",
-            query=(
-                "SELECT research_snapshot_id FROM research_snapshot_headers "
-                "WHERE julianday(cutoff_at)=julianday(?) "
-                "AND julianday(recorded_at)<=julianday(?) ORDER BY research_snapshot_id"
+            candidate_commitments=candidate_commitments,
+            spec=CutoverGateQuerySpec(
+                gate="research_snapshots",
+                selection_policy_id="research-snapshots.K-cutoff.O-recorded.v1",
+                key_column="research_snapshot_id",
+                query=(
+                    "SELECT research_snapshot_id FROM research_snapshot_headers "
+                    "WHERE julianday(cutoff_at)=julianday(:knowledge_cutoff) "
+                    "AND julianday(recorded_at)<=julianday(:observed_through) "
+                    "ORDER BY research_snapshot_id"
+                ),
             ),
-            params=(cutoff, cutoff),
-            key_column="research_snapshot_id",
+            params=params,
             verifier=lambda row: verify_research_snapshot(conn, str(row["research_snapshot_id"])),
         )
         _run_cutover_gate(
@@ -1199,14 +1323,19 @@ def audit_cutover_readiness(
             findings,
             coverage,
             options,
-            gate="heterogeneous_retrieval_traces",
-            query=(
-                "SELECT trace_id FROM heterogeneous_retrieval_trace_headers "
-                "WHERE julianday(cutoff_at)=julianday(?) "
-                "AND julianday(recorded_at)<=julianday(?) ORDER BY trace_id"
+            candidate_commitments=candidate_commitments,
+            spec=CutoverGateQuerySpec(
+                gate="heterogeneous_retrieval_traces",
+                selection_policy_id="retrieval-traces.K-cutoff.O-recorded.v1",
+                key_column="trace_id",
+                query=(
+                    "SELECT trace_id FROM heterogeneous_retrieval_trace_headers "
+                    "WHERE julianday(cutoff_at)=julianday(:knowledge_cutoff) "
+                    "AND julianday(recorded_at)<=julianday(:observed_through) "
+                    "ORDER BY trace_id"
+                ),
             ),
-            params=(cutoff, cutoff),
-            key_column="trace_id",
+            params=params,
             verifier=lambda row: verify_heterogeneous_retrieval_trace(conn, str(row["trace_id"])),
         )
         _run_cutover_gate(
@@ -1215,17 +1344,23 @@ def audit_cutover_readiness(
             findings,
             coverage,
             options,
-            gate="embedding_runtime_promotions",
-            query=(
-                "SELECT promotion_id,idempotency_key,purpose,revision,provider,model,"
-                "dimensions,golden_sha256,evaluation_artifact_sha256,"
-                "evaluation_metrics_json,runtime_artifact_json,"
-                "runtime_artifact_sha256,approved_by,approved_at,"
-                "supersedes_promotion_id FROM search_embedding_model_promotions "
-                "WHERE julianday(approved_at)<=julianday(?) ORDER BY promotion_id"
+            candidate_commitments=candidate_commitments,
+            spec=CutoverGateQuerySpec(
+                gate="embedding_runtime_promotions",
+                selection_policy_id="embedding-promotions.operational.O-approved.v1",
+                key_column="promotion_id",
+                query=(
+                    "SELECT promotion_id,idempotency_key,purpose,revision,provider,model,"
+                    "dimensions,golden_sha256,evaluation_artifact_sha256,"
+                    "evaluation_metrics_json,runtime_artifact_json,"
+                    "runtime_artifact_sha256,approved_by,approved_at,"
+                    "supersedes_promotion_id FROM search_embedding_model_promotions "
+                    "WHERE julianday(approved_at)<=julianday(:observed_through) "
+                    "AND julianday(:knowledge_cutoff)<=julianday(:observed_through) "
+                    "ORDER BY promotion_id"
+                ),
             ),
             params=params,
-            key_column="promotion_id",
             verifier=lambda row: EmbeddingPromotion.model_validate(dict(row)),
         )
         _run_cutover_gate(
@@ -1234,16 +1369,26 @@ def audit_cutover_readiness(
             findings,
             coverage,
             options,
-            gate="embedding_runtime_artifacts",
-            query=(
-                "SELECT embedding_artifact_id,index_run_id,provider,model,dimensions,"
-                "runtime_artifact_sha256 FROM search_embedding_artifacts "
-                "WHERE outcome='succeeded' "
-                "AND julianday(completed_at)<=julianday(?) "
-                "ORDER BY embedding_artifact_id"
+            candidate_commitments=candidate_commitments,
+            spec=CutoverGateQuerySpec(
+                gate="embedding_runtime_artifacts",
+                selection_policy_id="embedding-artifacts.K-manifest.O-completed.v1",
+                key_column="embedding_artifact_id",
+                query=(
+                    "SELECT artifact.embedding_artifact_id,artifact.index_run_id,"
+                    "artifact.provider,artifact.model,artifact.dimensions,"
+                    "artifact.runtime_artifact_sha256 "
+                    "FROM search_embedding_artifacts artifact "
+                    "JOIN search_index_runs run ON run.index_run_id=artifact.index_run_id "
+                    "JOIN search_corpus_manifests manifest "
+                    "ON manifest.manifest_id=run.manifest_id "
+                    "WHERE artifact.outcome='succeeded' "
+                    "AND julianday(manifest.knowledge_cutoff)<=julianday(:knowledge_cutoff) "
+                    "AND julianday(artifact.completed_at)<=julianday(:observed_through) "
+                    "ORDER BY artifact.embedding_artifact_id"
+                ),
             ),
             params=params,
-            key_column="embedding_artifact_id",
             verifier=lambda row: _verify_embedding_artifact_binding(
                 conn, row, cutoff_at=options.cutoff_at
             ),
@@ -1254,14 +1399,24 @@ def audit_cutover_readiness(
             findings,
             coverage,
             options,
-            gate="embedding_runtime_projection_seals",
-            query=(
-                "SELECT projection_seal_id,index_run_id "
-                "FROM search_projection_seals WHERE index_kind='vector' "
-                "AND julianday(sealed_at)<=julianday(?) ORDER BY projection_seal_id"
+            candidate_commitments=candidate_commitments,
+            spec=CutoverGateQuerySpec(
+                gate="embedding_runtime_projection_seals",
+                selection_policy_id="embedding-projections.K-manifest.O-sealed.v1",
+                key_column="projection_seal_id",
+                query=(
+                    "SELECT seal.projection_seal_id,seal.index_run_id "
+                    "FROM search_projection_seals seal "
+                    "JOIN search_index_runs run ON run.index_run_id=seal.index_run_id "
+                    "JOIN search_corpus_manifests manifest "
+                    "ON manifest.manifest_id=run.manifest_id "
+                    "WHERE seal.index_kind='vector' "
+                    "AND julianday(manifest.knowledge_cutoff)<=julianday(:knowledge_cutoff) "
+                    "AND julianday(seal.sealed_at)<=julianday(:observed_through) "
+                    "ORDER BY seal.projection_seal_id"
+                ),
             ),
             params=params,
-            key_column="projection_seal_id",
             verifier=lambda row: _verify_embedding_projection_binding(
                 conn,
                 index_run_id=str(row["index_run_id"]),
@@ -1273,9 +1428,11 @@ def audit_cutover_readiness(
 
     findings.sort(key=lambda item: (item.severity.value, item.code))
     return CutoverReadinessSummary(
-        cutoff_at=options.cutoff_at,
+        knowledge_cutoff=options.knowledge_cutoff,
+        observed_through=options.observed_through,
         generated_at=datetime.now(UTC),
         coverage=tuple(coverage),
+        candidate_commitments=tuple(candidate_commitments),
         findings=tuple(findings),
         has_blockers=any(item.severity is Severity.BLOCKER for item in findings),
         tables_present=tuple(sorted(tables)),
@@ -1289,12 +1446,12 @@ def _run_cutover_gate(
     coverage: list[CutoverGateCoverage],
     options: CutoverAuditOptions,
     *,
-    gate: str,
-    query: str,
-    params: tuple[object, ...],
-    key_column: str,
+    candidate_commitments: list[CutoverGateCandidateCommitment],
+    spec: CutoverGateQuerySpec,
+    params: Mapping[str, object],
     verifier: Callable[[sqlite3.Row], object],
 ) -> None:
+    gate = spec.gate
     required = set(_CUTOVER_GATE_TABLES[gate])
     missing = tuple(sorted(required - tables))
     if missing:
@@ -1318,7 +1475,7 @@ def _run_cutover_gate(
         )
         return
 
-    scoped_query = query.strip().removesuffix(";")
+    scoped_query = spec.query.strip().removesuffix(";")
     count_row = conn.execute(
         f"SELECT COUNT(*) FROM ({scoped_query}) AS cutover_candidates",  # nosec B608 -- trusted internal SQL shape; values remain bound
         params,
@@ -1327,10 +1484,39 @@ def _run_cutover_gate(
     verified = 0
     failed = 0
     samples: list[str] = []
-    cursor = conn.execute(scoped_query, params)
-    while rows := cursor.fetchmany(options.fetch_size):
+    candidate_digest = hashlib.sha256()
+    candidate_digest.update(
+        _canonical_commitment_json(
+            {
+                "gate": gate,
+                "selection_policy_id": spec.selection_policy_id,
+            }
+        ).encode()
+    )
+    candidate_count = 0
+    after_key: str | None = None
+    page_query = (
+        "SELECT * FROM ("  # nosec B608 -- validated internal selector and key identifier; temporal values remain bound
+        f"{scoped_query}) AS cutover_candidates "
+        f"WHERE (:_cutover_after_key IS NULL OR {spec.key_column}>:_cutover_after_key) "
+        f"ORDER BY {spec.key_column} LIMIT :_cutover_page_size"
+    )
+    while True:
+        page_params = {
+            **params,
+            "_cutover_after_key": after_key,
+            "_cutover_page_size": options.fetch_size,
+        }
+        rows = conn.execute(page_query, page_params).fetchall()
+        if not rows:
+            break
         for row in rows:
-            key = str(row[key_column])
+            candidate_digest.update(b"\n")
+            candidate_digest.update(_canonical_commitment_json(dict(row)).encode())
+            candidate_count += 1
+            key = str(row[spec.key_column])
+            if after_key is not None and key <= after_key:
+                raise RuntimeError("cutover gate keyset is not strictly increasing")
             try:
                 verifier(row)
             except (
@@ -1345,6 +1531,17 @@ def _run_cutover_gate(
                     samples.append(_cutover_failure_sample(key, exc))
             else:
                 verified += 1
+            after_key = key
+    if candidate_count != eligible:
+        raise RuntimeError("cutover gate candidate count changed during verification")
+    candidate_commitments.append(
+        CutoverGateCandidateCommitment(
+            gate=gate,
+            selection_policy_id=spec.selection_policy_id,
+            row_count=candidate_count,
+            rows_sha256=candidate_digest.hexdigest(),
+        )
+    )
     coverage.append(
         CutoverGateCoverage(
             gate=gate,
@@ -1360,8 +1557,12 @@ def _run_cutover_gate(
                 severity=Severity.BLOCKER,
                 remediation=RemediationClass.BACKFILL,
                 count=1,
-                query_context=scoped_query,
-                samples=(_canonical_datetime(options.cutoff_at),),
+                query_context=spec.selection_policy_id,
+                samples=(
+                    _canonical_datetime(options.knowledge_cutoff)
+                    + "|"
+                    + _canonical_datetime(options.observed_through),
+                ),
             )
         )
     if failed:
@@ -1371,7 +1572,7 @@ def _run_cutover_gate(
                 severity=Severity.BLOCKER,
                 remediation=RemediationClass.HARD_STOP,
                 count=failed,
-                query_context=scoped_query,
+                query_context=spec.selection_policy_id,
                 samples=tuple(samples),
             )
         )
@@ -1387,12 +1588,18 @@ def _verify_resolution_cutover(
     *,
     resolution_snapshot_id: str,
     cutoff_at: datetime,
+    observed_through: datetime,
 ) -> None:
-    CanonicalFactResolutionEngine(conn).verify_snapshot(resolution_snapshot_id, cutoff_at)
+    CanonicalFactResolutionEngine(conn).verify_snapshot(
+        resolution_snapshot_id,
+        cutoff_at,
+        observed_through=observed_through,
+    )
     verify_resolution_snapshot_watermark(
         conn,
         resolution_snapshot_id=resolution_snapshot_id,
         cutoff_at=cutoff_at,
+        observed_through=observed_through,
     )
 
 
@@ -1401,6 +1608,7 @@ def _verify_filing_disposition_cutover(
     *,
     extraction_run_id: str,
     cutoff_at: datetime,
+    observed_through: datetime,
 ) -> None:
     seal_row = conn.execute(
         "SELECT * FROM filing_xbrl_extraction_disposition_seals WHERE extraction_run_id=?",
@@ -1447,6 +1655,7 @@ def _verify_filing_disposition_cutover(
         conn,
         publication_id=seal.publication_id,
         cutoff=cutoff_at,
+        observed_through=observed_through,
     )
 
 

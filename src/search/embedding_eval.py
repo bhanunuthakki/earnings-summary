@@ -11,10 +11,11 @@ import json
 import math
 import time
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from search.grounded import SearchFilter, VectorCandidate
 
@@ -73,6 +74,38 @@ class CandidateMetrics(BaseModel):
         return value
 
 
+class CandidateEvaluationCoordinate(BaseModel):
+    """Exact sealed candidate projection used to produce one metric row."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    model: str = Field(min_length=1, max_length=128)
+    index_run_id: str = Field(min_length=1, max_length=128)
+    manifest_id: str = Field(min_length=1, max_length=128)
+    projection_seal_id: str = Field(min_length=1, max_length=128)
+    projection_records_sha256: str
+    artifact_set_sha256: str
+    config_sha256: str
+    chunk_count: int = Field(gt=0)
+    chunk_set_sha256: str
+    runtime_registration_id: str = Field(min_length=1, max_length=128)
+    runtime_artifact_sha256: str
+    sealed_at: datetime
+
+    @field_validator(
+        "projection_records_sha256",
+        "artifact_set_sha256",
+        "config_sha256",
+        "chunk_set_sha256",
+        "runtime_artifact_sha256",
+    )
+    @classmethod
+    def _hashes(cls, value: str) -> str:
+        if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+            raise ValueError("candidate coordinate hashes must be lowercase SHA-256")
+        return value
+
+
 class EmbeddingRecommendationArtifact(BaseModel):
     """An auditable result that intentionally does not modify model selection."""
 
@@ -83,8 +116,53 @@ class EmbeddingRecommendationArtifact(BaseModel):
     k: int = Field(gt=0)
     thresholds: EvalThresholds
     results: tuple[CandidateMetrics, ...]
+    candidate_coordinates: tuple[CandidateEvaluationCoordinate, ...]
+    evaluated_at: datetime
     recommended_model: str | None = None
     reason: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _candidate_contract(self) -> EmbeddingRecommendationArtifact:
+        coordinate_models = tuple(item.model for item in self.candidate_coordinates)
+        result_models = tuple(item.model for item in self.results)
+        if coordinate_models != tuple(sorted(coordinate_models)) or len(coordinate_models) != len(
+            set(coordinate_models)
+        ):
+            raise ValueError("candidate coordinates must be unique and sorted by model")
+        if set(coordinate_models) != set(DEFAULT_CANDIDATES) or len(coordinate_models) != len(
+            DEFAULT_CANDIDATES
+        ):
+            raise ValueError("candidate coordinates differ from the governed candidate policy")
+        runtime_coordinates = {item.runtime_registration_id for item in self.candidate_coordinates}
+        projection_coordinates = {item.projection_seal_id for item in self.candidate_coordinates}
+        if len(runtime_coordinates) != len(coordinate_models) or len(projection_coordinates) != len(
+            coordinate_models
+        ):
+            raise ValueError("candidate runtime and projection coordinates must be unique")
+        if result_models != coordinate_models:
+            raise ValueError("candidate metrics and coordinates must cover the same models")
+        corpus_coordinates = {
+            (item.manifest_id, item.chunk_count, item.chunk_set_sha256)
+            for item in self.candidate_coordinates
+        }
+        if len(corpus_coordinates) != 1:
+            raise ValueError("embedding candidates must evaluate the same sealed corpus")
+        runtime_by_model = {
+            item.model: item.runtime_artifact_sha256 for item in self.candidate_coordinates
+        }
+        if any(
+            item.runtime_artifact_sha256 != runtime_by_model[item.model] for item in self.results
+        ):
+            raise ValueError("candidate metrics runtime differs from its sealed coordinate")
+        return self
+
+    def canonical_json(self) -> str:
+        return json.dumps(
+            self.model_dump(mode="json"),
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
 
 
 class VectorRetriever(Protocol):
@@ -129,6 +207,8 @@ def evaluate_embedding_candidates(
     thresholds: EvalThresholds | None = None,
     golden_digest: str | None = None,
     runtime_artifact_sha256: Mapping[str, str],
+    candidate_coordinates: Mapping[str, CandidateEvaluationCoordinate],
+    evaluated_at: datetime,
     clock: Callable[[], float] = time.perf_counter,
 ) -> EmbeddingRecommendationArtifact:
     """Measure fixed retrieval metrics and recommend only a clear eligible winner."""
@@ -136,11 +216,15 @@ def evaluate_embedding_candidates(
         raise ValueError("k must be positive")
     if not cases:
         raise ValueError("evaluation needs at least one closed golden case")
-    missing = [model for model in DEFAULT_CANDIDATES if model not in retrievers]
-    if missing:
-        raise ValueError(f"evaluation must compare required candidates: {', '.join(missing)}")
+    if set(retrievers) != set(DEFAULT_CANDIDATES) or len(retrievers) != len(DEFAULT_CANDIDATES):
+        raise ValueError(
+            "evaluation candidates differ from the governed candidate policy: "
+            + ", ".join(DEFAULT_CANDIDATES)
+        )
     if set(runtime_artifact_sha256) != set(retrievers):
         raise ValueError("evaluation requires one runtime artifact hash per candidate")
+    if set(candidate_coordinates) != set(retrievers):
+        raise ValueError("evaluation requires one sealed coordinate per candidate")
     for digest in runtime_artifact_sha256.values():
         if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
             raise ValueError("candidate runtime artifact hash must be lowercase SHA-256")
@@ -158,11 +242,14 @@ def evaluate_embedding_candidates(
     )
     digest = golden_digest or _cases_digest(cases)
     winner, reason = _choose_winner(results, thresholds)
+    coordinates = tuple(candidate_coordinates[model] for model in sorted(candidate_coordinates))
     return EmbeddingRecommendationArtifact(
         golden_sha256=digest,
         k=k,
         thresholds=thresholds,
         results=results,
+        candidate_coordinates=coordinates,
+        evaluated_at=evaluated_at,
         recommended_model=winner,
         reason=reason,
     )

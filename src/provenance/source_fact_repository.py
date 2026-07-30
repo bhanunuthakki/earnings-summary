@@ -35,8 +35,7 @@ from provenance.source_fact_publication import (
     publication_payload,
     publication_seal_id,
     publication_seal_idempotency_key,
-    record_commitment,
-    record_idempotency_key,
+    record_coordinates,
     verify_source_fact_publication,
 )
 from provenance.source_fact_stream import (
@@ -211,17 +210,51 @@ class SourceFactRepository:
         require_source_fact_stream_schema(self._conn)
         created: list[str] = []
         with self._savepoint():
+            graph_items = (*publication.reported_facts, *publication.derived_facts)
+            semantic_cells = self._semantic_cells_by_sha256(
+                tuple(item.cell for item in graph_items)
+            )
+            existing_observation_keys = self._existing_observation_keys(
+                tuple(item.observation.idempotency_key for item in graph_items)
+            )
             cell_ids: list[str] = []
-            for item in (*publication.reported_facts, *publication.derived_facts):
-                if item.cell.fact_cell_id not in cell_ids:
-                    result = self._persist_semantic_cell(item.cell)
+            cell_id_set: set[str] = set()
+            for item in graph_items:
+                if item.cell.fact_cell_id not in cell_id_set:
+                    result = self._persist_semantic_cell(
+                        item.cell,
+                        existing=semantic_cells.get(str(item.cell.semantic_key_sha256)),
+                    )
                     cell_ids.append(item.cell.fact_cell_id)
+                    cell_id_set.add(item.cell.fact_cell_id)
                     if result.created:
                         created.append(result.record_id)
 
             observation_ids: list[str] = []
-            for item in (*publication.reported_facts, *publication.derived_facts):
-                result = self._persist_observation(item.observation)
+            new_reported = tuple(
+                item.observation
+                for item in publication.reported_facts
+                if item.observation.idempotency_key not in existing_observation_keys
+            )
+            if new_reported:
+                self._persist_new_reported_observations(
+                    new_reported,
+                    {
+                        item.cell.fact_cell_id: str(item.cell.semantic_key_sha256)
+                        for item in publication.reported_facts
+                    },
+                )
+                created.extend(item.observation_id for item in new_reported)
+            new_reported_ids = {item.observation_id for item in new_reported}
+            for item in graph_items:
+                if item.observation.observation_id in new_reported_ids:
+                    observation_ids.append(item.observation.observation_id)
+                    continue
+                result = (
+                    self._persist_observation(item.observation)
+                    if item.observation.idempotency_key in existing_observation_keys
+                    else self._plane.persist_observation(item.observation)
+                )
                 observation_ids.append(item.observation.observation_id)
                 if result.created:
                     created.append(result.record_id)
@@ -292,19 +325,206 @@ class SourceFactRepository:
                 exact_replay=not created and not ledger_created,
             )
 
-    def _persist_semantic_cell(self, cell: FactCellV2) -> PersistResult:
+    def _semantic_cells_by_sha256(
+        self,
+        cells: tuple[FactCellV2, ...],
+    ) -> dict[str, tuple[object, ...]]:
+        semantic_keys = tuple(dict.fromkeys(str(cell.semantic_key_sha256) for cell in cells))
+        rows: dict[str, tuple[object, ...]] = {}
+        for start in range(0, len(semantic_keys), 400):
+            batch = semantic_keys[start : start + 400]
+            placeholders = ",".join("?" for _ in batch)
+            cursor = self._conn.execute(
+                "SELECT seal.semantic_key_sha256,cell.fact_cell_id,"
+                "cell.idempotency_key,seal.semantic_key_version,"
+                "seal.semantic_identity_json,seal.dimension_set_json "
+                "FROM fact_cell_identity_seals_v2 AS seal "
+                "JOIN fact_cells_v2 AS cell "
+                "ON cell.fact_cell_id=seal.fact_cell_id "
+                f"WHERE seal.semantic_key_sha256 IN ({placeholders})",  # nosec B608 -- placeholders are generated from a bounded integer batch size
+                batch,
+            )
+            for row in cursor:
+                rows[str(row[0])] = tuple(row[1:])
+        return rows
+
+    def _existing_observation_keys(
+        self,
+        idempotency_keys: tuple[str, ...],
+    ) -> set[str]:
+        unique_keys = tuple(dict.fromkeys(idempotency_keys))
+        existing: set[str] = set()
+        for start in range(0, len(unique_keys), 400):
+            batch = unique_keys[start : start + 400]
+            placeholders = ",".join("?" for _ in batch)
+            existing.update(
+                str(row[0])
+                for row in self._conn.execute(
+                    "SELECT idempotency_key FROM fact_observations_v2 "
+                    f"WHERE idempotency_key IN ({placeholders})",  # nosec B608 -- placeholders are generated from a bounded integer batch size
+                    batch,
+                )
+            )
+        return existing
+
+    def _persist_new_reported_observations(
+        self,
+        observations: tuple[ReportedFactObservationV2, ...],
+        semantic_keys_by_cell: dict[str, str],
+    ) -> None:
+        """Persist a preflight-confirmed new reported-observation batch."""
+        runs_by_node: dict[str, tuple[object, ...]] = {}
+        node_ids = tuple(dict.fromkeys(item.evidence_node_id for item in observations))
+        for start in range(0, len(node_ids), 400):
+            batch = node_ids[start : start + 400]
+            placeholders = ",".join("?" for _ in batch)
+            for row in self._conn.execute(
+                "SELECT node.node_id,run.extraction_run_id,run.extractor_name,"
+                "run.extractor_code_version,run.extractor_config_sha256,"
+                "run.input_sha256,run.output_sha256 "
+                "FROM evidence_nodes AS node "
+                "JOIN evidence_extraction_runs AS run "
+                "ON run.extraction_run_id=node.extraction_run_id "
+                f"WHERE node.node_id IN ({placeholders})",  # nosec B608 -- bounded placeholders
+                batch,
+            ):
+                runs_by_node[str(row[0])] = tuple(row[1:])
+        missing_nodes = tuple(
+            item.evidence_node_id
+            for item in observations
+            if item.evidence_node_id not in runs_by_node
+        )
+        if missing_nodes:
+            raise ValueError("reported observation extraction run is missing")
+
+        observation_columns, _ = self._plane.observation_values(observations[0])
+        observation_values: list[tuple[object, ...]] = []
+        anchor_values: list[tuple[object, ...]] = []
+        payload_values: list[tuple[object, ...]] = []
+        for observation in observations:
+            columns, values = self._plane.observation_values(observation)
+            if columns != observation_columns:
+                raise RuntimeError("reported observation bulk columns changed within batch")
+            observation_values.append(values)
+            (
+                extraction_run_id,
+                extractor_name,
+                extractor_code_version,
+                extractor_config_sha256,
+                extraction_input_sha256,
+                extraction_output_sha256,
+            ) = runs_by_node[observation.evidence_node_id]
+            anchor_json = canonical_json(
+                {
+                    "document_version_id": observation.document_version_id,
+                    "evidence_node_id": observation.evidence_node_id,
+                    "extraction_input_sha256": str(extraction_input_sha256),
+                    "extraction_output_sha256": str(extraction_output_sha256),
+                    "extraction_run_id": str(extraction_run_id),
+                    "extractor_code_version": str(extractor_code_version),
+                    "extractor_config_sha256": str(extractor_config_sha256),
+                    "extractor_name": str(extractor_name),
+                    "raw_entry_sha256": observation.source_entry_sha256,
+                    "source_locator_sha256": observation.source_locator_sha256,
+                    "source_taxonomy_version": observation.source_taxonomy_version,
+                    "subject_binding_revision_id": observation.subject_binding_revision_id,
+                }
+            )
+            anchor_sha256 = digest_text(anchor_json)
+            anchor_values.append(
+                (
+                    observation.observation_id,
+                    f"{observation.idempotency_key}:anchor:v1",
+                    observation.subject_binding_revision_id,
+                    str(extraction_run_id),
+                    observation.source_taxonomy_version,
+                    str(extractor_name),
+                    str(extractor_code_version),
+                    str(extractor_config_sha256),
+                    str(extraction_input_sha256),
+                    str(extraction_output_sha256),
+                    observation.source_entry_sha256,
+                    anchor_json,
+                    anchor_sha256,
+                    observation.recorded_at,
+                )
+            )
+            semantic_key = semantic_keys_by_cell.get(observation.fact_cell_id)
+            if semantic_key is None:
+                raise ValueError("observation requires a hardened fact-cell identity")
+            payload_json = canonical_json(
+                {
+                    "decimals": observation.decimals,
+                    "effective_at": observation.effective_at.isoformat(),
+                    "fact_cell_semantic_key_sha256": semantic_key,
+                    "is_nil": observation.is_nil,
+                    "knowledge_at": observation.knowledge_at.isoformat(),
+                    "method_config_sha256": observation.method_config_sha256,
+                    "method_name": observation.method_name,
+                    "method_version": observation.method_version,
+                    "numeric_value": observation.numeric_value,
+                    "observation_kind": observation.observation_kind,
+                    "payload_version": "fact_observation_payload.v1",
+                    "precision": observation.precision,
+                    "provenance": {
+                        "anchor_payload_sha256": anchor_sha256,
+                        "document_version_id": observation.document_version_id,
+                        "evidence_node_id": observation.evidence_node_id,
+                        "source_context_id": observation.source_context_id,
+                        "source_entry_sha256": observation.source_entry_sha256,
+                        "source_locator_sha256": observation.source_locator_sha256,
+                        "source_unit_id": observation.source_unit_id,
+                    },
+                    "raw_lexical_value": observation.raw_lexical_value,
+                    "recorded_at": observation.recorded_at.isoformat(),
+                    "revision_kind": observation.revision_kind,
+                    "supersedes_observation_id": observation.supersedes_observation_id,
+                    "text_value": observation.text_value,
+                    "value_kind": observation.value_kind,
+                }
+            )
+            payload_values.append(
+                (
+                    observation.observation_id,
+                    f"{observation.idempotency_key}:payload:v1",
+                    "fact_observation_payload.v1",
+                    payload_json,
+                    digest_text(payload_json),
+                    observation.recorded_at,
+                )
+            )
+
+        placeholders = ",".join("?" for _ in observation_columns)
+        self._conn.executemany(
+            "INSERT INTO fact_observations_v2 "
+            f"({','.join(observation_columns)}) VALUES ({placeholders})",  # nosec B608 -- fixed FactPlaneV2 columns and generated placeholders; values remain bound
+            observation_values,
+        )
+        self._conn.executemany(
+            "INSERT INTO fact_reported_observation_anchors_v2 "
+            "(observation_id,idempotency_key,subject_binding_revision_id,"
+            "extraction_run_id,source_taxonomy_version,extractor_name,"
+            "extractor_code_version,extractor_config_sha256,"
+            "extraction_input_sha256,extraction_output_sha256,raw_entry_sha256,"
+            "anchor_payload_json,anchor_payload_sha256,recorded_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            anchor_values,
+        )
+        self._conn.executemany(
+            "INSERT INTO fact_observation_payload_commitments_v2 "
+            "(observation_id,idempotency_key,payload_version,canonical_payload_json,"
+            "observation_payload_sha256,committed_at) VALUES (?,?,?,?,?,?)",
+            payload_values,
+        )
+
+    def _persist_semantic_cell(
+        self,
+        cell: FactCellV2,
+        *,
+        existing: tuple[object, ...] | None,
+    ) -> PersistResult:
         """Reuse the first-seen envelope for one exact semantic coordinate."""
-        row = self._conn.execute(
-            "SELECT cell.fact_cell_id,cell.idempotency_key,"
-            "seal.semantic_key_version,seal.semantic_identity_json,"
-            "seal.dimension_set_json "
-            "FROM fact_cell_identity_seals_v2 AS seal "
-            "JOIN fact_cells_v2 AS cell "
-            "ON cell.fact_cell_id = seal.fact_cell_id "
-            "WHERE seal.semantic_key_sha256 = ?",
-            (cell.semantic_key_sha256,),
-        ).fetchone()
-        if row is None:
+        if existing is None:
             return self._plane.persist_cell(cell)
         expected = (
             cell.fact_cell_id,
@@ -313,7 +533,7 @@ class SourceFactRepository:
             cell.semantic_identity_json,
             cell.dimensions_json,
         )
-        if tuple(row) != expected:
+        if existing != expected:
             raise ValueError(
                 "existing semantic fact cell conflicts with deterministic "
                 "identity or normalized dimensions"
@@ -348,18 +568,28 @@ class SourceFactRepository:
                 for item in publication.resolutions
             ),
         )
+        record_kinds: tuple[PublicationMemberKind, ...] = (
+            "fact_cell",
+            "fact_observation",
+            "observation_relation",
+            "derivation_seal",
+            "extraction_seal",
+            "resolution_revision",
+        )
+        coordinate_maps = {
+            record_kind: record_coordinates(
+                self._conn,
+                record_kind,
+                tuple(record_id for kind, record_id in records if kind == record_kind),
+            )
+            for record_kind in record_kinds
+        }
         members: list[SourceFactPublicationMember] = []
         for ordinal, (record_kind, record_id) in enumerate(records):
-            member_record_idempotency_key = record_idempotency_key(
-                self._conn,
-                record_kind,
-                record_id,
-            )
-            member_record_commitment_sha256 = record_commitment(
-                self._conn,
-                record_kind,
-                record_id,
-            )
+            (
+                member_record_idempotency_key,
+                member_record_commitment_sha256,
+            ) = coordinate_maps[record_kind][record_id]
             canonical = publication_member_payload(
                 member_ordinal=ordinal,
                 record_kind=record_kind,
@@ -506,7 +736,8 @@ class SourceFactRepository:
             verified = verify_source_fact_publication(
                 self._conn,
                 publication_id=publication.publication_id,
-                cutoff=publication.recorded_at,
+                cutoff=publication.created_at,
+                observed_through=publication.recorded_at,
             )
             return (
                 verified.publication_payload_sha256,
@@ -522,14 +753,12 @@ class SourceFactRepository:
         )
         member_columns = tuple(SourceFactPublicationMember.model_fields)
         member_placeholders = ",".join("?" for _ in member_columns)
-        for member in members:
-            values = tuple(getattr(member, column) for column in member_columns)
-            self._conn.execute(
-                "INSERT INTO source_fact_publication_members "  # nosec B608 -- trusted internal SQL shape; values remain bound
-                f"({','.join(member_columns)}) "
-                f"VALUES ({member_placeholders})",
-                values,
-            )
+        self._conn.executemany(
+            "INSERT INTO source_fact_publication_members "  # nosec B608 -- trusted internal SQL shape; values remain bound
+            f"({','.join(member_columns)}) "
+            f"VALUES ({member_placeholders})",
+            (tuple(getattr(member, column) for column in member_columns) for member in members),
+        )
         self._conn.execute(
             "INSERT INTO source_fact_publication_seals "
             "(publication_seal_id,idempotency_key,publication_id,"
@@ -549,7 +778,8 @@ class SourceFactRepository:
         verified = verify_source_fact_publication(
             self._conn,
             publication_id=publication.publication_id,
-            cutoff=publication.recorded_at,
+            cutoff=publication.created_at,
+            observed_through=publication.recorded_at,
         )
         return (
             verified.publication_payload_sha256,
@@ -634,18 +864,31 @@ class SourceFactRepository:
         self,
         publication: SourceFactPublication,
     ) -> None:
-        for item in publication.reported_facts:
-            row = self._conn.execute(
-                "SELECT 1 FROM fact_reported_observation_anchors_v2 AS anchor "
-                "JOIN fact_extraction_run_completeness_seals_v2 AS seal "
-                "ON seal.extraction_run_id = anchor.extraction_run_id "
-                "WHERE anchor.observation_id = ?",
-                (item.observation.observation_id,),
-            ).fetchone()
-            if row is None:
-                raise ValueError(
-                    "reported observations must have a complete extraction seal before publication"
+        observation_ids = tuple(
+            item.observation.observation_id for item in publication.reported_facts
+        )
+        complete: set[str] = set()
+        for start in range(0, len(observation_ids), 400):
+            batch = observation_ids[start : start + 400]
+            placeholders = ",".join("?" for _ in batch)
+            complete.update(
+                str(row[0])
+                for row in self._conn.execute(
+                    "SELECT anchor.observation_id "
+                    "FROM fact_reported_observation_anchors_v2 AS anchor "
+                    "JOIN fact_extraction_run_completeness_seals_v2 AS seal "
+                    "ON seal.extraction_run_id=anchor.extraction_run_id "
+                    f"WHERE anchor.observation_id IN ({placeholders})",  # nosec B608 -- placeholders are generated from a bounded integer batch size
+                    batch,
                 )
+            )
+        missing = tuple(
+            observation_id for observation_id in observation_ids if observation_id not in complete
+        )
+        if missing:
+            raise ValueError(
+                "reported observations must have a complete extraction seal before publication"
+            )
 
     @contextmanager
     def _savepoint(self) -> Generator[None, None, None]:

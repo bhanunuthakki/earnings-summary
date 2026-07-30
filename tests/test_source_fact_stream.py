@@ -215,6 +215,26 @@ def _insert_empty_0241_publication(
     )
 
 
+def _append_empty_publication_event(
+    conn: sqlite3.Connection,
+    publication_id: str,
+    *,
+    sealed_at: datetime,
+    assigned_at: datetime,
+) -> PublicationEvent:
+    _insert_empty_0241_publication(
+        conn,
+        publication_id,
+        recorded_at=sealed_at,
+    )
+    return append_verified_publication_event(
+        conn,
+        publication_id=publication_id,
+        sequence_basis="legacy_backfill",
+        assigned_at=assigned_at,
+    )
+
+
 def test_repository_replay_returns_stable_sequence(
     conn: sqlite3.Connection,
 ) -> None:
@@ -589,64 +609,163 @@ def test_legacy_backfill_rejects_transactional_stream(
         backfill_legacy_publication_stream(conn)
 
 
-def test_resolution_snapshot_watermark_is_exact_and_time_complete(
+def test_resolution_snapshot_watermark_binds_k_before_o_exactly(
     conn: sqlite3.Connection,
 ) -> None:
-    repository = SourceFactRepository(conn)
-    repository.publish(_publication("publication-watermark-1"))
-    second = repository.publish(_publication("publication-watermark-2"))
-    cutoff = STAMP + timedelta(minutes=1)
+    cutoff = STAMP
+    observed = cutoff + timedelta(minutes=2)
+    _append_empty_publication_event(
+        conn,
+        "publication-watermark-1",
+        sealed_at=cutoff,
+        assigned_at=cutoff + timedelta(minutes=1),
+    )
+    second = _append_empty_publication_event(
+        conn,
+        "publication-watermark-2",
+        sealed_at=cutoff,
+        assigned_at=observed,
+    )
     engine = CanonicalFactResolutionEngine(conn)
-    engine.seal_snapshot("resolution-snapshot-1", cutoff, cutoff, EMPTY_SCOPE)
+    engine.seal_snapshot("resolution-snapshot-1", cutoff, observed, EMPTY_SCOPE)
 
     bound = bind_resolution_snapshot_watermark(
         conn,
         resolution_snapshot_id="resolution-snapshot-1",
         cutoff_at=cutoff,
-        recorded_at=cutoff,
+        observed_through=observed,
     )
     replay = verify_resolution_snapshot_watermark(
         conn,
         resolution_snapshot_id="resolution-snapshot-1",
         cutoff_at=cutoff,
+        observed_through=observed,
     )
     assert replay == bound
+    assert bound.observed_through == observed
     assert bound.publication_high_watermark == second.publication_sequence
-    assert bound.high_watermark_event_sha256 == second.publication_event_sha256
+    assert bound.high_watermark_event_sha256 == second.event_sha256
 
 
-def test_resolution_watermark_excludes_events_after_cutoff(
+def test_resolution_watermark_ignores_events_recorded_after_observed_through(
     conn: sqlite3.Connection,
 ) -> None:
-    after = STAMP + timedelta(hours=1)
-    SourceFactRepository(conn).publish(
-        _publication(
-            "publication-after-cutoff",
-            recorded_at=after,
-        )
+    cutoff = STAMP
+    observed = cutoff + timedelta(minutes=1)
+    before = _append_empty_publication_event(
+        conn,
+        "publication-before-observed-through",
+        sealed_at=cutoff,
+        assigned_at=observed,
     )
     CanonicalFactResolutionEngine(conn).seal_snapshot(
         "resolution-snapshot-before",
-        STAMP,
-        after,
+        cutoff,
+        observed,
         EMPTY_SCOPE,
     )
 
     bound = bind_resolution_snapshot_watermark(
         conn,
         resolution_snapshot_id="resolution-snapshot-before",
-        cutoff_at=STAMP,
-        recorded_at=after,
+        cutoff_at=cutoff,
+        observed_through=observed,
+    )
+    _append_empty_publication_event(
+        conn,
+        "publication-after-observed-through",
+        sealed_at=cutoff,
+        assigned_at=observed + timedelta(seconds=1),
     )
 
-    assert bound.cursor == PublicationCursor.initial()
+    assert bound.cursor == before.cursor
     assert (
         publication_cursor_through(
             conn,
-            cutoff_at=STAMP,
+            cutoff_at=cutoff,
+            observed_through=observed,
         )
-        == PublicationCursor.initial()
+        == before.cursor
     )
+    assert (
+        verify_resolution_snapshot_watermark(
+            conn,
+            resolution_snapshot_id="resolution-snapshot-before",
+            cutoff_at=cutoff,
+            observed_through=observed + timedelta(hours=1),
+        )
+        == bound
+    )
+
+
+def test_resolution_watermark_replay_detects_pre_observed_through_event_drift(
+    conn: sqlite3.Connection,
+) -> None:
+    cutoff = STAMP
+    observed = cutoff + timedelta(minutes=1)
+    event = _append_empty_publication_event(
+        conn,
+        "publication-before-drift",
+        sealed_at=cutoff,
+        assigned_at=observed,
+    )
+    CanonicalFactResolutionEngine(conn).seal_snapshot(
+        "resolution-snapshot-drift",
+        cutoff,
+        observed,
+        EMPTY_SCOPE,
+    )
+    bind_resolution_snapshot_watermark(
+        conn,
+        resolution_snapshot_id="resolution-snapshot-drift",
+        cutoff_at=cutoff,
+        observed_through=observed,
+    )
+    conn.execute("DROP TRIGGER trg_source_fact_publication_stream_append_only")
+    conn.execute(
+        "UPDATE source_fact_publication_stream SET event_sha256=? WHERE publication_sequence=?",
+        ("f" * 64, event.publication_sequence),
+    )
+
+    with pytest.raises(
+        PublicationStreamVerificationError,
+        match="publication_event_tampered",
+    ):
+        verify_resolution_snapshot_watermark(
+            conn,
+            resolution_snapshot_id="resolution-snapshot-drift",
+            cutoff_at=cutoff,
+            observed_through=observed,
+        )
+
+
+def test_publication_cursor_rejects_non_prefix_dual_clock_ambiguity(
+    conn: sqlite3.Connection,
+) -> None:
+    cutoff = STAMP
+    observed = cutoff + timedelta(minutes=1)
+    _append_empty_publication_event(
+        conn,
+        "publication-observed-later-first",
+        sealed_at=cutoff,
+        assigned_at=observed + timedelta(seconds=1),
+    )
+    _append_empty_publication_event(
+        conn,
+        "publication-observed-earlier-second",
+        sealed_at=cutoff,
+        assigned_at=observed,
+    )
+
+    with pytest.raises(
+        PublicationStreamVerificationError,
+        match="publication_cursor_non_prefix_ambiguity",
+    ):
+        publication_cursor_through(
+            conn,
+            cutoff_at=cutoff,
+            observed_through=observed,
+        )
 
 
 def test_empty_stream_resolution_watermark_uses_initial_cursor(
@@ -663,12 +782,13 @@ def test_empty_stream_resolution_watermark_uses_initial_cursor(
         conn,
         resolution_snapshot_id="resolution-snapshot-empty",
         cutoff_at=STAMP,
-        recorded_at=STAMP,
+        observed_through=STAMP,
     )
     replay = verify_resolution_snapshot_watermark(
         conn,
         resolution_snapshot_id="resolution-snapshot-empty",
         cutoff_at=STAMP,
+        observed_through=STAMP,
     )
 
     assert bound.cursor == PublicationCursor.initial()

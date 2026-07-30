@@ -13,6 +13,7 @@ from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from provenance.population_completeness import PopulationCompletenessLedger
 from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
 from provenance.search_index_lineage import load_projection_seal
 from provenance.verifier_identity import verifier_source_artifact_sha256
@@ -159,6 +160,13 @@ class HeterogeneousRetrievalRequest(_Frozen):
     filters: RetrievalFilters = RetrievalFilters()
     cutoff_at: datetime
     recorded_at: datetime
+    population_run_id: str | None = Field(default=None, max_length=128)
+    population_receipt_set_sha256: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+    )
+    population_observed_through: datetime | None = None
 
     @model_validator(mode="after")
     def _shape(self) -> Self:
@@ -173,6 +181,27 @@ class HeterogeneousRetrievalRequest(_Frozen):
             raise ValueError("retrieval supports at most 64 narrative bundles")
         if _utc(self.recorded_at) < _utc(self.cutoff_at):
             raise ValueError("retrieval recording cannot precede cutoff")
+        population_coordinates = (
+            self.population_run_id,
+            self.population_receipt_set_sha256,
+            self.population_observed_through,
+        )
+        if any(value is None for value in population_coordinates) != all(
+            value is None for value in population_coordinates
+        ):
+            raise ValueError("population cutover coordinates must be complete or absent")
+        if self.population_receipt_set_sha256 is not None and (
+            any(
+                character not in "0123456789abcdef"
+                for character in self.population_receipt_set_sha256
+            )
+        ):
+            raise ValueError("population receipt commitment must be lowercase sha256")
+        if self.population_observed_through is not None and (
+            _utc(self.population_observed_through) < _utc(self.cutoff_at)
+            or _utc(self.recorded_at) < _utc(self.population_observed_through)
+        ):
+            raise ValueError("retrieval trace cannot predate its population cutover")
         return self
 
 
@@ -319,6 +348,7 @@ def retrieve_heterogeneous(
     )
     ranker_json = canonical_json(request.ranker)
     filters_json = canonical_json(request.filters)
+    population_columns = _trace_population_columns(conn)
     existing = _row(
         conn,
         "SELECT * FROM heterogeneous_retrieval_trace_headers WHERE trace_id=? OR idempotency_key=?",
@@ -336,6 +366,8 @@ def retrieve_heterogeneous(
             or _int(existing["candidate_limit"]) != request.candidate_limit
             or _int(existing["result_limit"]) != request.result_limit
             or canonical_time(existing["cutoff_at"]) != canonical_time(request.cutoff_at)
+            or _trace_population_coordinates(existing, population_columns)
+            != _request_population_coordinates(request)
         ):
             raise HeterogeneousRetrievalError(
                 "retrieval_trace_idempotency_conflict",
@@ -375,12 +407,14 @@ def retrieve_heterogeneous(
         request.result_limit,
         db_time(request.cutoff_at),
         db_time(request.recorded_at),
+        *_request_population_db_values(request, population_columns),
     )
+    header_columns = _HEADER_COLUMNS + population_columns
     with _savepoint(conn, "heterogeneous_retrieval_trace"):
         conn.execute(
             "INSERT INTO heterogeneous_retrieval_trace_headers "  # nosec B608 -- trusted internal SQL shape; values remain bound
-            f"({','.join(_HEADER_COLUMNS)}) VALUES "
-            f"({','.join('?' for _ in _HEADER_COLUMNS)})",
+            f"({','.join(header_columns)}) VALUES "
+            f"({','.join('?' for _ in header_columns)})",
             header_values,
         )
         ranked = _rank_candidates(request, candidates)
@@ -418,6 +452,10 @@ def verify_heterogeneous_retrieval_trace(
     ranker = RetrievalRanker.model_validate(_json_object(header["ranker_json"]))
     filters = RetrievalFilters.model_validate(_json_object(header["filters_json"]))
     research_cutoff = _research_cutoff(conn, str(header["research_snapshot_id"]))
+    population_columns = _trace_population_columns(conn)
+    population_run_id, population_receipt_sha, population_observed_through = (
+        _trace_population_coordinates(header, population_columns)
+    )
     request = HeterogeneousRetrievalRequest(
         trace_id=trace_id,
         idempotency_key=str(header["idempotency_key"]),
@@ -433,9 +471,13 @@ def verify_heterogeneous_retrieval_trace(
         filters=filters,
         cutoff_at=_datetime(header["cutoff_at"]),
         recorded_at=_datetime(header["recorded_at"]),
+        population_run_id=population_run_id,
+        population_receipt_set_sha256=population_receipt_sha,
+        population_observed_through=population_observed_through,
     )
     if canonical_time(research_cutoff) != canonical_time(request.cutoff_at):
         raise HeterogeneousRetrievalError("retrieval_trace_cutoff_mismatch", trace_id=trace_id)
+    _verify_trace_population_cutover(conn, request)
     commitments = _verify_research_coordinates(conn, request)
     narrative_json = canonical_json(commitments["narrative"])
     semantic_receipts = _json_array(header["semantic_receipts_json"])
@@ -613,18 +655,15 @@ def verify_heterogeneous_retrieval_trace(
         result_jsons.append(payload)
     candidate_set_json = canonical_json(candidate_jsons)
     result_set_json = canonical_json(result_jsons)
-    trace_payload = canonical_json(
-        {
-            "candidate_set_sha256": digest_text(candidate_set_json),
-            "fact_projection_seal_sha256": header["fact_projection_seal_sha256"],
-            "narrative_commitments_sha256": header["narrative_commitments_sha256"],
-            "query_sha256": header["query_sha256"],
-            "research_snapshot_sha256": header["research_snapshot_sha256"],
-            "result_set_sha256": digest_text(result_set_json),
-            "semantic_receipts_sha256": header["semantic_receipts_sha256"],
-            "trace_id": trace_id,
-            "trace_version": "heterogeneous_retrieval_trace.v1",
-        }
+    trace_payload = _sealed_trace_payload(
+        request,
+        candidate_set_sha256=digest_text(candidate_set_json),
+        fact_projection_seal_sha256=str(header["fact_projection_seal_sha256"]),
+        narrative_commitments_sha256=str(header["narrative_commitments_sha256"]),
+        query_sha256=str(header["query_sha256"]),
+        research_snapshot_sha256=str(header["research_snapshot_sha256"]),
+        result_set_sha256=digest_text(result_set_json),
+        semantic_receipts_sha256=str(header["semantic_receipts_sha256"]),
     )
     if (
         _int(seal["candidate_count"]) != len(candidates)
@@ -1356,25 +1395,22 @@ def _write_trace(
         )
     candidate_json = canonical_json(candidate_payloads)
     result_json = canonical_json(result_payloads)
-    trace_payload = canonical_json(
-        {
-            "candidate_set_sha256": digest_text(candidate_json),
-            "fact_projection_seal_sha256": commitments["fact_projection_seal_sha256"],
-            "narrative_commitments_sha256": digest_text(canonical_json(commitments["narrative"])),
-            "query_sha256": digest_text(
-                canonical_json(
-                    {
-                        "query_text": request.query_text,
-                        "query_version": "heterogeneous_query.v1",
-                    }
-                )
-            ),
-            "research_snapshot_sha256": commitments["research_snapshot_sha256"],
-            "result_set_sha256": digest_text(result_json),
-            "semantic_receipts_sha256": commitments["semantic_receipts_sha256"],
-            "trace_id": request.trace_id,
-            "trace_version": "heterogeneous_retrieval_trace.v1",
-        }
+    trace_payload = _sealed_trace_payload(
+        request,
+        candidate_set_sha256=digest_text(candidate_json),
+        fact_projection_seal_sha256=str(commitments["fact_projection_seal_sha256"]),
+        narrative_commitments_sha256=digest_text(canonical_json(commitments["narrative"])),
+        query_sha256=digest_text(
+            canonical_json(
+                {
+                    "query_text": request.query_text,
+                    "query_version": "heterogeneous_query.v1",
+                }
+            )
+        ),
+        research_snapshot_sha256=str(commitments["research_snapshot_sha256"]),
+        result_set_sha256=digest_text(result_json),
+        semantic_receipts_sha256=str(commitments["semantic_receipts_sha256"]),
     )
     conn.execute(
         "INSERT INTO heterogeneous_retrieval_trace_seals VALUES (?,?,?,?,?,?,?,?,?,?)",
@@ -1607,6 +1643,139 @@ def _research_cutoff(conn: sqlite3.Connection, research_snapshot_id: str) -> dat
     return _datetime(row[0])
 
 
+def _trace_population_columns(
+    conn: sqlite3.Connection,
+) -> tuple[str, ...]:
+    available = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(heterogeneous_retrieval_trace_headers)")
+    }
+    present = tuple(name for name in _POPULATION_HEADER_COLUMNS if name in available)
+    if present and present != _POPULATION_HEADER_COLUMNS:
+        raise HeterogeneousRetrievalError("retrieval_trace_population_schema_partial")
+    return present
+
+
+def _request_population_coordinates(
+    request: HeterogeneousRetrievalRequest,
+) -> tuple[str | None, str | None, datetime | None]:
+    return (
+        request.population_run_id,
+        request.population_receipt_set_sha256,
+        (
+            None
+            if request.population_observed_through is None
+            else _utc(request.population_observed_through)
+        ),
+    )
+
+
+def _request_population_db_values(
+    request: HeterogeneousRetrievalRequest,
+    population_columns: tuple[str, ...],
+) -> tuple[object, ...]:
+    coordinates = _request_population_coordinates(request)
+    if not population_columns:
+        if any(value is not None for value in coordinates):
+            raise HeterogeneousRetrievalError(
+                "retrieval_trace_population_schema_missing",
+                trace_id=request.trace_id,
+            )
+        return ()
+    return (
+        request.population_run_id,
+        request.population_receipt_set_sha256,
+        (
+            None
+            if request.population_observed_through is None
+            else db_time(request.population_observed_through)
+        ),
+    )
+
+
+def _trace_population_coordinates(
+    header: dict[str, object],
+    population_columns: tuple[str, ...],
+) -> tuple[str | None, str | None, datetime | None]:
+    if not population_columns:
+        return (None, None, None)
+    raw = tuple(header[name] for name in _POPULATION_HEADER_COLUMNS)
+    if all(value is None for value in raw):
+        return (None, None, None)
+    if any(value is None for value in raw):
+        raise HeterogeneousRetrievalError(
+            "retrieval_trace_population_coordinates_partial",
+            trace_id=str(header.get("trace_id", "")) or None,
+        )
+    receipt_sha = str(raw[1])
+    if len(receipt_sha) != 64 or any(
+        character not in "0123456789abcdef" for character in receipt_sha
+    ):
+        raise HeterogeneousRetrievalError(
+            "retrieval_trace_population_coordinates_invalid",
+            trace_id=str(header.get("trace_id", "")) or None,
+        )
+    return str(raw[0]), receipt_sha, _datetime(raw[2])
+
+
+def _verify_trace_population_cutover(
+    conn: sqlite3.Connection,
+    request: HeterogeneousRetrievalRequest,
+) -> None:
+    if request.population_run_id is None:
+        return
+    try:
+        verified = PopulationCompletenessLedger(conn).verify(request.population_run_id)
+    except (sqlite3.Error, ValueError) as exc:
+        raise HeterogeneousRetrievalError(
+            "retrieval_trace_population_cutover_invalid",
+            trace_id=request.trace_id,
+        ) from exc
+    if (
+        verified.receipt_set_sha256 != request.population_receipt_set_sha256
+        or canonical_time(verified.temporal_scope.knowledge_cutoff)
+        != canonical_time(request.cutoff_at)
+        or canonical_time(verified.temporal_scope.observed_through)
+        != canonical_time(request.population_observed_through)
+    ):
+        raise HeterogeneousRetrievalError(
+            "retrieval_trace_population_cutover_mismatch",
+            trace_id=request.trace_id,
+        )
+
+
+def _sealed_trace_payload(
+    request: HeterogeneousRetrievalRequest,
+    *,
+    candidate_set_sha256: str,
+    fact_projection_seal_sha256: str,
+    narrative_commitments_sha256: str,
+    query_sha256: str,
+    research_snapshot_sha256: str,
+    result_set_sha256: str,
+    semantic_receipts_sha256: str,
+) -> str:
+    payload: dict[str, object] = {
+        "candidate_set_sha256": candidate_set_sha256,
+        "fact_projection_seal_sha256": fact_projection_seal_sha256,
+        "narrative_commitments_sha256": narrative_commitments_sha256,
+        "query_sha256": query_sha256,
+        "research_snapshot_sha256": research_snapshot_sha256,
+        "result_set_sha256": result_set_sha256,
+        "semantic_receipts_sha256": semantic_receipts_sha256,
+        "trace_id": request.trace_id,
+        "trace_version": "heterogeneous_retrieval_trace.v1",
+    }
+    if request.population_run_id is not None:
+        payload["population_cutover"] = {
+            "observed_through": canonical_time(request.population_observed_through),
+            "population_run_id": request.population_run_id,
+            "receipt_set_sha256": request.population_receipt_set_sha256,
+        }
+        payload["trace_version"] = "heterogeneous_retrieval_trace.v2"
+    return canonical_json(payload)
+
+
 @contextmanager
 def _savepoint(conn: sqlite3.Connection, name: str) -> Generator[None, None, None]:
     conn.execute(f"SAVEPOINT {name}")
@@ -1683,4 +1852,10 @@ _HEADER_COLUMNS = (
     "result_limit",
     "cutoff_at",
     "recorded_at",
+)
+
+_POPULATION_HEADER_COLUMNS = (
+    "population_run_id",
+    "population_receipt_set_sha256",
+    "population_observed_through",
 )

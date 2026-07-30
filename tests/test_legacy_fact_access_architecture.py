@@ -105,6 +105,9 @@ AUDITED_LEGACY_FACT_READS = {
     "src/provenance/financial_fact_resolution.py": 2,
     "src/provenance/integrity_audit.py": 1,
     "src/provenance/legacy_canonical_parity.py": 2,
+    # The cutover receipt must count the sealed legacy source universe and
+    # compare both legacy planes against v2 before ownership can transfer.
+    "src/provenance/population_cutover.py": 2,
     "src/report/metrics_view.py": 1,
     "src/report/sections/financials.py": 7,
     "src/report/sections/thesis.py": 1,

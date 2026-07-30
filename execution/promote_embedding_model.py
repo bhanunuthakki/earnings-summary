@@ -13,11 +13,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
 from search.embedding_promotion import (  # noqa: E402
+    EmbeddingApprovalReceipt,
     load_evaluation_artifact,
     persist_promotion,
     promotion_from_evaluation,
 )
-from search.embedding_runtime_artifact import load_runtime_artifact  # noqa: E402
+from search.embedding_runtime_registration import load_runtime_registration  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
@@ -36,30 +37,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--evaluation-artifact", type=Path, required=True)
     parser.add_argument("--revision", type=int, required=True)
-    parser.add_argument("--provider", default="fastembed")
-    parser.add_argument("--dimensions", type=int, required=True)
-    parser.add_argument("--runtime-artifact", type=Path, required=True)
-    parser.add_argument("--approved-by", required=True)
-    parser.add_argument(
-        "--approved-at",
-        type=_approved_at,
-        required=True,
-        help="Owner approval timestamp with an explicit timezone.",
-    )
+    parser.add_argument("--runtime-registration-id", required=True)
+    parser.add_argument("--approval-spec", type=Path, required=True)
     parser.add_argument("--supersedes-promotion-id")
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
-    artifact, artifact_sha = load_evaluation_artifact(args.evaluation_artifact)
-    runtime_artifact = load_runtime_artifact(args.runtime_artifact)
+    artifact, _artifact_sha = load_evaluation_artifact(args.evaluation_artifact)
+    approval_raw = args.approval_spec.read_text(encoding="utf-8")
+    approval = EmbeddingApprovalReceipt.model_validate_json(approval_raw)
+    if approval_raw.rstrip("\r\n") != approval.canonical_json():
+        raise ValueError("embedding approval receipt file is not canonical JSON")
+    conn = connect_sqlite(args.db, role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        runtime_registration = load_runtime_registration(conn, args.runtime_registration_id)
+    finally:
+        conn.close()
+    if runtime_registration is None:
+        raise ValueError("embedding runtime registration is absent")
     promotion = promotion_from_evaluation(
         artifact,
-        evaluation_artifact_sha256=artifact_sha,
         revision=args.revision,
-        provider=args.provider,
-        dimensions=args.dimensions,
-        approved_by=args.approved_by,
-        approved_at=args.approved_at,
-        runtime_artifact=runtime_artifact,
+        runtime_registration=runtime_registration,
+        approval=approval,
         supersedes_promotion_id=args.supersedes_promotion_id,
     )
     if not args.apply:

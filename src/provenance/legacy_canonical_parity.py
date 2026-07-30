@@ -9,6 +9,7 @@ private delta-chain SQL.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections import Counter, defaultdict
@@ -21,6 +22,7 @@ from typing import Literal, Protocol, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from provenance.population_completeness import PopulationTemporalScope
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 MAX_PAGE_SIZE = 1_000
@@ -59,23 +61,44 @@ class _Frozen(BaseModel):
 
 
 class LegacyFactCursor(_Frozen):
+    issuer_id: str = Field(min_length=1, max_length=128)
+    temporal_scope: PopulationTemporalScope
+    projection_generation_id: str = Field(min_length=1, max_length=128)
     fact_table_rank: int = Field(ge=0, le=1)
     fact_row_id: int = Field(ge=1)
 
 
 class ParityRequest(_Frozen):
-    cutoff_at: datetime
+    temporal_scope: PopulationTemporalScope
     projection_generation_id: str = Field(min_length=1, max_length=128)
+    issuer_id: str = Field(min_length=1, max_length=128)
     page_size: int = Field(default=1_000, ge=1, le=MAX_PAGE_SIZE)
     max_pages: int = Field(default=10_000, ge=1)
-    max_rows: int = Field(default=1_000_000, ge=1)
+    max_rows: int = Field(default=2_000_000, ge=1)
     after: LegacyFactCursor | None = None
 
     @model_validator(mode="after")
-    def _aware_cutoff(self) -> Self:
-        if self.cutoff_at.tzinfo is None or self.cutoff_at.utcoffset() is None:
-            raise ValueError("parity cutoff_at must be timezone-aware")
+    def _scope_bound_cursor(self) -> Self:
+        for name, value in (
+            ("knowledge_cutoff", self.temporal_scope.knowledge_cutoff),
+            ("observed_through", self.temporal_scope.observed_through),
+        ):
+            if value.tzinfo is None or value.utcoffset() is None:
+                raise ValueError(f"parity {name} must be timezone-aware")
+        if self.after is not None and self.after.issuer_id != self.issuer_id:
+            raise ValueError("parity cursor issuer differs from request issuer")
+        if self.after is not None and self.after.temporal_scope != self.temporal_scope:
+            raise ValueError("parity cursor temporal scope differs from request scope")
+        if (
+            self.after is not None
+            and self.after.projection_generation_id != self.projection_generation_id
+        ):
+            raise ValueError("parity cursor projection differs from request projection")
         return self
+
+    @property
+    def cutoff_at(self) -> datetime:
+        return self.temporal_scope.knowledge_cutoff
 
 
 class ProjectionCoordinate(_Frozen):
@@ -127,6 +150,10 @@ class ProjectionCoordinateReader(Protocol):
     ) -> Sequence[ProjectionCoordinate]: ...
 
 
+class _HashWriter(Protocol):
+    def update(self, data: bytes, /) -> object: ...
+
+
 class FieldDiff(_Frozen):
     field: Literal["value_kind", "value", "period_end", "unit", "currency"]
     legacy_value: str | None
@@ -160,8 +187,10 @@ class ParityRow(_Frozen):
 
 
 class ParityReport(_Frozen):
-    cutoff_at: datetime
+    knowledge_cutoff: datetime
+    observed_through: datetime
     projection_generation_id: str
+    issuer_id: str
     complete: bool
     truncated: bool
     cutover_ready: bool
@@ -174,6 +203,8 @@ class ParityReport(_Frozen):
     mismatch_rows: int = Field(ge=0)
     blocking_legacy_rows: int = Field(ge=0)
     disposition_counts: dict[str, int]
+    legacy_fact_universe_sha256: str = Field(min_length=64, max_length=64)
+    parity_rows_sha256: str = Field(min_length=64, max_length=64)
     next_cursor: LegacyFactCursor | None
     projection_next_cursor: str | None
     rows: tuple[ParityRow, ...]
@@ -206,12 +237,23 @@ def run_legacy_canonical_parity(
         conn.close()
 
 
+def scan_legacy_canonical_parity(
+    conn: sqlite3.Connection,
+    request: ParityRequest,
+    projection_reader: ProjectionCoordinateReader,
+) -> ParityReport:
+    """Scan parity on a caller-owned connection without mutating it."""
+
+    return _scan(conn, request, projection_reader)
+
+
 def _scan(
     conn: sqlite3.Connection,
     request: ParityRequest,
     projection_reader: ProjectionCoordinateReader,
 ) -> ParityReport:
-    cutoff = _db_time(request.cutoff_at)
+    knowledge_cutoff = _db_time(request.temporal_scope.knowledge_cutoff)
+    observed_through = _db_time(request.temporal_scope.observed_through)
     after = request.after
     rows: list[ParityRow] = []
     pages = 0
@@ -219,25 +261,44 @@ def _scan(
     truncated = False
     next_cursor: LegacyFactCursor | None = None
     exhausted = False
+    legacy_key_hasher = hashlib.sha256()
 
     while pages < request.max_pages and legacy_count < request.max_rows:
         remaining = request.max_rows - legacy_count
         page_limit = min(request.page_size, remaining)
-        page = _legacy_page(conn, after, page_limit)
+        page = _legacy_page(conn, request, after, page_limit)
         pages += 1
         if not page:
             exhausted = True
             break
         selected = page
-        evaluated = _evaluate_page(conn, selected, cutoff, request, projection_reader)
+        for key in selected:
+            _commit_model(
+                legacy_key_hasher,
+                {
+                    "fact_table": key.fact_table,
+                    "fact_row_id": key.fact_row_id,
+                },
+            )
+        evaluated = _evaluate_page(
+            conn,
+            selected,
+            knowledge_cutoff,
+            observed_through,
+            request,
+            projection_reader,
+        )
         rows.extend(evaluated)
         legacy_count += len(selected)
         tail = selected[-1]
         after = LegacyFactCursor(
+            issuer_id=request.issuer_id,
+            temporal_scope=request.temporal_scope,
+            projection_generation_id=request.projection_generation_id,
             fact_table_rank=tail.fact_table_rank,
             fact_row_id=tail.fact_row_id,
         )
-        has_more = _has_legacy_after(conn, after)
+        has_more = _has_legacy_after(conn, request, after)
         if has_more:
             if pages >= request.max_pages or legacy_count >= request.max_rows:
                 truncated = True
@@ -294,8 +355,10 @@ def _scan(
     )
     complete = not truncated and request.after is None
     return ParityReport(
-        cutoff_at=_utc(request.cutoff_at),
+        knowledge_cutoff=_utc(request.temporal_scope.knowledge_cutoff),
+        observed_through=_utc(request.temporal_scope.observed_through),
         projection_generation_id=request.projection_generation_id,
+        issuer_id=request.issuer_id,
         complete=complete,
         truncated=truncated,
         cutover_ready=complete and mismatch == 0 and blocking == 0,
@@ -308,6 +371,8 @@ def _scan(
         mismatch_rows=mismatch,
         blocking_legacy_rows=blocking,
         disposition_counts=dict(sorted(counts.items())),
+        legacy_fact_universe_sha256=legacy_key_hasher.hexdigest(),
+        parity_rows_sha256=_parity_rows_sha256(rows),
         next_cursor=next_cursor,
         projection_next_cursor=projection_next_cursor,
         rows=tuple(rows),
@@ -316,33 +381,102 @@ def _scan(
 
 def _legacy_page(
     conn: sqlite3.Connection,
+    request: ParityRequest,
     after: LegacyFactCursor | None,
     limit: int,
 ) -> list[_LegacyKeyRow]:
     rank = -1 if after is None else after.fact_table_rank
     row_id = 0 if after is None else after.fact_row_id
-    raw = conn.execute(
+    knowledge_cutoff = _db_time(request.temporal_scope.knowledge_cutoff)
+    observed_through = _db_time(request.temporal_scope.observed_through)
+    cursor = conn.execute(
         """
         SELECT fact_table_rank,fact_table,fact_row_id,kpi_lineage_required
         FROM (
           SELECT 0 AS fact_table_rank,'financial_facts' AS fact_table,
-                 id AS fact_row_id,0 AS kpi_lineage_required
-          FROM financial_facts
+                 fact.id AS fact_row_id,0 AS kpi_lineage_required
+          FROM financial_facts fact
+          JOIN documents document ON document.id=fact.source_doc_id
+          JOIN legacy_fact_evidence_match_revisions current_match
+            ON current_match.fact_table='financial_facts'
+           AND current_match.fact_row_id=fact.id
+           AND current_match.issuer_id=?
+           AND datetime(current_match.knowledge_at)<=datetime(?)
+           AND datetime(current_match.recorded_at)<=datetime(?)
+          WHERE datetime(document.fetched_at)<=datetime(?)
+            AND NOT EXISTS (
+            SELECT 1
+            FROM legacy_fact_evidence_match_revisions newer
+            WHERE newer.fact_table=current_match.fact_table
+              AND newer.fact_row_id=current_match.fact_row_id
+              AND datetime(newer.knowledge_at)<=datetime(?)
+              AND datetime(newer.recorded_at)<=datetime(?)
+              AND (
+                newer.revision>current_match.revision
+                OR (
+                  newer.revision=current_match.revision
+                  AND newer.match_revision_id>current_match.match_revision_id
+                )
+              )
+          )
           UNION ALL
-          SELECT 1,'kpi_facts',id,
-                 CASE WHEN computed_from IS NOT NULL
-                        OR formula_id IS NOT NULL OR formula_version IS NOT NULL
-                        OR lower(coalesce(extracted_by,'')) LIKE '%derived%'
+          SELECT 1,'kpi_facts',fact.id,
+                 CASE WHEN fact.computed_from IS NOT NULL
+                        OR fact.formula_id IS NOT NULL OR fact.formula_version IS NOT NULL
+                        OR lower(coalesce(fact.extracted_by,'')) LIKE '%derived%'
                       THEN 1 ELSE 0 END
-          FROM kpi_facts
+          FROM kpi_facts fact
+          JOIN documents document ON document.id=fact.source_doc_id
+          JOIN legacy_fact_evidence_match_revisions current_match
+            ON current_match.fact_table='kpi_facts'
+           AND current_match.fact_row_id=fact.id
+           AND current_match.issuer_id=?
+           AND datetime(current_match.knowledge_at)<=datetime(?)
+           AND datetime(current_match.recorded_at)<=datetime(?)
+          WHERE datetime(document.fetched_at)<=datetime(?)
+            AND NOT EXISTS (
+            SELECT 1
+            FROM legacy_fact_evidence_match_revisions newer
+            WHERE newer.fact_table=current_match.fact_table
+              AND newer.fact_row_id=current_match.fact_row_id
+              AND datetime(newer.knowledge_at)<=datetime(?)
+              AND datetime(newer.recorded_at)<=datetime(?)
+              AND (
+                newer.revision>current_match.revision
+                OR (
+                  newer.revision=current_match.revision
+                  AND newer.match_revision_id>current_match.match_revision_id
+                )
+              )
+          )
         )
         WHERE fact_table_rank > ?
            OR (fact_table_rank = ? AND fact_row_id > ?)
         ORDER BY fact_table_rank,fact_row_id
         LIMIT ?
         """,
-        (rank, rank, row_id, limit),
-    ).fetchall()
+        (
+            request.issuer_id,
+            knowledge_cutoff,
+            observed_through,
+            knowledge_cutoff,
+            knowledge_cutoff,
+            observed_through,
+            request.issuer_id,
+            knowledge_cutoff,
+            observed_through,
+            knowledge_cutoff,
+            knowledge_cutoff,
+            observed_through,
+            rank,
+            rank,
+            row_id,
+            limit,
+        ),
+    )
+    raw = cursor.fetchmany(limit + 1)
+    if len(raw) > limit:
+        raise ParityContractError("legacy fact query exceeded requested page size")
     return [
         _LegacyKeyRow(
             fact_table_rank=int(row["fact_table_rank"]),
@@ -357,31 +491,67 @@ def _legacy_page(
     ]
 
 
-def _has_legacy_after(conn: sqlite3.Connection, after: LegacyFactCursor) -> bool:
-    return bool(_legacy_page(conn, after, 1))
+def _has_legacy_after(
+    conn: sqlite3.Connection,
+    request: ParityRequest,
+    after: LegacyFactCursor,
+) -> bool:
+    return bool(_legacy_page(conn, request, after, 1))
 
 
 def _evaluate_page(
     conn: sqlite3.Connection,
     keys: Sequence[_LegacyKeyRow],
-    cutoff: str,
+    knowledge_cutoff: str,
+    observed_through: str,
     request: ParityRequest,
     reader: ProjectionCoordinateReader,
 ) -> list[ParityRow]:
-    legacy_resolved = _legacy_resolved_keys(conn, keys, cutoff)
-    matches = _latest_matches(conn, keys, cutoff)
-    bindings = _current_document_bindings(conn, matches.values(), cutoff)
-    bridges = _v2_bridges(conn, matches.values(), cutoff)
+    legacy_resolved = _legacy_resolved_keys(
+        conn,
+        keys,
+        knowledge_cutoff,
+        observed_through,
+    )
+    matches = _latest_matches(
+        conn,
+        keys,
+        knowledge_cutoff,
+        observed_through,
+        issuer_id=request.issuer_id,
+    )
+    bindings = _current_document_bindings(
+        conn,
+        matches.values(),
+        knowledge_cutoff,
+        observed_through,
+    )
+    bridges = _v2_bridges(
+        conn,
+        matches.values(),
+        knowledge_cutoff,
+        observed_through,
+    )
     observation_ids = [
         str(items[0]["observation_id"]) for items in bridges.values() if len(items) == 1
     ]
-    ontology = _ontology_bindings(conn, observation_ids, cutoff)
+    ontology = _ontology_bindings(
+        conn,
+        observation_ids,
+        knowledge_cutoff,
+        observed_through,
+    )
     coordinates = [
         str(row["canonical_metric_cell_id"])
         for row in ontology.values()
         if row is not None and row["binding_status"] == "bound"
     ]
-    resolutions = _canonical_resolutions(conn, coordinates, cutoff)
+    resolutions = _canonical_resolutions(
+        conn,
+        coordinates,
+        knowledge_cutoff,
+        observed_through,
+    )
     projection_ids = [
         coordinate
         for coordinate, resolution in resolutions.items()
@@ -530,11 +700,15 @@ def _evaluate_page(
 
 
 def _legacy_resolved_keys(
-    conn: sqlite3.Connection, keys: Sequence[_LegacyKeyRow], cutoff: str
+    conn: sqlite3.Connection,
+    keys: Sequence[_LegacyKeyRow],
+    knowledge_cutoff: str,
+    observed_through: str,
 ) -> set[tuple[str, int]]:
     clause, params = _key_clause(keys, "link")
-    rows = conn.execute(
-        f"""
+    rows = _bounded_rows(
+        conn.execute(
+            f"""
         WITH ranked_link AS (
           SELECT link.*,
                  row_number() OVER (
@@ -565,17 +739,25 @@ def _legacy_resolved_keys(
          AND outcome.resolution_status='resolved'
         WHERE link.row_rank=1
         """,  # nosec B608 -- trusted internal SQL shape; values remain bound
-        (cutoff, *params, cutoff, cutoff),
-    ).fetchall()
+            (observed_through, *params, knowledge_cutoff, observed_through),
+        ),
+        limit=len(keys),
+    )
     return {(str(row[0]), int(row[1])) for row in rows}
 
 
 def _latest_matches(
-    conn: sqlite3.Connection, keys: Sequence[_LegacyKeyRow], cutoff: str
+    conn: sqlite3.Connection,
+    keys: Sequence[_LegacyKeyRow],
+    knowledge_cutoff: str,
+    observed_through: str,
+    *,
+    issuer_id: str | None,
 ) -> dict[tuple[str, int], sqlite3.Row]:
     clause, params = _key_clause(keys, "match")
-    rows = conn.execute(
-        f"""
+    rows = _bounded_rows(
+        conn.execute(
+            f"""
         WITH ranked AS (
           SELECT match.*,
                  row_number() OVER (
@@ -587,22 +769,35 @@ def _latest_matches(
             AND datetime(recorded_at) <= datetime(?)
             AND ({clause})
         )
-        SELECT * FROM ranked WHERE row_rank=1
+        SELECT * FROM ranked
+        WHERE row_rank=1 AND (? IS NULL OR issuer_id=?)
         """,  # nosec B608 -- trusted internal SQL shape; values remain bound
-        (cutoff, cutoff, *params),
-    ).fetchall()
+            (
+                knowledge_cutoff,
+                observed_through,
+                *params,
+                issuer_id,
+                issuer_id,
+            ),
+        ),
+        limit=len(keys),
+    )
     return {(str(row["fact_table"]), int(row["fact_row_id"])): row for row in rows}
 
 
 def _current_document_bindings(
-    conn: sqlite3.Connection, matches: Iterable[sqlite3.Row], cutoff: str
+    conn: sqlite3.Connection,
+    matches: Iterable[sqlite3.Row],
+    knowledge_cutoff: str,
+    observed_through: str,
 ) -> dict[int, sqlite3.Row]:
     document_ids = sorted({_match_source_doc_id(row) for row in matches})
     if not document_ids:
         return {}
     placeholders = ",".join("?" for _ in document_ids)
-    rows = conn.execute(
-        f"""
+    rows = _bounded_rows(
+        conn.execute(
+            f"""
         WITH ranked AS (
           SELECT binding.*,
                  row_number() OVER (
@@ -616,39 +811,55 @@ def _current_document_bindings(
         )
         SELECT * FROM ranked WHERE row_rank=1
         """,  # nosec B608 -- trusted internal SQL shape; values remain bound
-        (cutoff, cutoff, *document_ids),
-    ).fetchall()
+            (knowledge_cutoff, observed_through, *document_ids),
+        ),
+        limit=len(document_ids),
+    )
     return {int(row["legacy_document_id"]): row for row in rows}
 
 
 def _v2_bridges(
-    conn: sqlite3.Connection, matches: Iterable[sqlite3.Row], cutoff: str
+    conn: sqlite3.Connection,
+    matches: Iterable[sqlite3.Row],
+    knowledge_cutoff: str,
+    observed_through: str,
 ) -> dict[str, tuple[sqlite3.Row, ...]]:
     match_ids = sorted({str(row["match_revision_id"]) for row in matches})
     if not match_ids:
         return {}
     placeholders = ",".join("?" for _ in match_ids)
-    rows = conn.execute(
-        f"""
-        SELECT observation.observation_id,observation.legacy_match_revision_id,
-               observation.fact_cell_id,observation.knowledge_at,
-               observation.recorded_at
-        FROM fact_observations_v2 observation
-        JOIN fact_cells_v2 cell ON cell.fact_cell_id=observation.fact_cell_id
-        JOIN reporting_entities entity
-          ON entity.reporting_entity_id=cell.reporting_entity_id
-        JOIN legacy_fact_evidence_match_revisions match
-          ON match.match_revision_id=observation.legacy_match_revision_id
-         AND match.issuer_id=entity.issuer_id
-         AND match.evidence_node_id=observation.evidence_node_id
-         AND match.matched_entry_sha256=observation.source_entry_sha256
-        WHERE observation.legacy_match_revision_id IN ({placeholders})
-          AND datetime(observation.knowledge_at) <= datetime(?)
-          AND datetime(observation.recorded_at) <= datetime(?)
-        ORDER BY observation.legacy_match_revision_id,observation.observation_id
+    rows = _bounded_rows(
+        conn.execute(
+            f"""
+        WITH ranked AS (
+          SELECT observation.observation_id,observation.legacy_match_revision_id,
+                 observation.fact_cell_id,observation.knowledge_at,
+                 observation.recorded_at,
+                 row_number() OVER (
+                   PARTITION BY observation.legacy_match_revision_id
+                   ORDER BY observation.observation_id
+                 ) row_rank
+          FROM fact_observations_v2 observation
+          JOIN fact_cells_v2 cell ON cell.fact_cell_id=observation.fact_cell_id
+          JOIN reporting_entities entity
+            ON entity.reporting_entity_id=cell.reporting_entity_id
+          JOIN legacy_fact_evidence_match_revisions match
+            ON match.match_revision_id=observation.legacy_match_revision_id
+           AND match.issuer_id=entity.issuer_id
+           AND match.evidence_node_id=observation.evidence_node_id
+           AND match.matched_entry_sha256=observation.source_entry_sha256
+          WHERE observation.legacy_match_revision_id IN ({placeholders})
+            AND datetime(observation.knowledge_at) <= datetime(?)
+            AND datetime(observation.recorded_at) <= datetime(?)
+        )
+        SELECT * FROM ranked
+        WHERE row_rank<=2
+        ORDER BY legacy_match_revision_id,observation_id
         """,  # nosec B608 -- trusted internal SQL shape; values remain bound
-        (*match_ids, cutoff, cutoff),
-    ).fetchall()
+            (*match_ids, knowledge_cutoff, observed_through),
+        ),
+        limit=2 * len(match_ids),
+    )
     grouped: defaultdict[str, list[sqlite3.Row]] = defaultdict(list)
     for row in rows:
         grouped[str(row["legacy_match_revision_id"])].append(row)
@@ -656,13 +867,17 @@ def _v2_bridges(
 
 
 def _ontology_bindings(
-    conn: sqlite3.Connection, observation_ids: Sequence[str], cutoff: str
+    conn: sqlite3.Connection,
+    observation_ids: Sequence[str],
+    knowledge_cutoff: str,
+    observed_through: str,
 ) -> dict[str, sqlite3.Row | None]:
     if not observation_ids:
         return {}
     placeholders = ",".join("?" for _ in observation_ids)
-    rows = conn.execute(
-        f"""
+    rows = _bounded_rows(
+        conn.execute(
+            f"""
         WITH ranked AS (
           SELECT binding.*,
                  row_number() OVER (
@@ -676,8 +891,10 @@ def _ontology_bindings(
         )
         SELECT * FROM ranked WHERE row_rank=1
         """,  # nosec B608 -- trusted internal SQL shape; values remain bound
-        (*observation_ids, cutoff, cutoff),
-    ).fetchall()
+            (*observation_ids, knowledge_cutoff, observed_through),
+        ),
+        limit=len(observation_ids),
+    )
     result: dict[str, sqlite3.Row | None] = {
         observation_id: None for observation_id in observation_ids
     }
@@ -686,14 +903,18 @@ def _ontology_bindings(
 
 
 def _canonical_resolutions(
-    conn: sqlite3.Connection, coordinates: Sequence[str], cutoff: str
+    conn: sqlite3.Connection,
+    coordinates: Sequence[str],
+    knowledge_cutoff: str,
+    observed_through: str,
 ) -> dict[str, sqlite3.Row | None]:
     if not coordinates:
         return {}
     unique = sorted(set(coordinates))
     placeholders = ",".join("?" for _ in unique)
-    rows = conn.execute(
-        f"""
+    rows = _bounded_rows(
+        conn.execute(
+            f"""
         WITH ranked AS (
           SELECT resolution.*,
                  row_number() OVER (
@@ -707,8 +928,10 @@ def _canonical_resolutions(
         )
         SELECT * FROM ranked WHERE row_rank=1
         """,  # nosec B608 -- trusted internal SQL shape; values remain bound
-        (*unique, cutoff, cutoff),
-    ).fetchall()
+            (*unique, knowledge_cutoff, observed_through),
+        ),
+        limit=len(unique),
+    )
     result: dict[str, sqlite3.Row | None] = {coordinate: None for coordinate in unique}
     result.update({str(row["canonical_metric_cell_id"]): row for row in rows})
     return result
@@ -906,6 +1129,31 @@ def _mark_many_to_one(rows: list[ParityRow]) -> list[ParityRow]:
     return result
 
 
+def _bounded_rows(cursor: sqlite3.Cursor, *, limit: int) -> list[sqlite3.Row]:
+    rows = cursor.fetchmany(limit + 1)
+    if len(rows) > limit:
+        raise ParityContractError("bounded parity query exceeded its page cardinality")
+    return rows
+
+
+def _commit_model(hasher: _HashWriter, value: object) -> None:
+    payload = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    hasher.update(payload.encode("utf-8"))
+    hasher.update(b"\n")
+
+
+def _parity_rows_sha256(rows: Sequence[ParityRow]) -> str:
+    hasher = hashlib.sha256()
+    for row in rows:
+        _commit_model(hasher, row.model_dump(mode="json"))
+    return hasher.hexdigest()
+
+
 def _terminal(
     key: _LegacyKeyRow,
     disposition: ParityDisposition,
@@ -1025,4 +1273,5 @@ __all__ = [
     "ProjectionCoordinate",
     "ProjectionCoordinateReader",
     "run_legacy_canonical_parity",
+    "scan_legacy_canonical_parity",
 ]
