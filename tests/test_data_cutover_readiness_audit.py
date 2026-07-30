@@ -60,7 +60,7 @@ def test_cutover_audit_pins_publication_and_stream_coverage_to_cutoff(
             "INSERT INTO source_fact_publication_seals VALUES (?,?)",
             (publication_id, recorded_at.isoformat()),
         )
-    verified_publications: list[tuple[str, datetime]] = []
+    verified_publications: list[tuple[str, datetime, datetime]] = []
     verified_stream: list[str] = []
 
     def verify_publication(
@@ -68,8 +68,9 @@ def test_cutover_audit_pins_publication_and_stream_coverage_to_cutoff(
         *,
         publication_id: str,
         cutoff: datetime,
+        observed_through: datetime,
     ) -> object:
-        verified_publications.append((publication_id, cutoff))
+        verified_publications.append((publication_id, cutoff, observed_through))
         return object()
 
     def verify_stream(
@@ -107,7 +108,10 @@ def test_cutover_audit_pins_publication_and_stream_coverage_to_cutoff(
     assert publication.eligible_count == publication.verified_count == 2
     assert stream.eligible_count == stream.verified_count == 2
     assert publication.failed_count == stream.failed_count == 0
-    assert verified_publications == [("before", CUTOFF), ("exact", CUTOFF)]
+    assert verified_publications == [
+        ("before", CUTOFF, CUTOFF),
+        ("exact", CUTOFF, CUTOFF),
+    ]
     assert verified_stream == ["before", "exact"]
     conn.close()
 
