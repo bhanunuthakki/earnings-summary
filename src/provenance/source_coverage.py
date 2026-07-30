@@ -184,6 +184,7 @@ def _expected_document_family(
         "financial_statement": "issuer_financial_statements",
         "investor_presentation": "issuer_presentations",
         "presentation": "issuer_presentations",
+        "supplement": "issuer_financial_statements",
     }
     if document_type not in families:
         raise ValueError("IR expected document requires an explicit governed document_type")

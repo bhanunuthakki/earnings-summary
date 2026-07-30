@@ -179,6 +179,12 @@ class ResolutionSnapshotWatermark(_FrozenModel):
             event_sha256=self.high_watermark_event_sha256,
         )
 
+    @property
+    def observed_through(self) -> datetime:
+        """Return O from the immutable persisted watermark clock."""
+
+        return self.recorded_at
+
 
 class PublicationStreamVerificationError(RuntimeError):
     """The stream, event, cursor, or watermark cannot be admitted."""
@@ -522,22 +528,67 @@ def publication_cursor_through(
     conn: sqlite3.Connection,
     *,
     cutoff_at: datetime,
+    observed_through: datetime,
 ) -> PublicationCursor:
-    """Return the verified maximal publication cursor through a cutoff."""
+    """Return the verified prefix cursor bounded by knowledge K and observation O."""
 
     register_source_fact_stream_functions(conn)
+    cutoff = _utc(cutoff_at)
+    observed = _utc(observed_through)
+    if observed < cutoff:
+        raise PublicationStreamVerificationError(
+            "publication_cursor_observed_through_precedes_cutoff"
+        )
     row = conn.execute(
         "SELECT publication_sequence FROM source_fact_publication_stream "
         "WHERE stream_id=? AND julianday(sealed_at)<=julianday(?) "
+        "AND julianday(assigned_at)<=julianday(?) "
         "ORDER BY publication_sequence DESC LIMIT 1",
-        (SOURCE_FACT_STREAM_ID, canonical_time(_utc(cutoff_at))),
+        (
+            SOURCE_FACT_STREAM_ID,
+            canonical_time(cutoff),
+            canonical_time(observed),
+        ),
     ).fetchone()
     if row is None:
         return PublicationCursor.initial()
-    return verify_publication_event(
-        conn,
-        publication_sequence=int(row[0]),
-    ).cursor
+    high_watermark = int(row[0])
+    non_prefix = conn.execute(
+        "SELECT publication_sequence FROM source_fact_publication_stream "
+        "WHERE stream_id=? AND publication_sequence<=? "
+        "AND (julianday(sealed_at)>julianday(?) "
+        "OR julianday(assigned_at)>julianday(?)) "
+        "ORDER BY publication_sequence LIMIT 1",
+        (
+            SOURCE_FACT_STREAM_ID,
+            high_watermark,
+            canonical_time(cutoff),
+            canonical_time(observed),
+        ),
+    ).fetchone()
+    if non_prefix is not None:
+        raise PublicationStreamVerificationError(
+            "publication_cursor_non_prefix_ambiguity",
+            publication_sequence=int(non_prefix[0]),
+        )
+    cursor = PublicationCursor.initial()
+    event_rows = conn.execute(
+        "SELECT publication_sequence,stream_id,publication_id,"
+        "publication_seal_id,publication_payload_sha256,member_set_sha256,"
+        "sequence_basis,sealed_at,assigned_at,event_version,"
+        "canonical_event_json,event_sha256 "
+        "FROM source_fact_publication_stream "
+        "WHERE stream_id=? AND publication_sequence<=? "
+        "ORDER BY publication_sequence",
+        (SOURCE_FACT_STREAM_ID, high_watermark),
+    )
+    columns = tuple(description[0] for description in event_rows.description or ())
+    for event_row in event_rows:
+        cursor = _verify_event_row(
+            conn,
+            dict(zip(columns, tuple(event_row), strict=True)),
+        ).cursor
+    return cursor
 
 
 def bind_resolution_snapshot_watermark(
@@ -545,13 +596,13 @@ def bind_resolution_snapshot_watermark(
     *,
     resolution_snapshot_id: str,
     cutoff_at: datetime,
-    recorded_at: datetime,
+    observed_through: datetime | None = None,
+    recorded_at: datetime | None = None,
 ) -> ResolutionSnapshotWatermark:
-    """Bind one sealed 0244 snapshot to its maximal stream cursor."""
+    """Bind one sealed 0244 snapshot to its exact K/O stream prefix."""
 
     register_source_fact_stream_functions(conn)
     cutoff = _utc(cutoff_at)
-    recorded = _utc(recorded_at)
     snapshot = _fetchone(
         conn,
         "SELECT cutoff_at,recorded_at "
@@ -569,11 +620,31 @@ def bind_resolution_snapshot_watermark(
             "resolution_snapshot_cutoff_mismatch",
             resolution_snapshot_id=resolution_snapshot_id,
         )
-    cursor = publication_cursor_through(conn, cutoff_at=cutoff)
-    bounded_recorded = max(
-        recorded,
-        cutoff,
-        _datetime(snapshot["recorded_at"]),
+    snapshot_recorded = _datetime(snapshot["recorded_at"])
+    legacy_recorded = None if recorded_at is None else _utc(recorded_at)
+    if observed_through is None:
+        if legacy_recorded is not None and legacy_recorded != snapshot_recorded:
+            raise PublicationStreamVerificationError(
+                "resolution_snapshot_watermark_legacy_clock_not_persisted",
+                resolution_snapshot_id=resolution_snapshot_id,
+            )
+        observed = snapshot_recorded
+    else:
+        observed = _utc(observed_through)
+        if legacy_recorded is not None and legacy_recorded != observed:
+            raise PublicationStreamVerificationError(
+                "resolution_snapshot_watermark_observation_clock_conflict",
+                resolution_snapshot_id=resolution_snapshot_id,
+            )
+    if observed < cutoff or snapshot_recorded > observed:
+        raise PublicationStreamVerificationError(
+            "resolution_snapshot_watermark_observed_through_invalid",
+            resolution_snapshot_id=resolution_snapshot_id,
+        )
+    cursor = publication_cursor_through(
+        conn,
+        cutoff_at=cutoff,
+        observed_through=observed,
     )
     idempotency_key = f"resolution-snapshot-watermark:{resolution_snapshot_id}"
     payload = resolution_snapshot_watermark_payload(
@@ -582,7 +653,7 @@ def bind_resolution_snapshot_watermark(
         publication_high_watermark=cursor.publication_sequence,
         high_watermark_event_sha256=cursor.event_sha256,
         cutoff_at=snapshot["cutoff_at"],
-        recorded_at=bounded_recorded,
+        recorded_at=observed,
     )
     values: tuple[object, ...] = (
         resolution_snapshot_id,
@@ -591,7 +662,7 @@ def bind_resolution_snapshot_watermark(
         cursor.publication_sequence,
         cursor.event_sha256,
         snapshot["cutoff_at"],
-        canonical_time(bounded_recorded),
+        canonical_time(observed),
         RESOLUTION_WATERMARK_VERSION,
         payload,
         digest_text(payload),
@@ -635,6 +706,7 @@ def bind_resolution_snapshot_watermark(
             conn,
             resolution_snapshot_id=resolution_snapshot_id,
             cutoff_at=cutoff,
+            observed_through=observed,
         )
 
 
@@ -643,6 +715,7 @@ def verify_resolution_snapshot_watermark(
     *,
     resolution_snapshot_id: str,
     cutoff_at: datetime,
+    observed_through: datetime | None = None,
 ) -> ResolutionSnapshotWatermark:
     register_source_fact_stream_functions(conn)
     row = _fetchone(
@@ -672,9 +745,23 @@ def verify_resolution_snapshot_watermark(
             "resolution_snapshot_cutoff_mismatch",
             resolution_snapshot_id=resolution_snapshot_id,
         )
+    requested_observed = (
+        watermark.observed_through if observed_through is None else _utc(observed_through)
+    )
+    if requested_observed < _utc(cutoff_at):
+        raise PublicationStreamVerificationError(
+            "resolution_snapshot_watermark_observed_through_precedes_cutoff",
+            resolution_snapshot_id=resolution_snapshot_id,
+        )
+    if watermark.observed_through > requested_observed:
+        raise PublicationStreamVerificationError(
+            "resolution_snapshot_watermark_absent_at_observed_through",
+            resolution_snapshot_id=resolution_snapshot_id,
+        )
     expected_cursor = publication_cursor_through(
         conn,
         cutoff_at=watermark.cutoff_at,
+        observed_through=watermark.observed_through,
     )
     if expected_cursor != watermark.cursor:
         raise PublicationStreamVerificationError(
@@ -701,11 +788,13 @@ def verify_resolution_snapshot_watermark(
         "SELECT 1 FROM source_fact_publication_stream "
         "WHERE stream_id=? AND publication_sequence>? "
         "AND julianday(sealed_at)<=julianday(?) "
+        "AND julianday(assigned_at)<=julianday(?) "
         "LIMIT 1",
         (
             watermark.stream_id,
             watermark.publication_high_watermark,
             snapshot["cutoff_at"],
+            canonical_time(watermark.observed_through),
         ),
     ).fetchone()
     if later is not None:

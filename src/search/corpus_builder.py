@@ -12,7 +12,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -120,6 +120,10 @@ class CorpusBuildRequest(_ClosedModel):
             raise ValueError("required extractor names must be unique")
         if len(self.source_inventory_snapshot_ids) != len(set(self.source_inventory_snapshot_ids)):
             raise ValueError("source inventory snapshot IDs must be unique")
+        if self.knowledge_cutoff is not None and _utc_clock(self.recorded_at) < _utc_clock(
+            self.knowledge_cutoff
+        ):
+            raise ValueError("recorded_at must not precede knowledge_cutoff")
         return self
 
 
@@ -468,7 +472,11 @@ def _membership(
         status == "included"
         and expected.document_version_id is not None
         and not _document_extraction_complete(
-            conn, expected.document_version_id, request.required_extractor_names
+            conn,
+            expected.document_version_id,
+            request.required_extractor_names,
+            knowledge_cutoff=request.knowledge_cutoff or request.recorded_at,
+            observed_through=request.recorded_at,
         )
     ):
         nonsemantic_assessment_id = _human_nonsemantic_assessment(
@@ -495,6 +503,9 @@ def _document_extraction_complete(
     conn: sqlite3.Connection,
     document_version_id: str,
     extractor_names: tuple[str, ...],
+    *,
+    knowledge_cutoff: datetime,
+    observed_through: datetime,
 ) -> bool:
     row = conn.execute(
         "SELECT observation.source_url, blob.media_type "
@@ -502,8 +513,16 @@ def _document_extraction_complete(
         "JOIN evidence_content_blobs AS blob ON blob.sha256 = document.blob_sha256 "
         "JOIN evidence_source_observations AS observation "
         "ON observation.observation_id = document.observation_id "
-        "WHERE document.document_version_id = ?",
-        (document_version_id,),
+        "WHERE document.document_version_id = ? "
+        "AND datetime(observation.retrieved_at)<=datetime(?) "
+        "AND datetime(document.recorded_at)<=datetime(?) "
+        "AND datetime(blob.recorded_at)<=datetime(?)",
+        (
+            document_version_id,
+            _db_clock(knowledge_cutoff),
+            _db_clock(observed_through),
+            _db_clock(observed_through),
+        ),
     ).fetchone()
     if row is None:
         raise ValueError("document version does not exist: " + document_version_id)
@@ -514,6 +533,7 @@ def _document_extraction_complete(
         conn,
         document_version_id,
         media_type=media_type,
+        observed_through=observed_through,
     )
     if media_type.lower() != "application/pdf":
         return _has_approved_substantive_extraction(
@@ -522,6 +542,7 @@ def _document_extraction_complete(
             extractor_names,
             fulltext_identity=fulltext_identity,
             accepted_image_node_ids=accepted_image_node_ids,
+            observed_through=observed_through,
         )
     if (
         conn.execute(
@@ -533,8 +554,9 @@ def _document_extraction_complete(
     assessment = conn.execute(
         "SELECT assessment_id, outcome, page_count "
         "FROM ocr_document_assessments WHERE document_version_id = ? "
+        "AND datetime(assessed_at)<=datetime(?) "
         "ORDER BY assessed_at DESC, assessment_id DESC LIMIT 1",
-        (document_version_id,),
+        (document_version_id, _db_clock(observed_through)),
     ).fetchone()
     if assessment is None or str(assessment[1]) not in {
         "native_sufficient",
@@ -582,8 +604,16 @@ def _document_extraction_complete(
             "JOIN evidence_extraction_runs AS run "
             "ON run.extraction_run_id = result.extraction_run_id "
             "WHERE governance.assessment_id = ? AND result.outcome = 'accepted' "
-            "AND run.outcome = 'succeeded'",
-            (str(assessment[0]),),
+            "AND run.outcome = 'succeeded' "
+            "AND datetime(governance.recorded_at)<=datetime(?) "
+            "AND datetime(result.recorded_at)<=datetime(?) "
+            "AND datetime(run.completed_at)<=datetime(?)",
+            (
+                str(assessment[0]),
+                _db_clock(observed_through),
+                _db_clock(observed_through),
+                _db_clock(observed_through),
+            ),
         ).fetchall()
     }
     return all(
@@ -599,17 +629,29 @@ def _has_approved_substantive_extraction(
     *,
     fulltext_identity: FulltextExtractorIdentity,
     accepted_image_node_ids: frozenset[str],
+    observed_through: datetime,
 ) -> bool:
     placeholders = ", ".join("?" for _ in extractor_names)
     rows = conn.execute(
         "SELECT DISTINCT node.node_id, run.extractor_name, run.extractor_code_version, "  # nosec B608 -- trusted internal SQL shape; values remain bound
-        "run.extractor_config_sha256 FROM v_evidence_current AS node "
+        "run.extractor_config_sha256 FROM evidence_nodes AS node "
         "JOIN evidence_extraction_runs AS run "
         "ON run.extraction_run_id = node.extraction_run_id "
         "WHERE run.document_version_id = ? AND run.outcome = 'succeeded' "
+        "AND datetime(run.completed_at)<=datetime(?) "
+        "AND datetime(node.recorded_at)<=datetime(?) "
+        "AND NOT EXISTS (SELECT 1 FROM evidence_nodes newer "
+        "WHERE newer.evidence_key=node.evidence_key AND newer.revision>node.revision "
+        "AND datetime(newer.recorded_at)<=datetime(?)) "
         "AND node.node_kind <> 'document' AND length(trim(node.text)) > 0 "
         f"AND run.extractor_name IN ({placeholders})",
-        (document_version_id, *extractor_names),
+        (
+            document_version_id,
+            _db_clock(observed_through),
+            _db_clock(observed_through),
+            _db_clock(observed_through),
+            *extractor_names,
+        ),
     ).fetchall()
     for row in rows:
         node_id = str(row[0])
@@ -635,6 +677,7 @@ def _accepted_current_image_ocr_node_ids(
     document_version_id: str,
     *,
     media_type: str,
+    observed_through: datetime,
 ) -> frozenset[str]:
     if media_type.lower() not in {"image/jpeg", "image/png"}:
         return frozenset()
@@ -655,8 +698,9 @@ def _accepted_current_image_ocr_node_ids(
     assessment = conn.execute(
         "SELECT assessment_id, outcome FROM image_ocr_assessments "
         "WHERE document_version_id = ? "
+        "AND datetime(assessed_at)<=datetime(?) "
         "ORDER BY assessed_at DESC, assessment_id DESC LIMIT 1",
-        (document_version_id,),
+        (document_version_id, _db_clock(observed_through)),
     ).fetchone()
     if assessment is None or str(assessment[1]) != "ocr_required":
         return frozenset()
@@ -668,16 +712,24 @@ def _accepted_current_image_ocr_node_ids(
         "ON current_assessment.assessment_id = governance.assessment_id "
         "JOIN evidence_extraction_runs AS run "
         "ON run.extraction_run_id = result.extraction_run_id "
-        "JOIN v_evidence_current AS node ON node.node_id = result.node_id "
+        "JOIN evidence_nodes AS node ON node.node_id = result.node_id "
         "WHERE current_assessment.assessment_id = ? "
         "AND result.outcome = 'accepted' AND result.node_id IS NOT NULL "
         "AND run.outcome = 'succeeded' "
+        "AND datetime(governance.recorded_at)<=datetime(?) "
+        "AND datetime(result.recorded_at)<=datetime(?) "
+        "AND datetime(run.completed_at)<=datetime(?) "
+        "AND datetime(node.recorded_at)<=datetime(?) "
         "AND run.document_version_id = current_assessment.document_version_id "
         "AND run.input_sha256 = current_assessment.input_sha256 "
         "AND run.extractor_name = ? AND run.extractor_code_version = ? "
         "AND run.extractor_config_sha256 = governance.extractor_config_sha256",
         (
             str(assessment[0]),
+            _db_clock(observed_through),
+            _db_clock(observed_through),
+            _db_clock(observed_through),
+            _db_clock(observed_through),
             IMAGE_OCR_EXTRACTOR_NAME,
             IMAGE_OCR_EXTRACTOR_CODE_VERSION,
         ),
@@ -759,6 +811,8 @@ def _iter_chunks_for_document(
         conn,
         membership.document_version_id,
         request.required_extractor_names,
+        knowledge_cutoff=request.knowledge_cutoff or request.recorded_at,
+        observed_through=request.recorded_at,
     )
     found = False
     for node_id, text, completed_at in rows:
@@ -802,6 +856,9 @@ def _selected_substantive_nodes(
     conn: sqlite3.Connection,
     document_version_id: str,
     extractor_names: tuple[str, ...],
+    *,
+    knowledge_cutoff: datetime,
+    observed_through: datetime,
 ) -> tuple[tuple[str, str, datetime], ...]:
     """Return the one canonical text projection approved for corpus use.
 
@@ -818,8 +875,16 @@ def _selected_substantive_nodes(
         "JOIN evidence_content_blobs AS blob ON blob.sha256 = document.blob_sha256 "
         "JOIN evidence_source_observations AS observation "
         "ON observation.observation_id = document.observation_id "
-        "WHERE document.document_version_id = ?",
-        (document_version_id,),
+        "WHERE document.document_version_id = ? "
+        "AND datetime(observation.retrieved_at)<=datetime(?) "
+        "AND datetime(document.recorded_at)<=datetime(?) "
+        "AND datetime(blob.recorded_at)<=datetime(?)",
+        (
+            document_version_id,
+            _db_clock(knowledge_cutoff),
+            _db_clock(observed_through),
+            _db_clock(observed_through),
+        ),
     ).fetchone()
     if media_row is None:
         raise ValueError("document version does not exist: " + document_version_id)
@@ -830,19 +895,31 @@ def _selected_substantive_nodes(
         ", node.node_kind, node.locator_json, run.extractor_name "
         ", node.parent_node_id, run.extractor_code_version "
         ", run.extractor_config_sha256, run.extraction_run_id "
-        "FROM v_evidence_current AS node "
+        "FROM evidence_nodes AS node "
         "JOIN evidence_extraction_runs AS run ON run.extraction_run_id = node.extraction_run_id "
         "WHERE run.document_version_id = ? AND run.outcome = 'succeeded' "
+        "AND datetime(run.completed_at)<=datetime(?) "
+        "AND datetime(node.recorded_at)<=datetime(?) "
+        "AND NOT EXISTS (SELECT 1 FROM evidence_nodes newer "
+        "WHERE newer.evidence_key=node.evidence_key AND newer.revision>node.revision "
+        "AND datetime(newer.recorded_at)<=datetime(?)) "
         "AND node.node_kind <> 'document' "
         f"AND run.extractor_name IN ({placeholders}) "
         "ORDER BY node.evidence_key, node.revision, node.node_id",
-        (document_version_id, *extractor_names),
+        (
+            document_version_id,
+            _db_clock(observed_through),
+            _db_clock(observed_through),
+            _db_clock(observed_through),
+            *extractor_names,
+        ),
     ).fetchall()
     if str(media_row[1]) != "application/pdf":
         accepted_image_node_ids = _accepted_current_image_ocr_node_ids(
             conn,
             document_version_id,
             media_type=str(media_row[1]),
+            observed_through=observed_through,
         )
         return _canonical_non_pdf_nodes(
             _authoritative_non_pdf_rows(
@@ -855,8 +932,9 @@ def _selected_substantive_nodes(
     assessment = conn.execute(
         "SELECT assessment_id, page_count FROM ocr_document_assessments "
         "WHERE document_version_id = ? "
+        "AND datetime(assessed_at)<=datetime(?) "
         "ORDER BY assessed_at DESC, assessment_id DESC LIMIT 1",
-        (document_version_id,),
+        (document_version_id, _db_clock(observed_through)),
     ).fetchone()
     if assessment is None:
         raise ValueError("PDF corpus selection requires a current OCR preflight assessment")
@@ -882,8 +960,16 @@ def _selected_substantive_nodes(
             "JOIN evidence_extraction_runs AS run "
             "ON run.extraction_run_id = result.extraction_run_id "
             "WHERE governance.assessment_id = ? AND result.outcome = 'accepted' "
-            "AND result.node_id IS NOT NULL AND run.outcome = 'succeeded'",
-            (assessment_id,),
+            "AND result.node_id IS NOT NULL AND run.outcome = 'succeeded' "
+            "AND datetime(governance.recorded_at)<=datetime(?) "
+            "AND datetime(result.recorded_at)<=datetime(?) "
+            "AND datetime(run.completed_at)<=datetime(?)",
+            (
+                assessment_id,
+                _db_clock(observed_through),
+                _db_clock(observed_through),
+                _db_clock(observed_through),
+            ),
         ).fetchall()
     }
     by_page: dict[int, list[tuple[str, str, datetime]]] = {
@@ -1638,3 +1724,11 @@ def _datetime(value: object) -> datetime:
         except ValueError as error:
             raise ValueError("evidence extraction clock is not ISO-8601") from error
     raise ValueError("evidence extraction clock has an unsupported type")
+
+
+def _utc_clock(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _db_clock(value: datetime) -> str:
+    return _utc_clock(value).replace(tzinfo=None).isoformat()

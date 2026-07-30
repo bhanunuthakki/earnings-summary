@@ -165,7 +165,11 @@ class CanonicalFactResolutionEngine:
             raise ValueError("resolution recorded_at must not precede knowledge_cutoff")
         if not canonical_metric_cell_id:
             raise ValueError("canonical_metric_cell_id is required")
-        candidates = self._enumerate(canonical_metric_cell_id, cutoff)
+        candidates = self._enumerate(
+            canonical_metric_cell_id,
+            cutoff,
+            observed_through=written_at,
+        )
         if len(candidates) > MAX_CANDIDATES_PER_CANONICAL_CELL:
             raise ValueError(
                 "canonical candidate universe exceeds the bounded relation policy "
@@ -191,7 +195,12 @@ class CanonicalFactResolutionEngine:
             eligible = [
                 candidate for candidate in candidates if candidate.eligibility == "eligible"
             ]
-            relations = self._relations(relation_set_id, eligible, cutoff)
+            relations = self._relations(
+                relation_set_id,
+                eligible,
+                cutoff,
+                observed_through=written_at,
+            )
             relation_replay = self._persist_relation_set(
                 relation_set_id, universe_id, cutoff, written_at, relations
             )
@@ -228,12 +237,19 @@ class CanonicalFactResolutionEngine:
         )
 
     def as_known(
-        self, canonical_metric_cell_id: str, cutoff_at: datetime
+        self,
+        canonical_metric_cell_id: str,
+        cutoff_at: datetime,
+        *,
+        observed_through: datetime | None = None,
     ) -> ResolutionReceipt | None:
         cutoff = _utc(cutoff_at)
+        observed = cutoff if observed_through is None else _utc(observed_through)
+        if observed < cutoff:
+            raise ValueError("observed_through must not precede cutoff_at")
         row = self._conn.execute(
             "SELECT canonical_resolution_revision_id,candidate_universe_id,relation_set_id,status,selected_observation_id FROM canonical_fact_resolution_revisions WHERE canonical_metric_cell_id=? AND knowledge_at<=? AND recorded_at<=? ORDER BY revision DESC LIMIT 1",
-            (canonical_metric_cell_id, _time(cutoff), _time(cutoff)),
+            (canonical_metric_cell_id, _time(cutoff), _time(observed)),
         ).fetchone()
         if row is None:
             return None
@@ -262,7 +278,11 @@ class CanonicalFactResolutionEngine:
         if recorded < cutoff:
             raise ValueError("snapshot recorded_at must not precede cutoff_at")
         self._verify_scope_registry(scope)
-        members = self._latest_resolution_members(cutoff, scope)
+        members = self._latest_resolution_members(
+            cutoff,
+            scope,
+            recorded_cutoff=recorded,
+        )
         member_json = _json(members)
         key = f"snapshot:{resolution_snapshot_id}"
         scope_key = f"snapshot-scope:{resolution_snapshot_id}"
@@ -342,7 +362,11 @@ class CanonicalFactResolutionEngine:
                     _time(recorded),
                 ),
             )
-            receipt = self.verify_snapshot(resolution_snapshot_id, cutoff)
+            receipt = self.verify_snapshot(
+                resolution_snapshot_id,
+                cutoff,
+                observed_through=recorded,
+            )
         except Exception:
             self._conn.execute("ROLLBACK TO SAVEPOINT seal_canonical_resolution_snapshot")
             self._conn.execute("RELEASE SAVEPOINT seal_canonical_resolution_snapshot")
@@ -351,8 +375,15 @@ class CanonicalFactResolutionEngine:
         return receipt
 
     def verify_snapshot(
-        self, resolution_snapshot_id: str, cutoff_at: datetime
+        self,
+        resolution_snapshot_id: str,
+        cutoff_at: datetime,
+        *,
+        observed_through: datetime | None = None,
     ) -> VerifiedResolutionSnapshot:
+        requested_observed = None if observed_through is None else _utc(observed_through)
+        if requested_observed is not None and requested_observed < _utc(cutoff_at):
+            raise ValueError("observed_through must not precede cutoff_at")
         scope_row = self._conn.execute(
             "SELECT issuer_id,scope_version,canonical_scope_json,scope_sha256,"
             "cutoff_at,recorded_at "
@@ -380,9 +411,19 @@ class CanonicalFactResolutionEngine:
         ).fetchone()
         if row is None:
             raise ValueError("canonical snapshot is missing")
+        observed = (
+            _utc(datetime.fromisoformat(str(row[4])))
+            if requested_observed is None
+            else requested_observed
+        )
         cutoff = _time(_utc(cutoff_at))
         if str(row[0]) != cutoff or str(scope_row[4]) != cutoff:
             raise ValueError("snapshot cutoff must be explicit and exact")
+        if (
+            _utc(datetime.fromisoformat(str(scope_row[5]))) > observed
+            or _utc(datetime.fromisoformat(str(row[4]))) > observed
+        ):
+            raise ValueError("canonical snapshot was not recorded by observed_through")
         scope_member_rows = self._conn.execute(
             "SELECT reporting_entity_id,member_sha256 "
             "FROM canonical_fact_resolution_snapshot_scope_members "
@@ -419,7 +460,11 @@ class CanonicalFactResolutionEngine:
             or any(_sha(item) != member[4] for item, member in zip(payload, members, strict=True))
         ):
             raise ValueError("canonical snapshot members are missing or tampered")
-        live_payload = self._latest_resolution_members(_utc(cutoff_at), parsed_scope)
+        live_payload = self._latest_resolution_members(
+            _utc(cutoff_at),
+            parsed_scope,
+            recorded_cutoff=datetime.fromisoformat(str(row[4])),
+        )
         if _json(payload) != _json(live_payload):
             raise ValueError("canonical snapshot is not exhaustive latest-as-known state")
         for member in payload:
@@ -450,6 +495,8 @@ class CanonicalFactResolutionEngine:
             or str(scope_seal[4]) != _sha(commitment)
         ):
             raise ValueError("canonical snapshot scope seal is missing or tampered")
+        if _utc(datetime.fromisoformat(str(scope_seal[5]))) > observed:
+            raise ValueError("canonical snapshot was not sealed by observed_through")
         return VerifiedResolutionSnapshot(
             resolution_snapshot_id=resolution_snapshot_id,
             scope=parsed_scope,
@@ -483,8 +530,11 @@ class CanonicalFactResolutionEngine:
         self,
         cutoff: datetime,
         scope: ResolutionSnapshotScope,
+        *,
+        recorded_cutoff: datetime | None = None,
     ) -> list[dict[str, object]]:
         cutoff_s = _time(cutoff)
+        recorded_cutoff_s = _time(recorded_cutoff or cutoff)
         rows = self._conn.execute(
             "SELECT r.canonical_metric_cell_id,r.candidate_universe_id,"
             "r.relation_set_id,r.canonical_resolution_revision_id "
@@ -501,10 +551,10 @@ class CanonicalFactResolutionEngine:
             "ORDER BY r.canonical_metric_cell_id",
             (
                 cutoff_s,
-                cutoff_s,
+                recorded_cutoff_s,
                 _json(list(scope.reporting_entity_ids)),
                 cutoff_s,
-                cutoff_s,
+                recorded_cutoff_s,
             ),
         ).fetchall()
         return [
@@ -582,8 +632,15 @@ class CanonicalFactResolutionEngine:
             if parent is None or parent[0] != row[17]:
                 raise ValueError("canonical resolution parent chain is incomplete")
 
-    def _enumerate(self, cell_id: str, cutoff: datetime) -> list[_Candidate]:
+    def _enumerate(
+        self,
+        cell_id: str,
+        cutoff: datetime,
+        *,
+        observed_through: datetime | None = None,
+    ) -> list[_Candidate]:
         cutoff_s = _time(cutoff)
+        observed_s = _time(cutoff if observed_through is None else observed_through)
         rows = self._conn.execute(
             """
             SELECT o.observation_id,o.fact_cell_id,o.observation_kind,
@@ -616,14 +673,14 @@ class CanonicalFactResolutionEngine:
             (
                 cell_id,
                 cutoff_s,
+                observed_s,
                 cutoff_s,
+                observed_s,
                 cutoff_s,
+                observed_s,
+                observed_s,
                 cutoff_s,
-                cutoff_s,
-                cutoff_s,
-                cutoff_s,
-                cutoff_s,
-                cutoff_s,
+                observed_s,
                 MAX_CANDIDATES_PER_CANONICAL_CELL + 1,
             ),
         ).fetchall()
@@ -640,7 +697,7 @@ class CanonicalFactResolutionEngine:
                 "WHERE m.record_kind='fact_observation' AND m.record_id=? "
                 "AND s.sealed_at<=? "
                 "ORDER BY s.sealed_at DESC,m.publication_id DESC LIMIT 1",
-                (observation_id, cutoff_s),
+                (observation_id, observed_s),
             ).fetchone()
             observation_kind = str(row[2])
             if observation_kind != "reported":
@@ -656,7 +713,7 @@ class CanonicalFactResolutionEngine:
                 verified = verify_source_fact_publication(
                     self._conn,
                     publication_id=str(publication[0]),
-                    cutoff=cutoff,
+                    cutoff=_utc(cutoff if observed_through is None else observed_through),
                 )
                 if verified.publication_seal_id != str(publication[1]):
                     raise ValueError("source publication seal identity changed")
@@ -673,7 +730,7 @@ class CanonicalFactResolutionEngine:
                     "WHERE d.observation_id=? AND d.disposition='published' "
                     "AND s.publication_id=? AND d.knowledge_at<=? "
                     "AND d.recorded_at<=? ORDER BY d.input_ordinal LIMIT 1",
-                    (observation_id, str(publication[0]), cutoff_s, cutoff_s),
+                    (observation_id, str(publication[0]), cutoff_s, observed_s),
                 ).fetchone()
                 if filing is not None:
                     lane = "filing_xbrl"
@@ -817,7 +874,12 @@ class CanonicalFactResolutionEngine:
         return False
 
     def _relations(
-        self, relation_set_id: str, candidates: list[_Candidate], cutoff: datetime
+        self,
+        relation_set_id: str,
+        candidates: list[_Candidate],
+        cutoff: datetime,
+        *,
+        observed_through: datetime | None = None,
     ) -> list[dict[str, object]]:
         by_id = {c.observation_id: c for c in candidates}
         relations: list[dict[str, object]] = []
@@ -828,9 +890,9 @@ class CanonicalFactResolutionEngine:
                 (
                     candidate.observation_id,
                     _time(cutoff),
+                    _time(cutoff if observed_through is None else observed_through),
                     _time(cutoff),
-                    _time(cutoff),
-                    _time(cutoff),
+                    _time(cutoff if observed_through is None else observed_through),
                 ),
             ).fetchall()
             for duplicate_id, ordinal in duplicates:

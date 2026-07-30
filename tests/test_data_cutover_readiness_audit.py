@@ -24,6 +24,7 @@ def _publication_schema(conn: sqlite3.Connection) -> None:
         """
         CREATE TABLE source_fact_publications (
             publication_id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
             recorded_at TEXT NOT NULL
         );
         CREATE TABLE source_fact_publication_members (
@@ -52,8 +53,8 @@ def test_cutover_audit_pins_publication_and_stream_coverage_to_cutoff(
         ("after", CUTOFF + timedelta(seconds=1)),
     ):
         conn.execute(
-            "INSERT INTO source_fact_publications VALUES (?,?)",
-            (publication_id, recorded_at.isoformat()),
+            "INSERT INTO source_fact_publications VALUES (?,?,?)",
+            (publication_id, recorded_at.isoformat(), recorded_at.isoformat()),
         )
         conn.execute(
             "INSERT INTO source_fact_publication_seals VALUES (?,?)",
@@ -92,7 +93,11 @@ def test_cutover_audit_pins_publication_and_stream_coverage_to_cutoff(
 
     summary = audit_cutover_readiness(
         conn,
-        CutoverAuditOptions(cutoff_at=CUTOFF, sample_limit=2),
+        CutoverAuditOptions(
+            knowledge_cutoff=CUTOFF,
+            observed_through=CUTOFF,
+            sample_limit=2,
+        ),
     )
 
     publication = next(item for item in summary.coverage if item.gate == "source_fact_publications")
@@ -112,7 +117,11 @@ def test_cutover_audit_reports_exact_missing_schema_with_bounded_samples() -> No
 
     summary = audit_cutover_readiness(
         conn,
-        CutoverAuditOptions(cutoff_at=CUTOFF, sample_limit=2),
+        CutoverAuditOptions(
+            knowledge_cutoff=CUTOFF,
+            observed_through=CUTOFF,
+            sample_limit=2,
+        ),
     )
 
     finding = next(
@@ -148,4 +157,5 @@ def test_cutover_cli_always_exits_nonzero_on_blockers(
     assert status == 2
     payload = json.loads(capsys.readouterr().out)
     assert payload["has_blockers"] is True
-    assert payload["cutoff_at"] == CUTOFF.isoformat().replace("+00:00", "Z")
+    assert payload["knowledge_cutoff"] == CUTOFF.isoformat().replace("+00:00", "Z")
+    assert payload["observed_through"] == CUTOFF.isoformat().replace("+00:00", "Z")

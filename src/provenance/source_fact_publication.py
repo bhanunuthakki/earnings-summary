@@ -113,8 +113,8 @@ class PublicationRecordMissingError(ValueError):
         record_kind: PublicationMemberKind,
         record_id: str,
     ) -> None:
-        self.record_kind = record_kind
-        self.record_id = record_id
+        self.record_kind: PublicationMemberKind = record_kind
+        self.record_id: str = record_id
         super().__init__(f"publication commitment record {record_id} missing")
 
 
@@ -253,6 +253,114 @@ def record_commitment(
             }
         )
     )
+
+
+def record_coordinates(
+    conn: sqlite3.Connection,
+    record_kind: PublicationMemberKind,
+    record_ids: tuple[str, ...],
+) -> dict[str, tuple[str, str]]:
+    """Load exact idempotency/commitment coordinates in bounded SQL batches."""
+
+    return {
+        record_id: (idempotency_key, commitment)
+        for record_id, (idempotency_key, commitment, _) in _record_coordinate_bundles(
+            conn,
+            record_kind,
+            record_ids,
+        ).items()
+    }
+
+
+def _record_coordinate_bundles(
+    conn: sqlite3.Connection,
+    record_kind: PublicationMemberKind,
+    record_ids: tuple[str, ...],
+) -> dict[str, tuple[str, str, dict[str, object]]]:
+    """Load verification coordinates and their exact committed bundles."""
+
+    unique_ids = tuple(dict.fromkeys(record_ids))
+    if not unique_ids:
+        return {}
+    if record_kind not in {"fact_cell", "fact_observation"}:
+        coordinates: dict[str, tuple[str, str, dict[str, object]]] = {}
+        for record_id in unique_ids:
+            bundle = record_bundle(conn, record_kind, record_id)
+            coordinates[record_id] = (
+                record_idempotency_key(conn, record_kind, record_id),
+                digest_text(
+                    canonical_json(
+                        {
+                            "commitment_version": RECORD_COMMITMENT_VERSION,
+                            "record": bundle,
+                            "record_kind": record_kind,
+                        }
+                    )
+                ),
+                bundle,
+            )
+        return coordinates
+    if record_kind == "fact_cell":
+        select = (
+            "SELECT cell.fact_cell_id,cell.idempotency_key,"
+            "cell.taxonomy_version,cell.fiscal_year,cell.fiscal_period,"
+            "cell.effective_at,cell.knowledge_at,cell.recorded_at,"
+            "seal.semantic_key_version,seal.semantic_identity_json,"
+            "seal.semantic_key_sha256,seal.dimension_set_json,"
+            "seal.dimension_set_sha256 "
+            "FROM fact_cells_v2 AS cell "
+            "JOIN fact_cell_identity_seals_v2 AS seal "
+            "ON seal.fact_cell_id=cell.fact_cell_id "
+            "WHERE cell.fact_cell_id IN ({placeholders})"
+        )
+        record_key = "fact_cell_id"
+        bundle_key = "cell"
+    else:
+        select = (
+            "SELECT observation.observation_id,"
+            "observation.idempotency_key,payload.payload_version,"
+            "payload.canonical_payload_json,"
+            "payload.observation_payload_sha256,"
+            "anchor.anchor_payload_json,anchor.anchor_payload_sha256 "
+            "FROM fact_observations_v2 AS observation "
+            "JOIN fact_observation_payload_commitments_v2 AS payload "
+            "ON payload.observation_id=observation.observation_id "
+            "LEFT JOIN fact_reported_observation_anchors_v2 AS anchor "
+            "ON anchor.observation_id=observation.observation_id "
+            "WHERE observation.observation_id IN ({placeholders})"
+        )
+        record_key = "observation_id"
+        bundle_key = "observation"
+    coordinates: dict[str, tuple[str, str, dict[str, object]]] = {}
+    for start in range(0, len(unique_ids), 400):
+        batch = unique_ids[start : start + 400]
+        placeholders = ",".join("?" for _ in batch)
+        cursor = conn.execute(
+            select.format(placeholders=placeholders),  # nosec B608 -- placeholders are generated from a bounded integer batch size
+            batch,
+        )
+        columns = tuple(item[0] for item in cursor.description)
+        for raw in cursor:
+            row = dict(zip(columns, tuple(raw), strict=True))
+            record_id = str(row[record_key])
+            bundle: dict[str, object] = {bundle_key: row}
+            coordinates[record_id] = (
+                str(row["idempotency_key"]),
+                digest_text(
+                    canonical_json(
+                        {
+                            "commitment_version": RECORD_COMMITMENT_VERSION,
+                            "record": bundle,
+                            "record_kind": record_kind,
+                        }
+                    )
+                ),
+                bundle,
+            )
+    missing = tuple(record_id for record_id in unique_ids if record_id not in coordinates)
+    if missing:
+        raise PublicationRecordMissingError(record_kind, missing[0])
+    return {record_id: coordinates[record_id] for record_id in unique_ids}
 
 
 def record_bundle(
@@ -524,7 +632,34 @@ def _verify_source_fact_publication(
 
     verified_members: list[VerifiedPublicationMember] = []
     canonical_members: list[dict[str, object]] = []
+    try:
+        member_coordinates = {
+            kind: _record_coordinate_bundles(
+                conn,
+                kind,
+                tuple(
+                    str(member["record_id"])
+                    for member in members
+                    if str(member["record_kind"]) == kind
+                ),
+            )
+            for kind in _MEMBER_KINDS
+        }
+    except PublicationRecordMissingError as exc:
+        raise _verification_error(
+            "publication_member_record_missing",
+            publication_id,
+            "quarantined",
+            exc.record_kind,
+            exc.record_id,
+        ) from exc
     for member in members:
+        kind_value = str(member["record_kind"])
+        coordinate = (
+            member_coordinates[kind_value].get(str(member["record_id"]))
+            if kind_value in _MEMBER_KINDS
+            else None
+        )
         verified, canonical = _verify_member(
             conn,
             publication_id=publication_id,
@@ -532,6 +667,7 @@ def _verify_source_fact_publication(
             publication_recorded_at=recorded_at,
             cutoff=bounded_cutoff,
             member=member,
+            coordinate=coordinate,
         )
         verified_members.append(verified)
         canonical_members.append(canonical)
@@ -597,6 +733,7 @@ def _verify_member(
     publication_recorded_at: datetime,
     cutoff: datetime,
     member: dict[str, object],
+    coordinate: tuple[str, str, dict[str, object]] | None = None,
 ) -> tuple[VerifiedPublicationMember, dict[str, object]]:
     kind_value = str(member["record_kind"])
     if kind_value not in _MEMBER_KINDS:
@@ -666,8 +803,20 @@ def _verify_member(
         )
 
     try:
-        live_idempotency_key = record_idempotency_key(conn, kind, record_id)
-        bundle = record_bundle(conn, kind, record_id)
+        if coordinate is None:
+            live_idempotency_key = record_idempotency_key(conn, kind, record_id)
+            bundle = record_bundle(conn, kind, record_id)
+            live_commitment = digest_text(
+                canonical_json(
+                    {
+                        "commitment_version": RECORD_COMMITMENT_VERSION,
+                        "record": bundle,
+                        "record_kind": kind,
+                    }
+                )
+            )
+        else:
+            live_idempotency_key, live_commitment, bundle = coordinate
     except PublicationRecordMissingError as exc:
         raise _verification_error(
             "publication_member_record_missing",
@@ -682,15 +831,6 @@ def _verify_member(
         publication_id=publication_id,
         record_kind=kind,
         record_id=record_id,
-    )
-    live_commitment = digest_text(
-        canonical_json(
-            {
-                "commitment_version": RECORD_COMMITMENT_VERSION,
-                "record": bundle,
-                "record_kind": kind,
-            }
-        )
     )
     if (
         str(member["record_idempotency_key"]) != live_idempotency_key

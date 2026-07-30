@@ -15,9 +15,12 @@ from provenance.legacy_canonical_parity import (
     ProjectionCoordinate,
     run_legacy_canonical_parity,
 )
+from provenance.population_completeness import PopulationTemporalScope
 
 NOW = datetime(2026, 1, 15, tzinfo=UTC)
+OBSERVED = datetime(2026, 1, 20, tzinfo=UTC)
 PAST = "2026-01-01T00:00:00Z"
+LATE_RECORDED = "2026-01-18T00:00:00Z"
 FUTURE = "2026-02-01T00:00:00Z"
 HASH = "a" * 64
 
@@ -96,10 +99,13 @@ def _database(tmp_path: Path) -> Path:
     conn = sqlite3.connect(path)
     conn.executescript(
         """
-        CREATE TABLE financial_facts (id INTEGER PRIMARY KEY);
+        CREATE TABLE documents (id INTEGER PRIMARY KEY,fetched_at TEXT);
+        CREATE TABLE financial_facts (
+          id INTEGER PRIMARY KEY,ticker TEXT,source_doc_id INTEGER
+        );
         CREATE TABLE kpi_facts (
           id INTEGER PRIMARY KEY, computed_from TEXT, formula_id TEXT,
-          formula_version TEXT, extracted_by TEXT
+          formula_version TEXT, extracted_by TEXT,ticker TEXT,source_doc_id INTEGER
         );
         CREATE TABLE fact_observation_revisions (
           fact_table TEXT, fact_row_id INTEGER, fact_revision INTEGER,
@@ -169,15 +175,21 @@ def _seed(
     binding_status: str = "bound",
     canonical_status: str = "resolved",
     knowledge_at: str = PAST,
+    recorded_at: str | None = None,
 ) -> str:
+    recorded_at = recorded_at or knowledge_at
     coordinate = coordinate or f"coordinate-{row_id}"
     conn = sqlite3.connect(path)
+    conn.execute("INSERT INTO documents VALUES (?,?)", (row_id, knowledge_at))
     if table == "financial_facts":
-        conn.execute("INSERT INTO financial_facts VALUES (?)", (row_id,))
+        conn.execute(
+            "INSERT INTO financial_facts VALUES (?,'OLD',?)",
+            (row_id, row_id),
+        )
     else:
         conn.execute(
-            "INSERT INTO kpi_facts VALUES (?,NULL,NULL,NULL,'reported')",
-            (row_id,),
+            "INSERT INTO kpi_facts VALUES (?,NULL,NULL,NULL,'reported','OLD',?)",
+            (row_id, row_id),
         )
     logical_key = f"logical-{table}-{row_id}"
     old_observation = f"old-{table}-{row_id}"
@@ -195,7 +207,7 @@ def _seed(
                 1,
                 old_observation,
                 knowledge_at,
-                knowledge_at,
+                recorded_at,
             ),
         )
         conn.execute(
@@ -229,12 +241,12 @@ def _seed(
             matched_candidate_count,
             match_outcome,
             knowledge_at,
-            knowledge_at,
+            recorded_at,
         ),
     )
     conn.execute(
         "INSERT INTO legacy_document_evidence_binding_revisions VALUES (?,?,?,?,?,?,?)",
-        (binding_id, row_id, 1, f"node-{row_id}", HASH, knowledge_at, knowledge_at),
+        (binding_id, row_id, 1, f"node-{row_id}", HASH, knowledge_at, recorded_at),
     )
     observation_id = f"v2-{coordinate}"
     if bridge:
@@ -252,7 +264,7 @@ def _seed(
                 f"node-{row_id}",
                 f"entry-{row_id}",
                 knowledge_at,
-                knowledge_at,
+                recorded_at,
             ),
         )
         conn.execute(
@@ -264,7 +276,7 @@ def _seed(
                 binding_status,
                 coordinate if binding_status != "quarantined" else None,
                 knowledge_at,
-                knowledge_at,
+                recorded_at,
             ),
         )
         if binding_status == "bound":
@@ -277,7 +289,7 @@ def _seed(
                     canonical_status,
                     observation_id if canonical_status == "resolved" else None,
                     knowledge_at,
-                    knowledge_at,
+                    recorded_at,
                 ),
             )
     conn.commit()
@@ -292,7 +304,11 @@ def _run(
 ):
     request = ParityRequest.model_validate(
         {
-            "cutoff_at": NOW,
+            "temporal_scope": {
+                "knowledge_cutoff": NOW,
+                "observed_through": OBSERVED,
+            },
+            "issuer_id": "issuer-1",
             "projection_generation_id": "generation-1",
             **request_overrides,
         }
@@ -438,6 +454,44 @@ def test_cutoff_uses_prior_as_known_match_revision(tmp_path: Path) -> None:
     assert report.rows[0].match_revision_id == "match-financial_facts-1"
 
 
+def test_issuer_scope_excludes_fact_superseded_by_another_issuer(tmp_path: Path) -> None:
+    path = _database(tmp_path)
+    coordinate = _seed(path)
+    conn = sqlite3.connect(path)
+    prior = conn.execute(
+        "SELECT fact_payload_json,legacy_binding_revision_id,"
+        "legacy_binding_revision,binding_scope_content_sha256,evidence_node_id,"
+        "matched_entry_sha256,candidate_count,matched_candidate_count,outcome "
+        "FROM legacy_fact_evidence_match_revisions "
+        "WHERE match_revision_id='match-financial_facts-1'"
+    ).fetchone()
+    assert prior is not None
+    conn.execute(
+        "INSERT INTO legacy_fact_evidence_match_revisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "newer-other-issuer-match",
+            "financial_facts",
+            1,
+            "issuer-2",
+            2,
+            *prior,
+            PAST,
+            PAST,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    report = _run(
+        path,
+        [_projection(coordinate)],
+        issuer_id="issuer-1",
+    )
+
+    assert report.legacy_rows_scanned == 0
+    assert report.rows[0].disposition is ParityDisposition.CANONICAL_ONLY_NATIVE
+
+
 def test_keyset_pagination_and_explicit_truncation(tmp_path: Path) -> None:
     path = _database(tmp_path)
     for row_id in range(1, 4):
@@ -446,7 +500,16 @@ def test_keyset_pagination_and_explicit_truncation(tmp_path: Path) -> None:
 
     first = _run(path, projections, page_size=1, max_pages=1, max_rows=10)
     assert first.truncated
-    assert first.next_cursor == LegacyFactCursor(fact_table_rank=0, fact_row_id=1)
+    assert first.next_cursor == LegacyFactCursor(
+        issuer_id="issuer-1",
+        temporal_scope=PopulationTemporalScope(
+            knowledge_cutoff=NOW,
+            observed_through=OBSERVED,
+        ),
+        projection_generation_id="generation-1",
+        fact_table_rank=0,
+        fact_row_id=1,
+    )
     assert first.legacy_rows_scanned == 1
     assert not first.cutover_ready
 
@@ -466,6 +529,105 @@ def test_keyset_pagination_and_explicit_truncation(tmp_path: Path) -> None:
 def test_timezone_naive_cutoff_is_rejected() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
         ParityRequest(
-            cutoff_at=datetime(2026, 1, 1),
+            temporal_scope=PopulationTemporalScope(
+                knowledge_cutoff=datetime(2026, 1, 1),
+                observed_through=OBSERVED,
+            ),
+            issuer_id="issuer-1",
             projection_generation_id="generation-1",
         )
+
+
+def test_late_recorded_evidence_is_visible_through_observation_clock(
+    tmp_path: Path,
+) -> None:
+    path = _database(tmp_path)
+    coordinate = _seed(
+        path,
+        knowledge_at=PAST,
+        recorded_at=LATE_RECORDED,
+    )
+
+    report = _run(path, [_projection(coordinate)])
+
+    assert report.knowledge_cutoff == NOW
+    assert report.observed_through == OBSERVED
+    assert report.equal_rows == 1
+    assert report.cutover_ready
+
+
+def test_legacy_pages_are_bounded_and_cursor_is_scope_bound(tmp_path: Path) -> None:
+    path = _database(tmp_path)
+    for row_id in range(1, 6):
+        _seed(path, row_id)
+    reader = FakeProjectionReader([_projection(f"coordinate-{row_id}") for row_id in range(1, 6)])
+
+    first = run_legacy_canonical_parity(
+        path,
+        ParityRequest(
+            temporal_scope=PopulationTemporalScope(
+                knowledge_cutoff=NOW,
+                observed_through=OBSERVED,
+            ),
+            issuer_id="issuer-1",
+            projection_generation_id="generation-1",
+            page_size=2,
+            max_pages=1,
+            max_rows=10,
+        ),
+        reader,
+    )
+
+    assert first.legacy_rows_scanned == 2
+    assert [row.fact_row_id for row in first.rows] == [1, 2]
+    assert first.next_cursor == LegacyFactCursor(
+        issuer_id="issuer-1",
+        temporal_scope=PopulationTemporalScope(
+            knowledge_cutoff=NOW,
+            observed_through=OBSERVED,
+        ),
+        projection_generation_id="generation-1",
+        fact_table_rank=0,
+        fact_row_id=2,
+    )
+    assert (
+        LegacyFactCursor.model_validate_json(first.next_cursor.model_dump_json())
+        == first.next_cursor
+    )
+    with pytest.raises(ValueError, match="cursor issuer"):
+        ParityRequest(
+            temporal_scope=PopulationTemporalScope(
+                knowledge_cutoff=NOW,
+                observed_through=OBSERVED,
+            ),
+            issuer_id="issuer-2",
+            projection_generation_id="generation-1",
+            after=first.next_cursor,
+        )
+    with pytest.raises(ValueError, match="cursor temporal scope"):
+        ParityRequest(
+            temporal_scope=PopulationTemporalScope(
+                knowledge_cutoff=NOW,
+                observed_through=datetime(2026, 1, 21, tzinfo=UTC),
+            ),
+            issuer_id="issuer-1",
+            projection_generation_id="generation-1",
+            after=first.next_cursor,
+        )
+
+    one_row_pages = _run(
+        path,
+        list(reader.coordinates.values()),
+        page_size=1,
+        max_pages=10,
+    )
+    five_row_page = _run(
+        path,
+        list(reader.coordinates.values()),
+        page_size=5,
+        max_pages=2,
+    )
+    assert one_row_pages.complete
+    assert five_row_page.complete
+    assert one_row_pages.legacy_fact_universe_sha256 == five_row_page.legacy_fact_universe_sha256
+    assert one_row_pages.parity_rows_sha256 == five_row_page.parity_rows_sha256

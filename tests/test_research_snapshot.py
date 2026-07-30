@@ -36,6 +36,7 @@ from provenance.research_snapshot import (
     VerifiedResearchReference,
     _build_research_snapshot_with_verifier,
     _DefaultResearchReferenceVerifier,
+    _document_family,
     _validate_document_obligation_subject_pairs,
     _verify_research_snapshot_with_verifier,
     admit,
@@ -495,6 +496,25 @@ def _seal_all_dispositions(
         seal_disposition(conn, disposition_id, sealed_at=seal_clock)
 
 
+def test_obligation_population_uses_k_for_knowledge_and_w_for_recording(
+    conn: sqlite3.Connection,
+) -> None:
+    recorded_at = T1 + timedelta(hours=2)
+
+    obligations = derive_obligations(
+        conn,
+        SCOPE,
+        T1,
+        POLICY,
+        observed_through=recorded_at,
+        recorded_at=recorded_at,
+    )
+
+    assert obligations
+    assert all(item.knowledge_at <= T1 for item in obligations)
+    assert {item.recorded_at for item in obligations} == {recorded_at}
+
+
 def _processing_snapshot(conn: sqlite3.Connection) -> str:
     _seal_all_dispositions(conn, cutoff=T1, prefix="t1")
     snapshot_id = "processing:t1"
@@ -816,6 +836,44 @@ def test_missing_lane_blocks_processing_snapshot(conn: sqlite3.Connection) -> No
         "document_processing_snapshot_seals",
     ):
         assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+
+def test_snapshot_verification_failure_rolls_back_header_members_and_seal(
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _seal_all_dispositions(conn, cutoff=T1, prefix="verification-failure")
+    snapshot_id = "processing:verification-failure"
+
+    def _reject_snapshot(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("forced snapshot verification failure")
+
+    monkeypatch.setattr(
+        "provenance.research_snapshot.verify_processing_snapshot",
+        _reject_snapshot,
+    )
+    with pytest.raises(ValueError, match="forced snapshot verification failure"):
+        seal_processing_snapshot(
+            conn,
+            processing_snapshot_id=snapshot_id,
+            idempotency_key=snapshot_id,
+            scope=SCOPE,
+            cutoff_at=T1,
+            policy=POLICY,
+            recorded_at=T1,
+        )
+    for table in (
+        "document_processing_snapshot_headers",
+        "document_processing_snapshot_members",
+        "document_processing_snapshot_seals",
+    ):
+        assert (
+            conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE processing_snapshot_id=?",
+                (snapshot_id,),
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_arbitrary_processing_evidence_commitment_cannot_admit(
@@ -1342,6 +1400,28 @@ def test_sec_source_duty_map_is_closed_and_issuer_kind_aware(
         recorded_at=T1,
     )
     assert _expected_document_family(record, issuer_kind=issuer_kind) == expected_family
+
+
+def test_ir_supplement_uses_financial_statement_source_duty() -> None:
+    assert _document_family("ir_supplement", "") == "issuer_financial_statements"
+    assert _document_family("ir_doc", "supplement") == "issuer_financial_statements"
+
+    expected = CoverageExpectedDocument(
+        expected_document_id="expected-supplement",
+        idempotency_key="expected-supplement",
+        snapshot_id="inventory-supplement",
+        expected_document_key="TEST:supplement",
+        issuer_id="issuer-policy",
+        source_kind="ir_document",
+        document_type="supplement",
+        form_type=None,
+        expectation_basis="authoritative",
+        recorded_at=T1,
+    )
+    assert (
+        _expected_document_family(expected, issuer_kind="operating_company")
+        == "issuer_financial_statements"
+    )
 
 
 @pytest.mark.parametrize(

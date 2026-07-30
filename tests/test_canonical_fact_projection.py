@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -434,6 +434,42 @@ def test_empty_generation_is_exact_replayable_and_row_factory_neutral(
             cutoff_at=T0,
         )
         assert tuple_verified.projection_seal_sha256 == (row_verified.projection_seal_sha256)
+    finally:
+        conn.close()
+
+
+def test_projection_verifier_requires_artifact_to_exist_by_observation_clock(
+    tmp_path: Path,
+) -> None:
+    conn = _empty_database(tmp_path / "dual-clock-projection.db")
+    recorded_at = T0 + timedelta(hours=1)
+    request = _request().model_copy(update={"recorded_at": recorded_at})
+    try:
+        build_canonical_projection_generation(conn, request)
+
+        with pytest.raises(
+            CanonicalFactProjectionError,
+            match="absent_at_observed_through",
+        ):
+            verify_canonical_projection_generation(
+                conn,
+                request.generation_id,
+                resolution_snapshot_id=request.resolution_snapshot_id,
+                ontology_snapshot_id=request.ontology_snapshot_id,
+                cutoff_at=T0,
+                observed_through=T0,
+            )
+        assert (
+            verify_canonical_projection_generation(
+                conn,
+                request.generation_id,
+                resolution_snapshot_id=request.resolution_snapshot_id,
+                ontology_snapshot_id=request.ontology_snapshot_id,
+                cutoff_at=T0,
+                observed_through=recorded_at,
+            ).recorded_at
+            == recorded_at
+        )
     finally:
         conn.close()
 

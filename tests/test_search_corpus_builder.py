@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -548,6 +548,39 @@ def test_dry_run_is_read_only_and_reports_exact_chunk_offsets(tmp_path: Path) ->
             "".join(chunk.text for chunk in result.planned_chunks)
             == "Revenue grew strongly year over year."
         )
+    finally:
+        conn.close()
+
+
+def test_corpus_ignores_evidence_revision_recorded_after_observation_clock(
+    tmp_path: Path,
+) -> None:
+    conn = _conn(tmp_path)
+    try:
+        _seed(conn)
+        EvidenceLedger(conn).persist(
+            EvidenceNode(
+                node_id="node-late",
+                evidence_key="ACME:node",
+                revision=2,
+                extraction_run_id="run",
+                supersedes_node_id="node",
+                node_kind="passage",
+                text="Late system revision.",
+                recorded_at=STAMP + timedelta(days=1),
+            )
+        )
+        conn.commit()
+        request = _request(apply=False).model_copy(
+            update={"knowledge_cutoff": STAMP, "recorded_at": STAMP}
+        )
+
+        result = build_grounded_search_corpus(conn, request)
+
+        assert "".join(chunk.text for chunk in result.planned_chunks) == (
+            "Revenue grew strongly year over year."
+        )
+        assert {chunk.evidence_node_id for chunk in result.planned_chunks} == {"node"}
     finally:
         conn.close()
 

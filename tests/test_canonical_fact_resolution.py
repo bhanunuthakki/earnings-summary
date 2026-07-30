@@ -58,8 +58,14 @@ class _DuplicateSnapshotEngine(CanonicalFactResolutionEngine):
         self,
         cutoff: datetime,
         scope: ResolutionSnapshotScope,
+        *,
+        recorded_cutoff: datetime | None = None,
     ) -> list[dict[str, object]]:
-        members = super()._latest_resolution_members(cutoff, scope)
+        members = super()._latest_resolution_members(
+            cutoff,
+            scope,
+            recorded_cutoff=recorded_cutoff,
+        )
         return [*members, *members]
 
 
@@ -803,5 +809,30 @@ def test_resolution_snapshots_are_exactly_issuer_scoped(tmp_path: Path) -> None:
                 "WHERE resolution_snapshot_id='snapshot:issuer-2'"
             )
         } == {second_cell_id}
+    finally:
+        conn.close()
+
+
+def test_snapshot_uses_separate_knowledge_and_system_clocks(tmp_path: Path) -> None:
+    output = _output((_entry(0),))
+    conn = _resolution_database(tmp_path, output)
+    try:
+        FilingXbrlExtractionLedger(conn).publish(output)
+        cell_id = _bind_every_published_cell(conn)
+        recorded_at = NOW + timedelta(hours=1)
+        engine = CanonicalFactResolutionEngine(conn)
+        engine.resolve(
+            cell_id,
+            NOW,
+            ResolutionPolicy(name="dual-clock", version="v1", config={}),
+            recorded_at=recorded_at,
+        )
+        members = engine._latest_resolution_members(
+            NOW,
+            SCOPE,
+            recorded_cutoff=recorded_at,
+        )
+
+        assert [member["canonical_metric_cell_id"] for member in members] == [cell_id]
     finally:
         conn.close()

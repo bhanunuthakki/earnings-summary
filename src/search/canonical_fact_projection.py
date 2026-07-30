@@ -288,7 +288,11 @@ def build_canonical_projection_generation(
 ) -> VerifiedCanonicalProjectionGeneration:
     """Build one exact generation atomically with bounded keyset batches."""
 
-    references = _verify_generation_references(conn, request)
+    references = _verify_generation_references(
+        conn,
+        request,
+        observed_through=request.recorded_at,
+    )
     delta_depth = _parent_depth(conn, request)
     config_json = canonical_json(request.config)
     generation_payload = {
@@ -350,6 +354,7 @@ def build_canonical_projection_generation(
                 resolution_snapshot_id=request.resolution_snapshot_id,
                 ontology_snapshot_id=request.ontology_snapshot_id,
                 cutoff_at=request.cutoff_at,
+                observed_through=request.recorded_at,
             )
             _record_projection_audit_receipt(conn, verified, audited_at=request.recorded_at)
             return verified
@@ -367,6 +372,7 @@ def build_canonical_projection_generation(
             resolution_snapshot_id=request.resolution_snapshot_id,
             ontology_snapshot_id=request.ontology_snapshot_id,
             cutoff_at=request.cutoff_at,
+            observed_through=request.recorded_at,
         )
         _record_projection_audit_receipt(conn, verified, audited_at=request.recorded_at)
         return verified
@@ -379,6 +385,7 @@ def verify_canonical_projection_generation(
     resolution_snapshot_id: str,
     ontology_snapshot_id: str,
     cutoff_at: datetime,
+    observed_through: datetime | None = None,
 ) -> VerifiedCanonicalProjectionGeneration:
     """Recompute and verify the public projection commitment.
 
@@ -418,6 +425,19 @@ def verify_canonical_projection_generation(
         raise CanonicalFactProjectionError(
             "projection_generation_not_fully_sealed", generation_id=generation_id
         )
+    observed = (
+        _datetime(header["recorded_at"]) if observed_through is None else _utc(observed_through)
+    )
+    if observed < _utc(cutoff_at):
+        raise CanonicalFactProjectionError(
+            "projection_observed_through_precedes_cutoff",
+            generation_id=generation_id,
+        )
+    if _datetime(header["recorded_at"]) > observed or _datetime(seal["sealed_at"]) > observed:
+        raise CanonicalFactProjectionError(
+            "projection_generation_absent_at_observed_through",
+            generation_id=generation_id,
+        )
     if (
         str(header["resolution_snapshot_id"]) != resolution_snapshot_id
         or str(header["ontology_snapshot_id"]) != ontology_snapshot_id
@@ -437,7 +457,11 @@ def verify_canonical_projection_generation(
         recorded_at=_datetime(header["recorded_at"]),
         config=ProjectionConfig.model_validate(json.loads(str(header["config_json"]))),
     )
-    references = _verify_generation_references(conn, request)
+    references = _verify_generation_references(
+        conn,
+        request,
+        observed_through=observed,
+    )
     config_json = canonical_json(request.config)
     payload = canonical_json(
         {
@@ -478,7 +502,7 @@ def verify_canonical_projection_generation(
         verify_source_fact_publication(
             conn,
             publication_id=str(publication["source_publication_id"]),
-            cutoff=request.cutoff_at,
+            cutoff=observed,
         )
     bucket_payload = _verify_buckets_streaming(conn, request, entry_audit.changed_buckets)
     ordered_entry_set_sha = entry_audit.ordered_entry_set_sha256
@@ -926,15 +950,21 @@ def _projection_audit_payload(
 
 
 def _verify_generation_references(
-    conn: sqlite3.Connection, request: ProjectionGenerationRequest
+    conn: sqlite3.Connection,
+    request: ProjectionGenerationRequest,
+    *,
+    observed_through: datetime,
 ) -> dict[str, str]:
     resolution_receipt = CanonicalFactResolutionEngine(conn).verify_snapshot(
-        request.resolution_snapshot_id, request.cutoff_at
+        request.resolution_snapshot_id,
+        request.cutoff_at,
+        observed_through=observed_through,
     )
     watermark = verify_resolution_snapshot_watermark(
         conn,
         resolution_snapshot_id=request.resolution_snapshot_id,
         cutoff_at=request.cutoff_at,
+        observed_through=observed_through,
     )
     MetricOntology(conn).verify_snapshot(request.ontology_snapshot_id)
     ontology = _row(
@@ -942,14 +972,22 @@ def _verify_generation_references(
         "SELECT header.cutoff_at,seal.member_set_sha256 "
         "FROM ontology_snapshot_headers header JOIN ontology_snapshot_seals seal "
         "ON seal.ontology_snapshot_id=header.ontology_snapshot_id "
-        "WHERE header.ontology_snapshot_id=?",
-        (request.ontology_snapshot_id,),
+        "WHERE header.ontology_snapshot_id=? "
+        "AND datetime(header.cutoff_at)=datetime(?) "
+        "AND datetime(header.recorded_at)<=datetime(?) "
+        "AND datetime(seal.sealed_at)<=datetime(?)",
+        (
+            request.ontology_snapshot_id,
+            db_time(request.cutoff_at),
+            db_time(observed_through),
+            db_time(observed_through),
+        ),
     )
     resolution = _row(
         conn,
         "SELECT member_set_sha256 FROM canonical_fact_resolution_snapshot_seals "
-        "WHERE resolution_snapshot_id=?",
-        (request.resolution_snapshot_id,),
+        "WHERE resolution_snapshot_id=? AND datetime(recorded_at)<=datetime(?)",
+        (request.resolution_snapshot_id, db_time(observed_through)),
     )
     if (
         ontology is None

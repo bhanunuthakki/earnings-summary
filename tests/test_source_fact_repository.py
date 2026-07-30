@@ -21,10 +21,15 @@ from provenance.fact_plane_v2 import (
     FactDimensionV2,
     FactResolutionCandidateV2,
     FactResolutionRevisionV2,
+    ObservationRelationV2,
     ReportedFactObservationV2,
 )
 from provenance.source_fact_publication import (
+    PublicationRecordMissingError,
     PublicationVerificationError,
+    record_commitment,
+    record_coordinates,
+    record_idempotency_key,
     verify_source_fact_publication,
 )
 from provenance.source_fact_repository import (
@@ -373,6 +378,14 @@ def test_publish_is_exact_replay_and_v2_only(
     assert payload is not None
     assert sha256(str(payload[0])) == first.publication_payload_sha256
     assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone() == (0,)
+    with pytest.raises(PublicationRecordMissingError) as captured:
+        record_coordinates(
+            conn,
+            "fact_cell",
+            ("missing-cell-first", publication.reported_facts[0].cell.fact_cell_id),
+        )
+    assert captured.value.record_kind == "fact_cell"
+    assert captured.value.record_id == "missing-cell-first"
 
 
 def test_public_verifier_recomputes_complete_publication_at_explicit_cutoff(
@@ -459,6 +472,32 @@ def test_public_verifier_rejects_live_record_commitment_tamper(
 
     assert captured.value.reason_code == "publication_record_commitment_mismatch"
     assert captured.value.disposition == "quarantined"
+
+
+def test_public_verifier_attributes_missing_batched_member_record(
+    conn: sqlite3.Connection,
+) -> None:
+    publication = make_publication()
+    SourceFactRepository(conn).publish(publication)
+    missing_observation_id = publication.reported_facts[0].observation.observation_id
+    conn.execute("DROP TRIGGER trg_fact_observation_payload_commitments_v2_append_only")
+    conn.execute("DROP TRIGGER trg_fact_observation_payload_commitments_v2_append_only_delete")
+    conn.execute(
+        "DELETE FROM fact_observation_payload_commitments_v2 WHERE observation_id = ?",
+        (missing_observation_id,),
+    )
+
+    with pytest.raises(PublicationVerificationError) as captured:
+        verify_source_fact_publication(
+            conn,
+            publication_id=publication.publication_id,
+            cutoff=STAMP,
+        )
+
+    assert captured.value.reason_code == "publication_member_record_missing"
+    assert captured.value.disposition == "quarantined"
+    assert captured.value.record_kind == "fact_observation"
+    assert captured.value.record_id == missing_observation_id
 
 
 def test_missing_extraction_seal_rolls_back_entire_publication(
@@ -712,8 +751,38 @@ def test_derived_publication_sequences_seal_before_resolution(
     conn: sqlite3.Connection,
 ) -> None:
     source_publication = make_publication()
+    source_fact = source_publication.reported_facts[0]
+    recast = make_report(
+        source_fact.cell,
+        "source-recast",
+        numeric_value="101",
+    )
+    relation = ObservationRelationV2(
+        relation_id="relation-source-recast",
+        idempotency_key="relation-key-source-recast",
+        subject_observation_id=recast.observation_id,
+        object_observation_id=source_fact.observation.observation_id,
+        relation_kind="presentation_recast_of",
+        reason_code="presentation_recast",
+        reason_details=CanonicalJSONObject({}),
+        policy_name="test-relation",
+        policy_version="v1",
+        policy_config_sha256=sha256("relation-policy"),
+        effective_at=STAMP,
+        knowledge_at=STAMP,
+        recorded_at=STAMP,
+    )
+    source_publication = source_publication.model_copy(
+        update={
+            "reported_facts": (
+                source_fact,
+                ReportedSourceFact(cell=source_fact.cell, observation=recast),
+            ),
+            "relations": (relation,),
+        }
+    )
     repository = SourceFactRepository(conn)
-    repository.publish(source_publication)
+    source_receipt = repository.publish(source_publication)
     source = source_publication.reported_facts[0].observation
     derived_cell = FactCellV2.model_validate(
         {
@@ -794,18 +863,139 @@ def test_derived_publication_sequences_seal_before_resolution(
             "recorded_at": STAMP,
         }
     )
-    receipt = repository.publish(
-        SourceFactPublication(
-            publication_id="publication-derived",
-            idempotency_key="publication-key-derived",
-            derived_facts=(DerivedSourceFact(cell=derived_cell, observation=derived),),
-            derivations=(derivation,),
-            resolutions=(resolution,),
-        )
+    derived_publication = SourceFactPublication(
+        publication_id="publication-derived",
+        idempotency_key="publication-key-derived",
+        derived_facts=(DerivedSourceFact(cell=derived_cell, observation=derived),),
+        derivations=(derivation,),
+        resolutions=(resolution,),
     )
+    receipt = repository.publish(derived_publication)
+    replay = repository.publish(derived_publication)
     assert receipt.derivation_seal_ids == ("derivation-seal-1",)
+    assert source_receipt.relation_ids == ("relation-source-recast",)
     assert receipt.resolution_revision_ids == ("resolution-derived",)
+    assert replay.exact_replay
     assert conn.execute(
         "SELECT COUNT(*) FROM fact_observation_payload_commitments_v2 "
         "WHERE observation_id = 'observation-derived'"
     ).fetchone() == (1,)
+
+    member_rows = conn.execute(
+        "SELECT record_kind,record_id FROM source_fact_publication_members "
+        "ORDER BY publication_id,member_ordinal"
+    ).fetchall()
+    for record_kind in (
+        "fact_cell",
+        "fact_observation",
+        "observation_relation",
+        "derivation_seal",
+        "extraction_seal",
+        "resolution_revision",
+    ):
+        record_ids = tuple(str(record_id) for kind, record_id in member_rows if kind == record_kind)
+        coordinates = record_coordinates(conn, record_kind, record_ids)
+        assert tuple(coordinates) == tuple(dict.fromkeys(record_ids))
+        assert coordinates == {
+            record_id: (
+                record_idempotency_key(conn, record_kind, record_id),
+                record_commitment(conn, record_kind, record_id),
+            )
+            for record_id in dict.fromkeys(record_ids)
+        }
+
+
+def test_publication_member_coordinate_reads_scale_by_bounded_batch_count(
+    conn: sqlite3.Connection,
+) -> None:
+    member_count = 401
+    facts = tuple(
+        ReportedSourceFact(
+            cell=(cell := make_cell(f"batch-{index}", period_end=STAMP - timedelta(days=index))),
+            observation=make_report(cell, f"batch-{index}"),
+        )
+        for index in range(member_count)
+    )
+    publication = SourceFactPublication(
+        publication_id="publication-batched-coordinates",
+        idempotency_key="publication-key-batched-coordinates",
+        reported_facts=facts,
+        extraction_seals=(
+            ExtractionRunCompletenessSealV2(
+                extraction_seal_id="extraction-seal-batched-coordinates",
+                idempotency_key="extraction-seal-key-batched-coordinates",
+                extraction_run_id="run-1",
+                expected_node_count=1,
+                completeness_policy_name="all-run-nodes",
+                completeness_policy_version="v1",
+                completeness_policy_sha256=sha256("completeness"),
+                knowledge_at=STAMP,
+                recorded_at=STAMP,
+            ),
+        ),
+    )
+    coordinate_selects: list[str] = []
+    completeness_selects: list[str] = []
+    per_record_selects: list[str] = []
+
+    def capture_coordinate_select(statement: str) -> None:
+        if (
+            "WHERE cell.fact_cell_id IN (" in statement
+            or "WHERE observation.observation_id IN (" in statement
+        ):
+            coordinate_selects.append(statement)
+        if "WHERE anchor.observation_id IN (" in statement:
+            completeness_selects.append(statement)
+        if (
+            "WHERE seal.semantic_key_sha256 =" in statement
+            or "WHERE anchor.observation_id =" in statement
+            or "SELECT * FROM fact_observations_v2 WHERE idempotency_key =" in statement
+        ):
+            per_record_selects.append(statement)
+
+    conn.set_trace_callback(capture_coordinate_select)
+    try:
+        receipt = SourceFactRepository(conn).publish(publication)
+    finally:
+        conn.set_trace_callback(None)
+
+    cell_selects = tuple(
+        statement for statement in coordinate_selects if "WHERE cell.fact_cell_id IN (" in statement
+    )
+    observation_selects = tuple(
+        statement
+        for statement in coordinate_selects
+        if "WHERE observation.observation_id IN (" in statement
+    )
+    # SQLite's trace hook may repeat a top-level statement while triggers run;
+    # unique rendered SQL still proves exactly two 400-record batches per kind.
+    assert len(set(cell_selects)) == 2
+    assert len(set(observation_selects)) == 2
+    assert len(set(completeness_selects)) == 2
+    assert per_record_selects == []
+    assert len(receipt.cell_ids) == member_count
+    assert len(receipt.observation_ids) == member_count
+    assert conn.execute(
+        "SELECT record_kind,COUNT(*) "
+        "FROM source_fact_publication_members "
+        "WHERE publication_id = ? GROUP BY record_kind ORDER BY record_kind",
+        (publication.publication_id,),
+    ).fetchall() == [
+        ("extraction_seal", 1),
+        ("fact_cell", member_count),
+        ("fact_observation", member_count),
+    ]
+    boundary_members = conn.execute(
+        "SELECT member_ordinal,record_kind,record_id "
+        "FROM source_fact_publication_members "
+        "WHERE publication_id = ? AND member_ordinal IN (0,400,401,801,802) "
+        "ORDER BY member_ordinal",
+        (publication.publication_id,),
+    ).fetchall()
+    assert boundary_members == [
+        (0, "fact_cell", "cell-batch-0"),
+        (400, "fact_cell", "cell-batch-400"),
+        (401, "fact_observation", "observation-batch-0"),
+        (801, "fact_observation", "observation-batch-400"),
+        (802, "extraction_seal", "extraction-seal-batched-coordinates"),
+    ]
