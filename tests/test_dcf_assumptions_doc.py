@@ -264,6 +264,25 @@ def test_write_provenance_sheet_comments_and_ledger(tmp_path: Path) -> None:
     assert data["opus_baseline"]["values"]["exit_multiple"] == 12.0
 
 
+def test_write_provenance_keeps_cover_story_in_sync(tmp_path: Path) -> None:
+    wb_path = tmp_path / "TESTCO.xlsx"
+    wb = _dashboard_workbook()
+    cover = wb.create_sheet("Cover", 0)
+    cover["A25"] = "  THE STORY (Opus)"
+    cover["A27"] = "STALE NARRATIVE"
+    wb.save(str(wb_path))
+    p = tmp_path / "data" / "dcf_assumptions" / "TESTCO.json"
+    _write_json(p, {"redesign": dict(_BLOCK)})
+
+    doc.write_provenance(wb_path, _INP, p, ticker="TESTCO", update_ledger=False, today=_TODAY)
+
+    updated = openpyxl.load_workbook(str(wb_path), data_only=False)
+    try:
+        assert updated["Cover"]["A27"].value == "REDESIGN NARRATIVE"
+    finally:
+        updated.close()
+
+
 def test_write_provenance_without_assumptions_file(tmp_path: Path) -> None:
     """No JSON at all: every input is a builder default; the sheet still
     renders (with the no-Opus explainer) and nothing is created on disk."""

@@ -1,0 +1,174 @@
+{
+  "ticker": "DASH",
+  "name": "DoorDash",
+  "last_updated": "2026-07-29",
+  "thesis": "DoorDash is the strongest US local-commerce demand network, with order density, DashPass, advertising, and category expansion supporting durable growth. The operating thesis is credible, but the security remains on the evaluation list rather than approved for new money because the price embeds too much of the upside. The revised DCF is about $122 base, $194 bull, and $43 bear versus a recent market price around $196. The base assumes 18% near-term revenue growth fading to 4%, a 19.5% terminal operating margin, and 14x exit. A purchase requires either a materially lower price or evidence that Deliveroo/Wolt integration, non-restaurant growth, and advertising can lift margin without slowing order growth or cash conversion.",
+  "verdict": "Evaluating",
+  "verdict_color": "blue",
+  "key_driver": "Marketplace GOV growth x net revenue margin x contribution margin, constrained by acquisition integration and reinvestment",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Free cash flow",
+    "FCF Margin (GAAP)"
+  ],
+  "_status": null,
+  "tier_1_kpis": [
+    {
+      "name": "Total orders YoY growth",
+      "current": "27% including Deliveroo and 16% excluding Deliveroo (Q1 2026)",
+      "prior": null,
+      "yoy": "healthy, with material acquisition contribution",
+      "status": "On track",
+      "break_condition": "<12% organic YoY for 2 consecutive quarters",
+      "source": "earnings release"
+    },
+    {
+      "name": "Marketplace GOV YoY growth",
+      "current": "37% including Deliveroo and 24% excluding Deliveroo (Q1 2026)",
+      "prior": null,
+      "yoy": "healthy, with material acquisition contribution",
+      "status": "On track",
+      "break_condition": "<15% organic YoY for 2 consecutive quarters",
+      "source": "earnings release"
+    },
+    {
+      "name": "Adjusted EBITDA / Marketplace GOV",
+      "current": "2.4% (Q1 2026)",
+      "prior": "2.6% (Q1 2025)",
+      "yoy": "down 20 bps",
+      "status": "Watch",
+      "break_condition": "<2.0% for 2 consecutive quarters or no YoY recovery by Q1 2027",
+      "source": "earnings release"
+    },
+    {
+      "name": "Free cash flow YoY growth",
+      "current": "-15% YoY (Q1 2026)",
+      "prior": null,
+      "yoy": "declining",
+      "status": "Watch",
+      "break_condition": "Negative YoY for 2 consecutive quarters while organic GOV growth is below 20%",
+      "source": "earnings release"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "Organic revenue growth excluding acquisitions",
+      "current": "21% YoY (Q1 2026)",
+      "source": "earnings release"
+    },
+    {
+      "name": "Advertising revenue and attach rate",
+      "source": "earnings call / shareholder letter"
+    },
+    {
+      "name": "Deliveroo and Wolt integration costs and synergies",
+      "source": "10-Q / earnings call"
+    },
+    {
+      "name": "Non-restaurant category order frequency",
+      "source": "earnings call / shareholder letter"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "DashPass member growth and cohort retention",
+      "source": "earnings call"
+    },
+    {
+      "name": "Courier cost per order and insurance cost",
+      "source": "10-Q"
+    },
+    {
+      "name": "International contribution profit",
+      "source": "earnings call / segment disclosure"
+    }
+  ],
+  "competitive_watchlist": [
+    "Uber Eats",
+    "Instacart",
+    "Amazon",
+    "Restaurant and grocer first-party delivery"
+  ],
+  "thesis_breakers_qualitative": [
+    "Organic order growth falls below low teens for two quarters",
+    "Adjusted EBITDA / GOV remains below 2% despite slowing reinvestment",
+    "Deliveroo or Wolt integration requires sustained capital without clear contribution-profit improvement",
+    "Advertising or take-rate gains provoke merchant churn or lower order frequency",
+    "Free cash flow declines while acquisition-adjusted revenue growth slows below 15%"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters."
+    },
+    {
+      "rule_id": "universal_fcf_margin_collapse",
+      "kpi_name": "FCF Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 5,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin below 5% for 2 consecutive quarters."
+    }
+  ],
+  "bear_deltas": {
+    "growth_delta_pp": -6.0,
+    "margin_delta_pp": -7.0,
+    "exit_multiple_delta": -5.0,
+    "terminal_g_delta_pp": -0.5,
+    "note": "Owner approved 2026-07-29. The simplified thesis seed captures slower organic order growth, acquisition-integration drag, and weaker delivery economics. The live workbook uses -6pp/-3pp near/terminal growth and -4pp/-7pp near/terminal margin, producing about $43 per share."
+  },
+  "schema_version": 2,
+  "wacc": 0.0985,
+  "mos_bar": null,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 14.0
+  },
+  "flags": [
+    "EVAL_LIST"
+  ],
+  "segments": [
+    {
+      "name": "Total company",
+      "description": "US and international local-commerce marketplace, including restaurant, grocery, retail, advertising, Wolt, and Deliveroo."
+    }
+  ],
+  "operational_kpis": [],
+  "break_rules_soft": [],
+  "business_model_rules": [
+    {
+      "rule_id": "dash_organic_orders_below_12",
+      "kpi_name": "Total orders YoY growth",
+      "comparator": "lt",
+      "threshold": 12,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Organic order growth below 12% for 2 quarters means density and frequency are no longer supporting the modeled growth path."
+    },
+    {
+      "rule_id": "dash_adj_ebitda_gov_below_2",
+      "kpi_name": "Adjusted EBITDA / Marketplace GOV",
+      "comparator": "lt",
+      "threshold": 2.0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Adjusted EBITDA / GOV below 2% for 2 quarters indicates reinvestment or competition is overwhelming scale economics."
+    },
+    {
+      "rule_id": "dash_fcf_growth_below_zero",
+      "kpi_name": "Free cash flow YoY growth",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Free cash flow declining for 2 quarters while organic growth slows is incompatible with the terminal-margin thesis."
+    }
+  ]
+}

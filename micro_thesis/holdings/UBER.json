@@ -1,8 +1,8 @@
 {
   "ticker": "UBER",
   "name": "Uber Technologies",
-  "last_updated": "2026-07-27",
-  "thesis": "Uber is a global mobility and delivery marketplace with structural compounding from audience growth, trip frequency, Uber One cross-sell, and operating leverage. The core business thesis is intact, but the holding is on Watch because autonomous vehicles can change distribution economics. Waymo is already a scaled, safety-evidenced direct competitor; Tesla is a credible but less-proven second threat. Uber wins if AV supply remains fragmented and its hybrid network earns an attractive, capital-light take rate. The thesis weakens if Waymo and Tesla keep dense-market demand in direct apps, Uber's AV take rate falls below 10% while it funds guarantees or fleet infrastructure, AV-overlap markets underperform matched controls by more than 5 points for two quarters, or AV capital at risk exceeds $2B / 20% of trailing FCF without contracted returns. Owner approved 2026-07-27. Position posture: hold around 2.0-2.5%, cap at 3.0% before AV economic proof, add toward 3.5-4.0% only after at least two proof points including one economic proof, and trim toward 1.0-1.5% when an approved warning trigger fires.",
+  "last_updated": "2026-07-29",
+  "thesis": "Uber is a global mobility and delivery marketplace with structural compounding from audience growth, trip frequency, Uber One cross-sell, and operating leverage. The core business thesis is intact, but the holding is on Watch because autonomous vehicles can change distribution economics. Waymo is already a scaled, safety-evidenced direct competitor; Tesla is a credible but less-proven second threat. Uber wins if AV supply remains fragmented and its hybrid network earns an attractive, capital-light take rate. The thesis weakens if Waymo and Tesla keep dense-market demand in direct apps, Uber's AV take rate falls below 10% while it funds guarantees or fleet infrastructure, AV-overlap markets underperform matched controls by more than 5 points for two quarters, or AV capital at risk exceeds $2B / 20% of trailing FCF without contracted returns. The revised DCF now values this fork explicitly: about $96 base, $150 bull, and $30 AV bear; the bear assumes 15% terminal operating margin and a 9x exit rather than preserving current marketplace economics. Position posture: hold around 2.0-2.5%, cap at 3.0% before AV economic proof, add toward 3.5-4.0% only after at least two proof points including one economic proof, and trim toward 1.0-1.5% when an approved warning trigger fires.",
   "verdict": "Watch",
   "verdict_color": "yellow",
   "key_driver": "MAPCs × trips/MAPC × Mobility take rate, constrained by AV routing share, AV contribution profit, and AV capital at risk",
@@ -214,22 +214,20 @@
   ],
   "bear_deltas": {
     "growth_delta_pp": -6.0,
-    "margin_delta_pp": -5.0,
-    "exit_multiple_delta": -4.0,
+    "margin_delta_pp": -8.0,
+    "exit_multiple_delta": -5.5,
     "terminal_g_delta_pp": -0.5,
-    "note": "Owner approved 2026-07-27 as the AV-disintermediation and regulatory bear overlay: Waymo/Tesla take dense urban markets, take-rate caps plus W-2 reclassification spread, and insurance inflation outruns pricing - growth -6pp, margin -5pp, exit -4 turns, terminal g -0.5pp."
+    "note": "Owner approved 2026-07-29 as the simplified thesis seed for the AV-disintermediation/capital-intensity bear. The live workbook is more precise: near/terminal growth -6pp/-4pp, near/terminal margin -5pp/-8pp, exit -5.5 turns, terminal g -0.5pp, yielding about $30 per share. Margin and multiple compression proxy both lower AV take rates and incremental guarantees, fleet, depot, charging, or other capital support because the scenario schema has no separate capex lever."
   },
   "schema_version": 2,
-  "wacc": null,
+  "wacc": 0.094,
   "mos_bar": null,
   "dcf_defaults": {
     "forecast_years": 5,
-    "terminal_multiple": null,
+    "terminal_multiple": 14.5,
     "gsheet_id": "1eK-vr33U3gZKSMDApWARCnvXyVDVR4y-ka5LqCVAU6I"
   },
-  "flags": [
-    "DCF_PARAMS_PENDING"
-  ],
+  "flags": [],
   "segments": [
     {
       "name": "Mobility",
