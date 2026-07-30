@@ -364,6 +364,15 @@ def test_extraction_lineage_promotes_current_coverage_without_rescanning_invento
         )
         document_version_id = captured.items[0].document_version_id
         assert document_version_id is not None
+        document_recorded_at = datetime.fromisoformat(
+            str(
+                conn.execute(
+                    "SELECT recorded_at FROM evidence_document_versions "
+                    "WHERE document_version_id=?",
+                    (document_version_id,),
+                ).fetchone()[0]
+            )
+        )
         digest = hashlib.sha256(BODY).hexdigest()
         ledger = EvidenceLedger(conn)
         ledger.persist(
@@ -395,7 +404,7 @@ def test_extraction_lineage_promotes_current_coverage_without_rescanning_invento
         conn.commit()
         request = CoverageRefreshRequest(
             inventory_keys=(INVENTORY_KEY,),
-            recorded_at=STAMP,
+            recorded_at=document_recorded_at,
             apply=False,
         )
 
@@ -427,7 +436,7 @@ def test_extraction_lineage_promotes_current_coverage_without_rescanning_invento
                 corpus_key="issuer-acme:reporting",
                 revision=1,
                 selector_code_version="corpus-builder@1",
-                recorded_at=STAMP,
+                recorded_at=document_recorded_at,
                 expected_documents=(
                     CorpusExpectedDocument(
                         expected_document_key="issuer-acme:2025:10-K",

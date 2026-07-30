@@ -13,6 +13,8 @@ import sqlite3
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import TracebackType
 from typing import Literal, Self, cast
 
@@ -46,6 +48,7 @@ from provenance.source_fact_repository import (
     SourceFactPublication,
     SourceFactRepository,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _POLICY_NAME = "governed_legacy_reported_fact_bridge"
 _POLICY_VERSION = "5"
@@ -270,30 +273,42 @@ class _RunDependencySpill:
 
     def __init__(self) -> None:
         self._conn: sqlite3.Connection | None = None
+        self._temp_dir: TemporaryDirectory[str] | None = None
 
     def __enter__(self) -> Self:
-        self._conn = sqlite3.connect("")
-        self._conn.executescript(
-            """
-            PRAGMA temp_store=FILE;
-            CREATE TABLE run_nodes (
-                run_id TEXT PRIMARY KEY,
-                first_capture TEXT NOT NULL,
-                indegree INTEGER NOT NULL DEFAULT 0,
-                emitted INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE run_edges (
-                parent_run_id TEXT NOT NULL,
-                child_run_id TEXT NOT NULL,
-                PRIMARY KEY(parent_run_id,child_run_id)
-            ) WITHOUT ROWID;
-            CREATE INDEX ix_run_edges_child ON run_edges(child_run_id);
-            CREATE TEMP TABLE ready_run_nodes (
-                run_id TEXT PRIMARY KEY,
-                first_capture TEXT NOT NULL
-            ) WITHOUT ROWID;
-            """
+        temp_dir = TemporaryDirectory(prefix="source-fact-run-dependencies-")
+        conn = connect_sqlite(
+            Path(temp_dir.name) / "run-dependencies.db",
+            role=SQLiteConnectionRole.SNAPSHOT_DESTINATION,
         )
+        try:
+            conn.executescript(
+                """
+                PRAGMA temp_store=FILE;
+                CREATE TABLE run_nodes (
+                    run_id TEXT PRIMARY KEY,
+                    first_capture TEXT NOT NULL,
+                    indegree INTEGER NOT NULL DEFAULT 0,
+                    emitted INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE run_edges (
+                    parent_run_id TEXT NOT NULL,
+                    child_run_id TEXT NOT NULL,
+                    PRIMARY KEY(parent_run_id,child_run_id)
+                ) WITHOUT ROWID;
+                CREATE INDEX ix_run_edges_child ON run_edges(child_run_id);
+                CREATE TEMP TABLE ready_run_nodes (
+                    run_id TEXT PRIMARY KEY,
+                    first_capture TEXT NOT NULL
+                ) WITHOUT ROWID;
+                """
+            )
+        except Exception:
+            conn.close()
+            temp_dir.cleanup()
+            raise
+        self._conn = conn
+        self._temp_dir = temp_dir
         return self
 
     def __exit__(
@@ -305,6 +320,9 @@ class _RunDependencySpill:
         if self._conn is not None:
             self._conn.close()
             self._conn = None
+        if self._temp_dir is not None:
+            self._temp_dir.cleanup()
+            self._temp_dir = None
 
     def _connection(self) -> sqlite3.Connection:
         if self._conn is None:

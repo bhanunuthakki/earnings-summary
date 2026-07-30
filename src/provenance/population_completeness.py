@@ -47,6 +47,7 @@ PopulationPlaneName = Literal[
 ReceiptStatus = Literal["complete", "blocked"]
 AUDIT_RECEIPT_VERSION = "population-cutover-audit.v2"
 CUTOVER_RECEIPT_VERSION = "population-cutover-receipt.v3"
+_FINDING_CODE_CHARACTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"  # pragma: allowlist secret
 PLANE_EXCLUSION_REASON_CODES: dict[str, frozenset[str]] = {
     "identity_scope": frozenset(),
     "source_fact_ontology": frozenset(
@@ -344,7 +345,7 @@ def _validate_audit_evidence(
         if (
             not isinstance(code, str)
             or not code
-            or any(character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_" for character in code)
+            or any(character not in _FINDING_CODE_CHARACTERS for character in code)
             or not isinstance(count, int)
             or isinstance(count, bool)
             or count < 0
