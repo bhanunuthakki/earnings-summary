@@ -413,6 +413,88 @@ def _install_repository(
     monkeypatch.setattr(population, "SourceFactRepository", factory)
 
 
+def test_existing_semantic_cell_cache_reuses_validated_envelope_across_batches(
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn.row_factory = sqlite3.Row
+    source_rows = cast(Callable[..., sqlite3.Cursor], getattr(population, "_source_rows"))
+    source_fact_from_row = cast(Callable[..., object], getattr(population, "_source_fact_from_row"))
+    fact = source_fact_from_row(
+        source_rows(conn, _request()).fetchone(),
+        policy_sha=_sha("policy"),
+        prior_observation_id=None,
+        operation_recorded_at=RECORDED,
+    )
+    cell = getattr(fact, "cell")
+    conn.execute(
+        "INSERT INTO fact_cells_v2 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            cell.fact_cell_id,
+            cell.idempotency_key,
+            cell.reporting_entity_id,
+            cell.scope_security_id,
+            cell.concept_namespace,
+            cell.concept_name,
+            cell.taxonomy_name,
+            cell.taxonomy_version,
+            cell.accounting_basis,
+            cell.consolidation_scope,
+            cell.period_kind,
+            cell.period_start,
+            cell.period_end,
+            cell.fiscal_year,
+            cell.fiscal_period,
+            cell.unit_key,
+            cell.currency,
+            cell.effective_at,
+            cell.knowledge_at,
+            cell.recorded_at,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO fact_cell_identity_seals_v2 VALUES (?,?,?,?,?)",
+        (
+            cell.fact_cell_id,
+            cell.semantic_key_version,
+            cell.semantic_key_sha256,
+            cell.semantic_identity_json,
+            cell.dimensions_json,
+        ),
+    )
+    cache = getattr(population, "_SemanticCellCache")()
+    resolver = cast(
+        Callable[..., tuple[object, ...]], getattr(population, "_reuse_existing_semantic_cells")
+    )
+    original_existing_cell = getattr(population, "_existing_cell")
+    reconstruction_count = 0
+
+    def count_reconstruction(*args: object) -> object:
+        nonlocal reconstruction_count
+        reconstruction_count += 1
+        return original_existing_cell(*args)
+
+    monkeypatch.setattr(population, "_existing_cell", count_reconstruction)
+    semantic_selects: list[str] = []
+    conn.set_trace_callback(
+        lambda statement: (
+            semantic_selects.append(statement)
+            if "FROM fact_cell_identity_seals_v2 seal" in statement
+            else None
+        )
+    )
+    try:
+        first = resolver(conn, (fact,), cache)
+        second = resolver(conn, (fact,), cache)
+    finally:
+        conn.set_trace_callback(None)
+
+    assert first == second
+    assert first[0] == fact
+    assert reconstruction_count == 1
+    assert len(semantic_selects) == 1
+
+
 def test_normalized_dimension_identity_is_scoped_to_fact_cell() -> None:
     recorded_at = datetime(2026, 7, 29, tzinfo=UTC)
     raw = '[{"key":"segment","value":"Cloud"}]'

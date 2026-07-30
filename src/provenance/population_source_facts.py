@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import TracebackType
@@ -73,6 +74,7 @@ _EXCLUSION_REASONS = (
     "no_selected_subject_binding_as_of_cutoff",
 )
 _SEMANTIC_CELL_BATCH_SIZE = 400
+_SEMANTIC_CELL_CACHE_SIZE = 4096
 
 
 class _FrozenModel(BaseModel):
@@ -211,6 +213,35 @@ class _PopulationPlan:
     run_plans: dict[str, _RunPlan]
     input_commitment_sha256: str
     planned_output_commitment_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidatedSemanticCell:
+    cell: FactCellV2
+    sealed_semantic_identity_json: str
+    sealed_dimension_set_json: str
+
+
+class _SemanticCellCache:
+    """Bounded LRU of fully validated persisted semantic-cell envelopes."""
+
+    def __init__(self, capacity: int = _SEMANTIC_CELL_CACHE_SIZE) -> None:
+        if capacity < 1:
+            raise ValueError("semantic-cell cache capacity must be positive")
+        self._capacity = capacity
+        self._values: OrderedDict[str, _ValidatedSemanticCell] = OrderedDict()
+
+    def get(self, semantic_key: str) -> _ValidatedSemanticCell | None:
+        value = self._values.get(semantic_key)
+        if value is not None:
+            self._values.move_to_end(semantic_key)
+        return value
+
+    def put(self, semantic_key: str, value: _ValidatedSemanticCell) -> None:
+        self._values[semantic_key] = value
+        self._values.move_to_end(semantic_key)
+        if len(self._values) > self._capacity:
+            self._values.popitem(last=False)
 
 
 class _CommitmentFold:
@@ -367,7 +398,8 @@ def populate_source_fact_plane(
 ) -> SourceFactPopulationResult:
     """Plan or publish bounded extraction-run units into the hardened plane."""
 
-    plan = _population_plan(conn, request)
+    semantic_cell_cache = _SemanticCellCache()
+    plan = _population_plan(conn, request, semantic_cell_cache=semantic_cell_cache)
     _verify_caller_commitments(request, plan)
     run_ids = _bounded_run_ids(plan, request)
     processed_observations = 0
@@ -384,6 +416,7 @@ def populate_source_fact_plane(
                     request=request,
                     run_plan=plan.run_plans[extraction_run_id],
                     policy_sha=plan.policy_config_sha256,
+                    semantic_cell_cache=semantic_cell_cache,
                 )
                 if (
                     run_commitment
@@ -448,7 +481,10 @@ def _policy() -> tuple[dict[str, JsonValue], str]:
 def _population_plan(
     conn: sqlite3.Connection,
     request: SourceFactPopulationRequest,
+    *,
+    semantic_cell_cache: _SemanticCellCache | None = None,
 ) -> _PopulationPlan:
+    cache = semantic_cell_cache or _SemanticCellCache()
     policy, policy_sha = _policy()
     original_row_factory = conn.row_factory
     conn.row_factory = sqlite3.Row
@@ -535,9 +571,9 @@ def _population_plan(
                 previous_eligible_observation_id = str(row["observation_id"])
                 previous_eligible_run_id = run_id
                 if len(pending_facts) == _SEMANTIC_CELL_BATCH_SIZE:
-                    _fold_manifest_fact_batch(conn, pending_facts, output_fold)
+                    _fold_manifest_fact_batch(conn, pending_facts, output_fold, cache)
                     pending_facts.clear()
-            _fold_manifest_fact_batch(conn, pending_facts, output_fold)
+            _fold_manifest_fact_batch(conn, pending_facts, output_fold, cache)
             for node in _node_rows(conn, request.operation_recorded_at):
                 node_run_id = str(node[0])
                 if node_run_id not in source_run_ids:
@@ -761,6 +797,7 @@ def _build_run_publication(
     request: SourceFactPopulationRequest,
     run_plan: _RunPlan,
     policy_sha: str,
+    semantic_cell_cache: _SemanticCellCache,
 ) -> tuple[SourceFactPublication, str]:
     original_row_factory = conn.row_factory
     conn.row_factory = sqlite3.Row
@@ -770,6 +807,7 @@ def _build_run_publication(
             request=request,
             run_plan=run_plan,
             policy_sha=policy_sha,
+            semantic_cell_cache=semantic_cell_cache,
         )
     finally:
         conn.row_factory = original_row_factory
@@ -781,6 +819,7 @@ def _build_run_publication_rows(
     request: SourceFactPopulationRequest,
     run_plan: _RunPlan,
     policy_sha: str,
+    semantic_cell_cache: _SemanticCellCache,
 ) -> tuple[SourceFactPublication, str]:
     facts: list[ReportedSourceFact] = []
     pending: list[tuple[sqlite3.Row, ReportedSourceFact]] = []
@@ -812,9 +851,9 @@ def _build_run_publication_rows(
             )
         )
         if len(pending) == _SEMANTIC_CELL_BATCH_SIZE:
-            _append_run_fact_batch(conn, pending, facts, run_fold)
+            _append_run_fact_batch(conn, pending, facts, run_fold, semantic_cell_cache)
             pending.clear()
-    _append_run_fact_batch(conn, pending, facts, run_fold)
+    _append_run_fact_batch(conn, pending, facts, run_fold, semantic_cell_cache)
     if len(facts) != run_plan.eligible_observation_count:
         raise ValueError("source-fact run membership changed after manifest planning")
     seal, envelope = _publication_envelope(
@@ -1086,10 +1125,12 @@ def _fold_manifest_fact_batch(
     conn: sqlite3.Connection,
     candidates: list[_ManifestFactCandidate],
     output_fold: _CommitmentFold,
+    semantic_cell_cache: _SemanticCellCache,
 ) -> None:
     resolved = _reuse_existing_semantic_cells(
         conn,
         tuple(candidate.fact for candidate in candidates),
+        semantic_cell_cache,
     )
     for candidate, fact in zip(candidates, resolved, strict=True):
         fact_payload = _fact_output_payload(
@@ -1109,10 +1150,12 @@ def _append_run_fact_batch(
     candidates: list[tuple[sqlite3.Row, ReportedSourceFact]],
     facts: list[ReportedSourceFact],
     run_fold: _CommitmentFold,
+    semantic_cell_cache: _SemanticCellCache,
 ) -> None:
     resolved = _reuse_existing_semantic_cells(
         conn,
         tuple(fact for _, fact in candidates),
+        semantic_cell_cache,
     )
     for (row, _), fact in zip(candidates, resolved, strict=True):
         run_fold.add(
@@ -1125,60 +1168,80 @@ def _append_run_fact_batch(
 def _reuse_existing_semantic_cells(
     conn: sqlite3.Connection,
     facts: tuple[ReportedSourceFact, ...],
+    semantic_cell_cache: _SemanticCellCache,
 ) -> tuple[ReportedSourceFact, ...]:
     if not facts:
         return ()
     if len(facts) > _SEMANTIC_CELL_BATCH_SIZE:
         raise ValueError("semantic-cell resolution batch exceeds the bounded query size")
     semantic_keys = tuple(dict.fromkeys(str(fact.cell.semantic_key_sha256) for fact in facts))
-    placeholders = ",".join("?" for _ in semantic_keys)
-    rows = conn.execute(
-        f"""
-        SELECT cell.*,
-               seal.semantic_key_version AS sealed_semantic_key_version,
-               seal.semantic_key_sha256 AS sealed_semantic_key_sha256,
-               seal.semantic_identity_json AS sealed_semantic_identity_json,
-               seal.dimension_set_json AS sealed_dimension_set_json
-        FROM fact_cell_identity_seals_v2 seal
-        JOIN fact_cells_v2 cell ON cell.fact_cell_id=seal.fact_cell_id
-        WHERE seal.semantic_key_sha256 IN ({placeholders})
-        """,  # nosec B608 -- fixed placeholders only; semantic keys remain bound
-        semantic_keys,
-    ).fetchall()
-    if not rows:
+    existing_by_semantic_key = {
+        semantic_key: cached
+        for semantic_key in semantic_keys
+        if (cached := semantic_cell_cache.get(semantic_key)) is not None
+    }
+    missing_keys = tuple(
+        semantic_key
+        for semantic_key in semantic_keys
+        if semantic_key not in existing_by_semantic_key
+    )
+    if missing_keys:
+        placeholders = ",".join("?" for _ in missing_keys)
+        rows = conn.execute(
+            f"""
+            SELECT cell.*,
+                   seal.semantic_key_version AS sealed_semantic_key_version,
+                   seal.semantic_key_sha256 AS sealed_semantic_key_sha256,
+                   seal.semantic_identity_json AS sealed_semantic_identity_json,
+                   seal.dimension_set_json AS sealed_dimension_set_json
+            FROM fact_cell_identity_seals_v2 seal
+            JOIN fact_cells_v2 cell ON cell.fact_cell_id=seal.fact_cell_id
+            WHERE seal.semantic_key_sha256 IN ({placeholders})
+            """,  # nosec B608 -- fixed placeholders only; semantic keys remain bound
+            missing_keys,
+        ).fetchall()
+    else:
+        rows = []
+    if not rows and not existing_by_semantic_key:
         return facts
     cell_ids = tuple(str(row["fact_cell_id"]) for row in rows)
-    cell_placeholders = ",".join("?" for _ in cell_ids)
-    dimension_rows = conn.execute(
-        "SELECT * FROM fact_dimensions_normalized_v2 "
-        f"WHERE fact_cell_id IN ({cell_placeholders}) "  # nosec B608 -- bound IDs
-        "ORDER BY fact_cell_id,dimension_ordinal",
-        cell_ids,
-    ).fetchall()
+    if cell_ids:
+        cell_placeholders = ",".join("?" for _ in cell_ids)
+        dimension_rows = conn.execute(
+            "SELECT * FROM fact_dimensions_normalized_v2 "
+            f"WHERE fact_cell_id IN ({cell_placeholders}) "  # nosec B608 -- bound IDs
+            "ORDER BY fact_cell_id,dimension_ordinal",
+            cell_ids,
+        ).fetchall()
+    else:
+        dimension_rows = []
     dimensions_by_cell: dict[str, list[sqlite3.Row]] = {cell_id: [] for cell_id in cell_ids}
     for dimension in dimension_rows:
         dimensions_by_cell[str(dimension["fact_cell_id"])].append(dimension)
-    existing_by_semantic_key: dict[str, tuple[sqlite3.Row, FactCellV2]] = {}
     for row in rows:
-        existing_by_semantic_key[str(row["sealed_semantic_key_sha256"])] = (
-            row,
-            _existing_cell(
+        semantic_key = str(row["sealed_semantic_key_sha256"])
+        validated = _ValidatedSemanticCell(
+            cell=_existing_cell(
                 row,
                 dimensions_by_cell[str(row["fact_cell_id"])],
             ),
+            sealed_semantic_identity_json=str(row["sealed_semantic_identity_json"]),
+            sealed_dimension_set_json=str(row["sealed_dimension_set_json"]),
         )
+        semantic_cell_cache.put(semantic_key, validated)
+        existing_by_semantic_key[semantic_key] = validated
     resolved: list[ReportedSourceFact] = []
     for fact in facts:
         match = existing_by_semantic_key.get(str(fact.cell.semantic_key_sha256))
         if match is None:
             resolved.append(fact)
             continue
-        row, existing = match
+        existing = match.cell
         if (
             existing.semantic_identity_json != fact.cell.semantic_identity_json
             or existing.dimensions_json != fact.cell.dimensions_json
-            or str(row["sealed_semantic_identity_json"]) != fact.cell.semantic_identity_json
-            or str(row["sealed_dimension_set_json"]) != fact.cell.dimensions_json
+            or match.sealed_semantic_identity_json != fact.cell.semantic_identity_json
+            or match.sealed_dimension_set_json != fact.cell.dimensions_json
         ):
             raise ValueError("existing semantic cell commitment conflicts with normalized fact")
         observation = fact.observation.model_copy(update={"fact_cell_id": existing.fact_cell_id})
