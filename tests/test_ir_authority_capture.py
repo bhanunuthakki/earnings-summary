@@ -233,6 +233,36 @@ def test_claimed_document_must_be_present_in_captured_surface_bytes(
         conn.close()
 
 
+def test_exhausted_surface_rejects_an_unclaimed_document_reference(
+    tmp_path: Path,
+) -> None:
+    conn = _conn(tmp_path)
+    q1_url = "https://ir.acme.test/q1-2026-results.pdf"
+    body = (
+        b"<html>"
+        b"<a href='/q1-2026-results.pdf'>Q1 results</a>"
+        b"<a href='/q2-2026-results.pdf'>Q2 results</a>"
+        b"</html>"
+    )
+    try:
+        result = capture_ir_authority_surfaces(
+            conn,
+            _request(document_url=q1_url),
+            blob_root=tmp_path / "blobs",
+            apply=True,
+            session=FakeSession([FakeResponse(body=body)]),
+        )
+        assert result.complete is False
+        assert result.failed == 1
+        assert result.items[0].reason_code == "unclaimed_document_in_surface"
+        assert conn.execute(
+            "SELECT COUNT(*) FROM issuer_authority_surface_revisions"
+        ).fetchone() == (0,)
+        assert conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone() == (0,)
+    finally:
+        conn.close()
+
+
 def test_dry_run_fetches_without_database_or_durable_blob_writes(
     tmp_path: Path,
 ) -> None:
@@ -491,7 +521,7 @@ def test_cli_uses_job_lock_and_json_contract(
         ]
     )
     output = capsys.readouterr()
-    assert exit_code == 0
+    assert exit_code == 0, output
     assert entered[0][0] == "ir-authority-surface-capture"
     payload = json.loads(output.out)
     assert payload["authority_evidence"]["surfaces"][0]["raw_sha256"]

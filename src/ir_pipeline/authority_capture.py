@@ -530,6 +530,13 @@ def _validate_claimed_documents(
             "claimed_document_not_in_surface",
             "publisher surface bytes do not contain every claimed document URL",
         )
+    # Exhausted surfaces are closed enumerations. Any parsed HTTPS reference
+    # omitted by the claim is evidence that the publisher universe is not closed.
+    if spec.outcome == "exhausted" and claimed != references:
+        raise _SurfaceFetchError(
+            "unclaimed_document_in_surface",
+            "exhausted publisher surface contains an unclaimed document URL",
+        )
 
 
 def _surface_references(
