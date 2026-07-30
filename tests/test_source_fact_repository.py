@@ -937,6 +937,8 @@ def test_publication_member_coordinate_reads_scale_by_bounded_batch_count(
     coordinate_selects: list[str] = []
     completeness_selects: list[str] = []
     per_record_selects: list[str] = []
+    extraction_run_selects: list[str] = []
+    nested_observation_savepoints: list[str] = []
 
     def capture_coordinate_select(statement: str) -> None:
         if (
@@ -952,6 +954,10 @@ def test_publication_member_coordinate_reads_scale_by_bounded_batch_count(
             or "SELECT * FROM fact_observations_v2 WHERE idempotency_key =" in statement
         ):
             per_record_selects.append(statement)
+        if "WHERE node.node_id IN (" in statement:
+            extraction_run_selects.append(statement)
+        if statement == "SAVEPOINT persist_fact_observation_v2":
+            nested_observation_savepoints.append(statement)
 
     conn.set_trace_callback(capture_coordinate_select)
     try:
@@ -972,7 +978,10 @@ def test_publication_member_coordinate_reads_scale_by_bounded_batch_count(
     assert len(set(cell_selects)) == 2
     assert len(set(observation_selects)) == 2
     assert len(set(completeness_selects)) == 2
+    # All 401 observations share one evidence node, so run metadata is fetched once.
+    assert len(set(extraction_run_selects)) == 1
     assert per_record_selects == []
+    assert nested_observation_savepoints == []
     assert len(receipt.cell_ids) == member_count
     assert len(receipt.observation_ids) == member_count
     assert conn.execute(
