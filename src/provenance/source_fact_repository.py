@@ -497,7 +497,7 @@ class SourceFactRepository:
         placeholders = ",".join("?" for _ in observation_columns)
         self._conn.executemany(
             "INSERT INTO fact_observations_v2 "
-            f"({','.join(observation_columns)}) VALUES ({placeholders})",
+            f"({','.join(observation_columns)}) VALUES ({placeholders})",  # nosec B608 -- fixed FactPlaneV2 columns and generated placeholders; values remain bound
             observation_values,
         )
         self._conn.executemany(
