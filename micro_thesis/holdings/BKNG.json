@@ -1,7 +1,7 @@
 {
   "ticker": "BKNG",
   "name": "Booking Holdings",
-  "last_updated": "2026-07-06",
+  "last_updated": "2026-07-29",
   "thesis": "Booking Holdings compounds per-share free cash flow off five reinforcing pillars. (1) MARKET-SHARE GAINS: BKNG is taking share in its most valuable markets — U.S. accommodations grew low-teens room nights in Q1'26 (4th consecutive quarter of acceleration, materially above a low-single-digit market), the payoff of multi-year deliberate investment, while alternative accommodations grow faster than the core and close the listings gap vs. Airbnb. The two-sided flywheel (more supply -> more demand -> more supply) still turns. (2) FIRST-PARTY / DIRECT MIX: the economic heart of the thesis. Every booking that arrives direct (app, logged-in, Genius loyalty) instead of via paid Google/meta-search is structurally higher-margin — lower CAC, higher LTV. A rising direct mix plus Connected-Trip attach (flights +28%, attractions +25% globally in Q1'26, ground transport, and Penny's end-to-end agentic booking) is what converts top-line growth into WIDENING FCF margin. The mix shift, not just volume, is the margin engine. (3) AGENTIC-COMMERCE / DISINTERMEDIATION IS OVERBLOWN: the bear case is that LLM travel agents (or Google's own agentic layer) disintermediate the OTA and commoditize BKNG into a bare supplier. Rejected for three reasons — (a) BKNG's own agent (Penny/Priceline) can TRANSACT end-to-end, which most third-party planners cannot; the hard part is the supply, payments and service graph BKNG already owns; (b) BKNG partners from strength (Claude Live performance-marketing) rather than being bypassed; (c) the quantitative tell is MARKETING EFFICIENCY — if disintermediation were real, BKNG would be forced to pay up for traffic and marketing/gross-profit would climb. So long as marketing intensity holds flat-to-down while direct mix rises, 'AI eats the OTA' is not showing up where it would have to. A real fight to monitor, not a foregone loss. (4) DISCIPLINED CAPITAL ALLOCATOR: an asset-light, negative-working-capital model converts ~30-35%+ of revenue to free cash flow and returns essentially all of it, shrinking the share count meaningfully every year (buybacks + the newer dividend). FREE CASH FLOW is the proxy for this pillar; the bet is that per-share FCF compounds well above revenue as the buyback retires stock at reasonable multiples. (5) SECULAR TRAVEL TAM: travel is a structurally rising share of consumer wallet as global living standards climb and the middle class expands (especially Asia), and as developed-market consumers favor experiences over goods; digital penetration of travel booking still has 35-45%+ headroom (per management). Even flat share of a growing, digitizing market compounds — BKNG's share GAINS on top of that are the upside. This reframes cyclical demand shocks (geopolitics, recession) as interruptions to a secular up-trend, not the trend itself. Held with a constructive 3-5 year view; near-term geopolitical travel softness (Middle-East corridors) is a buying condition, not a thesis-breaker (see nuance).",
   "verdict": "Intact",
   "verdict_color": "green",
@@ -155,19 +155,17 @@
     "margin_delta_pp": -4.0,
     "exit_multiple_delta": -5.0,
     "terminal_g_delta_pp": -0.5,
-    "note": "Agentic-disintermediation bear (2026-07 red team): room nights decelerate below mid-single-digit, marketing intensity rises structurally, direct/first-party mix stalls - growth -5pp, margin -4pp, exit -5 turns, terminal g -0.5pp. Implied bear FV ~$122/sh vs ~$178 live (-32%). Pending owner review."
+    "note": "Owner approved 2026-07-29. Agentic-disintermediation bear: room nights decelerate below mid-single-digit, marketing intensity rises structurally, and direct/first-party mix stalls. Growth -5pp, margin -4pp, exit -5 turns, terminal g -0.5pp; revised workbook bear is about $113 per share."
   },
   "schema_version": 2,
-  "wacc": null,
+  "wacc": 0.089,
   "mos_bar": null,
   "dcf_defaults": {
     "forecast_years": 5,
-    "terminal_multiple": null,
+    "terminal_multiple": 12.5,
     "gsheet_id": "1ISHZ40KLll_A5Af42bikQdOE-PQ5C_3KzoljdmlBqjE"
   },
-  "flags": [
-    "DCF_PARAMS_PENDING"
-  ],
+  "flags": [],
   "segments": [],
   "operational_kpis": [],
   "break_rules_soft": [],

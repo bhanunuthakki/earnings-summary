@@ -28,6 +28,7 @@ from pathlib import Path
 
 import openpyxl
 import pytest
+from openpyxl.cell.cell import Cell
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -662,6 +663,30 @@ def test_reader_reads_dashboard_and_financials(built_usd: tuple[Path, float]) ->
     assert inp.diluted_shares_m == pytest.approx(100.0)
     assert 0.0 < inp.wacc < 0.25
     assert inp.consensus_years == 5  # 2026..2030 on the Consensus sheet
+
+
+def test_reader_accepts_long_term_debt_label(built_usd: tuple[Path, float], tmp_path: Path) -> None:
+    """Live FMP workbooks label the balance-sheet debt row ``Long-term Debt``;
+    the reader must accept that source label as the equity-bridge debt input."""
+    source, _ = built_usd
+    dest = tmp_path / "long-term-debt-label.xlsx"
+    shutil.copy2(source, dest)
+    wb = openpyxl.load_workbook(dest)
+    try:
+        ws = wb["Financials"]
+        debt_row = next(
+            row for row in range(1, ws.max_row + 1) if ws.cell(row, 1).value == "Total Debt"
+        )
+        debt_cell = ws.cell(debt_row, 1)
+        assert isinstance(debt_cell, Cell)
+        debt_cell.value = "Long-term Debt"
+        wb.save(dest)
+    finally:
+        wb.close()
+
+    inp = redesign.read_inputs(dest)
+    assert inp is not None
+    assert inp.total_debt_m > 0
 
 
 # --------------------------------------------------------------------------- #

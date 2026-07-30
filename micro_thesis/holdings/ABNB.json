@@ -1,10 +1,10 @@
 {
   "ticker": "ABNB",
   "name": "Airbnb",
-  "last_updated": "2026-05-10",
-  "thesis": "Booking platform with structural take-rate + nights-booked compounding; thesis is durability of ADR + nights growth as travel normalizes off COVID base. STUB — needs user review.",
-  "verdict": "Pending",
-  "verdict_color": "gray",
+  "last_updated": "2026-07-29",
+  "thesis": "Airbnb is an asset-light global travel marketplace whose long-run value compounds through nights growth, ADR, take rate, and strong cash conversion. Q1 2026 growth supports an intact operating thesis, but the stock offers little base-case margin of safety: the revised DCF is about $138 base, $185 bull, and $70 bear. The model assumes 12% near-term growth fading to 4.5%, a 40% terminal operating margin, and 13.5x exit. The key adversarial question is whether fee migration and insurance attach are durable economics or temporary reported-growth support; new money requires either a materially lower price or evidence that nights growth and FCF margin remain strong after those benefits normalize.",
+  "verdict": "Intact",
+  "verdict_color": "green",
   "key_driver": "Nights & experiences booked × ADR × take-rate",
   "chart_priorities": [
     "Revenue",
@@ -12,7 +12,7 @@
     "Free cash flow",
     "FCF Margin (GAAP)"
   ],
-  "_status": "needs_user_review",
+  "_status": null,
   "tier_1_kpis": [
     {
       "name": "Nights & experiences booked YoY growth",
@@ -123,17 +123,22 @@
       "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
     }
   ],
+  "bear_deltas": {
+    "growth_delta_pp": -5.0,
+    "margin_delta_pp": -7.0,
+    "exit_multiple_delta": -4.5,
+    "terminal_g_delta_pp": -0.5,
+    "note": "Owner approved 2026-07-29. The simplified thesis seed captures fee and insurance normalization plus regulatory and host-acquisition pressure. The live workbook uses -5pp/-3pp near/terminal growth and -4pp/-7pp near/terminal margin, producing about $70 per share."
+  },
   "schema_version": 2,
-  "wacc": null,
+  "wacc": 0.0925,
   "mos_bar": null,
   "dcf_defaults": {
     "forecast_years": 5,
-    "terminal_multiple": null,
+    "terminal_multiple": 13.5,
     "gsheet_id": "14pD_oRRvOlmqF1yD1ZYAlvYK_4cLtoOFQC9QtNvwgBg"
   },
-  "flags": [
-    "DCF_PARAMS_PENDING"
-  ],
+  "flags": [],
   "segments": [],
   "operational_kpis": [],
   "break_rules_soft": [],

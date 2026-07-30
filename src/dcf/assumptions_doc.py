@@ -664,6 +664,24 @@ def write_assumptions_sheet(
         row += 1
 
 
+def sync_cover_narrative(wb: Workbook, narrative: str) -> None:
+    """Keep the Cover's story block aligned with the canonical assumptions prose.
+
+    The builder writes the story two rows below its ``THE STORY`` band. In-app
+    DCF saves regenerate the Assumptions sheet without rebuilding the Cover, so
+    update that existing cell in place when the expected structural marker is
+    present. A legacy/custom workbook without the marker is left untouched.
+    """
+    if not narrative or "Cover" not in wb.sheetnames:
+        return
+    cover = wb["Cover"]
+    for row in range(1, min(cover.max_row, 100) + 1):
+        label = cover.cell(row, 1).value
+        if isinstance(label, str) and "THE STORY" in label.upper():
+            cover.cell(row + 2, 1, narrative)
+            return
+
+
 def annotate_dashboard_comments(wb: Workbook, rows: list[AssumptionRow]) -> None:
     """Per-cell provenance as native comments on the yellow Dashboard inputs
     (Sheets shows them as notes after an export). Replaced on every write."""
@@ -722,6 +740,7 @@ def write_provenance_into(
     write_assumptions_sheet(
         wb, rows, ticker=ticker, narrative=narrative, reasoning=reasoning, baseline=baseline
     )
+    sync_cover_narrative(wb, narrative)
     annotate_dashboard_comments(wb, rows)
 
     counts: dict[str, int] = {}
