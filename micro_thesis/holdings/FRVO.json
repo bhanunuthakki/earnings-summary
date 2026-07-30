@@ -1,61 +1,219 @@
 {
   "ticker": "FRVO",
   "name": "Fervo Energy",
-  "last_updated": "2026-05-28",
-  "thesis": "Fervo Energy — next-gen enhanced geothermal systems (EGS) using horizontal drilling + multistage fracturing borrowed from shale to produce baseload zero-carbon electricity. IPO'd 2026-05-13 at $27/share on Nasdaq. STUB: needs user-authored thesis. Default key driver: contracted MWh under PPAs + capacity ramp at Cape Station + project IRRs. Anchor narrative on the S-1 (cached at data/sec_text/FRVO_s1_*.txt) until the first 10-K is filed.",
-  "verdict": "Pending",
-  "verdict_color": "gray",
-  "key_driver": "Contracted MWh under long-term PPAs + capacity ramp at Cape Station",
-  "_status": "stub_for_recurring_onboard",
+  "last_updated": "2026-07-29",
+  "thesis": "Fervo can become the leading scaled enhanced-geothermal independent power producer if Cape Station proves repeatable reservoir performance, installed cost falls from roughly $7,000/kW toward or below $3,000/kW, and premium long-term PPAs finance a path to 3-5 GW of operating capacity by 2035 without destructive corporate dilution. The stock is a Watch until the 100 MW Phase I plant produces sustained operating data; the thesis strengthens as capacity, cost and financing milestones are proven and breaks if commissioning slips materially, reservoir output degrades, the Google framework fails to convert into definitive offtake, or capital intensity remains too high to earn an adequate project return.",
+  "verdict": "Watch",
+  "verdict_color": "yellow",
+  "key_driver": "Operating MW x net realized power price x capacity factor, constrained by installed capex/kW and financing leakage",
+  "_status": null,
   "recently_ipod": true,
   "ipo_date": "2026-05-13",
-  "data_anchor": "s1",
+  "data_anchor": "10-q",
   "s1_accession": "0001628280-26-033127",
   "s1_url": "https://www.sec.gov/Archives/edgar/data/1853868/000162828026033127/fervoenergy-sx1a3.htm",
   "s1_filing_date": "2026-05-11",
   "s1_cache_path": "data/sec_text/FRVO_s1_2026.txt",
+  "latest_10q_accession": "0001628280-26-044799",
+  "latest_10q_url": "https://www.sec.gov/Archives/edgar/data/1853868/000162828026044799/frvo-20260331.htm",
+  "latest_10q_filing_date": "2026-06-23",
   "tier_1_kpis": [
     {
-      "name": "Contracted MWh (PPA-backed)",
-      "current": "TBV from S-1 / first 10-Q",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Net new PPA signings flat-to-negative for 2 consecutive Qs (placeholder)",
-      "source": "S-1 / press releases"
+      "name": "Cape Station Phase I operating capacity (MW)",
+      "current": "Approximately 100 MW under commissioning; GeoBlock 1 first power targeted Q4 2026 and GeoBlocks 2-3 targeted Q1 2027",
+      "prior": "Mechanical completion of GeoBlock 1 in Q1 2026",
+      "yoy": "pre-commercial",
+      "status": "On track",
+      "break_condition": "GeoBlock 1 has not achieved first power by 2027-03-31, or the full approximately 100 MW Phase I slips beyond 2027-09-30 without a clearly bounded fix",
+      "source": "Q1 2026 earnings release / 10-Q"
     },
     {
-      "name": "Operating capacity (MW)",
-      "current": "TBV",
+      "name": "Net capacity factor and sustained reservoir output",
+      "current": "TBV after Cape Station Phase I commercial operation; 92% is the reverse-DCF planning assumption, not reported performance",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "Ramp schedule slips >12 months vs S-1 timeline (placeholder)",
-      "source": "S-1 / earnings release"
+      "break_condition": "Trailing two-quarter net capacity factor below 85%, or reservoir pressure, temperature or flow deterioration causes a sustained output derating greater than 10%",
+      "source": "earnings releases / operating disclosures / 10-Q"
     },
     {
-      "name": "Capex / Revenue",
-      "current": "TBV",
-      "prior": null,
-      "yoy": null,
-      "status": "Unknown",
-      "break_condition": "Capex intensity exceeds S-1 plan by >25% (placeholder — high capex expected pre-scale)",
-      "source": "earnings release"
+      "name": "Cape Station total operating capacity (MW)",
+      "current": "Approximately 500 MW under construction: approximately 100 MW Phase I plus approximately 400 MW Phase II",
+      "prior": "Phase II construction commenced Q1 2026",
+      "yoy": "construction ramp",
+      "status": "On track",
+      "break_condition": "Approximately 500 MW is not in commercial operation by 2029-12-31, or the Phase II schedule slips more than 12 months from the 2028 target",
+      "source": "Q1 2026 earnings release / 10-Q"
     },
     {
-      "name": "Cash & Cash Equivalents (USD)",
-      "current": "TBV",
+      "name": "Installed capital cost per kW",
+      "current": "Approximately $7,000/kW estimated for a standardized 50 MW GeoBlock as of 2026-03-31",
+      "prior": null,
+      "yoy": null,
+      "status": "Watch",
+      "break_condition": "New-build installed cost lacks a credible path below $5,000/kW by 2029 and toward or below $3,000/kW by 2031, or an in-flight phase exceeds its approved budget by more than 20%",
+      "source": "10-Q / earnings release / project disclosures"
+    },
+    {
+      "name": "Binding contracted capacity (MW)",
+      "current": "658 MW of binding PPAs and other power-sale arrangements, representing approximately $7.2B of potential lifetime revenue backlog as of 2026-03-31",
+      "prior": null,
+      "yoy": null,
+      "status": "On track",
+      "break_condition": "Binding contracted capacity remains below 1 GW at 2029-12-31 or fails to cover capacity entering final investment decision",
+      "source": "Q1 2026 10-Q"
+    },
+    {
+      "name": "Definitive offtake converted from Google GFA (MW)",
+      "current": "0 MW disclosed from the March 2026 GFA; the up-to-3 GW framework is non-binding and does not obligate Google to purchase power",
+      "prior": null,
+      "yoy": null,
+      "status": "Watch",
+      "break_condition": "No definitive offtake agreement is executed under the GFA by 2028-03-19, allowing the framework to lapse without contracted capacity",
+      "source": "IPO prospectus / 10-Q"
+    },
+    {
+      "name": "New-project PPA economics",
+      "current": "Exact contracted price and project IRR not disclosed; reverse DCF assumes approximately $94/MWh in 2027 escalating to $115/MWh in 2035",
       "prior": null,
       "yoy": null,
       "status": "Unknown",
-      "break_condition": "Cash runway <18 months at current burn (placeholder)",
-      "source": "earnings release"
+      "break_condition": "New PPAs fail to support at least a 12% unlevered project IRR or an equivalent spread of at least 200 bps above the applicable project WACC after normalized operating and maintenance costs",
+      "source": "PPA disclosures / project financing materials / analyst-derived reverse DCF"
+    },
+    {
+      "name": "Corporate dilution and project-financing mix",
+      "current": "$421.4M of non-recourse Phase I project financing closed; IPO generated approximately $2.043B after underwriting discounts and commissions",
+      "prior": null,
+      "yoy": null,
+      "status": "On track",
+      "break_condition": "Diluted shares rise more than 15% over a rolling 24 months before 1 GW is operating, or corporate equity must fund more than 35% of aggregate new-project capex because project financing is unavailable",
+      "source": "Q1 2026 10-Q / financing disclosures"
     }
   ],
-  "tier_2_kpis": [],
-  "tier_3_kpis": [],
+  "tier_2_kpis": [
+    {
+      "name": "Drilling and completion cost per foot",
+      "current": "Management reports continued improvement but has not disclosed a complete comparable series",
+      "prior": null,
+      "yoy": null,
+      "status": "Unknown",
+      "break_condition": "No year-over-year reduction for two consecutive annual cohorts after adjusting for depth and lateral length",
+      "source": "earnings releases / technical presentations"
+    },
+    {
+      "name": "Liquidity runway (months)",
+      "current": "$280.8M unrestricted cash at 2026-03-31 before approximately $2.043B of net IPO proceeds; current post-IPO balance TBV from the next 10-Q",
+      "prior": "$461.8M unrestricted cash at 2025-12-31",
+      "yoy": "not meaningful before IPO",
+      "status": "Unknown",
+      "break_condition": "Less than 18 months of funded corporate and committed project obligations",
+      "source": "Q1 2026 10-Q / subsequent quarterly filings"
+    },
+    {
+      "name": "Permits required for commercial operation",
+      "current": "79 of 80 Phase I permits and 82 of 179 Phase II permits received as of the Q1 2026 10-Q",
+      "prior": "78 of 80 Phase I permits and 81 of 179 Phase II permits in the IPO prospectus",
+      "yoy": "progressing",
+      "status": "On track",
+      "break_condition": "A material permit delays a scheduled commercial-operation date by more than six months",
+      "source": "Q1 2026 10-Q / IPO prospectus"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Internal-control remediation",
+      "current": "Material weaknesses remained in segregation of duties, public-company accounting resources and IT general controls at 2026-03-31",
+      "prior": null,
+      "yoy": null,
+      "status": "Watch",
+      "break_condition": "Material weaknesses remain unremediated through the 2027 10-K or contribute to a material restatement",
+      "source": "Q1 2026 10-Q"
+    }
+  ],
   "break_rules": [],
-  "business_model_rules": [],
+  "business_model_rules": [
+    {
+      "rule_id": "frvo_capacity_factor_below_85",
+      "kpi_name": "Net capacity factor and sustained reservoir output",
+      "comparator": "lt",
+      "threshold": 85,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Net capacity factor below 85% for two quarters after Phase I commercial operation undermines premium baseload economics and the reverse-DCF capacity value."
+    },
+    {
+      "rule_id": "frvo_diluted_share_growth_above_15",
+      "kpi_name": "Corporate dilution and project-financing mix",
+      "comparator": "gt",
+      "threshold": 15,
+      "unit": "percent",
+      "consecutive_periods": 1,
+      "narrative": "More than 15% dilution before 1 GW is operating indicates that project finance is not carrying enough of the build and lowers per-share capacity value."
+    }
+  ],
+  "reverse_dcf_reference": {
+    "as_of_date": "2026-07-29",
+    "share_price_usd": 17.08,
+    "equity_value_usd_b": 5.03,
+    "estimated_net_cash_usd_b": 1.8,
+    "source_posture": "screen_grade",
+    "implied_2035_operating_capacity_gw": {
+      "wacc_10_0_percent": 3.0,
+      "wacc_10_5_percent": 3.7,
+      "wacc_11_0_percent": 4.6
+    },
+    "central_assumptions": {
+      "2035_power_price_usd_per_mwh": 115,
+      "capacity_factor_percent": 92,
+      "2035_ebitda_margin_percent": 68,
+      "2035_installed_capex_usd_per_kw": 2400,
+      "terminal_growth_percent": 3
+    },
+    "interpretation": "At the reference price, the market discounts approximately 3-5 GW operating by 2035 under rapid technology learning and premium pricing. A two-times equity outcome under the central assumptions requires approximately 6.6 GW."
+  },
+  "inflection_watchlist": [
+    {
+      "window": "By 2028-01-31 (approximately 18 months)",
+      "inflection": "Phase I proves commercial operation rather than commissioning progress",
+      "prove": "Approximately 100 MW reaches commercial operation and produces at least two quarters of stable output with net capacity factor at or above 90%",
+      "warning": "Availability or output remains below design while management attributes the gap to temporary commissioning issues",
+      "break": "Full Phase I remains below 100 MW beyond 2027-09-30 or sustained net capacity factor falls below 85%",
+      "action": "Eligible to increase a starter position only after operating proof"
+    },
+    {
+      "window": "By 2028-12-31 (approximately 29 months)",
+      "inflection": "Cape Station demonstrates scale and project bankability",
+      "prove": "Phase II reaches its 2028 commercial-operation target, total Cape capacity approaches 500 MW, and most remaining capital is financed with non-recourse project funding",
+      "warning": "Schedule remains nominally intact but capex/kW is not declining or financing requires increasing parent support",
+      "break": "Phase II slips more than 12 months or an in-flight phase exceeds approved budget by more than 20%",
+      "action": "Re-underwrite capacity and dilution before adding"
+    },
+    {
+      "window": "By 2029-12-31 (approximately 41 months)",
+      "inflection": "Commercial demand converts from framework narrative to financeable contracts",
+      "prove": "Binding contracted capacity exceeds 1 GW, at least one definitive Google-framework project is signed, and new PPAs support a 12% or better unlevered project return",
+      "warning": "Pipeline and proposals expand but binding PPAs and disclosed economics do not",
+      "break": "No definitive Google-framework offtake is signed by 2028-03-19 or binding contracted capacity remains below 1 GW at year-end 2029",
+      "action": "Treat uncontracted pipeline as zero in valuation until converted"
+    },
+    {
+      "window": "By 2030-07-31 (approximately 48 months)",
+      "inflection": "EGS becomes repeatable beyond the original Cape Station resource",
+      "prove": "A second GeoCluster reaches final investment decision with third-party financing and installed cost at or below $3,500/kW",
+      "warning": "All credible economics remain concentrated at Cape Station",
+      "break": "No independently financed non-Cape project reaches final investment decision or installed cost remains above $5,000/kW",
+      "action": "Do not capitalize the multi-GW land portfolio without cross-site replication"
+    },
+    {
+      "window": "By 2031-07-31 (approximately 60 months)",
+      "inflection": "The reverse-DCF 2035 capacity path becomes executable",
+      "prove": "At least 1.5 GW is operating or in commissioning, at least 3 GW is binding-contracted and substantially funded, and installed cost has a demonstrated path toward or below $3,000/kW",
+      "warning": "Capacity grows but project-level preferred claims, royalties or corporate dilution absorb most incremental economics",
+      "break": "Operating or commissioning capacity remains below 1 GW, funded contracted capacity remains below 2 GW, or cumulative dilution exceeds 25% without a proportional increase in per-share operating MW",
+      "action": "Press only if per-share operating capacity and project returns are compounding; otherwise hold, trim or exit"
+    }
+  ],
   "schema_version": 2,
   "wacc": null,
   "mos_bar": null,
@@ -65,10 +223,26 @@
   },
   "flags": [
     "RECENTLY_IPOD",
-    "DCF_PARAMS_PENDING",
-    "S1_ANCHOR"
+    "WATCH_PRE_COMMERCIAL",
+    "REVERSE_DCF_SCREEN_GRADE",
+    "10Q_ANCHOR"
   ],
   "segments": [],
-  "operational_kpis": [],
-  "break_rules_soft": []
+  "operational_kpis": [
+    "Cape Station operating MW",
+    "Net capacity factor",
+    "Net generation MWh",
+    "Installed capex per kW",
+    "Drilling and completion cost per foot",
+    "Binding contracted MW",
+    "Definitive Google GFA offtake MW",
+    "Diluted shares per operating MW"
+  ],
+  "break_rules_soft": [
+    "Phase I first power later than 2027-03-31 or full approximately 100 MW later than 2027-09-30.",
+    "Cape Station total approximately 500 MW not commercially operating by 2029-12-31.",
+    "No definitive Google GFA offtake by 2028-03-19 or binding contracted capacity below 1 GW at 2029-12-31.",
+    "No second GeoCluster final investment decision with third-party financing by 2030-07-31.",
+    "By 2031-07-31, less than 1.5 GW operating or commissioning, less than 3 GW binding-contracted and substantially funded, or no demonstrated path to installed cost at or below $3,000/kW."
+  ]
 }
