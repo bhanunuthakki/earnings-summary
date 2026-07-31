@@ -113,11 +113,11 @@ def test_red_team_panel_route_renders_empty_state(empty_client) -> None:
     assert "No red-team items yet" in body
 
 
-def test_red_team_aliases_into_the_portfolio_health_console(client) -> None:
-    """Phase-5 aggressive IA: Red Team is no longer a standalone Portfolio
-    sub-tab — it composes into the Portfolio → Health console and its old
-    #red_team deep-link aliases there. The builder's own /api/panel/red_team
-    route stays live for the composite + direct fetch (see the route test)."""
+def test_red_team_aliases_into_ask(client) -> None:
+    """Health redesign (2026-07-30): Red Team is an on-demand Ask question,
+    not a standing console section — the old #red_team deep-link lands on the
+    Ask panel. The builder's own /api/panel/red_team route stays live for
+    direct fetch (see the route tests above)."""
     from pipeline.command_center_shell import (
         _LEGACY_PANEL_REDIRECTS,  # pyright: ignore[reportPrivateUsage]
     )
@@ -125,8 +125,6 @@ def test_red_team_aliases_into_the_portfolio_health_console(client) -> None:
     resp = client.get("/")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    # The Health composite endpoint is the shell sub-tab now.
-    assert "/api/panel/portfolio_health" in body
-    # The old id aliases to it (mirrored in the SHELL_JS REDIRECTS map).
-    assert _LEGACY_PANEL_REDIRECTS["red_team"] == "portfolio_health"
+    # The old id aliases to Ask (mirrored in the SHELL_JS REDIRECTS map).
+    assert _LEGACY_PANEL_REDIRECTS["red_team"] == "explore"
     assert "red_team:" in body.replace("'", "")

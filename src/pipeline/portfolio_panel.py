@@ -1948,6 +1948,101 @@ def _implicit_bets_section(
     return f"{head}<ol>{items}</ol></section>"
 
 
+# --------------------------------------------------------------------------- #
+# Portfolio → Health chip fragments (Health console redesign, 2026-07-30).
+# The Health console is two chip-tab cards — Theses (thesis / exposure /
+# collisions) and Book risk (bets / drawdown / crowding / tail) — each pane
+# fetched on first activation via /api/panel/portfolio_health?fragment=<key>.
+# Every pane composes the SAME section renderers the standalone Synthesis and
+# Risk builders use (no second code path); the sections cut from the console
+# (Red Team, whole-book macro stress, style/business factors, the guards)
+# stay reachable through the still-live /api/panel/portfolio_risk and
+# /api/panel/red_team routes and the Ask doorways on the console brief.
+# --------------------------------------------------------------------------- #
+
+HEALTH_FRAGMENTS: tuple[str, ...] = (
+    "thesis",
+    "exposure",
+    "collisions",
+    "bets",
+    "drawdown",
+    "crowding",
+    "tail",
+)
+
+
+def _quiet_note(text: str) -> str:
+    return f'<section class="panel"><p class="muted">{escape(text)}</p></section>'
+
+
+def render_health_fragment(db_path: Path, fragment: str) -> str:
+    """One Health-console chip pane as a standalone HTML fragment. Each pane
+    carries the CSS block its sections need (the same block the standalone
+    builder emits), so a directly-fetched fragment styles itself."""
+    if fragment == "thesis":
+        from pipeline.analytical_dashboard import build_analytical_dashboard
+        from pipeline.analytical_dashboard_html import render_panel_fragment
+
+        dash = build_analytical_dashboard(db_path, sections={"portfolio_synthesis"})
+        memo = _synthesis_memo_doorway(dash.portfolio_synthesis_md) or (
+            render_panel_fragment(dash, "portfolio") or ""
+        )
+        rollup = _thesis_rollup_panel(db_path) or _quiet_note("No evaluated theses yet.")
+        return _INSIGHTS_CSS + rollup + memo
+    if fragment == "exposure":
+        alive, base = probe_tracker(None)
+        live = (
+            fetch_live_portfolio()
+            if alive
+            else LivePortfolio(available=False, api_url=base, error=_PROBE_DOWN_ERROR)
+        )
+        exposure = _exposure_panel(db_path, live) or _quiet_note("No holdings to weight yet.")
+        return _INSIGHTS_CSS + exposure
+    if fragment == "collisions":
+        return _RISK_CSS + _thesis_collision_section(_read_thesis_collision(None, db_path))
+    if fragment == "bets":
+        snapshot = read_latest_snapshot(db_path=db_path)
+        weights = _local_book_weights(None, db_path.parent.parent)
+        bets = _implicit_bets_section(snapshot, weights, _read_business_factor_vector(db_path))
+        return _RISK_CSS + (
+            bets or _quiet_note("Not enough on-disk data to state the book's bets yet.")
+        )
+    if fragment == "drawdown":
+        alive, base = probe_tracker(None)
+        analytics = (
+            fetch_portfolio_analytics(only={"performance", "beta"})
+            if alive
+            else PortfolioAnalytics(
+                available=False, api_url=base, errors={"performance": _PROBE_DOWN_ERROR}
+            )
+        )
+        if analytics.available:
+            parts: list[str] = []
+            if analytics.beta is not None:
+                parts.append(_risk_section(analytics.beta))
+            dd = (
+                compute_drawdown(analytics.performance.points)
+                if analytics.performance is not None
+                else None
+            )
+            parts.append(_drawdown_section(dd))
+            return _RISK_CSS + "".join(parts)
+        snap = read_latest_snapshot(db_path=db_path)
+        if snap is not None:
+            return _RISK_CSS + _cached_risk_section(snap)
+        return _RISK_CSS + _risk_offline_note(analytics)
+    if fragment == "crowding":
+        return _RISK_CSS + _correlation_section(_build_correlation_read(None, db_path))
+    if fragment == "tail":
+        return _RISK_CSS + (
+            _tail_stress_section(_build_tail_stress(None, db_path))
+            + _monte_carlo_section(
+                _build_monte_carlo(None, db_path), _build_joint_latam_stress(None, db_path)
+            )
+        )
+    return _quiet_note(f"Unknown Health fragment: {fragment}")
+
+
 def compose_risk_page(
     analytics: PortfolioAnalytics,
     *,

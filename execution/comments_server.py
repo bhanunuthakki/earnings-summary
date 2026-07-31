@@ -1587,12 +1587,18 @@ def create_app(
             return Response(render_red_team_panel(db_path=db_path), mimetype="text/html")
 
         if name == "portfolio_health":
-            # Portfolio -> Health (Phase-5 IA): the composite console composing
-            # Synthesis + Risk + Red Team behind an anchor-nav band (the S10
-            # Provenance-console pattern). The three builder routes above stay
-            # live for the composite + peek + direct fetch.
+            # Portfolio -> Health (redesigned 2026-07-30): the Band-1 read +
+            # two chip-tab cards (Theses / Book risk). ``?fragment=<key>``
+            # serves one chip pane (thesis / exposure / collisions / bets /
+            # drawdown / crowding / tail) — the cards lazy-fetch these on
+            # first activation. The old builder routes above stay live for
+            # deep dives, peeks and direct fetch.
             from pipeline.portfolio_console_panel import render_portfolio_health_panel
+            from pipeline.portfolio_panel import render_health_fragment
 
+            fragment = request.args.get("fragment")
+            if fragment:
+                return Response(render_health_fragment(db_path, fragment), mimetype="text/html")
             user_id = DEFAULT_USER_ID
             return Response(
                 render_portfolio_health_panel(db_path, user_id=user_id), mimetype="text/html"

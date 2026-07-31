@@ -45,18 +45,42 @@ def probe_down(monkeypatch: pytest.MonkeyPatch) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_health_console_defers_risk_and_red_team(tmp_path: Path, probe_down: None) -> None:
+def test_health_console_is_brief_plus_two_chip_cards(tmp_path: Path, probe_down: None) -> None:
+    """Health redesign (owner directive 2026-07-30): the read, then exactly
+    TWO chip-tab cards — no more vertical stack of a dozen sections."""
     html = render_portfolio_health_panel(tmp_path / "missing.db")
-    # The anchor wrappers stay (jump chips target csec-*; the placeholder swap
-    # is outerHTML on the INNER div only).
-    assert 'id="csec-risk"' in html and 'id="csec-red_team"' in html
-    assert 'data-console-jump="csec-risk"' in html
-    # Heavy builders are on-reveal placeholders, not inline sections.
-    assert 'hx-get="/api/panel/portfolio_risk" hx-trigger="revealed" hx-swap="outerHTML"' in html
-    assert 'hx-get="/api/panel/red_team" hx-trigger="revealed" hx-swap="outerHTML"' in html
-    assert html.count('class="cc-loading"') == 2
-    # The risk builder itself never ran inline (its signature content is absent).
+    assert 'class="panel console-brief"' in html
+    assert 'class="console-grid"' in html
+    assert html.count('class="console-sec hc-card"') == 2
+    # Legacy deep-link anchors survive on the cards (#portfolio_synthesis /
+    # #portfolio_risk still land on the right card via the shell ANCHORS map).
+    assert 'id="csec-synthesis"' in html and 'id="csec-risk"' in html
+    # 3 + 4 chips — never more than 4 per card.
+    assert html.count("data-hc-pane=") == 7
+    # Every pane lazy-fetches its fragment; the default pane of each card is
+    # visible (loads on wire-up), the rest are hidden until their chip.
+    for key in ("thesis", "exposure", "collisions", "bets", "drawdown", "crowding", "tail"):
+        assert f'data-src="/api/panel/portfolio_health?fragment={key}"' in html
+    assert '<div class="hc-pane" id="hcp-thesis" data-src=' in html
+    assert '<div class="hc-pane" id="hcp-exposure" hidden data-src=' in html
+    assert '<div class="hc-pane" id="hcp-bets" data-src=' in html
+    assert '<div class="hc-pane" id="hcp-drawdown" hidden data-src=' in html
+    # No builder ran inline — the console shell paints instantly.
     assert "Whole-book macro stress" not in html
+
+
+def test_health_console_cut_sections_became_ask_doorways(
+    tmp_path: Path, probe_down: None
+) -> None:
+    """Red Team and the macro-stress lens are on-demand Ask questions now
+    (Law-2 data-ask-q doorways on the brief), not standing sections."""
+    html = render_portfolio_health_panel(tmp_path / "missing.db")
+    assert "/api/panel/red_team" not in html
+    assert "/api/panel/portfolio_risk" not in html
+    assert "csec-red_team" not in html
+    assert html.count("data-ask-q=") == 2
+    assert "Red-team my portfolio" in html
+    assert "macro shock" in html
 
 
 def test_allocation_console_defers_performance(tmp_path: Path, probe_down: None) -> None:
@@ -243,28 +267,68 @@ def test_briefs_degrade_to_quiet_line_on_missing_db(tmp_path: Path, probe_down: 
     assert "Traceback" not in record
 
 
-def test_health_console_unchanged_by_grid_mode(tmp_path: Path, probe_down: None) -> None:
-    """Health keeps the stacked layout until the Wave-1 pattern is reviewed —
-    grid mode is opt-in per console, not a scaffold-wide flip."""
-    html = render_portfolio_health_panel(tmp_path / "missing.db")
-    assert 'class="console-grid"' not in html
-
-
 # --------------------------------------------------------------------------- #
-# Wave 4: the Band-1 read propagates to Health (grid stays a documented
-# exception — its children are composite full-width surfaces).
+# Health redesign (2026-07-30): the brief leads the two-card grid, and the
+# chip fragments each render standalone (with their own CSS block).
 # --------------------------------------------------------------------------- #
 
 
-def test_health_console_gets_the_brief_but_not_the_grid(tmp_path: Path, probe_down: None) -> None:
+def test_health_brief_leads_the_cards(tmp_path: Path, probe_down: None) -> None:
     html = render_portfolio_health_panel(tmp_path / "missing.db")
-    assert 'id="csec-brief"' in html
-    assert 'class="panel console-brief"' in html
-    assert html.index('id="csec-brief"') < html.index('id="csec-synthesis"')
-    # Documented exception: no tile grid on Health.
-    assert 'class="console-grid"' not in html
-    # Lazy tail untouched.
-    assert html.count('class="cc-loading"') == 2
+    assert html.index('class="panel console-brief"') < html.index('id="csec-synthesis"')
+    assert html.index('id="csec-synthesis"') < html.index('id="csec-risk"')
+
+
+def test_health_fragment_thesis_quiet_plus_memo_doorway(
+    monkeypatch: pytest.MonkeyPatch, probe_down: None, tmp_path: Path
+) -> None:
+    def _fake_dash(db_path: Path, sections: object = None, **kw: object) -> AnalyticalDashboard:
+        return AnalyticalDashboard(portfolio_synthesis_md=_MEMO_MD)
+
+    monkeypatch.setattr(ad, "build_analytical_dashboard", _fake_dash)
+    html = pp.render_health_fragment(tmp_path / "missing.db", "thesis")
+    assert "No evaluated theses yet." in html
+    assert "The book is overweight LatAm fintech against one rate regime." in html
+    assert 'href="#advisor_memos"' in html
+
+
+def test_health_fragment_drawdown_degrades_without_tracker_or_snapshot(
+    monkeypatch: pytest.MonkeyPatch, probe_down: None, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(pp, "fetch_portfolio_analytics", _boom)
+    html = pp.render_health_fragment(tmp_path / "missing.db", "drawdown")
+    assert "Risk &amp; drawdown" in html  # the offline note, never a crash
+
+
+def test_health_fragment_crowding_and_tail_empty_states(
+    tmp_path: Path, probe_down: None
+) -> None:
+    crowding = pp.render_health_fragment(tmp_path / "missing.db", "crowding")
+    assert "Holdings correlation &amp; crowding" in crowding
+    tail = pp.render_health_fragment(tmp_path / "missing.db", "tail")
+    assert "Scenario-tail stress" in tail
+    assert "Tail risk (Monte Carlo)" in tail
+    # The macro-stress lens is NOT part of any Health fragment.
+    assert "Whole-book macro stress" not in tail
+
+
+def test_health_cards_cover_exactly_the_fragment_keys() -> None:
+    """The owner's caps are structural: exactly 2 cards, ≤4 chips each, and
+    every chip key is a served fragment (and vice versa)."""
+    from pipeline.portfolio_console_panel import (
+        _HEALTH_CARDS,  # pyright: ignore[reportPrivateUsage]
+    )
+
+    assert len(_HEALTH_CARDS) == 2
+    assert all(len(tabs) <= 4 for _a, _q, tabs in _HEALTH_CARDS)
+    keys = [k for _a, _q, tabs in _HEALTH_CARDS for k, _l in tabs]
+    assert keys == list(pp.HEALTH_FRAGMENTS)
+
+
+def test_health_fragment_unknown_key_is_a_quiet_note(tmp_path: Path) -> None:
+    html = pp.render_health_fragment(tmp_path / "missing.db", "nope")
+    assert "Unknown Health fragment" in html
+    assert "Traceback" not in html
 
 
 def test_health_brief_counts_real_theses_only(tmp_path: Path, probe_down: None) -> None:
