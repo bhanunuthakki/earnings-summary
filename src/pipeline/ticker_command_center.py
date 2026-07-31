@@ -1623,7 +1623,7 @@ _PAGE_HEAD = (
     + (palette_css("dark") + controls_css("dark")).replace("{", "{{").replace("}", "}}")
     + """
   body {{ margin: 0; padding: 24px; font-family: var(--sans); background: var(--bg); color: var(--fg); line-height: 1.5; font-size: var(--fs-body); }}
-  header {{ margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 12px; display: flex; justify-content: space-between; align-items: flex-start; }}
+  header {{ margin-bottom: var(--sp-3); border-bottom: 1px solid var(--border); padding-bottom: 10px; display: flex; justify-content: space-between; align-items: flex-start; }}
   h1 {{ font-size: var(--fs-display); margin: 0 0 4px; font-weight: 600; }}
   h1 .k-tick-name {{ font-size: var(--fs-body); }}
   h2 {{ font-size: var(--fs-title); margin: 0 0 8px; font-weight: 600; }}
@@ -1633,7 +1633,7 @@ _PAGE_HEAD = (
   .top-nav a:hover {{ text-decoration: underline; }}
   .badges {{ text-align: right; }}
   /* identity badges → the kit (.k-chip list_type + .k-pill breach status). */
-  .panel {{ margin-bottom: 24px; background: var(--surface); border-radius: var(--radius); padding: 16px 18px; }}
+  .panel {{ margin-bottom: var(--sp-4); background: var(--surface); border-radius: var(--radius); padding: 14px 16px; }}
   .panel .sub {{ color: var(--muted); font-size: var(--fs-caption); margin: 0 0 12px; }}
   .panel-h3 {{ font-size: var(--fs-title); margin: 16px 0 6px; color: var(--fg); font-weight: 600; }}
   .muted {{ color: var(--muted); }}
@@ -1643,7 +1643,7 @@ _PAGE_HEAD = (
   tbody tr:hover td {{ background: var(--paper); }}
   td.num {{ text-align: right; }}
   code {{ font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }}
-  .fresh-strip {{ display: flex; gap: 1px; margin-bottom: 22px; background: var(--border); border-radius: var(--radius); overflow: hidden; }}
+  .fresh-strip {{ display: flex; gap: 1px; margin-bottom: var(--sp-4); background: var(--border); border-radius: var(--radius); overflow: hidden; }}
   .fresh-cell {{ background: var(--surface); padding: 8px 14px; flex: 1; }}
   .fresh-label {{ font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
   .fresh-val {{ font-size: var(--fs-body); font-variant-numeric: tabular-nums; }}

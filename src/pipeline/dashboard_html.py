@@ -46,7 +46,7 @@ _ACTIONS_BLOCK = """
   <pre id="ir-output" class="actions-output" hidden></pre>
 </section>
 <style>
-.actions-section { margin: 0 0 28px; padding: 16px 18px; background: var(--surface);
+.actions-section { margin: 0 0 var(--sp-4); padding: 14px 16px; background: var(--surface);
   border: 1px solid var(--border); border-radius: var(--radius); }
 .actions-section h2 { margin: 0 0 6px; }
 .actions-help { font-size: var(--fs-caption); color: var(--muted); margin: 0 0 12px;

@@ -454,8 +454,16 @@ def render_overview_panel(
             f"<script>{_UPCOMING_STATE_JS}</script>"
         )
     main = (
-        (open_loops_html or "")
+        # One flex-wrapped band around every briefing strip (brief doorway ·
+        # open loops · next-dollar · coach · since-last/continue): each strip
+        # takes only the width it needs and short strips share a row, instead
+        # of one full-width box per strip (density redesign D5). Layout-only —
+        # the strip renderers' markup and kit classes are untouched; the
+        # .cc-today-band scoped rules in SHELL_CSS do the packing.
+        '<div class="cc-today-band">'
+        + (open_loops_html or "")
         + '<div id="cc-today-bands"></div>'
+        + "</div>"
         + f"<script>{TODAY_BANDS_JS}</script>"
         + '<div id="cc-cockpit-live" hx-get="/api/cockpit" '
         'hx-trigger="every 90s" hx-swap="innerHTML">'
@@ -1045,7 +1053,21 @@ button { transition: color var(--transition), border-color var(--transition),
 .cc-tab.active { color: var(--fg); border-bottom-color: var(--accent); }
 .cc-topnav .cc-tab { border-bottom-width: 2px; }
 
-.cc-panels { padding: 22px 24px 64px; max-width: 1600px; margin: 0 auto; }
+.cc-panels { padding: var(--sp-4) 24px 40px; max-width: 1600px; margin: 0 auto; }
+
+/* Today band: the briefing strips pack as flex-wrapped compact cards sharing
+   rows instead of stacking one full-width box per one-line strip. The scoped
+   .k-well override is layout-only (margin/padding); tone fills stay the
+   kit's. The escalation banner alone stays full-width — it is the one strip
+   whose whole job is to interrupt. */
+.cc-today-band { display: flex; flex-wrap: wrap; align-items: stretch;
+  gap: var(--sp-1) var(--sp-2); margin: 0 0 var(--sp-2); }
+.cc-today-band .k-well { margin: 0; padding: 4px 12px; }
+.cc-today-band .cc-open-loops { margin: 0; }
+.cc-today-band .cc-ol-escalation { flex-basis: 100%; }
+.cc-today-band #cc-today-bands { display: contents; }
+.cc-today-band .cc-coach-strip { display: flex; flex-wrap: wrap;
+  align-items: baseline; gap: 2px 12px; }
 
 /* Home: cockpit + the unified Inbox rail (PR3) */
 .cc-home-grid { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: var(--sp-5);
@@ -1139,16 +1161,16 @@ h1 { font-size: var(--fs-display); margin: 0 0 8px; font-weight: 600; }
 h2 { font-size: var(--fs-title); margin: 0 0 6px; font-weight: 600; }
 h3 { font-size: var(--fs-title); margin: 0; font-weight: 600; }
 /* Panels are elevation, not boxes: surface-on-bg with the one radius. */
-.panel { margin-bottom: 28px; background: var(--surface);
-  border-radius: var(--radius); padding: 18px 20px; }
-.panel .sub { color: var(--muted); font-size: var(--fs-caption); margin: 0 0 16px; }
+.panel { margin-bottom: var(--sp-4); background: var(--surface);
+  border-radius: var(--radius); padding: 14px 16px; }
+.panel .sub { color: var(--muted); font-size: var(--fs-caption); margin: 0 0 10px; }
 .muted { color: var(--muted); }
 table { width: 100%; border-collapse: collapse; font-size: var(--fs-body);
   font-variant-numeric: tabular-nums; }
-th { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border);
+th { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border);
   font-size: var(--fs-caption); text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
-td { padding: 8px 10px; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+td { padding: 6px 10px; border-bottom: 1px solid var(--hairline); vertical-align: top; }
 tbody tr:hover td { background: var(--paper); }
 td.num { text-align: right; }
 td.muted { color: var(--muted); }
@@ -1243,7 +1265,7 @@ code { font-family: var(--mono); font-size: 0.93em; color: var(--fg-soft); }
 /* .budget-save composes the kit (.k-btn .k-btn-quiet .k-btn-sm) at its emitter. */
 /* Tier coverage strip */
 .tier-strip { background: var(--surface); border-radius: var(--radius);
-  padding: 10px 14px; margin-bottom: 22px; font-size: var(--fs-body); display: flex;
+  padding: 8px 14px; margin-bottom: var(--sp-4); font-size: var(--fs-body); display: flex;
   align-items: center; flex-wrap: wrap; gap: var(--sp-1); }
 .tier-strip-label { color: var(--muted); font-size: var(--fs-caption);
   text-transform: uppercase; letter-spacing: 0.06em; margin-right: 8px; }
@@ -1256,8 +1278,8 @@ a.k-chip { text-decoration: none; }
 /* ============================================================
    Overview status tables + action blocks (re-themed dark)
    ============================================================ */
-.list-section { margin-bottom: var(--sp-5); }
-.list-section h2 { font-size: var(--fs-title); text-transform: uppercase; letter-spacing: 0.5px; margin: 18px 0 10px; }
+.list-section { margin-bottom: var(--sp-4); }
+.list-section h2 { font-size: var(--fs-title); text-transform: uppercase; letter-spacing: 0.5px; margin: 12px 0 8px; }
 .list-section h2 .count { font-weight: 400; color: var(--muted); margin-left: 4px; }
 .list-section table { background: var(--surface); border-radius: var(--radius); overflow: hidden; }
 .list-section th { padding-top: 10px; }
@@ -1278,7 +1300,7 @@ td.ticker a:hover { color: var(--accent); }
 .cc-holding-links a:hover { text-decoration: underline; }
 .badges { display: inline-flex; gap: 4px; margin-left: 8px; }
 /* identity badges (ticker_command_center fragment) → the kit .k-chip / .k-pill. */
-.fresh-strip { display: flex; gap: 10px; margin-bottom: 22px; flex-wrap: wrap; }
+.fresh-strip { display: flex; gap: 10px; margin-bottom: var(--sp-4); flex-wrap: wrap; }
 .fresh-cell { background: var(--surface); border-radius: var(--radius);
   padding: 8px 14px; flex: 1; min-width: 140px; }
 .fresh-label { font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em;
