@@ -96,12 +96,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # NON-DESTRUCTIVE on the column: ALTER TABLE ... DROP COLUMN makes SQLite
+    # re-validate EVERY trigger in the schema, and partial-schema fixture DBs
+    # (stamped mid-chain, upgraded to head) can carry a dangling trigger over
+    # a table their subchain never created (seen live: the ask-audit trigger
+    # over a missing llm_calls in the 0059/0069/0119-based round-trip tests)
+    # — the DROP then fails on a trigger this migration doesn't own. The
+    # 0163-landmine family. A default-0 orphan column is harmless additive
+    # residue; upgrade() is guarded by _has_column, so re-upgrading is exact.
     bind = op.get_bind()
     insp = sa.inspect(bind)
-    existing = set(insp.get_table_names())
-    if _TABLE in existing and _has_column(insp, _TABLE, _COLUMN):
-        op.execute(f"ALTER TABLE {_TABLE} DROP COLUMN {_COLUMN}")
-    if "llm_budgets" in existing:
+    if "llm_budgets" in set(insp.get_table_names()):
         bind.execute(
             sa.text("DELETE FROM llm_budgets WHERE purpose = :purpose"),
             {"purpose": _PURPOSE},
