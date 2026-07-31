@@ -271,10 +271,22 @@ def test_migrated_schema_satisfies_trigger_contract(
             published_at=now - timedelta(hours=2),
         )
 
+        # v3 classification shape: event_type rides every entry (a missing one
+        # fails closed — see triggers.material_news._scores_from_payload).
         payload = json.dumps(
             [
-                {"news_index": 0, "relevance": 0.90, "why_material": "Material M&A"},
-                {"news_index": 1, "relevance": 0.10, "why_material": "Routine insider sale"},
+                {
+                    "news_index": 0,
+                    "event_type": "primary",
+                    "relevance": 0.90,
+                    "why_material": "Material M&A",
+                },
+                {
+                    "news_index": 1,
+                    "event_type": "commentary",
+                    "relevance": 0.10,
+                    "why_material": "Routine insider sale",
+                },
             ]
         )
         mock = _StatefulLLM([payload])
@@ -289,6 +301,6 @@ def test_migrated_schema_satisfies_trigger_contract(
         assert cand.ticker == "BN"
         assert cand.evidence["headline"] == "Acme acquires Beta for $2B"
         assert isinstance(cand.evidence["relevance_score"], float)
-        assert cand.evidence["relevance_score"] >= 0.6
+        assert cand.evidence["relevance_score"] >= 0.7
     finally:
         conn.close()

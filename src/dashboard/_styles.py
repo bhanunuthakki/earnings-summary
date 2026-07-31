@@ -98,18 +98,11 @@ button { transition: color var(--transition), border-color var(--transition),
   margin-bottom: 6px;
 }
 .qa-body { flex: 1; min-width: 200px; color: var(--fg-soft); font-size: var(--fs-body); }
+/* approve/dismiss are kit buttons (.k-btn .k-btn-sm) — no local link skin. */
 .qa-actions {
   display: flex; gap: 6px; align-items: center;
   font-size: var(--fs-caption);
 }
-.qa-actions a {
-  display: inline-flex;
-  padding: 3px 8px;
-  border: 1px solid var(--border-2);
-  border-radius: var(--radius);
-  color: var(--accent);
-}
-.qa-actions .qa-cli { color: var(--muted); font-family: var(--mono); font-size: 0.93em; }
 .qa-status-applied { color: var(--ok); }
 .qa-status-cancelled { color: var(--muted); }
 
