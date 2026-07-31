@@ -112,6 +112,13 @@ _MAX_STORIES_PER_SCAN = 15
 # noisy headlines") together with the event-type gate below.
 _RELEVANCE_THRESHOLD = 0.7
 
+# Cross-day event-dedup window: a candidate whose event_key matches an alert
+# already fired for the same ticker within this window is suppressed. The
+# per-story signature dedup can't catch this — multi-day coverage of one event
+# re-enters with fresh news ids (prod 2026-07-30: three Brookfield/NextEra
+# Kentucky-DC alerts, four META capex alerts, differing only by outlet).
+_EVENT_DEDUP_WINDOW_HOURS = 72
+
 # Event-type taxonomy (v3 classification contract). The signal-quality defect
 # this closes (owner walkthrough 2026-07-30): the v2 prompt scored TOPICAL
 # relevance, so an opinion piece *about* a thesis debate ("Is the CFO
@@ -197,6 +204,11 @@ class _Score:
     # a recognizable event_type are normalized to commentary (fails closed —
     # see ``_scores_from_payload``), so this is always one of the three values.
     event_type: str = _EVENT_COMMENTARY
+    # v4: short snake_case label for the underlying real-world event, IDENTICAL
+    # across outlets covering the same event — the clustering key for the
+    # one-alert-per-event dedup in ``scan()``. "" means unclustered: the story
+    # still fires individually (missing the field degrades dedup, not alerts).
+    event_key: str = ""
 
 
 # --------------------------------------------------------------------------
@@ -304,6 +316,45 @@ def _load_recent_news(conn: sqlite3.Connection, ticker: str, *, now: datetime) -
     return stories
 
 
+def _recent_alert_event_keys(
+    conn: sqlite3.Connection, ticker: str, *, kind: str, now: datetime
+) -> frozenset[str]:
+    """event_keys carried by ``kind`` alerts for ``ticker`` fired within the
+    cross-day dedup window — any status counts (a dismissed alert on an event
+    is still "the owner has seen this event").
+
+    Best-effort by design: a missing alerts table (unit-test fixtures), a
+    sqlite error, or malformed evidence_json all degrade to the empty set —
+    the guard silently stands down and the per-story signature dedup still
+    backstops exact re-fires.
+    """
+    # ``fired_at`` is stored as naive-UTC isoformat (alerts.store.insert_alert),
+    # so a lexical >= against an isoformat threshold is also chronological.
+    threshold = (now - timedelta(hours=_EVENT_DEDUP_WINDOW_HOURS)).isoformat()
+    try:
+        rows = conn.execute(
+            "SELECT evidence_json FROM alerts WHERE trigger_kind = ? AND ticker = ? AND fired_at >= ?",
+            (kind, ticker, threshold),
+        ).fetchall()
+    except sqlite3.Error:
+        return frozenset()
+    keys: set[str] = set()
+    for row in rows:
+        raw = row[0]
+        if not isinstance(raw, str):
+            continue
+        try:
+            evidence = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(evidence, dict):
+            continue
+        key = cast("dict[str, object]", evidence).get("event_key")
+        if isinstance(key, str) and key:
+            keys.add(key)
+    return frozenset(keys)
+
+
 # --------------------------------------------------------------------------
 # Prompt / parse / LLM call
 # --------------------------------------------------------------------------
@@ -375,10 +426,17 @@ def _build_classification_prompt(ticker: str, anchor_block: str, stories: list[_
         '* "primary": score by thesis impact. Routine events (10b5-1 sales, '
         "small bolt-ons, conference appearances, minor product updates) stay "
         "low.\n\n"
+        "event_key — a short snake_case label naming the underlying real-world "
+        'event the story reports (e.g. "acme_acquires_beta_2b"). Multiple '
+        "outlets often cover the SAME event with different headlines: every "
+        "story reporting the same event MUST carry the IDENTICAL event_key, "
+        "however the outlets phrase it, so one event collapses to one label. "
+        'Use "" only when the story reports no single identifiable event.\n\n'
         "Return ONLY a JSON array with one object per headline, in this exact "
         "shape:\n"
         '[{"news_index": <int matching the number above>, '
         '"event_type": "primary" | "results" | "commentary", '
+        '"event_key": "<snake_case event label, or \\"\\" if none>", '
         '"relevance": <float 0.0-1.0>, '
         '"why_material": "<one sentence; for low scores, why it is routine or '
         'derivative>"}]'
@@ -467,6 +525,10 @@ def _scores_from_payload(payload: list[object], *, n_stories: int) -> dict[int, 
     per batch, so a schema drift (the model stops emitting the field) reads as
     ``material_news_event_type_missing`` in the pipeline log, not as a
     mysteriously quiet news day.
+
+    A missing/non-string ``event_key`` (v4) normalizes to "" — unclustered, the
+    story still fires individually. Unlike event_type this needs no loud log:
+    losing the field degrades dedup quality, never alert correctness.
     """
     out: dict[int, _Score] = {}
     missing_event_type = 0
@@ -494,7 +556,14 @@ def _scores_from_payload(payload: list[object], *, n_stories: int) -> dict[int, 
         else:
             event_type = _EVENT_COMMENTARY
             missing_event_type += 1
-        out[idx] = _Score(relevance=float(relevance), why_material=why_str, event_type=event_type)
+        raw_key = obj.get("event_key")
+        event_key = raw_key.strip() if isinstance(raw_key, str) else ""
+        out[idx] = _Score(
+            relevance=float(relevance),
+            why_material=why_str,
+            event_type=event_type,
+            event_key=event_key,
+        )
     if missing_event_type:
         log.warning(
             {
@@ -506,6 +575,37 @@ def _scores_from_payload(payload: list[object], *, n_stories: int) -> dict[int, 
             }
         )
     return out
+
+
+def _dedup_by_event(
+    survivors: list[tuple[_NewsStory, _Score]],
+) -> list[tuple[_NewsStory, _Score]]:
+    """Collapse each non-empty event_key cluster to its single best story.
+
+    "Best" = highest relevance; on a tie, the most recent ``published_at``
+    (lexical compare — the news contract stores ``'YYYY-MM-DD HH:MM:SS'``).
+    Stories with an empty event_key are unclustered and pass through
+    individually. Input order is preserved for the kept entries so downstream
+    behavior (e.g. which candidate the qualitative overlay rides) stays stable.
+    """
+    best: dict[str, tuple[_NewsStory, _Score]] = {}
+    for story, score in survivors:
+        if not score.event_key:
+            continue
+        current = best.get(score.event_key)
+        if current is None:
+            best[score.event_key] = (story, score)
+            continue
+        cur_story, cur_score = current
+        if score.relevance > cur_score.relevance or (
+            score.relevance == cur_score.relevance and story.published_at > cur_story.published_at
+        ):
+            best[score.event_key] = (story, score)
+    return [
+        (story, score)
+        for story, score in survivors
+        if not score.event_key or best[score.event_key][0] is story
+    ]
 
 
 # --------------------------------------------------------------------------
@@ -579,12 +679,14 @@ class MaterialNewsTrigger:
     cadence: ClassVar[Cadence] = Cadence.ON_NEWS
 
     def scan(self, ticker: str, db: sqlite3.Connection) -> list[TriggerCandidate]:
-        """Emit one candidate per recent story the LLM scores as material.
+        """Emit one candidate per material *event* in the recent news.
 
         Loads recent news, classifies the whole batch in one (cached) LLM call,
-        and keeps only stories with ``relevance >= _RELEVANCE_THRESHOLD``.
-        Returns ``[]`` when there is no recent news, the news table is missing,
-        or the classification fails — never raises.
+        keeps only stories with ``relevance >= _RELEVANCE_THRESHOLD`` and an
+        alertable event_type, then collapses multi-outlet coverage of the same
+        event to its single best story (``_dedup_by_event`` + the 72h
+        recent-alert guard). Returns ``[]`` when there is no recent news, the
+        news table is missing, or the classification fails — never raises.
         """
         now = datetime.now(UTC).replace(tzinfo=None)
         stories = _load_recent_news(db, ticker, now=now)
@@ -614,13 +716,27 @@ class MaterialNewsTrigger:
             )
             return []
 
-        candidates: list[TriggerCandidate] = []
+        survivors: list[tuple[_NewsStory, _Score]] = []
         for idx, story in enumerate(stories):
             score = scores.get(idx)
             if score is None or score.relevance < _RELEVANCE_THRESHOLD:
                 continue  # immaterial — the veto: never becomes a candidate
             if score.event_type not in _ALERTABLE_EVENT_TYPES:
                 continue  # commentary about the company is never an alert
+            survivors.append((story, score))
+
+        # v4 event-level dedup: several outlets covering the same real-world
+        # event must yield ONE alert, not one per outlet. Same-batch coverage
+        # collapses via the event_key cluster; coverage that re-enters on a
+        # later day with fresh news ids (which the signature dedup can't see)
+        # is caught by the recent-alert event_key guard.
+        survivors = _dedup_by_event(survivors)
+        recent_keys = _recent_alert_event_keys(db, ticker, kind=self.kind, now=now)
+
+        candidates: list[TriggerCandidate] = []
+        for story, score in survivors:
+            if score.event_key and score.event_key in recent_keys:
+                continue  # event already alerted within the cross-day window
             evidence: dict[str, object] = {
                 "news_id": story.news_id,
                 "headline": story.headline,
@@ -630,6 +746,8 @@ class MaterialNewsTrigger:
                 "why_material": score.why_material,
                 "event_type": score.event_type,
             }
+            if score.event_key:
+                evidence["event_key"] = score.event_key
             candidates.append(
                 TriggerCandidate(
                     ticker=ticker,
@@ -716,6 +834,11 @@ class MaterialNewsTrigger:
         event_type = evidence.get("event_type")
         if isinstance(event_type, str) and event_type:
             evidence_obj["event_type"] = event_type
+        # v4: the event cluster label rides into the stored alert so the
+        # cross-day guard can read it back out of ``alerts.evidence_json``.
+        event_key = evidence.get("event_key")
+        if isinstance(event_key, str) and event_key:
+            evidence_obj["event_key"] = event_key
         # L9 PR2 — carry any qualitative-condition overlay scan attached, and
         # annotate the memo so the analyst sees the news may have tripped a
         # non-numeric condition they set.

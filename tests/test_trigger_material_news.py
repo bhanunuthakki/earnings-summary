@@ -202,18 +202,25 @@ class _StatefulLLM:
 
 
 def _classification_payload(
-    scores: list[tuple[int, float, str]], *, event_types: dict[int, str] | None = None
+    scores: list[tuple[int, float, str]],
+    *,
+    event_types: dict[int, str] | None = None,
+    event_keys: dict[int, str] | None = None,
 ) -> str:
-    """Build a canned JSON-array response matching the v3 prompt contract.
+    """Build a canned JSON-array response matching the v4 prompt contract.
 
     Every entry carries an ``event_type`` ("primary" unless overridden via
-    ``event_types``) — the shape the rewritten prompt demands."""
+    ``event_types``) and an ``event_key`` (per-index unique unless overridden
+    via ``event_keys``, so stories don't cluster together by accident — tests
+    of the clustering behavior override with a shared key)."""
     types = event_types or {}
+    keys = event_keys or {}
     return json.dumps(
         [
             {
                 "news_index": idx,
                 "event_type": types.get(idx, "primary"),
+                "event_key": keys.get(idx, f"event_{idx}"),
                 "relevance": rel,
                 "why_material": why,
             }
@@ -545,6 +552,172 @@ def test_scan_cache_hit_skips_second_llm_call(
     second = trig.scan("BN", fixture_db)
     assert mock.call_count == 1, "cache miss — call_llm was re-invoked"
     assert [c.key for c in first] == [c.key for c in second]
+
+
+# ---------------------------------------------------------------------------
+# scan() — event-level dedup (v4)
+# ---------------------------------------------------------------------------
+
+
+def _create_alerts_table(conn: sqlite3.Connection) -> None:
+    """Minimal alerts table for the cross-day event-guard tests ONLY — the base
+    fixture omits it, so every other scan test also exercises the guard's
+    missing-table degrade path (silently stands down, candidates still fire)."""
+    _ = conn.execute(
+        "CREATE TABLE alerts ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "user_id TEXT, ticker TEXT NOT NULL, trigger_kind TEXT NOT NULL, "
+        "fired_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', "
+        "memo_artifact_id INTEGER, evidence_json TEXT, signature_sha TEXT)"
+    )
+    conn.commit()
+
+
+def _insert_alert(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    fired_at: datetime,
+    event_key: str,
+    trigger_kind: str = "material_news",
+) -> None:
+    """One fired alert carrying ``event_key`` in its evidence_json, ``fired_at``
+    in the naive-UTC isoformat shape ``alerts.store.insert_alert`` writes."""
+    _ = conn.execute(
+        "INSERT INTO alerts (ticker, trigger_kind, fired_at, status, evidence_json, signature_sha) "
+        "VALUES (?, ?, ?, 'pending', ?, ?)",
+        (
+            ticker,
+            trigger_kind,
+            fired_at.isoformat(),
+            json.dumps({"event_key": event_key, "news_id": 999}),
+            "sig-" + event_key,
+        ),
+    )
+    conn.commit()
+
+
+def test_scan_clusters_same_event_to_single_candidate(
+    fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """THE v4 dedup contract: three outlets covering the same real-world event
+    (identical event_key, all primary, all above the floor) collapse to exactly
+    ONE candidate — the highest-relevance story (prod 2026-07-30: three
+    Brookfield/NextEra alerts, four META capex alerts, one per outlet)."""
+    ids = _seed_three_recent(fixture_db)
+    payload = _classification_payload(
+        [
+            (0, 0.85, "Acquisition, outlet A"),
+            (1, 0.92, "Acquisition, outlet B with deal terms"),
+            (2, 0.75, "Acquisition, outlet C"),
+        ],
+        event_keys={0: "acme_beta_deal", 1: "acme_beta_deal", 2: "acme_beta_deal"},
+    )
+    monkeypatch.setattr("triggers.material_news.call_llm", _StatefulLLM([payload]))
+    _patch_anchor(monkeypatch)
+
+    candidates = MaterialNewsTrigger().scan("BN", fixture_db)
+
+    assert [c.key for c in candidates] == [f"BN:news:{ids[1]}"]
+    assert candidates[0].evidence["relevance_score"] == 0.92
+    assert candidates[0].evidence["event_key"] == "acme_beta_deal"
+
+
+def test_scan_empty_event_key_never_clusters(
+    fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unclustered entries (event_key "" or the field missing entirely — e.g. a
+    schema drift back to the v3 shape) all fire individually: losing the field
+    degrades dedup, never alert correctness. No event_key rides the evidence."""
+    ids = _seed_three_recent(fixture_db)
+    payload = json.dumps(
+        [
+            {
+                "news_index": 0,
+                "event_type": "primary",
+                "event_key": "",
+                "relevance": 0.90,
+                "why_material": "M&A",
+            },
+            {
+                "news_index": 1,
+                "event_type": "primary",
+                "relevance": 0.85,
+                "why_material": "no event_key field",
+            },
+            {
+                "news_index": 2,
+                "event_type": "primary",
+                "event_key": "",
+                "relevance": 0.80,
+                "why_material": "probe",
+            },
+        ]
+    )
+    monkeypatch.setattr("triggers.material_news.call_llm", _StatefulLLM([payload]))
+    _patch_anchor(monkeypatch)
+
+    candidates = MaterialNewsTrigger().scan("BN", fixture_db)
+
+    assert sorted(c.key for c in candidates) == sorted(f"BN:news:{i}" for i in ids)
+    for cand in candidates:
+        assert "event_key" not in cand.evidence
+
+
+def test_scan_cross_day_guard_suppresses_recently_alerted_event(
+    fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A candidate whose event_key matches a same-ticker material_news alert
+    fired within the last 72h is suppressed — day-2 coverage of the same event
+    arrives with fresh news ids, which the per-story signature dedup can't see.
+    The guard is ticker-scoped: another ticker's alert on the same key doesn't
+    suppress."""
+    now = datetime.now(UTC).replace(tzinfo=None)
+    ids = _seed_three_recent(fixture_db)
+    _create_alerts_table(fixture_db)
+    _insert_alert(
+        fixture_db, ticker="BN", fired_at=now - timedelta(hours=10), event_key="acme_beta_deal"
+    )
+    _insert_alert(
+        fixture_db, ticker="OTHER", fired_at=now - timedelta(hours=10), event_key="core_unit_probe"
+    )
+    payload = _classification_payload(
+        [
+            (0, 0.90, "Day-2 coverage of the acquisition"),
+            (1, 0.20, "Routine insider sale"),
+            (2, 0.80, "Regulator opens probe"),
+        ],
+        event_keys={0: "acme_beta_deal", 2: "core_unit_probe"},
+    )
+    monkeypatch.setattr("triggers.material_news.call_llm", _StatefulLLM([payload]))
+    _patch_anchor(monkeypatch)
+
+    candidates = MaterialNewsTrigger().scan("BN", fixture_db)
+
+    assert [c.key for c in candidates] == [f"BN:news:{ids[2]}"]
+
+
+def test_scan_cross_day_guard_releases_after_window(
+    fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An alert on the same event_key OLDER than the 72h window no longer
+    suppresses — a genuine re-development of an old event may alert again."""
+    now = datetime.now(UTC).replace(tzinfo=None)
+    ids = _seed_three_recent(fixture_db)
+    _create_alerts_table(fixture_db)
+    _insert_alert(
+        fixture_db, ticker="BN", fired_at=now - timedelta(hours=100), event_key="acme_beta_deal"
+    )
+    payload = _classification_payload(
+        [(0, 0.90, "The acquisition develops further")],
+        event_keys={0: "acme_beta_deal"},
+    )
+    monkeypatch.setattr("triggers.material_news.call_llm", _StatefulLLM([payload]))
+    _patch_anchor(monkeypatch)
+
+    candidates = MaterialNewsTrigger().scan("BN", fixture_db)
+
+    assert [c.key for c in candidates] == [f"BN:news:{ids[0]}"]
 
 
 # ---------------------------------------------------------------------------

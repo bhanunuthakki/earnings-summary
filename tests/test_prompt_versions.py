@@ -45,7 +45,8 @@ def test_trigger_and_prediction_purposes_registered() -> None:
     registered (so a bump is one place). Three trigger purposes moved to v2 in
     the S9 spotlighting pass (transcript / news / anchor inputs now wrapped);
     material_news_classification moved to v3 in the 2026-07-30 signal-quality
-    rewrite (event-type taxonomy); management_prediction is untouched at v1."""
+    rewrite (event-type taxonomy) and to v4 in the 2026-07-31 event_key
+    clustering pass; management_prediction is untouched at v1."""
     for purpose in (
         "earnings_tone_diff",
         "kpi_inflection_context",
@@ -61,7 +62,7 @@ def test_trigger_and_prediction_purposes_registered() -> None:
         "saydo_due_context",
     ):
         assert prompt_version_for(trigger_purpose) == "v2"
-    assert prompt_version_for("material_news_classification") == "v3"
+    assert prompt_version_for("material_news_classification") == "v4"
 
 
 def test_research_triage_is_registered() -> None:
