@@ -36,7 +36,15 @@ _SRC_AUDITED_DELETE_DEBT = {
     ("src/filings/store.py", "filing_sections"),
     ("src/filings/section_items.py", "filing_sections"),
 }
-_EXECUTION_AUDITED_DELETE_DEBT: frozenset[tuple[str, str]] = frozenset()
+# Exception (not debt): the directive-governed garbage collector
+# (directives/db_garbage_collection.md) archives every row schema-identical
+# into data/archive/portfolio_gc_archive.db before deleting, dry-runs by
+# default, and enforces the consumer-audited window floors. It is the ONE
+# sanctioned destructive surface for financial_facts (owner-requested,
+# 2026-07-30). Any other execution-script delete on core tables stays banned.
+_EXECUTION_AUDITED_DELETE_DEBT: frozenset[tuple[str, str]] = frozenset(
+    {("execution/db_gc.py", "financial_facts")}
+)
 
 
 def _core_deletes(directory: Path) -> set[tuple[str, str]]:

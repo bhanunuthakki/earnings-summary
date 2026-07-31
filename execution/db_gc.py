@@ -166,10 +166,10 @@ def _archive_doomed(
     so archived rows can be restored verbatim with INSERT ... SELECT.
     """
     conn.execute(
-        f'CREATE TABLE IF NOT EXISTS gcarc."{table}" AS SELECT * FROM main."{table}" WHERE 0'
+        f'CREATE TABLE IF NOT EXISTS gcarc."{table}" AS SELECT * FROM main."{table}" WHERE 0'  # nosec B608 -- closed internal table/column identifier set, no user input
     )
     cur = conn.execute(
-        f'INSERT INTO gcarc."{table}" SELECT t.* FROM main."{table}" t '
+        f'INSERT INTO gcarc."{table}" SELECT t.* FROM main."{table}" t '  # nosec B608 -- closed internal table/column identifier set, no user input
         f'JOIN "{doomed}" d ON d.id = t."{id_col}"'
     )
     n = cur.rowcount
@@ -183,7 +183,7 @@ def _archive_doomed(
 
 def _reset_doomed(conn: sqlite3.Connection, name: str = "_gc_doomed") -> None:
     conn.execute(f'CREATE TEMP TABLE IF NOT EXISTS "{name}" (id INTEGER PRIMARY KEY)')
-    conn.execute(f'DELETE FROM "{name}"')
+    conn.execute(f'DELETE FROM "{name}"')  # nosec B608 -- closed internal table/column identifier set, no user input
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +317,7 @@ def telemetry_retention(
             id_col = "rowid"
         _reset_doomed(conn)
         conn.execute(
-            f'INSERT INTO _gc_doomed (id) SELECT "{id_col}" FROM "{table}" '
+            f'INSERT INTO _gc_doomed (id) SELECT "{id_col}" FROM "{table}" '  # nosec B608 -- closed internal table/column identifier set, no user input
             f'WHERE "{ts_col}" < ?',
             (cutoff,),
         )
@@ -325,7 +325,7 @@ def telemetry_retention(
         if apply and n:
             _archive_doomed(conn, table=table, run_at=run_at, policy="telemetry", id_col=id_col)
             conn.execute(
-                f'DELETE FROM "{table}" WHERE "{id_col}" IN (SELECT id FROM _gc_doomed)'
+                f'DELETE FROM "{table}" WHERE "{id_col}" IN (SELECT id FROM _gc_doomed)'  # nosec B608 -- closed internal table/column identifier set, no user input
             )
         report.rows_deleted[table] = n
         _log(
@@ -379,7 +379,7 @@ def _doom_facts_for_ticker(
     keep_periods = [
         r[0]
         for r in conn.execute(
-            f"SELECT DISTINCT period_end FROM financial_facts "
+            f"SELECT DISTINCT period_end FROM financial_facts "  # nosec B608 -- closed internal table/column identifier set, no user input
             f"WHERE ticker = ? AND fiscal_period_type IN ({qmarks}) "
             f"ORDER BY period_end DESC LIMIT ?",
             (ticker, *QUARTER_TYPES, keep_quarters),
@@ -389,7 +389,7 @@ def _doom_facts_for_ticker(
     keep_years = [
         r[0]
         for r in conn.execute(
-            f"SELECT DISTINCT substr(period_end, 1, 4) FROM financial_facts "
+            f"SELECT DISTINCT substr(period_end, 1, 4) FROM financial_facts "  # nosec B608 -- closed internal table/column identifier set, no user input
             f"WHERE ticker = ? AND fiscal_period_type IN ({amarks}) "
             f"ORDER BY 1 DESC LIMIT ?",
             (ticker, *ANNUAL_TYPES, keep_fy),
@@ -398,16 +398,11 @@ def _doom_facts_for_ticker(
     pmarks = ", ".join("?" for _ in keep_periods) or "''"
     ymarks = ", ".join("?" for _ in keep_years) or "''"
     cur = conn.execute(
-        f"""
-        INSERT INTO _gc_doomed (id)
-        SELECT id FROM financial_facts
-        WHERE ticker = ?
-          AND COALESCE(extracted_by, '') != 's1'
-          AND (
-                (fiscal_period_type IN ({qmarks}) AND period_end NOT IN ({pmarks}))
-             OR (fiscal_period_type IN ({amarks}) AND substr(period_end, 1, 4) NOT IN ({ymarks}))
-          )
-        """,
+        f"INSERT INTO _gc_doomed (id) SELECT id FROM financial_facts "  # nosec B608 -- placeholder-mark lists only, no user input
+        f"WHERE ticker = ? AND COALESCE(extracted_by, '') != 's1' AND ("
+        f"(fiscal_period_type IN ({qmarks}) AND period_end NOT IN ({pmarks})) "
+        f"OR (fiscal_period_type IN ({amarks}) "
+        f"AND substr(period_end, 1, 4) NOT IN ({ymarks})))",
         (ticker, *QUARTER_TYPES, *keep_periods, *ANNUAL_TYPES, *keep_years),
     )
     return cur.rowcount
@@ -512,7 +507,7 @@ def facts_depth(
     ):
         try:
             cur = conn.execute(
-                f'DELETE FROM "{tbl}" WHERE "{table_col}" = ? '
+                f'DELETE FROM "{tbl}" WHERE "{table_col}" = ? '  # nosec B608 -- closed internal table/column identifier set, no user input
                 f'AND "{id_col}" IN (SELECT id FROM _gc_doomed)',
                 ("financial_facts",),
             )

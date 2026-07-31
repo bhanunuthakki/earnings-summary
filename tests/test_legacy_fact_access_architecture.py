@@ -36,8 +36,13 @@ _DIRECT_READ = re.compile(
 )
 
 # Pre-v2 mutation debt.  New production code must use SourceFactRepository.
+# Exception (not debt): execution/db_gc.py is the directive-governed garbage
+# collector (directives/db_garbage_collection.md) — archive-then-delete with
+# dry-run default; its window prune is the ONE sanctioned destructive surface
+# for financial_facts (owner-requested, 2026-07-30).
 _DIRECT_MUTATION_DEBT = frozenset(
     {
+        "execution/db_gc.py",
         "execution/backfill_fiscal_period_stamps.py",
         "execution/backfill_ir_deck_locators.py",
         "execution/fix_kpi_series.py",
@@ -63,6 +68,8 @@ AUDITED_LEGACY_FACT_READS = {
     "execution/backfill_fiscal_period_stamps.py": 1,
     "execution/backfill_ir_deck_locators.py": 2,
     "execution/daily_fetch_and_brief.py": 2,
+    # Directive-governed GC (window discovery + doom-set staging + cascades).
+    "execution/db_gc.py": 7,
     "execution/extract_kpis_from_ir.py": 1,
     "execution/fix_kpi_series.py": 2,
     "execution/fmp_backpop.py": 1,
