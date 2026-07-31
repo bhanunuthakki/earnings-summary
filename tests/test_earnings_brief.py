@@ -238,6 +238,21 @@ def test_empty_response_is_transient_and_never_persisted(
     assert tally[GENERATED] == 0
 
 
+def test_lost_persist_is_deferred_not_reported_generated(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A generated brief whose artifact write fails (db locked past every
+    retry) must NOT tally as generated — that's a silent loss. It defers and
+    the absent artifact retries next run."""
+    monkeypatch.setattr(earnings_brief, "call_llm", lambda prompt, **k: "brief body")
+    monkeypatch.setattr(earnings_brief, "should_skip_for_budget", lambda *a, **k: None)
+    monkeypatch.setattr(earnings_brief, "upsert", lambda req, **k: (None, False))
+    monkeypatch.setattr(earnings_brief.time, "sleep", lambda s: None)
+    tally = generate_all(db, db.parent, today=TODAY)
+    assert tally[DEFERRED_TRANSIENT] == 2
+    assert tally[GENERATED] == 0
+
+
 def test_hard_stop_propagates(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from llm.cli import LLMSetupError
 

@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -70,6 +71,20 @@ REFRESH_WINDOW_DAYS = 1
 class EmptyBriefError(RuntimeError):
     """The model returned an empty/whitespace brief — treated as transient
     (deferred + retried next run), never persisted."""
+
+
+class BriefPersistError(RuntimeError):
+    """The brief was generated but could not be persisted (e.g. the DB write
+    lock was held past every retry — seen live 2026-07-31 against the cutover
+    audit's long transactions). Transient: the missing artifact IS the retry
+    queue, and reporting ``generated`` for a lost write would be exactly the
+    silent-degradation class the fleet bans."""
+
+
+# The artifact upsert retries briefly before deferring: a lock that clears in
+# seconds costs no extra LLM call; one that doesn't defers the ticker.
+_PERSIST_ATTEMPTS = 4
+_PERSIST_RETRY_SLEEP_S = 8.0
 
 
 @dataclass(frozen=True)
@@ -363,18 +378,28 @@ def generate_brief(
 
     from llm.cli import LLM_MODELS
 
-    artifact_id, was_cache_hit = upsert(
-        UpsertRequest(
-            ticker=t,
-            purpose=PURPOSE,
-            fiscal_period=er_iso,
-            content_md=text.strip(),
-            model=LLM_MODELS.get(PURPOSE),
-            prompt_version=prompt_version,
-            cache_inputs=cache_inputs,
-        ),
-        db_path=db_path,
+    req = UpsertRequest(
+        ticker=t,
+        purpose=PURPOSE,
+        fiscal_period=er_iso,
+        content_md=text.strip(),
+        model=LLM_MODELS.get(PURPOSE),
+        prompt_version=prompt_version,
+        cache_inputs=cache_inputs,
     )
+    artifact_id: int | None = None
+    was_cache_hit = False
+    for attempt in range(_PERSIST_ATTEMPTS):
+        artifact_id, was_cache_hit = upsert(req, db_path=db_path)
+        if artifact_id is not None:
+            break
+        if attempt < _PERSIST_ATTEMPTS - 1:
+            time.sleep(_PERSIST_RETRY_SLEEP_S)
+    if artifact_id is None:
+        raise BriefPersistError(
+            f"brief for {t} ({er_iso}) generated but not persisted after "
+            f"{_PERSIST_ATTEMPTS} attempts (db locked/unavailable)"
+        )
     log.info(
         {
             "event": "pre_earnings_brief_generated",
