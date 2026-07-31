@@ -340,8 +340,10 @@ def collect_primary(
 
 
 def _score_diet_quality(db_path: str) -> None:
-    """LLM information-quality scoring of the mirrored diet signals. Batched
-    Haiku calls over rows WHERE quality_score IS NULL, capped per run; the pass
+    """LLM information-quality scoring of the RENDERABLE diet signals
+    (sell-side ratings + EDGAR-fed filings rows; non-EDGAR headline news was
+    removed from the diet surface 2026-07-30 and is no longer scored). Batched
+    Haiku calls over in-scope rows WHERE quality_score IS NULL, capped per run; the pass
     degrades per-batch internally (transient failures leave rows NULL — retried
     on the next fetch) and this wrapper only lets HARD stops (budget cap /
     missing CLI — llm.cli.is_hard_stop) propagate."""
