@@ -32,7 +32,7 @@ def _database(
             CREATE TABLE alembic_version (
                 version_num TEXT PRIMARY KEY
             );
-            INSERT INTO alembic_version VALUES ('0259_source_definition_identity');
+            INSERT INTO alembic_version VALUES ('0260_pre_earnings_brief_plumbing');
             CREATE TABLE alerts (
                 event_id INTEGER PRIMARY KEY,
                 state TEXT NOT NULL,

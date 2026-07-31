@@ -13,7 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-_AUTHORITY_SCHEMA_REVISION = "0259_source_definition_identity"
+# Bumped 0259 → 0260 (2026-07-31, pre_earnings_brief plumbing): 0260 adds one
+# COLUMN (ticker_settings.auto_pre_earnings_brief) and one llm_budgets ROW —
+# no tables — so the exhaustive 0259 table registry below remains exact and
+# the count is unchanged.
+_AUTHORITY_SCHEMA_REVISION = "0260_pre_earnings_brief_plumbing"
 _AUTHORITY_SCHEMA_TABLE_COUNT = 309
 GOVERNED_TABLES_0259: frozenset[str] = frozenset(
     [
