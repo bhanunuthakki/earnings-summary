@@ -20,10 +20,10 @@ Two consequences fall out of that:
     the Protocol requires it to return an ``AlertDraft`` — so the filter must
     happen earlier. ``scan()`` classifies every recent headline in ONE batched
     LLM call, then emits a candidate *only* for stories scoring
-    ``relevance >= _RELEVANCE_THRESHOLD`` **and** classified as new primary
-    information (``event_type`` primary/results — commentary, opinion pieces,
-    and recaps of already-reported events are vetoed regardless of score;
-    see the v3 taxonomy at ``_EVENT_PRIMARY``). Immaterial stories never
+    ``relevance >= _RELEVANCE_THRESHOLD`` **and** classified as a new PRIMARY
+    event (``event_type`` primary — commentary is vetoed regardless of score,
+    and results-class stories route to the earnings machinery instead of
+    alerting here; see ``_ALERTABLE_EVENT_TYPES``). Immaterial stories never
     become candidates, so the driver never fires them.
 
 Cost is bounded: one batched call per ticker per run (up to
@@ -108,9 +108,12 @@ _MAX_STORIES_PER_SCAN = 15
 
 # Relevance floor (0.0-1.0) at which a classified story becomes a candidate.
 # The LLM scores every headline; this code-side cutoff is the materiality veto.
-# Raised 0.6 → 0.7 (2026-07-30, owner: "true needle-moving stuff, not random
-# noisy headlines") together with the event-type gate below.
-_RELEVANCE_THRESHOLD = 0.7
+# History: 0.6 → 0.7 (2026-07-30, owner: "true needle-moving stuff") with the
+# event-type gate; 0.7 → 0.65 (2026-07-31 backtest calibration: the straight
+# wire report of the $100B BN/NextEra campus scored 0.68 — with the gate now
+# primary-only, the floor's job is ranking real events, not filtering junk,
+# and clipping a $100B JV at 0.68 is a worse error than admitting a 0.65).
+_RELEVANCE_THRESHOLD = 0.65
 
 # Cross-day event-dedup window: a candidate whose event_key matches an alert
 # already fired for the same ticker within this window is suppressed. The
@@ -129,8 +132,15 @@ _EVENT_DEDUP_WINDOW_HOURS = 72
 _EVENT_PRIMARY = "primary"  # a new company/regulator/counterparty action
 _EVENT_RESULTS = "results"  # the earnings/KPI release or call itself
 _EVENT_COMMENTARY = "commentary"  # writing ABOUT the company: opinion/recap/price chatter
-# Code-side gate: commentary can NEVER become a candidate, whatever it scored.
-_ALERTABLE_EVENT_TYPES = frozenset({_EVENT_PRIMARY, _EVENT_RESULTS})
+# Code-side gate: ONLY primary events can become candidates. Results-class
+# stories are classified (the 3-way taxonomy keeps earnings coverage from
+# being misfiled as primary) but never alert here — the earnings machinery
+# (earnings_tone, pre/post-ER readouts, the filings block) owns results-day
+# coverage, and the 2026-07-31 backtest showed every results-class fire was
+# redundant with it (owner: "only stuff not covered by pre and post earnings
+# briefs"). Note a mid-quarter guidance change is PRIMARY, not results — the
+# prompt lists it under primary — so true inter-quarter surprises still fire.
+_ALERTABLE_EVENT_TYPES = frozenset({_EVENT_PRIMARY})
 
 # News-table column contract. No migration creates this table yet (see module
 # docstring); the names live here so a future news loader can align with a
@@ -407,14 +417,22 @@ def _build_classification_prompt(ticker: str, anchor_block: str, stories: list[_
         "event, a restructuring, litigation with real exposure.\n"
         '* "results" — the company\'s OWN earnings/KPI release or earnings '
         "call, as first reported.\n"
-        '* "commentary" — anything written ABOUT the company or its stock: '
-        "opinion and think-pieces, analyst takes and previews, recaps or "
-        'reactions to already-reported results, price-action stories ("shares '
-        'rise/fall on ..."), listicles and roundups, and re-reporting of an '
-        "event that was already public. A headline phrased as a question "
-        '("Is ...?", "Why ...", "What to know ...") is commentary. An opinion '
-        "piece about a CFO transition is NOT the CFO transition — the event was "
-        "news when announced; the think-piece about it is commentary.\n\n"
+        '* "commentary" — anything written ABOUT the company or its stock '
+        "with NO new event underneath: opinion and think-pieces, analyst takes "
+        "and previews, recaps or reactions to already-reported results, "
+        'price-action stories ("shares rise/fall on ..."), listicles and '
+        "roundups, and re-reporting of an event that was already public. An "
+        "opinion piece about a CFO transition is NOT the CFO transition — the "
+        "event was news when announced; the think-piece about it is "
+        "commentary.\n\n"
+        "Classify by the UNDERLYING EVENT, not the headline's packaging: a "
+        'story that is the first report of a new primary event is "primary" '
+        "even when its headline editorializes, asks a question, or leads with "
+        "the stock move (\"Uber Agrees to Invest $1.2B in Rivian ... Here's "
+        'Why X May Win" reports an investment -> primary; "Stock Is Up 5.9% '
+        'After EU Approval" reports an approval -> primary). A question- or '
+        "reaction-phrased headline is commentary ONLY when no new event sits "
+        "underneath it.\n\n"
         "relevance — 0.0-1.0: would this change a long-term holder's model "
         "inputs, or confirm/falsify a thesis pillar or tier-1 KPI?\n\n"
         '* "commentary" is never material, however thesis-adjacent its topic. '
