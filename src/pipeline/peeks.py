@@ -2516,9 +2516,9 @@ def _readout_transcript_link(conn: sqlite3.Connection, t: str) -> str:
 
         rel = selected_transcripts_relation(conn)
         row = conn.execute(
-            f"SELECT document_id, fiscal_period_type, period_end FROM {rel.sql} "
-            "WHERE UPPER(ticker) = ? AND period_end IS NOT NULL "
-            "ORDER BY period_end DESC LIMIT 1",
+            f"SELECT document_id, fiscal_period_type, period_end FROM {rel.sql} "  # nosec B608 -- trusted internal SQL shape; values remain bound
+            + "WHERE UPPER(ticker) = ? AND period_end IS NOT NULL "
+            + "ORDER BY period_end DESC LIMIT 1",
             (t,),
         ).fetchone()
     except Exception:
