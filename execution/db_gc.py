@@ -166,10 +166,10 @@ def _archive_doomed(
     so archived rows can be restored verbatim with INSERT ... SELECT.
     """
     conn.execute(
-        f'CREATE TABLE IF NOT EXISTS gcarc."{table}" AS SELECT * FROM main."{table}" WHERE 0'
+        f'CREATE TABLE IF NOT EXISTS gcarc."{table}" AS SELECT * FROM main."{table}" WHERE 0'  # nosec B608 -- internal registry table name; no user input
     )
     cur = conn.execute(
-        f'INSERT INTO gcarc."{table}" SELECT t.* FROM main."{table}" t '
+        f'INSERT INTO gcarc."{table}" SELECT t.* FROM main."{table}" t '  # nosec B608 -- internal registry identifiers; values remain bound
         f'JOIN "{doomed}" d ON d.id = t."{id_col}"'
     )
     n = cur.rowcount
@@ -183,7 +183,7 @@ def _archive_doomed(
 
 def _reset_doomed(conn: sqlite3.Connection, name: str = "_gc_doomed") -> None:
     conn.execute(f'CREATE TEMP TABLE IF NOT EXISTS "{name}" (id INTEGER PRIMARY KEY)')
-    conn.execute(f'DELETE FROM "{name}"')
+    conn.execute(f'DELETE FROM "{name}"')  # nosec B608 -- hardcoded temp-table name
 
 
 # ---------------------------------------------------------------------------
@@ -279,12 +279,8 @@ def collapse_validation_issues(
             "last_seen_at = ?, occurrence_count = ? WHERE id = ?",
             updates,
         )
-        _archive_doomed(
-            conn, table="validation_issues", run_at=run_at, policy="validation-issues"
-        )
-        conn.execute(
-            "DELETE FROM validation_issues WHERE id IN (SELECT id FROM _gc_doomed)"
-        )
+        _archive_doomed(conn, table="validation_issues", run_at=run_at, policy="validation-issues")
+        conn.execute("DELETE FROM validation_issues WHERE id IN (SELECT id FROM _gc_doomed)")
     _log(
         "gc_validation_issues",
         groups=groups,
@@ -317,16 +313,13 @@ def telemetry_retention(
             id_col = "rowid"
         _reset_doomed(conn)
         conn.execute(
-            f'INSERT INTO _gc_doomed (id) SELECT "{id_col}" FROM "{table}" '
-            f'WHERE "{ts_col}" < ?',
+            f'INSERT INTO _gc_doomed (id) SELECT "{id_col}" FROM "{table}" WHERE "{ts_col}" < ?',  # nosec B608 -- identifiers from the internal policy registry; cutoff bound
             (cutoff,),
         )
         n = conn.execute("SELECT COUNT(*) FROM _gc_doomed").fetchone()[0]
         if apply and n:
             _archive_doomed(conn, table=table, run_at=run_at, policy="telemetry", id_col=id_col)
-            conn.execute(
-                f'DELETE FROM "{table}" WHERE "{id_col}" IN (SELECT id FROM _gc_doomed)'
-            )
+            conn.execute(f'DELETE FROM "{table}" WHERE "{id_col}" IN (SELECT id FROM _gc_doomed)')  # nosec B608 -- internal registry identifiers; archive-first delete
         report.rows_deleted[table] = n
         _log(
             "gc_telemetry",
@@ -379,7 +372,7 @@ def _doom_facts_for_ticker(
     keep_periods = [
         r[0]
         for r in conn.execute(
-            f"SELECT DISTINCT period_end FROM financial_facts "
+            f"SELECT DISTINCT period_end FROM financial_facts "  # nosec B608 -- only qmark placeholders interpolated
             f"WHERE ticker = ? AND fiscal_period_type IN ({qmarks}) "
             f"ORDER BY period_end DESC LIMIT ?",
             (ticker, *QUARTER_TYPES, keep_quarters),
@@ -389,7 +382,7 @@ def _doom_facts_for_ticker(
     keep_years = [
         r[0]
         for r in conn.execute(
-            f"SELECT DISTINCT substr(period_end, 1, 4) FROM financial_facts "
+            f"SELECT DISTINCT substr(period_end, 1, 4) FROM financial_facts "  # nosec B608 -- only qmark placeholders interpolated
             f"WHERE ticker = ? AND fiscal_period_type IN ({amarks}) "
             f"ORDER BY 1 DESC LIMIT ?",
             (ticker, *ANNUAL_TYPES, keep_fy),
@@ -407,7 +400,7 @@ def _doom_facts_for_ticker(
                 (fiscal_period_type IN ({qmarks}) AND period_end NOT IN ({pmarks}))
              OR (fiscal_period_type IN ({amarks}) AND substr(period_end, 1, 4) NOT IN ({ymarks}))
           )
-        """,
+        """,  # nosec B608 -- only qmark placeholder lists interpolated; every value bound
         (ticker, *QUARTER_TYPES, *keep_periods, *ANNUAL_TYPES, *keep_years),
     )
     return cur.rowcount
@@ -427,9 +420,7 @@ def facts_depth(
     report = PolicyReport(policy="facts-depth", applied=apply)
     tier = _tier_of(conn)
 
-    fact_tickers = [
-        str(r[0]) for r in conn.execute("SELECT DISTINCT ticker FROM financial_facts")
-    ]
+    fact_tickers = [str(r[0]) for r in conn.execute("SELECT DISTINCT ticker FROM financial_facts")]
     if tickers:
         wanted = {t.upper() for t in tickers}
         fact_tickers = [t for t in fact_tickers if t.upper() in wanted]
@@ -499,8 +490,7 @@ def facts_depth(
             doomed="_gc_doomed_mca",
         )
         conn.execute(
-            "DELETE FROM metric_computation_attempts "
-            "WHERE id IN (SELECT id FROM _gc_doomed_mca)"
+            "DELETE FROM metric_computation_attempts WHERE id IN (SELECT id FROM _gc_doomed_mca)"
         )
 
     # Cascade 2: 0225 resolution-plane rows for the doomed facts (empty on
@@ -512,7 +502,7 @@ def facts_depth(
     ):
         try:
             cur = conn.execute(
-                f'DELETE FROM "{tbl}" WHERE "{table_col}" = ? '
+                f'DELETE FROM "{tbl}" WHERE "{table_col}" = ? '  # nosec B608 -- identifiers from the literal tuple above; values bound
                 f'AND "{id_col}" IN (SELECT id FROM _gc_doomed)',
                 ("financial_facts",),
             )
@@ -601,14 +591,10 @@ def run_gc(
         _reset_doomed(conn)
 
         if "validation-issues" in policies:
-            report.policies.append(
-                collapse_validation_issues(conn, apply=apply, run_at=run_at)
-            )
+            report.policies.append(collapse_validation_issues(conn, apply=apply, run_at=run_at))
         if "telemetry" in policies:
             report.policies.append(
-                telemetry_retention(
-                    conn, apply=apply, run_at=run_at, retention_days=retention_days
-                )
+                telemetry_retention(conn, apply=apply, run_at=run_at, retention_days=retention_days)
             )
         if "facts-depth" in policies:
             report.policies.append(

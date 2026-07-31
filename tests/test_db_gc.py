@@ -113,7 +113,10 @@ def _seed_fy(conn: sqlite3.Connection, ticker: str, n: int) -> None:
         conn.execute(
             "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type,"
             " line_item, value, extracted_by) VALUES (?, ?, 'FY', 'revenue', 1, 'fmp')",
-            (ticker, f"{2025 - i}-12-31",),
+            (
+                ticker,
+                f"{2025 - i}-12-31",
+            ),
         )
 
 
@@ -154,9 +157,12 @@ class TestValidationIssuesCollapse:
         assert first.startswith("2026-07-24") and last.startswith("2026-07-26")
         assert count == 3 and fp is not None
         # Singleton untouched.
-        assert conn.execute(
-            "SELECT COUNT(*) FROM validation_issues WHERE ticker = 'WIX'"
-        ).fetchone()[0] == 1
+        assert (
+            conn.execute("SELECT COUNT(*) FROM validation_issues WHERE ticker = 'WIX'").fetchone()[
+                0
+            ]
+            == 1
+        )
         # Duplicates archived, restorable.
         arc = gc_db.parent / "archive" / db_gc.ARCHIVE_NAME
         aconn = sqlite3.connect(arc)
@@ -178,8 +184,7 @@ class TestValidationIssuesCollapse:
         _run(gc_db, apply=True, policies=["validation-issues"])
         conn = sqlite3.connect(gc_db)
         surviving = {
-            r[0]
-            for r in conn.execute("SELECT id FROM validation_issues WHERE ticker='NU'")
+            r[0] for r in conn.execute("SELECT id FROM validation_issues WHERE ticker='NU'")
         }
         assert oldest_id in surviving  # protected row kept
         assert len(surviving) == 2  # survivor + protected; middle dup deleted
@@ -191,9 +196,12 @@ class TestValidationIssuesCollapse:
         assert pol.rows_deleted["validation_issues"] == 2
         conn = sqlite3.connect(gc_db)
         assert conn.execute("SELECT COUNT(*) FROM validation_issues").fetchone()[0] == 4
-        assert conn.execute(
-            "SELECT COUNT(*) FROM validation_issues WHERE fingerprint IS NOT NULL"
-        ).fetchone()[0] == 0
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM validation_issues WHERE fingerprint IS NOT NULL"
+            ).fetchone()[0]
+            == 0
+        )
 
 
 class TestTelemetryRetention:
@@ -263,40 +271,53 @@ class TestFactsDepth:
             return conn.execute(sql, args).fetchone()[0]
 
         # EVAL windowed: 16 quarterly periods x 2 items, 12 FY, TTM + s1 kept.
-        assert q(
-            "SELECT COUNT(DISTINCT period_end) FROM financial_facts"
-            " WHERE ticker='EVAL' AND fiscal_period_type LIKE 'Q%'"
-            " AND extracted_by != 's1'"
-        ) == 16
-        assert q(
-            "SELECT COUNT(*) FROM financial_facts WHERE ticker='EVAL'"
-            " AND fiscal_period_type='FY'"
-        ) == 12
-        assert q(
-            "SELECT COUNT(*) FROM financial_facts WHERE ticker='EVAL'"
-            " AND fiscal_period_type='TTM'"
-        ) == 1
-        assert q(
-            "SELECT COUNT(*) FROM financial_facts WHERE extracted_by='s1'"
-        ) == 1
+        assert (
+            q(
+                "SELECT COUNT(DISTINCT period_end) FROM financial_facts"
+                " WHERE ticker='EVAL' AND fiscal_period_type LIKE 'Q%'"
+                " AND extracted_by != 's1'"
+            )
+            == 16
+        )
+        assert (
+            q(
+                "SELECT COUNT(*) FROM financial_facts WHERE ticker='EVAL'"
+                " AND fiscal_period_type='FY'"
+            )
+            == 12
+        )
+        assert (
+            q(
+                "SELECT COUNT(*) FROM financial_facts WHERE ticker='EVAL'"
+                " AND fiscal_period_type='TTM'"
+            )
+            == 1
+        )
+        assert q("SELECT COUNT(*) FROM financial_facts WHERE extracted_by='s1'") == 1
         # Portfolio untouched without the flag.
-        assert q(
-            "SELECT COUNT(DISTINCT period_end) FROM financial_facts"
-            " WHERE ticker='PORT' AND fiscal_period_type LIKE 'Q%'"
-        ) == 30
+        assert (
+            q(
+                "SELECT COUNT(DISTINCT period_end) FROM financial_facts"
+                " WHERE ticker='PORT' AND fiscal_period_type LIKE 'Q%'"
+            )
+            == 30
+        )
         # index_member windowed; orphan removed entirely.
-        assert q(
-            "SELECT COUNT(DISTINCT period_end) FROM financial_facts"
-            " WHERE ticker='PEER' AND fiscal_period_type LIKE 'Q%'"
-        ) == 16
+        assert (
+            q(
+                "SELECT COUNT(DISTINCT period_end) FROM financial_facts"
+                " WHERE ticker='PEER' AND fiscal_period_type LIKE 'Q%'"
+            )
+            == 16
+        )
         assert q("SELECT COUNT(*) FROM financial_facts WHERE ticker='GONE'") == 0
         # Attempts cascade: pruned-period attempt gone, live-period attempt kept.
-        assert q(
-            "SELECT COUNT(*) FROM metric_computation_attempts WHERE period_end='2018-12-31'"
-        ) == 0
-        assert q(
-            "SELECT COUNT(*) FROM metric_computation_attempts WHERE period_end='2026-03-31'"
-        ) == 1
+        assert (
+            q("SELECT COUNT(*) FROM metric_computation_attempts WHERE period_end='2018-12-31'") == 0
+        )
+        assert (
+            q("SELECT COUNT(*) FROM metric_computation_attempts WHERE period_end='2026-03-31'") == 1
+        )
         assert pol.rows_deleted["metric_computation_attempts"] == 1
         # Everything deleted is archived.
         arc = sqlite3.connect(gc_db.parent / "archive" / db_gc.ARCHIVE_NAME)
@@ -330,34 +351,39 @@ class TestFactsDepth:
         conn.close()
         _run(gc_db, apply=True, policies=["facts-depth"])
         conn = sqlite3.connect(gc_db)
-        assert conn.execute(
-            "SELECT COUNT(*) FROM financial_facts WHERE id IN (9001, 9002)"
-        ).fetchone()[0] == 0
-        assert conn.execute(
-            "SELECT supersedes_id FROM financial_facts WHERE id = 9003"
-        ).fetchone()[0] is None
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM financial_facts WHERE id IN (9001, 9002)"
+            ).fetchone()[0]
+            == 0
+        )
+        assert (
+            conn.execute("SELECT supersedes_id FROM financial_facts WHERE id = 9003").fetchone()[0]
+            is None
+        )
 
     def test_dry_run_counts_but_does_not_delete(self, gc_db: Path) -> None:
         self._seed(gc_db)
-        before = sqlite3.connect(gc_db).execute(
-            "SELECT COUNT(*) FROM financial_facts"
-        ).fetchone()[0]
+        before = (
+            sqlite3.connect(gc_db).execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0]
+        )
         report = _run(gc_db, apply=False, policies=["facts-depth"])
         (pol,) = report.policies
         assert pol.rows_deleted["financial_facts"] > 0
-        after = sqlite3.connect(gc_db).execute(
-            "SELECT COUNT(*) FROM financial_facts"
-        ).fetchone()[0]
+        after = sqlite3.connect(gc_db).execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0]
         assert after == before
 
     def test_include_portfolio_windows_portfolio(self, gc_db: Path) -> None:
         self._seed(gc_db)
         _run(gc_db, apply=True, policies=["facts-depth"], include_portfolio=True)
         conn = sqlite3.connect(gc_db)
-        assert conn.execute(
-            "SELECT COUNT(DISTINCT period_end) FROM financial_facts"
-            " WHERE ticker='PORT' AND fiscal_period_type LIKE 'Q%'"
-        ).fetchone()[0] == 16
+        assert (
+            conn.execute(
+                "SELECT COUNT(DISTINCT period_end) FROM financial_facts"
+                " WHERE ticker='PORT' AND fiscal_period_type LIKE 'Q%'"
+            ).fetchone()[0]
+            == 16
+        )
 
 
 class TestGuards:

@@ -36,7 +36,12 @@ _SRC_AUDITED_DELETE_DEBT = {
     ("src/filings/store.py", "filing_sections"),
     ("src/filings/section_items.py", "filing_sections"),
 }
-_EXECUTION_AUDITED_DELETE_DEBT: frozenset[tuple[str, str]] = frozenset()
+# The DB garbage collector (#1085) deletes retention-windowed financial_facts
+# AFTER archiving each doomed row (with a manifest + verbatim restore path)
+# to data/gc_archive — the explicit-ratchet audit this set exists to force.
+_EXECUTION_AUDITED_DELETE_DEBT: frozenset[tuple[str, str]] = frozenset(
+    {("execution/db_gc.py", "financial_facts")}
+)
 
 
 def _core_deletes(directory: Path) -> set[tuple[str, str]]:
