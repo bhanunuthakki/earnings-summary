@@ -40,6 +40,9 @@ _DIRECT_MUTATION_DEBT = frozenset(
     {
         "execution/backfill_fiscal_period_stamps.py",
         "execution/backfill_ir_deck_locators.py",
+        # The ratified archive-then-delete GC (PR #1085): archives every row
+        # before deleting and writes a gc_manifest receipt.
+        "execution/db_gc.py",
         "execution/fix_kpi_series.py",
         "execution/mark_kpi_cadence.py",
         "execution/process_report_comments.py",
@@ -63,6 +66,8 @@ AUDITED_LEGACY_FACT_READS = {
     "execution/backfill_fiscal_period_stamps.py": 1,
     "execution/backfill_ir_deck_locators.py": 2,
     "execution/daily_fetch_and_brief.py": 2,
+    # Depth-window staging reads of the archive-then-delete GC (PR #1085).
+    "execution/db_gc.py": 7,
     "execution/extract_kpis_from_ir.py": 1,
     "execution/fix_kpi_series.py": 2,
     "execution/fmp_backpop.py": 1,

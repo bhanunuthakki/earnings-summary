@@ -36,7 +36,14 @@ _SRC_AUDITED_DELETE_DEBT = {
     ("src/filings/store.py", "filing_sections"),
     ("src/filings/section_items.py", "filing_sections"),
 }
-_EXECUTION_AUDITED_DELETE_DEBT: frozenset[tuple[str, str]] = frozenset()
+# execution/db_gc.py is the ratified archive-then-delete garbage collector
+# (PR #1085): every delete is preceded by a verbatim row copy into
+# data/archive/portfolio_gc_archive.db plus a gc_manifest receipt, so this is
+# an audited archiver, not raw deletion. It is the ONE sanctioned execution
+# deleter; anything else added here still requires an architecture decision.
+_EXECUTION_AUDITED_DELETE_DEBT: frozenset[tuple[str, str]] = frozenset(
+    {("execution/db_gc.py", "financial_facts")}
+)
 
 
 def _core_deletes(directory: Path) -> set[tuple[str, str]]:
