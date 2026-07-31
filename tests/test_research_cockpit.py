@@ -29,9 +29,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 import db as dbmod  # noqa: E402
+from pipeline.dashboard_status import DashboardRow  # noqa: E402
 from pipeline.research_cockpit import (  # noqa: E402
     CockpitRow,
     _eval_fundamentals,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
+    _price_cell,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
     _tier1_kpi_deltas,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
     attractiveness_breakdown,
     attractiveness_tone,
@@ -956,6 +958,13 @@ def test_compute_attractiveness_matches_row_and_guards(
 # --------------------------------------------------------------------------- #
 
 
+def test_price_cell_rounds_home_quotes_to_whole_dollars() -> None:
+    base = DashboardRow("NU", "portfolio", None, None, None, 0, None)
+    html = _price_cell(CockpitRow(base=base, price=1234.56))
+    assert "$1,235" in html
+    assert "$1,234.56" not in html
+
+
 def test_render_badges_chips_and_pills(rows: dict[str, list[CockpitRow]]) -> None:
     html = render_research_cockpit(rows)
     # Verdict badge with tone + rule summary in the hover (the kit status pill).
@@ -995,7 +1004,8 @@ def test_alert_pill_red_reserved_for_tier1(conn: sqlite3.Connection, repo_root: 
 
 def test_render_valuation_cells(rows: dict[str, list[CockpitRow]]) -> None:
     html = render_research_cockpit(rows)
-    assert "$12.29" in html
+    assert "$12" in html
+    assert "$12.29" not in html
     assert "+0.8%" in html  # day move, signed
     assert "-50.0%" in html  # vs-FV gap
     assert "0.5" in html  # PEG
