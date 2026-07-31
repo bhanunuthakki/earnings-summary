@@ -85,8 +85,8 @@ _PANEL_STYLE = """<style>
 .diet-sec.first { margin-top: var(--sp-3); }
 .diet-sec-h { font-size: var(--fs-title); font-weight: 600; color: var(--fg);
   margin: 0 0 var(--sp-2); }
-.diet-sec-sub { font-size: var(--fs-caption); color: var(--muted); margin: 0 0 var(--sp-3); }
-.diet-fresh { color: var(--muted); font-size: var(--fs-caption); white-space: nowrap; }
+.diet-fresh { color: var(--muted); font-size: var(--fs-caption); font-weight: 400;
+  white-space: nowrap; }
 .diet-when { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .diet-sig a { color: var(--fg); text-decoration: none; }
 .diet-sig a:hover { color: var(--accent); text-decoration: underline; }
@@ -99,9 +99,8 @@ _PANEL_STYLE = """<style>
   margin: var(--sp-4) 0 var(--sp-1); }
 .diet-group-sum { font-weight: 400; color: var(--muted); font-size: var(--fs-caption);
   margin-left: 6px; }
-.diet-scaffold { margin-top: var(--sp-5); padding: var(--sp-3) var(--sp-4);
-  background: var(--paper); border: 1px solid var(--border); border-radius: var(--radius);
-  font-size: var(--fs-caption); color: var(--muted); line-height: 1.55; }
+.diet-scaffold { margin-top: var(--sp-4); font-size: var(--fs-caption);
+  color: var(--muted); }
 </style>"""
 
 # signal_type → (display label, .k-pill tone class). Categories stay QUIET on a
@@ -128,11 +127,9 @@ def render_diet_panel(db_path: Path) -> str:
     return "".join(
         [
             _PANEL_STYLE,
-            '<section class="panel"><h2>Information diet</h2>',
-            '<p class="sub">The pull lane — what to <strong>read</strong> on your names, '
-            "kept separate from the inbox's push lane (what needs your <strong>action</strong>). "
-            "Sell-side ratings and news here never decay or fire an alert; a thesis breach "
-            "still reaches the inbox.</p>",
+            '<section class="panel"><h2 title="Pull lane — what to READ on your names, '
+            "separate from the inbox's push lane (what needs action). Nothing here decays "
+            'or fires an alert; a thesis breach still reaches the inbox.">Information diet</h2>',
             _stream_section(stream, list_types),
             _agenda_section(agenda, today),
             _scaffold_note(),
@@ -180,11 +177,10 @@ def _stream_section(rows: list[SignalRow], list_types: dict[str, str]) -> str:
     newest-first (the non-decaying diet invariant is untouched — grouping is
     presentation, the reader still never decays)."""
     head = (
-        '<div class="diet-sec first"><h3 class="diet-sec-h">Ingest stream</h3>'
-        '<p class="diet-sec-sub">What happened on your names, grouped by kind — '
-        "<strong>your book first</strong> within each group, newest-first. "
-        "Not ranked by urgency — this is reading, not triage."
-        f"{_freshness_line(rows)}</p>"
+        '<div class="diet-sec first"><h3 class="diet-sec-h" title="What happened on your '
+        "names, grouped by kind — your book first within each group, newest-first. Not "
+        'ranked by urgency — this is reading, not triage.">Ingest stream'
+        f"{_freshness_line(rows)}</h3>"
     )
     if not rows:
         return (
@@ -401,9 +397,8 @@ def _stream_row(r: SignalRow, list_type: str = "") -> str:
 
 def _agenda_section(rows: list[SignalRow], today: date) -> str:
     head = (
-        '<div class="diet-sec"><h3 class="diet-sec-h">Forward agenda</h3>'
-        '<p class="diet-sec-sub">Upcoming investor + analyst days, soonest first — '
-        "queryable event rows, not prose. Extends the earnings calendar.</p>"
+        '<div class="diet-sec"><h3 class="diet-sec-h" title="Upcoming investor + analyst '
+        'days, soonest first — extends the earnings calendar.">Forward agenda</h3>'
     )
     if not rows:
         return (
@@ -469,11 +464,9 @@ def _days_until(event_date: str | None, today: date) -> str:
 
 def _scaffold_note() -> str:
     return (
-        '<div class="diet-scaffold">'
-        "<strong>Coming as fast-follows:</strong> buy-side ratings (the 13F + ARK layer) "
-        "and sell-side estimate / model revisions. Both need a data path this repo doesn't "
-        "have on the free tier yet (FMP analyst estimates are Ultimate-gated), so they're "
-        "scaffolded in the substrate but not promised here. Post-event takeaway summaries of "
-        "the investor days above arrive with the summarization pass."
-        "</div>"
+        '<p class="diet-scaffold" title="Both need a data path this repo doesn\'t have on '
+        "the free tier yet (FMP analyst estimates are Ultimate-gated) — scaffolded in the "
+        'substrate, not promised here.">'
+        "Coming as fast-follows: buy-side ratings (13F + ARK) and sell-side estimate revisions."
+        "</p>"
     )
