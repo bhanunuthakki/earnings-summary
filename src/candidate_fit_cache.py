@@ -90,7 +90,9 @@ def assemble_book_context(
 
     weights = read_materialized_weights(repo_root)
     analytics = fetch_portfolio_analytics(
-        api_url=api_url, timeout=_MORNING_ANALYTICS_TIMEOUT_SECONDS
+        api_url=api_url,
+        timeout=_MORNING_ANALYTICS_TIMEOUT_SECONDS,
+        only={"beta", "positioning"},
     )
     snapshot = read_latest_snapshot(db_path=db_path)
 

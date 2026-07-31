@@ -50,7 +50,6 @@ from typing import Literal, cast
 from pydantic import ValidationError
 
 from allocation.candidate_fit import CandidateFit
-from candidate_fit_cache import read_materialized_candidate_fit, read_materialized_fit_meta
 from compute.thesis_evaluator import HoldingsSpec, load_holdings_spec
 from models.companies import ListType
 from pipeline.queries import tracked_companies_for_user
@@ -533,6 +532,10 @@ def assess_eligibility(
     lt = list_type.value if isinstance(list_type, ListType) else str(list_type)
     now = datetime.now(UTC).replace(tzinfo=None)
     conn = _ro_conn(db_path)
+    # Lazy to break the package-init cycle:
+    # candidate_fit_cache -> allocation.candidate_fit -> allocation.__init__
+    # -> allocation.eligibility. The cache is only needed by this I/O entrypoint.
+    from candidate_fit_cache import read_materialized_candidate_fit, read_materialized_fit_meta
 
     checks: dict[str, EligibilityCheck] = {}
     blocking: list[str] = []
