@@ -699,12 +699,7 @@ def _performance_section(
             tone=_tone(finals["Portfolio"]),
         )
     )
-    warn = (
-        '<p class="muted">⚠ The window start value looks incomplete (backfill unreliable) — '
-        "early benchmark gaps may overstate or understate relative performance.</p>"
-        if perf.backfill_start_unreliable
-        else ""
-    )
+    warn = _backfill_warning(perf)
     return (
         f"{head}"
         f'<div class="kpi-strip">{"".join(cards)}</div>'
@@ -712,6 +707,57 @@ def _performance_section(
         f"{_benchmark_chart(perf.points)}"
         f"{_policy_line(policy)}"
         f"{warn}</section>"
+    )
+
+
+def _backfill_warning(perf: PerformanceSeries) -> str:
+    """The "this window is modeled, not measured" banner.
+
+    Names the actual defect. Two earlier versions of this copy were wrong in
+    different directions and both are worth recording.
+
+    The original — "the window start value looks incomplete … may overstate or
+    understate relative performance" — never rendered at all, because the
+    tracker's guard only fired when the reconstructed start had collapsed below
+    25% of the end, which never happened on a real window.
+
+    The replacement over-corrected: it said the walk-back "can only see
+    positions you still hold", implying survivorship bias. That is NOT what the
+    walk-back does. It replays transactions backward from the anchor snapshot,
+    reversing every buy, sell and transfer on file, so a position fully exited
+    inside the covered span IS resurrected into the historical book. Measured
+    on the live database at 2024-01-01 it reconstructed 33 positions against
+    the 12 held today, including XLV, CPNG, AMZN, SOFI and FSLR — all long
+    gone. Attributing the inflation to vanished losers was simply false.
+
+    The real limit is COVERAGE, and it is per-account. Each account's
+    transaction history begins when that account was linked, not when the
+    window opens. Before its own feed starts, an account's positions freeze at
+    their earliest reconstructed state and — the part that actually moves the
+    number — the contributions that built it are invisible. Money deposited
+    but unseen is arithmetically indistinguishable from investment gain, so the
+    bias is one-directional and upward. On 2026-07-30 the recorded net flow was
+    +$4,867 for all of 2024 and *negative* $8,326 for 2025 on a book that grew
+    ~$150k that year; a 365-day window reporting +21.6% falls to ~7% if the
+    true figure was $75k higher, and under water at $150k.
+    """
+    if not perf.backfill_start_unreliable:
+        return ""
+    observed = perf.earliest_observed_date
+    span = (
+        f"Only {escape(observed)} onward is backed by observed broker snapshots"
+        if observed
+        else "No part of this window is backed by observed broker snapshots"
+    )
+    return (
+        '<p class="muted">⚠ <strong>This window is modeled, not measured.</strong> '
+        f"{span}. Earlier values are rebuilt by replaying your transactions backward, which "
+        "reconstructs trades and closed positions faithfully <em>as far back as each "
+        "account's transaction history reaches</em> — and that begins when the account was "
+        "linked, not when the window opens. Before then, deposits into that account are "
+        "invisible, and money you added is indistinguishable from money you made, so the "
+        "return is biased <em>upward</em>. Shorten the window to the observed range for a "
+        "number you can act on.</p>"
     )
 
 
