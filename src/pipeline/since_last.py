@@ -105,12 +105,16 @@ def _first_ticker(raw: object) -> str | None:
 def _signals_activity(db_path: Path | str | None, since_s: str, now_s: str) -> tuple[int, str]:
     """New information-diet rows (``signals.created_at`` — the ingest write
     stamp, not ``published_at``, which can be backdated to the source's own
-    publish time and would misrepresent "since you looked")."""
+    publish time and would misrepresent "since you looked"). Headline news is
+    excluded to match the diet panel's 2026-07-30 removal (a ``general_news``
+    row renders there only when EDGAR-fed): the doorway must count what the
+    page it opens actually shows."""
     conn = open_conn(db_path)
     try:
         row = conn.execute(
             "SELECT COUNT(*), GROUP_CONCAT(DISTINCT ticker) FROM signals "
-            "WHERE datetime(created_at) > datetime(?) AND datetime(created_at) <= datetime(?)",
+            "WHERE datetime(created_at) > datetime(?) AND datetime(created_at) <= datetime(?) "
+            "AND (signal_type != 'general_news' OR COALESCE(source_feed, '') LIKE 'edgar%')",
             (since_s, now_s),
         ).fetchone()
         return int(row[0] or 0), _tickers_suffix(row[1])

@@ -7,9 +7,15 @@ typed `signals` substrate (alembic 0095) directly and renders two lenses over
 it:
 
   * the INGEST STREAM — recent sell-side rating changes (``consensus_rating``,
-    routed free from the yf_grades feed) and general news (``general_news``),
-    newest first. NON-decaying: a story does not lose its place because the
-    clock moved (design_language "Diet-vs-alert").
+    routed free from the yf_grades feed), EDGAR filings, and curated podcast
+    appearances, newest first. NON-decaying: a story does not lose its place
+    because the clock moved (design_language "Diet-vs-alert"). General news
+    headlines are DELIBERATELY absent (owner ruling 2026-07-30: "surface level
+    poor quality work") — ``general_news`` rows render ONLY when EDGAR-fed
+    (the filings block); scraped headline aggregation never reaches this
+    surface. The substrate keeps ingesting news (the material_news alert
+    pipeline still reads it); this is a presentation-lane removal, not a feed
+    removal.
   * the FORWARD AGENDA — upcoming investor/analyst days (``investor_day``,
     forward-dated ``event_date`` rows), soonest first.
 
@@ -31,6 +37,7 @@ from datetime import UTC, date, datetime
 from html import escape
 from pathlib import Path
 
+from expected_earnings import last_reported_by_ticker, upcoming_by_ticker
 from signals.store import (
     SIGNAL_CONSENSUS_RATING,
     SIGNAL_GENERAL_NEWS,
@@ -74,9 +81,25 @@ def _load_list_types(db_path: Path) -> dict[str, str]:
 
 
 # The non-forward-dated reading lanes shown in the ingest stream: news-backed
-# ratings + news (mirrored) plus media appearances (written direct, free path).
-# Forward-dated investor days have their own lens (the forward agenda).
+# ratings (mirrored), EDGAR-fed filings (the only general_news rows that
+# survive to render — see _drop_headline_news), and media appearances (written
+# direct, free path). Forward-dated investor days have their own lens (the
+# forward agenda).
 _STREAM_TYPES = (SIGNAL_GENERAL_NEWS, SIGNAL_CONSENSUS_RATING, SIGNAL_MEDIA_APPEARANCE)
+
+
+def _drop_headline_news(rows: list[SignalRow]) -> list[SignalRow]:
+    """Owner ruling 2026-07-30: general-news headlines are removed from the
+    diet ENTIRELY. A ``general_news`` row survives only when EDGAR-fed (it is
+    a filing, rendered in the filings block); every other news row — scraped
+    headline aggregation — is dropped before grouping, emptiness checks, and
+    the freshness stamp, so the panel behaves as if the lane never existed."""
+    return [
+        r
+        for r in rows
+        if r.signal_type != SIGNAL_GENERAL_NEWS or (r.source_feed or "").startswith("edgar")
+    ]
+
 
 # Token-only scoped styles (guard-clean: every value is a token — radius via
 # --radius, type via the --fs-* scale, color via palette vars / color-mix).
@@ -105,11 +128,10 @@ _PANEL_STYLE = """<style>
 
 # signal_type → (display label, .k-pill tone class). Categories stay QUIET on a
 # dashboard (bare .k-pill, neutral --paper fill): accent is reserved for
-# interactive/selected/unread/status, not a decorative category tint.
+# interactive/selected/unread/status, not a decorative category tint. Only the
+# podcasts block renders through _stream_row now, so only its type is mapped
+# (an unmapped type falls back to its raw signal_type label).
 _TYPE_PILL: dict[str, tuple[str, str]] = {
-    SIGNAL_CONSENSUS_RATING: ("Rating", ""),
-    "general_news": ("News", ""),
-    "investor_day": ("Investor day", ""),
     SIGNAL_MEDIA_APPEARANCE: ("Podcast", ""),
 }
 
@@ -119,7 +141,7 @@ def render_diet_panel(db_path: Path) -> str:
     disclosed fast-follow note. Pure read over the `signals` substrate; degrades
     to a quiet empty state on a pre-0095 DB (no `signals` table)."""
     today = datetime.now(UTC).date()
-    stream = load_diet_signals(db_path, types=_STREAM_TYPES, limit=80)
+    stream = _drop_headline_news(load_diet_signals(db_path, types=_STREAM_TYPES, limit=80))
     agenda = load_forward_agenda(db_path, on_or_after=today, limit=40)
     list_types = _load_list_types(db_path)
     # Stable sort (recency preserved within tier): book names float to the top.
@@ -129,12 +151,116 @@ def render_diet_panel(db_path: Path) -> str:
             _PANEL_STYLE,
             '<section class="panel"><h2 title="Pull lane — what to READ on your names, '
             "separate from the inbox's push lane (what needs action). Nothing here decays "
-            'or fires an alert; a thesis breach still reaches the inbox.">Information diet</h2>',
+            "or fires an alert; a thesis breach still reaches the inbox. General-news "
+            'headlines are deliberately excluded — the readouts are the reading lane.">'
+            "Information diet</h2>",
+            _readouts_section(db_path, list_types, today),
             _stream_section(stream, list_types),
             _agenda_section(agenda, today),
             _scaffold_note(),
             "</section>",
         ]
+    )
+
+
+# ---------------------------------------------------------------------------
+# Earnings readouts — the reading lane that replaced the news list (owner
+# ruling 2026-07-30: the diet should be pre/post-ER readouts grounded in real
+# data, the transcript, and the thesis — not headline aggregation). One row
+# per book name (portfolio + evaluation), soonest-reporting first. Both chips
+# are JIT doorways (D2: the label IS the deliverable; NOTHING pre-generates):
+# the pre-ER chip opens the existing earnings-prep peek, the post-ER chip the
+# earnings-readout peek — each assembled at click time with an "ask" doorway
+# for the full LLM narrative.
+# ---------------------------------------------------------------------------
+
+
+def _readouts_section(db_path: Path, list_types: dict[str, str], today: date) -> str:
+    head = (
+        '<div class="diet-sec first"><h3 class="diet-sec-h" title="The reading lane: '
+        "pre-ER prep and post-ER readouts on your book, assembled on demand from the "
+        "thesis, tracked KPIs, and the call transcript — never pre-generated, never "
+        'headline churn.">Earnings readouts</h3>'
+    )
+    book = sorted(t for t, lt in list_types.items() if lt in _BOOK_PRIORITY)
+    if not book:
+        return (
+            head + '<p class="diet-empty">No portfolio or evaluation names tracked yet.</p></div>'
+        )
+    upcoming: dict[str, date] = {}
+    reported: dict[str, date] = {}
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    except sqlite3.Error:
+        conn = None
+    if conn is not None:
+        try:
+            upcoming = upcoming_by_ticker(conn, today)
+            reported = last_reported_by_ticker(conn, today)
+        finally:
+            conn.close()
+
+    def _order(t: str) -> tuple[int, int, str]:
+        # Soonest next ER first; names with no calendar row sink, most
+        # recently reported first among them; ticker breaks ties.
+        nxt = upcoming.get(t)
+        if nxt is not None:
+            return (0, nxt.toordinal(), t)
+        last = reported.get(t)
+        if last is not None:
+            return (1, -last.toordinal(), t)
+        return (2, 0, t)
+
+    book.sort(key=_order)
+    body = "".join(
+        _readout_row(t, list_types, upcoming.get(t), reported.get(t), today) for t in book
+    )
+    return (
+        head + '<table class="p-table"><thead><tr><th>Name</th><th>Last reported</th>'
+        "<th>Next ER</th><th>Readouts</th></tr></thead>"
+        f"<tbody>{body}</tbody></table></div>"
+    )
+
+
+def _readout_row(
+    t: str,
+    list_types: dict[str, str],
+    next_er: date | None,
+    last_er: date | None,
+    today: date,
+) -> str:
+    marker = _book_marker_html(list_types.get(t, ""))
+    tq = escape(t, quote=True)
+    if last_er is not None:
+        ago = (today - last_er).days
+        last_cell = f'{escape(last_er.isoformat())} <span class="diet-firm">({ago}d ago)</span>'
+    else:
+        last_cell = "—"
+    if next_er is not None:
+        rel = _days_until(next_er.isoformat(), today)
+        next_cell = f'{escape(next_er.isoformat())} <span class="diet-firm">({rel})</span>'
+    else:
+        next_cell = "—"
+    prep = (
+        '<button type="button" class="k-chip k-chip-btn" '
+        f'data-peek-url="/api/peek/earnings-prep?ticker={tq}" '
+        f'data-peek-title="Earnings prep — {tq}" '
+        'title="One-page pre-ER prep, assembled on demand">pre-ER prep</button>'
+    )
+    readout = (
+        '<button type="button" class="k-chip k-chip-btn" '
+        f'data-peek-url="/api/peek/earnings-readout?ticker={tq}" '
+        f'data-peek-title="Post-ER readout — {tq}" '
+        'title="Post-earnings readout — actuals vs what you track, the transcript, '
+        'and the thesis, assembled on demand">post-ER readout</button>'
+    )
+    return (
+        "<tr>"
+        f"<td>{ticker_label(t)}{marker}</td>"
+        f'<td class="diet-when">{last_cell}</td>'
+        f'<td class="diet-when">{next_cell}</td>'
+        f"<td>{prep} {readout}</td>"
+        "</tr>"
     )
 
 
@@ -172,12 +298,13 @@ def _stream_section(rows: list[SignalRow], list_types: dict[str, str]) -> str:
     """The ingest stream, regrouped per D3 (surface_density_jit_redesign.md,
     walkthrough #8): sell-side actions as a parsed dense table (firm / action /
     PT from→to with a deterministic per-group summary), filings as their own
-    block, and the remaining news reading list — instead of one undifferentiated
-    chronological mix. Within every group the order stays book-first then
-    newest-first (the non-decaying diet invariant is untouched — grouping is
-    presentation, the reader still never decays)."""
+    block, and podcast appearances — no general-news list (removed entirely,
+    owner ruling 2026-07-30; ``rows`` arrives pre-filtered through
+    :func:`_drop_headline_news`). Within every group the order stays book-first
+    then newest-first (the non-decaying diet invariant is untouched — grouping
+    is presentation, the reader still never decays)."""
     head = (
-        '<div class="diet-sec first"><h3 class="diet-sec-h" title="What happened on your '
+        '<div class="diet-sec"><h3 class="diet-sec-h" title="What happened on your '
         "names, grouped by kind — your book first within each group, newest-first. Not "
         'ranked by urgency — this is reading, not triage.">Ingest stream'
         f"{_freshness_line(rows)}</h3>"
@@ -185,21 +312,16 @@ def _stream_section(rows: list[SignalRow], list_types: dict[str, str]) -> str:
     if not rows:
         return (
             head + '<p class="diet-empty">No diet signals yet — they populate from the '
-            "news + yfinance-grades feeds.</p></div>"
+            "yfinance-grades, EDGAR, and podcast feeds.</p></div>"
         )
     ratings = [r for r in rows if r.signal_type == SIGNAL_CONSENSUS_RATING]
-    filings = [
-        r
-        for r in rows
-        if r.signal_type == SIGNAL_GENERAL_NEWS and (r.source_feed or "").startswith("edgar")
-    ]
-    grouped_ids = {id(r) for r in ratings} | {id(r) for r in filings}
-    news = [r for r in rows if id(r) not in grouped_ids]
+    filings = [r for r in rows if r.signal_type == SIGNAL_GENERAL_NEWS]
+    podcasts = [r for r in rows if r.signal_type == SIGNAL_MEDIA_APPEARANCE]
     return (
         head
         + _ratings_block(ratings, list_types)
         + _filings_block(filings, list_types)
-        + _news_block(news, list_types)
+        + _podcasts_block(podcasts, list_types)
         + "</div>"
     )
 
@@ -326,13 +448,16 @@ def _filings_block(rows: list[SignalRow], list_types: dict[str, str]) -> str:
     )
 
 
-def _news_block(rows: list[SignalRow], list_types: dict[str, str]) -> str:
+def _podcasts_block(rows: list[SignalRow], list_types: dict[str, str]) -> str:
+    """Curated podcast appearances (``media_appearance`` — a tracked exec or
+    rostered investor on an allowlisted show). Kept when the news list was
+    removed: these are long-form primary conversations, not headline churn."""
     if not rows:
         return ""
     body = "".join(_stream_row(r, list_types.get(r.ticker, "")) for r in rows)
     return (
-        '<h4 class="diet-group-h">News &amp; podcasts '
-        f'<span class="diet-group-sum">{len(rows)} item(s)</span></h4>'
+        '<h4 class="diet-group-h">Podcasts '
+        f'<span class="diet-group-sum">{len(rows)} appearance(s)</span></h4>'
         + lg.grid_open()
         + lg.filter_bar(len(rows), noun="signals", placeholder="Filter by name / source / text…")
         + '<table class="p-table"><thead><tr>'

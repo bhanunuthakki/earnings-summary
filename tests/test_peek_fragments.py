@@ -1214,3 +1214,88 @@ def test_earnings_prep_peek_empty_name_still_renders_capture_hint(
     html = render_earnings_prep_peek(db_path, repo, "ORCL")
     assert html is not None
     assert "No open watch items or questions" in html
+
+
+# --------------------------------------------------------------------------- #
+# Post-earnings readout peek (2026-07-30, diet news removal): the post-ER
+# counterpart of the prep memo — assembled at click time, grounded in the
+# recorded quarter, with the ask-engine doorway for the full LLM readout.
+# --------------------------------------------------------------------------- #
+
+
+def _seed_readout_ticker(db_path: Path, ticker: str = "NU") -> None:
+    _seed_prep_ticker(db_path, ticker)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS earnings_surprises (ticker TEXT, release_date TEXT, "
+            "eps_estimate TEXT, eps_actual TEXT, eps_surprise_pct TEXT, "
+            "revenue_estimate TEXT, revenue_actual TEXT, revenue_surprise_pct TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO earnings_surprises (ticker, release_date, eps_estimate, eps_actual, "
+            "eps_surprise_pct, revenue_estimate, revenue_actual, revenue_surprise_pct) "
+            "VALUES (?, '2026-07-20', '0.12', '0.15', '25.0', '3.1B', '3.0B', '-3.2')",
+            (ticker,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_earnings_readout_peek_assembles_grounded_readout(repo: Path, db_path: Path) -> None:
+    from pipeline.peeks import render_earnings_readout_peek
+    from user_state.ledger import append_entry
+    from user_state.notes import create_note
+
+    _seed_readout_ticker(db_path)
+    create_note(ticker="NU", kind="watch", body="Watch the NIM print.", db_path=db_path)
+    append_entry(
+        ticker="NU",
+        entry_kind="earnings_prep_append",
+        body="Re-check Mexico deposit ramp.",
+        db_path=db_path,
+    )
+
+    html = render_earnings_readout_peek(db_path, repo, "NU")
+    assert html is not None
+    # Header anchors on the actual report event with the thesis pill.
+    assert "reported 2026-07-20" in html
+    assert ">watch</span>" in html
+    # Beat/miss vs street, both sides toned + anchored to the estimate.
+    assert "Vs street" in html
+    assert "beat" in html and "miss" in html
+    assert "0.12" in html and "0.15" in html
+    # The owner's open watch item, reframed as the post-ER question.
+    assert "did they answer it?" in html
+    assert 'data-ask-q="Watch the NIM print. (NU)"' in html
+    # Last quarter's queued prep note, reframed for this call.
+    assert "Queued for this call last quarter" in html
+    assert "Re-check Mexico deposit ramp." in html
+    # Valuation stance reused verbatim.
+    assert "Valuation stance" in html
+    # The governed-LLM narrative doorway, thesis-tied and count-phrased.
+    assert "ask for the full readout" in html
+    assert "last 8 quarters" in html
+
+
+def test_earnings_readout_peek_route_serves_and_404s(client: FlaskClient, db_path: Path) -> None:
+    _seed_readout_ticker(db_path)
+    ok = client.get("/api/peek/earnings-readout?ticker=NU")
+    assert ok.status_code == 200
+    assert "Vs street" in ok.data.decode()
+    assert client.get("/api/peek/earnings-readout?ticker=NOPE").status_code == 404
+    assert client.get("/api/peek/earnings-readout").status_code == 404
+
+
+def test_earnings_readout_peek_degrades_without_quarter_data(repo: Path, db_path: Path) -> None:
+    """A tracked name with no surprises/KPI/tone rows still renders the honest
+    header — hide-don't-stub, never a blank or broken memo."""
+    from pipeline.peeks import render_earnings_readout_peek
+
+    _seed_prep_ticker(db_path, ticker="ORCL")
+    html = render_earnings_readout_peek(db_path, repo, "ORCL")
+    assert html is not None
+    assert "no reported quarter on record yet" in html
+    assert "Vs street" not in html
+    assert "ask for the full readout" in html
