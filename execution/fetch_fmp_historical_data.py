@@ -39,6 +39,13 @@ FMP_API_KEY = os.environ.get("FMP_API_KEY")
 
 FMP_BASE = "https://financialmodelingprep.com/stable"
 
+# --all previously walked EVERY tracked company — including the ~2,350
+# index_member peers — at full --limit depth, one of the writers behind the
+# 9.1 GB fmp cache (2026-07-30 DB-size audit). Peers are covered by the
+# shallow contract in save_fmp_data.PEER_ENDPOINT_ALLOWLIST instead, so
+# --all now defaults to the active universe; override with --list-types.
+ACTIVE_LIST_TYPES = ("portfolio", "watchlist", "evaluation")
+
 # Retry transient FMP responses (rate-limit / upstream 5xx) with exponential
 # backoff instead of silently returning None and skipping the statement. Mirrors
 # the backoff in execution/save_fmp_data.py; the sibling fetchers already do this.
@@ -162,6 +169,16 @@ def main() -> None:
     parser.add_argument(
         "--limit", type=int, default=20, help="Max quarters per data type (default: 20)"
     )
+    parser.add_argument(
+        "--list-types",
+        default=",".join(ACTIVE_LIST_TYPES),
+        help=(
+            "Comma-separated tracked_companies.list_type values --all includes "
+            f"(default: {','.join(ACTIVE_LIST_TYPES)}). index_member peers are "
+            "excluded by default: their depth contract is "
+            "save_fmp_data.PEER_ENDPOINT_ALLOWLIST"
+        ),
+    )
     args = parser.parse_args()
 
     if not FMP_API_KEY:
@@ -170,10 +187,13 @@ def main() -> None:
 
     tickers: list[str] = []
     if args.all:
+        wanted = {t.strip().lower() for t in args.list_types.split(",") if t.strip()}
         companies = db.get_tracked_companies()
-        tickers = [c["ticker"] for c in companies]
+        tickers = [
+            str(c["ticker"]) for c in companies if str(c.get("list_type") or "").lower() in wanted
+        ]
         if not tickers:
-            print("No tracked companies found in database.")
+            print(f"No tracked companies found for list_types={sorted(wanted)}.")
             sys.exit(0)
     else:
         tickers = [args.ticker.upper()]
