@@ -13,7 +13,7 @@ from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_REVISION = "0213_decision_draft_provider_id"
-HEAD = "0260_pre_earnings_brief_plumbing"
+HEAD = "0261_latest_governed_state"
 ADDITIVE_TABLES_0245_0248 = {
     "document_processing_obligation_revisions",
     "document_processing_disposition_headers",
@@ -45,6 +45,17 @@ ADDITIVE_TABLES_0245_0248 = {
     "pdf_table_extraction_artifact_headers",
     "pdf_table_extraction_artifact_members",
     "pdf_table_extraction_artifact_seals",
+}
+ADDITIVE_TABLES_0261 = {
+    "latest_governed_refresh_runs",
+    "latest_governed_refresh_stage",
+    "latest_governed_refresh_receipts",
+    "latest_governed_refresh_changes",
+    "latest_governed_scope_heads",
+    "latest_governed_fact_entries",
+    "latest_governed_document_entries",
+    "latest_governed_narrative_entries",
+    "latest_governed_narrative_fts",
 }
 
 
@@ -173,6 +184,7 @@ def test_evidence_search_migrations_have_one_reversible_head(tmp_path: Path) -> 
         }
         assert "ix_fact_reported_anchors_v2_extraction_observation" in anchor_indexes
         assert tables >= ADDITIVE_TABLES_0245_0248
+        assert tables >= ADDITIVE_TABLES_0261
         view_sql = str(
             conn.execute(
                 "SELECT sql FROM sqlite_master WHERE type='view' "
