@@ -622,6 +622,15 @@ def run_gc(
         if apply:
             require_current_for_write(conn)
             attach_archive(conn, archive)
+            # Take the write lock up front. The policies read for a while
+            # (window-function temp tables) before their first main-DB write;
+            # under a deferred transaction that first write is a snapshot
+            # UPGRADE, which fails immediately with "database is locked" if
+            # any other writer committed since the reads began — busy_timeout
+            # never applies. BEGIN IMMEDIATE makes lock acquisition happen
+            # here, where the 30s busy_timeout DOES apply, and holds one
+            # writer transaction for the whole run.
+            conn.execute("BEGIN IMMEDIATE")
         _reset_doomed(conn)
 
         if "validation-issues" in policies:
