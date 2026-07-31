@@ -226,11 +226,11 @@ def render_decision_journal_panel(
     var quality = pqBtn.getAttribute('data-pq');
     var holder = pqBtn.closest('[data-pq-decision]');
     if (quality === 'skip') {{
-      if (holder) holder.remove();
+      if (holder) CCAction.leave(holder);
       return;
     }}
     var decisionId = pqBtn.getAttribute('data-decision-id');
-    pqBtn.disabled = true;
+    CCAction.busy(pqBtn);
     fetch('/api/decisions/' + decisionId + '/process-quality', {{
       method: 'POST', headers: {{'Content-Type': 'application/json'}},
       body: JSON.stringify({{quality: quality}})
@@ -238,9 +238,9 @@ def render_decision_journal_panel(
       if (r.ok && holder) {{
         holder.outerHTML = '<span class="k-chip">process: ' + quality + '</span>';
       }} else {{
-        pqBtn.disabled = false;
+        CCAction.release(pqBtn);
       }}
-    }}).catch(function () {{ pqBtn.disabled = false; }});
+    }}).catch(function () {{ CCAction.release(pqBtn); }});
   }});
 }})();
 </script>"""

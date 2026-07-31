@@ -557,6 +557,99 @@ ${r?'Expression: "'+r+`"
 
 
 (function () {
+  if (window.CCAction) return;
+
+  function reduceMotion() {
+    return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  }
+
+  // Pressed state: disable + aria-busy (the kit dims [aria-busy]) + optional
+  // busy label. The original label is stashed once in data-cc-label so
+  // busy → release round-trips even if called twice. The stash happens ONLY
+  // when a label swap is requested: the control may be a <select> (triage's
+  // route picker), where writing textContent back would destroy the options.
+  function busy(btn, label) {
+    if (!btn) return;
+    if (label) {
+      if (!btn.hasAttribute('data-cc-label')) {
+        btn.setAttribute('data-cc-label', btn.textContent);
+      }
+      btn.textContent = label;
+    }
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+  }
+
+  function release(btn) {
+    if (!btn) return;
+    btn.disabled = false;
+    btn.removeAttribute('aria-busy');
+    var orig = btn.getAttribute('data-cc-label');
+    if (orig !== null) {
+      btn.textContent = orig;
+      btn.removeAttribute('data-cc-label');
+    }
+  }
+
+  // Terminal receipt: the button stays where it was, disabled, showing what
+  // just happened ("✓ Dismissed") — for surfaces whose element stays in place.
+  // Buttons only (writes textContent), never a <select>.
+  function receipt(btn, text) {
+    if (!btn) return;
+    btn.disabled = true;
+    btn.removeAttribute('aria-busy');  // settled, not in flight
+    btn.textContent = text;
+  }
+
+  // Animated removal: fade+settle, then collapse the pinned height so
+  // siblings slide up, then remove from the DOM and call done().
+  // transitionend drives each beat with a timeout fallback (240ms > the
+  // 150ms token) mirroring CCOverlay.animateOut.
+  function leave(el, done) {
+    if (!el || !el.parentNode) { if (done) done(); return; }
+    function finish() {
+      if (el.parentNode) el.parentNode.removeChild(el);
+      if (done) done();
+    }
+    if (reduceMotion()) { finish(); return; }
+    var phase = 0;
+    var timer = null;
+    function next() {
+      if (phase === 0) {
+        phase = 1;
+        el.classList.add('cc-act-collapse');
+        timer = setTimeout(next, 240);
+      } else if (phase === 1) {
+        phase = 2;
+        finish();
+      }
+    }
+    el.addEventListener('transitionend', function (e) {
+      if (e.target !== el) return;
+      if ((phase === 0 && e.propertyName === 'opacity') ||
+          (phase === 1 && e.propertyName === 'height')) {
+        clearTimeout(timer);
+        next();
+      }
+    });
+    // Pin the box height BEFORE animating so beat 2 has a concrete start.
+    el.style.height = el.offsetHeight + 'px';
+    el.style.overflow = 'hidden';
+    void el.offsetHeight;  // commit the pin before the class flips
+    el.classList.add('cc-act-leave');
+    timer = setTimeout(next, 240);
+  }
+
+  window.CCAction = {
+    busy: busy,
+    release: release,
+    receipt: receipt,
+    leave: leave,
+  };
+})();
+
+
+(function () {
   if (window.__ccSrcChipEsc || !window.CCOverlay) return;
   window.__ccSrcChipEsc = true;
   window.CCOverlay.addPopoverDismisser(function () {
@@ -987,7 +1080,7 @@ ${r?'Expression: "'+r+`"
       btn.addEventListener('click', function() {
         var id = btn.getAttribute('data-cmt-id');
         var action = btn.getAttribute('data-cmt-action');
-        updateComment(id, action);
+        updateComment(id, action, btn);
       });
     });
   }
@@ -1108,7 +1201,8 @@ ${r?'Expression: "'+r+`"
     });
   }
 
-  function updateComment(id, status) {
+  function updateComment(id, status, btn) {
+    CCAction.busy(btn);
     fetch(SERVER_URL + '/comments/' + id, {
       method: 'PATCH',
       headers: MUTATION_HEADERS,
@@ -1120,6 +1214,7 @@ ${r?'Expression: "'+r+`"
       renderList();
       renderPins();
     }).catch(function() {
+      CCAction.release(btn);
       hint('Server unreachable — cannot update.');
     });
   }
@@ -1675,11 +1770,13 @@ ${r?'Expression: "'+r+`"
       wrap.querySelectorAll('button').forEach(function(btn) {
         btn.addEventListener('click', function() {
           var dryRun = btn.getAttribute('data-action') === 'preview';
+          CCAction.busy(btn, dryRun ? 'Previewing…' : 'Applying…');
           fetch(SERVER_URL + '/chat/' + TICKER + '/apply', {
             method: 'POST',
             headers: MUTATION_HEADERS,
             body: JSON.stringify({diff: diff, report_date: REPORT_DATE, dry_run: dryRun}),
           }).then(function(r) { return r.json(); }).then(function(res) {
+            CCAction.release(btn);
             var msg = (res.applied ? '✓ Applied: ' : (res.dry_run ? '↗ Preview: ' : '✗ ')) +
               (res.summary || '') + (res.error ? ' — ' + res.error : '');
             var note = document.createElement('div');
@@ -1687,7 +1784,7 @@ ${r?'Expression: "'+r+`"
             note.textContent = msg;
             wrap.appendChild(note);
             if (res.applied) wrap.classList.add('applied');
-          });
+          }).catch(function() { CCAction.release(btn); });
         });
       });
     }

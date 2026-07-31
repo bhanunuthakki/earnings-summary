@@ -441,7 +441,9 @@ _QUICK_NOTE_SCRIPT = """<script>
   if (!root || root.dataset.wired) return;
   root.dataset.wired = '1';
   var msg = root.querySelector('.qn-msg');
+  var saveBtn = root.querySelector('.qn-save');
   function save() {
+    if (saveBtn.disabled) return;  // Enter + click can't double-submit
     var body = root.querySelector('.qn-body').value.trim();
     if (!body) { msg.textContent = 'write the note first'; return; }
     // Default (unchecked): journal note, unchanged behavior. Checked: the
@@ -459,6 +461,7 @@ _QUICK_NOTE_SCRIPT = """<script>
       : { kind: root.querySelector('.qn-kind').value, body: body };
     if (!toCaptureSpine && t) payload.ticker = t;
     msg.textContent = 'saving\\u2026';
+    CCAction.busy(saveBtn);
     fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -466,14 +469,15 @@ _QUICK_NOTE_SCRIPT = """<script>
     }).then(function (r) {
       return r.json().then(function (j) { return { ok: r.ok, j: j }; });
     }).then(function (res) {
+      CCAction.release(saveBtn);
       if (!res.ok) { msg.textContent = 'error: ' + (res.j.error || 'failed'); return; }
       msg.textContent = 'saved \\u2713';
       // The shell re-fetches this whole fragment, so the new note appears in
       // the list below (and the form resets).
       if (window.ccReloadNotesDrawer) window.ccReloadNotesDrawer();
-    }).catch(function () { msg.textContent = 'network error'; });
+    }).catch(function () { CCAction.release(saveBtn); msg.textContent = 'network error'; });
   }
-  root.querySelector('.qn-save').addEventListener('click', save);
+  saveBtn.addEventListener('click', save);
   root.querySelector('.qn-body').addEventListener('keydown', function (ev) {
     if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); save(); }
   });
@@ -592,6 +596,7 @@ document.querySelectorAll('.tcc-refresh').forEach(function (b) {
   b.addEventListener('click', function () {
     var msg = document.querySelector('.tcc-refresh-msg');
     msg.textContent = 'starting\\u2026';
+    CCAction.busy(b);
     fetch('/actions/refresh', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -601,10 +606,11 @@ document.querySelectorAll('.tcc-refresh').forEach(function (b) {
         force_budget_bypass: b.getAttribute('data-bypass') === '1'
       })
     }).then(function (r) { return r.json(); }).then(function (j) {
+      CCAction.release(b);
       msg.innerHTML = j.job_id
         ? 'started \\u2014 <a href="' + j.stream_url + '">view log</a>'
         : ('error: ' + (j.error || 'failed'));
-    }).catch(function () { msg.textContent = 'network error'; });
+    }).catch(function () { CCAction.release(b); msg.textContent = 'network error'; });
   });
 });
 var _t = document.querySelector('.tcc-bypass-toggle');
@@ -664,24 +670,26 @@ _DCF_SHEETS_SCRIPT = """<script>
         else { openLink.style.display = 'none'; }
       }).catch(function () {});
   }
-  function post(url, label) {
+  function post(url, label, btn) {
     msg.textContent = label + '\\u2026';
+    CCAction.busy(btn);
     fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ticker: tk })
     }).then(function (r) { return r.json(); }).then(function (j) {
+      CCAction.release(btn);
       msg.innerHTML = j.job_id
         ? 'started \\u2014 <a href="' + j.stream_url + '">view log</a>'
         : ('error: ' + (j.error || 'failed'));
       if (j.job_id) { setTimeout(refreshLink, 2000); }
-    }).catch(function () { msg.textContent = 'network error'; });
+    }).catch(function () { CCAction.release(btn); msg.textContent = 'network error'; });
   }
-  root.querySelector('.tcc-dcf-export').addEventListener('click', function () {
-    post('/actions/dcf-export', 'pushing to Sheets');
+  root.querySelector('.tcc-dcf-export').addEventListener('click', function (ev) {
+    post('/actions/dcf-export', 'pushing to Sheets', ev.currentTarget);
   });
-  root.querySelector('.tcc-dcf-import').addEventListener('click', function () {
-    post('/actions/dcf-import', 'pulling + recomputing');
+  root.querySelector('.tcc-dcf-import').addEventListener('click', function (ev) {
+    post('/actions/dcf-import', 'pulling + recomputing', ev.currentTarget);
   });
   refreshLink();
 })();

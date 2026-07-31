@@ -519,15 +519,15 @@ forever — memory is the point.</p>
     save.addEventListener('click', function () {{
       var txt = ta.value.trim();
       if (required && !txt) {{ ta.focus(); return; }}
-      save.disabled = true;
+      CCAction.busy(save, 'Saving\\u2026');
       var payload = {{}};
       if (act === 'supersede') payload.body = txt;
       else if (txt) payload.resolution_note = txt;
       fetch('/api/notes/' + id + '/' + act, {{
         method: 'POST', headers: {{'Content-Type': 'application/json'}},
         body: JSON.stringify(payload)
-      }}).then(function (r) {{ if (r.ok) refresh(); else save.disabled = false; }})
-        .catch(function () {{ save.disabled = false; }});
+      }}).then(function (r) {{ if (r.ok) refresh(); else CCAction.release(save); }})
+        .catch(function () {{ CCAction.release(save); }});
     }});
   }}
   root.addEventListener('click', function (ev) {{
@@ -560,22 +560,24 @@ forever — memory is the point.</p>
       var auto = holder.querySelector('input[data-role="link-auto"]');
       payload.auto_resolve = !!(auto && auto.checked);
     }}
-    btn.disabled = true;
+    CCAction.busy(btn);
     fetch('/api/notes/' + id + '/' + act, {{
       method: 'POST', headers: {{'Content-Type': 'application/json'}},
       body: JSON.stringify(payload)
-    }}).then(function (r) {{ if (r.ok) refresh(); else btn.disabled = false; }})
-      .catch(function () {{ btn.disabled = false; }});
+    }}).then(function (r) {{ if (r.ok) refresh(); else CCAction.release(btn); }})
+      .catch(function () {{ CCAction.release(btn); }});
   }});
   root.addEventListener('change', function (ev) {{
     var sel = ev.target.closest('select[data-act="reclassify"]');
     if (!sel) return;
     var holder = sel.closest('[data-note-id]');
     if (!holder) return;
+    CCAction.busy(sel);
     fetch('/api/notes/' + holder.getAttribute('data-note-id') + '/reclassify', {{
       method: 'POST', headers: {{'Content-Type': 'application/json'}},
       body: JSON.stringify({{kind: sel.value}})
-    }}).then(function (r) {{ if (r.ok) refresh(); }});
+    }}).then(function (r) {{ if (r.ok) refresh(); else CCAction.release(sel); }})
+      .catch(function () {{ CCAction.release(sel); }});
   }});
 }})();
 </script>"""

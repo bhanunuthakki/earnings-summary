@@ -229,6 +229,10 @@ input, textarea, select, [contenteditable] { caret-color: var(--accent); }
 .k-btn-danger { border-color: transparent; color: var(--bad); }
 .k-btn-danger:hover { border-color: var(--bad); }
 .k-btn[disabled] { opacity: 0.5; cursor: default; pointer-events: none; }
+/* pressed/in-flight state — CCAction.busy() sets aria-busy; HTMX toggles
+   .htmx-request on the triggering element for the request's duration. Slightly
+   less dim than [disabled] so "working" reads apart from "unavailable". */
+.k-btn[aria-busy="true"], .k-btn.htmx-request { opacity: 0.6; pointer-events: none; }
 /* min-height 24px (UX audit 2026-07-18): the WCAG/repo hit-target floor —
    fs-caption + the old 3px padding measured ~23px, just under it. */
 .k-btn-sm { font-size: var(--fs-caption); padding: 3px 9px; min-height: 24px; }

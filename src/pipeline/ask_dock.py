@@ -396,7 +396,7 @@ _DOCK_JS = r"""
           dateEl.textContent = res.ok
             ? ('distilled: ' + adopted + ' adopted, ' + (c.musings || 0) + ' filed')
             : (res.status === 409 ? 'already distilled' : 'distill failed');
-          distillBtn.remove();
+          CCAction.leave(distillBtn);
         })
         .catch(function () {
           dateEl.textContent = 'distill failed';
@@ -413,7 +413,7 @@ _DOCK_JS = r"""
 
     delBtn.addEventListener('click', function (ev) {
       ev.stopPropagation();
-      deleteThread(sess.id, row);
+      deleteThread(sess.id, row, delBtn);
     });
 
     return row;
@@ -483,15 +483,18 @@ _DOCK_JS = r"""
       .catch(function () {});
   }
 
-  function deleteThread(sid, row) {
+  function deleteThread(sid, row, btn) {
+    CCAction.busy(btn);
     fetch('/api/ask/sessions/' + encodeURIComponent(sid), {method: 'DELETE'})
       .then(function (r) {
         if (r.ok || r.status === 204) {
-          row.remove();
+          CCAction.leave(row);
           if (sid === currentSessionId) { startNewThread(); }
+        } else {
+          CCAction.release(btn);
         }
       })
-      .catch(function () {});
+      .catch(function () { CCAction.release(btn); });
   }
 
   function startNewThread() {

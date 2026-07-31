@@ -290,15 +290,14 @@ _RESOLVE_SCRIPT = """<script>
     var id = parseInt(btn.getAttribute('data-resolve-issue'), 10);
     if (isNaN(id)) return;
     var sev = btn.getAttribute('data-severity') || '';
-    btn.disabled = true;
-    btn.textContent = 'Resolving\\u2026';
+    CCAction.busy(btn, 'Resolving\\u2026');
     fetch('/actions/resolve-issue', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ issue_id: id })
     }).then(function (resp) {
       if (!resp.ok) {
-        btn.disabled = false;
+        CCAction.release(btn);
         btn.textContent = 'Retry resolve';
         btn.setAttribute('aria-invalid', 'true');
         return;
@@ -306,12 +305,9 @@ _RESOLVE_SCRIPT = """<script>
       if (sev === 'halt' || sev === 'warn') bump(sev, -1);
       bump('resolved', 1);
       var wrap = btn.closest('.k-prov');
-      if (!wrap) return;
-      wrap.style.transition = 'opacity 0.25s';
-      wrap.style.opacity = '0';
-      setTimeout(function () { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }, 280);
+      if (wrap) CCAction.leave(wrap);
     }).catch(function () {
-      btn.disabled = false;
+      CCAction.release(btn);
       btn.textContent = 'Retry resolve';
     });
   });

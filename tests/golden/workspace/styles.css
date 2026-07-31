@@ -178,6 +178,10 @@ input, textarea, select, [contenteditable] { caret-color: var(--accent); }
 .k-btn-danger { border-color: transparent; color: var(--bad); }
 .k-btn-danger:hover { border-color: var(--bad); }
 .k-btn[disabled] { opacity: 0.5; cursor: default; pointer-events: none; }
+/* pressed/in-flight state — CCAction.busy() sets aria-busy; HTMX toggles
+   .htmx-request on the triggering element for the request's duration. Slightly
+   less dim than [disabled] so "working" reads apart from "unavailable". */
+.k-btn[aria-busy="true"], .k-btn.htmx-request { opacity: 0.6; pointer-events: none; }
 /* min-height 24px (UX audit 2026-07-18): the WCAG/repo hit-target floor —
    fs-caption + the old 3px padding measured ~23px, just under it. */
 .k-btn-sm { font-size: var(--fs-caption); padding: 3px 9px; min-height: 24px; }
@@ -2655,6 +2659,17 @@ mark.cmt-highlight.addressed:hover { background: color-mix(in srgb, var(--ok) 24
 .dcf-edit-field input.dcf-injected { outline: 2px solid var(--accent); outline-offset: 1px;
   background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .dcf-inject-btn { color: var(--accent); margin-left: var(--sp-1); white-space: nowrap; }
+
+
+.cc-act-leave { transition: opacity var(--transition), transform var(--transition);
+  opacity: 0; transform: translateY(-4px); pointer-events: none; }
+.cc-act-collapse { transition: height var(--transition), margin var(--transition),
+  padding var(--transition), border-width var(--transition);
+  height: 0 !important; min-height: 0 !important; margin: 0 !important;
+  padding: 0 !important; border-width: 0 !important; overflow: hidden !important; }
+@media (prefers-reduced-motion: reduce) {
+  .cc-act-leave, .cc-act-collapse { transition-duration: 0.01ms; }
+}
 
 
 .lg-bar { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; flex-wrap: wrap; }

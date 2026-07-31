@@ -258,11 +258,13 @@ JS = (
       wrap.querySelectorAll('button').forEach(function(btn) {
         btn.addEventListener('click', function() {
           var dryRun = btn.getAttribute('data-action') === 'preview';
+          CCAction.busy(btn, dryRun ? 'Previewing…' : 'Applying…');
           fetch(SERVER_URL + '/chat/' + TICKER + '/apply', {
             method: 'POST',
             headers: MUTATION_HEADERS,
             body: JSON.stringify({diff: diff, report_date: REPORT_DATE, dry_run: dryRun}),
           }).then(function(r) { return r.json(); }).then(function(res) {
+            CCAction.release(btn);
             var msg = (res.applied ? '✓ Applied: ' : (res.dry_run ? '↗ Preview: ' : '✗ ')) +
               (res.summary || '') + (res.error ? ' — ' + res.error : '');
             var note = document.createElement('div');
@@ -270,7 +272,7 @@ JS = (
             note.textContent = msg;
             wrap.appendChild(note);
             if (res.applied) wrap.classList.add('applied');
-          });
+          }).catch(function() { CCAction.release(btn); });
         });
       });
     }

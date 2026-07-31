@@ -432,7 +432,7 @@ JS = r"""
       btn.addEventListener('click', function() {
         var id = btn.getAttribute('data-cmt-id');
         var action = btn.getAttribute('data-cmt-action');
-        updateComment(id, action);
+        updateComment(id, action, btn);
       });
     });
   }
@@ -553,7 +553,8 @@ JS = r"""
     });
   }
 
-  function updateComment(id, status) {
+  function updateComment(id, status, btn) {
+    CCAction.busy(btn);
     fetch(SERVER_URL + '/comments/' + id, {
       method: 'PATCH',
       headers: MUTATION_HEADERS,
@@ -565,6 +566,7 @@ JS = r"""
       renderList();
       renderPins();
     }).catch(function() {
+      CCAction.release(btn);
       hint('Server unreachable — cannot update.');
     });
   }

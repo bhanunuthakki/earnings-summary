@@ -38,6 +38,7 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import controls_css, ticker_label
 from ui.tokens import palette_css
@@ -567,8 +568,7 @@ _JS = """
       proposed_rationale: String(fields.get('proposed_rationale') || '').trim() || null
     };
     if (amount) payload.proposed_amount_usd = Number(amount);
-    submit.disabled = true;
-    submit.textContent = 'Saving...';
+    CCAction.busy(submit, 'Saving...');
     error.hidden = true;
     var endpoint = groupId
       ? ('/api/decision-draft-groups/' + groupId + '/correct')
@@ -578,14 +578,12 @@ _JS = """
     }).then(function (r) {
       return r.json().then(function (body) { return { r: r, body: body }; });
     }).then(function (res) {
-      if (res.r.ok) { card.remove(); return; }
-      submit.disabled = false;
-      submit.textContent = 'Save correction';
+      if (res.r.ok) { CCAction.leave(card); return; }
+      CCAction.release(submit);
       error.textContent = res.body.error || 'Correction failed.';
       error.hidden = false;
     }).catch(function () {
-      submit.disabled = false;
-      submit.textContent = 'Save correction';
+      CCAction.release(submit);
       error.textContent = 'Correction failed.';
       error.hidden = false;
     });
@@ -604,42 +602,39 @@ _JS = """
       var artifactId = dispositionCard.getAttribute('data-card-artifact-id');
       var disposition = dispositionBtn.getAttribute('data-card-disposition');
       var buttons = dispositionCard.querySelectorAll('[data-card-disposition]');
-      buttons.forEach(function (button) { button.disabled = true; });
-      dispositionBtn.textContent = '...';
+      buttons.forEach(function (button) { CCAction.busy(button); });
+      CCAction.busy(dispositionBtn, '...');
+      function releaseDisposition() {
+        buttons.forEach(function (button) { CCAction.release(button); });
+      }
       fetch('/api/research/card/' + artifactId + '/' + disposition, {
         method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
       }).then(function (r) {
-        if (r.ok) { dispositionCard.remove(); }
-        else {
-          buttons.forEach(function (button) { button.disabled = false; });
-          dispositionBtn.textContent = disposition.charAt(0).toUpperCase() + disposition.slice(1);
-        }
-      }).catch(function () {
-        buttons.forEach(function (button) { button.disabled = false; });
-        dispositionBtn.textContent = disposition.charAt(0).toUpperCase() + disposition.slice(1);
-      });
+        if (r.ok) { CCAction.leave(dispositionCard); }
+        else { releaseDisposition(); }
+      }).catch(releaseDisposition);
       return;
     }
     var dismissBtn = ev.target.closest('[data-mi-dismiss-ping]');
     if (dismissBtn) {
       var pingId = dismissBtn.getAttribute('data-mi-dismiss-ping');
-      dismissBtn.disabled = true;
-      dismissBtn.textContent = '...';
+      CCAction.busy(dismissBtn, '...');
       fetch('/api/senior-partner-brief/dismiss-item/' + pingId, { method: 'POST' })
         .then(function (r) { return r.json().then(function (body) { return { r: r, body: body }; }); })
         .then(function (res) {
           var card = dismissBtn.closest('.mi-card');
           if (res.r.ok) {
-            if (card) { card.style.opacity = '0.4'; }
-            dismissBtn.textContent = res.body.muted_class
+            // Receipt beat (what happened, visibly) before the card leaves —
+            // the ledger packet-walk pacing.
+            CCAction.receipt(dismissBtn, res.body.muted_class
               ? ('Muted ' + res.body.muted_class)
-              : 'Dismissed';
+              : 'Dismissed');
+            if (card) { setTimeout(function () { CCAction.leave(card); }, 1100); }
           } else {
-            dismissBtn.disabled = false;
-            dismissBtn.textContent = 'Dismiss';
+            CCAction.release(dismissBtn);
           }
         })
-        .catch(function () { dismissBtn.disabled = false; dismissBtn.textContent = 'Dismiss'; });
+        .catch(function () { CCAction.release(dismissBtn); });
       return;
     }
     var btn = ev.target.closest('[data-mi-act]');
@@ -659,16 +654,15 @@ _JS = """
       }
       return;
     }
-    btn.disabled = true;
-    btn.textContent = '...';
+    CCAction.busy(btn, '...');
     var endpoint = groupId
       ? ('/api/decision-draft-groups/' + groupId + '/' + act)
       : ('/api/decision-drafts/' + id + '/' + act);
     fetch(endpoint, {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
     }).then(function (r) {
-      if (r.ok) { card.remove(); } else { btn.disabled = false; }
-    }).catch(function () { btn.disabled = false; });
+      if (r.ok) { CCAction.leave(card); } else { CCAction.release(btn); }
+    }).catch(function () { CCAction.release(btn); });
   });
 })();
 </script>
@@ -678,7 +672,12 @@ _JS = """
 def render_mobile_inbox(db_path: Path) -> str:
     """The full standalone mobile page. Composes the five sections above; a
     single section's read failure never blanks the rest (each is isolated)."""
-    style = f"<style>{palette_css('paper')}</style><style>{controls_css('paper')}</style>{_STYLE}"
+    # Standalone document (not the shell): the CCAction primitive rides along
+    # explicitly, same as palette + controls.
+    style = (
+        f"<style>{palette_css('paper')}</style><style>{controls_css('paper')}</style>"
+        f"<style>{CC_ACTION_CSS}</style>{_STYLE}"
+    )
     body = (
         '<h1 class="mi-h1">Inbox</h1>'
         '<section class="mi-sec"><h2 class="mi-sec-h">Allocation decision</h2>'
@@ -692,7 +691,8 @@ def render_mobile_inbox(db_path: Path) -> str:
         '<section class="mi-sec"><h2 class="mi-sec-h">Recent activity</h2>'
         f"{_inbox_stream_section(db_path)}</section>"
     )
-    return f"<!doctype html><html><head>{_HEAD}{style}</head><body>{body}{_JS}</body></html>"
+    scripts = f"<script>{CC_ACTION_JS}</script>{_JS}"
+    return f"<!doctype html><html><head>{_HEAD}{style}</head><body>{body}{scripts}</body></html>"
 
 
 __all__ = ["render_mobile_inbox"]
