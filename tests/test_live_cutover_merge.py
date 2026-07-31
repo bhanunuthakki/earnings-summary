@@ -14,6 +14,7 @@ from provenance.live_cutover_merge import (
     apply_live_cutover_merge,
     plan_live_cutover_merge,
 )
+from schema_compat import expected_head
 
 _AUTHORITY_TABLES = cutover.GOVERNED_TABLES_0259 | cutover.OPERATIONAL_TABLES_0259
 
@@ -89,7 +90,10 @@ def test_plan_is_content_bound_and_excludes_governed_substrate(tmp_path: Path) -
     assert len(plan.plan_sha256) == 64
 
 
-def test_apply_preserves_live_operations_and_governed_evidence(tmp_path: Path) -> None:
+def test_apply_preserves_live_operations_and_governed_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     live = tmp_path / "live.db"
     governed = tmp_path / "governed.db"
     destination = tmp_path / "candidate.db"
@@ -104,6 +108,29 @@ def test_apply_preserves_live_operations_and_governed_evidence(tmp_path: Path) -
         evidence_rows=((1, "sealed"),),
     )
     plan = plan_live_cutover_merge(live, governed)
+
+    original_copy = cast(
+        "Callable[[Path, Path], None]",
+        getattr(cutover, "_copy_database"),
+    )
+
+    def copy_and_stamp_current_head(source: Path, destination_path: Path) -> None:
+        original_copy(source, destination_path)
+        connection = sqlite3.connect(destination_path)
+        try:
+            # Full-schema migration coverage lives in the 0261 round-trip tests.
+            # This minimal merge fixture models the operational migration seam:
+            # immutable authority inputs remain at 0260, then the copied
+            # candidate is stamped to the real checkout head before preflight.
+            connection.execute(
+                "UPDATE alembic_version SET version_num = ?",
+                (expected_head(),),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    monkeypatch.setattr(cutover, "_copy_database", copy_and_stamp_current_head)
 
     receipt = apply_live_cutover_merge(
         live,
