@@ -43,7 +43,7 @@ button { transition: color var(--transition), border-color var(--transition),
 .l1-shell {
   max-width: 1180px;
   margin: 0 auto;
-  padding: 28px var(--pad-x) 64px var(--pad-x);
+  padding: var(--sp-4) var(--pad-x) 40px var(--pad-x);
 }
 
 /* Header */

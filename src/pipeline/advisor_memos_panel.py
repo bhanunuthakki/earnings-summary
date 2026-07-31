@@ -578,14 +578,14 @@ _SOCRATIC_JS = r"""
 
 _SOCRATIC_PAGE_CSS = """
 * { box-sizing: border-box; }
-body { margin: 0; padding: 28px 24px 64px; font-family: var(--sans);
+body { margin: 0; padding: var(--sp-4) 24px 40px; font-family: var(--sans);
   background: var(--bg); color: var(--fg); line-height: 1.55; font-size: var(--fs-body); }
 main { max-width: 860px; margin: 0 auto; }
 h1 { font-size: var(--fs-display); margin: 0 0 4px; }
 h2 { font-size: var(--fs-title); margin: 0 0 6px; }
 .panel { background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 18px 20px; margin-bottom: 24px; }
-.panel .sub { color: var(--muted); font-size: var(--fs-caption); margin: 0 0 14px; }
+  border-radius: var(--radius); padding: 14px 16px; margin-bottom: var(--sp-4); }
+.panel .sub { color: var(--muted); font-size: var(--fs-caption); margin: 0 0 10px; }
 .muted { color: var(--muted); }
 """
 

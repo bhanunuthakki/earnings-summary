@@ -742,18 +742,18 @@ _PAGE_HEAD = (
   body {{ margin: 0; padding: 24px; font-family: var(--sans); background: var(--bg); color: var(--fg); line-height: 1.5; font-size: var(--fs-body); }}
   h1 {{ font-size: var(--fs-display); margin: 0 0 8px; font-weight: 600; }}
   h2 {{ font-size: var(--fs-title); margin: 0 0 6px; font-weight: 600; }}
-  .stamp {{ color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono); margin-bottom: 24px; }}
-  .panel {{ margin-bottom: 32px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }}
-  .panel-head {{ padding: 14px 20px; border-bottom: 1px solid var(--hairline); }}
+  .stamp {{ color: var(--muted); font-size: var(--fs-caption); font-family: var(--mono); margin-bottom: var(--sp-3); }}
+  .panel {{ margin-bottom: var(--sp-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }}
+  .panel-head {{ padding: 10px 16px; border-bottom: 1px solid var(--hairline); }}
   .panel-head h2 {{ margin: 0; }}
   .panel-head .sub {{ margin: 4px 0 0; }}
-  .panel-body {{ padding: 18px 20px; }}
-  .panel-foot {{ padding: 12px 20px; border-top: 1px solid var(--hairline); background: var(--paper); }}
-  .panel .sub {{ color: var(--muted); font-size: var(--fs-caption); margin: 0 0 16px; }}
+  .panel-body {{ padding: 14px 16px; }}
+  .panel-foot {{ padding: 10px 16px; border-top: 1px solid var(--hairline); background: var(--paper); }}
+  .panel .sub {{ color: var(--muted); font-size: var(--fs-caption); margin: 0 0 10px; }}
   .muted {{ color: var(--muted); }}
   table {{ width: 100%; border-collapse: collapse; font-size: var(--fs-body); font-variant-numeric: tabular-nums; }}
-  th {{ text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }}
-  td {{ padding: 8px 10px; border-bottom: 1px solid var(--hairline); vertical-align: top; }}
+  th {{ text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }}
+  td {{ padding: 6px 10px; border-bottom: 1px solid var(--hairline); vertical-align: top; }}
   tbody tr:hover td {{ background: var(--paper); }}
   td.num {{ text-align: right; }}
   td.muted {{ color: var(--muted); }}
@@ -839,7 +839,7 @@ _PAGE_HEAD = (
   .budget-footer {{ margin-top: 12px; font-size: var(--fs-body); color: var(--fg-soft); }}
   .budget-footer strong {{ color: var(--fg); }}
   /* Tier coverage strip */
-  .tier-strip {{ background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 22px; font-size: var(--fs-body); display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }}
+  .tier-strip {{ background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 14px; margin-bottom: var(--sp-4); font-size: var(--fs-body); display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }}
   .tier-strip-label {{ color: var(--muted); font-size: var(--fs-caption); text-transform: uppercase; letter-spacing: 0.06em; margin-right: 8px; }}
   a.k-chip {{ text-decoration: none; }}
   .tier-stale-count {{ color: var(--bad); font-weight: 600; }}
