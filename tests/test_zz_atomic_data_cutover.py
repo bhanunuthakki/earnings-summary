@@ -170,6 +170,34 @@ def test_dry_run_is_strictly_read_only(tmp_path: Path) -> None:
     assert not (live.parent / ".job_locks").exists()
 
 
+def test_dry_run_verifies_clean_wal_candidate_without_creating_sidecars(
+    tmp_path: Path,
+) -> None:
+    request, _live, candidate, rollback, failed_candidate = _request(
+        tmp_path,
+        mode=ActivationMode.DRY_RUN,
+    )
+    connection = sqlite3.connect(candidate)
+    try:
+        assert connection.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    finally:
+        connection.close()
+    for suffix in ("-wal", "-shm", "-journal"):
+        assert not Path(f"{candidate}{suffix}").exists()
+    candidate_before = candidate.read_bytes()
+    request = request.model_copy(update={"expected_candidate_sha256": _sha256(candidate)})
+
+    receipt = activate_data_cutover(request)
+
+    assert receipt.status == "ready"
+    assert candidate.read_bytes() == candidate_before
+    for suffix in ("-wal", "-shm", "-journal"):
+        assert not Path(f"{candidate}{suffix}").exists()
+    assert not rollback.exists()
+    assert not failed_candidate.exists()
+
+
 def test_refuses_stale_hash_before_mutation(tmp_path: Path) -> None:
     request, live, candidate, rollback, _failed_candidate = _request(
         tmp_path,

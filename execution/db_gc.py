@@ -77,12 +77,12 @@ from pydantic import BaseModel, Field
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from clock import now_naive_utc  # noqa: E402
-from pipeline.validation_issue_store import issue_fingerprint  # noqa: E402
-from schema_compat import require_current_for_write  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+import sqlite3
 
-import sqlite3  # noqa: E402
+from clock import now_naive_utc
+from pipeline.validation_issue_store import issue_fingerprint
+from schema_compat import require_current_for_write
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 DEFAULT_DB = Path(__file__).resolve().parents[1] / "data" / "portfolio.db"
 ARCHIVE_NAME = "portfolio_gc_archive.db"

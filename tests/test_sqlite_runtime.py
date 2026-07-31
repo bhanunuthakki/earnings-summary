@@ -82,6 +82,36 @@ def test_read_only_role_never_creates_or_mutates_database(tmp_path: Path) -> Non
         reader.close()
 
 
+def test_quiesced_immutable_reader_does_not_create_wal_sidecars(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "portfolio.db"
+    writer = sqlite3.connect(path)
+    try:
+        writer.execute("CREATE TABLE sample (id INTEGER PRIMARY KEY)")
+        writer.execute("INSERT INTO sample VALUES (1)")
+        writer.commit()
+        assert writer.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        writer.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    finally:
+        writer.close()
+    for suffix in ("-wal", "-shm", "-journal"):
+        assert not Path(f"{path}{suffix}").exists()
+
+    reader = connect_sqlite(
+        path,
+        role=SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY,
+    )
+    try:
+        assert reader.execute("SELECT id FROM sample").fetchone()[0] == 1
+        with pytest.raises(sqlite3.OperationalError):
+            reader.execute("INSERT INTO sample VALUES (2)")
+    finally:
+        reader.close()
+    for suffix in ("-wal", "-shm", "-journal"):
+        assert not Path(f"{path}{suffix}").exists()
+
+
 def test_snapshot_destination_retains_default_journal_policy(
     tmp_path: Path,
 ) -> None:
