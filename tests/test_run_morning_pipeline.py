@@ -44,6 +44,7 @@ RISK_SNAPSHOT_SCRIPT = "refresh_portfolio_risk_snapshot.py"
 WEALTH_CONTEXT_SCRIPT = "refresh_wealth_context_snapshot.py"
 TRIGGERS_SCRIPT = "run_triggers.py"
 STANDUP_SCRIPT = "run_standup.py"
+PRE_ER_BRIEF_SCRIPT = "generate_pre_earnings_briefs.py"
 FEED_SCRIPT = "build_alert_feed.py"
 VALIDATE_SCRIPT = "run_validation_engine.py"
 
@@ -164,6 +165,7 @@ def test_all_stages_succeed(
         WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
+        PRE_ER_BRIEF_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]
@@ -222,6 +224,7 @@ def test_stage1_failure_still_runs_feed(
         WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
+        PRE_ER_BRIEF_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]
@@ -259,6 +262,7 @@ def test_feed_failure_still_runs_validation(
         WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
+        PRE_ER_BRIEF_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]
@@ -316,6 +320,7 @@ def test_all_stages_fail_exit_code_counts_failures(
         WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
+        PRE_ER_BRIEF_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]
@@ -373,6 +378,7 @@ def test_stage1_timeout_is_caught_and_renders_still_run(
         WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
+        PRE_ER_BRIEF_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]
@@ -523,6 +529,7 @@ def test_validation_halt_counts_as_failed_stage_after_renders(
         WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
+        PRE_ER_BRIEF_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]
@@ -558,6 +565,7 @@ def test_skip_validation_removes_only_stage3(
         WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
+        PRE_ER_BRIEF_SCRIPT,
         FEED_SCRIPT,
     ]
     assert VALIDATE_SCRIPT not in fake.scripts
@@ -769,6 +777,7 @@ def test_skip_news_removes_only_stage0(
         WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
+        PRE_ER_BRIEF_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]
@@ -820,6 +829,7 @@ def test_news_failure_does_not_stop_triggers(
         WEALTH_CONTEXT_SCRIPT,
         TRIGGERS_SCRIPT,
         STANDUP_SCRIPT,
+        PRE_ER_BRIEF_SCRIPT,
         FEED_SCRIPT,
         VALIDATE_SCRIPT,
     ]

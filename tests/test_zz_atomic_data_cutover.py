@@ -26,7 +26,7 @@ from provenance.atomic_cutover import (
     quiescence_payload_sha256,
 )
 
-HEAD = "0259_source_definition_identity"
+HEAD = "0260_pre_earnings_brief_plumbing"
 
 
 class _VerifyDatabase(Protocol):

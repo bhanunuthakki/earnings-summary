@@ -2117,9 +2117,16 @@ def render_earnings_prep_peek(db_path: Path, repo_root: Path, ticker: str) -> st
             return None
         header = _prep_header(conn, repo_root, t)
         valuation = _prep_valuation(conn, t)
+        try:
+            from expected_earnings import upcoming_by_ticker
+
+            next_er = upcoming_by_ticker(conn, datetime.now(UTC).date()).get(t)
+        except Exception:
+            next_er = None
     finally:
         conn.close()
 
+    brief = _prep_brief_block(db_path, t, next_er.isoformat() if next_er else None)
     watch = _prep_watch_items(db_path, t)
     ledger = _prep_ledger_notes(db_path, t)
 
@@ -2134,8 +2141,38 @@ def render_earnings_prep_peek(db_path: Path, repo_root: Path, ticker: str) -> st
         f'<a href="/#holding={escape(t, quote=True)}">open the holding →</a></div>'
     )
     return (
-        f'<div class="cc-prep">{header}{watch}{ledger}{valuation}</div>{foot}'
+        f'<div class="cc-prep">{header}{brief}{watch}{ledger}{valuation}</div>{foot}'
         f"<style>{_PREP_CSS}</style>"
+    )
+
+
+def _prep_brief_block(db_path: Path, t: str, er_iso: str | None) -> str:
+    """The pre-generated pre-earnings brief (owner ruling 2026-07-31), served
+    instantly when one exists for THIS upcoming ER date — keyed exactly the
+    way the stage-1c generator persisted it, so a brief for a past quarter
+    can never masquerade as current. Absent (no calendar date, no artifact,
+    pre-0260 DB) the peek simply keeps its deterministic assembly."""
+    if not er_iso:
+        return ""
+    try:
+        from earnings_brief import PURPOSE as _BRIEF_PURPOSE
+        from llm_artifact_store import read_current
+
+        art = read_current(ticker=t, purpose=_BRIEF_PURPOSE, fiscal_period=er_iso, db_path=db_path)
+    except Exception:
+        return ""
+    if art is None or not (art.content_md or "").strip():
+        return ""
+    stamp = ""
+    try:
+        stamp = art.generated_at.date().isoformat()
+    except Exception:
+        stamp = ""
+    receipt_bits = [b for b in (f"generated {stamp}" if stamp else "", f"for ER {er_iso}") if b]
+    return (
+        '<div class="prep-sec"><h4>Pre-earnings brief</h4>'
+        f'<div class="synthesis-body">{render_prose((art.content_md or "")[:20000])}</div>'
+        f'<p class="muted">{escape(" · ".join(receipt_bits))}</p></div>'
     )
 
 

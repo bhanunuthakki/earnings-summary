@@ -185,6 +185,12 @@ _WEALTH_CONTEXT_TIMEOUT_S = 120
 # deliveries/day, but each is a streamed `claude -p` answer plus ≤2 follow-ups
 # plus the judge — 15 min covers a morning where several names trip at once.
 _STANDUP_TIMEOUT_S = 900
+# Stage 1c (pre-earnings briefs, 2026-07-31 owner ruling): ≤1 Sonnet call per
+# in-window name (portfolio + opted-in evaluation names reporting within 7d;
+# artifact input-hash cache + T-1 refresh gate bound each name to ≤2 calls per
+# earnings cycle). A busy week is ~3-5 calls at ~60-90s each; 10 min is
+# generous. Budget 'skip' mode (0260) means a blown cap exits fast and clean.
+_PRE_ER_BRIEF_TIMEOUT_S = 600
 
 # Canonical stage keys, in run order. Used to build the final summary so a
 # skipped stage still appears (as "skipped") even though it never ran.
@@ -204,6 +210,7 @@ STAGE_RISK_SNAPSHOT = "stage_0i_risk_snapshot"
 STAGE_WEALTH_CONTEXT = "stage_0j_wealth_context"
 STAGE_TRIGGERS = "stage_1_triggers"
 STAGE_STANDUP = "stage_1b_standup"
+STAGE_PRE_ER_BRIEF = "stage_1c_pre_earnings_briefs"
 STAGE_FEED = "stage_2_feed"
 STAGE_VALIDATE = "stage_3_validate"
 _ALL_STAGE_KEYS = (
@@ -223,6 +230,7 @@ _ALL_STAGE_KEYS = (
     STAGE_WEALTH_CONTEXT,
     STAGE_TRIGGERS,
     STAGE_STANDUP,
+    STAGE_PRE_ER_BRIEF,
     STAGE_FEED,
     STAGE_VALIDATE,
 )
@@ -622,6 +630,30 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
                 )
             )
 
+    # Stage 1c -- pre-earnings briefs (owner ruling 2026-07-31: the one
+    # artifact allowed to pre-generate). Runs AFTER triggers/standup so the
+    # brief's tone + KPI context reflects this morning's classification.
+    # Idempotent per (ticker, ER date) via the llm_artifacts input hash; the
+    # generator applies the per-item degrade pattern internally and its
+    # budget is 'skip' mode, so a lean-quota morning costs zero calls.
+    # Takes --db-path only (single-operator scope, cost governed by the
+    # purpose budget rather than --max-cost-usd). Skipped with triggers
+    # (re-render-only path) and by --skip-pre-earnings-briefs.
+    if not args.skip_triggers and not args.skip_pre_earnings_briefs:
+        brief_db_args = ["--db-path", str(args.db_path)] if args.db_path is not None else []
+        stages.append(
+            _Stage(
+                key=STAGE_PRE_ER_BRIEF,
+                label="Stage 1c - pre-earnings briefs (generate_pre_earnings_briefs.py)",
+                argv=[
+                    py,
+                    str(exec_dir / "generate_pre_earnings_briefs.py"),
+                    *brief_db_args,
+                ],
+                timeout_s=_PRE_ER_BRIEF_TIMEOUT_S,
+            )
+        )
+
     stages.append(
         _Stage(
             key=STAGE_FEED,
@@ -851,6 +883,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "validation engine and makes a HALT-severity result a failed stage "
         "(non-zero pipeline exit) so monitoring catches egregious data; skip it "
         "to run the pipeline without the data check.",
+    )
+    parser.add_argument(
+        "--skip-pre-earnings-briefs",
+        action="store_true",
+        help="Skip stage 1c (pre-earnings brief generation). The stage is "
+        "already a no-op outside each name's 7-day pre-ER window and is "
+        "idempotent inside it; skip it to run a brief-free pipeline.",
     )
     parser.add_argument(
         "--force",

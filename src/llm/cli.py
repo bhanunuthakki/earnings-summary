@@ -360,6 +360,15 @@ LLM_MODELS: dict[str, str] = {
     # path (cached in llm_artifacts, keyed by a mix+thesis input hash; see
     # that module's compute_input_sha).
     "business_factor_taxonomy": DEFAULT_MODEL,
+    # Pre-earnings brief (src/earnings_brief.py, 2026-07-31 owner ruling
+    # relaxing D2 for this one artifact): one narrative brief per (ticker,
+    # expected ER date), grounded in the composed thesis/bear/IR anchors,
+    # tier-1 KPI deltas, watch items, queued prep notes, tone shifts, and
+    # retrieved evidence. Same long-context-analytical-writing shape as
+    # transcript_summary/event_brief -> Sonnet tier; Opus stays reserved for
+    # alert-firing judgment. ≤2 calls per name per earnings cycle (artifact
+    # input-hash cache + T-1 refresh gate), budget 'skip' mode ($5/mo, 0260).
+    "pre_earnings_brief": DEFAULT_MODEL,
     # Long-context analytical writing
     "transcript_summary": DEFAULT_MODEL,
     "press_release_summary": DEFAULT_MODEL,
