@@ -79,6 +79,12 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+# The repo root too, so the post-flight dead-man check can import
+# ``execution.verify_daily_chain`` (a namespace package — ``execution/`` has no
+# ``__init__.py``). Without it that import raises ModuleNotFoundError into a
+# swallowing ``except``, and the artifact every external monitor keys off is
+# silently never written.
+sys.path.insert(0, str(PROJECT_ROOT))
 
 from llm import tracectx  # noqa: E402
 from pipeline.run_accounting import (  # noqa: E402
@@ -1003,7 +1009,13 @@ def main(argv: list[str] | None = None) -> int:
 
         _vdc_main(["--quiet", "--db-path", str(db_path)])
     except Exception as exc:
-        sys.stderr.write(f"WARNING: verify_daily_chain post-flight failed: {exc}\n")
+        # Deliberately non-fatal: a monitoring artifact must not fail the run
+        # that produced good data. But it gets the same "!!!" marker a failed
+        # stage does — the previous bare WARNING let a permanently broken
+        # import (and a never-written artifact) read as routine log noise.
+        sys.stderr.write(
+            f"\n!!! [post_flight_verify_daily_chain] FAILED - {type(exc).__name__}: {exc}\n"
+        )
 
     # Exit code = number of failed stages (skipped stages are not failures and
     # were never added to `results`). Reported only after all stages ran.

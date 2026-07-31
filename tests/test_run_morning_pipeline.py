@@ -20,12 +20,15 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import cast
 
 import pytest
 
 from execution import run_morning_pipeline
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # Script basenames in canonical run order, used to assert dispatch order.
 PREFLIGHT_SCRIPT = "validate_environment.py"
@@ -1063,3 +1066,41 @@ def _flag_value(argv: list[str], flag: str) -> str | None:
         if tok == flag:
             return argv[i + 1]
     return None
+
+
+def test_post_flight_dead_man_import_resolves_under_the_scripts_own_syspath(
+    tmp_path: Path,
+) -> None:
+    """The post-flight dead-man check must be importable as cron actually runs it.
+
+    Regression guard for a silent-degradation bug: the orchestrator imports
+    ``execution.verify_daily_chain`` inside a swallowing ``except``, but only
+    added ``<root>/src`` to ``sys.path``. Under pytest the repo root is already
+    importable, so the in-process tests passed while every real
+    ``python execution\run_morning_pipeline.py`` cron run raised
+    ModuleNotFoundError into that ``except`` — and
+    ``.tmp/daily_chain_status.json``, which the shell's System status dot and
+    external monitors key off, was never written at all.
+
+    So this must NOT rely on pytest's sys.path. It runs the module's top-level
+    bootstrap in a fresh interpreter from a neutral cwd, then asserts the
+    post-flight import target resolves from that alone.
+    """
+    script = PROJECT_ROOT / "execution" / "run_morning_pipeline.py"
+    probe = (
+        "import runpy, sys\n"
+        # run_name != '__main__' so the top-level sys.path setup executes but
+        # main() does not.
+        f"runpy.run_path(r'{script}', run_name='_bootstrap_probe')\n"
+        "import execution.verify_daily_chain as vdc\n"
+        "assert callable(vdc.main)\n"
+        "print('IMPORT_OK')\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=tmp_path,  # neutral cwd: repo root must not be implicitly importable
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, f"post-flight import broken:\n{proc.stderr}"
+    assert "IMPORT_OK" in proc.stdout
