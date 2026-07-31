@@ -1524,3 +1524,17 @@ def test_backfill_warning_names_the_observed_boundary_and_the_bias() -> None:
 def test_backfill_warning_handles_a_fully_modeled_window() -> None:
     html = _backfill_warning(_perf_series(unreliable=True, observed=None))
     assert "No part of this window" in html
+
+
+def test_backfill_warning_does_not_claim_survivorship() -> None:
+    # An earlier version of this copy said the walk-back "can only see
+    # positions you still hold". That is false: it replays transactions
+    # backward and DOES restore positions closed inside the covered span —
+    # 33 reconstructed at 2024-01-01 against 12 held today on the live book.
+    # The real limit is per-account transaction COVERAGE, and the dominant
+    # error is contributions made before a feed started, not vanished losers.
+    html = _backfill_warning(_perf_series(unreliable=True, observed="2026-05-09"))
+    assert "only see positions you still hold" not in html
+    assert "exited losers" not in html
+    assert "transaction history reaches" in html
+    assert "deposits into that account are invisible" in html

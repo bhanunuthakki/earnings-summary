@@ -713,17 +713,33 @@ def _performance_section(
 def _backfill_warning(perf: PerformanceSeries) -> str:
     """The "this window is modeled, not measured" banner.
 
-    Named the specific defect rather than hedging both ways. The old copy —
-    "the window start value looks incomplete … may overstate or understate
-    relative performance" — was doubly unhelpful: it never actually rendered
-    (the tracker's guard only fired when the reconstructed start had collapsed
-    below 25% of the end, which never happened), and its both-directions
-    hedge understated the problem. The bias has a direction. The walk-back
-    anchors on TODAY's holdings and reverses only the transactions on file, so
-    a position exited before its account's feed began never existed in the
-    model and contributions made before then are invisible and land in the
-    numerator as gains. Both errors flatter the portfolio. On 2026-07-30 a
-    2024-01-01 window read +85.5% against SPY's +57.5% on that basis alone.
+    Names the actual defect. Two earlier versions of this copy were wrong in
+    different directions and both are worth recording.
+
+    The original — "the window start value looks incomplete … may overstate or
+    understate relative performance" — never rendered at all, because the
+    tracker's guard only fired when the reconstructed start had collapsed below
+    25% of the end, which never happened on a real window.
+
+    The replacement over-corrected: it said the walk-back "can only see
+    positions you still hold", implying survivorship bias. That is NOT what the
+    walk-back does. It replays transactions backward from the anchor snapshot,
+    reversing every buy, sell and transfer on file, so a position fully exited
+    inside the covered span IS resurrected into the historical book. Measured
+    on the live database at 2024-01-01 it reconstructed 33 positions against
+    the 12 held today, including XLV, CPNG, AMZN, SOFI and FSLR — all long
+    gone. Attributing the inflation to vanished losers was simply false.
+
+    The real limit is COVERAGE, and it is per-account. Each account's
+    transaction history begins when that account was linked, not when the
+    window opens. Before its own feed starts, an account's positions freeze at
+    their earliest reconstructed state and — the part that actually moves the
+    number — the contributions that built it are invisible. Money deposited
+    but unseen is arithmetically indistinguishable from investment gain, so the
+    bias is one-directional and upward. On 2026-07-30 the recorded net flow was
+    +$4,867 for all of 2024 and *negative* $8,326 for 2025 on a book that grew
+    ~$150k that year; a 365-day window reporting +21.6% falls to ~7% if the
+    true figure was $75k higher, and under water at $150k.
     """
     if not perf.backfill_start_unreliable:
         return ""
@@ -735,11 +751,13 @@ def _backfill_warning(perf: PerformanceSeries) -> str:
     )
     return (
         '<p class="muted">⚠ <strong>This window is modeled, not measured.</strong> '
-        f"{span}; earlier values are reconstructed by walking transactions backward from "
-        "today's holdings. That reconstruction can only see positions you still hold and "
-        "contributions the feed recorded, so exited losers vanish and untracked deposits "
-        "count as gains — the reported return is biased <em>upward</em>, often by a lot. "
-        "Shorten the window to the observed range for a number you can act on.</p>"
+        f"{span}. Earlier values are rebuilt by replaying your transactions backward, which "
+        "reconstructs trades and closed positions faithfully <em>as far back as each "
+        "account's transaction history reaches</em> — and that begins when the account was "
+        "linked, not when the window opens. Before then, deposits into that account are "
+        "invisible, and money you added is indistinguishable from money you made, so the "
+        "return is biased <em>upward</em>. Shorten the window to the observed range for a "
+        "number you can act on.</p>"
     )
 
 
