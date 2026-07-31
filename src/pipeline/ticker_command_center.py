@@ -369,7 +369,7 @@ def _position_strip(repo_root: Path, t: str) -> PositionStrip:
 
 def _tracker_url(t: str) -> str:
     base = os.environ.get("PORTFOLIO_TRACKER_URL", _DEFAULT_TRACKER_URL).rstrip("/")
-    return f"{base}/trade-analysis?ticker={t}"
+    return f"{base}/holdings?ticker={t}"
 
 
 # --------------------------------------------------------------------------- #

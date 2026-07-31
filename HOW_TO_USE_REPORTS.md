@@ -79,8 +79,8 @@ own ports) and link **read-only**:
   (shares / cost / value / unrealized P&L / last trade decision) read from the
   tracker's SQLite at `../portfolio-tracker/portfolio.db` (opened read-only),
   plus an **Open in Portfolio Tracker ↗** deep link to
-  `<PORTFOLIO_TRACKER_URL>/trade-analysis?ticker=<T>` (default
-  `http://localhost:5173`; the tracker pre-filters its table to the ticker).
+  `<PORTFOLIO_TRACKER_URL>/holdings?ticker=<T>` (default
+  `http://localhost:5173`; the tracker highlights and scrolls to the ticker).
   Set `PORTFOLIO_TRACKER_URL` if the tracker runs elsewhere.
 - **tracker → research** — the tracker reads this repo's DB for next-earnings +
   thesis status and links to the latest brief via its

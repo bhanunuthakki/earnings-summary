@@ -457,7 +457,7 @@ Budget gating is **DB, not env**: `llm_budgets`/`llm_budget_alerts` (migration 0
 | Report ↗ | click | new tab `GET /reports/<T>` (latest `*_workspace.html` via send_file) | 404 if never built; 400 bad ticker | P0 |
 | DCF ↓ | click | `GET /dcf/<T>`: 302 to linked Google Sheet if `dcf_defaults.gsheet_id` set, else streams `dcf/<T>.xlsx`, else latest dated `*_dcf.xlsx` | 404 when none exists | P1 |
 | Review | click | peek `GET /api/peek/review/<T>` (instant LLM-free pre-analysis: facts, mechanical read, tax, graded-sells base rate, escalate-to-full-LLM footer button); real href `/ticker/<T>` for middle-click | always 200; degrades tracker-offline/no-thesis | P0 |
-| Tracker ↗ | click | new tab `<tracker>/trade-analysis?ticker=T` | link absent only if tracker_url None (never — env default) | P2 |
+| Tracker ↗ | click | new tab `<tracker>/holdings?ticker=T` (matching row highlighted and scrolled into view) | link absent only if tracker_url None (never — env default) | P2 |
 | Ledger | click | `#musings` hash — shell lands on Ledger tab (doorway while sub-row suppressed) | — | P1 |
 | ⚙ Ops | click | Ops drawer + scrim un-hidden (slide-in-right) | Escape or scrim click or × closes; multiple opens idempotent | P0 |
 | ✎ Notes | click (`data-cc-notes-open`) | shell's SHARED notes drawer opens ticker-scoped (see next surface) | — | P0 |
