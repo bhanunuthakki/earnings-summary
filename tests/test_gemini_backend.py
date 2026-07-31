@@ -38,6 +38,14 @@ from llm import gemini_backend
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.fixture(autouse=True)
+def _bind_genai() -> None:
+    """The backend imports the Gemini SDK lazily (``_ensure_genai``); bind
+    ``gemini_backend.genai`` up front so the monkeypatches below have a real
+    module attribute to patch."""
+    gemini_backend._ensure_genai()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 

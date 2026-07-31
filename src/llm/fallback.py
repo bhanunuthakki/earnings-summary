@@ -18,19 +18,37 @@ from __future__ import annotations
 
 import logging
 import os
+import warnings
+from typing import Any
 
 # NOTE: `google.generativeai` is deprecated as of late 2025; Google's path forward
 # is `google-genai` with a different API (genai.Client / client.models.generate_content).
 # Migrate when convenient — the deprecated package still works and avoids forcing
 # users to re-install for the fallback path. See:
 # https://github.com/google-gemini/deprecated-generative-ai-python
-import warnings
-
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", FutureWarning)  # silence deprecation noise at import
-    import google.generativeai as genai
+#
+# The import is LAZY (_ensure_genai), not module-level: this module loads on the
+# boot-critical chain (llm.cli -> llm.ledger -> here), and importing google.*
+# runs google.api_core's check_python_version(), whose packages_distributions()
+# scan stats every file of every installed distribution (measured 43s+ per
+# process on this machine; hung comments_server boot for minutes, 2026-07-31).
+# Only an actual fallback attempt may pay that. Same pattern as
+# ``llm.gemini_backend._ensure_genai``.
+genai: Any = None  # the google.generativeai module, set by _ensure_genai()
 
 log = logging.getLogger(__name__)
+
+
+def _ensure_genai() -> None:
+    """Import the Gemini SDK on first use, binding the module global the
+    call path (and tests, via ``fb.genai``) reference."""
+    global genai
+    if genai is not None:
+        return
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)  # silence deprecation noise
+        import google.generativeai as _genai
+    genai = _genai
 
 # Gemini fallback model. Single Flash variant for both heavy (thesis tracker)
 # and light (intake classifier) workloads — quality is good enough for backup
@@ -145,6 +163,7 @@ def try_gemini_fallback(prompt: str, claude_error: Exception) -> str:
             "gemini_model": GEMINI_FALLBACK_MODEL,
         }
     )
+    _ensure_genai()
     genai.configure(api_key=api_key)
     model_obj = genai.GenerativeModel(GEMINI_FALLBACK_MODEL)
     # request_options={"timeout": ...} is the deprecated google-generativeai

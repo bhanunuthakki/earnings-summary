@@ -47,6 +47,7 @@ def test_gemini_fallback_supplies_a_positive_request_timeout(
 ) -> None:
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
     monkeypatch.delenv("LLM_FALLBACK_DISABLED", raising=False)
+    fb._ensure_genai()  # the SDK import is lazy; bind fb.genai before patching it
     monkeypatch.setattr(fb.genai, "configure", _noop)
     monkeypatch.setattr(fb.genai, "GenerativeModel", _RecordingModel)
     _RecordingModel.last_kwargs = None

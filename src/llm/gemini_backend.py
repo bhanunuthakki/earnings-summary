@@ -53,7 +53,7 @@ import re
 import time
 import warnings
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 from llm import cli as llm_cli
 from llm.ledger import record_llm_call
@@ -64,12 +64,32 @@ from llm.ledger import record_llm_call
 # Migrate when convenient — the deprecated package still works and matches
 # src/llm/fallback.py, which depends on the same package for the same reason.
 # See: https://github.com/google-gemini/deprecated-generative-ai-python
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", FutureWarning)
-    import google.generativeai as genai
-    from google.api_core import exceptions as google_exceptions
+#
+# The import is LAZY (_ensure_genai), not module-level: this module loads with
+# the llm package (llm/__init__.py re-exports call_gemini), which every boot
+# path and execution/ CLI imports — and importing google.* runs
+# google.api_core's check_python_version(), whose packages_distributions()
+# scan stats every file of every installed distribution (measured 43s+ per
+# process on this machine; hung comments_server boot for minutes, 2026-07-31).
+# Only an actual Gemini call may pay that.
+genai: Any = None  # the google.generativeai module, set by _ensure_genai()
+google_exceptions: Any = None  # google.api_core.exceptions, set by _ensure_genai()
 
 log = logging.getLogger(__name__)
+
+
+def _ensure_genai() -> None:
+    """Import the Gemini SDK on first use, binding the module globals the
+    call paths (and tests, via ``gemini_backend.genai``) reference."""
+    global genai, google_exceptions
+    if genai is not None:
+        return
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        import google.generativeai as _genai
+        from google.api_core import exceptions as _google_exceptions
+    genai = _genai
+    google_exceptions = _google_exceptions
 
 # Gemini API tiers for analytical writing (Pro) vs the short structured calls
 # that run on Haiku under the Claude backend (Flash). The tier derivation in
@@ -200,14 +220,10 @@ def _discover_api_flash_model() -> str | None:
     longer a reliable signal — the API's own catalog is the correct source of
     truth for what a given key can actually call.
     """
+    _ensure_genai()
     try:
-        # google.generativeai's stubs don't declare list_models (same known gap
-        # as genai.configure/GenerativeModel in src/llm/fallback.py) — cast at
-        # this boundary rather than let Unknown propagate downstream.
-        models = cast(
-            "list[object]",
-            genai.list_models(),  # pyright: ignore[reportPrivateImportUsage]
-        )
+        # Cast at this SDK boundary rather than let Any propagate downstream.
+        models = cast("list[object]", genai.list_models())
     except Exception as exc:
         log.warning({"event": "gemini_anneal_list_models_failed", "error": str(exc)[:200]})
         return None
@@ -332,6 +348,7 @@ def _classify_gemini_failure(exc: Exception) -> None:
     and stay on the operational path so the caller's failure policy (degrade
     to Claude, or raise for a forced backend="gemini" call) applies.
     """
+    _ensure_genai()
     if isinstance(exc, (google_exceptions.Unauthenticated, google_exceptions.PermissionDenied)):
         raise llm_cli.LLMSetupError(
             f"Gemini API key rejected ({type(exc).__name__}). {GEMINI_API_KEY_HINT}\n"
@@ -372,7 +389,8 @@ def call_gemini(
     llm_cli._enforce_budget_pre_call(purpose, force_budget_bypass=force_budget_bypass)
     _verify_gemini_setup_once()  # setup errors propagate
     assert _gemini_api_key is not None  # set by _verify_gemini_setup_once
-    genai.configure(api_key=_gemini_api_key)  # pyright: ignore[reportPrivateImportUsage]
+    _ensure_genai()
+    genai.configure(api_key=_gemini_api_key)
     resolved_model = model or gemini_model_for(purpose)
     resolved_timeout = timeout_seconds or GEMINI_BACKEND_TIMEOUT_SECONDS
     log.info(
@@ -399,7 +417,7 @@ def call_gemini(
         started_at = datetime.now(UTC)
         t0 = time.monotonic()
         try:
-            model_obj = genai.GenerativeModel(_try_model)  # pyright: ignore[reportPrivateImportUsage]
+            model_obj = genai.GenerativeModel(_try_model)
             response = model_obj.generate_content(
                 prompt, request_options={"timeout": resolved_timeout}
             )
