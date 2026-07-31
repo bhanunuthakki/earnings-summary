@@ -69,9 +69,7 @@ def test_health_console_is_brief_plus_two_chip_cards(tmp_path: Path, probe_down:
     assert "Whole-book macro stress" not in html
 
 
-def test_health_console_cut_sections_became_ask_doorways(
-    tmp_path: Path, probe_down: None
-) -> None:
+def test_health_console_cut_sections_became_ask_doorways(tmp_path: Path, probe_down: None) -> None:
     """Red Team and the macro-stress lens are on-demand Ask questions now
     (Law-2 data-ask-q doorways on the brief), not standing sections."""
     html = render_portfolio_health_panel(tmp_path / "missing.db")
@@ -300,9 +298,7 @@ def test_health_fragment_drawdown_degrades_without_tracker_or_snapshot(
     assert "Risk &amp; drawdown" in html  # the offline note, never a crash
 
 
-def test_health_fragment_crowding_and_tail_empty_states(
-    tmp_path: Path, probe_down: None
-) -> None:
+def test_health_fragment_crowding_and_tail_empty_states(tmp_path: Path, probe_down: None) -> None:
     crowding = pp.render_health_fragment(tmp_path / "missing.db", "crowding")
     assert "Holdings correlation &amp; crowding" in crowding
     tail = pp.render_health_fragment(tmp_path / "missing.db", "tail")

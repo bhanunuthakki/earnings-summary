@@ -164,7 +164,7 @@ def _health_card(anchor: str, question: str, tabs: tuple[tuple[str, str], ...]) 
     )
     return (
         f'<div class="console-sec hc-card" id="csec-{escape(anchor)}">'
-        f"<h2 class=\"hc-h\">{escape(question)}</h2>"
+        f'<h2 class="hc-h">{escape(question)}</h2>'
         f'<div class="hc-tabs">{chips}</div>{panes}</div>'
     )
 
