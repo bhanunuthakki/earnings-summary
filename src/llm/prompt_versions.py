@@ -70,7 +70,12 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # wraps). saydo/kpi prompts changed only via the anchor wrap.
     "earnings_tone_diff": "v2",
     "kpi_inflection_context": "v2",
-    "material_news_classification": "v2",
+    # material_news v3 (2026-07-30): event-type taxonomy (primary / results /
+    # commentary) + novelty framing — the v2 prompt scored topical relevance,
+    # so opinion pieces and post-earnings recaps about thesis-relevant topics
+    # fired as alerts (owner: "low quality/noise signals"). Commentary is now
+    # vetoed code-side regardless of score; relevance floor 0.6 → 0.7.
+    "material_news_classification": "v3",
     "saydo_due_context": "v2",
     # Pairwise backend judge (src/llm/backend_judge.py). Bump when the A/B judge
     # rubric is materially reworded so a re-grade of the same corpus is comparable

@@ -20,8 +20,11 @@ Two consequences fall out of that:
     the Protocol requires it to return an ``AlertDraft`` — so the filter must
     happen earlier. ``scan()`` classifies every recent headline in ONE batched
     LLM call, then emits a candidate *only* for stories scoring
-    ``relevance >= _RELEVANCE_THRESHOLD``. Immaterial stories never become
-    candidates, so the driver never fires them.
+    ``relevance >= _RELEVANCE_THRESHOLD`` **and** classified as new primary
+    information (``event_type`` primary/results — commentary, opinion pieces,
+    and recaps of already-reported events are vetoed regardless of score;
+    see the v3 taxonomy at ``_EVENT_PRIMARY``). Immaterial stories never
+    become candidates, so the driver never fires them.
 
 Cost is bounded: one batched call per ticker per run (up to
 ``_MAX_STORIES_PER_SCAN`` headlines), cached in ``llm_artifacts`` keyed on
@@ -105,7 +108,22 @@ _MAX_STORIES_PER_SCAN = 15
 
 # Relevance floor (0.0-1.0) at which a classified story becomes a candidate.
 # The LLM scores every headline; this code-side cutoff is the materiality veto.
-_RELEVANCE_THRESHOLD = 0.6
+# Raised 0.6 → 0.7 (2026-07-30, owner: "true needle-moving stuff, not random
+# noisy headlines") together with the event-type gate below.
+_RELEVANCE_THRESHOLD = 0.7
+
+# Event-type taxonomy (v3 classification contract). The signal-quality defect
+# this closes (owner walkthrough 2026-07-30): the v2 prompt scored TOPICAL
+# relevance, so an opinion piece *about* a thesis debate ("Is the CFO
+# transition slowing profitability?") or a recap of already-reported earnings
+# ("Stock rises on strong earnings") scored high — the topic was material even
+# though the story carried zero new information. v3 classifies what the story
+# IS before asking how much it matters; only new primary information can fire.
+_EVENT_PRIMARY = "primary"  # a new company/regulator/counterparty action
+_EVENT_RESULTS = "results"  # the earnings/KPI release or call itself
+_EVENT_COMMENTARY = "commentary"  # writing ABOUT the company: opinion/recap/price chatter
+# Code-side gate: commentary can NEVER become a candidate, whatever it scored.
+_ALERTABLE_EVENT_TYPES = frozenset({_EVENT_PRIMARY, _EVENT_RESULTS})
 
 # News-table column contract. No migration creates this table yet (see module
 # docstring); the names live here so a future news loader can align with a
@@ -137,12 +155,6 @@ _ARTIFACT_PURPOSE = "material_news_classification"
 # the central registry (the single bump-point). Bump the entry there when the
 # classification prompt body changes materially.
 _PROMPT_VERSION = prompt_version_for(_ARTIFACT_PURPOSE)
-
-# queued_actions.action_kind values this trigger emits. Material news is
-# informational — it never proposes a bear_append or sizing_update; the user
-# decides direction.
-_ACTION_THESIS_UPDATE = "thesis_update"
-_ACTION_EARNINGS_PREP = "earnings_prep_append"
 
 # Retry hint prepended to the user prompt on a second attempt when the first
 # response failed to parse as JSON. call_llm has no separate system-prompt
@@ -181,6 +193,10 @@ class _Score:
 
     relevance: float
     why_material: str
+    # v3: what the story IS (``_EVENT_*``). Entries whose classification lacked
+    # a recognizable event_type are normalized to commentary (fails closed —
+    # see ``_scores_from_payload``), so this is always one of the three values.
+    event_type: str = _EVENT_COMMENTARY
 
 
 # --------------------------------------------------------------------------
@@ -324,19 +340,48 @@ def _build_classification_prompt(ticker: str, anchor_block: str, stories: list[_
     )
 
     return (
-        f"You are screening recent news for a long-term investor in {ticker}.\n\n"
+        f"You are screening recent news for a long-term investor in {ticker}. "
+        "The investor runs their own earnings analysis and thesis reviews — this "
+        "screen exists ONLY to surface new primary information that moves the "
+        "thesis. A false positive costs attention; when in doubt, score low.\n\n"
         f"{framing}\n\n"
         f"Recent headlines (numbered, most recent first):\n{headlines_block}\n\n"
-        "For EACH numbered headline, score how material it is to the investment "
-        "thesis above (or to a long-term holder of the stock generally, if no "
-        "thesis was provided). Use 0.0 for noise / routine coverage / price "
-        "chatter and 1.0 for a development that directly bears on the thesis or "
-        "a tier-1 KPI.\n\n"
+        "For EACH numbered headline, first classify WHAT the story is, then "
+        "score how much it matters.\n\n"
+        "event_type — exactly one of:\n\n"
+        '* "primary" — a new company / counterparty / regulator ACTION reported '
+        "for the first time: M&A, a guidance change or withdrawal, an announced "
+        "executive change, a regulatory action or probe, a capital raise, a "
+        "buyback or dividend change, a major contract, customer, or product "
+        "event, a restructuring, litigation with real exposure.\n"
+        '* "results" — the company\'s OWN earnings/KPI release or earnings '
+        "call, as first reported.\n"
+        '* "commentary" — anything written ABOUT the company or its stock: '
+        "opinion and think-pieces, analyst takes and previews, recaps or "
+        'reactions to already-reported results, price-action stories ("shares '
+        'rise/fall on ..."), listicles and roundups, and re-reporting of an '
+        "event that was already public. A headline phrased as a question "
+        '("Is ...?", "Why ...", "What to know ...") is commentary. An opinion '
+        "piece about a CFO transition is NOT the CFO transition — the event was "
+        "news when announced; the think-piece about it is commentary.\n\n"
+        "relevance — 0.0-1.0: would this change a long-term holder's model "
+        "inputs, or confirm/falsify a thesis pillar or tier-1 KPI?\n\n"
+        '* "commentary" is never material, however thesis-adjacent its topic. '
+        "Score it 0.0-0.2.\n"
+        '* "results": score by the stated surprise — a large beat or miss, a '
+        "guidance change, a KPI inflection named in the headline/snippet is "
+        "material; in-line results, and coverage of the stock's reaction, are "
+        "not.\n"
+        '* "primary": score by thesis impact. Routine events (10b5-1 sales, '
+        "small bolt-ons, conference appearances, minor product updates) stay "
+        "low.\n\n"
         "Return ONLY a JSON array with one object per headline, in this exact "
         "shape:\n"
         '[{"news_index": <int matching the number above>, '
+        '"event_type": "primary" | "results" | "commentary", '
         '"relevance": <float 0.0-1.0>, '
-        '"why_material": "<one sentence; for low scores, why it is routine>"}]'
+        '"why_material": "<one sentence; for low scores, why it is routine or '
+        'derivative>"}]'
         "\n\nOutput the JSON array and nothing else — no markdown fences, no "
         "commentary, no prefatory prose."
     )
@@ -415,8 +460,16 @@ def _scores_from_payload(payload: list[object], *, n_stories: int) -> dict[int, 
     lack a numeric relevance — a malformed entry is degraded output, not a hard
     error. ``bool`` is rejected explicitly for both index and relevance because
     it is an ``int`` subclass.
+
+    A missing/unrecognized ``event_type`` normalizes to commentary — failing
+    CLOSED (no alert) rather than open (the pre-v3 noise this gate exists to
+    stop). That degradation must not be silent: it is counted and logged loud
+    per batch, so a schema drift (the model stops emitting the field) reads as
+    ``material_news_event_type_missing`` in the pipeline log, not as a
+    mysteriously quiet news day.
     """
     out: dict[int, _Score] = {}
+    missing_event_type = 0
     for entry in payload:
         if not isinstance(entry, dict):
             continue
@@ -431,7 +484,27 @@ def _scores_from_payload(payload: list[object], *, n_stories: int) -> dict[int, 
             continue
         why = obj.get("why_material")
         why_str = why.strip() if isinstance(why, str) else ""
-        out[idx] = _Score(relevance=float(relevance), why_material=why_str)
+        raw_event = obj.get("event_type")
+        if isinstance(raw_event, str) and raw_event.strip().lower() in (
+            _EVENT_PRIMARY,
+            _EVENT_RESULTS,
+            _EVENT_COMMENTARY,
+        ):
+            event_type = raw_event.strip().lower()
+        else:
+            event_type = _EVENT_COMMENTARY
+            missing_event_type += 1
+        out[idx] = _Score(relevance=float(relevance), why_material=why_str, event_type=event_type)
+    if missing_event_type:
+        log.warning(
+            {
+                "event": "material_news_event_type_missing",
+                "count": missing_event_type,
+                "n_entries": len(payload),
+                "note": "entries normalized to commentary (fail closed); "
+                "check the v3 prompt contract if this persists",
+            }
+        )
     return out
 
 
@@ -546,6 +619,8 @@ class MaterialNewsTrigger:
             score = scores.get(idx)
             if score is None or score.relevance < _RELEVANCE_THRESHOLD:
                 continue  # immaterial — the veto: never becomes a candidate
+            if score.event_type not in _ALERTABLE_EVENT_TYPES:
+                continue  # commentary about the company is never an alert
             evidence: dict[str, object] = {
                 "news_id": story.news_id,
                 "headline": story.headline,
@@ -553,6 +628,7 @@ class MaterialNewsTrigger:
                 "published_at": story.published_at,
                 "relevance_score": score.relevance,
                 "why_material": score.why_material,
+                "event_type": score.event_type,
             }
             candidates.append(
                 TriggerCandidate(
@@ -579,16 +655,22 @@ class MaterialNewsTrigger:
         return candidates
 
     def should_fire(self, candidate: TriggerCandidate, user_state: UserStateContext) -> bool:
-        """Defensive re-check of the relevance floor.
+        """Defensive re-check of the relevance floor + the event-type gate.
 
-        ``scan()`` already filtered to ``relevance >= _RELEVANCE_THRESHOLD``;
-        this guards against a hand-built candidate slipping below the bar.
+        ``scan()`` already filtered to ``relevance >= _RELEVANCE_THRESHOLD``
+        and to alertable event types; this guards against a hand-built
+        candidate slipping below the bar. A candidate whose evidence carries no
+        ``event_type`` (pre-v3 shape) passes on relevance alone — it was built
+        under the old contract and the driver is mid-flight with it.
         Driver-side dedup (``find_by_signature``) owns dismissed-alert
         suppression, so we don't re-check ``recent_dismissed_signatures`` here.
         """
         _ = user_state
         relevance = candidate.evidence.get("relevance_score")
         if isinstance(relevance, bool) or not isinstance(relevance, (int, float)):
+            return False
+        event_type = candidate.evidence.get("event_type")
+        if isinstance(event_type, str) and event_type not in _ALERTABLE_EVENT_TYPES:
             return False
         return float(relevance) >= _RELEVANCE_THRESHOLD
 
@@ -631,6 +713,9 @@ class MaterialNewsTrigger:
             "relevance_score": relevance,
             "why_material": why_material,
         }
+        event_type = evidence.get("event_type")
+        if isinstance(event_type, str) and event_type:
+            evidence_obj["event_type"] = event_type
         # L9 PR2 — carry any qualitative-condition overlay scan attached, and
         # annotate the memo so the analyst sees the news may have tripped a
         # non-numeric condition they set.
@@ -662,47 +747,21 @@ class MaterialNewsTrigger:
     def draft_actions(
         self, alert: AlertDraft, candidate: TriggerCandidate
     ) -> list[QueuedActionDraft]:
-        """Propose informational follow-ups for a material development.
+        """No queued actions — the alert itself is the deliverable.
 
-        Material news is informational — it never proposes a ``bear_append`` or
-        ``sizing_update`` (the user decides direction). Emits a
-        ``thesis_update`` (incorporate the development) and an
-        ``earnings_prep_append`` (watch management's Q&A handling of it next call
-        — the user tracks management's responses to analysts, not their own).
+        The pre-2026-07-30 behavior queued two TEMPLATED actions per material
+        story ("Incorporate development: <headline>" + "watch how management
+        addresses <headline>"). The owner ruled those noise: they said nothing
+        the alert didn't, doubled the approve/dismiss surface on every card,
+        and violated the density/JIT ruling that nothing pre-generates
+        (docs/design/surface_density_jit_redesign.md D2). Incorporating a
+        development into the thesis is a deliberate owner action taken through
+        the ledger/ask flows; the alert settles at the alert level
+        (``/api/alerts/<id>/dismiss``), so it needs no action rows to be
+        actionable.
         """
-        _ = alert
-        evidence = candidate.evidence
-        headline = evidence.get("headline")
-        news_id = evidence.get("news_id")
-        if not isinstance(headline, str) or news_id is None:
-            return []
-
-        url = evidence.get("url")
-        url_str = url if isinstance(url, str) else ""
-        why = evidence.get("why_material")
-        why_str = why.strip() if isinstance(why, str) else ""
-
-        thesis_body = f"Incorporate development: '{headline}'."
-        if why_str:
-            thesis_body = f"{thesis_body} {why_str}"
-
-        return [
-            QueuedActionDraft(
-                action_kind=_ACTION_THESIS_UPDATE,
-                payload={
-                    "body": thesis_body,
-                    "news_url": url_str,
-                    "news_id": news_id,
-                },
-            ),
-            QueuedActionDraft(
-                action_kind=_ACTION_EARNINGS_PREP,
-                payload={
-                    "body": f"Next call Q&A: watch how management addresses '{headline}'.",
-                    "news_id": news_id,
-                },
-            ),
-        ]
+        _ = alert, candidate
+        return []
 
     # ------------------------------------------------------------------
     # Internal — anchor load + cache-aware classification

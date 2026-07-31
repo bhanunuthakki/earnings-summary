@@ -111,8 +111,11 @@ def render_alert_card(
 
 def render_queued_action(body: StringIO, qa: QueuedActionRow) -> None:
     """Render one queued-action row. Visible state depends on ``status``:
-    pending → approve/dismiss links + CLI hint; applied/cancelled →
-    timestamp pill so the historical context is preserved on the feed."""
+    pending → approve/dismiss buttons; applied/cancelled → timestamp pill so
+    the historical context is preserved on the feed. No CLI hint — the owner
+    ruled the ``python execution/approve_queued_action.py`` line out of the
+    scan surface (2026-06-14 feed-density ruling, re-flagged 2026-07-30); the
+    CLI remains available for scripting, it just doesn't ride every card."""
     kind_label = _ACTION_KIND_LABELS.get(qa.action_kind, qa.action_kind)
     qa_body = _action_body(qa.payload)
     body.write('<div class="queued-action">')
@@ -128,11 +131,9 @@ def render_queued_action(body: StringIO, qa: QueuedActionRow) -> None:
         # relative "approve?..." would resolve to a different (dead) path per
         # surface. The live route is GET /approve (comments_server.py).
         body.write(
-            f'<a href="/approve?action_id={qa.id}">approve</a>'
-            f'<a href="/approve?action_id={qa.id}&dismiss=1">dismiss</a>'
-            '<span class="qa-cli">CLI: '
-            "<code>python execution/approve_queued_action.py "
-            f"--action-id {qa.id}</code></span>"
+            f'<a class="k-btn k-btn-sm" href="/approve?action_id={qa.id}">approve</a>'
+            f'<a class="k-btn k-btn-quiet k-btn-sm" '
+            f'href="/approve?action_id={qa.id}&dismiss=1">dismiss</a>'
         )
     body.write("</div>")
     body.write("</div>")

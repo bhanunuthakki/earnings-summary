@@ -9,14 +9,16 @@ Material news is an LLM-DEPENDENT trigger (like earnings_tone, the inverse of
 kpi_inflection): the materiality judgment IS the LLM call, with no deterministic
 fallback. The key contracts verified here:
 
-  * scan() emits a candidate ONLY for stories scored >= the relevance floor —
-    immaterial stories never become candidates (the veto lives in scan)
+  * scan() emits a candidate ONLY for stories scored >= the relevance floor
+    AND classified as new primary information (event_type primary/results) —
+    commentary/opinion/recap stories never become candidates, whatever they
+    scored (the veto lives in scan; v3 contract, 2026-07-30)
   * scan() degrades to [] (never raises, never fabricates) when the LLM fails
   * the batch classification is cached — a second scan over the same news is a
     cache hit (no second LLM call)
   * build_alert is deterministic from the stored classification — NO LLM call
-  * draft_actions emits thesis_update + earnings_prep_append only (material news
-    is informational: no bear_append, no sizing_update)
+  * draft_actions emits NOTHING (the templated thesis_update/earnings_prep
+    pair was ruled noise 2026-07-30; the alert settles at the alert level)
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import pytest
 
@@ -199,10 +201,24 @@ class _StatefulLLM:
         return self.responses[idx]
 
 
-def _classification_payload(scores: list[tuple[int, float, str]]) -> str:
-    """Build a canned JSON-array response matching the prompt's contract."""
+def _classification_payload(
+    scores: list[tuple[int, float, str]], *, event_types: dict[int, str] | None = None
+) -> str:
+    """Build a canned JSON-array response matching the v3 prompt contract.
+
+    Every entry carries an ``event_type`` ("primary" unless overridden via
+    ``event_types``) — the shape the rewritten prompt demands."""
+    types = event_types or {}
     return json.dumps(
-        [{"news_index": idx, "relevance": rel, "why_material": why} for idx, rel, why in scores]
+        [
+            {
+                "news_index": idx,
+                "event_type": types.get(idx, "primary"),
+                "relevance": rel,
+                "why_material": why,
+            }
+            for idx, rel, why in scores
+        ]
     )
 
 
@@ -215,21 +231,26 @@ def _make_candidate(
     published_at: str = "2026-05-29 10:00:00",
     relevance: float = 0.82,
     why_material: str = "Material M&A reshapes the segment",
+    event_type: str | None = "primary",
 ) -> TriggerCandidate:
     """Build a candidate directly (bypassing scan) for unit-testing the
-    deterministic build_alert / draft_actions / should_fire paths."""
+    deterministic build_alert / draft_actions / should_fire paths.
+    ``event_type=None`` omits the field (the pre-v3 evidence shape)."""
+    evidence: dict[str, object] = {
+        "news_id": news_id,
+        "headline": headline,
+        "url": url,
+        "published_at": published_at,
+        "relevance_score": relevance,
+        "why_material": why_material,
+    }
+    if event_type is not None:
+        evidence["event_type"] = event_type
     return TriggerCandidate(
         ticker=ticker,
         kind="material_news",
         key=f"{ticker}:news:{news_id}",
-        evidence={
-            "news_id": news_id,
-            "headline": headline,
-            "url": url,
-            "published_at": published_at,
-            "relevance_score": relevance,
-            "why_material": why_material,
-        },
+        evidence=evidence,
         computed_at=datetime.now(UTC).replace(tzinfo=None),
     )
 
@@ -290,8 +311,9 @@ def test_signature_key_evidence_is_news_id_only() -> None:
 def test_scan_emits_candidates_only_for_material_stories(
     fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """3 recent stories, LLM scores 2 of them >= 0.6 → exactly 2 candidates,
-    each carrying relevance + why_material in evidence."""
+    """3 recent stories, LLM scores 2 of them >= the 0.7 floor → exactly 2
+    candidates, each carrying relevance + why_material + event_type in
+    evidence."""
     ids = _seed_three_recent(fixture_db)
     payload = _classification_payload(
         [
@@ -313,10 +335,51 @@ def test_scan_emits_candidates_only_for_material_stories(
     for cand in candidates:
         assert cand.ticker == "BN"
         assert cand.kind == "material_news"
-        assert cand.evidence["relevance_score"] >= 0.6
+        assert cand.evidence["relevance_score"] >= 0.7
+        assert cand.evidence["event_type"] == "primary"
         assert isinstance(cand.evidence["why_material"], str)
         assert cand.evidence["why_material"]
         assert cand.evidence["url"].startswith("https://")
+
+
+def test_scan_vetoes_commentary_regardless_of_score(
+    fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """THE v3 signal-quality contract: an opinion piece or earnings recap about
+    a thesis-relevant TOPIC never fires, even scored 0.9+ — topical relevance
+    without new primary information is noise (owner ruling 2026-07-30, the
+    LMND CFO think-piece / MSFT earnings-recap alerts)."""
+    ids = _seed_three_recent(fixture_db)
+    payload = _classification_payload(
+        [
+            (0, 0.95, "CFO think-piece bears on the profitability debate"),
+            (1, 0.90, "Recap of the earnings move"),
+            (2, 0.85, "Regulator opens probe into core unit"),
+        ],
+        event_types={0: "commentary", 1: "commentary", 2: "primary"},
+    )
+    monkeypatch.setattr("triggers.material_news.call_llm", _StatefulLLM([payload]))
+    _patch_anchor(monkeypatch)
+
+    candidates = MaterialNewsTrigger().scan("BN", fixture_db)
+
+    assert [c.key for c in candidates] == [f"BN:news:{ids[2]}"]
+
+
+def test_scan_missing_event_type_fails_closed(
+    fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An entry without a recognizable event_type (schema drift back to the v2
+    shape) is treated as commentary — excluded — never as a fire-anyway
+    fallback to the old noisy behavior."""
+    _ = _seed_three_recent(fixture_db)
+    payload = json.dumps(
+        [{"news_index": 0, "relevance": 0.92, "why_material": "high score, no event_type"}]
+    )
+    monkeypatch.setattr("triggers.material_news.call_llm", _StatefulLLM([payload]))
+    _patch_anchor(monkeypatch)
+
+    assert MaterialNewsTrigger().scan("BN", fixture_db) == []
 
 
 def _create_decisions_with_qualitative(
@@ -454,7 +517,7 @@ def test_scan_all_below_threshold_returns_empty(
     emitted even though the LLM responded cleanly."""
     _ = _seed_three_recent(fixture_db)
     payload = _classification_payload(
-        [(0, 0.10, "noise"), (1, 0.30, "routine"), (2, 0.55, "near-miss, still below")]
+        [(0, 0.10, "noise"), (1, 0.30, "routine"), (2, 0.65, "near-miss, still below 0.7")]
     )
     mock = _StatefulLLM([payload])
     monkeypatch.setattr("triggers.material_news.call_llm", mock)
@@ -492,9 +555,22 @@ def test_scan_cache_hit_skips_second_llm_call(
 def test_should_fire_respects_relevance_floor() -> None:
     trig = MaterialNewsTrigger()
     state = _empty_state()
-    assert trig.should_fire(_make_candidate(relevance=0.60), state) is True
+    assert trig.should_fire(_make_candidate(relevance=0.70), state) is True
     assert trig.should_fire(_make_candidate(relevance=0.95), state) is True
-    assert trig.should_fire(_make_candidate(relevance=0.59), state) is False
+    assert trig.should_fire(_make_candidate(relevance=0.69), state) is False
+
+
+def test_should_fire_event_type_gate() -> None:
+    """Commentary is blocked at fire time too; a pre-v3 candidate (no
+    event_type in evidence) passes on relevance alone — it was built mid-flight
+    under the old contract."""
+    trig = MaterialNewsTrigger()
+    state = _empty_state()
+    assert (
+        trig.should_fire(_make_candidate(relevance=0.95, event_type="commentary"), state) is False
+    )
+    assert trig.should_fire(_make_candidate(relevance=0.95, event_type="results"), state) is True
+    assert trig.should_fire(_make_candidate(relevance=0.95, event_type=None), state) is True
 
 
 # ---------------------------------------------------------------------------
@@ -547,11 +623,15 @@ def test_build_alert_memo_handles_empty_reason() -> None:
 
 
 # ---------------------------------------------------------------------------
-# draft_actions — informational only
+# draft_actions — none (the alert is the deliverable)
 # ---------------------------------------------------------------------------
 
 
-def test_draft_actions_thesis_update_and_earnings_prep_only() -> None:
+def test_draft_actions_emits_nothing() -> None:
+    """The templated thesis_update/earnings_prep pair was ruled noise
+    (2026-07-30): it restated the headline, doubled the approve/dismiss
+    surface, and pre-generated work the owner takes deliberately through the
+    ledger/ask flows. Material news alerts settle at the alert level."""
     cand = _make_candidate(
         news_id=7,
         headline="Acme acquires Beta for $2B",
@@ -559,28 +639,7 @@ def test_draft_actions_thesis_update_and_earnings_prep_only() -> None:
         why_material="Reshapes the competitive landscape",
     )
     alert = MaterialNewsTrigger().build_alert(cand, None)
-    actions = MaterialNewsTrigger().draft_actions(alert, cand)
-
-    kinds = sorted(a.action_kind for a in actions)
-    assert kinds == ["earnings_prep_append", "thesis_update"]
-    # Material news is informational — never direction-bearing actions.
-    assert "bear_append" not in kinds
-    assert "sizing_update" not in kinds
-
-    by_kind: dict[str, dict[str, Any]] = {a.action_kind: dict(a.payload) for a in actions}
-    thesis = by_kind["thesis_update"]
-    assert thesis["news_id"] == 7
-    assert thesis["news_url"] == "https://news.example/7"
-    assert "Acme acquires Beta for $2B" in thesis["body"]
-    assert "Reshapes the competitive landscape" in thesis["body"]
-
-    prep = by_kind["earnings_prep_append"]
-    assert prep["news_id"] == 7
-    assert "Acme acquires Beta for $2B" in prep["body"]
-    # The user tracks management's RESPONSES to analyst Q&A, not their own
-    # questions — the prep action must say "watch the Q&A", never "ask management".
-    assert "Q&A" in prep["body"]
-    assert "ask management" not in prep["body"].lower()
+    assert MaterialNewsTrigger().draft_actions(alert, cand) == []
 
 
 # ---------------------------------------------------------------------------
@@ -623,8 +682,5 @@ def test_full_pipeline_integration_smoke(
     assert "Brookfield closes $12B flagship infrastructure fund" in memo
     assert alert.signature_sha == compute_signature_sha("material_news", "BN", {"news_id": news_id})
 
-    actions = trig.draft_actions(alert, candidates[0])
-    assert sorted(a.action_kind for a in actions) == [
-        "earnings_prep_append",
-        "thesis_update",
-    ]
+    # v3: no queued actions — the alert settles at the alert level.
+    assert trig.draft_actions(alert, candidates[0]) == []

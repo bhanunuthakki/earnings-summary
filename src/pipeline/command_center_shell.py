@@ -1387,9 +1387,7 @@ td.ticker a:hover { color: var(--accent); }
 .qa-body { flex: 1; min-width: 140px; color: var(--fg-soft); font-size: var(--fs-caption); }
 .qa-actions { display: flex; gap: 6px; align-items: center; font-family: var(--mono);
   font-size: var(--fs-caption); }
-.qa-actions a { display: inline-flex; padding: 2px 7px; border: 1px solid var(--border-2);
-  border-radius: var(--radius); color: var(--accent); text-decoration: none; }
-.qa-actions .qa-cli { color: var(--muted); overflow-wrap: anywhere; }
+/* approve/dismiss are kit buttons (.k-btn .k-btn-sm) — no local link skin. */
 .qa-status-applied { color: var(--ok); }
 .qa-status-cancelled { color: var(--muted); }
 .evidence-drawer { margin-top: 8px; background: var(--paper);
