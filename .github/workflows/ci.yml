@@ -31,18 +31,32 @@ jobs:
   tests:
     name: tests (shard ${{ matrix.label }}/8)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 40, not 25: the heaviest shards legitimately run 14-15 min, and hosted
+    # runners routinely deliver ~2x slowdowns (disk/CPU contention), which put
+    # shard 6 over a 25 min cap three times on 2026-07-31 while it was still
+    # PASSING — every dot green, just slow. A timeout kill is reported as
+    # `cancelled`, not `failure`, so it reads like a concurrency supersession
+    # and costs a rerun to diagnose. 40 keeps ~2.5x headroom over the worst
+    # observed honest run while still bounding a genuine hang.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
+        # `split_count` subdivides a source shard WITHOUT changing which shard
+        # a file lands in (that stays `index % 8`), so adding a split keeps
+        # assignments stable (b93ead99). Shards 1 and 6 are the consistently
+        # heaviest (886-929s and 674-851s vs 211-365s for shard 2's halves),
+        # so they carry the split; that pulls the slowest job back to ~450s.
         include:
-          - { label: "1", source_shard: 1, split_count: 1, split_part: 0 }
+          - { label: "1", source_shard: 1, split_count: 2, split_part: 0 }
+          - { label: "1 overflow", source_shard: 1, split_count: 2, split_part: 1 }
           - { label: "2", source_shard: 2, split_count: 2, split_part: 0 }
           - { label: "2 overflow", source_shard: 2, split_count: 2, split_part: 1 }
           - { label: "3", source_shard: 3, split_count: 1, split_part: 0 }
           - { label: "4", source_shard: 4, split_count: 1, split_part: 0 }
           - { label: "5", source_shard: 5, split_count: 1, split_part: 0 }
-          - { label: "6", source_shard: 6, split_count: 1, split_part: 0 }
+          - { label: "6", source_shard: 6, split_count: 2, split_part: 0 }
+          - { label: "6 overflow", source_shard: 6, split_count: 2, split_part: 1 }
           - { label: "7", source_shard: 7, split_count: 1, split_part: 0 }
           - { label: "8", source_shard: 8, split_count: 1, split_part: 0 }
     steps:
@@ -86,7 +100,12 @@ jobs:
             exit 1
           fi
           printf 'Shard %s/8: %s files\n' '${{ matrix.label }}' "${#selected[@]}"
-          pytest -q "${selected[@]}"
+          # --durations: `pytest -q` emits only dots, so when a shard stalls the
+          # log shows a multi-minute gap between two dot rows and NOTHING about
+          # which test caused it (this is what made the 2026-07-31 shard-6 kills
+          # undiagnosable). The slowest-test table costs nothing and makes the
+          # next occurrence attributable.
+          pytest -q --durations=25 "${selected[@]}"
 
   quality:
     runs-on: ubuntu-latest
