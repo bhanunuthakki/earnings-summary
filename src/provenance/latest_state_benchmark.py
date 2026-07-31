@@ -586,7 +586,7 @@ CREATE TABLE v_population_cutover_current (
 CREATE TABLE v_ask_retrieval_scope_current (
   promotion_id TEXT, scope_key TEXT, status TEXT,
   research_snapshot_id TEXT, fact_generation_id TEXT,
-  fact_projection_seal_sha256 TEXT, source_inventory_ids_json TEXT,
+  fact_projection_seal_sha256 TEXT, source_inventory_set_json TEXT,
   narrative_bundles_json TEXT, cutoff_at TEXT, population_run_id TEXT,
   population_receipt_set_sha256 TEXT, population_observed_through TEXT,
   issuer_id TEXT, reporting_entity_id TEXT
@@ -1008,7 +1008,7 @@ class LatestStateSqliteAdapter:
             vector_id=vector,
         )
         previous = conn.execute(
-            "SELECT narrative_bundles_json,source_inventory_ids_json "
+            "SELECT narrative_bundles_json,source_inventory_set_json "
             "FROM v_ask_retrieval_scope_current WHERE scope_key='issuer:0000'"
         ).fetchone()
         bundles = list(json.loads(self._bundle(manifest, vector)))
@@ -1029,7 +1029,7 @@ class LatestStateSqliteAdapter:
         conn.execute(
             "UPDATE v_ask_retrieval_scope_current SET "
             "promotion_id=?,research_snapshot_id=?,fact_generation_id=?,"
-            "fact_projection_seal_sha256=?,source_inventory_ids_json=?,"
+            "fact_projection_seal_sha256=?,source_inventory_set_json=?,"
             "narrative_bundles_json=?,cutoff_at=?,population_run_id=?,"
             "population_receipt_set_sha256=?,population_observed_through=? "
             "WHERE scope_key='issuer:0000'",

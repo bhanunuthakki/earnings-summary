@@ -40,7 +40,7 @@ def _database() -> sqlite3.Connection:
         CREATE TABLE v_ask_retrieval_scope_current (
           promotion_id TEXT, scope_key TEXT, status TEXT,
           research_snapshot_id TEXT, fact_generation_id TEXT,
-          fact_projection_seal_sha256 TEXT, source_inventory_ids_json TEXT,
+          fact_projection_seal_sha256 TEXT, source_inventory_set_json TEXT,
           narrative_bundles_json TEXT, cutoff_at TEXT, population_run_id TEXT,
           population_receipt_set_sha256 TEXT, population_observed_through TEXT,
           issuer_id TEXT, reporting_entity_id TEXT
@@ -1164,7 +1164,7 @@ def test_reporting_entity_binding_rollover_forces_full_scope_replacement() -> No
         "population_run_id='population-2',"
         "population_receipt_set_sha256=?,population_observed_through=?,"
         "issuer_id='issuer-2',reporting_entity_id='reporting-2',"
-        "source_inventory_ids_json='[\"inventory-2\"]',"
+        "source_inventory_set_json='[\"inventory-2\"]',"
         "narrative_bundles_json=?",
         (SHA_D, next_clock, SHA_D, next_clock, bundles),
     )

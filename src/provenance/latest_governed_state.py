@@ -683,7 +683,7 @@ class GovernedCurrentMaterializer:
         promotion = self._conn.execute(
             "SELECT promotion_id,scope_key,status,research_snapshot_id,"
             "fact_generation_id,fact_projection_seal_sha256,"
-            "source_inventory_ids_json,narrative_bundles_json,cutoff_at,"
+            "source_inventory_set_json,narrative_bundles_json,cutoff_at,"
             "population_run_id,population_receipt_set_sha256,"
             "population_observed_through,issuer_id,reporting_entity_id "
             "FROM v_ask_retrieval_scope_current WHERE scope_key=?",
