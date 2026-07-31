@@ -68,13 +68,25 @@ def _insert_signal(
     firm: str | None = "Reuters",
     published_at: str = "2026-07-01 09:00:00",
     weight: float = 0.5,
+    source_feed: str | None = None,
     quality_score: float | None = None,
 ) -> int:
     conn = sqlite3.connect(str(path))
     cur = conn.execute(
         "INSERT INTO signals (ticker, signal_type, title, firm, published_at, weight, "
-        "cadence, created_at, quality_score) VALUES (?, ?, ?, ?, ?, ?, 'event', ?, ?)",
-        (ticker, signal_type, title, firm, published_at, weight, published_at, quality_score),
+        "cadence, source_feed, created_at, quality_score) VALUES (?, ?, ?, ?, ?, ?, 'event', "
+        "?, ?, ?)",
+        (
+            ticker,
+            signal_type,
+            title,
+            firm,
+            published_at,
+            weight,
+            source_feed,
+            published_at,
+            quality_score,
+        ),
     )
     conn.commit()
     row_id = int(cur.lastrowid or 0)
@@ -127,7 +139,7 @@ def test_migration_adds_quality_score_column(tmp_path: Path) -> None:
 def test_score_unscored_signals_stamps_valid_scores(
     db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    id_a = _insert_signal(db, title="Original scoop", firm="Reuters")
+    id_a = _insert_signal(db, title="Original scoop", firm="Reuters", source_feed="edgar_8k")
     id_b = _insert_signal(db, title="3 stocks to buy", firm="Zacks", signal_type="consensus_rating")
     id_c = _insert_signal(
         db, signal_type="investor_day", title="Analyst day"
@@ -154,7 +166,7 @@ def test_score_unscored_signals_stamps_valid_scores(
     stored = _stored_scores(db)
     assert stored[id_a] == 0.9
     assert stored[id_b] == 0.15
-    assert stored[id_c] is None  # investor_day is not a news-backed lane
+    assert stored[id_c] is None  # investor_day is not a scored lane
 
     kwargs = seen["kwargs"]
     assert isinstance(kwargs, dict)
@@ -166,11 +178,50 @@ def test_score_unscored_signals_stamps_valid_scores(
     assert "Analyst day" not in prompt
 
 
+def test_non_renderable_news_is_not_scored(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """2026-07-30 narrowing: non-EDGAR general_news (yf_news / websearch / fmp
+    / NULL feed) no longer renders on the diet, so it must never reach the LLM
+    — rows stay NULL and cost nothing. Renderable rows (consensus_rating on
+    any feed + EDGAR-fed general_news) are still scored."""
+    id_yf = _insert_signal(db, title="Headline recap", source_feed="yf_news")
+    id_ws = _insert_signal(db, title="Websearch story", source_feed="websearch_opus")
+    id_null = _insert_signal(db, title="Feedless story")
+    id_rating = _insert_signal(
+        db, title="MS maintains", signal_type="consensus_rating", source_feed="yf_grades"
+    )
+    id_13f = _insert_signal(db, title="Whale 13F", source_feed="edgar_13f")
+
+    prompts: list[str] = []
+
+    def fake_structured(prompt: str, **kwargs: object) -> object:
+        prompts.append(prompt)
+        return [{"id": id_rating, "score": 0.8}, {"id": id_13f, "score": 0.3}]
+
+    monkeypatch.setattr(q, "call_llm_structured", fake_structured)
+    tally = score_unscored_signals(db)
+    assert tally["scored"] == 2
+
+    assert len(prompts) == 1
+    assert _batch_size_of(prompts[0]) == 2  # only the two renderable rows sent
+    assert "MS maintains" in prompts[0] and "Whale 13F" in prompts[0]
+    assert "Headline recap" not in prompts[0]
+
+    stored = _stored_scores(db)
+    assert stored[id_yf] is None and stored[id_ws] is None and stored[id_null] is None
+    assert stored[id_rating] == 0.8
+    assert stored[id_13f] == 0.3
+
+
 def test_score_unscored_signals_batches_and_caps(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """45 unscored rows, batch_size 20 → 3 calls (20/20/5); max_rows caps the
     run so a large backlog drains over several runs, not one."""
     for i in range(45):
-        _insert_signal(db, title=f"story {i}", published_at=f"2026-07-01 09:{i:02d}:00")
+        _insert_signal(
+            db,
+            title=f"story {i}",
+            published_at=f"2026-07-01 09:{i:02d}:00",
+            source_feed="edgar_8k",
+        )
 
     batch_sizes: list[int] = []
 
@@ -190,7 +241,7 @@ def test_score_unscored_signals_batches_and_caps(db: Path, monkeypatch: pytest.M
 def test_score_unscored_signals_is_idempotent_over_scored_rows(
     db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    rid = _insert_signal(db)
+    rid = _insert_signal(db, source_feed="edgar_8k")
 
     def scores_once(*args: object, **kwargs: object) -> object:
         return [{"id": rid, "score": 0.8}]
@@ -210,7 +261,7 @@ def test_score_unscored_signals_is_idempotent_over_scored_rows(
 def test_parse_failure_leaves_null_and_does_not_raise(
     db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    rid = _insert_signal(db)
+    rid = _insert_signal(db, source_feed="edgar_8k")
 
     def bad_twice(*args: object, **kwargs: object) -> object:
         raise StructuredParseError("unusable twice", raw_head="?")
@@ -226,7 +277,7 @@ def test_empty_response_leaves_null_and_does_not_raise(
 ) -> None:
     """An empty (or all-invalid) array is a quality miss, not a crash: rows
     stay NULL and the read path's denylist fallback governs them."""
-    rid = _insert_signal(db)
+    rid = _insert_signal(db, source_feed="edgar_8k")
 
     def empty_array(*args: object, **kwargs: object) -> object:
         return []
@@ -243,7 +294,12 @@ def test_transient_failure_defers_batch_but_continues(
     """Quota-scheduling rule 3: a transient CLI failure defers THAT batch
     (rows stay NULL, tallied) and the loop continues to the next batch."""
     for i in range(4):
-        _insert_signal(db, title=f"story {i}", published_at=f"2026-07-01 09:0{i}:00")
+        _insert_signal(
+            db,
+            title=f"story {i}",
+            published_at=f"2026-07-01 09:0{i}:00",
+            source_feed="edgar_8k",
+        )
 
     calls: list[int] = []
 
@@ -266,7 +322,7 @@ def test_transient_failure_defers_batch_but_continues(
 def test_hard_stop_propagates(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from llm.cli import LLMSetupError
 
-    _insert_signal(db)
+    _insert_signal(db, source_feed="edgar_8k")
 
     def setup_broken(*args: object, **kwargs: object) -> object:
         raise LLMSetupError("Claude Code CLI ('claude') not found in PATH.")

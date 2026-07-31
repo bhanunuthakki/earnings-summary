@@ -4,10 +4,19 @@ The diet reading lane's low-quality filter was a static substring denylist
 (``store._LOW_QUALITY_SOURCE_TOKENS``) — a keyword gate where semantics decide
 (LLM-maximalist directive: "use LLM where semantics beat keyword/regex"). This
 module is the intelligent replacement's WRITE side: a batched Haiku call
-(purpose ``diet_source_quality``) scores news-backed diet signals 0..1 on
+(purpose ``diet_source_quality``) scores RENDERABLE diet signals 0..1 on
 information quality — original reporting / primary-source disclosure high,
 recycled recaps / screener-generated content-farm copy low — and stamps the
 score onto ``signals.quality_score`` (alembic 0150) ONCE, at ingest.
+
+Scope (narrowed 2026-07-30, diet-news-removal follow-up): only rows the diet
+surface can still render are scored — ``consensus_rating`` (the score drops
+no-new-info reiterations a firm-name denylist can't judge) and EDGAR-fed
+``general_news`` (the score suppresses 13F position-tweak trivia while 8-K/
+13D/13G score high). Non-EDGAR ``general_news`` (yf_news / websearch / fmp)
+no longer renders on the diet after the 2026-07-30 headline-news removal, so
+scoring it spent quota on rows whose score could never influence a render —
+those rows now stay NULL and the read path's denylist fallback governs them.
 
 Read-time filtering happens in ``store.load_diet_signals`` on the STORED
 score, so the diet lane stays guard-safe: no decaying scorer import, no
@@ -35,7 +44,7 @@ from typing import cast
 
 from llm.cli import is_hard_stop
 from llm.structured import StructuredParseError, call_llm_structured
-from signals.store import NEWS_MIRRORED_TYPES
+from signals.store import SIGNAL_CONSENSUS_RATING, SIGNAL_GENERAL_NEWS
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -130,9 +139,9 @@ def score_unscored_signals(
     max_rows: int = _MAX_ROWS_PER_RUN,
     batch_size: int = _BATCH_SIZE,
 ) -> dict[str, int]:
-    """Score up to ``max_rows`` unscored news-backed diet signals; return a
-    tally. Newest first, so the rows the panel is about to show are scored
-    before backlog.
+    """Score up to ``max_rows`` unscored RENDERABLE diet signals (sell-side
+    ratings + EDGAR-fed filings rows); return a tally. Newest first, so the
+    rows the panel is about to show are scored before backlog.
 
     Per-batch degradation (quota-scheduling rule 3): a ``StructuredParseError``
     or any other transient LLM failure leaves that batch's rows NULL (tallied,
@@ -153,13 +162,17 @@ def score_unscored_signals(
         if not _has_quality_column(conn):
             tally["db_unavailable"] = 1
             return tally
-        marks = ",".join("?" for _ in NEWS_MIRRORED_TYPES)
+        # Renderable scope only (see module docstring): sell-side ratings, plus
+        # general_news whose source_feed is an EDGAR feed (edgar_8k / edgar_13d
+        # / edgar_13g / edgar_13f — the diet panel's filings block matches the
+        # same prefix). Everything else stays NULL — denylist fallback governs.
         try:
             rows = conn.execute(
-                f"SELECT id, firm, title FROM signals "
-                f"WHERE quality_score IS NULL AND signal_type IN ({marks}) "
+                "SELECT id, firm, title FROM signals "
+                "WHERE quality_score IS NULL AND (signal_type = ? "
+                "OR (signal_type = ? AND source_feed LIKE 'edgar%')) "
                 "ORDER BY published_at DESC, id DESC LIMIT ?",
-                (*sorted(NEWS_MIRRORED_TYPES), int(max_rows)),
+                (SIGNAL_CONSENSUS_RATING, SIGNAL_GENERAL_NEWS, int(max_rows)),
             ).fetchall()
         except sqlite3.Error:
             tally["db_unavailable"] = 1

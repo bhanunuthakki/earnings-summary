@@ -143,9 +143,12 @@ _DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 #      0..1 stamped ONCE at ingest by the ``diet_source_quality`` purpose
 #      (``signals.quality``): original reporting / primary sources high,
 #      recycled recaps / content farms low. A SCORED row is governed by the
-#      score alone: drop below ``MIN_QUALITY_SCORE``, keep at/above.
-#   2. The static denylist below — the belt-and-braces fallback for rows the
-#      batch pass hasn't scored yet (quality_score NULL) and for pre-0150 DBs.
+#      score alone: drop below ``MIN_QUALITY_SCORE``, keep at/above. Since
+#      2026-07-30 the pass only scores RENDERABLE rows (consensus_rating +
+#      EDGAR-fed general_news — see ``signals.quality``); other news-mirrored
+#      rows stay NULL permanently and rung 2 governs them.
+#   2. The static denylist below — the belt-and-braces fallback for rows with
+#      no stored score (out of scoring scope, not yet reached, pre-0150 DBs).
 #
 # Both are read-time curation filters on STORED fields, not decay factors:
 # they remove rows, never reorder them, so the non-decaying ordering guarantee
