@@ -18,6 +18,7 @@ class SQLiteConnectionRole(StrEnum):
     """Capabilities requested from a SQLite connection."""
 
     READ_ONLY = "read_only"
+    QUIESCED_IMMUTABLE_READ_ONLY = "quiesced_immutable_read_only"
     WRITER = "writer"
     SNAPSHOT_DESTINATION = "snapshot_destination"
 
@@ -31,10 +32,12 @@ def connect_sqlite(
     """Open a SQLite connection under the repository's role-specific policy.
 
     Read-only connections use SQLite's ``mode=ro`` URI and never create a
-    parent directory. Writer connections may preflight Alembic compatibility
-    and set the WAL/durability policy. Snapshot destinations are new,
-    caller-owned local files used by backup or isolated synthetic tooling and
-    intentionally retain the default journal mode.
+    parent directory. The quiesced immutable role additionally suppresses
+    SQLite lock and WAL sidecars, and is only safe after the caller has proved
+    the file cannot change for the connection lifetime. Writer connections may
+    preflight Alembic compatibility and set the WAL/durability policy. Snapshot
+    destinations are new, caller-owned local files used by backup or isolated
+    synthetic tooling and intentionally retain the default journal mode.
     """
     require_schema = (
         role is SQLiteConnectionRole.WRITER if schema_preflight is None else schema_preflight
@@ -43,8 +46,18 @@ def connect_sqlite(
         raise ValueError("schema_preflight is available only to writer connections")
 
     resolved = os.fspath(path)
-    if role is SQLiteConnectionRole.READ_ONLY:
-        conn = sqlite3.connect(_read_only_uri(resolved), uri=True, timeout=30.0)
+    if role in (
+        SQLiteConnectionRole.READ_ONLY,
+        SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY,
+    ):
+        conn = sqlite3.connect(
+            _read_only_uri(
+                resolved,
+                immutable=(role is SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY),
+            ),
+            uri=True,
+            timeout=30.0,
+        )
     else:
         if (
             role is SQLiteConnectionRole.WRITER
@@ -69,11 +82,12 @@ def connect_sqlite(
     return conn
 
 
-def _read_only_uri(path: str) -> str:
+def _read_only_uri(path: str, *, immutable: bool = False) -> str:
     """Build SQLite's read-only URI without touching the target path."""
     if path == ":memory:":
         raise ValueError("read-only connections require an on-disk database")
-    return f"{Path(path).resolve().as_uri()}?mode=ro"
+    immutable_query = "&immutable=1" if immutable else ""
+    return f"{Path(path).resolve().as_uri()}?mode=ro{immutable_query}"
 
 
 def _apply_connection_policy(conn: sqlite3.Connection) -> None:

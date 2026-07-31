@@ -419,7 +419,13 @@ def _revalidate_locked(request: ActivationRequest, preflight: _Preflight) -> Non
 
 
 def _verify_database(path: Path, *, expected_head: str) -> DatabaseVerification:
-    connection = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
+    # Both candidate and installed live files are hash-bound and quiesced for
+    # this scan. Immutable mode prevents SQLite from creating WAL/SHM files
+    # merely to inspect a clean WAL-mode database at the rename boundary.
+    connection = connect_sqlite(
+        path,
+        role=SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY,
+    )
     try:
         revision_rows = connection.execute(
             "SELECT version_num FROM alembic_version ORDER BY version_num"
