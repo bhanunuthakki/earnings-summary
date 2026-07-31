@@ -150,28 +150,36 @@ def register_settings_routes(app: Flask, context: SettingsRouteContext) -> None:
         if request.method == "GET":
             return {
                 "ticker": normalized_ticker,
-                "bypass_budget": ticker_settings.get_bypass_budget(
-                    normalized_ticker,
-                    db_path=db_path,
-                ),
+                **{
+                    flag: ticker_settings.get_flag(normalized_ticker, flag, db_path=db_path)
+                    for flag in sorted(ticker_settings.FLAG_COLUMNS)
+                },
             }
         body = cast(
             "dict[str, object]",
             request.get_json(silent=True) or {},
         )
-        if "bypass_budget" not in body:
-            return ({"error": "bypass_budget required"}, 400)
-        value = bool(body["bypass_budget"])
-        if not ticker_settings.set_bypass_budget(
-            normalized_ticker,
-            value,
-            db_path=db_path,
-        ):
+        # Accept any known flag(s); unknown keys are ignored, none present is 400
+        # (the pre-0260 contract required bypass_budget specifically — kept
+        # compatible: that body still works unchanged).
+        updates = {flag: bool(body[flag]) for flag in ticker_settings.FLAG_COLUMNS if flag in body}
+        if not updates:
             return (
-                {"error": "could not persist (ticker_settings table missing?)"},
-                500,
+                {"error": f"one of {sorted(ticker_settings.FLAG_COLUMNS)} required"},
+                400,
             )
+        for flag, value in updates.items():
+            if not ticker_settings.set_flag(
+                normalized_ticker,
+                flag,
+                value,
+                db_path=db_path,
+            ):
+                return (
+                    {"error": "could not persist (ticker_settings table missing?)"},
+                    500,
+                )
         return {
             "ticker": normalized_ticker,
-            "bypass_budget": value,
+            **updates,
         }

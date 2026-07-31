@@ -589,6 +589,14 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "Overstating scope, decision rights, or impact.",
     ),
     _q(
+        "pre_earnings_brief",
+        "P2",
+        "cold",
+        "synthesis",
+        "Brief the owner for an earnings call from their thesis, tracked KPIs, and open questions.",
+        "A generic preview, an invented figure, or ignoring the owner's stated watch items.",
+    ),
+    _q(
         "presentation_brief",
         "P2",
         "cold",

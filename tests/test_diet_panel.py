@@ -77,6 +77,43 @@ def test_renders_both_lenses_through_the_kit(db: Path) -> None:
         assert cls in html
 
 
+def test_readout_rows_carry_auto_brief_toggle_for_evaluation_names(tmp_path: Path) -> None:
+    """The pre-ER brief opt-in (0260) is a one-click chip on the readout row:
+    evaluation names get the toggle (off by default, 'on' when flagged);
+    held names never do — they are always in the generator's scope."""
+    d = tmp_path / "toggle.db"
+    signals_only(d)
+    conn = sqlite3.connect(str(d))
+    try:
+        conn.executescript(
+            "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, "
+            "archived_at TIMESTAMP);"
+            "CREATE TABLE ticker_settings (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "ticker TEXT NOT NULL, bypass_budget INTEGER NOT NULL DEFAULT 0, "
+            "auto_pre_earnings_brief INTEGER NOT NULL DEFAULT 0, "
+            "created_at TEXT NOT NULL, updated_at TEXT NOT NULL);"
+        )
+        conn.executemany(
+            "INSERT INTO tracked_companies (ticker, list_type) VALUES (?, ?)",
+            [("NU", "portfolio"), ("WIX", "evaluation"), ("ZZZ", "evaluation")],
+        )
+        conn.execute(
+            "INSERT INTO ticker_settings (ticker, auto_pre_earnings_brief, created_at, "
+            "updated_at) VALUES ('WIX', 1, 't', 't')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    html = render_diet_panel(d)
+    # Marked evaluation name: on-state chip; unmarked: off-state; held: none.
+    assert 'data-autobrief-ticker="WIX" data-autobrief-on="1"' in html
+    assert "auto-brief on" in html
+    assert 'data-autobrief-ticker="ZZZ" data-autobrief-on="0"' in html
+    assert 'data-autobrief-ticker="NU"' not in html
+    # The chip POSTs the existing per-ticker settings endpoint.
+    assert "/api/ticker-settings/" in html
+
+
 def test_headline_news_never_renders(db: Path) -> None:
     """Owner ruling 2026-07-30: 'remove news section entirely'. No news group
     header, no headline row, regardless of source quality."""

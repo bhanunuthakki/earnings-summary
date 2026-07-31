@@ -175,12 +175,31 @@ def render_diet_panel(db_path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _load_auto_brief_flags(db_path: Path) -> dict[str, bool]:
+    """``ticker -> auto_pre_earnings_brief`` (0260) for the toggle chips.
+    Degrades to ``{}`` on a pre-0260 DB — every evaluation row then renders
+    the off-state toggle, which is the true state."""
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    except sqlite3.Error:
+        return {}
+    try:
+        rows = conn.execute(
+            "SELECT ticker, auto_pre_earnings_brief FROM ticker_settings"
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+    return {str(t).upper(): bool(v) for t, v in rows if t}
+
+
 def _readouts_section(db_path: Path, list_types: dict[str, str], today: date) -> str:
     head = (
         '<div class="diet-sec first"><h3 class="diet-sec-h" title="The reading lane: '
-        "pre-ER prep and post-ER readouts on your book, assembled on demand from the "
-        "thesis, tracked KPIs, and the call transcript — never pre-generated, never "
-        'headline churn.">Earnings readouts</h3>'
+        "pre-ER prep and post-ER readouts on your book. Pre-ER briefs pre-generate in "
+        "the earnings week for every held name and for evaluation names you switch on "
+        '(auto-brief); everything else assembles on demand.">Earnings readouts</h3>'
     )
     book = sorted(t for t, lt in list_types.items() if lt in _BOOK_PRIORITY)
     if not book:
@@ -212,13 +231,16 @@ def _readouts_section(db_path: Path, list_types: dict[str, str], today: date) ->
         return (2, 0, t)
 
     book.sort(key=_order)
+    auto_flags = _load_auto_brief_flags(db_path)
     body = "".join(
-        _readout_row(t, list_types, upcoming.get(t), reported.get(t), today) for t in book
+        _readout_row(t, list_types, upcoming.get(t), reported.get(t), today, auto_flags)
+        for t in book
     )
     return (
         head + '<table class="p-table"><thead><tr><th>Name</th><th>Last reported</th>'
         "<th>Next ER</th><th>Readouts</th></tr></thead>"
-        f"<tbody>{body}</tbody></table></div>"
+        f"<tbody>{body}</tbody></table>"
+        f"<script>{_AUTO_BRIEF_JS}</script></div>"
     )
 
 
@@ -228,6 +250,7 @@ def _readout_row(
     next_er: date | None,
     last_er: date | None,
     today: date,
+    auto_flags: dict[str, bool],
 ) -> str:
     marker = _book_marker_html(list_types.get(t, ""))
     tq = escape(t, quote=True)
@@ -245,7 +268,8 @@ def _readout_row(
         '<button type="button" class="k-chip k-chip-btn" '
         f'data-peek-url="/api/peek/earnings-prep?ticker={tq}" '
         f'data-peek-title="Earnings prep — {tq}" '
-        'title="One-page pre-ER prep, assembled on demand">pre-ER prep</button>'
+        'title="One-page pre-ER prep — serves the pre-generated brief when one exists, '
+        'assembled deterministically otherwise">pre-ER prep</button>'
     )
     readout = (
         '<button type="button" class="k-chip k-chip-btn" '
@@ -254,14 +278,63 @@ def _readout_row(
         'title="Post-earnings readout — actuals vs what you track, the transcript, '
         'and the thesis, assembled on demand">post-ER readout</button>'
     )
+    # The auto-brief opt-in (0260) is an EVALUATION-name choice: held names are
+    # always in the generator's scope, so their row carries no toggle.
+    toggle = ""
+    if list_types.get(t) == "evaluation":
+        on = auto_flags.get(t, False)
+        cls = "k-chip k-chip-btn diet-autobrief" + (" k-chip-ok" if on else "")
+        toggle = (
+            f'<button type="button" class="{cls}" data-autobrief-ticker="{tq}" '
+            f'data-autobrief-on="{1 if on else 0}" '
+            "title=\"Pre-generate this name's pre-ER brief in its earnings week "
+            '(held names are always included)">'
+            f"auto-brief {'on' if on else 'off'}</button>"
+        )
     return (
         "<tr>"
         f"<td>{ticker_label(t)}{marker}</td>"
         f'<td class="diet-when">{last_cell}</td>'
         f'<td class="diet-when">{next_cell}</td>'
-        f"<td>{prep} {readout}</td>"
+        f"<td>{prep} {readout}{' ' + toggle if toggle else ''}</td>"
         "</tr>"
     )
+
+
+# One-click auto-brief opt-in: POSTs the existing per-ticker settings endpoint
+# and reflects the new state in place (chip tone + label + data attribute) —
+# the same GET-hydrated/POST-persisted shape as the bypass_budget toggle, no
+# page reload, no SSE (this is a setting, not a job).
+_AUTO_BRIEF_JS = """
+(function () {
+  if (window.__dietAutoBriefWired) return;
+  window.__dietAutoBriefWired = true;
+  document.addEventListener('click', function (ev) {
+    var btn = ev.target && ev.target.closest
+      ? ev.target.closest('button[data-autobrief-ticker]') : null;
+    if (!btn || btn.disabled) return;
+    ev.preventDefault();
+    var next = btn.getAttribute('data-autobrief-on') !== '1';
+    btn.disabled = true;
+    fetch('/api/ticker-settings/' + encodeURIComponent(btn.getAttribute('data-autobrief-ticker')), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ auto_pre_earnings_brief: next })
+    }).then(function (resp) {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.json();
+    }).then(function () {
+      btn.setAttribute('data-autobrief-on', next ? '1' : '0');
+      btn.classList.toggle('k-chip-ok', next);
+      btn.textContent = 'auto-brief ' + (next ? 'on' : 'off');
+      btn.disabled = false;
+    }).catch(function () {
+      btn.textContent = 'auto-brief error';
+      btn.disabled = false;
+    });
+  });
+})();
+""".strip()
 
 
 # The stream is "fresh" while its newest signal is at most this old; older

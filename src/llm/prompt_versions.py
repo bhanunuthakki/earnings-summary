@@ -204,6 +204,12 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # RSS description copy. Bump when _build_prompt is materially rewritten and
     # re-run the golden-set eval (evals/golden/podcast_takeaway_summary.json).
     "podcast_takeaway_summary": "v1",
+    # Pre-earnings brief (src/earnings_brief.py, 2026-07-31): the scheduled
+    # per-(ticker, ER-date) narrative brief. The version participates in the
+    # llm_artifacts input hash, so a bump here alone forces regeneration on
+    # the next in-window run — bump ONLY when _PROMPT_HEADER / the section
+    # assembly is materially rewritten.
+    "pre_earnings_brief": "v1",
     # Rubric-audited prose purposes (Chip 2). Bump when the generating prompt
     # in llm_client.extract_qa_vs_prepared_themes / generate_qa_topics is
     # materially rewritten and re-run `run_llm_evals.py --purpose <p>`.

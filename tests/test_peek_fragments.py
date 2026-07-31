@@ -1216,6 +1216,82 @@ def test_earnings_prep_peek_empty_name_still_renders_capture_hint(
     assert "No open watch items or questions" in html
 
 
+def _seed_brief_artifact(db_path: Path, ticker: str, er_iso: str, body: str) -> None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executescript(
+            "CREATE TABLE IF NOT EXISTS expected_earnings (id INTEGER PRIMARY KEY, "
+            "ticker TEXT, expected_date TEXT);"
+            "CREATE TABLE IF NOT EXISTS llm_artifacts ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, "
+            "scope TEXT NOT NULL DEFAULT 'ticker', purpose TEXT NOT NULL, "
+            "fiscal_period TEXT, content_md TEXT, content_json TEXT, "
+            "input_sha256 TEXT NOT NULL, output_sha256 TEXT, model TEXT, "
+            "prompt_version TEXT NOT NULL DEFAULT 'v1', "
+            "generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, expires_at TIMESTAMP, "
+            "superseded_by_id INTEGER, dirty INTEGER NOT NULL DEFAULT 0, "
+            "dirty_reason TEXT, source_doc_ids TEXT, parent_artifact_ids TEXT, "
+            "llm_call_id INTEGER);"
+        )
+        conn.execute(
+            "INSERT INTO expected_earnings (ticker, expected_date, detected_source, "
+            "first_seen_at, last_seen_at) VALUES (?, ?, 'fmp', 't', 't')",
+            (ticker, er_iso),
+        )
+        conn.execute(
+            "INSERT INTO llm_artifacts (ticker, purpose, fiscal_period, content_md, "
+            "input_sha256, generated_at) VALUES (?, 'pre_earnings_brief', ?, ?, 'sha', "
+            "'2026-08-01 04:10:00')",
+            (ticker, er_iso, body),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_earnings_prep_peek_serves_pregenerated_brief(repo: Path, db_path: Path) -> None:
+    """Owner ruling 2026-07-31: when stage 1c persisted a brief for THIS
+    upcoming ER date, the prep peek serves it instantly with its receipt —
+    keyed to the ER date, so a stale-quarter brief can never render."""
+    from datetime import UTC, datetime, timedelta
+
+    from pipeline.peeks import render_earnings_prep_peek
+
+    _seed_prep_ticker(db_path)
+    er_iso = (datetime.now(UTC).date() + timedelta(days=3)).isoformat()
+    _seed_brief_artifact(db_path, "NU", er_iso, "**What this quarter must show** — NIM holds.")
+
+    html = render_earnings_prep_peek(db_path, repo, "NU")
+    assert html is not None
+    assert "Pre-earnings brief" in html
+    assert "NIM holds" in html
+    assert "generated 2026-08-01" in html and f"for ER {er_iso}" in html
+    # Deterministic assembly still renders beneath it.
+    assert "Valuation stance" in html
+
+
+def test_earnings_prep_peek_ignores_brief_for_other_er_date(repo: Path, db_path: Path) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from pipeline.peeks import render_earnings_prep_peek
+
+    _seed_prep_ticker(db_path)
+    upcoming = (datetime.now(UTC).date() + timedelta(days=3)).isoformat()
+    _seed_brief_artifact(db_path, "NU", "2026-05-13", "stale-quarter brief")
+    # Point the calendar at a NEWER date than the artifact's key.
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute("UPDATE expected_earnings SET expected_date = ?", (upcoming,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    html = render_earnings_prep_peek(db_path, repo, "NU")
+    assert html is not None
+    assert "stale-quarter brief" not in html
+    assert "Pre-earnings brief" not in html
+
+
 # --------------------------------------------------------------------------- #
 # Post-earnings readout peek (2026-07-30, diet news removal): the post-ER
 # counterpart of the prep memo — assembled at click time, grounded in the
