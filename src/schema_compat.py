@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import sqlite3
 from contextlib import suppress
+from functools import lru_cache
 from pathlib import Path
 from typing import cast
 
@@ -20,8 +21,22 @@ class SchemaRevisionMismatch(sqlite3.OperationalError):
 
 
 def expected_head(project_root: Path | None = None) -> str:
-    """Return the one Alembic leaf in this checkout, or fail loudly on forks."""
-    root = project_root or Path(__file__).resolve().parents[1]
+    """Return the one Alembic leaf in this checkout, or fail loudly on forks.
+
+    Memoized per resolved root for the life of the process: the parse walks
+    every ``alembic/versions/*.py`` (253 files, ~0.5s on this machine), and
+    ``require_current_for_write`` runs on EVERY guarded writer connection —
+    uncached, one Home render's ~75 ``open_conn`` calls took ~42s and read as
+    "the page never loads" (2026-07-31). A checkout's migration set cannot
+    change under a running process, so caching preserves the guard exactly;
+    the mismatch/fork failures still raise on every call (exceptions are
+    never cached by ``lru_cache``)."""
+    root = (project_root or Path(__file__).resolve().parents[1]).resolve()
+    return _expected_head_cached(root)
+
+
+@lru_cache(maxsize=8)
+def _expected_head_cached(root: Path) -> str:
     revisions: set[str] = set()
     parents: set[str] = set()
     for path in (root / "alembic" / "versions").glob("*.py"):
