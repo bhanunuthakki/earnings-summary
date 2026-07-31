@@ -95,13 +95,17 @@ def db_path(tmp_path: Path) -> Path:
     return db
 
 
-def _insert_signal(db_path: Path, ticker: str, created_at: str) -> None:
+def _insert_signal(
+    db_path: Path, ticker: str, created_at: str, *, source_feed: str = "edgar_8k"
+) -> None:
+    # EDGAR-fed by default: since 2026-07-30 headline news (non-EDGAR
+    # general_news) is excluded from the diet page AND this band's count.
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute(
-            "INSERT INTO signals (ticker, signal_type, title, published_at, created_at) "
-            "VALUES (?, 'general_news', 'headline', ?, ?)",
-            (ticker, created_at, created_at),
+            "INSERT INTO signals (ticker, signal_type, title, published_at, created_at, "
+            "source_feed) VALUES (?, 'general_news', 'headline', ?, ?, ?)",
+            (ticker, created_at, created_at, source_feed),
         )
         conn.commit()
     finally:
@@ -203,6 +207,15 @@ def test_signals_contribute_count_and_tickers(db_path: Path) -> None:
     assert "MELI" in html and "NU" in html
     assert "OUT" not in html
     assert 'href="/#diet"' in html
+
+
+def test_headline_news_signals_do_not_count(db_path: Path) -> None:
+    """The band's Signals doorway opens the diet page, which no longer shows
+    headline news (2026-07-30) — so a non-EDGAR general_news row must not
+    inflate the count either."""
+    _insert_signal(db_path, "NU", IN_WINDOW, source_feed="fmp_stock_news")
+    story = build_since_last(db_path, since=SINCE, now=NOW)
+    assert story.is_quiet
 
 
 def test_falsifiers_armed_counts_owner_decisions_with_falsifier(db_path: Path) -> None:

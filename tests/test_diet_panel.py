@@ -1,8 +1,11 @@
 """Tests for src/pipeline/diet_panel.py — the information-diet PULL surface.
 
-Renders through the S1 control kit; verifies the two lenses (ingest stream +
-forward agenda), the consensus_rating pill, the disclosed scaffold note,
-empty-state disclosure on a pre-0094 DB, and HTML-escaping of untrusted fields.
+Renders through the S1 control kit; verifies the lenses (earnings readouts +
+ingest stream + forward agenda), the parsed sell-side table, the disclosed
+scaffold note, empty-state disclosure on a pre-0094 DB, HTML-escaping of
+untrusted fields, and — owner ruling 2026-07-30 — that general-news headlines
+NEVER render (the news reading list was removed entirely; only EDGAR-fed
+``general_news`` rows survive, as filings).
 """
 
 from __future__ import annotations
@@ -58,20 +61,28 @@ def db(tmp_path: Path) -> Path:
 def test_renders_both_lenses_through_the_kit(db: Path) -> None:
     html = render_diet_panel(db)
     # ingest stream, regrouped (Wave 3, D3): the rating lands in the parsed
-    # Sell-side actions table (full title preserved on hover), the news row
-    # stays in the reading list.
+    # Sell-side actions table (full title preserved on hover); the general-news
+    # headline is GONE — the reading list was removed entirely (2026-07-30).
     assert "Ingest stream" in html
     assert "Sell-side actions" in html
     assert "upgrades <strong>Buy</strong>" in html
     assert 'title="MS upgrades META to Buy"' in html
-    assert "Nu launches product" in html
+    assert "Nu launches product" not in html
     # forward agenda: the investor day as a dated row.
     assert "Forward agenda" in html
     assert "Analyst Day 2099" in html
     assert "2099-09-18" in html
     # kit classes only — no bespoke table/pill systems.
-    for cls in ("p-table", "k-pill", "k-tick", "panel"):
+    for cls in ("p-table", "k-tick", "panel"):
         assert cls in html
+
+
+def test_headline_news_never_renders(db: Path) -> None:
+    """Owner ruling 2026-07-30: 'remove news section entirely'. No news group
+    header, no headline row, regardless of source quality."""
+    html = render_diet_panel(db)
+    assert "News &amp; podcasts" not in html
+    assert "Nu launches product" not in html
 
 
 def test_media_appearance_renders_in_the_stream(db: Path) -> None:
@@ -87,6 +98,7 @@ def test_media_appearance_renders_in_the_stream(db: Path) -> None:
     finally:
         conn.close()
     html = render_diet_panel(db)
+    assert "Podcasts" in html  # its own group header now (news list removed)
     assert "David Vélez on Invest Like the Best" in html
     assert 'k-pill">Podcast' in html  # neutral category pill (§2 accent discipline)
     assert "Invest Like the Best" in html  # the show name in the source column
@@ -125,6 +137,7 @@ def test_book_names_float_to_top_and_are_marked(tmp_path: Path) -> None:
     names. A held name with an OLDER story still leads a watchlist name with a
     NEWER one, and carries the 'core' marker."""
     d = tmp_path / "prio.db"
+    # EDGAR-fed rows (the filings block) — headline news no longer renders.
     make_news_then_signals(
         d,
         [
@@ -135,8 +148,8 @@ def test_book_names_float_to_top_and_are_marked(tmp_path: Path) -> None:
                 "http://x/nu",
                 "2026-06-10 09:00:00",
                 None,
-                "Reuters",
-                "fmp_stock_news",
+                "SEC",
+                "edgar_8k",
                 "t",
             ),
             # non-book name, newer (would lead in pure recency)
@@ -146,8 +159,8 @@ def test_book_names_float_to_top_and_are_marked(tmp_path: Path) -> None:
                 "http://x/zz",
                 "2026-06-14 09:00:00",
                 None,
-                "Reuters",
-                "fmp_stock_news",
+                "SEC",
+                "edgar_8k",
                 "t",
             ),
         ],
@@ -171,9 +184,9 @@ def test_book_names_float_to_top_and_are_marked(tmp_path: Path) -> None:
     assert "core" in html
 
 
-def test_low_quality_sources_are_filtered_from_the_stream(tmp_path: Path) -> None:
-    """Owner feedback 2026-07-14: 'shit sources'. Content-farm publishers are
-    dropped from the reading lane; reputable ones stay."""
+def test_headline_news_dropped_regardless_of_source_quality(tmp_path: Path) -> None:
+    """Supersedes the 2026-07-14 'shit sources' quality filter at this surface:
+    since 2026-07-30 NO headline news renders — reputable or content-farm."""
     d = tmp_path / "sources.db"
     make_news_then_signals(
         d,
@@ -201,7 +214,7 @@ def test_low_quality_sources_are_filtered_from_the_stream(tmp_path: Path) -> Non
         ],
     )
     html = render_diet_panel(d)
-    assert "Nu real report" in html
+    assert "Nu real report" not in html
     assert "Nu farm recap" not in html
 
 
@@ -222,9 +235,11 @@ def test_fresh_stream_has_no_warn_chip(tmp_path: Path) -> None:
 
     d = tmp_path / "fresh.db"
     now = datetime.now(UTC).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    # A rating row (yf_grades) — freshness is computed from the rows that
+    # actually render, and headline news no longer does.
     make_news_then_signals(
         d,
-        [("NU", "Nu fresh story", "http://x/1", now, None, "Reuters", "fmp_stock_news", "t")],
+        [("NU", "JPM maintains Buy on NU", "http://x/1", now, None, "JPM", "yf_grades", "t")],
     )
     html = render_diet_panel(d)
     assert "newest signal 0d ago" in html
@@ -232,6 +247,8 @@ def test_fresh_stream_has_no_warn_chip(tmp_path: Path) -> None:
 
 
 def test_escapes_untrusted_headline(tmp_path: Path) -> None:
+    # An EDGAR-fed row (renders in the filings block) — the escaping contract
+    # must hold on the rows that still reach the page.
     d = tmp_path / "xss.db"
     make_news_then_signals(
         d,
@@ -242,8 +259,8 @@ def test_escapes_untrusted_headline(tmp_path: Path) -> None:
                 "http://x/1",
                 "2026-06-12 09:00:00",
                 None,
-                "X",
-                "fmp_stock_news",
+                "SEC",
+                "edgar_8k",
                 "t",
             )
         ],
@@ -299,24 +316,26 @@ def test_stream_groups_ratings_filings_and_news(tmp_path: Path) -> None:
     )
     html = render_diet_panel(db)
 
-    # Three group headers with deterministic summaries.
+    # Ratings + filings group headers with deterministic summaries; the news
+    # reading list is gone (2026-07-30) and its headline never renders.
     assert "Sell-side actions" in html
     assert "1 action(s) on 1 name(s)" in html
     assert "1 PT raise(s) / 0 cut(s)" in html
     assert "Filings" in html
-    assert "News &amp; podcasts" in html
+    assert "News &amp; podcasts" not in html
+    assert "Nu wins banking license in Mexico" not in html
     # The rating parsed into firm/action/PT columns with the delta anchored.
     assert "maintains <strong>Neutral</strong>" in html
     assert "$109 →" in html and "$110" in html and "(+1%)" in html
     # The filing's kind lifted into a chip, headline de-prefixed.
     assert 'k-chip k-chip-mono">SC 13D/A</span>' in html
-    # Groups order: ratings, filings, then the news reading list.
+    # Groups order: ratings then filings.
     assert html.index("Sell-side actions") < html.index("Filings")
-    assert html.index("Filings") < html.index("News &amp; podcasts")
 
 
-def test_stream_group_absent_when_kind_absent(tmp_path: Path) -> None:
-    """An empty group renders NO header (hide-don't-stub) — news only here."""
+def test_stream_empty_when_only_headline_news_exists(tmp_path: Path) -> None:
+    """A DB holding nothing but headline news renders the honest empty state —
+    the panel behaves as if the news lane never existed (hide-don't-stub)."""
     db = tmp_path / "signals.db"
     make_news_then_signals(
         db,
@@ -336,4 +355,6 @@ def test_stream_group_absent_when_kind_absent(tmp_path: Path) -> None:
     html = render_diet_panel(db)
     assert "Sell-side actions" not in html
     assert ">Filings" not in html
-    assert "News &amp; podcasts" in html
+    assert "News &amp; podcasts" not in html
+    assert "Nu launches product" not in html
+    assert "No diet signals yet" in html

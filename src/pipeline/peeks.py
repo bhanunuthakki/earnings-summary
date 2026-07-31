@@ -39,7 +39,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from html import escape
 from io import StringIO
 from pathlib import Path
@@ -80,6 +80,7 @@ __all__ = [
     "render_alerts_list_peek",
     "render_derived_peek",
     "render_discovery_compare_peek",
+    "render_earnings_readout_peek",
     "render_fact_provenance_peek",
     "render_fit_peek",
     "render_memo_peek",
@@ -2171,7 +2172,7 @@ def _prep_header(conn: sqlite3.Connection, repo_root: Path, t: str) -> str:
     return f'<div class="prep-head"><span class="prep-when">reports {when_txt}</span>{status}</div>'
 
 
-def _prep_watch_items(db_path: Path, t: str) -> str:
+def _prep_watch_items(db_path: Path, t: str, *, heading: str = "What you said to watch") -> str:
     try:
         from user_state.notes import list_notes
 
@@ -2182,7 +2183,7 @@ def _prep_watch_items(db_path: Path, t: str) -> str:
     notes = sorted(notes, key=lambda n: kind_rank.get(n.kind, 9))[:6]
     if not notes:
         return (
-            '<div class="prep-sec"><h4>What you said to watch</h4>'
+            f'<div class="prep-sec"><h4>{escape(heading)}</h4>'
             '<p class="muted">No open watch items or questions on this name — capture one '
             "and it becomes this list.</p></div>"
         )
@@ -2193,10 +2194,10 @@ def _prep_watch_items(db_path: Path, t: str) -> str:
         f"{escape(n.body.strip())}</button></li>"
         for n in notes
     )
-    return f'<div class="prep-sec"><h4>What you said to watch</h4><ul>{items}</ul></div>'
+    return f'<div class="prep-sec"><h4>{escape(heading)}</h4><ul>{items}</ul></div>'
 
 
-def _prep_ledger_notes(db_path: Path, t: str) -> str:
+def _prep_ledger_notes(db_path: Path, t: str, *, heading: str = "Queued from prior signals") -> str:
     try:
         from user_state.ledger import list_entries
 
@@ -2212,7 +2213,7 @@ def _prep_ledger_notes(db_path: Path, t: str) -> str:
         f'<span class="muted">({escape(str(e.created_at)[:10])})</span></li>'
         for e in entries
     )
-    return f'<div class="prep-sec"><h4>Queued from prior signals</h4><ul>{items}</ul></div>'
+    return f'<div class="prep-sec"><h4>{escape(heading)}</h4><ul>{items}</ul></div>'
 
 
 def _prep_valuation(conn: sqlite3.Connection, t: str) -> str:
@@ -2263,3 +2264,270 @@ _PREP_CSS = """
   color: var(--fg); font: inherit; text-align: left; }
 .prep-ask:hover { color: var(--accent); }
 """.strip()
+
+
+# ----------------------------------------------------------------------------
+# Post-earnings readout peek — the diet page's post-ER doorway (2026-07-30)
+# ----------------------------------------------------------------------------
+
+
+def render_earnings_readout_peek(db_path: Path, repo_root: Path, ticker: str) -> str | None:
+    """The on-demand POST-earnings readout for one name — the counterpart of
+    :func:`render_earnings_prep_peek`, assembled at click time (D2: nothing
+    pre-generates) and grounded in what the platform actually recorded about
+    the just-reported quarter:
+
+    header (last reported date + thesis breach pill) · beat/miss vs street
+    (latest quarter + the 8-quarter base rate) · tier-1 KPI moves latest-vs-
+    prior · the call-tone shift summary (``earnings_tone`` alert, when one
+    fired) · the transcript doorway (``/source/<doc_id>``) · your open watch
+    items ("did they answer it?") · what last quarter's signals queued for
+    this call · the valuation stance — then the ask-engine doorway for the
+    full LLM narrative readout. Every block is best-effort (a missing table
+    drops its block, never the memo); ``None`` (→ the route 404s) only when
+    the ticker isn't a tracked, non-archived name."""
+    t = (ticker or "").strip().upper()
+    if not t:
+        return None
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    except sqlite3.Error:
+        return None
+    try:
+        try:
+            tracked = conn.execute(
+                "SELECT list_type FROM tracked_companies WHERE ticker = ? AND archived_at IS NULL",
+                (t,),
+            ).fetchone()
+        except sqlite3.Error:
+            tracked = None
+        if tracked is None:
+            return None
+        header = _readout_header(conn, t)
+        surprise = _readout_surprise(conn, t)
+        kpis = _readout_kpi_moves(conn, t)
+        transcript = _readout_transcript_link(conn, t)
+        valuation = _prep_valuation(conn, t)
+    finally:
+        conn.close()
+
+    tone = _readout_tone(db_path, t)
+    watch = _prep_watch_items(db_path, t, heading="What you said to watch — did they answer it?")
+    ledger = _prep_ledger_notes(db_path, t, heading="Queued for this call last quarter")
+
+    ask_q = (
+        f"Write the post-earnings readout for {t}'s most recent reported quarter: "
+        "compare the reported actuals and KPI moves to my thesis's break rules and the "
+        "KPIs I track, pull what management actually said on the call — especially where "
+        "it answers my open questions and watch items — say where the quarter confirmed "
+        "or pressured the thesis, and end with what to verify next quarter. Ground every "
+        "claim in the transcript and reported figures, last 8 quarters."
+    )
+    foot = (
+        '<div class="cc-peek-foot">'
+        f'<button type="button" class="k-chip k-chip-btn" data-ask-q="{escape(ask_q, quote=True)}">'
+        "ask for the full readout →</button>"
+        f'<a href="/#holding={escape(t, quote=True)}">open the holding →</a></div>'
+    )
+    return (
+        f'<div class="cc-prep">{header}{surprise}{kpis}{tone}{transcript}{watch}{ledger}'
+        f"{valuation}</div>{foot}<style>{_PREP_CSS}</style>"
+    )
+
+
+def _readout_header(conn: sqlite3.Connection, t: str) -> str:
+    """ "reported <date> (Nd ago)" + the thesis breach pill. The date prefers an
+    actual report event (``earnings_surprises.release_date``), falling back to
+    the earnings calendar's kept-as-history past rows."""
+    when: str | None = None
+    try:
+        row = conn.execute(
+            "SELECT MAX(release_date) FROM earnings_surprises WHERE ticker = ?", (t,)
+        ).fetchone()
+        if row is not None and row[0]:
+            when = str(row[0])[:10]
+    except sqlite3.Error:
+        when = None
+    if when is None:
+        try:
+            from expected_earnings import last_reported_by_ticker
+
+            d = last_reported_by_ticker(conn, datetime.now(UTC).date()).get(t)
+            when = d.isoformat() if d is not None else None
+        except Exception:
+            when = None
+    status = ""
+    try:
+        row = conn.execute(
+            "SELECT breach_status FROM thesis_state WHERE ticker = ?", (t,)
+        ).fetchone()
+        if row is not None and row[0]:
+            tone = {"ok": "-ok", "watch": "-warn", "breach": "-bad"}.get(str(row[0]), "")
+            status = f' <span class="k-pill k-pill{tone}">{escape(str(row[0]))}</span>'
+    except sqlite3.Error:
+        status = ""
+    if when:
+        try:
+            days = (datetime.now(UTC).date() - date.fromisoformat(when)).days
+            when_txt = f"reported {escape(when)} ({days}d ago)"
+        except ValueError:
+            when_txt = f"reported {escape(when)}"
+    else:
+        when_txt = "no reported quarter on record yet"
+    return f'<div class="prep-head"><span class="prep-when">{when_txt}</span>{status}</div>'
+
+
+def _readout_surprise(conn: sqlite3.Connection, t: str) -> str:
+    """Latest quarter's beat/miss vs street plus the 8-quarter base rate, from
+    ``earnings_surprises`` — absent entirely when the ingest hasn't landed."""
+    try:
+        row = conn.execute(
+            "SELECT eps_estimate, eps_actual, eps_surprise_pct, "
+            "revenue_estimate, revenue_actual, revenue_surprise_pct "
+            "FROM earnings_surprises WHERE ticker = ? "
+            "ORDER BY release_date DESC LIMIT 1",
+            (t,),
+        ).fetchone()
+    except sqlite3.Error:
+        return ""
+    if row is None:
+        return ""
+
+    def _side(label: str, est: object, act: object, pct: object) -> str:
+        if act is None or pct is None:
+            return ""
+        try:
+            p = float(str(pct))
+        except ValueError:
+            return ""
+        tone = "k-num-pos" if p >= 0 else "k-num-neg"
+        verb = "beat" if p >= 0 else "miss"
+        vs = ""
+        if est is not None:
+            vs = f" vs {escape(str(est))} est"
+        return (
+            f"{label} {escape(str(act))}{vs} "
+            f'<span class="{tone}">({verb} {escape(fmt_pct(p, signed=True))})</span>'
+        )
+
+    bits = [
+        b
+        for b in (
+            _side("EPS", row[0], row[1], row[2]),
+            _side("Revenue", row[3], row[4], row[5]),
+        )
+        if b
+    ]
+    if not bits:
+        return ""
+    rate = ""
+    try:
+        from compute.earnings_surprise import surprise_scorecard_for
+
+        conn.row_factory = sqlite3.Row
+        try:
+            sc = surprise_scorecard_for(conn, t, lookback_quarters=8)
+        finally:
+            conn.row_factory = None
+        if sc.total_quarters and sc.eps.beat_rate_pct is not None:
+            rate = (
+                f'<p class="muted">EPS beat rate {sc.eps.beat_rate_pct}% '
+                f"over the last {sc.total_quarters} quarter(s)</p>"
+            )
+    except Exception:
+        rate = ""
+    return f'<div class="prep-sec"><h4>Vs street</h4><p>{" · ".join(bits)}</p>{rate}</div>'
+
+
+def _readout_kpi_moves(conn: sqlite3.Connection, t: str) -> str:
+    """Tier-1 KPI moves, latest vs prior fact — the same deltas the cockpit
+    chips render (one reader, so the peek can't disagree with the cockpit)."""
+    try:
+        from pipeline.research_cockpit import (
+            _tier1_kpi_deltas,  # pyright: ignore[reportPrivateUsage]
+        )
+
+        deltas = _tier1_kpi_deltas(conn, {t}, as_of=datetime.now(UTC).date()).get(t, [])
+    except Exception:
+        return ""
+    if not deltas:
+        return ""
+    deltas = sorted(deltas, key=lambda d: d.magnitude, reverse=True)[:8]
+    rows: list[str] = []
+    for d in deltas:
+        tone_cls = {"ok": "k-num-pos", "bad": "k-num-neg", "warn": "k-num-neg"}.get(d.tone, "")
+        why = f' title="{escape(d.tone_why, quote=True)}"' if d.tone_why else ""
+        delta_html = (
+            f'<span class="{tone_cls}"{why}>{escape(d.delta_display)}</span>'
+            if tone_cls
+            else f"<span{why}>{escape(d.delta_display)}</span>"
+        )
+        rows.append(
+            f"<li>{escape(d.name)}: {d.latest_value:g} {escape(d.unit)} "
+            f"({delta_html} vs {d.prior_value:g}, {escape(d.prior_period[:10])})</li>"
+        )
+    return (
+        '<div class="prep-sec"><h4>Tier-1 KPI moves, latest vs prior</h4>'
+        f"<ul>{''.join(rows)}</ul></div>"
+    )
+
+
+def _readout_tone(db_path: Path, t: str) -> str:
+    """The latest ``earnings_tone`` alert's LLM diff summary + shifts — the
+    call-tone read the trigger already produced (never recomputed here)."""
+    try:
+        alerts = list_alerts(ticker=t, limit=50, db_path=db_path)
+    except sqlite3.Error:
+        return ""
+    tone = next((a for a in alerts if a.trigger_kind == "earnings_tone"), None)
+    if tone is None or not tone.evidence_json:
+        return ""
+    try:
+        parsed = json.loads(tone.evidence_json)
+    except ValueError:
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    ev = cast("dict[str, object]", parsed)
+    summary = str(ev.get("summary") or "").strip()
+    if not summary:
+        return ""
+    shifts = ev.get("shifts")
+    shift_items = ""
+    if isinstance(shifts, list) and shifts:
+        shift_list = cast("list[object]", shifts)
+        shift_items = (
+            "<ul>"
+            + "".join(f"<li>{escape(str(s))}</li>" for s in shift_list[:4] if str(s).strip())
+            + "</ul>"
+        )
+    stamp = escape(str(tone.fired_at)[:10])
+    return (
+        '<div class="prep-sec"><h4>Call tone vs prior quarters</h4>'
+        f'<p>{escape(summary)} <span class="muted">({stamp})</span></p>{shift_items}</div>'
+    )
+
+
+def _readout_transcript_link(conn: sqlite3.Connection, t: str) -> str:
+    """The latest selected transcript as a ``/source/<doc_id>`` doorway with
+    its period label — the primary source every readout claim traces to."""
+    try:
+        from provenance.selection import selected_transcripts_relation
+
+        rel = selected_transcripts_relation(conn)
+        row = conn.execute(
+            f"SELECT document_id, fiscal_period_type, period_end FROM {rel.sql} "  # nosec B608 -- trusted internal SQL shape; values remain bound
+            + "WHERE UPPER(ticker) = ? AND period_end IS NOT NULL "
+            + "ORDER BY period_end DESC LIMIT 1",
+            (t,),
+        ).fetchone()
+    except Exception:
+        return ""
+    if row is None or row[0] is None:
+        return ""
+    doc_id, fpt, period_end = int(row[0]), str(row[1] or "").strip(), str(row[2] or "")
+    label = f"{fpt} {period_end[:4]}".strip() or "latest call"
+    return (
+        '<div class="prep-sec"><h4>Primary source</h4>'
+        f'<p><a href="/source/{doc_id}">{escape(label)} earnings-call transcript →</a></p></div>'
+    )

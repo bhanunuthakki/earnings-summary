@@ -236,6 +236,19 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             abort(404)
         return Response(html, mimetype="text/html")
 
+    @app.route("/api/peek/earnings-readout", methods=["GET"])
+    def peek_earnings_readout():
+        from pipeline.peeks import render_earnings_readout_peek
+
+        html = render_earnings_readout_peek(
+            db_path,
+            repo_root,
+            request.args.get("ticker") or "",
+        )
+        if html is None:
+            abort(404)
+        return Response(html, mimetype="text/html")
+
     @app.route("/api/peek/fit", methods=["GET"])
     def peek_fit():
         from pipeline.peeks import render_fit_peek

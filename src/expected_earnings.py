@@ -21,7 +21,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, date, datetime
 
-__all__ = ["record_next_earnings", "upcoming_by_ticker"]
+__all__ = ["last_reported_by_ticker", "record_next_earnings", "upcoming_by_ticker"]
 
 
 def _now_stamp(now: datetime | None) -> str:
@@ -65,6 +65,30 @@ def record_next_earnings(
         "WHERE ticker = ? AND expected_date >= ? AND expected_date != ?",
         (ticker.upper(), today.isoformat(), iso),
     )
+
+
+def last_reported_by_ticker(conn: sqlite3.Connection, before: date) -> dict[str, date]:
+    """Latest expected_date < ``before`` per ticker — the most recent PAST
+    report date. Past rows are kept as history by :func:`record_next_earnings`
+    (only future-dated reschedules are pruned), which is exactly what makes
+    this read possible. Same tolerance contract as :func:`upcoming_by_ticker`:
+    a pre-0082 DB or an unparseable date degrades to the ticker being absent.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT ticker, MAX(expected_date) FROM expected_earnings "
+            "WHERE expected_date < ? GROUP BY ticker",
+            (before.isoformat(),),
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    out: dict[str, date] = {}
+    for ticker, iso in rows:
+        try:
+            out[str(ticker).upper()] = date.fromisoformat(str(iso)[:10])
+        except ValueError:
+            continue
+    return out
 
 
 def upcoming_by_ticker(conn: sqlite3.Connection, on_or_after: date) -> dict[str, date]:
