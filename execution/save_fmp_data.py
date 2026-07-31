@@ -608,24 +608,52 @@ def _log_deferred_split_quarantine(
 # Endpoint catalog
 # ---------------------------------------------------------------------------
 
+# Peer-depth contract (2026-07-30 DB-size audit). index_member peers are
+# comp-set pool candidates, never subjects, and their only consumers
+# (discovery screens, comparable-set metrics, the ghost filter) read these 8
+# file families at shallow depth — yet the full catalog was fetched for ~2,350
+# peers, which is what grew data/historical/fmp/ to 9.1 GB. A value of None
+# keeps the catalog's default params; a dict REPLACES the job's params with
+# the shallow depth:
+#   income 9 quarters   — screens._rev_yoy_at(inc, 4) reads index 8
+#   key-metrics 4       — the TTM sums need exactly 4 quarters
+#   balance sheet 1     — only the latest quarter is read
+#   market cap ~140d    — ~90 daily rows, one quarter of trading closes
+# Existing full-depth peer files are trimmed once by
+# execution/truncate_peer_fmp_cache.py, whose KEEP_FULL/TRUNCATE_DEPTH tables
+# must stay in sync with this dict (guarded by tests/test_peer_fmp_depth.py).
+PEER_MARKET_CAP_FROM = (TODAY - timedelta(days=140)).isoformat()
+PEER_ENDPOINT_ALLOWLIST: dict[str, dict[str, object] | None] = {
+    "profile": None,
+    "peers": None,
+    "key_metrics_ttm": None,
+    "financial_ratios_ttm": None,
+    "income_statement_quarterly": {"period": "quarter", "limit": 9},
+    "key_metrics_quarterly": {"period": "quarter", "limit": 4},
+    "balance_sheet_quarterly": {"period": "quarter", "limit": 1},
+    "historical_market_cap": {"from": PEER_MARKET_CAP_FROM, "to": TODAY_STR, "limit": 5000},
+}
 
-def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[dict]:
+
+def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[dict[str, object]]:
     """Build the endpoint job list for a ticker.
 
     list_type controls scope:
-      - portfolio / watchlist / none / TEMPLATE -> full 67-endpoint set
-      - index_member / etf -> skips the 10 financial-reports-form-10-k-json calls
-        (saves ~1,700 calls across ~170 index members)
+      - portfolio / watchlist / evaluation / none / TEMPLATE -> full 67-endpoint set
+      - etf -> skips the 10 financial-reports-form-10-k-json calls
+      - index_member -> the shallow 8-endpoint peer contract
+        (PEER_ENDPOINT_ALLOWLIST above): peers only need screen/comp-set
+        inputs, so the rest of the catalog is never fetched for them
     """
     s = symbol.upper()
     skip_10k = list_type in ("index_member", "etf")
-    jobs: list[dict] = []
+    jobs: list[dict[str, object]] = []
 
     def add(
         path: str,
         period: str,
         suffix: str,
-        extra: dict | None = None,
+        extra: dict[str, object] | None = None,
         file_override: str | None = None,
     ):
         jobs.append(
@@ -760,6 +788,13 @@ def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[dict]:
         "price_chart_10y_div_adj",
         {"from": TEN_YEARS_AGO, "to": TODAY_STR},
     )
+
+    if list_type == "index_member":
+        jobs = [j for j in jobs if j["suffix"] in PEER_ENDPOINT_ALLOWLIST]
+        for job in jobs:
+            override = PEER_ENDPOINT_ALLOWLIST[cast("str", job["suffix"])]
+            if override is not None:
+                job["extra"] = dict(override)
 
     return jobs
 
