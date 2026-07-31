@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import sqlite3
 import sys
 from datetime import date
@@ -311,39 +312,50 @@ def test_metric_fingerprint_tracks_memberships_and_source_files(
     source_file = source_dir / "SOFI_historical_market_cap.json"
     source_file.write_text('[{"date":"2026-07-28","marketCap":100}]', encoding="utf-8")
 
-    frozen, slices, selection_a, sources_a, file_count = module._metric_input_fingerprint(
-        conn,
-        tickers=["NU"],
-        repo_root=tmp_path,
-        include_pool_scopes=False,
-    )
-    source_file.write_text(
-        '[{"date":"2026-07-28","marketCap":200}]',
-        encoding="utf-8",
-    )
-    _, _, selection_b, sources_b, _ = module._metric_input_fingerprint(
-        conn,
-        tickers=["NU"],
-        repo_root=tmp_path,
-        include_pool_scopes=False,
-    )
+    def _fingerprint() -> tuple[
+        dict[str, module.FrozenSet | None], module.ScopeSlices, str, str, int
+    ]:
+        return module._metric_input_fingerprint(
+            conn,
+            tickers=["NU"],
+            repo_root=tmp_path,
+            include_pool_scopes=False,
+        )
+
+    # Source files are identified by (st_mtime_ns, st_size), so pin mtime
+    # explicitly rather than leaning on filesystem timestamp granularity.
+    os.utime(source_file, ns=(1_000_000_000_000_000_000, 1_000_000_000_000_000_000))
+    frozen, slices, selection_a, sources_a, file_count = _fingerprint()
+
+    # Nothing touched: identical fingerprint, so a same-day re-run is still
+    # correctly deduplicated.
+    _, _, _, sources_repeat, _ = _fingerprint()
+
+    # A refetch rewrites the file and moves mtime, even at an identical size.
+    source_file.write_text('[{"date":"2026-07-28","marketCap":200}]', encoding="utf-8")
+    assert source_file.stat().st_size == len('[{"date":"2026-07-28","marketCap":100}]')
+    os.utime(source_file, ns=(2_000_000_000_000_000_000, 2_000_000_000_000_000_000))
+    _, _, selection_b, sources_mtime, _ = _fingerprint()
+
+    # A size change is caught even if mtime were somehow preserved.
+    source_file.write_text('[{"date":"2026-07-28","marketCap":2000}]', encoding="utf-8")
+    os.utime(source_file, ns=(2_000_000_000_000_000_000, 2_000_000_000_000_000_000))
+    _, _, _, sources_size, _ = _fingerprint()
+
     conn.execute(
         "UPDATE comparable_set_members SET membership_reason = 'fallback' "
         "WHERE comparable_set_id = ?",
         (set_id,),
     )
-    _, _, selection_c, _, _ = module._metric_input_fingerprint(
-        conn,
-        tickers=["NU"],
-        repo_root=tmp_path,
-        include_pool_scopes=False,
-    )
+    _, _, selection_c, _, _ = _fingerprint()
 
     assert frozen["NU"] == ("operating", [("SOFI", "industry", False)])
     assert slices == {}
     assert file_count == len(module._MEMBER_SOURCE_SUFFIXES)
     assert selection_a == selection_b
-    assert sources_a != sources_b
+    assert sources_a == sources_repeat
+    assert sources_a != sources_mtime
+    assert sources_mtime != sources_size
     assert selection_b != selection_c
     conn.close()
 
