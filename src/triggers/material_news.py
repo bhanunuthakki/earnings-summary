@@ -20,10 +20,10 @@ Two consequences fall out of that:
     the Protocol requires it to return an ``AlertDraft`` — so the filter must
     happen earlier. ``scan()`` classifies every recent headline in ONE batched
     LLM call, then emits a candidate *only* for stories scoring
-    ``relevance >= _RELEVANCE_THRESHOLD`` **and** classified as new primary
-    information (``event_type`` primary/results — commentary, opinion pieces,
-    and recaps of already-reported events are vetoed regardless of score;
-    see the v3 taxonomy at ``_EVENT_PRIMARY``). Immaterial stories never
+    ``relevance >= _RELEVANCE_THRESHOLD`` **and** classified as a new PRIMARY
+    event (``event_type`` primary — commentary is vetoed regardless of score,
+    and results-class stories route to the earnings machinery instead of
+    alerting here; see ``_ALERTABLE_EVENT_TYPES``). Immaterial stories never
     become candidates, so the driver never fires them.
 
 Cost is bounded: one batched call per ticker per run (up to
@@ -129,8 +129,16 @@ _EVENT_DEDUP_WINDOW_HOURS = 72
 _EVENT_PRIMARY = "primary"  # a new company/regulator/counterparty action
 _EVENT_RESULTS = "results"  # the earnings/KPI release or call itself
 _EVENT_COMMENTARY = "commentary"  # writing ABOUT the company: opinion/recap/price chatter
-# Code-side gate: commentary can NEVER become a candidate, whatever it scored.
-_ALERTABLE_EVENT_TYPES = frozenset({_EVENT_PRIMARY, _EVENT_RESULTS})
+# Code-side gate: ONLY primary events can become candidates. Results-class
+# stories are classified (the 3-way taxonomy keeps earnings coverage from
+# being misfiled as primary) but never alert here — the earnings machinery
+# (earnings_tone, pre/post-ER readouts, the filings block) owns results-day
+# coverage, and the 2026-07-31 backtest showed every results-class fire was
+# redundant with it (owner: "only stuff not covered by pre and post earnings
+# briefs"). Note a mid-quarter guidance change is PRIMARY, not results — the
+# prompt lists it under primary — so true inter-quarter surprises still fire.
+# The gate is code-side only; the prompt is unchanged, so v4 caches stay valid.
+_ALERTABLE_EVENT_TYPES = frozenset({_EVENT_PRIMARY})
 
 # News-table column contract. No migration creates this table yet (see module
 # docstring); the names live here so a future news loader can align with a

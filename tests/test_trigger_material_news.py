@@ -10,9 +10,10 @@ kpi_inflection): the materiality judgment IS the LLM call, with no deterministic
 fallback. The key contracts verified here:
 
   * scan() emits a candidate ONLY for stories scored >= the relevance floor
-    AND classified as new primary information (event_type primary/results) —
-    commentary/opinion/recap stories never become candidates, whatever they
-    scored (the veto lives in scan; v3 contract, 2026-07-30)
+    AND classified as a new PRIMARY event — commentary/opinion/recap stories
+    AND results-class earnings coverage never become candidates, whatever
+    they scored (the veto lives in scan; results-day coverage belongs to the
+    earnings machinery — owner ruling 2026-07-31)
   * scan() degrades to [] (never raises, never fabricates) when the LLM fails
   * the batch classification is cached — a second scan over the same news is a
     cache hit (no second LLM call)
@@ -734,16 +735,41 @@ def test_should_fire_respects_relevance_floor() -> None:
 
 
 def test_should_fire_event_type_gate() -> None:
-    """Commentary is blocked at fire time too; a pre-v3 candidate (no
-    event_type in evidence) passes on relevance alone — it was built mid-flight
-    under the old contract."""
+    """Commentary AND results are blocked at fire time — only primary events
+    alert (results-day coverage belongs to the earnings machinery, owner
+    ruling 2026-07-31). A pre-v3 candidate (no event_type in evidence) passes
+    on relevance alone — it was built mid-flight under the old contract."""
     trig = MaterialNewsTrigger()
     state = _empty_state()
     assert (
         trig.should_fire(_make_candidate(relevance=0.95, event_type="commentary"), state) is False
     )
-    assert trig.should_fire(_make_candidate(relevance=0.95, event_type="results"), state) is True
+    assert trig.should_fire(_make_candidate(relevance=0.95, event_type="results"), state) is False
+    assert trig.should_fire(_make_candidate(relevance=0.95, event_type="primary"), state) is True
     assert trig.should_fire(_make_candidate(relevance=0.95, event_type=None), state) is True
+
+
+def test_scan_vetoes_results_class(
+    fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A results-class story never fires from the news lane, however large the
+    surprise — the 2026-07-31 backtest showed every results-class fire was
+    redundant with the post-ER readout / earnings_tone coverage."""
+    ids = _seed_three_recent(fixture_db)
+    payload = _classification_payload(
+        [
+            (0, 0.95, "Blowout quarter, huge beat"),
+            (1, 0.90, "8-K results of operations"),
+            (2, 0.85, "Regulator opens probe into core unit"),
+        ],
+        event_types={0: "results", 1: "results", 2: "primary"},
+    )
+    monkeypatch.setattr("triggers.material_news.call_llm", _StatefulLLM([payload]))
+    _patch_anchor(monkeypatch)
+
+    candidates = MaterialNewsTrigger().scan("BN", fixture_db)
+
+    assert [c.key for c in candidates] == [f"BN:news:{ids[2]}"]
 
 
 # ---------------------------------------------------------------------------
