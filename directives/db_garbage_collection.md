@@ -1,9 +1,13 @@
-# DB Garbage Collection (DRAFT — pending owner ratification)
+# DB Garbage Collection
 
-> Status: PROPOSED 2026-07-30. Not yet ratified; no cron registered. The
-> retention windows below are the owner-approval surface — everything else is
-> mechanics. Grounded in the 2026-07-30 three-way consumer audit of
-> financial_facts, kpi_facts, and the telemetry tables.
+> Status: RATIFIED 2026-07-31 (owner). Windows 20Q/12FY confirmed as the
+> standing defaults, and **portfolio IS included** in the facts-depth window
+> (`--include-portfolio` is the standing invocation). First apply ran
+> 2026-07-31 after a verified snapshot
+> (data/archive/pre_gc_20260731_portfolio.db) and a credibility-priors
+> re-baseline. Cron registration is still pending owner approval — until
+> then, runs are manual. Grounded in the 2026-07-30 three-way consumer audit
+> of financial_facts, kpi_facts, and the telemetry tables.
 
 ## Goal
 

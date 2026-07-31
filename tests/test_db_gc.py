@@ -386,6 +386,51 @@ class TestFactsDepth:
         )
 
 
+class TestAppendOnlyGuardWindow:
+    """The 0225 cutover's BEFORE DELETE RAISE(ABORT) trigger on
+    financial_facts must be dropped for the prune and recreated verbatim —
+    and still block ad-hoc deletes afterward."""
+
+    GUARD_SQL = (
+        f"CREATE TRIGGER {db_gc.FACTS_DELETE_GUARD_TRIGGER} "
+        "BEFORE DELETE ON financial_facts BEGIN "
+        "SELECT RAISE(ABORT, 'financial fact history is append-only after cutover'); END"
+    )
+
+    def test_prune_succeeds_and_guard_survives(self, gc_db: Path) -> None:
+        conn = sqlite3.connect(gc_db)
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, list_type) VALUES ('EVAL', 'evaluation')"
+        )
+        _seed_quarters(conn, "EVAL", 30)
+        conn.execute(self.GUARD_SQL)
+        conn.commit()
+        conn.close()
+        report = _run(gc_db, apply=True, policies=["facts-depth"])
+        assert report.policies[0].rows_deleted["financial_facts"] > 0
+        conn = sqlite3.connect(gc_db)
+        # Trigger recreated verbatim…
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?",
+            (db_gc.FACTS_DELETE_GUARD_TRIGGER,),
+        ).fetchone()
+        assert sql is not None and "append-only after cutover" in sql[0]
+        # …and still functional against ad-hoc deletes.
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute("DELETE FROM financial_facts")
+
+    def test_prune_works_without_guard_present(self, gc_db: Path) -> None:
+        conn = sqlite3.connect(gc_db)
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, list_type) VALUES ('EVAL', 'evaluation')"
+        )
+        _seed_quarters(conn, "EVAL", 30)
+        conn.commit()
+        conn.close()
+        report = _run(gc_db, apply=True, policies=["facts-depth"])
+        assert report.policies[0].rows_deleted["financial_facts"] > 0
+
+
 class TestGuards:
     def test_window_floors_enforced(self, gc_db: Path) -> None:
         with pytest.raises(ValueError, match="keep-quarters"):
