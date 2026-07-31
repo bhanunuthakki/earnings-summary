@@ -144,6 +144,37 @@ def test_track_comp_metrics_fingerprints_material_inputs(
     assert captured["deduplicate_completed"] is True
 
 
+def test_source_file_budget_covers_pool_wide_slice_scope() -> None:
+    """Phase 2 (§6) fingerprints every US-listed pool member's cache files.
+
+    The Phase-1-era 5,000 ceiling silently became unreachable-by-design once
+    pool-wide industry/sector slices landed: the pool is ~2,000 names x 4
+    suffixes, so every no-``--ticker`` run raised before ``start_run`` and the
+    daily job died with no pipeline-run row. Pin the budget to the scope it
+    actually has to cover.
+    """
+    from execution import track_comp_metrics as module
+
+    us_listed_pool_ceiling = 2_000
+    required = us_listed_pool_ceiling * len(module._MEMBER_SOURCE_SUFFIXES)
+    assert required <= module._MAX_FINGERPRINT_FILES
+
+
+def test_source_file_budget_breach_reports_the_counts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A breach must name actual-vs-limit; a bare message costs a DB audit."""
+    from execution import track_comp_metrics as module
+
+    monkeypatch.setattr(module, "_MAX_FINGERPRINT_FILES", 4)
+    with pytest.raises(ValueError) as excinfo:
+        module._source_files_fingerprint(tmp_path, {"NU", "MELI"})
+
+    message = str(excinfo.value)
+    assert "8 files from 2 tickers > 4" in message
+
+
 def test_drift_fingerprint_changes_with_selected_rows() -> None:
     from execution import check_comp_set_drift as module
 

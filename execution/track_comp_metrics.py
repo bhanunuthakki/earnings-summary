@@ -83,7 +83,11 @@ _MEMBER_SOURCE_SUFFIXES: tuple[str, ...] = (
     "key_metrics_quarterly",
 )
 _MAX_FINGERPRINT_MEMBERSHIPS = 20_000
-_MAX_FINGERPRINT_FILES = 5_000
+# Phase 2 (§6) fingerprints every pool-slice member's cache files, not just the
+# portfolio subjects' — ~1,440 US-listed slice tickers x 4 suffixes ≈ 5.8k files
+# today and it tracks pool growth, so the Phase-1-era 5,000 ceiling tripped.
+# Sized for parity with the membership budget (~3x current headroom).
+_MAX_FINGERPRINT_FILES = 20_000
 
 FrozenSet = tuple[str, list[tuple[str, str, bool]]]
 ScopeSlices = dict[tuple[str, str], list[str]]
@@ -115,7 +119,10 @@ def _file_sha256(path: Path) -> str | None:
 def _source_files_fingerprint(repo_root: Path, tickers: set[str]) -> tuple[str, int]:
     file_count = len(tickers) * len(_MEMBER_SOURCE_SUFFIXES)
     if file_count > _MAX_FINGERPRINT_FILES:
-        raise ValueError("comparable-set source fingerprint exceeds bounded file budget")
+        raise ValueError(
+            "comparable-set source fingerprint exceeds bounded file budget "
+            f"({file_count} files from {len(tickers)} tickers > {_MAX_FINGERPRINT_FILES})"
+        )
     rows: list[dict[str, object]] = []
     for ticker in sorted(tickers):
         for suffix in _MEMBER_SOURCE_SUFFIXES:
@@ -228,14 +235,20 @@ def _metric_input_fingerprint(
         len(frozen[1]) for frozen in frozen_by_ticker.values() if frozen is not None
     )
     if membership_count > _MAX_FINGERPRINT_MEMBERSHIPS:
-        raise ValueError("comparable-set fingerprint exceeds bounded membership budget")
+        raise ValueError(
+            "comparable-set fingerprint exceeds bounded membership budget "
+            f"({membership_count} > {_MAX_FINGERPRINT_MEMBERSHIPS})"
+        )
 
     slices: ScopeSlices = {}
     if include_pool_scopes:
         slices = pool_scope_slices(load_pool(conn, repo_root))
         membership_count += sum(len(members) for members in slices.values())
         if membership_count > _MAX_FINGERPRINT_MEMBERSHIPS:
-            raise ValueError("pool-scope fingerprint exceeds bounded membership budget")
+            raise ValueError(
+                "pool-scope fingerprint exceeds bounded membership budget "
+                f"({membership_count} across {len(slices)} slices > {_MAX_FINGERPRINT_MEMBERSHIPS})"
+            )
 
     source_tickers: set[str] = set()
     frozen_payload: list[dict[str, object]] = []
