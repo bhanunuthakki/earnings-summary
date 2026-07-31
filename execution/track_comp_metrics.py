@@ -83,7 +83,25 @@ _MEMBER_SOURCE_SUFFIXES: tuple[str, ...] = (
     "key_metrics_quarterly",
 )
 _MAX_FINGERPRINT_MEMBERSHIPS = 20_000
-_MAX_FINGERPRINT_FILES = 5_000
+# Phase 2 (§6) fingerprints every pool-slice member's cache files, not just the
+# portfolio subjects' — ~1,440 US-listed slice tickers x 4 suffixes ≈ 5.8k files
+# today and it tracks pool growth, so the Phase-1-era 5,000 ceiling tripped.
+# Sized for parity with the membership budget (~3x current headroom).
+_MAX_FINGERPRINT_FILES = 20_000
+
+# Fingerprint scheme tag, hashed into the payload below. Reading all ~5.8k files
+# to SHA-256 their contents cost ~74s over ~1.0 GB at current pool scale (vs
+# ~0.4s to stat them) on a job that runs daily, so a source file is identified
+# by (st_mtime_ns, st_size) instead. The trade: a rewrite preserving BOTH size
+# and mtime is invisible here. These caches are only ever rewritten wholesale by
+# a refetch (`open(..., "w")` + `json.dump`; nothing in src/ or execution/ uses
+# copy2/copystat/utime), and every such rewrite moves mtime — so the §8
+# "late-arriving cache file changes the answer" case is still caught. The tag
+# makes the weaker guarantee explicit, and bumping it forces every previously-
+# recorded pipeline_key to differ if the scheme changes again — without that, an
+# attempt recorded under an old scheme could suppress a new one through
+# deduplicate_completed.
+_SOURCE_FINGERPRINT_SCHEME = "stat-v1"
 
 FrozenSet = tuple[str, list[tuple[str, str, bool]]]
 ScopeSlices = dict[tuple[str, str], list[str]]
@@ -99,35 +117,42 @@ def _canonical_sha256(value: object) -> str:
     return sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _file_sha256(path: Path) -> str | None:
-    if not path.exists():
-        return None
-    digest = sha256()
+def _file_stat_signature(path: Path) -> list[int] | None:
+    """[st_mtime_ns, st_size], or None when the file is absent or unreadable.
+
+    Absent and unreadable deliberately collapse to the same None: neither
+    contributes usable input to the metrics, and both flip to a real signature
+    the moment the file lands.
+    """
     try:
-        with path.open("rb") as source:
-            while chunk := source.read(1024 * 1024):
-                digest.update(chunk)
+        stat = path.stat()
     except OSError:
         return None
-    return digest.hexdigest()
+    return [stat.st_mtime_ns, stat.st_size]
 
 
 def _source_files_fingerprint(repo_root: Path, tickers: set[str]) -> tuple[str, int]:
+    """Identify every member cache file by (mtime_ns, size) — see
+    `_SOURCE_FINGERPRINT_SCHEME` for why this is stat-based, not content-based."""
     file_count = len(tickers) * len(_MEMBER_SOURCE_SUFFIXES)
     if file_count > _MAX_FINGERPRINT_FILES:
-        raise ValueError("comparable-set source fingerprint exceeds bounded file budget")
+        raise ValueError(
+            "comparable-set source fingerprint exceeds bounded file budget "
+            f"({file_count} files from {len(tickers)} tickers > {_MAX_FINGERPRINT_FILES})"
+        )
     rows: list[dict[str, object]] = []
     for ticker in sorted(tickers):
         for suffix in _MEMBER_SOURCE_SUFFIXES:
             path = repo_root / "data" / "historical" / "fmp" / f"{ticker.upper()}_{suffix}.json"
             rows.append(
                 {
-                    "sha256": _file_sha256(path),
+                    "stat": _file_stat_signature(path),
                     "suffix": suffix,
                     "ticker": ticker.upper(),
                 }
             )
-    return _canonical_sha256(rows), file_count
+    payload = {"files": rows, "scheme": _SOURCE_FINGERPRINT_SCHEME}
+    return _canonical_sha256(payload), file_count
 
 
 def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:
@@ -228,14 +253,20 @@ def _metric_input_fingerprint(
         len(frozen[1]) for frozen in frozen_by_ticker.values() if frozen is not None
     )
     if membership_count > _MAX_FINGERPRINT_MEMBERSHIPS:
-        raise ValueError("comparable-set fingerprint exceeds bounded membership budget")
+        raise ValueError(
+            "comparable-set fingerprint exceeds bounded membership budget "
+            f"({membership_count} > {_MAX_FINGERPRINT_MEMBERSHIPS})"
+        )
 
     slices: ScopeSlices = {}
     if include_pool_scopes:
         slices = pool_scope_slices(load_pool(conn, repo_root))
         membership_count += sum(len(members) for members in slices.values())
         if membership_count > _MAX_FINGERPRINT_MEMBERSHIPS:
-            raise ValueError("pool-scope fingerprint exceeds bounded membership budget")
+            raise ValueError(
+                "pool-scope fingerprint exceeds bounded membership budget "
+                f"({membership_count} across {len(slices)} slices > {_MAX_FINGERPRINT_MEMBERSHIPS})"
+            )
 
     source_tickers: set[str] = set()
     frozen_payload: list[dict[str, object]] = []
