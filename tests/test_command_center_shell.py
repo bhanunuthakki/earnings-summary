@@ -304,7 +304,6 @@ def test_legacy_deep_links_scroll_to_their_console_section() -> None:
         # Portfolio 8→3 + Review 3→1 composites (console_scaffold csec-* ids).
         "portfolio_synthesis": "csec-synthesis",
         "portfolio_risk": "csec-risk",
-        "red_team": "csec-red_team",
         "positioning": "csec-positioning",
         "portfolio": "csec-performance",
         "decisions": "csec-decisions",
@@ -564,7 +563,8 @@ def test_killed_surfaces_are_out_of_nav_but_redirected() -> None:
     for pid, home in (
         ("portfolio_synthesis", "portfolio_health"),
         ("portfolio_risk", "portfolio_health"),
-        ("red_team", "portfolio_health"),
+        # Health redesign (2026-07-30): Red Team relegated to Ask.
+        ("red_team", "explore"),
         ("positioning", "portfolio_allocation"),
         ("portfolio", "portfolio_allocation"),
         ("decisions_record", "portfolio_record"),

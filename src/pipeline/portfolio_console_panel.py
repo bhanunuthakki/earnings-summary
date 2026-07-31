@@ -72,35 +72,127 @@ def _lazy_section_placeholder(endpoint: str, label: str) -> str:
     )
 
 
+# Health console (owner directive 2026-07-30): the read, then exactly TWO
+# chip-tab cards — nothing below the fold. Chips (.k-chip-btn + the kit's
+# .is-on active state) swap panes in place; each pane fetches its fragment on
+# first activation, so the console shell paints instantly. Layout-only CSS —
+# the chips/pills are the kit.
+_HEALTH_CSS = """<style>
+.hc-card { min-width: 0; }
+.hc-h { margin: 0 0 4px; font-size: var(--fs-title); }
+.hc-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.hc-pane[hidden] { display: none; }
+</style>"""
+
+# Chip switcher + fetch-on-first-activation pane loader. One guarded
+# document-level listener (re-injected fragments never double-wire); the
+# trailing scan runs on EVERY inject so the default pane of each card loads
+# without a click. A failed fetch clears the loaded flag so pressing the chip
+# again retries.
+_HEALTH_TABS_JS = """
+(function () {
+  function loadPane(pane) {
+    if (!pane || !pane.dataset.src || pane.dataset.loaded === '1') return;
+    pane.dataset.loaded = '1';
+    fetch(pane.dataset.src).then(function (r) { return r.text(); }).then(function (html) {
+      pane.innerHTML = html;
+      var scripts = pane.querySelectorAll('script');
+      for (var i = 0; i < scripts.length; i++) {
+        var old = scripts[i];
+        var s = document.createElement('script');
+        if (old.src) s.src = old.src; else s.textContent = old.textContent;
+        old.parentNode.replaceChild(s, old);
+      }
+    }).catch(function () {
+      pane.dataset.loaded = '';
+      pane.innerHTML = '<p class="muted">Failed to load — press the chip again to retry.</p>';
+    });
+  }
+  if (!window.__ccHealthTabs) {
+    window.__ccHealthTabs = true;
+    document.addEventListener('click', function (ev) {
+      var b = ev.target && ev.target.closest ? ev.target.closest('[data-hc-pane]') : null;
+      if (!b) return;
+      var card = b.closest('.hc-card');
+      var pane = document.getElementById(b.getAttribute('data-hc-pane'));
+      if (!card || !pane) return;
+      var chips = card.querySelectorAll('[data-hc-pane]');
+      for (var i = 0; i < chips.length; i++) chips[i].classList.toggle('is-on', chips[i] === b);
+      var panes = card.querySelectorAll('.hc-pane');
+      for (var j = 0; j < panes.length; j++) {
+        if (panes[j] === pane) panes[j].removeAttribute('hidden');
+        else panes[j].setAttribute('hidden', '');
+      }
+      loadPane(pane);
+    });
+  }
+  var open = document.querySelectorAll('.hc-pane:not([hidden])[data-src]');
+  for (var k = 0; k < open.length; k++) loadPane(open[k]);
+})();
+""".strip()
+
+# (anchor, header question, ((fragment key, chip label), ...)). Anchors keep
+# the legacy csec-synthesis / csec-risk ids so old #portfolio_synthesis /
+# #portfolio_risk deep-links still land on the right card. Max 4 chips per
+# card — the owner's cap; anything that didn't earn a chip lives on the
+# still-live /api/panel/portfolio_risk route or behind an Ask doorway.
+_HEALTH_CARDS: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
+    (
+        "synthesis",
+        "What could break?",
+        (("thesis", "Theses"), ("exposure", "Exposure"), ("collisions", "Collisions")),
+    ),
+    (
+        "risk",
+        "How exposed is the book?",
+        (("bets", "Bets"), ("drawdown", "Drawdown"), ("crowding", "Crowding"), ("tail", "Tail")),
+    ),
+)
+
+
+def _health_card(anchor: str, question: str, tabs: tuple[tuple[str, str], ...]) -> str:
+    chips = "".join(
+        f'<button type="button" class="k-chip k-chip-btn{" is-on" if i == 0 else ""}" '
+        f'data-hc-pane="hcp-{key}">{escape(label)}</button>'
+        for i, (key, label) in enumerate(tabs)
+    )
+    panes = "".join(
+        f'<div class="hc-pane" id="hcp-{key}"{"" if i == 0 else " hidden"} '
+        f'data-src="/api/panel/portfolio_health?fragment={key}">'
+        '<p class="cc-loading">Loading…</p></div>'
+        for i, (key, _label) in enumerate(tabs)
+    )
+    return (
+        f'<div class="console-sec hc-card" id="csec-{escape(anchor)}">'
+        f'<h2 class="hc-h">{escape(question)}</h2>'
+        f'<div class="hc-tabs">{chips}</div>{panes}</div>'
+    )
+
+
 def render_portfolio_health_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
-    """Portfolio → Health: thesis health and what could break it. Composes the
-    Synthesis (thesis rollup + allocation) landing, the whole-book Risk cockpit,
-    and the monthly adversarial Red Team brief. Risk + Red Team are the
-    console's heavy tail (tracker round-trips + the brief) — they defer to
-    on-reveal HTMX fragments so Synthesis paints first (B4a).
+    """Portfolio → Health, redesigned (owner directive 2026-07-30): the Band-1
+    read, then exactly TWO chip-tab cards side by side — Theses (thesis
+    rollup / sector exposure / collision audit) and Book risk (implicit bets /
+    drawdown / crowding & correlation / tail stress). Chips swap panes in
+    place — no scrolling; each pane lazy-fetches
+    ``/api/panel/portfolio_health?fragment=<key>``
+    (``portfolio_panel.render_health_fragment``).
 
-    Wave 4 (D1 propagation): the Band-1 read leads here too. The tile GRID is
-    a documented exception — Health's three children are themselves composite
-    full-width surfaces (the Risk page alone is a dozen sections), so tiling
-    them side-by-side would crush real tables into half-columns for no density
-    gain; the read + anchor nav carry D1's value on this console."""
-    from pipeline.portfolio_panel import render_portfolio_synthesis_panel
-
-    sections: list[ConsoleSection] = [
-        ("brief", "Read", lambda: _health_brief(db_path)),
-        ("synthesis", "Synthesis", lambda: render_portfolio_synthesis_panel(db_path)),
-        ("risk", "Risk", lambda: _lazy_section_placeholder("/api/panel/portfolio_risk", "Risk")),
-        (
-            "red_team",
-            "Red Team",
-            lambda: _lazy_section_placeholder("/api/panel/red_team", "Red Team"),
-        ),
-    ]
-    return _CONSOLE_CSS + render_console(
-        "Health",
-        sections,
-        wrap_class="portfolio-health-console",
-        nav_exclude=("brief",),
+    Cut from the console, not from the platform: Red Team and the whole-book
+    macro-stress lens are Ask questions now (``data-ask-q`` doorways on the
+    brief — the shell's Law-2 hand-off); style/business factors, bear lint,
+    the naked-position gate and the risk-vs-reward gap stay on the still-live
+    ``/api/panel/portfolio_risk`` route."""
+    del user_id
+    cards = "".join(_health_card(a, q, tabs) for a, q, tabs in _HEALTH_CARDS)
+    return (
+        _CONSOLE_CSS
+        + _HEALTH_CSS
+        + '<div class="portfolio-health-console">'
+        + _health_brief(db_path)
+        + f'<div class="console-grid">{cards}</div>'
+        + "</div>"
+        + f"<script>{_HEALTH_TABS_JS}</script>"
     )
 
 
@@ -131,9 +223,20 @@ def _jump_chip(anchor: str, label: str) -> str:
     )
 
 
+def _ask_chip(question: str, label: str) -> str:
+    """A Law-2 Ask doorway chip: the shell's document-level ``data-ask-q``
+    listener hands the question to the Ask panel on click. Red Team and the
+    macro-stress lens live behind these now — on-demand questions, not
+    standing console sections (owner directive 2026-07-30)."""
+    return (
+        f'<button type="button" class="k-chip k-chip-btn" data-ask-q="{escape(question, quote=True)}">'
+        f"{escape(label)}</button>"
+    )
+
+
 def _health_brief(db_path: Path) -> str:
-    """The Health read: where the theses stand, how fresh the risk picture is,
-    and what the last red-team run left on the table."""
+    """The Health read: where the theses stand and how fresh the risk picture
+    is, plus the Ask doorways for the on-demand adversarial questions."""
     lines: list[str] = []
     links: list[str] = []
 
@@ -170,20 +273,6 @@ def _health_brief(db_path: Path) -> str:
                         else "Thesis health: "
                     )
                     lines.append(lead + " &middot; ".join(bits) + ".")
-                    links.append(_jump_chip("synthesis", "Synthesis"))
-            except sqlite3.Error:
-                pass
-            try:
-                row = conn.execute(
-                    "SELECT run_key, COUNT(*) FROM red_team_items "
-                    "WHERE run_key = (SELECT MAX(run_key) FROM red_team_items) "
-                    "GROUP BY run_key"
-                ).fetchone()
-                if row is not None:
-                    lines.append(
-                        f"Last red-team run ({escape(str(row[0]))}): {row[1]} attack(s) on file."
-                    )
-                    links.append(_jump_chip("red_team", "Red Team"))
             except sqlite3.Error:
                 pass
         finally:
@@ -200,14 +289,26 @@ def _health_brief(db_path: Path) -> str:
                 + stamp_html(snap.captured_at, mode="rel", prefix="as of ")
                 + "."
             )
-            links.append(_jump_chip("risk", "Risk"))
     except Exception:
         pass
 
+    links.append(
+        _ask_chip(
+            "Red-team my portfolio: what are the strongest arguments against my current book?",
+            "Red-team · Ask",
+        )
+    )
+    links.append(
+        _ask_chip(
+            "How would my portfolio fare in a macro shock — rates, FX, or a LatAm selloff?",
+            "Macro stress · Ask",
+        )
+    )
+
     return _brief_shell(
         "The read",
-        "Where the theses stand and how fresh the risk picture is — the sections "
-        "below carry the evidence.",
+        "Where the theses stand and how fresh the risk picture is — the two "
+        "cards below carry the evidence.",
         lines,
         links,
     )

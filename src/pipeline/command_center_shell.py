@@ -174,9 +174,10 @@ _THEMES: tuple[tuple[str, str, tuple[_SubTab, ...]], ...] = (
                 False,
                 False,
             ),
-            # Health — thesis health & what could break it: Synthesis (thesis
-            # rollup + allocation, the landing) + the whole-book Risk cockpit +
-            # the monthly adversarial Red Team brief.
+            # Health — thesis health & what could break it (redesigned
+            # 2026-07-30): the read + two chip-tab cards — Theses (rollup /
+            # exposure / collisions) and Book risk (bets / drawdown /
+            # crowding / tail). Red Team + macro stress are Ask questions now.
             ("portfolio_health", "Health", "/api/panel/portfolio_health", False, False),
             # Record — the audit trail: the allocation-decisions record (sizing
             # audit + merged decisions timeline) + advisor Memos + the Triggers
@@ -283,7 +284,10 @@ _LEGACY_PANEL_REDIRECTS: dict[str, str] = {
     # (lookups don't chain; the guard test enforces set-equality).
     "portfolio_synthesis": "portfolio_health",
     "portfolio_risk": "portfolio_health",
-    "red_team": "portfolio_health",
+    # Health redesign (2026-07-30): Red Team is an on-demand Ask question now,
+    # not a standing console section — the legacy deep-link lands on Ask (the
+    # /api/panel/red_team builder route stays live for direct fetch).
+    "red_team": "explore",
     "positioning": "portfolio_allocation",
     "portfolio": "portfolio_allocation",
     "decisions_record": "portfolio_record",
@@ -1695,7 +1699,9 @@ SHELL_JS = r"""
     // with _LEGACY_PANEL_REDIRECTS in the Python module.
     portfolio_synthesis: 'portfolio_health',
     portfolio_risk: 'portfolio_health',
-    red_team: 'portfolio_health',
+    // Health redesign (2026-07-30): Red Team relegated to Ask — on-demand
+    // question, not a standing section.
+    red_team: 'explore',
     positioning: 'portfolio_allocation',
     portfolio: 'portfolio_allocation',
     decisions_record: 'portfolio_record',
@@ -1718,7 +1724,6 @@ SHELL_JS = r"""
   var ANCHORS = {
     portfolio_synthesis: 'csec-synthesis',
     portfolio_risk: 'csec-risk',
-    red_team: 'csec-red_team',
     positioning: 'csec-positioning',
     portfolio: 'csec-performance',
     decisions: 'csec-decisions',
@@ -1750,7 +1755,7 @@ SHELL_JS = r"""
   var PALETTE_ALIASES = [
     ['Synthesis', 'portfolio_synthesis', 'Portfolio · Health'],
     ['Risk', 'portfolio_risk', 'Portfolio · Health'],
-    ['Red Team', 'red_team', 'Portfolio · Health'],
+    ['Red Team', 'red_team', 'Ask'],
     ['Positioning', 'positioning', 'Portfolio · Allocation'],
     ['Performance', 'portfolio', 'Portfolio · Allocation'],
     ['Decisions', 'decisions_record', 'Portfolio · Record'],
