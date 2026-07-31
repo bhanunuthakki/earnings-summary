@@ -78,7 +78,12 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # v4 (2026-07-31): event_key clustering — each entry now labels the
     # underlying real-world event so multi-outlet coverage collapses to one
     # alert (scan-side same-batch dedup + 72h cross-day guard).
-    "material_news_classification": "v4",
+    # v5 (2026-07-31, backtest calibration): classify by the UNDERLYING event,
+    # not headline packaging — editorialized/price-action headlines that
+    # first-report a real primary event (UBER/Rivian $1.2B, NVO EU approval)
+    # were filed commentary and killed. Floor 0.7 → 0.65 rides the same
+    # calibration (the BN $100B campus wire report scored 0.68).
+    "material_news_classification": "v5",
     "saydo_due_context": "v2",
     # Pairwise backend judge (src/llm/backend_judge.py). Bump when the A/B judge
     # rubric is materially reworded so a re-grade of the same corpus is comparable

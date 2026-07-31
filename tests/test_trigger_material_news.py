@@ -319,7 +319,7 @@ def test_signature_key_evidence_is_news_id_only() -> None:
 def test_scan_emits_candidates_only_for_material_stories(
     fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """3 recent stories, LLM scores 2 of them >= the 0.7 floor → exactly 2
+    """3 recent stories, LLM scores 2 of them >= the 0.65 floor → exactly 2
     candidates, each carrying relevance + why_material + event_type in
     evidence."""
     ids = _seed_three_recent(fixture_db)
@@ -343,7 +343,7 @@ def test_scan_emits_candidates_only_for_material_stories(
     for cand in candidates:
         assert cand.ticker == "BN"
         assert cand.kind == "material_news"
-        assert cand.evidence["relevance_score"] >= 0.7
+        assert cand.evidence["relevance_score"] >= 0.65
         assert cand.evidence["event_type"] == "primary"
         assert isinstance(cand.evidence["why_material"], str)
         assert cand.evidence["why_material"]
@@ -525,7 +525,7 @@ def test_scan_all_below_threshold_returns_empty(
     emitted even though the LLM responded cleanly."""
     _ = _seed_three_recent(fixture_db)
     payload = _classification_payload(
-        [(0, 0.10, "noise"), (1, 0.30, "routine"), (2, 0.65, "near-miss, still below 0.7")]
+        [(0, 0.10, "noise"), (1, 0.30, "routine"), (2, 0.60, "near-miss, still below 0.65")]
     )
     mock = _StatefulLLM([payload])
     monkeypatch.setattr("triggers.material_news.call_llm", mock)
@@ -729,9 +729,9 @@ def test_scan_cross_day_guard_releases_after_window(
 def test_should_fire_respects_relevance_floor() -> None:
     trig = MaterialNewsTrigger()
     state = _empty_state()
-    assert trig.should_fire(_make_candidate(relevance=0.70), state) is True
+    assert trig.should_fire(_make_candidate(relevance=0.65), state) is True
     assert trig.should_fire(_make_candidate(relevance=0.95), state) is True
-    assert trig.should_fire(_make_candidate(relevance=0.69), state) is False
+    assert trig.should_fire(_make_candidate(relevance=0.64), state) is False
 
 
 def test_should_fire_event_type_gate() -> None:
