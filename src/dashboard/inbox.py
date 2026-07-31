@@ -1310,7 +1310,19 @@ INBOX_JS = r"""
   // now (Wave 3b): each button POSTs and swaps its .ix-quick span for a
   // terminal "done" chip — with an Undo on the reversible ones. No JS handler
   // here; the server returns the chip HTML. (Category filtering + the
-  // advisor-memo dismiss below stay vanilla.)
+  // advisor-memo dismiss below stay vanilla.) The pressed state while the
+  // POST is in flight is the kit's .k-btn.htmx-request rule — declarative,
+  // no JS. What IS wired here: when the swapped-in chip is a dismissal
+  // (cancelled / archived), settle the whole card via .ix-dismissed so the
+  // click visibly lands on the card, not just the chip — and an Undo swap
+  // (buttons restored, no .ix-acted) lifts it again.
+  document.addEventListener('htmx:afterSwap', function (ev) {
+    var card = ev.target && ev.target.closest
+      ? ev.target.closest('.ix-card, .alert-card') : null;
+    if (!card) return;
+    var settled = card.querySelector('.ix-acted-cancelled, .ix-acted-archived');
+    card.classList.toggle('ix-dismissed', !!settled);
+  });
 
   // Advisor-memo dismiss chip (.ix-note-dismiss): archive the note-backed memo
   // via the REST endpoint the journal already uses, then fade the card in

@@ -234,7 +234,7 @@ _PANEL_JS = """
     if (reasonTa) reasonTa.focus();
     cell.querySelector('[data-dismiss-cancel]').addEventListener('click', restore);
     cell.querySelector('[data-dismiss-save]').addEventListener('click', function () {
-      this.disabled = true;
+      CCAction.busy(this, 'Dismissing\\u2026');
       var body = {status: 'dismissed'};
       var reason = (reasonTa && reasonTa.value || '').trim();
       var revisit = (revisitInput && revisitInput.value || '').trim();
@@ -243,7 +243,8 @@ _PANEL_JS = """
       fetch('/api/discovery/candidates/' + id + '/status', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(body)
-      }).then(function (r) { if (r.ok) refresh(); else restore(); });
+      }).then(function (r) { if (r.ok) refresh(); else restore(); })
+        .catch(restore);
     });
   }
   // Status chips behave like a radio group.
@@ -299,9 +300,9 @@ _PANEL_JS = """
       return;
     }
     if (act === 'watch') {
-      btn.disabled = true;
+      CCAction.busy(btn);
       postAction('/api/discovery/candidates/' + id + '/watch', {}).then(function (res) {
-        btn.disabled = false;
+        CCAction.release(btn);
         if (res.ok) { logLine('Watching ' + (holder.getAttribute('data-cand-ticker') || '')); }
         else { logLine('watch failed: ' + (res.body.error || 'unknown')); }
       });
@@ -309,10 +310,12 @@ _PANEL_JS = """
     }
     var status = {queue: 'queued', reopen: 'new'}[act];
     if (!status) return;
+    CCAction.busy(btn);
     fetch('/api/discovery/candidates/' + id + '/status', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({status: status})
-    }).then(function (r) { if (r.ok) refresh(); });
+    }).then(function (r) { if (r.ok) refresh(); else CCAction.release(btn); })
+      .catch(function () { CCAction.release(btn); });
   });
   el('dq-min-score').addEventListener('change', refresh);
   el('dq-run-discovery').addEventListener('click', function () {

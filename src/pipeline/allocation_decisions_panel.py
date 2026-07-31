@@ -1156,7 +1156,7 @@ _UNMUTE_JS = """<script>
     btn.addEventListener('click', function () {
       var cls = btn.getAttribute('data-class');
       var row = btn.closest('[data-mute-row]');
-      btn.disabled = true;
+      CCAction.busy(btn);
       fetch('/api/coach/unmute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1165,9 +1165,9 @@ _UNMUTE_JS = """<script>
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
       }).then(function () {
-        if (row && row.parentNode) row.parentNode.removeChild(row);
+        if (row) CCAction.leave(row);
       }).catch(function () {
-        btn.disabled = false;
+        CCAction.release(btn);
       });
     });
   });

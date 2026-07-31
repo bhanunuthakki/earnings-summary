@@ -26,6 +26,7 @@ from __future__ import annotations
 from io import StringIO
 from pathlib import Path
 
+from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
 from pipeline.cc_overlay import CC_OVERLAY_JS
 from report.models import ReportFlavor, ReportSpec
 from report.renderers.charts_v2 import CSS as CHARTS_V2_CSS
@@ -393,6 +394,7 @@ def _document(spec: ReportSpec, body: str) -> str:
 <style>{COMMENTS_CSS}</style>
 <style>{CHAT_CSS}</style>
 <style>{DCF_CSS}</style>
+<style>{CC_ACTION_CSS}</style>
 {_LIVING_GRID_HEAD}
 </head>
 <body>
@@ -404,6 +406,7 @@ def _document(spec: ReportSpec, body: str) -> str:
      cross-document window.__close* handshake. SOURCE_CHIP_JS gives the report's
      source-chip <details> Escape-only dismissal. -->
 <script>{CC_OVERLAY_JS}</script>
+<script>{CC_ACTION_JS}</script>
 <script>{SOURCE_CHIP_JS}</script>
 <script>{COMMENTS_JS}</script>
 <script>{CHAT_JS}</script>

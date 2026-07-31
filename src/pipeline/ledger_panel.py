@@ -425,22 +425,24 @@ _RESEARCH_JS = """<script>(function(){
   }
   function setRow(el, disabled){
     var btns=rowButtons(el);
-    for(var i=0;i<btns.length;i++){ btns[i].disabled=disabled; }
+    for(var i=0;i<btns.length;i++){
+      if(disabled){ CCAction.busy(btns[i]); } else { CCAction.release(btns[i]); }
+    }
   }
   document.addEventListener('click', function(e){
     var run=e.target.closest('[data-run-task]');
     if(run){
       var tid=run.getAttribute('data-run-task');
-      run.disabled=true; run.textContent='Researching...';
+      CCAction.busy(run, 'Researching...');
       fetch('/api/research/task/'+tid+'/run',{method:'POST'})
         .then(function(r){ if(!r.ok){ throw new Error(); } return r.json(); })
         .then(function(){ pollRun(tid, run, 0); })
-        .catch(function(){ run.disabled=false; run.textContent='Research it'; });
+        .catch(function(){ CCAction.release(run); });
       return;
     }
     var rej=e.target.closest('[data-reject-task]');
     if(rej){
-      rej.disabled=true; rej.textContent='Dismissing...';
+      CCAction.busy(rej, 'Dismissing...');
       fetch('/api/research/task/'+rej.getAttribute('data-reject-task')+'/reject',{method:'POST'})
         .then(function(r){ if(!r.ok){ throw new Error(); } return r.json(); })
         .then(function(){
@@ -448,7 +450,7 @@ _RESEARCH_JS = """<script>(function(){
           reload();
         })
         .catch(function(){
-          rej.disabled=false; rej.textContent='Dismiss';
+          CCAction.release(rej);
           if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(rej, false, 'Could not reach the server.'); }
         });
       return;
@@ -831,17 +833,17 @@ _RECONCILE_JS = """<script>(function(){
   document.addEventListener('click', function(e){
     var v=e.target.closest('[data-rec-verdict]');
     if(v){
-      v.disabled=true;
+      CCAction.busy(v);
       fetch('/api/reconcile/'+v.getAttribute('data-rec-kind')+'/'+v.getAttribute('data-rec-id')
             +'/'+v.getAttribute('data-rec-verdict'),{method:'POST'})
         .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok, body:j}; }); })
         .then(function(res){
           var text=(res.body && res.body.receipt) || (res.ok ? 'Saved.' : "Didn't save — retry.");
           if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(v, res.ok, text); }
-          if(res.ok){ reload(); } else { v.disabled=false; }
+          if(res.ok){ reload(); } else { CCAction.release(v); }
         })
         .catch(function(){
-          v.disabled=false;
+          CCAction.release(v);
           if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(v, false, 'Could not reach the server.'); }
         });
       return;
@@ -854,7 +856,7 @@ _RECONCILE_JS = """<script>(function(){
         if(card){ beginRewrite(card); }
         return;
       }
-      f.disabled=true;
+      CCAction.busy(f);
       fetch('/api/reconcile/falsifier/'+f.getAttribute('data-rec-id'),
             {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action})})
         .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok, body:j}; }); })
@@ -862,10 +864,10 @@ _RECONCILE_JS = """<script>(function(){
           var text=(res.body && res.body.receipt) || (res.ok ? 'Saved.' : "Didn't save — retry.");
           if(res.body && res.body.receipt){ showReceipt(res.body.receipt); }
           if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(f, res.ok, text); }
-          if(res.ok){ reload(); } else { f.disabled=false; }
+          if(res.ok){ reload(); } else { CCAction.release(f); }
         })
         .catch(function(){
-          f.disabled=false;
+          CCAction.release(f);
           if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(f, false, 'Could not reach the server.'); }
         });
     }
@@ -1217,16 +1219,17 @@ _ONMYMIND_JS = """<script>(function(){
     if(act){
       var card=act.closest('[data-om-id]'); if(!card){ return; }
       var id=card.getAttribute('data-om-id'); var verb=act.getAttribute('data-om-verb');
-      act.disabled=true;
+      CCAction.busy(act);
       fetch('/api/onmymind/'+id+'/'+verb,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
         .then(function(r){ return r.json(); })
         .then(function(res){
-          if(!res || res.ok===false){ act.disabled=false; return; }
-          if(res.removed){ if(card.parentNode){ card.parentNode.removeChild(card); } return; }
+          if(!res || res.ok===false){ CCAction.release(act); return; }
+          if(res.removed){ CCAction.leave(card); return; }
+          CCAction.release(act);
           var badge=card.querySelector('.om-ladder');
           if(badge){ badge.textContent=res.ladder_label||''; }
         })
-        .catch(function(){ act.disabled=false; });
+        .catch(function(){ CCAction.release(act); });
       return;
     }
     var more=e.target.closest('[data-om-more]');
@@ -1927,7 +1930,7 @@ _PACKET_JS = """<script>(function(){
     // same registered-feedback contract as every reused card's own script.
     var tr=e.target.closest('[data-pk-route]');
     if(tr){
-      tr.disabled=true;
+      CCAction.busy(tr);
       var pkItemR=tr.closest('.pk-item');
       fetch('/api/notes/'+tr.getAttribute('data-note-id')+'/route',
         {method:'POST',headers:{'Content-Type':'application/json'},
@@ -1935,25 +1938,25 @@ _PACKET_JS = """<script>(function(){
         .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok, body:j}; }); })
         .then(function(res){
           var text=(res.body && res.body.receipt) || (res.ok ? 'Routed.' : "Didn't save — retry.");
-          if(!res.ok){ tr.disabled=false; }
+          if(!res.ok){ CCAction.release(tr); }
           settleItem(pkItemR, root, res.ok, text, 'resolved');
         })
-        .catch(function(){ tr.disabled=false; settleItem(pkItemR, root, false, 'Could not reach the server.', 'resolved'); });
+        .catch(function(){ CCAction.release(tr); settleItem(pkItemR, root, false, 'Could not reach the server.', 'resolved'); });
       return;
     }
     var td=e.target.closest('[data-pk-dismiss]');
     if(td){
-      td.disabled=true;
+      CCAction.busy(td);
       var pkItemD=td.closest('.pk-item');
       fetch('/api/notes/'+td.getAttribute('data-note-id')+'/archive',
         {method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})
         .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok, body:j}; }); })
         .then(function(res){
           var text=(res.body && res.body.receipt) || (res.ok ? 'Dismissed.' : "Didn't save — retry.");
-          if(!res.ok){ td.disabled=false; }
+          if(!res.ok){ CCAction.release(td); }
           settleItem(pkItemD, root, res.ok, text, 'resolved');
         })
-        .catch(function(){ td.disabled=false; settleItem(pkItemD, root, false, 'Could not reach the server.', 'resolved'); });
+        .catch(function(){ CCAction.release(td); settleItem(pkItemD, root, false, 'Could not reach the server.', 'resolved'); });
       return;
     }
     // Grouped bulk-affirm card (requirement C): Affirm all / Drop all loop the
@@ -1977,7 +1980,7 @@ _PACKET_JS = """<script>(function(){
       var route=(verb==='affirm') ? 'reaffirm' : 'retire';
       var groupItem=bulk.closest('.pk-item');
       var row=bulk.closest('.ledger-cap-row');
-      if(row){ var btns=row.querySelectorAll('button'); for(var bi=0; bi<btns.length; bi++){ btns[bi].disabled=true; } }
+      if(row){ var btns=row.querySelectorAll('button'); for(var bi=0; bi<btns.length; bi++){ CCAction.busy(btns[bi]); } }
       Promise.all(ids.map(function(id){
         return fetch('/api/profile/fact/'+id+'/'+route, {method:'POST'})
           .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok, id:id}; }); });
@@ -2029,18 +2032,18 @@ _PROFILE_FACT_JS = """<script>(function(){
       var ta=card2.querySelector('.ledger-profile-update-text');
       var text=ta?ta.value.trim():'';
       if(!text){ return; }
-      save.disabled=true;
+      CCAction.busy(save, 'Saving\\u2026');
       fetch('/api/profile/fact/'+id2+'/update',{method:'POST',
             headers:{'Content-Type':'application/json'},
             body:JSON.stringify({narrative:text})})
         .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok && !!(j&&j.ok!==false), body:j}; }); })
         .then(function(res){
           var text2=(res.body && res.body.receipt) || (res.ok ? 'Saved.' : "Didn't save — retry.");
-          if(!res.ok){ save.disabled=false; }
+          if(!res.ok){ CCAction.release(save); }
           if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(save, res.ok, text2); }
         })
         .catch(function(){
-          save.disabled=false;
+          CCAction.release(save);
           if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(save, false, 'Could not reach the server.'); }
         });
       return;
@@ -2050,16 +2053,16 @@ _PROFILE_FACT_JS = """<script>(function(){
     var card3=act.closest('[data-profile-fact-id]'); if(!card3){ return; }
     var id3=card3.getAttribute('data-profile-fact-id');
     var verb=act.getAttribute('data-profile-action');
-    act.disabled=true;
+    CCAction.busy(act);
     fetch('/api/profile/fact/'+id3+'/'+verb,{method:'POST'})
       .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok && !!(j&&j.ok!==false), body:j}; }); })
       .then(function(res){
         var text=(res.body && res.body.receipt) || (res.ok ? 'Saved.' : "Didn't save — retry.");
-        if(!res.ok){ act.disabled=false; }
+        if(!res.ok){ CCAction.release(act); }
         if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(act, res.ok, text); }
       })
       .catch(function(){
-        act.disabled=false;
+        CCAction.release(act);
         if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(act, false, 'Could not reach the server.'); }
       });
   });

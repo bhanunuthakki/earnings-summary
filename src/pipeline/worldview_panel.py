@@ -64,37 +64,37 @@ _WORLDVIEW_JS = """<script>(function(){
       var sc=document.getElementById('wv-tenet-scope');
       var st=document.getElementById('wv-status');
       var body=(ta&&ta.value||'').trim(); if(!body){ if(ta){ ta.focus(); } return; }
-      add.disabled=true; if(st){ st.textContent='Adding...'; }
+      CCAction.busy(add); if(st){ st.textContent='Adding...'; }
       fetch('/api/tenets',{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({body_md:body, scope_key:(sc&&sc.value||'').trim()})})
         .then(function(r){ return r.json(); }).then(function(){ reload(); })
-        .catch(function(){ add.disabled=false; if(st){ st.textContent='Could not reach the server.'; } });
+        .catch(function(){ CCAction.release(add); if(st){ st.textContent='Could not reach the server.'; } });
       return;
     }
     var distill=e.target.closest('#wv-distill-btn');
     if(distill){
       var st2=document.getElementById('wv-status');
-      distill.disabled=true; if(st2){ st2.textContent='Distilling from flagged musings...'; }
+      CCAction.busy(distill); if(st2){ st2.textContent='Distilling from flagged musings...'; }
       fetch('/api/tenets/distill',{method:'POST'})
         .then(function(r){ return r.json(); })
         .then(function(res){ if(st2&&res){ st2.textContent=(res.proposed||0)+' proposed from '+(res.candidates||0)+' flagged.'; } reload(); })
-        .catch(function(){ distill.disabled=false; if(st2){ st2.textContent='Distill failed.'; } });
+        .catch(function(){ CCAction.release(distill); if(st2){ st2.textContent='Distill failed.'; } });
       return;
     }
     var act=e.target.closest('[data-tenet-action]');
     if(act){
       var card=act.closest('[data-tenet-id]'); if(!card){ return; }
-      act.disabled=true;
+      CCAction.busy(act);
       fetch('/api/tenets/'+card.getAttribute('data-tenet-id')+'/'+act.getAttribute('data-tenet-action'),
         {method:'POST'})
         .then(function(r){ return r.json().catch(function(){ return null; }).then(function(j){ return {ok:r.ok, body:j}; }); })
         .then(function(res){
           var text=(res.body && res.body.receipt) || (res.ok ? 'Saved.' : "Didn't save — retry.");
           if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(act, res.ok, text); }
-          if(res.ok){ reload(); } else { act.disabled=false; }
+          if(res.ok){ reload(); } else { CCAction.release(act); }
         })
         .catch(function(){
-          act.disabled=false;
+          CCAction.release(act);
           if(window.__ledgerEmitSettled){ window.__ledgerEmitSettled(act, false, 'Could not reach the server.'); }
         });
     }

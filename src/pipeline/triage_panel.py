@@ -285,14 +285,14 @@ Route each to the real intent it meant, resolve it once handled, or dismiss it.<
       }});
   }}
   function post(url, payload, btn) {{
-    if (btn) btn.disabled = true;
+    CCAction.busy(btn);
     fetch(url, {{
       method: 'POST', headers: {{'Content-Type': 'application/json'}},
       body: JSON.stringify(payload || {{}})
     }}).then(function (r) {{
       if (r.ok) {{ if (ov) ov.close(); refresh(); }}
-      else if (btn) btn.disabled = false;
-    }}).catch(function () {{ if (btn) btn.disabled = false; }});
+      else CCAction.release(btn);
+    }}).catch(function () {{ CCAction.release(btn); }});
   }}
   // In-place Resolve editor (replaces window.prompt): a table row grows a
   // sibling row with the textarea; the drawer's action strip appends it inline.

@@ -91,6 +91,7 @@ from typing import cast
 from dashboard.inbox import INBOX_CSS, INBOX_JS
 from dashboard.upcoming import UPCOMING_CSS
 from pipeline.ask_dock import render_ask_dock
+from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
 from pipeline.cc_overlay import CC_OVERLAY_CSS, CC_OVERLAY_JS
 from pipeline.cc_state import CC_STATE_JS
 from pipeline.research_cockpit import CockpitRow
@@ -564,6 +565,11 @@ def render_shell(
             # inlined BEFORE the dock and shell scripts so both register their
             # overlays against the same open-surface stack.
             f"<script>{CC_OVERLAY_JS}</script>",
+            # The one action-feedback primitive: window.CCAction (busy /
+            # release / receipt / animated leave), inlined before the panel
+            # fragments so every POST-action button shares one pressed state
+            # and one exit motion instead of hand-rolled instant .remove().
+            f"<script>{CC_ACTION_JS}</script>",
             # Escape-only dismissal for the JS-free source-chip <details>
             # popovers anywhere in the shell document (Law 3 / §3.1) — a
             # non-modal CCOverlay dismisser, not the full triad. The cite-mark
@@ -999,6 +1005,9 @@ SHELL_CSS = (
     # CCOverlay (S4) close motion — paired with the kit's .k-scrim/.k-overlay
     # open motion so every overlay dismissal animates out instead of snapping.
     + CC_OVERLAY_CSS
+    # CCAction leave/collapse motion — the in-flow sibling of the overlay
+    # close motion, for dismissed cards/rows (pipeline/cc_action.py).
+    + CC_ACTION_CSS
     + """
 * { box-sizing: border-box; }
 body { margin: 0; padding: 0; font-family: var(--sans); background: var(--bg);
