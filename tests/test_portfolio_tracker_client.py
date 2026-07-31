@@ -25,6 +25,7 @@ from integrations.portfolio_tracker_client import (
     LivePortfolio,
     LivePosition,
     PerformancePoint,
+    PerformanceSeries,
     PortfolioAnalytics,
     PositionCorrelationRow,
     TaxLot,
@@ -34,6 +35,7 @@ from integrations.portfolio_tracker_client import (
 )
 from pipeline.portfolio_panel import (
     WindowSelection,
+    _backfill_warning,
     compose_portfolio_page,
     compose_risk_page,
     compose_synthesis_page,
@@ -1483,3 +1485,42 @@ def test_compose_risk_page_renders_drawdown_and_cached_digest() -> None:
     # The cached digest is spliced into the macro-stress section verbatim.
     assert "DIGEST-BODY" in html
     assert "No stress digest cached yet" not in html
+
+
+# --- modeled-window warning -------------------------------------------------
+# The tracker's `backfill_start_unreliable` used to test only whether the
+# reconstructed start value had COLLAPSED (< 25% of the end), so it measured
+# False on every real window including a 2024-01-01 lookback that reported
+# +85.5% against SPY's +57.5% purely from walk-back artifacts. It now also
+# fires whenever the window starts before `earliest_observed_date`. These pin
+# the ES-side rendering of that signal.
+
+
+def _perf_series(*, unreliable: bool, observed: str | None) -> PerformanceSeries:
+    return PerformanceSeries(
+        start_date="2024-01-01",
+        end_date="2026-07-30",
+        base_value=315781.0,
+        net_external_cashflow_in=52179.0,
+        backfill_start_unreliable=unreliable,
+        earliest_observed_date=observed,
+    )
+
+
+def test_backfill_warning_absent_when_window_is_observed() -> None:
+    assert _backfill_warning(_perf_series(unreliable=False, observed="2026-05-09")) == ""
+
+
+def test_backfill_warning_names_the_observed_boundary_and_the_bias() -> None:
+    html = _backfill_warning(_perf_series(unreliable=True, observed="2026-05-09"))
+    assert "modeled, not measured" in html
+    # The boundary has to be in the copy — "some of this is modeled" without
+    # saying how far back is not actionable.
+    assert "2026-05-09" in html
+    # And the bias has a direction; the old both-ways hedge understated it.
+    assert "upward" in html
+
+
+def test_backfill_warning_handles_a_fully_modeled_window() -> None:
+    html = _backfill_warning(_perf_series(unreliable=True, observed=None))
+    assert "No part of this window" in html

@@ -699,12 +699,7 @@ def _performance_section(
             tone=_tone(finals["Portfolio"]),
         )
     )
-    warn = (
-        '<p class="muted">⚠ The window start value looks incomplete (backfill unreliable) — '
-        "early benchmark gaps may overstate or understate relative performance.</p>"
-        if perf.backfill_start_unreliable
-        else ""
-    )
+    warn = _backfill_warning(perf)
     return (
         f"{head}"
         f'<div class="kpi-strip">{"".join(cards)}</div>'
@@ -712,6 +707,39 @@ def _performance_section(
         f"{_benchmark_chart(perf.points)}"
         f"{_policy_line(policy)}"
         f"{warn}</section>"
+    )
+
+
+def _backfill_warning(perf: PerformanceSeries) -> str:
+    """The "this window is modeled, not measured" banner.
+
+    Named the specific defect rather than hedging both ways. The old copy —
+    "the window start value looks incomplete … may overstate or understate
+    relative performance" — was doubly unhelpful: it never actually rendered
+    (the tracker's guard only fired when the reconstructed start had collapsed
+    below 25% of the end, which never happened), and its both-directions
+    hedge understated the problem. The bias has a direction. The walk-back
+    anchors on TODAY's holdings and reverses only the transactions on file, so
+    a position exited before its account's feed began never existed in the
+    model and contributions made before then are invisible and land in the
+    numerator as gains. Both errors flatter the portfolio. On 2026-07-30 a
+    2024-01-01 window read +85.5% against SPY's +57.5% on that basis alone.
+    """
+    if not perf.backfill_start_unreliable:
+        return ""
+    observed = perf.earliest_observed_date
+    span = (
+        f"Only {escape(observed)} onward is backed by observed broker snapshots"
+        if observed
+        else "No part of this window is backed by observed broker snapshots"
+    )
+    return (
+        '<p class="muted">⚠ <strong>This window is modeled, not measured.</strong> '
+        f"{span}; earlier values are reconstructed by walking transactions backward from "
+        "today's holdings. That reconstruction can only see positions you still hold and "
+        "contributions the feed recorded, so exited losers vanish and untracked deposits "
+        "count as gains — the reported return is biased <em>upward</em>, often by a lot. "
+        "Shorten the window to the observed range for a number you can act on.</p>"
     )
 
 

@@ -497,12 +497,20 @@ class PerformanceSeries:
     # First date backed by a real observed snapshot. Served by BOTH transports
     # and load-bearing for provenance: a series whose ``start_date`` precedes
     # this is partly the provider's MODELED transaction walk-back, so its
-    # returns are rebased off a reconstructed value. Compare the two fields to
-    # classify the basis — ``backfill_start_unreliable`` does NOT answer this
-    # (it flags an untrustworthy walk-back START VALUE, and measured False on
-    # both transports across observed, trailing-365d, and 26-year windows on
-    # 2026-07-24, so it is constant in practice). WINDOW-RELATIVE: it reports
-    # the earliest observation INSIDE the requested window, never before it.
+    # returns are rebased off a reconstructed value. WINDOW-RELATIVE: it
+    # reports the earliest observation INSIDE the requested window, never
+    # before it.
+    #
+    # ``backfill_start_unreliable`` now answers the same question and is the
+    # field to branch on. It previously did NOT: it tested only whether the
+    # reconstructed start had COLLAPSED (start < 25% of end) and so measured
+    # False across observed, trailing-365d and 26-year windows alike — a guard
+    # that read as verified while pinning nothing. Tracker-side it now also
+    # fires whenever the window starts before ``earliest_observed_date``, which
+    # is the condition that actually matters: a 2024-01-01 start reported
+    # +85.5% against SPY's +57.5% purely because the walk-back carried today's
+    # holdings backward at historical prices. Keep both fields — the flag says
+    # "don't trust this", the date says how far back the trustworthy part goes.
     earliest_observed_date: str | None = None
     points: list[PerformancePoint] = field(default_factory=list[PerformancePoint])
 
