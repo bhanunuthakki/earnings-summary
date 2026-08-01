@@ -100,6 +100,16 @@ class ResolutionPlan(BaseModel):
         return _sha(self)
 
 
+class ResolutionCandidateManifest(BaseModel):
+    """Stable public candidate evidence consumed by population admission."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    observation_id: str
+    binding_revision_id: str
+    candidate_json: str
+    candidate_sha256: str = Field(min_length=64, max_length=64)
+
+
 class ResolutionSnapshotScope(BaseModel):
     """The explicit, immutable issuer universe committed by a resolution snapshot."""
 
@@ -210,6 +220,7 @@ class CanonicalFactResolutionEngine:
             [
                 canonical_metric_cell_id,
                 _time(cutoff),
+                _time(written_at),
                 policy.name,
                 policy.version,
                 policy.config_sha256,
@@ -280,6 +291,30 @@ class CanonicalFactResolutionEngine:
             observed_through=observed_through,
         ).plan
 
+    def candidate_manifest(
+        self,
+        canonical_metric_cell_id: str,
+        knowledge_cutoff: datetime,
+        *,
+        observed_through: datetime,
+    ) -> tuple[ResolutionCandidateManifest, ...]:
+        """Return the exact ordered resolver inputs without exposing engine internals."""
+
+        candidates = self._enumerate(
+            canonical_metric_cell_id,
+            _utc(knowledge_cutoff),
+            observed_through=_utc(observed_through),
+        )
+        return tuple(
+            ResolutionCandidateManifest(
+                observation_id=candidate.observation_id,
+                binding_revision_id=candidate.binding_revision_id,
+                candidate_json=_json(asdict(candidate)),
+                candidate_sha256=_sha(asdict(candidate)),
+            )
+            for candidate in candidates
+        )
+
     def _prepare_resolution(
         self,
         canonical_metric_cell_id: str,
@@ -303,12 +338,13 @@ class CanonicalFactResolutionEngine:
                 "canonical candidate universe exceeds the bounded relation policy "
                 f"({MAX_CANDIDATES_PER_CANONICAL_CELL})"
             )
-        universe_id = f"cfu_{_sha([canonical_metric_cell_id, _time(cutoff)])[:40]}"
+        universe_id = f"cfu_{_sha([canonical_metric_cell_id, _time(cutoff), _time(observed)])[:40]}"
         relation_set_id = f"cfrs_{_sha([universe_id, 'relations.v2'])[:39]}"
         resolution_key = _sha(
             [
                 canonical_metric_cell_id,
                 _time(cutoff),
+                _time(observed),
                 policy.name,
                 policy.version,
                 policy.config_sha256,
@@ -1247,6 +1283,17 @@ class CanonicalFactResolutionEngine:
             if tuple(existing) != expected:
                 raise ValueError("canonical resolution replay conflict")
             return True
+        latest = self._conn.execute(
+            "SELECT knowledge_at,recorded_at "
+            "FROM canonical_fact_resolution_revisions "
+            "WHERE canonical_metric_cell_id=? ORDER BY revision DESC LIMIT 1",
+            (cell_id,),
+        ).fetchone()
+        if latest is not None and (
+            _utc(cutoff) < _utc(datetime.fromisoformat(str(latest[0])))
+            or _utc(recorded_at) < _utc(datetime.fromisoformat(str(latest[1])))
+        ):
+            raise ValueError("canonical resolution write is temporally non-monotonic")
         revision = self._conn.execute(
             "SELECT COALESCE(MAX(revision),0)+1 FROM canonical_fact_resolution_revisions WHERE canonical_metric_cell_id=?",
             (cell_id,),
