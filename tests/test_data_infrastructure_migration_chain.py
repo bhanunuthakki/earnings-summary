@@ -1,8 +1,10 @@
+# pyright: reportPrivateUsage=false
 """The additive evidence/search roadmap remains one reversible migration chain."""
 
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -10,10 +12,11 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 
 from alembic import command
+from provenance import population_document_processing as document_population
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_REVISION = "0213_decision_draft_provider_id"
-HEAD = "0263_ask_scope_identity"
+HEAD = "0264_document_processing_operation_ledger"
 ADDITIVE_TABLES_0245_0248 = {
     "document_processing_obligation_revisions",
     "document_processing_disposition_headers",
@@ -56,6 +59,10 @@ ADDITIVE_TABLES_0261 = {
     "latest_governed_document_entries",
     "latest_governed_narrative_entries",
     "latest_governed_narrative_fts",
+}
+ADDITIVE_TABLES_0264 = {
+    "database_runtime_identity",
+    "document_processing_operation_ledger",
 }
 
 
@@ -185,6 +192,37 @@ def test_evidence_search_migrations_have_one_reversible_head(tmp_path: Path) -> 
         assert "ix_fact_reported_anchors_v2_extraction_observation" in anchor_indexes
         assert tables >= ADDITIVE_TABLES_0245_0248
         assert tables >= ADDITIVE_TABLES_0261
+        assert tables >= ADDITIVE_TABLES_0264
+        read_set_sha = document_population._input_commitment(
+            conn,
+            datetime(2026, 7, 31, tzinfo=UTC),
+            datetime(2026, 7, 31, tzinfo=UTC),
+            (),
+        )
+        assert len(read_set_sha) == 64
+        identity_row = conn.execute(
+            "SELECT database_instance_id FROM database_runtime_identity WHERE singleton=1"
+        ).fetchone()
+        assert identity_row is not None
+        assert str(identity_row[0]).startswith("database-instance:")
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            conn.execute(
+                "UPDATE database_runtime_identity SET database_instance_id=? WHERE singleton=1",
+                ("database-instance:" + "f" * 32,),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO document_processing_operation_ledger VALUES (?,?,?,?,?,?,?)",
+                (
+                    "document-processing-operation:" + "a" * 64,
+                    "document-processing-operation:" + "a" * 64,
+                    str(identity_row[0]),
+                    "b" * 64,
+                    "c" * 64,
+                    "d" * 64,
+                    "{}",
+                ),
+            )
         view_sql = str(
             conn.execute(
                 "SELECT sql FROM sqlite_master WHERE type='view' "

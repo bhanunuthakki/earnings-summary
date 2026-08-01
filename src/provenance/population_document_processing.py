@@ -138,9 +138,90 @@ class DocumentProcessingPopulationResult(_FrozenModel):
     processing_snapshot_count: int
     selection_commitment_sha256: str
     input_commitment_sha256: str
+    post_state_commitment_sha256: str
     plan_commitment_sha256: str
     output_commitment_sha256: str
     checkpoint: DocumentProcessingCheckpoint
+
+
+DocumentProcessingReceiptOutcome = Literal[
+    "planned",
+    "applied",
+    "checkpoint",
+    "blocked",
+    "complete",
+]
+
+
+class DocumentProcessingOperationReceipt(_FrozenModel):
+    schema_version: Literal["document-processing-operation-receipt/v1"] = (
+        "document-processing-operation-receipt/v1"
+    )
+    database_path: str = Field(min_length=1, max_length=1_024)
+    database_instance_id: str = Field(
+        min_length=50,
+        max_length=64,
+        pattern=r"^database-instance:[0-9a-f]{32}$",
+    )
+    operation_id: str = Field(
+        min_length=94,
+        max_length=94,
+        pattern=r"^document-processing-operation:[0-9a-f]{64}$",
+    )
+    alembic_revision: str = Field(min_length=1, max_length=128)
+    request: DocumentProcessingPopulationRequest
+    result: DocumentProcessingPopulationResult
+    outcome: DocumentProcessingReceiptOutcome
+    blocker_counts: dict[str, int]
+    prior_checkpoint_receipt_sha256: str | None
+    admission_receipt_sha256: str | None
+    request_sha256: str
+    result_sha256: str
+    receipt_sha256: str
+
+    @field_validator(
+        "prior_checkpoint_receipt_sha256",
+        "admission_receipt_sha256",
+        "request_sha256",
+        "result_sha256",
+        "receipt_sha256",
+    )
+    @classmethod
+    def _receipt_sha(cls, value: str | None) -> str | None:
+        if value is not None and (
+            len(value) != 64 or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise ValueError("receipt commitment must be a lowercase SHA-256")
+        return value
+
+    @model_validator(mode="after")
+    def _receipt_contract(self) -> Self:
+        if self.request.apply != (self.result.mode == "apply"):
+            raise ValueError("document operation receipt mode does not match its result")
+        if self.request.apply != (self.admission_receipt_sha256 is not None):
+            raise ValueError("an apply receipt requires exactly one dry-run admission receipt")
+        if (self.request.after_processing_obligation_revision_id is not None) != (
+            self.prior_checkpoint_receipt_sha256 is not None
+        ):
+            raise ValueError("a resumed operation must bind exactly one prior checkpoint receipt")
+        if self.request_sha256 != _model_sha(self.request):
+            raise ValueError("document operation request commitment does not match")
+        if self.result_sha256 != _model_sha(self.result):
+            raise ValueError("document operation result commitment does not match")
+        if self.operation_id != document_processing_operation_id(
+            database_instance_id=self.database_instance_id,
+            request=self.request,
+            admission_receipt_sha256=self.admission_receipt_sha256,
+            prior_checkpoint_receipt_sha256=self.prior_checkpoint_receipt_sha256,
+        ):
+            raise ValueError("document operation identity does not match")
+        if self.blocker_counts != _document_blocker_counts(self.result):
+            raise ValueError("document operation blocker census does not match")
+        if self.outcome != _document_receipt_outcome(self.request, self.result):
+            raise ValueError("document operation outcome does not match")
+        if self.receipt_sha256 != _document_receipt_sha(self):
+            raise ValueError("document operation receipt commitment does not match")
+        return self
 
 
 class ReportingDocumentDecision(_FrozenModel):
@@ -154,6 +235,193 @@ class ReportingDocumentDecision(_FrozenModel):
     coverage_status: str
     document_version_id: str | None = None
     reporting_entity_id: str | None = None
+
+
+def build_document_processing_receipt(
+    *,
+    database_path: str,
+    database_instance_id: str,
+    alembic_revision: str,
+    request: DocumentProcessingPopulationRequest,
+    result: DocumentProcessingPopulationResult,
+    prior_checkpoint_receipt_sha256: str | None,
+    admission_receipt_sha256: str | None,
+) -> DocumentProcessingOperationReceipt:
+    """Bind one exact document population attempt to immutable evidence."""
+
+    payload: dict[str, object] = {
+        "schema_version": "document-processing-operation-receipt/v1",
+        "database_path": database_path,
+        "database_instance_id": database_instance_id,
+        "alembic_revision": alembic_revision,
+        "request": request,
+        "result": result,
+        "outcome": _document_receipt_outcome(request, result),
+        "blocker_counts": _document_blocker_counts(result),
+        "prior_checkpoint_receipt_sha256": prior_checkpoint_receipt_sha256,
+        "admission_receipt_sha256": admission_receipt_sha256,
+        "request_sha256": _model_sha(request),
+        "result_sha256": _model_sha(result),
+    }
+    payload["operation_id"] = document_processing_operation_id(
+        database_instance_id=database_instance_id,
+        request=request,
+        admission_receipt_sha256=admission_receipt_sha256,
+        prior_checkpoint_receipt_sha256=prior_checkpoint_receipt_sha256,
+    )
+    payload["receipt_sha256"] = digest_text(
+        canonical_json(
+            {
+                key: (value.model_dump(mode="json") if isinstance(value, BaseModel) else value)
+                for key, value in payload.items()
+            }
+        )
+    )
+    return DocumentProcessingOperationReceipt.model_validate(payload)
+
+
+def verify_document_processing_receipt(
+    receipt: DocumentProcessingOperationReceipt,
+) -> bool:
+    """Return whether all nested and top-level receipt commitments agree."""
+
+    try:
+        DocumentProcessingOperationReceipt.model_validate(receipt.model_dump(mode="json"))
+    except ValueError:
+        return False
+    return True
+
+
+def database_instance_id(conn: sqlite3.Connection) -> str:
+    """Return the one immutable identity installed for this database lineage."""
+
+    rows = conn.execute(
+        "SELECT database_instance_id FROM database_runtime_identity WHERE singleton=1"
+    ).fetchall()
+    if len(rows) != 1:
+        raise ValueError("document-processing database identity is missing or ambiguous")
+    value = str(rows[0][0])
+    suffix = value.removeprefix("database-instance:")
+    if (
+        len(value) != 50
+        or len(suffix) != 32
+        or any(character not in "0123456789abcdef" for character in suffix)
+    ):
+        raise ValueError("document-processing database identity is invalid")
+    return value
+
+
+def persist_document_processing_receipt(
+    conn: sqlite3.Connection,
+    receipt: DocumentProcessingOperationReceipt,
+) -> bool:
+    """Persist one immutable apply receipt inside the caller's transaction."""
+
+    if not receipt.request.apply or not verify_document_processing_receipt(receipt):
+        raise ValueError("only a valid apply receipt can enter the operation ledger")
+    payload = receipt.model_dump_json()
+    values = (
+        receipt.operation_id,
+        receipt.operation_id,
+        receipt.database_instance_id,
+        receipt.request_sha256,
+        receipt.result_sha256,
+        receipt.receipt_sha256,
+        payload,
+    )
+    cursor = conn.execute(
+        "INSERT OR IGNORE INTO document_processing_operation_ledger "
+        "(operation_id,idempotency_key,database_instance_id,request_sha256,"
+        "result_sha256,receipt_sha256,receipt_json) VALUES (?,?,?,?,?,?,?)",
+        values,
+    )
+    if cursor.rowcount == 1:
+        return True
+    existing = conn.execute(
+        "SELECT operation_id,idempotency_key,database_instance_id,request_sha256,"
+        "result_sha256,receipt_sha256,receipt_json "
+        "FROM document_processing_operation_ledger WHERE operation_id=?",
+        (receipt.operation_id,),
+    ).fetchone()
+    if existing is None or tuple(existing) != values:
+        raise ValueError("document-processing operation replay changed immutable evidence")
+    return False
+
+
+def load_document_processing_receipt(
+    conn: sqlite3.Connection,
+    operation_id: str,
+) -> DocumentProcessingOperationReceipt | None:
+    """Load and verify the canonical receipt for one exact operation."""
+
+    row = conn.execute(
+        "SELECT receipt_json FROM document_processing_operation_ledger WHERE operation_id=?",
+        (operation_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    receipt = DocumentProcessingOperationReceipt.model_validate_json(str(row[0]))
+    if not verify_document_processing_receipt(receipt) or receipt.operation_id != operation_id:
+        raise ValueError("stored document-processing receipt is invalid")
+    return receipt
+
+
+def _document_receipt_outcome(
+    request: DocumentProcessingPopulationRequest,
+    result: DocumentProcessingPopulationResult,
+) -> DocumentProcessingReceiptOutcome:
+    blocker_total = sum(_document_blocker_counts(result).values())
+    if not request.apply:
+        return "blocked" if request.phase in {"snapshots", "all"} and blocker_total else "planned"
+    if result.checkpoint.bounded:
+        if blocker_total and not result.checkpoint.can_resume:
+            return "blocked"
+        return "checkpoint"
+    if blocker_total:
+        return "blocked"
+    if request.phase in {"snapshots", "all"}:
+        return "complete"
+    return "applied"
+
+
+def _document_blocker_counts(
+    result: DocumentProcessingPopulationResult,
+) -> dict[str, int]:
+    return {
+        "binding_failure": result.binding_failure_count,
+        "failed_obligation": result.failed_obligation_count,
+        "incomplete_inventory": result.incomplete_inventory_count,
+        "missing_document": result.missing_document_count,
+        "unresolved_document": result.unresolved_document_count,
+    }
+
+
+def _model_sha(model: BaseModel) -> str:
+    return digest_text(canonical_json(model.model_dump(mode="json")))
+
+
+def _document_receipt_sha(receipt: DocumentProcessingOperationReceipt) -> str:
+    payload = receipt.model_dump(mode="json")
+    payload.pop("receipt_sha256")
+    return digest_text(canonical_json(payload))
+
+
+def document_processing_operation_id(
+    *,
+    database_instance_id: str,
+    request: DocumentProcessingPopulationRequest,
+    admission_receipt_sha256: str | None,
+    prior_checkpoint_receipt_sha256: str | None,
+) -> str:
+    material = canonical_json(
+        {
+            "admission_receipt_sha256": admission_receipt_sha256,
+            "database_instance_id": database_instance_id,
+            "prior_checkpoint_receipt_sha256": prior_checkpoint_receipt_sha256,
+            "request_sha256": _model_sha(request),
+        }
+    )
+    return "document-processing-operation:" + digest_text(material)
 
 
 def verify_document_processing(
@@ -257,7 +525,7 @@ def populate_document_processing(
         )
         if not documents_by_issuer:
             raise ValueError("document processing requires a nonempty covered universe")
-        input_sha = _input_commitment(conn, cutoff, recorded)
+        input_sha = _input_commitment(conn, cutoff, recorded, decisions)
         selection_sha = _selection_commitment(decisions)
         plan_sha = _population_plan_commitment(request, input_sha, selection_sha)
         _verify_commitments(request, input_sha=input_sha, plan_sha=plan_sha)
@@ -283,15 +551,14 @@ def populate_document_processing(
                 recorded,
             )
             for document_ids in documents_by_issuer.values():
-                with conn:
-                    derive_obligations(
-                        conn,
-                        DocumentProcessingScope(document_version_ids=document_ids),
-                        cutoff,
-                        _POLICY,
-                        observed_through=recorded,
-                        recorded_at=recorded,
-                    )
+                derive_obligations(
+                    conn,
+                    DocumentProcessingScope(document_version_ids=document_ids),
+                    cutoff,
+                    _POLICY,
+                    observed_through=recorded,
+                    recorded_at=recorded,
+                )
         obligations = _obligation_rows(
             conn,
             cutoff,
@@ -317,10 +584,12 @@ def populate_document_processing(
                     last_id = obligation_id
                     continue
                 try:
+                    conn.execute("SAVEPOINT population_document_obligation")
                     _close_obligation(conn, obligation, cutoff, recorded)
-                    conn.commit()
+                    conn.execute("RELEASE population_document_obligation")
                 except Exception as exc:
-                    conn.rollback()
+                    conn.execute("ROLLBACK TO population_document_obligation")
+                    conn.execute("RELEASE population_document_obligation")
                     reason = _reason(exc)
                     failures[reason] = failures.get(reason, 0) + 1
                     break
@@ -391,6 +660,9 @@ def populate_document_processing(
                 + sum(failures.values())
             ),
         )
+        post_state_sha = (
+            _input_commitment(conn, cutoff, recorded, decisions) if request.apply else input_sha
+        )
         return DocumentProcessingPopulationResult(
             mode="apply" if request.apply else "dry_run",
             phase=request.phase,
@@ -422,6 +694,7 @@ def populate_document_processing(
             processing_snapshot_count=_processing_snapshot_count(conn, cutoff, recorded),
             selection_commitment_sha256=selection_sha,
             input_commitment_sha256=input_sha,
+            post_state_commitment_sha256=post_state_sha,
             plan_commitment_sha256=plan_sha,
             output_commitment_sha256=_output_commitment(
                 conn,
@@ -701,35 +974,34 @@ def _ensure_document_family_obligations(
         revision = 1 if prior is None else int(prior[1]) + 1
         supersedes = None if prior is None else str(prior[0])
         record_id = "source-obligation:" + _digest(obligation_key, str(revision))
-        with conn:
-            result = registry.persist(
-                SourceObligationRevision(
-                    obligation_revision_id=record_id,
-                    idempotency_key=record_id,
-                    obligation_key=obligation_key,
-                    revision=revision,
-                    issuer_id=issuer_id,
-                    reporting_entity_id=reporting_entity_id,
-                    authority_kind=authority_kind,
-                    document_family=cast(DocumentFamily, family),
-                    obligation_state="required",
-                    completeness_rule=completeness_rule,
-                    active_from=cutoff,
-                    active_to=None,
-                    decision_kind="deterministic",
-                    reason_code="governed_reporting_document_family_present",
-                    reason_details=(
-                        (
-                            "population_policy",
-                            "complete_reporting_document_processing@1",
-                        ),
+        result = registry.persist(
+            SourceObligationRevision(
+                obligation_revision_id=record_id,
+                idempotency_key=record_id,
+                obligation_key=obligation_key,
+                revision=revision,
+                issuer_id=issuer_id,
+                reporting_entity_id=reporting_entity_id,
+                authority_kind=authority_kind,
+                document_family=cast(DocumentFamily, family),
+                obligation_state="required",
+                completeness_rule=completeness_rule,
+                active_from=cutoff,
+                active_to=None,
+                decision_kind="deterministic",
+                reason_code="governed_reporting_document_family_present",
+                reason_details=(
+                    (
+                        "population_policy",
+                        "complete_reporting_document_processing@1",
                     ),
-                    effective_at=cutoff,
-                    knowledge_at=cutoff,
-                    recorded_at=recorded_at,
-                    supersedes_obligation_revision_id=supersedes,
-                )
+                ),
+                effective_at=cutoff,
+                knowledge_at=cutoff,
+                recorded_at=recorded_at,
+                supersedes_obligation_revision_id=supersedes,
             )
+        )
         created += int(result.created)
     return created
 
@@ -843,16 +1115,15 @@ def _ensure_expected_document_binding(
         if tuple(existing) != values:
             raise ValueError("expected document binding replay changed immutable values")
         return False
-    with conn:
-        conn.execute(
-            "INSERT INTO expected_document_obligation_bindings "
-            "(binding_id,idempotency_key,expected_document_id,"
-            "source_obligation_revision_id,issuer_id,reporting_entity_id,"
-            "document_family,canonical_binding_json,binding_sha256,"
-            "effective_at,knowledge_at,recorded_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            values,
-        )
+    conn.execute(
+        "INSERT INTO expected_document_obligation_bindings "
+        "(binding_id,idempotency_key,expected_document_id,"
+        "source_obligation_revision_id,issuer_id,reporting_entity_id,"
+        "document_family,canonical_binding_json,binding_sha256,"
+        "effective_at,knowledge_at,recorded_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        values,
+    )
     return True
 
 
@@ -986,6 +1257,7 @@ def _seal_complete_snapshots(
     cutoff: datetime,
     recorded_at: datetime,
 ) -> None:
+    planned: list[tuple[str, tuple[str, ...], str]] = []
     for issuer_id, document_ids in documents_by_issuer.items():
         totals = _obligation_totals(conn, cutoff, document_ids, recorded_at)
         if _sealed_disposition_count(conn, cutoff, document_ids, recorded_at) != totals["total"]:
@@ -993,7 +1265,10 @@ def _seal_complete_snapshots(
                 f"cannot seal processing snapshot for {issuer_id} with unclosed obligations"
             )
         snapshot_id = "processing-snapshot:" + _digest(issuer_id, _db_time(cutoff))
-        with conn:
+        planned.append((issuer_id, document_ids, snapshot_id))
+    conn.execute("SAVEPOINT population_document_snapshot_batch")
+    try:
+        for _issuer_id, document_ids, snapshot_id in planned:
             seal_processing_snapshot(
                 conn,
                 processing_snapshot_id=snapshot_id,
@@ -1003,6 +1278,11 @@ def _seal_complete_snapshots(
                 policy=_POLICY,
                 recorded_at=recorded_at,
             )
+        conn.execute("RELEASE population_document_snapshot_batch")
+    except Exception:
+        conn.execute("ROLLBACK TO population_document_snapshot_batch")
+        conn.execute("RELEASE population_document_snapshot_batch")
+        raise
 
 
 def _obligation_rows(
@@ -1165,8 +1445,9 @@ def _input_commitment(
     conn: sqlite3.Connection,
     cutoff: datetime,
     observed_through: datetime,
+    decisions: tuple[ReportingDocumentDecision, ...],
 ) -> str:
-    rows = conn.execute(
+    scope_rows = conn.execute(
         "SELECT expected.expected_document_id,coverage.coverage_status,"
         "coverage.document_version_id,coverage.assessment_id "
         "FROM expected_documents expected "
@@ -1189,7 +1470,307 @@ def _input_commitment(
             _db_time(observed_through),
         ),
     ).fetchall()
-    return _sha_rows(rows)
+    document_ids = tuple(
+        sorted(
+            {item.document_version_id for item in decisions if item.document_version_id is not None}
+        )
+    )
+    expected_ids = tuple(sorted(item.expected_document_id for item in decisions))
+    material: dict[str, list[list[object]]] = {
+        "scope": _json_rows(scope_rows),
+        "source_inventory": _json_rows(
+            conn.execute(
+                "SELECT inventory.*,seal.expected_component_count,"
+                "seal.component_digest_sha256,seal.completion_status,seal.sealed_at "
+                "FROM source_inventory_snapshots inventory "
+                "LEFT JOIN source_inventory_snapshot_seals seal "
+                "ON seal.snapshot_id=inventory.snapshot_id "
+                "WHERE datetime(inventory.recorded_at)<=datetime(?) "
+                "ORDER BY inventory.inventory_key,inventory.revision",
+                (_db_time(observed_through),),
+            ).fetchall()
+        ),
+        "source_inventory_components": _json_rows(
+            conn.execute(
+                "SELECT component.* FROM source_inventory_components component "
+                "JOIN source_inventory_snapshots inventory "
+                "ON inventory.snapshot_id=component.snapshot_id "
+                "WHERE datetime(inventory.recorded_at)<=datetime(?) "
+                "ORDER BY component.snapshot_id,component.ordinal",
+                (_db_time(observed_through),),
+            ).fetchall()
+        ),
+        "expected_documents": _rows_for_values(
+            conn,
+            table="expected_documents",
+            column="expected_document_id",
+            values=expected_ids,
+            order_by="expected_document_id",
+        ),
+        "coverage": _rows_for_values(
+            conn,
+            table="source_coverage_assessments",
+            column="expected_document_id",
+            values=expected_ids,
+            order_by="expected_document_id,revision",
+        ),
+        "lifecycle": _json_rows(
+            conn.execute(
+                "SELECT * FROM expected_document_lifecycle_revisions "
+                "WHERE datetime(knowledge_at)<=datetime(?) "
+                "AND datetime(recorded_at)<=datetime(?) "
+                "ORDER BY inventory_key,expected_document_key,revision",
+                (_db_time(cutoff), _db_time(observed_through)),
+            ).fetchall()
+        ),
+        "reporting_entities": _reporting_entity_scope_rows(conn, decisions),
+        "source_obligations": _json_rows(
+            conn.execute(
+                "SELECT * FROM source_obligation_revisions "
+                "WHERE datetime(knowledge_at)<=datetime(?) "
+                "AND datetime(recorded_at)<=datetime(?) "
+                "ORDER BY obligation_key,revision",
+                (_db_time(cutoff), _db_time(observed_through)),
+            ).fetchall()
+        ),
+        "bindings": _rows_for_values(
+            conn,
+            table="expected_document_obligation_bindings",
+            column="expected_document_id",
+            values=expected_ids,
+            order_by="expected_document_id",
+        ),
+        "document_versions": _rows_for_values(
+            conn,
+            table="evidence_document_versions",
+            column="document_version_id",
+            values=document_ids,
+            order_by="document_version_id",
+        ),
+        "content_blobs": _document_blob_scope_rows(conn, document_ids),
+        "extraction_runs": _rows_for_values(
+            conn,
+            table="evidence_extraction_runs",
+            column="document_version_id",
+            values=document_ids,
+            order_by="document_version_id,extraction_run_id",
+        ),
+        "processing_obligations": _rows_for_values(
+            conn,
+            table="document_processing_obligation_revisions",
+            column="document_version_id",
+            values=document_ids,
+            order_by="processing_obligation_revision_id",
+        ),
+        "processing_evidence": _rows_for_values(
+            conn,
+            table="document_processing_evidence_headers",
+            column="document_version_id",
+            values=document_ids,
+            order_by="evidence_seal_id",
+        ),
+        "ocr_assessments": _rows_for_values(
+            conn,
+            table="ocr_document_assessments",
+            column="document_version_id",
+            values=document_ids,
+            order_by="document_version_id,assessment_id",
+        ),
+        "image_ocr_assessments": _rows_for_values(
+            conn,
+            table="image_ocr_assessments",
+            column="document_version_id",
+            values=document_ids,
+            order_by="document_version_id,assessment_id",
+        ),
+        "pdf_table_artifacts": _rows_for_values(
+            conn,
+            table="pdf_table_extraction_artifact_headers",
+            column="document_version_id",
+            values=document_ids,
+            order_by="document_version_id,artifact_id",
+        ),
+    }
+    run_ids = (
+        tuple(
+            str(row[0])
+            for row in conn.execute(
+                "SELECT extraction_run_id FROM evidence_extraction_runs "
+                "WHERE document_version_id IN (SELECT value FROM json_each(?)) "
+                "ORDER BY extraction_run_id",
+                (json.dumps(document_ids),),
+            ).fetchall()
+        )
+        if document_ids
+        else ()
+    )
+    evidence_ids = _selected_ids(
+        conn,
+        table="document_processing_evidence_headers",
+        id_column="evidence_seal_id",
+        scope_column="document_version_id",
+        scope_values=document_ids,
+    )
+    obligation_ids = _selected_ids(
+        conn,
+        table="document_processing_obligation_revisions",
+        id_column="processing_obligation_revision_id",
+        scope_column="document_version_id",
+        scope_values=document_ids,
+    )
+    disposition_ids = (
+        tuple(
+            str(row[0])
+            for row in conn.execute(
+                "SELECT header.processing_disposition_id "
+                "FROM document_processing_disposition_headers header "
+                "WHERE header.processing_obligation_revision_id "
+                "IN (SELECT value FROM json_each(?)) "
+                "ORDER BY header.processing_disposition_id",
+                (json.dumps(obligation_ids),),
+            ).fetchall()
+        )
+        if obligation_ids
+        else ()
+    )
+    snapshot_ids = (
+        tuple(
+            str(row[0])
+            for row in conn.execute(
+                "SELECT DISTINCT processing_snapshot_id "
+                "FROM document_processing_snapshot_members "
+                "WHERE document_version_id IN (SELECT value FROM json_each(?)) "
+                "ORDER BY processing_snapshot_id",
+                (json.dumps(document_ids),),
+            ).fetchall()
+        )
+        if document_ids
+        else ()
+    )
+    assessment_ids = _selected_ids(
+        conn,
+        table="ocr_document_assessments",
+        id_column="assessment_id",
+        scope_column="document_version_id",
+        scope_values=document_ids,
+    )
+    artifact_ids = _selected_ids(
+        conn,
+        table="pdf_table_extraction_artifact_headers",
+        id_column="artifact_id",
+        scope_column="document_version_id",
+        scope_values=document_ids,
+    )
+    for label, table, column, values, order_by in (
+        (
+            "processing_evidence_members",
+            "document_processing_evidence_members",
+            "evidence_seal_id",
+            evidence_ids,
+            "evidence_seal_id,member_ordinal",
+        ),
+        (
+            "processing_evidence_seals",
+            "document_processing_evidence_seals",
+            "evidence_seal_id",
+            evidence_ids,
+            "evidence_seal_id",
+        ),
+        (
+            "processing_disposition_headers",
+            "document_processing_disposition_headers",
+            "processing_disposition_id",
+            disposition_ids,
+            "processing_disposition_id",
+        ),
+        (
+            "processing_disposition_members",
+            "document_processing_disposition_members",
+            "processing_disposition_id",
+            disposition_ids,
+            "processing_disposition_id,member_ordinal",
+        ),
+        (
+            "processing_disposition_seals",
+            "document_processing_disposition_seals",
+            "processing_disposition_id",
+            disposition_ids,
+            "processing_disposition_id",
+        ),
+        (
+            "processing_snapshot_headers",
+            "document_processing_snapshot_headers",
+            "processing_snapshot_id",
+            snapshot_ids,
+            "processing_snapshot_id",
+        ),
+        (
+            "processing_snapshot_members",
+            "document_processing_snapshot_members",
+            "processing_snapshot_id",
+            snapshot_ids,
+            "processing_snapshot_id,member_ordinal",
+        ),
+        (
+            "processing_snapshot_seals",
+            "document_processing_snapshot_seals",
+            "processing_snapshot_id",
+            snapshot_ids,
+            "processing_snapshot_id",
+        ),
+        (
+            "ocr_preflight",
+            "ocr_preflight_pages",
+            "assessment_id",
+            assessment_ids,
+            "assessment_id,page_number",
+        ),
+        (
+            "pdf_table_members",
+            "pdf_table_extraction_artifact_members",
+            "artifact_id",
+            artifact_ids,
+            "artifact_id,member_ordinal",
+        ),
+        (
+            "pdf_table_seals",
+            "pdf_table_extraction_artifact_seals",
+            "artifact_id",
+            artifact_ids,
+            "artifact_id",
+        ),
+    ):
+        material[label] = _rows_for_values(
+            conn,
+            table=table,
+            column=column,
+            values=values,
+            order_by=order_by,
+        )
+    for label, table, order_by in (
+        (
+            "evidence_nodes",
+            "evidence_nodes",
+            "extraction_run_id,node_kind,revision,node_id",
+        ),
+        ("ocr_governance", "ocr_extraction_governance", "extraction_run_id"),
+        ("ocr_results", "ocr_page_results", "extraction_run_id,page_number"),
+        ("image_ocr_governance", "image_ocr_extraction_governance", "extraction_run_id"),
+        ("image_ocr_results", "image_ocr_results", "extraction_run_id,page_number"),
+        (
+            "filing_xbrl_seals",
+            "filing_xbrl_extraction_disposition_seals",
+            "extraction_run_id,disposition_seal_id",
+        ),
+    ):
+        material[label] = _rows_for_values(
+            conn,
+            table=table,
+            column="extraction_run_id",
+            values=run_ids,
+            order_by=order_by,
+        )
+    return digest_text(canonical_json(material))
 
 
 def _population_plan_commitment(
@@ -1253,7 +1834,7 @@ def _document_checkpoint(
         last_processing_obligation_revision_id=prior_cursor,
         processed_obligation_count=processed,
         remaining_obligation_count=remaining,
-        can_resume=bounded and remaining > 0,
+        can_resume=bounded and remaining > 0 and prior_cursor is not None,
     )
 
 
@@ -1418,6 +1999,86 @@ def _selection_commitment(
     ).hexdigest()
 
 
+def _rows_for_values(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    column: str,
+    values: tuple[str, ...],
+    order_by: str,
+    columns: str = "*",
+) -> list[list[object]]:
+    if not values:
+        return []
+    rows = conn.execute(
+        f"SELECT {columns} FROM {table} "  # nosec B608 -- identifiers are fixed internal call-site constants
+        f"WHERE {column} IN (SELECT value FROM json_each(?)) "
+        f"ORDER BY {order_by}",
+        (json.dumps(values),),
+    ).fetchall()
+    return _json_rows(rows)
+
+
+def _reporting_entity_scope_rows(
+    conn: sqlite3.Connection,
+    decisions: tuple[ReportingDocumentDecision, ...],
+) -> list[list[object]]:
+    issuer_ids = tuple(sorted({item.issuer_id for item in decisions}))
+    return _rows_for_values(
+        conn,
+        table="reporting_entities",
+        column="issuer_id",
+        values=issuer_ids,
+        order_by="issuer_id,reporting_entity_id",
+    )
+
+
+def _document_blob_scope_rows(
+    conn: sqlite3.Connection,
+    document_ids: tuple[str, ...],
+) -> list[list[object]]:
+    blob_shas = _selected_ids(
+        conn,
+        table="evidence_document_versions",
+        id_column="blob_sha256",
+        scope_column="document_version_id",
+        scope_values=document_ids,
+    )
+    return _rows_for_values(
+        conn,
+        table="evidence_content_blobs",
+        column="sha256",
+        values=blob_shas,
+        order_by="sha256",
+        columns="sha256,media_type,byte_size,recorded_at",
+    )
+
+
+def _selected_ids(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    id_column: str,
+    scope_column: str,
+    scope_values: tuple[str, ...],
+) -> tuple[str, ...]:
+    if not scope_values:
+        return ()
+    return tuple(
+        str(row[0])
+        for row in conn.execute(
+            f"SELECT {id_column} FROM {table} "  # nosec B608 -- fixed internal call-site identifiers
+            f"WHERE {scope_column} IN (SELECT value FROM json_each(?)) "
+            f"ORDER BY {id_column}",
+            (json.dumps(scope_values),),
+        ).fetchall()
+    )
+
+
+def _json_rows(rows: list[sqlite3.Row]) -> list[list[object]]:
+    return [[value.hex() if isinstance(value, bytes) else value for value in row] for row in rows]
+
+
 def _sha_rows(rows: list[sqlite3.Row]) -> str:
     payload = json.dumps(
         [list(row) for row in rows],
@@ -1438,7 +2099,17 @@ def _sql_sha256(value: object) -> str:
 
 def _reason(exc: Exception) -> str:
     reason = getattr(exc, "reason_code", None)
-    return str(reason or str(exc) or type(exc).__name__)[:128]
+    candidate = str(reason or str(exc) or "")
+    if (
+        candidate
+        and len(candidate) <= 128
+        and all(
+            character.isascii() and (character.islower() or character.isdigit() or character == "_")
+            for character in candidate
+        )
+    ):
+        return candidate
+    return "document_processing_obligation_failed"
 
 
 def _utc(value: datetime) -> datetime:
