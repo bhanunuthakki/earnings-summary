@@ -73,6 +73,8 @@ class _DuplicateSnapshotEngine(CanonicalFactResolutionEngine):
 def _resolution_database(
     tmp_path: Path,
     output: FilingXbrlNormalizedOutput,
+    *,
+    target_revision: str = "0267_source_definition_taxonomy_identity",
 ) -> sqlite3.Connection:
     real_upgrade = command.upgrade
 
@@ -104,7 +106,7 @@ def _resolution_database(
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.upgrade(config, "0267_source_definition_taxonomy_identity")
+    command.upgrade(config, target_revision)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -181,12 +183,20 @@ def _mapping(component: SourceTaxonomyComponent) -> MappingRevision:
     )
 
 
+def _taxonomy_qualified_binding_contract(conn: sqlite3.Connection) -> bool:
+    trigger = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='trg_binding_exact_coordinate'"
+    ).fetchone()
+    return (
+        trigger is not None
+        and isinstance(trigger[0], str)
+        and "'schema_version','source-definition-identity/v1'" in trigger[0]
+    )
+
+
 def _bind_every_published_cell(conn: sqlite3.Connection) -> str:
     ontology = MetricOntology(conn)
-    taxonomy_qualified = (
-        conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
-        == "0267_source_definition_taxonomy_identity"
-    )
+    taxonomy_qualified = _taxonomy_qualified_binding_contract(conn)
     period_start, period_end = conn.execute(
         "SELECT period_start,period_end FROM fact_cells_v2 LIMIT 1"
     ).fetchone()

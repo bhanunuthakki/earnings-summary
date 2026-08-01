@@ -85,6 +85,7 @@ def _mock_compression(monkeypatch: pytest.MonkeyPatch) -> None:
         del path
         return 10_000_000_000
 
+    monkeypatch.setattr(clone_module, "_require_ntfs_host", lambda: None)
     monkeypatch.setattr(clone_module, "_enable_directory_compression", enable)
     monkeypatch.setattr(clone_module, "_directory_is_compressed", compressed)
     monkeypatch.setattr(clone_module, "_file_is_compressed", compressed)

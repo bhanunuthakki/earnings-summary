@@ -17,6 +17,7 @@ from provenance.population_document_processing import (
 from tests.test_population_document_processing import receipt_result
 
 _DATABASE_INSTANCE_ID = "database-instance:" + "1" * 32
+_HEAD_REVISION = "0269_latest_governed_population_receipt_v2"
 
 
 def _database(path: Path) -> None:
@@ -43,6 +44,7 @@ def _database(path: Path) -> None:
             CREATE TABLE operation_probe (value TEXT NOT NULL);
             """
         )
+        conn.execute("UPDATE alembic_version SET version_num=?", (_HEAD_REVISION,))
         conn.commit()
     finally:
         conn.close()
@@ -53,7 +55,7 @@ def _planned_receipt(database: Path):
     return build_document_processing_receipt(
         database_path=str(database.resolve()),
         database_instance_id=_DATABASE_INSTANCE_ID,
-        alembic_revision="0264_document_processing_operation_ledger",
+        alembic_revision=_HEAD_REVISION,
         request=DocumentProcessingPopulationRequest(
             cutoff_at=cutoff,
             operation_recorded_at=cutoff,

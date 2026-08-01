@@ -115,11 +115,15 @@ def compressed_file_metrics(path: Path) -> tuple[bool, int]:
     return _file_is_compressed(candidate), _compressed_size(candidate)
 
 
+def _require_ntfs_host() -> None:
+    if os.name != "nt":
+        raise LatestStateActivationError("compressed candidate clones require Windows NTFS")
+
+
 def prepare_compressed_clone(request: CompressedCloneRequest) -> CompressedCloneReceipt:
     """Copy one audited quiesced database with bounded local-disk headroom."""
 
-    if os.name != "nt":
-        raise LatestStateActivationError("compressed candidate clones require Windows NTFS")
+    _require_ntfs_host()
     source = request.source_database.resolve()
     audit_path = request.candidate_audit_receipt.resolve()
     coverage_path = request.candidate_coverage_receipt.resolve()

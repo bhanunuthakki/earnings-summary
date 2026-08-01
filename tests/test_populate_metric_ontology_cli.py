@@ -17,6 +17,7 @@ from provenance.population_metric_ontology import (
 
 _STAMP = datetime(2026, 7, 29, tzinfo=UTC)
 _DATABASE_INSTANCE_ID = "database-instance:" + "1" * 32
+_HEAD_REVISION = "0269_latest_governed_population_receipt_v2"
 
 
 def _database(path: Path) -> None:
@@ -43,6 +44,7 @@ def _database(path: Path) -> None:
             CREATE TABLE operation_probe (value TEXT NOT NULL);
             """
         )
+        conn.execute("UPDATE alembic_version SET version_num=?", (_HEAD_REVISION,))
 
 
 def _result(
@@ -91,7 +93,7 @@ def _planned_receipt(database: Path) -> MetricOntologyOperationReceipt:
     return build_metric_ontology_receipt(
         database_path=str(database.resolve()),
         database_instance_id=_DATABASE_INSTANCE_ID,
-        alembic_revision="0267_source_definition_taxonomy_identity",
+        alembic_revision=_HEAD_REVISION,
         request=MetricOntologyPopulationRequest(
             knowledge_cutoff=_STAMP,
             operation_recorded_at=_STAMP,

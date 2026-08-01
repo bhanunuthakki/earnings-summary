@@ -274,7 +274,7 @@ def test_existing_clone_upgrade_recovery_refuses_replacement_target_database(
     conn.close()
     clone_path = tmp_path / "compressed-clone.json"
     _clone_receipt(clone_path, database)
-    _patch_environment(monkeypatch)
+    _patch_environment(monkeypatch, introduces_runtime_identity=True)
     request = _request(tmp_path, database, clone_path)
     publish = cutover.publish_text_no_clobber
     failed = False
@@ -298,6 +298,19 @@ def test_existing_clone_upgrade_recovery_refuses_replacement_target_database(
 
     with pytest.raises(CutoverPreflightError, match="replacement database"):
         upgrade_existing_isolated_clone(request)
+
+
+def test_existing_clone_upgrade_recovery_requires_durable_database_identity() -> None:
+    plan = MigrationPlan(
+        expected_alembic_head=TARGET_REVISION,
+        ordered_migration_files=(),
+    )
+
+    assert not cutover._recovery_runtime_identity_is_valid(
+        source_identity=None,
+        recovered_identity=None,
+        migration_plan=plan,
+    )
 
 
 def test_existing_clone_upgrade_intermediate_revision_requires_clone_restore(

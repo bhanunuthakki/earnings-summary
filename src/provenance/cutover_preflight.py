@@ -781,7 +781,9 @@ def _recovery_runtime_identity_is_valid(
         item.revision == "0264_document_processing_operation_ledger"
         for item in migration_plan.ordered_migration_files
     )
-    return recovered_identity is not None if introduces_identity else recovered_identity is None
+    if not introduces_identity:
+        return False
+    return recovered_identity is not None
 
 
 def _load_completed_existing_clone_upgrade(
