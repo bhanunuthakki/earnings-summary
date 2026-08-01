@@ -351,6 +351,27 @@ def test_cross_qname_candidates_are_exhaustive_and_conflicts_stay_unresolved(
         FilingXbrlExtractionLedger(conn).publish(output)
         cell = _bind_every_published_cell(conn)
         engine = CanonicalFactResolutionEngine(conn)
+        plan = engine.plan(
+            cell,
+            NOW,
+            ResolutionPolicy(name="deterministic", version="v1", config={}),
+            observed_through=NOW,
+        )
+        assert plan.status == "unresolved"
+        assert plan.reason_code == "materially_conflicting_assertions"
+        assert plan.candidate_count == 2
+        assert plan.eligible_candidate_count == 2
+        assert (
+            sum(
+                int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+                for table in (
+                    "canonical_fact_candidate_universe_revisions",
+                    "canonical_fact_relation_set_revisions",
+                    "canonical_fact_resolution_revisions",
+                )
+            )
+            == 0
+        )
         receipt = engine.resolve(
             cell,
             NOW,
@@ -358,6 +379,10 @@ def test_cross_qname_candidates_are_exhaustive_and_conflicts_stay_unresolved(
             recorded_at=NOW,
         )
         assert receipt.status == "unresolved"
+        assert receipt.reason_code == plan.reason_code
+        assert receipt.candidate_universe_id == plan.candidate_universe_id
+        assert receipt.relation_set_id == plan.relation_set_id
+        assert receipt.canonical_resolution_revision_id == plan.canonical_resolution_revision_id
         assert tuple(
             conn.execute(
                 "SELECT COUNT(*) FROM canonical_fact_candidate_dispositions WHERE candidate_universe_id=?",

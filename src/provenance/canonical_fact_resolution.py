@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Literal, cast
 
@@ -68,7 +68,36 @@ class ResolutionReceipt(BaseModel):
     canonical_resolution_revision_id: str
     status: Status
     selected_observation_id: str | None
+    reason_code: str
     exact_replay: bool
+
+
+class ResolutionPlan(BaseModel):
+    """Read-only deterministic outcome over one exact candidate graph."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    canonical_metric_cell_id: str
+    cutoff_at: datetime
+    observed_through: datetime
+    policy_name: str
+    policy_version: str
+    policy_config_sha256: str
+    candidate_universe_id: str
+    candidate_count: int = Field(ge=0)
+    eligible_candidate_count: int = Field(ge=0)
+    candidate_set_sha256: str = Field(min_length=64, max_length=64)
+    relation_set_id: str
+    relation_count: int = Field(ge=0)
+    relation_set_sha256: str = Field(min_length=64, max_length=64)
+    canonical_resolution_revision_id: str
+    status: Status
+    selected_observation_id: str | None
+    reason_code: str
+    reason_details_sha256: str = Field(min_length=64, max_length=64)
+
+    @property
+    def commitment_sha256(self) -> str:
+        return _sha(self)
 
 
 class ResolutionSnapshotScope(BaseModel):
@@ -143,6 +172,15 @@ class _Candidate:
         return (self.numeric_value, self.text_value, self.is_nil, self.currency, self.unit_key)
 
 
+@dataclass(frozen=True)
+class _PreparedResolution:
+    plan: ResolutionPlan
+    candidates: list[_Candidate]
+    eligible: list[_Candidate]
+    relations: list[dict[str, object]]
+    reason: tuple[str, dict[str, object]]
+
+
 class CanonicalFactResolutionEngine:
     """The sole durable cross-cell resolution boundary."""
 
@@ -161,14 +199,104 @@ class CanonicalFactResolutionEngine:
     ) -> ResolutionReceipt:
         """Enumerate all sealed eligible assertions and persist one exact result."""
         cutoff, written_at = _utc(knowledge_cutoff), _utc(recorded_at)
-        if written_at < cutoff:
-            raise ValueError("resolution recorded_at must not precede knowledge_cutoff")
+        prepared = self._prepare_resolution(
+            canonical_metric_cell_id,
+            cutoff,
+            policy,
+            observed_through=written_at,
+        )
+        plan = prepared.plan
+        resolution_key = _sha(
+            [
+                canonical_metric_cell_id,
+                _time(cutoff),
+                policy.name,
+                policy.version,
+                policy.config_sha256,
+            ]
+        )
+        self._conn.execute("SAVEPOINT canonical_fact_resolution")
+        try:
+            universe_replay = self._persist_universe(
+                plan.candidate_universe_id,
+                canonical_metric_cell_id,
+                cutoff,
+                written_at,
+                prepared.candidates,
+            )
+            relation_replay = self._persist_relation_set(
+                plan.relation_set_id,
+                plan.candidate_universe_id,
+                cutoff,
+                written_at,
+                prepared.relations,
+            )
+            resolution_replay = self._persist_resolution(
+                plan.canonical_resolution_revision_id,
+                resolution_key,
+                canonical_metric_cell_id,
+                plan.candidate_universe_id,
+                plan.relation_set_id,
+                cutoff,
+                written_at,
+                policy,
+                plan.status,
+                plan.selected_observation_id,
+                prepared.reason,
+            )
+            self._verify_universe(plan.candidate_universe_id, prepared.candidates)
+            self._verify_relation_set(plan.relation_set_id, prepared.relations)
+        except Exception:
+            self._conn.execute("ROLLBACK TO SAVEPOINT canonical_fact_resolution")
+            self._conn.execute("RELEASE SAVEPOINT canonical_fact_resolution")
+            raise
+        self._conn.execute("RELEASE SAVEPOINT canonical_fact_resolution")
+        return ResolutionReceipt(
+            canonical_metric_cell_id=canonical_metric_cell_id,
+            cutoff_at=cutoff,
+            candidate_universe_id=plan.candidate_universe_id,
+            relation_set_id=plan.relation_set_id,
+            canonical_resolution_revision_id=plan.canonical_resolution_revision_id,
+            status=plan.status,
+            selected_observation_id=plan.selected_observation_id,
+            reason_code=plan.reason_code,
+            exact_replay=universe_replay and relation_replay and resolution_replay,
+        )
+
+    def plan(
+        self,
+        canonical_metric_cell_id: str,
+        knowledge_cutoff: datetime,
+        policy: ResolutionPolicy,
+        *,
+        observed_through: datetime,
+    ) -> ResolutionPlan:
+        """Return the exact deterministic outcome without persisting evidence."""
+
+        return self._prepare_resolution(
+            canonical_metric_cell_id,
+            knowledge_cutoff,
+            policy,
+            observed_through=observed_through,
+        ).plan
+
+    def _prepare_resolution(
+        self,
+        canonical_metric_cell_id: str,
+        knowledge_cutoff: datetime,
+        policy: ResolutionPolicy,
+        *,
+        observed_through: datetime,
+    ) -> _PreparedResolution:
+        cutoff, observed = _utc(knowledge_cutoff), _utc(observed_through)
+        if observed < cutoff:
+            raise ValueError("resolution observed_through must not precede knowledge_cutoff")
         if not canonical_metric_cell_id:
             raise ValueError("canonical_metric_cell_id is required")
         candidates = self._enumerate(
             canonical_metric_cell_id,
             cutoff,
-            observed_through=written_at,
+            observed_through=observed,
         )
         if len(candidates) > MAX_CANDIDATES_PER_CANONICAL_CELL:
             raise ValueError(
@@ -187,53 +315,40 @@ class CanonicalFactResolutionEngine:
             ]
         )
         resolution_id = f"cfr_{resolution_key[:40]}"
-        self._conn.execute("SAVEPOINT canonical_fact_resolution")
-        try:
-            universe_replay = self._persist_universe(
-                universe_id, canonical_metric_cell_id, cutoff, written_at, candidates
-            )
-            eligible = [
-                candidate for candidate in candidates if candidate.eligibility == "eligible"
-            ]
-            relations = self._relations(
-                relation_set_id,
-                eligible,
-                cutoff,
-                observed_through=written_at,
-            )
-            relation_replay = self._persist_relation_set(
-                relation_set_id, universe_id, cutoff, written_at, relations
-            )
-            status, selected, reason = self._outcome(eligible, relations)
-            resolution_replay = self._persist_resolution(
-                resolution_id,
-                resolution_key,
-                canonical_metric_cell_id,
-                universe_id,
-                relation_set_id,
-                cutoff,
-                written_at,
-                policy,
-                status,
-                selected,
-                reason,
-            )
-            self._verify_universe(universe_id, candidates)
-            self._verify_relation_set(relation_set_id, relations)
-        except Exception:
-            self._conn.execute("ROLLBACK TO SAVEPOINT canonical_fact_resolution")
-            self._conn.execute("RELEASE SAVEPOINT canonical_fact_resolution")
-            raise
-        self._conn.execute("RELEASE SAVEPOINT canonical_fact_resolution")
-        return ResolutionReceipt(
+        eligible = [candidate for candidate in candidates if candidate.eligibility == "eligible"]
+        relations = self._relations(
+            relation_set_id,
+            eligible,
+            cutoff,
+            observed_through=observed,
+        )
+        status, selected, reason = self._outcome(eligible, relations)
+        plan = ResolutionPlan(
             canonical_metric_cell_id=canonical_metric_cell_id,
             cutoff_at=cutoff,
+            observed_through=observed,
+            policy_name=policy.name,
+            policy_version=policy.version,
+            policy_config_sha256=policy.config_sha256,
             candidate_universe_id=universe_id,
+            candidate_count=len(candidates),
+            eligible_candidate_count=len(eligible),
+            candidate_set_sha256=_sha([asdict(candidate) for candidate in candidates]),
             relation_set_id=relation_set_id,
+            relation_count=len(relations),
+            relation_set_sha256=_sha(relations),
             canonical_resolution_revision_id=resolution_id,
             status=status,
             selected_observation_id=selected,
-            exact_replay=universe_replay and relation_replay and resolution_replay,
+            reason_code=reason[0],
+            reason_details_sha256=_sha(reason[1]),
+        )
+        return _PreparedResolution(
+            plan=plan,
+            candidates=candidates,
+            eligible=eligible,
+            relations=relations,
+            reason=reason,
         )
 
     def as_known(
@@ -248,7 +363,10 @@ class CanonicalFactResolutionEngine:
         if observed < cutoff:
             raise ValueError("observed_through must not precede cutoff_at")
         row = self._conn.execute(
-            "SELECT canonical_resolution_revision_id,candidate_universe_id,relation_set_id,status,selected_observation_id FROM canonical_fact_resolution_revisions WHERE canonical_metric_cell_id=? AND knowledge_at<=? AND recorded_at<=? ORDER BY revision DESC LIMIT 1",
+            "SELECT canonical_resolution_revision_id,candidate_universe_id,relation_set_id,"
+            "status,selected_observation_id,reason_code "
+            "FROM canonical_fact_resolution_revisions WHERE canonical_metric_cell_id=? "
+            "AND knowledge_at<=? AND recorded_at<=? ORDER BY revision DESC LIMIT 1",
             (canonical_metric_cell_id, _time(cutoff), _time(observed)),
         ).fetchone()
         if row is None:
@@ -264,6 +382,7 @@ class CanonicalFactResolutionEngine:
             canonical_resolution_revision_id=str(row[0]),
             status=cast(Status, row[3]),
             selected_observation_id=row[4],
+            reason_code=str(row[5]),
             exact_replay=True,
         )
 

@@ -156,6 +156,11 @@ class CanonicalResolutionPopulationResult(_FrozenModel):
     resolved_cell_count: int
     unresolved_cell_count: int
     retired_cell_count: int
+    planned_resolved_cell_count: int
+    planned_unresolved_cell_count: int
+    planned_retired_cell_count: int
+    resolution_reason_counts: dict[str, int]
+    resolution_plan_commitment_sha256: str
     processed_cell_count: int
     last_canonical_metric_cell_id: str | None
     expected_issuer_count: int
@@ -323,6 +328,12 @@ def populate_canonical_resolution(
         input_sha = manifest.commitment_sha256
         plan_sha = _population_plan_commitment(request, input_sha)
         _verify_commitments(request, input_sha=input_sha, plan_sha=plan_sha)
+        planned_counts, reason_counts, resolution_plan_sha = _resolution_plan_summary(
+            conn,
+            cutoff,
+            recorded,
+            manifest,
+        )
         processed = 0
         last_cell: str | None = None
         effective_phase = "resolutions" if bounded and request.phase == "all" else request.phase
@@ -341,26 +352,23 @@ def populate_canonical_resolution(
                     processed += 1
                     last_cell = cell_id
         complete_resolutions = _resolution_set_is_exact(conn, cutoff, recorded)
+        counts = _status_counts(conn, cutoff, recorded)
+        projection_ready = complete_resolutions and counts["unresolved"] == 0
 
-        if request.apply and effective_phase in {"snapshots", "all"}:
-            if not complete_resolutions:
-                raise ValueError("resolution cells are not an exact canonical-cell set")
+        if request.apply and projection_ready and effective_phase in {"snapshots", "all"}:
             _seal_snapshots(conn, cutoff, recorded, manifest)
             _verify_snapshot_sets(conn, cutoff, recorded, manifest)
-        if request.apply and effective_phase in {"projections", "all"}:
-            if not complete_resolutions:
-                raise ValueError("resolution cells are not an exact canonical-cell set")
+        if request.apply and projection_ready and effective_phase in {"projections", "all"}:
             _verify_snapshot_sets(conn, cutoff, recorded, manifest)
             _build_projections(conn, cutoff, recorded, manifest)
             _verify_projection_sets(conn, cutoff, recorded, manifest)
 
-        counts = _status_counts(conn, cutoff, recorded)
         remaining = _remaining_resolution_count(conn, cutoff, recorded)
-        safe_to_seal = not bounded and complete_resolutions
+        safe_to_seal = not bounded and projection_ready
         state: Literal["planned", "partial", "complete"]
         if not request.apply:
             state = "planned"
-        elif bounded or not complete_resolutions:
+        elif bounded or not projection_ready:
             state = "partial"
         else:
             state = "complete"
@@ -381,6 +389,11 @@ def populate_canonical_resolution(
             resolved_cell_count=counts["resolved"],
             unresolved_cell_count=counts["unresolved"],
             retired_cell_count=counts["retired"],
+            planned_resolved_cell_count=planned_counts["resolved"],
+            planned_unresolved_cell_count=planned_counts["unresolved"],
+            planned_retired_cell_count=planned_counts["retired"],
+            resolution_reason_counts=reason_counts,
+            resolution_plan_commitment_sha256=resolution_plan_sha,
             processed_cell_count=processed,
             last_canonical_metric_cell_id=last_cell,
             expected_issuer_count=len(manifest.issuer_scopes),
@@ -875,6 +888,39 @@ def _resolution_set_is_exact(
         ),
     ).fetchone()
     return mismatch is None
+
+
+def _resolution_plan_summary(
+    conn: sqlite3.Connection,
+    cutoff: datetime,
+    recorded: datetime,
+    manifest: CanonicalResolutionPrewriteManifest,
+) -> tuple[dict[str, int], dict[str, int], str]:
+    """Plan every cell without writes and commit the exact deterministic outcomes."""
+
+    engine = CanonicalFactResolutionEngine(conn)
+    status_counts = {"resolved": 0, "unresolved": 0, "retired": 0}
+    reason_counts: dict[str, int] = {}
+    fold = _CanonicalArrayFold()
+    for cell_id in _bounded_cells(
+        conn,
+        cutoff,
+        recorded,
+        after=None,
+        limit=None,
+    ):
+        plan = engine.plan(
+            cell_id,
+            cutoff,
+            _POLICY,
+            observed_through=recorded,
+        )
+        status_counts[plan.status] += 1
+        reason_counts[plan.reason_code] = reason_counts.get(plan.reason_code, 0) + 1
+        fold.add(plan.model_dump(mode="json"))
+    if fold.count != manifest.canonical_cell_count:
+        raise ValueError("canonical resolution plan does not cover the frozen cell set")
+    return status_counts, dict(sorted(reason_counts.items())), fold.hexdigest()
 
 
 def _status_counts(

@@ -19,6 +19,7 @@ from provenance.canonical_fact_resolution import (
     VerifiedResolutionSnapshot,
 )
 from provenance.filing_xbrl_extraction_ledger import FilingXbrlExtractionLedger
+from provenance.filing_xbrl_fact_adapter import FilingXbrlNormalizedOutput
 from provenance.metric_ontology import (
     CanonicalMetricCell,
     MetricOntology,
@@ -56,12 +57,13 @@ def _seal_ontology(conn: sqlite3.Connection) -> str:
     return snapshot_id
 
 
-def _ready_database(tmp_path: Path) -> sqlite3.Connection:
-    conn = _resolution_database(
-        tmp_path,
-        _output((_entry(0, numeric_value=Decimal("100")),)),
-    )
-    FilingXbrlExtractionLedger(conn).publish(_output((_entry(0, numeric_value=Decimal("100")),)))
+def _ready_database(
+    tmp_path: Path,
+    output: FilingXbrlNormalizedOutput | None = None,
+) -> sqlite3.Connection:
+    prepared = _output((_entry(0, numeric_value=Decimal("100")),)) if output is None else output
+    conn = _resolution_database(tmp_path, prepared)
+    FilingXbrlExtractionLedger(conn).publish(prepared)
     _bind_every_published_cell(conn)
     _seal_ontology(conn)
     path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
@@ -82,6 +84,17 @@ def test_full_population_uses_system_clock_and_closes_exact_sets(
     conn = _ready_database(tmp_path)
     recorded_at = NOW + timedelta(hours=2)
     try:
+        preview = populate_canonical_resolution(
+            conn,
+            CanonicalResolutionPopulationRequest(
+                cutoff_at=NOW,
+                operation_recorded_at=recorded_at,
+            ),
+        )
+        assert preview.planned_resolved_cell_count == 1
+        assert preview.planned_unresolved_cell_count == 0
+        assert preview.resolution_reason_counts == {"exact_assertion_agreement": 1}
+        assert len(preview.resolution_plan_commitment_sha256) == 64
         result = populate_canonical_resolution(
             conn,
             CanonicalResolutionPopulationRequest(
@@ -106,6 +119,45 @@ def test_full_population_uses_system_clock_and_closes_exact_sets(
                 "SELECT canonical_metric_cell_id FROM canonical_fact_projection_entries"
             )
         } == {"canonical:revenue"}
+    finally:
+        conn.close()
+
+
+def test_unresolved_admission_cannot_seal_or_project(tmp_path: Path) -> None:
+    output = _output(
+        (
+            _entry(0, concept_name="Revenue", numeric_value=Decimal("100")),
+            _entry(1, concept_name="Sales", numeric_value=Decimal("200")),
+        )
+    )
+    conn = _ready_database(tmp_path, output)
+    recorded_at = NOW + timedelta(hours=2)
+    try:
+        preview = populate_canonical_resolution(
+            conn,
+            CanonicalResolutionPopulationRequest(
+                cutoff_at=NOW,
+                operation_recorded_at=recorded_at,
+            ),
+        )
+        result = populate_canonical_resolution(
+            conn,
+            CanonicalResolutionPopulationRequest(
+                cutoff_at=NOW,
+                operation_recorded_at=recorded_at,
+                apply=True,
+                input_commitment_sha256=preview.input_commitment_sha256,
+                plan_commitment_sha256=preview.plan_commitment_sha256,
+            ),
+        )
+
+        assert preview.planned_unresolved_cell_count == 1
+        assert preview.resolution_reason_counts == {"materially_conflicting_assertions": 1}
+        assert result.state == "partial"
+        assert result.unresolved_cell_count == 1
+        assert result.checkpoint.safe_to_seal is False
+        assert result.resolution_snapshot_count == 0
+        assert result.projection_count == 0
     finally:
         conn.close()
 
