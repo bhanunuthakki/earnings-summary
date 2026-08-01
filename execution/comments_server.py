@@ -4817,6 +4817,59 @@ def configure_runtime_db(repo_root: Path) -> Path:
     return db_path
 
 
+# Today's two expensive read-only builds, in the order the browser needs them:
+# the Overview fragment the shell fetches on load, then the cockpit body its
+# 90s poll re-fetches. Both are pure reads (batched DB queries + per-ticker
+# disk-cache reads); neither takes a pipeline lock or writes anything, so
+# priming them cannot contend with the morning pipeline or any other writer.
+WARMUP_PATHS: tuple[str, ...] = ("/api/panel/overview", "/api/cockpit")
+
+
+def start_boot_warmup(app: Flask, *, paths: tuple[str, ...] = WARMUP_PATHS) -> threading.Thread:
+    """Render Today once in the background so the owner's first visit is warm.
+
+    A freshly restarted server pays 35-40s on the first ``/api/panel/overview``
+    — cold module imports, cold OS page cache over the per-ticker FMP profile
+    reads, cold SQLite page cache — and ~80ms on every request after. That cost
+    is unavoidable but it does not have to land on a person waiting at the
+    browser, so a daemon thread pays it at boot instead.
+
+    Requests go through ``app.test_client`` (in-process WSGI), not a socket, so
+    the warm-up neither waits for the bind nor depends on host/port/Tailscale
+    settings, and it lands in the same 30s panel cache a real request would.
+    Wholly failure-isolated: any error is logged and the server serves normally.
+    Set ``COMMENTS_SERVER_SKIP_WARMUP=1`` to measure cold timings.
+    """
+
+    def _warm() -> None:
+        try:
+            client = app.test_client()
+        except Exception:
+            app.logger.warning("boot warm-up could not start", exc_info=True)
+            return
+        for path in paths:
+            started_ns = time.perf_counter_ns()
+            try:
+                response = client.get(path)
+                status = response.status_code
+                response.close()
+            except Exception:
+                # A priming failure is never allowed to affect serving; the
+                # path simply stays cold and the owner pays what they used to.
+                app.logger.warning("boot warm-up failed for %s", path, exc_info=True)
+                continue
+            app.logger.info(
+                "boot warm-up %s status=%s elapsed_ms=%d",
+                path,
+                status,
+                (time.perf_counter_ns() - started_ns) // 1_000_000,
+            )
+
+    thread = threading.Thread(target=_warm, name="comments-server-warmup", daemon=True)
+    thread.start()
+    return thread
+
+
 def main() -> int:
     configure_logging()  # structured root logging + correlation ids (sre-4)
     parser = argparse.ArgumentParser(description=__doc__)
@@ -4844,6 +4897,8 @@ def main() -> int:
         file=sys.stderr,
     )
     app = create_app(repo_root, db_path=db_path)
+    if os.environ.get("COMMENTS_SERVER_SKIP_WARMUP", "") not in ("1", "true", "True"):
+        start_boot_warmup(app)
     # Flask's built-in dev server is fine here — this is a single-user
     # localhost tool, not a production service.
     app.run(host=host, port=args.port, debug=False, threaded=True)
