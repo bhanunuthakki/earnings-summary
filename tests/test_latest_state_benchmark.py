@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import provenance.latest_state_benchmark as benchmark_module
 from provenance.latest_governed_state import LatestGovernedStateError
 from provenance.latest_state_benchmark import (
     AdapterRefresh,
@@ -20,9 +21,11 @@ from provenance.latest_state_benchmark import (
     LatestStateSqliteAdapter,
     QueryPlanProof,
     RefusedBenchmarkPathError,
+    benchmark_scope_id,
     production_benchmark_budgets,
     production_benchmark_config,
     run_latest_state_benchmark,
+    verify_production_benchmark_report,
     verify_report_sha256,
     write_report_atomic,
 )
@@ -97,7 +100,7 @@ class _DeterministicAdapter:
             "INSERT INTO v_ask_retrieval_scope_current VALUES (?,?,?)",
             (
                 (
-                    f"issuer:{scope_index:04d}",
+                    benchmark_scope_id(scope_index),
                     f"issuer:{scope_index:04d}",
                     f"reporting:{scope_index:04d}",
                 )
@@ -108,7 +111,7 @@ class _DeterministicAdapter:
             "INSERT INTO benchmark_scope_meta VALUES (?,?,?,?,?,?)",
             (
                 (
-                    f"issuer:{scope_index:04d}",
+                    benchmark_scope_id(scope_index),
                     f"reporting:{scope_index:04d}",
                     config.cell_count // config.scope_count
                     + (1 if scope_index < config.cell_count % config.scope_count else 0),
@@ -216,11 +219,12 @@ class _DeterministicAdapter:
         )
         conn.execute(
             "UPDATE benchmark_scope_meta SET pending_facts=?,pending_documents=?,"
-            "pending_narrative=? WHERE scope_key='issuer:0000'",
+            "pending_narrative=? WHERE scope_key=?",
             (
                 config.delta_cell_count,
                 config.delta_document_count,
                 config.delta_chunk_count,
+                benchmark_scope_id(0),
             ),
         )
         maximum = int(
@@ -457,7 +461,7 @@ class _DeterministicAdapter:
                 "SELECT * FROM latest_governed_fact_entries WHERE scope_key=? "
                 "AND canonical_metric_name IN (?) LIMIT ?"
             ),
-            params=("issuer:0000", "revenue", 5),
+            params=(benchmark_scope_id(0), "revenue", 5),
             details=(
                 "SEARCH latest_governed_fact_entries USING INDEX "
                 "ix_latest_governed_fact_search "
@@ -608,13 +612,17 @@ def test_exact_work_read_and_resume_ratchets_pass(tmp_path: Path) -> None:
     }
     assert set(implementation_files) == {
         "alembic/versions/0261_latest_governed_state.py",
+        "alembic/versions/0263_ask_scope_identity.py",
         "execution/benchmark_latest_state.py",
+        "src/scope_identity.py",
+        "src/provenance/scope_identity.py",
         "src/provenance/latest_governed_state.py",
         "src/provenance/latest_state_benchmark.py",
     }
     for relative_path, file_sha256 in implementation_files.items():
         assert file_sha256 == sha256((ROOT / relative_path).read_bytes()).hexdigest()
     assert verify_report_sha256(report)
+    assert not verify_production_benchmark_report(report)
     tampered_file = report.implementation_provenance.files[0].model_copy(
         update={"sha256": "0" * 64}
     )
@@ -629,6 +637,17 @@ def test_exact_work_read_and_resume_ratchets_pass(tmp_path: Path) -> None:
     assert not verify_report_sha256(
         report.model_copy(update={"implementation_provenance": tampered_provenance})
     )
+
+
+def test_production_admission_recomputes_exact_profile_and_budgets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    report = _run(tmp_path)
+    monkeypatch.setattr(benchmark_module, "production_benchmark_config", lambda: report.config)
+    monkeypatch.setattr(benchmark_module, "production_benchmark_budgets", lambda: report.budgets)
+
+    assert verify_production_benchmark_report(report)
 
 
 def test_report_is_schema_validated_canonical_and_atomic(
@@ -751,7 +770,7 @@ def test_query_plan_ratchet_rejects_full_current_scope_scan(tmp_path: Path) -> N
                     "SELECT * FROM latest_governed_fact_entries "
                     "WHERE scope_key=? AND instr(canonical_search_text,?)>0"
                 ),
-                params=("issuer:0000", "revenue"),
+                params=(benchmark_scope_id(0), "revenue"),
                 details=(
                     "SEARCH latest_governed_fact_entries USING INDEX "
                     "sqlite_autoindex_latest_governed_fact_entries_1 (scope_key=?)",
@@ -855,17 +874,21 @@ def test_cross_scope_ratchet_rejects_non_target_delta_write(tmp_path: Path) -> N
             )
             if (
                 not self.corrupted
-                and scope_id == "issuer:0000"
+                and scope_id == benchmark_scope_id(0)
                 and result.fact_changes == config.delta_cell_count
             ):
                 conn.execute(
                     "UPDATE latest_governed_fact_entries SET refresh_receipt_id=? "
-                    "WHERE scope_key='issuer:0001' "
+                    "WHERE scope_key=? "
                     "AND canonical_metric_cell_id=("
                     "SELECT MIN(canonical_metric_cell_id) "
                     "FROM latest_governed_fact_entries "
-                    "WHERE scope_key='issuer:0001')",
-                    ("receipt-" + result.refresh_id,),
+                    "WHERE scope_key=?)",
+                    (
+                        "receipt-" + result.refresh_id,
+                        benchmark_scope_id(1),
+                        benchmark_scope_id(1),
+                    ),
                 )
                 conn.commit()
                 self.corrupted = True

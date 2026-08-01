@@ -12,6 +12,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from schema_compat import require_current_for_write
+from scope_identity import derive_retrieval_scope_id
 
 
 class SQLiteConnectionRole(StrEnum):
@@ -71,6 +72,7 @@ def connect_sqlite(
         conn = sqlite3.connect(resolved, timeout=30.0)
 
     try:
+        _register_scope_identity_function(conn)
         _apply_connection_policy(conn)
         if role is SQLiteConnectionRole.WRITER:
             if require_schema:
@@ -80,6 +82,23 @@ def connect_sqlite(
         conn.close()
         raise
     return conn
+
+
+def _register_scope_identity_function(conn: sqlite3.Connection) -> None:
+    def derive(source_scope_key: object, issuer_id: object) -> str:
+        if not isinstance(source_scope_key, str) or not isinstance(issuer_id, str):
+            raise ValueError("scope identity components must be text")
+        return derive_retrieval_scope_id(
+            source_scope_key=source_scope_key,
+            issuer_id=issuer_id,
+        )
+
+    conn.create_function(
+        "derive_retrieval_scope_id",
+        2,
+        derive,
+        deterministic=True,
+    )
 
 
 def _read_only_uri(path: str, *, immutable: bool = False) -> str:

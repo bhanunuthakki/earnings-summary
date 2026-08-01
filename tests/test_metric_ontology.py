@@ -50,6 +50,9 @@ SOURCE_DEFINITION_QUALIFIER = hashlib.sha256(
             "consolidation_scope": "consolidated",
             "period_kind": "duration",
             "reporting_entity_id": "entity-1",
+            "schema_version": "source-definition-identity/v1",
+            "taxonomy_name": "test-taxonomy",
+            "taxonomy_version": "2025",
             "unit_family": "currency",
             "value_kind": "numeric",
         },
@@ -109,7 +112,7 @@ def ontology_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     conn.close()
     config = _config(path)
     command.stamp(config, BASE_REVISION)
-    command.upgrade(config, "0259_source_definition_identity")
+    command.upgrade(config, "0267_source_definition_taxonomy_identity")
     return path
 
 

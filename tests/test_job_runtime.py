@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Regression coverage for the shared scheduled/interactive job runtime."""
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from runtime.job_runtime import (
     JobLock,
     _windows_mutex_name,
     _write_set_lock_path,
+    allow_nested_job_locks,
     inherited_lock_is_valid,
     main,
     run_job,
@@ -37,6 +39,18 @@ def test_different_write_sets_can_run_together(tmp_path: Path) -> None:
         JobLock(tmp_path, "interactive", ["report-output"]),
     ):
         pass
+
+
+def test_explicit_synchronous_nested_owner_borrows_and_preserves_outer_lock(
+    tmp_path: Path,
+) -> None:
+    lock_path = _write_set_lock_path(tmp_path, "portfolio-db")
+    with JobLock(tmp_path, "outer", ["portfolio-db"]):
+        outer = json.loads(lock_path.read_text(encoding="utf-8"))
+        with allow_nested_job_locks(), JobLock(tmp_path, "inner", ["portfolio-db"]):
+            assert json.loads(lock_path.read_text(encoding="utf-8")) == outer
+        assert json.loads(lock_path.read_text(encoding="utf-8")) == outer
+    assert not lock_path.exists()
 
 
 def test_distinct_checkouts_share_lock_for_same_canonical_db(

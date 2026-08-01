@@ -129,6 +129,8 @@ class SemanticCanaryReceipt(_FrozenModel):
     candidate_set_sha256: str = Field(min_length=64, max_length=64)
     backend_receipt_sha256: str = Field(min_length=64, max_length=64)
     candidate_count: int = Field(gt=0)
+    seed_chunk_id: str = Field(min_length=1, max_length=128)
+    seed_candidate_rank: int = Field(ge=1, le=10)
 
 
 class RetrievalIssuerPopulationResult(_FrozenModel):
@@ -1223,12 +1225,13 @@ def _verify_semantic_canary(
     exact_row_cap: int,
 ) -> SemanticCanaryReceipt:
     row = conn.execute(
-        "SELECT text FROM search_chunks WHERE manifest_id=? ORDER BY chunk_id LIMIT 1",
+        "SELECT chunk_id,text FROM search_chunks WHERE manifest_id=? ORDER BY chunk_id LIMIT 1",
         (manifest_id,),
     ).fetchone()
     if row is None:
         raise ValueError("semantic canary requires a nonempty sealed corpus")
-    query = _canary_query(str(row[0]))
+    seed_chunk_id = str(row[0])
+    query = _canary_query(str(row[1]))
     semantic = ExactSemanticRuntime.from_local_ledger(
         conn,
         vector_index_run_id=vector_index_run_id,
@@ -1250,12 +1253,24 @@ def _verify_semantic_canary(
     )
     if count != len(evidence.candidates):
         raise ValueError("semantic canary returned a chunk outside the sealed manifest")
+    seed_rank = next(
+        (
+            ordinal
+            for ordinal, candidate in enumerate(evidence.candidates, start=1)
+            if candidate.chunk_id == seed_chunk_id
+        ),
+        None,
+    )
+    if seed_rank is None:
+        raise ValueError("semantic canary did not retrieve its grounded seed chunk")
     candidates = [item.model_dump(mode="json") for item in evidence.candidates]
     return SemanticCanaryReceipt(
         query_sha256=_digest_text(query),
         candidate_set_sha256=_digest_json(candidates),
         backend_receipt_sha256=_digest_json(evidence.backend.model_dump(mode="json")),
         candidate_count=len(candidates),
+        seed_chunk_id=seed_chunk_id,
+        seed_candidate_rank=seed_rank,
     )
 
 

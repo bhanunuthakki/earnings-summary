@@ -14,6 +14,7 @@ import re
 import subprocess
 from collections.abc import Generator
 from contextlib import AbstractContextManager, contextmanager, suppress
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +24,24 @@ from uuid import uuid4
 
 class JobAlreadyRunningError(RuntimeError):
     """A mutable write set is already owned by another live process."""
+
+
+_CONTEXT_LOCK_CLAIMS: ContextVar[dict[str, tuple[str, int]] | None] = ContextVar(
+    "job_lock_context_claims",
+    default=None,
+)
+_ALLOW_NESTED_LOCKS: ContextVar[bool] = ContextVar("allow_nested_job_locks", default=False)
+
+
+@contextmanager
+def allow_nested_job_locks() -> Generator[None, None, None]:
+    """Permit synchronous inner owners to borrow the current exact write sets."""
+
+    token = _ALLOW_NESTED_LOCKS.set(True)
+    try:
+        yield
+    finally:
+        _ALLOW_NESTED_LOCKS.reset(token)
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -206,13 +225,29 @@ class JobLock(AbstractContextManager["JobLock"]):
         self._repo_root = repo_root.resolve()
         self._job_name = job_name
         self._write_sets = sorted(set(write_sets))
-        self._owned: list[tuple[Path, str]] = []
+        self._claims: list[tuple[Path, str, bool]] = []
 
     def __enter__(self) -> JobLock:
         try:
             for write_set in self._write_sets:
                 path = _write_set_lock_path(self._repo_root, write_set)
                 path.parent.mkdir(parents=True, exist_ok=True)
+                key = str(path.resolve()).casefold()
+                context_claims = dict(_CONTEXT_LOCK_CLAIMS.get() or {})
+                inherited = context_claims.get(key)
+                if inherited is not None:
+                    if not _ALLOW_NESTED_LOCKS.get():
+                        raise JobAlreadyRunningError(f"write set busy: {write_set}")
+                    token, depth = inherited
+                    owner = _read_lock_owner(path)
+                    if owner is None or owner.pid != os.getpid() or owner.token != token:
+                        raise JobAlreadyRunningError(
+                            f"nested write-set ownership changed: {write_set}"
+                        )
+                    context_claims[key] = (token, depth + 1)
+                    _CONTEXT_LOCK_CLAIMS.set(context_claims)
+                    self._claims.append((path, token, False))
+                    continue
                 token = uuid4().hex
                 with _lock_transition_guard(path):
                     try:
@@ -241,7 +276,9 @@ class JobLock(AbstractContextManager["JobLock"]):
                             },
                             lock_file,
                         )
-                    self._owned.append((path, token))
+                    context_claims[key] = (token, 1)
+                    _CONTEXT_LOCK_CLAIMS.set(context_claims)
+                    self._claims.append((path, token, True))
         except Exception:
             self.__exit__(None, None, None)
             raise
@@ -252,20 +289,34 @@ class JobLock(AbstractContextManager["JobLock"]):
         return json.dumps(
             {
                 write_set: {"path": str(path), "token": token, "pid": os.getpid()}
-                for write_set, (path, token) in zip(self._write_sets, self._owned, strict=True)
+                for write_set, (path, token, _owns_file) in zip(
+                    self._write_sets,
+                    self._claims,
+                    strict=True,
+                )
             },
             separators=(",", ":"),
             sort_keys=True,
         )
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        for path, token in reversed(self._owned):
-            with _lock_transition_guard(path):
-                owner = _read_lock_owner(path)
-                if owner is not None and owner.token == token:
-                    with suppress(FileNotFoundError):
-                        path.unlink()
-        self._owned.clear()
+        for path, token, owns_file in reversed(self._claims):
+            key = str(path.resolve()).casefold()
+            context_claims = dict(_CONTEXT_LOCK_CLAIMS.get() or {})
+            current = context_claims.get(key)
+            if current is not None and current[0] == token:
+                if current[1] > 1:
+                    context_claims[key] = (token, current[1] - 1)
+                else:
+                    context_claims.pop(key, None)
+                _CONTEXT_LOCK_CLAIMS.set(context_claims)
+            if owns_file:
+                with _lock_transition_guard(path):
+                    owner = _read_lock_owner(path)
+                    if owner is not None and owner.token == token:
+                        with suppress(FileNotFoundError):
+                            path.unlink()
+        self._claims.clear()
 
 
 def portfolio_db_path(repo_root: Path) -> Path:

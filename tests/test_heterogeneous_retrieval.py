@@ -1317,6 +1317,34 @@ def _sql_sha256(value: object) -> str:
     return hashlib.sha256(str(value).encode()).hexdigest()
 
 
+def _use_taxonomy_qualified_binding_trigger(conn: sqlite3.Connection) -> str:
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='trg_binding_exact_coordinate'"
+    ).fetchone()
+    assert row is not None and isinstance(row[0], str)
+    original = row[0]
+    old = (
+        "'reporting_entity_id',source_cell.reporting_entity_id,\n"
+        "                    'unit_family',CASE"
+    )
+    new = (
+        "'reporting_entity_id',source_cell.reporting_entity_id,\n"
+        "                    'schema_version','source-definition-identity/v1',\n"
+        "                    'taxonomy_name',source_cell.taxonomy_name,\n"
+        "                    'taxonomy_version',anchor.source_taxonomy_version,\n"
+        "                    'unit_family',CASE"
+    )
+    assert old in original
+    conn.execute('DROP TRIGGER "trg_binding_exact_coordinate"')
+    conn.execute(original.replace(old, new, 1))
+    return original
+
+
+def _restore_binding_trigger(conn: sqlite3.Connection, trigger_sql: str) -> None:
+    conn.execute('DROP TRIGGER "trg_binding_exact_coordinate"')
+    conn.execute(trigger_sql)
+
+
 def _two_period_output() -> FilingXbrlNormalizedOutput:
     period_2023 = datetime(2023, 12, 31, tzinfo=UTC)
     period_2024 = datetime(2024, 12, 31, tzinfo=UTC)
@@ -1382,13 +1410,13 @@ def _seed_resolved_periods(
         "WHERE disposition.disposition='published' ORDER BY cell.period_end"
     ).fetchall()
     assert len(rows) == 2
-    component = _component("Revenue")
+    component = _component("Revenue", taxonomy_qualified=True)
     mapping = _mapping(component)
     ontology.persist_source_component(component)
     ontology.persist_mapping(mapping)
     bindings: dict[int, BindingRevision] = {}
     canonical_cells: list[str] = []
-    for ordinal, row in enumerate(rows):
+    for row in rows:
         year = datetime.fromisoformat(str(row[3])).year
         canonical_cell_id = f"canonical:revenue:{year}"
         _persist_taxonomy_assertion(
@@ -1953,13 +1981,18 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
 
     monkeypatch.setattr(command, "upgrade", _bounded_fixture_upgrade)
     output = _two_period_output()
-    conn = _resolution_database(tmp_path, output)
+    conn = _resolution_database(
+        tmp_path,
+        output,
+        target_revision="0259_source_definition_identity",
+    )
     path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
     try:
         conn.close()
         _upgrade(path, "0246_source_fact_publication_stream")
         conn = sqlite3.connect(path)
         conn.execute("PRAGMA foreign_keys=ON")
+        historical_binding_trigger = _use_taxonomy_qualified_binding_trigger(conn)
         FilingXbrlExtractionLedger(conn).publish(output)
         bindings, canonical_cells = _seed_resolved_periods(conn)
         conn.close()
@@ -2079,6 +2112,7 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
         # The K/O projection assertions above exercise the real 0259 schema.
         # The remaining mixed-retrieval fixture intentionally models a
         # historical pre-population promotion, so return to its 0255 boundary.
+        _restore_binding_trigger(conn, historical_binding_trigger)
         conn.commit()
         conn.close()
         _downgrade(path, "0255_scoped_canonical_resolution_snapshots")

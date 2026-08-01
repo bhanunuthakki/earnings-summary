@@ -1215,6 +1215,7 @@ class MetricOntology:
             """
             SELECT source_cell.concept_namespace AS source_concept_namespace,
                    source_cell.concept_name AS source_concept_name,
+                   source_cell.taxonomy_name AS source_taxonomy_name,
                    source_cell.reporting_entity_id AS source_reporting_entity_id,
                    source_cell.scope_security_id AS source_scope_security_id,
                    source_cell.period_kind AS source_period_kind,
@@ -1332,6 +1333,9 @@ class MetricOntology:
                     "consolidation_scope": str(row["source_consolidation_scope"]),
                     "period_kind": str(row["source_period_kind"]),
                     "reporting_entity_id": str(row["source_reporting_entity_id"]),
+                    "schema_version": "source-definition-identity/v1",
+                    "taxonomy_name": str(row["source_taxonomy_name"]),
+                    "taxonomy_version": str(row["anchor_taxonomy_version"]),
                     "unit_family": source_unit_family,
                     "value_kind": str(row["source_value_kind"]),
                 }

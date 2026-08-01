@@ -30,7 +30,7 @@ from provenance.metric_ontology import (
 from provenance.population_completeness import PopulationTemporalScope
 
 _POLICY_NAME = "deterministic_legacy_metric_admission"
-_POLICY_VERSION = "5"
+_POLICY_VERSION = "7"
 _TAXONOMY_NAME = "earnings-summary-legacy"
 _TAXONOMY_VERSION = "legacy-observation-contract.v2"
 _AUDITED_POLICY_PATH = "src/provenance/population_metric_ontology.py"
@@ -67,6 +67,20 @@ class _FrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class _SourceDefinitionIdentity(_FrozenModel):
+    schema_version: Literal["source-definition-identity/v1"] = "source-definition-identity/v1"
+    reporting_entity_id: str
+    taxonomy_name: str
+    taxonomy_version: str
+    concept_namespace: str
+    concept_name: str
+    accounting_basis: str
+    consolidation_scope: str
+    period_kind: str
+    unit_family: str
+    value_kind: str
+
+
 class MetricOntologyPopulationRequest(_FrozenModel):
     knowledge_cutoff: datetime
     operation_recorded_at: datetime
@@ -88,6 +102,13 @@ class MetricOntologyPopulationRequest(_FrozenModel):
 
     @model_validator(mode="after")
     def _request_contract(self) -> Self:
+        if (
+            self.knowledge_cutoff.tzinfo is None
+            or self.knowledge_cutoff.utcoffset() is None
+            or self.operation_recorded_at.tzinfo is None
+            or self.operation_recorded_at.utcoffset() is None
+        ):
+            raise ValueError("ontology temporal scope must include a timezone")
         if (self.input_commitment_sha256 is None) != (self.plan_commitment_sha256 is None):
             raise ValueError("population commitments must be supplied together")
         if (
@@ -96,6 +117,10 @@ class MetricOntologyPopulationRequest(_FrozenModel):
             and self.input_commitment_sha256 is None
         ):
             raise ValueError("an apply resume requires manifest commitments")
+        if self.phase != "all" and (
+            self.after_observation_id is not None or self.max_observations is not None
+        ):
+            raise ValueError("bounded ontology population requires phase='all'")
         if _utc(self.operation_recorded_at) < _utc(self.knowledge_cutoff):
             raise ValueError("operation_recorded_at must not precede knowledge_cutoff")
         return self
@@ -114,13 +139,300 @@ class MetricOntologyPopulationResult(_FrozenModel):
     canonical_cell_count: int
     assertion_count: int
     binding_count: int
+    missing_assertion_count: int
+    missing_binding_count: int
     processed_observation_count: int
     last_observation_id: str | None
+    remaining_observation_count: int
+    safe_to_seal: bool
     snapshot_id: str | None
     policy_config_sha256: str
     plan_commitment_sha256: str
     input_commitment_sha256: str
+    post_state_commitment_sha256: str
     output_commitment_sha256: str
+
+    @model_validator(mode="after")
+    def _checkpoint_contract(self) -> Self:
+        if self.safe_to_seal != self.snapshot_eligible:
+            raise ValueError("ontology seal safety does not match snapshot eligibility")
+        if self.outcome == "checkpoint" and (
+            self.remaining_observation_count == 0 or self.safe_to_seal
+        ):
+            raise ValueError("ontology checkpoint must retain bounded work")
+        if self.snapshot_id is not None and not self.safe_to_seal:
+            raise ValueError("ontology snapshot requires terminal seal safety")
+        return self
+
+
+MetricOntologyReceiptOutcome = Literal[
+    "planned",
+    "applied",
+    "checkpoint",
+    "blocked",
+    "complete",
+]
+
+
+class MetricOntologyOperationReceipt(_FrozenModel):
+    schema_version: Literal["metric-ontology-operation-receipt/v1"] = (
+        "metric-ontology-operation-receipt/v1"
+    )
+    database_path: str = Field(min_length=1, max_length=1_024)
+    database_instance_id: str = Field(
+        min_length=50,
+        max_length=64,
+        pattern=r"^database-instance:[0-9a-f]{32}$",
+    )
+    operation_id: str = Field(
+        min_length=90,
+        max_length=90,
+        pattern=r"^metric-ontology-operation:[0-9a-f]{64}$",
+    )
+    alembic_revision: str = Field(min_length=1, max_length=128)
+    request: MetricOntologyPopulationRequest
+    result: MetricOntologyPopulationResult
+    outcome: MetricOntologyReceiptOutcome
+    blocker_counts: dict[str, int]
+    prior_checkpoint_receipt_sha256: str | None
+    admission_receipt_sha256: str | None
+    request_sha256: str
+    result_sha256: str
+    receipt_sha256: str
+
+    @field_validator(
+        "prior_checkpoint_receipt_sha256",
+        "admission_receipt_sha256",
+        "request_sha256",
+        "result_sha256",
+        "receipt_sha256",
+    )
+    @classmethod
+    def _receipt_sha(cls, value: str | None) -> str | None:
+        if value is not None and (
+            len(value) != 64 or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise ValueError("receipt commitment must be a lowercase SHA-256")
+        return value
+
+    @model_validator(mode="after")
+    def _receipt_contract(self) -> Self:
+        if self.request.apply != (self.result.mode == "apply"):
+            raise ValueError("ontology operation receipt mode does not match its result")
+        if self.request.apply != (self.admission_receipt_sha256 is not None):
+            raise ValueError("an ontology apply receipt requires one dry-run admission")
+        if (self.request.after_observation_id is not None) != (
+            self.prior_checkpoint_receipt_sha256 is not None
+        ):
+            raise ValueError("an ontology resume must bind one prior checkpoint")
+        if self.request_sha256 != _model_sha(self.request):
+            raise ValueError("ontology operation request commitment does not match")
+        if self.result_sha256 != _model_sha(self.result):
+            raise ValueError("ontology operation result commitment does not match")
+        if self.operation_id != metric_ontology_operation_id(
+            database_instance_id=self.database_instance_id,
+            request=self.request,
+            admission_receipt_sha256=self.admission_receipt_sha256,
+            prior_checkpoint_receipt_sha256=self.prior_checkpoint_receipt_sha256,
+        ):
+            raise ValueError("ontology operation identity does not match")
+        if self.blocker_counts != _ontology_blocker_counts(self.result):
+            raise ValueError("ontology blocker census does not match")
+        if self.outcome != _ontology_receipt_outcome(self.request, self.result):
+            raise ValueError("ontology operation outcome does not match")
+        if self.receipt_sha256 != _ontology_receipt_sha(self):
+            raise ValueError("ontology operation receipt commitment does not match")
+        return self
+
+
+def build_metric_ontology_receipt(
+    *,
+    database_path: str,
+    database_instance_id: str,
+    alembic_revision: str,
+    request: MetricOntologyPopulationRequest,
+    result: MetricOntologyPopulationResult,
+    prior_checkpoint_receipt_sha256: str | None,
+    admission_receipt_sha256: str | None,
+) -> MetricOntologyOperationReceipt:
+    """Bind one exact ontology population attempt to immutable evidence."""
+
+    payload: dict[str, object] = {
+        "schema_version": "metric-ontology-operation-receipt/v1",
+        "database_path": database_path,
+        "database_instance_id": database_instance_id,
+        "alembic_revision": alembic_revision,
+        "request": request,
+        "result": result,
+        "outcome": _ontology_receipt_outcome(request, result),
+        "blocker_counts": _ontology_blocker_counts(result),
+        "prior_checkpoint_receipt_sha256": prior_checkpoint_receipt_sha256,
+        "admission_receipt_sha256": admission_receipt_sha256,
+        "request_sha256": _model_sha(request),
+        "result_sha256": _model_sha(result),
+    }
+    payload["operation_id"] = metric_ontology_operation_id(
+        database_instance_id=database_instance_id,
+        request=request,
+        admission_receipt_sha256=admission_receipt_sha256,
+        prior_checkpoint_receipt_sha256=prior_checkpoint_receipt_sha256,
+    )
+    payload["receipt_sha256"] = hashlib.sha256(
+        _canonical_json(
+            {
+                key: value.model_dump(mode="json") if isinstance(value, BaseModel) else value
+                for key, value in payload.items()
+            }
+        ).encode()
+    ).hexdigest()
+    return MetricOntologyOperationReceipt.model_validate(payload)
+
+
+def verify_metric_ontology_receipt(receipt: MetricOntologyOperationReceipt) -> bool:
+    """Return whether every nested and top-level ontology commitment agrees."""
+
+    try:
+        MetricOntologyOperationReceipt.model_validate(receipt.model_dump(mode="json"))
+    except ValueError:
+        return False
+    return True
+
+
+def database_instance_id(conn: sqlite3.Connection) -> str:
+    """Return the immutable identity installed for this database lineage."""
+
+    rows = conn.execute(
+        "SELECT database_instance_id FROM database_runtime_identity WHERE singleton=1"
+    ).fetchall()
+    if len(rows) != 1:
+        raise ValueError("ontology database identity is missing or ambiguous")
+    value = str(rows[0][0])
+    suffix = value.removeprefix("database-instance:")
+    if (
+        len(value) != 50
+        or len(suffix) != 32
+        or any(character not in "0123456789abcdef" for character in suffix)
+    ):
+        raise ValueError("ontology database identity is invalid")
+    return value
+
+
+def persist_metric_ontology_receipt(
+    conn: sqlite3.Connection,
+    receipt: MetricOntologyOperationReceipt,
+) -> bool:
+    """Persist one immutable apply receipt inside the caller transaction."""
+
+    if not receipt.request.apply or not verify_metric_ontology_receipt(receipt):
+        raise ValueError("only a valid ontology apply receipt can enter the ledger")
+    payload = receipt.model_dump_json()
+    values = (
+        receipt.operation_id,
+        receipt.operation_id,
+        receipt.database_instance_id,
+        receipt.request_sha256,
+        receipt.result_sha256,
+        receipt.receipt_sha256,
+        payload,
+    )
+    cursor = conn.execute(
+        "INSERT OR IGNORE INTO metric_ontology_operation_ledger "
+        "(operation_id,idempotency_key,database_instance_id,request_sha256,"
+        "result_sha256,receipt_sha256,receipt_json) VALUES (?,?,?,?,?,?,?)",
+        values,
+    )
+    if cursor.rowcount == 1:
+        return True
+    existing = conn.execute(
+        "SELECT operation_id,idempotency_key,database_instance_id,request_sha256,"
+        "result_sha256,receipt_sha256,receipt_json "
+        "FROM metric_ontology_operation_ledger WHERE operation_id=?",
+        (receipt.operation_id,),
+    ).fetchone()
+    if existing is None or tuple(existing) != values:
+        raise ValueError("ontology operation replay changed immutable evidence")
+    return False
+
+
+def load_metric_ontology_receipt(
+    conn: sqlite3.Connection,
+    operation_id: str,
+) -> MetricOntologyOperationReceipt | None:
+    """Load and verify the canonical receipt for one ontology operation."""
+
+    row = conn.execute(
+        "SELECT receipt_json FROM metric_ontology_operation_ledger WHERE operation_id=?",
+        (operation_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    receipt = MetricOntologyOperationReceipt.model_validate_json(str(row[0]))
+    if not verify_metric_ontology_receipt(receipt) or receipt.operation_id != operation_id:
+        raise ValueError("stored ontology operation receipt is invalid")
+    return receipt
+
+
+def metric_ontology_operation_id(
+    *,
+    database_instance_id: str,
+    request: MetricOntologyPopulationRequest,
+    admission_receipt_sha256: str | None,
+    prior_checkpoint_receipt_sha256: str | None,
+) -> str:
+    material = _canonical_json(
+        {
+            "admission_receipt_sha256": admission_receipt_sha256,
+            "database_instance_id": database_instance_id,
+            "prior_checkpoint_receipt_sha256": prior_checkpoint_receipt_sha256,
+            "request_sha256": _model_sha(request),
+        }
+    )
+    return "metric-ontology-operation:" + hashlib.sha256(material.encode()).hexdigest()
+
+
+def _ontology_receipt_outcome(
+    request: MetricOntologyPopulationRequest,
+    result: MetricOntologyPopulationResult,
+) -> MetricOntologyReceiptOutcome:
+    if result.outcome == "blocked":
+        return "blocked"
+    if not request.apply:
+        return "planned"
+    if result.outcome == "checkpoint":
+        return "checkpoint"
+    if request.phase in {"snapshot", "all"} and result.snapshot_eligible:
+        return "complete"
+    return "applied"
+
+
+def _ontology_blocker_counts(result: MetricOntologyPopulationResult) -> dict[str, int]:
+    counts = {
+        "missing_assertion": result.missing_assertion_count,
+        "missing_binding": result.missing_binding_count,
+    }
+    counts.update(
+        {
+            reason: 1
+            for reason in result.reason_codes
+            if reason
+            not in {
+                "bounded_population_checkpoint",
+                "ontology_assertions_incomplete",
+                "ontology_bindings_incomplete",
+            }
+        }
+    )
+    return {key: value for key, value in sorted(counts.items()) if value}
+
+
+def _model_sha(model: BaseModel) -> str:
+    return hashlib.sha256(_canonical_json(model.model_dump(mode="json")).encode()).hexdigest()
+
+
+def _ontology_receipt_sha(receipt: MetricOntologyOperationReceipt) -> str:
+    payload = receipt.model_dump(mode="json")
+    payload.pop("receipt_sha256")
+    return hashlib.sha256(_canonical_json(payload).encode()).hexdigest()
 
 
 def _canonical_json(value: object) -> str:
@@ -240,13 +552,22 @@ def populate_metric_ontology(
                 source_observation_count=source_observation_count,
                 processed=0,
                 last_observation_id=None,
+                remaining_observation_count=source_observation_count,
+                safe_to_seal=False,
                 snapshot_id=None,
                 policy_sha=policy_sha,
                 plan_sha=plan_sha,
                 input_sha=input_sha,
             )
         processed = 0
-        last_observation_id: str | None = None
+        last_observation_id: str | None = request.after_observation_id
+        remaining_observation_count = _remaining_observation_count(
+            conn,
+            after_observation_id=request.after_observation_id,
+            knowledge_cutoff=request.knowledge_cutoff,
+            observed_through=request.operation_recorded_at,
+        )
+        safe_to_seal = False
         snapshot_id: str | None = None
         if request.apply:
             with _atomic_population(conn):
@@ -284,11 +605,11 @@ def populate_metric_ontology(
                         observed_through=request.operation_recorded_at,
                     )
                     for row in rows:
-                        repository.persist_observation_taxonomy_assertion(
-                            _taxonomy_assertion(row, request.operation_recorded_at)
-                        )
+                        repository.persist_observation_taxonomy_assertion(_taxonomy_assertion(row))
                         processed += 1
-                        last_observation_id = str(row["observation_id"])
+                        observation_id = str(row["observation_id"])
+                        if last_observation_id is None or observation_id > last_observation_id:
+                            last_observation_id = observation_id
                 if request.phase in {"bindings", "all"}:
                     rows = _binding_rows(
                         conn,
@@ -298,11 +619,31 @@ def populate_metric_ontology(
                         observed_through=request.operation_recorded_at,
                     )
                     for row in rows:
-                        repository.persist_binding(_binding(row, request.operation_recorded_at))
+                        repository.persist_binding(_binding(row))
                         if request.phase == "bindings":
                             processed += 1
-                        last_observation_id = str(row["observation_id"])
-                if request.phase == "snapshot" or (request.phase == "all" and not bounded):
+                        observation_id = str(row["observation_id"])
+                        if last_observation_id is None or observation_id > last_observation_id:
+                            last_observation_id = observation_id
+                remaining_observation_count = _remaining_observation_count(
+                    conn,
+                    after_observation_id=last_observation_id,
+                    knowledge_cutoff=request.knowledge_cutoff,
+                    observed_through=request.operation_recorded_at,
+                )
+                safe_to_seal = (
+                    (
+                        request.phase == "snapshot"
+                        or (request.phase == "all" and remaining_observation_count == 0)
+                    )
+                    and not _count_missing_assertions(
+                        conn, request.knowledge_cutoff, request.operation_recorded_at
+                    )
+                    and not _count_missing_bindings(
+                        conn, request.knowledge_cutoff, request.operation_recorded_at
+                    )
+                )
+                if request.phase == "snapshot" or safe_to_seal:
                     snapshot_id = _seal_snapshot(
                         conn,
                         repository,
@@ -319,25 +660,32 @@ def populate_metric_ontology(
                     != input_sha
                 ):
                     raise ValueError("metric ontology source input changed during write")
-        checkpoint = request.apply and request.phase == "all" and bounded
-        return _result(
-            conn,
-            request=request,
-            outcome=("checkpoint" if checkpoint else "applied" if request.apply else "planned"),
-            reason_codes=(("bounded_population_checkpoint",) if checkpoint else ()),
-            snapshot_eligible=(
-                not bounded
+        if not request.apply:
+            safe_to_seal = (
+                request.phase in {"snapshot", "all"}
+                and (not bounded or remaining_observation_count == 0)
                 and not _count_missing_assertions(
                     conn, request.knowledge_cutoff, request.operation_recorded_at
                 )
                 and not _count_missing_bindings(
                     conn, request.knowledge_cutoff, request.operation_recorded_at
                 )
-            ),
+            )
+        checkpoint = (
+            request.apply and request.phase == "all" and bounded and remaining_observation_count > 0
+        )
+        return _result(
+            conn,
+            request=request,
+            outcome=("checkpoint" if checkpoint else "applied" if request.apply else "planned"),
+            reason_codes=(("bounded_population_checkpoint",) if checkpoint else ()),
+            snapshot_eligible=safe_to_seal,
             source_cell_count=source_cell_count,
             source_observation_count=source_observation_count,
             processed=processed,
             last_observation_id=last_observation_id,
+            remaining_observation_count=remaining_observation_count,
+            safe_to_seal=safe_to_seal,
             snapshot_id=snapshot_id,
             policy_sha=policy_sha,
             plan_sha=plan_sha,
@@ -358,16 +706,38 @@ def _result(
     source_observation_count: int,
     processed: int,
     last_observation_id: str | None,
+    remaining_observation_count: int,
+    safe_to_seal: bool,
     snapshot_id: str | None,
     policy_sha: str,
     plan_sha: str,
     input_sha: str,
 ) -> MetricOntologyPopulationResult:
+    missing_assertions = _count_missing_assertions(
+        conn,
+        request.knowledge_cutoff,
+        request.operation_recorded_at,
+    )
+    missing_bindings = _count_missing_bindings(
+        conn,
+        request.knowledge_cutoff,
+        request.operation_recorded_at,
+    )
+    reasons = set(reason_codes)
+    if missing_assertions:
+        reasons.add("ontology_assertions_incomplete")
+    if missing_bindings:
+        reasons.add("ontology_bindings_incomplete")
+    post_state_sha = _output_commitment_at_scope(
+        conn,
+        request.knowledge_cutoff,
+        request.operation_recorded_at,
+    )
     return MetricOntologyPopulationResult(
         mode="apply" if request.apply else "dry_run",
         phase=request.phase,
         outcome=outcome,
-        reason_codes=tuple(sorted(set(reason_codes))),
+        reason_codes=tuple(sorted(reasons)),
         snapshot_eligible=snapshot_eligible,
         source_cell_count=source_cell_count,
         source_observation_count=source_observation_count,
@@ -376,17 +746,18 @@ def _result(
         canonical_cell_count=_count(conn, "canonical_metric_cells"),
         assertion_count=_count(conn, "source_observation_taxonomy_assertions"),
         binding_count=_count(conn, "fact_cell_canonical_binding_revisions"),
+        missing_assertion_count=missing_assertions,
+        missing_binding_count=missing_bindings,
         processed_observation_count=processed,
         last_observation_id=last_observation_id,
+        remaining_observation_count=remaining_observation_count,
+        safe_to_seal=safe_to_seal,
         snapshot_id=snapshot_id,
         policy_config_sha256=policy_sha,
         plan_commitment_sha256=plan_sha,
         input_commitment_sha256=input_sha,
-        output_commitment_sha256=_output_commitment_at_scope(
-            conn,
-            request.knowledge_cutoff,
-            request.operation_recorded_at,
-        ),
+        post_state_commitment_sha256=post_state_sha,
+        output_commitment_sha256=post_state_sha,
     )
 
 
@@ -429,24 +800,33 @@ def _source_cells(
             "AND datetime(observation.knowledge_at)<=datetime(?) "
             "AND datetime(observation.recorded_at)<=datetime(?) "
             "AND datetime(seal.sealed_at)<=datetime(?) "
+            "AND datetime(anchor.recorded_at)<=datetime(?) "
         )
-        params = (knowledge, observed, knowledge, observed, observed)
+        params = (knowledge, observed, knowledge, observed, observed, observed)
     query = """
-        SELECT cell.*,seal.semantic_key_sha256,
+        SELECT cell.*,seal.semantic_key_sha256,anchor.source_taxonomy_version,
+               entity.created_at AS reporting_entity_created_at,
                MIN(CASE WHEN observation.value_kind<>'nil'
                         THEN observation.value_kind END) AS substantive_value_kind,
                COUNT(DISTINCT CASE WHEN observation.value_kind<>'nil'
                                    THEN observation.value_kind END)
                    AS substantive_value_kind_count
         FROM fact_cells_v2 cell
+        JOIN reporting_entities entity
+          ON entity.reporting_entity_id=cell.reporting_entity_id
         JOIN fact_cell_identity_seals_v2 seal
           ON seal.fact_cell_id=cell.fact_cell_id
         JOIN fact_observations_v2 observation
           ON observation.fact_cell_id=cell.fact_cell_id
          AND observation.observation_kind='reported'
+        JOIN fact_reported_observation_anchors_v2 anchor
+          ON anchor.observation_id=observation.observation_id
     """
     query += scope_filter
-    query += " GROUP BY cell.fact_cell_id ORDER BY cell.fact_cell_id"
+    query += (
+        " GROUP BY cell.fact_cell_id,anchor.source_taxonomy_version "
+        "ORDER BY cell.fact_cell_id,anchor.source_taxonomy_version"
+    )
     rows = conn.execute(
         query,  # nosec B608 -- only the fixed dual-clock predicate is appended
         params,
@@ -525,13 +905,13 @@ def _populate_registry(
     policy_sha = _policy_sha()
     for row in _registry_rows(conn, knowledge_cutoff, operation_recorded_at):
         clock = _cell_clock(row)
+        component_clock = _component_clock(row)
         _persist_metric_stack(
             repository,
             row,
             metric_clock=clock,
-            component_clock=clock,
+            component_clock=component_clock,
             policy_sha=policy_sha,
-            operation_recorded_at=operation_recorded_at,
         )
     _persist_dimension_registry(
         conn,
@@ -571,11 +951,14 @@ def _registry_rows(
         WITH source_cells AS (
             SELECT cell.*,seal.semantic_key_sha256,
                    anchor.source_taxonomy_version,
+                   entity.created_at AS reporting_entity_created_at,
                    MIN(CASE WHEN observation.value_kind<>'nil'
                             THEN observation.value_kind END) AS value_kind,
                    COUNT(DISTINCT CASE WHEN observation.value_kind<>'nil'
                                        THEN observation.value_kind END) AS kind_count
             FROM fact_cells_v2 cell
+            JOIN reporting_entities entity
+              ON entity.reporting_entity_id=cell.reporting_entity_id
             JOIN fact_cell_identity_seals_v2 seal
               ON seal.fact_cell_id=cell.fact_cell_id
             JOIN fact_observations_v2 observation
@@ -629,7 +1012,6 @@ def _persist_metric_stack(
     metric_clock: tuple[datetime, datetime, datetime],
     component_clock: tuple[datetime, datetime, datetime],
     policy_sha: str,
-    operation_recorded_at: datetime,
 ) -> None:
     metric_id = _metric_id(row)
     component_id = _concept_component_id(row)
@@ -643,7 +1025,7 @@ def _persist_metric_stack(
             ),
             effective_at=metric_clock[0],
             knowledge_at=metric_clock[1],
-            recorded_at=operation_recorded_at,
+            recorded_at=metric_clock[2],
         )
     )
     definition_id = _record_id(
@@ -683,7 +1065,7 @@ def _persist_metric_stack(
             },
             effective_at=metric_clock[0],
             knowledge_at=metric_clock[1],
-            recorded_at=operation_recorded_at,
+            recorded_at=metric_clock[2],
         )
     )
     repository.persist_source_component(
@@ -719,7 +1101,7 @@ def _persist_metric_stack(
             },
             effective_at=component_clock[0],
             knowledge_at=component_clock[1],
-            recorded_at=operation_recorded_at,
+            recorded_at=component_clock[2],
         )
     )
     mapping_id = _mapping_id(row)
@@ -754,7 +1136,7 @@ def _persist_metric_stack(
             audited_policy_path=_AUDITED_POLICY_PATH,
             effective_at=max(metric_clock[0], component_clock[0], key=_utc),
             knowledge_at=max(metric_clock[1], component_clock[1], key=_utc),
-            recorded_at=operation_recorded_at,
+            recorded_at=max(metric_clock[2], component_clock[2], key=_utc),
         )
     )
 
@@ -793,7 +1175,7 @@ def _persist_dimension_registry(
                 ),
                 effective_at=clock[0],
                 knowledge_at=clock[1],
-                recorded_at=operation_recorded_at,
+                recorded_at=clock[2],
             )
         )
         component_id = _axis_component_id(row)
@@ -812,7 +1194,7 @@ def _persist_dimension_registry(
                 evidence_locator={"policy_config_sha256": policy_sha},
                 effective_at=clock[0],
                 knowledge_at=clock[1],
-                recorded_at=operation_recorded_at,
+                recorded_at=clock[2],
             )
         )
         mapping_id = _dimension_mapping_id(component_id)
@@ -833,7 +1215,7 @@ def _persist_dimension_registry(
                 audited_policy_path=_AUDITED_POLICY_PATH,
                 effective_at=clock[0],
                 knowledge_at=clock[1],
-                recorded_at=operation_recorded_at,
+                recorded_at=clock[2],
             )
         )
     for row in _member_registry_rows(conn, knowledge_cutoff, operation_recorded_at):
@@ -851,7 +1233,7 @@ def _persist_dimension_registry(
                 ),
                 effective_at=clock[0],
                 knowledge_at=clock[1],
-                recorded_at=operation_recorded_at,
+                recorded_at=clock[2],
             )
         )
         component_id = _member_component_id(row)
@@ -870,7 +1252,7 @@ def _persist_dimension_registry(
                 evidence_locator={"policy_config_sha256": policy_sha},
                 effective_at=clock[0],
                 knowledge_at=clock[1],
-                recorded_at=operation_recorded_at,
+                recorded_at=clock[2],
             )
         )
         mapping_id = _dimension_mapping_id(component_id)
@@ -894,7 +1276,7 @@ def _persist_dimension_registry(
                 audited_policy_path=_AUDITED_POLICY_PATH,
                 effective_at=clock[0],
                 knowledge_at=clock[1],
-                recorded_at=operation_recorded_at,
+                recorded_at=clock[2],
             )
         )
 
@@ -1029,6 +1411,7 @@ def _canonical_cell(
     *,
     operation_recorded_at: datetime,
 ) -> CanonicalMetricCell:
+    source_clock = _component_clock(row)
     dimensions = tuple(
         CanonicalDimension(
             axis_id=_axis_id(dimension),
@@ -1061,9 +1444,9 @@ def _canonical_cell(
         unit_family=_unit_family(row),
         accounting_basis=str(row["accounting_basis"]),
         consolidation_scope=str(row["consolidation_scope"]),
-        effective_at=_parse_time(row["effective_at"]),
-        knowledge_at=_parse_time(row["knowledge_at"]),
-        recorded_at=operation_recorded_at,
+        effective_at=source_clock[0],
+        knowledge_at=source_clock[1],
+        recorded_at=source_clock[2],
     )
 
 
@@ -1115,9 +1498,44 @@ def _observation_rows(
     return conn.execute(query, tuple(params))
 
 
+def _remaining_observation_count(
+    conn: sqlite3.Connection,
+    *,
+    after_observation_id: str | None,
+    knowledge_cutoff: datetime,
+    observed_through: datetime,
+) -> int:
+    knowledge, observed = _scope_bounds(knowledge_cutoff, observed_through)
+    params: list[object] = [knowledge, observed, observed, knowledge, observed]
+    after = ""
+    if after_observation_id is not None:
+        after = "AND observation.observation_id>?"
+        params.append(after_observation_id)
+    row = conn.execute(
+        "SELECT COUNT(*) "
+        "FROM fact_observations_v2 observation "
+        "JOIN fact_cells_v2 cell ON cell.fact_cell_id=observation.fact_cell_id "
+        "JOIN fact_cell_identity_seals_v2 cell_seal "
+        "ON cell_seal.fact_cell_id=cell.fact_cell_id "
+        "JOIN fact_reported_observation_anchors_v2 anchor "
+        "ON anchor.observation_id=observation.observation_id "
+        "JOIN fact_observation_payload_commitments_v2 payload "
+        "ON payload.observation_id=observation.observation_id "
+        "JOIN fact_extraction_run_completeness_seals_v2 completeness "
+        "ON completeness.extraction_run_id=anchor.extraction_run_id "
+        "WHERE observation.observation_kind='reported' "
+        "AND datetime(observation.knowledge_at)<=datetime(?) "
+        "AND datetime(observation.recorded_at)<=datetime(?) "
+        "AND datetime(payload.committed_at)<=datetime(?) "
+        "AND datetime(completeness.knowledge_at)<=datetime(?) "
+        "AND datetime(completeness.recorded_at)<=datetime(?) " + after,  # nosec B608 -- only the fixed cursor clause is appended
+        tuple(params),
+    ).fetchone()
+    return int(row[0])
+
+
 def _taxonomy_assertion(
     row: Mapping[str, object],
-    operation_recorded_at: datetime,
 ) -> SourceObservationTaxonomyAssertion:
     clock = _parse_time(row["recorded_at"])
     observation_id = str(row["observation_id"])
@@ -1138,7 +1556,7 @@ def _taxonomy_assertion(
         raw_entry_sha256=str(row["raw_entry_sha256"]),
         observation_set_sha256=str(row["observation_set_sha256"]),
         knowledge_at=clock,
-        recorded_at=operation_recorded_at,
+        recorded_at=clock,
     )
 
 
@@ -1194,7 +1612,6 @@ def _binding_rows(
 
 def _binding(
     row: Mapping[str, object],
-    operation_recorded_at: datetime,
 ) -> BindingRevision:
     observation_id = str(row["observation_id"])
     clock = max(
@@ -1215,7 +1632,7 @@ def _binding(
         binding_status="bound",
         effective_at=clock,
         knowledge_at=clock,
-        recorded_at=operation_recorded_at,
+        recorded_at=clock,
     )
 
 
@@ -1243,7 +1660,12 @@ def _seal_snapshot(
     ):
         member_fold.add({"id": member_id, "kind": kind, "sha256": digest})
     member_set_sha = member_fold.hexdigest()
-    snapshot_id = _snapshot_id(cutoff, policy_sha, member_set_sha)
+    snapshot_id = _snapshot_id(
+        cutoff,
+        operation_recorded_at,
+        policy_sha,
+        member_set_sha,
+    )
     snapshot = OntologySnapshot(
         ontology_snapshot_id=snapshot_id,
         idempotency_key=snapshot_id,
@@ -1262,12 +1684,24 @@ def _seal_snapshot(
 
 
 def _cell_clock(
-    row: Mapping[str, object],
+    row: Mapping[str, object] | sqlite3.Row,
 ) -> tuple[datetime, datetime, datetime]:
     return (
         _parse_time(row["effective_at"]),
         _parse_time(row["knowledge_at"]),
         _parse_time(row["recorded_at"]),
+    )
+
+
+def _component_clock(
+    row: Mapping[str, object] | sqlite3.Row,
+) -> tuple[datetime, datetime, datetime]:
+    source = _cell_clock(row)
+    parent_created_at = _parse_time(row["reporting_entity_created_at"])
+    return (
+        max(source[0], parent_created_at, key=_utc),
+        max(source[1], parent_created_at, key=_utc),
+        max(source[2], parent_created_at, key=_utc),
     )
 
 
@@ -1309,36 +1743,30 @@ def _object_clocks(
 
 
 def _metric_signature(row: Mapping[str, object] | sqlite3.Row) -> str:
-    return _canonical_json(
-        {
-            "accounting_basis": str(row["accounting_basis"]),
-            "concept_name": str(row["concept_name"]),
-            "concept_namespace": str(row["concept_namespace"]),
-            "period_kind": str(row["period_kind"]),
-            "reporting_entity_id": str(row["reporting_entity_id"]),
-            "unit_family": _unit_family(row),
-            "value_kind": str(row["value_kind"]),
-        }
+    return _canonical_json(_source_definition_identity(row).model_dump(mode="json"))
+
+
+def _source_definition_identity(
+    row: Mapping[str, object] | sqlite3.Row,
+) -> _SourceDefinitionIdentity:
+    return _SourceDefinitionIdentity(
+        reporting_entity_id=str(row["reporting_entity_id"]),
+        taxonomy_name=str(row["taxonomy_name"]),
+        taxonomy_version=str(row["source_taxonomy_version"]),
+        concept_namespace=str(row["concept_namespace"]),
+        concept_name=str(row["concept_name"]),
+        accounting_basis=str(row["accounting_basis"]),
+        consolidation_scope=str(row["consolidation_scope"]),
+        period_kind=str(row["period_kind"]),
+        unit_family=_unit_family(row),
+        value_kind=str(row["value_kind"]),
     )
 
 
 def _source_definition_commitment(
     row: Mapping[str, object] | sqlite3.Row,
 ) -> str:
-    return hashlib.sha256(
-        _canonical_json(
-            {
-                "accounting_basis": str(row["accounting_basis"]),
-                "concept_name": str(row["concept_name"]),
-                "concept_namespace": str(row["concept_namespace"]),
-                "consolidation_scope": str(row["consolidation_scope"]),
-                "period_kind": str(row["period_kind"]),
-                "reporting_entity_id": str(row["reporting_entity_id"]),
-                "unit_family": _unit_family(row),
-                "value_kind": str(row["value_kind"]),
-            }
-        ).encode()
-    ).hexdigest()
+    return _model_sha(_source_definition_identity(row))
 
 
 def _metric_id(row: Mapping[str, object] | sqlite3.Row) -> str:
@@ -1473,7 +1901,7 @@ def _policy_sha() -> str:
             {
                 "audited_policy_path": _AUDITED_POLICY_PATH,
                 "knowledge_clock_policy": "earliest_source_object_clock",
-                "recording_clock_policy": "explicit_population_operation_clock",
+                "recording_clock_policy": "stable_source_derived_object_clocks",
                 "cross_issuer_policy": "issuer_scoped_provisional_metrics",
                 "input_manifest_version": "metric-ontology-input.v2",
                 "mapping_rule": "exact_preserved_source_definition_coordinate",
@@ -1481,7 +1909,7 @@ def _policy_sha() -> str:
                 "output_manifest_version": "metric-ontology-output.v3",
                 "policy_name": _POLICY_NAME,
                 "policy_version": _POLICY_VERSION,
-                "snapshot_identity": "cutoff_policy_member_set",
+                "snapshot_identity": "cutoff_observed_through_policy_member_set",
                 "taxonomy_version": _TAXONOMY_VERSION,
             }
         )
@@ -1490,12 +1918,14 @@ def _policy_sha() -> str:
 
 def _snapshot_id(
     cutoff: datetime,
+    observed_through: datetime,
     policy_sha: str,
     member_set_sha: str,
 ) -> str:
     return _record_id(
         "ontology-snapshot",
         _utc(cutoff).isoformat(),
+        _utc(observed_through).isoformat(),
         policy_sha,
         member_set_sha,
     )
@@ -1811,19 +2241,20 @@ def _plan_commitment(
 ) -> str:
     """Commit to every deterministic object identity before any write."""
 
-    fold = _CommitmentFold("metric-ontology-plan.v4")
+    fold = _CommitmentFold("metric-ontology-plan.v5")
     fold.add(
         "manifest",
         {
             "input_commitment_sha256": input_sha,
             "knowledge_cutoff": _utc(knowledge_cutoff).isoformat(),
             "operation_recorded_at": _utc(operation_recorded_at).isoformat(),
-            "plan_version": "metric-ontology-plan.v4",
+            "plan_version": "metric-ontology-plan.v5",
             "policy_config_sha256": policy_sha,
         },
     )
     for row in _registry_rows(conn, knowledge_cutoff, operation_recorded_at):
         clock = _cell_clock(row)
+        component_clock = _component_clock(row)
         metric_id = _metric_id(row)
         component_id = _concept_component_id(row)
         fold.add(
@@ -1839,37 +2270,40 @@ def _plan_commitment(
                 ),
                 "metric_id": metric_id,
                 "mapping_revision_id": _mapping_id(row),
-                "recorded_at": _utc(operation_recorded_at).isoformat(),
-                "source_component_clock": _clock_manifest(clock),
+                "recorded_at": _utc(clock[2]).isoformat(),
+                "source_component_clock": _clock_manifest(component_clock),
                 "source_definition_commitment_sha256": (_source_definition_commitment(row)),
             },
         )
     for row in _axis_registry_rows(conn, knowledge_cutoff, operation_recorded_at):
         component_id = _axis_component_id(row)
+        clock = _dimension_clock(row)
         fold.add(
             "axis",
             {
                 "axis_id": _axis_id(row),
                 "dimension_mapping_revision_id": _dimension_mapping_id(component_id),
-                "recorded_at": _utc(operation_recorded_at).isoformat(),
+                "recorded_at": _utc(clock[2]).isoformat(),
                 "source_component_id": component_id,
                 "source_clock": _clock_manifest(_dimension_clock(row)),
             },
         )
     for row in _member_registry_rows(conn, knowledge_cutoff, operation_recorded_at):
         component_id = _member_component_id(row)
+        clock = _dimension_clock(row)
         fold.add(
             "member",
             {
                 "axis_id": _axis_id(row),
                 "dimension_mapping_revision_id": _dimension_mapping_id(component_id),
                 "member_id": _member_id(row),
-                "recorded_at": _utc(operation_recorded_at).isoformat(),
+                "recorded_at": _utc(clock[2]).isoformat(),
                 "source_component_id": component_id,
                 "source_clock": _clock_manifest(_dimension_clock(row)),
             },
         )
     for cell in _source_cells(conn, knowledge_cutoff, operation_recorded_at):
+        canonical_cell_clock = _component_clock(cell)
         metric_id = _metric_id(cell)
         component_id = _concept_component_id(cell)
         canonical_cell_id = _canonical_cell_id(cell)
@@ -1881,7 +2315,7 @@ def _plan_commitment(
                 "fact_cell_id": str(cell["fact_cell_id"]),
                 "mapping_revision_id": _mapping_id(cell),
                 "metric_id": metric_id,
-                "recorded_at": _utc(operation_recorded_at).isoformat(),
+                "canonical_cell_clock": _clock_manifest(canonical_cell_clock),
                 "source_definition_commitment_sha256": (_source_definition_commitment(cell)),
             },
         )
@@ -1902,19 +2336,25 @@ def _plan_commitment(
             )
     knowledge, observed = _scope_bounds(knowledge_cutoff, operation_recorded_at)
     for row in conn.execute(
-        "SELECT observation_id FROM fact_observations_v2 "
-        "WHERE observation_kind='reported' "
-        "AND datetime(knowledge_at)<=datetime(?) "
-        "AND datetime(recorded_at)<=datetime(?) ORDER BY observation_id",
+        "SELECT observation.observation_id,observation.recorded_at,"
+        "cell.recorded_at FROM fact_observations_v2 observation "
+        "JOIN fact_cells_v2 cell ON cell.fact_cell_id=observation.fact_cell_id "
+        "WHERE observation.observation_kind='reported' "
+        "AND datetime(observation.knowledge_at)<=datetime(?) "
+        "AND datetime(observation.recorded_at)<=datetime(?) "
+        "ORDER BY observation.observation_id",
         (knowledge, observed),
     ):
         observation_id = str(row[0])
+        assertion_recorded_at = _parse_time(row[1])
+        binding_recorded_at = max(assertion_recorded_at, _parse_time(row[2]), key=_utc)
         fold.add(
             "observation",
             {
                 "binding_revision_id": _binding_id(observation_id),
                 "observation_id": observation_id,
-                "recorded_at": _utc(operation_recorded_at).isoformat(),
+                "binding_recorded_at": _utc(binding_recorded_at).isoformat(),
+                "taxonomy_assertion_recorded_at": _utc(assertion_recorded_at).isoformat(),
                 "taxonomy_assertion_idempotency_key": _record_id(
                     "taxonomy-assertion",
                     observation_id,

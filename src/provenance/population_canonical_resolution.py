@@ -12,7 +12,6 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Iterator
-from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Literal, Self, cast
 
@@ -87,6 +86,13 @@ class CanonicalResolutionPopulationRequest(_FrozenModel):
 
     @model_validator(mode="after")
     def _commitment_contract(self) -> Self:
+        if (
+            self.cutoff_at.tzinfo is None
+            or self.cutoff_at.utcoffset() is None
+            or self.operation_recorded_at.tzinfo is None
+            or self.operation_recorded_at.utcoffset() is None
+        ):
+            raise ValueError("canonical temporal scope must include a timezone")
         if (self.input_commitment_sha256 is None) != (self.plan_commitment_sha256 is None):
             raise ValueError("population commitments must be supplied together")
         bounded = self.after_canonical_metric_cell_id is not None or self.max_cells is not None
@@ -156,6 +162,11 @@ class CanonicalResolutionPopulationResult(_FrozenModel):
     resolved_cell_count: int
     unresolved_cell_count: int
     retired_cell_count: int
+    planned_resolved_cell_count: int
+    planned_unresolved_cell_count: int
+    planned_retired_cell_count: int
+    resolution_reason_counts: dict[str, int]
+    resolution_plan_commitment_sha256: str
     processed_cell_count: int
     last_canonical_metric_cell_id: str | None
     expected_issuer_count: int
@@ -164,8 +175,285 @@ class CanonicalResolutionPopulationResult(_FrozenModel):
     projection_entry_count: int
     input_commitment_sha256: str
     plan_commitment_sha256: str
+    post_state_commitment_sha256: str
     output_commitment_sha256: str
     checkpoint: CanonicalResolutionCheckpoint
+
+
+CanonicalResolutionReceiptOutcome = Literal[
+    "planned",
+    "applied",
+    "checkpoint",
+    "blocked",
+    "complete",
+]
+
+
+class CanonicalResolutionOperationReceipt(_FrozenModel):
+    schema_version: Literal["canonical-resolution-operation-receipt/v1"] = (
+        "canonical-resolution-operation-receipt/v1"
+    )
+    database_path: str = Field(min_length=1, max_length=1_024)
+    database_instance_id: str = Field(
+        min_length=50,
+        max_length=64,
+        pattern=r"^database-instance:[0-9a-f]{32}$",
+    )
+    operation_id: str = Field(
+        min_length=95,
+        max_length=95,
+        pattern=r"^canonical-resolution-operation:[0-9a-f]{64}$",
+    )
+    alembic_revision: str = Field(min_length=1, max_length=128)
+    request: CanonicalResolutionPopulationRequest
+    result: CanonicalResolutionPopulationResult
+    outcome: CanonicalResolutionReceiptOutcome
+    blocker_counts: dict[str, int]
+    document_prerequisite_receipt_sha256: str
+    prior_checkpoint_receipt_sha256: str | None
+    admission_receipt_sha256: str | None
+    request_sha256: str
+    result_sha256: str
+    receipt_sha256: str
+
+    @field_validator(
+        "document_prerequisite_receipt_sha256",
+        "prior_checkpoint_receipt_sha256",
+        "admission_receipt_sha256",
+        "request_sha256",
+        "result_sha256",
+        "receipt_sha256",
+    )
+    @classmethod
+    def _receipt_sha(cls, value: str | None) -> str | None:
+        if value is not None and (
+            len(value) != 64 or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise ValueError("receipt commitment must be a lowercase SHA-256")
+        return value
+
+    @model_validator(mode="after")
+    def _receipt_contract(self) -> Self:
+        if self.request.apply != (self.result.mode == "apply"):
+            raise ValueError("canonical operation receipt mode does not match its result")
+        if self.request.apply != (self.admission_receipt_sha256 is not None):
+            raise ValueError("a canonical apply receipt requires one dry-run admission")
+        if self.request.after_canonical_metric_cell_id is not None and (
+            self.prior_checkpoint_receipt_sha256 is None
+        ):
+            raise ValueError("a canonical cursor resume must bind one prior checkpoint")
+        if self.request_sha256 != _model_sha(self.request):
+            raise ValueError("canonical operation request commitment does not match")
+        if self.result_sha256 != _model_sha(self.result):
+            raise ValueError("canonical operation result commitment does not match")
+        if self.operation_id != canonical_resolution_operation_id(
+            database_instance_id=self.database_instance_id,
+            request=self.request,
+            document_prerequisite_receipt_sha256=self.document_prerequisite_receipt_sha256,
+            admission_receipt_sha256=self.admission_receipt_sha256,
+            prior_checkpoint_receipt_sha256=self.prior_checkpoint_receipt_sha256,
+        ):
+            raise ValueError("canonical operation identity does not match")
+        if self.blocker_counts != _canonical_blocker_counts(self.result):
+            raise ValueError("canonical blocker census does not match")
+        if self.outcome != _canonical_receipt_outcome(self.request, self.result):
+            raise ValueError("canonical operation outcome does not match")
+        if self.receipt_sha256 != _canonical_receipt_sha(self):
+            raise ValueError("canonical operation receipt commitment does not match")
+        return self
+
+
+def build_canonical_resolution_receipt(
+    *,
+    database_path: str,
+    database_instance_id: str,
+    alembic_revision: str,
+    request: CanonicalResolutionPopulationRequest,
+    result: CanonicalResolutionPopulationResult,
+    document_prerequisite_receipt_sha256: str,
+    prior_checkpoint_receipt_sha256: str | None,
+    admission_receipt_sha256: str | None,
+) -> CanonicalResolutionOperationReceipt:
+    """Bind one exact canonical population attempt to immutable evidence."""
+
+    payload: dict[str, object] = {
+        "schema_version": "canonical-resolution-operation-receipt/v1",
+        "database_path": database_path,
+        "database_instance_id": database_instance_id,
+        "alembic_revision": alembic_revision,
+        "request": request,
+        "result": result,
+        "outcome": _canonical_receipt_outcome(request, result),
+        "blocker_counts": _canonical_blocker_counts(result),
+        "document_prerequisite_receipt_sha256": document_prerequisite_receipt_sha256,
+        "prior_checkpoint_receipt_sha256": prior_checkpoint_receipt_sha256,
+        "admission_receipt_sha256": admission_receipt_sha256,
+        "request_sha256": _model_sha(request),
+        "result_sha256": _model_sha(result),
+    }
+    payload["operation_id"] = canonical_resolution_operation_id(
+        database_instance_id=database_instance_id,
+        request=request,
+        document_prerequisite_receipt_sha256=document_prerequisite_receipt_sha256,
+        admission_receipt_sha256=admission_receipt_sha256,
+        prior_checkpoint_receipt_sha256=prior_checkpoint_receipt_sha256,
+    )
+    payload["receipt_sha256"] = digest_text(
+        canonical_json(
+            {
+                key: value.model_dump(mode="json") if isinstance(value, BaseModel) else value
+                for key, value in payload.items()
+            }
+        )
+    )
+    return CanonicalResolutionOperationReceipt.model_validate(payload)
+
+
+def verify_canonical_resolution_receipt(
+    receipt: CanonicalResolutionOperationReceipt,
+) -> bool:
+    """Return whether every nested and top-level canonical commitment agrees."""
+
+    try:
+        CanonicalResolutionOperationReceipt.model_validate(receipt.model_dump(mode="json"))
+    except ValueError:
+        return False
+    return True
+
+
+def database_instance_id(conn: sqlite3.Connection) -> str:
+    """Return the immutable identity installed for this database lineage."""
+
+    rows = conn.execute(
+        "SELECT database_instance_id FROM database_runtime_identity WHERE singleton=1"
+    ).fetchall()
+    if len(rows) != 1:
+        raise ValueError("canonical database identity is missing or ambiguous")
+    value = str(rows[0][0])
+    suffix = value.removeprefix("database-instance:")
+    if (
+        len(value) != 50
+        or len(suffix) != 32
+        or any(character not in "0123456789abcdef" for character in suffix)
+    ):
+        raise ValueError("canonical database identity is invalid")
+    return value
+
+
+def persist_canonical_resolution_receipt(
+    conn: sqlite3.Connection,
+    receipt: CanonicalResolutionOperationReceipt,
+) -> bool:
+    """Persist one immutable apply receipt inside the caller transaction."""
+
+    if not receipt.request.apply or not verify_canonical_resolution_receipt(receipt):
+        raise ValueError("only a valid canonical apply receipt can enter the ledger")
+    payload = receipt.model_dump_json()
+    values = (
+        receipt.operation_id,
+        receipt.operation_id,
+        receipt.database_instance_id,
+        receipt.document_prerequisite_receipt_sha256,
+        receipt.request_sha256,
+        receipt.result_sha256,
+        receipt.receipt_sha256,
+        payload,
+    )
+    cursor = conn.execute(
+        "INSERT OR IGNORE INTO canonical_resolution_operation_ledger "
+        "(operation_id,idempotency_key,database_instance_id,"
+        "document_prerequisite_receipt_sha256,request_sha256,result_sha256,"
+        "receipt_sha256,receipt_json) VALUES (?,?,?,?,?,?,?,?)",
+        values,
+    )
+    if cursor.rowcount == 1:
+        return True
+    existing = conn.execute(
+        "SELECT operation_id,idempotency_key,database_instance_id,"
+        "document_prerequisite_receipt_sha256,request_sha256,result_sha256,"
+        "receipt_sha256,receipt_json FROM canonical_resolution_operation_ledger "
+        "WHERE operation_id=?",
+        (receipt.operation_id,),
+    ).fetchone()
+    if existing is None or tuple(existing) != values:
+        raise ValueError("canonical operation replay changed immutable evidence")
+    return False
+
+
+def load_canonical_resolution_receipt(
+    conn: sqlite3.Connection,
+    operation_id: str,
+) -> CanonicalResolutionOperationReceipt | None:
+    """Load and verify the canonical receipt for one exact operation."""
+
+    row = conn.execute(
+        "SELECT receipt_json FROM canonical_resolution_operation_ledger WHERE operation_id=?",
+        (operation_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    receipt = CanonicalResolutionOperationReceipt.model_validate_json(str(row[0]))
+    if not verify_canonical_resolution_receipt(receipt) or receipt.operation_id != operation_id:
+        raise ValueError("stored canonical operation receipt is invalid")
+    return receipt
+
+
+def canonical_resolution_operation_id(
+    *,
+    database_instance_id: str,
+    request: CanonicalResolutionPopulationRequest,
+    document_prerequisite_receipt_sha256: str,
+    admission_receipt_sha256: str | None,
+    prior_checkpoint_receipt_sha256: str | None,
+) -> str:
+    material = canonical_json(
+        {
+            "admission_receipt_sha256": admission_receipt_sha256,
+            "database_instance_id": database_instance_id,
+            "document_prerequisite_receipt_sha256": document_prerequisite_receipt_sha256,
+            "prior_checkpoint_receipt_sha256": prior_checkpoint_receipt_sha256,
+            "request_sha256": _model_sha(request),
+        }
+    )
+    return "canonical-resolution-operation:" + digest_text(material)
+
+
+def _canonical_receipt_outcome(
+    request: CanonicalResolutionPopulationRequest,
+    result: CanonicalResolutionPopulationResult,
+) -> CanonicalResolutionReceiptOutcome:
+    if result.planned_unresolved_cell_count or result.unresolved_cell_count:
+        return "blocked"
+    if not request.apply:
+        return "planned"
+    if result.checkpoint.bounded:
+        return "checkpoint"
+    if result.state != "complete":
+        return "blocked"
+    if request.phase in {"snapshots", "projections", "all"}:
+        return "complete"
+    return "applied"
+
+
+def _canonical_blocker_counts(result: CanonicalResolutionPopulationResult) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    if result.planned_unresolved_cell_count:
+        counts["unresolved_cell"] = result.planned_unresolved_cell_count
+    for reason in ("no_admitted_observation", "materially_conflicting_assertions"):
+        value = result.resolution_reason_counts.get(reason, 0)
+        if value:
+            counts[reason] = value
+    return dict(sorted(counts.items()))
+
+
+def _model_sha(model: BaseModel) -> str:
+    return digest_text(canonical_json(model.model_dump(mode="json")))
+
+
+def _canonical_receipt_sha(receipt: CanonicalResolutionOperationReceipt) -> str:
+    payload = receipt.model_dump(mode="json")
+    payload.pop("receipt_sha256")
+    return digest_text(canonical_json(payload))
 
 
 def verify_canonical_resolution(
@@ -323,6 +611,12 @@ def populate_canonical_resolution(
         input_sha = manifest.commitment_sha256
         plan_sha = _population_plan_commitment(request, input_sha)
         _verify_commitments(request, input_sha=input_sha, plan_sha=plan_sha)
+        planned_counts, reason_counts, resolution_plan_sha = _resolution_plan_summary(
+            conn,
+            cutoff,
+            recorded,
+            manifest,
+        )
         processed = 0
         last_cell: str | None = None
         effective_phase = "resolutions" if bounded and request.phase == "all" else request.phase
@@ -335,32 +629,28 @@ def populate_canonical_resolution(
                 after=request.after_canonical_metric_cell_id,
                 limit=request.max_cells,
             )
-            with conn:
-                for cell_id in batch:
-                    engine.resolve(cell_id, cutoff, _POLICY, recorded_at=recorded)
-                    processed += 1
-                    last_cell = cell_id
+            for cell_id in batch:
+                engine.resolve(cell_id, cutoff, _POLICY, recorded_at=recorded)
+                processed += 1
+                last_cell = cell_id
         complete_resolutions = _resolution_set_is_exact(conn, cutoff, recorded)
+        counts = _status_counts(conn, cutoff, recorded)
+        projection_ready = complete_resolutions and counts["unresolved"] == 0
 
-        if request.apply and effective_phase in {"snapshots", "all"}:
-            if not complete_resolutions:
-                raise ValueError("resolution cells are not an exact canonical-cell set")
+        if request.apply and projection_ready and effective_phase in {"snapshots", "all"}:
             _seal_snapshots(conn, cutoff, recorded, manifest)
             _verify_snapshot_sets(conn, cutoff, recorded, manifest)
-        if request.apply and effective_phase in {"projections", "all"}:
-            if not complete_resolutions:
-                raise ValueError("resolution cells are not an exact canonical-cell set")
+        if request.apply and projection_ready and effective_phase in {"projections", "all"}:
             _verify_snapshot_sets(conn, cutoff, recorded, manifest)
             _build_projections(conn, cutoff, recorded, manifest)
             _verify_projection_sets(conn, cutoff, recorded, manifest)
 
-        counts = _status_counts(conn, cutoff, recorded)
         remaining = _remaining_resolution_count(conn, cutoff, recorded)
-        safe_to_seal = not bounded and complete_resolutions
+        safe_to_seal = not bounded and projection_ready
         state: Literal["planned", "partial", "complete"]
         if not request.apply:
             state = "planned"
-        elif bounded or not complete_resolutions:
+        elif bounded or not projection_ready:
             state = "partial"
         else:
             state = "complete"
@@ -373,6 +663,7 @@ def populate_canonical_resolution(
             remaining_cell_count=remaining,
             can_resume=bounded and remaining > 0,
         )
+        post_state_sha = _output_commitment(conn, cutoff, recorded, manifest)
         return CanonicalResolutionPopulationResult(
             mode="apply" if request.apply else "dry_run",
             phase=request.phase,
@@ -381,6 +672,11 @@ def populate_canonical_resolution(
             resolved_cell_count=counts["resolved"],
             unresolved_cell_count=counts["unresolved"],
             retired_cell_count=counts["retired"],
+            planned_resolved_cell_count=planned_counts["resolved"],
+            planned_unresolved_cell_count=planned_counts["unresolved"],
+            planned_retired_cell_count=planned_counts["retired"],
+            resolution_reason_counts=reason_counts,
+            resolution_plan_commitment_sha256=resolution_plan_sha,
             processed_cell_count=processed,
             last_canonical_metric_cell_id=last_cell,
             expected_issuer_count=len(manifest.issuer_scopes),
@@ -389,7 +685,8 @@ def populate_canonical_resolution(
             projection_entry_count=_owned_projection_entry_count(conn, cutoff, recorded, manifest),
             input_commitment_sha256=input_sha,
             plan_commitment_sha256=plan_sha,
-            output_commitment_sha256=_output_commitment(conn, cutoff, recorded, manifest),
+            post_state_commitment_sha256=post_state_sha,
+            output_commitment_sha256=post_state_sha,
             checkpoint=checkpoint,
         )
     finally:
@@ -519,7 +816,7 @@ def _candidate_input_commitment(
         cell_id = str(row["canonical_metric_cell_id"])
         issuer_id = str(row["issuer_id"])
         reporting_entity_id = str(row["reporting_entity_id"])
-        for candidate in engine._enumerate(
+        for candidate in engine.candidate_manifest(
             cell_id,
             cutoff,
             observed_through=observed_through,
@@ -559,7 +856,6 @@ def _candidate_input_commitment(
                 is None
             ):
                 raise ValueError("ontology snapshot omits a required active binding")
-            payload = _canonical_json(asdict(candidate))
             item = _CandidateInput(
                 canonical_metric_cell_id=cell_id,
                 reporting_entity_id=reporting_entity_id,
@@ -571,8 +867,8 @@ def _candidate_input_commitment(
                 subject_binding_outcome=str(subject["outcome"]),
                 subject_binding_knowledge_at=_parse_time(subject["knowledge_at"]),
                 subject_binding_recorded_at=_parse_time(subject["recorded_at"]),
-                resolver_candidate_json=payload,
-                resolver_candidate_sha256=_sha(payload),
+                resolver_candidate_json=candidate.candidate_json,
+                resolver_candidate_sha256=candidate.candidate_sha256,
             )
             fold.add(item.model_dump(mode="json"))
     return fold.count, fold.hexdigest()
@@ -640,7 +936,8 @@ def _verified_ontology_snapshot(
     recorded: datetime,
 ) -> tuple[str, str, int]:
     headers = conn.execute(
-        "SELECT header.ontology_snapshot_id,seal.member_count,"
+        "WITH eligible AS ("
+        "SELECT header.ontology_snapshot_id,header.recorded_at,seal.member_count,"
         "length(seal.canonical_member_set_json) AS canonical_length,"
         "seal.member_set_sha256 "
         "FROM ontology_snapshot_headers header "
@@ -648,12 +945,19 @@ def _verified_ontology_snapshot(
         "ON seal.ontology_snapshot_id=header.ontology_snapshot_id "
         "WHERE datetime(header.cutoff_at)=datetime(?) "
         "AND datetime(header.recorded_at)<=datetime(?) "
-        "AND datetime(seal.sealed_at)<=datetime(?) "
-        "ORDER BY header.ontology_snapshot_id",
+        "AND datetime(seal.sealed_at)<=datetime(?)"
+        "), terminal AS ("
+        "SELECT MAX(datetime(recorded_at)) AS recorded_at FROM eligible"
+        ") "
+        "SELECT eligible.ontology_snapshot_id,eligible.member_count,"
+        "eligible.canonical_length,eligible.member_set_sha256 "
+        "FROM eligible JOIN terminal "
+        "ON datetime(eligible.recorded_at)=terminal.recorded_at "
+        "ORDER BY eligible.ontology_snapshot_id",
         (_db_time(cutoff), _db_time(recorded), _db_time(recorded)),
     ).fetchall()
     if len(headers) != 1:
-        raise ValueError("exactly one sealed ontology snapshot is required at the cutoff")
+        raise ValueError("exactly one terminal sealed ontology snapshot is required at the cutoff")
     snapshot_id = str(headers[0]["ontology_snapshot_id"])
     actual_rows = conn.execute(
         "SELECT member_kind,member_id,member_sha256 "
@@ -723,24 +1027,23 @@ def _seal_snapshots(
     manifest: CanonicalResolutionPrewriteManifest,
 ) -> None:
     engine = CanonicalFactResolutionEngine(conn)
-    with conn:
-        for scope in manifest.issuer_scopes:
-            snapshot_id = _snapshot_id(scope.issuer_id, cutoff, recorded)
-            engine.seal_snapshot(
-                snapshot_id,
-                cutoff,
-                recorded,
-                ResolutionSnapshotScope(
-                    issuer_id=scope.issuer_id,
-                    reporting_entity_ids=scope.reporting_entity_ids,
-                ),
-            )
-            bind_resolution_snapshot_watermark(
-                conn,
-                resolution_snapshot_id=snapshot_id,
-                cutoff_at=cutoff,
-                recorded_at=recorded,
-            )
+    for scope in manifest.issuer_scopes:
+        snapshot_id = _snapshot_id(scope.issuer_id, cutoff, recorded)
+        engine.seal_snapshot(
+            snapshot_id,
+            cutoff,
+            recorded,
+            ResolutionSnapshotScope(
+                issuer_id=scope.issuer_id,
+                reporting_entity_ids=scope.reporting_entity_ids,
+            ),
+        )
+        bind_resolution_snapshot_watermark(
+            conn,
+            resolution_snapshot_id=snapshot_id,
+            cutoff_at=cutoff,
+            recorded_at=recorded,
+        )
 
 
 def _verify_snapshot_sets(
@@ -780,22 +1083,21 @@ def _build_projections(
     recorded: datetime,
     manifest: CanonicalResolutionPrewriteManifest,
 ) -> None:
-    with conn:
-        for scope in manifest.issuer_scopes:
-            generation_id = _projection_id(scope.issuer_id, cutoff, recorded)
-            build_canonical_projection_generation(
-                conn,
-                ProjectionGenerationRequest(
-                    generation_id=generation_id,
-                    idempotency_key=generation_id,
-                    generation_kind="checkpoint",
-                    resolution_snapshot_id=_snapshot_id(scope.issuer_id, cutoff, recorded),
-                    ontology_snapshot_id=manifest.ontology_snapshot_id,
-                    cutoff_at=cutoff,
-                    recorded_at=recorded,
-                    config=ProjectionConfig(),
-                ),
-            )
+    for scope in manifest.issuer_scopes:
+        generation_id = _projection_id(scope.issuer_id, cutoff, recorded)
+        build_canonical_projection_generation(
+            conn,
+            ProjectionGenerationRequest(
+                generation_id=generation_id,
+                idempotency_key=generation_id,
+                generation_kind="checkpoint",
+                resolution_snapshot_id=_snapshot_id(scope.issuer_id, cutoff, recorded),
+                ontology_snapshot_id=manifest.ontology_snapshot_id,
+                cutoff_at=cutoff,
+                recorded_at=recorded,
+                config=ProjectionConfig(),
+            ),
+        )
 
 
 def _verify_projection_sets(
@@ -875,6 +1177,39 @@ def _resolution_set_is_exact(
         ),
     ).fetchone()
     return mismatch is None
+
+
+def _resolution_plan_summary(
+    conn: sqlite3.Connection,
+    cutoff: datetime,
+    recorded: datetime,
+    manifest: CanonicalResolutionPrewriteManifest,
+) -> tuple[dict[str, int], dict[str, int], str]:
+    """Plan every cell without writes and commit the exact deterministic outcomes."""
+
+    engine = CanonicalFactResolutionEngine(conn)
+    status_counts = {"resolved": 0, "unresolved": 0, "retired": 0}
+    reason_counts: dict[str, int] = {}
+    fold = _CanonicalArrayFold()
+    for cell_id in _bounded_cells(
+        conn,
+        cutoff,
+        recorded,
+        after=None,
+        limit=None,
+    ):
+        plan = engine.plan(
+            cell_id,
+            cutoff,
+            _POLICY,
+            observed_through=recorded,
+        )
+        status_counts[plan.status] += 1
+        reason_counts[plan.reason_code] = reason_counts.get(plan.reason_code, 0) + 1
+        fold.add(plan.model_dump(mode="json"))
+    if fold.count != manifest.canonical_cell_count:
+        raise ValueError("canonical resolution plan does not cover the frozen cell set")
+    return status_counts, dict(sorted(reason_counts.items())), fold.hexdigest()
 
 
 def _status_counts(

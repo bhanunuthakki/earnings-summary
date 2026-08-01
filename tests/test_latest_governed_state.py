@@ -15,6 +15,7 @@ from provenance.latest_governed_state import (
     LatestGovernedRefreshResult,
     LatestGovernedReprojectionRequest,
     LatestGovernedStateError,
+    audit_latest_governed_cohort,
     build_latest_governed_fact_search_query,
     refresh_latest_governed_state,
     reproject_latest_governed_state,
@@ -40,10 +41,15 @@ def _database() -> sqlite3.Connection:
         CREATE TABLE v_ask_retrieval_scope_current (
           promotion_id TEXT, scope_key TEXT, status TEXT,
           research_snapshot_id TEXT, fact_generation_id TEXT,
-          fact_projection_seal_sha256 TEXT, source_inventory_ids_json TEXT,
+          fact_projection_seal_sha256 TEXT, source_inventory_set_json TEXT,
           narrative_bundles_json TEXT, cutoff_at TEXT, population_run_id TEXT,
           population_receipt_set_sha256 TEXT, population_observed_through TEXT,
-          issuer_id TEXT, reporting_entity_id TEXT
+          issuer_id TEXT, reporting_entity_id TEXT,
+          source_scope_key TEXT, source_scope_revision_id TEXT
+        );
+        CREATE TABLE v_issuer_reporting_scope_current (
+          scope_revision_id TEXT, scope_key TEXT, issuer_id TEXT,
+          inclusion_state TEXT
         );
         CREATE TABLE source_fact_publication_stream (
           publication_sequence INTEGER, sealed_at TEXT, assigned_at TEXT
@@ -250,6 +256,9 @@ def _database() -> sqlite3.Connection:
     return conn
 
 
+latest_governed_test_database = _database
+
+
 def _seed_frontier(conn: sqlite3.Connection) -> None:
     clock = T0.isoformat()
     bundles = json.dumps(
@@ -268,10 +277,14 @@ def _seed_frontier(conn: sqlite3.Connection) -> None:
         ("population-1", SHA_A, clock, clock),
     )
     conn.execute(
-        "INSERT INTO v_ask_retrieval_scope_current VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO v_issuer_reporting_scope_current VALUES (?,?,?,?)",
+        ("scope-revision-1", "investor-research", "issuer-1", "core"),
+    )
+    conn.execute(
+        "INSERT INTO v_ask_retrieval_scope_current VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "promotion-1",
-            "issuer:1",
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
             "promoted",
             "research-1",
             "generation-1",
@@ -284,6 +297,8 @@ def _seed_frontier(conn: sqlite3.Connection) -> None:
             clock,
             "issuer-1",
             "reporting-1",
+            "investor-research",
+            "scope-revision-1",
         ),
     )
     conn.execute(
@@ -399,7 +414,7 @@ def _fact_entry(
 
 def _request(**changes: object) -> LatestGovernedRefreshRequest:
     values: dict[str, object] = {
-        "scope_id": "issuer:1",
+        "scope_id": "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
         "operation_recorded_at": T0 + timedelta(minutes=1),
         "apply": True,
         "max_batch_rows": 100,
@@ -433,10 +448,10 @@ def _advance_delta(
         ]
     )
     conn.execute(
-        "INSERT INTO v_ask_retrieval_scope_current VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO v_ask_retrieval_scope_current VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "promotion-2",
-            "issuer:1",
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
             "promoted",
             "research-2",
             generation,
@@ -449,6 +464,8 @@ def _advance_delta(
             new_time,
             "issuer-1",
             "reporting-1",
+            "investor-research",
+            "scope-revision-1",
         ),
     )
     _seed_universe(conn, "research-2", "issuer-1", ("reporting-1",))
@@ -625,10 +642,10 @@ def _promote_one_document_delta(
         ]
     )
     conn.execute(
-        "INSERT INTO v_ask_retrieval_scope_current VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO v_ask_retrieval_scope_current VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "promotion-2",
-            "issuer:1",
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
             "promoted",
             "research-2",
             "generation-2",
@@ -641,6 +658,8 @@ def _promote_one_document_delta(
             clock,
             "issuer-1",
             "reporting-1",
+            "investor-research",
+            "scope-revision-1",
         ),
     )
     _seed_universe(conn, "research-2", "issuer-1", ("reporting-1",))
@@ -782,10 +801,10 @@ def _rollover_source_inventory(
         sort_keys=True,
     )
     conn.execute(
-        "INSERT INTO v_ask_retrieval_scope_current VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO v_ask_retrieval_scope_current VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "promotion-2",
-            "issuer:1",
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
             "promoted",
             "research-2",
             "generation-1",
@@ -798,6 +817,8 @@ def _rollover_source_inventory(
             clock,
             "issuer-1",
             "reporting-1",
+            "investor-research",
+            "scope-revision-1",
         ),
     )
     _seed_universe(conn, "research-2", "issuer-1", ("reporting-1",))
@@ -821,8 +842,21 @@ def test_initial_refresh_latest_reads_and_exact_noop_replay() -> None:
     assert (first.fact_change_count, first.document_change_count) == (1, 1)
     assert first.narrative_change_count == 1
     assert first.current_write_count == 3
-    assert search_latest_governed_facts(conn, "issuer:1", "revenue", 5)[0].canonical_value == "100"
-    narrative = search_latest_governed_narrative(conn, "issuer:1", "accelerated", 5)
+    assert (
+        search_latest_governed_facts(
+            conn,
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
+            "revenue",
+            5,
+        )[0].canonical_value
+        == "100"
+    )
+    narrative = search_latest_governed_narrative(
+        conn,
+        "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
+        "accelerated",
+        5,
+    )
     assert narrative[0].embedding_artifact_id == "embedding-1"
 
     noop = refresh_latest_governed_state(
@@ -847,6 +881,21 @@ def test_initial_refresh_latest_reads_and_exact_noop_replay() -> None:
     )
 
 
+def test_latest_refresh_never_falls_back_to_ambiguous_raw_scope_key() -> None:
+    conn = _database()
+
+    with pytest.raises(
+        LatestGovernedStateError,
+        match="one current promoted Ask retrieval scope is required",
+    ):
+        refresh_latest_governed_state(
+            conn,
+            _request(scope_id="investor-research"),
+        )
+
+    assert conn.execute("SELECT COUNT(*) FROM latest_governed_scope_heads").fetchone() == (0,)
+
+
 def test_small_direct_delta_and_tombstone_never_select_conflict() -> None:
     conn = _database()
     refresh_latest_governed_state(conn, _request())
@@ -859,7 +908,15 @@ def test_small_direct_delta_and_tombstone_never_select_conflict() -> None:
     assert delta.document_change_count == 0
     assert delta.narrative_change_count == 0
     assert delta.current_write_count == 1
-    assert search_latest_governed_facts(conn, "issuer:1", "revenue", 5)[0].canonical_value == "110"
+    assert (
+        search_latest_governed_facts(
+            conn,
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
+            "revenue",
+            5,
+        )[0].canonical_value
+        == "110"
+    )
 
     # A governed unresolved/conflict outcome appears downstream as a tombstone.
     later = T0 + timedelta(hours=2)
@@ -884,10 +941,10 @@ def test_small_direct_delta_and_tombstone_never_select_conflict() -> None:
         ]
     )
     conn.execute(
-        "INSERT INTO v_ask_retrieval_scope_current VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO v_ask_retrieval_scope_current VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "promotion-3",
-            "issuer:1",
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
             "promoted",
             "research-3",
             "generation-3",
@@ -900,6 +957,8 @@ def test_small_direct_delta_and_tombstone_never_select_conflict() -> None:
             later.isoformat(),
             "issuer-1",
             "reporting-1",
+            "investor-research",
+            "scope-revision-1",
         ),
     )
     _seed_universe(conn, "research-3", "issuer-1", ("reporting-1",))
@@ -918,7 +977,15 @@ def test_small_direct_delta_and_tombstone_never_select_conflict() -> None:
         _request(operation_recorded_at=later + timedelta(minutes=1)),
     )
     assert tombstone.fact_change_count == 1
-    assert search_latest_governed_facts(conn, "issuer:1", "revenue", 5) == ()
+    assert (
+        search_latest_governed_facts(
+            conn,
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
+            "revenue",
+            5,
+        )
+        == ()
+    )
 
 
 def test_direct_delta_reads_only_changed_current_fact_coordinates() -> None:
@@ -926,7 +993,7 @@ def test_direct_delta_reads_only_changed_current_fact_coordinates() -> None:
     refresh_latest_governed_state(conn, _request())
     template = conn.execute(
         "SELECT * FROM latest_governed_fact_entries "
-        "WHERE scope_key='issuer:1' AND canonical_metric_cell_id='cell-1'"
+        "WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3' AND canonical_metric_cell_id='cell-1'"
     ).fetchone()
     assert template is not None
     columns = [
@@ -958,7 +1025,10 @@ def test_direct_delta_reads_only_changed_current_fact_coordinates() -> None:
             "EXPLAIN QUERY PLAN SELECT canonical_metric_cell_id,"
             "current_commitment_sha256 FROM latest_governed_fact_entries "
             "WHERE scope_key=? AND canonical_metric_cell_id IN (?)",
-            ("issuer:1", "cell-1"),
+            (
+                "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
+                "cell-1",
+            ),
         )
     )
     assert "sqlite_autoindex_latest_governed_fact_entries_1" in plan
@@ -970,7 +1040,7 @@ def test_shared_generation_isolated_by_promoted_reporting_entity_for_upserts_and
     bundles = str(
         conn.execute(
             "SELECT narrative_bundles_json FROM v_ask_retrieval_scope_current "
-            "WHERE scope_key='issuer:1'"
+            "WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3'"
         ).fetchone()[0]
     )
     _seed_universe(conn, "research-other", "issuer-2", ("reporting-2",))
@@ -992,10 +1062,10 @@ def test_shared_generation_isolated_by_promoted_reporting_entity_for_upserts_and
         entry_ordinal=1,
     )
     conn.execute(
-        "INSERT INTO v_ask_retrieval_scope_current VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO v_ask_retrieval_scope_current VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "promotion-other-1",
-            "issuer:2",
+            "ask-scope:v1:0a03af0ac0dccd62d74966db96111cc02d144581edba5f3d9e16730c12b71ac0",
             "promoted",
             "research-other",
             "generation-1",
@@ -1008,19 +1078,38 @@ def test_shared_generation_isolated_by_promoted_reporting_entity_for_upserts_and
             clock,
             "issuer-2",
             "reporting-2",
+            "investor-research",
+            "scope-revision-2",
         ),
+    )
+    conn.execute(
+        "INSERT INTO v_issuer_reporting_scope_current VALUES (?,?,?,?)",
+        ("scope-revision-2", "investor-research", "issuer-2", "core"),
     )
     conn.commit()
 
     refresh_latest_governed_state(conn, _request())
-    refresh_latest_governed_state(conn, _request(scope_id="issuer:2"))
+    refresh_latest_governed_state(
+        conn,
+        _request(
+            scope_id="ask-scope:v1:0a03af0ac0dccd62d74966db96111cc02d144581edba5f3d9e16730c12b71ac0"
+        ),
+    )
     assert conn.execute(
         "SELECT scope_key,canonical_metric_cell_id,canonical_value "
         "FROM latest_governed_fact_entries "
         "ORDER BY scope_key,canonical_metric_cell_id"
     ).fetchall() == [
-        ("issuer:1", "cell-1", "100"),
-        ("issuer:2", "cell-2", "200"),
+        (
+            "ask-scope:v1:0a03af0ac0dccd62d74966db96111cc02d144581edba5f3d9e16730c12b71ac0",
+            "cell-2",
+            "200",
+        ),
+        (
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
+            "cell-1",
+            "100",
+        ),
     ]
 
     next_clock = (T0 + timedelta(hours=1)).isoformat()
@@ -1072,7 +1161,9 @@ def test_shared_generation_isolated_by_promoted_reporting_entity_for_upserts_and
     second_delta = refresh_latest_governed_state(
         conn,
         _request(
-            scope_id="issuer:2",
+            scope_id=(
+                "ask-scope:v1:0a03af0ac0dccd62d74966db96111cc02d144581edba5f3d9e16730c12b71ac0"
+            ),
             operation_recorded_at=T0 + timedelta(hours=1, minutes=1),
         ),
     )
@@ -1081,17 +1172,23 @@ def test_shared_generation_isolated_by_promoted_reporting_entity_for_upserts_and
         "SELECT scope_key,canonical_metric_cell_id,canonical_value "
         "FROM latest_governed_fact_entries "
         "ORDER BY scope_key,canonical_metric_cell_id"
-    ).fetchall() == [("issuer:2", "cell-2", "210")]
+    ).fetchall() == [
+        (
+            "ask-scope:v1:0a03af0ac0dccd62d74966db96111cc02d144581edba5f3d9e16730c12b71ac0",
+            "cell-2",
+            "210",
+        )
+    ]
 
 
 def test_reporting_entity_binding_rollover_forces_full_scope_replacement() -> None:
     conn = _database()
     initial = refresh_latest_governed_state(conn, _request())
     next_clock = (T0 + timedelta(hours=1)).isoformat()
-    _seed_universe(conn, "research-rollover", "issuer-2", ("reporting-2",))
+    _seed_universe(conn, "research-rollover", "issuer-1", ("reporting-2",))
     conn.execute(
         "INSERT INTO source_inventory_snapshots VALUES (?,?,?)",
-        ("inventory-2", "issuer-2", "succeeded"),
+        ("inventory-2", "issuer-1", "succeeded"),
     )
     conn.execute(
         "INSERT INTO source_inventory_snapshot_seals VALUES (?,?)",
@@ -1163,8 +1260,8 @@ def test_reporting_entity_binding_rollover_forces_full_scope_replacement() -> No
         "fact_projection_seal_sha256=?,cutoff_at=?,"
         "population_run_id='population-2',"
         "population_receipt_set_sha256=?,population_observed_through=?,"
-        "issuer_id='issuer-2',reporting_entity_id='reporting-2',"
-        "source_inventory_ids_json='[\"inventory-2\"]',"
+        "issuer_id='issuer-1',reporting_entity_id='reporting-2',"
+        "source_inventory_set_json='[\"inventory-2\"]',"
         "narrative_bundles_json=?",
         (SHA_D, next_clock, SHA_D, next_clock, bundles),
     )
@@ -1182,16 +1279,16 @@ def test_reporting_entity_binding_rollover_forces_full_scope_replacement() -> No
     ) == (2, 2, 2, 6)
     assert conn.execute(
         "SELECT canonical_metric_cell_id,canonical_value "
-        "FROM latest_governed_fact_entries WHERE scope_key='issuer:1'"
+        "FROM latest_governed_fact_entries WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3'"
     ).fetchall() == [("cell-2", "200")]
     assert initial.head_id != rollover.head_id
     assert conn.execute(
         "SELECT expected_document_key,document_version_id "
-        "FROM latest_governed_document_entries WHERE scope_key='issuer:1'"
+        "FROM latest_governed_document_entries WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3'"
     ).fetchall() == [("10-q:2026-q3", "doc-2")]
     assert conn.execute(
         "SELECT expected_document_key,chunk_key,text "
-        "FROM latest_governed_narrative_entries WHERE scope_key='issuer:1'"
+        "FROM latest_governed_narrative_entries WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3'"
     ).fetchall() == [("10-q:2026-q3", "chunk:q3", "new issuer")]
 
 
@@ -1228,7 +1325,7 @@ def test_reporting_entity_rollover_rejects_stale_cross_issuer_inventory() -> Non
 
     with pytest.raises(
         LatestGovernedStateError,
-        match="source inventory does not bind to its issuer",
+        match="scope ID does not match its source composite identity",
     ):
         refresh_latest_governed_state(
             conn,
@@ -1270,7 +1367,7 @@ def test_document_delta_reads_and_writes_only_changed_document_and_chunks() -> N
     retained_before = conn.execute(
         "SELECT refresh_receipt_id,source_evidence_json "
         "FROM latest_governed_document_entries "
-        "WHERE scope_key='issuer:1' "
+        "WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3' "
         "AND expected_document_key='retained:0000'"
     ).fetchone()
     assert retained_before is not None
@@ -1289,15 +1386,15 @@ def test_document_delta_reads_and_writes_only_changed_document_and_chunks() -> N
     assert delta.current_read_count == 9
     assert delta.current_write_count == 9
     assert conn.execute(
-        "SELECT COUNT(*) FROM latest_governed_document_entries WHERE scope_key='issuer:1'"
+        "SELECT COUNT(*) FROM latest_governed_document_entries WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3'"
     ).fetchone() == (201,)
     assert conn.execute(
-        "SELECT COUNT(*) FROM latest_governed_narrative_entries WHERE scope_key='issuer:1'"
+        "SELECT COUNT(*) FROM latest_governed_narrative_entries WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3'"
     ).fetchone() == (1_608,)
     retained_after = conn.execute(
         "SELECT refresh_receipt_id,source_evidence_json "
         "FROM latest_governed_document_entries "
-        "WHERE scope_key='issuer:1' "
+        "WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3' "
         "AND expected_document_key='retained:0000'"
     ).fetchone()
     assert retained_after == retained_before
@@ -1455,23 +1552,23 @@ def test_forward_reprojection_restores_prior_state_without_mutating_history() ->
     initial_head = conn.execute(
         "SELECT state_sha256,fact_root_sha256,document_root_sha256,"
         "narrative_root_sha256 FROM latest_governed_scope_heads "
-        "WHERE scope_key='issuer:1'"
+        "WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3'"
     ).fetchone()
     initial_rows = (
         conn.execute(
             "SELECT canonical_metric_cell_id,canonical_value,"
             "current_commitment_sha256 FROM latest_governed_fact_entries "
-            "WHERE scope_key='issuer:1' ORDER BY canonical_metric_cell_id"
+            "WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3' ORDER BY canonical_metric_cell_id"
         ).fetchall(),
         conn.execute(
             "SELECT expected_document_key,document_version_id,"
             "current_commitment_sha256 FROM latest_governed_document_entries "
-            "WHERE scope_key='issuer:1' ORDER BY expected_document_key"
+            "WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3' ORDER BY expected_document_key"
         ).fetchall(),
         conn.execute(
             "SELECT expected_document_key,chunk_key,text,"
             "current_commitment_sha256 FROM latest_governed_narrative_entries "
-            "WHERE scope_key='issuer:1' ORDER BY expected_document_key,chunk_key"
+            "WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3' ORDER BY expected_document_key,chunk_key"
         ).fetchall(),
     )
     _advance_delta(conn, generation="generation-2", commitment=SHA_D)
@@ -1493,7 +1590,7 @@ def test_forward_reprojection_restores_prior_state_without_mutating_history() ->
     restored = reproject_latest_governed_state(
         conn,
         LatestGovernedReprojectionRequest(
-            scope_id="issuer:1",
+            scope_id="ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
             target_receipt_id=initial.head_id or "",
             expected_current_receipt_id=changed.head_id or "",
             operation_recorded_at=T0 + timedelta(hours=1, minutes=2),
@@ -1505,7 +1602,7 @@ def test_forward_reprojection_restores_prior_state_without_mutating_history() ->
         conn.execute(
             "SELECT state_sha256,fact_root_sha256,document_root_sha256,"
             "narrative_root_sha256 FROM latest_governed_scope_heads "
-            "WHERE scope_key='issuer:1'"
+            "WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3'"
         ).fetchone()
         == initial_head
     )
@@ -1513,7 +1610,7 @@ def test_forward_reprojection_restores_prior_state_without_mutating_history() ->
         conn.execute(
             "SELECT canonical_metric_cell_id,canonical_value,"
             "current_commitment_sha256 FROM latest_governed_fact_entries "
-            "WHERE scope_key='issuer:1' ORDER BY canonical_metric_cell_id"
+            "WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3' ORDER BY canonical_metric_cell_id"
         ).fetchall()
         == initial_rows[0]
     )
@@ -1521,7 +1618,7 @@ def test_forward_reprojection_restores_prior_state_without_mutating_history() ->
         conn.execute(
             "SELECT expected_document_key,document_version_id,"
             "current_commitment_sha256 FROM latest_governed_document_entries "
-            "WHERE scope_key='issuer:1' ORDER BY expected_document_key"
+            "WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3' ORDER BY expected_document_key"
         ).fetchall()
         == initial_rows[1]
     )
@@ -1529,7 +1626,7 @@ def test_forward_reprojection_restores_prior_state_without_mutating_history() ->
         conn.execute(
             "SELECT expected_document_key,chunk_key,text,"
             "current_commitment_sha256 FROM latest_governed_narrative_entries "
-            "WHERE scope_key='issuer:1' ORDER BY expected_document_key,chunk_key"
+            "WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3' ORDER BY expected_document_key,chunk_key"
         ).fetchall()
         == initial_rows[2]
     )
@@ -1635,7 +1732,7 @@ def test_forward_reprojection_conflicts_fail_closed() -> None:
         reproject_latest_governed_state(
             conn,
             LatestGovernedReprojectionRequest(
-                scope_id="issuer:1",
+                scope_id="ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
                 target_receipt_id=initial.head_id or "",
                 expected_current_receipt_id=initial.head_id or "",
                 operation_recorded_at=T0 + timedelta(hours=1, minutes=2),
@@ -1645,7 +1742,7 @@ def test_forward_reprojection_conflicts_fail_closed() -> None:
         reproject_latest_governed_state(
             conn,
             LatestGovernedReprojectionRequest(
-                scope_id="issuer:1",
+                scope_id="ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
                 target_receipt_id=changed.head_id or "",
                 expected_current_receipt_id=changed.head_id or "",
                 operation_recorded_at=T0 + timedelta(hours=1, minutes=2),
@@ -1765,7 +1862,7 @@ def test_document_checkpoint_reaches_inventory_rollover_with_changed_only_writes
     retained_before = conn.execute(
         "SELECT refresh_receipt_id,current_commitment_sha256 "
         "FROM latest_governed_document_entries "
-        "WHERE scope_key='issuer:1' AND expected_document_key='10-k:2025'"
+        "WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3' AND expected_document_key='10-k:2025'"
     ).fetchone()
     assert retained_before is not None
     _rollover_source_inventory(conn, retain_second=True)
@@ -1796,7 +1893,7 @@ def test_document_checkpoint_reaches_inventory_rollover_with_changed_only_writes
         conn.execute(
             "SELECT refresh_receipt_id,current_commitment_sha256 "
             "FROM latest_governed_document_entries "
-            "WHERE scope_key='issuer:1' AND expected_document_key='10-k:2025'"
+            "WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3' AND expected_document_key='10-k:2025'"
         ).fetchone()
         == retained_before
     )
@@ -1845,11 +1942,11 @@ def test_document_checkpoint_deletes_absent_coordinates_and_binds_resume_policy(
     ) == (2, 2, 4)
     assert conn.execute(
         "SELECT COUNT(*) FROM latest_governed_document_entries "
-        "WHERE scope_key='issuer:1' AND expected_document_key='10-k:2025'"
+        "WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3' AND expected_document_key='10-k:2025'"
     ).fetchone() == (0,)
     assert conn.execute(
         "SELECT COUNT(*) FROM latest_governed_narrative_entries "
-        "WHERE scope_key='issuer:1' AND expected_document_key='10-k:2025'"
+        "WHERE scope_key='ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3' AND expected_document_key='10-k:2025'"
     ).fetchone() == (0,)
 
 
@@ -1880,7 +1977,12 @@ def test_document_checkpoint_rejects_ambiguous_active_current_inventory() -> Non
 def test_latest_reads_are_history_independent_and_reject_implicit_history() -> None:
     conn = _database()
     refresh_latest_governed_state(conn, _request())
-    before = search_latest_governed_facts(conn, "issuer:1", "revenue", 5)
+    before = search_latest_governed_facts(
+        conn,
+        "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
+        "revenue",
+        5,
+    )
     for ordinal in range(100):
         generation = f"historical-{ordinal}"
         conn.execute(
@@ -1894,11 +1996,31 @@ def test_latest_reads_are_history_independent_and_reject_implicit_history() -> N
             (generation, 0, "upsert", f"old-{ordinal}", "revenue", SHA_A),
         )
     conn.commit()
-    assert search_latest_governed_facts(conn, "issuer:1", "revenue", 5) == before
+    assert (
+        search_latest_governed_facts(
+            conn,
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
+            "revenue",
+            5,
+        )
+        == before
+    )
     with pytest.raises(LatestGovernedStateError, match="explicit historical"):
-        search_latest_governed_facts(conn, "issuer:1", "revenue", 5, include_history=True)
+        search_latest_governed_facts(
+            conn,
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
+            "revenue",
+            5,
+            include_history=True,
+        )
     with pytest.raises(LatestGovernedStateError, match="explicit historical"):
-        search_latest_governed_narrative(conn, "issuer:1", "demand", 5, include_history=True)
+        search_latest_governed_narrative(
+            conn,
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
+            "demand",
+            5,
+            include_history=True,
+        )
 
     fact_plan = " ".join(
         str(row[3])
@@ -1906,7 +2028,10 @@ def test_latest_reads_are_history_independent_and_reject_implicit_history() -> N
             "EXPLAIN QUERY PLAN SELECT canonical_metric_cell_id "
             "FROM latest_governed_fact_entries WHERE scope_key=? "
             "AND canonical_metric_name=? ORDER BY period_end DESC LIMIT 5",
-            ("issuer:1", "revenue"),
+            (
+                "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
+                "revenue",
+            ),
         )
     )
     narrative_plan = " ".join(
@@ -1918,7 +2043,10 @@ def test_latest_reads_are_history_independent_and_reject_implicit_history() -> N
             "ON entry.rowid=latest_governed_narrative_fts.rowid "
             "WHERE latest_governed_narrative_fts MATCH ? "
             "AND entry.scope_key=? LIMIT 5",
-            ("demand", "issuer:1"),
+            (
+                "demand",
+                "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
+            ),
         )
     )
     combined = (fact_plan + " " + narrative_plan).lower()
@@ -1931,7 +2059,7 @@ def test_fact_search_is_bounded_and_uses_the_public_indexed_sql() -> None:
     conn = _database()
     refresh_latest_governed_state(conn, _request())
     statement = build_latest_governed_fact_search_query(
-        "issuer:1",
+        "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
         "Revenue revenue",
         5,
     )
@@ -1940,7 +2068,7 @@ def test_fact_search_is_bounded_and_uses_the_public_indexed_sql() -> None:
     assert (
         search_latest_governed_facts(
             conn,
-            "issuer:1",
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
             "Revenue revenue",
             5,
         )[0].canonical_value
@@ -1953,14 +2081,24 @@ def test_fact_search_is_bounded_and_uses_the_public_indexed_sql() -> None:
     with pytest.raises(ValueError, match="32 token"):
         search_latest_governed_facts(
             conn,
-            "issuer:1",
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
             " ".join(f"metric-{ordinal}" for ordinal in range(33)),
             5,
         )
     with pytest.raises(ValueError, match="128 character"):
-        search_latest_governed_facts(conn, "issuer:1", "x" * 129, 5)
+        search_latest_governed_facts(
+            conn,
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
+            "x" * 129,
+            5,
+        )
     with pytest.raises(ValueError, match="4096 character"):
-        search_latest_governed_facts(conn, "issuer:1", "x " * 2_049, 5)
+        search_latest_governed_facts(
+            conn,
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
+            "x " * 2_049,
+            5,
+        )
 
 
 def test_narrative_search_rejects_unbounded_queries() -> None:
@@ -1969,14 +2107,24 @@ def test_narrative_search_rejects_unbounded_queries() -> None:
     with pytest.raises(ValueError, match="32 token"):
         search_latest_governed_narrative(
             conn,
-            "issuer:1",
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
             " ".join(f"word-{ordinal}" for ordinal in range(33)),
             5,
         )
     with pytest.raises(ValueError, match="128 character"):
-        search_latest_governed_narrative(conn, "issuer:1", "x" * 129, 5)
+        search_latest_governed_narrative(
+            conn,
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
+            "x" * 129,
+            5,
+        )
     with pytest.raises(ValueError, match="4096 character"):
-        search_latest_governed_narrative(conn, "issuer:1", "x " * 2_049, 5)
+        search_latest_governed_narrative(
+            conn,
+            "ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",
+            "x " * 2_049,
+            5,
+        )
 
 
 def test_changed_narrative_batch_stays_below_physical_write_ratchet() -> None:
@@ -1998,3 +2146,177 @@ def test_changed_narrative_batch_stays_below_physical_write_ratchet() -> None:
     physical_writes = conn.total_changes - total_changes_before
     assert (result.document_change_count, result.narrative_change_count) == (1, 8)
     assert physical_writes / logical_writes <= 8
+
+
+def test_cohort_audit_proves_all_nine_planes_and_source_parity() -> None:
+    conn = _database()
+    refresh_latest_governed_state(conn, _request())
+    _advance_delta(conn, generation="generation-2", commitment=SHA_D)
+    refresh_latest_governed_state(
+        conn,
+        _request(operation_recorded_at=T0 + timedelta(hours=1, minutes=1)),
+    )
+    audit = audit_latest_governed_cohort(
+        conn,
+        ("ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",),
+        operation_recorded_at=T0 + timedelta(hours=1, minutes=2),
+        high_risk_sample_size=2,
+    )
+    assert audit.table_counts == {
+        "latest_governed_refresh_runs": 2,
+        "latest_governed_refresh_stage": 0,
+        "latest_governed_refresh_receipts": 2,
+        "latest_governed_refresh_changes": 1,
+        "latest_governed_scope_heads": 1,
+        "latest_governed_fact_entries": 1,
+        "latest_governed_document_entries": 1,
+        "latest_governed_narrative_entries": 1,
+        "latest_governed_narrative_fts": 1,
+    }
+    assert audit.scopes[0].fact_canary_coordinate == "cell-1"
+    assert audit.scopes[0].narrative_canary_coordinate == "10-q:2026-q2\x00chunk:q2"
+
+
+def test_cohort_audit_accepts_baseline_without_delta_rows_and_rejects_current_tamper() -> None:
+    conn = _database()
+    refresh_latest_governed_state(conn, _request())
+    scope_ids = ("ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",)
+    baseline = audit_latest_governed_cohort(
+        conn,
+        scope_ids,
+        operation_recorded_at=T0 + timedelta(minutes=2),
+    )
+    assert baseline.table_counts["latest_governed_refresh_changes"] == 0
+    _advance_delta(conn, generation="generation-2", commitment=SHA_D)
+    refresh_latest_governed_state(
+        conn,
+        _request(operation_recorded_at=T0 + timedelta(hours=1, minutes=1)),
+    )
+    conn.execute(
+        "UPDATE latest_governed_fact_entries "
+        "SET current_commitment_sha256=? WHERE canonical_metric_cell_id='cell-1'",
+        (SHA_A,),
+    )
+    with pytest.raises(LatestGovernedStateError, match="persisted payload differs"):
+        audit_latest_governed_cohort(
+            conn,
+            scope_ids,
+            operation_recorded_at=T0 + timedelta(hours=1, minutes=2),
+        )
+
+
+def test_cohort_audit_rejects_nonterminal_stage_and_extra_scope_head() -> None:
+    conn = _database()
+    refresh_latest_governed_state(conn, _request())
+    _advance_delta(conn, generation="generation-2", commitment=SHA_D)
+    refresh_latest_governed_state(
+        conn,
+        _request(operation_recorded_at=T0 + timedelta(hours=1, minutes=1)),
+    )
+    scope_ids = ("ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",)
+    conn.execute(
+        "UPDATE latest_governed_refresh_runs SET status='staging' "
+        "WHERE refresh_run_id=(SELECT refresh_run_id FROM latest_governed_refresh_runs LIMIT 1)"
+    )
+    with pytest.raises(LatestGovernedStateError, match="unfinished refresh"):
+        audit_latest_governed_cohort(
+            conn,
+            scope_ids,
+            operation_recorded_at=T0 + timedelta(hours=1, minutes=2),
+        )
+    conn.execute("UPDATE latest_governed_refresh_runs SET status='finalized'")
+    conn.execute(
+        "INSERT INTO latest_governed_scope_heads SELECT 'unexpected-scope',"
+        "'unexpected-receipt',population_run_id,promotion_id,fact_generation_id,"
+        "source_heads_json,source_heads_sha256,state_sha256,fact_root_sha256,"
+        "document_root_sha256,narrative_root_sha256,fact_count,document_count,"
+        "narrative_count,knowledge_cutoff,observed_through,updated_at "
+        "FROM latest_governed_scope_heads LIMIT 1"
+    )
+    with pytest.raises(LatestGovernedStateError, match="exact production cohort"):
+        audit_latest_governed_cohort(
+            conn,
+            scope_ids,
+            operation_recorded_at=T0 + timedelta(hours=1, minutes=2),
+        )
+
+
+def test_cohort_audit_rejects_payload_tamper_and_out_of_cohort_current_rows() -> None:
+    conn = _database()
+    refresh_latest_governed_state(conn, _request())
+    scope_ids = ("ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",)
+    conn.execute(
+        "UPDATE latest_governed_fact_entries SET canonical_value='tampered' "
+        "WHERE canonical_metric_cell_id='cell-1'"
+    )
+    with pytest.raises(LatestGovernedStateError, match="persisted payload differs"):
+        audit_latest_governed_cohort(
+            conn,
+            scope_ids,
+            operation_recorded_at=T0 + timedelta(minutes=2),
+        )
+    conn.execute(
+        "UPDATE latest_governed_fact_entries SET canonical_value='100' "
+        "WHERE canonical_metric_cell_id='cell-1'"
+    )
+    columns = tuple(
+        str(row[1]) for row in conn.execute("PRAGMA table_info(latest_governed_fact_entries)")
+    )
+    values = list(conn.execute("SELECT * FROM latest_governed_fact_entries").fetchone())
+    values[columns.index("scope_key")] = "unexpected-scope"
+    values[columns.index("canonical_metric_cell_id")] = "unexpected-cell"
+    conn.execute(
+        "INSERT INTO latest_governed_fact_entries VALUES (" + ",".join("?" for _ in values) + ")",
+        values,
+    )
+    with pytest.raises(LatestGovernedStateError, match="plane scopes differ"):
+        audit_latest_governed_cohort(
+            conn,
+            scope_ids,
+            operation_recorded_at=T0 + timedelta(minutes=2),
+        )
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    (
+        ("digest_bucket", 4095),
+        ("refresh_receipt_id", "unrelated-receipt"),
+        ("prior_commitment_sha256", SHA_B),
+        ("knowledge_cutoff", "2026-07-29 11:59:00"),
+        ("observed_through", "2026-07-29 11:59:00"),
+        ("updated_at", "2026-07-29 12:03:00"),
+    ),
+)
+def test_cohort_audit_rejects_persisted_provenance_metadata_tamper(
+    column: str,
+    value: object,
+) -> None:
+    conn = _database()
+    refresh_latest_governed_state(conn, _request())
+    conn.execute(
+        f"UPDATE latest_governed_fact_entries SET {column}=? "  # nosec B608 -- closed parametrized column set
+        "WHERE canonical_metric_cell_id='cell-1'",
+        (value,),
+    )
+    with pytest.raises(LatestGovernedStateError, match="persisted payload differs"):
+        audit_latest_governed_cohort(
+            conn,
+            ("ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",),
+            operation_recorded_at=T0 + timedelta(minutes=2),
+        )
+
+
+def test_cohort_audit_rejects_head_count_and_clock_tamper() -> None:
+    conn = _database()
+    refresh_latest_governed_state(conn, _request())
+    conn.execute(
+        "UPDATE latest_governed_scope_heads SET fact_count=2,updated_at=?",
+        ((T0 + timedelta(minutes=3)).isoformat(),),
+    )
+    with pytest.raises(LatestGovernedStateError, match="head projection differs"):
+        audit_latest_governed_cohort(
+            conn,
+            ("ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",),
+            operation_recorded_at=T0 + timedelta(minutes=4),
+        )
