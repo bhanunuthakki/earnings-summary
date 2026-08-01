@@ -53,6 +53,7 @@ from filings.specificity import (
     SpecificityBand,
     SpecificityMetrics,
     extract_diff_hunk,
+    looks_tabular,
     specificity_metrics,
 )
 from filings.store import table_exists
@@ -239,18 +240,40 @@ class ClassificationResult:
     band: SpecificityBand
     risk_growth_flagged: bool
     llm_used: bool
+    #: True when the table-shape override withheld the confident-HIGH fast path
+    #: (or would have, had the hunk scored HIGH). Recorded rather than inferred
+    #: so the override's real effect is countable instead of invisible.
+    table_shaped: bool = False
 
 
 def _classify_deterministic(
     row: ItemEventRow, risk_growth_flagged: bool
-) -> tuple[SpecificityBand, SpecificityMetrics, str]:
+) -> tuple[SpecificityBand, SpecificityMetrics, str, bool]:
+    """Deterministic band for one event, with both gate overrides applied.
+
+    Returns ``(band, metrics, hunk, table_shaped)``. The two overrides are
+    mirror images, each barring ONE confident fast path and deferring to LLM
+    triage rather than asserting the opposite verdict:
+
+    * **Filzen 2015** bars confident-LOW when risk-section growth says the text
+      carries information despite reading generic.
+    * **Table shape** bars confident-HIGH, because the specificity proxy's
+      number-density premise inverts on extracted table content — see
+      ``filings.specificity.looks_tabular`` for the measured evidence.
+    """
     hunk = _hunk_for_event(row)
     metrics = specificity_metrics(hunk)
     band = metrics.band
     if risk_growth_flagged and band is SpecificityBand.LOW:
         # Filzen 2015 override — see module docstring.
         band = SpecificityBand.AMBIGUOUS
-    return band, metrics, hunk
+    table_shaped = looks_tabular(hunk)
+    if table_shaped and band is SpecificityBand.HIGH:
+        # Table-shape override: a table row is dense with numbers because it is
+        # a table, not because it is firm-specific. Withhold the fast path and
+        # let triage read it; never assert 'boilerplate' from shape alone.
+        band = SpecificityBand.AMBIGUOUS
+    return band, metrics, hunk, table_shaped
 
 
 def classify_ticker_events(
@@ -272,11 +295,14 @@ def classify_ticker_events(
 
     flags = risk_growth_flags or {}
     resolved: list[ClassificationResult] = []
-    survivors: list[tuple[ItemEventRow, str, SpecificityMetrics]] = []
+    survivors: list[tuple[ItemEventRow, str, SpecificityMetrics, bool]] = []
+    table_barred = 0
 
     for row in rows:
         flagged = flags.get((row.ticker, row.fiscal_year, row.fiscal_period), False)
-        band, metrics, hunk = _classify_deterministic(row, flagged)
+        band, metrics, hunk, table_shaped = _classify_deterministic(row, flagged)
+        if table_shaped and metrics.band is SpecificityBand.HIGH:
+            table_barred += 1
         if band is SpecificityBand.LOW:
             resolved.append(
                 ClassificationResult(
@@ -294,6 +320,7 @@ def classify_ticker_events(
                     band=band,
                     risk_growth_flagged=flagged,
                     llm_used=False,
+                    table_shaped=table_shaped,
                 )
             )
         elif band is SpecificityBand.HIGH:
@@ -313,20 +340,35 @@ def classify_ticker_events(
                     band=band,
                     risk_growth_flagged=flagged,
                     llm_used=False,
+                    table_shaped=table_shaped,
                 )
             )
         else:
-            survivors.append((row, hunk, metrics))
+            survivors.append((row, hunk, metrics, table_shaped))
+
+    if table_barred:
+        # The override moves cost, so it reports cost: these events would have
+        # resolved free on the fast path and now consume triage instead.
+        log.info(
+            {
+                "event": "boilerplate_table_shape_override",
+                "ticker": ticker,
+                "barred_from_confident_high": table_barred,
+                "events_scanned": len(rows),
+                "note": "table-shaped hunks deferred to LLM triage; "
+                "number density is not firm-specificity on extracted tables",
+            }
+        )
 
     llm_degraded = False
     if survivors:
         candidates: list[TriageCandidate] = [
             (row.id, row.event_type, row.subject_label or row.subject, hunk)
-            for row, hunk, _m in survivors
+            for row, hunk, _m, _t in survivors
         ]
         outcome = triage_events(ticker, candidates, db_path=db_path)
         llm_degraded = outcome.degraded
-        for row, _hunk, metrics in survivors:
+        for row, _hunk, metrics, table_shaped in survivors:
             flagged = flags.get((row.ticker, row.fiscal_year, row.fiscal_period), False)
             verdict_out = outcome.verdicts.get(row.id)
             if verdict_out is None:
@@ -347,6 +389,7 @@ def classify_ticker_events(
                         band=metrics.band,
                         risk_growth_flagged=flagged,
                         llm_used=True,
+                        table_shaped=table_shaped,
                     )
                 )
                 continue
@@ -363,6 +406,7 @@ def classify_ticker_events(
                     band=metrics.band,
                     risk_growth_flagged=flagged,
                     llm_used=True,
+                    table_shaped=table_shaped,
                 )
             )
     return resolved, llm_degraded
