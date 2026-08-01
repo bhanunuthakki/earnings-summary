@@ -104,27 +104,36 @@ def _resolution_database(
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    command.upgrade(config, "0259_source_definition_identity")
+    command.upgrade(config, "0267_source_definition_taxonomy_identity")
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
-def _component(name: str) -> SourceTaxonomyComponent:
-    definition_qualifier_sha256 = hashlib.sha256(
-        canonical_json(
+def _component(
+    name: str,
+    *,
+    taxonomy_qualified: bool = False,
+) -> SourceTaxonomyComponent:
+    qualifier: dict[str, str] = {
+        "accounting_basis": "us_gaap",
+        "concept_name": name,
+        "concept_namespace": "https://fasb.org/us-gaap/2026",
+        "consolidation_scope": "consolidated",
+        "period_kind": "duration",
+        "reporting_entity_id": "reporting-1",
+        "unit_family": "currency",
+        "value_kind": "numeric",
+    }
+    if taxonomy_qualified:
+        qualifier.update(
             {
-                "accounting_basis": "us_gaap",
-                "concept_name": name,
-                "concept_namespace": "https://fasb.org/us-gaap/2026",
-                "consolidation_scope": "consolidated",
-                "period_kind": "duration",
-                "reporting_entity_id": "reporting-1",
-                "unit_family": "currency",
-                "value_kind": "numeric",
+                "schema_version": "source-definition-identity/v1",
+                "taxonomy_name": "US GAAP",
+                "taxonomy_version": "2026",
             }
-        ).encode()
-    ).hexdigest()
+        )
+    definition_qualifier_sha256 = hashlib.sha256(canonical_json(qualifier).encode()).hexdigest()
     return SourceTaxonomyComponent(
         component_id=f"component:{name}",
         idempotency_key=f"component:{name}",
@@ -174,6 +183,10 @@ def _mapping(component: SourceTaxonomyComponent) -> MappingRevision:
 
 def _bind_every_published_cell(conn: sqlite3.Connection) -> str:
     ontology = MetricOntology(conn)
+    taxonomy_qualified = (
+        conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+        == "0267_source_definition_taxonomy_identity"
+    )
     period_start, period_end = conn.execute(
         "SELECT period_start,period_end FROM fact_cells_v2 LIMIT 1"
     ).fetchone()
@@ -265,7 +278,10 @@ def _bind_every_published_cell(conn: sqlite3.Connection) -> str:
                 recorded_at=NOW,
             )
         )
-        component = _component(str(concept_name))
+        component = _component(
+            str(concept_name),
+            taxonomy_qualified=taxonomy_qualified,
+        )
         mapping = _mapping(component)
         ontology.persist_source_component(component)
         ontology.persist_mapping(mapping)
@@ -357,6 +373,13 @@ def test_cross_qname_candidates_are_exhaustive_and_conflicts_stay_unresolved(
             ResolutionPolicy(name="deterministic", version="v1", config={}),
             observed_through=NOW,
         )
+        candidate_manifest = engine.candidate_manifest(
+            cell,
+            NOW,
+            observed_through=NOW,
+        )
+        assert len(candidate_manifest) == plan.candidate_count
+        assert all(item.candidate_sha256 for item in candidate_manifest)
         assert plan.status == "unresolved"
         assert plan.reason_code == "materially_conflicting_assertions"
         assert plan.candidate_count == 2
@@ -505,18 +528,20 @@ def test_later_binding_retirement_creates_complete_resolution_supersession(
                 mapping_revision_id=str(prior[3]),
                 source_component_id=str(prior[4]),
                 binding_status="retired",
-                effective_at=later,
-                knowledge_at=later,
+                effective_at=NOW,
+                knowledge_at=NOW,
                 recorded_at=later,
             )
         )
         second = engine.resolve(
             cell,
-            later,
+            NOW,
             ResolutionPolicy(name="deterministic", version="v1", config={}),
             recorded_at=later,
         )
         assert second.status == "unresolved"
+        assert second.candidate_universe_id != first.candidate_universe_id
+        assert second.canonical_resolution_revision_id != (first.canonical_resolution_revision_id)
         revision = conn.execute(
             "SELECT revision,supersedes_resolution_revision_id "
             "FROM canonical_fact_resolution_revisions "
@@ -535,6 +560,72 @@ def test_later_binding_retirement_creates_complete_resolution_supersession(
                 (second.candidate_universe_id,),
             ).fetchone()
         ) == (0,)
+    finally:
+        conn.close()
+
+
+def test_resolution_refuses_reverse_observation_horizon_backfill(
+    tmp_path: Path,
+) -> None:
+    output = _output((_entry(0),))
+    conn = _resolution_database(tmp_path, output)
+    database_path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
+    conn.commit()
+    conn.close()
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(ROOT / "alembic"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
+    command.upgrade(config, "head")
+    conn = sqlite3.connect(database_path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    later = NOW + timedelta(hours=1)
+    try:
+        FilingXbrlExtractionLedger(conn).publish(output)
+        cell = _bind_every_published_cell(conn)
+        prior = conn.execute(
+            "SELECT binding_revision_id,fact_cell_id,source_observation_id,"
+            "mapping_revision_id,source_component_id "
+            "FROM fact_cell_canonical_binding_revisions LIMIT 1"
+        ).fetchone()
+        MetricOntology(conn).persist_binding(
+            BindingRevision(
+                binding_revision_id="binding:retired-before-resolution",
+                idempotency_key="binding:retired-before-resolution",
+                fact_cell_id=str(prior[1]),
+                source_observation_id=str(prior[2]),
+                revision=2,
+                supersedes_binding_revision_id=str(prior[0]),
+                canonical_metric_cell_id=cell,
+                mapping_revision_id=str(prior[3]),
+                source_component_id=str(prior[4]),
+                binding_status="retired",
+                effective_at=NOW,
+                knowledge_at=NOW,
+                recorded_at=later,
+            )
+        )
+        engine = CanonicalFactResolutionEngine(conn)
+        newest = engine.resolve(
+            cell,
+            NOW,
+            ResolutionPolicy(name="deterministic", version="v1", config={}),
+            recorded_at=later,
+        )
+
+        with pytest.raises(ValueError, match="temporally non-monotonic"):
+            engine.resolve(
+                cell,
+                NOW,
+                ResolutionPolicy(name="deterministic", version="v1", config={}),
+                recorded_at=NOW,
+            )
+
+        rows = conn.execute(
+            "SELECT canonical_resolution_revision_id,revision "
+            "FROM canonical_fact_resolution_revisions"
+        ).fetchall()
+        assert [tuple(row) for row in rows] == [(newest.canonical_resolution_revision_id, 1)]
     finally:
         conn.close()
 

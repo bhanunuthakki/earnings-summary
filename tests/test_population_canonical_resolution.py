@@ -64,8 +64,6 @@ def _ready_database(
     prepared = _output((_entry(0, numeric_value=Decimal("100")),)) if output is None else output
     conn = _resolution_database(tmp_path, prepared)
     FilingXbrlExtractionLedger(conn).publish(prepared)
-    _bind_every_published_cell(conn)
-    _seal_ontology(conn)
     path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
     conn.commit()
     conn.close()
@@ -74,7 +72,11 @@ def _ready_database(
     config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
     command.upgrade(config, "head")
     upgraded = sqlite3.connect(path)
+    upgraded.row_factory = sqlite3.Row
     upgraded.execute("PRAGMA foreign_keys = ON")
+    _bind_every_published_cell(upgraded)
+    _seal_ontology(upgraded)
+    upgraded.commit()
     return upgraded
 
 
@@ -119,6 +121,42 @@ def test_full_population_uses_system_clock_and_closes_exact_sets(
                 "SELECT canonical_metric_cell_id FROM canonical_fact_projection_entries"
             )
         } == {"canonical:revenue"}
+    finally:
+        conn.close()
+
+
+def test_population_selects_latest_terminal_ontology_snapshot_at_cutoff(
+    tmp_path: Path,
+) -> None:
+    conn = _ready_database(tmp_path)
+    later = NOW + timedelta(hours=1)
+    terminal_snapshot_id = "ontology:population:o2"
+    try:
+        MetricOntology(conn).seal_snapshot(
+            OntologySnapshot(
+                ontology_snapshot_id=terminal_snapshot_id,
+                idempotency_key=terminal_snapshot_id,
+                cutoff_at=NOW,
+                recorded_at=later,
+            )
+        )
+
+        snapshot_id, _, _ = population._verified_ontology_snapshot(
+            conn,
+            NOW,
+            later,
+        )
+        result = populate_canonical_resolution(
+            conn,
+            CanonicalResolutionPopulationRequest(
+                cutoff_at=NOW,
+                operation_recorded_at=later,
+            ),
+        )
+
+        assert snapshot_id == terminal_snapshot_id
+        assert result.state == "planned"
+        assert result.planned_resolved_cell_count == 1
     finally:
         conn.close()
 

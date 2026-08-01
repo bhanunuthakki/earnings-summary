@@ -24,7 +24,7 @@ def _database(path: Path) -> None:
         conn.executescript(
             """
             CREATE TABLE alembic_version (version_num TEXT NOT NULL);
-            INSERT INTO alembic_version VALUES ('0265_metric_ontology_operation_ledger');
+            INSERT INTO alembic_version VALUES ('0267_source_definition_taxonomy_identity');
             CREATE TABLE database_runtime_identity (
                 singleton INTEGER PRIMARY KEY,
                 database_instance_id TEXT NOT NULL UNIQUE
@@ -75,6 +75,8 @@ def _result(
             "missing_binding_count": missing,
             "processed_observation_count": 2 - missing,
             "last_observation_id": last_observation_id,
+            "remaining_observation_count": 1 if outcome == "checkpoint" else 0,
+            "safe_to_seal": missing == 0 and outcome != "checkpoint",
             "snapshot_id": None,
             "policy_config_sha256": "a" * 64,
             "plan_commitment_sha256": "b" * 64,
@@ -89,7 +91,7 @@ def _planned_receipt(database: Path) -> MetricOntologyOperationReceipt:
     return build_metric_ontology_receipt(
         database_path=str(database.resolve()),
         database_instance_id=_DATABASE_INSTANCE_ID,
-        alembic_revision="0265_metric_ontology_operation_ledger",
+        alembic_revision="0267_source_definition_taxonomy_identity",
         request=MetricOntologyPopulationRequest(
             knowledge_cutoff=_STAMP,
             operation_recorded_at=_STAMP,
@@ -264,3 +266,32 @@ def test_checkpoint_successor_rejects_post_state_drift(tmp_path: Path) -> None:
             result=successor,
             alembic_revision="0265_metric_ontology_operation_ledger",
         )
+
+
+def test_terminal_bounded_apply_seals_as_complete_not_checkpoint(tmp_path: Path) -> None:
+    database = tmp_path / "candidate.db"
+    receipt = build_metric_ontology_receipt(
+        database_path=str(database.resolve()),
+        database_instance_id=_DATABASE_INSTANCE_ID,
+        alembic_revision="0267_source_definition_taxonomy_identity",
+        request=MetricOntologyPopulationRequest(
+            knowledge_cutoff=_STAMP,
+            operation_recorded_at=_STAMP,
+            apply=True,
+            after_observation_id="observation-final",
+            max_observations=10,
+            input_commitment_sha256="c" * 64,
+            plan_commitment_sha256="b" * 64,
+        ),
+        result=_result(
+            mode="apply",
+            outcome="applied",
+            last_observation_id="observation-final",
+        ),
+        prior_checkpoint_receipt_sha256="e" * 64,
+        admission_receipt_sha256="f" * 64,
+    )
+
+    assert receipt.result.remaining_observation_count == 0
+    assert receipt.result.safe_to_seal is True
+    assert receipt.outcome == "complete"
