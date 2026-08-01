@@ -39,6 +39,7 @@ from provenance.immutable_artifact import (  # noqa: E402
 )
 from provenance.latest_governed_population import (  # noqa: E402
     LatestGovernedPopulationReceipt,
+    load_latest_governed_population_receipt,
 )
 from provenance.latest_governed_state import (  # noqa: E402
     LatestGovernedCohortAudit,
@@ -65,14 +66,25 @@ from provenance.latest_state_rehearsal import (  # noqa: E402
     build_rehearsal_readiness_receipt,
     verify_rehearsal_checkpoint,
 )
+from provenance.latest_state_rehearsal_evidence import (  # noqa: E402
+    CandidatePerformanceRequest,
+    RestoreRoundtripRequest,
+    generate_candidate_performance_evidence,
+    generate_restore_roundtrip_evidence,
+)
 from provenance.population_canonical_resolution import (  # noqa: E402
     CanonicalResolutionOperationReceipt,
     database_instance_id,
+    load_canonical_resolution_receipt,
 )
 from provenance.population_document_processing import (  # noqa: E402
     DocumentProcessingOperationReceipt,
+    load_document_processing_receipt,
 )
-from provenance.population_metric_ontology import MetricOntologyOperationReceipt  # noqa: E402
+from provenance.population_metric_ontology import (  # noqa: E402
+    MetricOntologyOperationReceipt,
+    load_metric_ontology_receipt,
+)
 from runtime.job_runtime import (  # noqa: E402
     JobAlreadyRunningError,
     JobLock,
@@ -361,6 +373,206 @@ def _run_population(
     return artifact, evidence, apply and bounded_exit == 0
 
 
+def _replay_population_checkpoint(
+    plan: RehearsalPlan,
+    history: tuple[tuple[ArtifactCommitment, RehearsalCheckpoint], ...],
+    checkpoint: RehearsalCheckpoint,
+) -> None:
+    """Reinvoke one recorded population CLI against its immutable receipt path."""
+
+    evidence = checkpoint.population_checkpoint
+    if evidence is None:
+        raise ValueError("replay checkpoint lacks population evidence")
+    stage = checkpoint.stage
+    output = evidence.operator_receipt.path
+    argv = ["--cutoff-at", _iso(plan.cutoff_at)]
+    if stage is RehearsalStage.DOCUMENT:
+        module = document_cli
+        model_type: type[BaseModel] = DocumentProcessingOperationReceipt
+        argv = [
+            "--db",
+            plan.database_path,
+            *argv,
+            "--recorded-at",
+            _iso(plan.operation_recorded_at),
+            "--phase",
+            "all",
+            "--max-obligations",
+            str(plan.max_document_obligations),
+            "--receipt",
+            output,
+        ]
+        cursor_flag = "--after-obligation-id"
+    elif stage is RehearsalStage.ONTOLOGY:
+        module = ontology_cli
+        model_type = MetricOntologyOperationReceipt
+        argv = [
+            "--db",
+            plan.database_path,
+            *argv,
+            "--recorded-at",
+            _iso(plan.operation_recorded_at),
+            "--phase",
+            "all",
+            "--max-observations",
+            str(plan.max_ontology_observations),
+            "--receipt",
+            output,
+        ]
+        cursor_flag = "--after-observation-id"
+    elif stage is RehearsalStage.CANONICAL:
+        module = canonical_cli
+        model_type = CanonicalResolutionOperationReceipt
+        argv = [
+            "--db",
+            plan.database_path,
+            *argv,
+            "--recorded-at",
+            _iso(plan.operation_recorded_at),
+            "--phase",
+            "all",
+            "--max-cells",
+            str(plan.max_canonical_cells),
+            "--document-prerequisite-receipt",
+            _stage_artifact(history, RehearsalStage.DOCUMENT).path,
+            "--receipt",
+            output,
+        ]
+        cursor_flag = "--after-cell-id"
+    elif stage is RehearsalStage.LATEST:
+        module = latest_cli
+        model_type = LatestGovernedPopulationReceipt
+        argv = [
+            "--database",
+            plan.database_path,
+            "--eligibility",
+            _stage_artifact(history, RehearsalStage.ADMISSION_ELIGIBILITY).path,
+            "--scope-registry",
+            plan.production_scope_registry,
+            "--expected-revision",
+            plan.expected_target_revision,
+            "--operation-recorded-at",
+            _iso(plan.operation_recorded_at),
+            "--max-scopes",
+            "1",
+            "--max-batch-rows",
+            str(plan.max_latest_batch_rows),
+            "--receipt",
+            output,
+        ]
+        cursor_flag = "--after-scope-id"
+    else:
+        raise ValueError("replay checkpoint names a non-population stage")
+    if evidence.request_cursor is not None:
+        argv.extend([cursor_flag, evidence.request_cursor])
+    if evidence.prior_operator_receipt is not None:
+        argv.extend(["--prior-checkpoint-receipt", evidence.prior_operator_receipt.path])
+    if evidence.mode == "apply":
+        if evidence.admission_receipt is None:
+            raise ValueError("replayed apply lacks its dry-run admission receipt")
+        argv.extend(["--apply", "--admission-receipt", evidence.admission_receipt.path])
+    exit_code = module.main(argv)
+    if exit_code != evidence.exit_code:
+        raise ValueError("population exact replay returned a different exit code")
+    artifact, _snapshot, receipt = _load_model(Path(output), model_type)
+    if (
+        artifact != evidence.operator_receipt
+        or str(receipt.receipt_sha256) != evidence.operator_receipt_sha256
+    ):
+        raise ValueError("population exact replay changed its immutable receipt")
+
+
+def _ledger_receipt_sha256(database: Path, checkpoint: RehearsalCheckpoint) -> str:
+    """Load the exact applied operation receipt from its owning database ledger."""
+
+    evidence = checkpoint.population_checkpoint
+    if evidence is None or evidence.mode != "apply":
+        raise ValueError("ledger verification requires an applied population checkpoint")
+    conn = connect_sqlite(
+        database,
+        role=SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY,
+        schema_preflight=False,
+    )
+    try:
+        receipt_path = Path(evidence.operator_receipt.path)
+        if checkpoint.stage is RehearsalStage.DOCUMENT:
+            _a, _s, file_receipt = _load_model(receipt_path, DocumentProcessingOperationReceipt)
+            stored = load_document_processing_receipt(conn, file_receipt.operation_id)
+        elif checkpoint.stage is RehearsalStage.ONTOLOGY:
+            _a, _s, file_receipt = _load_model(receipt_path, MetricOntologyOperationReceipt)
+            stored = load_metric_ontology_receipt(conn, file_receipt.operation_id)
+        elif checkpoint.stage is RehearsalStage.CANONICAL:
+            _a, _s, file_receipt = _load_model(receipt_path, CanonicalResolutionOperationReceipt)
+            stored = load_canonical_resolution_receipt(conn, file_receipt.operation_id)
+        elif checkpoint.stage is RehearsalStage.LATEST:
+            _a, _s, file_receipt = _load_model(receipt_path, LatestGovernedPopulationReceipt)
+            stored = load_latest_governed_population_receipt(conn, file_receipt.operation_id)
+        else:
+            raise ValueError("ledger verification names a non-population stage")
+    finally:
+        conn.close()
+    if stored is None or stored != file_receipt:
+        raise ValueError("population receipt differs from its database ledger")
+    return str(stored.receipt_sha256)
+
+
+def _generate_exact_replay_evidence(
+    *,
+    plan: RehearsalPlan,
+    history: tuple[tuple[ArtifactCommitment, RehearsalCheckpoint], ...],
+) -> ExactReplayEvidence:
+    """Replay applied calls and bind their historical dry admissions and ledgers."""
+
+    database = Path(plan.database_path)
+    before = DatabaseFileState.from_path(database)
+    population = tuple(
+        checkpoint
+        for _artifact, checkpoint in history
+        if checkpoint.population_checkpoint is not None
+    )
+    applied = tuple(
+        checkpoint
+        for checkpoint in population
+        if checkpoint.population_checkpoint is not None
+        and checkpoint.population_checkpoint.mode == "apply"
+    )
+    operators = {
+        checkpoint.population_checkpoint.operator
+        for checkpoint in applied
+        if checkpoint.population_checkpoint is not None
+    }
+    if operators != {"document", "ontology", "canonical", "latest"}:
+        raise ValueError("exact replay lacks a completed apply receipt for every operator")
+    if any(
+        checkpoint.population_checkpoint is None
+        or not checkpoint.population_checkpoint.operator_receipt.verify()
+        for checkpoint in population
+    ):
+        raise ValueError("historical population admission receipt changed before replay")
+    for checkpoint in applied:
+        _replay_population_checkpoint(plan, history, checkpoint)
+        if DatabaseFileState.from_path(database) != before:
+            raise ValueError("exact replay changed the rehearsal database")
+    receipt_shas = tuple(_ledger_receipt_sha256(database, item) for item in applied)
+    expected_shas = tuple(
+        item.population_checkpoint.operator_receipt_sha256
+        for item in applied
+        if item.population_checkpoint is not None
+    )
+    if receipt_shas != expected_shas:
+        raise ValueError("database ledger commitments differ from replayed receipts")
+    after = DatabaseFileState.from_path(database)
+    if after != before:
+        raise ValueError("exact replay changed the rehearsal database")
+    return ExactReplayEvidence(
+        database_sha256_before=before.file_sha256,
+        database_sha256_after=after.file_sha256,
+        operator_receipt_sha256s=receipt_shas,
+        database_ledger_match_count=len(receipt_shas),
+        no_clobber_replay_count=len(applied),
+    )
+
+
 def _run_nonpopulation(
     *,
     plan: RehearsalPlan,
@@ -496,12 +708,80 @@ def _run_nonpopulation(
         finally:
             conn.close()
         publish_text_no_clobber(output, audit.model_dump_json())
-    elif stage in {
-        RehearsalStage.SEMANTIC,
-        RehearsalStage.REPLAY,
-        RehearsalStage.RESTORE,
-        RehearsalStage.PERFORMANCE,
-    }:
+    elif stage is RehearsalStage.REPLAY:
+        replay = _generate_exact_replay_evidence(plan=plan, history=history)
+        publish_text_no_clobber(output, replay.model_dump_json())
+    elif stage is RehearsalStage.RESTORE:
+        if output.is_file():
+            raise ValueError("uncheckpointed restore evidence already exists; preserve it")
+        audit = _stage_artifact(history, RehearsalStage.TERMINAL_AUDIT)
+        coverage = _stage_artifact(history, RehearsalStage.TERMINAL_COVERAGE)
+        _clone_snapshot, clone_payload = read_stable_artifact(Path(plan.compressed_clone_receipt))
+        clone_receipt = json.loads(clone_payload)
+        minimum_free_bytes = int(clone_receipt["minimum_free_bytes"])
+        restore = generate_restore_roundtrip_evidence(
+            RestoreRoundtripRequest(
+                repo_root=Path(plan.repo_root),
+                source_database=database,
+                candidate_audit_receipt=Path(audit.path),
+                candidate_coverage_receipt=Path(coverage.path),
+                work_directory=database.parent / f".restore-roundtrip-{plan.plan_sha256[:16]}",
+                operation_recorded_at=plan.operation_recorded_at,
+                minimum_free_bytes=minimum_free_bytes,
+            )
+        )
+        publish_text_no_clobber(output, restore.model_dump_json())
+    elif stage is RehearsalStage.PERFORMANCE:
+        if stage_evidence is None:
+            raise ValueError("performance stage requires its typed threshold request")
+        if output.is_file():
+            raise ValueError("uncheckpointed performance evidence already exists; preserve it")
+        request_artifact, request_snapshot, request = _load_model(
+            stage_evidence, CandidatePerformanceRequest
+        )
+        terminal = _stage_artifact(history, RehearsalStage.TERMINAL_ELIGIBILITY)
+        _terminal_artifact, _terminal_snapshot, bound = _load_model(
+            Path(terminal.path), BoundLatestStateEligibilityManifest
+        )
+        scope_ids = tuple(bound.expected_scope_ids)
+        no_op_path = _output_path(plan, ordinal, "performance-no-op")
+        if latest_cli.main(
+            [
+                "--database",
+                plan.database_path,
+                "--eligibility",
+                terminal.path,
+                "--scope-registry",
+                plan.production_scope_registry,
+                "--expected-revision",
+                plan.expected_target_revision,
+                "--operation-recorded-at",
+                _iso(plan.operation_recorded_at),
+                "--max-scopes",
+                str(len(scope_ids)),
+                "--max-batch-rows",
+                str(plan.max_latest_batch_rows),
+                "--receipt",
+                str(no_op_path),
+            ]
+        ):
+            raise ValueError("candidate performance no-op admission blocked")
+        no_op_artifact, _no_op_snapshot, no_op_receipt = _load_model(
+            no_op_path, LatestGovernedPopulationReceipt
+        )
+        performance = generate_candidate_performance_evidence(
+            database_path=database,
+            request=request,
+            request_artifact=request_artifact,
+            no_op_receipt_artifact=no_op_artifact,
+            no_op_receipt=no_op_receipt,
+            production_scope_ids=scope_ids,
+        )
+        assert_artifact_unchanged(request_snapshot)
+        if not request_artifact.verify():
+            raise ValueError("performance threshold request changed during measurement")
+        publish_text_no_clobber(output, performance.model_dump_json())
+    elif stage is RehearsalStage.SEMANTIC:
         del stage_evidence
         raise ValueError(
             f"{stage.value} has no authoritative generator; terminal readiness is disabled"
@@ -609,16 +889,24 @@ def _safe_outer_receipt(
     inputs: tuple[Path, ...],
 ) -> Path:
     destination = Path(os.path.abspath(path))
-    protected = {
+    live_sidecars = {
+        Path(f"{portfolio_db_path(Path(plan.repo_root)).resolve()}{suffix}")
+        for suffix in ("-wal", "-shm", "-journal")
+    }
+    storage_protected = {
         Path(plan.database_path),
         Path(plan.compressed_clone_receipt),
         Path(plan.production_scope_registry),
         portfolio_db_path(Path(plan.repo_root)).resolve(),
+        *live_sidecars,
         *(Path(f"{plan.database_path}{suffix}") for suffix in ("-wal", "-shm", "-journal")),
-        *(Path(os.path.abspath(item)) for item in inputs),
     }
+    resolved_inputs = {Path(os.path.abspath(item)) for item in inputs}
+    protected = storage_protected | resolved_inputs
     for item in (destination, *protected):
         require_no_reparse_points(item)
+    if any(path_aliases_any(item, storage_protected) for item in resolved_inputs):
+        raise ValueError("outer rehearsal input aliases protected SQLite storage")
     if path_aliases_any(destination, protected):
         raise ValueError("outer rehearsal receipt aliases a protected artifact")
     return destination

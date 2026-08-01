@@ -71,10 +71,10 @@ class RehearsalStage(StrEnum):
     TERMINAL_COVERAGE = "terminal_coverage"
     TERMINAL_ELIGIBILITY = "terminal_eligibility"
     COHORT_AUDIT = "cohort_audit"
-    SEMANTIC = "semantic"
     REPLAY = "replay"
     RESTORE = "restore"
     PERFORMANCE = "performance"
+    SEMANTIC = "semantic"
     COMPOSITE = "composite"
 
 
@@ -188,7 +188,9 @@ class PopulationCheckpointEvidence(_FrozenModel):
 class RehearsalPlan(_FrozenModel):
     """Exact immutable inputs and bounds for a future isolated rehearsal."""
 
-    schema_version: str = "latest-governed-rehearsal-plan/v1"
+    schema_version: Literal["latest-governed-rehearsal-plan/v2"] = (
+        "latest-governed-rehearsal-plan/v2"
+    )
     repo_root: str = Field(min_length=1, max_length=2_048)
     database_path: str = Field(min_length=1, max_length=2_048)
     evidence_directory: str = Field(min_length=1, max_length=2_048)
@@ -262,7 +264,7 @@ class RehearsalPlan(_FrozenModel):
             normalized[key] = str(path)
         normalized["stage_order"] = tuple(RehearsalStage)
         normalized.pop("plan_sha256", None)
-        normalized.setdefault("schema_version", "latest-governed-rehearsal-plan/v1")
+        normalized.setdefault("schema_version", "latest-governed-rehearsal-plan/v2")
         commitment_payload = {
             key: (
                 value.isoformat().replace("+00:00", "Z") if isinstance(value, datetime) else value
@@ -615,31 +617,76 @@ class ExactReplayEvidence(_FrozenModel):
         return self
 
 
+class CandidateScopePerformance(_FrozenModel):
+    """Per-scope public-read latency and query-plan evidence."""
+
+    scope_id: str = Field(min_length=1, max_length=256)
+    sample_count: int = Field(ge=3)
+    fact_read_p95_milliseconds: float = Field(ge=0)
+    narrative_read_p95_milliseconds: float = Field(ge=0)
+    fact_query_uses_production_index: bool
+    narrative_query_uses_fts_index: bool
+    fact_query_plan: tuple[str, ...] = Field(min_length=1)
+    narrative_query_plan: tuple[str, ...] = Field(min_length=1)
+
+
 class CandidatePerformanceEvidence(_FrozenModel):
     """Candidate-specific read/no-op/query-plan evidence plus synthetic ratchets."""
 
     database_sha256: str = Field(pattern=_SHA_PATTERN)
+    performance_request: ArtifactCommitment
     synthetic_benchmark_report: ArtifactCommitment
+    candidate_no_op_receipt: ArtifactCommitment
+    synthetic_benchmark_profile: Literal["production"]
     synthetic_benchmark_passed: bool
     no_op_current_write_count: int = Field(ge=0)
+    measured_scope_ids: tuple[str, ...] = Field(min_length=1)
+    scope_measurements: tuple[CandidateScopePerformance, ...] = Field(min_length=1)
+    read_sample_count: int = Field(ge=1)
     fact_read_p95_milliseconds: float = Field(ge=0)
     narrative_read_p95_milliseconds: float = Field(ge=0)
     max_fact_read_p95_milliseconds: float = Field(gt=0)
     max_narrative_read_p95_milliseconds: float = Field(gt=0)
     fact_query_uses_production_index: bool
     narrative_query_uses_fts_index: bool
+    fact_query_index_use_count: int = Field(ge=0)
+    narrative_fts_index_use_count: int = Field(ge=0)
+    fact_query_plan: tuple[str, ...] = Field(min_length=1)
+    narrative_query_plan: tuple[str, ...] = Field(min_length=1)
     history_scale_ratio: float = Field(gt=0)
     max_history_scale_ratio: float = Field(gt=0)
 
     @model_validator(mode="after")
     def _passed(self) -> Self:
+        measurement_scope_ids = tuple(item.scope_id for item in self.scope_measurements)
+        max_fact_p95 = max(item.fact_read_p95_milliseconds for item in self.scope_measurements)
+        max_narrative_p95 = max(
+            item.narrative_read_p95_milliseconds for item in self.scope_measurements
+        )
         if (
-            not self.synthetic_benchmark_passed
+            self.measured_scope_ids != tuple(sorted(set(self.measured_scope_ids)))
+            or measurement_scope_ids != self.measured_scope_ids
+            or not self.performance_request.verify()
+            or not self.synthetic_benchmark_report.verify()
+            or not self.candidate_no_op_receipt.verify()
+            or not self.synthetic_benchmark_passed
             or self.no_op_current_write_count
+            or self.read_sample_count != sum(item.sample_count for item in self.scope_measurements)
+            or self.fact_read_p95_milliseconds != max_fact_p95
+            or self.narrative_read_p95_milliseconds != max_narrative_p95
             or self.fact_read_p95_milliseconds > self.max_fact_read_p95_milliseconds
             or self.narrative_read_p95_milliseconds > self.max_narrative_read_p95_milliseconds
             or not self.fact_query_uses_production_index
             or not self.narrative_query_uses_fts_index
+            or self.fact_query_index_use_count != len(self.measured_scope_ids)
+            or self.narrative_fts_index_use_count != len(self.measured_scope_ids)
+            or any(
+                item.fact_read_p95_milliseconds > self.max_fact_read_p95_milliseconds
+                or item.narrative_read_p95_milliseconds > self.max_narrative_read_p95_milliseconds
+                or not item.fact_query_uses_production_index
+                or not item.narrative_query_uses_fts_index
+                for item in self.scope_measurements
+            )
             or self.history_scale_ratio > self.max_history_scale_ratio
         ):
             raise ValueError("candidate-specific performance evidence failed its ratchets")

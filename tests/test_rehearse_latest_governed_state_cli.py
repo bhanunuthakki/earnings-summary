@@ -14,6 +14,8 @@ import execution.rehearse_latest_governed_state as rehearsal_cli
 from provenance.compressed_candidate_clone import MINIMUM_SAFE_FREE_BYTES
 from provenance.cutover_preflight import ExistingCloneUpgradeRequest
 from provenance.immutable_artifact import read_stable_artifact
+from provenance.latest_governed_population import LatestGovernedPopulationReceipt
+from provenance.latest_state_activation import BoundLatestStateEligibilityManifest
 from provenance.latest_state_rehearsal import (
     ArtifactCommitment,
     DatabaseFileState,
@@ -23,6 +25,7 @@ from provenance.latest_state_rehearsal import (
     RehearsalStage,
     verify_rehearsal_checkpoint,
 )
+from provenance.latest_state_rehearsal_evidence import CandidatePerformanceRequest
 from provenance.population_document_processing import (
     DocumentProcessingPopulationRequest,
     build_document_processing_receipt,
@@ -324,15 +327,7 @@ def test_population_dispatcher_preserves_resume_cursor_across_two_dry_apply_batc
     assert evidences[3].admission_receipt == evidences[2].operator_receipt
 
 
-@pytest.mark.parametrize(
-    "stage",
-    [
-        RehearsalStage.SEMANTIC,
-        RehearsalStage.REPLAY,
-        RehearsalStage.RESTORE,
-        RehearsalStage.PERFORMANCE,
-    ],
-)
+@pytest.mark.parametrize("stage", [RehearsalStage.SEMANTIC])
 def test_terminal_stage_refuses_caller_authored_evidence_without_an_authoritative_generator(
     tmp_path: Path,
     stage: RehearsalStage,
@@ -350,3 +345,285 @@ def test_terminal_stage_refuses_caller_authored_evidence_without_an_authoritativ
             stage_evidence=supplied,
             activation_requirements=None,
         )
+
+
+@pytest.mark.parametrize(
+    ("stage", "label"),
+    [
+        (RehearsalStage.RESTORE, "restore"),
+        (RehearsalStage.PERFORMANCE, "performance"),
+    ],
+)
+def test_authoritative_stage_refuses_uncheckpointed_orphan_output(
+    tmp_path: Path,
+    stage: RehearsalStage,
+    label: str,
+) -> None:
+    plan, _plan_path = _plan(tmp_path)
+    output = Path(plan.evidence_directory) / f"0001-{label}.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("{}", encoding="utf-8")
+    stage_evidence = tmp_path / "performance-request.json"
+    stage_evidence.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="uncheckpointed"):
+        rehearsal_cli._run_nonpopulation(
+            plan=plan,
+            stage=stage,
+            history=(),
+            ordinal=1,
+            stage_evidence=(stage_evidence if stage is RehearsalStage.PERFORMANCE else None),
+            activation_requirements=None,
+        )
+
+
+def test_outer_receipt_refuses_configured_live_sidecars(tmp_path: Path) -> None:
+    plan, _plan_path = _plan(tmp_path)
+    live_wal = tmp_path / "data" / "portfolio.db-wal"
+
+    with pytest.raises(ValueError, match="aliases a protected artifact"):
+        rehearsal_cli._safe_outer_receipt(live_wal, plan=plan, inputs=())
+
+
+def test_exact_replay_generator_replays_every_population_receipt_and_matches_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan, _plan_path = _plan(tmp_path)
+    database = Path(plan.database_path)
+    history: list[tuple[ArtifactCommitment, RehearsalCheckpoint]] = []
+    expected_shas: list[str] = []
+    for ordinal, stage in enumerate(
+        (
+            RehearsalStage.DOCUMENT,
+            RehearsalStage.ONTOLOGY,
+            RehearsalStage.CANONICAL,
+            RehearsalStage.LATEST,
+        ),
+        start=1,
+    ):
+        dry_path = tmp_path / f"{stage.value}-dry.json"
+        dry_path.write_text(json.dumps({"stage": stage.value, "mode": "dry"}), encoding="utf-8")
+        dry_artifact = ArtifactCommitment.from_path(dry_path)
+        dry_population = PopulationCheckpointEvidence.model_construct(
+            operator=stage.value,
+            mode="dry_run",
+            exit_code=0,
+            operator_receipt=dry_artifact,
+            operator_receipt_sha256="f" * 64,
+        )
+        dry_checkpoint_path = tmp_path / f"checkpoint-{ordinal}-dry.json"
+        dry_checkpoint_path.write_text("{}", encoding="utf-8")
+        history.append(
+            (
+                ArtifactCommitment.from_path(dry_checkpoint_path),
+                RehearsalCheckpoint.model_construct(
+                    stage=stage,
+                    population_checkpoint=dry_population,
+                ),
+            )
+        )
+        operator_path = tmp_path / f"{stage.value}.json"
+        operator_path.write_text(json.dumps({"stage": stage.value}), encoding="utf-8")
+        operator_artifact = ArtifactCommitment.from_path(operator_path)
+        receipt_sha = f"{ordinal:x}" * 64
+        receipt_sha = receipt_sha[:64]
+        expected_shas.append(receipt_sha)
+        population = PopulationCheckpointEvidence.model_construct(
+            operator=stage.value,
+            mode="apply",
+            exit_code=0,
+            request_cursor=None,
+            result_cursor=None,
+            operator_receipt=operator_artifact,
+            operator_receipt_sha256=receipt_sha,
+            prior_operator_receipt=None,
+            prior_operator_receipt_sha256=None,
+            admission_receipt=dry_artifact,
+            admission_receipt_sha256="f" * 64,
+            database_before=DatabaseFileState.from_path(database),
+            database_after=DatabaseFileState.from_path(database),
+        )
+        checkpoint_path = tmp_path / f"checkpoint-{ordinal}.json"
+        checkpoint_path.write_text("{}", encoding="utf-8")
+        history.append(
+            (
+                ArtifactCommitment.from_path(checkpoint_path),
+                RehearsalCheckpoint.model_construct(
+                    stage=stage,
+                    population_checkpoint=population,
+                ),
+            )
+        )
+    replayed: list[str] = []
+
+    def replay(
+        _plan: RehearsalPlan,
+        _history: tuple[tuple[ArtifactCommitment, RehearsalCheckpoint], ...],
+        checkpoint: RehearsalCheckpoint,
+    ) -> None:
+        assert checkpoint.population_checkpoint is not None
+        replayed.append(checkpoint.population_checkpoint.operator)
+
+    monkeypatch.setattr(rehearsal_cli, "_replay_population_checkpoint", replay)
+
+    def ledger_receipt_sha256(
+        _database: Path,
+        checkpoint: RehearsalCheckpoint,
+    ) -> str:
+        assert checkpoint.population_checkpoint is not None
+        return checkpoint.population_checkpoint.operator_receipt_sha256
+
+    monkeypatch.setattr(
+        rehearsal_cli,
+        "_ledger_receipt_sha256",
+        ledger_receipt_sha256,
+    )
+
+    evidence = rehearsal_cli._generate_exact_replay_evidence(
+        plan=plan,
+        history=tuple(history),
+    )
+
+    assert replayed == ["document", "ontology", "canonical", "latest"]
+    assert evidence.operator_receipt_sha256s == tuple(expected_shas)
+    assert evidence.database_sha256_before == evidence.database_sha256_after
+    assert evidence.database_ledger_match_count == 4
+    assert evidence.no_clobber_replay_count == 4
+
+
+def test_exact_replay_generator_fails_if_operator_changes_candidate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan, _plan_path = _plan(tmp_path)
+    database = Path(plan.database_path)
+    history_items: list[tuple[ArtifactCommitment, RehearsalCheckpoint]] = []
+    for stage in (
+        RehearsalStage.DOCUMENT,
+        RehearsalStage.ONTOLOGY,
+        RehearsalStage.CANONICAL,
+        RehearsalStage.LATEST,
+    ):
+        operator_path = tmp_path / f"{stage.value}.json"
+        operator_path.write_text("{}", encoding="utf-8")
+        operator_artifact = ArtifactCommitment.from_path(operator_path)
+        population = PopulationCheckpointEvidence.model_construct(
+            operator=stage.value,
+            mode="apply",
+            exit_code=0,
+            operator_receipt=operator_artifact,
+            operator_receipt_sha256="a" * 64,
+        )
+        checkpoint_path = tmp_path / f"checkpoint-{stage.value}.json"
+        checkpoint_path.write_text("{}", encoding="utf-8")
+        history_items.append(
+            (
+                ArtifactCommitment.from_path(checkpoint_path),
+                RehearsalCheckpoint.model_construct(
+                    stage=stage,
+                    population_checkpoint=population,
+                ),
+            )
+        )
+    history = tuple(history_items)
+
+    def replay(
+        _plan: RehearsalPlan,
+        _history: tuple[tuple[ArtifactCommitment, RehearsalCheckpoint], ...],
+        _checkpoint: RehearsalCheckpoint,
+    ) -> None:
+        database.write_bytes(b"changed")
+
+    monkeypatch.setattr(rehearsal_cli, "_replay_population_checkpoint", replay)
+
+    with pytest.raises(ValueError, match="changed the rehearsal database"):
+        rehearsal_cli._generate_exact_replay_evidence(plan=plan, history=history)
+
+
+def test_performance_stage_generates_full_cohort_noop_before_measurement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan, _plan_path = _plan(tmp_path)
+    benchmark = tmp_path / "benchmark.json"
+    benchmark.write_text("{}", encoding="utf-8")
+    request = CandidatePerformanceRequest(
+        synthetic_benchmark_report=benchmark.resolve(),
+        read_samples=3,
+        read_limit=10,
+        max_fact_read_p95_milliseconds=100,
+        max_narrative_read_p95_milliseconds=100,
+        max_history_scale_ratio=1.5,
+    )
+    request_path = tmp_path / "performance-request.json"
+    request_path.write_text(request.model_dump_json(), encoding="utf-8")
+    terminal_path = tmp_path / "terminal-eligibility.json"
+    terminal_path.write_text("{}", encoding="utf-8")
+    terminal_artifact = ArtifactCommitment.from_path(terminal_path)
+
+    def stage_artifact(
+        _history: tuple[tuple[ArtifactCommitment, RehearsalCheckpoint], ...],
+        stage: RehearsalStage,
+    ) -> ArtifactCommitment:
+        if stage is not RehearsalStage.TERMINAL_ELIGIBILITY:
+            raise AssertionError(stage)
+        return terminal_artifact
+
+    monkeypatch.setattr(
+        rehearsal_cli,
+        "_stage_artifact",
+        stage_artifact,
+    )
+    real_load = rehearsal_cli._load_model
+    no_op_receipt = LatestGovernedPopulationReceipt.model_construct()
+
+    def load_model(path: Path, model_type: type[BaseModel]) -> tuple[object, object, object]:
+        if model_type is BoundLatestStateEligibilityManifest:
+            snapshot, _payload = read_stable_artifact(path)
+            return (
+                ArtifactCommitment.from_path(path),
+                snapshot,
+                BoundLatestStateEligibilityManifest.model_construct(
+                    expected_scope_ids=("scope-a", "scope-b")
+                ),
+            )
+        if model_type is LatestGovernedPopulationReceipt:
+            snapshot, _payload = read_stable_artifact(path)
+            return ArtifactCommitment.from_path(path), snapshot, no_op_receipt
+        return real_load(path, model_type)
+
+    monkeypatch.setattr(rehearsal_cli, "_load_model", load_model)
+    calls: list[list[str]] = []
+
+    def latest_main(argv: list[str] | None = None) -> int:
+        assert argv is not None
+        calls.append(argv)
+        receipt = Path(argv[argv.index("--receipt") + 1])
+        receipt.parent.mkdir(parents=True, exist_ok=True)
+        receipt.write_text("{}", encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(rehearsal_cli.latest_cli, "main", latest_main)
+    captured: dict[str, object] = {}
+
+    def generate(**kwargs: object) -> SimpleNamespace:
+        captured.update(kwargs)
+        return SimpleNamespace(model_dump_json=lambda: '{"performance":true}')
+
+    monkeypatch.setattr(rehearsal_cli, "generate_candidate_performance_evidence", generate)
+
+    artifact = rehearsal_cli._run_nonpopulation(
+        plan=plan,
+        stage=RehearsalStage.PERFORMANCE,
+        history=(),
+        ordinal=12,
+        stage_evidence=request_path,
+        activation_requirements=None,
+    )
+
+    assert artifact.verify()
+    assert calls[0][calls[0].index("--max-scopes") + 1] == "2"
+    assert "--apply" not in calls[0]
+    assert captured["production_scope_ids"] == ("scope-a", "scope-b")
+    assert captured["no_op_receipt"] is no_op_receipt

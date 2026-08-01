@@ -74,6 +74,15 @@ def test_plan_is_hash_bound_absolute_and_refuses_live_or_unbounded_inputs(
     assert plan.database_path == str((tmp_path / "candidate.db").resolve())
     assert plan.verify_commitment()
     assert plan.stage_order == tuple(RehearsalStage)
+    assert plan.stage_order.index(RehearsalStage.REPLAY) < plan.stage_order.index(
+        RehearsalStage.SEMANTIC
+    )
+    assert plan.stage_order.index(RehearsalStage.RESTORE) < plan.stage_order.index(
+        RehearsalStage.SEMANTIC
+    )
+    assert plan.stage_order.index(RehearsalStage.PERFORMANCE) < plan.stage_order.index(
+        RehearsalStage.SEMANTIC
+    )
 
     relative = plan.model_dump(mode="json")
     relative["database_path"] = "candidate.db"

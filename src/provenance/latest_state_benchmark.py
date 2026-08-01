@@ -2224,8 +2224,59 @@ def _implementation_provenance() -> ImplementationProvenance:
     )
 
 
+def latest_state_implementation_provenance() -> ImplementationProvenance:
+    """Return the exact implementation commitment a fresh benchmark must name."""
+
+    return _implementation_provenance()
+
+
 def verify_report_sha256(report: LatestStateBenchmarkReport) -> bool:
     return report.report_sha256 == _report_sha256(report)
+
+
+def verify_production_benchmark_report(report: LatestStateBenchmarkReport) -> bool:
+    """Recompute every production admission decision from report measurements."""
+
+    expected_config = production_benchmark_config()
+    expected_budgets = production_benchmark_budgets()
+    expected_ratchets = _ratchets(
+        expected_config,
+        report.no_op,
+        report.small_delta,
+        report.fact_read,
+        report.narrative_read,
+        report.rows,
+        report.change_audit,
+        report.cross_scope,
+        report.storage,
+        report.write_amplification,
+        report.resume,
+        report.history_independence,
+    )
+    expected_budget_results = _budget_results(
+        expected_budgets,
+        hot_path_wall_seconds=report.hot_path_wall_seconds,
+        peak_memory=report.peak_python_memory_bytes,
+        no_op=report.no_op,
+        delta=report.small_delta,
+        storage=report.storage,
+        fact_read=report.fact_read,
+        narrative_read=report.narrative_read,
+        history=report.history_independence,
+    )
+    expected_provenance = latest_state_implementation_provenance()
+    return (
+        verify_report_sha256(report)
+        and report.config == expected_config
+        and report.config_sha256
+        == digest_text(canonical_json(expected_config.model_dump(mode="json")))
+        and report.budgets == expected_budgets
+        and report.implementation_provenance == expected_provenance
+        and report.ratchets == expected_ratchets
+        and report.budget_results == expected_budget_results
+        and report.overall_pass
+        and all(item.passed for item in (*expected_ratchets, *expected_budget_results))
+    )
 
 
 def production_benchmark_config() -> LatestStateBenchmarkConfig:
