@@ -15,6 +15,7 @@ from provenance.latest_governed_state import (
     LatestGovernedRefreshResult,
     LatestGovernedReprojectionRequest,
     LatestGovernedStateError,
+    audit_latest_governed_cohort,
     build_latest_governed_fact_search_query,
     refresh_latest_governed_state,
     reproject_latest_governed_state,
@@ -2142,3 +2143,96 @@ def test_changed_narrative_batch_stays_below_physical_write_ratchet() -> None:
     physical_writes = conn.total_changes - total_changes_before
     assert (result.document_change_count, result.narrative_change_count) == (1, 8)
     assert physical_writes / logical_writes <= 8
+
+
+def test_cohort_audit_proves_all_nine_planes_and_source_parity() -> None:
+    conn = _database()
+    refresh_latest_governed_state(conn, _request())
+    _advance_delta(conn, generation="generation-2", commitment=SHA_D)
+    refresh_latest_governed_state(
+        conn,
+        _request(operation_recorded_at=T0 + timedelta(hours=1, minutes=1)),
+    )
+    audit = audit_latest_governed_cohort(
+        conn,
+        ("ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",),
+        operation_recorded_at=T0 + timedelta(hours=1, minutes=2),
+        high_risk_sample_size=2,
+    )
+    assert audit.table_counts == {
+        "latest_governed_refresh_runs": 2,
+        "latest_governed_refresh_stage": 0,
+        "latest_governed_refresh_receipts": 2,
+        "latest_governed_refresh_changes": 1,
+        "latest_governed_scope_heads": 1,
+        "latest_governed_fact_entries": 1,
+        "latest_governed_document_entries": 1,
+        "latest_governed_narrative_entries": 1,
+        "latest_governed_narrative_fts": 1,
+    }
+    assert audit.scopes[0].fact_canary_coordinate == "cell-1"
+    assert audit.scopes[0].narrative_canary_coordinate == "10-q:2026-q2\x00chunk:q2"
+
+
+def test_cohort_audit_accepts_baseline_without_delta_rows_and_rejects_current_tamper() -> None:
+    conn = _database()
+    refresh_latest_governed_state(conn, _request())
+    scope_ids = ("ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",)
+    baseline = audit_latest_governed_cohort(
+        conn,
+        scope_ids,
+        operation_recorded_at=T0 + timedelta(minutes=2),
+    )
+    assert baseline.table_counts["latest_governed_refresh_changes"] == 0
+    _advance_delta(conn, generation="generation-2", commitment=SHA_D)
+    refresh_latest_governed_state(
+        conn,
+        _request(operation_recorded_at=T0 + timedelta(hours=1, minutes=1)),
+    )
+    conn.execute(
+        "UPDATE latest_governed_fact_entries "
+        "SET current_commitment_sha256=? WHERE canonical_metric_cell_id='cell-1'",
+        (SHA_A,),
+    )
+    with pytest.raises(LatestGovernedStateError, match="differ from exhaustive"):
+        audit_latest_governed_cohort(
+            conn,
+            scope_ids,
+            operation_recorded_at=T0 + timedelta(hours=1, minutes=2),
+        )
+
+
+def test_cohort_audit_rejects_nonterminal_stage_and_extra_scope_head() -> None:
+    conn = _database()
+    refresh_latest_governed_state(conn, _request())
+    _advance_delta(conn, generation="generation-2", commitment=SHA_D)
+    refresh_latest_governed_state(
+        conn,
+        _request(operation_recorded_at=T0 + timedelta(hours=1, minutes=1)),
+    )
+    scope_ids = ("ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",)
+    conn.execute(
+        "UPDATE latest_governed_refresh_runs SET status='staging' "
+        "WHERE refresh_run_id=(SELECT refresh_run_id FROM latest_governed_refresh_runs LIMIT 1)"
+    )
+    with pytest.raises(LatestGovernedStateError, match="unfinished refresh"):
+        audit_latest_governed_cohort(
+            conn,
+            scope_ids,
+            operation_recorded_at=T0 + timedelta(hours=1, minutes=2),
+        )
+    conn.execute("UPDATE latest_governed_refresh_runs SET status='finalized'")
+    conn.execute(
+        "INSERT INTO latest_governed_scope_heads SELECT 'unexpected-scope',"
+        "'unexpected-receipt',population_run_id,promotion_id,fact_generation_id,"
+        "source_heads_json,source_heads_sha256,state_sha256,fact_root_sha256,"
+        "document_root_sha256,narrative_root_sha256,fact_count,document_count,"
+        "narrative_count,knowledge_cutoff,observed_through,updated_at "
+        "FROM latest_governed_scope_heads LIMIT 1"
+    )
+    with pytest.raises(LatestGovernedStateError, match="exact production cohort"):
+        audit_latest_governed_cohort(
+            conn,
+            scope_ids,
+            operation_recorded_at=T0 + timedelta(hours=1, minutes=2),
+        )

@@ -226,6 +226,35 @@ class LatestGovernedNarrativeHit(_FrozenModel):
     evidence_locator: dict[str, object]
 
 
+class LatestGovernedScopeAudit(_FrozenModel):
+    """Exhaustive source-to-current verification for one production scope."""
+
+    scope_id: str
+    head_receipt_id: str
+    terminal_commitment: str
+    fact_count: int = Field(gt=0)
+    document_count: int = Field(gt=0)
+    narrative_count: int = Field(gt=0)
+    fts_count: int = Field(gt=0)
+    change_count: int = Field(ge=0)
+    finalized_run_count: int = Field(gt=0)
+    stage_count: Literal[0] = 0
+    fact_canary_coordinate: str
+    narrative_canary_coordinate: str
+    exhaustive_source_commitment_sha256: str
+    high_risk_sample_commitment_sha256: str
+
+
+class LatestGovernedCohortAudit(_FrozenModel):
+    """Exact, nonempty readiness evidence for one ordered production cohort."""
+
+    schema_version: Literal["latest-governed-cohort-audit/v1"] = "latest-governed-cohort-audit/v1"
+    scope_ids: tuple[str, ...]
+    scopes: tuple[LatestGovernedScopeAudit, ...]
+    table_counts: dict[str, int]
+    cohort_commitment_sha256: str
+
+
 class LatestGovernedStateError(RuntimeError):
     """Fail-loud materialization or read admission error."""
 
@@ -243,6 +272,77 @@ def refresh_latest_governed_state(
     """
 
     return GovernedCurrentMaterializer(conn).refresh(request)
+
+
+def audit_latest_governed_cohort(
+    conn: sqlite3.Connection,
+    scope_ids: tuple[str, ...],
+    *,
+    operation_recorded_at: datetime,
+    high_risk_sample_size: int = 32,
+) -> LatestGovernedCohortAudit:
+    """Prove every 0261 plane is terminal, nonempty where durable, and source-exact."""
+
+    if operation_recorded_at.tzinfo is None or operation_recorded_at.utcoffset() is None:
+        raise ValueError("operation_recorded_at must include a timezone")
+    if high_risk_sample_size < 1 or high_risk_sample_size > 1_000:
+        raise ValueError("high_risk_sample_size must be between 1 and 1000")
+    ordered = tuple(sorted(scope_ids))
+    if not ordered or ordered != scope_ids or len(set(ordered)) != len(ordered):
+        raise LatestGovernedStateError(
+            "latest governed cohort must be nonempty, unique, and sorted"
+        )
+    materializer = GovernedCurrentMaterializer(conn)
+    audits = tuple(
+        materializer.audit_scope(
+            scope_id,
+            operation_recorded_at=operation_recorded_at,
+            high_risk_sample_size=high_risk_sample_size,
+        )
+        for scope_id in ordered
+    )
+    head_scope_ids = tuple(
+        str(row[0])
+        for row in conn.execute(
+            "SELECT scope_key FROM latest_governed_scope_heads ORDER BY scope_key"
+        ).fetchall()
+    )
+    if head_scope_ids != ordered:
+        raise LatestGovernedStateError(
+            "latest governed heads differ from the exact production cohort"
+        )
+    table_names = (
+        "latest_governed_refresh_runs",
+        "latest_governed_refresh_stage",
+        "latest_governed_refresh_receipts",
+        "latest_governed_refresh_changes",
+        "latest_governed_scope_heads",
+        "latest_governed_fact_entries",
+        "latest_governed_document_entries",
+        "latest_governed_narrative_entries",
+        "latest_governed_narrative_fts",
+    )
+    table_counts = {
+        name: int(conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0])  # nosec B608 -- names are a closed constant tuple
+        for name in table_names
+    }
+    required_nonempty = set(table_names) - {
+        "latest_governed_refresh_changes",
+        "latest_governed_refresh_stage",
+    }
+    if table_counts["latest_governed_refresh_stage"] != 0:
+        raise LatestGovernedStateError("latest governed stage is not terminally empty")
+    if any(table_counts[name] == 0 for name in required_nonempty):
+        raise LatestGovernedStateError("latest governed durable planes must all be nonempty")
+    core = {
+        "schema_version": "latest-governed-cohort-audit/v1",
+        "scope_ids": ordered,
+        "scopes": [item.model_dump(mode="json") for item in audits],
+        "table_counts": table_counts,
+    }
+    return LatestGovernedCohortAudit.model_validate(
+        core | {"cohort_commitment_sha256": _digest(core)}
+    )
 
 
 def reproject_latest_governed_state(
@@ -408,6 +508,190 @@ class GovernedCurrentMaterializer:
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
         conn.execute("PRAGMA foreign_keys=ON")
+
+    def audit_scope(
+        self,
+        scope_id: str,
+        *,
+        operation_recorded_at: datetime,
+        high_risk_sample_size: int,
+    ) -> LatestGovernedScopeAudit:
+        """Verify one current scope against a fresh exhaustive source reconstruction."""
+
+        frontier = self._frontier(scope_id)
+        if _datetime(operation_recorded_at) < _datetime(frontier.observed_through):
+            raise LatestGovernedStateError(
+                "audit operation_recorded_at precedes the admitted population frontier"
+            )
+        head = self._head(scope_id)
+        if head is None or head.source_frontier != frontier:
+            raise LatestGovernedStateError(
+                "latest governed head is missing or does not bind the current frontier"
+            )
+        if self._receipt_head(scope_id=scope_id, receipt_id=head.receipt_id) != head:
+            raise LatestGovernedStateError("latest governed head receipt is invalid")
+        stage_count = int(
+            self._conn.execute(
+                "SELECT COUNT(*) FROM latest_governed_refresh_stage stage "
+                "JOIN latest_governed_refresh_runs run "
+                "ON run.refresh_run_id=stage.refresh_run_id WHERE run.scope_key=?",
+                (scope_id,),
+            ).fetchone()[0]
+        )
+        if stage_count:
+            raise LatestGovernedStateError("latest governed scope has staged changes")
+        unfinished = int(
+            self._conn.execute(
+                "SELECT COUNT(*) FROM latest_governed_refresh_runs "
+                "WHERE scope_key=? AND status<>'finalized'",
+                (scope_id,),
+            ).fetchone()[0]
+        )
+        if unfinished:
+            raise LatestGovernedStateError("latest governed scope has unfinished refresh runs")
+
+        source_changes = self._baseline_source_changes(frontier)
+        expected: dict[str, dict[str, str]] = {
+            "fact": {},
+            "document": {},
+            "narrative": {},
+        }
+        for change in source_changes:
+            if change["change_kind"] != "upsert" or change["current_commitment_sha256"] is None:
+                raise LatestGovernedStateError(
+                    "exhaustive latest governed source reconstruction emitted a tombstone"
+                )
+            expected[str(change["entity_kind"])][str(change["coordinate_key"])] = str(
+                change["current_commitment_sha256"]
+            )
+        current = {
+            "fact": {
+                str(row[0]): str(row[1])
+                for row in self._conn.execute(
+                    "SELECT canonical_metric_cell_id,current_commitment_sha256 "
+                    "FROM latest_governed_fact_entries WHERE scope_key=?",
+                    (scope_id,),
+                )
+            },
+            "document": {
+                str(row[0]): str(row[1])
+                for row in self._conn.execute(
+                    "SELECT expected_document_key,current_commitment_sha256 "
+                    "FROM latest_governed_document_entries WHERE scope_key=?",
+                    (scope_id,),
+                )
+            },
+            "narrative": {
+                f"{row[0]}\x00{row[1]}": str(row[2])
+                for row in self._conn.execute(
+                    "SELECT expected_document_key,chunk_key,current_commitment_sha256 "
+                    "FROM latest_governed_narrative_entries WHERE scope_key=?",
+                    (scope_id,),
+                )
+            },
+        }
+        if current != expected:
+            raise LatestGovernedStateError(
+                "latest governed current rows differ from exhaustive governed sources"
+            )
+        counts = {kind: len(rows) for kind, rows in current.items()}
+        if any(value == 0 for value in counts.values()):
+            raise LatestGovernedStateError(
+                "latest governed facts, documents, and narratives must all be nonempty"
+            )
+        narrative_rowids = {
+            int(row[0])
+            for row in self._conn.execute(
+                "SELECT rowid FROM latest_governed_narrative_entries WHERE scope_key=?",
+                (scope_id,),
+            )
+        }
+        fts_rowids = {
+            int(row[0])
+            for row in self._conn.execute(
+                "SELECT fts.rowid FROM latest_governed_narrative_fts fts "
+                "JOIN latest_governed_narrative_entries entry ON entry.rowid=fts.rowid "
+                "WHERE entry.scope_key=?",
+                (scope_id,),
+            )
+        }
+        if fts_rowids != narrative_rowids:
+            raise LatestGovernedStateError("latest governed FTS rows differ from narratives")
+        change_count = int(
+            self._conn.execute(
+                "SELECT COUNT(*) FROM latest_governed_refresh_changes changes "
+                "JOIN latest_governed_refresh_receipts receipt "
+                "ON receipt.receipt_id=changes.receipt_id WHERE receipt.scope_key=?",
+                (scope_id,),
+            ).fetchone()[0]
+        )
+        finalized_run_count = int(
+            self._conn.execute(
+                "SELECT COUNT(*) FROM latest_governed_refresh_runs "
+                "WHERE scope_key=? AND status='finalized'",
+                (scope_id,),
+            ).fetchone()[0]
+        )
+        fact_coordinate, fact_name = self._conn.execute(
+            "SELECT canonical_metric_cell_id,canonical_metric_name "
+            "FROM latest_governed_fact_entries WHERE scope_key=? "
+            "ORDER BY canonical_metric_cell_id LIMIT 1",
+            (scope_id,),
+        ).fetchone()
+        if not any(
+            hit.canonical_metric_cell_id == str(fact_coordinate)
+            for hit in search_latest_governed_facts(self._conn, scope_id, str(fact_name), 5)
+        ):
+            raise LatestGovernedStateError("latest governed fact retrieval canary failed")
+        narrative_row = self._conn.execute(
+            "SELECT expected_document_key,chunk_key,text "
+            "FROM latest_governed_narrative_entries WHERE scope_key=? "
+            "ORDER BY expected_document_key,chunk_key LIMIT 1",
+            (scope_id,),
+        ).fetchone()
+        narrative_tokens = re.findall(r"[A-Za-z0-9]{2,}", str(narrative_row[2]))
+        if not narrative_tokens:
+            raise LatestGovernedStateError("latest governed narrative canary has no safe token")
+        narrative_coordinate = f"{narrative_row[0]}\x00{narrative_row[1]}"
+        if not any(
+            f"{hit.expected_document_key}\x00{hit.chunk_key}" == narrative_coordinate
+            for hit in search_latest_governed_narrative(
+                self._conn,
+                scope_id,
+                narrative_tokens[0],
+                5,
+            )
+        ):
+            raise LatestGovernedStateError("latest governed narrative retrieval canary failed")
+        ordered_source = [
+            {
+                "coordinate": coordinate,
+                "entity_kind": kind,
+                "sha256": sha256,
+            }
+            for kind in ("fact", "document", "narrative")
+            for coordinate, sha256 in sorted(expected[kind].items())
+        ]
+        high_risk_sample = sorted(
+            ordered_source,
+            key=lambda item: (_digest(item["coordinate"]), item["entity_kind"]),
+        )[:high_risk_sample_size]
+        return LatestGovernedScopeAudit(
+            scope_id=scope_id,
+            head_receipt_id=head.receipt_id,
+            terminal_commitment=head.state_commitment_sha256,
+            fact_count=counts["fact"],
+            document_count=counts["document"],
+            narrative_count=counts["narrative"],
+            fts_count=len(fts_rowids),
+            change_count=change_count,
+            finalized_run_count=finalized_run_count,
+            stage_count=0,
+            fact_canary_coordinate=str(fact_coordinate),
+            narrative_canary_coordinate=narrative_coordinate,
+            exhaustive_source_commitment_sha256=_digest(ordered_source),
+            high_risk_sample_commitment_sha256=_digest(high_risk_sample),
+        )
 
     def refresh(self, request: LatestGovernedRefreshRequest) -> LatestGovernedRefreshResult:
         frontier = self._frontier(request.scope_id)
