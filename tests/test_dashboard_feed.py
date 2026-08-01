@@ -57,7 +57,17 @@ def test_empty_db_renders_empty_list(db_path: Path) -> None:
     assert "<!doctype html>" in html
 
 
-def test_feed_shows_only_high_materiality_disclosure_chips(db_path: Path) -> None:
+def test_feed_never_shows_disclosure_events_even_at_high_materiality(db_path: Path) -> None:
+    """Disclosure drift is a research substrate, not a decision feed (owner
+    ruling 2026-07-30; Disclosure Intelligence v1 PRD ruling 4 puts it on Ask +
+    the ticker workspace).
+
+    Seeds BOTH a high-materiality (0.92, 'substantive') and a low-materiality
+    (0.20, 'noise') event. Neither may reach the feed. The high-materiality row
+    is the one that matters: it would have passed the retired
+    ``materiality >= 0.8`` gate, so this asserts the kind is gone rather than
+    the threshold merely being tightened.
+    """
     conn = sqlite3.connect(str(db_path))
     now = datetime.now(UTC).replace(tzinfo=None).isoformat()
     base = (
@@ -129,9 +139,39 @@ def test_feed_shows_only_high_materiality_disclosure_chips(db_path: Path) -> Non
 
     html = render_alert_feed(db_path=db_path)
 
-    assert "Disclosure drift" in html
-    assert "Delinquency formation increased in the youngest vintages." in html
+    assert "Disclosure drift" not in html
+    # The high-materiality row cleared the OLD gate — its absence is the proof
+    # the kind was removed, not just re-thresholded.
+    assert "Delinquency formation increased in the youngest vintages." not in html
     assert "Minor punctuation changed." not in html
+
+
+def test_capped_feed_names_the_remainder_instead_of_truncating_silently(
+    db_path: Path,
+) -> None:
+    """A capped stream must say what it dropped.
+
+    The cap is real (``collect_inbox(limit=80)``) and was silently hiding 19
+    live items — a truncated list reads as the whole queue. The seed is 5
+    alerts, but the default feed carries pending + approved only (the dismissed
+    one is settled noise), so 4 are eligible; ``limit=2`` cuts 2 of them.
+    """
+    _seed_mixed_statuses(db_path)
+    html = render_alert_feed(db_path=db_path, limit=2)
+
+    assert 'class="ix-more"' in html
+    assert "Showing the top 2 of 4" in html
+    assert "2 lower-ranked items not shown" in html
+
+
+def test_uncapped_feed_shows_no_remainder_line(db_path: Path) -> None:
+    """The receipt appears ONLY when something was actually cut — otherwise it
+    is noise on a complete list."""
+    _seed_mixed_statuses(db_path)
+    html = render_alert_feed(db_path=db_path, limit=80)
+
+    assert 'class="ix-more"' not in html
+    assert "not shown" not in html
 
 
 def test_active_filters_render_as_removable_chips(db_path: Path) -> None:

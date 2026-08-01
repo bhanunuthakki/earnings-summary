@@ -74,10 +74,24 @@ _LEDGER_KIND_LABELS: dict[str, str] = {
     "advisor_memo": ADVISOR_MEMO_TITLE,
 }
 
+# 'disclosure' is deliberately ABSENT (2026-07-30 owner ruling). Filing/
+# transcript disclosure drift is a RESEARCH substrate, not a decision feed:
+# `disclosure_events` carries 36k rows of which 6,348 passed the old inbox gate
+# (`materiality >= 0.8`), so it monopolized the ranked stream and buried every
+# alert. The gate could not work, because `materiality` is not one quantity —
+# each detector writes its own incommensurable scale into that column:
+# `item_diff` writes 1.0 - text_similarity, `metric_lifecycle` writes a
+# magnitude RATIO, and `section_similarity` writes a whole-book PERCENTILE
+# (so ~20% of the book scores >= 0.8 by construction, forever). Comparing them
+# against one float threshold is a category error, not a tuning problem.
+# The ratified Disclosure Intelligence v1 PRD (docs/design/
+# disclosure_intelligence_v1_prd.md, owner ruling 4) already placed this
+# substrate on **Ask + the ticker workspace**, with feed chips reserved for
+# high-materiality events only — a bar no per-detector scale currently meets.
+# Re-adding this kind needs a real cross-detector materiality contract first.
 _DEFAULT_KINDS: tuple[str, ...] = (
     "alert",
     "draft",
-    "disclosure",
     "ledger",
     "note",
     "synthesis",
@@ -90,7 +104,6 @@ _DEFAULT_KINDS: tuple[str, ...] = (
 _KIND_RICHNESS: dict[str, int] = {
     "alert": 5,
     "draft": 4,
-    "disclosure": 3,
     "synthesis": 2,
     "ledger": 1,
     "note": 0,
@@ -141,7 +154,6 @@ class InboxItem:
     score_why: str = ""
     semantic_kind: str | None = None
     note_id: int | None = None
-    source_doc_id: int | None = None
 
 
 def _norm_body(text: str) -> str:
@@ -183,7 +195,47 @@ def collect_inbox(
     now: datetime | None = None,
     position_weights: dict[str, float] | None = None,
 ) -> list[InboxItem]:
+    """The capped stream — see :func:`collect_inbox_counted` for the semantics.
+
+    Thin wrapper for callers that don't render an overflow line (the Home rail
+    and the mobile panel show a deliberate top-N, so "N of M" is noise there).
+    A caller that renders the WHOLE stream should use ``collect_inbox_counted``
+    and surface the remainder — a silently truncated list reads as complete.
+    """
+    return collect_inbox_counted(
+        db_path,
+        user_id=user_id,
+        since=since,
+        until=until,
+        ticker=ticker,
+        status=status,
+        trigger_kind=trigger_kind,
+        kinds=kinds,
+        limit=limit,
+        now=now,
+        position_weights=position_weights,
+    )[0]
+
+
+def collect_inbox_counted(
+    db_path: Path | None,
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    ticker: str | None = None,
+    status: str | None = None,
+    trigger_kind: str | None = None,
+    kinds: tuple[str, ...] = _DEFAULT_KINDS,
+    limit: int = 80,
+    now: datetime | None = None,
+    position_weights: dict[str, float] | None = None,
+) -> tuple[list[InboxItem], int]:
     """Build the stream — deduped, categorized, ranked.
+
+    Returns ``(capped_items, total_eligible)``. ``total_eligible`` counts the
+    ranked stream BEFORE ``limit`` is applied, so a caller can tell the owner
+    what the cap hid instead of presenting a truncated list as the whole queue.
 
     ``since`` windows the EVENT kinds — resolved alerts, ledger entries, and
     synthesis sections. Drafts, notes, and PENDING alerts are STANDING items:
@@ -402,58 +454,9 @@ def collect_inbox(
                 )
             )
 
-    if "disclosure" in kinds:
-        try:
-            conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-            conn.row_factory = sqlite3.Row
-            clauses = [
-                "status != 'dismissed'",
-                "materiality >= 0.8",
-                "TRIM(COALESCE(evidence_quote, '')) != ''",
-                "verdict NOT IN ('noise', 'mechanical', 'boilerplate_update')",
-            ]
-            params: list[object] = []
-            if ticker is not None:
-                clauses.append("ticker = ?")
-                params.append(ticker.upper())
-            # Clause fragments are fixed here; ticker and limit remain parameters.
-            query = f"""
-                SELECT ticker, event_type, subject, subject_label, evidence_quote,
-                       interpretation_md, source_doc_id, created_at
-                FROM disclosure_events
-                WHERE {" AND ".join(clauses)}
-                ORDER BY created_at DESC, id DESC
-                LIMIT ?
-                """  # nosec B608
-            rows = conn.execute(
-                query,
-                (*params, limit),
-            ).fetchall()
-            conn.close()
-        except sqlite3.Error:
-            rows = []
-        for row in rows:
-            when = _parse_artifact_dt(str(row["created_at"] or ""))
-            if when is None or not _in_window(when, windowed=True):
-                continue
-            subject = str(row["subject_label"] or row["subject"] or "Disclosure")
-            quote = " ".join(str(row["evidence_quote"] or "").split())
-            interpretation = " ".join(str(row["interpretation_md"] or "").split())
-            body = f"{subject}: “{quote}”"
-            if interpretation:
-                body += f" — {interpretation}"
-            items.append(
-                InboxItem(
-                    kind="disclosure",
-                    ticker=str(row["ticker"] or "").upper() or None,
-                    when=when,
-                    title="Disclosure drift",
-                    body=body,
-                    source_doc_id=(
-                        int(row["source_doc_id"]) if row["source_doc_id"] is not None else None
-                    ),
-                )
-            )
+    # NOTE: there is no 'disclosure' source here by design — see _DEFAULT_KINDS.
+    # Disclosure drift reaches the owner through Ask and the ticker workspace,
+    # which is where the ratified PRD put it.
 
     if "synthesis" in kinds and ticker is None:
         # Portfolio-scope insight: the cross-portfolio synthesis memo's
@@ -466,7 +469,7 @@ def collect_inbox(
     # one — an advisor memo's ledger entry and its journal-observation echo
     # carry the same line under different decorations (see ``_fuzzy_norm``),
     # and the old per-kind key rendered both. The survivor is the RICHEST
-    # kind (alert > draft > disclosure > synthesis > ledger > note), newest on ties — so
+    # kind (alert > draft > synthesis > ledger > note), newest on ties — so
     # within one kind this still keeps the newest of texts that repeat across
     # consecutive runs. Bodyless items (alert cards — their narrative lives
     # in evidence_json) pass through: alerts dedupe upstream on
@@ -488,7 +491,7 @@ def collect_inbox(
     ranked = annotate_and_rank(
         deduped, db_path=Path(db_path), now=now_dt, position_weights=position_weights
     )
-    return ranked[:limit]
+    return ranked[:limit], len(ranked)
 
 
 # ----------------------------------------------------------------------------
@@ -594,6 +597,7 @@ def render_inbox_stream(
     show_status_badge: bool = True,
     show_filters: bool = False,
     surface: str | None = None,
+    hidden_count: int = 0,
     empty_text: str = "Nothing new — alerts, drafts, thesis changes, and watch items land here.",
 ) -> str:
     """The stream HTML: ONE flat list in the score order ``collect_inbox``
@@ -603,7 +607,11 @@ def render_inbox_stream(
     approvable cards. ``show_filters`` renders the category chips (client-side
     filtering via INBOX_JS). ``surface`` names the page ("home" | "feed") for
     the unread tracking: INBOX_JS keys its per-surface localStorage last-seen
-    off the ``data-ix-surface`` attr."""
+    off the ``data-ix-surface`` attr. ``hidden_count`` is how many ranked items
+    the cap dropped — when >0 the stream closes with a one-line receipt naming
+    the remainder, because a silently truncated list reads as the whole queue
+    (the "no silent caps" rule; the count comes from
+    ``collect_inbox_counted``)."""
     if not items:
         return f'<div class="ix-empty">{_esc(empty_text)}</div>'
     out = StringIO()
@@ -613,6 +621,14 @@ def render_inbox_stream(
         _render_category_chips(out, items)
     for it in items:
         _render_item(out, it, db_path=db_path, compact=compact, show_status=show_status_badge)
+    if hidden_count > 0:
+        # Owner language, not a diagnostic: what is shown, what is not, and why
+        # the rest is safe to not look at (they rank below everything above).
+        noun = "item" if hidden_count == 1 else "items"
+        out.write(
+            f'<div class="ix-more">Showing the top {len(items)} of '
+            f"{len(items) + hidden_count} — {hidden_count} lower-ranked {noun} not shown.</div>"
+        )
     out.write("</div>")
     return out.getvalue()
 
@@ -814,11 +830,6 @@ def _render_card_footer(out: StringIO, it: InboxItem, *, compact: bool) -> None:
         parts.append(
             f'<a class="ix-foot-link" href="{_esc(article)}" target="_blank" '
             'rel="noopener noreferrer">article ↗</a>'
-        )
-
-    if it.kind == "disclosure" and it.source_doc_id is not None:
-        parts.append(
-            f'<a class="ix-foot-link" href="/source/{it.source_doc_id}">source receipt ↗</a>'
         )
 
     if parts:
@@ -1179,6 +1190,10 @@ INBOX_CSS = """
 .ix-memo-open { text-decoration: none; }
 .ix-note-dismiss:hover { color: var(--bad); border-color: var(--bad); }
 .ix-empty { color: var(--muted); font-size: var(--fs-body); padding: 14px 4px; }
+/* Truncation receipt — the stream is capped, so it says so rather than
+   presenting the top N as the whole queue. */
+.ix-more { color: var(--muted); font-size: var(--fs-caption); padding: 10px 4px 2px;
+  border-top: 1px solid var(--border-2); margin-top: 8px; }
 /* Quick approve/dismiss (compact rail cards) — zero-height: the buttons sit
    in the existing header row and flip visibility (layout stays reserved, so
    nothing shifts) on card hover / keyboard focus. */

@@ -117,7 +117,6 @@ _TRIGGER_CATEGORIES: dict[str, str] = {
 
 _KIND_CATEGORIES: dict[str, str] = {
     "draft": CATEGORY_DRAFTS,
-    "disclosure": CATEGORY_THESIS,
     "ledger": CATEGORY_THESIS,
     "note": CATEGORY_WATCH,
     "synthesis": CATEGORY_SYNTHESIS,
