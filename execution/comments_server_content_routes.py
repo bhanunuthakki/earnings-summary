@@ -154,6 +154,15 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             mimetype="text/html",
         )
 
+    @app.route("/api/peek/news-events", methods=["GET"])
+    def peek_news_events():
+        from pipeline.peeks import render_news_events_peek
+
+        return Response(
+            render_news_events_peek(db_path, request.args.get("ticker") or ""),
+            mimetype="text/html",
+        )
+
     @app.route("/api/peek/ticker/<ticker>", methods=["GET"])
     def peek_ticker(ticker: str):
         from pipeline.peeks import render_ticker_peek

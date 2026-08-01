@@ -1194,6 +1194,63 @@ def test_earnings_prep_peek_assembles_grounded_memo(repo: Path, db_path: Path) -
     assert "ask for the narrative" in html and "data-ask-q=" in html
 
 
+def _seed_news_event(
+    db_path: Path,
+    *,
+    ticker: str = "NU",
+    news_id: int = 7001,
+    headline: str = "Nu acquires a Mexican bank charter",
+    days_ago: int = 5,
+    event_key: str = "nu_mx_charter",
+) -> None:
+    """One news_events row (alembic 0262) inside the since-last-call window."""
+    stamp = (datetime.now(UTC) - timedelta(days=days_ago)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO news_events(ticker, news_id, headline, url, published_at, "
+            "event_key, event_type, relevance, why_material, classified_at) "
+            "VALUES (?, ?, ?, 'https://news.example/ev', ?, ?, 'primary', 0.9, "
+            "'a new charter expands the lending thesis', ?)",
+            (ticker, news_id, headline, stamp, event_key, stamp),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_earnings_prep_peek_lists_events_since_last_call(repo: Path, db_path: Path) -> None:
+    """The news lane is pull-only (owner ruling 2026-07-31): material primary
+    events surface as the prep memo's "Since last call" section, one line per
+    event with the article link — never as alerts."""
+    from pipeline.peeks import render_earnings_prep_peek
+
+    _seed_prep_ticker(db_path)
+    _seed_news_event(db_path)
+
+    html = render_earnings_prep_peek(db_path, repo, "NU")
+    assert html is not None
+    assert "Since last call — material events" in html
+    assert "Nu acquires a Mexican bank charter" in html
+    assert 'href="https://news.example/ev"' in html
+    assert "a new charter expands the lending thesis" in html
+
+
+def test_news_events_peek_route(client: FlaskClient, db_path: Path) -> None:
+    """The ticker peek's events doorway: rows render one line per event; an
+    empty window is a valid, quiet answer (never an error)."""
+    _seed_news_event(db_path)
+    resp = client.get("/api/peek/news-events?ticker=NU")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "material events since last call" in body
+    assert "Nu acquires a Mexican bank charter" in body
+
+    empty = client.get("/api/peek/news-events?ticker=ZZZQ")
+    assert empty.status_code == 200
+    assert "No material events noted" in empty.get_data(as_text=True)
+
+
 def test_earnings_prep_peek_route_serves_and_404s(client: FlaskClient, db_path: Path) -> None:
     _seed_prep_ticker(db_path)
     ok = client.get("/api/peek/earnings-prep?ticker=NU")

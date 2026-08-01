@@ -9,17 +9,18 @@ Material news is an LLM-DEPENDENT trigger (like earnings_tone, the inverse of
 kpi_inflection): the materiality judgment IS the LLM call, with no deterministic
 fallback. The key contracts verified here:
 
-  * scan() emits a candidate ONLY for stories scored >= the relevance floor
-    AND classified as a new PRIMARY event — commentary/opinion/recap stories
-    AND results-class earnings coverage never become candidates, whatever
-    they scored (the veto lives in scan; results-day coverage belongs to the
-    earnings machinery — owner ruling 2026-07-31)
-  * scan() degrades to [] (never raises, never fabricates) when the LLM fails
+  * scan() ALWAYS returns [] — the lane is pull-only (owner ruling
+    2026-07-31: news never alerts; the catch-up is the pre-earnings brief).
+    Its product is the news_events store: a row per story scored >= the
+    relevance floor AND classified as a new PRIMARY event —
+    commentary/opinion/recap stories AND results-class earnings coverage
+    never reach the store, whatever they scored
+  * scan() degrades to a no-op (never raises, never fabricates) when the LLM
+    fails
   * the batch classification is cached — a second scan over the same news is a
-    cache hit (no second LLM call)
-  * build_alert is deterministic from the stored classification — NO LLM call
-  * draft_actions emits NOTHING (the templated thesis_update/earnings_prep
-    pair was ruled noise 2026-07-30; the alert settles at the alert level)
+    cache hit (no second LLM call) and a store no-op
+  * should_fire / build_alert / draft_actions stay Protocol-compliant and
+    deterministic (unreachable in production — no candidates are emitted)
 """
 
 from __future__ import annotations
@@ -29,7 +30,6 @@ import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
 
 import pytest
 
@@ -83,6 +83,59 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         + "llm_call_id INTEGER"
         + ")"
     )
+    # The trigger's product store (alembic 0262) — scan() persists qualifying
+    # primary events here and emits no candidates (owner ruling 2026-07-31).
+    _ = conn.execute(
+        "CREATE TABLE news_events ("
+        + "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        + "ticker TEXT NOT NULL, "
+        + "news_id INTEGER NOT NULL UNIQUE, "
+        + "headline TEXT NOT NULL, "
+        + "url TEXT NOT NULL, "
+        + "published_at TEXT NOT NULL, "
+        + "event_key TEXT NOT NULL DEFAULT '', "
+        + "event_type TEXT NOT NULL, "
+        + "relevance REAL NOT NULL, "
+        + "why_material TEXT NOT NULL DEFAULT '', "
+        + "classified_at TEXT NOT NULL"
+        + ")"
+    )
+
+
+def _noted(conn: sqlite3.Connection) -> list[tuple[int, str, str, float]]:
+    """The persisted news_events rows, ordered by news_id — the assertion
+    surface for every scan test: (news_id, event_key, event_type, relevance)."""
+    return [
+        (int(r[0]), str(r[1]), str(r[2]), float(r[3]))
+        for r in conn.execute(
+            "SELECT news_id, event_key, event_type, relevance FROM news_events ORDER BY news_id"
+        ).fetchall()
+    ]
+
+
+def _note_event(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str = "BN",
+    news_id: int,
+    event_key: str,
+    classified_at: datetime,
+) -> None:
+    """Pre-insert one news_events row (the cross-day guard's lookback set)."""
+    _ = conn.execute(
+        "INSERT INTO news_events(ticker, news_id, headline, url, published_at, "
+        "event_key, event_type, relevance, why_material, classified_at) "
+        "VALUES (?, ?, 'prior coverage', 'https://news.example/prior', ?, ?, "
+        "'primary', 0.9, 'prior', ?)",
+        (
+            ticker,
+            news_id,
+            classified_at.strftime("%Y-%m-%d %H:%M:%S"),
+            event_key,
+            classified_at.strftime("%Y-%m-%d %H:%M:%S"),
+        ),
+    )
+    conn.commit()
 
 
 def _insert_news(
@@ -316,12 +369,12 @@ def test_signature_key_evidence_is_news_id_only() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_scan_emits_candidates_only_for_material_stories(
+def test_scan_notes_material_primary_events_and_emits_no_candidates(
     fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """3 recent stories, LLM scores 2 of them >= the 0.65 floor → exactly 2
-    candidates, each carrying relevance + why_material + event_type in
-    evidence."""
+    """3 recent stories, 2 score >= the 0.65 floor → scan returns [] (the
+    pull-only contract: nothing pending, ever) and persists exactly those 2
+    to news_events with their classification fields."""
     ids = _seed_three_recent(fixture_db)
     payload = _classification_payload(
         [
@@ -334,29 +387,21 @@ def test_scan_emits_candidates_only_for_material_stories(
     monkeypatch.setattr("triggers.material_news.call_llm", mock)
     _patch_anchor(monkeypatch)
 
-    candidates = MaterialNewsTrigger().scan("BN", fixture_db)
+    assert MaterialNewsTrigger().scan("BN", fixture_db) == []
 
     assert mock.call_count == 1  # ONE batched call for the whole ticker
-    assert len(candidates) == 2
-    keys = sorted(c.key for c in candidates)
-    assert keys == [f"BN:news:{ids[0]}", f"BN:news:{ids[2]}"]
-    for cand in candidates:
-        assert cand.ticker == "BN"
-        assert cand.kind == "material_news"
-        assert cand.evidence["relevance_score"] >= 0.65
-        assert cand.evidence["event_type"] == "primary"
-        assert isinstance(cand.evidence["why_material"], str)
-        assert cand.evidence["why_material"]
-        assert cand.evidence["url"].startswith("https://")
+    noted = _noted(fixture_db)
+    assert [(n, t) for n, _k, t, _r in noted] == [(ids[0], "primary"), (ids[2], "primary")]
+    assert all(r >= 0.65 for _n, _k, _t, r in noted)
 
 
 def test_scan_vetoes_commentary_regardless_of_score(
     fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """THE v3 signal-quality contract: an opinion piece or earnings recap about
-    a thesis-relevant TOPIC never fires, even scored 0.9+ — topical relevance
-    without new primary information is noise (owner ruling 2026-07-30, the
-    LMND CFO think-piece / MSFT earnings-recap alerts)."""
+    a thesis-relevant TOPIC is never noted, even scored 0.9+ — topical
+    relevance without new primary information is noise (owner ruling
+    2026-07-30, the LMND CFO think-piece / MSFT earnings-recap alerts)."""
     ids = _seed_three_recent(fixture_db)
     payload = _classification_payload(
         [
@@ -369,16 +414,15 @@ def test_scan_vetoes_commentary_regardless_of_score(
     monkeypatch.setattr("triggers.material_news.call_llm", _StatefulLLM([payload]))
     _patch_anchor(monkeypatch)
 
-    candidates = MaterialNewsTrigger().scan("BN", fixture_db)
-
-    assert [c.key for c in candidates] == [f"BN:news:{ids[2]}"]
+    assert MaterialNewsTrigger().scan("BN", fixture_db) == []
+    assert [n for n, _k, _t, _r in _noted(fixture_db)] == [ids[2]]
 
 
 def test_scan_missing_event_type_fails_closed(
     fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """An entry without a recognizable event_type (schema drift back to the v2
-    shape) is treated as commentary — excluded — never as a fire-anyway
+    shape) is treated as commentary — excluded — never as a note-anyway
     fallback to the old noisy behavior."""
     _ = _seed_three_recent(fixture_db)
     payload = json.dumps(
@@ -388,64 +432,7 @@ def test_scan_missing_event_type_fails_closed(
     _patch_anchor(monkeypatch)
 
     assert MaterialNewsTrigger().scan("BN", fixture_db) == []
-
-
-def _create_decisions_with_qualitative(
-    conn: sqlite3.Connection, *, ticker: str, conds: object
-) -> None:
-    """A minimal decisions table + one open row carrying qualitative conditions
-    (L9 PR2 bridge). The fixture has no decisions table; create it here so the
-    other scan tests stay byte-identical (no qualitative overlay when absent)."""
-    conn.execute(
-        "CREATE TABLE decisions ("
-        "id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT, recommendation_kind TEXT, "
-        "recommendation_value FLOAT, made_at TEXT, source_lens TEXT, outcome_at TEXT, "
-        "qualitative_conditions TEXT)"
-    )
-    conn.execute(
-        "INSERT INTO decisions (ticker, recommendation_kind, made_at, qualitative_conditions) "
-        "VALUES (?, 'add', '2026-05-01', ?)",
-        (ticker, json.dumps(conds)),
-    )
-    conn.commit()
-
-
-def test_scan_attaches_qualitative_conditions_to_top_story(
-    fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """L9 PR2 — a held name with an open NEWS-watched qualitative condition: the
-    overlay rides the single most-material story, so the news alert flags the
-    condition the news may have tripped. Fires on NEWS, not next quarter's XBRL."""
-    ids = _seed_three_recent(fixture_db)
-    _create_decisions_with_qualitative(
-        fixture_db,
-        ticker="BN",
-        conds=[
-            {"phrase": "a credible competitor enters", "watch_for": "news", "note": None},
-            {"phrase": "tone turns defensive", "watch_for": "earnings", "note": None},
-        ],
-    )
-    payload = _classification_payload(
-        [(0, 0.90, "Major M&A"), (1, 0.20, "immaterial"), (2, 0.75, "antitrust probe")]
-    )
-    monkeypatch.setattr("triggers.material_news.call_llm", _StatefulLLM([payload]))
-    _patch_anchor(monkeypatch)
-
-    candidates = MaterialNewsTrigger().scan("BN", fixture_db)
-
-    # Only the highest-relevance candidate (story 0, 0.90) carries the overlay,
-    # and only the NEWS-watched condition (the earnings one is routed elsewhere).
-    top = next(c for c in candidates if c.key == f"BN:news:{ids[0]}")
-    other = next(c for c in candidates if c.key == f"BN:news:{ids[2]}")
-    overlay = top.evidence["thesis_conditions"]
-    assert isinstance(overlay, list)
-    phrases = [cast("dict[str, object]", p)["phrase"] for p in cast("list[object]", overlay)]
-    assert phrases == ["a credible competitor enters"]
-    assert "thesis_conditions" not in other.evidence
-
-    # ...and it renders into the alert the analyst sees.
-    alert = MaterialNewsTrigger().build_alert(top, None)
-    assert alert.memo_text is not None and "a credible competitor enters" in alert.memo_text
+    assert _noted(fixture_db) == []
 
 
 def test_scan_no_recent_news_returns_empty(fixture_db: sqlite3.Connection) -> None:
@@ -491,18 +478,18 @@ def test_scan_retries_once_on_malformed_json_then_succeeds(
     fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """First response is non-JSON; the retry (carrying the JSON-only preamble)
-    parses, and the candidate lands."""
+    parses, and the event is noted."""
     ids = _seed_three_recent(fixture_db)
     good = _classification_payload([(0, 0.91, "Material M&A")])
     mock = _StatefulLLM(["Here you go: { not json", good])
     monkeypatch.setattr("triggers.material_news.call_llm", mock)
     _patch_anchor(monkeypatch)
 
-    candidates = MaterialNewsTrigger().scan("BN", fixture_db)
+    assert MaterialNewsTrigger().scan("BN", fixture_db) == []
 
     assert mock.call_count == 2
     assert "previous response was not valid JSON" in mock.prompts[1]
-    assert [c.key for c in candidates] == [f"BN:news:{ids[0]}"]
+    assert [n for n, _k, _t, _r in _noted(fixture_db)] == [ids[0]]
 
 
 def test_scan_degrades_to_empty_on_malformed_json_twice(
@@ -521,8 +508,8 @@ def test_scan_degrades_to_empty_on_malformed_json_twice(
 def test_scan_all_below_threshold_returns_empty(
     fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The veto: when every story scores below the floor, no candidates are
-    emitted even though the LLM responded cleanly."""
+    """The veto: when every story scores below the floor, nothing is noted
+    even though the LLM responded cleanly."""
     _ = _seed_three_recent(fixture_db)
     payload = _classification_payload(
         [(0, 0.10, "noise"), (1, 0.30, "routine"), (2, 0.60, "near-miss, still below 0.65")]
@@ -533,26 +520,29 @@ def test_scan_all_below_threshold_returns_empty(
 
     assert MaterialNewsTrigger().scan("BN", fixture_db) == []
     assert mock.call_count == 1
+    assert _noted(fixture_db) == []
 
 
 def test_scan_cache_hit_skips_second_llm_call(
     fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A second scan over the same news batch is an artifact-store cache hit —
-    call_llm must not run again."""
-    _ = _seed_three_recent(fixture_db)
+    call_llm must not run again, and the store stays one-row (INSERT OR
+    IGNORE + the recent-event_key guard make the rerun a no-op)."""
+    ids = _seed_three_recent(fixture_db)
     payload = _classification_payload([(0, 0.90, "Material M&A")])
     mock = _StatefulLLM([payload])
     monkeypatch.setattr("triggers.material_news.call_llm", mock)
     _patch_anchor(monkeypatch)
 
     trig = MaterialNewsTrigger()
-    first = trig.scan("BN", fixture_db)
+    assert trig.scan("BN", fixture_db) == []
     assert mock.call_count == 1
+    assert [n for n, _k, _t, _r in _noted(fixture_db)] == [ids[0]]
 
-    second = trig.scan("BN", fixture_db)
+    assert trig.scan("BN", fixture_db) == []
     assert mock.call_count == 1, "cache miss — call_llm was re-invoked"
-    assert [c.key for c in first] == [c.key for c in second]
+    assert [n for n, _k, _t, _r in _noted(fixture_db)] == [ids[0]]
 
 
 # ---------------------------------------------------------------------------
@@ -560,50 +550,12 @@ def test_scan_cache_hit_skips_second_llm_call(
 # ---------------------------------------------------------------------------
 
 
-def _create_alerts_table(conn: sqlite3.Connection) -> None:
-    """Minimal alerts table for the cross-day event-guard tests ONLY — the base
-    fixture omits it, so every other scan test also exercises the guard's
-    missing-table degrade path (silently stands down, candidates still fire)."""
-    _ = conn.execute(
-        "CREATE TABLE alerts ("
-        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-        "user_id TEXT, ticker TEXT NOT NULL, trigger_kind TEXT NOT NULL, "
-        "fired_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', "
-        "memo_artifact_id INTEGER, evidence_json TEXT, signature_sha TEXT)"
-    )
-    conn.commit()
-
-
-def _insert_alert(
-    conn: sqlite3.Connection,
-    *,
-    ticker: str,
-    fired_at: datetime,
-    event_key: str,
-    trigger_kind: str = "material_news",
-) -> None:
-    """One fired alert carrying ``event_key`` in its evidence_json, ``fired_at``
-    in the naive-UTC isoformat shape ``alerts.store.insert_alert`` writes."""
-    _ = conn.execute(
-        "INSERT INTO alerts (ticker, trigger_kind, fired_at, status, evidence_json, signature_sha) "
-        "VALUES (?, ?, ?, 'pending', ?, ?)",
-        (
-            ticker,
-            trigger_kind,
-            fired_at.isoformat(),
-            json.dumps({"event_key": event_key, "news_id": 999}),
-            "sig-" + event_key,
-        ),
-    )
-    conn.commit()
-
-
-def test_scan_clusters_same_event_to_single_candidate(
+def test_scan_clusters_same_event_to_single_row(
     fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """THE v4 dedup contract: three outlets covering the same real-world event
     (identical event_key, all primary, all above the floor) collapse to exactly
-    ONE candidate — the highest-relevance story (prod 2026-07-30: three
+    ONE noted row — the highest-relevance story (prod 2026-07-30: three
     Brookfield/NextEra alerts, four META capex alerts, one per outlet)."""
     ids = _seed_three_recent(fixture_db)
     payload = _classification_payload(
@@ -617,19 +569,16 @@ def test_scan_clusters_same_event_to_single_candidate(
     monkeypatch.setattr("triggers.material_news.call_llm", _StatefulLLM([payload]))
     _patch_anchor(monkeypatch)
 
-    candidates = MaterialNewsTrigger().scan("BN", fixture_db)
-
-    assert [c.key for c in candidates] == [f"BN:news:{ids[1]}"]
-    assert candidates[0].evidence["relevance_score"] == 0.92
-    assert candidates[0].evidence["event_key"] == "acme_beta_deal"
+    assert MaterialNewsTrigger().scan("BN", fixture_db) == []
+    assert _noted(fixture_db) == [(ids[1], "acme_beta_deal", "primary", 0.92)]
 
 
 def test_scan_empty_event_key_never_clusters(
     fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Unclustered entries (event_key "" or the field missing entirely — e.g. a
-    schema drift back to the v3 shape) all fire individually: losing the field
-    degrades dedup, never alert correctness. No event_key rides the evidence."""
+    schema drift back to the v3 shape) all note individually: losing the field
+    degrades dedup, never coverage."""
     ids = _seed_three_recent(fixture_db)
     payload = json.dumps(
         [
@@ -658,29 +607,34 @@ def test_scan_empty_event_key_never_clusters(
     monkeypatch.setattr("triggers.material_news.call_llm", _StatefulLLM([payload]))
     _patch_anchor(monkeypatch)
 
-    candidates = MaterialNewsTrigger().scan("BN", fixture_db)
+    assert MaterialNewsTrigger().scan("BN", fixture_db) == []
+    noted = _noted(fixture_db)
+    assert [n for n, _k, _t, _r in noted] == sorted(ids)
+    assert all(k == "" for _n, k, _t, _r in noted)
 
-    assert sorted(c.key for c in candidates) == sorted(f"BN:news:{i}" for i in ids)
-    for cand in candidates:
-        assert "event_key" not in cand.evidence
 
-
-def test_scan_cross_day_guard_suppresses_recently_alerted_event(
+def test_scan_cross_day_guard_suppresses_recently_noted_event(
     fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A candidate whose event_key matches a same-ticker material_news alert
-    fired within the last 72h is suppressed — day-2 coverage of the same event
-    arrives with fresh news ids, which the per-story signature dedup can't see.
-    The guard is ticker-scoped: another ticker's alert on the same key doesn't
-    suppress."""
+    """A story whose event_key was already noted for the SAME ticker within the
+    last 72h is skipped — day-2 coverage arrives with fresh news ids, which
+    UNIQUE(news_id) can't see. The guard is ticker-scoped: another ticker's
+    row on the same key doesn't suppress."""
     now = datetime.now(UTC).replace(tzinfo=None)
     ids = _seed_three_recent(fixture_db)
-    _create_alerts_table(fixture_db)
-    _insert_alert(
-        fixture_db, ticker="BN", fired_at=now - timedelta(hours=10), event_key="acme_beta_deal"
+    _note_event(
+        fixture_db,
+        ticker="BN",
+        news_id=901,
+        event_key="acme_beta_deal",
+        classified_at=now - timedelta(hours=10),
     )
-    _insert_alert(
-        fixture_db, ticker="OTHER", fired_at=now - timedelta(hours=10), event_key="core_unit_probe"
+    _note_event(
+        fixture_db,
+        ticker="OTHER",
+        news_id=902,
+        event_key="core_unit_probe",
+        classified_at=now - timedelta(hours=10),
     )
     payload = _classification_payload(
         [
@@ -693,21 +647,24 @@ def test_scan_cross_day_guard_suppresses_recently_alerted_event(
     monkeypatch.setattr("triggers.material_news.call_llm", _StatefulLLM([payload]))
     _patch_anchor(monkeypatch)
 
-    candidates = MaterialNewsTrigger().scan("BN", fixture_db)
-
-    assert [c.key for c in candidates] == [f"BN:news:{ids[2]}"]
+    assert MaterialNewsTrigger().scan("BN", fixture_db) == []
+    fresh = [n for n, _k, _t, _r in _noted(fixture_db) if n not in (901, 902)]
+    assert fresh == [ids[2]]
 
 
 def test_scan_cross_day_guard_releases_after_window(
     fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An alert on the same event_key OLDER than the 72h window no longer
-    suppresses — a genuine re-development of an old event may alert again."""
+    """A noted row on the same event_key OLDER than the 72h window no longer
+    suppresses — a genuine re-development of an old event notes again."""
     now = datetime.now(UTC).replace(tzinfo=None)
     ids = _seed_three_recent(fixture_db)
-    _create_alerts_table(fixture_db)
-    _insert_alert(
-        fixture_db, ticker="BN", fired_at=now - timedelta(hours=100), event_key="acme_beta_deal"
+    _note_event(
+        fixture_db,
+        ticker="BN",
+        news_id=901,
+        event_key="acme_beta_deal",
+        classified_at=now - timedelta(hours=100),
     )
     payload = _classification_payload(
         [(0, 0.90, "The acquisition develops further")],
@@ -716,9 +673,9 @@ def test_scan_cross_day_guard_releases_after_window(
     monkeypatch.setattr("triggers.material_news.call_llm", _StatefulLLM([payload]))
     _patch_anchor(monkeypatch)
 
-    candidates = MaterialNewsTrigger().scan("BN", fixture_db)
-
-    assert [c.key for c in candidates] == [f"BN:news:{ids[0]}"]
+    assert MaterialNewsTrigger().scan("BN", fixture_db) == []
+    fresh = [n for n, _k, _t, _r in _noted(fixture_db) if n != 901]
+    assert fresh == [ids[0]]
 
 
 # ---------------------------------------------------------------------------
@@ -767,9 +724,8 @@ def test_scan_vetoes_results_class(
     monkeypatch.setattr("triggers.material_news.call_llm", _StatefulLLM([payload]))
     _patch_anchor(monkeypatch)
 
-    candidates = MaterialNewsTrigger().scan("BN", fixture_db)
-
-    assert [c.key for c in candidates] == [f"BN:news:{ids[2]}"]
+    assert MaterialNewsTrigger().scan("BN", fixture_db) == []
+    assert [n for n, _k, _t, _r in _noted(fixture_db)] == [ids[2]]
 
 
 # ---------------------------------------------------------------------------
@@ -849,8 +805,9 @@ def test_draft_actions_emits_nothing() -> None:
 def test_full_pipeline_integration_smoke(
     fixture_db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A BN story scored material walks scan → should_fire → build_alert →
-    draft_actions end-to-end."""
+    """A BN story scored material walks the whole production path: scan
+    classifies it, notes it to news_events with every classification field,
+    and hands the driver NOTHING — the pull-only lane end-to-end."""
     now = datetime.now(UTC).replace(tzinfo=None)
     news_id = _insert_news(
         fixture_db,
@@ -861,25 +818,25 @@ def test_full_pipeline_integration_smoke(
         snippet="Largest close to date, expanding fee-bearing capital.",
     )
     payload = _classification_payload(
-        [(0, 0.88, "A record fund close expands fee-bearing capital")]
+        [(0, 0.88, "A record fund close expands fee-bearing capital")],
+        event_keys={0: "bn_flagship_fund_close"},
     )
     mock = _StatefulLLM([payload])
     monkeypatch.setattr("triggers.material_news.call_llm", mock)
     _patch_anchor(monkeypatch)
 
-    trig = MaterialNewsTrigger()
-    candidates = trig.scan("BN", fixture_db)
-    assert len(candidates) == 1
+    assert MaterialNewsTrigger().scan("BN", fixture_db) == []
 
-    assert trig.should_fire(candidates[0], _empty_state()) is True
-
-    alert = trig.build_alert(candidates[0], None)
-    assert alert.ticker == "BN"
-    assert alert.trigger_kind == "material_news"
-    memo = alert.memo_text
-    assert memo is not None
-    assert "Brookfield closes $12B flagship infrastructure fund" in memo
-    assert alert.signature_sha == compute_signature_sha("material_news", "BN", {"news_id": news_id})
-
-    # v3: no queued actions — the alert settles at the alert level.
-    assert trig.draft_actions(alert, candidates[0]) == []
+    row = fixture_db.execute(
+        "SELECT ticker, news_id, headline, url, event_key, event_type, relevance, why_material "
+        "FROM news_events"
+    ).fetchone()
+    assert row is not None
+    assert row[0] == "BN"
+    assert row[1] == news_id
+    assert row[2] == "Brookfield closes $12B flagship infrastructure fund"
+    assert row[3] == "https://news.example/bn1"
+    assert row[4] == "bn_flagship_fund_close"
+    assert row[5] == "primary"
+    assert row[6] == 0.88
+    assert "fee-bearing capital" in row[7]

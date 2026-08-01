@@ -39,7 +39,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Mapping
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from html import escape
 from io import StringIO
 from pathlib import Path
@@ -346,6 +346,20 @@ def render_ticker_peek(
         rows.append(("Next ER", f"{escape(fmt_date(next_er, include_year=False))} · {escape(rel)}"))
     if pending:
         rows.append(("Unreviewed", f"{pending} alert{'s' if pending != 1 else ''}"))
+    n_events = _events_since_call_count(conn, t)
+    if n_events:
+        # Pull-only doorway (owner ruling 2026-07-31: news never alerts) —
+        # the count retargets the peek to the since-last-call events list;
+        # middle-click still lands on the holding.
+        rows.append(
+            (
+                "Since last call",
+                f'<a href="/#holding={escape(t)}" '
+                f'data-peek-url="/api/peek/news-events?ticker={escape(t)}" '
+                f'data-peek-title="Material events">'
+                f"{n_events} event{'s' if n_events != 1 else ''}</a>",
+            )
+        )
     rows_html = "".join(
         f'<div class="cc-mini-row"><span>{label}</span><b>{value}</b></div>'
         for label, value in rows
@@ -383,6 +397,32 @@ def _latest_overall_status(conn: sqlite3.Connection, ticker: str) -> str | None:
     if row is None or row[0] is None:
         return None
     return str(row[0])
+
+
+def _events_since_call_count(conn: sqlite3.Connection, ticker: str) -> int:
+    """Distinct material events noted since the last reported ER (fallback:
+    120 days) — the mini-card's pull-only doorway count. 0 on a pre-0262 DB
+    or any error (the row simply drops, hide-don't-stub)."""
+    try:
+        since: str | None = None
+        try:
+            from expected_earnings import last_reported_by_ticker
+
+            last = last_reported_by_ticker(conn, datetime.now(UTC).date()).get(ticker)
+            since = last.isoformat() if last else None
+        except Exception:
+            since = None
+        if since is None:
+            since = (datetime.now(UTC) - timedelta(days=120)).date().isoformat()
+        row = conn.execute(
+            "SELECT COUNT(DISTINCT CASE WHEN event_key != '' THEN event_key "
+            "ELSE 'row:' || id END) FROM news_events "
+            "WHERE ticker = ? AND published_at >= ?",
+            (ticker, since),
+        ).fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(row[0]) if row and row[0] is not None else 0
 
 
 def _pending_alert_count(conn: sqlite3.Connection, ticker: str) -> int:
@@ -2127,6 +2167,7 @@ def render_earnings_prep_peek(db_path: Path, repo_root: Path, ticker: str) -> st
         conn.close()
 
     brief = _prep_brief_block(db_path, t, next_er.isoformat() if next_er else None)
+    events = _prep_events_block(db_path, t)
     watch = _prep_watch_items(db_path, t)
     ledger = _prep_ledger_notes(db_path, t)
 
@@ -2141,7 +2182,7 @@ def render_earnings_prep_peek(db_path: Path, repo_root: Path, ticker: str) -> st
         f'<a href="/#holding={escape(t, quote=True)}">open the holding →</a></div>'
     )
     return (
-        f'<div class="cc-prep">{header}{brief}{watch}{ledger}{valuation}</div>{foot}'
+        f'<div class="cc-prep">{header}{brief}{events}{watch}{ledger}{valuation}</div>{foot}'
         f"<style>{_PREP_CSS}</style>"
     )
 
@@ -2207,6 +2248,117 @@ def _prep_header(conn: sqlite3.Connection, repo_root: Path, t: str) -> str:
         status = ""
     when_txt = escape(when) if when else "date not on the calendar yet"
     return f'<div class="prep-head"><span class="prep-when">reports {when_txt}</span>{status}</div>'
+
+
+class _NewsEventRow(NamedTuple):
+    published: str  # YYYY-MM-DD
+    headline: str
+    url: str
+    why: str
+
+
+def _news_events_since(db_path: Path, t: str, *, limit: int = 12) -> list[_NewsEventRow]:
+    """Material events noted for ``t`` since its last reported ER (fallback:
+    120 days), newest first, one row per real-world event (latest per
+    event_key — the write path already suppresses most duplicates; this
+    read-side pass keeps the list one-per-event even across guard windows).
+    Empty on a pre-0262 DB or any sqlite error — the section simply drops.
+    """
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    except sqlite3.Error:
+        return []
+    try:
+        since: str | None = None
+        try:
+            from expected_earnings import last_reported_by_ticker
+
+            last = last_reported_by_ticker(conn, datetime.now(UTC).date()).get(t)
+            since = last.isoformat() if last else None
+        except Exception:
+            since = None
+        if since is None:
+            since = (datetime.now(UTC) - timedelta(days=120)).date().isoformat()
+        try:
+            rows = conn.execute(
+                "SELECT published_at, headline, url, why_material, event_key "
+                "FROM news_events WHERE ticker = ? AND published_at >= ? "
+                "ORDER BY published_at DESC",
+                (t, since),
+            ).fetchall()
+        except sqlite3.Error:
+            return []
+    finally:
+        conn.close()
+    out: list[_NewsEventRow] = []
+    seen_keys: set[str] = set()
+    for published_at, headline, url, why, event_key in rows:
+        key = str(event_key or "")
+        if key and key in seen_keys:
+            continue
+        if key:
+            seen_keys.add(key)
+        out.append(
+            _NewsEventRow(
+                published=str(published_at or "")[:10],
+                headline=str(headline or ""),
+                url=str(url or ""),
+                why=str(why or ""),
+            )
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _news_events_list_html(events: list[_NewsEventRow]) -> str:
+    """The shared one-line-per-event list body (prep section + events peek)."""
+    items: list[str] = []
+    for e in events:
+        head = (
+            f'<a href="{escape(e.url, quote=True)}" target="_blank" rel="noopener">'
+            f"{escape(e.headline)}</a>"
+            if e.url.startswith(("http://", "https://"))
+            else escape(e.headline)
+        )
+        why = f' <span class="muted">— {escape(e.why)}</span>' if e.why else ""
+        items.append(f'<li><span class="muted">{escape(e.published)}</span> · {head}{why}</li>')
+    return f"<ul>{''.join(items)}</ul>"
+
+
+def _prep_events_block(db_path: Path, t: str) -> str:
+    """ "Since last call" — the material primary events noted between the last
+    reported ER and now (the news_events store; owner ruling 2026-07-31: news
+    never alerts, the catch-up happens HERE). Renders nothing when the store
+    is empty for the window — a quiet quarter is one line less, not a stub."""
+    events = _news_events_since(db_path, t)
+    if not events:
+        return ""
+    return (
+        '<div class="prep-sec"><h4>Since last call — material events</h4>'
+        f"{_news_events_list_html(events)}</div>"
+    )
+
+
+def render_news_events_peek(db_path: Path, ticker: str) -> str:
+    """The ticker peek's events doorway: the same since-last-call list as the
+    prep memo, standalone. Always renders — an empty window is a valid answer."""
+    t = (ticker or "").strip().upper()
+    if not t:
+        return '<div class="cc-empty">No ticker.</div>'
+    events = _news_events_since(db_path, t)
+    if not events:
+        return '<div class="cc-empty">No material events noted since the last call.</div>'
+    foot = (
+        f'<div class="cc-peek-foot"><a href="/#holding={escape(t, quote=True)}">'
+        "open the holding →</a></div>"
+    )
+    return (
+        f'<div class="cc-prep"><div class="prep-sec">'
+        f"<h4>{escape(t)} — material events since last call</h4>"
+        f"{_news_events_list_html(events)}</div></div>{foot}"
+        f"<style>{_PREP_CSS}</style>"
+    )
 
 
 def _prep_watch_items(db_path: Path, t: str, *, heading: str = "What you said to watch") -> str:

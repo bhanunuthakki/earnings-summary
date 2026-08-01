@@ -122,7 +122,7 @@ def test_extracted_routes_preserve_endpoint_contract(client):
         for rule in client.application.url_map.iter_rules()
         if rule.endpoint != "static"
     }
-    assert len(rules) == 149  # +1: peek_earnings_readout (2026-07-30 diet readout lane)
+    assert len(rules) == 150  # +1: peek_news_events (2026-07-31 pull-only news lane)
     assert {
         endpoint: rules[endpoint]
         for endpoint in (
@@ -138,6 +138,7 @@ def test_extracted_routes_preserve_endpoint_contract(client):
             "peek_score",
             "peek_earnings_prep",
             "peek_earnings_readout",
+            "peek_news_events",
             "peek_fit",
             "peek_whatif",
             "peek_etf_workup",
@@ -174,6 +175,7 @@ def test_extracted_routes_preserve_endpoint_contract(client):
         "peek_score": "/api/peek/score",
         "peek_earnings_prep": "/api/peek/earnings-prep",
         "peek_earnings_readout": "/api/peek/earnings-readout",
+        "peek_news_events": "/api/peek/news-events",
         "peek_fit": "/api/peek/fit",
         "peek_whatif": "/api/peek/whatif",
         "peek_etf_workup": "/api/peek/etf_workup",
