@@ -239,10 +239,14 @@ class _StatefulLLM:
 def test_migrated_schema_satisfies_trigger_contract(
     db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Build ``news`` via the migration, seed two recent stories, and run
-    ``scan()`` with a mocked classifier: exactly the material story becomes a
-    candidate. This is the reason the table exists — the migration's columns
-    feed the trigger verbatim.
+    """Build the schema via the migrations, seed two recent stories, and run
+    ``scan()`` with a mocked classifier: exactly the material story lands in
+    ``news_events`` (the lane is pull-only — scan emits no candidates, owner
+    ruling 2026-07-31). This is the reason the tables exist — the ``news``
+    migration's columns feed the trigger verbatim and 0262's store receives
+    its verdicts. Upgraded to HEAD (not just the news migration): the persist
+    path opens a WRITER connection whose schema preflight requires the DB
+    revision to match the checkout.
 
     No ``llm_artifacts`` table is created: the trigger's classification cache
     degrades gracefully when that table is absent (``read_current``/``upsert``
@@ -250,7 +254,7 @@ def test_migrated_schema_satisfies_trigger_contract(
     hermetic and free of cross-connection sqlite locking. Cache behavior is
     covered separately by ``test_trigger_material_news.py``."""
     cfg = _build_config(db_path)
-    command.upgrade(cfg, NEWS_HEAD)
+    command.upgrade(cfg, "head")
 
     conn = sqlite3.connect(str(db_path))
     try:
@@ -293,14 +297,16 @@ def test_migrated_schema_satisfies_trigger_contract(
         monkeypatch.setattr("triggers.material_news.call_llm", mock)
         monkeypatch.setattr("triggers.material_news.load_thesis_anchor", _anchor_stub)
 
-        candidates = MaterialNewsTrigger().scan("BN", conn)
+        assert MaterialNewsTrigger().scan("BN", conn) == []
 
         assert mock.call_count == 1  # one batched classification call
-        assert len(candidates) == 1
-        cand = candidates[0]
-        assert cand.ticker == "BN"
-        assert cand.evidence["headline"] == "Acme acquires Beta for $2B"
-        assert isinstance(cand.evidence["relevance_score"], float)
-        assert cand.evidence["relevance_score"] >= 0.7
+        rows = conn.execute(
+            "SELECT ticker, headline, event_type, relevance FROM news_events"
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == "BN"
+        assert rows[0][1] == "Acme acquires Beta for $2B"
+        assert rows[0][2] == "primary"
+        assert float(rows[0][3]) >= 0.65
     finally:
         conn.close()

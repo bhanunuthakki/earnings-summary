@@ -16,15 +16,17 @@ Two consequences fall out of that:
     materiality. A failed classification means "we couldn't judge today",
     not "nothing happened" and certainly not "everything is material".
 
-  * **The materiality veto lives in ``scan()``.** ``build_alert`` cannot veto —
-    the Protocol requires it to return an ``AlertDraft`` — so the filter must
-    happen earlier. ``scan()`` classifies every recent headline in ONE batched
-    LLM call, then emits a candidate *only* for stories scoring
-    ``relevance >= _RELEVANCE_THRESHOLD`` **and** classified as a new PRIMARY
-    event (``event_type`` primary — commentary is vetoed regardless of score,
-    and results-class stories route to the earnings machinery instead of
-    alerting here; see ``_ALERTABLE_EVENT_TYPES``). Immaterial stories never
-    become candidates, so the driver never fires them.
+  * **This lane emits NO alerts (owner ruling 2026-07-31).** "No filter can
+    do a good enough job of only fetching useful alerts" — the catch-up is
+    the pre-earnings brief, so ``scan()`` classifies every recent headline in
+    ONE batched LLM call and persists qualifying rows (``relevance >=
+    _RELEVANCE_THRESHOLD`` **and** a new PRIMARY event — commentary and
+    results-class coverage never qualify; see ``_ALERTABLE_EVENT_TYPES``) to
+    the ``news_events`` store (alembic 0262), then ALWAYS returns ``[]``.
+    Pull surfaces consume the store: the earnings-prep peek's "Since last
+    call" section and the ticker peek's events strip. ``should_fire`` /
+    ``build_alert`` / ``draft_actions`` remain for Protocol compliance but
+    are unreachable in production (no candidates are ever emitted).
 
 Cost is bounded: one batched call per ticker per run (up to
 ``_MAX_STORIES_PER_SCAN`` headlines), cached in ``llm_artifacts`` keyed on
@@ -65,11 +67,7 @@ from pathlib import Path
 from typing import ClassVar, cast
 
 from alerts.store import compute_signature_sha
-from decision_conditions import (
-    load_open_qualitative_conditions,
-    overlay_payloads,
-    render_qualitative_overlay,
-)
+from decision_conditions import render_qualitative_overlay
 from llm.anchors import (
     compose_anchor_block,
     load_bear_anchor,
@@ -86,6 +84,7 @@ from llm_artifact_store import (
     upsert,
 )
 from llm_client import JSON_FENCE_RE, call_llm
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from triggers.base import (
     AlertDraft,
     Cadence,
@@ -326,43 +325,79 @@ def _load_recent_news(conn: sqlite3.Connection, ticker: str, *, now: datetime) -
     return stories
 
 
-def _recent_alert_event_keys(
-    conn: sqlite3.Connection, ticker: str, *, kind: str, now: datetime
-) -> frozenset[str]:
-    """event_keys carried by ``kind`` alerts for ``ticker`` fired within the
-    cross-day dedup window — any status counts (a dismissed alert on an event
-    is still "the owner has seen this event").
+def _recent_event_keys(conn: sqlite3.Connection, ticker: str, *, now: datetime) -> frozenset[str]:
+    """event_keys already persisted to ``news_events`` for ``ticker`` within
+    the cross-day dedup window — multi-day coverage of one event re-enters
+    with fresh news ids (which the UNIQUE(news_id) constraint can't see), so
+    the store would otherwise accumulate one row per outlet per day.
 
-    Best-effort by design: a missing alerts table (unit-test fixtures), a
-    sqlite error, or malformed evidence_json all degrade to the empty set —
-    the guard silently stands down and the per-story signature dedup still
-    backstops exact re-fires.
+    Best-effort by design: a missing news_events table (unit-test fixtures,
+    pre-0262 DB) or a sqlite error degrades to the empty set — the guard
+    silently stands down and UNIQUE(news_id) still blocks exact re-notes.
     """
-    # ``fired_at`` is stored as naive-UTC isoformat (alerts.store.insert_alert),
-    # so a lexical >= against an isoformat threshold is also chronological.
-    threshold = (now - timedelta(hours=_EVENT_DEDUP_WINDOW_HOURS)).isoformat()
+    threshold = _format_threshold(now - timedelta(hours=_EVENT_DEDUP_WINDOW_HOURS))
     try:
         rows = conn.execute(
-            "SELECT evidence_json FROM alerts WHERE trigger_kind = ? AND ticker = ? AND fired_at >= ?",
-            (kind, ticker, threshold),
+            "SELECT DISTINCT event_key FROM news_events "
+            "WHERE ticker = ? AND classified_at >= ? AND event_key != ''",
+            (ticker, threshold),
         ).fetchall()
     except sqlite3.Error:
         return frozenset()
-    keys: set[str] = set()
-    for row in rows:
-        raw = row[0]
-        if not isinstance(raw, str):
-            continue
-        try:
-            evidence = json.loads(raw)
-        except ValueError:
-            continue
-        if not isinstance(evidence, dict):
-            continue
-        key = cast("dict[str, object]", evidence).get("event_key")
-        if isinstance(key, str) and key:
-            keys.add(key)
-    return frozenset(keys)
+    return frozenset(str(r[0]) for r in rows if isinstance(r[0], str) and r[0])
+
+
+def _persist_events(
+    db_path: Path,
+    ticker: str,
+    kept: list[tuple[_NewsStory, _Score]],
+    *,
+    now: datetime,
+) -> int:
+    """Write the batch's qualifying events to ``news_events``; returns rows
+    actually inserted. Opens its own WRITER connection — ``scan()`` holds the
+    driver's read-only handle (same pattern as the artifact-store cache).
+    ``INSERT OR IGNORE`` on UNIQUE(news_id) makes re-runs no-ops. A sqlite
+    error (e.g. pre-0262 schema) logs loud and returns 0 — the classification
+    already happened and is cached, so the next run after the migration
+    persists at no extra LLM cost.
+    """
+    try:
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER)
+    except sqlite3.Error as exc:
+        log.warning({"event": "news_events_open_failed", "ticker": ticker, "error": str(exc)})
+        return 0
+    try:
+        classified_at = _format_threshold(now)
+        cur = conn.executemany(
+            "INSERT OR IGNORE INTO news_events("
+            "ticker, news_id, headline, url, published_at, "
+            "event_key, event_type, relevance, why_material, classified_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    ticker,
+                    story.news_id,
+                    story.headline,
+                    story.url,
+                    story.published_at,
+                    score.event_key,
+                    score.event_type,
+                    score.relevance,
+                    score.why_material,
+                    classified_at,
+                )
+                for story, score in kept
+            ],
+        )
+        conn.commit()
+        # rowcount is -1 when the driver can't count (never negative rows).
+        return max(0, cur.rowcount)
+    except sqlite3.Error as exc:
+        log.warning({"event": "news_events_persist_failed", "ticker": ticker, "error": str(exc)})
+        return 0
+    finally:
+        conn.close()
 
 
 # --------------------------------------------------------------------------
@@ -686,25 +721,32 @@ def _repo_root() -> Path:
 
 
 class MaterialNewsTrigger:
-    """``Cadence.ON_NEWS`` sensor over the ``news`` table.
+    """``Cadence.ON_NEWS`` collector over the ``news`` table.
 
     LLM-dependent: ``scan()`` classifies recent headlines for materiality and
-    emits a candidate only for stories above ``_RELEVANCE_THRESHOLD``. On any
-    classification failure it returns ``[]`` rather than raising or fabricating.
+    persists qualifying primary events to ``news_events`` — it emits NO
+    candidates (owner ruling 2026-07-31: the news lane is pull-only; the
+    catch-up is the pre-earnings brief). On any classification failure it
+    degrades to a no-op rather than raising or fabricating.
     """
 
     kind: ClassVar[str] = "material_news"
     cadence: ClassVar[Cadence] = Cadence.ON_NEWS
 
     def scan(self, ticker: str, db: sqlite3.Connection) -> list[TriggerCandidate]:
-        """Emit one candidate per material *event* in the recent news.
+        """Classify recent news and persist material events; emit NO candidates.
 
-        Loads recent news, classifies the whole batch in one (cached) LLM call,
-        keeps only stories with ``relevance >= _RELEVANCE_THRESHOLD`` and an
-        alertable event_type, then collapses multi-outlet coverage of the same
-        event to its single best story (``_dedup_by_event`` + the 72h
-        recent-alert guard). Returns ``[]`` when there is no recent news, the
-        news table is missing, or the classification fails — never raises.
+        Owner ruling 2026-07-31: no news story earns an interrupt — "no filter
+        can do a good enough job"; the catch-up is the pre-earnings brief. So
+        this lane's product is the ``news_events`` store, not alerts: recent
+        news is classified in one (cached) LLM call, stories with
+        ``relevance >= _RELEVANCE_THRESHOLD`` and an alertable event_type are
+        collapsed per real-world event (``_dedup_by_event`` + the 72h
+        cross-day guard) and written to ``news_events`` for the earnings-prep
+        peek's "Since last call" section and the ticker peek's events strip.
+        Always returns ``[]`` — nothing pending, nothing to settle. A missing
+        news table or a failed classification degrades to a no-op; never
+        raises.
         """
         now = datetime.now(UTC).replace(tzinfo=None)
         stories = _load_recent_news(db, ticker, now=now)
@@ -723,8 +765,8 @@ class MaterialNewsTrigger:
             )
         except MaterialNewsLLMError as exc:
             # The LLM-dependent contract: a failed classification degrades to
-            # "no material-news alerts today". Log and return [] — do not raise,
-            # do not fabricate materiality.
+            # "no events noted today". Log and return [] — do not raise, do
+            # not fabricate materiality.
             log.warning(
                 {
                     "event": "material_news_classification_failed",
@@ -738,57 +780,35 @@ class MaterialNewsTrigger:
         for idx, story in enumerate(stories):
             score = scores.get(idx)
             if score is None or score.relevance < _RELEVANCE_THRESHOLD:
-                continue  # immaterial — the veto: never becomes a candidate
+                continue  # immaterial — the veto: never reaches the store
             if score.event_type not in _ALERTABLE_EVENT_TYPES:
-                continue  # commentary about the company is never an alert
+                continue  # commentary / results coverage is never an event row
             survivors.append((story, score))
 
-        # v4 event-level dedup: several outlets covering the same real-world
-        # event must yield ONE alert, not one per outlet. Same-batch coverage
+        # Event-level dedup: several outlets covering the same real-world
+        # event must yield ONE row, not one per outlet. Same-batch coverage
         # collapses via the event_key cluster; coverage that re-enters on a
-        # later day with fresh news ids (which the signature dedup can't see)
-        # is caught by the recent-alert event_key guard.
+        # later day with fresh news ids (which UNIQUE(news_id) can't see) is
+        # caught by the recent-event_key guard over the store itself.
         survivors = _dedup_by_event(survivors)
-        recent_keys = _recent_alert_event_keys(db, ticker, kind=self.kind, now=now)
+        recent_keys = _recent_event_keys(db, ticker, now=now)
+        kept = [
+            (story, score)
+            for story, score in survivors
+            if not (score.event_key and score.event_key in recent_keys)
+        ]
 
-        candidates: list[TriggerCandidate] = []
-        for story, score in survivors:
-            if score.event_key and score.event_key in recent_keys:
-                continue  # event already alerted within the cross-day window
-            evidence: dict[str, object] = {
-                "news_id": story.news_id,
-                "headline": story.headline,
-                "url": story.url,
-                "published_at": story.published_at,
-                "relevance_score": score.relevance,
-                "why_material": score.why_material,
-                "event_type": score.event_type,
-            }
-            if score.event_key:
-                evidence["event_key"] = score.event_key
-            candidates.append(
-                TriggerCandidate(
-                    ticker=ticker,
-                    kind=self.kind,
-                    key=f"{ticker}:news:{story.news_id}",
-                    evidence=evidence,
-                    computed_at=now,
-                )
+        if kept and db_path is not None:
+            inserted = _persist_events(db_path, ticker, kept, now=now)
+            log.info(
+                {
+                    "event": "material_news_events_noted",
+                    "ticker": ticker,
+                    "qualifying": len(kept),
+                    "inserted": inserted,
+                }
             )
-
-        # L9 PR2 — qualitative-condition bridge: when this held name has open
-        # NON-numeric "what would change my mind" conditions, attach them to the
-        # single most-material story so the alert reminds the analyst the news
-        # may have tripped one. Surfaced (not auto-satisfied): the human judges
-        # the match. Mutating the candidate's evidence dict is safe — the dict is
-        # mutable even though TriggerCandidate is frozen — and never touches the
-        # signature (keyed on news_id alone).
-        if candidates:
-            overlay = load_open_qualitative_conditions(db, ticker, surface="news")
-            if overlay:
-                top = max(candidates, key=lambda c: _as_float(c.evidence.get("relevance_score")))
-                top.evidence["thesis_conditions"] = overlay_payloads(overlay)
-        return candidates
+        return []
 
     def should_fire(self, candidate: TriggerCandidate, user_state: UserStateContext) -> bool:
         """Defensive re-check of the relevance floor + the event-type gate.
