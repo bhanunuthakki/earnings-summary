@@ -92,13 +92,24 @@ class DocumentProcessingPopulationRequest(_FrozenModel):
     def _commitment_contract(self) -> Self:
         if (self.input_commitment_sha256 is None) != (self.plan_commitment_sha256 is None):
             raise ValueError("population commitments must be supplied together")
-        if (
-            self.apply
-            and self.after_processing_obligation_revision_id is not None
-            and self.input_commitment_sha256 is None
-        ):
-            raise ValueError("a resumed apply requires population commitments")
+        bounded = (
+            self.after_processing_obligation_revision_id is not None
+            or self.max_obligations is not None
+        )
+        if self.apply and bounded and self.input_commitment_sha256 is None:
+            raise ValueError("a bounded or resumed apply requires population commitments")
+        if bounded and self.phase == "snapshots":
+            raise ValueError("bounded population cannot enter the snapshot sealing phase")
         return self
+
+
+class DocumentProcessingCheckpoint(_FrozenModel):
+    bounded: bool
+    safe_to_seal: bool
+    last_processing_obligation_revision_id: str | None
+    processed_obligation_count: int = Field(ge=0)
+    remaining_obligation_count: int = Field(ge=0)
+    can_resume: bool
 
 
 class DocumentProcessingPopulationResult(_FrozenModel):
@@ -129,6 +140,7 @@ class DocumentProcessingPopulationResult(_FrozenModel):
     input_commitment_sha256: str
     plan_commitment_sha256: str
     output_commitment_sha256: str
+    checkpoint: DocumentProcessingCheckpoint
 
 
 class ReportingDocumentDecision(_FrozenModel):
@@ -234,6 +246,10 @@ def populate_document_processing(
         deterministic=True,
     )
     try:
+        bounded = (
+            request.after_processing_obligation_revision_id is not None
+            or request.max_obligations is not None
+        )
         decisions, documents_by_issuer, incomplete_inventories = _document_scope(
             conn,
             cutoff,
@@ -245,7 +261,7 @@ def populate_document_processing(
         selection_sha = _selection_commitment(decisions)
         plan_sha = _population_plan_commitment(request, input_sha, selection_sha)
         _verify_commitments(request, input_sha=input_sha, plan_sha=plan_sha)
-        if request.apply and request.phase in {"snapshots", "all"}:
+        if request.apply and not bounded and request.phase in {"snapshots", "all"}:
             _raise_for_immutable_snapshot_blockers(
                 decisions,
                 incomplete_inventory_count=incomplete_inventories,
@@ -314,7 +330,7 @@ def populate_document_processing(
                     attempted_id=obligation_id,
                     succeeded=True,
                 )
-        if request.apply and request.phase in {"snapshots", "all"}:
+        if request.apply and not bounded and request.phase in {"snapshots", "all"}:
             governed_ids = tuple(
                 item.expected_document_id
                 for item in decisions
@@ -361,6 +377,20 @@ def populate_document_processing(
         )
         expected_bindings = sum(item.outcome == "governed_reporting" for item in decisions)
         binding_failure_count = max(expected_bindings - binding_count, 0)
+        checkpoint = _document_checkpoint(
+            bounded=bounded,
+            prior_cursor=last_id,
+            processed=processed,
+            total=totals["total"],
+            sealed=sealed,
+            blocker_count=(
+                missing
+                + unresolved
+                + incomplete_inventories
+                + binding_failure_count
+                + sum(failures.values())
+            ),
+        )
         return DocumentProcessingPopulationResult(
             mode="apply" if request.apply else "dry_run",
             phase=request.phase,
@@ -399,6 +429,7 @@ def populate_document_processing(
                 decisions,
                 recorded,
             ),
+            checkpoint=checkpoint,
         )
     finally:
         conn.row_factory = original_row_factory
@@ -1204,6 +1235,26 @@ def _retry_cursor_after_attempt(
     succeeded: bool,
 ) -> str | None:
     return attempted_id if succeeded else prior_cursor
+
+
+def _document_checkpoint(
+    *,
+    bounded: bool,
+    prior_cursor: str | None,
+    processed: int,
+    total: int,
+    sealed: int,
+    blocker_count: int = 0,
+) -> DocumentProcessingCheckpoint:
+    remaining = max(total - sealed, 0)
+    return DocumentProcessingCheckpoint(
+        bounded=bounded,
+        safe_to_seal=not bounded and remaining == 0 and blocker_count == 0,
+        last_processing_obligation_revision_id=prior_cursor,
+        processed_obligation_count=processed,
+        remaining_obligation_count=remaining,
+        can_resume=bounded and remaining > 0,
+    )
 
 
 def _expected_reporting_issuer_count(

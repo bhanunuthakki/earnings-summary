@@ -29,6 +29,154 @@ def test_resume_apply_requires_dry_run_commitments() -> None:
         )
 
 
+def test_bounded_apply_requires_dry_run_commitments() -> None:
+    with pytest.raises(ValidationError, match="commitments"):
+        DocumentProcessingPopulationRequest(
+            cutoff_at=population.datetime(2026, 7, 29),
+            operation_recorded_at=population.datetime(2026, 7, 29),
+            apply=True,
+            max_obligations=1,
+        )
+
+
+def test_bounded_checkpoint_never_claims_safe_to_seal() -> None:
+    checkpoint = population._document_checkpoint(
+        bounded=True,
+        prior_cursor="obligation-1",
+        processed=2,
+        total=5,
+        sealed=2,
+    )
+
+    assert checkpoint.safe_to_seal is False
+    assert checkpoint.can_resume is True
+    assert checkpoint.remaining_obligation_count == 3
+    assert checkpoint.last_processing_obligation_revision_id == "obligation-1"
+
+
+def test_bounded_all_returns_checkpoint_without_sealing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cutoff = datetime(2026, 7, 29, tzinfo=UTC)
+    decision = ReportingDocumentDecision(
+        expected_document_id="expected",
+        issuer_id="issuer",
+        outcome="governed_reporting",
+        reason_code="governed_periodic_filing",
+        document_family="operating_company_periodic",
+        coverage_status="captured",
+        document_version_id="document",
+        reporting_entity_id="reporting",
+    )
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE v_source_obligations_current (obligation_state TEXT NOT NULL)")
+    conn.execute("INSERT INTO v_source_obligations_current VALUES ('required')")
+
+    def scope_stub(
+        *_args: object,
+        **_kwargs: object,
+    ) -> tuple[
+        tuple[ReportingDocumentDecision, ...],
+        dict[str, tuple[str, ...]],
+        int,
+    ]:
+        return (decision,), {"issuer": ("document",)}, 0
+
+    def input_stub(*_args: object) -> str:
+        return "a" * 64
+
+    def created_stub(*_args: object, **_kwargs: object) -> int:
+        return 1
+
+    def bindings_stub(
+        *_args: object,
+        **_kwargs: object,
+    ) -> tuple[int, dict[str, int]]:
+        return 1, {}
+
+    def derive_stub(*_args: object, **_kwargs: object) -> tuple[()]:
+        return ()
+
+    def obligation_rows_stub(
+        *_args: object,
+        **_kwargs: object,
+    ) -> list[sqlite3.Row]:
+        return []
+
+    def totals_stub(*_args: object, **_kwargs: object) -> dict[str, int]:
+        return {"total": 1, "applicable": 1, "not_applicable": 0}
+
+    def zero_stub(*_args: object) -> int:
+        return 0
+
+    def one_stub(*_args: object) -> int:
+        return 1
+
+    def output_stub(*_args: object) -> str:
+        return "b" * 64
+
+    def must_not_seal(*_args: object) -> None:
+        pytest.fail("bounded run must not seal snapshots")
+
+    monkeypatch.setattr(
+        population,
+        "_document_scope",
+        scope_stub,
+    )
+    monkeypatch.setattr(population, "_input_commitment", input_stub)
+    monkeypatch.setattr(
+        population,
+        "_ensure_document_family_obligations",
+        created_stub,
+    )
+    monkeypatch.setattr(
+        population,
+        "_ensure_expected_document_bindings",
+        bindings_stub,
+    )
+    monkeypatch.setattr(population, "derive_obligations", derive_stub)
+    monkeypatch.setattr(population, "_obligation_rows", obligation_rows_stub)
+    monkeypatch.setattr(
+        population,
+        "_obligation_totals",
+        totals_stub,
+    )
+    monkeypatch.setattr(population, "_sealed_disposition_count", zero_stub)
+    monkeypatch.setattr(population, "_binding_count", one_stub)
+    monkeypatch.setattr(population, "_processing_snapshot_count", zero_stub)
+    monkeypatch.setattr(population, "_output_commitment", output_stub)
+    monkeypatch.setattr(
+        population,
+        "_seal_complete_snapshots",
+        must_not_seal,
+    )
+
+    preview = populate_document_processing(
+        conn,
+        DocumentProcessingPopulationRequest(
+            cutoff_at=cutoff,
+            operation_recorded_at=cutoff,
+            max_obligations=1,
+        ),
+    )
+    result = populate_document_processing(
+        conn,
+        DocumentProcessingPopulationRequest(
+            cutoff_at=cutoff,
+            operation_recorded_at=cutoff,
+            apply=True,
+            max_obligations=1,
+            input_commitment_sha256=preview.input_commitment_sha256,
+            plan_commitment_sha256=preview.plan_commitment_sha256,
+        ),
+    )
+
+    assert result.checkpoint.bounded is True
+    assert result.checkpoint.safe_to_seal is False
+    assert result.checkpoint.remaining_obligation_count == 1
+    assert result.processing_snapshot_count == 0
+
+
 def test_request_accepts_later_operation_clock() -> None:
     cutoff = population.datetime(2026, 7, 29)
     request = DocumentProcessingPopulationRequest(
