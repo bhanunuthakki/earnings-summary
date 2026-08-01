@@ -105,6 +105,16 @@ def verify_compressed_clone_receipt(receipt: CompressedCloneReceipt) -> bool:
     return stored == _digest(payload)
 
 
+def compressed_file_metrics(path: Path) -> tuple[bool, int]:
+    """Return the NTFS compression flag and physical size for an admitted clone."""
+
+    candidate = path.expanduser().resolve()
+    require_no_reparse_points(candidate)
+    if not candidate.is_file():
+        raise LatestStateActivationError("compressed candidate clone is missing")
+    return _file_is_compressed(candidate), _compressed_size(candidate)
+
+
 def prepare_compressed_clone(request: CompressedCloneRequest) -> CompressedCloneReceipt:
     """Copy one audited quiesced database with bounded local-disk headroom."""
 

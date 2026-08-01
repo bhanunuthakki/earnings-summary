@@ -874,6 +874,89 @@ def audit_governed_candidate(
     return GovernedCandidateAudit.model_validate(core | {"report_sha256": _digest(core)})
 
 
+def build_governed_candidate_seal(
+    database_path: Path,
+    *,
+    expected_revision: str,
+) -> CandidateSeal:
+    """Create the companion seal for one quiesced, checkpointed governed DB."""
+
+    database = database_path.expanduser().resolve()
+    if not database.is_file():
+        raise LatestStateActivationError("candidate database is missing")
+    require_checkpointed_sidecars(database)
+    identity_before = _file_identity(database)
+    database_sha256 = _sha256(database)
+    conn = connect_sqlite(
+        database,
+        role=SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY,
+        schema_preflight=False,
+    )
+    try:
+        revisions = tuple(
+            str(row[0])
+            for row in conn.execute("SELECT version_num FROM alembic_version").fetchall()
+        )
+        if revisions != (expected_revision,):
+            raise LatestStateActivationError("candidate revision differs from expectation")
+        quick_values = tuple(str(row[0]) for row in conn.execute("PRAGMA quick_check"))
+        integrity_values = tuple(str(row[0]) for row in conn.execute("PRAGMA integrity_check"))
+        foreign_key_violations = len(conn.execute("PRAGMA foreign_key_check").fetchall())
+        if quick_values != ("ok",) or integrity_values != ("ok",) or foreign_key_violations:
+            raise LatestStateActivationError("candidate failed SQLite sealing checks")
+        tables = {
+            str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        required = {
+            "source_taxonomy_components",
+            "fact_cell_canonical_binding_revisions",
+        }
+        if not required.issubset(tables):
+            raise LatestStateActivationError("candidate lacks governed ontology tables")
+        source_taxonomy_components = _count_fixed_table(
+            conn,
+            "source_taxonomy_components",
+            required,
+        )
+        canonical_bindings = _count_fixed_table(
+            conn,
+            "fact_cell_canonical_binding_revisions",
+            required,
+        )
+    except sqlite3.Error as exc:
+        raise LatestStateActivationError("candidate sealing census failed") from exc
+    finally:
+        conn.close()
+    require_checkpointed_sidecars(database)
+    identity_after = _file_identity(database)
+    if identity_after != identity_before or _sha256(database) != database_sha256:
+        raise LatestStateActivationError("candidate changed while its seal was built")
+    return CandidateSeal(
+        canonical_bindings=canonical_bindings,
+        database=str(database),
+        foreign_key_violations=0,
+        quick_check="ok",
+        revision=revisions,
+        sha256=database_sha256,
+        size_bytes=identity_after.size_bytes,
+        source_taxonomy_components=source_taxonomy_components,
+    )
+
+
+def _count_fixed_table(
+    conn: sqlite3.Connection,
+    table_name: str,
+    allowed: set[str],
+) -> int:
+    if table_name not in allowed:
+        raise LatestStateActivationError("candidate sealing table is not allowlisted")
+    return int(
+        conn.execute(
+            f'SELECT COUNT(*) FROM "{table_name}"'  # nosec B608 -- fixed allowlist
+        ).fetchone()[0]
+    )
+
+
 def _count_fixed_plane(conn: sqlite3.Connection, plane_name: str) -> int:
     if plane_name not in GOVERNED_PLANE_NAMES:
         raise LatestStateActivationError("unregistered governed plane")

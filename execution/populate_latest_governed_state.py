@@ -61,6 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--operation-recorded-at", type=_datetime, required=True)
     parser.add_argument("--after-scope-id")
     parser.add_argument("--prior-checkpoint-receipt", type=Path)
+    parser.add_argument("--admission-receipt", type=Path)
     parser.add_argument("--max-scopes", type=int, default=1)
     parser.add_argument("--max-batch-rows", type=int, default=1_000)
     parser.add_argument("--document-checkpoint", action="store_true")
@@ -119,6 +120,41 @@ def validate_existing_export_database_evidence(
         )
 
 
+def validate_population_admission_receipt(
+    admission_receipt: LatestGovernedPopulationReceipt,
+    *,
+    database_path: str,
+    database_instance: str,
+    alembic_revision: str,
+    eligibility_artifact_sha256: str,
+    registry_artifact_sha256: str,
+    admission_sha256: str,
+    prior_checkpoint_receipt_sha256: str | None,
+    request: LatestGovernedPopulationRequest,
+) -> None:
+    """Require apply to be the exact mode-only successor of one dry-run receipt."""
+
+    admitted_request = admission_receipt.request
+    if (
+        admitted_request.apply
+        or admission_receipt.result.mode != "dry_run"
+        or admission_receipt.database_path != database_path
+        or admission_receipt.database_instance_id != database_instance
+        or admission_receipt.alembic_revision != alembic_revision
+        or admission_receipt.eligibility_artifact_sha256 != eligibility_artifact_sha256
+        or admission_receipt.registry_artifact_sha256 != registry_artifact_sha256
+        or admission_receipt.admission_sha256 != admission_sha256
+        or admission_receipt.prior_checkpoint_receipt_sha256 != prior_checkpoint_receipt_sha256
+        or admitted_request.operation_recorded_at != request.operation_recorded_at
+        or admitted_request.admission_sha256 != request.admission_sha256
+        or admitted_request.after_scope_id != request.after_scope_id
+        or admitted_request.max_scopes != request.max_scopes
+        or admitted_request.max_batch_rows != request.max_batch_rows
+        or admitted_request.document_checkpoint != request.document_checkpoint
+    ):
+        raise ValueError("latest governed apply differs from its dry-run admission")
+
+
 def _load_bound(
     path: Path,
 ) -> tuple[ImmutableArtifactSnapshot, BoundLatestStateEligibilityManifest]:
@@ -144,6 +180,8 @@ def _execute(args: argparse.Namespace) -> LatestGovernedPopulationReceipt:
         raise ValueError("apply checkpoint publication requires --max-scopes 1")
     if (args.after_scope_id is None) != (args.prior_checkpoint_receipt is None):
         raise ValueError("resume requires both --after-scope-id and --prior-checkpoint-receipt")
+    if args.apply != (args.admission_receipt is not None):
+        raise ValueError("latest governed apply requires exactly one dry-run admission receipt")
     database = Path(os.path.abspath(args.database))
     eligibility_path = Path(os.path.abspath(args.eligibility))
     registry_path = Path(os.path.abspath(args.scope_registry))
@@ -152,8 +190,13 @@ def _execute(args: argparse.Namespace) -> LatestGovernedPopulationReceipt:
         if args.prior_checkpoint_receipt is None
         else Path(os.path.abspath(args.prior_checkpoint_receipt))
     )
+    admission_path = (
+        None if args.admission_receipt is None else Path(os.path.abspath(args.admission_receipt))
+    )
     inputs = tuple(
-        path for path in (eligibility_path, registry_path, prior_path) if path is not None
+        path
+        for path in (eligibility_path, registry_path, prior_path, admission_path)
+        if path is not None
     )
     output = safe_receipt_path(args.receipt, database=database, inputs=inputs)
     resources = [
@@ -168,6 +211,10 @@ def _execute(args: argparse.Namespace) -> LatestGovernedPopulationReceipt:
         prior: LatestGovernedPopulationReceipt | None = None
         if prior_path is not None:
             prior_snapshot, prior = _load_receipt(prior_path)
+        admission_snapshot: ImmutableArtifactSnapshot | None = None
+        admission_receipt: LatestGovernedPopulationReceipt | None = None
+        if admission_path is not None:
+            admission_snapshot, admission_receipt = _load_receipt(admission_path)
         role = SQLiteConnectionRole.WRITER if args.apply else SQLiteConnectionRole.READ_ONLY
         conn = connect_sqlite(database, role=role, schema_preflight=args.apply)
         try:
@@ -242,6 +289,20 @@ def _execute(args: argparse.Namespace) -> LatestGovernedPopulationReceipt:
                 admission_sha256=admission.commitment_sha256,
                 request=request,
             )
+            if args.apply:
+                if admission_receipt is None:
+                    raise ValueError("latest governed apply admission receipt is missing")
+                validate_population_admission_receipt(
+                    admission_receipt,
+                    database_path=str(database),
+                    database_instance=instance_id,
+                    alembic_revision=revision,
+                    eligibility_artifact_sha256=eligibility_snapshot.file_sha256,
+                    registry_artifact_sha256=registry_snapshot.file_sha256,
+                    admission_sha256=admission.commitment_sha256,
+                    prior_checkpoint_receipt_sha256=prior_sha,
+                    request=request,
+                )
             stored_before = (
                 load_latest_governed_population_receipt(conn, operation_id) if args.apply else None
             )
@@ -271,6 +332,7 @@ def _execute(args: argparse.Namespace) -> LatestGovernedPopulationReceipt:
                         eligibility_snapshot,
                         registry_snapshot,
                         prior_snapshot,
+                        admission_snapshot,
                     )
                 ),
             )
@@ -284,6 +346,8 @@ def _execute(args: argparse.Namespace) -> LatestGovernedPopulationReceipt:
                 assert_artifact_unchanged(registry_snapshot)
                 if prior_snapshot is not None:
                     assert_artifact_unchanged(prior_snapshot)
+                if admission_snapshot is not None:
+                    assert_artifact_unchanged(admission_snapshot)
                 if database_instance_id(conn) != instance_id:
                     raise ValueError("latest governed database identity changed")
                 receipt = build_latest_governed_population_receipt(
@@ -314,6 +378,8 @@ def _execute(args: argparse.Namespace) -> LatestGovernedPopulationReceipt:
         assert_artifact_unchanged(registry_snapshot)
         if prior_snapshot is not None:
             assert_artifact_unchanged(prior_snapshot)
+        if admission_snapshot is not None:
+            assert_artifact_unchanged(admission_snapshot)
         return receipt
 
 
@@ -345,11 +411,14 @@ def _assert_inputs_unchanged(
     eligibility: ImmutableArtifactSnapshot,
     registry: ImmutableArtifactSnapshot,
     prior: ImmutableArtifactSnapshot | None,
+    admission: ImmutableArtifactSnapshot | None,
 ) -> None:
     assert_artifact_unchanged(eligibility)
     assert_artifact_unchanged(registry)
     if prior is not None:
         assert_artifact_unchanged(prior)
+    if admission is not None:
+        assert_artifact_unchanged(admission)
 
 
 def main(argv: list[str] | None = None) -> int:
