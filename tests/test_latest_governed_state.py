@@ -2275,3 +2275,48 @@ def test_cohort_audit_rejects_payload_tamper_and_out_of_cohort_current_rows() ->
             scope_ids,
             operation_recorded_at=T0 + timedelta(minutes=2),
         )
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    (
+        ("digest_bucket", 4095),
+        ("refresh_receipt_id", "unrelated-receipt"),
+        ("prior_commitment_sha256", SHA_B),
+        ("knowledge_cutoff", "2026-07-29 11:59:00"),
+        ("observed_through", "2026-07-29 11:59:00"),
+        ("updated_at", "2026-07-29 12:03:00"),
+    ),
+)
+def test_cohort_audit_rejects_persisted_provenance_metadata_tamper(
+    column: str,
+    value: object,
+) -> None:
+    conn = _database()
+    refresh_latest_governed_state(conn, _request())
+    conn.execute(
+        f"UPDATE latest_governed_fact_entries SET {column}=? "  # nosec B608 -- closed parametrized column set
+        "WHERE canonical_metric_cell_id='cell-1'",
+        (value,),
+    )
+    with pytest.raises(LatestGovernedStateError, match="persisted payload differs"):
+        audit_latest_governed_cohort(
+            conn,
+            ("ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",),
+            operation_recorded_at=T0 + timedelta(minutes=2),
+        )
+
+
+def test_cohort_audit_rejects_head_count_and_clock_tamper() -> None:
+    conn = _database()
+    refresh_latest_governed_state(conn, _request())
+    conn.execute(
+        "UPDATE latest_governed_scope_heads SET fact_count=2,updated_at=?",
+        ((T0 + timedelta(minutes=3)).isoformat(),),
+    )
+    with pytest.raises(LatestGovernedStateError, match="head projection differs"):
+        audit_latest_governed_cohort(
+            conn,
+            ("ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",),
+            operation_recorded_at=T0 + timedelta(minutes=4),
+        )

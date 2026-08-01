@@ -253,13 +253,14 @@ class LatestGovernedScopeAudit(_FrozenModel):
     fact_canary_coordinate: str
     narrative_canary_coordinate: str
     exhaustive_source_commitment_sha256: str
+    current_projection_commitment_sha256: str
     high_risk_sample_commitment_sha256: str
 
 
 class LatestGovernedCohortAudit(_FrozenModel):
     """Exact, nonempty readiness evidence for one ordered production cohort."""
 
-    schema_version: Literal["latest-governed-cohort-audit/v1"] = "latest-governed-cohort-audit/v1"
+    schema_version: Literal["latest-governed-cohort-audit/v2"] = "latest-governed-cohort-audit/v2"
     scope_ids: tuple[str, ...]
     scopes: tuple[LatestGovernedScopeAudit, ...]
     table_counts: dict[str, int]
@@ -399,13 +400,97 @@ def audit_latest_governed_cohort(
             "latest governed global plane counts differ from audited scopes"
         )
     core = {
-        "schema_version": "latest-governed-cohort-audit/v1",
+        "schema_version": "latest-governed-cohort-audit/v2",
         "scope_ids": ordered,
         "scopes": [item.model_dump(mode="json") for item in audits],
         "table_counts": table_counts,
     }
     return LatestGovernedCohortAudit.model_validate(
         core | {"cohort_commitment_sha256": _digest(core)}
+    )
+
+
+def audit_latest_governed_scope(
+    conn: sqlite3.Connection,
+    scope_id: str,
+    *,
+    operation_recorded_at: datetime,
+    high_risk_sample_size: int = 32,
+) -> LatestGovernedScopeAudit:
+    """Exhaustively verify one scope without weakening exact cohort admission."""
+
+    if operation_recorded_at.tzinfo is None or operation_recorded_at.utcoffset() is None:
+        raise ValueError("operation_recorded_at must include a timezone")
+    if high_risk_sample_size < 1 or high_risk_sample_size > 1_000:
+        raise ValueError("high_risk_sample_size must be between 1 and 1000")
+    return GovernedCurrentMaterializer(conn).audit_scope(
+        scope_id,
+        operation_recorded_at=operation_recorded_at,
+        high_risk_sample_size=high_risk_sample_size,
+    )
+
+
+def current_latest_governed_projection_commitment(
+    conn: sqlite3.Connection,
+    scope_id: str,
+) -> str:
+    """Hash one scope's exact mutable 0261 projection without source reads."""
+
+    planes = {
+        "refresh_runs": conn.execute(
+            "SELECT * FROM latest_governed_refresh_runs WHERE scope_key=? ORDER BY refresh_run_id",
+            (scope_id,),
+        ).fetchall(),
+        "refresh_stage": conn.execute(
+            "SELECT stage.* FROM latest_governed_refresh_stage stage "
+            "JOIN latest_governed_refresh_runs run "
+            "ON run.refresh_run_id=stage.refresh_run_id WHERE run.scope_key=? "
+            "ORDER BY stage.refresh_run_id,stage.stage_ordinal",
+            (scope_id,),
+        ).fetchall(),
+        "refresh_receipts": conn.execute(
+            "SELECT * FROM latest_governed_refresh_receipts WHERE scope_key=? ORDER BY receipt_id",
+            (scope_id,),
+        ).fetchall(),
+        "refresh_changes": conn.execute(
+            "SELECT changes.* FROM latest_governed_refresh_changes changes "
+            "JOIN latest_governed_refresh_receipts receipt "
+            "ON receipt.receipt_id=changes.receipt_id WHERE receipt.scope_key=? "
+            "ORDER BY changes.receipt_id,changes.change_ordinal",
+            (scope_id,),
+        ).fetchall(),
+        "head": conn.execute(
+            "SELECT * FROM latest_governed_scope_heads WHERE scope_key=?",
+            (scope_id,),
+        ).fetchall(),
+        "facts": conn.execute(
+            "SELECT * FROM latest_governed_fact_entries WHERE scope_key=? "
+            "ORDER BY canonical_metric_cell_id",
+            (scope_id,),
+        ).fetchall(),
+        "documents": conn.execute(
+            "SELECT * FROM latest_governed_document_entries WHERE scope_key=? "
+            "ORDER BY expected_document_key",
+            (scope_id,),
+        ).fetchall(),
+        "narratives": conn.execute(
+            "SELECT rowid,* FROM latest_governed_narrative_entries WHERE scope_key=? "
+            "ORDER BY expected_document_key,chunk_key",
+            (scope_id,),
+        ).fetchall(),
+        "narrative_fts": conn.execute(
+            "SELECT docsize.id FROM latest_governed_narrative_fts_docsize docsize "
+            "JOIN latest_governed_narrative_entries entry ON entry.rowid=docsize.id "
+            "WHERE entry.scope_key=? ORDER BY docsize.id",
+            (scope_id,),
+        ).fetchall(),
+    }
+    return _digest(
+        {
+            "planes": {name: [list(row) for row in rows] for name, rows in planes.items()},
+            "scope_id": scope_id,
+            "version": "latest-governed-current-projection/v2",
+        }
     )
 
 
@@ -615,6 +700,10 @@ class GovernedCurrentMaterializer:
             raise LatestGovernedStateError("latest governed scope has unfinished refresh runs")
 
         source_changes = self._baseline_source_changes(frontier)
+        history = self._snapshot_at_receipt(
+            scope_id=scope_id,
+            receipt_id=head.receipt_id,
+        )
         expected: dict[str, dict[str, str]] = {
             "fact": {},
             "document": {},
@@ -628,7 +717,25 @@ class GovernedCurrentMaterializer:
             expected[str(change["entity_kind"])][str(change["coordinate_key"])] = str(
                 change["current_commitment_sha256"]
             )
-            self._verify_current_payload(scope_id, frontier, change)
+            history_change = history.get(
+                (str(change["entity_kind"]), str(change["coordinate_key"]))
+            )
+            if history_change is None:
+                raise LatestGovernedStateError(
+                    "latest governed current coordinate is absent from receipt history"
+                )
+            self._verify_current_payload(
+                scope_id,
+                frontier,
+                change,
+                history_change=history_change,
+            )
+        if set(history) != {
+            (kind, coordinate) for kind, rows in expected.items() for coordinate in rows
+        }:
+            raise LatestGovernedStateError(
+                "latest governed receipt history differs from governed sources"
+            )
         current = {
             "fact": {
                 str(row[0]): str(row[1])
@@ -664,6 +771,12 @@ class GovernedCurrentMaterializer:
             raise LatestGovernedStateError(
                 "latest governed facts, documents, and narratives must all be nonempty"
             )
+        self._verify_head_projection(
+            scope_id=scope_id,
+            frontier=frontier,
+            head=head,
+            counts=counts,
+        )
         narrative_rowids = {
             int(row[0])
             for row in self._conn.execute(
@@ -777,6 +890,9 @@ class GovernedCurrentMaterializer:
             fact_canary_coordinate=str(fact_coordinate),
             narrative_canary_coordinate=narrative_coordinate,
             exhaustive_source_commitment_sha256=_digest(ordered_source),
+            current_projection_commitment_sha256=(
+                current_latest_governed_projection_commitment(self._conn, scope_id)
+            ),
             high_risk_sample_commitment_sha256=_digest(high_risk_sample),
         )
 
@@ -785,6 +901,8 @@ class GovernedCurrentMaterializer:
         scope_id: str,
         frontier: ChangeFrontier,
         change: dict[str, object],
+        *,
+        history_change: dict[str, object],
     ) -> None:
         payload = cast(dict[str, object], change["payload"])
         expected_row = cast(dict[str, object], payload["row"])
@@ -819,9 +937,27 @@ class GovernedCurrentMaterializer:
             raise LatestGovernedStateError("latest governed current payload is missing")
         actual = dict(row)
         evidence_json = _canonical_json(evidence)
+        raw_history_payload = history_change.get("canonical_payload")
+        if not isinstance(raw_history_payload, dict):
+            raise LatestGovernedStateError(
+                "latest governed persisted payload differs from governed source evidence: history"
+            )
+        history_payload = cast(dict[str, object], raw_history_payload)
+        if (
+            history_payload.get("row") != payload["row"]
+            or history_payload.get("selection_reason") != payload["selection_reason"]
+            or history_change.get("current_commitment_sha256")
+            != change["current_commitment_sha256"]
+        ):
+            raise LatestGovernedStateError(
+                "latest governed persisted payload differs from governed source evidence: history"
+            )
         expected_common: dict[str, object] = {
             "scope_key": scope_id,
+            "digest_bucket": _bucket(coordinate),
+            "refresh_receipt_id": history_change["refresh_receipt_id"],
             "selection_reason": payload["selection_reason"],
+            "prior_commitment_sha256": history_change["prior_commitment_sha256"],
             "current_commitment_sha256": change["current_commitment_sha256"],
         }
         if kind in {"fact", "document"}:
@@ -833,13 +969,61 @@ class GovernedCurrentMaterializer:
         mismatches = tuple(
             key for key, value in expected_payload.items() if actual.get(key) != value
         )
-        clocks_admitted = _datetime(actual.get("knowledge_cutoff")) <= _datetime(
-            frontier.knowledge_cutoff
-        ) and _datetime(actual.get("observed_through")) <= _datetime(frontier.observed_through)
-        if mismatches or not clocks_admitted:
+        clock_mismatches = tuple(
+            key
+            for key in ("knowledge_cutoff", "observed_through", "updated_at")
+            if _datetime(actual.get(key)) != _datetime(history_change[key])
+        )
+        if mismatches or clock_mismatches:
             raise LatestGovernedStateError(
                 "latest governed persisted payload differs from governed source evidence: "
-                + ",".join(mismatches)
+                + ",".join((*mismatches, *clock_mismatches))
+            )
+
+    def _verify_head_projection(
+        self,
+        *,
+        scope_id: str,
+        frontier: ChangeFrontier,
+        head: CurrentHead,
+        counts: dict[str, int],
+    ) -> None:
+        row = self._conn.execute(
+            "SELECT population_run_id,promotion_id,fact_generation_id,source_heads_json,"
+            "source_heads_sha256,state_sha256,fact_root_sha256,document_root_sha256,"
+            "narrative_root_sha256,fact_count,document_count,narrative_count,"
+            "knowledge_cutoff,observed_through,updated_at "
+            "FROM latest_governed_scope_heads WHERE scope_key=?",
+            (scope_id,),
+        ).fetchone()
+        sealed = self._conn.execute(
+            "SELECT sealed_at FROM latest_governed_refresh_receipts WHERE receipt_id=?",
+            (head.receipt_id,),
+        ).fetchone()
+        if row is None or sealed is None:
+            raise LatestGovernedStateError("latest governed head projection is incomplete")
+        expected = (
+            frontier.population_run_id,
+            frontier.promotion_id,
+            frontier.fact_generation_id,
+            _canonical_json(frontier.model_dump(mode="json")),
+            frontier.commitment_sha256,
+            head.state_commitment_sha256,
+            head.fact_root_sha256,
+            head.document_root_sha256,
+            head.narrative_root_sha256,
+            counts["fact"],
+            counts["document"],
+            counts["narrative"],
+        )
+        clocks_exact = (
+            _datetime(row[12]) == _datetime(frontier.knowledge_cutoff)
+            and _datetime(row[13]) == _datetime(frontier.observed_through)
+            and _datetime(row[14]) == _datetime(sealed[0])
+        )
+        if tuple(row[:12]) != expected or not clocks_exact:
+            raise LatestGovernedStateError(
+                "latest governed head projection differs from its exact source and receipt"
             )
 
     def refresh(
@@ -879,6 +1063,13 @@ class GovernedCurrentMaterializer:
         refresh_id = f"latest-run:{idempotency[:40]}"
         replay = self._replayed_result(refresh_id, request.apply)
         if replay is not None:
+            if finalization_hook is not None:
+                self._finalize_replayed_hook(
+                    request=request,
+                    frontier=frontier,
+                    replay=replay,
+                    finalization_hook=finalization_hook,
+                )
             return replay
         if request.resume_refresh_id is not None and request.resume_refresh_id != refresh_id:
             raise LatestGovernedStateError(
@@ -1471,7 +1662,7 @@ class GovernedCurrentMaterializer:
                 "SELECT change_count,canonical_change_set_json,change_set_sha256,"
                 "fact_generation_id,prior_receipt_id,current_state_sha256,"
                 "fact_root_sha256,document_root_sha256,narrative_root_sha256,"
-                "canonical_receipt_json "
+                "canonical_receipt_json,knowledge_cutoff,observed_through,sealed_at "
                 "FROM latest_governed_refresh_receipts WHERE receipt_id=?",
                 (chain_receipt_id,),
             ).fetchone()
@@ -1560,6 +1751,10 @@ class GovernedCurrentMaterializer:
                         "entity_kind": change["entity_kind"],
                         "prior_commitment_sha256": None,
                         "canonical_payload": change["payload"],
+                        "refresh_receipt_id": chain_receipt_id,
+                        "knowledge_cutoff": receipt[10],
+                        "observed_through": receipt[11],
+                        "updated_at": receipt[12],
                     }
                 continue
             if audit.get("mode") != "coordinate_changes.v1":
@@ -1621,6 +1816,10 @@ class GovernedCurrentMaterializer:
                     snapshot[key] = {
                         **change,
                         "canonical_payload": payload,
+                        "refresh_receipt_id": chain_receipt_id,
+                        "knowledge_cutoff": receipt[10],
+                        "observed_through": receipt[11],
+                        "updated_at": receipt[12],
                     }
         return snapshot
 
@@ -3387,7 +3586,13 @@ class GovernedCurrentMaterializer:
             "WHERE scope_key=?",
             (scope_id,),
         ).fetchone()
-        if head is None or (str(head[0]), str(head[1])) != (receipt_id, str(row[4])):
+        change_count = sum(int(row[index]) for index in (6, 7, 8))
+        expected_head_receipt_id = receipt_id if change_count else _optional_text(row[3])
+        if (
+            head is None
+            or expected_head_receipt_id is None
+            or (str(head[0]), str(head[1])) != (expected_head_receipt_id, str(row[4]))
+        ):
             raise LatestGovernedStateError(
                 "finalized refresh receipt is not the current governed head"
             )
@@ -3395,7 +3600,7 @@ class GovernedCurrentMaterializer:
             receipt_id=receipt_id,
             refresh_id=refresh_id,
             scope_id=scope_id,
-            outcome="changed" if sum(int(row[index]) for index in (6, 7, 8)) else "no_op",
+            outcome="changed" if change_count else "no_op",
             prior_receipt_id=_optional_text(row[3]),
             current_state_sha256=str(row[4]),
             terminal_commitment=str(row[5]),
@@ -3879,11 +4084,18 @@ class GovernedCurrentMaterializer:
         if row is None:
             return None
         change_count = int(row[2])
-        if change_count == 0 and apply:
+        if change_count == 0:
             head = self._head(str(row[6]))
             if head is None or head.receipt_id != str(row[7]):
                 raise LatestGovernedStateError(
                     "replayed no-op receipt is not bound to the unchanged current head"
+                )
+            if not apply:
+                return self._planned_result(
+                    refresh_id=refresh_id,
+                    prior=head,
+                    outcome="no_op",
+                    terminal=head.state_commitment_sha256,
                 )
             return self._noop_result(
                 refresh_id=refresh_id,
@@ -3907,6 +4119,49 @@ class GovernedCurrentMaterializer:
             receipt_write_count=0,
             terminal_commitment=str(row[1]),
         )
+
+    def _finalize_replayed_hook(
+        self,
+        *,
+        request: LatestGovernedRefreshRequest,
+        frontier: ChangeFrontier,
+        replay: LatestGovernedRefreshResult,
+        finalization_hook: LatestGovernedFinalizationHook,
+    ) -> None:
+        """Attach an outer atomic receipt to an already-finalized refresh replay."""
+
+        try:
+            self._conn.execute("BEGIN IMMEDIATE")
+            if self._frontier(request.scope_id) != frontier:
+                raise LatestGovernedStateError(
+                    "latest governed frontier changed before replay finalization"
+                )
+            row = self._conn.execute(
+                "SELECT receipt_id FROM latest_governed_refresh_receipts WHERE refresh_run_id=?",
+                (replay.refresh_id,),
+            ).fetchone()
+            if row is None:
+                raise LatestGovernedStateError("replayed refresh receipt disappeared")
+            receipt = self._receipt_for_refresh(
+                refresh_id=replay.refresh_id,
+                receipt_id=str(row[0]),
+                scope_id=request.scope_id,
+            )
+            head = self._head(request.scope_id)
+            if receipt is None or head is None:
+                raise LatestGovernedStateError("replayed refresh has no current head")
+            if (
+                request.expected_terminal_commitment is not None
+                and request.expected_terminal_commitment != head.state_commitment_sha256
+            ):
+                raise LatestGovernedStateError(
+                    "latest governed replay terminal differs from admission"
+                )
+            finalization_hook(self._conn, request, frontier, receipt, head)
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def _planned_result(
         self,

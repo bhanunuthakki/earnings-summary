@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import sys
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 
@@ -88,6 +89,36 @@ def safe_receipt_path(
     return destination
 
 
+def population_database_lock_resources(
+    database: Path,
+    portfolio_database: Path,
+) -> tuple[str, ...]:
+    """Bind the canonical portfolio lock and reject unsafe same-file aliases."""
+
+    candidate = Path(os.path.abspath(database))
+    portfolio = Path(os.path.abspath(portfolio_database))
+    resources = [f"sqlite:{candidate}"]
+    if path_aliases_any(candidate, {portfolio}):
+        if candidate != portfolio:
+            raise ValueError("latest governed database aliases the portfolio database")
+        resources.append("portfolio-db")
+    return tuple(resources)
+
+
+def validate_existing_export_database_evidence(
+    *,
+    apply: bool,
+    existing: LatestGovernedPopulationReceipt | None,
+    stored: LatestGovernedPopulationReceipt | None,
+) -> None:
+    """Require DB evidence before replaying apply output; defer dry-run equality."""
+
+    if apply and existing is not None and stored != existing:
+        raise ImmutableArtifactConflictError(
+            "exported latest governed receipt lacks matching database evidence"
+        )
+
+
 def _load_bound(
     path: Path,
 ) -> tuple[ImmutableArtifactSnapshot, BoundLatestStateEligibilityManifest]:
@@ -126,12 +157,10 @@ def _execute(args: argparse.Namespace) -> LatestGovernedPopulationReceipt:
     )
     output = safe_receipt_path(args.receipt, database=database, inputs=inputs)
     resources = [
-        f"sqlite:{database}",
+        *population_database_lock_resources(database, portfolio_db_path(PROJECT_ROOT)),
         *(f"artifact:{path}" for path in inputs),
         f"artifact:{output}",
     ]
-    if database == portfolio_db_path(PROJECT_ROOT):
-        resources.append("portfolio-db")
     with JobLock(PROJECT_ROOT, "populate-latest-governed-state", resources):
         eligibility_snapshot, manifest = _load_bound(eligibility_path)
         registry_snapshot, registry_bytes = read_stable_artifact(registry_path)
@@ -193,7 +222,6 @@ def _execute(args: argparse.Namespace) -> LatestGovernedPopulationReceipt:
                 or prior.admission != admission
                 or prior.database_instance_id != instance_id
                 or prior.alembic_revision != revision
-                or _head_snapshot_for_receipt(conn, prior) != prior.result.heads_after
                 or prior.result.processed_scope_ids != (args.after_scope_id,)
                 or prior.result.remaining_scope_ids != expected_remaining
                 or args.operation_recorded_at < prior.request.operation_recorded_at
@@ -210,23 +238,32 @@ def _execute(args: argparse.Namespace) -> LatestGovernedPopulationReceipt:
                 prior_checkpoint_receipt_sha256=prior_sha,
             )
             operation_id = latest_governed_population_operation_id(
-                database_instance_id=instance_id,
+                persistence=persistence,
                 admission_sha256=admission.commitment_sha256,
                 request=request,
-                prior_checkpoint_receipt_sha256=prior_sha,
             )
             stored_before = (
                 load_latest_governed_population_receipt(conn, operation_id) if args.apply else None
             )
-            if existing is not None and stored_before != existing:
-                raise ImmutableArtifactConflictError(
-                    "exported latest governed receipt lacks matching database evidence"
+            if prior is not None:
+                validate_population_resume_heads(
+                    conn,
+                    prior_heads=prior.result.heads_after,
+                    stored_successor_heads=(
+                        None if stored_before is None else stored_before.result.heads_after
+                    ),
                 )
+            validate_existing_export_database_evidence(
+                apply=args.apply,
+                existing=existing,
+                stored=stored_before,
+            )
             result = populate_latest_governed_cohort(
                 conn,
                 admission,
                 request,
                 persistence=persistence if args.apply else None,
+                prior_checkpoint=prior if args.apply else None,
                 input_stability_check=(
                     None
                     if not args.apply
@@ -280,12 +317,17 @@ def _execute(args: argparse.Namespace) -> LatestGovernedPopulationReceipt:
         return receipt
 
 
-def _head_snapshot_for_receipt(
+def validate_population_resume_heads(
     conn: sqlite3.Connection,
-    receipt: LatestGovernedPopulationReceipt,
-) -> dict[str, tuple[str, str] | None]:
-    snapshot: dict[str, tuple[str, str] | None] = {}
-    for scope_id in receipt.result.heads_after:
+    *,
+    prior_heads: Mapping[str, tuple[str, str] | None],
+    stored_successor_heads: Mapping[str, tuple[str, str] | None] | None,
+) -> None:
+    """Accept a committed successor before export, otherwise require the prior boundary."""
+
+    expected = prior_heads if stored_successor_heads is None else stored_successor_heads
+    actual: dict[str, tuple[str, str] | None] = {}
+    for scope_id in expected:
         rows = conn.execute(
             "SELECT refresh_receipt_id,state_sha256 FROM latest_governed_scope_heads "
             "WHERE scope_key=?",
@@ -293,8 +335,10 @@ def _head_snapshot_for_receipt(
         ).fetchall()
         if len(rows) > 1:
             raise ValueError("latest governed scope head is ambiguous")
-        snapshot[scope_id] = None if not rows else (str(rows[0][0]), str(rows[0][1]))
-    return snapshot
+        actual[scope_id] = None if not rows else (str(rows[0][0]), str(rows[0][1]))
+    if actual != expected:
+        label = "prior checkpoint" if stored_successor_heads is None else "stored successor"
+        raise ValueError(f"latest governed database heads differ from the {label}")
 
 
 def _assert_inputs_unchanged(

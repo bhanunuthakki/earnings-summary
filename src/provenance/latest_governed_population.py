@@ -17,9 +17,12 @@ from provenance.latest_governed_state import (
     LatestGovernedCohortAudit,
     LatestGovernedRefreshRequest,
     LatestGovernedRefreshResult,
+    LatestGovernedScopeAudit,
     LatestGovernedStateError,
     RefreshReceipt,
     audit_latest_governed_cohort,
+    audit_latest_governed_scope,
+    current_latest_governed_projection_commitment,
     refresh_latest_governed_state,
 )
 from provenance.latest_state_activation import (
@@ -28,6 +31,7 @@ from provenance.latest_state_activation import (
 )
 
 _HEX = frozenset("0123456789abcdef")
+_OPERATION_LEDGER_TABLE = "latest_governed_population_operation_ledger_v2"
 
 
 def _canonical_json(value: object) -> str:
@@ -129,11 +133,12 @@ class LatestGovernedPopulationScopeResult(_FrozenModel):
     head_receipt_id: str | None
     head_state_sha256: str | None
     stage_count: int = Field(ge=0)
+    scope_audit: LatestGovernedScopeAudit | None
 
 
 class LatestGovernedPopulationResult(_FrozenModel):
-    schema_version: Literal["latest-governed-population-result/v1"] = (
-        "latest-governed-population-result/v1"
+    schema_version: Literal["latest-governed-population-result/v2"] = (
+        "latest-governed-population-result/v2"
     )
     mode: Literal["dry_run", "apply"]
     outcome: Literal["planned", "checkpoint", "complete"]
@@ -145,6 +150,8 @@ class LatestGovernedPopulationResult(_FrozenModel):
     heads_after: dict[str, tuple[str, str] | None]
     heads_before_sha256: str
     heads_after_sha256: str
+    prefix_projection_commitments: dict[str, str]
+    fts_rowid_commitment_sha256: str
     cohort_audit: LatestGovernedCohortAudit | None
     result_sha256: str
 
@@ -168,8 +175,19 @@ class LatestGovernedPopulationResult(_FrozenModel):
             self.heads_before
         ) or self.heads_after_sha256 != _digest(self.heads_after):
             raise ValueError("population head-set commitment mismatch")
+        if len(self.fts_rowid_commitment_sha256) != 64 or any(
+            character not in _HEX for character in self.fts_rowid_commitment_sha256
+        ):
+            raise ValueError("population FTS rowid commitment must be lowercase SHA-256")
         if self.mode == "apply" and len(self.processed_scope_ids) != 1:
             raise ValueError("apply results must contain exactly one checkpointed scope")
+        if self.mode == "apply" and any(item.scope_audit is None for item in self.scope_results):
+            raise ValueError("apply results require an exhaustive new-scope audit")
+        if self.mode == "dry_run" and (
+            self.prefix_projection_commitments
+            or any(item.scope_audit is not None for item in self.scope_results)
+        ):
+            raise ValueError("dry-run results cannot carry applied projection evidence")
         if self.outcome == "checkpoint" and not self.remaining_scope_ids:
             raise ValueError("checkpoint result must retain a nonempty suffix")
         return self
@@ -202,8 +220,8 @@ class LatestGovernedPopulationPersistence(_FrozenModel):
 
 
 class LatestGovernedPopulationReceipt(_FrozenModel):
-    schema_version: Literal["latest-governed-population-receipt/v1"] = (
-        "latest-governed-population-receipt/v1"
+    schema_version: Literal["latest-governed-population-receipt/v2"] = (
+        "latest-governed-population-receipt/v2"
     )
     operation_id: str = Field(
         min_length=101,
@@ -256,10 +274,16 @@ class LatestGovernedPopulationReceipt(_FrozenModel):
         if self.request_sha256 != _digest(self.request):
             raise ValueError("latest governed receipt request commitment mismatch")
         if self.operation_id != latest_governed_population_operation_id(
-            database_instance_id=self.database_instance_id,
+            persistence=LatestGovernedPopulationPersistence(
+                database_path=self.database_path,
+                database_instance_id=self.database_instance_id,
+                alembic_revision=self.alembic_revision,
+                eligibility_artifact_sha256=self.eligibility_artifact_sha256,
+                registry_artifact_sha256=self.registry_artifact_sha256,
+                prior_checkpoint_receipt_sha256=self.prior_checkpoint_receipt_sha256,
+            ),
             admission_sha256=self.admission_sha256,
             request=self.request,
-            prior_checkpoint_receipt_sha256=self.prior_checkpoint_receipt_sha256,
         ):
             raise ValueError("latest governed population operation identity mismatch")
         scope_ids = tuple(item.scope_id for item in self.admission.scopes)
@@ -291,6 +315,9 @@ class LatestGovernedPopulationReceipt(_FrozenModel):
                 or result.refresh_receipt.current_state_sha256 != result.head_state_sha256
                 or result.head_state_sha256 != scope.terminal_commitment
                 or result.stage_count != 0
+                or result.scope_audit is None
+                or result.scope_audit.scope_id != result.scope_id
+                or result.scope_audit.terminal_commitment != scope.terminal_commitment
             ):
                 raise ValueError("population receipt finalized scope evidence mismatch")
             if not self.request.apply and result.refresh_receipt is not None:
@@ -303,6 +330,28 @@ class LatestGovernedPopulationReceipt(_FrozenModel):
             self.result.cohort_audit.scope_ids != scope_ids
         ):
             raise ValueError("population readiness cohort differs from admission")
+        expected_prefix = scope_ids[: start + len(selected)] if self.request.apply else ()
+        if tuple(self.result.prefix_projection_commitments) != expected_prefix:
+            raise ValueError("population prefix projection evidence is incomplete")
+        for scope_result in self.result.scope_results:
+            audit = scope_result.scope_audit
+            if (
+                audit is not None
+                and self.result.prefix_projection_commitments.get(scope_result.scope_id)
+                != audit.current_projection_commitment_sha256
+            ):
+                raise ValueError("population new-scope projection evidence differs")
+        if self.result.cohort_audit is not None:
+            audited = {item.scope_id: item for item in self.result.cohort_audit.scopes}
+            for scope_id, scope in admitted.items():
+                audit = audited.get(scope_id)
+                if (
+                    audit is None
+                    or audit.terminal_commitment != scope.terminal_commitment
+                    or self.result.prefix_projection_commitments.get(scope_id)
+                    != audit.current_projection_commitment_sha256
+                ):
+                    raise ValueError("population cohort audit differs from admission")
         return self
 
 
@@ -322,14 +371,21 @@ def build_latest_governed_population_receipt(
 
     admission_sha256 = admission.commitment_sha256
     request_sha256 = _digest(request)
-    operation_id = latest_governed_population_operation_id(
+    persistence = LatestGovernedPopulationPersistence(
+        database_path=database_path,
         database_instance_id=database_instance_id,
-        admission_sha256=admission_sha256,
-        request=request,
+        alembic_revision=alembic_revision,
+        eligibility_artifact_sha256=eligibility_artifact_sha256,
+        registry_artifact_sha256=registry_artifact_sha256,
         prior_checkpoint_receipt_sha256=prior_checkpoint_receipt_sha256,
     )
+    operation_id = latest_governed_population_operation_id(
+        persistence=persistence,
+        admission_sha256=admission_sha256,
+        request=request,
+    )
     core = {
-        "schema_version": "latest-governed-population-receipt/v1",
+        "schema_version": "latest-governed-population-receipt/v2",
         "operation_id": operation_id,
         "database_path": database_path,
         "database_instance_id": database_instance_id,
@@ -348,16 +404,14 @@ def build_latest_governed_population_receipt(
 
 def latest_governed_population_operation_id(
     *,
-    database_instance_id: str,
+    persistence: LatestGovernedPopulationPersistence,
     admission_sha256: str,
     request: LatestGovernedPopulationRequest,
-    prior_checkpoint_receipt_sha256: str | None,
 ) -> str:
     return "latest-governed-population-operation:" + _digest(
         {
             "admission_sha256": admission_sha256,
-            "database_instance_id": database_instance_id,
-            "prior_checkpoint_receipt_sha256": prior_checkpoint_receipt_sha256,
+            "persistence": persistence.model_dump(mode="json"),
             "request": request.model_dump(mode="json"),
         }
     )
@@ -394,24 +448,36 @@ def persist_latest_governed_population_receipt(
         receipt.receipt_sha256,
         payload,
     )
-    inserted = conn.execute(
-        "INSERT INTO latest_governed_population_operation_ledger ("
+    existing = conn.execute(
+        "SELECT operation_id,idempotency_key,database_instance_id,"
+        "eligibility_artifact_sha256,registry_artifact_sha256,admission_sha256,"
+        "request_sha256,result_sha256,receipt_sha256,receipt_json "
+        f"FROM {_OPERATION_LEDGER_TABLE} WHERE operation_id=? "  # nosec B608 -- fixed table
+        "OR idempotency_key=? OR receipt_sha256=?",
+        (receipt.operation_id, receipt.operation_id, receipt.receipt_sha256),
+    ).fetchall()
+    if existing:
+        if len(existing) != 1 or tuple(existing[0]) != values:
+            raise LatestGovernedStateError("latest governed population ledger conflict")
+        return False
+    conn.execute(
+        f"INSERT INTO {_OPERATION_LEDGER_TABLE} ("  # nosec B608 -- fixed table
         "operation_id,idempotency_key,database_instance_id,"
         "eligibility_artifact_sha256,registry_artifact_sha256,admission_sha256,"
         "request_sha256,result_sha256,receipt_sha256,receipt_json) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING",
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
         values,
     )
     row = conn.execute(
         "SELECT operation_id,idempotency_key,database_instance_id,"
         "eligibility_artifact_sha256,registry_artifact_sha256,admission_sha256,"
         "request_sha256,result_sha256,receipt_sha256,receipt_json "
-        "FROM latest_governed_population_operation_ledger WHERE operation_id=?",
+        f"FROM {_OPERATION_LEDGER_TABLE} WHERE operation_id=?",  # nosec B608 -- fixed table
         (receipt.operation_id,),
     ).fetchone()
     if row is None or tuple(row) != values:
         raise LatestGovernedStateError("latest governed population ledger conflict")
-    return inserted.rowcount == 1
+    return True
 
 
 def load_latest_governed_population_receipt(
@@ -419,7 +485,8 @@ def load_latest_governed_population_receipt(
     operation_id: str,
 ) -> LatestGovernedPopulationReceipt | None:
     row = conn.execute(
-        "SELECT receipt_json FROM latest_governed_population_operation_ledger WHERE operation_id=?",
+        f"SELECT receipt_json FROM {_OPERATION_LEDGER_TABLE} "  # nosec B608 -- fixed table
+        "WHERE operation_id=?",
         (operation_id,),
     ).fetchone()
     if row is None:
@@ -498,6 +565,7 @@ def populate_latest_governed_cohort(
     request: LatestGovernedPopulationRequest,
     *,
     persistence: LatestGovernedPopulationPersistence | None = None,
+    prior_checkpoint: LatestGovernedPopulationReceipt | None = None,
     input_stability_check: Callable[[], None] | None = None,
 ) -> LatestGovernedPopulationResult:
     """Plan or apply a bounded deterministic slice of the admitted production cohort."""
@@ -519,33 +587,139 @@ def populate_latest_governed_cohort(
         raise LatestGovernedStateError("latest governed apply requires an input stability gate")
     if request.apply and len(selected) != 1:
         raise LatestGovernedStateError("latest governed apply must select exactly one scope")
+    expected_prefix_ids = scope_ids[:start]
+    if request.apply and bool(expected_prefix_ids) != (prior_checkpoint is not None):
+        raise LatestGovernedStateError(
+            "latest governed resume requires its exact prior checkpoint evidence"
+        )
+    if request.apply:
+        assert persistence is not None
+        if (persistence.prior_checkpoint_receipt_sha256 is not None) != (
+            prior_checkpoint is not None
+        ):
+            raise LatestGovernedStateError(
+                "latest governed persistence differs from its prior checkpoint"
+            )
+    if prior_checkpoint is not None and (
+        load_latest_governed_population_receipt(conn, prior_checkpoint.operation_id)
+        != prior_checkpoint
+        or prior_checkpoint.admission != admission
+        or prior_checkpoint.result.outcome != "checkpoint"
+        or prior_checkpoint.result.last_scope_id != request.after_scope_id
+        or tuple(prior_checkpoint.result.prefix_projection_commitments) != expected_prefix_ids
+        or prior_checkpoint.result.heads_after != heads_before
+        or request.operation_recorded_at < prior_checkpoint.request.operation_recorded_at
+    ):
+        raise LatestGovernedStateError(
+            "latest governed prior checkpoint differs from this exact resume"
+        )
+    stable_data_version = _data_version(conn)
+    current_scope_ids = tuple(
+        scope_id for scope_id, head in heads_before.items() if head is not None
+    )
+    _require_projection_scope_isolation(
+        conn,
+        admitted_scope_ids=scope_ids,
+        expected_current_scope_ids=current_scope_ids,
+    )
+    if prior_checkpoint is not None:
+        if _fts_rowid_commitment(conn) != prior_checkpoint.result.fts_rowid_commitment_sha256:
+            raise LatestGovernedStateError(
+                "latest governed FTS rowids differ from checkpoint evidence"
+            )
+        _verify_projection_prefix(
+            conn,
+            prior_checkpoint.result.prefix_projection_commitments,
+        )
+        if _data_version(conn) != stable_data_version:
+            raise LatestGovernedStateError(
+                "latest governed database changed during prefix verification"
+            )
     if request.apply:
         assert persistence is not None
         operation_id = latest_governed_population_operation_id(
-            database_instance_id=persistence.database_instance_id,
+            persistence=persistence,
             admission_sha256=admission.commitment_sha256,
             request=request,
-            prior_checkpoint_receipt_sha256=persistence.prior_checkpoint_receipt_sha256,
         )
         stored = load_latest_governed_population_receipt(conn, operation_id)
         if stored is not None:
-            if stored.admission != admission or stored.request != request:
+            stored_persistence = LatestGovernedPopulationPersistence(
+                database_path=stored.database_path,
+                database_instance_id=stored.database_instance_id,
+                alembic_revision=stored.alembic_revision,
+                eligibility_artifact_sha256=stored.eligibility_artifact_sha256,
+                registry_artifact_sha256=stored.registry_artifact_sha256,
+                prior_checkpoint_receipt_sha256=stored.prior_checkpoint_receipt_sha256,
+            )
+            if (
+                stored.admission != admission
+                or stored.request != request
+                or stored_persistence != persistence
+            ):
                 raise LatestGovernedStateError("stored population operation identity conflict")
-            current_heads = _head_snapshot(conn, scope_ids)
-            if current_heads != stored.result.heads_after:
+            if _head_snapshot(conn, scope_ids) != stored.result.heads_after:
                 raise LatestGovernedStateError(
                     "stored population receipt differs from current database heads"
                 )
+            stable_data_version = _data_version(conn)
+            stored_scope_ids = tuple(
+                scope_id for scope_id, head in stored.result.heads_after.items() if head is not None
+            )
+            _require_projection_scope_isolation(
+                conn,
+                admitted_scope_ids=scope_ids,
+                expected_current_scope_ids=stored_scope_ids,
+            )
+            if _fts_rowid_commitment(conn) != stored.result.fts_rowid_commitment_sha256:
+                raise LatestGovernedStateError(
+                    "stored population FTS rowids differ from current database"
+                )
+            _verify_projection_prefix(conn, stored.result.prefix_projection_commitments)
             if stored.result.outcome == "complete":
                 audit = audit_latest_governed_cohort(
                     conn,
                     scope_ids,
                     operation_recorded_at=request.operation_recorded_at,
                 )
+                _require_admitted_audit_terminals(admission, audit)
                 if audit != stored.result.cohort_audit:
                     raise LatestGovernedStateError(
                         "stored complete population readiness no longer verifies"
                     )
+            if _data_version(conn) != stable_data_version:
+                raise LatestGovernedStateError(
+                    "latest governed database changed during stored replay verification"
+                )
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                if _data_version(conn) != stable_data_version:
+                    raise LatestGovernedStateError(
+                        "latest governed database changed before stored replay lock"
+                    )
+                if _head_snapshot(conn, scope_ids) != stored.result.heads_after:
+                    raise LatestGovernedStateError(
+                        "stored population receipt differs from current database heads"
+                    )
+                _require_projection_scope_isolation(
+                    conn,
+                    admitted_scope_ids=scope_ids,
+                    expected_current_scope_ids=stored_scope_ids,
+                )
+                if _fts_rowid_commitment(conn) != stored.result.fts_rowid_commitment_sha256:
+                    raise LatestGovernedStateError(
+                        "stored population FTS rowids changed before replay lock"
+                    )
+                _verify_projection_prefix(
+                    conn,
+                    stored.result.prefix_projection_commitments,
+                )
+                assert input_stability_check is not None
+                input_stability_check()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
             return stored.result
     dry_results: list[
         tuple[LatestGovernedPopulationScopeAdmission, LatestGovernedRefreshResult]
@@ -583,6 +757,7 @@ def populate_latest_governed_cohort(
                     head_receipt_id=None if prior_head is None else prior_head[0],
                     head_state_sha256=None if prior_head is None else prior_head[1],
                     stage_count=0,
+                    scope_audit=None,
                 )
             )
         results = tuple(planned_results)
@@ -594,6 +769,8 @@ def populate_latest_governed_cohort(
             scope_results=results,
             heads_before=heads_before,
             heads_after=heads_before,
+            prefix_projection_commitments={},
+            fts_rowid_commitment_sha256=_fts_rowid_commitment(conn),
             cohort_audit=None,
         )
 
@@ -609,16 +786,39 @@ def populate_latest_governed_cohort(
     ) -> None:
         assert input_stability_check is not None
         input_stability_check()
+        if _data_version(transaction) != stable_data_version:
+            raise LatestGovernedStateError(
+                "latest governed database changed before checkpoint finalization"
+            )
         if head.state_commitment_sha256 != item.terminal_commitment:
             raise LatestGovernedStateError(
                 "latest governed finalized head differs from admitted terminal"
             )
         heads_after = _head_snapshot(transaction, scope_ids)
+        expected_non_target_heads = (
+            heads_before if prior_checkpoint is None else prior_checkpoint.result.heads_after
+        )
         for scope_id in scope_ids:
-            if scope_id != item.scope_id and heads_after[scope_id] != heads_before[scope_id]:
+            if (
+                scope_id != item.scope_id
+                and heads_after[scope_id] != expected_non_target_heads[scope_id]
+            ):
                 raise LatestGovernedStateError(
                     "latest governed population changed a non-target scope"
                 )
+        if prior_checkpoint is not None:
+            _verify_projection_prefix(
+                transaction,
+                prior_checkpoint.result.prefix_projection_commitments,
+            )
+        finalized_scope_ids = tuple(
+            scope_id for scope_id, value in heads_after.items() if value is not None
+        )
+        _require_projection_scope_isolation(
+            transaction,
+            admitted_scope_ids=scope_ids,
+            expected_current_scope_ids=finalized_scope_ids,
+        )
         stage_count = int(
             transaction.execute(
                 "SELECT COUNT(*) FROM latest_governed_refresh_stage stage "
@@ -629,15 +829,40 @@ def populate_latest_governed_cohort(
         )
         if stage_count:
             raise LatestGovernedStateError("latest governed finalized scope retained stage rows")
-        cohort_audit = (
-            audit_latest_governed_cohort(
+        cohort_audit = None
+        if remaining:
+            scope_audit = audit_latest_governed_scope(
+                transaction,
+                item.scope_id,
+                operation_recorded_at=request.operation_recorded_at,
+            )
+            if scope_audit.terminal_commitment != item.terminal_commitment:
+                raise LatestGovernedStateError(
+                    "latest governed new-scope audit differs from admission"
+                )
+            prefix_projection_commitments = (
+                {}
+                if prior_checkpoint is None
+                else dict(prior_checkpoint.result.prefix_projection_commitments)
+            )
+            prefix_projection_commitments[item.scope_id] = (
+                scope_audit.current_projection_commitment_sha256
+            )
+        else:
+            cohort_audit = audit_latest_governed_cohort(
                 transaction,
                 scope_ids,
                 operation_recorded_at=request.operation_recorded_at,
             )
-            if not remaining
-            else None
-        )
+            _require_admitted_audit_terminals(admission, cohort_audit)
+            scope_audit = next(
+                audit for audit in cohort_audit.scopes if audit.scope_id == item.scope_id
+            )
+            prefix_projection_commitments = {
+                audit.scope_id: audit.current_projection_commitment_sha256
+                for audit in cohort_audit.scopes
+            }
+        input_stability_check()
         result = _population_result(
             mode="apply",
             outcome="checkpoint" if remaining else "complete",
@@ -652,10 +877,13 @@ def populate_latest_governed_cohort(
                     head_receipt_id=head.receipt_id,
                     head_state_sha256=head.state_commitment_sha256,
                     stage_count=0,
+                    scope_audit=scope_audit,
                 ),
             ),
             heads_before=heads_before,
             heads_after=heads_after,
+            prefix_projection_commitments=prefix_projection_commitments,
+            fts_rowid_commitment_sha256=_fts_rowid_commitment(transaction),
             cohort_audit=cohort_audit,
         )
         assert persistence is not None
@@ -699,10 +927,12 @@ def _population_result(
     scope_results: tuple[LatestGovernedPopulationScopeResult, ...],
     heads_before: dict[str, tuple[str, str] | None],
     heads_after: dict[str, tuple[str, str] | None],
+    prefix_projection_commitments: dict[str, str],
+    fts_rowid_commitment_sha256: str,
     cohort_audit: LatestGovernedCohortAudit | None,
 ) -> LatestGovernedPopulationResult:
     core = {
-        "schema_version": "latest-governed-population-result/v1",
+        "schema_version": "latest-governed-population-result/v2",
         "mode": mode,
         "outcome": outcome,
         "processed_scope_ids": processed_scope_ids,
@@ -713,9 +943,99 @@ def _population_result(
         "heads_after": heads_after,
         "heads_before_sha256": _digest(heads_before),
         "heads_after_sha256": _digest(heads_after),
+        "prefix_projection_commitments": prefix_projection_commitments,
+        "fts_rowid_commitment_sha256": fts_rowid_commitment_sha256,
         "cohort_audit": None if cohort_audit is None else cohort_audit.model_dump(mode="json"),
     }
     return LatestGovernedPopulationResult.model_validate(core | {"result_sha256": _digest(core)})
+
+
+def _data_version(conn: sqlite3.Connection) -> int:
+    return int(conn.execute("PRAGMA data_version").fetchone()[0])
+
+
+def _verify_projection_prefix(
+    conn: sqlite3.Connection,
+    expected: dict[str, str],
+) -> None:
+    for scope_id, commitment in expected.items():
+        if current_latest_governed_projection_commitment(conn, scope_id) != commitment:
+            raise LatestGovernedStateError(
+                "latest governed prefix projection differs from checkpoint evidence"
+            )
+
+
+def _fts_rowid_commitment(conn: sqlite3.Connection) -> str:
+    rows = conn.execute(
+        "SELECT id FROM latest_governed_narrative_fts_docsize ORDER BY id"
+    ).fetchall()
+    return _digest({"rowids": [int(row[0]) for row in rows], "version": "fts-rowids/v1"})
+
+
+def _require_projection_scope_isolation(
+    conn: sqlite3.Connection,
+    *,
+    admitted_scope_ids: tuple[str, ...],
+    expected_current_scope_ids: tuple[str, ...],
+) -> None:
+    admitted = set(admitted_scope_ids)
+    expected_current = set(expected_current_scope_ids)
+    fts_delta_count = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM ("
+            "SELECT docsize.id FROM latest_governed_narrative_fts_docsize docsize "
+            "WHERE NOT EXISTS (SELECT 1 FROM latest_governed_narrative_entries entry "
+            "WHERE entry.rowid=docsize.id) UNION ALL "
+            "SELECT entry.rowid FROM latest_governed_narrative_entries entry "
+            "WHERE NOT EXISTS (SELECT 1 FROM latest_governed_narrative_fts_docsize docsize "
+            "WHERE docsize.id=entry.rowid))"
+        ).fetchone()[0]
+    )
+    if fts_delta_count:
+        raise LatestGovernedStateError("latest governed FTS rowids differ from narrative rows")
+    for table in (
+        "latest_governed_scope_heads",
+        "latest_governed_fact_entries",
+        "latest_governed_document_entries",
+        "latest_governed_narrative_entries",
+    ):
+        current_scope_ids = {
+            str(row[0])
+            for row in conn.execute(
+                f"SELECT DISTINCT scope_key FROM {table}"  # nosec B608 -- closed table tuple
+            ).fetchall()
+        }
+        if current_scope_ids != expected_current:
+            raise LatestGovernedStateError(
+                "latest governed current scopes differ from checkpoint heads"
+            )
+    plane_scope_ids = {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT scope_key FROM latest_governed_refresh_runs UNION "
+            "SELECT scope_key FROM latest_governed_refresh_receipts UNION "
+            "SELECT scope_key FROM latest_governed_scope_heads UNION "
+            "SELECT scope_key FROM latest_governed_fact_entries UNION "
+            "SELECT scope_key FROM latest_governed_document_entries UNION "
+            "SELECT scope_key FROM latest_governed_narrative_entries"
+        ).fetchall()
+    }
+    if not plane_scope_ids.issubset(admitted):
+        raise LatestGovernedStateError(
+            "latest governed planes contain a scope outside the admission"
+        )
+
+
+def _require_admitted_audit_terminals(
+    admission: LatestGovernedPopulationAdmission,
+    audit: LatestGovernedCohortAudit,
+) -> None:
+    admitted = {item.scope_id: item.terminal_commitment for item in admission.scopes}
+    actual = {item.scope_id: item.terminal_commitment for item in audit.scopes}
+    if actual != admitted:
+        raise LatestGovernedStateError(
+            "latest governed cohort audit terminals differ from admission"
+        )
 
 
 def _head_snapshot(
