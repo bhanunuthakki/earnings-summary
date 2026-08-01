@@ -256,6 +256,9 @@ def _database() -> sqlite3.Connection:
     return conn
 
 
+latest_governed_test_database = _database
+
+
 def _seed_frontier(conn: sqlite3.Connection) -> None:
     clock = T0.isoformat()
     bundles = json.dumps(
