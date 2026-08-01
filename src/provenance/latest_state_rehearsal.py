@@ -22,6 +22,7 @@ from provenance.immutable_artifact import (
     read_stable_artifact,
     require_no_reparse_points,
 )
+from provenance.latest_governed_state import LatestGovernedCohortAudit
 from provenance.latest_state_activation import (
     candidate_file_identity,
     require_checkpointed_sidecars,
@@ -44,6 +45,8 @@ _LATEST_TABLES = (
 _TERMINALLY_EMPTY_TABLES = frozenset(
     {"latest_governed_refresh_stage", "latest_governed_refresh_changes"}
 )
+SEMANTIC_FACT_CANARY_POLICY_MAX_MILLISECONDS = 10_000.0
+SEMANTIC_ISSUER_QUALIFICATION_POLICY_MAX_MILLISECONDS = 60_000.0
 
 
 class RehearsalError(ValueError):
@@ -439,39 +442,188 @@ def build_rehearsal_checkpoint(
     return RehearsalCheckpoint.model_validate(core | {"receipt_sha256": _digest(core)})
 
 
+class GroundedCanaryCommitment(_FrozenModel):
+    """One reproducible fact, lexical, or semantic retrieval canary."""
+
+    canary_kind: Literal["fact", "lexical", "semantic"]
+    query_sha256: str = Field(pattern=_SHA_PATTERN)
+    result_set_sha256: str = Field(pattern=_SHA_PATTERN)
+    result_count: int = Field(gt=0)
+    elapsed_milliseconds: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    document_family: str | None = Field(default=None, min_length=1, max_length=64)
+    backend_receipt_sha256: str | None = Field(default=None, pattern=_SHA_PATTERN)
+    expected_source_id: str | None = Field(default=None, min_length=1, max_length=128)
+    observed_rank: int | None = Field(default=None, ge=1, le=1_000)
+
+    @model_validator(mode="after")
+    def _kind_coordinates(self) -> Self:
+        if (self.canary_kind == "lexical") != (self.document_family is not None):
+            raise ValueError("only lexical canaries carry a document family")
+        if (self.canary_kind == "semantic") != (self.backend_receipt_sha256 is not None):
+            raise ValueError("only semantic canaries carry a backend receipt")
+        if (self.canary_kind in {"fact", "semantic"}) != (
+            self.expected_source_id is not None and self.observed_rank is not None
+        ):
+            raise ValueError("fact and semantic canaries require an exact grounded source rank")
+        if (self.canary_kind == "fact") != (self.elapsed_milliseconds is not None):
+            raise ValueError("only fact canaries carry an attributable per-canary latency")
+        return self
+
+
+class SemanticIssuerQualification(_FrozenModel):
+    """Issuer-owned corpus, runtime, projection, and narrative canary evidence."""
+
+    issuer_id: str = Field(min_length=1, max_length=128)
+    corpus_manifest_id: str = Field(min_length=1, max_length=128)
+    corpus_membership_sha256: str = Field(pattern=_SHA_PATTERN)
+    corpus_expected_document_count: int = Field(gt=0)
+    corpus_included_document_count: int = Field(gt=0)
+    corpus_chunk_count: int = Field(gt=0)
+    lexical_index_run_id: str = Field(min_length=1, max_length=128)
+    vector_index_run_id: str = Field(min_length=1, max_length=128)
+    projection_seal_id: str = Field(min_length=1, max_length=128)
+    projection_records_sha256: str = Field(pattern=_SHA_PATTERN)
+    projection_artifact_set_sha256: str = Field(pattern=_SHA_PATTERN)
+    embedding_promotion_id: str = Field(min_length=1, max_length=128)
+    runtime_registration_id: str = Field(min_length=1, max_length=128)
+    runtime_artifact_sha256: str = Field(pattern=_SHA_PATTERN)
+    lexical_canaries: tuple[GroundedCanaryCommitment, ...] = Field(min_length=1)
+    semantic_canary: GroundedCanaryCommitment
+    qualification_elapsed_milliseconds: float = Field(gt=0, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def _complete(self) -> Self:
+        families = tuple(item.document_family for item in self.lexical_canaries)
+        normalized_families = tuple(item for item in families if item is not None)
+        if (
+            self.corpus_expected_document_count != self.corpus_included_document_count
+            or self.semantic_canary.canary_kind != "semantic"
+            or any(item.canary_kind != "lexical" for item in self.lexical_canaries)
+            or len(normalized_families) != len(families)
+            or normalized_families != tuple(sorted(set(normalized_families)))
+        ):
+            raise ValueError("semantic issuer qualification is incomplete or ambiguous")
+        return self
+
+
+class SemanticScopeQualification(_FrozenModel):
+    """Scope-owned Ask/fact evidence bound to one issuer runtime qualification."""
+
+    scope_id: str = Field(min_length=1, max_length=256)
+    source_scope_key: str = Field(min_length=1, max_length=128)
+    source_scope_revision_id: str = Field(min_length=1, max_length=128)
+    issuer_id: str = Field(min_length=1, max_length=128)
+    reporting_entity_id: str = Field(min_length=1, max_length=128)
+    ask_promotion_id: str = Field(min_length=1, max_length=128)
+    research_snapshot_id: str = Field(min_length=1, max_length=128)
+    fact_generation_id: str = Field(min_length=1, max_length=128)
+    fact_projection_seal_sha256: str = Field(pattern=_SHA_PATTERN)
+    source_inventory_count: int = Field(gt=0)
+    source_inventory_set_sha256: str = Field(pattern=_SHA_PATTERN)
+    corpus_manifest_id: str = Field(min_length=1, max_length=128)
+    lexical_index_run_id: str = Field(min_length=1, max_length=128)
+    vector_index_run_id: str = Field(min_length=1, max_length=128)
+    embedding_promotion_id: str = Field(min_length=1, max_length=128)
+    fact_canary: GroundedCanaryCommitment
+
+    @model_validator(mode="after")
+    def _complete(self) -> Self:
+        if self.fact_canary.canary_kind != "fact":
+            raise ValueError("semantic scope qualification is incomplete or ambiguous")
+        return self
+
+
 class SemanticQualificationEvidence(_FrozenModel):
     """Exact Ask/runtime qualification required before reader promotion."""
 
+    schema_version: Literal["latest-governed-semantic-qualification/v2"] = (
+        "latest-governed-semantic-qualification/v2"
+    )
     database_sha256: str = Field(pattern=_SHA_PATTERN)
+    request_artifact: ArtifactCommitment
     registry_artifact: ArtifactCommitment
-    index_artifacts: tuple[ArtifactCommitment, ...] = Field(min_length=1)
-    runtime_artifacts: tuple[ArtifactCommitment, ...] = Field(min_length=1)
     production_scope_ids: tuple[str, ...] = Field(min_length=1)
-    promotion_ids: tuple[str, ...] = Field(min_length=1)
-    vector_index_run_ids: tuple[str, ...] = Field(min_length=1)
-    embedding_promotion_ids: tuple[str, ...] = Field(min_length=1)
-    runtime_artifact_ids: tuple[str, ...] = Field(min_length=1)
+    issuer_qualifications: tuple[SemanticIssuerQualification, ...] = Field(min_length=1)
+    scope_qualifications: tuple[SemanticScopeQualification, ...] = Field(min_length=1)
     corpus_document_count: int = Field(gt=0)
     grounded_fact_canary_count: int = Field(gt=0)
     grounded_narrative_canary_count: int = Field(gt=0)
-    failure_count: int = Field(ge=0)
-    max_fact_canary_milliseconds: float = Field(gt=0)
-    max_narrative_canary_milliseconds: float = Field(gt=0)
-    observed_fact_canary_p95_milliseconds: float = Field(ge=0)
-    observed_narrative_canary_p95_milliseconds: float = Field(ge=0)
+    failure_count: Literal[0] = 0
+    max_fact_canary_milliseconds: float = Field(
+        gt=0,
+        le=SEMANTIC_FACT_CANARY_POLICY_MAX_MILLISECONDS,
+        allow_inf_nan=False,
+    )
+    max_issuer_qualification_milliseconds: float = Field(
+        gt=0,
+        le=SEMANTIC_ISSUER_QUALIFICATION_POLICY_MAX_MILLISECONDS,
+        allow_inf_nan=False,
+    )
+    observed_max_fact_canary_milliseconds: float = Field(gt=0, allow_inf_nan=False)
+    observed_max_issuer_qualification_milliseconds: float = Field(gt=0, allow_inf_nan=False)
     qualification_sha256: str = Field(pattern=_SHA_PATTERN)
 
     @model_validator(mode="after")
     def _ready(self) -> Self:
+        scope_ids = tuple(item.scope_id for item in self.scope_qualifications)
+        optional_fact_times = tuple(
+            item.fact_canary.elapsed_milliseconds for item in self.scope_qualifications
+        )
+        if any(item is None for item in optional_fact_times):
+            raise ValueError("semantic fact canary latency is missing")
+        fact_times = tuple(cast(float, item) for item in optional_fact_times)
+        issuer_times = tuple(
+            item.qualification_elapsed_milliseconds for item in self.issuer_qualifications
+        )
+        issuer_ids = tuple(item.issuer_id for item in self.issuer_qualifications)
+        if issuer_ids != tuple(sorted(set(issuer_ids))):
+            raise ValueError("semantic issuer qualifications must be unique and sorted")
+        by_issuer = {item.issuer_id: item for item in self.issuer_qualifications}
+        manifests: dict[str, tuple[str, int, int, int]] = {}
+        for item in self.issuer_qualifications:
+            coordinates = (
+                item.corpus_membership_sha256,
+                item.corpus_expected_document_count,
+                item.corpus_included_document_count,
+                item.corpus_chunk_count,
+            )
+            existing = manifests.setdefault(item.corpus_manifest_id, coordinates)
+            if existing != coordinates:
+                raise ValueError("shared semantic corpus coordinates are inconsistent")
+        expected_documents = sum(item[1] for item in manifests.values())
+        narrative_canaries = sum(
+            len(item.lexical_canaries) + 1 for item in self.issuer_qualifications
+        )
+        scope_runtime_mismatch = any(
+            (issuer := by_issuer.get(item.issuer_id)) is None
+            or (
+                item.corpus_manifest_id,
+                item.lexical_index_run_id,
+                item.vector_index_run_id,
+                item.embedding_promotion_id,
+            )
+            != (
+                issuer.corpus_manifest_id,
+                issuer.lexical_index_run_id,
+                issuer.vector_index_run_id,
+                issuer.embedding_promotion_id,
+            )
+            for item in self.scope_qualifications
+        )
         if (
             tuple(sorted(set(self.production_scope_ids))) != self.production_scope_ids
-            or len(self.promotion_ids) != len(self.production_scope_ids)
-            or self.grounded_fact_canary_count < len(self.production_scope_ids)
-            or self.grounded_narrative_canary_count < len(self.production_scope_ids)
-            or self.failure_count
-            or self.observed_fact_canary_p95_milliseconds > self.max_fact_canary_milliseconds
-            or self.observed_narrative_canary_p95_milliseconds
-            > self.max_narrative_canary_milliseconds
+            or scope_ids != self.production_scope_ids
+            or len({item.ask_promotion_id for item in self.scope_qualifications})
+            != len(self.scope_qualifications)
+            or scope_runtime_mismatch
+            or self.corpus_document_count != expected_documents
+            or self.grounded_fact_canary_count != len(self.scope_qualifications)
+            or self.grounded_narrative_canary_count != narrative_canaries
+            or self.observed_max_fact_canary_milliseconds != max(fact_times)
+            or self.observed_max_issuer_qualification_milliseconds != max(issuer_times)
+            or self.observed_max_fact_canary_milliseconds > self.max_fact_canary_milliseconds
+            or self.observed_max_issuer_qualification_milliseconds
+            > self.max_issuer_qualification_milliseconds
         ):
             raise ValueError("semantic qualification is incomplete or ambiguous")
         payload = self.model_dump(mode="json", exclude={"qualification_sha256"})
@@ -488,6 +640,7 @@ def build_semantic_qualification_evidence(
     core = dict(fields)
     core.pop("qualification_sha256", None)
     normalized = {key: _json_value(value) for key, value in core.items()}
+    normalized.setdefault("schema_version", "latest-governed-semantic-qualification/v2")
     return SemanticQualificationEvidence.model_validate(
         normalized | {"qualification_sha256": _digest(normalized)}
     )
@@ -696,8 +849,10 @@ class CandidatePerformanceEvidence(_FrozenModel):
 class RehearsalReadinessReceipt(_FrozenModel):
     """Single immutable composite receipt that can enable a later activation gate."""
 
-    schema_version: str = "latest-governed-sealed-rehearsal-readiness/v1"
-    status: str = "ready"
+    schema_version: Literal["latest-governed-sealed-rehearsal-readiness/v2"] = (
+        "latest-governed-sealed-rehearsal-readiness/v2"
+    )
+    status: Literal["ready"] = "ready"
     plan_sha256: str = Field(pattern=_SHA_PATTERN)
     database_path: str = Field(min_length=1, max_length=2_048)
     database_instance_id: str = Field(pattern=_DATABASE_INSTANCE_PATTERN)
@@ -713,10 +868,10 @@ class RehearsalReadinessReceipt(_FrozenModel):
     restore_roundtrip: RestoreRoundtripEvidence
     exact_replay_verified: bool
     candidate_performance_passed: bool
-    exhaustive_parity_failure_count: int = Field(ge=0)
-    cross_scope_leakage_count: int = Field(ge=0)
-    retrieval_canary_failure_count: int = Field(ge=0)
-    fts_failure_count: int = Field(ge=0)
+    exhaustive_parity_failure_count: Literal[0] = 0
+    cross_scope_leakage_count: Literal[0] = 0
+    retrieval_canary_failure_count: Literal[0] = 0
+    fts_failure_count: Literal[0] = 0
     receipt_sha256: str = Field(pattern=_SHA_PATTERN)
 
 
@@ -737,15 +892,12 @@ def build_rehearsal_readiness_receipt(
     stage_artifacts: tuple[ArtifactCommitment, ...],
     admission_bundle: AdmissionBundle,
     terminal_bundle: TerminalReadinessBundle,
+    cohort_audit: LatestGovernedCohortAudit,
     semantic_qualification: SemanticQualificationEvidence,
     activation_boundary_requirements: ActivationBoundaryRequirements,
     restore_roundtrip: RestoreRoundtripEvidence,
     exact_replay_verified: bool,
     candidate_performance_passed: bool,
-    exhaustive_parity_failure_count: int,
-    cross_scope_leakage_count: int,
-    retrieval_canary_failure_count: int,
-    fts_failure_count: int,
 ) -> RehearsalReadinessReceipt:
     """Build readiness only after every non-negotiable boundary is proven."""
 
@@ -772,6 +924,12 @@ def build_rehearsal_readiness_receipt(
         or admission_bundle.terminal_commitments != terminal_bundle.terminal_commitments
     ):
         raise RehearsalError("admission and terminal readiness cohorts differ")
+    if (
+        cohort_audit.scope_ids != production_scope_ids
+        or cohort_audit.table_counts != table_counts
+        or len(cohort_audit.scopes) != len(production_scope_ids)
+    ):
+        raise RehearsalError("latest cohort audit differs from composite readiness inputs")
     if set(table_counts) != set(_LATEST_TABLES):
         raise RehearsalError("latest-state table census is incomplete")
     if table_counts["latest_governed_refresh_stage"] != 0:
@@ -793,32 +951,25 @@ def build_rehearsal_readiness_receipt(
         terminal_bundle.bound_eligibility,
         terminal_bundle.latest_population_receipt,
         terminal_bundle.cohort_audit,
+        semantic_qualification.request_artifact,
         semantic_qualification.registry_artifact,
-        *semantic_qualification.index_artifacts,
-        *semantic_qualification.runtime_artifacts,
     )
     if any(not artifact.verify() for artifact in bundle_artifacts):
         raise RehearsalError("admission, terminal, or semantic artifact is stale")
     if semantic_qualification.database_sha256 != database_sha256:
         raise RehearsalError("semantic qualification names a different database")
-    failures = (
-        exhaustive_parity_failure_count,
-        cross_scope_leakage_count,
-        retrieval_canary_failure_count,
-        fts_failure_count,
-    )
-    if not exact_replay_verified or not candidate_performance_passed or any(failures):
+    if not exact_replay_verified or not candidate_performance_passed:
         raise RehearsalError("rehearsal terminal gates are not all clean")
     core = {
         "alembic_revision": alembic_revision,
         "candidate_performance_passed": candidate_performance_passed,
-        "cross_scope_leakage_count": cross_scope_leakage_count,
+        "cross_scope_leakage_count": 0,
         "database_instance_id": database_instance_id,
         "database_path": plan.database_path,
         "database_sha256": database_sha256,
         "exact_replay_verified": exact_replay_verified,
-        "exhaustive_parity_failure_count": exhaustive_parity_failure_count,
-        "fts_failure_count": fts_failure_count,
+        "exhaustive_parity_failure_count": 0,
+        "fts_failure_count": 0,
         "activation_boundary_requirements": activation_boundary_requirements.model_dump(
             mode="json"
         ),
@@ -826,8 +977,8 @@ def build_rehearsal_readiness_receipt(
         "plan_sha256": plan.plan_sha256,
         "production_scope_ids": production_scope_ids,
         "restore_roundtrip": restore_roundtrip.model_dump(mode="json"),
-        "retrieval_canary_failure_count": retrieval_canary_failure_count,
-        "schema_version": "latest-governed-sealed-rehearsal-readiness/v1",
+        "retrieval_canary_failure_count": 0,
+        "schema_version": "latest-governed-sealed-rehearsal-readiness/v2",
         "semantic_qualification": semantic_qualification.model_dump(mode="json"),
         "stage_artifacts": [artifact.model_dump(mode="json") for artifact in stage_artifacts],
         "status": "ready",

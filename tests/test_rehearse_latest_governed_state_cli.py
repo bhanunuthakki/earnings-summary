@@ -26,6 +26,7 @@ from provenance.latest_state_rehearsal import (
     verify_rehearsal_checkpoint,
 )
 from provenance.latest_state_rehearsal_evidence import CandidatePerformanceRequest
+from provenance.latest_state_semantic_qualification import SemanticQualificationRequest
 from provenance.population_document_processing import (
     DocumentProcessingPopulationRequest,
     build_document_processing_receipt,
@@ -327,24 +328,61 @@ def test_population_dispatcher_preserves_resume_cursor_across_two_dry_apply_batc
     assert evidences[3].admission_receipt == evidences[2].operator_receipt
 
 
-@pytest.mark.parametrize("stage", [RehearsalStage.SEMANTIC])
-def test_terminal_stage_refuses_caller_authored_evidence_without_an_authoritative_generator(
-    tmp_path: Path,
-    stage: RehearsalStage,
-) -> None:
+def test_semantic_stage_requires_typed_generator_request(tmp_path: Path) -> None:
     plan, _plan_path = _plan(tmp_path)
-    supplied = tmp_path / f"fabricated-{stage.value}.json"
-    supplied.write_text("{}", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="no authoritative generator"):
+    with pytest.raises(ValueError, match="typed qualification request"):
         rehearsal_cli._run_nonpopulation(
             plan=plan,
-            stage=stage,
+            stage=RehearsalStage.SEMANTIC,
             history=(),
             ordinal=1,
-            stage_evidence=supplied,
+            stage_evidence=None,
             activation_requirements=None,
         )
+
+
+def test_semantic_stage_generates_and_publishes_authoritative_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan, _plan_path = _plan(tmp_path)
+    index_root = tmp_path / "indexes"
+    runtime_root = tmp_path / "runtime"
+    index_root.mkdir()
+    runtime_root.mkdir()
+    request = SemanticQualificationRequest(
+        index_root=index_root.resolve(),
+        runtime_root=runtime_root.resolve(),
+        exact_row_cap=100,
+        fact_canary_limit=10,
+        max_fact_canary_milliseconds=1_000,
+        max_issuer_qualification_milliseconds=1_000,
+    )
+    request_path = tmp_path / "semantic-request.json"
+    request_path.write_text(request.model_dump_json(), encoding="utf-8")
+    observed: dict[str, object] = {}
+
+    def generate(**kwargs: object) -> SimpleNamespace:
+        observed.update(kwargs)
+        return SimpleNamespace(model_dump_json=lambda: '{"semantic":"ready"}')
+
+    monkeypatch.setattr(rehearsal_cli, "generate_semantic_qualification_evidence", generate)
+
+    artifact = rehearsal_cli._run_nonpopulation(
+        plan=plan,
+        stage=RehearsalStage.SEMANTIC,
+        history=(),
+        ordinal=1,
+        stage_evidence=request_path,
+        activation_requirements=None,
+    )
+
+    assert Path(artifact.path).read_text(encoding="utf-8").strip() == '{"semantic":"ready"}'
+    assert observed["database_path"] == Path(plan.database_path)
+    assert observed["registry_path"] == Path(plan.production_scope_registry)
+    assert observed["request"] == request
+    assert observed["request_artifact"] == ArtifactCommitment.from_path(request_path)
 
 
 @pytest.mark.parametrize(
@@ -352,6 +390,7 @@ def test_terminal_stage_refuses_caller_authored_evidence_without_an_authoritativ
     [
         (RehearsalStage.RESTORE, "restore"),
         (RehearsalStage.PERFORMANCE, "performance"),
+        (RehearsalStage.SEMANTIC, "semantic"),
     ],
 )
 def test_authoritative_stage_refuses_uncheckpointed_orphan_output(
@@ -372,7 +411,11 @@ def test_authoritative_stage_refuses_uncheckpointed_orphan_output(
             stage=stage,
             history=(),
             ordinal=1,
-            stage_evidence=(stage_evidence if stage is RehearsalStage.PERFORMANCE else None),
+            stage_evidence=(
+                stage_evidence
+                if stage in {RehearsalStage.PERFORMANCE, RehearsalStage.SEMANTIC}
+                else None
+            ),
             activation_requirements=None,
         )
 

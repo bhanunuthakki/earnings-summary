@@ -72,6 +72,11 @@ from provenance.latest_state_rehearsal_evidence import (  # noqa: E402
     generate_candidate_performance_evidence,
     generate_restore_roundtrip_evidence,
 )
+from provenance.latest_state_semantic_qualification import (  # noqa: E402
+    SemanticQualificationRequest,
+    generate_semantic_qualification_evidence,
+    verify_semantic_qualification_current,
+)
 from provenance.population_canonical_resolution import (  # noqa: E402
     CanonicalResolutionOperationReceipt,
     database_instance_id,
@@ -782,10 +787,25 @@ def _run_nonpopulation(
             raise ValueError("performance threshold request changed during measurement")
         publish_text_no_clobber(output, performance.model_dump_json())
     elif stage is RehearsalStage.SEMANTIC:
-        del stage_evidence
-        raise ValueError(
-            f"{stage.value} has no authoritative generator; terminal readiness is disabled"
+        if stage_evidence is None:
+            raise ValueError("semantic stage requires its typed qualification request")
+        if output.is_file():
+            raise ValueError("uncheckpointed semantic evidence already exists; preserve it")
+        request_artifact, request_snapshot, request = _load_model(
+            stage_evidence, SemanticQualificationRequest
         )
+        semantics = generate_semantic_qualification_evidence(
+            database_path=database,
+            registry_path=Path(plan.production_scope_registry),
+            cutoff_at=plan.cutoff_at,
+            operation_recorded_at=plan.operation_recorded_at,
+            request=request,
+            request_artifact=request_artifact,
+        )
+        assert_artifact_unchanged(request_snapshot)
+        if not request_artifact.verify():
+            raise ValueError("semantic qualification request changed during execution")
+        publish_text_no_clobber(output, semantics.model_dump_json())
     elif stage is RehearsalStage.COMPOSITE:
         if activation_requirements is None:
             raise ValueError("composite requires future activation-boundary requirements")
@@ -808,6 +828,36 @@ def _run_nonpopulation(
             Path(_stage_artifact(history, RehearsalStage.SEMANTIC).path),
             SemanticQualificationEvidence,
         )
+        _request_artifact, _request_snapshot, semantic_request = _load_model(
+            Path(semantics.request_artifact.path),
+            SemanticQualificationRequest,
+        )
+        if _request_artifact != semantics.request_artifact:
+            raise ValueError("semantic request artifact identity changed before composite")
+        verify_semantic_qualification_current(
+            database_path=database,
+            registry_path=Path(plan.production_scope_registry),
+            cutoff_at=plan.cutoff_at,
+            operation_recorded_at=plan.operation_recorded_at,
+            request=semantic_request,
+            evidence=semantics,
+        )
+        cohort_conn = connect_sqlite(
+            database,
+            role=SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY,
+            schema_preflight=False,
+        )
+        try:
+            current_cohort = audit_latest_governed_cohort(
+                cohort_conn,
+                tuple(cohort.scope_ids),
+                operation_recorded_at=plan.operation_recorded_at,
+                high_risk_sample_size=plan.high_risk_sample_size,
+            )
+        finally:
+            cohort_conn.close()
+        if current_cohort != cohort:
+            raise ValueError("latest cohort audit changed before composite readiness")
         _a, _s, replay = _load_model(
             Path(_stage_artifact(history, RehearsalStage.REPLAY).path),
             ExactReplayEvidence,
@@ -858,15 +908,12 @@ def _run_nonpopulation(
                 production_scope_ids=scope_ids,
                 terminal_commitments=terminal_commitments,
             ),
+            cohort_audit=cohort,
             semantic_qualification=semantics,
             activation_boundary_requirements=requirements,
             restore_roundtrip=restore,
             exact_replay_verified=(replay.database_sha256_before == replay.database_sha256_after),
             candidate_performance_passed=performance.synthetic_benchmark_passed,
-            exhaustive_parity_failure_count=0,
-            cross_scope_leakage_count=0,
-            retrieval_canary_failure_count=0,
-            fts_failure_count=0,
         )
         publish_text_no_clobber(output, readiness.model_dump_json())
     else:

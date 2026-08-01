@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Deterministic corpus and semantic-runtime population gates."""
 
 from __future__ import annotations
@@ -5,9 +6,10 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 import provenance.population_retrieval_runtime as population
 from provenance.population_completeness import PopulationTemporalScope
@@ -20,6 +22,52 @@ from search.corpus_builder import CorpusBuildResult
 
 STAMP = datetime(2026, 7, 29, 12, 0, tzinfo=UTC)
 SHA = hashlib.sha256(b"retrieval-runtime-test").hexdigest()
+
+
+class _SemanticCandidate(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    chunk_id: str
+
+
+class _SemanticBackend(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    receipt: str = "verified"
+
+
+class _SemanticEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    candidates: tuple[_SemanticCandidate, ...]
+    backend: _SemanticBackend = _SemanticBackend()
+
+
+class _FakeSemanticRuntime:
+    candidate_ids: tuple[str, ...] = ()
+
+    @classmethod
+    def from_local_ledger(
+        cls,
+        _conn: sqlite3.Connection,
+        *,
+        vector_index_run_id: str,
+        embedding_promotion_id: str,
+        runtime_root: Path,
+        exact_row_cap: int,
+    ) -> _FakeSemanticRuntime:
+        del vector_index_run_id, embedding_promotion_id, runtime_root, exact_row_cap
+        return cls()
+
+    def search(self, _query: str, *, limit: int) -> _SemanticEvidence:
+        return _SemanticEvidence(
+            candidates=tuple(
+                _SemanticCandidate(chunk_id=item) for item in self.candidate_ids[:limit]
+            )
+        )
+
+    def verify(self, _evidence: _SemanticEvidence, *, query_text: str, limit: int) -> None:
+        del query_text, limit
 
 
 def _database(*, complete_inventory: bool = True) -> sqlite3.Connection:
@@ -484,6 +532,46 @@ def test_resume_apply_requires_dry_run_commitments() -> None:
             apply=True,
             after_issuer_id="issuer-a",
         )
+
+
+def test_semantic_canary_requires_and_receipts_exact_grounded_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE search_chunks(chunk_id TEXT PRIMARY KEY,manifest_id TEXT,text TEXT)")
+    conn.executemany(
+        "INSERT INTO search_chunks VALUES (?,?,?)",
+        (
+            ("chunk-a", "manifest", "revenue growth margin"),
+            ("chunk-b", "manifest", "other revenue evidence"),
+        ),
+    )
+    monkeypatch.setattr(population, "ExactSemanticRuntime", _FakeSemanticRuntime)
+    _FakeSemanticRuntime.candidate_ids = ("chunk-b",)
+
+    with pytest.raises(ValueError, match="grounded seed chunk"):
+        population._verify_semantic_canary(
+            conn,
+            manifest_id="manifest",
+            vector_index_run_id="vector",
+            embedding_promotion_id="promotion",
+            runtime_root=Path("runtime"),
+            exact_row_cap=100,
+        )
+
+    _FakeSemanticRuntime.candidate_ids = ("chunk-b", "chunk-a")
+    receipt = population._verify_semantic_canary(
+        conn,
+        manifest_id="manifest",
+        vector_index_run_id="vector",
+        embedding_promotion_id="promotion",
+        runtime_root=Path("runtime"),
+        exact_row_cap=100,
+    )
+    conn.close()
+
+    assert receipt.seed_chunk_id == "chunk-a"
+    assert receipt.seed_candidate_rank == 2
 
 
 def test_population_stops_at_first_failed_issuer_without_advancing_cursor(

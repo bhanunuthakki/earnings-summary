@@ -9,16 +9,23 @@ from pathlib import Path
 import pytest
 
 import execution.seal_latest_state_rehearsal_candidate as seal_cli
+from provenance.latest_governed_state import (
+    LatestGovernedCohortAudit,
+    LatestGovernedScopeAudit,
+)
 from provenance.latest_state_activation import build_governed_candidate_seal
 from provenance.latest_state_rehearsal import (
     ActivationBoundaryRequirements,
     AdmissionBundle,
     ArtifactCommitment,
     DatabaseFileState,
+    GroundedCanaryCommitment,
     PopulationCheckpointEvidence,
     RehearsalPlan,
     RehearsalStage,
     RestoreRoundtripEvidence,
+    SemanticIssuerQualification,
+    SemanticScopeQualification,
     TerminalReadinessBundle,
     build_rehearsal_checkpoint,
     build_rehearsal_readiness_receipt,
@@ -348,22 +355,82 @@ def test_terminal_receipt_separates_rehearsal_from_future_live_boundary(
     )
     semantics = build_semantic_qualification_evidence(
         database_sha256=hashlib.sha256(Path(plan.database_path).read_bytes()).hexdigest(),
+        request_artifact=evidence[12],
         registry_artifact=evidence[0],
-        index_artifacts=(evidence[1],),
-        runtime_artifacts=(evidence[2],),
         production_scope_ids=("ask-scope:v1:" + "1" * 64,),
-        promotion_ids=("promotion-1",),
-        vector_index_run_ids=("index-run-1",),
-        embedding_promotion_ids=("embedding-promotion-1",),
-        runtime_artifact_ids=("runtime-artifact-1",),
+        issuer_qualifications=(
+            SemanticIssuerQualification(
+                issuer_id="issuer-1",
+                corpus_manifest_id="manifest-1",
+                corpus_membership_sha256=SHA_A,
+                corpus_expected_document_count=1,
+                corpus_included_document_count=1,
+                corpus_chunk_count=1,
+                lexical_index_run_id="lexical-1",
+                vector_index_run_id="index-run-1",
+                projection_seal_id="projection-seal-1",
+                projection_records_sha256=SHA_A,
+                projection_artifact_set_sha256=SHA_A,
+                embedding_promotion_id="embedding-promotion-1",
+                runtime_registration_id="runtime-artifact-1",
+                runtime_artifact_sha256=SHA_A,
+                lexical_canaries=(
+                    GroundedCanaryCommitment(
+                        canary_kind="lexical",
+                        query_sha256=SHA_A,
+                        result_set_sha256=SHA_A,
+                        result_count=1,
+                        document_family="annual_securities_report",
+                    ),
+                ),
+                semantic_canary=GroundedCanaryCommitment(
+                    canary_kind="semantic",
+                    query_sha256=SHA_A,
+                    result_set_sha256=SHA_A,
+                    result_count=1,
+                    backend_receipt_sha256=SHA_A,
+                    expected_source_id="chunk-1",
+                    observed_rank=1,
+                ),
+                qualification_elapsed_milliseconds=20.0,
+            ),
+        ),
+        scope_qualifications=(
+            SemanticScopeQualification(
+                scope_id="ask-scope:v1:" + "1" * 64,
+                source_scope_key="investor-research",
+                source_scope_revision_id="source-scope-revision-1",
+                issuer_id="issuer-1",
+                reporting_entity_id="entity-1",
+                ask_promotion_id="promotion-1",
+                research_snapshot_id="research-1",
+                fact_generation_id="generation-1",
+                fact_projection_seal_sha256=SHA_A,
+                source_inventory_count=1,
+                source_inventory_set_sha256=SHA_A,
+                corpus_manifest_id="manifest-1",
+                lexical_index_run_id="lexical-1",
+                vector_index_run_id="index-run-1",
+                embedding_promotion_id="embedding-promotion-1",
+                fact_canary=GroundedCanaryCommitment(
+                    canary_kind="fact",
+                    query_sha256=SHA_A,
+                    result_set_sha256=SHA_A,
+                    result_count=1,
+                    elapsed_milliseconds=10.0,
+                    expected_source_id="cell-1",
+                    observed_rank=1,
+                ),
+            ),
+        ),
         corpus_document_count=1,
         grounded_fact_canary_count=1,
-        grounded_narrative_canary_count=1,
+        grounded_narrative_canary_count=2,
         failure_count=0,
         max_fact_canary_milliseconds=100.0,
-        max_narrative_canary_milliseconds=100.0,
-        observed_fact_canary_p95_milliseconds=10.0,
-        observed_narrative_canary_p95_milliseconds=20.0,
+        max_issuer_qualification_milliseconds=100.0,
+        observed_max_fact_canary_milliseconds=10.0,
+        observed_max_issuer_qualification_milliseconds=20.0,
     )
     activation_boundary = ActivationBoundaryRequirements(
         expected_task_paths=tuple(f"task-{index}" for index in range(45)),
@@ -412,6 +479,28 @@ def test_terminal_receipt_separates_rehearsal_from_future_live_boundary(
         production_scope_ids=scope_ids,
         terminal_commitments=commitments,
     )
+    scope_audit = LatestGovernedScopeAudit(
+        scope_id=scope_ids[0],
+        head_receipt_id="head-1",
+        terminal_commitment=SHA_A,
+        fact_count=1,
+        document_count=1,
+        narrative_count=1,
+        fts_count=1,
+        change_count=0,
+        finalized_run_count=1,
+        fact_canary_coordinate="fact-1",
+        narrative_canary_coordinate="narrative-1",
+        exhaustive_source_commitment_sha256=SHA_A,
+        current_projection_commitment_sha256=SHA_A,
+        high_risk_sample_commitment_sha256=SHA_A,
+    )
+    cohort = LatestGovernedCohortAudit(
+        scope_ids=scope_ids,
+        scopes=(scope_audit,),
+        table_counts=counts,
+        cohort_commitment_sha256=SHA_A,
+    )
 
     receipt = build_rehearsal_readiness_receipt(
         plan=plan,
@@ -423,15 +512,12 @@ def test_terminal_receipt_separates_rehearsal_from_future_live_boundary(
         stage_artifacts=evidence,
         admission_bundle=admission,
         terminal_bundle=terminal,
+        cohort_audit=cohort,
         semantic_qualification=semantics,
         activation_boundary_requirements=activation_boundary,
         restore_roundtrip=restore,
         exact_replay_verified=True,
         candidate_performance_passed=True,
-        exhaustive_parity_failure_count=0,
-        cross_scope_leakage_count=0,
-        retrieval_canary_failure_count=0,
-        fts_failure_count=0,
     )
 
     assert verify_rehearsal_readiness_receipt(receipt)
@@ -439,6 +525,7 @@ def test_terminal_receipt_separates_rehearsal_from_future_live_boundary(
 
     broken_counts = dict(counts)
     broken_counts["latest_governed_narrative_entries"] = 0
+    broken_cohort = cohort.model_copy(update={"table_counts": broken_counts})
     with pytest.raises(ValueError, match="durable latest-state planes"):
         build_rehearsal_readiness_receipt(
             plan=plan,
@@ -450,15 +537,12 @@ def test_terminal_receipt_separates_rehearsal_from_future_live_boundary(
             stage_artifacts=evidence,
             admission_bundle=admission,
             terminal_bundle=terminal,
+            cohort_audit=broken_cohort,
             semantic_qualification=semantics,
             activation_boundary_requirements=activation_boundary,
             restore_roundtrip=restore,
             exact_replay_verified=True,
             candidate_performance_passed=True,
-            exhaustive_parity_failure_count=0,
-            cross_scope_leakage_count=0,
-            retrieval_canary_failure_count=0,
-            fts_failure_count=0,
         )
 
 
