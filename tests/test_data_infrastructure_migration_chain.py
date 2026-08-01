@@ -16,7 +16,7 @@ from provenance import population_document_processing as document_population
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_REVISION = "0213_decision_draft_provider_id"
-HEAD = "0264_document_processing_operation_ledger"
+HEAD = "0265_metric_ontology_operation_ledger"
 ADDITIVE_TABLES_0245_0248 = {
     "document_processing_obligation_revisions",
     "document_processing_disposition_headers",
@@ -64,6 +64,7 @@ ADDITIVE_TABLES_0264 = {
     "database_runtime_identity",
     "document_processing_operation_ledger",
 }
+ADDITIVE_TABLES_0265 = {"metric_ontology_operation_ledger"}
 
 
 def _config(path: Path) -> Config:
@@ -193,6 +194,7 @@ def test_evidence_search_migrations_have_one_reversible_head(tmp_path: Path) -> 
         assert tables >= ADDITIVE_TABLES_0245_0248
         assert tables >= ADDITIVE_TABLES_0261
         assert tables >= ADDITIVE_TABLES_0264
+        assert tables >= ADDITIVE_TABLES_0265
         read_set_sha = document_population._input_commitment(
             conn,
             datetime(2026, 7, 31, tzinfo=UTC),

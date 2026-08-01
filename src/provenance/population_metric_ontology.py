@@ -88,6 +88,13 @@ class MetricOntologyPopulationRequest(_FrozenModel):
 
     @model_validator(mode="after")
     def _request_contract(self) -> Self:
+        if (
+            self.knowledge_cutoff.tzinfo is None
+            or self.knowledge_cutoff.utcoffset() is None
+            or self.operation_recorded_at.tzinfo is None
+            or self.operation_recorded_at.utcoffset() is None
+        ):
+            raise ValueError("ontology temporal scope must include a timezone")
         if (self.input_commitment_sha256 is None) != (self.plan_commitment_sha256 is None):
             raise ValueError("population commitments must be supplied together")
         if (
@@ -114,13 +121,286 @@ class MetricOntologyPopulationResult(_FrozenModel):
     canonical_cell_count: int
     assertion_count: int
     binding_count: int
+    missing_assertion_count: int
+    missing_binding_count: int
     processed_observation_count: int
     last_observation_id: str | None
     snapshot_id: str | None
     policy_config_sha256: str
     plan_commitment_sha256: str
     input_commitment_sha256: str
+    post_state_commitment_sha256: str
     output_commitment_sha256: str
+
+
+MetricOntologyReceiptOutcome = Literal[
+    "planned",
+    "applied",
+    "checkpoint",
+    "blocked",
+    "complete",
+]
+
+
+class MetricOntologyOperationReceipt(_FrozenModel):
+    schema_version: Literal["metric-ontology-operation-receipt/v1"] = (
+        "metric-ontology-operation-receipt/v1"
+    )
+    database_path: str = Field(min_length=1, max_length=1_024)
+    database_instance_id: str = Field(
+        min_length=50,
+        max_length=64,
+        pattern=r"^database-instance:[0-9a-f]{32}$",
+    )
+    operation_id: str = Field(
+        min_length=90,
+        max_length=90,
+        pattern=r"^metric-ontology-operation:[0-9a-f]{64}$",
+    )
+    alembic_revision: str = Field(min_length=1, max_length=128)
+    request: MetricOntologyPopulationRequest
+    result: MetricOntologyPopulationResult
+    outcome: MetricOntologyReceiptOutcome
+    blocker_counts: dict[str, int]
+    prior_checkpoint_receipt_sha256: str | None
+    admission_receipt_sha256: str | None
+    request_sha256: str
+    result_sha256: str
+    receipt_sha256: str
+
+    @field_validator(
+        "prior_checkpoint_receipt_sha256",
+        "admission_receipt_sha256",
+        "request_sha256",
+        "result_sha256",
+        "receipt_sha256",
+    )
+    @classmethod
+    def _receipt_sha(cls, value: str | None) -> str | None:
+        if value is not None and (
+            len(value) != 64 or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise ValueError("receipt commitment must be a lowercase SHA-256")
+        return value
+
+    @model_validator(mode="after")
+    def _receipt_contract(self) -> Self:
+        if self.request.apply != (self.result.mode == "apply"):
+            raise ValueError("ontology operation receipt mode does not match its result")
+        if self.request.apply != (self.admission_receipt_sha256 is not None):
+            raise ValueError("an ontology apply receipt requires one dry-run admission")
+        if (self.request.after_observation_id is not None) != (
+            self.prior_checkpoint_receipt_sha256 is not None
+        ):
+            raise ValueError("an ontology resume must bind one prior checkpoint")
+        if self.request_sha256 != _model_sha(self.request):
+            raise ValueError("ontology operation request commitment does not match")
+        if self.result_sha256 != _model_sha(self.result):
+            raise ValueError("ontology operation result commitment does not match")
+        if self.operation_id != metric_ontology_operation_id(
+            database_instance_id=self.database_instance_id,
+            request=self.request,
+            admission_receipt_sha256=self.admission_receipt_sha256,
+            prior_checkpoint_receipt_sha256=self.prior_checkpoint_receipt_sha256,
+        ):
+            raise ValueError("ontology operation identity does not match")
+        if self.blocker_counts != _ontology_blocker_counts(self.result):
+            raise ValueError("ontology blocker census does not match")
+        if self.outcome != _ontology_receipt_outcome(self.request, self.result):
+            raise ValueError("ontology operation outcome does not match")
+        if self.receipt_sha256 != _ontology_receipt_sha(self):
+            raise ValueError("ontology operation receipt commitment does not match")
+        return self
+
+
+def build_metric_ontology_receipt(
+    *,
+    database_path: str,
+    database_instance_id: str,
+    alembic_revision: str,
+    request: MetricOntologyPopulationRequest,
+    result: MetricOntologyPopulationResult,
+    prior_checkpoint_receipt_sha256: str | None,
+    admission_receipt_sha256: str | None,
+) -> MetricOntologyOperationReceipt:
+    """Bind one exact ontology population attempt to immutable evidence."""
+
+    payload: dict[str, object] = {
+        "schema_version": "metric-ontology-operation-receipt/v1",
+        "database_path": database_path,
+        "database_instance_id": database_instance_id,
+        "alembic_revision": alembic_revision,
+        "request": request,
+        "result": result,
+        "outcome": _ontology_receipt_outcome(request, result),
+        "blocker_counts": _ontology_blocker_counts(result),
+        "prior_checkpoint_receipt_sha256": prior_checkpoint_receipt_sha256,
+        "admission_receipt_sha256": admission_receipt_sha256,
+        "request_sha256": _model_sha(request),
+        "result_sha256": _model_sha(result),
+    }
+    payload["operation_id"] = metric_ontology_operation_id(
+        database_instance_id=database_instance_id,
+        request=request,
+        admission_receipt_sha256=admission_receipt_sha256,
+        prior_checkpoint_receipt_sha256=prior_checkpoint_receipt_sha256,
+    )
+    payload["receipt_sha256"] = hashlib.sha256(
+        _canonical_json(
+            {
+                key: value.model_dump(mode="json") if isinstance(value, BaseModel) else value
+                for key, value in payload.items()
+            }
+        ).encode()
+    ).hexdigest()
+    return MetricOntologyOperationReceipt.model_validate(payload)
+
+
+def verify_metric_ontology_receipt(receipt: MetricOntologyOperationReceipt) -> bool:
+    """Return whether every nested and top-level ontology commitment agrees."""
+
+    try:
+        MetricOntologyOperationReceipt.model_validate(receipt.model_dump(mode="json"))
+    except ValueError:
+        return False
+    return True
+
+
+def database_instance_id(conn: sqlite3.Connection) -> str:
+    """Return the immutable identity installed for this database lineage."""
+
+    rows = conn.execute(
+        "SELECT database_instance_id FROM database_runtime_identity WHERE singleton=1"
+    ).fetchall()
+    if len(rows) != 1:
+        raise ValueError("ontology database identity is missing or ambiguous")
+    value = str(rows[0][0])
+    suffix = value.removeprefix("database-instance:")
+    if (
+        len(value) != 50
+        or len(suffix) != 32
+        or any(character not in "0123456789abcdef" for character in suffix)
+    ):
+        raise ValueError("ontology database identity is invalid")
+    return value
+
+
+def persist_metric_ontology_receipt(
+    conn: sqlite3.Connection,
+    receipt: MetricOntologyOperationReceipt,
+) -> bool:
+    """Persist one immutable apply receipt inside the caller transaction."""
+
+    if not receipt.request.apply or not verify_metric_ontology_receipt(receipt):
+        raise ValueError("only a valid ontology apply receipt can enter the ledger")
+    payload = receipt.model_dump_json()
+    values = (
+        receipt.operation_id,
+        receipt.operation_id,
+        receipt.database_instance_id,
+        receipt.request_sha256,
+        receipt.result_sha256,
+        receipt.receipt_sha256,
+        payload,
+    )
+    cursor = conn.execute(
+        "INSERT OR IGNORE INTO metric_ontology_operation_ledger "
+        "(operation_id,idempotency_key,database_instance_id,request_sha256,"
+        "result_sha256,receipt_sha256,receipt_json) VALUES (?,?,?,?,?,?,?)",
+        values,
+    )
+    if cursor.rowcount == 1:
+        return True
+    existing = conn.execute(
+        "SELECT operation_id,idempotency_key,database_instance_id,request_sha256,"
+        "result_sha256,receipt_sha256,receipt_json "
+        "FROM metric_ontology_operation_ledger WHERE operation_id=?",
+        (receipt.operation_id,),
+    ).fetchone()
+    if existing is None or tuple(existing) != values:
+        raise ValueError("ontology operation replay changed immutable evidence")
+    return False
+
+
+def load_metric_ontology_receipt(
+    conn: sqlite3.Connection,
+    operation_id: str,
+) -> MetricOntologyOperationReceipt | None:
+    """Load and verify the canonical receipt for one ontology operation."""
+
+    row = conn.execute(
+        "SELECT receipt_json FROM metric_ontology_operation_ledger WHERE operation_id=?",
+        (operation_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    receipt = MetricOntologyOperationReceipt.model_validate_json(str(row[0]))
+    if not verify_metric_ontology_receipt(receipt) or receipt.operation_id != operation_id:
+        raise ValueError("stored ontology operation receipt is invalid")
+    return receipt
+
+
+def metric_ontology_operation_id(
+    *,
+    database_instance_id: str,
+    request: MetricOntologyPopulationRequest,
+    admission_receipt_sha256: str | None,
+    prior_checkpoint_receipt_sha256: str | None,
+) -> str:
+    material = _canonical_json(
+        {
+            "admission_receipt_sha256": admission_receipt_sha256,
+            "database_instance_id": database_instance_id,
+            "prior_checkpoint_receipt_sha256": prior_checkpoint_receipt_sha256,
+            "request_sha256": _model_sha(request),
+        }
+    )
+    return "metric-ontology-operation:" + hashlib.sha256(material.encode()).hexdigest()
+
+
+def _ontology_receipt_outcome(
+    request: MetricOntologyPopulationRequest,
+    result: MetricOntologyPopulationResult,
+) -> MetricOntologyReceiptOutcome:
+    if result.outcome == "blocked":
+        return "blocked"
+    if not request.apply:
+        return "planned"
+    if result.outcome == "checkpoint":
+        return "checkpoint"
+    if request.phase in {"snapshot", "all"} and result.snapshot_eligible:
+        return "complete"
+    return "applied"
+
+
+def _ontology_blocker_counts(result: MetricOntologyPopulationResult) -> dict[str, int]:
+    counts = {
+        "missing_assertion": result.missing_assertion_count,
+        "missing_binding": result.missing_binding_count,
+    }
+    counts.update(
+        {
+            reason: 1
+            for reason in result.reason_codes
+            if reason
+            not in {
+                "bounded_population_checkpoint",
+                "ontology_assertions_incomplete",
+                "ontology_bindings_incomplete",
+            }
+        }
+    )
+    return {key: value for key, value in sorted(counts.items()) if value}
+
+
+def _model_sha(model: BaseModel) -> str:
+    return hashlib.sha256(_canonical_json(model.model_dump(mode="json")).encode()).hexdigest()
+
+
+def _ontology_receipt_sha(receipt: MetricOntologyOperationReceipt) -> str:
+    payload = receipt.model_dump(mode="json")
+    payload.pop("receipt_sha256")
+    return hashlib.sha256(_canonical_json(payload).encode()).hexdigest()
 
 
 def _canonical_json(value: object) -> str:
@@ -363,11 +643,31 @@ def _result(
     plan_sha: str,
     input_sha: str,
 ) -> MetricOntologyPopulationResult:
+    missing_assertions = _count_missing_assertions(
+        conn,
+        request.knowledge_cutoff,
+        request.operation_recorded_at,
+    )
+    missing_bindings = _count_missing_bindings(
+        conn,
+        request.knowledge_cutoff,
+        request.operation_recorded_at,
+    )
+    reasons = set(reason_codes)
+    if missing_assertions:
+        reasons.add("ontology_assertions_incomplete")
+    if missing_bindings:
+        reasons.add("ontology_bindings_incomplete")
+    post_state_sha = _output_commitment_at_scope(
+        conn,
+        request.knowledge_cutoff,
+        request.operation_recorded_at,
+    )
     return MetricOntologyPopulationResult(
         mode="apply" if request.apply else "dry_run",
         phase=request.phase,
         outcome=outcome,
-        reason_codes=tuple(sorted(set(reason_codes))),
+        reason_codes=tuple(sorted(reasons)),
         snapshot_eligible=snapshot_eligible,
         source_cell_count=source_cell_count,
         source_observation_count=source_observation_count,
@@ -376,17 +676,16 @@ def _result(
         canonical_cell_count=_count(conn, "canonical_metric_cells"),
         assertion_count=_count(conn, "source_observation_taxonomy_assertions"),
         binding_count=_count(conn, "fact_cell_canonical_binding_revisions"),
+        missing_assertion_count=missing_assertions,
+        missing_binding_count=missing_bindings,
         processed_observation_count=processed,
         last_observation_id=last_observation_id,
         snapshot_id=snapshot_id,
         policy_config_sha256=policy_sha,
         plan_commitment_sha256=plan_sha,
         input_commitment_sha256=input_sha,
-        output_commitment_sha256=_output_commitment_at_scope(
-            conn,
-            request.knowledge_cutoff,
-            request.operation_recorded_at,
-        ),
+        post_state_commitment_sha256=post_state_sha,
+        output_commitment_sha256=post_state_sha,
     )
 
 

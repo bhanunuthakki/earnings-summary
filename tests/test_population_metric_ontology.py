@@ -14,7 +14,11 @@ from provenance.metric_ontology import (
     SourceObservationTaxonomyAssertion,
 )
 from provenance.population_metric_ontology import (
+    MetricOntologyOperationReceipt,
     MetricOntologyPopulationRequest,
+    MetricOntologyPopulationResult,
+    build_metric_ontology_receipt,
+    verify_metric_ontology_receipt,
 )
 
 _STAMP = datetime(2026, 7, 29, tzinfo=UTC)
@@ -350,6 +354,17 @@ def test_legacy_source_concept_variants_have_distinct_component_identity() -> No
     )
 
 
+def test_operator_keeps_same_metric_definition_qualified_without_stale_conflict() -> None:
+    consolidated = _metric_cell()
+    unconsolidated = {**consolidated, "consolidation_scope": "unconsolidated"}
+
+    assert _metric_id(consolidated) == _metric_id(unconsolidated)
+    assert _source_definition_commitment(consolidated) != _source_definition_commitment(
+        unconsolidated
+    )
+    assert _concept_component_id(consolidated) != _concept_component_id(unconsolidated)
+
+
 def test_object_clock_is_stable_when_later_cells_arrive() -> None:
     first = _metric_cell(recorded_at=_STAMP)
     second = _metric_cell(recorded_at=_STAMP + timedelta(days=1))
@@ -438,3 +453,52 @@ def test_snapshot_identity_commits_to_cutoff_policy_and_member_set() -> None:
     )
     assert baseline != _snapshot_id(_STAMP, "other-policy", "member-set-a")
     assert baseline != _snapshot_id(_STAMP, _policy_sha(), "member-set-b")
+
+
+def test_operation_receipt_binds_exact_source_definition_admission() -> None:
+    request = MetricOntologyPopulationRequest(
+        knowledge_cutoff=_STAMP,
+        operation_recorded_at=_OPERATION_STAMP,
+    )
+    result = MetricOntologyPopulationResult(
+        mode="dry_run",
+        phase="all",
+        outcome="planned",
+        reason_codes=("ontology_assertions_incomplete", "ontology_bindings_incomplete"),
+        snapshot_eligible=False,
+        source_cell_count=2,
+        source_observation_count=2,
+        metric_count=0,
+        source_component_count=0,
+        canonical_cell_count=0,
+        assertion_count=0,
+        binding_count=0,
+        missing_assertion_count=2,
+        missing_binding_count=2,
+        processed_observation_count=0,
+        last_observation_id=None,
+        snapshot_id=None,
+        policy_config_sha256="a" * 64,
+        plan_commitment_sha256="b" * 64,
+        input_commitment_sha256="c" * 64,
+        post_state_commitment_sha256="d" * 64,
+        output_commitment_sha256="d" * 64,
+    )
+
+    receipt = build_metric_ontology_receipt(
+        database_path="C:/candidate.db",
+        database_instance_id="database-instance:" + "1" * 32,
+        alembic_revision="0265_metric_ontology_operation_ledger",
+        request=request,
+        result=result,
+        prior_checkpoint_receipt_sha256=None,
+        admission_receipt_sha256=None,
+    )
+
+    assert isinstance(receipt, MetricOntologyOperationReceipt)
+    assert receipt.outcome == "planned"
+    assert receipt.blocker_counts == {
+        "missing_assertion": 2,
+        "missing_binding": 2,
+    }
+    assert verify_metric_ontology_receipt(receipt)
