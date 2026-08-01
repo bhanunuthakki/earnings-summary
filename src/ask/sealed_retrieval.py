@@ -16,6 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from ask.audit_store import canonical_json, digest_text, retrieval_query_sha256
 from provenance.population_completeness import PopulationCompletenessLedger
 from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
+from provenance.scope_identity import (
+    RetrievalScope,
+    derive_retrieval_scope_id,
+    validate_retrieval_scope_identity,
+    validate_source_scope_revision_id,
+)
 from search.embedding_promotion import LocalVectorRuntimeConfig
 from search.exact_semantic import ExactSemanticRuntime
 from search.heterogeneous_retrieval import (
@@ -51,12 +57,12 @@ ReasonCode = Literal[
     "trace_verification_failed",
 ]
 
-ASK_RETRIEVAL_POLICY_VERSION = "ask-sealed-retrieval.v2"
+ASK_RETRIEVAL_POLICY_VERSION = "ask-sealed-retrieval.v3"
 ASK_RETRIEVAL_VERIFIER_NAME = "ask.sealed_retrieval.verify_retrieval_promotion"
-ASK_RETRIEVAL_VERIFIER_VERSION = "2"
-ASK_RETRIEVAL_VERIFIER_MANIFEST_VERSION = "ask-verifier-manifest.v2"
+ASK_RETRIEVAL_VERIFIER_VERSION = "3"
+ASK_RETRIEVAL_VERIFIER_MANIFEST_VERSION = "ask-verifier-manifest.v3"
 PRODUCTION_SCOPE_REGISTRY_ID = "ask-retrieval-production-scopes"
-PRODUCTION_SCOPE_SCHEMA_VERSION = 1
+PRODUCTION_SCOPE_SCHEMA_VERSION = 2
 PRODUCTION_SUPPORTED_COHORT = ("operating_company:legal_registrant",)
 _VERIFIER_CONFIG = {
     "common_cutoff_required": True,
@@ -68,7 +74,9 @@ _VERIFIER_CONFIG = {
 }
 _VERIFIER_ARTIFACTS = (
     ("src/ask/audit_store.py", "ask-audit-store.v1"),
-    ("src/ask/sealed_retrieval.py", "ask-sealed-retrieval.v2"),
+    ("src/scope_identity.py", "scope-identity-derivation.v1"),
+    ("src/provenance/scope_identity.py", "retrieval-scope-identity.v1"),
+    ("src/ask/sealed_retrieval.py", "ask-sealed-retrieval.v3"),
     ("src/provenance/population_completeness.py", "population-cutover-verifier.v1"),
     ("src/provenance/research_snapshot.py", "research-snapshot-verifier.v1"),
     ("src/search/exact_semantic.py", "exact-semantic-verifier.v1"),
@@ -144,22 +152,12 @@ class _Frozen(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-class RetrievalScope(_Frozen):
-    scope_key: str = Field(min_length=1, max_length=256)
-    ticker: str = Field(min_length=1, max_length=32)
-    issuer_id: str = Field(min_length=1, max_length=128)
-    reporting_entity_id: str = Field(min_length=1, max_length=128)
-
-    @field_validator("ticker")
-    @classmethod
-    def _ticker(cls, value: str) -> str:
-        return value.strip().upper()
-
-
 class RetrievalPromotion(_Frozen):
     promotion_id: str = Field(min_length=1, max_length=128)
     idempotency_key: str = Field(min_length=1, max_length=256)
-    scope_key: str = Field(min_length=1, max_length=256)
+    scope_id: str = Field(min_length=1, max_length=256)
+    source_scope_key: str = Field(min_length=1, max_length=128)
+    source_scope_revision_id: str = Field(min_length=1, max_length=128)
     revision: int = Field(gt=0)
     issuer_id: str = Field(min_length=1, max_length=128)
     reporting_entity_id: str = Field(min_length=1, max_length=128)
@@ -182,6 +180,10 @@ class RetrievalPromotion(_Frozen):
     supersedes_promotion_id: str | None = Field(default=None, max_length=128)
     recorded_at: datetime
 
+    _source_revision = field_validator("source_scope_revision_id")(
+        validate_source_scope_revision_id
+    )
+
     _hashes = field_validator(
         "research_snapshot_sha256",
         "fact_projection_seal_sha256",
@@ -192,6 +194,11 @@ class RetrievalPromotion(_Frozen):
 
     @model_validator(mode="after")
     def _shape(self) -> Self:
+        validate_retrieval_scope_identity(
+            scope_id=self.scope_id,
+            source_scope_key=self.source_scope_key,
+            issuer_id=self.issuer_id,
+        )
         if self.source_inventory_ids != tuple(sorted(set(self.source_inventory_ids))):
             raise ValueError("source inventory ids must be unique and sorted")
         manifest_ids = [item.corpus_manifest_id for item in self.narrative_bundles]
@@ -211,6 +218,11 @@ class RetrievalPromotion(_Frozen):
         ) < _utc(self.population_observed_through):
             raise ValueError("promotion cannot predate its population cutover")
         return self
+
+
+class RetrievalPromotionWriteResult(_Frozen):
+    outcome: Literal["promoted", "exact_replay"]
+    promotion: RetrievalPromotion
 
 
 class ReadyRetrievalScope(_Frozen):
@@ -415,6 +427,7 @@ def _admit_population_cutover(
         _db_time(promotion.population_observed_through),
         promotion.population_receipt_set_sha256,
     )
+
     if (
         len(current) != 1
         or (
@@ -520,13 +533,19 @@ def derive_production_scope_registry(
             raise ValueError(f"core scope {scope_key}/{issuer_id} has an empty reporting identity")
         scopes.append(
             RetrievalScope(
-                scope_key=scope_key,
+                scope_id=derive_retrieval_scope_id(
+                    source_scope_key=scope_key,
+                    issuer_id=issuer_id,
+                ),
+                source_scope_key=scope_key,
+                source_scope_revision_id=revision_id,
                 ticker=ticker,
                 issuer_id=issuer_id,
                 reporting_entity_id=reporting_entity_id,
             )
         )
         revisions.append(revision_id)
+    scopes.sort(key=lambda item: item.scope_id)
     canonical_scopes = canonical_json([item.model_dump(mode="json") for item in scopes])
     core: dict[str, object] = {
         "registry_id": PRODUCTION_SCOPE_REGISTRY_ID,
@@ -573,8 +592,8 @@ def load_production_scopes(
         raise ValueError("production scope registry must contain scopes")
     scope_payloads = cast(list[object], raw_scopes)
     scopes = tuple(RetrievalScope.model_validate(item) for item in scope_payloads)
-    if scopes != tuple(sorted(scopes, key=lambda item: item.scope_key)):
-        raise ValueError("production scopes must be sorted by scope_key")
+    if scopes != tuple(sorted(scopes, key=lambda item: item.scope_id)):
+        raise ValueError("production scopes must be sorted by scope_id")
     scope_set_sha256 = payload.get("scope_set_sha256")
     if scope_set_sha256 != digest_text(
         canonical_json([item.model_dump(mode="json") for item in scopes])
@@ -594,7 +613,7 @@ def load_production_scopes(
         if len(candidates) != 1:
             raise ValueError(f"production Ask scope for {ticker} is missing or ambiguous")
         selected.append(candidates[0])
-    return tuple(sorted(selected, key=lambda item: item.scope_key))
+    return tuple(sorted(selected, key=lambda item: item.scope_id))
 
 
 @contextmanager
@@ -629,7 +648,9 @@ def _promotion_values(promotion: RetrievalPromotion) -> tuple[object, ...]:
     return (
         promotion.promotion_id,
         promotion.idempotency_key,
-        promotion.scope_key,
+        promotion.scope_id,
+        promotion.source_scope_key,
+        promotion.source_scope_revision_id,
         promotion.revision,
         promotion.issuer_id,
         promotion.reporting_entity_id,
@@ -660,6 +681,8 @@ _PROMOTION_COLUMNS = (
     "promotion_id",
     "idempotency_key",
     "scope_key",
+    "source_scope_key",
+    "source_scope_revision_id",
     "revision",
     "issuer_id",
     "reporting_entity_id",
@@ -687,7 +710,8 @@ _PROMOTION_COLUMNS = (
 
 _PROMOTION_INSERT_SQL = """
     INSERT INTO ask_retrieval_scope_promotions (
-        promotion_id,idempotency_key,scope_key,revision,issuer_id,
+        promotion_id,idempotency_key,scope_key,source_scope_key,
+        source_scope_revision_id,revision,issuer_id,
         reporting_entity_id,research_snapshot_id,research_snapshot_sha256,
         fact_generation_id,fact_projection_seal_sha256,
         source_inventory_set_json,source_inventory_set_sha256,
@@ -695,12 +719,13 @@ _PROMOTION_INSERT_SQL = """
         population_run_id,population_receipt_set_sha256,population_observed_through,
         policy_version,verifier_name,verifier_version,verifier_code_sha256,
         verifier_config_sha256,status,supersedes_promotion_id,recorded_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT DO NOTHING
 """
 
 _PROMOTION_SELECT_BY_IDEMPOTENCY_SQL = """
-    SELECT promotion_id,idempotency_key,scope_key,revision,issuer_id,
+    SELECT promotion_id,idempotency_key,scope_key,source_scope_key,
+           source_scope_revision_id,revision,issuer_id,
            reporting_entity_id,research_snapshot_id,research_snapshot_sha256,
            fact_generation_id,fact_projection_seal_sha256,
            source_inventory_set_json,source_inventory_set_sha256,
@@ -713,12 +738,12 @@ _PROMOTION_SELECT_BY_IDEMPOTENCY_SQL = """
 """
 
 
-def persist_retrieval_promotion(
+def persist_retrieval_promotion_with_outcome(
     conn: sqlite3.Connection,
     promotion: RetrievalPromotion,
     *,
     runtime: LocalVectorRuntimeConfig | None = None,
-) -> RetrievalPromotion:
+) -> RetrievalPromotionWriteResult:
     """Verify and append one promotion; exact idempotent replay is accepted."""
 
     promotion = RetrievalPromotion.model_validate(promotion.model_dump())
@@ -736,7 +761,8 @@ def persist_retrieval_promotion(
             stored = _promotion_from_row(existing_rows[0])
             if _promotion_values(stored) != values:
                 raise ValueError("immutable Ask retrieval promotion replay conflict")
-            return stored
+            verify_retrieval_promotion(conn, stored, runtime=runtime)
+            return RetrievalPromotionWriteResult(outcome="exact_replay", promotion=stored)
         verify_retrieval_promotion(conn, promotion, runtime=runtime)
         cursor = conn.execute(_PROMOTION_INSERT_SQL, values)
         if cursor.rowcount == 0:
@@ -746,7 +772,25 @@ def persist_retrieval_promotion(
             ).fetchone()
             if row is None or tuple(row) != values:
                 raise ValueError("immutable Ask retrieval promotion replay conflict")
-    return promotion
+            stored = _promotion_from_row(row)
+            verify_retrieval_promotion(conn, stored, runtime=runtime)
+            return RetrievalPromotionWriteResult(outcome="exact_replay", promotion=stored)
+    return RetrievalPromotionWriteResult(outcome="promoted", promotion=promotion)
+
+
+def persist_retrieval_promotion(
+    conn: sqlite3.Connection,
+    promotion: RetrievalPromotion,
+    *,
+    runtime: LocalVectorRuntimeConfig | None = None,
+) -> RetrievalPromotion:
+    """Compatibility wrapper returning the verified stored promotion."""
+
+    return persist_retrieval_promotion_with_outcome(
+        conn,
+        promotion,
+        runtime=runtime,
+    ).promotion
 
 
 def _research_request(
@@ -791,6 +835,16 @@ def verify_retrieval_promotion(
 ) -> None:
     """Strictly verify a promotion's immutable coordinates and current coverage."""
 
+    source_scopes = conn.execute(
+        "SELECT scope_revision_id FROM v_issuer_reporting_scope_current "
+        "WHERE scope_key=? AND issuer_id=? AND inclusion_state='core'",
+        (promotion.source_scope_key, promotion.issuer_id),
+    ).fetchall()
+    if len(source_scopes) != 1 or str(source_scopes[0][0]) != promotion.source_scope_revision_id:
+        raise PromotionVerificationError(
+            "scope_identity_incomplete",
+            "promotion does not bind the exact current composite source scope revision",
+        )
     actual_identity = (
         promotion.policy_version,
         promotion.verifier_name,
@@ -971,7 +1025,9 @@ def _promotion_from_row(row: sqlite3.Row) -> RetrievalPromotion:
     promotion = RetrievalPromotion(
         promotion_id=str(row["promotion_id"]),
         idempotency_key=str(row["idempotency_key"]),
-        scope_key=str(row["scope_key"]),
+        scope_id=str(row["scope_key"]),
+        source_scope_key=str(row["source_scope_key"]),
+        source_scope_revision_id=str(row["source_scope_revision_id"]),
         revision=int(row["revision"]),
         issuer_id=str(row["issuer_id"]),
         reporting_entity_id=str(row["reporting_entity_id"]),
@@ -1022,7 +1078,7 @@ def assess_retrieval_readiness(
             reason_code="empty_scope",
             details="no reporting scope was supplied",
         )
-    if len({scope.scope_key for scope in scopes}) != len(scopes):
+    if len({scope.scope_id for scope in scopes}) != len(scopes):
         return RetrievalReadiness(
             outcome="unavailable",
             reason_code="scope_identity_incomplete",
@@ -1033,13 +1089,13 @@ def assess_retrieval_readiness(
     for scope in scopes:
         row = conn.execute(
             "SELECT * FROM v_ask_retrieval_scope_current WHERE scope_key=?",
-            (scope.scope_key,),
+            (scope.scope_id,),
         ).fetchone()
         if row is None:
             return RetrievalReadiness(
                 outcome="coverage_incomplete",
                 reason_code="promotion_missing",
-                details=f"no retrieval promotion exists for {scope.scope_key}",
+                details=f"no retrieval promotion exists for {scope.scope_id}",
             )
         try:
             promotion = _promotion_from_row(row)
@@ -1047,22 +1103,25 @@ def assess_retrieval_readiness(
             return RetrievalReadiness(
                 outcome="unavailable",
                 reason_code="promotion_invalid",
-                details=f"promotion is invalid for {scope.scope_key}: {exc}",
+                details=f"promotion is invalid for {scope.scope_id}: {exc}",
             )
         if (
-            promotion.issuer_id != scope.issuer_id
+            promotion.scope_id != scope.scope_id
+            or promotion.source_scope_key != scope.source_scope_key
+            or promotion.source_scope_revision_id != scope.source_scope_revision_id
+            or promotion.issuer_id != scope.issuer_id
             or promotion.reporting_entity_id != scope.reporting_entity_id
         ):
             return RetrievalReadiness(
                 outcome="unavailable",
                 reason_code="scope_identity_incomplete",
-                details=f"promotion identity differs for {scope.scope_key}",
+                details=f"promotion identity differs for {scope.scope_id}",
             )
         if promotion.status != "promoted":
             return RetrievalReadiness(
                 outcome="coverage_incomplete",
                 reason_code="promotion_withdrawn",
-                details=f"retrieval promotion is withdrawn for {scope.scope_key}",
+                details=f"retrieval promotion is withdrawn for {scope.scope_id}",
             )
         try:
             verify_retrieval_promotion(conn, promotion, runtime=runtime)
@@ -1082,7 +1141,7 @@ def assess_retrieval_readiness(
             return RetrievalReadiness(
                 outcome=outcome,
                 reason_code=exc.reason_code,
-                details=f"{scope.scope_key}: {exc.details}",
+                details=f"{scope.scope_id}: {exc.details}",
             )
         ready.append(ReadyRetrievalScope(scope=scope, promotion=promotion))
     cutoffs = {_utc(item.promotion.cutoff_at) for item in ready}
@@ -1132,7 +1191,7 @@ def build_sealed_retrieval_plan(
                 "promotion_id": scope.promotion.promotion_id,
                 "question": normalized_question,
                 "request_id": request_id,
-                "scope_key": scope.scope.scope_key,
+                "scope_id": scope.scope.scope_id,
             }
         )
         identity = digest_text(seed)
@@ -1184,12 +1243,12 @@ def execute_sealed_retrieval_plan(
         for planned_scope, request in zip(plan.scopes, plan.requests, strict=True):
             current_row = conn.execute(
                 "SELECT * FROM v_ask_retrieval_scope_current WHERE scope_key=?",
-                (planned_scope.scope.scope_key,),
+                (planned_scope.scope.scope_id,),
             ).fetchone()
             if current_row is None:
                 raise PromotionVerificationError(
                     "promotion_missing",
-                    f"retrieval promotion disappeared for {planned_scope.scope.scope_key}",
+                    f"retrieval promotion disappeared for {planned_scope.scope.scope_id}",
                 )
             try:
                 current = _promotion_from_row(current_row)
@@ -1201,7 +1260,7 @@ def execute_sealed_retrieval_plan(
             if current != planned_scope.promotion or current.status != "promoted":
                 raise PromotionVerificationError(
                     "promotion_stale",
-                    f"retrieval promotion changed for {planned_scope.scope.scope_key}",
+                    f"retrieval promotion changed for {planned_scope.scope.scope_id}",
                 )
             verify_retrieval_promotion(
                 conn,
@@ -1444,6 +1503,7 @@ __all__ = [
     "PromotionVerificationError",
     "ReadyRetrievalScope",
     "RetrievalPromotion",
+    "RetrievalPromotionWriteResult",
     "RetrievalReadiness",
     "RetrievalScope",
     "SealedEvidenceItem",
@@ -1452,8 +1512,10 @@ __all__ = [
     "assess_retrieval_readiness",
     "build_sealed_retrieval_plan",
     "current_verifier_identity",
+    "derive_retrieval_scope_id",
     "execute_sealed_retrieval_plan",
     "load_verified_trace_evidence",
     "persist_retrieval_promotion",
+    "persist_retrieval_promotion_with_outcome",
     "verify_retrieval_promotion",
 ]

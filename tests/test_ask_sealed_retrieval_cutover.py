@@ -17,8 +17,8 @@ from ask.sealed_retrieval import (
     RetrievalScope,
     assess_retrieval_readiness,
     build_sealed_retrieval_plan,
+    derive_retrieval_scope_id,
     execute_sealed_retrieval_plan,
-    persist_retrieval_promotion,
 )
 from provenance.population_completeness import PopulationTemporalScope
 
@@ -31,7 +31,8 @@ def _promotion_table(conn: sqlite3.Connection) -> None:
     conn.executescript(
         """
         CREATE TABLE ask_retrieval_scope_promotions (
-            promotion_id TEXT, idempotency_key TEXT, scope_key TEXT,
+            promotion_id TEXT PRIMARY KEY, idempotency_key TEXT UNIQUE, scope_key TEXT,
+            source_scope_key TEXT, source_scope_revision_id TEXT,
             revision INTEGER, issuer_id TEXT, reporting_entity_id TEXT,
             research_snapshot_id TEXT, research_snapshot_sha256 TEXT,
             fact_generation_id TEXT, fact_projection_seal_sha256 TEXT,
@@ -47,11 +48,19 @@ def _promotion_table(conn: sqlite3.Connection) -> None:
         );
         CREATE VIEW v_ask_retrieval_scope_current AS
         SELECT * FROM ask_retrieval_scope_promotions;
+        CREATE TABLE v_issuer_reporting_scope_current (
+            scope_revision_id TEXT, scope_key TEXT, issuer_id TEXT,
+            inclusion_state TEXT
+        );
         """
     )
 
 
 def _insert(conn: sqlite3.Connection, scope: str, cutoff: str) -> None:
+    conn.execute(
+        "INSERT INTO v_issuer_reporting_scope_current VALUES (?,?,?,?)",
+        (f"scope-revision-{scope}", scope, f"issuer-{scope}", "core"),
+    )
     bundle = {
         "corpus_manifest_id": f"manifest-{scope}",
         "lexical_index_run_id": f"lex-{scope}",
@@ -62,11 +71,13 @@ def _insert(conn: sqlite3.Connection, scope: str, cutoff: str) -> None:
     bundle_json = canonical_json([bundle])
     conn.execute(
         "INSERT INTO ask_retrieval_scope_promotions VALUES "
-        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             f"promotion-{scope}",
             f"promotion-{scope}",
+            _scope_id(scope),
             scope,
+            f"scope-revision-{scope}",
             1,
             f"issuer-{scope}",
             f"reporter-{scope}",
@@ -96,10 +107,19 @@ def _insert(conn: sqlite3.Connection, scope: str, cutoff: str) -> None:
 
 def _scope(key: str) -> RetrievalScope:
     return RetrievalScope(
-        scope_key=key,
+        scope_id=_scope_id(key),
+        source_scope_key=key,
+        source_scope_revision_id=f"scope-revision-{key}",
         ticker=key,
         issuer_id=f"issuer-{key}",
         reporting_entity_id=f"reporter-{key}",
+    )
+
+
+def _scope_id(key: str) -> str:
+    return derive_retrieval_scope_id(
+        source_scope_key=key,
+        issuer_id=f"issuer-{key}",
     )
 
 
@@ -124,7 +144,7 @@ def test_multi_issuer_requires_common_cutoff_and_builds_exact_requests() -> None
     ).fetchall()
     ready_scopes = tuple(
         ReadyRetrievalScope(
-            scope=_scope(str(row["scope_key"])),
+            scope=_scope(str(row["source_scope_key"])),
             promotion=sealed._promotion_from_row(row),
         )
         for row in rows
@@ -167,9 +187,8 @@ def test_multi_issuer_same_cutoff_requires_one_exact_population_coordinate(
     _insert(conn, "AAA", cutoff.isoformat())
     _insert(conn, "BBB", cutoff.isoformat())
     conn.execute(
-        "UPDATE ask_retrieval_scope_promotions "
-        "SET population_observed_through=? WHERE scope_key='BBB'",
-        (NOW.replace(hour=11, minute=30).isoformat(),),
+        "UPDATE ask_retrieval_scope_promotions SET population_observed_through=? WHERE scope_key=?",
+        (NOW.replace(hour=11, minute=30).isoformat(), _scope_id("BBB")),
     )
 
     def _verified(
@@ -211,9 +230,8 @@ def test_promotion_json_hash_tampering_returns_stable_fail_closed_reason() -> No
     _promotion_table(conn)
     _insert(conn, "AAA", NOW.isoformat())
     conn.execute(
-        "UPDATE ask_retrieval_scope_promotions "
-        "SET source_inventory_set_sha256=? WHERE scope_key='AAA'",
-        ("9" * 64,),
+        "UPDATE ask_retrieval_scope_promotions SET source_inventory_set_sha256=? WHERE scope_key=?",
+        ("9" * 64, _scope_id("AAA")),
     )
     readiness = assess_retrieval_readiness(conn, (_scope("AAA"),))
     assert readiness.outcome == "unavailable"
@@ -221,17 +239,112 @@ def test_promotion_json_hash_tampering_returns_stable_fail_closed_reason() -> No
     assert readiness.scopes == ()
 
 
-def test_exact_promotion_replay_precedes_mutable_readiness_checks() -> None:
+def test_promotion_revision_binding_rejects_changed_source_registry() -> None:
+    conn = sqlite3.connect(":memory:")
+    _promotion_table(conn)
+    _insert(conn, "AAA", NOW.isoformat())
+    conn.execute(
+        "UPDATE v_issuer_reporting_scope_current SET scope_revision_id=? "
+        "WHERE scope_key=? AND issuer_id=?",
+        ("scope-revision-AAA-new", "AAA", "issuer-AAA"),
+    )
+
+    readiness = assess_retrieval_readiness(conn, (_scope("AAA"),))
+
+    assert readiness.outcome == "unavailable"
+    assert readiness.reason_code == "scope_identity_incomplete"
+    assert "exact current composite source scope revision" in readiness.details
+
+
+def test_exact_promotion_replay_revalidates_current_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     conn = sqlite3.connect(":memory:")
     _promotion_table(conn)
     _insert(conn, "AAA", NOW.isoformat())
     conn.row_factory = sqlite3.Row
     row = conn.execute(
-        "SELECT * FROM ask_retrieval_scope_promotions WHERE scope_key='AAA'"
+        "SELECT * FROM ask_retrieval_scope_promotions WHERE scope_key=?",
+        (_scope_id("AAA"),),
     ).fetchone()
     assert row is not None
     promotion = sealed._promotion_from_row(row)
-    assert persist_retrieval_promotion(conn, promotion) == promotion
+    verified: list[str] = []
+
+    def verify(
+        connection: sqlite3.Connection,
+        stored: sealed.RetrievalPromotion,
+        *,
+        runtime: object,
+    ) -> None:
+        del connection, runtime
+        verified.append(stored.promotion_id)
+
+    monkeypatch.setattr(sealed, "verify_retrieval_promotion", verify)
+    result = sealed.persist_retrieval_promotion_with_outcome(conn, promotion)
+    assert result.outcome == "exact_replay"
+    assert result.promotion == promotion
+    assert verified == [promotion.promotion_id]
+
+
+def test_insert_conflict_replay_is_revalidated_and_reported_exactly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    _promotion_table(conn)
+    _insert(conn, "AAA", NOW.isoformat())
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM ask_retrieval_scope_promotions").fetchone()
+    assert row is not None
+    promotion = sealed._promotion_from_row(row)
+    conn.execute("DELETE FROM ask_retrieval_scope_promotions")
+    verified: list[str] = []
+
+    def insert_during_verification(
+        connection: sqlite3.Connection,
+        stored: sealed.RetrievalPromotion,
+        *,
+        runtime: object,
+    ) -> None:
+        del runtime
+        verified.append(stored.promotion_id)
+        if len(verified) == 1:
+            connection.execute(
+                sealed._PROMOTION_INSERT_SQL,
+                sealed._promotion_values(stored),
+            )
+
+    monkeypatch.setattr(sealed, "verify_retrieval_promotion", insert_during_verification)
+    result = sealed.persist_retrieval_promotion_with_outcome(conn, promotion)
+
+    assert result.outcome == "exact_replay"
+    assert result.promotion == promotion
+    assert verified == [promotion.promotion_id, promotion.promotion_id]
+    count_row = conn.execute("SELECT COUNT(*) FROM ask_retrieval_scope_promotions").fetchone()
+    assert count_row is not None
+    assert count_row[0] == 1
+
+
+def test_stale_exact_promotion_replay_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    _promotion_table(conn)
+    _insert(conn, "AAA", NOW.isoformat())
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM ask_retrieval_scope_promotions").fetchone()
+    assert row is not None
+    promotion = sealed._promotion_from_row(row)
+
+    def stale(*_args: object, **_kwargs: object) -> None:
+        raise PromotionVerificationError(
+            "scope_identity_incomplete",
+            "source scope revision advanced",
+        )
+
+    monkeypatch.setattr(sealed, "verify_retrieval_promotion", stale)
+    with pytest.raises(PromotionVerificationError, match="source scope revision advanced"):
+        sealed.persist_retrieval_promotion_with_outcome(conn, promotion)
 
 
 def test_execution_rechecks_current_promotion_before_retrieval(
@@ -242,7 +355,8 @@ def test_execution_rechecks_current_promotion_before_retrieval(
     _insert(conn, "AAA", NOW.isoformat())
     conn.row_factory = sqlite3.Row
     row = conn.execute(
-        "SELECT * FROM ask_retrieval_scope_promotions WHERE scope_key='AAA'"
+        "SELECT * FROM ask_retrieval_scope_promotions WHERE scope_key=?",
+        (_scope_id("AAA"),),
     ).fetchone()
     assert row is not None
     ready = ReadyRetrievalScope(
@@ -261,7 +375,8 @@ def test_execution_rechecks_current_promotion_before_retrieval(
         created_at=NOW,
     )
     conn.execute(
-        "UPDATE ask_retrieval_scope_promotions SET status='withdrawn' WHERE scope_key='AAA'"
+        "UPDATE ask_retrieval_scope_promotions SET status='withdrawn' WHERE scope_key=?",
+        (_scope_id("AAA"),),
     )
 
     def _admitted(
@@ -289,7 +404,7 @@ def test_execution_current_admits_every_planned_scope_before_retrieval(
     ).fetchall()
     ready_scopes = tuple(
         ReadyRetrievalScope(
-            scope=_scope(str(row["scope_key"])),
+            scope=_scope(str(row["source_scope_key"])),
             promotion=sealed._promotion_from_row(row),
         )
         for row in rows
@@ -313,8 +428,8 @@ def test_execution_current_admits_every_planned_scope_before_retrieval(
         promotion: sealed.RetrievalPromotion,
     ) -> None:
         del _conn
-        admitted.append(promotion.scope_key)
-        if promotion.scope_key == "BBB":
+        admitted.append(promotion.scope_id)
+        if promotion.scope_id == _scope_id("BBB"):
             raise PromotionVerificationError(
                 "population_cutover_stale",
                 "BBB no longer resolves to the common current cutover",
@@ -331,7 +446,7 @@ def test_execution_current_admits_every_planned_scope_before_retrieval(
         match="BBB no longer resolves to the common current cutover",
     ):
         execute_sealed_retrieval_plan(conn, plan)
-    assert admitted == ["AAA", "BBB"]
+    assert admitted == [_scope_id("AAA"), _scope_id("BBB")]
 
 
 def test_live_ask_requires_current_population_cutover_receipt() -> None:
@@ -538,6 +653,8 @@ def test_verifier_artifact_hash_is_line_ending_insensitive(tmp_path: Path) -> No
     paths = {str(item["path"]) for item in artifacts}
     assert {
         "src/ask/audit_store.py",
+        "src/scope_identity.py",
+        "src/provenance/scope_identity.py",
         "src/ask/sealed_retrieval.py",
         "src/provenance/population_completeness.py",
         "src/provenance/research_snapshot.py",

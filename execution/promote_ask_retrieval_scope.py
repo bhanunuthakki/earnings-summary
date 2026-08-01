@@ -16,7 +16,7 @@ from ask.sealed_retrieval import (  # noqa: E402
     PromotionVerificationError,
     RetrievalPromotion,
     current_verifier_identity,
-    persist_retrieval_promotion,
+    persist_retrieval_promotion_with_outcome,
 )
 from search.embedding_promotion import LocalVectorRuntimeConfig  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
@@ -80,8 +80,11 @@ def main(argv: list[str] | None = None) -> int:
 
             verify_retrieval_promotion(conn, promotion, runtime=runtime)
             conn.rollback()
+            outcome = "verified"
         else:
-            persist_retrieval_promotion(conn, promotion, runtime=runtime)
+            result = persist_retrieval_promotion_with_outcome(conn, promotion, runtime=runtime)
+            promotion = result.promotion
+            outcome = result.outcome
             conn.commit()
     except PromotionVerificationError as exc:
         conn.rollback()
@@ -101,9 +104,11 @@ def main(argv: list[str] | None = None) -> int:
     print(
         json.dumps(
             {
-                "outcome": "verified" if args.dry_run else "promoted",
+                "outcome": outcome,
                 "promotion_id": promotion.promotion_id,
-                "scope_key": promotion.scope_key,
+                "scope_id": promotion.scope_id,
+                "source_scope_key": promotion.source_scope_key,
+                "source_scope_revision_id": promotion.source_scope_revision_id,
                 "revision": promotion.revision,
             },
             sort_keys=True,

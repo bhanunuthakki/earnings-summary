@@ -7,15 +7,22 @@ import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from ask.sealed_retrieval import (
+    PRODUCTION_SCOPE_REGISTRY_ID,
+    PRODUCTION_SCOPE_SCHEMA_VERSION,
+    PRODUCTION_SUPPORTED_COHORT,
+)
 from provenance.latest_governed_state import (
     LatestGovernedRefreshRequest,
     LatestGovernedStateError,
     refresh_latest_governed_state,
 )
+from provenance.scope_identity import RetrievalScope
+from scope_identity import derive_retrieval_scope_id
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _SCHEMA_VERSION = "latest-governed-activation-candidate/v2"
@@ -191,7 +198,8 @@ ScopeEligibilityStatus = Literal["eligible", "blocked", "intentionally_excluded"
 
 class ScopeEligibility(_FrozenModel):
     scope_revision_id: str
-    scope_key: str
+    scope_id: str
+    source_scope_key: str
     issuer_id: str
     inclusion_state: str
     status: ScopeEligibilityStatus
@@ -209,7 +217,7 @@ class ScopeEligibility(_FrozenModel):
 
 
 class LatestStateEligibilityManifest(_FrozenModel):
-    schema_version: str = "latest-governed-scope-eligibility/v1"
+    schema_version: str = "latest-governed-scope-eligibility/v2"
     operation_recorded_at: datetime
     population_run_id: str | None
     population_receipt_set_sha256: str | None
@@ -230,8 +238,8 @@ class LatestStateEligibilityManifest(_FrozenModel):
 
 
 class BoundLatestStateEligibilityManifest(_FrozenModel):
-    schema_version: Literal["latest-governed-bound-scope-eligibility/v2"] = (
-        "latest-governed-bound-scope-eligibility/v2"
+    schema_version: Literal["latest-governed-bound-scope-eligibility/v3"] = (
+        "latest-governed-bound-scope-eligibility/v3"
     )
     database_path: str
     database_sha256: str
@@ -254,6 +262,7 @@ class BoundLatestStateEligibilityManifest(_FrozenModel):
     production_scope_registry_identity_before: CandidateFileIdentity
     production_scope_registry_identity_after: CandidateFileIdentity
     expected_scope_count: int = Field(ge=1)
+    expected_scope_ids: tuple[str, ...]
     expected_scope_revision_ids: tuple[str, ...]
     eligibility: LatestStateEligibilityManifest
     report_sha256: str
@@ -292,9 +301,10 @@ def bind_scope_eligibility_manifest(
     try:
         observed_audit, structural_bytes = read_candidate_artifact(structural_path)
         observed_coverage, coverage_bytes = read_candidate_artifact(exhaustive_path)
-        observed_registry, _ = read_candidate_artifact(registry_path)
+        observed_registry, registry_bytes = read_candidate_artifact(registry_path)
         structural = GovernedCandidateAudit.model_validate_json(structural_bytes)
         coverage = GovernedCandidateCoverageAudit.model_validate_json(coverage_bytes)
+        decoded_registry: object = json.loads(registry_bytes)
     except (OSError, ValueError) as exc:
         raise LatestStateActivationError("candidate admission receipt is malformed") from exc
     if (
@@ -307,6 +317,39 @@ def bind_scope_eligibility_manifest(
         raise LatestStateActivationError("candidate audit receipt commitment is invalid")
     if not verify_candidate_coverage_receipt(coverage):
         raise LatestStateActivationError("candidate coverage receipt commitment is invalid")
+    if not isinstance(decoded_registry, dict):
+        raise LatestStateActivationError("production scope registry is malformed")
+    registry_payload = cast(dict[str, object], decoded_registry)
+    registry_core: dict[str, object] = {
+        key: value for key, value in registry_payload.items() if key != "registry_sha256"
+    }
+    if (
+        registry_payload.get("registry_sha256") != scope_registry_sha256
+        or _digest(registry_core) != scope_registry_sha256
+    ):
+        raise LatestStateActivationError("production scope registry commitment is invalid")
+    raw_registry_scopes = registry_payload.get("scopes")
+    if not isinstance(raw_registry_scopes, list) or not raw_registry_scopes:
+        raise LatestStateActivationError("production scope registry is empty")
+    registry_scope_payloads = cast(list[object], raw_registry_scopes)
+    try:
+        registry_scopes = tuple(
+            RetrievalScope.model_validate(item) for item in registry_scope_payloads
+        )
+    except ValueError as exc:
+        raise LatestStateActivationError("production scope registry scopes are malformed") from exc
+    if (
+        registry_payload.get("registry_id") != PRODUCTION_SCOPE_REGISTRY_ID
+        or registry_payload.get("schema_version") != PRODUCTION_SCOPE_SCHEMA_VERSION
+        or registry_payload.get("supported_cohort") != list(PRODUCTION_SUPPORTED_COHORT)
+        or registry_scopes != tuple(sorted(registry_scopes, key=lambda item: item.scope_id))
+        or len({scope.scope_id for scope in registry_scopes}) != len(registry_scopes)
+        or registry_payload.get("scope_set_sha256")
+        != _digest([scope.model_dump(mode="json") for scope in registry_scopes])
+        or registry_payload.get("source_scope_revision_ids")
+        != sorted(scope.source_scope_revision_id for scope in registry_scopes)
+    ):
+        raise LatestStateActivationError("production scope registry contract is invalid")
     if (
         Path(structural.database_path).resolve() != database
         or structural.alembic_revision != expected_revision
@@ -332,6 +375,37 @@ def bind_scope_eligibility_manifest(
     )
     if eligible_core_revision_ids != tuple(sorted(expected_scope_revision_ids)):
         raise LatestStateActivationError("eligibility core scopes differ from production registry")
+    expected_scope_evidence = tuple(
+        sorted(
+            (
+                scope.scope_id,
+                scope.source_scope_key,
+                scope.source_scope_revision_id,
+                scope.issuer_id,
+                scope.reporting_entity_id,
+                scope.ticker,
+            )
+            for scope in registry_scopes
+        )
+    )
+    actual_scope_evidence = tuple(
+        sorted(
+            (
+                item.scope_id,
+                item.source_scope_key,
+                item.scope_revision_id,
+                item.issuer_id,
+                item.reporting_entity_id or "",
+                item.ticker or "",
+            )
+            for item in eligibility.scopes
+            if item.inclusion_state == "core"
+        )
+    )
+    if actual_scope_evidence != expected_scope_evidence:
+        raise LatestStateActivationError(
+            "eligibility scope identities differ from production registry"
+        )
     _before_bound_artifact_recheck()
     audit_after = candidate_artifact_snapshot(structural_path)
     coverage_after = candidate_artifact_snapshot(exhaustive_path)
@@ -360,6 +434,7 @@ def bind_scope_eligibility_manifest(
         "database_sha256": structural.database_sha256,
         "eligibility": eligibility.model_dump(mode="json"),
         "expected_scope_count": len(expected_scope_revision_ids),
+        "expected_scope_ids": sorted(scope.scope_id for scope in registry_scopes),
         "expected_scope_revision_ids": sorted(expected_scope_revision_ids),
         "production_scope_registry": str(registry_path),
         "production_scope_registry_file_sha256": registry_snapshot.file_sha256,
@@ -368,7 +443,7 @@ def bind_scope_eligibility_manifest(
             mode="json"
         ),
         "production_scope_registry_sha256": scope_registry_sha256,
-        "schema_version": "latest-governed-bound-scope-eligibility/v2",
+        "schema_version": "latest-governed-bound-scope-eligibility/v3",
     }
     return BoundLatestStateEligibilityManifest.model_validate(
         core | {"report_sha256": _digest(core)}
@@ -397,13 +472,15 @@ def build_scope_eligibility_manifest(
         "FROM v_issuer_reporting_scope_current "
         "ORDER BY scope_key,issuer_id,scope_revision_id"
     ).fetchall()
-    scope_keys = tuple(str(row[1]) for row in scope_rows)
-    scope_revision_ids = tuple(str(row[0]) for row in scope_rows)
     if not any(str(row[3]) == "core" for row in scope_rows):
         raise LatestStateActivationError("production core scope cohort is empty")
-    ambiguous_scope_keys = {value for value in scope_keys if scope_keys.count(value) > 1}
+    core_composites = tuple(
+        (str(row[1]), str(row[2])) for row in scope_rows if str(row[3]) == "core"
+    )
+    core_revision_ids = tuple(str(row[0]) for row in scope_rows if str(row[3]) == "core")
+    ambiguous_composites = {value for value in core_composites if core_composites.count(value) > 1}
     ambiguous_revision_ids = {
-        value for value in scope_revision_ids if scope_revision_ids.count(value) > 1
+        value for value in core_revision_ids if core_revision_ids.count(value) > 1
     }
     scopes = tuple(
         _classify_scope(
@@ -412,7 +489,11 @@ def build_scope_eligibility_manifest(
             population=population,
             operation_recorded_at=operation_recorded_at,
             registry_ambiguous=(
-                str(row[1]) in ambiguous_scope_keys or str(row[0]) in ambiguous_revision_ids
+                str(row[3]) == "core"
+                and (
+                    (str(row[1]), str(row[2])) in ambiguous_composites
+                    or str(row[0]) in ambiguous_revision_ids
+                )
             ),
         )
         for row in scope_rows
@@ -425,7 +506,7 @@ def build_scope_eligibility_manifest(
         "operation_recorded_at": operation_recorded_at,
         "population_receipt_set_sha256": population[1],
         "population_run_id": population[0],
-        "schema_version": "latest-governed-scope-eligibility/v1",
+        "schema_version": "latest-governed-scope-eligibility/v2",
         "scope_count": len(scopes),
         "scopes": scopes,
         "source_scope_revision_ids": tuple(item.scope_revision_id for item in scopes),
@@ -445,23 +526,28 @@ def _classify_scope(
     registry_ambiguous: bool,
 ) -> ScopeEligibility:
     scope_revision_id, scope_key, issuer_id, inclusion_state = map(str, row)
+    scope_id = derive_retrieval_scope_id(
+        source_scope_key=scope_key,
+        issuer_id=issuer_id,
+    )
     base = {
         "scope_revision_id": scope_revision_id,
-        "scope_key": scope_key,
+        "scope_id": scope_id,
+        "source_scope_key": scope_key,
         "issuer_id": issuer_id,
         "inclusion_state": inclusion_state,
     }
-    if registry_ambiguous:
-        return ScopeEligibility(
-            **base,
-            status="blocked",
-            reason_codes=("scope_registry_ambiguous",),
-        )
     if inclusion_state != "core":
         return ScopeEligibility(
             **base,
             status="intentionally_excluded",
             reason_codes=("scope_not_core",),
+        )
+    if registry_ambiguous:
+        return ScopeEligibility(
+            **base,
+            status="blocked",
+            reason_codes=("scope_registry_ambiguous",),
         )
     issuer_count = int(
         conn.execute(
@@ -511,9 +597,10 @@ def _classify_scope(
         "SELECT promotion_id,status,population_receipt_set_sha256,"
         "fact_projection_seal_sha256,source_inventory_set_json,"
         "source_inventory_set_sha256,narrative_bundles_json,"
-        "narrative_bundles_sha256,issuer_id,reporting_entity_id "
+        "narrative_bundles_sha256,issuer_id,reporting_entity_id,"
+        "source_scope_key,source_scope_revision_id "
         "FROM v_ask_retrieval_scope_current WHERE scope_key=?",
-        (scope_key,),
+        (scope_id,),
     ).fetchall()
     if not promotion_rows:
         return ScopeEligibility(
@@ -536,6 +623,8 @@ def _classify_scope(
         str(promotion[2]) != population[1]
         or str(promotion[8]) != issuer_id
         or str(promotion[9]) != reporting_entity_id
+        or str(promotion[10]) != scope_key
+        or str(promotion[11]) != scope_revision_id
     ):
         return ScopeEligibility(
             **base,
@@ -570,7 +659,7 @@ def _classify_scope(
         result = refresh_latest_governed_state(
             conn,
             LatestGovernedRefreshRequest(
-                scope_id=scope_key,
+                scope_id=scope_id,
                 operation_recorded_at=operation_recorded_at,
                 apply=False,
             ),

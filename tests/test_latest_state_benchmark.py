@@ -20,6 +20,7 @@ from provenance.latest_state_benchmark import (
     LatestStateSqliteAdapter,
     QueryPlanProof,
     RefusedBenchmarkPathError,
+    benchmark_scope_id,
     production_benchmark_budgets,
     production_benchmark_config,
     run_latest_state_benchmark,
@@ -97,7 +98,7 @@ class _DeterministicAdapter:
             "INSERT INTO v_ask_retrieval_scope_current VALUES (?,?,?)",
             (
                 (
-                    f"issuer:{scope_index:04d}",
+                    benchmark_scope_id(scope_index),
                     f"issuer:{scope_index:04d}",
                     f"reporting:{scope_index:04d}",
                 )
@@ -108,7 +109,7 @@ class _DeterministicAdapter:
             "INSERT INTO benchmark_scope_meta VALUES (?,?,?,?,?,?)",
             (
                 (
-                    f"issuer:{scope_index:04d}",
+                    benchmark_scope_id(scope_index),
                     f"reporting:{scope_index:04d}",
                     config.cell_count // config.scope_count
                     + (1 if scope_index < config.cell_count % config.scope_count else 0),
@@ -216,11 +217,12 @@ class _DeterministicAdapter:
         )
         conn.execute(
             "UPDATE benchmark_scope_meta SET pending_facts=?,pending_documents=?,"
-            "pending_narrative=? WHERE scope_key='issuer:0000'",
+            "pending_narrative=? WHERE scope_key=?",
             (
                 config.delta_cell_count,
                 config.delta_document_count,
                 config.delta_chunk_count,
+                benchmark_scope_id(0),
             ),
         )
         maximum = int(
@@ -457,7 +459,7 @@ class _DeterministicAdapter:
                 "SELECT * FROM latest_governed_fact_entries WHERE scope_key=? "
                 "AND canonical_metric_name IN (?) LIMIT ?"
             ),
-            params=("issuer:0000", "revenue", 5),
+            params=(benchmark_scope_id(0), "revenue", 5),
             details=(
                 "SEARCH latest_governed_fact_entries USING INDEX "
                 "ix_latest_governed_fact_search "
@@ -608,7 +610,10 @@ def test_exact_work_read_and_resume_ratchets_pass(tmp_path: Path) -> None:
     }
     assert set(implementation_files) == {
         "alembic/versions/0261_latest_governed_state.py",
+        "alembic/versions/0263_ask_scope_identity.py",
         "execution/benchmark_latest_state.py",
+        "src/scope_identity.py",
+        "src/provenance/scope_identity.py",
         "src/provenance/latest_governed_state.py",
         "src/provenance/latest_state_benchmark.py",
     }
@@ -751,7 +756,7 @@ def test_query_plan_ratchet_rejects_full_current_scope_scan(tmp_path: Path) -> N
                     "SELECT * FROM latest_governed_fact_entries "
                     "WHERE scope_key=? AND instr(canonical_search_text,?)>0"
                 ),
-                params=("issuer:0000", "revenue"),
+                params=(benchmark_scope_id(0), "revenue"),
                 details=(
                     "SEARCH latest_governed_fact_entries USING INDEX "
                     "sqlite_autoindex_latest_governed_fact_entries_1 (scope_key=?)",
@@ -855,17 +860,21 @@ def test_cross_scope_ratchet_rejects_non_target_delta_write(tmp_path: Path) -> N
             )
             if (
                 not self.corrupted
-                and scope_id == "issuer:0000"
+                and scope_id == benchmark_scope_id(0)
                 and result.fact_changes == config.delta_cell_count
             ):
                 conn.execute(
                     "UPDATE latest_governed_fact_entries SET refresh_receipt_id=? "
-                    "WHERE scope_key='issuer:0001' "
+                    "WHERE scope_key=? "
                     "AND canonical_metric_cell_id=("
                     "SELECT MIN(canonical_metric_cell_id) "
                     "FROM latest_governed_fact_entries "
-                    "WHERE scope_key='issuer:0001')",
-                    ("receipt-" + result.refresh_id,),
+                    "WHERE scope_key=?)",
+                    (
+                        "receipt-" + result.refresh_id,
+                        benchmark_scope_id(1),
+                        benchmark_scope_id(1),
+                    ),
                 )
                 conn.commit()
                 self.corrupted = True

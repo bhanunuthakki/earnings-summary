@@ -32,6 +32,7 @@ from typing import Literal, Protocol, Self, cast
 import pydantic
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from scope_identity import derive_retrieval_scope_id
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 MAX_COUNT = 1_000_000
@@ -48,7 +49,10 @@ ProcessMemoryMetric = Literal["private_bytes", "rss_bytes", "unavailable"]
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _IMPLEMENTATION_RELATIVE_PATHS = (
     "alembic/versions/0261_latest_governed_state.py",
+    "alembic/versions/0263_ask_scope_identity.py",
     "execution/benchmark_latest_state.py",
+    "src/scope_identity.py",
+    "src/provenance/scope_identity.py",
     "src/provenance/latest_governed_state.py",
     "src/provenance/latest_state_benchmark.py",
 )
@@ -69,6 +73,13 @@ def canonical_json(value: object) -> str:
 
 def digest_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def benchmark_scope_id(scope_index: int) -> str:
+    return derive_retrieval_scope_id(
+        source_scope_key="investor-research",
+        issuer_id=f"issuer:{scope_index:04d}",
+    )
 
 
 class _FrozenModel(BaseModel):
@@ -589,7 +600,12 @@ CREATE TABLE v_ask_retrieval_scope_current (
   fact_projection_seal_sha256 TEXT, source_inventory_set_json TEXT,
   narrative_bundles_json TEXT, cutoff_at TEXT, population_run_id TEXT,
   population_receipt_set_sha256 TEXT, population_observed_through TEXT,
-  issuer_id TEXT, reporting_entity_id TEXT
+  issuer_id TEXT, reporting_entity_id TEXT,
+  source_scope_key TEXT, source_scope_revision_id TEXT
+);
+CREATE TABLE v_issuer_reporting_scope_current (
+  scope_revision_id TEXT, scope_key TEXT, issuer_id TEXT,
+  inclusion_state TEXT
 );
 CREATE TABLE reporting_entities (
   reporting_entity_id TEXT PRIMARY KEY, issuer_id TEXT
@@ -802,6 +818,18 @@ class LatestStateSqliteAdapter:
             ("population-0", baseline_sha, clock, clock),
         )
         conn.executemany(
+            "INSERT INTO v_issuer_reporting_scope_current VALUES (?,?,?,?)",
+            (
+                (
+                    f"scope-revision-{scope_index:04d}",
+                    "investor-research",
+                    f"issuer:{scope_index:04d}",
+                    "core",
+                )
+                for scope_index in range(config.scope_count)
+            ),
+        )
+        conn.executemany(
             "INSERT INTO reporting_entities VALUES (?,?)",
             (
                 (
@@ -844,11 +872,11 @@ class LatestStateSqliteAdapter:
             ),
         )
         conn.executemany(
-            "INSERT INTO v_ask_retrieval_scope_current VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO v_ask_retrieval_scope_current VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 (
                     f"promotion-{scope_index:04d}",
-                    f"issuer:{scope_index:04d}",
+                    benchmark_scope_id(scope_index),
                     "promoted",
                     f"research-{scope_index:04d}",
                     "generation-0",
@@ -863,6 +891,8 @@ class LatestStateSqliteAdapter:
                     clock,
                     f"issuer:{scope_index:04d}",
                     f"reporting:{scope_index:04d}",
+                    "investor-research",
+                    f"scope-revision-{scope_index:04d}",
                 )
                 for scope_index in range(config.scope_count)
             ),
@@ -986,8 +1016,8 @@ class LatestStateSqliteAdapter:
         )
         parent = str(
             conn.execute(
-                "SELECT fact_generation_id FROM latest_governed_scope_heads "
-                "WHERE scope_key='issuer:0000'"
+                "SELECT fact_generation_id FROM latest_governed_scope_heads WHERE scope_key=?",
+                (benchmark_scope_id(0),),
             ).fetchone()[0]
         )
         generation = f"generation-delta-{revision}"
@@ -1009,7 +1039,8 @@ class LatestStateSqliteAdapter:
         )
         previous = conn.execute(
             "SELECT narrative_bundles_json,source_inventory_set_json "
-            "FROM v_ask_retrieval_scope_current WHERE scope_key='issuer:0000'"
+            "FROM v_ask_retrieval_scope_current WHERE scope_key=?",
+            (benchmark_scope_id(0),),
         ).fetchone()
         bundles = list(json.loads(self._bundle(manifest, vector)))
         inventories = list(json.loads(str(previous[1])))
@@ -1032,7 +1063,7 @@ class LatestStateSqliteAdapter:
             "fact_projection_seal_sha256=?,source_inventory_set_json=?,"
             "narrative_bundles_json=?,cutoff_at=?,population_run_id=?,"
             "population_receipt_set_sha256=?,population_observed_through=? "
-            "WHERE scope_key='issuer:0000'",
+            "WHERE scope_key=?",
             (
                 f"promotion-delta-{revision}",
                 f"research-delta-{revision}",
@@ -1044,6 +1075,7 @@ class LatestStateSqliteAdapter:
                 population,
                 population_sha,
                 clock,
+                benchmark_scope_id(0),
             ),
         )
         maximum_publication = int(
@@ -2256,12 +2288,12 @@ def run_latest_state_benchmark(
             source_fixture_storage = _storage_checkpoint(conn, database)
             adapter.create_reporting_entity_index(conn)
             reporting_entity_index_storage = _storage_checkpoint(conn, database)
-            scope_id = "issuer:0000"
+            scope_id = benchmark_scope_id(0)
             initial_checkpoint: AdapterRefresh | None = None
             for scope_index in range(config.scope_count):
                 candidate = adapter.refresh(
                     conn,
-                    scope_id=f"issuer:{scope_index:04d}",
+                    scope_id=benchmark_scope_id(scope_index),
                     config=config,
                     operation_recorded_at=BENCHMARK_STAMP,
                 )

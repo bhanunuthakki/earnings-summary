@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from schema_compat import SchemaRevisionMismatch
+from scope_identity import derive_retrieval_scope_id
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
@@ -22,6 +23,43 @@ def test_connection_enforces_integrity_and_concurrency_policy(tmp_path: Path) ->
         assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30_000
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_scope_identity_sql_function_rejects_forged_canonical_id(tmp_path: Path) -> None:
+    conn = connect_sqlite(
+        tmp_path / "scope-identity.db",
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=False,
+    )
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE promotions (
+              scope_id TEXT, source_scope_key TEXT, issuer_id TEXT
+            );
+            CREATE TRIGGER promotion_scope_exact BEFORE INSERT ON promotions
+            WHEN NEW.scope_id<>derive_retrieval_scope_id(
+              NEW.source_scope_key,NEW.issuer_id
+            ) BEGIN
+              SELECT RAISE(ABORT, 'scope ID mismatch');
+            END;
+            """
+        )
+        exact = derive_retrieval_scope_id(
+            source_scope_key="investor-research",
+            issuer_id="issuer-1",
+        )
+        conn.execute(
+            "INSERT INTO promotions VALUES (?,?,?)",
+            (exact, "investor-research", "issuer-1"),
+        )
+        with pytest.raises(sqlite3.IntegrityError, match="scope ID mismatch"):
+            conn.execute(
+                "INSERT INTO promotions VALUES (?,?,?)",
+                ("ask-scope:v1:" + "0" * 64, "investor-research", "issuer-1"),
+            )
     finally:
         conn.close()
 

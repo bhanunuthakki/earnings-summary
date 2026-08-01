@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import sys
@@ -20,6 +21,7 @@ from ask.audit_store import (  # noqa: E402
     digest_text,
 )
 from ask.sealed_retrieval import (  # noqa: E402
+    PRODUCTION_SCOPE_SCHEMA_VERSION,
     RetrievalScope,
     assess_retrieval_readiness,
     derive_production_scope_registry,
@@ -28,6 +30,8 @@ from search.embedding_promotion import LocalVectorRuntimeConfig  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 PRODUCTION_SCOPE_REGISTRY = REPO_ROOT / "config" / "ask_retrieval_production_scopes.json"
+
+RegistryArtifactSnapshot = tuple[int, int, int, int, int, str]
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -45,11 +49,15 @@ def _load_authoritative_scopes(
     *,
     registry_path: Path,
     expected_sha256: str,
+    registry_bytes: bytes | None = None,
 ) -> tuple[RetrievalScope, ...]:
     if registry_path.resolve() != PRODUCTION_SCOPE_REGISTRY.resolve():
         raise SystemExit("cutover must use the committed production scope registry")
     try:
-        decoded = json.loads(registry_path.read_text(encoding="utf-8"))
+        payload_bytes = (
+            _read_registry_artifact(registry_path)[1] if registry_bytes is None else registry_bytes
+        )
+        decoded = json.loads(payload_bytes)
     except (OSError, json.JSONDecodeError) as exc:
         raise SystemExit(f"production scope registry is unavailable: {exc}") from exc
     if not isinstance(decoded, dict):
@@ -57,9 +65,9 @@ def _load_authoritative_scopes(
     payload = cast(dict[str, object], decoded)
     if payload.get("registry_id") != "ask-retrieval-production-scopes":
         raise SystemExit("production scope registry identity is invalid")
-    if payload.get("schema_version") != 1 or payload.get("supported_cohort") != [
-        "operating_company:legal_registrant"
-    ]:
+    if payload.get("schema_version") != PRODUCTION_SCOPE_SCHEMA_VERSION or payload.get(
+        "supported_cohort"
+    ) != ["operating_company:legal_registrant"]:
         raise SystemExit("production scope registry cohort contract is invalid")
     stored_registry_sha256 = payload.get("registry_sha256")
     registry_core = {key: value for key, value in payload.items() if key != "registry_sha256"}
@@ -77,8 +85,8 @@ def _load_authoritative_scopes(
         scopes = tuple(RetrievalScope.model_validate(item) for item in scope_payloads)
     except ValueError as exc:
         raise SystemExit(f"production scope registry is invalid: {exc}") from exc
-    if tuple(sorted(scopes, key=lambda item: item.scope_key)) != scopes:
-        raise SystemExit("production scopes must be sorted by scope_key")
+    if tuple(sorted(scopes, key=lambda item: item.scope_id)) != scopes:
+        raise SystemExit("production scopes must be sorted by scope_id")
     canonical = canonical_json([item.model_dump(mode="json") for item in scopes])
     computed_sha256 = digest_text(canonical)
     if (
@@ -90,17 +98,42 @@ def _load_authoritative_scopes(
     return scopes
 
 
+def _read_registry_artifact(path: Path) -> tuple[RegistryArtifactSnapshot, bytes]:
+    try:
+        before = path.stat()
+        payload = path.read_bytes()
+        after = path.stat()
+    except OSError as exc:
+        raise SystemExit(f"production scope registry is unavailable: {exc}") from exc
+    before_identity = (
+        int(before.st_dev),
+        int(before.st_ino),
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    after_identity = (
+        int(after.st_dev),
+        int(after.st_ino),
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    )
+    if before_identity != after_identity:
+        raise SystemExit("production scope registry changed while being read")
+    return (*after_identity, hashlib.sha256(payload).hexdigest()), payload
+
+
 def _verify_registry_against_live(
     conn: sqlite3.Connection,
     *,
-    registry_path: Path,
+    registry_payload: object,
 ) -> None:
     try:
-        decoded = json.loads(registry_path.read_text(encoding="utf-8"))
         derived = derive_production_scope_registry(conn)
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
+    except ValueError as exc:
         raise SystemExit(f"production scope registry re-derivation failed: {exc}") from exc
-    if canonical_json(decoded) != canonical_json(derived):
+    if canonical_json(registry_payload) != canonical_json(derived):
         raise SystemExit(
             "production scope registry differs from the live frozen cohort/source revisions"
         )
@@ -131,13 +164,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     conn = connect_sqlite(args.db, role=SQLiteConnectionRole.READ_ONLY)
     try:
+        registry_before, registry_bytes = _read_registry_artifact(PRODUCTION_SCOPE_REGISTRY)
         scopes = _load_authoritative_scopes(
             registry_path=PRODUCTION_SCOPE_REGISTRY,
             expected_sha256=args.scope_set_sha256,
+            registry_bytes=registry_bytes,
         )
+        registry_payload: object = json.loads(registry_bytes)
+        conn.execute("BEGIN")
         _verify_registry_against_live(
             conn,
-            registry_path=PRODUCTION_SCOPE_REGISTRY,
+            registry_payload=registry_payload,
         )
         _verify_claim_audit_budget(conn)
         integrity = audit_answer_audit_integrity(conn)
@@ -154,7 +191,12 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
         readiness = assess_retrieval_readiness(conn, scopes, runtime=runtime)
+        registry_after, _ = _read_registry_artifact(PRODUCTION_SCOPE_REGISTRY)
+        if registry_after != registry_before:
+            raise SystemExit("production scope registry changed during cutover audit")
     finally:
+        if conn.in_transaction:
+            conn.rollback()
         conn.close()
     print(readiness.model_dump_json())
     return 0 if readiness.outcome == "ready" else 2

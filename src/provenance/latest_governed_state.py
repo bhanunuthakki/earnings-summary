@@ -17,6 +17,8 @@ from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from scope_identity import derive_retrieval_scope_id
+
 RETENTION_POLICY_PROPOSAL = "retain-source-history_compact-rebuildable-projection.v1"
 DEFAULT_POLICY_VERSION = "latest-governed-state.v1"
 _HEX = frozenset("0123456789abcdef")
@@ -685,7 +687,8 @@ class GovernedCurrentMaterializer:
             "fact_generation_id,fact_projection_seal_sha256,"
             "source_inventory_set_json,narrative_bundles_json,cutoff_at,"
             "population_run_id,population_receipt_set_sha256,"
-            "population_observed_through,issuer_id,reporting_entity_id "
+            "population_observed_through,issuer_id,reporting_entity_id,"
+            "source_scope_key,source_scope_revision_id "
             "FROM v_ask_retrieval_scope_current WHERE scope_key=?",
             (scope_id,),
         ).fetchall()
@@ -719,6 +722,24 @@ class GovernedCurrentMaterializer:
             )
         issuer_id = str(promoted[12])
         reporting_entity_id = str(promoted[13])
+        source_scope_key = str(promoted[14])
+        source_scope_revision_id = str(promoted[15])
+        if scope_id != derive_retrieval_scope_id(
+            source_scope_key=source_scope_key,
+            issuer_id=issuer_id,
+        ):
+            raise LatestGovernedStateError(
+                "current Ask promotion scope ID does not match its source composite identity"
+            )
+        source_scopes = self._conn.execute(
+            "SELECT scope_revision_id FROM v_issuer_reporting_scope_current "
+            "WHERE scope_key=? AND issuer_id=? AND inclusion_state='core'",
+            (source_scope_key, issuer_id),
+        ).fetchall()
+        if len(source_scopes) != 1 or str(source_scopes[0][0]) != source_scope_revision_id:
+            raise LatestGovernedStateError(
+                "current Ask promotion does not bind the exact current source scope revision"
+            )
         try:
             raw_inventory_ids: object = json.loads(str(promoted[6]))
         except (json.JSONDecodeError, TypeError) as exc:

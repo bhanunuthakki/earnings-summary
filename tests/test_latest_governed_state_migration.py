@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import importlib.util
 import sqlite3
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from sqlalchemy import create_engine
 
 from alembic import command
+from scope_identity import derive_retrieval_scope_id
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "0261_latest_governed_state"
+SCOPE_IDENTITY_REVISION = "0263_ask_scope_identity"
 PARENT = "0260_pre_earnings_brief_plumbing"
 BASE_REVISION = "0213_decision_draft_provider_id"
 
@@ -69,6 +75,244 @@ def _table_names(conn: sqlite3.Connection) -> set[str]:
         str(row[0])
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type IN ('table','view')")
     }
+
+
+def _load_0263_module() -> ModuleType:
+    path = ROOT / "alembic" / "versions" / "0263_ask_scope_identity.py"
+    spec = importlib.util.spec_from_file_location("migration_0263_for_test", path)
+    if spec is None or spec.loader is None:
+        raise AssertionError("could not load migration 0263")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _seed_current_source_scope(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        INSERT INTO issuer_reporting_scope_revisions (
+          scope_revision_id,idempotency_key,scope_key,issuer_id,revision,
+          inclusion_state,history_policy,history_start,latest_years,
+          require_sec,require_ir,require_earnings,decision_kind,reason_code,
+          reason_details_json,effective_at,knowledge_at,recorded_at,
+          supersedes_scope_revision_id
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            "scope-revision-1",
+            "scope-revision-1",
+            "investor-research",
+            "issuer-1",
+            1,
+            "core",
+            "all_available",
+            None,
+            None,
+            1,
+            1,
+            1,
+            "deterministic",
+            "test",
+            "{}",
+            T1,
+            T1,
+            T1,
+            None,
+        ),
+    )
+
+
+def _promotion_insert_values(scope_id: str) -> tuple[object, ...]:
+    return (
+        "promotion-1",
+        "promotion-1",
+        scope_id,
+        1,
+        "issuer-1",
+        "reporting-1",
+        "research-1",
+        HEX_A,
+        "generation-1",
+        HEX_B,
+        "[]",
+        HEX_A,
+        "[]",
+        HEX_B,
+        T1,
+        "policy-1",
+        "verifier",
+        "1",
+        HEX_A,
+        HEX_B,
+        "promoted",
+        None,
+        T1,
+        None,
+        None,
+        None,
+        "investor-research",
+        "scope-revision-1",
+    )
+
+
+_PROMOTION_INSERT = """
+    INSERT INTO ask_retrieval_scope_promotions (
+      promotion_id,idempotency_key,scope_key,revision,issuer_id,
+      reporting_entity_id,research_snapshot_id,research_snapshot_sha256,
+      fact_generation_id,fact_projection_seal_sha256,
+      source_inventory_set_json,source_inventory_set_sha256,
+      narrative_bundles_json,narrative_bundles_sha256,cutoff_at,
+      policy_version,verifier_name,verifier_version,
+      verifier_code_sha256,verifier_config_sha256,status,
+      supersedes_promotion_id,recorded_at,population_run_id,
+      population_receipt_set_sha256,population_observed_through,
+      source_scope_key,source_scope_revision_id
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+"""
+
+
+def test_0263_adds_exact_composite_source_scope_evidence(tmp_path: Path) -> None:
+    database = tmp_path / "scope-identity.db"
+    config = _upgrade(database)
+    command.upgrade(config, SCOPE_IDENTITY_REVISION)
+
+    with sqlite3.connect(database) as conn:
+        columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(ask_retrieval_scope_promotions)")
+        }
+        trigger = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?",
+            ("trg_ask_retrieval_scope_promotion_source_scope_exact",),
+        ).fetchone()
+        revision_row = conn.execute("SELECT version_num FROM alembic_version").fetchone()
+
+    assert {"source_scope_key", "source_scope_revision_id"} <= columns
+    assert trigger is not None
+    assert "ask-scope:v1:" in str(trigger[0])
+    assert "derive_retrieval_scope_id" in str(trigger[0])
+    assert "source.scope_key=NEW.source_scope_key" in str(trigger[0])
+    assert "source.issuer_id=NEW.issuer_id" in str(trigger[0])
+    assert "source.scope_revision_id=NEW.source_scope_revision_id" in str(trigger[0])
+    assert revision_row == (SCOPE_IDENTITY_REVISION,)
+
+
+def test_0263_writer_reservation_closes_empty_check_race(tmp_path: Path) -> None:
+    database = tmp_path / "scope-identity-lock.db"
+    config = _upgrade(database)
+    database_url = config.get_main_option("sqlalchemy.url")
+    assert database_url is not None
+    engine = create_engine(database_url)
+    migration = _load_0263_module()
+
+    with engine.connect() as owner, owner.begin():
+        migration._acquire_writer_lock(owner)
+        contender = sqlite3.connect(database, timeout=0)
+        try:
+            with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+                contender.execute("BEGIN IMMEDIATE")
+        finally:
+            contender.close()
+
+
+def test_0263_migrated_trigger_rejects_forged_canonical_scope_id(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "scope-identity-trigger.db"
+    config = _upgrade(database)
+    command.upgrade(config, SCOPE_IDENTITY_REVISION)
+
+    with sqlite3.connect(database) as seed:
+        _seed_current_source_scope(seed)
+        seed.commit()
+
+    conn = connect_sqlite(
+        database,
+        role=SQLiteConnectionRole.WRITER,
+        schema_preflight=False,
+    )
+    try:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        valid = derive_retrieval_scope_id(
+            source_scope_key="investor-research",
+            issuer_id="issuer-1",
+        )
+        forged = valid[:-1] + ("0" if valid[-1] != "0" else "1")
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="exact current composite source scope",
+        ):
+            conn.execute(_PROMOTION_INSERT, _promotion_insert_values(forged))
+    finally:
+        conn.close()
+
+
+def test_0263_downgrade_refuses_after_first_immutable_promotion(tmp_path: Path) -> None:
+    database = tmp_path / "populated-scope-identity.db"
+    config = _upgrade(database)
+    command.upgrade(config, SCOPE_IDENTITY_REVISION)
+
+    with sqlite3.connect(database) as conn:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        trigger_names = tuple(
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger' "
+                "AND tbl_name='ask_retrieval_scope_promotions'"
+            )
+        )
+        for name in trigger_names:
+            escaped = name.replace('"', '""')
+            conn.execute(f'DROP TRIGGER "{escaped}"')  # nosec B608 -- sqlite_master identity
+        conn.execute(
+            """
+            INSERT INTO ask_retrieval_scope_promotions (
+              promotion_id,idempotency_key,scope_key,revision,issuer_id,
+              reporting_entity_id,research_snapshot_id,research_snapshot_sha256,
+              fact_generation_id,fact_projection_seal_sha256,
+              source_inventory_set_json,source_inventory_set_sha256,
+              narrative_bundles_json,narrative_bundles_sha256,cutoff_at,
+              policy_version,verifier_name,verifier_version,
+              verifier_code_sha256,verifier_config_sha256,status,
+              supersedes_promotion_id,recorded_at,population_run_id,
+              population_receipt_set_sha256,population_observed_through,
+              source_scope_key,source_scope_revision_id
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "promotion-1",
+                "promotion-1",
+                "ask-scope:v1:" + "0" * 64,
+                1,
+                "issuer-1",
+                "reporting-1",
+                "research-1",
+                HEX_A,
+                "generation-1",
+                HEX_B,
+                "[]",
+                HEX_A,
+                "[]",
+                HEX_B,
+                T1,
+                "policy-1",
+                "verifier",
+                "1",
+                HEX_A,
+                HEX_B,
+                "promoted",
+                None,
+                T1,
+                None,
+                None,
+                None,
+                "investor-research",
+                "scope-revision-1",
+            ),
+        )
+        conn.commit()
+
+    with pytest.raises(RuntimeError, match="requires an empty Ask promotion table"):
+        command.downgrade(config, REVISION)
 
 
 def _seed_immutable_rows(conn: sqlite3.Connection) -> None:

@@ -5,10 +5,13 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 import provenance.latest_state_activation as activation_module
+from ask.audit_store import canonical_json
+from ask.sealed_retrieval import derive_production_scope_registry
 from execution.audit_latest_state_candidate import receipt_destination
 from provenance.immutable_artifact import (
     ImmutableArtifactConflictError,
@@ -30,6 +33,7 @@ from provenance.latest_state_activation import (
     verify_bound_eligibility_manifest,
     verify_candidate_coverage_receipt,
 )
+from scope_identity import derive_retrieval_scope_id
 
 
 def _candidate(path: Path) -> None:
@@ -305,7 +309,8 @@ def _eligibility_database() -> sqlite3.Connection:
           population_receipt_set_sha256 TEXT, fact_projection_seal_sha256 TEXT,
           source_inventory_set_json TEXT, source_inventory_set_sha256 TEXT,
           narrative_bundles_json TEXT, narrative_bundles_sha256 TEXT,
-          issuer_id TEXT, reporting_entity_id TEXT
+          issuer_id TEXT, reporting_entity_id TEXT,
+          source_scope_key TEXT, source_scope_revision_id TEXT
         );
         INSERT INTO v_population_cutover_current VALUES ('population-1', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
         INSERT INTO v_issuer_reporting_scope_current VALUES
@@ -328,16 +333,21 @@ def _eligibility_database() -> sqlite3.Connection:
           'issuer:a', 'promotion-a', 'promoted',
           'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
           'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-          '["inventory-a"]', NULL, '[]', NULL, 'issuer-a', 'reporting-a'
+          '["inventory-a"]', NULL, '[]', NULL, 'issuer-a', 'reporting-a',
+          'issuer:a', 'revision-a'
         );
         """
     )
     conn.execute(
         "UPDATE v_ask_retrieval_scope_current SET "
-        "source_inventory_set_sha256=?,narrative_bundles_sha256=?",
+        "source_inventory_set_sha256=?,narrative_bundles_sha256=?,scope_key=?",
         (
             hashlib.sha256(b'["inventory-a"]').hexdigest(),
             hashlib.sha256(b"[]").hexdigest(),
+            derive_retrieval_scope_id(
+                source_scope_key="issuer:a",
+                issuer_id="issuer-a",
+            ),
         ),
     )
     return conn
@@ -389,7 +399,7 @@ def test_scope_manifest_classifies_every_scope_and_commits_evidence(
     assert manifest.eligible_count == 1
     assert manifest.blocked_count == 1
     assert manifest.excluded_count == 1
-    by_scope = {item.scope_key: item for item in manifest.scopes}
+    by_scope = {item.source_scope_key: item for item in manifest.scopes}
     assert by_scope["issuer:a"].status == "eligible"
     assert by_scope["issuer:a"].reason_codes == ("eligible",)
     assert by_scope["issuer:a"].promotion_id == "promotion-a"
@@ -458,10 +468,74 @@ def test_scope_manifest_blocks_duplicate_current_scope_key(
         operation_recorded_at=datetime(2026, 7, 31, tzinfo=UTC),
     )
 
-    duplicates = [item for item in manifest.scopes if item.scope_key == "issuer:a"]
+    duplicates = [item for item in manifest.scopes if item.source_scope_key == "issuer:a"]
     assert len(duplicates) == 2
     assert all(item.status == "blocked" for item in duplicates)
     assert all(item.reason_codes == ("scope_registry_ambiguous",) for item in duplicates)
+
+
+def test_scope_manifest_allows_shared_raw_key_across_distinct_core_issuers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _eligibility_database()
+    conn.execute(
+        "UPDATE v_issuer_reporting_scope_current SET scope_key='investor-research' "
+        "WHERE issuer_id IN ('issuer-a','issuer-c')"
+    )
+
+    def dry_run(
+        connection: sqlite3.Connection,
+        request: LatestGovernedRefreshRequest,
+    ) -> LatestGovernedRefreshResult:
+        del connection, request
+        return _dry_run_result()
+
+    monkeypatch.setattr(
+        "provenance.latest_state_activation.refresh_latest_governed_state",
+        dry_run,
+    )
+
+    manifest = build_scope_eligibility_manifest(
+        conn,
+        operation_recorded_at=datetime(2026, 7, 31, tzinfo=UTC),
+    )
+
+    core = [item for item in manifest.scopes if item.inclusion_state == "core"]
+    assert len(core) == 2
+    assert len({item.scope_id for item in core}) == 2
+    assert all(item.reason_codes != ("scope_registry_ambiguous",) for item in core)
+
+
+def test_non_core_duplicate_revision_is_excluded_before_identity_ambiguity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _eligibility_database()
+    conn.execute(
+        "INSERT INTO v_issuer_reporting_scope_current VALUES (?,?,?,?)",
+        ("revision-b", "issuer:b-other", "issuer-b", "monitored"),
+    )
+
+    def dry_run(
+        connection: sqlite3.Connection,
+        request: LatestGovernedRefreshRequest,
+    ) -> LatestGovernedRefreshResult:
+        del connection, request
+        return _dry_run_result()
+
+    monkeypatch.setattr(
+        "provenance.latest_state_activation.refresh_latest_governed_state",
+        dry_run,
+    )
+
+    manifest = build_scope_eligibility_manifest(
+        conn,
+        operation_recorded_at=datetime(2026, 7, 31, tzinfo=UTC),
+    )
+
+    excluded = [item for item in manifest.scopes if item.inclusion_state == "monitored"]
+    assert len(excluded) == 2
+    assert all(item.status == "intentionally_excluded" for item in excluded)
+    assert all(item.reason_codes == ("scope_not_core",) for item in excluded)
 
 
 def test_scope_manifest_blocks_nonterminal_materializer_result(
@@ -543,9 +617,11 @@ def test_bound_manifest_commits_candidate_receipts_registry_and_scope_set(
     coverage = audit_candidate_coverage(database, candidate_audit_receipt=audit_path)
     coverage_path = tmp_path / "candidate-coverage.json"
     coverage_path.write_text(coverage.model_dump_json(), encoding="utf-8")
-    registry_path = tmp_path / "production-scopes.json"
-    registry_path.write_text('{"registry_sha256":"registry-sha"}', encoding="utf-8")
     conn = _eligibility_database()
+    registry = derive_production_scope_registry(conn)
+    registry_sha256 = str(registry["registry_sha256"])
+    registry_path = tmp_path / "production-scopes.json"
+    registry_path.write_text(canonical_json(registry), encoding="utf-8")
 
     def dry_run(
         connection: sqlite3.Connection,
@@ -572,7 +648,7 @@ def test_bound_manifest_commits_candidate_receipts_registry_and_scope_set(
         audit_path=audit_path,
         coverage_path=coverage_path,
         scope_registry_path=registry_path,
-        scope_registry_sha256="registry-sha",
+        scope_registry_sha256=registry_sha256,
         audit_snapshot=audit_snapshot,
         coverage_snapshot=coverage_snapshot,
         registry_snapshot=registry_snapshot,
@@ -584,6 +660,7 @@ def test_bound_manifest_commits_candidate_receipts_registry_and_scope_set(
     )
 
     assert bound.expected_scope_count == 2
+    assert len(bound.expected_scope_ids) == 2
     assert bound.database_sha256 == structural.database_sha256
     assert bound.candidate_coverage_report_sha256 == coverage.report_sha256
     assert bound.candidate_audit_identity_before == bound.candidate_audit_identity_after
@@ -594,13 +671,49 @@ def test_bound_manifest_commits_candidate_receipts_registry_and_scope_set(
     )
     assert verify_bound_eligibility_manifest(bound)
 
+    tampered_registry = dict(registry)
+    raw_tampered_scopes = tampered_registry["scopes"]
+    assert isinstance(raw_tampered_scopes, list)
+    tampered_scope_payloads = cast(list[object], raw_tampered_scopes)
+    tampered_scopes = [dict(cast(dict[str, object], item)) for item in tampered_scope_payloads]
+    tampered_scopes[0]["ticker"] = "ZZZ"
+    tampered_registry["scopes"] = tampered_scopes
+    tampered_registry["scope_set_sha256"] = hashlib.sha256(
+        canonical_json(tampered_scopes).encode()
+    ).hexdigest()
+    tampered_core = {
+        key: value for key, value in tampered_registry.items() if key != "registry_sha256"
+    }
+    tampered_sha256 = hashlib.sha256(canonical_json(tampered_core).encode()).hexdigest()
+    tampered_registry["registry_sha256"] = tampered_sha256
+    registry_path.write_text(canonical_json(tampered_registry), encoding="utf-8")
+    tampered_snapshot, _ = read_candidate_artifact(registry_path)
+    with pytest.raises(LatestStateActivationError, match="scope identities differ"):
+        bind_scope_eligibility_manifest(
+            database_path=database,
+            audit_path=audit_path,
+            coverage_path=coverage_path,
+            scope_registry_path=registry_path,
+            scope_registry_sha256=tampered_sha256,
+            audit_snapshot=audit_snapshot,
+            coverage_snapshot=coverage_snapshot,
+            registry_snapshot=tampered_snapshot,
+            expected_scope_revision_ids=("revision-a", "revision-c"),
+            identity_before=identity,
+            identity_after=identity,
+            eligibility=eligibility,
+            expected_revision="0261_latest_governed_state",
+        )
+    registry_path.write_text(canonical_json(registry), encoding="utf-8")
+    registry_snapshot, _ = read_candidate_artifact(registry_path)
+
     with pytest.raises(LatestStateActivationError, match="differ from production registry"):
         bind_scope_eligibility_manifest(
             database_path=database,
             audit_path=audit_path,
             coverage_path=coverage_path,
             scope_registry_path=registry_path,
-            scope_registry_sha256="registry-sha",
+            scope_registry_sha256=registry_sha256,
             audit_snapshot=audit_snapshot,
             coverage_snapshot=coverage_snapshot,
             registry_snapshot=registry_snapshot,
@@ -635,7 +748,7 @@ def test_bound_manifest_commits_candidate_receipts_registry_and_scope_set(
                 audit_path=audit_path,
                 coverage_path=coverage_path,
                 scope_registry_path=registry_path,
-                scope_registry_sha256="registry-sha",
+                scope_registry_sha256=registry_sha256,
                 audit_snapshot=audit_snapshot,
                 coverage_snapshot=coverage_snapshot,
                 registry_snapshot=registry_snapshot,
