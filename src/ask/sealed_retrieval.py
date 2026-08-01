@@ -563,12 +563,17 @@ def load_production_scopes(
     registry_path: Path,
     *,
     requested_tickers: tuple[str, ...] | None = None,
+    registry_payload: bytes | None = None,
 ) -> tuple[RetrievalScope, ...]:
     """Load a committed registry only when it exactly equals the live cohort."""
 
     try:
-        decoded = json.loads(registry_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        decoded = json.loads(
+            registry_path.read_text(encoding="utf-8")
+            if registry_payload is None
+            else registry_payload.decode("utf-8")
+        )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"production scope registry is unavailable: {exc}") from exc
     if not isinstance(decoded, dict):
         raise ValueError("production scope registry must be a JSON object")

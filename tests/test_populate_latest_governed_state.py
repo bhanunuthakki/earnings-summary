@@ -17,7 +17,7 @@ def test_cli_requires_typed_operational_inputs() -> None:
             "--scope-registry",
             "registry.json",
             "--expected-revision",
-            "0267_source_definition_taxonomy_identity",
+            "0268_latest_governed_population_operation_ledger",
             "--operation-recorded-at",
             "2026-07-31T23:00:00Z",
             "--receipt",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -24,10 +25,13 @@ from provenance.immutable_artifact import (  # noqa: E402
     require_no_reparse_points,
 )
 from provenance.latest_governed_population import (  # noqa: E402
+    LatestGovernedPopulationPersistence,
     LatestGovernedPopulationReceipt,
     LatestGovernedPopulationRequest,
     admit_latest_governed_population,
     build_latest_governed_population_receipt,
+    latest_governed_population_operation_id,
+    load_latest_governed_population_receipt,
     populate_latest_governed_cohort,
     verify_latest_governed_population_receipt,
 )
@@ -36,7 +40,7 @@ from provenance.latest_state_activation import (  # noqa: E402
     verify_bound_eligibility_manifest,
 )
 from provenance.population_canonical_resolution import database_instance_id  # noqa: E402
-from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
+from runtime.job_runtime import JobAlreadyRunningError, JobLock, portfolio_db_path  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 
@@ -126,9 +130,11 @@ def _execute(args: argparse.Namespace) -> LatestGovernedPopulationReceipt:
         *(f"artifact:{path}" for path in inputs),
         f"artifact:{output}",
     ]
+    if database == portfolio_db_path(PROJECT_ROOT):
+        resources.append("portfolio-db")
     with JobLock(PROJECT_ROOT, "populate-latest-governed-state", resources):
         eligibility_snapshot, manifest = _load_bound(eligibility_path)
-        registry_snapshot, _registry_bytes = read_stable_artifact(registry_path)
+        registry_snapshot, registry_bytes = read_stable_artifact(registry_path)
         prior_snapshot: ImmutableArtifactSnapshot | None = None
         prior: LatestGovernedPopulationReceipt | None = None
         if prior_path is not None:
@@ -140,8 +146,17 @@ def _execute(args: argparse.Namespace) -> LatestGovernedPopulationReceipt:
             if len(revision_rows) != 1 or str(revision_rows[0][0]) != args.expected_revision:
                 raise ValueError("latest governed database revision differs from expectation")
             revision = str(revision_rows[0][0])
+            if (
+                Path(manifest.database_path).resolve() != database
+                or manifest.alembic_revision != revision
+            ):
+                raise ValueError("latest governed eligibility names another database or revision")
             instance_id = database_instance_id(conn)
-            scopes = load_production_scopes(conn, registry_path)
+            scopes = load_production_scopes(
+                conn,
+                registry_path,
+                registry_payload=registry_bytes,
+            )
             admission = admit_latest_governed_population(manifest, scopes)
             request = LatestGovernedPopulationRequest(
                 operation_recorded_at=args.operation_recorded_at,
@@ -152,33 +167,82 @@ def _execute(args: argparse.Namespace) -> LatestGovernedPopulationReceipt:
                 max_batch_rows=args.max_batch_rows,
                 document_checkpoint=args.document_checkpoint,
             )
+            prior_stored = (
+                None
+                if prior is None
+                else load_latest_governed_population_receipt(conn, prior.operation_id)
+            )
+            expected_remaining = (
+                ()
+                if args.after_scope_id is None
+                else tuple(
+                    item.scope_id
+                    for item in admission.scopes[
+                        tuple(scope.scope_id for scope in admission.scopes).index(
+                            args.after_scope_id
+                        )
+                        + 1 :
+                    ]
+                )
+            )
             if prior is not None and (
-                prior.result.outcome != "checkpoint"
+                prior_stored != prior
+                or prior.result.outcome != "checkpoint"
                 or not prior.request.apply
                 or prior.result.last_scope_id != args.after_scope_id
                 or prior.admission != admission
                 or prior.database_instance_id != instance_id
                 or prior.alembic_revision != revision
+                or _head_snapshot_for_receipt(conn, prior) != prior.result.heads_after
+                or prior.result.processed_scope_ids != (args.after_scope_id,)
+                or prior.result.remaining_scope_ids != expected_remaining
+                or args.operation_recorded_at < prior.request.operation_recorded_at
             ):
                 raise ValueError("prior latest governed checkpoint does not bind this resume")
             existing = None if not output.exists() else _load_receipt(output)[1]
-            if existing is not None:
-                if (
-                    existing.request != request
-                    or existing.admission != admission
-                    or existing.database_instance_id != instance_id
-                    or existing.alembic_revision != revision
-                    or existing.eligibility_artifact_sha256 != eligibility_snapshot.file_sha256
-                    or existing.registry_artifact_sha256 != registry_snapshot.file_sha256
-                    or existing.prior_checkpoint_receipt_sha256
-                    != (None if prior_snapshot is None else prior_snapshot.file_sha256)
-                ):
-                    raise ImmutableArtifactConflictError(
-                        "immutable latest governed receipt belongs to another operation"
+            prior_sha = None if prior_snapshot is None else prior_snapshot.file_sha256
+            persistence = LatestGovernedPopulationPersistence(
+                database_path=str(database),
+                database_instance_id=instance_id,
+                alembic_revision=revision,
+                eligibility_artifact_sha256=eligibility_snapshot.file_sha256,
+                registry_artifact_sha256=registry_snapshot.file_sha256,
+                prior_checkpoint_receipt_sha256=prior_sha,
+            )
+            operation_id = latest_governed_population_operation_id(
+                database_instance_id=instance_id,
+                admission_sha256=admission.commitment_sha256,
+                request=request,
+                prior_checkpoint_receipt_sha256=prior_sha,
+            )
+            stored_before = (
+                load_latest_governed_population_receipt(conn, operation_id) if args.apply else None
+            )
+            if existing is not None and stored_before != existing:
+                raise ImmutableArtifactConflictError(
+                    "exported latest governed receipt lacks matching database evidence"
+                )
+            result = populate_latest_governed_cohort(
+                conn,
+                admission,
+                request,
+                persistence=persistence if args.apply else None,
+                input_stability_check=(
+                    None
+                    if not args.apply
+                    else lambda: _assert_inputs_unchanged(
+                        eligibility_snapshot,
+                        registry_snapshot,
+                        prior_snapshot,
                     )
-                receipt = existing
+                ),
+            )
+            if args.apply:
+                stored = load_latest_governed_population_receipt(conn, operation_id)
+                if stored is None:
+                    raise ValueError("atomic latest governed population receipt is missing")
+                receipt = stored
             else:
-                result = populate_latest_governed_cohort(conn, admission, request)
                 assert_artifact_unchanged(eligibility_snapshot)
                 assert_artifact_unchanged(registry_snapshot)
                 if prior_snapshot is not None:
@@ -194,9 +258,11 @@ def _execute(args: argparse.Namespace) -> LatestGovernedPopulationReceipt:
                     admission=admission,
                     request=request,
                     result=result,
-                    prior_checkpoint_receipt_sha256=(
-                        None if prior_snapshot is None else prior_snapshot.file_sha256
-                    ),
+                    prior_checkpoint_receipt_sha256=prior_sha,
+                )
+            if existing is not None and existing != receipt:
+                raise ImmutableArtifactConflictError(
+                    "exported latest governed receipt differs from its database ledger"
                 )
         finally:
             conn.close()
@@ -207,7 +273,39 @@ def _execute(args: argparse.Namespace) -> LatestGovernedPopulationReceipt:
                 "exported latest governed receipt differs from the canonical receipt"
             )
         assert_artifact_unchanged(exported_snapshot)
+        assert_artifact_unchanged(eligibility_snapshot)
+        assert_artifact_unchanged(registry_snapshot)
+        if prior_snapshot is not None:
+            assert_artifact_unchanged(prior_snapshot)
         return receipt
+
+
+def _head_snapshot_for_receipt(
+    conn: sqlite3.Connection,
+    receipt: LatestGovernedPopulationReceipt,
+) -> dict[str, tuple[str, str] | None]:
+    snapshot: dict[str, tuple[str, str] | None] = {}
+    for scope_id in receipt.result.heads_after:
+        rows = conn.execute(
+            "SELECT refresh_receipt_id,state_sha256 FROM latest_governed_scope_heads "
+            "WHERE scope_key=?",
+            (scope_id,),
+        ).fetchall()
+        if len(rows) > 1:
+            raise ValueError("latest governed scope head is ambiguous")
+        snapshot[scope_id] = None if not rows else (str(rows[0][0]), str(rows[0][1]))
+    return snapshot
+
+
+def _assert_inputs_unchanged(
+    eligibility: ImmutableArtifactSnapshot,
+    registry: ImmutableArtifactSnapshot,
+    prior: ImmutableArtifactSnapshot | None,
+) -> None:
+    assert_artifact_unchanged(eligibility)
+    assert_artifact_unchanged(registry)
+    if prior is not None:
+        assert_artifact_unchanged(prior)
 
 
 def main(argv: list[str] | None = None) -> int:

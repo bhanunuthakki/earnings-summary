@@ -2197,7 +2197,7 @@ def test_cohort_audit_accepts_baseline_without_delta_rows_and_rejects_current_ta
         "SET current_commitment_sha256=? WHERE canonical_metric_cell_id='cell-1'",
         (SHA_A,),
     )
-    with pytest.raises(LatestGovernedStateError, match="differ from exhaustive"):
+    with pytest.raises(LatestGovernedStateError, match="persisted payload differs"):
         audit_latest_governed_cohort(
             conn,
             scope_ids,
@@ -2238,4 +2238,40 @@ def test_cohort_audit_rejects_nonterminal_stage_and_extra_scope_head() -> None:
             conn,
             scope_ids,
             operation_recorded_at=T0 + timedelta(hours=1, minutes=2),
+        )
+
+
+def test_cohort_audit_rejects_payload_tamper_and_out_of_cohort_current_rows() -> None:
+    conn = _database()
+    refresh_latest_governed_state(conn, _request())
+    scope_ids = ("ask-scope:v1:3476a10310c9cbbf527a8277bff9db171809c30a0111949fd0b2619e3398fad3",)
+    conn.execute(
+        "UPDATE latest_governed_fact_entries SET canonical_value='tampered' "
+        "WHERE canonical_metric_cell_id='cell-1'"
+    )
+    with pytest.raises(LatestGovernedStateError, match="persisted payload differs"):
+        audit_latest_governed_cohort(
+            conn,
+            scope_ids,
+            operation_recorded_at=T0 + timedelta(minutes=2),
+        )
+    conn.execute(
+        "UPDATE latest_governed_fact_entries SET canonical_value='100' "
+        "WHERE canonical_metric_cell_id='cell-1'"
+    )
+    columns = tuple(
+        str(row[1]) for row in conn.execute("PRAGMA table_info(latest_governed_fact_entries)")
+    )
+    values = list(conn.execute("SELECT * FROM latest_governed_fact_entries").fetchone())
+    values[columns.index("scope_key")] = "unexpected-scope"
+    values[columns.index("canonical_metric_cell_id")] = "unexpected-cell"
+    conn.execute(
+        "INSERT INTO latest_governed_fact_entries VALUES (" + ",".join("?" for _ in values) + ")",
+        values,
+    )
+    with pytest.raises(LatestGovernedStateError, match="plane scopes differ"):
+        audit_latest_governed_cohort(
+            conn,
+            scope_ids,
+            operation_recorded_at=T0 + timedelta(minutes=2),
         )
