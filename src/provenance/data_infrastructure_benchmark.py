@@ -1590,6 +1590,9 @@ def _production_component() -> SourceTaxonomyComponent:
                 "consolidation_scope": "consolidated",
                 "period_kind": "duration",
                 "reporting_entity_id": "production-reporting-entity",
+                "schema_version": "source-definition-identity/v1",
+                "taxonomy_name": "US GAAP",
+                "taxonomy_version": "2026",
                 "unit_family": "currency",
                 "value_kind": "numeric",
             }
