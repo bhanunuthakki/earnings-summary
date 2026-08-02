@@ -953,7 +953,16 @@ def render_holding_fragment(repo_root: Path, ticker: str) -> str:
 
 
 def _disclosure_change_strip(db_path: Path, ticker: str) -> str:
-    """Compact, drift-framed disclosure panel with verbatim source receipts."""
+    """Compact, drift-framed disclosure panel with verbatim source receipts.
+
+    Elevation-gated (owner ruling 2026-08-02): only events an LLM judged
+    ``thesis_materiality = 'restricts_measurement'`` — the change fundamentally
+    restricts the ability to measure the thesis — render here. Unjudged rows
+    (NULL) are NOT elevated; the strip reports the on-file / awaiting-judgment
+    counts so an empty state is distinguishable from an unswept one. The
+    stored ``materiality`` float is three incommensurable per-detector scales
+    and must never order or gate this surface.
+    """
 
     try:
         conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
@@ -963,14 +972,23 @@ def _disclosure_change_strip(db_path: Path, ticker: str) -> str:
                 """
                 SELECT event_type, fiscal_year, fiscal_period, canonical_id,
                        subject, subject_label, source_doc_id, evidence_quote,
-                       materiality, verdict, interpretation_md
+                       verdict, interpretation_md, thesis_materiality_rationale
                 FROM disclosure_events
                 WHERE ticker = ? AND status != 'dismissed'
-                ORDER BY COALESCE(materiality, 0) DESC, created_at DESC, id DESC
+                  AND thesis_materiality = 'restricts_measurement'
+                ORDER BY created_at DESC, id DESC
                 LIMIT 4
                 """,
                 (ticker.upper(),),
             ).fetchall()
+            on_file, judged = conn.execute(
+                """
+                SELECT COUNT(*), COUNT(thesis_materiality)
+                FROM disclosure_events
+                WHERE ticker = ? AND status != 'dismissed'
+                """,
+                (ticker.upper(),),
+            ).fetchone()
         finally:
             conn.close()
     except sqlite3.Error:
@@ -980,21 +998,35 @@ def _disclosure_change_strip(db_path: Path, ticker: str) -> str:
             '<p class="muted">Disclosure-change history is unavailable in this database.</p>'
             "</section>"
         )
+    counts_note = (
+        f"{int(on_file)} drift events on file · {int(on_file) - int(judged)} awaiting "
+        "the thesis-materiality judgment"
+    )
     if not rows:
+        if int(on_file) == 0:
+            body = (
+                "No stored change events for this name. That is a coverage state, "
+                "not evidence that disclosures were unchanged."
+            )
+        else:
+            body = (
+                "Nothing judged to restrict measuring the thesis. "
+                f"{counts_note}; unjudged events never elevate."
+            )
         return (
             '<section class="disclosure-strip k-well">'
             '<div class="disclosure-head"><h2>Disclosure drift</h2>'
-            '<span class="k-chip">relevant for weeks</span></div>'
-            '<p class="muted">No stored change events for this name. That is a coverage state, '
-            "not evidence that disclosures were unchanged.</p></section>"
+            '<span class="k-chip">thesis-materiality gated</span></div>'
+            f'<p class="muted">{escape(body)}</p></section>'
         )
 
     out = [
         '<section class="disclosure-strip k-well">',
         '<div class="disclosure-head"><h2>Disclosure drift</h2>',
-        '<span class="k-chip">relevant for weeks</span></div>',
-        '<p class="sub">Longitudinal changes, not day-of alerts. Read the verdict with '
-        "the verbatim receipt; the event label alone has no direction.</p>",
+        '<span class="k-chip">thesis-materiality gated</span></div>',
+        '<p class="sub">Only changes an LLM judged to restrict measuring the thesis '
+        f"are shown ({escape(counts_note)}). Read the verdict with the verbatim "
+        "receipt; the event label alone has no direction.</p>",
         '<div class="disclosure-rows">',
     ]
     for row in rows:
@@ -1036,6 +1068,11 @@ def _disclosure_change_strip(db_path: Path, ticker: str) -> str:
         out.append("</div>")
         if receipt:
             out.append(f'<p class="disclosure-receipt">“{escape(receipt)}”</p>')
+        gate_rationale = " ".join(str(row["thesis_materiality_rationale"] or "").split())
+        if gate_rationale:
+            out.append(
+                f'<p class="disclosure-gate muted">Why elevated: {escape(gate_rationale)}</p>'
+            )
         if interpretation:
             out.append(
                 f'<div class="disclosure-interpretation">{render_prose(interpretation)}</div>'
@@ -1109,7 +1146,7 @@ _DISCLOSURE_STYLE = """<style>
 .disclosure-rows { display:grid; gap:8px; margin-top:8px; }
 .disclosure-row { display:grid; gap:5px; padding-top:8px; border-top:1px solid var(--border); }
 .disclosure-row-head strong { margin-right:auto; }
-.disclosure-receipt, .disclosure-interpretation p { margin:0; }
+.disclosure-receipt, .disclosure-gate, .disclosure-interpretation p { margin:0; }
 .disclosure-receipt { color:var(--fg); }
 </style>"""
 

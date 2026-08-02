@@ -686,10 +686,21 @@ def _journal_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[str, 
 
 
 def _disclosure_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[str, object] | None:
-    """Recent disclosure drift, with the stored verbatim receipt on every row."""
+    """Recent disclosure drift, with the stored verbatim receipt on every row.
+
+    Ranked by the thesis-materiality elevation gate (owner ruling 2026-08-02):
+    events an LLM judged to restrict measuring the thesis come first, then
+    recency. Noise-class verdicts are excluded, and the broken multi-scale
+    ``materiality`` float no longer orders anything. This is on-demand
+    retrieval (not elevation), so non-elevated rows remain available to
+    disclosure questions — labeled so the answer can tell the tiers apart.
+    """
 
     params: list[object] = []
-    where = ["status != 'dismissed'"]
+    where = [
+        "status != 'dismissed'",
+        "verdict NOT IN ('noise', 'mechanical', 'boilerplate_update')",
+    ]
     if focus:
         marks = ",".join("?" for _ in focus)
         where.append(f"ticker IN ({marks})")
@@ -698,11 +709,12 @@ def _disclosure_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[st
     # Clause fragments are fixed here; all values remain bound parameters.
     query = f"""
         SELECT ticker, event_type, fiscal_year, fiscal_period, canonical_id,
-               subject, subject_label, evidence_quote, materiality, verdict,
-               interpretation_md
+               subject, subject_label, evidence_quote, verdict,
+               interpretation_md, thesis_materiality, thesis_materiality_rationale
         FROM disclosure_events
         WHERE {" AND ".join(where)}
-        ORDER BY COALESCE(materiality, 0) DESC, created_at DESC, id DESC
+        ORDER BY CASE WHEN thesis_materiality = 'restricts_measurement' THEN 0 ELSE 1 END,
+                 created_at DESC, id DESC
         LIMIT ?
         """  # nosec B608
     rows = _rows(
@@ -721,7 +733,9 @@ def _disclosure_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[st
     lines = [
         "Disclosure drift, not a day-of alert. Treat these as longitudinal changes "
         "that can remain relevant for weeks; event direction comes from the verdict "
-        "and receipt, never the event type alone."
+        "and receipt, never the event type alone. Rows marked THESIS-MATERIAL were "
+        "judged to restrict the ability to measure the thesis and outrank the rest; "
+        "unmarked rows are background drift — do not present them as alerts."
     ]
     for row in rows:
         period = " ".join(
@@ -737,6 +751,11 @@ def _disclosure_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[st
         interpretation = " ".join(str(row["interpretation_md"] or "").split())
         lead = f"{row['ticker']} {period}".strip()
         detail = f"{event_type} · {concept or 'cross-document'} · {subject} · {verdict}"
+        if str(row["thesis_materiality"] or "") == "restricts_measurement":
+            gate_rationale = " ".join(str(row["thesis_materiality_rationale"] or "").split())
+            detail += " · THESIS-MATERIAL"
+            if gate_rationale:
+                detail += f" ({gate_rationale})"
         if receipt:
             detail += f' · receipt: "{receipt}"'
         if interpretation:

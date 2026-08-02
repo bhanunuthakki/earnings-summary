@@ -819,6 +819,17 @@ LLM_MODELS: dict[str, str] = {
     # closed-vocab classification shape as metric_lifecycle_triage -> Haiku
     # tier.
     "disclosure_item_specificity_triage": FAST_CLASSIFIER_MODEL,
+    # Thesis-materiality elevation gate (filings.materiality_judgment, owner
+    # ruling 2026-08-02): decides whether a disclosure-drift event may be
+    # ELEVATED to an owner-facing surface at all — "restricts_measurement"
+    # only when the change fundamentally restricts the ability to measure the
+    # thesis (a tier-1 KPI / break-condition input dropped, aggregated away,
+    # redefined, or obscured). Judgment of thesis-vs-disclosure semantics
+    # against the thesis anchor, not a closed text-property classification,
+    # and it is the SOLE elevation gate — Sonnet tier (cheapest-at-parity
+    # starting point, like red_team_attack); batched ≤40 events/call, one to
+    # a few calls per ticker per weekly sweep.
+    "disclosure_thesis_materiality": DEFAULT_MODEL,
     # Legacy private callers migrated to the governed entrypoint.  These are
     # short, schema-bound document extractors; each has a golden/eval registry
     # entry and a versioned prompt identity.

@@ -113,6 +113,9 @@ def test_successful_ticker_runs_detectors_in_dependency_order(tmp_path: Path) ->
         "detect_transcript_disclosure_events.py",
         "detrend_disclosure_events.py",
         "classify_disclosure_specificity.py",
+        # The thesis-materiality elevation gate runs LAST so it judges what
+        # the detectors + classifier just wrote (owner ruling 2026-08-02).
+        "judge_disclosure_materiality.py",
     ]
     assert all("--db-path" in call for call in runner.calls)
 
