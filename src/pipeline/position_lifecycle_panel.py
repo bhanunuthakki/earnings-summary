@@ -68,11 +68,16 @@ _PANEL_SCRIPT = """<script>
     if (!form) return;
     ev.preventDefault();
     var entryId = form.getAttribute('data-plc-grade');
+    var submitBtn = form.querySelector('button[type="submit"]');
     var payload = {
       exit_reason: (form.querySelector('[name=exit_reason]') || {}).value || '',
       lessons: (form.querySelector('[name=lessons]') || {}).value || '',
       outcome_vs_thesis: (form.querySelector('[name=outcome_vs_thesis]') || {}).value || ''
     };
+    // Busy-guards the submit (previously nothing did — a double-click could
+    // double-submit); the section is fully re-rendered on success, so no
+    // separate receipt call is needed — the fresh fragment IS the receipt.
+    if (submitBtn) CCAction.busy(submitBtn, 'Saving…');
     fetch('/api/position-entries/' + entryId, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -85,6 +90,7 @@ _PANEL_SCRIPT = """<script>
       root.outerHTML = html;
       void holder; // the fresh fragment carries its own script + wiring guard
     }).catch(function (err) {
+      if (submitBtn) CCAction.release(submitBtn);
       var note = form.querySelector('.plc-note');
       if (note) note.textContent = String(err);
     });

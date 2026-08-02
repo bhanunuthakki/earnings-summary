@@ -103,14 +103,19 @@ _SCRIPT = """<script>
     var log = document.getElementById('dcfg-rebuild-log');
     if (!window.confirm('Rebuild every DCF-maintained name? This re-runs ~all DCF '
         + 'models and can take several minutes.')) return;
-    rb.disabled = true; msg.textContent = 'starting\\u2026';
+    CCAction.busy(rb, 'Starting\\u2026');
+    msg.textContent = '';
     log.style.display = 'block'; log.textContent = '';
     fetch('/actions/rebuild-dcfs', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
     }).then(function (r) {
       return r.json().then(function (j) { return {ok: r.ok, j: j}; });
     }).then(function (res) {
-      if (!res.ok) { msg.textContent = 'error: ' + (res.j.error || 'failed'); rb.disabled = false; return; }
+      if (!res.ok) {
+        msg.textContent = 'error: ' + (res.j.error || 'failed to start rebuild');
+        CCAction.release(rb);
+        return;
+      }
       msg.textContent = 'running (' + res.j.job_id + ')\\u2026';
       var es = new EventSource(res.j.stream_url);
       es.onmessage = function (ev) {
@@ -118,11 +123,21 @@ _SCRIPT = """<script>
         if (f.event === 'log') { log.textContent += f.line + '\\n'; log.scrollTop = log.scrollHeight; }
         if (f.event === 'done') {
           log.textContent += '=== done (exit ' + f.exit_code + ') ===\\n';
-          msg.textContent = 'done'; rb.disabled = false; es.close();
+          if (f.exit_code === 0) {
+            CCAction.receipt(rb, '\\u2713 Rebuild complete — DCF models refreshed');
+          } else {
+            msg.textContent = 'rebuild finished with errors (exit ' + f.exit_code + ') — see log above';
+            CCAction.release(rb);
+          }
+          es.close();
         }
       };
-      es.onerror = function () { es.close(); rb.disabled = false; msg.textContent = 'stream ended'; };
-    }).catch(function () { msg.textContent = 'network error'; rb.disabled = false; });
+      es.onerror = function () {
+        es.close();
+        msg.textContent = 'stream ended unexpectedly — rebuild may still be running server-side';
+        CCAction.release(rb);
+      };
+    }).catch(function () { msg.textContent = 'network error'; CCAction.release(rb); });
   });
 })();
 </script>"""

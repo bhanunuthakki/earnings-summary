@@ -490,7 +490,7 @@ _START_TRACKER_JS = """
   function pollPanel(tries) {
     if (tries <= 0) {
       msg.textContent = 'tracker still not reachable — check the log below';
-      btn.disabled = false;
+      CCAction.release(btn);
       return;
     }
     var endpoint = banner.getAttribute('data-refresh-endpoint') || '/api/panel/portfolio';
@@ -507,7 +507,7 @@ _START_TRACKER_JS = """
     }).catch(function () { setTimeout(function () { pollPanel(tries - 1); }, 3000); });
   }
   function startTracker(auto) {
-    btn.disabled = true;
+    CCAction.busy(btn, auto ? undefined : 'Starting…');
     if (!auto) { msg.textContent = 'starting…'; }
     fetch('/actions/start-tracker', {
       method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'
@@ -516,8 +516,8 @@ _START_TRACKER_JS = """
         // 409 = a tracker job is ALREADY starting (e.g. a prior page open
         // kicked it off) — not an error, just begin polling for :8000.
         if (!res.ok && res.status !== 409) {
-          msg.textContent = 'error: ' + (res.j.error || 'failed');
-          btn.disabled = false;
+          msg.textContent = 'error: ' + (res.j.error || 'failed to start tracker');
+          CCAction.release(btn);
           return;
         }
         msg.textContent = 'starting — waiting for :8000 to answer…';
@@ -535,7 +535,7 @@ _START_TRACKER_JS = """
           } catch (e) {}
         }
         pollPanel(30);
-      }).catch(function () { msg.textContent = 'network error'; btn.disabled = false; });
+      }).catch(function () { msg.textContent = 'network error — start-tracker request failed'; CCAction.release(btn); });
   }
   btn.addEventListener('click', function () { startTracker(false); });
   // Auto-start when the page opens — the tracker powers the WHOLE portfolio
@@ -548,7 +548,7 @@ _START_TRACKER_JS = """
   } else {
     // Another mounted banner already started the shared tracker. This banner
     // still refreshes its own section when the service becomes reachable.
-    btn.disabled = true;
+    CCAction.busy(btn);
     msg.textContent = 'starting — waiting for :8000 to answer…';
     pollPanel(30);
   }
@@ -978,7 +978,7 @@ def _alpha_section(pa: PositionAlpha) -> str:
     for r in sorted(pa.rows, key=lambda x: (x.alpha is None, -(x.alpha or 0.0))):
         ticker = r.ticker or "—"
         ticker_cell = (
-            f'<a href="../research/{escape(ticker)}/" class="ticker-link">{escape(ticker)}</a>'
+            ticker_label(ticker, href="../research/" + escape(ticker) + "/", classes="ticker-link")
             if r.ticker
             else "—"
         )
@@ -1621,12 +1621,12 @@ _RUN_SCENARIO_JS = """
       var root = document.getElementById('pfr-root');
       var target = root ? root.closest('.cc-panel-body') : null;
       if (target) { reinject(target, html); } else { location.reload(); }
-    }).catch(function () { btn.disabled = false; });
+    }).catch(function () { CCAction.release(btn); });
   }
   btn.addEventListener('click', function () {
     var scenario = sel ? sel.value : '';
     if (!scenario) { msg.textContent = 'pick a scenario'; return; }
-    btn.disabled = true;
+    CCAction.busy(btn, 'Running…');
     msg.textContent = 'running… (LLM digest, ~10-40s)';
     log.style.display = 'block';
     fetch('/actions/run-scenario', {
@@ -1634,19 +1634,37 @@ _RUN_SCENARIO_JS = """
       body: JSON.stringify({scenario: scenario})
     }).then(function (r) { return r.json().then(function (j) { return {ok: r.ok, j: j}; }); })
       .then(function (res) {
-        if (!res.ok) { msg.textContent = 'error: ' + (res.j.error || 'failed'); btn.disabled = false; return; }
+        if (!res.ok) {
+          msg.textContent = 'error: ' + (res.j.error || 'scenario run failed to start');
+          CCAction.release(btn);
+          return;
+        }
         try {
           var es = new EventSource(res.j.stream_url);
           es.onmessage = function (ev) {
             try {
               var f = JSON.parse(ev.data);
               if (f.line) { log.textContent += f.line + '\\n'; log.scrollTop = log.scrollHeight; }
-              if (f.event === 'done') { es.close(); msg.textContent = 'done — refreshing digest…'; reloadPanel(); }
+              if (f.event === 'done') {
+                es.close();
+                if (f.exit_code === 0) {
+                  msg.textContent = 'done — refreshing digest…';
+                  CCAction.receipt(btn, '✓ Digest refreshed');
+                  reloadPanel();
+                } else {
+                  msg.textContent = 'scenario run failed — exit code ' + f.exit_code + ', see log above';
+                  CCAction.release(btn);
+                }
+              }
             } catch (e) {}
           };
-          es.onerror = function () { es.close(); btn.disabled = false; };
-        } catch (e) { btn.disabled = false; }
-      }).catch(function () { msg.textContent = 'network error'; btn.disabled = false; });
+          es.onerror = function () {
+            es.close();
+            msg.textContent = 'stream interrupted — scenario run may not have completed';
+            CCAction.release(btn);
+          };
+        } catch (e) { CCAction.release(btn); }
+      }).catch(function () { msg.textContent = 'network error'; CCAction.release(btn); });
   });
 })();
 """
@@ -3514,7 +3532,7 @@ def _positions_table(live: LivePortfolio) -> str:
         pct = f"{p.percent_of_portfolio:.1f}%" if p.percent_of_portfolio is not None else "—"
         ticker = p.ticker or "—"
         ticker_cell = (
-            f'<a href="../research/{escape(ticker)}/" class="ticker-link">{escape(ticker)}</a>'
+            ticker_label(ticker, href="../research/" + escape(ticker) + "/", classes="ticker-link")
             if p.ticker
             else "—"
         )

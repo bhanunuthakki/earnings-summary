@@ -34,9 +34,10 @@ from advisor.context import (
 from advisor.store import AdvisorMemoRow, StanceScoreRow, list_memos, list_scores_for_memos
 from identity import DEFAULT_USER_ID
 from pipeline.allocation_decisions_panel import portfolio_holdings
+from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
-from ui.controls import controls_css
+from ui.controls import controls_css, ticker_label
 from ui.prose import render_prose
 from ui.tokens import FAVICON_LINK, palette_css
 
@@ -174,17 +175,21 @@ def _screen_section(
     # column." Name it ONCE in a caption; the table then carries only per-holding
     # data (its own upside + the margin against that one alternative).
     best = screen[0]
+    best_label = ticker_label(
+        best.candidate, href=f"/ticker/{escape(best.candidate)}", classes="ticker-link"
+    )
     caption = (
         f'<p class="sub am-swap-target">Best available alternative: '
-        f'<a href="/ticker/{escape(best.candidate)}" class="ticker-link">{escape(best.candidate)}</a> '
+        f"{best_label} "
         f'<span class="muted">({escape(best.candidate_list)})</span> '
         f"at {best.candidate_upside_pct:+.0f}% DCF upside. Each holding below is scored by the "
         "margin its own upside trails this alternative.</p>"
     )
     rows = "".join(
         f"<tr{_screen_data(s)}>"
-        f'<td class="ticker"><a href="/ticker/{escape(s.holding)}" class="ticker-link">'
-        f"{escape(s.holding)}</a></td>"
+        f'<td class="ticker">'
+        f"{ticker_label(s.holding, href='/ticker/' + escape(s.holding), classes='ticker-link')}"
+        "</td>"
         f'<td class="num">{s.holding_upside_pct:+.0f}%</td>'
         f'<td class="num {"am-cleared" if s.cleared else ""}">{s.margin_pp:+.0f}pp</td>'
         f"<td>{_bar_cell(s)}</td>"
@@ -412,10 +417,15 @@ _RUN_JS = r"""
     if (!btn) return;
     var kind = btn.getAttribute('data-kind');
     var buttons = bar.querySelectorAll('button');
-    buttons.forEach(function (b) { b.disabled = true; });
+    CCAction.busy(btn, 'Running…');
+    buttons.forEach(function (b) { if (b !== btn) b.disabled = true; });
     logEl.hidden = false;
     logEl.textContent = '';
     append('starting ' + kind + ' run…');
+    function releaseAll() {
+      CCAction.release(btn);
+      buttons.forEach(function (b) { if (b !== btn) b.disabled = false; });
+    }
     fetch('/actions/advisor-memo', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -439,18 +449,24 @@ _RUN_JS = r"""
           finished = true;
           append('# exit code ' + m.exit_code);
           es.close();
-          buttons.forEach(function (b) { b.disabled = false; });
-          if (m.exit_code === 0) refetch();
+          buttons.forEach(function (b) { if (b !== btn) b.disabled = false; });
+          if (m.exit_code === 0) {
+            CCAction.receipt(btn, '✓ Run complete — recorded below');
+            setTimeout(refetch, 900);
+          } else {
+            CCAction.release(btn);
+            append('run failed — exit code ' + m.exit_code + ', see log above for detail');
+          }
         }
       };
       es.onerror = function () {
-        if (!finished) append('stream closed');
+        if (!finished) append('stream closed unexpectedly — run may not have completed');
         es.close();
-        buttons.forEach(function (b) { b.disabled = false; });
+        releaseAll();
       };
     }).catch(function (e) {
       append('failed: ' + e.message);
-      buttons.forEach(function (b) { b.disabled = false; });
+      releaseAll();
     });
   });
 })();
@@ -535,7 +551,7 @@ _SOCRATIC_JS = r"""
       return;
     }
     var btn = body.querySelector('.soc-submit');
-    btn.disabled = true;
+    CCAction.busy(btn, 'Writing…');
     setStatus('Writing the decision memo… (Opus; this can take a few minutes)');
     fetch('/api/socratic/memo', {
       method: 'POST',
@@ -552,13 +568,18 @@ _SOCRATIC_JS = r"""
         return j;
       });
     }).then(function (j) {
-      var stance = j.stance ? ('stance: ' + j.stance + ' · ' + j.horizon_days + 'd horizon, scoring pending') : 'no stance line parsed';
-      body.innerHTML = '<p class="soc-saved">Saved as memo #' + esc(j.memo_id) + ' — ' +
+      // The button (and its CCAction busy state) is torn down by this
+      // innerHTML replacement, so the consequence receipt lives in the
+      // saved-message text itself: a stance is now recorded and scoreable.
+      var stance = j.stance
+        ? ('stance recorded — scoreable at ' + j.horizon_days + 'd horizon: ' + j.stance)
+        : 'no stance line parsed — recorded as a scoreable memo regardless';
+      body.innerHTML = '<p class="soc-saved">✓ Saved as memo #' + esc(j.memo_id) + ' — ' +
         esc(stance) + '. It is in the record below, your notes, and the decisions timeline.</p>' +
         '<div class="am-body">' + j.body_html + '</div>';
       body.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }).catch(function (e) {
-      btn.disabled = false;
+      CCAction.release(btn);
       setStatus('Memo failed: ' + e.message + ' — your answers are still in the form; retry.');
     });
   }
@@ -601,6 +622,7 @@ def render_socratic_page(ticker: str) -> str:
         f"<title>{t} · think-through</title>"
         f"{FAVICON_LINK}"
         f"<style>{palette_css('dark')}{controls_css('dark')}{_SOCRATIC_PAGE_CSS}</style>"
+        f"<style>{CC_ACTION_CSS}</style>"
         f"{_PANEL_CSS}"
         "</head><body><main>"
         f"<h1>Socratic think-through · {t}</h1>"
@@ -614,5 +636,8 @@ def render_socratic_page(ticker: str) -> str:
         "what-would-change-my-mind / stance-if-forced), saved and scheduled for outcome "
         "scoring.</p>"
         '<div id="soc-body"></div></section>'
-        f"</main><script>{_SOCRATIC_JS}</script></body></html>"
+        # Standalone document (not the shell): the CCAction primitive rides
+        # along explicitly, same as palette + controls (mirrors
+        # render_mobile_inbox's inlining for the same reason).
+        f"</main><script>{CC_ACTION_JS}</script><script>{_SOCRATIC_JS}</script></body></html>"
     )

@@ -644,7 +644,13 @@ _JS = """
     if (!card) return;
     var id = card.getAttribute('data-draft-id');
     var groupId = card.getAttribute('data-draft-group-id');
-    if (act === 'defer') { card.style.opacity = '0.4'; btn.disabled = true; return; }
+    if (act === 'defer') {
+      // Deliberately client-only: defer writes nothing server-side, so the
+      // receipt must say exactly that rather than imply a persisted state.
+      CCAction.receipt(btn, 'Deferred (this session only)');
+      card.style.opacity = '0.4';
+      return;
+    }
     if (act === 'correct') {
       var correctionForm = card.querySelector('[data-mi-correct-form]');
       if (correctionForm) {

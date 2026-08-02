@@ -406,7 +406,7 @@ _ALLOC_JS = """<script>
         return;
       }
       if (errEl) errEl.hidden = true;
-      if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Working...'; }
+      if (submitBtn) CCAction.busy(submitBtn, 'Working…');
       fetch('/api/allocation/recommendation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -414,15 +414,16 @@ _ALLOC_JS = """<script>
       }).then(function (r) {
         return r.json().then(function (data) { return { ok: r.ok, data: data }; });
       }).then(function (res) {
-        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Get recommendation'; }
         if (!res.ok) {
-          if (errEl) { errEl.hidden = false; errEl.textContent = res.data.error || 'Failed.'; }
+          if (submitBtn) CCAction.release(submitBtn);
+          if (errEl) { errEl.hidden = false; errEl.textContent = res.data.error || 'Recommendation failed.'; }
           return;
         }
-        refreshSection();
+        if (submitBtn) CCAction.receipt(submitBtn, '✓ Recommendation generated');
+        setTimeout(refreshSection, 500);
       }).catch(function (err) {
-        if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Get recommendation'; }
-        if (errEl) { errEl.hidden = false; errEl.textContent = 'error: ' + err; }
+        if (submitBtn) CCAction.release(submitBtn);
+        if (errEl) { errEl.hidden = false; errEl.textContent = 'Recommendation failed: ' + err; }
       });
     });
   }
@@ -432,13 +433,17 @@ _ALLOC_JS = """<script>
     refreshBtn.addEventListener('click', function () {
       var cash = parseFloat(refreshBtn.getAttribute('data-cash') || '0');
       var horizon = refreshBtn.getAttribute('data-horizon') || '';
-      refreshBtn.disabled = true; refreshBtn.textContent = 'Refreshing...';
+      CCAction.busy(refreshBtn, 'Refreshing…');
       fetch('/api/allocation/recommendation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cash_usd: cash, horizon: horizon || undefined })
-      }).then(function () { refreshSection(); }).catch(function () {
-        refreshBtn.disabled = false; refreshBtn.textContent = 'Refresh';
+      }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        CCAction.receipt(refreshBtn, '✓ Refreshed');
+        setTimeout(refreshSection, 500);
+      }).catch(function () {
+        CCAction.release(refreshBtn);
       });
     });
   }
@@ -455,16 +460,27 @@ _ALLOC_JS = """<script>
     btn.addEventListener('click', function () {
       var verb = btn.getAttribute('data-alloc-verb');
       var id = btn.getAttribute('data-alloc-id');
-      btn.disabled = true;
+      CCAction.busy(btn, '…');
       fetch('/api/allocation/recommendation/' + id + '/adopt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ verb: verb })
-      }).then(function (r) { return r.json(); }).then(function (data) {
+      }).then(function (r) {
+        return r.json().then(function (data) { return { ok: r.ok, data: data }; });
+      }).then(function (res) {
         var st = statusEl();
-        if (st) st.textContent = data.status || (data.error || 'done');
-        btn.disabled = false;
-      }).catch(function () { btn.disabled = false; });
+        if (res.ok) {
+          if (st) st.textContent = res.data.status || 'Disposition saved.';
+          CCAction.receipt(btn, '✓ Disposition saved');
+        } else {
+          if (st) st.textContent = res.data.error || 'Save failed.';
+          CCAction.release(btn);
+        }
+      }).catch(function () {
+        var st = statusEl();
+        if (st) st.textContent = 'Save failed — network error.';
+        CCAction.release(btn);
+      });
     });
   });
 
@@ -792,17 +808,22 @@ _POSTURE_JS = """<script>
   if (!confirmBtn) return;
   confirmBtn.addEventListener('click', function () {
     var st = section.querySelector('#posture-status');
-    confirmBtn.disabled = true;
+    CCAction.busy(confirmBtn, 'Confirming…');
     fetch('/api/positioning/confirm-posture', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ narrative: confirmBtn.getAttribute('data-narrative') || '' })
     }).then(function (r) { return r.json(); }).then(function (data) {
-      if (st) st.textContent = data.ok ? 'Confirmed.' : (data.error || 'Failed.');
-      confirmBtn.disabled = false;
+      if (data.ok) {
+        if (st) st.textContent = 'Confirmed — recorded as your affirmed read.';
+        CCAction.receipt(confirmBtn, '✓ Confirmed');
+      } else {
+        if (st) st.textContent = data.error || 'Confirm failed.';
+        CCAction.release(confirmBtn);
+      }
     }).catch(function () {
-      if (st) st.textContent = 'error';
-      confirmBtn.disabled = false;
+      if (st) st.textContent = 'Confirm failed — network error.';
+      CCAction.release(confirmBtn);
     });
   });
 })();

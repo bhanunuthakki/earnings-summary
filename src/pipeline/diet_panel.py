@@ -315,7 +315,7 @@ _AUTO_BRIEF_JS = """
     if (!btn || btn.disabled) return;
     ev.preventDefault();
     var next = btn.getAttribute('data-autobrief-on') !== '1';
-    btn.disabled = true;
+    CCAction.busy(btn);
     fetch('/api/ticker-settings/' + encodeURIComponent(btn.getAttribute('data-autobrief-ticker')), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -326,11 +326,14 @@ _AUTO_BRIEF_JS = """
     }).then(function () {
       btn.setAttribute('data-autobrief-on', next ? '1' : '0');
       btn.classList.toggle('k-chip-ok', next);
-      btn.textContent = 'auto-brief ' + (next ? 'on' : 'off');
-      btn.disabled = false;
-    }).catch(function () {
-      btn.textContent = 'auto-brief error';
-      btn.disabled = false;
+      // No label was stashed (busy() called without one), so release() only
+      // re-enables — the receipt text below is what sticks.
+      CCAction.receipt(btn, 'auto-brief ' + (next ? 'on' : 'off'));
+      setTimeout(function () { CCAction.release(btn); }, 900);
+    }).catch(function (err) {
+      btn.textContent = 'auto-brief error — save failed'
+        + (err && err.message ? (': ' + err.message) : '');
+      CCAction.release(btn);
     });
   });
 })();

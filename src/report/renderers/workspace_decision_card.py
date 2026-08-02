@@ -37,7 +37,8 @@ JS = r"""
           return;
         }
         var actions = card ? card.querySelectorAll('.dc-act') : [btn];
-        actions.forEach(function (b) { b.disabled = true; });
+        CCAction.busy(btn, 'Recording…');
+        actions.forEach(function (b) { if (b !== btn) b.disabled = true; });
         if (statusEl) statusEl.textContent = 'Recording ' + verb + '…';
         fetch(SERVER_URL + '/api/research/card/' + artifactId + '/' + verb, {
           method: 'POST',
@@ -46,14 +47,17 @@ JS = r"""
         }).then(function (r) {
           return r.json().then(function (data) { return {ok: r.ok, data: data}; });
         }).then(function (res) {
-          actions.forEach(function (b) { b.disabled = false; });
+          actions.forEach(function (b) { if (b !== btn) b.disabled = false; });
           if (!res.ok) {
+            CCAction.release(btn);
             if (statusEl) statusEl.textContent = 'Failed: ' + (res.data.error || 'server error');
             return;
           }
+          CCAction.receipt(btn, '✓ ' + verb);
           if (statusEl) statusEl.textContent = 'Recorded: ' + res.data.status;
         }).catch(function (err) {
-          actions.forEach(function (b) { b.disabled = false; });
+          actions.forEach(function (b) { if (b !== btn) b.disabled = false; });
+          CCAction.release(btn);
           if (statusEl) statusEl.textContent = 'Server unreachable — start comments_server.py.';
           console.warn(err);
         });

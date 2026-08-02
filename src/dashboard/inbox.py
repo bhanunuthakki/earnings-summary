@@ -1334,7 +1334,11 @@ INBOX_JS = r"""
     if (!chip || chip.disabled) return;
     var noteId = chip.getAttribute('data-note-id');
     var card = chip.closest('.ix-card');
-    chip.disabled = true;
+    // Same busy affordance as every other action button (.k-btn[aria-busy]);
+    // on success the terminal state IS the .ix-acted span — the identical
+    // receipt shape the HTMX quick-actions above render server-side, so this
+    // row type no longer carries a second, hand-rolled contract.
+    CCAction.busy(chip, 'Dismissing…');
     fetch('/api/notes/' + encodeURIComponent(noteId) + '/archive', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1346,9 +1350,11 @@ INBOX_JS = r"""
       var acts = card.querySelector('.ix-memo-acts');
       if (acts) acts.innerHTML = '<span class="ix-acted ix-acted-applied">✓ dismissed</span>';
     }).catch(function (err) {
-      chip.disabled = false;
+      CCAction.release(chip);
       chip.classList.add('ix-act-fail');
-      chip.title = String((err && err.message) || err);
+      var detail = String((err && err.message) || err);
+      chip.textContent = 'dismiss failed — ' + detail;
+      chip.title = detail;
     });
   });
 
