@@ -995,7 +995,7 @@ def test_ticker_cell_uses_ticker_label_with_direct_holding_href(
     html = render_research_cockpit(rows)
     assert "<td class='ticker'" in html
     assert "data-peek-ticker='NU'" in html
-    assert "<a class=\"k-tick-sym\" href=\"/#holding=NU\">NU</a>" in html
+    assert '<a class="k-tick-sym" href="/#holding=NU">NU</a>' in html
     # Compact form: no inline company-name span (density) — but the full name
     # still rides the <td>'s title (unchanged from before this migration).
     assert "k-tick-name" not in html

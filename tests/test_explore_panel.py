@@ -203,9 +203,7 @@ def test_builder_popover_uses_ccoverlay_not_a_bespoke_escape_listener(
     # Registered scrimless/non-trapping (a lightweight in-panel popover, not
     # a blocking modal): scrim / focus-trap / restore-focus all explicit
     # false, not left to defaults.
-    m = re.search(
-        r"window\.CCOverlay\.register\(builderPop,\s*\{([^}]*)\}", html_out
-    )
+    m = re.search(r"window\.CCOverlay\.register\(builderPop,\s*\{([^}]*)\}", html_out)
     assert m, "builderPop CCOverlay.register() call not found"
     opts = " ".join(m.group(1).split())
     assert "scrim: false" in opts

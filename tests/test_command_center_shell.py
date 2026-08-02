@@ -1088,9 +1088,7 @@ def test_ticker_hover_and_click_routing_cover_ticker_label() -> None:
     # The legacy selector stays too — a sibling PR still emits .ticker-link
     # elsewhere until it migrates.
     assert "a.ticker-link" in SHELL_JS
-    click_routing = re.search(
-        r"ev\.target\.closest\('([^']*\ba\.k-tick-sym\b[^']*)'\)", SHELL_JS
-    )
+    click_routing = re.search(r"ev\.target\.closest\('([^']*\ba\.k-tick-sym\b[^']*)'\)", SHELL_JS)
     assert click_routing, "the ticker click delegator must also match a.k-tick-sym"
     assert "a.ticker-link" in click_routing.group(1)
 

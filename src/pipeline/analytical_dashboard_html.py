@@ -117,7 +117,7 @@ def _decisions_section(panel: DecisionsPanel) -> str:
             "<h2>Decisions (LLM recommendations · audit ledger)</h2></div>"
             '<div class="panel-body">'
             + k_empty("No decisions recorded yet — extract them from cached rereads.")
-            + '<details><summary>run manually</summary>'
+            + "<details><summary>run manually</summary>"
             '<pre class="cli-hint">python execution/record_decisions.py</pre></details>'
             "</div></section>"
         )
@@ -205,7 +205,7 @@ def _decisions_section(panel: DecisionsPanel) -> str:
             out.append(
                 "<tr>"
                 f"<td>{stamp_html(d.made_at, mode='date')}</td>"
-                f'<td>{ticker_label(d.ticker, href=f"../research/{d.ticker}/")}</td>'
+                f"<td>{ticker_label(d.ticker, href=f'../research/{d.ticker}/')}</td>"
                 f"<td>{escape(kind_label)}</td>"
                 f"<td>{escape(d.conviction or '—')}</td>"
                 f'<td class="num">{pct_str}</td>'
@@ -256,7 +256,7 @@ def _llm_budget_section(panel: LlmBudgetPanel) -> str:
             '<section class="panel"><div class="panel-head"><h2>LLM spend & budget</h2></div>'
             '<div class="panel-body">'
             + k_empty("No LLM budget data yet — the budget migration hasn't run.")
-            + '<details><summary>run manually</summary>'
+            + "<details><summary>run manually</summary>"
             '<pre class="cli-hint">python -m alembic upgrade head</pre></details>'
             "</div></section>"
         )
@@ -459,7 +459,7 @@ def _portfolio_synthesis_section(content_md: str | None) -> str:
             '<section class="panel"><div class="panel-head"><h2>Portfolio synthesis</h2></div>'
             '<div class="panel-body">'
             + k_empty("No cross-portfolio synthesis cached yet.")
-            + '<details><summary>run manually</summary>'
+            + "<details><summary>run manually</summary>"
             '<pre class="cli-hint">python execution/run_lens.py --lens cross_portfolio_synthesis</pre></details>'
             "</div></section>"
         )
@@ -482,7 +482,7 @@ def _per_ticker_reread_section(rows: list[PortfolioLensRow]) -> str:
             '<section class="panel"><div class="panel-head"><h2>Per-holding 5-min rereads</h2></div>'
             '<div class="panel-body">'
             + k_empty("No per-holding 5-min rereads cached yet.")
-            + '<details><summary>run manually</summary>'
+            + "<details><summary>run manually</summary>"
             '<pre class="cli-hint">python execution/run_lens.py --tickers AMZN,GOOG,META '
             "--lens five_min_reread  # or --all for every lens</pre></details>"
             "</div></section>"
@@ -505,7 +505,7 @@ def _reread_card(r: PortfolioLensRow) -> str:
     rendered = light_markdown_to_html(r.content_md[:8000])
     return (
         f'<details class="reread-card"><summary>'
-        f'{ticker_label(r.ticker, href=f"../research/{r.ticker}/")}'
+        f"{ticker_label(r.ticker, href=f'../research/{r.ticker}/')}"
         f"{stamp_html(r.generated_at, mode='date', css='reread-stamp')}"
         f"</summary>"
         f'<div class="reread-body">{rendered}</div>'
@@ -547,7 +547,7 @@ def _trigger_ladder_section(rows: list[TriggerLadderRow]) -> str:
             '<section class="panel"><div class="panel-head"><h2>Trigger ladder</h2></div>'
             '<div class="panel-body">'
             + k_empty("No DCF runs yet.")
-            + '<details><summary>run manually</summary>'
+            + "<details><summary>run manually</summary>"
             '<pre class="cli-hint">python execution/refresh_dcf.py --all-named</pre></details>'
             "</div></section>"
         )
@@ -624,7 +624,7 @@ def _trigger_ladder_section(rows: list[TriggerLadderRow]) -> str:
         )
         out.append(
             f'<tr class="{tone}">'
-            f'<td>{ticker_label(r.ticker, href=f"../research/{r.ticker}/")}</td>'
+            f"<td>{ticker_label(r.ticker, href=f'../research/{r.ticker}/')}</td>"
             f"<td>{escape(r.verdict or '—')}</td>"
             f"{live}{fair}"
             f'<td class="num">{ou}</td><td class="num">{mos}</td>'
@@ -641,7 +641,7 @@ def _insider_events_section(rows: list[InsiderEventRow]) -> str:
             '<section class="panel"><div class="panel-head"><h2>Cross-ticker insider activity (last 90d)</h2></div>'
             '<div class="panel-body">'
             + k_empty("No insider-transaction data yet.")
-            + '<details><summary>run manually</summary>'
+            + "<details><summary>run manually</summary>"
             '<pre class="cli-hint">python execution/backfill_insider_transactions.py '
             "--since 2024-01-01</pre></details>"
             "</div></section>"
@@ -674,7 +674,7 @@ def _insider_events_section(rows: list[InsiderEventRow]) -> str:
         out.append(
             f'<tr class="{tone}">'
             f"<td>{escape(r.transaction_date)}</td>"
-            f'<td>{ticker_label(r.ticker, href=f"../research/{r.ticker}/")}</td>'
+            f"<td>{ticker_label(r.ticker, href=f'../research/{r.ticker}/')}</td>"
             f"<td>{escape(r.insider_name)}</td>"
             f"<td>{escape(r.insider_role or '?')}</td>"
             f"<td>{escape(r.transaction_type.replace('_', ' '))}</td>"
@@ -726,7 +726,7 @@ def _predictions_section(rows: list[PredictionOutcomeRow]) -> str:
             hit_rate = f"{100 * outcomes.get('met', 0) / graded:.0f}%" if graded > 0 else "—"
             out.append(
                 "<tr>"
-                f'<td>{ticker_label(ticker, href=f"../research/{ticker}/")}</td>'
+                f"<td>{ticker_label(ticker, href=f'../research/{ticker}/')}</td>"
                 f"<td>{escape(source_kind)}</td>"
                 f'<td class="num muted">{outcomes.get("pending", 0)}</td>'
                 f'<td class="num k-num-pos">{outcomes.get("met", 0)}</td>'
