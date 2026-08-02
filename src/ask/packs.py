@@ -52,6 +52,7 @@ from typing import cast
 
 from advisor.context import IMPLAUSIBLE_UPSIDE_PCT
 from calibration_guard import rate_phrase
+from dcf.latest import latest_dcf_rows_from_db
 from decision_calibration import bucket_for_conviction, build_calibration, omission_clause
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import (
@@ -452,25 +453,24 @@ def _conviction_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[st
 
 
 def _latest_dcf_by_ticker(db_path: Path) -> dict[str, tuple[float, float, str]]:
-    """ticker -> (fair_value, live_price, run_date), latest usable run.
-    Upside is recomputed downstream from the row's own two fields — the
-    convention-proof read (over_under_pct is never read; its sign convention
-    differed across builders)."""
-    rows = _rows(
-        db_path,
-        "SELECT ticker, valuation_date, npv_per_share, live_price "
-        "FROM dcf_runs ORDER BY ticker, created_at DESC, id DESC",
-    )
+    """ticker -> (fair_value, live_price, run_date), latest usable TOP-LEVEL
+    (unsegmented, current-version) run per ticker — read through the
+    canonical shared reader (``dcf.latest``, PR: canonical latest_dcf_run
+    reader) so a segment or superseded row can't win this pack. Upside is
+    recomputed downstream from the row's own two fields — the convention-
+    proof read (over_under_pct is never read; its sign convention differed
+    across builders). A sanity-flagged run (migration 0182) is EXCLUDED: the
+    dcf pack is a valuation/opportunity leg, and an unreviewed outlier must
+    not surface as "your fair value" any more than it may drive eligibility."""
     out: dict[str, tuple[float, float, str]] = {}
-    for r in rows:
-        t = str(r["ticker"]).upper()
-        if t in out:
+    for t, row in latest_dcf_rows_from_db(db_path).items():
+        if row.sanity_flag:
             continue
-        fv = _f(r["npv_per_share"])
-        px = _f(r["live_price"])
+        fv = row.npv_per_share
+        px = row.live_price
         if fv is None or px is None or fv <= 0 or px <= 0:
             continue
-        out[t] = (fv, px, _day(r["valuation_date"]))
+        out[t] = (fv, px, _day(row.valuation_date))
     return out
 
 

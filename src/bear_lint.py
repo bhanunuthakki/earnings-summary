@@ -34,14 +34,13 @@ with a reason, never silently absent.
 
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dcf.latest import latest_dcf_rows_from_db
 from dcf.scenario_reward import parse_scenario_bear_provenance, parse_scenario_fair_values
 from portfolio_weights import read_materialized_weights
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 __all__ = [
     "SHALLOW_BEAR_FLOOR_PCT",
@@ -108,44 +107,18 @@ class _Row:
 
 def _latest_top_level_rows(db_path: Path, tickers: Sequence[str]) -> dict[str, _Row]:
     """Latest TOP-LEVEL (``is_latest``, unsegmented) ``dcf_runs`` row per name —
-    ``{}`` on a missing DB / table, mirroring ``portfolio_tail_stress``'s
-    ``_latest_dcf_legs``. ``COALESCE`` tolerates both the versioned schema
-    (migration 0137+, ``is_latest``/``segment_name`` populated) and a pre-0137 /
-    hand-rolled test schema where a row simply has no such columns."""
-    if not db_path.exists():
-        return {}
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return {}
-    try:
-        conn.row_factory = sqlite3.Row
-        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
-        if not cols:
-            return {}
-        snap_sel = ", assumption_snapshot_json" if "assumption_snapshot_json" in cols else ""
-        is_latest_pred = "COALESCE(is_latest, 1) = 1" if "is_latest" in cols else "1 = 1"
-        seg_pred = "COALESCE(segment_name, '') = ''" if "segment_name" in cols else "1 = 1"
-        rows = conn.execute(
-            f"SELECT ticker, live_price{snap_sel} FROM dcf_runs "
-            f"WHERE {is_latest_pred} AND {seg_pred} "
-            "ORDER BY ticker, created_at DESC, id DESC"
-        ).fetchall()
-    except sqlite3.Error:
-        return {}
-    finally:
-        conn.close()
-
+    ``{}`` on a missing DB / table. Reads through the canonical shared reader
+    (``dcf.latest.latest_dcf_rows_from_db``, PR: canonical latest_dcf_run
+    reader) rather than a locally hand-rolled query."""
     want = {t.upper() for t in tickers}
     out: dict[str, _Row] = {}
-    for r in rows:
-        t = str(r["ticker"]).upper()
-        if t not in want or t in out:
+    for t, row in latest_dcf_rows_from_db(db_path).items():
+        if t not in want:
             continue
-        snapshot = r["assumption_snapshot_json"] if snap_sel else None
+        snapshot = row.assumption_snapshot_json
         fair_values = parse_scenario_fair_values(snapshot)
         out[t] = _Row(
-            live_price=float(r["live_price"]) if r["live_price"] is not None else None,
+            live_price=row.live_price,
             bear_fv=fair_values.get("bear"),
             provenance=parse_scenario_bear_provenance(snapshot),
             has_bear_leg="bear" in fair_values,

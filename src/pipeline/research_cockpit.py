@@ -54,8 +54,10 @@ from cockpit_fundamentals import (
 from cockpit_fundamentals import (
     read_materialized_fundamentals,
 )
+from dcf.latest import latest_dcf_rows
 from expected_earnings import upcoming_by_ticker
 from pipeline.dashboard_status import DashboardRow, build_dashboard_rows
+from pipeline.freshness import freshness_verdict
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_pp, fmt_reltime
 from ui import living_grid as lg
 from ui.controls import pill_tone_class, thesis_status_tone
@@ -93,10 +95,8 @@ def _sort_th(label: str, key: str, sort_type: str, *, num: bool = True, title: s
 # across every surface that colors a thesis status.
 _STATUS_RANK: dict[str, int] = {"breach": 0, "broken": 0, "warn": 1, "watch": 1, "unresolved": 2}
 
-# Staleness-dot thresholds (days). The FMP cycle is daily and builds are
-# weekly-ish, so a few quiet days is normal; beyond these the cron is broken.
-_FMP_WARN_DAYS, _FMP_BAD_DAYS = 3.0, 14.0
-_BUILD_WARN_DAYS, _BUILD_BAD_DAYS = 10.0, 30.0
+# Staleness-dot thresholds now live in pipeline.freshness (FMP_WARN_DAYS et
+# al) — the single per-source verdict shared with ticker_command_center.
 
 _MAX_KPI_CHIPS = 3
 
@@ -687,32 +687,26 @@ def latest_dcf_runs(
     conn: sqlite3.Connection,
 ) -> dict[str, tuple[float | None, float | None, float | None, str | None]]:
     """ticker -> (fv_gap_pct, npv_per_share, live_price, valuation_date), latest
-    run per ticker. The gap is RECOMPUTED as live_price / npv_per_share − 1
-    rather than read from ``over_under_pct`` — the bank/holdco builders stored
-    that column in a different convention (percent upside) than refresh_dcf's
-    documented ratio, and the row's own two fields are convention-proof and
-    currency-consistent with each other. Public: the allocation-decisions
-    panel (P2.2) reads the same gap so the two surfaces can never disagree."""
-    sanity_sel = _dcf_sanity_select(conn)
-    rows = _safe_rows(
-        conn,
-        f"SELECT ticker, valuation_date, npv_per_share, live_price, {sanity_sel} "
-        "FROM dcf_runs ORDER BY ticker, created_at DESC, id DESC",
-    )
+    TOP-LEVEL (unsegmented, current-version) run per ticker — read through the
+    canonical shared reader (``dcf.latest``, PR: canonical latest_dcf_run
+    reader) so a segment or superseded row can't win this map. The gap is
+    RECOMPUTED as live_price / npv_per_share − 1 rather than read from
+    ``over_under_pct`` — the bank/holdco builders stored that column in a
+    different convention (percent upside) than refresh_dcf's documented
+    ratio, and the row's own two fields are convention-proof and currency-
+    consistent with each other. Public: the allocation-decisions panel (P2.2)
+    reads the same gap so the two surfaces can never disagree."""
     out: dict[str, tuple[float | None, float | None, float | None, str | None]] = {}
-    for r in rows:
-        t = str(r["ticker"])
-        if t in out:
-            continue
-        fv = float(r["npv_per_share"]) if r["npv_per_share"] is not None else None
-        px = float(r["live_price"]) if r["live_price"] is not None else None
+    for t, row in latest_dcf_rows(conn).items():
+        fv = row.npv_per_share
+        px = row.live_price
         gap = (px / fv - 1.0) * 100.0 if fv is not None and fv > 0 and px is not None else None
         # A sanity-flagged run (dcf_runs.sanity_flag, migration 0182) keeps its
         # values visible but emits NO gap signal — a broken model must not rank
         # names or drive trim/add framing anywhere this map is consumed.
-        if r["sanity_flag"]:
+        if row.sanity_flag:
             gap = None
-        out[t] = (gap, fv, px, str(r["valuation_date"]) if r["valuation_date"] else None)
+        out[t] = (gap, fv, px, row.valuation_date)
     return out
 
 
@@ -1509,17 +1503,12 @@ def _staleness_dot(row: CockpitRow, now: datetime) -> str:
     """One dot summarising ops freshness; the per-column detail the old status
     tables carried lives in the hover title. Clicking peeks the per-source
     provenance card (UX9d) — ages + inline refresh — with /#system as the
-    real href for middle-click."""
-    fmp_age = _age_days(row.base.fmp_last_pulled, now)
-    build_age = _age_days(row.base.last_build_at, now)
-    tone = "ok"
-    if fmp_age is None or build_age is None:
-        tone = "bad"
-    else:
-        if fmp_age > _FMP_WARN_DAYS or build_age > _BUILD_WARN_DAYS:
-            tone = "warn"
-        if fmp_age > _FMP_BAD_DAYS or build_age > _BUILD_BAD_DAYS:
-            tone = "bad"
+    real href for middle-click. Tone comes from the shared per-source verdict
+    (``pipeline.freshness``, PR: canonical latest_dcf_run reader + per-source
+    freshness rule) — the same rule ``ticker_command_center`` now uses."""
+    tone = freshness_verdict(
+        fmp_at=row.base.fmp_last_pulled, build_at=row.base.last_build_at, now=now
+    ).tone
     detail = [
         f"FMP {fmt_reltime(row.base.fmp_last_pulled, now=now) if row.base.fmp_last_pulled else 'never'}",
         f"build {fmt_reltime(row.base.last_build_at, now=now) if row.base.last_build_at else 'never'}",
@@ -1540,19 +1529,6 @@ def _staleness_dot(row: CockpitRow, now: datetime) -> str:
         f"aria-label='Data provenance for {t}' "
         f"title='{escape(' · '.join(detail))}'><span class='k-dot k-dot-{tone}'></span></a>"
     )
-
-
-def _age_days(iso: str | None, now: datetime) -> float | None:
-    if not iso:
-        return None
-    try:
-        dt = datetime.fromisoformat(iso)
-    except ValueError:
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    ref = now if now.tzinfo else now.replace(tzinfo=UTC)
-    return (ref - dt).total_seconds() / 86400.0
 
 
 _COCKPIT_CSS = """

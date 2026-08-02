@@ -130,6 +130,94 @@ def test_missing_dcf_and_missing_bear_are_excluded_with_reasons(tmp_path: Path) 
     assert any("CCC" in n and "BBB" in n for n in stress.notes)
 
 
+def _make_versioned_db(tmp_path: Path) -> Path:
+    """The versioned/sanity-gated dcf_runs shape (migration 0137+/0182) —
+    ``_make_db``'s schema carries none of is_latest/segment_name/sanity_flag."""
+    db_path = tmp_path / "versioned.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "CREATE TABLE dcf_runs ("
+        "id INTEGER PRIMARY KEY, ticker TEXT, created_at TEXT, valuation_date TEXT, "
+        "npv_per_share REAL, live_price REAL, live_price_at TEXT, "
+        "assumption_snapshot_json TEXT, is_latest INTEGER, segment_name TEXT, sanity_flag TEXT)"
+    )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def _insert_versioned_run(
+    db_path: Path,
+    ticker: str,
+    *,
+    created_at: str,
+    live_price: float | None = 100.0,
+    bear_fv: float | None = 60.0,
+    is_latest: int = 1,
+    segment_name: str | None = None,
+    sanity_flag: str | None = None,
+) -> None:
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "INSERT INTO dcf_runs "
+        "(ticker, created_at, valuation_date, npv_per_share, live_price, live_price_at, "
+        "assumption_snapshot_json, is_latest, segment_name, sanity_flag) "
+        "VALUES (?, ?, '2026-06-15', 120.0, ?, '2026-07-01', ?, ?, ?, ?)",
+        (
+            ticker,
+            created_at,
+            live_price,
+            _snapshot(bear=bear_fv, base=120.0),
+            is_latest,
+            segment_name,
+            sanity_flag,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_segment_row_never_wins_the_bear_leg_even_when_newer(tmp_path: Path) -> None:
+    """PART A: a segment row landed AFTER the consolidated row must not win
+    the bear leg — the shared dcf.latest reader fix."""
+    db_path = _make_versioned_db(tmp_path)
+    _insert_versioned_run(db_path, "AAA", created_at="2026-06-01T00:00:00", bear_fv=60.0)
+    _insert_versioned_run(
+        db_path,
+        "AAA",
+        created_at="2026-06-02T00:00:00",  # newer than the consolidated row
+        segment_name="Consumer",
+        bear_fv=999.0,
+    )
+    stress = build_tail_stress(db_path, {"AAA": 1.0}, today=TODAY)
+    assert stress is not None
+    (row,) = stress.rows
+    assert row.bear_fv == 60.0  # the consolidated row's bear leg, not the segment one
+
+
+def test_sanity_flagged_row_keeps_price_drops_bear_leg(tmp_path: Path) -> None:
+    """Caller policy (ratified): skip the fair-value (bear) leg for a
+    sanity-flagged run but keep the price-only leg — the row is excluded from
+    the drawdown (no bear signal to stress against) with a reason naming WHY,
+    not folded silently into 'no bear scenario persisted'."""
+    db_path = _make_versioned_db(tmp_path)
+    _insert_versioned_run(
+        db_path,
+        "AAA",
+        created_at="2026-06-01T00:00:00",
+        live_price=100.0,
+        bear_fv=60.0,
+        sanity_flag="outlier",
+    )
+    stress = build_tail_stress(db_path, {"AAA": 1.0}, today=TODAY)
+    assert stress is not None
+    (row,) = stress.rows
+    assert row.live_price == 100.0  # price-only leg survives
+    assert row.bear_fv is None  # fair-value leg dropped
+    assert row.contribution_pct is None
+    assert row.excluded_reason == "DCF sanity-flagged (outlier) — bear leg excluded"
+
+
 def test_stale_fair_value_and_price_flag_low_confidence(tmp_path: Path) -> None:
     db_path = _make_db(tmp_path)
     stale_val = (TODAY - timedelta(days=FV_STALE_DAYS + 5)).isoformat()

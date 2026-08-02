@@ -458,6 +458,85 @@ def test_dcf_portfolio_wide_excludes_non_portfolio_and_flags_suspect(
     assert "suspect" in str(focused["text"])
 
 
+_VERSIONED_DCF_DDL = _DDL.replace(
+    "CREATE TABLE dcf_runs (\n"
+    "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+    "    ticker TEXT NOT NULL, valuation_date TEXT NOT NULL,\n"
+    "    npv_per_share NUMERIC, live_price NUMERIC,\n"
+    "    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+    ");",
+    "CREATE TABLE dcf_runs (\n"
+    "    id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+    "    ticker TEXT NOT NULL, valuation_date TEXT NOT NULL,\n"
+    "    npv_per_share NUMERIC, live_price NUMERIC,\n"
+    "    is_latest INTEGER, segment_name TEXT, sanity_flag TEXT,\n"
+    "    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+    ");",
+)
+
+
+def _versioned_db(tmp_path: Path) -> Path:
+    """The versioned/sanity-gated dcf_runs shape (migration 0137+/0182) —
+    the plain ``db`` fixture's schema carries none of these columns."""
+    path = tmp_path / "versioned.db"
+    conn = sqlite3.connect(str(path))
+    conn.executescript(_VERSIONED_DCF_DDL)
+    conn.execute(
+        "INSERT INTO tracked_companies (ticker, name, list_type) VALUES ('NU', 'Nu Holdings', 'portfolio')"
+    )
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_dcf_pack_ignores_segment_row_even_when_newer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PART A: a segment row landed AFTER the consolidated row must not win
+    the dcf pack's fair-value line — the shared dcf.latest reader fix."""
+    db_path = _versioned_db(tmp_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "INSERT INTO dcf_runs (ticker, valuation_date, npv_per_share, live_price, is_latest, "
+        "created_at) VALUES ('NU', '2026-06-08', 13.96, 12.10, 1, '2026-06-08 09:00:00')"
+    )
+    conn.execute(
+        "INSERT INTO dcf_runs (ticker, valuation_date, npv_per_share, live_price, segment_name, "
+        "created_at) VALUES ('NU', '2026-06-08', 999.0, 12.10, 'Consumer', '2026-06-09 09:00:00')"
+    )
+    conn.commit()
+    conn.close()
+    item = _one(db_path, "dcf", ["NU"], monkeypatch)
+    assert item is not None
+    assert "NU: fair $13.96 vs live $12.10" in str(item["text"])
+
+
+def test_dcf_pack_excludes_sanity_flagged_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Caller policy (ratified): the dcf pack is a valuation/opportunity leg,
+    so a sanity-flagged (outlier) run is excluded entirely — same rule
+    allocation.eligibility already enforces."""
+    db_path = _versioned_db(tmp_path)
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        "INSERT INTO dcf_runs (ticker, valuation_date, npv_per_share, live_price, sanity_flag, "
+        "created_at) VALUES ('NU', '2026-06-08', 60.0, 12.10, 'outlier', '2026-06-08 09:00:00')"
+    )
+    # A second, unflagged run so `runs` isn't empty overall (the pack only
+    # contributes nothing when NO ticker has a usable run) — isolates the
+    # sanity-flag exclusion to NU specifically.
+    conn.execute(
+        "INSERT INTO dcf_runs (ticker, valuation_date, npv_per_share, live_price, "
+        "created_at) VALUES ('MELI', '2026-06-01', 2400.0, 2000.0, '2026-06-01 09:00:00')"
+    )
+    conn.commit()
+    conn.close()
+    item = _one(db_path, "dcf", ["NU"], monkeypatch)
+    assert item is not None
+    assert "NU: no DCF run on file" in str(item["text"])
+
+
 def test_decisions_ledger_lines(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     item = _one(db, "decisions", ["NU", "MELI"], monkeypatch)
     assert item is not None

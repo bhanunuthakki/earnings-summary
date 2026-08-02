@@ -30,6 +30,7 @@ from pathlib import Path
 from statistics import median
 
 from allocation.book_risk import BookRisk, build_book_risk
+from dcf.latest import latest_dcf_rows_from_db
 from dcf.scenario_reward import scenario_reward
 from identity import DEFAULT_USER_ID
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -254,46 +255,40 @@ def _parse_date(raw: object) -> date | None:
 def _dcf_reward_legs(db_path: Path, tickers: Sequence[str], today: date) -> dict[str, _Reward]:
     """Asymmetry-aware reward leg per ticker, with freshness-derived confidence.
 
-    Reads the latest ``dcf_runs`` row per name: the L6 price-leg-fresh
-    ``live_price`` and the value-of-record ``npv_per_share`` feed
-    ``dcf.scenario_reward``; ``valuation_date`` (fair-value leg) and
-    ``live_price_at`` (price leg) drive the low-confidence framing. A name with
-    no row simply gets no entry (the caller treats it as 'no DCF on file')."""
-    if not db_path.exists():
-        return {}
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return {}
-    try:
-        conn.row_factory = sqlite3.Row
-        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
-        snap_sel = ", assumption_snapshot_json" if "assumption_snapshot_json" in cols else ""
-        priced_sel = ", live_price_at" if "live_price_at" in cols else ""
-        rows = conn.execute(
-            f"SELECT ticker, valuation_date, npv_per_share, live_price{priced_sel}{snap_sel} "
-            "FROM dcf_runs ORDER BY ticker, created_at DESC, id DESC"
-        ).fetchall()
-    except sqlite3.Error:
-        return {}
-    finally:
-        conn.close()
+    Reads the latest TOP-LEVEL (unsegmented, current-version) ``dcf_runs`` row
+    per name through the canonical shared reader (``dcf.latest``, PR:
+    canonical latest_dcf_run reader) — a segment or superseded row can't win
+    this reward leg. The L6 price-leg-fresh ``live_price`` and the value-of-
+    record ``npv_per_share`` feed ``dcf.scenario_reward``; ``valuation_date``
+    (fair-value leg) and ``live_price_at`` (price leg) drive the low-
+    confidence framing. A name with no row simply gets no entry (the caller
+    treats it as 'no DCF on file').
 
+    A sanity-flagged run (migration 0182) skips the fair-value leg entirely —
+    ``scenario_reward`` is never called, so ``expected_return`` reads None,
+    same shape as "no usable price / fair value" — an unreviewed outlier
+    valuation must not drive the risk-parity-gap ranking any more than it may
+    drive eligibility (``allocation.eligibility``)."""
     want = {t.upper() for t in tickers}
     out: dict[str, _Reward] = {}
-    for r in rows:
-        t = str(r["ticker"]).upper()
-        if t not in want or t in out:
+    for t, row in latest_dcf_rows_from_db(db_path).items():
+        if t not in want:
             continue
-        fv = float(r["npv_per_share"]) if r["npv_per_share"] is not None else None
-        px = float(r["live_price"]) if r["live_price"] is not None else None
-        snapshot = r["assumption_snapshot_json"] if snap_sel else None
-        reward = scenario_reward(price=px, base_fv=fv, snapshot_json=snapshot)
+        if row.sanity_flag:
+            out[t] = _Reward(
+                None, False, True, f"DCF sanity-flagged (outlier: {row.sanity_flag!r})", None
+            )
+            continue
+        reward = scenario_reward(
+            price=row.live_price,
+            base_fv=row.npv_per_share,
+            snapshot_json=row.assumption_snapshot_json,
+        )
         if reward is None:
             out[t] = _Reward(None, False, True, "DCF has no usable price / fair value", None)
             continue
-        val_date = _parse_date(r["valuation_date"])
-        priced_date = _parse_date(r["live_price_at"]) if priced_sel else None
+        val_date = _parse_date(row.valuation_date)
+        priced_date = _parse_date(row.live_price_at)
         stale_bits: list[str] = []
         if val_date is None:
             stale_bits.append("fair value undated")
