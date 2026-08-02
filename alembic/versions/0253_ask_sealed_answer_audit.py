@@ -479,48 +479,73 @@ def upgrade() -> None:
         "AND header.research_snapshot_sha256=NEW.research_snapshot_sha256) "
         "BEGIN SELECT RAISE(ABORT, 'answer retrieval must reference an exact sealed trace'); END"
     )
-    op.execute(
-        "CREATE TRIGGER trg_ask_answer_audit_record_session "
-        "BEFORE INSERT ON ask_answer_audit_records "
-        "WHEN NEW.session_id IS NOT NULL AND NOT EXISTS ("
-        "SELECT 1 FROM ask_sessions session WHERE session.id=NEW.session_id "
-        "AND session.scope=NEW.surface) "
-        "BEGIN SELECT RAISE(ABORT, 'Ask answer session identity mismatch'); END"
+    # Same presence-guard rationale as the llm_calls triggers below:
+    # ask_sessions may not exist on minimal test chains, and SQLite
+    # re-validates every trigger on any later ALTER TABLE.
+    _has_ask_sessions = (
+        op.get_bind()
+        .execute(sa.text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ask_sessions'"))
+        .fetchone()
+        is not None
     )
-    op.execute(
-        "CREATE TRIGGER trg_ask_answer_audit_record_llm "
-        "BEFORE INSERT ON ask_answer_audit_records "
-        "WHEN NOT EXISTS (SELECT 1 FROM llm_calls call "
-        "WHERE call.id=NEW.llm_call_id AND call.purpose=NEW.llm_purpose "
-        "AND call.run_id=NEW.llm_run_id "
-        "AND call.model=NEW.llm_model AND call.provider=NEW.llm_provider "
-        "AND call.transport=NEW.llm_transport "
-        "AND call.template_id=NEW.prompt_template_id "
-        "AND call.template_version=NEW.prompt_template_version "
-        "AND call.template_vars_sha256=NEW.prompt_template_vars_sha256 "
-        "AND call.prompt_sha256=NEW.prompt_sha256 "
-        "AND call.response_sha256=NEW.answer_sha256 "
-        "AND call.error IS NULL) "
-        "BEGIN SELECT RAISE(ABORT, 'Ask answer LLM call identity mismatch'); END"
+    if _has_ask_sessions:
+        op.execute(
+            "CREATE TRIGGER trg_ask_answer_audit_record_session "
+            "BEFORE INSERT ON ask_answer_audit_records "
+            "WHEN NEW.session_id IS NOT NULL AND NOT EXISTS ("
+            "SELECT 1 FROM ask_sessions session WHERE session.id=NEW.session_id "
+            "AND session.scope=NEW.surface) "
+            "BEGIN SELECT RAISE(ABORT, 'Ask answer session identity mismatch'); END"
+        )
+    # GUARDED on llm_calls presence (the 0143 lesson, trigger edition): CREATE
+    # TRIGGER does not validate referenced tables, but SQLite re-validates
+    # EVERY trigger during any later ALTER TABLE — so on minimal test DBs
+    # (stamped at 0059, which never create the pre-0059 llm_calls from 0034)
+    # these two triggers sat as landmines until 0271's native DROP COLUMN
+    # detonated them ("no such table: main.llm_calls", 2026-08-02). Prod and
+    # every real DB have llm_calls, so the audit enforcement is unchanged
+    # where it matters.
+    _has_llm_calls = (
+        op.get_bind()
+        .execute(sa.text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='llm_calls'"))
+        .fetchone()
+        is not None
     )
-    op.execute(
-        "CREATE TRIGGER trg_ask_answer_audit_record_claim_llm "
-        "BEFORE INSERT ON ask_answer_audit_records "
-        "WHEN NOT EXISTS (SELECT 1 FROM llm_calls call "
-        "WHERE call.id=NEW.claim_audit_llm_call_id "
-        "AND call.run_id=NEW.claim_audit_run_id "
-        "AND call.purpose=NEW.claim_audit_purpose "
-        "AND call.template_id=NEW.claim_audit_template_id "
-        "AND call.template_version=NEW.claim_audit_template_version "
-        "AND call.template_vars_sha256=NEW.claim_audit_template_vars_sha256 "
-        "AND call.model=NEW.claim_auditor_model "
-        "AND call.provider=NEW.claim_audit_provider "
-        "AND call.transport=NEW.claim_audit_transport "
-        "AND call.prompt_sha256=NEW.claim_audit_prompt_sha256 "
-        "AND call.response_sha256=NEW.claim_audit_response_sha256 "
-        "AND call.error IS NULL) "
-        "BEGIN SELECT RAISE(ABORT, 'Ask claim-audit LLM call identity mismatch'); END"
-    )
+    if _has_llm_calls:
+        op.execute(
+            "CREATE TRIGGER trg_ask_answer_audit_record_llm "
+            "BEFORE INSERT ON ask_answer_audit_records "
+            "WHEN NOT EXISTS (SELECT 1 FROM llm_calls call "
+            "WHERE call.id=NEW.llm_call_id AND call.purpose=NEW.llm_purpose "
+            "AND call.run_id=NEW.llm_run_id "
+            "AND call.model=NEW.llm_model AND call.provider=NEW.llm_provider "
+            "AND call.transport=NEW.llm_transport "
+            "AND call.template_id=NEW.prompt_template_id "
+            "AND call.template_version=NEW.prompt_template_version "
+            "AND call.template_vars_sha256=NEW.prompt_template_vars_sha256 "
+            "AND call.prompt_sha256=NEW.prompt_sha256 "
+            "AND call.response_sha256=NEW.answer_sha256 "
+            "AND call.error IS NULL) "
+            "BEGIN SELECT RAISE(ABORT, 'Ask answer LLM call identity mismatch'); END"
+        )
+        op.execute(
+            "CREATE TRIGGER trg_ask_answer_audit_record_claim_llm "
+            "BEFORE INSERT ON ask_answer_audit_records "
+            "WHEN NOT EXISTS (SELECT 1 FROM llm_calls call "
+            "WHERE call.id=NEW.claim_audit_llm_call_id "
+            "AND call.run_id=NEW.claim_audit_run_id "
+            "AND call.purpose=NEW.claim_audit_purpose "
+            "AND call.template_id=NEW.claim_audit_template_id "
+            "AND call.template_version=NEW.claim_audit_template_version "
+            "AND call.template_vars_sha256=NEW.claim_audit_template_vars_sha256 "
+            "AND call.model=NEW.claim_auditor_model "
+            "AND call.provider=NEW.claim_audit_provider "
+            "AND call.transport=NEW.claim_audit_transport "
+            "AND call.prompt_sha256=NEW.claim_audit_prompt_sha256 "
+            "AND call.response_sha256=NEW.claim_audit_response_sha256 "
+            "AND call.error IS NULL) "
+            "BEGIN SELECT RAISE(ABORT, 'Ask claim-audit LLM call identity mismatch'); END"
+        )
     op.execute(
         "CREATE TRIGGER trg_ask_answer_audit_claim_exact_span "
         "BEFORE INSERT ON ask_answer_audit_claims "
