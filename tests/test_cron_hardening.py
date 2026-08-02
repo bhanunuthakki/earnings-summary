@@ -187,12 +187,22 @@ def test_no_wrapper_carries_a_stray_carriage_return() -> None:
 
 def test_every_wrapper_call_target_exists() -> None:
     """The direct consequence check for the defect above: every `call` target a
-    wrapper names must actually be present on disk."""
+    wrapper names must actually be present on disk.
+
+    Batch files address paths with ``\\``, which is a separator only on Windows —
+    CI runs on Linux, where a raw backslash string is one long filename and every
+    target would look missing. Normalize to ``/`` and resolve relative to the repo
+    so the check means the same thing on both platforms. A stray CR inside the
+    path survives normalization and still fails the check, which is the point.
+    """
     missing: list[str] = []
     for path in sorted(CRON.glob("run_*.bat")):
         text = path.read_bytes().decode("utf-8")
         for match in re.finditer(r'call\s+"([^"]+)"', text):
-            target = Path(match.group(1).replace("%PROJECT_ROOT%", str(PROJECT_ROOT)))
-            if not target.exists():
-                missing.append(f"{path.name} -> {match.group(1)}")
+            raw = match.group(1)
+            if "%PROJECT_ROOT%" not in raw:
+                continue
+            relative = raw.split("%PROJECT_ROOT%", 1)[1].replace("\\", "/").lstrip("/")
+            if not (PROJECT_ROOT / relative).exists():
+                missing.append(f"{path.name} -> {raw!r}")
     assert not missing, f"wrappers calling a nonexistent target: {missing}"
