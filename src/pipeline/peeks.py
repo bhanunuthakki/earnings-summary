@@ -2238,12 +2238,8 @@ def _prep_header(conn: sqlite3.Connection, repo_root: Path, t: str) -> str:
             "SELECT breach_status FROM thesis_state WHERE ticker = ?", (t,)
         ).fetchone()
         if row is not None and row[0]:
-            tone = {"ok": "-ok", "watch": "-warn", "breach": "-bad"}.get(str(row[0]), "")
-            status = (
-                f' <span class="k-pill k-pill{tone}">{escape(str(row[0]))}</span>'
-                if tone
-                else (f' <span class="k-pill">{escape(str(row[0]))}</span>')
-            )
+            pill_tone = pill_tone_class(thesis_status_tone(str(row[0])))
+            status = f' <span class="k-pill{pill_tone}">{escape(str(row[0]))}</span>'
     except sqlite3.Error:
         status = ""
     when_txt = escape(when) if when else "date not on the calendar yet"
@@ -2551,8 +2547,8 @@ def _readout_header(conn: sqlite3.Connection, t: str) -> str:
             "SELECT breach_status FROM thesis_state WHERE ticker = ?", (t,)
         ).fetchone()
         if row is not None and row[0]:
-            tone = {"ok": "-ok", "watch": "-warn", "breach": "-bad"}.get(str(row[0]), "")
-            status = f' <span class="k-pill k-pill{tone}">{escape(str(row[0]))}</span>'
+            pill_tone = pill_tone_class(thesis_status_tone(str(row[0])))
+            status = f' <span class="k-pill{pill_tone}">{escape(str(row[0]))}</span>'
     except sqlite3.Error:
         status = ""
     if when:

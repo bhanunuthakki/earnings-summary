@@ -1194,6 +1194,27 @@ def test_earnings_prep_peek_assembles_grounded_memo(repo: Path, db_path: Path) -
     assert "ask for the narrative" in html and "data-ask-q=" in html
 
 
+def test_earnings_prep_peek_warn_status_renders_warn_toned_pill(repo: Path, db_path: Path) -> None:
+    """``breach_status='warn'`` (the raw word thesis_evaluations writes, not
+    'watch') must still render a warn-toned pill — the local tone dict this
+    peek used to carry only recognized 'watch', silently dropping 'warn' to
+    the un-toned base pill."""
+    from pipeline.peeks import render_earnings_prep_peek
+
+    _seed_prep_ticker(db_path)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute("UPDATE thesis_state SET breach_status = 'warn' WHERE ticker = 'NU'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    html = render_earnings_prep_peek(db_path, repo, "NU")
+    assert html is not None
+    assert "k-pill-warn" in html
+    assert ">warn</span>" in html
+
+
 def _seed_news_event(
     db_path: Path,
     *,
@@ -1410,6 +1431,27 @@ def test_earnings_readout_peek_assembles_grounded_readout(repo: Path, db_path: P
     # The governed-LLM narrative doorway, thesis-tied and count-phrased.
     assert "ask for the full readout" in html
     assert "last 8 quarters" in html
+
+
+def test_earnings_readout_peek_warn_status_renders_warn_toned_pill(
+    repo: Path, db_path: Path
+) -> None:
+    """Same fix as the prep peek's header: ``breach_status='warn'`` must
+    render a warn-toned pill, not fall through to the un-toned base pill."""
+    from pipeline.peeks import render_earnings_readout_peek
+
+    _seed_readout_ticker(db_path)
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute("UPDATE thesis_state SET breach_status = 'warn' WHERE ticker = 'NU'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    html = render_earnings_readout_peek(db_path, repo, "NU")
+    assert html is not None
+    assert "k-pill-warn" in html
+    assert ">warn</span>" in html
 
 
 def test_earnings_readout_peek_route_serves_and_404s(client: FlaskClient, db_path: Path) -> None:

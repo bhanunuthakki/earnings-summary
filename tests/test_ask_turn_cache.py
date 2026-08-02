@@ -189,7 +189,7 @@ CREATE TABLE kpi_facts (
     unit TEXT DEFAULT 'actual', source_doc_id INTEGER);
 CREATE TABLE tracked_companies (
     id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT DEFAULT 'bhanu',
-    ticker TEXT, name TEXT, list_type TEXT);
+    ticker TEXT, name TEXT, list_type TEXT, archived_at TEXT);
 """
 
 

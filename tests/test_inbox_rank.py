@@ -409,9 +409,59 @@ def test_thesis_relevance_boosts_warn_and_breach_tickers(tmp_path: Path) -> None
         position_weights={},
     )
     assert [it.ticker for it in ranked] == ["GOOG", "NU", "META"]
-    assert "thesis 1.50 (breach)" in ranked[0].score_why
+    # Tone text is the kit vocabulary (ui.controls.thesis_status_tone), not
+    # the raw thesis_evaluations status word — 'breach' normalizes to 'bad'.
+    assert "thesis 1.50 (bad)" in ranked[0].score_why
     assert "thesis 1.25 (warn)" in ranked[1].score_why
     assert "thesis 1.00 (ok)" in ranked[2].score_why
+
+
+def test_unresolved_thesis_status_does_not_get_the_breach_factor(tmp_path: Path) -> None:
+    """An unrecognized/unresolved overall_status must normalize to neutral
+    (1.0), never fall through a bare `else` into the breach multiplier."""
+    db = tmp_path / "thesis.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE thesis_evaluations (ticker TEXT, overall_status TEXT, evaluated_at TEXT)"
+    )
+    conn.execute("INSERT INTO thesis_evaluations VALUES ('NU','unresolved','2026-06-09')")
+    conn.commit()
+    conn.close()
+
+    when = NOW - timedelta(hours=2)
+    ranked = annotate_and_rank(
+        [_alert_item(ticker="NU", when=when)], db_path=db, now=NOW, position_weights={}
+    )
+    assert "thesis 1.00 (n/a)" in ranked[0].score_why
+
+
+def test_genuine_breach_status_still_gets_the_severity_boost(tmp_path: Path) -> None:
+    """'breach' and 'broken' (the kit's other bad-tone status word) both still
+    earn the 1.5x multiplier after routing through thesis_status_tone."""
+    db = tmp_path / "thesis.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE thesis_evaluations (ticker TEXT, overall_status TEXT, evaluated_at TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO thesis_evaluations VALUES (?,?,?)",
+        [
+            ("NU", "breach", "2026-06-09"),
+            ("MELI", "broken", "2026-06-09"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    when = NOW - timedelta(hours=2)
+    ranked = annotate_and_rank(
+        [_alert_item(ticker="NU", when=when), _alert_item(ticker="MELI", when=when)],
+        db_path=db,
+        now=NOW,
+        position_weights={},
+    )
+    for it in ranked:
+        assert "thesis 1.50 (bad)" in it.score_why
 
 
 def test_none_weights_read_materialized_cache_not_network(tmp_path: Path) -> None:
@@ -487,7 +537,8 @@ def test_thesis_tones_memo_invalidates_on_db_write(tmp_path: Path) -> None:
     second = annotate_and_rank(
         [_alert_item(ticker="NU", when=when)], db_path=db, now=NOW, position_weights={}
     )
-    assert "thesis 1.50 (breach)" in second[0].score_why
+    # Tone text is the kit vocabulary — 'breach' normalizes to 'bad'.
+    assert "thesis 1.50 (bad)" in second[0].score_why
 
 
 def test_why_string_names_every_factor() -> None:

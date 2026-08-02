@@ -75,7 +75,8 @@ def full_db(tmp_path: Path) -> Path:
         user_id TEXT NOT NULL DEFAULT 'bhanu',
         ticker TEXT NOT NULL,
         name TEXT NOT NULL,
-        list_type TEXT NOT NULL
+        list_type TEXT NOT NULL,
+        archived_at TEXT
     );
     """
     )

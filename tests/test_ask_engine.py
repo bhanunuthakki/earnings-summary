@@ -49,7 +49,7 @@ _TRACKED_DDL = """
 CREATE TABLE tracked_companies (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL DEFAULT 'bhanu', ticker TEXT NOT NULL,
-    name TEXT NOT NULL, list_type TEXT NOT NULL
+    name TEXT NOT NULL, list_type TEXT NOT NULL, archived_at TEXT
 );
 """
 
@@ -72,6 +72,11 @@ def tracked_db(tmp_path: Path) -> Path:
             ("bhanu", "TST", "Test Co", "portfolio"),
             ("bhanu", "EVA", "Eval Co", "evaluation"),
         ],
+    )
+    # An archived name must never surface in the Ask universe.
+    conn.execute(
+        "INSERT INTO tracked_companies (user_id, ticker, name, list_type, archived_at) "
+        "VALUES ('bhanu', 'OLD', 'Old Co', 'portfolio', '2026-01-01T00:00:00')"
     )
     conn.commit()
     conn.close()
@@ -825,5 +830,15 @@ def test_build_portfolio_pack_degrades_without_db(tmp_path: Path) -> None:
 
 
 def test_tracked_tickers(tracked_db: Path, tmp_path: Path) -> None:
+    """The archived 'OLD' row (archived_at set in the fixture) never appears —
+    ``tracked_tickers`` filters to the active universe."""
     assert tracked_tickers(tracked_db) == {"TST", "EVA"}
     assert tracked_tickers(tmp_path / "nope.db") == set()
+
+
+def test_build_portfolio_pack_excludes_archived_tickers(tmp_path: Path, tracked_db: Path) -> None:
+    """The Ask tab's portfolio pack must not ground on an archived name — its
+    universe block and default tickers both come from ``_tracked_by_list``."""
+    pack = build_portfolio_pack(tmp_path, tracked_db)
+    assert "OLD" not in pack.default_tickers
+    assert "OLD" not in (pack.system_context or "")
