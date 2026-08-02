@@ -413,11 +413,14 @@
 .peer:hover { background: var(--paper); }
 .pos { color: var(--ok); }
 .position-coaching .coaching-line { margin: 0; }
+.position-coaching { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 0 0 var(--gap); }
 .position-stat { background: var(--surface); padding: 16px 18px; }
 .position-stat-label { font-size: var(--fs-caption); color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
 .position-stat-sub { font-family: var(--mono); font-size: var(--fs-caption); margin-top: 4px; color: var(--muted); }
 .position-stat-value { font-family: var(--mono); font-size: 20px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
 .position-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1px; background: var(--border); border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); }
+.position-yousaid .k-empty { padding: 0; }
+.position-yousaid .ys-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
 .prose > :first-child { margin-top: 0; }
 .prose > :last-child { margin-bottom: 0; }
 .prose code { font-family: var(--mono); font-size: 0.93em; background: var(--paper); border-radius: var(--radius); padding: 0.05em 0.35em; }
@@ -668,7 +671,7 @@
 /* ============================================================ Panels ============================================================ */ .panel { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
 /* ============================================================ Peer row ============================================================ */ .peer-row { margin: var(--section-gap) var(--pad-x) 0; padding-top: 22px; border-top: 1px solid var(--border); }
 /* ============================================================ Phase 5 — Executive Compensation tab ============================================================ */ /* the CEO role tag rides the kit's .k-chip .k-chip-mono (outline mono) now — accent fill is interactive-only (§2), a role tag stays quiet. */ .ceo-pill { margin-left: 6px; vertical-align: middle; }
-/* ============================================================ Position tab ============================================================ */ .position-coaching { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 0 0 var(--gap); }
+/* ============================================================ Position tab ============================================================ */ .position-yousaid { margin: 0 0 var(--gap); font-size: var(--fs-body); }
 /* ============================================================ Primitives ============================================================ */ .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--border-2); border-radius: 999px; font-size: var(--fs-caption); font-weight: 500; color: var(--fg-soft); background: var(--surface); letter-spacing: 0.01em; white-space: nowrap; }
 /* ============================================================ Print ============================================================ */ @media print { .l1-chrome, .twk-toggle-btn, .twk-panel { display: none; } .tab-group-pane { display: block !important; } .tab-pane { display: block !important; padding-top: 16px; break-before: page; } .tabs, .subtabs { display: none; } .news-strip, .kpi-strip, .l1-identity { break-after: avoid; } }
 /* ============================================================ Responsive overrides (S16 PR1 + L13 PR2) ============================================================ */ /* Horizontal table scroll at small-laptop/tablet widths. */ @media (max-width: 1024px) { .tbl { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; } }

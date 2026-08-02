@@ -29,6 +29,7 @@ from dashboard.evidence_drawer import load_brief_provenance
 from pipeline.analysis_log import AnalysisLog, build_analysis_log
 from pipeline.artifact_inventory import Artifact, build_artifact_inventory
 from pipeline.freshness import freshness_verdict
+from pipeline.you_said import render_you_said_strip_for_path
 from provenance.selection import selected_transcripts_relation
 from report.renderers.numfmt import fmt_date, fmt_reltime
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -937,6 +938,7 @@ def render_holding_fragment(repo_root: Path, ticker: str) -> str:
     return "".join(
         [
             render_ticker_fragment(tcc),
+            f'<div class="tcc-yousaid">{render_you_said_strip_for_path(db_path, t)}</div>',
             _disclosure_change_strip(db_path, t),
             f'<div class="tcc-report-main">{_report_embed_section(t, tcc.report_date)}</div>',
             _tcc_drawer("ops", "Ops · refresh & data", ops_body),
@@ -944,6 +946,7 @@ def render_holding_fragment(repo_root: Path, ticker: str) -> str:
             _COMBO_SCRIPT,
             _TCC_DRAWER_STYLE,
             _DISCLOSURE_STYLE,
+            _YOUSAID_STYLE,
             _TCC_DRAWER_SCRIPT,
         ]
     )
@@ -1108,6 +1111,15 @@ _DISCLOSURE_STYLE = """<style>
 .disclosure-row-head strong { margin-right:auto; }
 .disclosure-receipt, .disclosure-interpretation p { margin:0; }
 .disclosure-receipt { color:var(--fg); }
+</style>"""
+
+# "You said" strip (pipeline/you_said.py) — near the Holding tab's utility
+# band, above the disclosure strip: the owner's own last decision on this
+# name, ambient rather than a click away.
+_YOUSAID_STYLE = """<style>
+.tcc-yousaid { margin: 4px 0 10px; font-size: var(--fs-body); }
+.tcc-yousaid .ys-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.tcc-yousaid .k-empty { padding: 0; }
 </style>"""
 
 # Self-contained combobox wiring, re-run on every fragment inject (the shell's

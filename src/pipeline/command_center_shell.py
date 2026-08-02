@@ -1573,6 +1573,12 @@ td.ticker a:hover { color: var(--accent); }
 .cc-mini-open { margin-top: 7px; padding-top: 6px; border-top: 1px solid var(--border);
   font-size: var(--fs-caption); }
 .cc-mini-open a { color: var(--accent); text-decoration: none; }
+/* "You said" strip (pipeline/you_said.py) — ABOVE the mini-card facts, one
+   dense line, visually separated from the price/DCF/ER rows below it. */
+.cc-mini-yousaid { margin: 0 0 6px; padding-bottom: 6px; border-bottom: 1px dashed var(--border);
+  font-size: var(--fs-caption); }
+.cc-mini-yousaid .k-empty { padding: 0; }
+.cc-mini-yousaid .ys-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
 
 /* Ctrl/Cmd+. capture tray: a small pop overlay (same family as the palette),
    never a full drawer — one textarea, a ticker chip, Capture. The close
@@ -2627,6 +2633,23 @@ SHELL_JS = r"""
   });
   var trayBtn = document.getElementById('cc-capture-tray-save');
   if (trayBtn) trayBtn.addEventListener('click', trayCapture);
+
+  // data-open-capture-tray: the ONE delegated rail (design_language Sec4.1
+  // doorway pattern) any lazily-injected panel/peek uses to open the capture
+  // tray -- the "You said" strip's degraded-state chip (pipeline/you_said.py)
+  // is the first adopter. data-capture-ticker pre-fills the textarea (only
+  // when still empty, so it never clobbers trayPrefillTicker's own
+  // holdingTicker()-derived prefill run on open).
+  document.addEventListener('click', function (ev) {
+    if (ev.defaultPrevented || ev.button !== 0) return;
+    if (!ev.target.closest) return;
+    var el = ev.target.closest('[data-open-capture-tray]');
+    if (!el) return;
+    ev.preventDefault();
+    var t = el.getAttribute('data-capture-ticker');
+    if (t && trayBody && !trayBody.value) trayBody.value = '$' + t + ' ';
+    openTray();
+  });
 
   function runPalSelection() {
     if (!palMatches.length) return;

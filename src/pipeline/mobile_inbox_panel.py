@@ -38,7 +38,9 @@ from html import escape
 from pathlib import Path
 from typing import cast
 
+from capture.decision_draft import ACTION_VOCAB as _RECEIPT_ACTION_VOCAB
 from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
+from pipeline.calibration_receipt import render_calibration_receipt_for
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import controls_css, ticker_label
 from ui.tokens import palette_css
@@ -56,6 +58,9 @@ body { margin:0; padding:var(--sp-3); background:var(--paper); font-family:var(-
 .mi-card-head { display:flex; align-items:baseline; gap:var(--sp-2); flex-wrap:wrap;
   margin-bottom:var(--sp-1); }
 .mi-body { color:var(--fg-soft); font-size:var(--fs-body); line-height:1.5; margin:var(--sp-1) 0; }
+/* Calibration receipt (pipeline/calibration_receipt.py) — "when you've been
+   here before," a muted read on the confirm card, ahead of the actions. */
+.cr-receipt { color:var(--muted); font-size:var(--fs-caption); margin:var(--sp-1) 0; }
 .mi-actions { display:flex; gap:var(--sp-2); flex-wrap:wrap; margin-top:var(--sp-2); }
 .mi-correct-form { display:grid; grid-template-columns:1fr 1fr; gap:var(--sp-2);
   margin-top:var(--sp-2); }
@@ -93,11 +98,24 @@ def _open(db_path: Path) -> sqlite3.Connection | None:
         return None
 
 
-def _draft_card(row: sqlite3.Row) -> str:
+def _draft_card(row: sqlite3.Row, conn: sqlite3.Connection) -> str:
     ticker = str(row["ticker"] or "")
     action = str(row["action"] or "")
     ticker_html = ticker_label(ticker) if ticker else '<span class="k-chip">PORTFOLIO</span>'
     action_chip = f'<span class="k-chip k-chip-mono">{escape(action)}</span>' if action else ""
+    # Calibration receipt (owner-ratified design review, 2026-08-02): "when
+    # you've been here before" on the SAME verb the draft carries. Only a
+    # closed decision-verb (never a bare 'musing'/'correction' intent, which
+    # `action` falls back to when the parser found no proposed_action)
+    # produces a meaningful cohort read. Best-effort — never raises.
+    receipt_html = ""
+    if action.lower() in _RECEIPT_ACTION_VOCAB:
+        try:
+            receipt_html = render_calibration_receipt_for(
+                conn, action=action, ticker=ticker or None
+            )
+        except sqlite3.Error:
+            receipt_html = ""
     fill_count = int(row["fill_count"])
     amount_raw = row["amount_usd"]
     amount_note = f" · ${float(amount_raw):,.0f} total" if amount_raw is not None else ""
@@ -143,6 +161,7 @@ def _draft_card(row: sqlite3.Row) -> str:
         f'<span class="k-chip">{escape(str(row["source_channel"]))}</span>{group_note}</div>'
         f'<div class="mi-body">{escape(str(row["original_text"])[:280])}'
         f"{escape(amount_note)}</div>"
+        f"{receipt_html}"
         '<div class="mi-actions">'
         f'<button type="button" class="k-btn k-btn-primary k-btn-sm" '
         f'data-mi-act="confirm">{confirm_label}</button>'
@@ -336,21 +355,25 @@ def _drafts_section(db_path: Path) -> str:
                 LIMIT 60
                 """
             ).fetchall()
+        if not rows:
+            return (
+                '<div class="mi-empty">Nothing pending — captures land here for confirmation.</div>'
+            )
+        summary = ""
+        if counts is not None and int(counts["fill_count"]) != int(counts["group_count"]):
+            summary = (
+                '<div class="k-well mi-body">'
+                f"Review {int(counts['group_count'])} trade decisions from "
+                f"{int(counts['fill_count'])} underlying fills. Split fills stay linked "
+                "as audit evidence.</div>"
+            )
+        # Cards render (incl. each row's calibration receipt) while the READ
+        # connection is still open — it closes in the finally below, once.
+        return summary + "".join(_draft_card(r, conn) for r in rows)
     except sqlite3.Error:
         return '<div class="mi-failed">Decision drafts unavailable.</div>'
     finally:
         conn.close()
-    if not rows:
-        return '<div class="mi-empty">Nothing pending — captures land here for confirmation.</div>'
-    summary = ""
-    if counts is not None and int(counts["fill_count"]) != int(counts["group_count"]):
-        summary = (
-            '<div class="k-well mi-body">'
-            f"Review {int(counts['group_count'])} trade decisions from "
-            f"{int(counts['fill_count'])} underlying fills. Split fills stay linked "
-            "as audit evidence.</div>"
-        )
-    return summary + "".join(_draft_card(r) for r in rows)
 
 
 def _card_disposition_card(row: sqlite3.Row) -> str:

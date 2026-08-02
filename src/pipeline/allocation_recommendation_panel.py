@@ -48,6 +48,7 @@ import wealth_context_store
 from allocation.concentration import classify_zone
 from allocation.recommendation_schema import IncrementalDollarRecommendation, RecommendationPlan
 from owner_profile.store import list_facts
+from pipeline.calibration_receipt import render_calibration_receipt_for
 from portfolio_weights import read_materialized_weights, read_materialized_weights_as_of
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import ticker_label
@@ -68,6 +69,9 @@ _STYLE = """<style>
 .alloc-alt-grid { display:grid; grid-template-columns: 1fr 1fr; gap:12px; align-items:start; }
 @media (max-width: 900px) { .alloc-alt-grid { grid-template-columns: 1fr; } }
 .alloc-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; align-items:center; }
+/* Calibration receipt (pipeline/calibration_receipt.py) — "when you've been
+   here before," a muted read just ahead of the adopt/disposition buttons. */
+.cr-receipt { color:var(--muted); font-size:var(--fs-caption); margin:8px 0 0; }
 .alloc-compare-out { margin-top:10px; font-size:var(--fs-body); }
 .alloc-compare-table { width:100%; border-collapse:collapse; font-size:var(--fs-body); }
 .alloc-compare-table th, .alloc-compare-table td { padding:5px 8px; text-align:left;
@@ -185,11 +189,32 @@ def _plan_html(plan: RecommendationPlan, *, label: str) -> str:
     return f"<div><strong>{escape(label)}</strong>{rows}{retained}</div>"
 
 
-def _actions_row(artifact_id: int, rec: IncrementalDollarRecommendation) -> str:
+def _receipt_html(db_path: Path, top_ticker: str | None) -> str:
+    """The calibration receipt for an 'add' (deploying new cash is always an
+    add) on the plan's top ticker — the owner's own recent track record on
+    calls like this one. "" when there's no ticker, the DB can't be read, or
+    the cohort has fewer than 2 graded rows (render_calibration_receipt_for's
+    own signal-quality suppression). Best-effort: never raises."""
+    if not top_ticker:
+        return ""
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    except sqlite3.Error:
+        return ""
+    try:
+        return render_calibration_receipt_for(conn, action="add", ticker=top_ticker)
+    except sqlite3.Error:
+        return ""
+    finally:
+        conn.close()
+
+
+def _actions_row(artifact_id: int, rec: IncrementalDollarRecommendation, db_path: Path) -> str:
     cash_usd = _cash_usd_of(rec)
     top_ticker = (
         rec.preferred_plan.allocations[0].ticker if rec.preferred_plan.allocations else None
     )
+    receipt = _receipt_html(db_path, top_ticker)
     simulate = ""
     if top_ticker:
         tq = escape(top_ticker, quote=True)
@@ -203,6 +228,7 @@ def _actions_row(artifact_id: int, rec: IncrementalDollarRecommendation) -> str:
         quote=True,
     )
     return (
+        f"{receipt}"
         '<div class="alloc-actions">'
         f'<button type="button" class="k-chip k-chip-btn" id="alloc-compare-toggle" '
         f'data-cash="{cash_usd:g}">Compare</button>'
@@ -254,7 +280,7 @@ def _details_expansion(rec: IncrementalDollarRecommendation) -> str:
     )
 
 
-def _card_body(artifact_id: int, rec: IncrementalDollarRecommendation) -> str:
+def _card_body(artifact_id: int, rec: IncrementalDollarRecommendation, db_path: Path) -> str:
     fallback_banner = ""
     if rec.selection_mode == "deterministic_fallback":
         fallback_banner = (
@@ -310,7 +336,7 @@ def _card_body(artifact_id: int, rec: IncrementalDollarRecommendation) -> str:
         f"{_plan_html(rec.preferred_plan, label='Preferred')}</div>"
         f"{rationale}"
         + (f'<div class="alloc-alt-grid">{alts}</div>' if alts else "")
-        + _actions_row(artifact_id, rec)
+        + _actions_row(artifact_id, rec, db_path)
         + _details_expansion(rec)
     )
 
@@ -372,7 +398,7 @@ def render_allocation_recommendation_section(db_path: Path, repo_root: Path) -> 
         f"{_STYLE}{head_with_id}{sub}"
         f'<p class="alloc-meta">{stamp}{stale_badge}</p>'
         f'<details id="alloc-cash-details"><summary>Change amount</summary>{_CASH_FORM}</details>'
-        f"{_card_body(artifact.id, rec)}"
+        f"{_card_body(artifact.id, rec, db_path)}"
         f"</section>{_ALLOC_JS}"
     )
 
