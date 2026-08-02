@@ -51,6 +51,7 @@ from pydantic import ValidationError
 
 from allocation.candidate_fit import CandidateFit
 from compute.thesis_evaluator import HoldingsSpec, load_holdings_spec
+from dcf.latest import LatestDcfRow, latest_dcf_row
 from models.companies import ListType
 from pipeline.queries import tracked_companies_for_user
 from portfolio_risk_snapshot_store import read_latest_snapshot
@@ -202,48 +203,22 @@ def _is_corruption_stub(raw_json: object) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-def _dcf_columns(conn: sqlite3.Connection) -> set[str]:
-    try:
-        return {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
-    except sqlite3.Error:
-        return set()
-
-
-def _latest_dcf_row(conn: sqlite3.Connection | None, ticker: str) -> sqlite3.Row | None:
+def _latest_dcf_row(conn: sqlite3.Connection | None, ticker: str) -> LatestDcfRow | None:
     """The latest consolidated (unsegmented) dcf_runs row for ``ticker`` — the
-    same ``COALESCE(is_latest, 1) = 1`` / ``COALESCE(segment_name, '') = ''``
-    column-presence-guarded query template used by ``bear_lint`` and
-    ``model_provenance.basis``. NOT shared with ``risk_reward._dcf_reward_legs``:
-    that query has no ``is_latest``/``segment_name`` predicates at all (it reads
-    every dcf_runs row ordered by ticker/created_at/id and the caller takes the
-    first per ticker) — despite this docstring previously claiming otherwise."""
+    single canonical reader (``dcf.latest.latest_dcf_row``), shared with
+    ``bear_lint``, ``model_provenance.basis`` and every other "latest DCF"
+    call site (PR: canonical latest_dcf_run reader)."""
     if conn is None:
         return None
-    cols = _dcf_columns(conn)
-    if not cols:
-        return None
-    is_latest_pred = "COALESCE(is_latest, 1) = 1" if "is_latest" in cols else "1 = 1"
-    seg_pred = "COALESCE(segment_name, '') = ''" if "segment_name" in cols else "1 = 1"
-    sanity_sel = "sanity_flag" if "sanity_flag" in cols else "NULL AS sanity_flag"
-    price_at_sel = "live_price_at" if "live_price_at" in cols else "NULL AS live_price_at"
-    try:
-        return conn.execute(
-            f"SELECT ticker, valuation_date, npv_per_share, live_price, "
-            f"{price_at_sel}, {sanity_sel}, created_at, id FROM dcf_runs "
-            f"WHERE UPPER(ticker) = ? AND {is_latest_pred} AND {seg_pred} "
-            "ORDER BY created_at DESC, id DESC LIMIT 1",
-            (ticker,),
-        ).fetchone()
-    except sqlite3.Error:
-        return None
+    return latest_dcf_row(conn, ticker)
 
 
 def _check_price_freshness(
-    row: sqlite3.Row | None, *, now: datetime
+    row: LatestDcfRow | None, *, now: datetime
 ) -> tuple[EligibilityCheck, str | None]:
     if row is None:
         return EligibilityCheck(False, "no dcf_runs row on file — price freshness unknown"), None
-    raw_at = row["live_price_at"]
+    raw_at = row.live_price_at
     if not raw_at:
         return EligibilityCheck(False, "live_price_at not recorded on the latest run"), None
     dt = _parse_dt(raw_at)
@@ -264,12 +239,12 @@ def _check_price_freshness(
     )
 
 
-def _check_usable_dcf(row: sqlite3.Row | None) -> tuple[EligibilityCheck, str | None]:
+def _check_usable_dcf(row: LatestDcfRow | None) -> tuple[EligibilityCheck, str | None]:
     if row is None:
         return EligibilityCheck(False, "no dcf_runs row on file"), None
-    val_date = row["valuation_date"] or "?"
-    asof = f"{val_date} (run {row['id']})"
-    sanity = row["sanity_flag"]
+    val_date = row.valuation_date or "?"
+    asof = f"{val_date} (run {row.id})"
+    sanity = row.sanity_flag
     if sanity:
         return (
             EligibilityCheck(
@@ -277,8 +252,8 @@ def _check_usable_dcf(row: sqlite3.Row | None) -> tuple[EligibilityCheck, str | 
             ),
             asof,
         )
-    fv = row["npv_per_share"]
-    px = row["live_price"]
+    fv = row.npv_per_share
+    px = row.live_price
     if fv is None or px is None:
         return EligibilityCheck(
             False, "npv_per_share or live_price missing on the latest run"

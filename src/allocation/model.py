@@ -32,7 +32,6 @@ surfaced. Full model documentation: directives/next_dollar_model.md.
 from __future__ import annotations
 
 import math
-import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -41,6 +40,7 @@ from pathlib import Path
 import numpy as np
 
 from allocation.book_risk import build_book_risk
+from dcf.latest import latest_dcf_rows_from_db
 from dcf.scenario_reward import scenario_reward
 from macro_store import Sensitivity, fetch_sensitivities, fetch_series
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -330,41 +330,29 @@ def _dcf_upside(db_path: Path, tickers: Sequence[str]) -> dict[str, tuple[float,
     range. The base leg is recomputed from the row's own two fields (currency-
     consistent), never from ``over_under_pct`` — the bank/holdco builders stored
     that column in a different convention. Same base rule as
-    ``research_cockpit.latest_dcf_runs``."""
-    if not db_path.exists():
-        return {}
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return {}
-    try:
-        conn.row_factory = sqlite3.Row
-        # The scenario block lives in assumption_snapshot_json (migration 0024+);
-        # select it only when the column exists so hand-rolled test schemas (and
-        # very old data dirs) still score on the base leg.
-        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
-        snap_sel = ", assumption_snapshot_json" if "assumption_snapshot_json" in cols else ""
-        rows = conn.execute(
-            f"SELECT ticker, valuation_date, npv_per_share, live_price{snap_sel} "
-            "FROM dcf_runs ORDER BY ticker, created_at DESC, id DESC"
-        ).fetchall()
-    except sqlite3.Error:
-        return {}
-    finally:
-        conn.close()
+    ``research_cockpit.latest_dcf_runs``.
+
+    Reads the latest TOP-LEVEL (unsegmented, current-version) row per ticker
+    via the canonical shared reader (``dcf.latest``, PR: canonical
+    latest_dcf_run reader) — a segment or superseded row can no longer win
+    this ranking leg by accident. A sanity-flagged run (migration 0182
+    ``sanity_flag`` — the model failed the trust gate) is EXCLUDED entirely:
+    this is a ranking/valuation leg, and an unreviewed outlier valuation must
+    not drive the next-dollar allocation any more than it may drive
+    eligibility (``allocation.eligibility``)."""
     want = set(tickers)
     out: dict[str, tuple[float, str]] = {}
-    for r in rows:
-        t = str(r["ticker"]).upper()
-        if t not in want or t in out:
+    for t, row in latest_dcf_rows_from_db(db_path).items():
+        if t not in want or row.sanity_flag:
             continue
-        fv = float(r["npv_per_share"]) if r["npv_per_share"] is not None else None
-        px = float(r["live_price"]) if r["live_price"] is not None else None
-        snapshot = r["assumption_snapshot_json"] if snap_sel else None
-        reward = scenario_reward(price=px, base_fv=fv, snapshot_json=snapshot)
+        reward = scenario_reward(
+            price=row.live_price,
+            base_fv=row.npv_per_share,
+            snapshot_json=row.assumption_snapshot_json,
+        )
         if reward is None:
             continue
-        as_of = str(r["valuation_date"]) if r["valuation_date"] else "?"
+        as_of = row.valuation_date or "?"
         out[t] = (reward.expected_return, f"{reward.detail} ({as_of})")
     return out
 

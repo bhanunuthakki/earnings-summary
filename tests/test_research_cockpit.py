@@ -40,6 +40,7 @@ from pipeline.research_cockpit import (  # noqa: E402
     build_cockpit_rows,
     compute_attractiveness,
     eval_attractiveness,
+    latest_dcf_runs,
     render_research_cockpit,
 )
 from provenance.evidence_ledger import (  # noqa: E402
@@ -1011,6 +1012,72 @@ def test_render_valuation_cells(rows: dict[str, list[CockpitRow]]) -> None:
     assert "0.5" in html  # PEG
     nu_er = (NOW + timedelta(days=30)).date().isoformat()
     assert fmt_date(nu_er, include_year=False) in html
+
+
+def _insert_minimal_dcf_run(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    npv_per_share: float | None,
+    live_price: float | None,
+    created_at: str,
+    is_latest: int = 1,
+    segment_name: str | None = None,
+    sanity_flag: str | None = None,
+) -> None:
+    conn.execute(
+        "INSERT INTO dcf_runs (ticker, valuation_date, horizon_years, revenue_growths_json, "
+        "fcf_margin, wacc, terminal_growth, npv, npv_per_share, live_price, created_at, "
+        "is_latest, segment_name, sanity_flag) VALUES (?, '2026-06-08', 10, '[]', 0.2, 0.1, "
+        "0.025, 1000, ?, ?, ?, ?, ?, ?)",
+        (ticker, npv_per_share, live_price, created_at, is_latest, segment_name, sanity_flag),
+    )
+    conn.commit()
+
+
+def test_latest_dcf_runs_ignores_segment_row_even_when_newer(
+    conn: sqlite3.Connection,
+) -> None:
+    """PART A: a segment row (segment_name set) landed AFTER the consolidated
+    row must not win 'the' DCF for a ticker — the shared dcf.latest reader
+    fix. Previously ``latest_dcf_runs`` had NO is_latest/segment_name
+    predicate at all."""
+    _insert_minimal_dcf_run(
+        conn,
+        ticker="SEG",
+        npv_per_share=120.0,
+        live_price=100.0,
+        created_at=_iso(NOW - timedelta(days=1)),
+    )
+    _insert_minimal_dcf_run(
+        conn,
+        ticker="SEG",
+        npv_per_share=999.0,
+        live_price=100.0,
+        created_at=_iso(NOW),  # newer than the consolidated row
+        segment_name="Consumer",
+    )
+    gap, fv, px, _date = latest_dcf_runs(conn)["SEG"]
+    assert fv == 120.0
+    assert px == 100.0
+    assert gap == pytest.approx((100.0 / 120.0 - 1.0) * 100.0)
+
+
+def test_latest_dcf_runs_nulls_gap_on_sanity_flag(conn: sqlite3.Connection) -> None:
+    """The existing sanity_flag behavior (research_cockpit already nulls the
+    gap — kept unchanged by this port): values stay visible, gap is None."""
+    _insert_minimal_dcf_run(
+        conn,
+        ticker="OUT",
+        npv_per_share=60.0,
+        live_price=100.0,
+        created_at=_iso(NOW),
+        sanity_flag="outlier",
+    )
+    gap, fv, px, _date = latest_dcf_runs(conn)["OUT"]
+    assert gap is None
+    assert fv == 60.0
+    assert px == 100.0
 
 
 def test_render_staleness_dots(rows: dict[str, list[CockpitRow]]) -> None:

@@ -145,7 +145,8 @@ def _dcf_db(tmp_path: Path) -> Path:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ticker TEXT NOT NULL, valuation_date TEXT,
                 npv_per_share NUMERIC, live_price FLOAT, live_price_at TEXT,
-                assumption_snapshot_json TEXT, created_at DATETIME
+                assumption_snapshot_json TEXT, created_at DATETIME,
+                is_latest INTEGER, segment_name TEXT, sanity_flag TEXT
             );
             """
         )
@@ -201,6 +202,59 @@ def test_reward_legs_freshness_and_asymmetry(tmp_path: Path) -> None:
     assert "fair value" in (legs["OLDVAL"].confidence_reason or "")
     assert legs["OLDPX"].low_confidence is True
     assert "price" in (legs["OLDPX"].confidence_reason or "")
+
+
+def test_reward_legs_ignore_segment_row_even_when_newer(tmp_path: Path) -> None:
+    """PART A: a segment row landed AFTER the consolidated row must not win
+    the reward leg — the shared dcf.latest reader fix. Previously
+    ``_dcf_reward_legs`` had NO is_latest/segment_name predicate at all."""
+    db = _dcf_db(tmp_path)
+    today = date(2026, 6, 14)
+    fresh = today.isoformat()
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO dcf_runs (ticker, valuation_date, npv_per_share, live_price, "
+            "live_price_at, created_at) VALUES ('SEG', ?, 110.0, 100.0, ?, ?)",
+            (fresh, fresh, f"{fresh} 00:00:00"),
+        )
+        conn.execute(
+            "INSERT INTO dcf_runs (ticker, valuation_date, npv_per_share, live_price, "
+            "live_price_at, segment_name, created_at) VALUES "
+            "('SEG', ?, 900.0, 100.0, ?, 'Consumer', ?)",
+            (fresh, fresh, f"{fresh} 00:00:01"),  # newer than the consolidated row
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    legs = _dcf_reward_legs(db, ["SEG"], today)
+    # Base-point estimate from the consolidated row's 110/100, not the segment's 900/100.
+    assert legs["SEG"].expected_return == pytest.approx(0.10)
+
+
+def test_reward_legs_skip_fair_value_leg_on_sanity_flag(tmp_path: Path) -> None:
+    """Caller policy (ratified): a sanity-flagged run skips the fair-value
+    leg entirely — expected_return reads None with a distinct reason, same
+    rule allocation.eligibility already enforces for the decision-ready gate."""
+    db = _dcf_db(tmp_path)
+    today = date(2026, 6, 14)
+    fresh = today.isoformat()
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO dcf_runs (ticker, valuation_date, npv_per_share, live_price, "
+            "live_price_at, sanity_flag, created_at) VALUES "
+            "('OUT', ?, 500.0, 100.0, ?, 'outlier', ?)",
+            (fresh, fresh, f"{fresh} 00:00:00"),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    legs = _dcf_reward_legs(db, ["OUT"], today)
+    leg = legs["OUT"]
+    assert leg.expected_return is None
+    assert leg.low_confidence is True
+    assert leg.confidence_reason is not None and "sanity-flagged" in leg.confidence_reason
 
 
 # --------------------------------------------------------------------------- #

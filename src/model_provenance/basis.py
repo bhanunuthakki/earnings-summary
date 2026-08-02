@@ -17,6 +17,8 @@ import json
 import sqlite3
 from dataclasses import dataclass
 
+from dcf.latest import latest_dcf_row
+
 
 @dataclass(frozen=True, slots=True)
 class Basis:
@@ -31,31 +33,20 @@ class Basis:
 
 def dcf_basis(conn: sqlite3.Connection, ticker: str) -> Basis | None:
     """The current DCF model-version a decision on ``ticker`` rests on — the
-    unsegmented latest run. Returns None when there is no usable run (no row, or a
-    null fair value). Degrades to None on a pre-DCF schema rather than raising.
-
-    ``COALESCE(is_latest, 1) = 1`` reads the current row on the versioned schema
-    (0137+) and every row on a pre-0137 schema (where there is one per ticker), so
-    the resolver works either way.
+    unsegmented latest run, read through the canonical shared reader
+    (``dcf.latest.latest_dcf_row``, PR: canonical latest_dcf_run reader).
+    Returns None when there is no usable run (no row, or a null fair value).
+    Degrades to None on a pre-DCF schema rather than raising.
     """
-    try:
-        cur = conn.execute(
-            "SELECT id, npv_per_share, valuation_date, over_under_pct FROM dcf_runs "
-            "WHERE ticker = ? AND COALESCE(is_latest, 1) = 1 AND COALESCE(segment_name, '') = '' "
-            "ORDER BY created_at DESC, id DESC LIMIT 1",
-            (ticker.upper(),),
-        )
-    except sqlite3.OperationalError:
+    row = latest_dcf_row(conn, ticker)
+    if row is None or row.npv_per_share is None:
         return None
-    row = cur.fetchone()
-    if row is None or row[1] is None:
-        return None
-    over_under = row[3]
+    over_under = row.over_under_pct
     meta = None if over_under is None else json.dumps({"over_under_pct": float(over_under)})
     return Basis(
         kind="dcf",
-        ref_id=int(row[0]),
-        value=float(row[1]),
-        as_of=(str(row[2]) if row[2] else None),
+        ref_id=row.id,
+        value=float(row.npv_per_share),
+        as_of=row.valuation_date,
         meta_json=meta,
     )

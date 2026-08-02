@@ -28,6 +28,7 @@ from dashboard import render_alert_card
 from dashboard.evidence_drawer import load_brief_provenance
 from pipeline.analysis_log import AnalysisLog, build_analysis_log
 from pipeline.artifact_inventory import Artifact, build_artifact_inventory
+from pipeline.freshness import freshness_verdict
 from provenance.selection import selected_transcripts_relation
 from report.renderers.numfmt import fmt_date, fmt_reltime
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -856,30 +857,20 @@ def render_holding_picker_band(_repo_root: Path) -> str:
 
 
 def _freshness_dot(ident: TickerIdentity) -> str:
-    """One dot instead of three giant cards: worst-of staleness across the
-    build and the FMP pull, with the detail in the tooltip (PR1 time rules).
-    Clicking peeks the per-source provenance card (UX9d) — ages + inline
-    refresh — with /#system as the real href for middle-click."""
+    """One dot instead of three giant cards: the per-source freshness verdict
+    (``pipeline.freshness``, PR: canonical latest_dcf_run reader + per-source
+    freshness rule) — the SAME rule ``research_cockpit`` uses, so the two
+    surfaces can never disagree about a name's data freshness. Was
+    ``max(build_age, fmp_age)`` against one shared 7/21d bar; now the FMP pull
+    is judged against its own 3/14d bar and the build against its own
+    10/30d bar, worst tone wins — a stale FMP pull can no longer hide behind
+    a fresh build, or the reverse. Clicking peeks the per-source provenance
+    card (UX9d) — ages + inline refresh — with /#system as the real href for
+    middle-click."""
     from datetime import UTC as _UTC
 
     now = datetime.now(_UTC).replace(tzinfo=None)
-
-    def _age_days(iso: str | None) -> float | None:
-        if not iso:
-            return None
-        try:
-            dt = datetime.fromisoformat(str(iso))
-        except ValueError:
-            return None
-        if dt.tzinfo is not None:
-            dt = dt.astimezone(_UTC).replace(tzinfo=None)
-        return (now - dt).total_seconds() / 86400.0
-
-    ages = [
-        a for a in (_age_days(ident.last_build_at), _age_days(ident.last_fmp_at)) if a is not None
-    ]
-    worst = max(ages) if ages else None
-    tone = "bad" if worst is None or worst > 21 else ("warn" if worst > 7 else "ok")
+    tone = freshness_verdict(fmp_at=ident.last_fmp_at, build_at=ident.last_build_at, now=now).tone
     bits = [
         f"Build {fmt_reltime(ident.last_build_at)}" if ident.last_build_at else "Never built",
         f"FMP pull {fmt_reltime(ident.last_fmp_at)}" if ident.last_fmp_at else "No FMP pull",

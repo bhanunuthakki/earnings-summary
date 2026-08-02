@@ -23,14 +23,13 @@ Local DB only — renders with the tracker down.
 
 from __future__ import annotations
 
-import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
+from dcf.latest import latest_dcf_rows_from_db
 from dcf.scenario_reward import parse_scenario_fair_values
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 __all__ = [
     "COVERAGE_BAD_PCT",
@@ -106,48 +105,37 @@ class _DcfLeg:
     bear_fv: float | None
     valuation_date: date | None
     priced_date: date | None
+    sanity_flagged: bool = False
 
 
 def _latest_dcf_legs(db_path: Path, tickers: Sequence[str]) -> dict[str, _DcfLeg]:
-    """Latest ``dcf_runs`` row per name — the L6-fresh ``live_price`` plus the
-    bear fair value out of the scenario snapshot. Mirrors
-    ``risk_reward._dcf_reward_legs``'s query shape (column presence probed, the
-    newest row per ticker wins). ``{}`` on a missing DB / table."""
-    if not db_path.exists():
-        return {}
-    try:
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return {}
-    try:
-        conn.row_factory = sqlite3.Row
-        cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(dcf_runs)")}
-        if not cols:
-            return {}
-        snap_sel = ", assumption_snapshot_json" if "assumption_snapshot_json" in cols else ""
-        priced_sel = ", live_price_at" if "live_price_at" in cols else ""
-        rows = conn.execute(
-            f"SELECT ticker, valuation_date, live_price{priced_sel}{snap_sel} "
-            "FROM dcf_runs ORDER BY ticker, created_at DESC, id DESC"
-        ).fetchall()
-    except sqlite3.Error:
-        return {}
-    finally:
-        conn.close()
+    """Latest TOP-LEVEL (unsegmented, current-version) ``dcf_runs`` row per
+    name — the L6-fresh ``live_price`` plus the bear fair value out of the
+    scenario snapshot — read through the canonical shared reader
+    (``dcf.latest``, PR: canonical latest_dcf_run reader) so a segment or
+    superseded row can't win this leg. ``{}`` on a missing DB / table.
 
+    A sanity-flagged run (migration 0182) keeps its ``live_price`` (the
+    price-only leg survives — the stress still knows the name is priced) but
+    the bear fair value is dropped, so the row falls into the caller's
+    existing "no bear scenario persisted" exclusion bucket rather than
+    stressing the book against an unreviewed outlier valuation."""
     want = {t.upper() for t in tickers}
     out: dict[str, _DcfLeg] = {}
-    for r in rows:
-        t = str(r["ticker"]).upper()
-        if t not in want or t in out:
+    for t, row in latest_dcf_rows_from_db(db_path).items():
+        if t not in want:
             continue
-        snapshot = r["assumption_snapshot_json"] if snap_sel else None
-        bear = parse_scenario_fair_values(snapshot).get("bear")
+        bear = (
+            None
+            if row.sanity_flag
+            else parse_scenario_fair_values(row.assumption_snapshot_json).get("bear")
+        )
         out[t] = _DcfLeg(
-            live_price=float(r["live_price"]) if r["live_price"] is not None else None,
+            live_price=row.live_price,
             bear_fv=bear,
-            valuation_date=_parse_date(r["valuation_date"]),
-            priced_date=_parse_date(r["live_price_at"]) if priced_sel else None,
+            valuation_date=_parse_date(row.valuation_date),
+            priced_date=_parse_date(row.live_price_at),
+            sanity_flagged=bool(row.sanity_flag),
         )
     return out
 
@@ -189,11 +177,13 @@ def build_tail_stress(
             )
             continue
         if leg.bear_fv is None or leg.live_price is None or leg.live_price <= 0:
-            reason = (
-                "no bear scenario persisted"
-                if leg.live_price is not None and leg.live_price > 0
-                else "DCF has no usable live price"
-            )
+            has_price = leg.live_price is not None and leg.live_price > 0
+            if leg.sanity_flagged:
+                reason = "DCF sanity-flagged (outlier) — bear leg excluded"
+            elif has_price:
+                reason = "no bear scenario persisted"
+            else:
+                reason = "DCF has no usable live price"
             rows.append(
                 TailStressRow(
                     ticker=t,

@@ -372,6 +372,106 @@ def test_dcf_upside_uses_scenario_asymmetry(tmp_path: Path) -> None:
     assert flat_detail == "fair $120.00 vs $100.00 (2026-06-08)"
 
 
+def _seed_dcf_versioned(db: Path) -> None:
+    """The versioned/sanity-gated schema (migration 0137+/0182): is_latest,
+    segment_name, sanity_flag — exercising the branches the plain _seed_dcf
+    schema (no such columns) never reaches."""
+    conn = sqlite3.connect(db)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE dcf_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticker TEXT NOT NULL,
+                created_at DATETIME,
+                is_latest INTEGER,
+                segment_name TEXT,
+                valuation_date TEXT,
+                npv_per_share NUMERIC,
+                live_price FLOAT,
+                sanity_flag TEXT
+            );
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _insert_versioned_dcf(
+    db: Path,
+    *,
+    ticker: str,
+    created_at: str,
+    is_latest: int = 1,
+    segment_name: str | None = None,
+    valuation_date: str = "2026-06-08",
+    npv_per_share: float | None,
+    live_price: float | None,
+    sanity_flag: str | None = None,
+) -> None:
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            "INSERT INTO dcf_runs (ticker, created_at, is_latest, segment_name, "
+            "valuation_date, npv_per_share, live_price, sanity_flag) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                ticker,
+                created_at,
+                is_latest,
+                segment_name,
+                valuation_date,
+                npv_per_share,
+                live_price,
+                sanity_flag,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_dcf_upside_ignores_segment_row_even_when_newer(tmp_path: Path) -> None:
+    """PART A: a segment row (segment_name set) landed AFTER the consolidated
+    row must not win the ret factor's reward leg — the exact bug the shared
+    dcf.latest reader fixes."""
+    db = tmp_path / "portfolio.db"
+    _seed_dcf_versioned(db)
+    _insert_versioned_dcf(
+        db, ticker="AAA", created_at="2026-06-08T00:00:00", npv_per_share=120.0, live_price=100.0
+    )
+    _insert_versioned_dcf(
+        db,
+        ticker="AAA",
+        created_at="2026-06-09T00:00:00",  # newer than the consolidated row
+        segment_name="Consumer",
+        npv_per_share=999.0,
+        live_price=100.0,
+    )
+    out = _dcf_upside(db, ["AAA"])
+    aaa_raw, _ = out["AAA"]
+    assert aaa_raw == pytest.approx(0.20)  # from the consolidated 120/100 row, not the segment one
+
+
+def test_dcf_upside_excludes_sanity_flagged_row(tmp_path: Path) -> None:
+    """Caller policy (ratified): the ret factor is a ranking/valuation leg,
+    so a sanity-flagged (outlier) run is excluded entirely — same rule
+    allocation.eligibility already enforces for the decision-ready gate."""
+    db = tmp_path / "portfolio.db"
+    _seed_dcf_versioned(db)
+    _insert_versioned_dcf(
+        db,
+        ticker="AAA",
+        created_at="2026-06-08T00:00:00",
+        npv_per_share=500.0,
+        live_price=100.0,
+        sanity_flag="outlier",
+    )
+    out = _dcf_upside(db, ["AAA"])
+    assert "AAA" not in out
+
+
 def test_low_r_squared_sensitivity_excluded_from_macro_tilt(repo_root: Path) -> None:
     """C4 pin (A3's read-side floor): a sensitivity with r_squared below
     MACRO_MIN_R_SQUARED never enters the tilt — statistically indistinguishable
