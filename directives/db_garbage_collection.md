@@ -5,9 +5,11 @@
 > (`--include-portfolio` is the standing invocation). First apply ran
 > 2026-07-31 after a verified snapshot
 > (data/archive/pre_gc_20260731_portfolio.db) and a credibility-priors
-> re-baseline. Cron registration is still pending owner approval — until
-> then, runs are manual. Grounded in the 2026-07-30 three-way consumer audit
-> of financial_facts, kpi_facts, and the telemetry tables.
+> re-baseline; full ratified apply (facts-depth incl. portfolio + VACUUM)
+> completed 2026-08-02. Weekly cron REGISTERED 2026-08-02 (owner-authorized):
+> `cron/db_gc.task.xml` + `cron/run_db_gc.bat`, Sunday 06:00 PT, VACUUM on
+> the first Sunday of the month. Grounded in the 2026-07-30 three-way
+> consumer audit of financial_facts, kpi_facts, and the telemetry tables.
 
 ## Goal
 
@@ -88,14 +90,15 @@ dashboard looking healthy. Standing rules now built into the tool:
 
 ## Cadence & sequencing
 
-- Proposed: weekly, Sunday 06:00 PT (after the 04:00 pipeline; clear of the
-  Sun 03:00 git-cleanup / 03:30 memory-streamline / ~10:30 eval rungs).
-  VACUUM on the first Sunday of the month only. No LLM leg → the quota
-  windows in `llm_quota_scheduling.md` do not apply; DB write-lock contention
-  does, hence the slot — and the in-tool protected-window guard + run lock
-  above are the backstop if the schedule ever drifts. Cron registration is
-  STILL PENDING owner approval (verified 2026-08-01: no Task Scheduler entry
-  exists; all runs to date were manual).
+- REGISTERED (2026-08-02, owner-authorized): weekly, Sunday 06:00 PT via
+  `cron/db_gc.task.xml` → `cron/run_db_gc.bat` (after the 04:00 pipeline;
+  clear of the Sun 03:00 git-cleanup / 03:30 memory-streamline / ~10:30 eval
+  rungs). The wrapper adds `--vacuum` only when day-of-month <= 7 (first
+  Sunday). Standing invocation: `--apply --include-portfolio` (all four
+  policies). No LLM leg → the quota windows in `llm_quota_scheduling.md` do
+  not apply; DB write-lock contention does, hence the slot — and the in-tool
+  protected-window guard + run lock above are the backstop if the schedule
+  ever drifts.
 - Idempotency: a second run over the same DB is a no-op; idempotency key is
   the DB state itself (row-level predicates), logged per run in `gc_manifest`.
 - Failure mode: halt loud (non-zero exit, JSON events on stderr). No retries.

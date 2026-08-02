@@ -11,6 +11,7 @@ Generated from `cron/task_manifest.json`; do not edit by hand.
 | `\earnings-summary\check_comp_set_drift` | weekly Sunday at 12:15:00 | `check_comp_set_drift.task.xml` | `run_check_comp_set_drift.bat` | Task Scheduler |
 | `\earnings-summary\coach_pings` | daily at 07:15:00 | `coach_pings.task.xml` | `run_coach_pings.bat` | Task Scheduler |
 | `\earnings-summary\daily_fetch_and_brief` | daily at 06:30:00 | `daily_fetch_and_brief.task.xml` | `run_daily_fetch_and_brief.bat` | Task Scheduler |
+| `\earnings-summary\db_gc` | weekly Sunday at 06:00:00 | `db_gc.task.xml` | `run_db_gc.bat` | Task Scheduler |
 | `\earnings-summary\decision_nudge` | daily at 17:00:00 | `decision_nudge.task.xml` | `run_decision_nudge.bat` | Task Scheduler |
 | `\earnings-summary\disclosure_change_sweep` | weekly Saturday at 14:00:00 | `disclosure_change_sweep.task.xml` | `run_disclosure_change_sweep.bat` | Task Scheduler |
 | `\earnings-summary\discover_ir_documents` | weekly Sunday at 01:30:00 | `discover_ir_documents.task.xml` | `run_discover_ir_documents.bat` | Task Scheduler |
