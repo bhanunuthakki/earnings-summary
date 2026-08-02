@@ -188,7 +188,7 @@ def _screen_section(
     rows = "".join(
         f"<tr{_screen_data(s)}>"
         f'<td class="ticker">'
-        f'{ticker_label(s.holding, href="/ticker/" + escape(s.holding), classes="ticker-link")}'
+        f"{ticker_label(s.holding, href='/ticker/' + escape(s.holding), classes='ticker-link')}"
         "</td>"
         f'<td class="num">{s.holding_upside_pct:+.0f}%</td>'
         f'<td class="num {"am-cleared" if s.cleared else ""}">{s.margin_pp:+.0f}pp</td>'
