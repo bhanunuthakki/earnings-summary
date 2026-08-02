@@ -70,6 +70,15 @@ _CANONICAL_LISTENER = "127.0.0.1:7421"
 _GC_ARCHIVE_NAME = "portfolio_gc_archive.db"
 _CANONICAL_REPOSITORY = Path(__file__).resolve().parents[2]
 _PUBLICATION_FRESHNESS_FLOOR = timedelta(seconds=30)
+_INERT_INACCESSIBLE_WINDOWS_PROCESS_IMAGES = frozenset(
+    {
+        "memory compression",
+        "registry",
+        "secure system",
+        "system",
+        "system idle process",
+    }
+)
 
 
 class GcRecoveryError(RuntimeError):
@@ -542,6 +551,7 @@ class AdmittedRecoveryEvidence(BaseModel):
     terminal_artifact: ImmutableArtifactSnapshot
     quiescence_registry_artifact: ImmutableArtifactSnapshot
     process_census_artifact: ImmutableArtifactSnapshot
+    process_census: RecoveryProcessCensus
     operation_report: GcRunReportEvidence | None
 
 
@@ -700,6 +710,7 @@ def _audit_gc_recovery_core(
             retry_fk_ready=retry_fk_ready,
             retry_index_ready=retry_index_ready,
             admission=admitted.receipt,
+            process_census=admitted.process_census,
         )
     )
     blocker_set.update(_live_process_blockers(process_census_start, current_database=current))
@@ -1384,6 +1395,7 @@ def _load_admission(
         terminal_artifact=terminal_snapshot,
         quiescence_registry_artifact=quiescence_snapshot,
         process_census_artifact=census_snapshot,
+        process_census=census,
         operation_report=operation_report,
     )
 
@@ -1898,7 +1910,11 @@ def _live_process_blockers(
     blockers: set[str] = set()
     if census.census_sha256 != census.computed_census_sha256():
         blockers.add("live_process_census_self_seal_invalid")
-    if any(row.command_line_status == "access_denied" for row in census.processes):
+    if any(
+        row.command_line_status == "access_denied"
+        and _inaccessible_process_can_host_database_writer(row)
+        for row in census.processes
+    ):
         blockers.add("live_process_census_incomplete")
     if any(
         _process_writer_evidence(row, current_database=current_database) is not None
@@ -1906,6 +1922,23 @@ def _live_process_blockers(
     ):
         blockers.add("live_database_writer_present")
     return tuple(sorted(blockers))
+
+
+def _inaccessible_process_can_host_database_writer(
+    observation: ProcessCensusObservation,
+) -> bool:
+    """Refuse every unresolved process except inert Windows kernel pseudo-processes.
+
+    Windows intentionally withholds command lines for its kernel pseudo-processes.
+    They cannot host application code and remain recorded in the exhaustive census.
+    Every user-mode executable, service host, unknown image, interpreter, or SQLite
+    client is unresolved writer capability when its command line is inaccessible.
+    The write-denial fence separately excludes open writers during the audit; this
+    predicate prevents an idle or unregistered writer from being ignored afterward.
+    """
+
+    image_name = Path(observation.image_name).name.casefold()
+    return image_name not in _INERT_INACCESSIBLE_WINDOWS_PROCESS_IMAGES
 
 
 @contextmanager
@@ -2698,6 +2731,7 @@ def _blockers(
     retry_fk_ready: bool,
     retry_index_ready: bool,
     admission: GcRecoveryAdmissionReceipt,
+    process_census: RecoveryProcessCensus,
 ) -> tuple[str, ...]:
     blockers: set[str] = set()
     if current_verification.revision != expected_current_revision:
@@ -2744,7 +2778,11 @@ def _blockers(
         blockers.add("operation_terminal_status_failed")
     if admission.report_size_bytes == 0:
         blockers.add("operation_terminal_report_empty")
-    if admission.process_command_line_access_denied_count:
+    if any(
+        row.command_line_status == "access_denied"
+        and _inaccessible_process_can_host_database_writer(row)
+        for row in process_census.processes
+    ):
         blockers.add("process_census_incomplete")
     if admission.database_writer_matches:
         blockers.add("database_writer_still_present")
