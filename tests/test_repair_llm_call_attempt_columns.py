@@ -163,6 +163,20 @@ def test_missing_source_columns_skip_backfill_rather_than_erroring(tmp_path: Pat
         conn.close()
 
 
+def test_unknown_sql_identifier_is_refused() -> None:
+    """SQLite cannot bind an identifier, so table/column names are interpolated.
+    The allowlist must actually reject something — a guard that accepts every
+    input pins nothing."""
+    with pytest.raises(ValueError, match="unknown identifier"):
+        repair_mod._assert_known_identifier("llm_calls; DROP TABLE llm_calls")
+    with pytest.raises(ValueError, match="unknown identifier"):
+        repair_mod._assert_known_identifier("attempt_count", "not_a_real_column")
+    # ...and accept every identifier the module genuinely uses.
+    repair_mod._assert_known_identifier("llm_calls", *(n for n, _t in repair_mod._COLUMNS))
+    for target, source in repair_mod._BACKFILL:
+        repair_mod._assert_known_identifier(target, source)
+
+
 def test_repair_never_touches_alembic_version(prod_shape: Path) -> None:
     """The revision pointer is already correct in claiming 0212 applied; this
     makes the schema match the claim, never the other way round."""

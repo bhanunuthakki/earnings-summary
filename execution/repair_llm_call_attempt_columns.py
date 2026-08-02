@@ -117,9 +117,34 @@ def _configure_logging(verbose: bool) -> None:
     root.setLevel(logging.DEBUG if verbose else logging.INFO)
 
 
+#: Every identifier this module is ever allowed to interpolate into SQL: the
+#: one table plus the columns named in _COLUMNS / _BACKFILL. Nothing here comes
+#: from argv, the database, or any caller.
+_KNOWN_IDENTIFIERS: frozenset[str] = frozenset(
+    {_TABLE}
+    | {name for name, _type in _COLUMNS}
+    | {t for t, _s in _BACKFILL}
+    | {s for _t, s in _BACKFILL}
+)
+
+
+def _assert_known_identifier(*names: str) -> None:
+    """Fail loudly if a SQL identifier is not one of this module's constants.
+
+    SQLite cannot bind an identifier, so table and column names must be
+    interpolated. This makes that safe by construction rather than by comment:
+    the allowlist is derived from the same constants the statements are built
+    from, so it cannot drift from them, and any future edit that routed an
+    external value here would raise instead of producing a query.
+    """
+    unknown = [n for n in names if n not in _KNOWN_IDENTIFIERS]
+    if unknown:
+        raise ValueError(f"refusing to build SQL with unknown identifier(s): {unknown!r}")
+
+
 def _columns_of(conn: sqlite3.Connection, table: str) -> set[str]:
-    # PRAGMA takes no parameters; the table name is a module constant, never
-    # user input.
+    # PRAGMA cannot be parameterised either; same allowlist check.
+    _assert_known_identifier(table)
     return {str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table}")')}
 
 
@@ -157,6 +182,7 @@ def repair(conn: sqlite3.Connection) -> dict[str, object]:
     for name, sql_type in _COLUMNS:
         if name in existing:
             continue
+        _assert_known_identifier(_TABLE, name)
         conn.execute(f'ALTER TABLE "{_TABLE}" ADD COLUMN "{name}" {sql_type}')
         added.append(name)
         log.info({"event": "column_added", "table": _TABLE, "column": name, "type": sql_type})
@@ -175,10 +201,17 @@ def repair(conn: sqlite3.Connection) -> dict[str, object]:
                 }
             )
             continue
-        cur = conn.execute(
+        # SQLite cannot parameterise an identifier, so the column names are
+        # interpolated. They are not merely "trusted" — _assert_known_identifier
+        # re-checks each one against this module's own constants immediately
+        # before use, so a future edit that let an outside value reach here
+        # raises instead of building the statement.
+        _assert_known_identifier(target, source)
+        query = (
             f'UPDATE "{_TABLE}" SET "{target}" = "{source}" '
             f'WHERE "{target}" IS NULL AND "{source}" IS NOT NULL'
         )
+        cur = conn.execute(query)
         backfilled[target] = cur.rowcount
         log.info({"event": "backfilled", "target": target, "source": source, "rows": cur.rowcount})
 
