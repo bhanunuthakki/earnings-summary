@@ -23,5 +23,10 @@ set LOG_FILE=%LOG_DIR%\backup_db_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
 call "%PROJECT_ROOT%\cron\run_python.bat" "backup_db" "portfolio-db" cron\backup_db.py > "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
 
-endlocal
+REM Propagate the job's exit code. Without this the script ended on `endlocal`
+REM and ALWAYS returned 0, so Task Scheduler recorded "Last Result: 0" while
+REM the backup was failing — three days of missed snapshots looked healthy in
+REM every place an operator would check. A failed backup must read as failed.
+endlocal & exit /b %RC%

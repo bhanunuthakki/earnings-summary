@@ -337,7 +337,25 @@ def _write_set_lock_path(repo_root: Path, write_set: str) -> Path:
 
 
 def inherited_lock_is_valid(repo_root: Path, write_set: str) -> bool:
-    """Validate that the parent process still owns the exact inherited lock."""
+    """Validate that an ANCESTOR process still owns the exact inherited lock.
+
+    Deliberately does NOT require the holder to be the direct parent. The
+    scheduler wrapper does not guarantee a wrapper->script topology: it spawns
+    the job through an intermediate process, so ``os.getppid()`` is that shim,
+    not the lock holder. Requiring equality made every wrapped job fail to
+    recognize the lock its own ancestor held, re-acquire it, and deadlock
+    against itself ("write set busy: portfolio-db") — which silently killed the
+    nightly backup for three days after the write-set lock landed.
+
+    The remaining checks are the ones that actually carry the proof, and they
+    are strictly stronger than a pid comparison:
+      * the token is a per-acquisition random secret published only through
+        ``EARNINGS_SUMMARY_JOB_LOCK_PROOF``, and environment variables are
+        inherited only by descendants — a non-descendant cannot hold it;
+      * the on-disk owner must match that pid AND token; and
+      * ``_owner_is_live`` re-validates the process START IDENTITY, so a reused
+        pid cannot impersonate the holder.
+    """
     raw = os.environ.get("EARNINGS_SUMMARY_JOB_LOCK_PROOF", "")
     try:
         proof = json.loads(raw)
@@ -351,7 +369,7 @@ def inherited_lock_is_valid(repo_root: Path, write_set: str) -> bool:
         path != _write_set_lock_path(repo_root.resolve(), write_set)
         or not isinstance(token, str)
         or not isinstance(pid, int)
-        or pid != os.getppid()
+        or pid <= 0
     ):
         return False
     owner = _read_lock_owner(path)
