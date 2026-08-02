@@ -50,6 +50,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from advisor.context import IMPLAUSIBLE_UPSIDE_PCT
 from calibration_guard import rate_phrase
 from decision_calibration import bucket_for_conviction, build_calibration, omission_clause
 from identity import DEFAULT_USER_ID
@@ -69,11 +70,6 @@ log = logging.getLogger(__name__)
 # panel writes/reads the same two — pipeline.allocation_decisions_panel).
 _CONVICTION_KIND = "conviction"
 _TARGET_WEIGHT_KIND = "target_weight_pct"
-
-# A DCF upside above this is more likely a mis-modeled run (currency/unit
-# artifacts on sweep-built watchlist DCFs) than a free double — same ceiling
-# and reasoning as advisor.context.IMPLAUSIBLE_UPSIDE_PCT.
-_IMPLAUSIBLE_UPSIDE_PCT = 100.0
 
 # Per-ticker lines when the question names tickers / portfolio-wide row caps.
 _MAX_FOCUS_TICKERS = 8
@@ -481,7 +477,7 @@ def _latest_dcf_by_ticker(db_path: Path) -> dict[str, tuple[float, float, str]]:
 def _dcf_line(ticker: str, fv: float, px: float, run_date: str) -> str:
     upside = (fv / px - 1.0) * 100.0
     line = f"{ticker}: fair ${fv:,.2f} vs live ${px:,.2f} → {upside:+.0f}% upside (run {run_date})"
-    if upside > _IMPLAUSIBLE_UPSIDE_PCT:
+    if upside > IMPLAUSIBLE_UPSIDE_PCT:
         line += " — suspect (>+100%, likely a mis-modeled run, not an opportunity)"
     return line
 

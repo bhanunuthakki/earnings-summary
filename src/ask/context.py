@@ -77,8 +77,10 @@ def build_portfolio_pack(repo_root: Path, db_path: Path) -> ContextPack:
 
 
 def tracked_tickers(db_path: Path) -> set[str]:
-    """Every tracked symbol (any list type, any user) — the routing layer's
-    membership test for ticker-ish tokens. Best-effort: empty on missing DB."""
+    """Every ACTIVE tracked symbol (any list type, any user, archived names
+    excluded per the repo-wide ``archived_at IS NULL`` convention) — the
+    routing layer's membership test for ticker-ish tokens. Best-effort: empty
+    on missing DB."""
     if not db_path.exists():
         return set()
     try:
@@ -86,7 +88,9 @@ def tracked_tickers(db_path: Path) -> set[str]:
     except sqlite3.Error:
         return set()
     try:
-        rows = conn.execute("SELECT DISTINCT ticker FROM tracked_companies").fetchall()
+        rows = conn.execute(
+            "SELECT DISTINCT ticker FROM tracked_companies WHERE archived_at IS NULL"
+        ).fetchall()
         return {str(r[0]).upper() for r in rows}
     except sqlite3.Error:
         return set()
@@ -105,7 +109,7 @@ def _tracked_by_list(db_path: Path) -> dict[str, list[str]]:
     try:
         rows = conn.execute(
             "SELECT ticker, list_type FROM tracked_companies "
-            "WHERE user_id = ? ORDER BY list_type, ticker",
+            "WHERE user_id = ? AND archived_at IS NULL ORDER BY list_type, ticker",
             (DEFAULT_USER_ID,),
         ).fetchall()
     except sqlite3.Error:

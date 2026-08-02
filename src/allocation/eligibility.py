@@ -212,8 +212,11 @@ def _dcf_columns(conn: sqlite3.Connection) -> set[str]:
 def _latest_dcf_row(conn: sqlite3.Connection | None, ticker: str) -> sqlite3.Row | None:
     """The latest consolidated (unsegmented) dcf_runs row for ``ticker`` — the
     same ``COALESCE(is_latest, 1) = 1`` / ``COALESCE(segment_name, '') = ''``
-    column-presence-guarded query template used by
-    ``risk_reward._dcf_reward_legs`` / ``bear_lint`` / ``model_provenance.basis``."""
+    column-presence-guarded query template used by ``bear_lint`` and
+    ``model_provenance.basis``. NOT shared with ``risk_reward._dcf_reward_legs``:
+    that query has no ``is_latest``/``segment_name`` predicates at all (it reads
+    every dcf_runs row ordered by ticker/created_at/id and the caller takes the
+    first per ticker) — despite this docstring previously claiming otherwise."""
     if conn is None:
         return None
     cols = _dcf_columns(conn)

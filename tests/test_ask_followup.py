@@ -72,7 +72,7 @@ CREATE TABLE transcripts (
 CREATE TABLE tracked_companies (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id TEXT NOT NULL DEFAULT 'bhanu', ticker TEXT NOT NULL,
-    name TEXT NOT NULL, list_type TEXT NOT NULL
+    name TEXT NOT NULL, list_type TEXT NOT NULL, archived_at TEXT
 );
 """
 

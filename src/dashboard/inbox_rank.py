@@ -50,6 +50,7 @@ from typing import TYPE_CHECKING, cast
 
 from signals.store import SIGNAL_CONSENSUS_RATING
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from ui.controls import thesis_status_tone
 
 if TYPE_CHECKING:
     from dashboard.inbox import InboxItem
@@ -294,7 +295,13 @@ _RECENCY_FLOOR = 0.05
 _POSITION_SLOPE = 1.5
 _POSITION_WEIGHT_CAP = 0.4
 
-_THESIS_TONE_FACTORS: dict[str, float] = {"ok": 1.0, "warn": 1.25, "breach": 1.5}
+# Keyed by the kit tone vocabulary (ui.controls.thesis_status_tone: 'ok' /
+# 'warn' / 'bad' / '' neutral), NOT raw thesis_evaluations.overall_status
+# words — see _compute_thesis_tones. A status the tone map doesn't recognize
+# (e.g. 'unresolved') normalizes to '' and falls through to the neutral 1.0
+# default via .get(tone, 1.0); it must never silently inherit the breach
+# multiplier.
+_THESIS_TONE_FACTORS: dict[str, float] = {"ok": 1.0, "warn": 1.25, "bad": 1.5}
 
 
 # ----------------------------------------------------------------------------
@@ -340,8 +347,10 @@ def _materialized_weights(db_path: Path | None) -> dict[str, float]:
 
 
 def _thesis_tones(db_path: Path | None) -> dict[str, str]:
-    """Latest thesis-evaluation tone per ticker: 'ok' | 'warn' | 'breach'.
-    Missing DB/table → {} (factor 1.0 everywhere). Memoized per (path, mtime)."""
+    """Latest thesis-evaluation tone per ticker, normalized through the kit's
+    shared vocabulary (:func:`ui.controls.thesis_status_tone`): 'ok' | 'warn' |
+    'bad' | '' (unresolved/unknown status, neutral). Missing DB/table → {}
+    (factor 1.0 everywhere). Memoized per (path, mtime)."""
     if db_path is None:
         return {}
     path = Path(db_path)
@@ -377,13 +386,10 @@ def _compute_thesis_tones(db_path: Path) -> dict[str, str]:
         ticker = str(raw_ticker).upper()
         if ticker in out or raw_status is None:
             continue
-        status = str(raw_status).lower()
-        if status in ("ok", "intact"):
-            out[ticker] = "ok"
-        elif status in ("watch", "warn"):
-            out[ticker] = "warn"
-        else:
-            out[ticker] = "breach"
+        # thesis_status_tone is the ONE status→tone map (ui.controls) — a
+        # status it doesn't recognize (e.g. 'unresolved') normalizes to ''
+        # here rather than falling through to the breach multiplier.
+        out[ticker] = thesis_status_tone(str(raw_status))
     return out
 
 
