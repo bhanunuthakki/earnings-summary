@@ -1107,19 +1107,16 @@ def run_gc(
                     if "facts-depth" in policies:
                         report.facts_depth_apply_preflight = _facts_depth_apply_preflight(conn)
                 attach_archive(conn, archive)
-                # FK enforcement OFF for this maintenance connection (set
-                # outside any transaction — the pragma no-ops inside one, and
-                # it persists across the batch transactions below).
-                # financial_facts has no index on supersedes_id, so the
-                # enforced self-referential FK runs a full-table child scan
-                # per deleted row — measured on prod 2026-08-01: a 767k-row
-                # prune pegged one core for 2h+ (767k x 1.1M row visits) with
-                # no end in sight; batching does not reduce that per-row
-                # cost. Referential integrity is maintained explicitly: the
-                # resolution-plane cascades and the supersedes_id nulling run
-                # BEFORE the delete batches. Connection-local; enforcement
-                # returns when this connection closes.
-                conn.execute("PRAGMA foreign_keys = OFF")
+                # FK enforcement stays ON, deliberately. #1115 turned it OFF
+                # here (the unindexed supersedes_id self-FK made each parent
+                # DELETE a full-table child scan), but #1116 landed in
+                # parallel with the durable fix — the mandatory
+                # ix_0270_financial_facts_supersedes_id index plus the
+                # admission preflight above, which REQUIRES foreign_keys=ON
+                # and re-runs inside facts_depth(). The merged combination
+                # aborted every facts-depth apply ("requires PRAGMA
+                # foreign_keys=ON"). With the index guaranteed, FK checks are
+                # indexed lookups — keep enforcement and drop the pragma.
             _reset_doomed(conn)
 
             if "validation-issues" in policies:
