@@ -12,6 +12,7 @@ from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from provenance.immutable_artifact import canonical_text_artifact_sha256
 from provenance.metric_ontology import (
     BindingRevision,
     CanonicalAxis,
@@ -111,12 +112,9 @@ class MetricOntologyPopulationRequest(_FrozenModel):
             raise ValueError("ontology temporal scope must include a timezone")
         if (self.input_commitment_sha256 is None) != (self.plan_commitment_sha256 is None):
             raise ValueError("population commitments must be supplied together")
-        if (
-            self.apply
-            and self.after_observation_id is not None
-            and self.input_commitment_sha256 is None
-        ):
-            raise ValueError("an apply resume requires manifest commitments")
+        bounded = self.after_observation_id is not None or self.max_observations is not None
+        if self.apply and bounded and self.input_commitment_sha256 is None:
+            raise ValueError("a bounded ontology apply requires manifest commitments")
         if self.phase != "all" and (
             self.after_observation_id is not None or self.max_observations is not None
         ):
@@ -156,10 +154,8 @@ class MetricOntologyPopulationResult(_FrozenModel):
     def _checkpoint_contract(self) -> Self:
         if self.safe_to_seal != self.snapshot_eligible:
             raise ValueError("ontology seal safety does not match snapshot eligibility")
-        if self.outcome == "checkpoint" and (
-            self.remaining_observation_count == 0 or self.safe_to_seal
-        ):
-            raise ValueError("ontology checkpoint must retain bounded work")
+        if self.outcome == "checkpoint" and self.safe_to_seal:
+            raise ValueError("ontology checkpoint cannot be safe to seal")
         if self.snapshot_id is not None and not self.safe_to_seal:
             raise ValueError("ontology snapshot requires terminal seal safety")
         return self
@@ -217,14 +213,31 @@ class MetricOntologyOperationReceipt(_FrozenModel):
 
     @model_validator(mode="after")
     def _receipt_contract(self) -> Self:
+        bounded = (
+            self.request.after_observation_id is not None
+            or self.request.max_observations is not None
+        )
         if self.request.apply != (self.result.mode == "apply"):
             raise ValueError("ontology operation receipt mode does not match its result")
+        if self.result.phase != self.request.phase:
+            raise ValueError("ontology operation result phase does not match its request")
+        if self.request.apply and bounded and self.result.outcome != "checkpoint":
+            raise ValueError("bounded ontology apply must produce a checkpoint")
+        if self.request.apply and not bounded and self.result.outcome == "checkpoint":
+            raise ValueError("unbounded ontology apply cannot produce a checkpoint")
         if self.request.apply != (self.admission_receipt_sha256 is not None):
             raise ValueError("an ontology apply receipt requires one dry-run admission")
-        if (self.request.after_observation_id is not None) != (
-            self.prior_checkpoint_receipt_sha256 is not None
+        if (
+            self.request.after_observation_id is not None
+            and self.prior_checkpoint_receipt_sha256 is None
         ):
             raise ValueError("an ontology resume must bind one prior checkpoint")
+        if (
+            self.prior_checkpoint_receipt_sha256 is not None
+            and not bounded
+            and (self.request.phase not in {"snapshot", "all"})
+        ):
+            raise ValueError("an unbounded ontology successor must be a sealing phase")
         if self.request_sha256 != _model_sha(self.request):
             raise ValueError("ontology operation request commitment does not match")
         if self.result_sha256 != _model_sha(self.result):
@@ -296,6 +309,98 @@ def verify_metric_ontology_receipt(receipt: MetricOntologyOperationReceipt) -> b
     except ValueError:
         return False
     return True
+
+
+def verify_metric_ontology_receipt_current_result(
+    receipt: MetricOntologyOperationReceipt,
+    current: MetricOntologyPopulationResult,
+    *,
+    historical_checkpoint: bool = False,
+) -> None:
+    """Compare replay evidence with checkpoint-stable or terminal-current commitments."""
+
+    if not receipt.request.apply:
+        raise ValueError("stored ontology replay receipt is not applied")
+    expected = receipt.result
+    if historical_checkpoint:
+        if receipt.outcome != "checkpoint":
+            raise ValueError("only an ontology checkpoint can be verified as historical")
+        stable_expected = (
+            expected.input_commitment_sha256,
+            expected.plan_commitment_sha256,
+            expected.policy_config_sha256,
+            expected.source_cell_count,
+            expected.source_observation_count,
+        )
+        stable_current = (
+            current.input_commitment_sha256,
+            current.plan_commitment_sha256,
+            current.policy_config_sha256,
+            current.source_cell_count,
+            current.source_observation_count,
+        )
+        if stable_current != stable_expected:
+            raise ValueError("stored ontology checkpoint changed its stable source universe")
+        return
+    current_plane: dict[str, object] = {
+        "assertion_count": current.assertion_count,
+        "binding_count": current.binding_count,
+        "canonical_cell_count": current.canonical_cell_count,
+        "input_commitment_sha256": current.input_commitment_sha256,
+        "metric_count": current.metric_count,
+        "missing_assertion_count": current.missing_assertion_count,
+        "missing_binding_count": current.missing_binding_count,
+        "output_commitment_sha256": current.output_commitment_sha256,
+        "plan_commitment_sha256": current.plan_commitment_sha256,
+        "policy_config_sha256": current.policy_config_sha256,
+        "post_state_commitment_sha256": current.post_state_commitment_sha256,
+        "source_cell_count": current.source_cell_count,
+        "source_component_count": current.source_component_count,
+        "source_observation_count": current.source_observation_count,
+    }
+    expected_plane: dict[str, object] = {
+        "assertion_count": expected.assertion_count,
+        "binding_count": expected.binding_count,
+        "canonical_cell_count": expected.canonical_cell_count,
+        "input_commitment_sha256": expected.input_commitment_sha256,
+        "metric_count": expected.metric_count,
+        "missing_assertion_count": expected.missing_assertion_count,
+        "missing_binding_count": expected.missing_binding_count,
+        "output_commitment_sha256": expected.output_commitment_sha256,
+        "plan_commitment_sha256": expected.plan_commitment_sha256,
+        "policy_config_sha256": expected.policy_config_sha256,
+        "post_state_commitment_sha256": expected.post_state_commitment_sha256,
+        "source_cell_count": expected.source_cell_count,
+        "source_component_count": expected.source_component_count,
+        "source_observation_count": expected.source_observation_count,
+    }
+    if current_plane != expected_plane:
+        raise ValueError("stored ontology receipt no longer matches current planes")
+
+
+def verify_metric_ontology_receipt_current(
+    conn: sqlite3.Connection,
+    receipt: MetricOntologyOperationReceipt,
+) -> None:
+    """Recompute current ontology planes and verify one stored replay receipt."""
+
+    chain = _metric_ontology_receipt_verification_chain(conn, receipt)
+    for position, item in enumerate(chain):
+        current = populate_metric_ontology(
+            conn,
+            item.request.model_copy(
+                update={
+                    "apply": False,
+                    "input_commitment_sha256": None,
+                    "plan_commitment_sha256": None,
+                }
+            ),
+        )
+        verify_metric_ontology_receipt_current_result(
+            item,
+            current,
+            historical_checkpoint=position < len(chain) - 1,
+        )
 
 
 def database_instance_id(conn: sqlite3.Connection) -> str:
@@ -370,6 +475,115 @@ def load_metric_ontology_receipt(
     if not verify_metric_ontology_receipt(receipt) or receipt.operation_id != operation_id:
         raise ValueError("stored ontology operation receipt is invalid")
     return receipt
+
+
+def _metric_ontology_receipt_verification_chain(
+    conn: sqlite3.Connection,
+    receipt: MetricOntologyOperationReceipt,
+) -> tuple[MetricOntologyOperationReceipt, ...]:
+    rows = conn.execute("SELECT receipt_json FROM metric_ontology_operation_ledger").fetchall()
+    ledger = tuple(MetricOntologyOperationReceipt.model_validate_json(str(row[0])) for row in rows)
+    if any(not verify_metric_ontology_receipt(item) for item in ledger):
+        raise ValueError("ontology ledger contains an invalid receipt")
+    if sum(item == receipt for item in ledger) != 1:
+        raise ValueError("ontology replay receipt is not the canonical ledger receipt")
+    chain = [receipt]
+    seen = {receipt.receipt_sha256}
+    while chain[0].prior_checkpoint_receipt_sha256 is not None:
+        child = chain[0]
+        parents = tuple(
+            item
+            for item in ledger
+            if _ontology_receipt_artifact_sha(item) == child.prior_checkpoint_receipt_sha256
+        )
+        if len(parents) != 1:
+            raise ValueError("ontology checkpoint parent is missing or ambiguous")
+        parent = parents[0]
+        if parent.outcome != "checkpoint":
+            raise ValueError("ontology successor parent is not a checkpoint")
+        if parent.receipt_sha256 in seen:
+            raise ValueError("ontology checkpoint ancestry is cyclic")
+        siblings = tuple(
+            item
+            for item in ledger
+            if item.prior_checkpoint_receipt_sha256 == _ontology_receipt_artifact_sha(parent)
+        )
+        if len(siblings) != 1 or siblings[0] != child:
+            raise ValueError("ontology checkpoint successor is ambiguous")
+        _validate_metric_ontology_receipt_successor(parent, child)
+        chain.insert(0, parent)
+        seen.add(parent.receipt_sha256)
+    while chain[-1].outcome == "checkpoint":
+        parent = chain[-1]
+        successors = tuple(
+            item
+            for item in ledger
+            if item.prior_checkpoint_receipt_sha256 == _ontology_receipt_artifact_sha(parent)
+        )
+        if not successors:
+            break
+        if len(successors) != 1:
+            raise ValueError("ontology checkpoint successor is ambiguous")
+        successor = successors[0]
+        if successor.receipt_sha256 in seen:
+            raise ValueError("ontology checkpoint successor chain is cyclic")
+        _validate_metric_ontology_receipt_successor(parent, successor)
+        chain.append(successor)
+        seen.add(successor.receipt_sha256)
+    if len(chain) > 1 and not _ontology_receipt_is_terminal_success(chain[-1]):
+        raise ValueError("ontology checkpoint successor chain is not terminal")
+    return tuple(chain)
+
+
+def _validate_metric_ontology_receipt_successor(
+    parent: MetricOntologyOperationReceipt,
+    successor: MetricOntologyOperationReceipt,
+) -> None:
+    if (
+        successor.database_path != parent.database_path
+        or successor.database_instance_id != parent.database_instance_id
+        or successor.alembic_revision != parent.alembic_revision
+    ):
+        raise ValueError("ontology checkpoint successor database changed")
+    if (
+        successor.request.knowledge_cutoff != parent.request.knowledge_cutoff
+        or successor.request.operation_recorded_at != parent.request.operation_recorded_at
+    ):
+        raise ValueError("ontology checkpoint successor scope changed")
+    successor_bounded = (
+        successor.request.after_observation_id is not None
+        or successor.request.max_observations is not None
+    )
+    if successor_bounded:
+        if (
+            successor.request.phase != parent.request.phase
+            or successor.request.max_observations != parent.request.max_observations
+        ):
+            raise ValueError("ontology checkpoint successor batch shape changed")
+        if successor.request.after_observation_id != parent.result.last_observation_id:
+            raise ValueError("ontology checkpoint successor cursor changed")
+    elif (
+        successor.request.phase not in {"snapshot", "all"}
+        or parent.result.remaining_observation_count != 0
+    ):
+        raise ValueError("ontology sealing successor is not ready")
+    if (
+        successor.result.input_commitment_sha256 != parent.result.input_commitment_sha256
+        or successor.result.policy_config_sha256 != parent.result.policy_config_sha256
+    ):
+        raise ValueError("ontology checkpoint successor commitments changed")
+
+
+def _ontology_receipt_is_terminal_success(receipt: MetricOntologyOperationReceipt) -> bool:
+    bounded = (
+        receipt.request.after_observation_id is not None
+        or receipt.request.max_observations is not None
+    )
+    return receipt.request.apply and not bounded and receipt.outcome == "complete"
+
+
+def _ontology_receipt_artifact_sha(receipt: MetricOntologyOperationReceipt) -> str:
+    return canonical_text_artifact_sha256(receipt.model_dump_json())
 
 
 def metric_ontology_operation_id(
@@ -632,7 +846,8 @@ def populate_metric_ontology(
                     observed_through=request.operation_recorded_at,
                 )
                 safe_to_seal = (
-                    (
+                    not bounded
+                    and (
                         request.phase == "snapshot"
                         or (request.phase == "all" and remaining_observation_count == 0)
                     )
@@ -663,7 +878,7 @@ def populate_metric_ontology(
         if not request.apply:
             safe_to_seal = (
                 request.phase in {"snapshot", "all"}
-                and (not bounded or remaining_observation_count == 0)
+                and not bounded
                 and not _count_missing_assertions(
                     conn, request.knowledge_cutoff, request.operation_recorded_at
                 )
@@ -671,9 +886,7 @@ def populate_metric_ontology(
                     conn, request.knowledge_cutoff, request.operation_recorded_at
                 )
             )
-        checkpoint = (
-            request.apply and request.phase == "all" and bounded and remaining_observation_count > 0
-        )
+        checkpoint = request.apply and request.phase == "all" and bounded
         return _result(
             conn,
             request=request,

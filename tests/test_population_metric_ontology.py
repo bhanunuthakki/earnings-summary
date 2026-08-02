@@ -291,12 +291,22 @@ def test_scoped_source_cells_ignore_post_observation_clock_artifacts() -> None:
 
 
 def test_resume_requires_original_manifest_commitments() -> None:
-    with pytest.raises(ValueError, match="resume requires manifest commitments"):
+    with pytest.raises(ValueError, match="bounded ontology apply"):
         MetricOntologyPopulationRequest(
             apply=True,
             knowledge_cutoff=_STAMP,
             operation_recorded_at=_OPERATION_STAMP,
             after_observation_id="observation-10",
+        )
+
+
+def test_max_only_bounded_apply_requires_manifest_commitments() -> None:
+    with pytest.raises(ValueError, match="bounded ontology apply"):
+        MetricOntologyPopulationRequest(
+            apply=True,
+            knowledge_cutoff=_STAMP,
+            operation_recorded_at=_OPERATION_STAMP,
+            max_observations=10,
         )
 
 

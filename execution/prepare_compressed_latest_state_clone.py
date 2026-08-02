@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
-from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 
@@ -91,13 +89,13 @@ def main(argv: list[str] | None = None) -> int:
         _event("compressed_latest_state_clone_deferred", reason="job_lock_held")
         return 75
     except (ImmutableArtifactConflictError, LatestStateActivationError, OSError, ValueError) as exc:
-        if clone_receipt is not None:
-            _remove_owned_clone(
-                clone_receipt.destination_database, clone_receipt.destination_database_sha256
-            )
         _event(
             "compressed_latest_state_clone_refused",
             error_type=type(exc).__name__,
+            preserved_clone=(None if clone_receipt is None else clone_receipt.destination_database),
+            preserved_clone_expected_sha256=(
+                None if clone_receipt is None else clone_receipt.destination_database_sha256
+            ),
             reason=str(exc),
         )
         return 2
@@ -143,30 +141,6 @@ def receipt_path_for(args: argparse.Namespace) -> Path:
     if path_aliases_any(receipt, protected):
         raise LatestStateActivationError("clone receipt aliases a protected artifact")
     return receipt
-
-
-def _remove_owned_clone(database: str, expected_sha256: str) -> None:
-    destination = Path(database).resolve()
-    if any(Path(f"{destination}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal")):
-        raise LatestStateActivationError(
-            "receipt publication failed and clone cleanup found SQLite sidecars"
-        )
-    digest = hashlib.sha256()
-    try:
-        with destination.open("rb") as handle:
-            while block := handle.read(8 * 1024 * 1024):
-                digest.update(block)
-        if digest.hexdigest() != expected_sha256:
-            raise LatestStateActivationError(
-                "receipt publication failed and clone cleanup identity changed"
-            )
-        destination.unlink()
-        with suppress(OSError):
-            destination.parent.rmdir()
-    except OSError as exc:
-        raise LatestStateActivationError(
-            "receipt publication failed and owned clone cleanup failed"
-        ) from exc
 
 
 def _event(event: str, **fields: object) -> None:

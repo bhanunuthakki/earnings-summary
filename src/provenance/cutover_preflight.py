@@ -775,15 +775,10 @@ def _recovery_runtime_identity_is_valid(
     recovered_identity: str | None,
     migration_plan: MigrationPlan,
 ) -> bool:
-    if source_identity is not None:
-        return recovered_identity == source_identity
-    introduces_identity = any(
-        item.revision == "0264_document_processing_operation_ledger"
-        for item in migration_plan.ordered_migration_files
-    )
-    if not introduces_identity:
+    del migration_plan
+    if source_identity is None:
         return False
-    return recovered_identity is not None
+    return recovered_identity == source_identity
 
 
 def _load_completed_existing_clone_upgrade(

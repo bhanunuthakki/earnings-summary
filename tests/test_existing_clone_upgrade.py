@@ -34,6 +34,26 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _create_revision_database(
+    path: Path,
+    revision: str,
+    *,
+    database_instance_id: str | None = None,
+) -> None:
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE alembic_version (version_num TEXT PRIMARY KEY)")
+        conn.execute("INSERT INTO alembic_version VALUES (?)", (revision,))
+        if database_instance_id is not None:
+            conn.execute(
+                "CREATE TABLE database_runtime_identity ("
+                "singleton INTEGER PRIMARY KEY,database_instance_id TEXT NOT NULL)"
+            )
+            conn.execute(
+                "INSERT INTO database_runtime_identity VALUES (1,?)",
+                (database_instance_id,),
+            )
+
+
 def _clone_receipt(path: Path, database: Path) -> CompressedCloneReceipt:
     identity = candidate_file_identity(database)
     fields: dict[str, object] = {
@@ -140,9 +160,9 @@ def _patch_environment(
             conn.execute("UPDATE alembic_version SET version_num=?", (expected_head,))
             if introduces_runtime_identity:
                 conn.executescript(
-                    "CREATE TABLE database_runtime_identity ("
+                    "CREATE TABLE IF NOT EXISTS database_runtime_identity ("
                     "singleton INTEGER PRIMARY KEY,database_instance_id TEXT NOT NULL);"
-                    "INSERT INTO database_runtime_identity VALUES "
+                    "INSERT OR IGNORE INTO database_runtime_identity VALUES "
                     "(1,'database-instance:11111111111111111111111111111111');"
                 )
         conn.close()
@@ -155,12 +175,7 @@ def test_existing_compressed_clone_upgrade_is_exact_receipted_and_single_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database = tmp_path / "candidate.db"
-    with sqlite3.connect(database) as conn:
-        conn.executescript(
-            "CREATE TABLE alembic_version (version_num TEXT PRIMARY KEY);"
-            f"INSERT INTO alembic_version VALUES ('{SOURCE_REVISION}');"
-        )
-    conn.close()
+    _create_revision_database(database, SOURCE_REVISION)
     clone_path = tmp_path / "compressed-clone.json"
     clone = _clone_receipt(clone_path, database)
     _patch_environment(monkeypatch)
@@ -183,11 +198,7 @@ def test_existing_clone_upgrade_refuses_database_drift_from_clone_receipt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database = tmp_path / "candidate.db"
-    with sqlite3.connect(database) as conn:
-        conn.executescript(
-            "CREATE TABLE alembic_version (version_num TEXT PRIMARY KEY);"
-            f"INSERT INTO alembic_version VALUES ('{SOURCE_REVISION}');"
-        )
+    _create_revision_database(database, SOURCE_REVISION)
     clone_path = tmp_path / "compressed-clone.json"
     _clone_receipt(clone_path, database)
     with sqlite3.connect(database) as conn:
@@ -203,11 +214,7 @@ def test_existing_clone_upgrade_exact_replay_returns_the_immutable_receipt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database = tmp_path / "candidate.db"
-    with sqlite3.connect(database) as conn:
-        conn.executescript(
-            "CREATE TABLE alembic_version (version_num TEXT PRIMARY KEY);"
-            f"INSERT INTO alembic_version VALUES ('{SOURCE_REVISION}');"
-        )
+    _create_revision_database(database, SOURCE_REVISION)
     clone_path = tmp_path / "compressed-clone.json"
     _clone_receipt(clone_path, database)
     _patch_environment(monkeypatch)
@@ -220,16 +227,12 @@ def test_existing_clone_upgrade_exact_replay_returns_the_immutable_receipt(
     assert verify_existing_clone_upgrade_receipt(second)
 
 
-def test_existing_clone_upgrade_recovers_after_migration_before_receipt_publication(
+def test_existing_clone_upgrade_refuses_recovery_when_identity_was_created_by_migration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database = tmp_path / "candidate.db"
-    with sqlite3.connect(database) as conn:
-        conn.executescript(
-            "CREATE TABLE alembic_version (version_num TEXT PRIMARY KEY);"
-            f"INSERT INTO alembic_version VALUES ('{SOURCE_REVISION}');"
-        )
+    _create_revision_database(database, SOURCE_REVISION)
     clone_path = tmp_path / "compressed-clone.json"
     _clone_receipt(clone_path, database)
     _patch_environment(monkeypatch, introduces_runtime_identity=True)
@@ -254,24 +257,22 @@ def test_existing_clone_upgrade_recovers_after_migration_before_receipt_publicat
             TARGET_REVISION,
         )
 
-    receipt = upgrade_existing_isolated_clone(request)
+    with pytest.raises(CutoverPreflightError, match="replacement database"):
+        upgrade_existing_isolated_clone(request)
 
-    assert request.receipt_path.is_file()
-    assert receipt.database_after.alembic_revision == TARGET_REVISION
-    assert verify_existing_clone_upgrade_receipt(receipt)
+    assert not request.receipt_path.exists()
 
 
-def test_existing_clone_upgrade_recovery_refuses_replacement_target_database(
+def test_existing_clone_upgrade_recovery_refuses_replaced_runtime_identity(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database = tmp_path / "candidate.db"
-    with sqlite3.connect(database) as conn:
-        conn.executescript(
-            "CREATE TABLE alembic_version (version_num TEXT PRIMARY KEY);"
-            f"INSERT INTO alembic_version VALUES ('{SOURCE_REVISION}');"
-        )
-    conn.close()
+    _create_revision_database(
+        database,
+        SOURCE_REVISION,
+        database_instance_id="database-instance:" + "1" * 32,
+    )
     clone_path = tmp_path / "compressed-clone.json"
     _clone_receipt(clone_path, database)
     _patch_environment(monkeypatch, introduces_runtime_identity=True)
@@ -289,11 +290,10 @@ def test_existing_clone_upgrade_recovery_refuses_replacement_target_database(
     monkeypatch.setattr(cutover, "publish_text_no_clobber", fail_final_receipt)
     with pytest.raises(OSError, match="injected"):
         upgrade_existing_isolated_clone(request)
-    database.unlink()
     with sqlite3.connect(database) as conn:
-        conn.executescript(
-            "CREATE TABLE alembic_version (version_num TEXT PRIMARY KEY);"
-            f"INSERT INTO alembic_version VALUES ('{TARGET_REVISION}');"
+        conn.execute(
+            "UPDATE database_runtime_identity SET database_instance_id=? WHERE singleton=1",
+            ("database-instance:" + "2" * 32,),
         )
 
     with pytest.raises(CutoverPreflightError, match="replacement database"):
@@ -311,6 +311,22 @@ def test_existing_clone_upgrade_recovery_requires_durable_database_identity() ->
         recovered_identity=None,
         migration_plan=plan,
     )
+    assert not cutover._recovery_runtime_identity_is_valid(
+        source_identity=None,
+        recovered_identity="database-instance:" + "1" * 32,
+        migration_plan=MigrationPlan(
+            expected_alembic_head=TARGET_REVISION,
+            ordered_migration_files=(
+                MigrationFileDigest(
+                    ordinal=1,
+                    revision="0264_document_processing_operation_ledger",
+                    down_revisions=(SOURCE_REVISION,),
+                    relative_path=("alembic/versions/0264_document_processing_operation_ledger.py"),
+                    sha256="d" * 64,
+                ),
+            ),
+        ),
+    )
 
 
 def test_existing_clone_upgrade_intermediate_revision_requires_clone_restore(
@@ -318,11 +334,7 @@ def test_existing_clone_upgrade_intermediate_revision_requires_clone_restore(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database = tmp_path / "candidate.db"
-    with sqlite3.connect(database) as conn:
-        conn.executescript(
-            "CREATE TABLE alembic_version (version_num TEXT PRIMARY KEY);"
-            f"INSERT INTO alembic_version VALUES ('{SOURCE_REVISION}');"
-        )
+    _create_revision_database(database, SOURCE_REVISION)
     clone_path = tmp_path / "compressed-clone.json"
     _clone_receipt(clone_path, database)
     _patch_environment(monkeypatch)

@@ -20,9 +20,12 @@ from provenance.immutable_artifact import (  # noqa: E402
     ImmutableArtifactSnapshot,
     assert_artifact_unchanged,
     path_aliases_any,
+    population_database_lock_resources,
     publish_text_no_clobber,
     read_stable_artifact,
+    require_canonical_text_artifact,
     require_no_reparse_points,
+    validate_population_database_target,
 )
 from provenance.population_canonical_resolution import (  # noqa: E402
     CanonicalResolutionOperationReceipt,
@@ -35,6 +38,7 @@ from provenance.population_canonical_resolution import (  # noqa: E402
     persist_canonical_resolution_receipt,
     populate_canonical_resolution,
     verify_canonical_resolution_receipt,
+    verify_canonical_resolution_receipt_current,
 )
 from provenance.population_document_processing import (  # noqa: E402
     DocumentProcessingOperationReceipt,
@@ -148,12 +152,17 @@ def validate_checkpoint_resume(
         or receipt.request.operation_recorded_at != operation_recorded_at
     ):
         raise ValueError("canonical checkpoint temporal scope does not match")
-    if max_cells is not None:
+    bounded = after_cell_id is not None or max_cells is not None
+    if bounded:
+        if not receipt.result.checkpoint.can_resume:
+            raise ValueError("canonical prior receipt is not a resumable checkpoint")
+        if receipt.request.phase != phase or receipt.result.phase != phase:
+            raise ValueError("canonical checkpoint phase does not match")
         if receipt.request.max_cells != max_cells:
             raise ValueError("canonical checkpoint batch shape does not match")
         if receipt.result.last_canonical_metric_cell_id != after_cell_id:
             raise ValueError("canonical resume cursor does not match the checkpoint")
-    elif phase not in {"snapshots", "projections"} or (
+    elif phase not in {"snapshots", "projections", "all"} or (
         receipt.result.checkpoint.remaining_cell_count != 0
     ):
         raise ValueError("canonical sealing handoff requires a completed checkpoint")
@@ -170,8 +179,21 @@ def validate_checkpoint_successor(
 
     if alembic_revision != receipt.alembic_revision:
         raise ValueError("canonical checkpoint database revision changed")
-    if request.max_cells is not None and request.max_cells != receipt.request.max_cells:
-        raise ValueError("canonical checkpoint successor batch shape changed")
+    bounded = request.after_canonical_metric_cell_id is not None or request.max_cells is not None
+    if bounded:
+        if not receipt.result.checkpoint.can_resume:
+            raise ValueError("canonical checkpoint successor parent cannot resume")
+        if request.phase != receipt.request.phase or result.phase != receipt.result.phase:
+            raise ValueError("canonical checkpoint successor phase changed")
+        if request.max_cells != receipt.request.max_cells:
+            raise ValueError("canonical checkpoint successor batch shape changed")
+        if request.after_canonical_metric_cell_id != receipt.result.last_canonical_metric_cell_id:
+            raise ValueError("canonical checkpoint successor cursor changed")
+    elif (
+        request.phase not in {"snapshots", "projections", "all"}
+        or receipt.result.checkpoint.remaining_cell_count != 0
+    ):
+        raise ValueError("canonical checkpoint is not ready for sealing")
     if result.output_commitment_sha256 != receipt.result.post_state_commitment_sha256:
         raise ValueError("canonical state changed since prior checkpoint")
     if result.input_commitment_sha256 != receipt.result.input_commitment_sha256:
@@ -205,7 +227,7 @@ def validate_receipt_path(
     return destination
 
 
-def _load_canonical_receipt(
+def load_canonical_resolution_receipt_artifact(
     path: Path,
 ) -> tuple[ImmutableArtifactSnapshot, CanonicalResolutionOperationReceipt]:
     snapshot, payload = read_stable_artifact(path)
@@ -215,6 +237,7 @@ def _load_canonical_receipt(
         raise ValueError("canonical receipt payload is invalid") from exc
     if not verify_canonical_resolution_receipt(receipt):
         raise ValueError("canonical receipt commitment is invalid")
+    require_canonical_text_artifact(snapshot, receipt.model_dump_json())
     return snapshot, receipt
 
 
@@ -228,6 +251,7 @@ def _load_document_receipt(
         raise ValueError("document prerequisite payload is invalid") from exc
     if not verify_document_processing_receipt(receipt):
         raise ValueError("document prerequisite commitment is invalid")
+    require_canonical_text_artifact(snapshot, receipt.model_dump_json())
     return snapshot, receipt
 
 
@@ -308,8 +332,6 @@ def _execute(args: argparse.Namespace) -> CanonicalResolutionOperationReceipt:
         args.input_commitment_sha256 is not None or args.plan_commitment_sha256 is not None
     ):
         raise ValueError("apply commitments must come only from the admission receipt")
-    if args.prior_checkpoint_receipt is not None and args.apply:
-        raise ValueError("a prior checkpoint is bound by the apply admission receipt")
     if (
         args.after_cell_id is not None
         and not args.apply
@@ -332,23 +354,32 @@ def _execute(args: argparse.Namespace) -> CanonicalResolutionOperationReceipt:
         protected_receipts=input_paths,
     )
     resources = [
-        f"sqlite:{Path(os.path.abspath(args.db))}",
+        *population_database_lock_resources(args.db, portfolio_db_path(PROJECT_ROOT)),
         f"artifact:{receipt_path}",
         *(f"artifact:{Path(os.path.abspath(path))}" for path in input_paths),
     ]
-    if Path(os.path.abspath(args.db)) == portfolio_db_path(PROJECT_ROOT):
-        resources.append("portfolio-db")
     with JobLock(PROJECT_ROOT, "populate-canonical-resolution", resources):
+        database_path = validate_population_database_target(
+            args.db, portfolio_db_path(PROJECT_ROOT)
+        )
         document_snapshot, document = _load_document_receipt(args.document_prerequisite_receipt)
         admission_snapshot: ImmutableArtifactSnapshot | None = None
         prior_snapshot: ImmutableArtifactSnapshot | None = None
         admission: CanonicalResolutionOperationReceipt | None = None
         prior: CanonicalResolutionOperationReceipt | None = None
         if args.admission_receipt is not None:
-            admission_snapshot, admission = _load_canonical_receipt(args.admission_receipt)
+            admission_snapshot, admission = load_canonical_resolution_receipt_artifact(
+                args.admission_receipt
+            )
         if args.prior_checkpoint_receipt is not None:
-            prior_snapshot, prior = _load_canonical_receipt(args.prior_checkpoint_receipt)
+            prior_snapshot, prior = load_canonical_resolution_receipt_artifact(
+                args.prior_checkpoint_receipt
+            )
         if admission is not None:
+            expected_prior_sha = admission.prior_checkpoint_receipt_sha256
+            actual_prior_sha = None if prior_snapshot is None else prior_snapshot.file_sha256
+            if actual_prior_sha != expected_prior_sha:
+                raise ValueError("canonical apply prior checkpoint differs from its admission")
             request = admitted_apply_request(
                 admission,
                 database=args.db,
@@ -374,9 +405,10 @@ def _execute(args: argparse.Namespace) -> CanonicalResolutionOperationReceipt:
                 max_cells=args.max_cells,
             )
         existing_output = (
-            None if not receipt_path.exists() else _load_canonical_receipt(receipt_path)
+            None
+            if not receipt_path.exists()
+            else load_canonical_resolution_receipt_artifact(receipt_path)
         )
-        database_path = Path(os.path.abspath(args.db))
         file_identity = _database_file_identity(database_path)
         role = SQLiteConnectionRole.WRITER if request.apply else SQLiteConnectionRole.READ_ONLY
         conn = connect_sqlite(database_path, role=role, schema_preflight=request.apply)
@@ -390,6 +422,11 @@ def _execute(args: argparse.Namespace) -> CanonicalResolutionOperationReceipt:
                 raise ValueError("canonical admission database identity changed")
             if prior is not None and instance_id != prior.database_instance_id:
                 raise ValueError("canonical checkpoint database identity changed")
+            if (
+                prior is not None
+                and load_canonical_resolution_receipt(conn, prior.operation_id) != prior
+            ):
+                raise ValueError("canonical checkpoint is not canonical in the ledger")
             _validate_document_prerequisite(
                 conn,
                 document,
@@ -423,6 +460,7 @@ def _execute(args: argparse.Namespace) -> CanonicalResolutionOperationReceipt:
                     raise ImmutableArtifactConflictError(
                         "exported canonical receipt differs from its ledger"
                     )
+                verify_canonical_resolution_receipt_current(conn, stored)
                 assert_artifact_unchanged(document_snapshot)
                 if admission_snapshot is not None:
                     assert_artifact_unchanged(admission_snapshot)
@@ -479,7 +517,7 @@ def _execute(args: argparse.Namespace) -> CanonicalResolutionOperationReceipt:
         finally:
             conn.close()
         publish_text_no_clobber(receipt_path, receipt.model_dump_json())
-        exported_snapshot, exported = _load_canonical_receipt(receipt_path)
+        exported_snapshot, exported = load_canonical_resolution_receipt_artifact(receipt_path)
         if exported != receipt:
             raise ImmutableArtifactConflictError(
                 "exported canonical receipt differs from the canonical receipt"

@@ -65,6 +65,22 @@ def read_stable_artifact(path: Path) -> tuple[ImmutableArtifactSnapshot, bytes]:
     )
 
 
+def canonical_text_artifact_sha256(payload: str) -> str:
+    """Hash the exact UTF-8 bytes emitted by ``publish_text_no_clobber``."""
+
+    return sha256((payload + "\n").encode()).hexdigest()
+
+
+def require_canonical_text_artifact(
+    snapshot: ImmutableArtifactSnapshot,
+    canonical_payload: str,
+) -> None:
+    """Reject alternate serializations that cannot be resolved from a ledger model."""
+
+    if snapshot.file_sha256 != canonical_text_artifact_sha256(canonical_payload):
+        raise ImmutableArtifactConflictError("immutable artifact is not canonically serialized")
+
+
 def assert_artifact_unchanged(snapshot: ImmutableArtifactSnapshot) -> None:
     """Fail when an admitted artifact's identity or content has changed."""
 
@@ -140,6 +156,34 @@ def path_aliases_any(path: Path, protected: set[Path]) -> bool:
         except OSError as exc:
             raise ImmutableArtifactConflictError("artifact alias check failed") from exc
     return False
+
+
+def population_database_lock_resources(
+    database: Path,
+    portfolio_database: Path,
+) -> tuple[str, ...]:
+    """Reserve both the target and canonical writer namespaces before path admission."""
+
+    candidate = _lexical_absolute(database)
+    portfolio = _lexical_absolute(portfolio_database)
+    require_no_reparse_points(candidate)
+    require_no_reparse_points(portfolio)
+    return (f"sqlite:{candidate}", "portfolio-db")
+
+
+def validate_population_database_target(
+    database: Path,
+    portfolio_database: Path,
+) -> Path:
+    """Validate one population target after the canonical writer lock is held."""
+
+    candidate = _lexical_absolute(database)
+    portfolio = _lexical_absolute(portfolio_database)
+    require_no_reparse_points(candidate)
+    require_no_reparse_points(portfolio)
+    if candidate != portfolio and path_aliases_any(candidate, {portfolio}):
+        raise ValueError("population database aliases the portfolio database")
+    return candidate
 
 
 def require_no_reparse_points(path: Path) -> None:

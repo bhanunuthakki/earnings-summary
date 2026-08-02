@@ -30,6 +30,7 @@ from provenance.canonical_fact_resolution import (
     ResolutionPolicy,
     ResolutionSnapshotScope,
 )
+from provenance.immutable_artifact import canonical_text_artifact_sha256
 from provenance.population_completeness import (
     PopulationArtifactSetCommitment,
     PopulationPlaneVerification,
@@ -234,14 +235,28 @@ class CanonicalResolutionOperationReceipt(_FrozenModel):
 
     @model_validator(mode="after")
     def _receipt_contract(self) -> Self:
+        bounded = (
+            self.request.after_canonical_metric_cell_id is not None
+            or self.request.max_cells is not None
+        )
         if self.request.apply != (self.result.mode == "apply"):
             raise ValueError("canonical operation receipt mode does not match its result")
+        if self.result.phase != self.request.phase:
+            raise ValueError("canonical operation result phase does not match its request")
+        if self.result.checkpoint.bounded != bounded:
+            raise ValueError("canonical operation bounded result does not match its request")
         if self.request.apply != (self.admission_receipt_sha256 is not None):
             raise ValueError("a canonical apply receipt requires one dry-run admission")
         if self.request.after_canonical_metric_cell_id is not None and (
             self.prior_checkpoint_receipt_sha256 is None
         ):
             raise ValueError("a canonical cursor resume must bind one prior checkpoint")
+        if (
+            self.prior_checkpoint_receipt_sha256 is not None
+            and not bounded
+            and (self.request.phase not in {"snapshots", "projections", "all"})
+        ):
+            raise ValueError("an unbounded canonical successor must be a sealing phase")
         if self.request_sha256 != _model_sha(self.request):
             raise ValueError("canonical operation request commitment does not match")
         if self.result_sha256 != _model_sha(self.result):
@@ -321,6 +336,116 @@ def verify_canonical_resolution_receipt(
     return True
 
 
+def verify_canonical_resolution_receipt_current_result(
+    receipt: CanonicalResolutionOperationReceipt,
+    current: CanonicalResolutionPopulationResult,
+    *,
+    historical_checkpoint: bool = False,
+) -> None:
+    """Compare replay evidence with checkpoint-stable or terminal-current commitments."""
+
+    if not receipt.request.apply:
+        raise ValueError("stored canonical replay receipt is not applied")
+    expected = receipt.result
+    if historical_checkpoint:
+        if receipt.outcome != "checkpoint":
+            raise ValueError("only a canonical checkpoint can be verified as historical")
+        stable_expected = (
+            expected.input_commitment_sha256,
+            expected.plan_commitment_sha256,
+            expected.resolution_plan_commitment_sha256,
+            expected.expected_cell_count,
+            expected.planned_resolved_cell_count,
+            expected.planned_unresolved_cell_count,
+            expected.planned_retired_cell_count,
+            expected.resolution_reason_counts,
+            expected.expected_issuer_count,
+        )
+        stable_current = (
+            current.input_commitment_sha256,
+            current.plan_commitment_sha256,
+            current.resolution_plan_commitment_sha256,
+            current.expected_cell_count,
+            current.planned_resolved_cell_count,
+            current.planned_unresolved_cell_count,
+            current.planned_retired_cell_count,
+            current.resolution_reason_counts,
+            current.expected_issuer_count,
+        )
+        if stable_current != stable_expected:
+            raise ValueError("stored canonical checkpoint changed its stable source universe")
+        return
+    current_plane: dict[str, object] = {
+        "expected_cell_count": current.expected_cell_count,
+        "expected_issuer_count": current.expected_issuer_count,
+        "input_commitment_sha256": current.input_commitment_sha256,
+        "output_commitment_sha256": current.output_commitment_sha256,
+        "plan_commitment_sha256": current.plan_commitment_sha256,
+        "planned_resolved_cell_count": current.planned_resolved_cell_count,
+        "planned_retired_cell_count": current.planned_retired_cell_count,
+        "planned_unresolved_cell_count": current.planned_unresolved_cell_count,
+        "post_state_commitment_sha256": current.post_state_commitment_sha256,
+        "projection_count": current.projection_count,
+        "projection_entry_count": current.projection_entry_count,
+        "remaining_cell_count": current.checkpoint.remaining_cell_count,
+        "resolution_plan_commitment_sha256": current.resolution_plan_commitment_sha256,
+        "resolution_reason_counts": current.resolution_reason_counts,
+        "resolution_snapshot_count": current.resolution_snapshot_count,
+        "resolved_cell_count": current.resolved_cell_count,
+        "retired_cell_count": current.retired_cell_count,
+        "safe_to_seal": current.checkpoint.safe_to_seal,
+        "unresolved_cell_count": current.unresolved_cell_count,
+    }
+    expected_plane: dict[str, object] = {
+        "expected_cell_count": expected.expected_cell_count,
+        "expected_issuer_count": expected.expected_issuer_count,
+        "input_commitment_sha256": expected.input_commitment_sha256,
+        "output_commitment_sha256": expected.output_commitment_sha256,
+        "plan_commitment_sha256": expected.plan_commitment_sha256,
+        "planned_resolved_cell_count": expected.planned_resolved_cell_count,
+        "planned_retired_cell_count": expected.planned_retired_cell_count,
+        "planned_unresolved_cell_count": expected.planned_unresolved_cell_count,
+        "post_state_commitment_sha256": expected.post_state_commitment_sha256,
+        "projection_count": expected.projection_count,
+        "projection_entry_count": expected.projection_entry_count,
+        "remaining_cell_count": expected.checkpoint.remaining_cell_count,
+        "resolution_plan_commitment_sha256": expected.resolution_plan_commitment_sha256,
+        "resolution_reason_counts": expected.resolution_reason_counts,
+        "resolution_snapshot_count": expected.resolution_snapshot_count,
+        "resolved_cell_count": expected.resolved_cell_count,
+        "retired_cell_count": expected.retired_cell_count,
+        "safe_to_seal": expected.checkpoint.safe_to_seal,
+        "unresolved_cell_count": expected.unresolved_cell_count,
+    }
+    if current_plane != expected_plane:
+        raise ValueError("stored canonical receipt no longer matches current planes")
+
+
+def verify_canonical_resolution_receipt_current(
+    conn: sqlite3.Connection,
+    receipt: CanonicalResolutionOperationReceipt,
+) -> None:
+    """Recompute current canonical planes and verify one stored replay receipt."""
+
+    chain = _canonical_resolution_receipt_verification_chain(conn, receipt)
+    for position, item in enumerate(chain):
+        current = populate_canonical_resolution(
+            conn,
+            item.request.model_copy(
+                update={
+                    "apply": False,
+                    "input_commitment_sha256": None,
+                    "plan_commitment_sha256": None,
+                }
+            ),
+        )
+        verify_canonical_resolution_receipt_current_result(
+            item,
+            current,
+            historical_checkpoint=position < len(chain) - 1,
+        )
+
+
 def database_instance_id(conn: sqlite3.Connection) -> str:
     """Return the immutable identity installed for this database lineage."""
 
@@ -396,6 +521,125 @@ def load_canonical_resolution_receipt(
     if not verify_canonical_resolution_receipt(receipt) or receipt.operation_id != operation_id:
         raise ValueError("stored canonical operation receipt is invalid")
     return receipt
+
+
+def _canonical_resolution_receipt_verification_chain(
+    conn: sqlite3.Connection,
+    receipt: CanonicalResolutionOperationReceipt,
+) -> tuple[CanonicalResolutionOperationReceipt, ...]:
+    rows = conn.execute("SELECT receipt_json FROM canonical_resolution_operation_ledger").fetchall()
+    ledger = tuple(
+        CanonicalResolutionOperationReceipt.model_validate_json(str(row[0])) for row in rows
+    )
+    if any(not verify_canonical_resolution_receipt(item) for item in ledger):
+        raise ValueError("canonical ledger contains an invalid receipt")
+    if sum(item == receipt for item in ledger) != 1:
+        raise ValueError("canonical replay receipt is not the canonical ledger receipt")
+    chain = [receipt]
+    seen = {receipt.receipt_sha256}
+    while chain[0].prior_checkpoint_receipt_sha256 is not None:
+        child = chain[0]
+        parents = tuple(
+            item
+            for item in ledger
+            if _canonical_receipt_artifact_sha(item) == child.prior_checkpoint_receipt_sha256
+        )
+        if len(parents) != 1:
+            raise ValueError("canonical checkpoint parent is missing or ambiguous")
+        parent = parents[0]
+        if parent.outcome != "checkpoint":
+            raise ValueError("canonical successor parent is not a checkpoint")
+        if parent.receipt_sha256 in seen:
+            raise ValueError("canonical checkpoint ancestry is cyclic")
+        siblings = tuple(
+            item
+            for item in ledger
+            if item.prior_checkpoint_receipt_sha256 == _canonical_receipt_artifact_sha(parent)
+        )
+        if len(siblings) != 1 or siblings[0] != child:
+            raise ValueError("canonical checkpoint successor is ambiguous")
+        _validate_canonical_resolution_receipt_successor(parent, child)
+        chain.insert(0, parent)
+        seen.add(parent.receipt_sha256)
+    while chain[-1].outcome == "checkpoint":
+        parent = chain[-1]
+        successors = tuple(
+            item
+            for item in ledger
+            if item.prior_checkpoint_receipt_sha256 == _canonical_receipt_artifact_sha(parent)
+        )
+        if not successors:
+            break
+        if len(successors) != 1:
+            raise ValueError("canonical checkpoint successor is ambiguous")
+        successor = successors[0]
+        if successor.receipt_sha256 in seen:
+            raise ValueError("canonical checkpoint successor chain is cyclic")
+        _validate_canonical_resolution_receipt_successor(parent, successor)
+        chain.append(successor)
+        seen.add(successor.receipt_sha256)
+    if len(chain) > 1 and not _canonical_receipt_is_terminal_success(chain[-1]):
+        raise ValueError("canonical checkpoint successor chain is not terminal")
+    return tuple(chain)
+
+
+def _validate_canonical_resolution_receipt_successor(
+    parent: CanonicalResolutionOperationReceipt,
+    successor: CanonicalResolutionOperationReceipt,
+) -> None:
+    if (
+        successor.database_path != parent.database_path
+        or successor.database_instance_id != parent.database_instance_id
+        or successor.alembic_revision != parent.alembic_revision
+        or successor.document_prerequisite_receipt_sha256
+        != parent.document_prerequisite_receipt_sha256
+    ):
+        raise ValueError("canonical checkpoint successor database or prerequisite changed")
+    if (
+        successor.request.cutoff_at != parent.request.cutoff_at
+        or successor.request.operation_recorded_at != parent.request.operation_recorded_at
+    ):
+        raise ValueError("canonical checkpoint successor scope changed")
+    successor_bounded = (
+        successor.request.after_canonical_metric_cell_id is not None
+        or successor.request.max_cells is not None
+    )
+    if successor_bounded:
+        if (
+            successor.request.phase != parent.request.phase
+            or successor.request.max_cells != parent.request.max_cells
+        ):
+            raise ValueError("canonical checkpoint successor batch shape changed")
+        if (
+            successor.request.after_canonical_metric_cell_id
+            != parent.result.last_canonical_metric_cell_id
+        ):
+            raise ValueError("canonical checkpoint successor cursor changed")
+    elif (
+        successor.request.phase not in {"snapshots", "projections", "all"}
+        or parent.result.checkpoint.remaining_cell_count != 0
+    ):
+        raise ValueError("canonical sealing successor is not ready")
+    if (
+        successor.result.input_commitment_sha256 != parent.result.input_commitment_sha256
+        or successor.result.resolution_plan_commitment_sha256
+        != parent.result.resolution_plan_commitment_sha256
+    ):
+        raise ValueError("canonical checkpoint successor commitments changed")
+
+
+def _canonical_receipt_is_terminal_success(
+    receipt: CanonicalResolutionOperationReceipt,
+) -> bool:
+    bounded = (
+        receipt.request.after_canonical_metric_cell_id is not None
+        or receipt.request.max_cells is not None
+    )
+    return receipt.request.apply and not bounded and receipt.outcome == "complete"
+
+
+def _canonical_receipt_artifact_sha(receipt: CanonicalResolutionOperationReceipt) -> str:
+    return canonical_text_artifact_sha256(receipt.model_dump_json())
 
 
 def canonical_resolution_operation_id(
