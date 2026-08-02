@@ -298,6 +298,37 @@ def test_panel_toolbar_is_one_band_title_then_controls() -> None:
     assert tb.index("k-toolbar-title") < tb.index("k-toolbar-controls")
 
 
+def test_panel_toolbar_sticky_pins_below_the_shell_topbar() -> None:
+    """Owner directive 2026-08-02: ``sticky=True`` adds ``.k-toolbar-sticky``
+    (never replacing ``.k-toolbar`` — the layout/spacing rules still apply),
+    and the plain non-sticky band is unaffected by the new kwarg."""
+    css = controls_css("dark")
+    band = css.split(".k-toolbar-sticky, .k-chip-tabs-sticky {", 1)[1].split("}", 1)[0]
+    assert "position: sticky" in band
+    assert "top: var(--cc-topbar-h, 0px)" in band
+    assert "background: var(--bg)" in band
+    assert "border-bottom: 1px solid var(--border)" in band
+
+    tb = panel_toolbar("Provenance", filters='<span class="k-chip">a</span>', sticky=True)
+    assert 'class="k-toolbar k-toolbar-sticky"' in tb
+    plain = panel_toolbar("Provenance", filters='<span class="k-chip">a</span>')
+    assert 'class="k-toolbar"' in plain and "k-toolbar-sticky" not in plain
+
+
+def test_chip_tab_active_state_is_an_underline_not_a_filled_pill() -> None:
+    """Owner directive 2026-08-02: a chip-tab's ACTIVE state must never change
+    the chip's box size (a filled pill / border recolor would), so it is
+    strictly an inset box-shadow (never resizes the box) + accent text —
+    never a ``background`` fill."""
+    css = controls_css("dark")
+    inactive = css.split(".k-chip-tab {", 1)[1].split("}", 1)[0]
+    assert "border-color: transparent" in inactive
+    active = css.split(".k-chip-tab.is-on {", 1)[1].split("}", 1)[0]
+    assert "color: var(--accent)" in active
+    assert "box-shadow: inset 0 -2px 0 0 var(--accent)" in active
+    assert "background" not in active  # never a filled pill
+
+
 def test_panel_section_title_suppressed_when_nav_owns_it() -> None:
     """A panel under a single-sub-tab section must not re-print its name — the
     nav already shows it (design_language §6.1)."""

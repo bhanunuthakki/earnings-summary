@@ -205,6 +205,21 @@ button.k-chip, .k-chip-btn { cursor: pointer; font: inherit; font-size: var(--fs
 button.k-chip:hover, .k-chip-btn:hover { color: var(--fg); border-color: var(--border-2); }
 button.k-chip.is-on, .k-chip-btn.is-on { color: var(--accent); border-color: var(--accent); }
 
+/* ---- chip-tab: the section-nav / pane-switcher variant of a clickable chip
+   (owner directive 2026-08-02 — sticky nav bands must never change height
+   between active and inactive chips). Same pill shape as any other chip;
+   its ACTIVE state is a 2px accent underline (an inset box-shadow, which
+   never resizes the box) + accent text, NEVER a filled pill or a
+   full-perimeter border recolor. Compose as .k-chip.k-chip-btn.k-chip-tab
+   and toggle .is-on exactly like any other chip — every console's jump-nav
+   and pane-switcher chips share this ONE primitive instead of each
+   reinventing an active-state treatment. ---- */
+.k-chip-tab { border-color: transparent; }
+.k-chip-tab.is-on {
+  color: var(--accent); border-color: transparent;
+  box-shadow: inset 0 -2px 0 0 var(--accent);
+}
+
 /* ---- the canonical ticker label: mono symbol + muted truncated name ---- */
 .k-tick { display: inline-flex; align-items: baseline; gap: 7px; min-width: 0;
   max-width: 100%; }
@@ -349,6 +364,23 @@ details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
   margin-right: auto; }
 .k-toolbar-controls { display: flex; align-items: center; gap: var(--sp-2);
   flex-wrap: wrap; margin-left: auto; }
+
+/* ---- sticky chip-tab / section-nav bands (owner directive 2026-08-02):
+   "sticky, cut the vertical space, accentuate with a line or shade — not
+   height". Pinned just below the shell topbar (--cc-topbar-h, set by
+   command_center_shell.py; the 0px fallback keeps this safe to compose on a
+   surface with no shell topbar) with a background + one hairline so content
+   scrolling underneath stays readable, and its own padding trimmed to the
+   low end of the --sp scale so pinning it never grows the page.
+   .k-toolbar-sticky is the panel_toolbar(sticky=True) modifier (a console's
+   jump-nav band); .k-chip-tabs-sticky is the same treatment for a bare chip
+   row that isn't a full toolbar (the Health console's per-card pane
+   switcher) — ONE offset + one look, two attachment points. ---- */
+.k-toolbar-sticky, .k-chip-tabs-sticky {
+  position: sticky; top: var(--cc-topbar-h, 0px); z-index: 20;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: var(--sp-1) 0; margin-bottom: var(--sp-2);
+}
 
 /* ---- rendered prose: the shared container for render_prose() output
    (design_language §9; src/ui/prose.py). ONE token-only treatment for every

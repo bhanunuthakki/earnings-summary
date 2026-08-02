@@ -97,6 +97,18 @@ def test_overview_demotes_upcoming_into_the_inbox_rail() -> None:
     assert ".up-strip {" in SHELL_CSS
 
 
+def test_topbar_height_is_a_shared_css_variable() -> None:
+    """Owner directive 2026-08-02: every sticky band below the topbar (the
+    Home rail here, a console's chip-tab nav in ui/controls.py) reads ONE
+    centralized offset instead of each hand-guessing a pixel value. Pin the
+    variable exists and that the rail consumes it rather than a hardcoded
+    literal — a regression here silently breaks every sticky consumer at once."""
+    assert ":root { --cc-topbar-h:" in SHELL_CSS
+    assert "position: sticky; top: 0;" in SHELL_CSS  # the topbar itself, unmoved
+    assert ".cc-home-rail { position: sticky; top: var(--cc-topbar-h);" in SHELL_CSS
+    assert ".cc-home-rail { position: sticky; top: 64px;" not in SHELL_CSS
+
+
 def test_upcoming_rail_summary_is_informative_and_state_persists() -> None:
     """Wave B (B2): the collapsed Upcoming-earnings <details> must answer
     "anything soon?" while closed — the shell hoists the strip's

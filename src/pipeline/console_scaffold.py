@@ -12,6 +12,14 @@ Pure composition, no new CSS: the kit classes (``panel_toolbar`` + ``.k-chip``)
 carry the band, and each composed builder keeps its own styling. A builder that
 *raises* is caught and rendered as a small error card so one broken section
 never blanks the whole console (same contract as the Provenance console).
+
+The nav band renders ``panel_toolbar(sticky=True)`` (owner directive
+2026-08-02): it pins ``position: sticky`` just below the shell topbar
+(the ``.k-toolbar-sticky`` modifier in ``ui/controls.py``, offset from the
+shell's topbar-height custom property) so a long console (Allocation,
+Record, the Ledger console) keeps its jump chips reachable without
+re-scrolling to the top, and its chips carry ``.k-chip-tab`` for the shared
+underline-active look.
 """
 
 from __future__ import annotations
@@ -82,12 +90,13 @@ def render_console(
     ``.console-grid`` CSS — this scaffold stays styling-free.
     """
     nav = extra_nav + "".join(
-        f'<button type="button" class="k-chip k-chip-btn" data-console-jump="csec-{escape(anchor)}">'
+        f'<button type="button" class="k-chip k-chip-btn k-chip-tab" '
+        f'data-console-jump="csec-{escape(anchor)}">'
         f"{escape(label)}</button>"
         for anchor, label, _ in sections
         if anchor not in nav_exclude
     )
-    toolbar = panel_toolbar(title, filters=nav, suppress_title=True)
+    toolbar = panel_toolbar(title, filters=nav, suppress_title=True, sticky=True)
     body = "".join(
         f'<div class="console-sec{" csec-wide" if grid and anchor in wide else ""}" '
         f'id="csec-{escape(anchor)}">{_safe(label, fn)}</div>'

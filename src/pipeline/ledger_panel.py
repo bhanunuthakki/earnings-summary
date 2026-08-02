@@ -2500,7 +2500,8 @@ def _jump_chips(counts: dict[str, int], *, onmymind_on: bool) -> str:
     if not onmymind_on:
         sections.append(("musings", "Musings"))
     return "".join(
-        f'<button type="button" class="k-chip k-chip-btn" data-ledger-jump="ledger-jump-{anchor}">'
+        f'<button type="button" class="k-chip k-chip-btn k-chip-tab" '
+        f'data-ledger-jump="ledger-jump-{anchor}">'
         f"{escape(label)}"
         + (f' <span class="k-chip-mono">{counts[anchor]}</span>' if counts.get(anchor) else "")
         + "</button>"

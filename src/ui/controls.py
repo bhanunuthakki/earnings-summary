@@ -22,8 +22,10 @@ Composition contract — ``controls_css(default)`` rides immediately after
 * ``.k-btn`` + ``.k-btn-primary`` / ``.k-btn-quiet`` / ``.k-btn-danger`` —
   the WHOLE button hierarchy. One solid-accent primary per view, quiet for
   everything else, danger only for destructive actions.
-* ``.k-chip`` (+ tone modifiers, + ``.k-chip-btn`` for clickable filters) —
-  the one badge/chip shape: radius-full, caption type, uppercase.
+* ``.k-chip`` (+ tone modifiers, + ``.k-chip-btn`` for clickable filters, +
+  ``.k-chip-tab`` for a section-nav/pane-switcher chip whose ``.is-on`` state
+  is a 2px accent underline instead of a border recolor) — the one badge/chip
+  shape: radius-full, caption type, uppercase.
 * ``.k-tick`` — the canonical ticker label: mono ticker + regular-weight
   muted company name, ellipsis-truncated with the full name in ``title``.
   Use :func:`ticker_label`; never concatenate ``f"{ticker} · {name}"`` again.
@@ -71,7 +73,11 @@ Composition contract — ``controls_css(default)`` rides immediately after
   (design_language §6.1): title left, filters + actions on the same flex row.
   :func:`panel_section_title` emits (or, when the nav owns the title, suppresses)
   the panel's ``<h2>`` so an in-shell single-sub-tab panel never re-prints its
-  section name.
+  section name. ``panel_toolbar(sticky=True)`` adds ``.k-toolbar-sticky``
+  (owner directive 2026-08-02): pins the band below the shell topbar
+  (``var(--cc-topbar-h)``) with a background + hairline, for section-nav /
+  chip-tab bands only — ``.k-chip-tabs-sticky`` is the same treatment for a
+  bare chip row with no toolbar wrapper (the Health console's pane switcher).
 * ``.prose`` (+ its ``h3``-``h6`` / ``p`` / ``ul`` / ``li`` / ``strong`` /
   ``em`` / ``code`` / ``hr`` / ``table`` descendants) — the shared container for
   :func:`ui.prose.render_prose` output (design_language §9): ONE token-only
@@ -267,6 +273,21 @@ button.k-chip, .k-chip-btn { cursor: pointer; font: inherit; font-size: var(--fs
 button.k-chip:hover, .k-chip-btn:hover { color: var(--fg); border-color: var(--border-2); }
 button.k-chip.is-on, .k-chip-btn.is-on { color: var(--accent); border-color: var(--accent); }
 
+/* ---- chip-tab: the section-nav / pane-switcher variant of a clickable chip
+   (owner directive 2026-08-02 — sticky nav bands must never change height
+   between active and inactive chips). Same pill shape as any other chip;
+   its ACTIVE state is a 2px accent underline (an inset box-shadow, which
+   never resizes the box) + accent text, NEVER a filled pill or a
+   full-perimeter border recolor. Compose as .k-chip.k-chip-btn.k-chip-tab
+   and toggle .is-on exactly like any other chip — every console's jump-nav
+   and pane-switcher chips share this ONE primitive instead of each
+   reinventing an active-state treatment. ---- */
+.k-chip-tab { border-color: transparent; }
+.k-chip-tab.is-on {
+  color: var(--accent); border-color: transparent;
+  box-shadow: inset 0 -2px 0 0 var(--accent);
+}
+
 /* ---- the canonical ticker label: mono symbol + muted truncated name ---- */
 .k-tick { display: inline-flex; align-items: baseline; gap: 7px; min-width: 0;
   max-width: 100%; }
@@ -411,6 +432,23 @@ details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
   margin-right: auto; }
 .k-toolbar-controls { display: flex; align-items: center; gap: var(--sp-2);
   flex-wrap: wrap; margin-left: auto; }
+
+/* ---- sticky chip-tab / section-nav bands (owner directive 2026-08-02):
+   "sticky, cut the vertical space, accentuate with a line or shade — not
+   height". Pinned just below the shell topbar (--cc-topbar-h, set by
+   command_center_shell.py; the 0px fallback keeps this safe to compose on a
+   surface with no shell topbar) with a background + one hairline so content
+   scrolling underneath stays readable, and its own padding trimmed to the
+   low end of the --sp scale so pinning it never grows the page.
+   .k-toolbar-sticky is the panel_toolbar(sticky=True) modifier (a console's
+   jump-nav band); .k-chip-tabs-sticky is the same treatment for a bare chip
+   row that isn't a full toolbar (the Health console's per-card pane
+   switcher) — ONE offset + one look, two attachment points. ---- */
+.k-toolbar-sticky, .k-chip-tabs-sticky {
+  position: sticky; top: var(--cc-topbar-h, 0px); z-index: 20;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding: var(--sp-1) 0; margin-bottom: var(--sp-2);
+}
 
 /* ---- rendered prose: the shared container for render_prose() output
    (design_language §9; src/ui/prose.py). ONE token-only treatment for every
@@ -655,6 +693,7 @@ def panel_toolbar(
     filters: str = "",
     actions: str = "",
     suppress_title: bool = False,
+    sticky: bool = False,
 ) -> str:
     """The one operating band a panel gets before its content (design_language
     §6.1): the title on the left, ``filters`` + ``actions`` on the SAME flex
@@ -664,6 +703,16 @@ def panel_toolbar(
     filters, ``.k-btn`` actions, selects). ``suppress_title`` drops the heading
     when the nav owns it (single-sub-tab in-shell panels); the controls then
     left-align into the freed row. Returns ``""`` when there is nothing to draw.
+
+    ``sticky=True`` adds ``.k-toolbar-sticky`` (owner directive 2026-08-02):
+    the band pins ``position: sticky`` just below the shell topbar
+    (``var(--cc-topbar-h)``, set by ``command_center_shell.py``) with a
+    background + bottom hairline so content scrolling underneath stays
+    readable, and trims its padding to the low end of the ``--sp`` scale so
+    pinning it never grows the page. Reserved for section-nav / chip-tab
+    bands (the console composites, the Provenance anchor nav) — an ordinary
+    panel's one-off filter row should NOT opt in, or every panel on a long
+    page starts pinning its own band.
     """
     head = panel_section_title(title, suppressed=suppress_title)
     controls = (
@@ -671,7 +720,8 @@ def panel_toolbar(
     )
     if not head and not controls:
         return ""
-    return f'<div class="k-toolbar">{head}{controls}</div>'
+    cls = "k-toolbar k-toolbar-sticky" if sticky else "k-toolbar"
+    return f'<div class="{cls}">{head}{controls}</div>'
 
 
 def k_empty(line: str, chip_html: str = "") -> str:

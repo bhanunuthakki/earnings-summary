@@ -1038,6 +1038,14 @@ button { transition: color var(--transition), border-color var(--transition),
 .cc-sr-only { position: absolute; width: 1px; height: 1px; padding: 0;
   margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
 
+/* The shell topbar's rendered height, centralized (owner directive
+   2026-08-02: sticky console nav bands pin just below it). Every sticky band
+   further down the page (this rail, a console's chip-tab nav) reads ONE
+   number instead of a hand-measured pixel guess per consumer — bump this if
+   the topbar's own padding/content ever grows instead of re-tuning each
+   sticky consumer separately. */
+:root { --cc-topbar-h: 64px; }
+
 /* One sticky top bar: brand + section nav + utility links. The only other
    chrome is the active section's single sub-row (suppressed entirely for
    single-tab sections), so content starts ~90px from the top instead of ~200. */
@@ -1093,7 +1101,7 @@ button { transition: color var(--transition), border-color var(--transition),
    instead of overlapping the rail. */
 .cc-home-main { min-width: 0; }
 .cc-home-main .lg { overflow-x: auto; }
-.cc-home-rail { position: sticky; top: 64px; min-width: 0; }
+.cc-home-rail { position: sticky; top: var(--cc-topbar-h); min-width: 0; }
 .cc-home-rail-head { display: flex; align-items: baseline; justify-content: space-between;
   margin-bottom: var(--sp-2); }
 .cc-home-rail-head h2 { font-size: var(--fs-title); text-transform: uppercase;
