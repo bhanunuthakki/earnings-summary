@@ -45,13 +45,21 @@ __all__ = [
 ]
 
 # Columns selected unconditionally (present on every dcf_runs schema this
-# module has to read, including the oldest hand-rolled test fixtures) vs.
+# module has to read, including the oldest hand-rolled test fixtures: ticker
+# identifies the row, id is the primary key, created_at orders "latest") vs.
 # columns probed for presence (added by a later migration, or simply absent
-# on a hand-rolled test schema that never needed that field — e.g. the
-# decision-basis capture fixture has no ``live_price`` column at all, only
-# ``model_provenance.basis`` used to read it, and never read live_price).
-_CORE_COLUMNS = ("ticker", "id", "created_at", "valuation_date", "npv_per_share")
+# on a hand-rolled test schema that never needed that field — e.g.
+# bear_lint's own test fixture has no ``valuation_date``/``npv_per_share``
+# columns at all, since the original ``_latest_top_level_rows`` only ever
+# read ``live_price``/``assumption_snapshot_json``). Every field a caller
+# might read must be probed here, never assumed core, or a narrower
+# hand-rolled schema fails the whole query (caught by ``sqlite3.Error``,
+# degrading SILENTLY to "no row" — exactly the bug a missing-column probe
+# exists to prevent).
+_CORE_COLUMNS = ("ticker", "id", "created_at")
 _OPTIONAL_COLUMNS = (
+    "valuation_date",
+    "npv_per_share",
     "live_price",
     "live_price_at",
     "over_under_pct",
