@@ -1433,7 +1433,9 @@ def test_earnings_readout_peek_assembles_grounded_readout(repo: Path, db_path: P
     assert "last 8 quarters" in html
 
 
-def test_earnings_readout_peek_warn_status_renders_warn_toned_pill(repo: Path, db_path: Path) -> None:
+def test_earnings_readout_peek_warn_status_renders_warn_toned_pill(
+    repo: Path, db_path: Path
+) -> None:
     """Same fix as the prep peek's header: ``breach_status='warn'`` must
     render a warn-toned pill, not fall through to the un-toned base pill."""
     from pipeline.peeks import render_earnings_readout_peek

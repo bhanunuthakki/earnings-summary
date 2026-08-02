@@ -836,9 +836,7 @@ def test_tracked_tickers(tracked_db: Path, tmp_path: Path) -> None:
     assert tracked_tickers(tmp_path / "nope.db") == set()
 
 
-def test_build_portfolio_pack_excludes_archived_tickers(
-    tmp_path: Path, tracked_db: Path
-) -> None:
+def test_build_portfolio_pack_excludes_archived_tickers(tmp_path: Path, tracked_db: Path) -> None:
     """The Ask tab's portfolio pack must not ground on an archived name — its
     universe block and default tickers both come from ``_tracked_by_list``."""
     pack = build_portfolio_pack(tmp_path, tracked_db)
