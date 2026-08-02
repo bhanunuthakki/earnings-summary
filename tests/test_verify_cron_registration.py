@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import pytest
 
 from execution.verify_cron_registration import (
     TaskReport,
+    _command_executable,  # pyright: ignore[reportPrivateUsage]
     _extract_next_run_time,  # pyright: ignore[reportPrivateUsage]
     _parse_xml,  # pyright: ignore[reportPrivateUsage]
     _print_report,  # pyright: ignore[reportPrivateUsage]
@@ -153,7 +155,13 @@ def test_compare_all_ok(tmp_path: Path) -> None:
     )
     _write_task_xml(tmp_path / "backup_db.task.xml", r"\earnings-summary\backup_db", "02:45:00")
 
-    with patch("execution.verify_cron_registration._query_schtasks") as mock_q:
+    with (
+        patch("execution.verify_cron_registration._query_schtasks") as mock_q,
+        # These fixtures reuse REAL task names, so leaving the action lookup
+        # live would consult this machine's scheduler and judge it against a
+        # tmp_path root. This test is about registration, not checkout roots.
+        patch("execution.verify_cron_registration._query_task_commands", return_value=None),
+    ):
         mock_q.return_value = {
             r"\earnings-summary\refresh_cache".lower(): {
                 "name": r"\earnings-summary\refresh_cache",
@@ -360,7 +368,11 @@ def test_hourly_repetition_not_flagged_as_mismatch(tmp_path: Path) -> None:
     _write_hourly_task_xml(
         tmp_path / "onboard.task.xml", r"\earnings-summary\onboard_pending", "00:17:00"
     )
-    with patch("execution.verify_cron_registration._query_schtasks") as mock_q:
+    with (
+        patch("execution.verify_cron_registration._query_schtasks") as mock_q,
+        # Real task name — keep the live action lookup out of this test.
+        patch("execution.verify_cron_registration._query_task_commands", return_value=None),
+    ):
         mock_q.return_value = {
             r"\earnings-summary\onboard_pending".lower(): {
                 "name": r"\earnings-summary\onboard_pending",
@@ -515,4 +527,140 @@ def test_main_no_false_allclear_when_unparseable_mixed_with_ok(tmp_path: Path) -
             }
         }
         rc = main(["--cron-dir", str(tmp_path), "--quiet"])
+    assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# wrong-checkout detection
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        (r'"C:\repo dir\cron\run_x.bat" --flag', r"C:\repo dir\cron\run_x.bat"),
+        (r"C:\repo\cron\run_x.bat", r"C:\repo\cron\run_x.bat"),
+        (r"C:\repo\cron\run_x.bat --flag", r"C:\repo\cron\run_x.bat"),
+        ('"unterminated', None),
+        ("", None),
+        ("   ", None),
+    ],
+)
+def test_command_executable_extracts_image_path(command: str, expected: str | None) -> None:
+    assert _command_executable(command) == expected
+
+
+def _ready(name: str, next_run: str = "6/12/2026 3:00:00 AM") -> dict[str, str]:
+    return {"name": name, "next_run": next_run, "status": "Ready"}
+
+
+def test_compare_flags_task_registered_in_another_checkout(tmp_path: Path) -> None:
+    """The 2026-07-30 outage: right wrapper name, wrong repo, own empty DB."""
+    root = tmp_path / "main-checkout"
+    other = tmp_path / "runtime-checkout"
+    (root / "cron").mkdir(parents=True)
+    (other / "cron").mkdir(parents=True)
+    name = r"\earnings-summary\refresh_cache"
+    _write_task_xml(tmp_path / "refresh_cache.task.xml", name, "03:00:00")
+
+    stray = str(other / "cron" / "run_refresh_cache.bat")
+    with (
+        patch("execution.verify_cron_registration._query_schtasks") as mock_q,
+        patch("execution.verify_cron_registration._query_task_commands") as mock_c,
+    ):
+        mock_q.return_value = {name.lower(): _ready(name)}
+        mock_c.return_value = {name.lower(): stray}
+        report, _xml = compare(tmp_path, project_root=root)
+
+    assert report.has_problems
+    assert [n for n, _cmd in report.wrong_root] == [name]
+    # It is NOT reported as healthy — the whole point is that every other
+    # check passes for this task.
+    assert name not in report.ok
+    assert not report.missing and not report.disabled and not report.mismatch
+
+
+def test_compare_accepts_task_registered_in_this_checkout(tmp_path: Path) -> None:
+    root = tmp_path / "main-checkout"
+    (root / "cron").mkdir(parents=True)
+    name = r"\earnings-summary\refresh_cache"
+    _write_task_xml(tmp_path / "refresh_cache.task.xml", name, "03:00:00")
+
+    good = f'"{root / "cron" / "run_refresh_cache.bat"}"'
+    with (
+        patch("execution.verify_cron_registration._query_schtasks") as mock_q,
+        patch("execution.verify_cron_registration._query_task_commands") as mock_c,
+    ):
+        mock_q.return_value = {name.lower(): _ready(name)}
+        mock_c.return_value = {name.lower(): good}
+        report, _xml = compare(tmp_path, project_root=root)
+
+    assert not report.has_problems
+    assert name in report.ok
+
+
+def test_compare_skips_root_check_when_commands_unavailable(tmp_path: Path) -> None:
+    """No action data (non-Windows, permission error) must not accuse every task."""
+    root = tmp_path / "main-checkout"
+    (root / "cron").mkdir(parents=True)
+    name = r"\earnings-summary\refresh_cache"
+    _write_task_xml(tmp_path / "refresh_cache.task.xml", name, "03:00:00")
+
+    with (
+        patch("execution.verify_cron_registration._query_schtasks") as mock_q,
+        patch("execution.verify_cron_registration._query_task_commands", return_value=None),
+    ):
+        mock_q.return_value = {name.lower(): _ready(name)}
+        report, _xml = compare(tmp_path, project_root=root)
+
+    assert not report.has_problems
+    assert not report.wrong_root
+    assert name in report.ok
+
+
+def test_wrong_root_surfaces_in_payload_and_output(tmp_path: Path) -> None:
+    root = tmp_path / "main-checkout"
+    other = tmp_path / "runtime-checkout"
+    (root / "cron").mkdir(parents=True)
+    (other / "cron").mkdir(parents=True)
+    name = r"\earnings-summary\refresh_cache"
+    _write_task_xml(tmp_path / "refresh_cache.task.xml", name, "03:00:00")
+
+    stray = str(other / "cron" / "run_refresh_cache.bat")
+    with (
+        patch("execution.verify_cron_registration._query_schtasks") as mock_q,
+        patch("execution.verify_cron_registration._query_task_commands") as mock_c,
+    ):
+        mock_q.return_value = {name.lower(): _ready(name)}
+        mock_c.return_value = {name.lower(): stray}
+        report, xml_tasks = compare(tmp_path, project_root=root)
+
+    payload = report_payload(report, xml_tasks)
+    assert payload["status"] == "failed"
+    # report_payload's contract is dict[str, object]; narrow at the boundary.
+    entries = cast(list[dict[str, str]], payload["wrong_root"])
+    assert len(entries) == 1
+    assert entries[0]["task"] == name
+    assert entries[0]["command"] == stray
+
+    _print_report(report, xml_tasks)
+
+
+def test_main_exits_nonzero_on_wrong_checkout(tmp_path: Path) -> None:
+    root = tmp_path / "main-checkout"
+    other = tmp_path / "runtime-checkout"
+    (root / "cron").mkdir(parents=True)
+    (other / "cron").mkdir(parents=True)
+    name = r"\earnings-summary\refresh_cache"
+    _write_task_xml(tmp_path / "refresh_cache.task.xml", name, "03:00:00")
+
+    with (
+        patch("execution.verify_cron_registration._query_schtasks") as mock_q,
+        patch("execution.verify_cron_registration._query_task_commands") as mock_c,
+        patch("execution.verify_cron_registration.PROJECT_ROOT", root),
+    ):
+        mock_q.return_value = {name.lower(): _ready(name)}
+        mock_c.return_value = {name.lower(): str(other / "cron" / "run_refresh_cache.bat")}
+        rc = main(["--cron-dir", str(tmp_path), "--quiet"])
+
     assert rc == 1
