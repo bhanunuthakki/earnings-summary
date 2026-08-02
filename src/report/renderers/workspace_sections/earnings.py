@@ -24,9 +24,9 @@ from report.models import (
     ThemeRollup,
 )
 from report.renderers.workspace_sections._shared import (
-    _empty_panel,
     _esc,
     _fmt_pct,
+    _inline_md,
     _missing_panel,
     _panel_head,
     _quarter_selector,
@@ -47,7 +47,7 @@ __all__ = [
     "_fmt_line_value",
     "_growth_pair_cell",
     "_pos_of_card",
-    "_qa_roster_panel_for_quarter",
+    "_qa_roster_panel",
     "_qa_row",
     "_source_for_display_index",
     "_surprise_tone",
@@ -101,8 +101,14 @@ def _earnings_tab(
         )
         _financial_highlights_panel(body, card, _financials_for_card(card, financials))
         _earnings_narrative_panel(body, card, ticker, repo_root)
-        _qa_roster_panel_for_quarter(body, qa, card.quarter, card.year)
         body.write("</div>")
+
+    # design_language §6.2 — the "Analyst Q&A" title is constant metadata; it
+    # used to restate a full panel-head per quarter card (N identical titles
+    # stacked in the DOM even though only one quarter is visible at a time).
+    # ONE panel-head now, with the per-quarter roster swapped by the SAME
+    # quarter-toggle the highlights/narrative panels above use.
+    _qa_roster_panel(body, qa, cards)
 
     body.write("</div>")
 
@@ -199,7 +205,7 @@ def _theme_list(body: StringIO, themes: list[ThemeRollup]) -> None:
     for theme in themes:
         body.write('<li class="theme-row">')
         body.write(
-            f'<div class="theme-head"><strong>{_esc(theme.theme_name)}</strong>'
+            f'<div class="theme-head"><strong>{_inline_md(theme.theme_name)}</strong>'
             f' <span class="muted">({theme.last_4q_count} mentions)</span></div>'
         )
         if theme.mentions_per_quarter:
@@ -387,38 +393,52 @@ def _growth_pair_cell(curr: float | None, base: float | None) -> str:
     return f'<td class="{cls}">{pct:+.1f}%</td>'
 
 
-def _qa_roster_panel_for_quarter(
+def _qa_roster_panel(
     body: StringIO,
     qa: QARosterSection | None,
-    quarter: str,
-    year: int,
+    cards: list[QuarterlyEarningsCard],
 ) -> None:
-    """Render the analyst Q&A panel for the named quarter. Falls back to a
-    stub when that quarter's transcript hasn't been parsed."""
-    if qa is None:
+    """ONE "Analyst Q&A" panel shared across every quarter (design_language
+    §6.2 — constant metadata rides an existing frame, stated once; the
+    quarter is the per-item label, not a restated title). Previously each
+    quarter card carried its own full ``.panel`` with an identical
+    "Analyst Q&A" ``.panel-title`` — N boxed, bordered panel-heads restating
+    the same constant text, one per quarter on file. The per-quarter roster
+    now swaps inside ONE panel body via the SAME quarter-toggle the
+    highlights/narrative panels use — ``workspace_script``'s toggle queries
+    ``[data-quarter-card][data-quarter-group]`` globally (not scoped to a
+    parent), so these toggle divs don't need to nest under the per-quarter
+    wrapper in ``_earnings_tab``."""
+    if qa is None or not cards:
         return
-    matching = _find_qa_quarter(qa, quarter, year)
-    if matching is None:
-        _empty_panel(
-            body,
-            "Analyst Q&A",
-            "No parsed transcript on file for this quarter. Older calls often "
-            "drop out of the transcript window, and some quarters publish "
-            "without a Q&A session.",
-            reason=f"{quarter} {year} call · not parsed",
+    body.write(_panel_head("Analyst Q&A", sub="questions from the analyst call"))
+    for i, card in enumerate(cards):
+        display = "" if i == 0 else "display:none"
+        qid = f"{card.quarter} {card.year}"
+        body.write(
+            f'<div data-quarter-card data-quarter-group="earnings" '
+            f'data-quarter="{_esc(qid)}" style="{display}">'
         )
-        return
-    body.write(
-        _panel_head(
-            "Analyst Q&A",
-            sub=f"{matching.quarter} {matching.year} call · "
-            f"{len(matching.entries)} question{'s' if len(matching.entries) != 1 else ''}",
-        )
-    )
-    body.write('<div class="qa-list">')
-    for i, entry in enumerate(matching.entries):
-        _qa_row(body, entry, is_first=i == 0)
-    body.write("</div></div>")
+        matching = _find_qa_quarter(qa, card.quarter, card.year)
+        if matching is None:
+            body.write(
+                '<div class="panel-empty-body">No parsed transcript on file for '
+                "this quarter&rsquo;s Q&amp;A. Older calls often drop out of the "
+                "transcript window, and some quarters publish without a Q&amp;A "
+                "session.</div>"
+            )
+        else:
+            n = len(matching.entries)
+            body.write(
+                f'<div class="panel-sub qa-quarter-sub">{_esc(matching.quarter)} '
+                f"{matching.year} call &middot; {n} question{'s' if n != 1 else ''}</div>"
+            )
+            body.write('<div class="qa-list">')
+            for j, entry in enumerate(matching.entries):
+                _qa_row(body, entry, is_first=j == 0)
+            body.write("</div>")
+        body.write("</div>")
+    body.write("</div>")
 
 
 def _find_qa_quarter(qa: QARosterSection, quarter: str, year: int) -> QARosterQuarter | None:

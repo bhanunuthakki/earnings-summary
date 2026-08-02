@@ -120,7 +120,7 @@
 .cv2-legend { font-size: 10.5px; fill: #1a1f2e; font-family: var(--sans, 'Inter', sans-serif); }
 .cv2-line-end { font-size: 10px; font-weight: 600; font-family: var(--mono, 'JetBrains Mono', monospace); }
 .cv2-matrix th, .cv2-matrix td { padding: 4px 6px; border: 1px solid #e3e7eb; text-align: right; white-space: nowrap; }
-.cv2-matrix { border-collapse: collapse; font-size: 11px; width: 100%; }
+.cv2-matrix { border-collapse: collapse; font-size: 11px; width: 100%; max-width: 100%; }
 .cv2-matrix-cagr, .cv2-matrix-cagr-cell { border-left: 2px solid #1a1f2e !important; }
 .cv2-matrix-def-mark { cursor: help; opacity: 0.6; }
 .cv2-matrix-def-mark:hover { opacity: 1; }
@@ -171,9 +171,9 @@
 .decision-badge .decision-kind { font-weight: 600; letter-spacing: 0.4px; color: var(--fg); }
 .decision-badge { display: grid; grid-template-columns: 72px 1fr auto; align-items: center; gap: 10px; padding: 6px 10px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--hairline); font-size: 12.5px; }
 .decision-brief-link:hover { background: var(--accent-soft); }
-.decision-card { padding: 14px var(--panel-pad-x); border-bottom: 1px solid var(--hairline); }
+.decision-card { padding: var(--row-pad-y) var(--panel-pad-x); border-bottom: 1px solid var(--hairline); }
 .decision-card:last-child { border-bottom: 0; }
-.decision-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; background: var(--paper); border: 1px solid var(--hairline); border-radius: 999px; font-size: var(--fs-caption); }
+.decision-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; background: var(--paper); border: 1px solid var(--hairline); border-radius: var(--radius-full); font-size: var(--fs-caption); }
 .decision-chip-label { font-size: var(--fs-caption); font-weight: 600; letter-spacing: 0.05em; color: var(--fg); }
 .decision-chip-n { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
 .decision-chip.decision-chip-muted .decision-chip-label { color: var(--muted); text-transform: uppercase; }
@@ -183,7 +183,6 @@
 .decision-confidence { font-size: var(--fs-caption); color: var(--muted); font-style: italic; }
 .decision-date { font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted); }
 .decision-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
-.decision-list { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
 .decision-outcome { font-size: var(--fs-caption); font-weight: 600; padding: 2px 6px; border-radius: var(--radius-full); letter-spacing: 0.06em; text-transform: uppercase; }
 .decision-outcome-block { margin-top: 6px; padding: 6px 8px; background: var(--paper); border-radius: var(--radius); line-height: 1.45; }
 .decision-outcome.invalidated { color: var(--bad); background: color-mix(in srgb, var(--bad) 12%, transparent); }
@@ -192,7 +191,7 @@
 .elevator-block::before { content: 'Elevator pitch'; display: block; font-size: var(--fs-caption); font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
 .eyebrow { font-size: var(--fs-caption); font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); margin-bottom: 10px; }
 .fact-doorway:hover, .fact-doorway:focus-visible { color: var(--accent); border-bottom-color: var(--accent); outline: none; }
-.failure { display: flex; gap: 14px; padding: 14px var(--panel-pad-x); border-bottom: 1px solid var(--hairline); }
+.failure { display: flex; gap: 14px; padding: var(--row-pad-y) var(--panel-pad-x); border-bottom: 1px solid var(--hairline); }
 .failure-body { flex: 1; }
 .failure-label { font-size: var(--fs-caption); font-weight: 600; letter-spacing: 0.06em; color: var(--accent); text-transform: uppercase; padding-top: 1px; }
 .failure-meta { display: grid; grid-template-columns: 110px 1fr; gap: 6px 12px; font-size: var(--fs-caption); color: var(--fg-soft); line-height: 1.55; margin-top: 6px; }
@@ -202,7 +201,7 @@
 .fin-chev { display: inline-block; width: 14px; font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted); }
 .fin-drill td.fin-drill-cell { padding: 0 !important; background: var(--paper); }
 .fin-drill-table th, .fin-drill-table td { border: 0 !important; border-bottom: 1px solid var(--hairline) !important; padding: 8px 14px !important; }
-.fin-drill-table { width: 100%; margin: 0; background: var(--paper); }
+.fin-drill-table { width: 100%; max-width: 100%; margin: 0; background: var(--paper); }
 .fin-row.drillable:hover td { background: var(--paper); }
 .fin-sum-row td { background: var(--surface) !important; font-family: var(--mono); }
 .flag { color: var(--warn); font-size: 14px; }
@@ -224,7 +223,7 @@
 .insider-table td.signal-weak { color: var(--muted); }
 .insider-table tr.tx-buy { background: color-mix(in srgb, var(--ok) 6%, transparent); }
 .insider-table tr.tx-sell { background: color-mix(in srgb, var(--bad) 4%, transparent); }
-.ir-card { padding: 12px var(--panel-pad-x); border-bottom: 1px solid var(--hairline); }
+.ir-card { padding: var(--row-pad-y) var(--panel-pad-x); border-bottom: 1px solid var(--hairline); }
 .ir-card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .ir-card:last-child { border-bottom: 0; }
 .ir-link { font-size: var(--fs-caption); color: var(--accent); text-decoration: none; }
@@ -341,7 +340,6 @@
 .legend-swatch { width: 10px; height: 10px; border-radius: 2px; }
 .lens-five_min_reread .lens-body strong { color: var(--fg); }
 .lens-panel .lens-body { padding: 14px 18px 18px; }
-.lens-panel .panel-head { display: flex; flex-direction: column; gap: 2px; padding-bottom: 4px; }
 .lg-bar { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; flex-wrap: wrap; }
 .lg-count { font-size: var(--fs-caption); }
 .lg-filter { padding: 5px 9px; font-size: var(--fs-caption); font-family: var(--sans); background: var(--paper); color: var(--fg); border: 1px solid var(--border); border-radius: var(--radius); min-width: 210px; }
@@ -446,7 +444,7 @@
 .qa-chev::before { content: '+'; }
 .qa-followup { font-size: 12.5px; color: var(--muted); padding-top: 8px; border-top: 1px dashed var(--border); }
 .qa-followup-label { font-size: var(--fs-caption); font-weight: 600; letter-spacing: 0.08em; color: var(--muted); text-transform: uppercase; flex-shrink: 0; padding-top: 3px; width: 64px; }
-.qa-head { width: 100%; display: flex; align-items: center; gap: 14px; padding: 13px var(--panel-pad-x); text-align: left; cursor: pointer; user-select: none; list-style: none; }
+.qa-head { width: 100%; display: flex; align-items: center; gap: 14px; padding: var(--row-pad-y) var(--panel-pad-x); text-align: left; cursor: pointer; user-select: none; list-style: none; }
 .qa-head::-webkit-details-marker { display: none; }
 .qa-head:hover { background: var(--paper); }
 .qa-label { font-size: var(--fs-caption); font-weight: 600; color: var(--accent); flex-shrink: 0; width: 14px; padding-top: 2px; }
@@ -478,7 +476,7 @@
 .scenario-bar-track { position: relative; height: 6px; border-radius: var(--radius-full); background: linear-gradient(90deg, color-mix(in srgb, var(--bad) 16%, transparent), color-mix(in srgb, var(--ok) 16%, transparent)); }
 .scenario-cell + .scenario-cell { border-left: 1px solid var(--hairline); }
 .scenario-cell strong { font-family: var(--mono); font-size: 15px; font-weight: 500; }
-.scenario-cell { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 10px var(--panel-pad-x) 8px; }
+.scenario-cell { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: var(--row-pad-y) var(--panel-pad-x); }
 .scenario-cell.base strong { font-size: 16px; font-weight: 600; }
 .scenario-cell.bear .scenario-label { color: var(--bad); }
 .scenario-cell.bull .scenario-label { color: var(--ok); }
@@ -525,7 +523,7 @@
 .src-sec-official { color: var(--ok); border-color: var(--ok); }
 .src-yfinance-fallback, .src-s1-provisional { color: var(--muted); }
 .stub-warning { background: color-mix(in srgb, var(--bad) 16%, transparent); border-left: 3px solid var(--bad); padding: 10px 14px; border-radius: var(--radius); font-size: 12.5px; color: var(--fg); }
-.subtab { appearance: none; border: 1px solid var(--border-2); background: var(--surface); padding: 5px 12px 6px; font-family: var(--sans); font-size: var(--fs-caption); font-weight: 500; color: var(--muted); cursor: pointer; border-radius: 999px; display: flex; align-items: center; gap: 7px; letter-spacing: 0.005em; }
+.subtab { appearance: none; border: 1px solid var(--border-2); background: var(--surface); padding: 5px 12px 6px; font-family: var(--sans); font-size: var(--fs-caption); font-weight: 500; color: var(--muted); cursor: pointer; border-radius: var(--radius-full); display: flex; align-items: center; gap: 7px; letter-spacing: 0.005em; }
 .subtab-count { font-family: var(--mono); font-size: var(--fs-caption); font-weight: 500; padding: 0 5px; border-radius: var(--radius-full); background: var(--paper); color: var(--muted); }
 .subtab.active .subtab-count { background: var(--bg); color: var(--fg); }
 .subtab.active { color: var(--bg); background: var(--fg); border-color: var(--fg); }
@@ -570,7 +568,7 @@
 .thesis-list li:last-child { margin-bottom: 0; }
 .thesis-list { margin: 0; padding: 12px var(--panel-pad-x) 14px 36px; font-size: 12.5px; line-height: 1.55; color: var(--fg-soft); }
 .ticker-large { font-family: var(--mono); font-weight: 600; font-size: 60px; letter-spacing: -0.045em; line-height: 0.95; color: var(--fg); }
-.transcript-block summary { padding: 14px var(--panel-pad-x); cursor: pointer; user-select: none; font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 10px; }
+.transcript-block summary { padding: var(--row-pad-y) var(--panel-pad-x); cursor: pointer; user-select: none; font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 10px; }
 .transcript-block summary::-webkit-details-marker { display: none; }
 .transcript-block summary::before { content: '▸'; font-family: var(--mono); font-size: var(--fs-caption); color: var(--muted); display: inline-block; transition: transform var(--transition); }
 .transcript-block summary::marker { content: ''; }
@@ -590,11 +588,11 @@
 .twk-sect { font-size: var(--fs-caption); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); padding-top: 6px; }
 .twk-sect:first-child { padding-top: 0; }
 .twk-seg button { appearance: none; border: 0; background: transparent; flex: 1; padding: 5px 8px; border-radius: calc(var(--radius) - 2px); font: inherit; font-weight: 500; color: var(--muted); cursor: pointer; }
-.twk-seg button.active { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+.twk-seg button.active { background: var(--surface); color: var(--fg); /* --scrim is the palette's one black-wash primitive (a neutral 50%-alpha black in both themes, per tokens.py) — color-mix at 12% reproduces the exact alpha this micro shadow needs, without a raw function-color literal. */ box-shadow: 0 1px 2px color-mix(in srgb, var(--scrim) 12%, transparent); }
 .twk-seg { display: flex; padding: 2px; border-radius: var(--radius); background: var(--paper); border: 1px solid var(--border); }
-.twk-toggle { position: relative; width: 32px; height: 18px; border: 0; border-radius: 999px; background: var(--border-2); cursor: pointer; padding: 0; }
+.twk-toggle { position: relative; width: 32px; height: 18px; border: 0; border-radius: var(--radius-full); background: var(--border-2); cursor: pointer; padding: 0; }
 .twk-toggle-btn:hover { color: var(--fg); border-color: var(--border-2); }
-.twk-toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform var(--transition); }
+.twk-toggle::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--surface); /* Same --scrim color-mix idiom as .twk-seg button.active above, at a stronger mix for this knob's slightly deeper shadow. */ box-shadow: 0 1px 2px color-mix(in srgb, var(--scrim) 50%, transparent); transition: transform var(--transition); }
 .twk-toggle[data-on="1"] { background: var(--accent); }
 .twk-toggle[data-on="1"]::after { transform: translateX(14px); }
 .twk-x { appearance: none; border: 0; background: transparent; color: var(--muted); width: 24px; height: 24px; border-radius: var(--radius); cursor: pointer; font-size: 13px; }
@@ -603,7 +601,7 @@
 .underweighted-panel { border-color: var(--warn); }
 .val-divider { width: 1px; background: var(--border); align-self: stretch; }
 .val-row strong { font-family: var(--mono); font-weight: 500; font-size: 14px; }
-.val-row { display: flex; justify-content: space-between; align-items: baseline; padding: 12px var(--panel-pad-x); border-bottom: 1px solid var(--hairline); font-size: 13px; }
+.val-row { display: flex; justify-content: space-between; align-items: baseline; padding: var(--row-pad-y) var(--panel-pad-x); border-bottom: 1px solid var(--hairline); font-size: 13px; }
 .val-row.emph strong { font-size: 16px; font-weight: 600; }
 .val-row.emph { background: var(--paper); }
 .val-row.muted strong { color: var(--muted); }
@@ -662,21 +660,22 @@
 /* ============================================================ Chat drawer ============================================================ */ .chat-drawer { position: fixed; bottom: 16px; right: calc(var(--sidebar-open-width, 0px) + 16px); z-index: 95; transition: right 0.2s ease; }
 /* ============================================================ Company tab ============================================================ */ .elevator-block { border: 1px solid var(--border-2); background: linear-gradient(180deg, var(--paper), var(--surface)); padding: 22px 26px; border-radius: var(--radius); font-family: var(--serif); font-size: 17px; line-height: 1.55; color: var(--fg); }
 /* ============================================================ Cross-quarter themes — prepared remarks vs Q&A rollup (§5 split) ============================================================ */ .theme-bucket { margin-top: 14px; }
-/* ============================================================ Decision history — last 3 LLM recommendations from the audit ledger (decisions table, migration 0046). Rendered in the Thesis tab between the valuation/break-rule grid and the thesis-hygiene panels. ============================================================ */ .decision-history-panel { margin-top: 14px; }
+/* ============================================================ Decision history — last 3 LLM recommendations from the audit ledger (decisions table, migration 0046). Rendered in the Thesis tab between the valuation/break-rule grid and the thesis-hygiene panels. ============================================================ */ /* No local margin-top: a direct .tab-body child already gets the shared panel-to-panel gap (see the .lens-panel note above — same fix). */ .decision-list { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
 /* ============================================================ Financials line-item drill-down + charts_v2 dark overrides ============================================================ */ .fin-row.drillable { cursor: pointer; }
 /* ============================================================ Footer ============================================================ */ .l1-footer { display: flex; justify-content: space-between; gap: 16px; padding: 28px var(--pad-x) 0; margin-top: 32px; border-top: 1px solid var(--border); font-size: var(--fs-caption); color: var(--fg-soft); align-items: baseline; flex-wrap: wrap; }
 /* ============================================================ Inline comments — pin markers + sidebar + form ============================================================ */ [data-commentable="true"] { position: relative; }
 /* ============================================================ Investment Decision Card strip (PRD §8.1, P1.1) ============================================================ */ .l1-decision-card { margin: 0 var(--pad-x) 8px; padding: var(--panel-pad-y) var(--panel-pad-x); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
-/* ============================================================ P3 panels (P4-A1) — macro sensitivities, strategic targets, customer concentrations, lease ladder, decision history full ledger, say-do verdicts, peer comp. Most reuse the canonical .tbl class; the styles below are for the Decisions tab's summary-chip ribbon + small layout tweaks. ============================================================ */ .macro-sens-panel, .strategic-targets-panel, .customer-concentration-panel, .lease-ladder-panel, .saydo-verdicts-panel, .peer-comp-panel, .comp-set-context-panel { margin-top: var(--gap); }
+/* ============================================================ P3 panels (P4-A1) — macro sensitivities, strategic targets, customer concentrations, lease ladder, decision history full ledger, say-do verdicts, peer comp. Most reuse the canonical .tbl class; the styles below are for the Decisions tab's summary-chip ribbon + small layout tweaks. ============================================================ */ /* No local margin-top on these seven: each renders as a direct .tab-body child, which already spaces every panel via its own flex gap (see the .lens-panel note above) — var(--gap) here used to add a second, smaller gap on top of that shared one instead of matching it, so two P3 panels back to back were spaced inconsistently with every other pair of panels in the same tab. */ /* Phase 3 (comparable_sets_bottoms_up.md §11) — Sector context card: the industry/sector/benchmark-proxy chip row. Layout only (flex/gap/padding); the .k-well/.k-chip fills are the kit's, not re-skinned here. */ .comp-set-benchmark-row { display: flex; flex-wrap: wrap; gap: var(--sp-3); padding: var(--sp-3) var(--panel-pad-x); }
 /* ============================================================ Panels ============================================================ */ .panel { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
 /* ============================================================ Peer row ============================================================ */ .peer-row { margin: var(--section-gap) var(--pad-x) 0; padding-top: 22px; border-top: 1px solid var(--border); }
 /* ============================================================ Phase 5 — Executive Compensation tab ============================================================ */ /* the CEO role tag rides the kit's .k-chip .k-chip-mono (outline mono) now — accent fill is interactive-only (§2), a role tag stays quiet. */ .ceo-pill { margin-left: 6px; vertical-align: middle; }
 /* ============================================================ Position tab ============================================================ */ .position-yousaid { margin: 0 0 var(--gap); font-size: var(--fs-body); }
-/* ============================================================ Primitives ============================================================ */ .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--border-2); border-radius: 999px; font-size: var(--fs-caption); font-weight: 500; color: var(--fg-soft); background: var(--surface); letter-spacing: 0.01em; white-space: nowrap; }
+/* ============================================================ Primitives ============================================================ */ .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border: 1px solid var(--border-2); border-radius: var(--radius-full); font-size: var(--fs-caption); font-weight: 500; color: var(--fg-soft); background: var(--surface); letter-spacing: 0.01em; white-space: nowrap; }
 /* ============================================================ Print ============================================================ */ @media print { .l1-chrome, .twk-toggle-btn, .twk-panel { display: none; } .tab-group-pane { display: block !important; } .tab-pane { display: block !important; padding-top: 16px; break-before: page; } .tabs, .subtabs { display: none; } .news-strip, .kpi-strip, .l1-identity { break-after: avoid; } }
+/* ============================================================ Report spacing rhythm — ONE system, three tiers (owner audit, 2026-08-02: "spacing is shit... too much space between vertical sections and too little between horizontal sometimes"). Every gap in this file should read off one of these three, not a freehand px value: --section-gap between STRUCTURAL BANDS (identity / kpi-strip / news-strip / tabs-wrap / peer-row / footer) — the biggest gap, used sparingly, at the page-chrome level. --gap-lg between PANELS inside one tab. `.tab-body`'s own flex `gap` is the ONE place this is spent per tab — a panel/section class must NOT also carry its own margin-top/-bottom to a sibling panel, or the two stack (a panel used to get gap-lg PLUS a local 14-18px margin — the doubled "too much space" the audit named; fixed by deleting the redundant local margins, not by inventing a fourth token). --row-pad-y inside ONE panel, between repeated ROW-shaped items (a Q&A question, a decision card, an IR document, a valuation row) — the tightest tier. Table cells use the sibling --table-pad-y instead (a table row is denser than a card row by design). All three collapse under [data-density="compact"] below, so honoring them (instead of a literal px) is also what makes the density toggle actually reach a given block. */ :root { --pad-x: 28px; --pad-y: 18px; --panel-pad-x: 18px; --panel-pad-y: 14px; --row-pad-y: 11px; --gap: 18px; --gap-lg: 24px; --section-gap: 28px; --kpi-pad: 22px; --table-pad-y: 10px; }
 /* ============================================================ Responsive overrides (S16 PR1 + L13 PR2) ============================================================ */ /* Horizontal table scroll at small-laptop/tablet widths. */ @media (max-width: 1024px) { .tbl { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; } }
 /* ============================================================ Sources tab ============================================================ */ /* Coverage matrix modifiers on .tbl: mono cells + centered dot columns. */ .coverage-table th.cov-cell { text-align: center; }
-/* ============================================================ Synthesis tab — lens artifact panels ============================================================ */ .lens-panel { margin-bottom: 16px; }
+/* ============================================================ Synthesis tab — lens artifact panels ============================================================ */ /* No local margin: .lens-panel is a direct child of .tab-body, whose own `gap: var(--gap-lg)` already spaces every panel in a tab (the rhythm tokens block at the top of this file). A local margin here used to STACK on top of that gap (24px + 16px = 40px between two lens panels) — the "too much space between vertical sections" this pass fixes. */ .lens-panel .panel-head { display: flex; flex-direction: column; gap: 2px; padding-bottom: 4px; }
 /* ============================================================ Tabs ============================================================ */ .l1-tabs-wrap { padding: var(--section-gap) var(--pad-x) 0; }
 /* ============================================================ Thesis lede prominence (top of report, below identity) ============================================================ */ .l1-thesis { /* Align side margins to the shell's standard inset so the thesis card spans the full content width (matched edges with the KPI strip / tabs below it) instead of inset further. */ margin: 0 var(--pad-x) 8px; padding: 12px 16px; background: var(--surface); border-left: 3px solid var(--accent, var(--ok)); border-radius: var(--radius); }
 /* ============================================================ Thesis tab: hygiene panels + ledger collapsible + underweighted ============================================================ */ .grid-thesis-hygiene { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: var(--gap); }
@@ -695,6 +694,7 @@
 /* Dim a stale row's data but keep the flag itself at full strength. */ .ledger-stale-row td { opacity: 0.55; }
 /* Doorway: a KPI name that opens the exact series in Ask (Law 2). Looks like the bold label it replaces; reveals a dashed accent underline on hover/keyboard focus so the affordance reads without crowding the table. */ .fact-doorway { font: inherit; font-weight: 600; color: var(--fg); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; border-bottom: 1px dashed transparent; }
 /* Drawn as a border, not a background fill: --mark is ink and furniture, and test_mark_never_fills_a_control keeps that absolute rather than "absolute except this one 1px case". */ .k-doc-mast::after { content: ""; position: absolute; left: 0; bottom: -1px; width: 84px; border-top: 1px solid var(--mark); }
+/* Earnings tab: the per-quarter caption line inside the ONE shared "Analyst Q&A" panel (workspace_sections/earnings.py::_qa_roster_panel — design_language §6.2, the quarter is the per-item label under a constant title stated once, not a restated panel-head per quarter). */ .qa-quarter-sub { padding: var(--row-pad-y) var(--panel-pad-x) 0; }
 /* Enriched §2 KPI ledger rows: a clean name with the qualifier demoted to a muted definition line, a sparkline + YoY/QoQ delta trend cell, a staleness flag, and the "tracked, no data yet" footnote. */ .kpi-ledger-table td:first-child { white-space: normal; max-width: 300px; }
 /* Financials */ .chart-panel { padding-bottom: var(--panel-pad-y); }
 /* Floating "+ Comment" button on text selection (Google-Docs style). The button itself is the kit's small primary (.k-btn.k-btn-primary.k-btn-sm, added in the JS markup); only the floater's drop shadow + pill radius are surface-specific. */ .cmt-floater { position: absolute; z-index: 110; pointer-events: auto; }
@@ -712,12 +712,11 @@
 /* Outcomes are STATUS: green=good (the accent "validated" predated the green unification), soft color-mix fills per the chip convention. */ .decision-outcome.validated { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
 /* P4.1 canonical collapse idiom: <details class="panel"> with <summary class="panel-head">. The ▸/▾ affordance rides on .panel-title. (The financials line-item drill-down stays a JS row toggle — <tr> can't nest inside <details>.) */ details.panel > summary { cursor: pointer; user-select: none; list-style: none; }
 /* P4.1 canonical header anatomy: title (left) · as-of · source chip · sub (right edge, grouped in .panel-meta). Built by workspace_html._panel_head — hand-rolled heads should not exist outside that helper. */ .panel-meta { display: flex; align-items: baseline; gap: 10px; min-width: 0; text-align: right; }
-/* P4.1 canonical table — the ONE data-table class. Variants are modifier classes alongside it (.tbl-nowrap for dense numeric grids; semantic modifiers like .coverage-table / .insider-table / .kpi-ledger-table keep only their table-specific rules below). */ .tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+/* P4.1 canonical table — the ONE data-table class. Variants are modifier classes alongside it (.tbl-nowrap for dense numeric grids; semantic modifiers like .coverage-table / .insider-table / .kpi-ledger-table keep only their table-specific rules below). Explicitly fluid: width AND max-width at 100% (never a fixed px), table-layout left at its `auto` default so column widths still follow content within that 100% — a table should fill whatever column/panel it renders in, never sit locked at its own intrinsic width regardless of a wider container. */ .tbl { width: 100%; max-width: 100%; border-collapse: collapse; font-size: 13px; }
 /* P4.1 empty-state anatomy: empty sections collapse to a single muted summary line (<details class="panel panel-empty">) that expands to an analyst-language explanation. Replaces the old full-height .stub blocks. */ .panel-empty .panel-title { color: var(--muted); font-weight: 500; }
 /* P4.3 cross-tab links: small accent links in the panel-meta that jump to a related panel on another tab (data-xtab handler in workspace_script.JS). The landing panel flashes briefly so the eye finds it after the switch. */ .panel-xlink { font-size: var(--fs-caption); color: var(--accent); text-decoration: none; white-space: nowrap; }
 /* P4.4 — the open watch-items strip under the thesis lede: every build leads with what the owner already said to watch for. */ .l1-open-items { margin: 0 var(--pad-x) 8px; }
 /* Peer-row tile variants by list type — quiet borders that hint at portfolio / watchlist / evaluation membership without shouting. */ .peer-portfolio { border-left: 3px solid var(--border-2); }
-/* Phase 3 (comparable_sets_bottoms_up.md §11) — Sector context card: the industry/sector/benchmark-proxy chip row. Layout only (flex/gap/padding); the .k-well/.k-chip fills are the kit's, not re-skinned here. */ .comp-set-benchmark-row { display: flex; flex-wrap: wrap; gap: var(--sp-3); padding: var(--sp-3) var(--panel-pad-x); }
 /* Pillbox warn variant — used by the Validation panel chip. */ .pill-warn-cell { color: var(--warn); }
 /* Position tab — decision brief link + outcome notes block. */ .decision-brief-link { font-size: var(--fs-caption); color: var(--accent); text-decoration: none; font-family: var(--mono); padding: 1px 6px; border: 1px solid var(--accent); border-radius: var(--radius-full); }
 /* Preview/Apply are the kit's quiet small buttons (.k-btn.k-btn-quiet.k-btn-sm, added in the JS markup); this rule keeps only the row layout + the Apply button's ok-tint affordance (a positive-action hint, token-routed). */ .chat-diff-actions { display: flex; gap: 6px; margin-top: 6px; }
@@ -753,7 +752,6 @@
 /* §3.5 signal cards — severity via token-backed classes (P6.1; these previously carried hardcoded inline rgba colors + a literal font stack). */ .signal-card { border: 1px solid var(--hairline); border-left: 3px solid var(--hairline); border-radius: var(--radius); padding: 10px 12px; font-size: 12.5px; }
 ::-webkit-resizer { display: none; }
 ::placeholder { color: var(--muted); opacity: 1; }
-:root { --pad-x: 28px; --pad-y: 18px; --panel-pad-x: 18px; --panel-pad-y: 14px; --row-pad-y: 11px; --gap: 18px; --gap-lg: 24px; --section-gap: 28px; --kpi-pad: 22px; --table-pad-y: 10px; }
 :root { color-scheme: light; --k-chevron: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M4 6l4 4 4-4%22 stroke=%22%236f6b60%22 stroke-width=%221.6%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E') /* @kind other */; --k-check: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M3.5 8.5l3 3 6-7%22 stroke=%22%23ffffff%22 stroke-width=%222%22 fill=%22none%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22/%3E%3C/svg%3E') /* @kind other */; }
 :root[data-density="compact"] { --pad-x: 22px; --pad-y: 13px; --panel-pad-x: 14px; --panel-pad-y: 10px; --row-pad-y: 7px; --gap: 12px; --gap-lg: 16px; --section-gap: 20px; --kpi-pad: 16px; --table-pad-y: 6.5px; }
 :root[data-theme="dark"] .cv2-matrix th, :root[data-theme="dark"] .cv2-matrix td { border-color: var(--border) !important; }
