@@ -133,6 +133,23 @@ def _run_backup() -> int:
         print(f"ERROR: backup accounting unavailable: {exc}", file=sys.stderr)
         return 1
 
+    # Refuse up front rather than half-write onto a full volume. Staging holds the raw
+    # snapshot AND its gzip before either is released, so the true cost is ~2x the DB
+    # (plus the compressed artifact landing in dest_dir). A backup that dies mid-write
+    # on a full disk is indistinguishable from one that never ran.
+    db_bytes = SRC_DB.stat().st_size
+    need_staging = 2 * db_bytes + 256 * 1024 * 1024
+    free_staging = shutil.disk_usage(tempfile.gettempdir()).free
+    if free_staging < need_staging:
+        msg = (
+            f"insufficient free space for backup staging: need "
+            f"{need_staging / 1e9:.2f} GB, have {free_staging / 1e9:.2f} GB "
+            f"on {tempfile.gettempdir()}"
+        )
+        _finish_accounting(accounting, success=False, error_msg=msg)
+        print(f"ERROR: {msg}", file=sys.stderr)
+        return 1
+
     stamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
     final_path = dest_dir / f"portfolio.db.{stamp}.gz.enc"
 
@@ -146,7 +163,12 @@ def _run_backup() -> int:
             with open(tmp_path, "rb") as raw, gzip.open(tmp_gz, "wb") as gz:
                 shutil.copyfileobj(raw, gz)
             encrypt_file(tmp_gz, final_path, key=load_or_create_key())
-        snapshots = sorted(dest_dir.glob("portfolio.db.*.gz.enc"))
+        # Retention spans EVERY snapshot format, not just the one this build writes.
+        # Globbing only "*.gz.enc" made the pruner blind to its own history: when the
+        # running checkout wrote plaintext ".gz" (2026-07-27 onward) the 15 encrypted
+        # snapshots became unprunable and sat at ~3.7 GB with nothing able to reclaim
+        # them. A format switch must never orphan the previous format's files.
+        snapshots = sorted(dest_dir.glob("portfolio.db.*.gz*"))
         for stale in snapshots[:-retain]:
             stale.unlink()
 
