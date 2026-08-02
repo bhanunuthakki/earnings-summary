@@ -16,7 +16,7 @@ from provenance import population_document_processing as document_population
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_REVISION = "0213_decision_draft_provider_id"
-HEAD = "0269_latest_governed_population_receipt_v2"
+HEAD = "0270_financial_facts_supersedes_index"
 ADDITIVE_TABLES_0245_0248 = {
     "document_processing_obligation_revisions",
     "document_processing_disposition_headers",
@@ -90,7 +90,8 @@ def test_evidence_search_migrations_have_one_reversible_head(tmp_path: Path) -> 
             """
             CREATE TABLE financial_facts (
                 id INTEGER PRIMARY KEY,
-                source_doc_id INTEGER NOT NULL
+                source_doc_id INTEGER NOT NULL,
+                supersedes_id INTEGER REFERENCES financial_facts(id)
             );
             CREATE TABLE kpi_facts (
                 id INTEGER PRIMARY KEY,
@@ -196,6 +197,9 @@ def test_evidence_search_migrations_have_one_reversible_head(tmp_path: Path) -> 
             for row in conn.execute("PRAGMA index_list('fact_reported_observation_anchors_v2')")
         }
         assert "ix_fact_reported_anchors_v2_extraction_observation" in anchor_indexes
+        assert conn.execute(
+            "PRAGMA index_info('ix_0270_financial_facts_supersedes_id')"
+        ).fetchall() == [(0, 2, "supersedes_id")]
         assert tables >= ADDITIVE_TABLES_0245_0248
         assert tables >= ADDITIVE_TABLES_0261
         assert tables >= ADDITIVE_TABLES_0264
