@@ -336,14 +336,16 @@ _PANEL_JS = """
     var spec = buildSpec();
     if (!spec.tickers.length) { showError('Add at least one ticker.'); return; }
     if (!spec.metrics.length) { showError('Pick at least one metric.'); return; }
+    var btn = el('vx-run');
+    CCAction.busy(btn, 'Running\\u2026');
     el('vx-result').innerHTML = '<div class="vx-none">Running\\u2026</div>';
     fetch('/api/viewspec/run', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({spec: spec})
     }).then(function (r) {
-      if (r.ok) return r.text().then(function (h) { el('vx-result').innerHTML = h; });
-      return r.json().then(function (e) { showError(e.error || ('HTTP ' + r.status)); });
-    });
+      if (r.ok) return r.text().then(function (h) { CCAction.release(btn); el('vx-result').innerHTML = h; });
+      return r.json().then(function (e) { CCAction.release(btn); showError(e.error || ('HTTP ' + r.status)); });
+    }).catch(function () { CCAction.release(btn); showError('network error — try again'); });
   }
   function refreshSaved() {
     fetch('/api/panel/explore?fragment=views').then(function (r) { return r.text(); })
@@ -367,13 +369,13 @@ _PANEL_JS = """
     var msg = el('vx-nl-msg');
     if (!q) { msg.textContent = 'Type a question first.'; return; }
     var btn = el('vx-nl-go');
-    btn.disabled = true;
+    CCAction.busy(btn);
     msg.textContent = 'compiling…';
     fetch('/api/viewspec/compile', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({query: q, tickers: tickers()})
     }).then(function (r) { return r.json(); }).then(function (res) {
-      btn.disabled = false;
+      CCAction.release(btn);
       if (res.status === 'ok' && res.spec) {
         msg.textContent = 'compiled — builder updated';
         applySpec(res.spec);
@@ -381,7 +383,7 @@ _PANEL_JS = """
         msg.textContent = res.message || res.error || 'compile failed — use the builder';
       }
     }).catch(function () {
-      btn.disabled = false;
+      CCAction.release(btn);
       msg.textContent = 'compile failed — use the builder';
     });
   }
@@ -406,22 +408,34 @@ _PANEL_JS = """
   });
 
   // ---- DIY builder popover (Ask v4): the builder opens on demand from the
-  // DIY button / "Open in builder" instead of living as a bottom fold. ----
+  // DIY button / "Open in builder" instead of living as a bottom fold.
+  // CCOverlay registration (Law 3 / design_language §3.1): this used to carry
+  // its OWN document-level keydown Escape listener — the last per-surface
+  // Escape in the shell, and one that ALWAYS fired regardless of whatever
+  // else (a peek, the palette) was open on top. Registering it instead puts
+  // it on the shared priority ladder; ``priority`` is left UNSET (defaults to
+  // 0), the one rung below window.CCOverlay.PRIORITY.DOCK (10) — a scoped,
+  // scrimless, in-panel popover never outranks a shell overlay for Escape,
+  // it only claims Escape when nothing higher on the ladder (palette / peek /
+  // drawer / dock) is open. closeId auto-wires the (x); wireClose default
+  // stays on so no separate click listener is needed either. ----
   var builderPop = el('ask-advanced');
+  var builderOv = window.CCOverlay && builderPop && window.CCOverlay.register(builderPop, {
+    scrim: false, trapFocus: false, restoreFocus: false, autofocus: false,
+    motion: 'none', closeId: 'ask-pop-close'
+  });
   function openBuilder() {
     if (!builderPop) return;
-    builderPop.hidden = false;
+    if (builderOv) builderOv.open(); else builderPop.hidden = false;
     builderPop.scrollIntoView({behavior: 'smooth', block: 'nearest'});
   }
-  function closeBuilder() { if (builderPop) builderPop.hidden = true; }
+  function closeBuilder() {
+    if (!builderPop) return;
+    if (builderOv) builderOv.close(); else builderPop.hidden = true;
+  }
   var diyBtn = el('ask-diy');
   if (diyBtn) diyBtn.addEventListener('click', function () {
     if (builderPop && builderPop.hidden) openBuilder(); else closeBuilder();
-  });
-  var popClose = el('ask-pop-close');
-  if (popClose) popClose.addEventListener('click', closeBuilder);
-  document.addEventListener('keydown', function (ev) {
-    if (ev.key === 'Escape') closeBuilder();
   });
 
   // ---- Scored peers (Ask v4): /api/peers/<T> serves the PR 400 peer
@@ -438,9 +452,9 @@ _PANEL_JS = """
   if (vxPeers) vxPeers.addEventListener('click', function () {
     var cur = tickers();
     if (!cur.length) { showError('Add a base ticker first.'); return; }
-    vxPeers.disabled = true;
+    CCAction.busy(vxPeers);
     fetchPeers(cur[0], function (peers) {
-      vxPeers.disabled = false;
+      CCAction.release(vxPeers);
       if (!peers.length) { showError('No scored peers for ' + cur[0] + '.'); return; }
       var merged = cur.slice();
       peers.forEach(function (p) { if (merged.indexOf(p) === -1) merged.push(p); });
@@ -451,15 +465,14 @@ _PANEL_JS = """
   function addPeersToCard(btn, card, spec) {
     var base = (spec.tickers && spec.tickers[0]) || tickers()[0];
     if (!base || !card) return;
-    btn.disabled = true;
-    btn.textContent = 'adding peers…';
+    CCAction.busy(btn, 'adding peers…');
     fetchPeers(base, function (peers) {
       var current = spec.tickers || [];
       var merged = current.slice();
       peers.forEach(function (p) { if (merged.indexOf(p) === -1) merged.push(p); });
       merged = merged.slice(0, 16);
       if (merged.length === current.length) {
-        btn.textContent = 'no new peers';
+        CCAction.receipt(btn, 'no new peers');
         return;
       }
       var newSpec = JSON.parse(JSON.stringify(spec));
@@ -478,8 +491,7 @@ _PANEL_JS = """
         card.setAttribute('data-ask-spec', JSON.stringify(newSpec));
         askScroll();
       }).catch(function () {
-        btn.disabled = false;
-        btn.textContent = '+ Peers';
+        CCAction.release(btn);
       });
     });
   }
@@ -488,12 +500,18 @@ _PANEL_JS = """
     if (!name) { showError('Name the view before saving.'); return; }
     var spec = buildSpec();
     if (!spec.metrics.length) { showError('Pick at least one metric.'); return; }
+    var saveBtn = el('vx-save');
+    CCAction.busy(saveBtn, 'Saving\\u2026');
     fetch('/api/views', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({name: name, spec: spec})
     }).then(function (r) {
+      CCAction.release(saveBtn);
       if (r.ok) { refreshSaved(); }
       else { r.json().then(function (e) { showError(e.error || 'save failed'); }); }
+    }).catch(function () {
+      CCAction.release(saveBtn);
+      showError('network error — try again');
     });
   });
 
@@ -535,7 +553,7 @@ _PANEL_JS = """
     var toks = selectedTokens();
     if (toks.length !== 1) { showError('Pick exactly one fact to inject as a DCF driver.'); return; }
     var fieldSel = el('vx-inject-field');
-    injectBtn.disabled = true;
+    CCAction.busy(injectBtn, 'Injecting\\u2026');
     el('vx-result').innerHTML = '<div class="vx-none">Injecting\\u2026</div>';
     fetch('/api/dcf/inject-fact', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -543,11 +561,11 @@ _PANEL_JS = """
     }).then(function (r) {
       return r.json().then(function (res) { return {ok: r.ok, res: res}; });
     }).then(function (o) {
-      injectBtn.disabled = false;
+      CCAction.release(injectBtn);
       if (!o.ok) { showError((o.res && o.res.error) || 'injection failed'); return; }
       renderInjection(o.res);
     }).catch(function () {
-      injectBtn.disabled = false;
+      CCAction.release(injectBtn);
       showError('network error — try again');
     });
   });
@@ -579,7 +597,7 @@ _PANEL_JS = """
     }
     var toks = selectedTokens();
     if (toks.length !== 1) { showError('Pick exactly one fact to add as a DCF reference.'); return; }
-    refBtn.disabled = true;
+    CCAction.busy(refBtn, 'Adding reference\\u2026');
     el('vx-result').innerHTML = '<div class="vx-none">Adding reference\\u2026</div>';
     fetch('/api/dcf/inject-fact-sheet', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -587,11 +605,11 @@ _PANEL_JS = """
     }).then(function (r) {
       return r.json().then(function (res) { return {ok: r.ok, res: res}; });
     }).then(function (o) {
-      refBtn.disabled = false;
+      CCAction.release(refBtn);
       if (!o.ok) { showError((o.res && o.res.error) || 'adding reference failed'); return; }
       renderReference(o.res);
     }).catch(function () {
-      refBtn.disabled = false;
+      CCAction.release(refBtn);
       showError('network error — try again');
     });
   });
@@ -858,11 +876,11 @@ _PANEL_JS = """
     row.querySelector('[data-view-save]').addEventListener('click', function () {
       var name = (input && input.value || '').trim();
       if (!name) { if (input) input.focus(); return; }
-      this.disabled = true;
+      CCAction.busy(this);
       fetch('/api/views', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({name: name, spec: spec})
-      }).then(function (r) { if (r.ok) refreshSaved(); restore(); });
+      }).then(function (r) { if (r.ok) refreshSaved(); restore(); }).catch(restore);
     });
   }
 
@@ -921,10 +939,11 @@ _PANEL_JS = """
     window.CCState.del('askViewId');
     var chip = root.querySelector('[data-view-id="' + id + '"] button[data-act="load"]');
     if (!chip) return;
-    var fold = el('ask-advanced');
-    if (fold) fold.open = true;
+    // NB: 'ask-advanced' is a plain div (no disclosure-widget semantics), so
+    // a bare `.open = true` here was a dead assignment predating the
+    // CCOverlay conversion above; openBuilder() is the real show call.
+    openBuilder();
     chip.click();
-    if (fold) fold.scrollIntoView({behavior: 'smooth', block: 'start'});
   }
   window.addEventListener('cc-view-id', consumePaletteView);
   consumePaletteView();

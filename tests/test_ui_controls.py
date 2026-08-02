@@ -1576,6 +1576,7 @@ _CCACTION_PINNED: frozenset[str] = frozenset(
         "pipeline/cc_action.py",
         "pipeline/decision_journal_panel.py",
         "pipeline/discovery_panel.py",
+        "pipeline/explore_panel.py",
         "pipeline/journal_panel.py",
         "pipeline/ledger_panel.py",
         "pipeline/mobile_inbox_panel.py",

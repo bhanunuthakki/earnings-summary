@@ -1069,3 +1069,37 @@ def test_rail_upcoming_disclosure_glyphs_are_css_escapes_not_octal_mojibake() ->
     assert "content: '\\25B8 ';" in SHELL_CSS  # CSS escape for U+25B8 (closed)
     assert "content: '\\25BE ';" in SHELL_CSS  # CSS escape for U+25BE (open)
     assert "\x15" not in SHELL_CSS  # the octal-escape mojibake byte
+
+
+def test_ticker_hover_and_click_routing_cover_ticker_label() -> None:
+    """.ticker-link collapse (design_language §5): ui.controls.ticker_label()
+    is now the ONLY ticker renderer, but its <a class="k-tick-sym"> class
+    differs from the legacy `.ticker-link` markup portfolio_panel.py /
+    allocation_decisions_panel.py / advisor_memos_panel.py still emit during
+    the transition. The delegated hover-mini-card + click-to-holding-tab
+    listeners key off a literal selector string — a future edit that touches
+    HOVER_SEL or the click delegator without updating BOTH would silently stop
+    routing every ticker_label() link the migrated surfaces (analytical
+    dashboard, research cockpit) now render. Pin both selector strings so that
+    class of drift fails CI instead of shipping quiet."""
+    assert re.search(r"var HOVER_SEL = '[^']*\ba\.k-tick-sym\b[^']*';", SHELL_JS), (
+        "HOVER_SEL must cover a.k-tick-sym (ticker_label()'s anchor)"
+    )
+    # The legacy selector stays too — a sibling PR still emits .ticker-link
+    # elsewhere until it migrates.
+    assert "a.ticker-link" in SHELL_JS
+    click_routing = re.search(
+        r"ev\.target\.closest\('([^']*\ba\.k-tick-sym\b[^']*)'\)", SHELL_JS
+    )
+    assert click_routing, "the ticker click delegator must also match a.k-tick-sym"
+    assert "a.ticker-link" in click_routing.group(1)
+
+
+def test_qa_actions_row_carries_no_mono() -> None:
+    """§1: a button in mono is drift. .qa-actions holds approve/dismiss kit
+    buttons (+ a stamp_html() label) — never a tabular-number cell — so the
+    row itself must not pin font-family: var(--mono); an individual value
+    cell would carry its own mono class instead."""
+    m = re.search(r"\.qa-actions\s*\{([^}]*)\}", SHELL_CSS)
+    assert m, ".qa-actions rule not found in SHELL_CSS"
+    assert "var(--mono)" not in m.group(1)

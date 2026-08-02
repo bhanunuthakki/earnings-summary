@@ -981,6 +981,30 @@ def test_render_badges_chips_and_pills(rows: dict[str, list[CockpitRow]]) -> Non
     assert "1 new doc" in html
 
 
+def test_ticker_cell_uses_ticker_label_with_direct_holding_href(
+    rows: dict[str, list[CockpitRow]],
+) -> None:
+    """.ticker-link collapse (design_language §5): the cockpit's primary
+    ticker cell used to be a hand-rolled `<a href='/ticker/<T>'>` — a 302 hop
+    (/ticker/<T> redirects to /#holding=<T>) with no hover mini-card. It's
+    now ticker_label() in its compact/symbol-only form (the company name
+    stays in the <td>'s title, not inline — cockpit column density), a
+    direct /#holding=<T> href (skips the redirect), and data-peek-ticker on
+    the <td> so the shell's hover card has a target regardless of what's
+    nested inside."""
+    html = render_research_cockpit(rows)
+    assert "<td class='ticker'" in html
+    assert "data-peek-ticker='NU'" in html
+    assert "<a class=\"k-tick-sym\" href=\"/#holding=NU\">NU</a>" in html
+    # Compact form: no inline company-name span (density) — but the full name
+    # still rides the <td>'s title (unchanged from before this migration).
+    assert "k-tick-name" not in html
+    # The old bare-anchor / redirect-hop shape is gone for the primary ticker
+    # cell (the score/fit/ΔSR peek chips still legitimately use /ticker/<T> —
+    # that assertion lives in test_compute_attractiveness_matches_*).
+    assert "<a href='/ticker/NU'>NU</a>" not in html
+
+
 def test_alert_pill_red_reserved_for_tier1(conn: sqlite3.Connection, repo_root: Path) -> None:
     """Routine pending alerts render an AMBER pill; red is reserved for a
     pending tier-1/decisive alert (owner falsifier breach / registered

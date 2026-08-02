@@ -1187,6 +1187,15 @@ td { padding: 6px 10px; border-bottom: 1px solid var(--hairline); vertical-align
 tbody tr:hover td { background: var(--paper); }
 td.num { text-align: right; }
 td.muted { color: var(--muted); }
+/* .ticker-link is the pre-ticker_label() renderer (design_language §5:
+   ui.controls.ticker_label() is the ONLY ticker renderer now). This shared
+   definition stays live even though command_center_shell.py and
+   analytical_dashboard_html.py's OWN emissions migrated to ticker_label() —
+   portfolio_panel.py / allocation_decisions_panel.py / advisor_memos_panel.py
+   still render raw `<a class="ticker-link">` and lean on THIS block (the
+   shell's CSS is global to every panel injected into .cc-panels); removing it
+   before their migration lands would silently unstyle those links. Delete
+   once every `.ticker-link` emitter in src/ has moved to ticker_label(). */
 .ticker-link { color: var(--fg); text-decoration: none; font-weight: 600; }
 .ticker-link:hover { color: var(--accent); }
 tr.tone-sell { background: color-mix(in srgb, var(--bad) 6%, transparent); }
@@ -1394,9 +1403,11 @@ td.ticker a:hover { color: var(--accent); }
   padding: 6px 8px; background: var(--paper);
   border-radius: var(--radius); margin-bottom: 5px; }
 .qa-body { flex: 1; min-width: 140px; color: var(--fg-soft); font-size: var(--fs-caption); }
-.qa-actions { display: flex; gap: 6px; align-items: center; font-family: var(--mono);
-  font-size: var(--fs-caption); }
-/* approve/dismiss are kit buttons (.k-btn .k-btn-sm) — no local link skin. */
+.qa-actions { display: flex; gap: 6px; align-items: center; font-size: var(--fs-caption); }
+/* approve/dismiss are kit buttons (.k-btn .k-btn-sm) — no local link skin.
+   No row-level mono (§1): the row holds buttons + a stamp_html() label, not
+   tabular numbers — a mono class belongs on an individual value cell, not a
+   button row. */
 .qa-status-applied { color: var(--ok); }
 .qa-status-cancelled { color: var(--muted); }
 .evidence-drawer { margin-top: 8px; background: var(--paper);
@@ -2814,16 +2825,16 @@ SHELL_JS = r"""
   // (closeId 'cc-peek-close' + the one .k-scrim listener).
 
   // ----- Ticker hover mini-card (UX9) -----
-  // Hovering a ticker link (cockpit rows, analytical .ticker-link cells, or
-  // anything carrying data-peek-ticker) shows a small price/verdict/next-ER
-  // card from /api/peek/ticker/<T>. Hover-capable pointers only; fragments
-  // are cached per page load.
+  // Hovering a ticker link (cockpit rows, analytical .ticker-link cells,
+  // ticker_label()'s a.k-tick-sym, or anything carrying data-peek-ticker)
+  // shows a small price/verdict/next-ER card from /api/peek/ticker/<T>.
+  // Hover-capable pointers only; fragments are cached per page load.
   var hovercard = document.getElementById('cc-hovercard');
   var hoverCache = {};
   var hoverShowTimer = null;
   var hoverHideTimer = null;
   var hoverSeq = 0;
-  var HOVER_SEL = 'a.ticker-link, td.ticker a, [data-peek-ticker]';
+  var HOVER_SEL = 'a.ticker-link, a.k-tick-sym, td.ticker a, [data-peek-ticker]';
   var TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,9}$/;
 
   function closeHover() {
@@ -2966,13 +2977,14 @@ SHELL_JS = r"""
   subnavs.forEach(function (n) { setupTablistNav(n); });
 
   // A ticker link anywhere in the shell (analytical panels' .ticker-link, the
-  // Overview status tables' td.ticker links) opens the per-ticker Holding tab
-  // instead of navigating away. Delegated on document so it also catches links
-  // inside lazily-injected panels. (Links inside the embedded report iframe live
-  // in a separate document and are unaffected.)
+  // Overview status tables' td.ticker links, ticker_label()'s a.k-tick-sym)
+  // opens the per-ticker Holding tab instead of navigating away. Delegated on
+  // document so it also catches links inside lazily-injected panels. (Links
+  // inside the embedded report iframe live in a separate document and are
+  // unaffected.)
   document.addEventListener('click', function (ev) {
     if (!ev.target.closest) return;
-    var a = ev.target.closest('a.ticker-link, td.ticker a');
+    var a = ev.target.closest('a.ticker-link, a.k-tick-sym, td.ticker a');
     if (!a) return;
     var t = (a.textContent || '').trim().toUpperCase();
     if (!t) return;
