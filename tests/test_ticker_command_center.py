@@ -87,7 +87,9 @@ def _seed_db(db_path: Path) -> None:
             fiscal_year INTEGER, fiscal_period TEXT, canonical_id TEXT,
             subject TEXT, subject_label TEXT, source_doc_id INTEGER,
             evidence_quote TEXT, materiality REAL, verdict TEXT,
-            interpretation_md TEXT, status TEXT, created_at TEXT
+            interpretation_md TEXT, status TEXT, created_at TEXT,
+            thesis_materiality TEXT, thesis_materiality_rationale TEXT,
+            thesis_materiality_judged_at TEXT
         );
         """
     )
@@ -136,7 +138,21 @@ def _seed_db(db_path: Path) -> None:
          'credit quality', 'Credit quality', 42,
          'Delinquency formation increased in the youngest vintages.',
          0.92, 'substantive',
-         'The wording became more company-specific.', 'new', ?)
+         'The wording became more company-specific.', 'new', ?,
+         'restricts_measurement', 'Vintage-level delinquency feeds the NPL break rule.', ?)
+        """,
+        (now, now),
+    )
+    # High-materiality-float but UNJUDGED — must never elevate (the float is
+    # three incommensurable scales; NULL judgment means not elevated).
+    conn.execute(
+        """
+        INSERT INTO disclosure_events VALUES
+        (2, 'NU', 'item_added', '10-Q', 2026, 'Q2', 'mdna',
+         'unjudged noise', 'Unjudged noise', NULL,
+         'Revenuesand Delivery DD&A: Totals presented above.',
+         1.0, 'substantive',
+         'mangled table scraping', 'new', ?, NULL, NULL, NULL)
         """,
         (now,),
     )
@@ -292,9 +308,14 @@ def test_render_holding_fragment_embeds_report(repo: Path) -> None:
     # The reread is no longer an inline fold above the report.
     assert "tcc-reread-fold" not in frag
     assert "Disclosure drift" in frag
-    assert "relevant for weeks" in frag
+    assert "thesis-materiality gated" in frag
     assert "Delinquency formation increased in the youngest vintages." in frag
+    assert "Vintage-level delinquency feeds the NPL break rule." in frag
     assert 'href="/source/42"' in frag
+    # The unjudged row (NULL thesis_materiality) must NOT elevate, however
+    # high its materiality float — and the strip must say so honestly.
+    assert "Unjudged noise" not in frag
+    assert "1 awaiting the thesis-materiality judgment" in frag
 
 
 def test_render_holding_fragment_no_brief_degrades(tmp_path: Path) -> None:

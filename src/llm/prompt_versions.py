@@ -380,6 +380,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # prompt changed since the v1 golden set was captured.
     "metric_lifecycle_triage": "v1",
     "disclosure_item_specificity_triage": "v1",
+    # Thesis-materiality elevation gate (filings.materiality_judgment
+    # ._build_prompt, owner ruling 2026-08-02). Bump when the
+    # restricts-measurement bar or the anchor framing is materially rewritten.
+    "disclosure_thesis_materiality": "v1",
     # Guidance-withdrawal detector Stage 2/3 triage (D2.1,
     # filings.guidance_triage._build_prompt). Bump when the relevance/prior
     # prompt is materially rewritten.

@@ -68,7 +68,9 @@ CREATE TABLE disclosure_events (
     subject TEXT NOT NULL, subject_label TEXT, source_doc_id INTEGER,
     evidence_quote TEXT, materiality REAL, verdict TEXT NOT NULL,
     interpretation_md TEXT, status TEXT NOT NULL DEFAULT 'new',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    thesis_materiality TEXT, thesis_materiality_rationale TEXT,
+    thesis_materiality_judged_at TEXT
 );
 """
 
@@ -132,14 +134,26 @@ def db(tmp_path: Path) -> Path:
         INSERT INTO disclosure_events
         (ticker, event_type, form, fiscal_year, fiscal_period, canonical_id,
          subject, subject_label, source_doc_id, evidence_quote, materiality,
-         verdict, interpretation_md, created_at)
+         verdict, interpretation_md, created_at,
+         thesis_materiality, thesis_materiality_rationale)
         VALUES
         ('NU', 'item_reworded', '10-Q', 2026, 'Q2', 'risk_factors',
          'credit quality', 'Credit quality', 42,
          'Delinquency formation increased in the youngest vintages.',
          0.92, 'substantive',
          'The risk language became more specific; this is drift, not a day-of alert.',
-         '2026-07-25T10:00:00')
+         '2026-07-25T10:00:00',
+         'restricts_measurement', 'Vintage-level delinquency feeds the NPL break rule.'),
+        ('NU', 'item_added', '10-Q', 2026, 'Q2', 'mdna',
+         'background drift', 'Background drift', NULL,
+         'Newer, unjudged wording with no measurement impact.',
+         1.0, 'substantive',
+         'unjudged row — must rank BELOW the thesis-material one despite recency',
+         '2026-07-26T10:00:00', NULL, NULL),
+        ('NU', 'item_reworded', '10-Q', 2026, 'Q2', 'mdna',
+         'noise row', 'Noise row', NULL,
+         'Pure noise-class row that must not appear at all.',
+         1.0, 'noise', NULL, '2026-07-27T10:00:00', NULL, NULL)
         """
     )
     conn.commit()
@@ -706,6 +720,23 @@ def test_disclosure_pack_carries_drift_frame_and_verbatim_receipt(
     assert "NU 2026 Q2" in text
     assert "Delinquency formation increased in the youngest vintages." in text
     assert "substantive" in text
+
+
+def test_disclosure_pack_ranks_thesis_material_first_and_drops_noise_class(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Elevation-gate ordering (owner ruling 2026-08-02): the judged
+    restricts_measurement row outranks a NEWER unjudged one; the label +
+    judge rationale ride along; noise-class verdicts never appear."""
+    item = _one(db, "disclosures", ["NU"], monkeypatch)
+    assert item is not None
+    text = str(item["text"])
+    assert "THESIS-MATERIAL" in text
+    assert "Vintage-level delinquency feeds the NPL break rule." in text
+    material_pos = text.index("Delinquency formation increased")
+    unjudged_pos = text.index("Newer, unjudged wording")
+    assert material_pos < unjudged_pos
+    assert "Pure noise-class row" not in text
 
 
 def test_load_packs_canonical_order_and_unknown_keys(

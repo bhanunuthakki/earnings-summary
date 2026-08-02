@@ -74,6 +74,11 @@ STEPS: tuple[str, ...] = (
     "detect_transcript_disclosure_events.py",
     "detrend_disclosure_events.py",
     "classify_disclosure_specificity.py",
+    # Thesis-materiality elevation gate (owner ruling 2026-08-02): runs LAST so
+    # it judges what the detectors + classifier just wrote. Rows it does not
+    # judge (no thesis on file, tabular backlog, transient LLM failure) stay
+    # NULL, which every surface treats as NOT elevated; the next sweep retries.
+    "judge_disclosure_materiality.py",
 )
 
 
