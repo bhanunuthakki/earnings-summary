@@ -24,6 +24,7 @@ from provenance.population_document_processing import (
     DocumentProcessingPopulationRequest,
     persist_document_processing_receipt,
 )
+from schema_compat import expected_head
 from tests.test_population_document_processing import (
     build_test_document_processing_receipt as build_document_processing_receipt,
 )
@@ -33,7 +34,7 @@ from tests.test_population_document_processing import (
 
 _STAMP = datetime(2026, 7, 29, tzinfo=UTC)
 _DATABASE_INSTANCE_ID = "database-instance:" + "1" * 32
-_HEAD_REVISION = "0269_latest_governed_population_receipt_v2"
+_HEAD_REVISION = expected_head()
 
 
 def _artifact_sha(receipt: CanonicalResolutionOperationReceipt) -> str:

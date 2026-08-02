@@ -32,6 +32,7 @@ from provenance.population_document_processing import (
     DocumentProcessingPopulationRequest,
 )
 from runtime.job_runtime import JobAlreadyRunningError, JobLock
+from schema_compat import expected_head
 from tests.test_population_document_processing import (
     build_test_document_processing_receipt as build_document_processing_receipt,
 )
@@ -40,6 +41,7 @@ from tests.test_population_document_processing import (
 )
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+_HEAD_REVISION = expected_head()
 
 
 @pytest.fixture(autouse=True)
@@ -68,7 +70,7 @@ def _plan(tmp_path: Path) -> tuple[RehearsalPlan, Path]:
         compressed_clone_receipt=clone,
         production_scope_registry=registry,
         expected_source_revision="0261_latest_governed_state",
-        expected_target_revision="0269_latest_governed_population_receipt_v2",
+        expected_target_revision=_HEAD_REVISION,
         cutoff_at=NOW,
         operation_recorded_at=NOW,
         max_document_obligations=100,

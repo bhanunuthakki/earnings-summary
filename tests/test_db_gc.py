@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """Tests for execution/db_gc.py — the periodic DB garbage collector.
 
 Fixture DBs deliberately omit alembic_version so schema_compat's write
@@ -5,6 +6,8 @@ preflight no-ops (its documented fixture contract)."""
 
 from __future__ import annotations
 
+import hashlib
+import os
 import sqlite3
 import sys
 from collections.abc import Callable
@@ -36,6 +39,8 @@ def gc_db(tmp_path: Path) -> Path:
             fiscal_period_type TEXT, line_item TEXT, value NUMERIC,
             extracted_by TEXT, supersedes_id INTEGER REFERENCES financial_facts(id)
         );
+        CREATE INDEX ix_0270_financial_facts_supersedes_id
+            ON financial_facts(supersedes_id);
         CREATE TABLE metric_computation_attempts (
             id INTEGER PRIMARY KEY, ticker TEXT, period_end TEXT,
             fiscal_period_type TEXT, formula_id INTEGER
@@ -516,6 +521,202 @@ class TestIncidentHardening:
             ).fetchone()[0]
             == deleted
         )
+        preflight = report.facts_depth_apply_preflight
+        assert preflight is not None
+        assert preflight.schema_version == "gc-facts-depth-apply-preflight/v1"
+        assert preflight.foreign_keys_enabled is True
+        assert preflight.self_fk_target_table == "financial_facts"
+        assert preflight.self_fk_from_column == "supersedes_id"
+        assert preflight.self_fk_to_column == "id"
+        assert preflight.lookup_index_name == "ix_0270_financial_facts_supersedes_id"
+        assert preflight.lookup_index_columns == ("supersedes_id",)
+        assert preflight.lookup_index_unique is False
+        assert preflight.lookup_index_origin == "c"
+        assert preflight.lookup_index_partial is False
+        assert preflight.sqlite_version == sqlite3.sqlite_version
+        assert preflight.lookup_query_plan
+
+    def test_facts_apply_refuses_missing_leading_index_before_archive_or_mutation(
+        self, gc_db: Path
+    ) -> None:
+        self._seed_facts(gc_db)
+        with sqlite3.connect(gc_db) as conn:
+            conn.execute("DROP INDEX ix_0270_financial_facts_supersedes_id")
+            conn.execute(
+                "CREATE INDEX ix_bad_facts_ticker_supersedes "
+                "ON financial_facts(supersedes_id, ticker)"
+            )
+            before = conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0]
+
+        archive = gc_db.parent / "archive" / db_gc.ARCHIVE_NAME
+        with pytest.raises(db_gc.GcAbortedError, match="leading supersedes_id"):
+            _run(gc_db, apply=True, policies=["facts-depth"])
+
+        assert not archive.exists()
+        with sqlite3.connect(gc_db) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == before
+
+    def test_facts_dry_run_without_index_is_logically_read_only(self, gc_db: Path) -> None:
+        self._seed_facts(gc_db)
+        with sqlite3.connect(gc_db) as conn:
+            conn.execute("DROP INDEX ix_0270_financial_facts_supersedes_id")
+        before_sha = hashlib.sha256(gc_db.read_bytes()).hexdigest()
+
+        report = _run(gc_db, apply=False, policies=["facts-depth"])
+
+        assert report.policies[0].rows_deleted["financial_facts"] > 0
+        assert report.facts_depth_apply_preflight is None
+        assert hashlib.sha256(gc_db.read_bytes()).hexdigest() == before_sha
+        assert not (gc_db.parent / "archive" / db_gc.ARCHIVE_NAME).exists()
+
+    def test_facts_apply_refuses_missing_self_fk_before_archive(self, gc_db: Path) -> None:
+        with sqlite3.connect(gc_db) as conn:
+            conn.executescript(
+                """
+                DROP INDEX ix_0270_financial_facts_supersedes_id;
+                ALTER TABLE financial_facts RENAME TO financial_facts_old;
+                CREATE TABLE financial_facts (
+                    id INTEGER PRIMARY KEY, ticker TEXT, period_end TEXT,
+                    fiscal_period_type TEXT, line_item TEXT, value NUMERIC,
+                    extracted_by TEXT, supersedes_id INTEGER
+                );
+                DROP TABLE financial_facts_old;
+                CREATE INDEX ix_0270_financial_facts_supersedes_id
+                    ON financial_facts(supersedes_id);
+                """
+            )
+        self._seed_facts(gc_db)
+
+        with pytest.raises(db_gc.GcAbortedError, match="REFERENCES financial_facts"):
+            _run(gc_db, apply=True, policies=["facts-depth"])
+
+        assert not (gc_db.parent / "archive" / db_gc.ARCHIVE_NAME).exists()
+
+    @pytest.mark.parametrize(
+        "table_definition",
+        [
+            """
+            CREATE TABLE financial_facts (
+                id INTEGER PRIMARY KEY, ticker TEXT, period_end TEXT,
+                fiscal_period_type TEXT, line_item TEXT, value NUMERIC,
+                extracted_by TEXT,
+                supersedes_id INTEGER REFERENCES financial_facts(id) ON DELETE CASCADE
+            )
+            """,
+            """
+            CREATE TABLE financial_facts (
+                id INTEGER PRIMARY KEY, ticker TEXT, period_end TEXT,
+                fiscal_period_type TEXT, line_item TEXT, value NUMERIC,
+                extracted_by TEXT, supersedes_id INTEGER, scope_id INTEGER,
+                UNIQUE(id, scope_id),
+                FOREIGN KEY(supersedes_id, scope_id)
+                    REFERENCES financial_facts(id, scope_id)
+            )
+            """,
+        ],
+        ids=["cascade", "composite"],
+    )
+    def test_facts_apply_refuses_non_exact_self_fk_semantics(
+        self,
+        gc_db: Path,
+        table_definition: str,
+    ) -> None:
+        with sqlite3.connect(gc_db) as conn:
+            conn.executescript(
+                "DROP INDEX ix_0270_financial_facts_supersedes_id;"
+                "ALTER TABLE financial_facts RENAME TO financial_facts_old;"
+                f"{table_definition};"
+                "DROP TABLE financial_facts_old;"
+                "CREATE INDEX ix_0270_financial_facts_supersedes_id "
+                "ON financial_facts(supersedes_id);"
+            )
+        self._seed_facts(gc_db)
+
+        with pytest.raises(db_gc.GcAbortedError, match="exact single-column self-FK"):
+            _run(gc_db, apply=True, policies=["facts-depth"])
+
+        assert not (gc_db.parent / "archive" / db_gc.ARCHIVE_NAME).exists()
+
+    def test_facts_apply_rechecks_index_under_writer_lock_before_mutation(
+        self,
+        gc_db: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._seed_facts(gc_db)
+        with sqlite3.connect(gc_db) as conn:
+            before = conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0]
+        original = db_gc._archive_doomed
+
+        def archive_then_drift(
+            conn: sqlite3.Connection,
+            *,
+            table: str,
+            run_at: str,
+            policy: str,
+            id_col: str = "id",
+            doomed: str = "_gc_doomed",
+        ) -> int:
+            archived = original(
+                conn,
+                table=table,
+                run_at=run_at,
+                policy=policy,
+                id_col=id_col,
+                doomed=doomed,
+            )
+            if table == "financial_facts":
+                conn.execute("DROP INDEX ix_0270_financial_facts_supersedes_id")
+            return archived
+
+        monkeypatch.setattr(db_gc, "_archive_doomed", archive_then_drift)
+
+        with pytest.raises(db_gc.GcAbortedError, match="leading supersedes_id"):
+            _run(gc_db, apply=True, policies=["facts-depth"])
+
+        with sqlite3.connect(gc_db) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == before
+        archive = gc_db.parent / "archive" / db_gc.ARCHIVE_NAME
+        with sqlite3.connect(archive) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] > 0
+
+    def test_schema_guard_runs_only_inside_each_immediate_transaction(
+        self,
+        gc_db: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._seed_facts(gc_db)
+        calls = 0
+        original = db_gc.require_current_for_write
+
+        def guarded(conn: sqlite3.Connection) -> None:
+            nonlocal calls
+            assert conn.in_transaction
+            calls += 1
+            original(conn)
+
+        monkeypatch.setattr(db_gc, "require_current_for_write", guarded)
+
+        _run(gc_db, apply=True, policies=["facts-depth"], batch_size=7)
+
+        assert calls >= 4
+
+    def test_apply_refuses_hardlink_database_alias_before_lock_or_archive(
+        self,
+        gc_db: Path,
+    ) -> None:
+        self._seed_facts(gc_db)
+        alias = gc_db.with_name("portfolio-alias.db")
+        os.link(gc_db, alias)
+        with sqlite3.connect(gc_db) as conn:
+            before = conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0]
+
+        with pytest.raises(db_gc.GcAbortedError, match="hardlink alias"):
+            _run(alias, apply=True, policies=["facts-depth"])
+
+        with sqlite3.connect(gc_db) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == before
+        assert not (gc_db.parent / "archive" / db_gc.ARCHIVE_NAME).exists()
+        assert not run_lock.lock_path_for(alias).exists()
 
     def test_guard_trigger_live_after_batched_prune(self, gc_db: Path) -> None:
         self._seed_facts(gc_db)

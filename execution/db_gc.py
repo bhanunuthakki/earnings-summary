@@ -111,6 +111,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
@@ -194,12 +195,32 @@ class PolicyReport(BaseModel):
     detail: dict[str, int] = Field(default_factory=dict[str, int])
 
 
+class FactsDepthApplyPreflight(BaseModel):
+    """Structural admission and diagnostic query-plan evidence for fact GC."""
+
+    schema_version: Literal["gc-facts-depth-apply-preflight/v1"] = (
+        "gc-facts-depth-apply-preflight/v1"
+    )
+    foreign_keys_enabled: bool
+    self_fk_target_table: str
+    self_fk_from_column: str
+    self_fk_to_column: str
+    lookup_index_name: str
+    lookup_index_columns: tuple[str, ...]
+    lookup_index_unique: bool
+    lookup_index_origin: str
+    lookup_index_partial: bool
+    sqlite_version: str
+    lookup_query_plan: tuple[str, ...]
+
+
 class GcRunReport(BaseModel):
     run_at: str
     db_path: str
     archive_path: str
     apply: bool
     policies: list[PolicyReport] = Field(default_factory=list["PolicyReport"])
+    facts_depth_apply_preflight: FactsDepthApplyPreflight | None = None
 
 
 def _log(event: str, **fields: object) -> None:
@@ -264,6 +285,11 @@ def _txn(conn: sqlite3.Connection) -> Generator[None]:
     except sqlite3.OperationalError as exc:
         raise GcAbortedError(f"could not take the write lock for a batch: {exc}") from exc
     try:
+        # Alembic does not participate in RunLock, so the revision must be
+        # checked after SQLite itself has reserved the writer slot. Keeping
+        # this in the shared batch boundary also catches a migration between
+        # independently committed GC batches.
+        require_current_for_write(conn)
         yield
     except BaseException:
         with suppress(sqlite3.OperationalError):
@@ -278,6 +304,111 @@ def _chunks(
 ) -> Iterator[Sequence[tuple[object, ...]]]:
     for i in range(0, len(rows), size):
         yield rows[i : i + size]
+
+
+def _facts_depth_apply_preflight(conn: sqlite3.Connection) -> FactsDepthApplyPreflight:
+    """Refuse fact deletion without indexed enforcement of its self-FK.
+
+    Runtime admission uses only SQLite's structural PRAGMA contracts. The raw
+    EXPLAIN output is retained as version-stamped diagnostic evidence; its
+    prose is intentionally not parsed because SQLite does not stabilize that
+    text as an API.
+    """
+    foreign_keys = int(conn.execute("PRAGMA foreign_keys").fetchone()[0])
+    if foreign_keys != 1:
+        raise GcAbortedError("facts-depth apply requires PRAGMA foreign_keys=ON")
+
+    fk_groups: dict[int, list[sqlite3.Row]] = {}
+    for row in conn.execute("PRAGMA foreign_key_list('financial_facts')"):
+        fk_groups.setdefault(int(row[0]), []).append(row)
+    fk_candidates = [
+        rows for rows in fk_groups.values() if any(str(row[3]) == "supersedes_id" for row in rows)
+    ]
+    self_fk = (
+        fk_candidates[0][0] if len(fk_candidates) == 1 and len(fk_candidates[0]) == 1 else None
+    )
+    if (
+        self_fk is None
+        or int(self_fk[1]) != 0
+        or str(self_fk[2]) != "financial_facts"
+        or str(self_fk[3]) != "supersedes_id"
+        or str(self_fk[4]) != "id"
+        or str(self_fk[5]).upper() != "NO ACTION"
+        or str(self_fk[6]).upper() != "NO ACTION"
+        or str(self_fk[7]).upper() != "NONE"
+    ):
+        raise GcAbortedError(
+            "facts-depth apply requires the exact single-column self-FK "
+            "financial_facts.supersedes_id REFERENCES financial_facts(id) "
+            "with ON UPDATE/DELETE NO ACTION and MATCH NONE"
+        )
+
+    expected_index = "ix_0270_financial_facts_supersedes_id"
+    index_row = next(
+        (
+            row
+            for row in conn.execute("PRAGMA index_list('financial_facts')")
+            if str(row[1]) == expected_index
+        ),
+        None,
+    )
+    index_columns = (
+        tuple(
+            str(column[0])
+            for column in conn.execute(
+                "SELECT name FROM pragma_index_info(?) ORDER BY seqno",
+                (expected_index,),
+            )
+        )
+        if index_row is not None
+        else ()
+    )
+    if (
+        index_row is None
+        or bool(index_row[2])
+        or str(index_row[3]) != "c"
+        or bool(index_row[4])
+        or index_columns != ("supersedes_id",)
+    ):
+        raise GcAbortedError(
+            "facts-depth apply requires the exact non-partial, non-unique index "
+            "ix_0270_financial_facts_supersedes_id with leading supersedes_id; "
+            "upgrade the database to Alembic head before retrying"
+        )
+
+    lookup_plan = tuple(
+        str(row[3])
+        for row in conn.execute(
+            "EXPLAIN QUERY PLAN SELECT id FROM financial_facts WHERE supersedes_id = ?",
+            (0,),
+        )
+    )
+    return FactsDepthApplyPreflight(
+        foreign_keys_enabled=True,
+        self_fk_target_table=str(self_fk[2]),
+        self_fk_from_column=str(self_fk[3]),
+        self_fk_to_column=str(self_fk[4]),
+        lookup_index_name=expected_index,
+        lookup_index_columns=index_columns,
+        lookup_index_unique=bool(index_row[2]),
+        lookup_index_origin=str(index_row[3]),
+        lookup_index_partial=bool(index_row[4]),
+        sqlite_version=sqlite3.sqlite_version,
+        lookup_query_plan=lookup_plan,
+    )
+
+
+def _resolve_database_path(db_path: Path, *, apply: bool) -> Path:
+    """Canonicalize symlinks and reject hardlink aliases for mutable runs."""
+    resolved = db_path.resolve(strict=True)
+    if not resolved.is_file():
+        raise GcAbortedError(f"database path is not a regular file: {resolved}")
+    if apply and resolved.stat().st_nlink != 1:
+        raise GcAbortedError(
+            "database has a hardlink alias; refuse apply until exactly one "
+            f"directory entry owns the SQLite file ({resolved})"
+        )
+    return resolved
 
 
 # ---------------------------------------------------------------------------
@@ -364,6 +495,8 @@ def _delete_batches(
         ctrl.checkpoint()
         n = 0
         with _txn(conn):
+            if table == "financial_facts":
+                _facts_depth_apply_preflight(conn)
             conn.execute("DROP TABLE IF EXISTS temp._gc_batch")
             conn.execute(
                 f'CREATE TEMP TABLE _gc_batch AS SELECT id FROM "{doomed}" '  # nosec B608 -- internal temp-table names; batch size is int()
@@ -782,6 +915,7 @@ def facts_depth(
     # first (survivor stragglers and doomed rows alike) removes every FK edge
     # into the doomed set; the archive above already preserved the originals.
     with _txn(conn):
+        _facts_depth_apply_preflight(conn)
         cur = conn.execute(
             "UPDATE financial_facts SET supersedes_id = NULL "
             "WHERE supersedes_id IN (SELECT id FROM _gc_doomed)"
@@ -934,7 +1068,8 @@ def run_gc(
     ctrl.checkpoint()  # refuse to start inside the protected window
 
     run_at = now_naive_utc().isoformat()
-    archive = archive_path or (db_path.parent / "archive" / ARCHIVE_NAME)
+    effective_db_path = _resolve_database_path(db_path, apply=apply)
+    archive = archive_path or (effective_db_path.parent / "archive" / ARCHIVE_NAME)
 
     # AGENTS.md concurrency rule: one process owns the portfolio write set.
     # The morning pipeline orchestrator holds the same lock for its whole run,
@@ -942,22 +1077,35 @@ def run_gc(
     # timeout on purpose — GC yields, it does not queue.
     lock: RunLock | None = None
     if apply:
-        lock = acquire_run_lock(db_path, owner="db_gc", timeout_s=lock_timeout_s)
+        lock = acquire_run_lock(effective_db_path, owner="db_gc", timeout_s=lock_timeout_s)
 
     try:
-        # Dry runs mutate nothing, so they skip the alembic-revision preflight
-        # and never create the archive sidecar; --apply enforces both.
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=apply)
+        # Dry runs make no logical database writes, so they skip the Alembic
+        # write preflight and never create the archive sidecar; --apply
+        # enforces both. A WAL reader may still open SQLite-managed sidecars.
+        role = SQLiteConnectionRole.WRITER if apply else SQLiteConnectionRole.READ_ONLY
+        conn = connect_sqlite(
+            effective_db_path,
+            role=role,
+            schema_preflight=False if apply else None,
+        )
         # Explicit transaction control: the batching contract needs autocommit
         # between the bounded _txn() blocks, not the sqlite3 module's implicit
         # transaction management.
         conn.isolation_level = None
         report = GcRunReport(
-            run_at=run_at, db_path=str(db_path), archive_path=str(archive), apply=apply
+            run_at=run_at,
+            db_path=str(effective_db_path),
+            archive_path=str(archive),
+            apply=apply,
         )
         try:
             if apply:
-                require_current_for_write(conn)
+                # The compatibility check must run while SQLite owns the
+                # writer reservation, not merely before lock acquisition.
+                with _txn(conn):
+                    if "facts-depth" in policies:
+                        report.facts_depth_apply_preflight = _facts_depth_apply_preflight(conn)
                 attach_archive(conn, archive)
             _reset_doomed(conn)
 

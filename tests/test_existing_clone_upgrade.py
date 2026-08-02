@@ -26,7 +26,7 @@ from provenance.cutover_preflight import (
 from provenance.latest_state_activation import candidate_file_identity
 
 SOURCE_REVISION = "0261_latest_governed_state"
-TARGET_REVISION = "0269_latest_governed_population_receipt_v2"
+TARGET_REVISION = "0270_financial_facts_supersedes_index"
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
 
 

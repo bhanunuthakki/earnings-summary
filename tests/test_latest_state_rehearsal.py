@@ -33,10 +33,12 @@ from provenance.latest_state_rehearsal import (
     verify_rehearsal_checkpoint,
     verify_rehearsal_readiness_receipt,
 )
+from schema_compat import expected_head
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+_HEAD_REVISION = expected_head()
 
 
 def _artifact(path: Path, payload: str = "evidence") -> ArtifactCommitment:
@@ -62,7 +64,7 @@ def _plan(tmp_path: Path) -> RehearsalPlan:
         compressed_clone_receipt=clone_receipt,
         production_scope_registry=registry,
         expected_source_revision="0261_latest_governed_state",
-        expected_target_revision="0269_latest_governed_population_receipt_v2",
+        expected_target_revision=_HEAD_REVISION,
         cutoff_at=NOW,
         operation_recorded_at=NOW,
         max_document_obligations=100,
@@ -254,10 +256,10 @@ def test_post_mutation_seal_is_exact_and_refuses_uncheckpointed_sidecars(
     database = tmp_path / "candidate.db"
     with sqlite3.connect(database) as conn:
         conn.executescript(
-            """
+            f"""
             CREATE TABLE alembic_version (version_num TEXT PRIMARY KEY);
             INSERT INTO alembic_version VALUES
-              ('0269_latest_governed_population_receipt_v2');
+              ('{_HEAD_REVISION}');
             CREATE TABLE source_taxonomy_components (component_id TEXT PRIMARY KEY);
             INSERT INTO source_taxonomy_components VALUES ('component-1');
             CREATE TABLE fact_cell_canonical_binding_revisions (
@@ -275,10 +277,10 @@ def test_seal_cli_checkpoints_isolated_candidate_and_publishes_no_clobber(
     database = tmp_path / "candidate.db"
     with sqlite3.connect(database) as conn:
         conn.executescript(
-            """
+            f"""
             CREATE TABLE alembic_version (version_num TEXT PRIMARY KEY);
             INSERT INTO alembic_version VALUES
-              ('0269_latest_governed_population_receipt_v2');
+              ('{_HEAD_REVISION}');
             CREATE TABLE source_taxonomy_components (component_id TEXT PRIMARY KEY);
             INSERT INTO source_taxonomy_components VALUES ('component-1');
             CREATE TABLE fact_cell_canonical_binding_revisions (
@@ -301,7 +303,7 @@ def test_seal_cli_checkpoints_isolated_candidate_and_publishes_no_clobber(
             "--database",
             str(database),
             "--expected-revision",
-            "0269_latest_governed_population_receipt_v2",
+            _HEAD_REVISION,
             "--seal",
             str(seal_path),
         ]
@@ -318,7 +320,7 @@ def test_seal_cli_checkpoints_isolated_candidate_and_publishes_no_clobber(
                 "--database",
                 str(database),
                 "--expected-revision",
-                "0269_latest_governed_population_receipt_v2",
+                _HEAD_REVISION,
                 "--seal",
                 str(database),
             ]
@@ -328,11 +330,11 @@ def test_seal_cli_checkpoints_isolated_candidate_and_publishes_no_clobber(
 
     seal = build_governed_candidate_seal(
         database,
-        expected_revision="0269_latest_governed_population_receipt_v2",
+        expected_revision=_HEAD_REVISION,
     )
 
     assert seal.database == str(database.resolve())
-    assert seal.revision == ("0269_latest_governed_population_receipt_v2",)
+    assert seal.revision == (_HEAD_REVISION,)
     assert seal.canonical_bindings == 1
     assert seal.source_taxonomy_components == 1
     assert seal.sha256 == hashlib.sha256(database.read_bytes()).hexdigest()
@@ -341,7 +343,7 @@ def test_seal_cli_checkpoints_isolated_candidate_and_publishes_no_clobber(
     with pytest.raises(RuntimeError, match="WAL sidecar"):
         build_governed_candidate_seal(
             database,
-            expected_revision="0269_latest_governed_population_receipt_v2",
+            expected_revision=_HEAD_REVISION,
         )
 
 

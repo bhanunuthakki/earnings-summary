@@ -64,7 +64,10 @@ AUDITED_LEGACY_FACT_READS = {
     "execution/backfill_fiscal_period_stamps.py": 1,
     "execution/backfill_ir_deck_locators.py": 2,
     "execution/daily_fetch_and_brief.py": 2,
-    "execution/db_gc.py": 7,
+    # The eighth literal is an EXPLAIN QUERY PLAN safety probe that proves the
+    # supersedes self-FK lookup uses the migration-owned index before deletion;
+    # it does not fetch domain rows.
+    "execution/db_gc.py": 8,
     "execution/extract_kpis_from_ir.py": 1,
     "execution/fix_kpi_series.py": 2,
     "execution/fmp_backpop.py": 1,
