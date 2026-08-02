@@ -173,7 +173,7 @@ class TestValidationIssuesCollapse:
         assert raised.startswith("2026-07-26")
         assert first.startswith("2026-07-24") and last.startswith("2026-07-26")
         assert count == 3 and fp is not None
-        # Singleton untouched.
+        # Singleton kept as one row — but fingerprinted, not stranded.
         assert (
             conn.execute("SELECT COUNT(*) FROM validation_issues WHERE ticker = 'WIX'").fetchone()[
                 0
@@ -211,6 +211,8 @@ class TestValidationIssuesCollapse:
         report = _run(gc_db, apply=False, policies=["validation-issues"])
         (pol,) = report.policies
         assert pol.rows_deleted["validation_issues"] == 2
+        # Both survivors are planned for a fingerprint (dup group + singleton).
+        assert pol.detail["fingerprint_backfilled"] == 2
         conn = sqlite3.connect(gc_db)
         assert conn.execute("SELECT COUNT(*) FROM validation_issues").fetchone()[0] == 4
         assert (
@@ -219,6 +221,197 @@ class TestValidationIssuesCollapse:
             ).fetchone()[0]
             == 0
         )
+
+
+class TestNullFingerprintBackfill:
+    """Regression: every NULL fingerprint is backfilled, not just dup survivors.
+
+    Before this, ``collapse_validation_issues`` backfilled only rows matching
+    ``rn = 1 AND n > 1``. A row that was always a singleton kept its NULL
+    fingerprint, and ``record_issue`` matches on ``WHERE fingerprint = ?``,
+    which never matches NULL — so the row could never be re-opened, updated,
+    or resolved and sat in the open-issue count forever (196 such rows
+    survived the 2026-08-02 production apply).
+    """
+
+    def _seed_singleton(self, db: Path, *, ticker: str = "NU") -> None:
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "INSERT INTO validation_issues (run_id, source_doc_id, ticker, severity,"
+            " rule, raw_value, expected, raised_at, fingerprint, occurrence_count)"
+            " VALUES ('run0', 7, ?, 'warn', 'PLAUSIBLE_RANGE', 'x=1', 'x<1',"
+            " '2026-07-24 04:00:00', NULL, 1)",
+            (ticker,),
+        )
+        conn.commit()
+        conn.close()
+
+    def _record_with_rule(
+        self, db: Path, *, ticker: str = "NU", rule: str = "PLAUSIBLE_RANGE"
+    ) -> int:
+        """Re-detect the seeded defect through the real lifecycle writer."""
+        from pipeline.validation_issue_store import record_issue
+
+        conn = sqlite3.connect(db)
+        try:
+            issue_id = record_issue(
+                conn,
+                run_id="run-after-gc",
+                source_doc_id=7,
+                ticker=ticker,
+                severity="warn",
+                rule=rule,
+                raw_value="x=1",
+                expected="x<1",
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return issue_id
+
+    def test_singleton_gets_fingerprint_and_record_issue_updates_it(self, gc_db: Path) -> None:
+        self._seed_singleton(gc_db)
+        report = _run(gc_db, apply=True, policies=["validation-issues"])
+        (pol,) = report.policies
+        # No duplicates at all — the old `if apply and doomed_total` gate also
+        # skipped the backfill entirely on exactly this shape.
+        assert pol.rows_deleted["validation_issues"] == 0
+        assert pol.detail["duplicate_groups"] == 0
+        assert pol.detail["fingerprint_backfilled"] == 1
+
+        conn = sqlite3.connect(gc_db)
+        seeded_id, fingerprint, first, last, count = conn.execute(
+            "SELECT id, fingerprint, first_seen_at, last_seen_at, occurrence_count"
+            " FROM validation_issues"
+        ).fetchone()
+        conn.close()
+        assert fingerprint is not None
+        assert (
+            fingerprint == hashlib.sha256(b"7\x1fNU\x1fPLAUSIBLE_RANGE\x1fx=1\x1fx<1").hexdigest()
+        )
+        assert first.startswith("2026-07-24") and last.startswith("2026-07-24")
+        assert count == 1
+
+        # The point of the fingerprint: the next detection UPDATEs this row
+        # rather than inserting a second one.
+        assert self._record_with_rule(gc_db) == seeded_id
+        conn = sqlite3.connect(gc_db)
+        rows = conn.execute("SELECT id, run_id, occurrence_count FROM validation_issues").fetchall()
+        conn.close()
+        assert len(rows) == 1
+        assert rows[0] == (seeded_id, "run-after-gc", 2)
+
+    def test_second_apply_is_a_noop(self, gc_db: Path) -> None:
+        self._seed_singleton(gc_db)
+        _run(gc_db, apply=True, policies=["validation-issues"])
+        report = _run(gc_db, apply=True, policies=["validation-issues"])
+        (pol,) = report.policies
+        assert pol.rows_deleted["validation_issues"] == 0
+        assert pol.rows_updated["validation_issues"] == 0
+        assert pol.detail["fingerprint_backfilled"] == 0
+
+    def test_ticker_case_variants_collapse_as_one_defect(self, gc_db: Path) -> None:
+        """The defect-group key mirrors issue_fingerprint's normalization.
+
+        ``issue_fingerprint`` upper-cases the ticker, so 'nu' and 'NU' are one
+        defect. The group key used to partition on the raw ticker, which put
+        them in two groups that computed one fingerprint — the second UPDATE
+        would hit uq_validation_issues_fingerprint. Aligned, they are simply
+        one duplicate group.
+        """
+        self._seed_singleton(gc_db, ticker="NU")
+        conn = sqlite3.connect(gc_db)
+        conn.execute(
+            "INSERT INTO validation_issues (run_id, source_doc_id, ticker, severity,"
+            " rule, raw_value, expected, raised_at, fingerprint, occurrence_count)"
+            " VALUES ('run-legacy', 7, 'nu', 'warn', 'PLAUSIBLE_RANGE', 'x=1', 'x<1',"
+            " '2026-07-20 04:00:00', NULL, 1)"
+        )
+        conn.commit()
+        conn.close()
+
+        report = _run(gc_db, apply=True, policies=["validation-issues"])
+        (pol,) = report.policies
+        assert pol.detail["duplicate_groups"] == 1
+        assert pol.detail["fingerprint_collisions"] == 0
+        assert pol.rows_deleted["validation_issues"] == 1
+
+        conn = sqlite3.connect(gc_db)
+        rows = conn.execute("SELECT ticker, fingerprint FROM validation_issues").fetchall()
+        conn.close()
+        assert len(rows) == 1
+        assert rows[0][0] == "NU" and rows[0][1] is not None
+
+    def test_collision_with_fingerprinted_row_is_archived_not_written(self, gc_db: Path) -> None:
+        """A NULL row whose fingerprint is already owned is a true duplicate.
+
+        The one normalization the group key cannot mirror in SQL: a NULL
+        ``rule`` reaches ``issue_fingerprint`` as the literal string "None", so
+        a NULL rule and the rule 'None' are two groups with one fingerprint.
+        The loser goes through archive+delete, never an UPDATE the partial
+        unique index would reject mid-batch.
+        """
+        conn = sqlite3.connect(gc_db)
+        conn.execute(
+            "INSERT INTO validation_issues (run_id, source_doc_id, ticker, severity,"
+            " rule, raw_value, expected, raised_at, fingerprint, occurrence_count)"
+            " VALUES ('run-legacy', 7, 'NU', 'warn', NULL, 'x=1', 'x<1',"
+            " '2026-07-20 04:00:00', NULL, 1)"
+        )
+        conn.commit()
+        conn.close()
+        kept_id = self._record_with_rule(gc_db, rule="None")
+
+        report = _run(gc_db, apply=True, policies=["validation-issues"])
+        (pol,) = report.policies
+        assert pol.detail["fingerprint_collisions"] == 1
+        assert pol.detail["fingerprint_backfilled"] == 0
+        assert pol.rows_deleted["validation_issues"] == 1
+
+        conn = sqlite3.connect(gc_db)
+        rows = conn.execute("SELECT id FROM validation_issues").fetchall()
+        conn.close()
+        assert rows == [(kept_id,)]
+        arc = gc_db.parent / "archive" / db_gc.ARCHIVE_NAME
+        aconn = sqlite3.connect(arc)
+        archived = aconn.execute("SELECT run_id FROM validation_issues").fetchall()
+        aconn.close()
+        assert archived == [("run-legacy",)]
+
+    def test_referenced_collision_is_stranded_loudly_not_deleted(self, gc_db: Path) -> None:
+        """An FK-referenced collision can be neither fingerprinted nor deleted."""
+        conn = sqlite3.connect(gc_db)
+        cur = conn.execute(
+            "INSERT INTO validation_issues (run_id, source_doc_id, ticker, severity,"
+            " rule, raw_value, expected, raised_at, fingerprint, occurrence_count)"
+            " VALUES ('run-legacy', 7, 'NU', 'warn', NULL, 'x=1', 'x<1',"
+            " '2026-07-20 04:00:00', NULL, 1)"
+        )
+        conn.execute(
+            "INSERT INTO fact_selection_decisions (target_table, target_row_id,"
+            " validation_issue_id) VALUES ('kpi_facts', 1, ?)",
+            (cur.lastrowid,),
+        )
+        conn.commit()
+        conn.close()
+        self._record_with_rule(gc_db, rule="None")
+
+        report = _run(gc_db, apply=True, policies=["validation-issues"])
+        (pol,) = report.policies
+        assert pol.detail["fingerprint_blocked_referenced"] == 1
+        assert pol.detail["fingerprint_collisions"] == 0
+        assert pol.rows_deleted["validation_issues"] == 0
+
+        conn = sqlite3.connect(gc_db)
+        assert conn.execute("SELECT COUNT(*) FROM validation_issues").fetchone()[0] == 2
+        # Stranded, but reported — never silently "fixed".
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM validation_issues WHERE fingerprint IS NULL"
+            ).fetchone()[0]
+            == 1
+        )
+        conn.close()
 
 
 class TestTelemetryRetention:
