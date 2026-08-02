@@ -497,7 +497,9 @@ def test_persist_prelude_each_call_lands_a_fresh_row(tmp_path: Path) -> None:
     """Each generate click is a deliberate new LLM spend — never served
     stale from an artifact cache keyed only on ticker."""
     db = _build_db(tmp_path)
-    persist_prelude(db, SocraticPrelude(ticker="NU", questions=["a?", "b?", "c?"], context_block="1"))
+    persist_prelude(
+        db, SocraticPrelude(ticker="NU", questions=["a?", "b?", "c?"], context_block="1")
+    )
     persist_prelude(
         db, SocraticPrelude(ticker="NU", questions=["x?", "y?", "z?"], context_block="2")
     )
@@ -517,7 +519,9 @@ def test_run_socratic_questions_script_persists_prelude(
     db = _build_db(tmp_path)
 
     def fake_generate(repo_root: Path, ticker: str, **_kwargs: object) -> SocraticPrelude:
-        return SocraticPrelude(ticker=ticker.upper(), questions=["a?", "b?", "c?"], context_block="c")
+        return SocraticPrelude(
+            ticker=ticker.upper(), questions=["a?", "b?", "c?"], context_block="c"
+        )
 
     monkeypatch.setattr(socratic_mod, "generate_questions", fake_generate)
 
@@ -559,7 +563,9 @@ def test_run_socratic_questions_script_exit_1_when_persistence_fails(
     page has no other way to read a background job's result back."""
 
     def fake_generate(repo_root: Path, ticker: str, **_kwargs: object) -> SocraticPrelude:
-        return SocraticPrelude(ticker=ticker.upper(), questions=["a?", "b?", "c?"], context_block="c")
+        return SocraticPrelude(
+            ticker=ticker.upper(), questions=["a?", "b?", "c?"], context_block="c"
+        )
 
     monkeypatch.setattr(socratic_mod, "generate_questions", fake_generate)
     monkeypatch.setattr(socratic_mod, "persist_prelude", lambda *_a, **_k: None)
@@ -619,7 +625,9 @@ def test_socratic_questions_result_route_roundtrip(client: FlaskClient, tmp_path
     persist_prelude(
         db_path,
         SocraticPrelude(
-            ticker="NU", questions=["Your read?", "Horizon?", "What breaks it?"], context_block="ctx"
+            ticker="NU",
+            questions=["Your read?", "Horizon?", "What breaks it?"],
+            context_block="ctx",
         ),
     )
     resp = client.get("/api/socratic/questions/nu")

@@ -66,9 +66,16 @@ def main(argv: list[str] | None = None) -> int:
         # The LLM call succeeded but persistence didn't — the page has no
         # other way to see this job's result, so an un-persisted prelude is
         # a failure from the caller's perspective, not a degraded success.
-        print("persistence failed — DB unavailable; the page will never see these questions", file=sys.stderr, flush=True)
+        print(
+            "persistence failed — DB unavailable; the page will never see these questions",
+            file=sys.stderr,
+            flush=True,
+        )
         return 1
-    print(f"questions ready: {len(prelude.questions)} for {ticker} (artifact #{artifact_id})", flush=True)
+    print(
+        f"questions ready: {len(prelude.questions)} for {ticker} (artifact #{artifact_id})",
+        flush=True,
+    )
     return 0
 
 

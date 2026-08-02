@@ -301,7 +301,7 @@ def render_weekly_packet_peek(db_path: Path | str | None, *, now: datetime | Non
     rows = "".join(
         '<div class="cc-ol-line">'
         f'<span class="k-chip k-chip-mono">{escape(str(kind))}</span> '
-        f'{escape((str(ticker) + " — ") if ticker else "")}{escape(str(title)[:160])} '
+        f"{escape((str(ticker) + ' — ') if ticker else '')}{escape(str(title)[:160])} "
         f'<span class="muted">{escape(str(verdict) if verdict else "pending")}</span></div>'
         for kind, ticker, title, verdict in items
     )

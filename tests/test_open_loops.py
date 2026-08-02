@@ -305,9 +305,7 @@ def test_coach_sent_today_line_ignores_digest_and_dismissed(db_path: Path) -> No
 # --------------------------------------------------------------------------- #
 
 
-def _insert_packet_run(
-    db_path: Path, *, status: str, total_items: int, now: datetime
-) -> int:
+def _insert_packet_run(db_path: Path, *, status: str, total_items: int, now: datetime) -> int:
     iso_year, iso_week, _ = now.isocalendar()
     conn = sqlite3.connect(str(db_path))
     try:
@@ -345,9 +343,15 @@ def _insert_packet_item(
 
 def test_packet_line_open_run_shows_answered_of_total(db_path: Path) -> None:
     run_id = _insert_packet_run(db_path, status="open", total_items=3, now=_PINNED_NOW)
-    _insert_packet_item(db_path, run_id=run_id, order_index=0, title="a", verdict="accept", now=_PINNED_NOW)
-    _insert_packet_item(db_path, run_id=run_id, order_index=1, title="b", verdict=None, now=_PINNED_NOW)
-    _insert_packet_item(db_path, run_id=run_id, order_index=2, title="c", verdict=None, now=_PINNED_NOW)
+    _insert_packet_item(
+        db_path, run_id=run_id, order_index=0, title="a", verdict="accept", now=_PINNED_NOW
+    )
+    _insert_packet_item(
+        db_path, run_id=run_id, order_index=1, title="b", verdict=None, now=_PINNED_NOW
+    )
+    _insert_packet_item(
+        db_path, run_id=run_id, order_index=2, title="c", verdict=None, now=_PINNED_NOW
+    )
 
     html = render_open_loops_band(db_path, now=_PINNED_NOW)
     assert "Sunday packet · 1 of 3 answered · finish" in html
@@ -390,7 +394,12 @@ def test_packet_line_ignores_a_prior_weeks_leftover_run(db_path: Path) -> None:
 def test_weekly_packet_peek_renders_pending_and_answered_items(db_path: Path) -> None:
     run_id = _insert_packet_run(db_path, status="open", total_items=2, now=_PINNED_NOW)
     _insert_packet_item(
-        db_path, run_id=run_id, order_index=0, title="ratified note", verdict="accept", now=_PINNED_NOW
+        db_path,
+        run_id=run_id,
+        order_index=0,
+        title="ratified note",
+        verdict="accept",
+        now=_PINNED_NOW,
     )
     _insert_packet_item(
         db_path, run_id=run_id, order_index=1, title="still pending", verdict=None, now=_PINNED_NOW

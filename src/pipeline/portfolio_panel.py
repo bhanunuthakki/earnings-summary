@@ -1490,7 +1490,7 @@ def _next_dollar_distribution(model: NextDollarModel) -> str:
         items.append(
             '<div class="pf-nd-item" tabindex="0">'
             '<div class="pf-nd-row">'
-            f'{ticker_label(r.ticker, href=f"../research/{ticker}/", classes="pf-nd-ticker")}'
+            f"{ticker_label(r.ticker, href=f'../research/{ticker}/', classes='pf-nd-ticker')}"
             f'<span class="pf-nd-bar"><span style="width:{width:.1f}%"></span></span>'
             f'<span class="pf-nd-alloc">{r.allocation_pct:.1f}%</span>'
             f'<span class="pf-nd-now muted">{now_text}</span>'
