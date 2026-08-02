@@ -254,3 +254,55 @@ def test_run_job_writes_machine_readable_health(tmp_path: Path) -> None:
     record = json.loads(records[0].read_text(encoding="utf-8"))
     assert record["status"] == "ok"
     assert record["write_sets"] == ["portfolio-db"]
+
+
+def test_inherited_lock_valid_when_holder_is_grandparent_not_direct_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the scheduler wrapper spawns the job through an intermediate
+    process, so the lock holder is an ANCESTOR, not ``os.getppid()``. Requiring
+    direct parentage made every wrapped job re-acquire the lock its own ancestor
+    held and deadlock ("write set busy"), which silently stopped the nightly
+    backup for three days."""
+    lock_path = _write_set_lock_path(tmp_path, "portfolio-db")
+    with JobLock(tmp_path, "wrapper", ["portfolio-db"]):
+        owner = json.loads(lock_path.read_text(encoding="utf-8"))
+        monkeypatch.setenv(
+            "EARNINGS_SUMMARY_JOB_LOCK_PROOF",
+            json.dumps(
+                {
+                    "portfolio-db": {
+                        "path": str(lock_path),
+                        "token": owner["token"],
+                        "pid": owner["pid"],
+                    }
+                }
+            ),
+        )
+        # A shim sits between the holder and this process: getppid() is NOT the
+        # holder. The proof must still validate.
+        monkeypatch.setattr(job_runtime.os, "getppid", lambda: owner["pid"] + 10_000)
+        assert inherited_lock_is_valid(tmp_path, "portfolio-db") is True
+
+
+def test_inherited_lock_rejected_when_token_does_not_match_on_disk_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The token — not the pid relationship — is what proves inheritance."""
+    lock_path = _write_set_lock_path(tmp_path, "portfolio-db")
+    with JobLock(tmp_path, "wrapper", ["portfolio-db"]):
+        owner = json.loads(lock_path.read_text(encoding="utf-8"))
+        monkeypatch.setenv(
+            "EARNINGS_SUMMARY_JOB_LOCK_PROOF",
+            json.dumps(
+                {
+                    "portfolio-db": {
+                        "path": str(lock_path),
+                        "token": "forged-token",
+                        "pid": owner["pid"],
+                    }
+                }
+            ),
+        )
+        monkeypatch.setattr(job_runtime.os, "getppid", lambda: owner["pid"])
+        assert inherited_lock_is_valid(tmp_path, "portfolio-db") is False
