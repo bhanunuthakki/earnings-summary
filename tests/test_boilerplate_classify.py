@@ -30,6 +30,7 @@ from filings import boilerplate_classify as bc  # noqa: E402
 from filings import boilerplate_triage as bt  # noqa: E402
 from filings.boilerplate_triage import BoilerplateVerdict, ItemVerdict, TriageOutcome  # noqa: E402
 from filings.models import HardStopError  # noqa: E402
+from filings.specificity import SpecificityBand, specificity_metrics  # noqa: E402
 
 _SCHEMA = """
 CREATE TABLE filing_sections (
@@ -326,6 +327,87 @@ def test_risk_growth_override_forces_llm_lane(
     assert called["n"] == 1
     assert results[0].llm_used is True
     assert results[0].risk_growth_flagged is True
+
+
+_SCRAPED_TABLE_ROW = (
+    "Year Ended December 31, (in millions)20242023 Depreciation and amortization$591 $504 "
+    "17.3 % Interest expense$(1,295)$(897)44.3 % Total revenues2.5 %2.4 % Other countries44.1 "
+    "26.1 Total consolidated101.5 %73.2 %"
+)
+
+
+def test_table_shaped_hunk_is_barred_from_the_confident_high_fast_path(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mirror of the Filzen override.
+
+    A scraped table row is dense with numbers BECAUSE it is a table, and the
+    specificity proxy reads that density as firm-specificity — so it would
+    otherwise resolve `substantive` on the free fast path without any LLM
+    reading it. It must be deferred to triage instead. The override withholds
+    a fast path; it never asserts 'boilerplate' from shape alone.
+    """
+    event_id = _insert_event(
+        conn,
+        ticker="AAA",
+        event_type="item_reworded",
+        subject="s1",
+        current_excerpt=_SCRAPED_TABLE_ROW,
+    )
+    # Precondition: without the override this text IS confidently HIGH — the
+    # test would be vacuous if the hunk merely scored ambiguous on its own.
+    assert specificity_metrics(_SCRAPED_TABLE_ROW).band is SpecificityBand.HIGH
+
+    called = {"n": 0}
+
+    def _fake_triage(ticker: str, candidates: list[object], **kwargs: object) -> TriageOutcome:
+        called["n"] += 1
+        return TriageOutcome(
+            ticker=ticker,
+            verdicts={
+                event_id: ItemVerdict(
+                    event_id=event_id,
+                    verdict=BoilerplateVerdict.BOILERPLATE_UPDATE,
+                    confidence=0.8,
+                    rationale="tabular",
+                )
+            },
+        )
+
+    monkeypatch.setattr(bc, "triage_events", _fake_triage)
+    results, _degraded = bc.classify_ticker_events(conn, "AAA")
+
+    assert called["n"] == 1, "table-shaped hunk must reach LLM triage, not the fast path"
+    assert results[0].llm_used is True
+    assert results[0].table_shaped is True
+
+
+def test_firm_specific_prose_keeps_its_confident_high_fast_path(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The override must not tax ordinary number-carrying prose.
+
+    ``_FIRM_SPECIFIC`` names dollar figures, percentages, months and entities —
+    exactly the checkable content the specificity proxy is meant to reward — so
+    it must still resolve free, with no LLM call.
+    """
+    _insert_event(
+        conn,
+        ticker="AAA",
+        event_type="item_added",
+        subject="s1",
+        current_excerpt=_FIRM_SPECIFIC,
+    )
+
+    def _fail(*_a: object, **_k: object) -> TriageOutcome:
+        raise AssertionError("firm-specific prose must not reach the LLM")
+
+    monkeypatch.setattr(bc, "triage_events", _fail)
+    results, _degraded = bc.classify_ticker_events(conn, "AAA")
+
+    assert results[0].llm_used is False
+    assert results[0].verdict == bc.SUBSTANTIVE_VERDICT
+    assert results[0].table_shaped is False
 
 
 def test_compute_risk_growth_flags(conn: sqlite3.Connection) -> None:

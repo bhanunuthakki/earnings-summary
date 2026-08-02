@@ -35,6 +35,7 @@ from datetime import UTC, datetime
 from filings import section_items, store
 from filings.models import FilingForm, FiscalPeriod, HardStopError
 from filings.section_items import SectionItem
+from filings.specificity import looks_tabular
 
 log = logging.getLogger(__name__)
 
@@ -110,7 +111,28 @@ def _excerpt(body: str, n: int = EXCERPT_LEN) -> str:
     return " ".join(body.split())[:n].strip()
 
 
+def _is_tabular_item(body: str) -> bool:
+    """Whether this item body is extracted TABLE content rather than narrative.
+
+    This detector diffs the NARRATIVE items of a filing section. A financial
+    table that survived extraction as flattened text ("(in millions)20242023
+    Interest expense$(1,295)$(897)44.3 %") is out of its subject matter: the
+    numbers it carries are the facts/XBRL pipeline's job, and diffing them as
+    prose produces an event on every period simply because the figures moved.
+
+    Suppressing at emit is the top-of-funnel fix. Left to run, these items
+    dominate everything downstream — they were ~36% of all events, they defeat
+    body-level dedupe (every quarter's numbers differ, so no two are alike),
+    and the P3 specificity proxy actively PROMOTES them because it reads number
+    density as firm-specificity (``specificity.looks_tabular``). Dropping them
+    here is cheaper and more honest than paying an LLM to reject each one.
+    """
+    return looks_tabular(body)
+
+
 def _removed_event(item: SectionItem) -> DisclosureEvent | None:
+    if _is_tabular_item(item.body):
+        return None
     quote = _quote(item.body)
     if not quote:
         return None
@@ -134,6 +156,8 @@ def _removed_event(item: SectionItem) -> DisclosureEvent | None:
 
 
 def _added_event(item: SectionItem) -> DisclosureEvent | None:
+    if _is_tabular_item(item.body):
+        return None
     quote = _quote(item.body)
     if not quote:
         return None
@@ -157,6 +181,16 @@ def _added_event(item: SectionItem) -> DisclosureEvent | None:
 
 
 def _reworded_event(prior: SectionItem, current: SectionItem) -> DisclosureEvent | None:
+    # Gate on the CURRENT body only — the side this event's quote and excerpt
+    # are drawn from. An earlier version also suppressed when the PRIOR side was
+    # tabular; the one-ticker dry sweep caught that dropping real narrative
+    # events whose prior-period counterpart happened to match a table (the
+    # aligner can pair a narrative item against a tabular one via the
+    # content-similarity fallback). Losing narrative is the expensive error
+    # here; a spurious table-to-prose "rewording" is merely noisy, and the P3
+    # specificity gate still sees it.
+    if _is_tabular_item(current.body):
+        return None
     quote = _quote(current.body)
     if not quote:
         return None
@@ -328,6 +362,23 @@ def diff_ticker_concept(
     events: list[DisclosureEvent] = []
     for (_prior_key, prior_items), (_cur_key, current_items) in itertools.pairwise(periods):
         events.extend(align_period_pair(prior_items, current_items))
+
+    # A suppressed item is invisible in the output by construction, so report
+    # it: a silent 36% drop in event volume must be attributable to this gate
+    # rather than read as the detector quietly going quiet.
+    tabular_items = sum(1 for it in all_items if _is_tabular_item(it.body))
+    if tabular_items:
+        log.info(
+            {
+                "event": "item_diff_tabular_items_suppressed",
+                "ticker": ticker,
+                "canonical_id": canonical_id,
+                "tabular_items": tabular_items,
+                "items_total": len(all_items),
+                "note": "extracted table content is not narrative drift; "
+                "numeric change belongs to the facts/XBRL pipeline",
+            }
+        )
 
     return all_items, events
 

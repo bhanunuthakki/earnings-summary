@@ -23,7 +23,7 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 from dashboard._styles import CSS
-from dashboard.inbox import INBOX_CSS, INBOX_JS, collect_inbox, render_inbox_stream
+from dashboard.inbox import INBOX_CSS, INBOX_JS, collect_inbox_counted, render_inbox_stream
 from identity import DEFAULT_USER_ID
 from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
 from ui.time import stamp_html
@@ -50,17 +50,15 @@ def render_alert_feed(
     # filters (trigger_kind / status) narrow it back to the alerts-only view
     # those filters are defined over.
     alerts_only = bool(trigger_kind or status)
-    items = collect_inbox(
+    # Counted variant: /feed is the WHOLE-stream view, so it owes the owner the
+    # remainder the cap dropped rather than presenting the top N as everything.
+    items, total_eligible = collect_inbox_counted(
         db_path,
         user_id=user_id,
         ticker=ticker,
         status=status,
         trigger_kind=trigger_kind,
-        kinds=(
-            ("alert",)
-            if alerts_only
-            else ("alert", "draft", "disclosure", "ledger", "note", "synthesis")
-        ),
+        kinds=(("alert",) if alerts_only else ("alert", "draft", "ledger", "note", "synthesis")),
         limit=limit,
     )
 
@@ -68,7 +66,7 @@ def render_alert_feed(
     body.write('<div class="l1-shell">')
     _render_header(
         body,
-        total=len(items),
+        total=total_eligible,
         active=_active_filters(ticker=ticker, trigger_kind=trigger_kind, status=status),
     )
     # One band only: the category chips (rendered by the stream) head the list —
@@ -80,6 +78,7 @@ def render_alert_feed(
             db_path=db_path,
             surface="feed",
             show_filters=True,
+            hidden_count=max(0, total_eligible - len(items)),
             empty_text="No items match the current filters.",
         )
     )

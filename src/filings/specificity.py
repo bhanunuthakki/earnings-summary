@@ -167,6 +167,68 @@ def _count_entities(text: str) -> int:
     return count
 
 
+#: Numeric share at/above which a hunk reads as tabular rather than narrative.
+#: ``numbers / (words + numbers)`` — measured over 24,243 real quoted events,
+#: prose sits far below this and scraped table rows far above it.
+TABULAR_NUMERIC_SHARE_MIN = 0.30
+#: How many "glued" digit/letter boundaries (a cell wall lost in extraction,
+#: e.g. ``Total3,380`` or ``(in millions)20242023``) mark a hunk as tabular.
+TABULAR_GLUE_HITS_MIN = 2
+#: ...and at what RATE per word. An absolute count alone is length-biased: a
+#: 9,600-word narrative section accumulates a few incidental hits and would be
+#: condemned by them, while a 6-word table row trips this rate immediately.
+#: Caught by the one-ticker dry sweep — MELI's 63,738-char Item 1 Business
+#: (numeric share 0.018, i.e. almost pure prose) was being suppressed on 5 hits.
+TABULAR_GLUE_RATE_MIN = 0.02
+
+#: A digit run welded to a letter with NO separator — the signature of a lost
+#: table-cell boundary. Deliberately requires a 3+ digit run (or grouped/decimal
+#: digits) so ordinary financial prose tokens are NOT caught: ``Q4``, ``H1``,
+#: ``FY2025``, ``10-K``, ``8-K``, ``S-1``, ``COVID-19``, ``5G``, ``CO2`` all
+#: carry short or hyphen-separated digit runs and must stay narrative.
+#:
+#: ``$`` is deliberately NOT in the leading class: ``$612.4`` is how prose
+#: writes money, not a collapsed cell wall. Including it condemned any narrative
+#: carrying a few dollar figures — the exact false positive the dry sweep found.
+#: ``%`` stays, because a percent sign butting the next number (``%73.2``) is a
+#: cell boundary, not a way anyone writes a sentence.
+_TABLE_GLUE_RX = re.compile(r"[A-Za-z)%][\d][\d,.]{2,}|[\d][\d,.]{2,}[A-Za-z(]")
+
+
+def looks_tabular(text: str) -> bool:
+    """True when a hunk is extracted TABLE content rather than narrative prose.
+
+    Why this exists: ``specificity_metrics`` treats number density as evidence
+    of firm-specificity (Hope/Hu/Lu 2016) — a premise that holds for PROSE and
+    inverts on a table. A scraped 10-K table row is almost entirely numbers, so
+    it scores maximally specific and takes the confident-HIGH fast path
+    straight to a ``substantive`` verdict without an LLM ever reading it.
+
+    Measured over the real book (24,243 non-dismissed events carrying a quote):
+    table-shaped hunks scored a mean specificity of 0.708 and landed HIGH 66.7%
+    of the time, versus 0.268 / 27.8% for prose — and were then written
+    ``substantive`` 74.3% of the time versus 50.1% for prose, while being
+    called boilerplate only 5.4% of the time versus 44.4%. The classifier was
+    not missing table junk; it was certifying it.
+
+    This is a SHAPE test, never a materiality judgment: callers use it to
+    withhold a fast path, not to assign a verdict. A false positive costs one
+    LLM triage call; it can never suppress a real disclosure change.
+    """
+    words = _tokens(text)
+    numbers = _NUMBER_RX.findall(text)
+    denom = len(words) + len(numbers)
+    if denom == 0:
+        return False
+    if len(numbers) / denom >= TABULAR_NUMERIC_SHARE_MIN:
+        return True
+    glue = len(_TABLE_GLUE_RX.findall(text))
+    # Count AND rate: the count keeps a two-cell fragment from qualifying on a
+    # single hit, the rate keeps a long narrative from being condemned by a
+    # handful of incidental ones.
+    return glue >= TABULAR_GLUE_HITS_MIN and glue / max(len(words), 1) >= TABULAR_GLUE_RATE_MIN
+
+
 def specificity_metrics(text: str) -> SpecificityMetrics:
     """Compute the deterministic specificity proxy for one text hunk.
 

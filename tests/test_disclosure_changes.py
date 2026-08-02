@@ -447,6 +447,67 @@ def test_same_match_key_different_body_is_reworded() -> None:
     assert events[0].verdict == "unclassified"
 
 
+_TABLE_BODY_2024 = (
+    "Year Ended December 31, (in millions)20242023 Depreciation and amortization$591 $504 "
+    "17.3 % Interest expense$(1,295)$(897)44.3 % Total revenues2.5 %2.4 % Other countries44.1 "
+    "26.1 Total consolidated101.5 %73.2 %"
+)
+_TABLE_BODY_2025 = (
+    "Year Ended December 31, (in millions)20252024 Depreciation and amortization$655 $591 "
+    "10.8 % Interest expense$(1,402)$(1,295)8.3 % Total revenues2.7 %2.5 % Other countries51.3 "
+    "44.1 Total consolidated118.9 %101.5 %"
+)
+
+
+def test_tabular_items_emit_no_event_at_all() -> None:
+    """Top-of-funnel gate: extracted table content never becomes an event.
+
+    Two periods of the SAME financial table differ every quarter purely because
+    the figures moved — which is why these defeated body-level dedupe and grew
+    to ~36% of all events. Numeric change is the facts/XBRL pipeline's job; this
+    detector diffs narrative. Nothing here is a disclosure change.
+    """
+    prior = [_item(body=_TABLE_BODY_2024, match_key="results of operations")]
+    current = [_item(body=_TABLE_BODY_2025, match_key="results of operations")]
+    assert align_period_pair(prior, current) == []
+
+
+def test_tabular_item_is_suppressed_on_add_and_on_remove() -> None:
+    """The gate applies to every emit path, not just rewording."""
+    table = [_item(body=_TABLE_BODY_2025, match_key="a table that appeared")]
+    assert align_period_pair([], table) == [], "added table must not emit"
+    assert align_period_pair(table, []) == [], "removed table must not emit"
+
+
+def test_narrative_prose_still_emits_after_the_tabular_gate() -> None:
+    """The gate must not swallow real narrative drift — including prose that
+    legitimately cites figures, which is exactly the content the detector is
+    for. A regression here is silent signal loss."""
+    prior = [
+        _item(
+            body=(
+                "Our Brazil credit portfolio grew during fiscal 2024 and delinquency "
+                "formation in the youngest vintages remained within our underwriting "
+                "tolerance across the period we reviewed."
+            ),
+            match_key="credit quality",
+        )
+    ]
+    current = [
+        _item(
+            body=(
+                "Our Brazil credit portfolio contracted during fiscal 2025 and delinquency "
+                "formation in the youngest vintages exceeded our underwriting tolerance, "
+                "prompting a tightening of origination standards."
+            ),
+            match_key="credit quality",
+        )
+    ]
+    events = align_period_pair(prior, current)
+    assert len(events) == 1
+    assert events[0].event_type == "item_reworded"
+
+
 def test_reworded_heading_does_not_produce_spurious_add_and_remove() -> None:
     """THE failure mode this engine exists to prevent: a heading edit alone
     must not look like one item vanishing and an unrelated one appearing."""
