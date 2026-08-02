@@ -432,6 +432,29 @@ def attach_archive(conn: sqlite3.Connection, archive_path: Path) -> None:
     )
 
 
+def _dedupe_archive_table(conn: sqlite3.Connection, *, table: str, id_col: str) -> int:
+    """Collapse an archive table onto one row per identity; return rows removed.
+
+    Self-heal for sidecars written before archiving became idempotent: the
+    unique index below cannot be created while duplicates exist. Keeps the
+    lowest rowid per identity — archived rows for one identity are byte-equal
+    copies of the same pre-delete row, so the choice is arbitrary but stable.
+    No-op (and no write) on an archive that is already clean, which is the
+    steady state.
+    """
+    duplicates = conn.execute(
+        f'SELECT COUNT(*) - COUNT(DISTINCT "{id_col}") FROM gcarc."{table}"'  # nosec B608 -- internal registry identifiers; no user input
+    ).fetchone()[0]
+    if not duplicates:
+        return 0
+    conn.execute(
+        f'DELETE FROM gcarc."{table}" WHERE rowid NOT IN '  # nosec B608 -- internal registry identifiers; no user input
+        f'(SELECT MIN(rowid) FROM gcarc."{table}" GROUP BY "{id_col}")'
+    )
+    _log("gc_archive_deduped", table=table, rows_removed=duplicates)
+    return int(duplicates)
+
+
 def _archive_doomed(
     conn: sqlite3.Connection,
     *,
@@ -447,14 +470,43 @@ def _archive_doomed(
     so archived rows can be restored verbatim with INSERT ... SELECT.
     Writes touch only the attached sidecar (plus a read snapshot of main), so
     this never holds the main DB's write lock however large the doomed set is.
+
+    **Idempotent.** An apply that aborts after archiving but before the last
+    delete batch (the 2026-08-02 sequence: an FK-preflight abort at 20:40
+    followed by a clean re-run at 20:43) re-archives the same doomed set on
+    the next run. A plain INSERT would then store each row twice and break
+    the "restore with one INSERT ... SELECT" contract this sidecar exists to
+    provide. A unique index on the identity column plus INSERT OR IGNORE
+    makes re-archiving a no-op, and the manifest records rows actually added
+    (0 on a repeat) rather than rows considered — so summing the manifest
+    stays a truthful row count.
+
+    Tables archived by rowid (``ingestion_runs`` has no ``id`` column) do not
+    carry the identity column into the projection; those fall back to
+    an EXCEPT anti-join on the whole row, which is the same guarantee keyed
+    on full-row equality.
     """
     conn.execute(
         f'CREATE TABLE IF NOT EXISTS gcarc."{table}" AS SELECT * FROM main."{table}" WHERE 0'  # nosec B608 -- internal registry table name; no user input
     )
-    cur = conn.execute(
-        f'INSERT INTO gcarc."{table}" SELECT t.* FROM main."{table}" t '  # nosec B608 -- internal registry identifiers; values remain bound
-        f'JOIN "{doomed}" d ON d.id = t."{id_col}"'
-    )
+    archived_cols = {row[1] for row in conn.execute(f'PRAGMA gcarc.table_info("{table}")')}
+    keyed = id_col in archived_cols
+    if keyed:
+        _dedupe_archive_table(conn, table=table, id_col=id_col)
+        conn.execute(
+            f'CREATE UNIQUE INDEX IF NOT EXISTS gcarc."ux_gc_archive_{table}_{id_col}" '  # nosec B608 -- internal registry identifiers; no user input
+            f'ON "{table}" ("{id_col}")'
+        )
+        cur = conn.execute(
+            f'INSERT OR IGNORE INTO gcarc."{table}" '  # nosec B608 -- internal registry identifiers; values remain bound
+            f'SELECT t.* FROM main."{table}" t JOIN "{doomed}" d ON d.id = t."{id_col}"'
+        )
+    else:
+        cur = conn.execute(
+            f'INSERT INTO gcarc."{table}" '  # nosec B608 -- internal registry identifiers; values remain bound
+            f'SELECT t.* FROM main."{table}" t JOIN "{doomed}" d ON d.id = t."{id_col}" '
+            f'EXCEPT SELECT * FROM gcarc."{table}"'
+        )
     n = cur.rowcount
     conn.execute(
         "INSERT INTO gcarc.gc_manifest (run_at, policy, source_table, rows_archived) "

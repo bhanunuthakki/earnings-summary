@@ -848,3 +848,121 @@ class TestIncidentHardening:
         report = _run(gc_db, apply=True, policies=["facts-depth", "maintenance"], vacuum=True)
         maint = report.policies[-1]
         assert maint.detail.get("vacuum") == 1
+
+
+class TestArchiveIdempotency:
+    """An apply that aborts after archiving but before the last delete batch
+    re-archives the same doomed set on the next run (the 2026-08-02 sequence:
+    FK-preflight abort at 20:40, clean re-run at 20:43). The sidecar must stay
+    restorable with one INSERT ... SELECT."""
+
+    def _seed(self, db: Path) -> None:
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, list_type) VALUES ('EVAL', 'evaluation')"
+        )
+        _seed_quarters(conn, "EVAL", 30)
+        conn.commit()
+        conn.close()
+
+    def _archive(self, db: Path) -> sqlite3.Connection:
+        return sqlite3.connect(db.parent / "archive" / db_gc.ARCHIVE_NAME)
+
+    def test_rearchiving_the_same_rows_does_not_duplicate(self, gc_db: Path) -> None:
+        """Re-running the archive pass over rows already in the sidecar adds
+        nothing — the restore contract survives an interrupted apply."""
+        self._seed(gc_db)
+        report = _run(gc_db, apply=True, policies=["facts-depth"])
+        archived = report.policies[0].rows_deleted["financial_facts"]
+        assert archived > 0
+
+        arc = self._archive(gc_db)
+        rows, distinct = arc.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT id) FROM financial_facts"
+        ).fetchone()
+        assert rows == distinct == archived
+
+        # Replay the archive pass against the same sidecar with the same ids.
+        conn = sqlite3.connect(gc_db)
+        conn.execute(
+            "ATTACH DATABASE ? AS gcarc", (str(gc_db.parent / "archive" / db_gc.ARCHIVE_NAME),)
+        )
+        db_gc._reset_doomed(conn)
+        ids = [r[0] for r in arc.execute("SELECT id FROM financial_facts LIMIT 5")]
+        conn.executemany("INSERT INTO _gc_doomed (id) VALUES (?)", [(i,) for i in ids])
+        added = db_gc._archive_doomed(
+            conn, table="financial_facts", run_at="2026-08-02T20:43:39", policy="facts-depth"
+        )
+        conn.commit()
+        conn.close()
+
+        # Those ids are already archived (and already gone from main), so the
+        # replay adds zero rows and the manifest records zero, not five.
+        assert added == 0
+        arc2 = self._archive(gc_db)
+        rows_after, distinct_after = arc2.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT id) FROM financial_facts"
+        ).fetchone()
+        assert rows_after == distinct_after == archived
+        assert (
+            arc2.execute(
+                "SELECT SUM(rows_archived) FROM gc_manifest WHERE source_table='financial_facts'"
+            ).fetchone()[0]
+            == archived
+        )
+
+    def test_preexisting_duplicate_archive_is_self_healed(self, gc_db: Path) -> None:
+        """A sidecar written before idempotency (duplicate rows per id) is
+        collapsed on the next archive pass instead of blocking on the unique
+        index."""
+        self._seed(gc_db)
+        report = _run(gc_db, apply=True, policies=["facts-depth"])
+        archived = report.policies[0].rows_deleted["financial_facts"]
+
+        # Simulate the legacy double-archive: drop the guard index, duplicate
+        # every row, and confirm the sidecar is genuinely corrupt.
+        arc_path = gc_db.parent / "archive" / db_gc.ARCHIVE_NAME
+        arc = sqlite3.connect(arc_path)
+        arc.execute("DROP INDEX IF EXISTS ux_gc_archive_financial_facts_id")
+        arc.execute("INSERT INTO financial_facts SELECT * FROM financial_facts")
+        arc.commit()
+        assert arc.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == archived * 2
+        arc.close()
+
+        conn = sqlite3.connect(gc_db)
+        conn.execute("ATTACH DATABASE ? AS gcarc", (str(arc_path),))
+        db_gc._reset_doomed(conn)
+        db_gc._archive_doomed(
+            conn, table="financial_facts", run_at="2026-08-02T21:00:00", policy="facts-depth"
+        )
+        conn.commit()
+        conn.close()
+
+        arc2 = sqlite3.connect(arc_path)
+        rows, distinct = arc2.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT id) FROM financial_facts"
+        ).fetchone()
+        assert rows == distinct == archived
+
+    def test_archived_rows_restore_verbatim(self, gc_db: Path) -> None:
+        """The contract the sidecar exists for: one INSERT ... SELECT puts the
+        pruned rows back, with no duplicate-id collision against live rows."""
+        self._seed(gc_db)
+        _run(gc_db, apply=True, policies=["facts-depth"])
+
+        conn = sqlite3.connect(gc_db)
+        conn.execute(
+            "ATTACH DATABASE ? AS gcarc", (str(gc_db.parent / "archive" / db_gc.ARCHIVE_NAME),)
+        )
+        before = conn.execute("SELECT COUNT(*) FROM main.financial_facts").fetchone()[0]
+        overlap = conn.execute(
+            "SELECT COUNT(*) FROM gcarc.financial_facts a"
+            " JOIN main.financial_facts m ON m.id = a.id"
+        ).fetchone()[0]
+        assert overlap == 0
+        archived = conn.execute("SELECT COUNT(*) FROM gcarc.financial_facts").fetchone()[0]
+        conn.execute("INSERT INTO main.financial_facts SELECT * FROM gcarc.financial_facts")
+        conn.commit()
+        after = conn.execute("SELECT COUNT(*) FROM main.financial_facts").fetchone()[0]
+        assert after == before + archived
+        assert conn.execute("PRAGMA main.foreign_key_check").fetchall() == []
