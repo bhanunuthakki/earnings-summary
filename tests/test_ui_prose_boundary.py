@@ -225,3 +225,48 @@ def test_deterministic_fields_keep_escape() -> None:
     evals = _read("src/pipeline/evals_panel.py")
     assert "rationale=c.judge_rationale" in evals
     assert "render_prose(c.judge_rationale" not in evals
+
+
+# ---------------------------------------------------------------------------
+# 3. prose_card_text — the clamped-inline boundary (2026-08-02 feed leak).
+#
+# The renderer-signature scan above catches a RE-ROLLED renderer; it cannot
+# catch a renderer SKIPPED (a bare html.escape of a markdown-bearing body —
+# the other half of the §9 promise). These pin that half for the one card
+# body that leaked, plus the helper's own contract.
+# ---------------------------------------------------------------------------
+
+from ui.prose import prose_card_text  # noqa: E402
+
+
+def test_prose_card_text_strips_block_markers_and_keeps_bold() -> None:
+    body = (
+        "## Where the next dollar works hardest\n\n"
+        "**UBER — DCF upside +104%, verdict ok.** Sized by conviction.\n"
+        "- second item\n---\n"
+    )
+    out = prose_card_text(body)
+    assert "**" not in out
+    assert "##" not in out
+    assert "<strong>UBER — DCF upside +104%, verdict ok.</strong>" in out
+    assert "Where the next dollar works hardest" in out
+    assert "second item" in out
+    # No block structure in a clamped card.
+    assert "<h" not in out and "<ul>" not in out and "<hr" not in out
+
+
+def test_prose_card_text_escapes_raw_html() -> None:
+    out = prose_card_text("<script>alert(1)</script> **b**")
+    assert "<script>" not in out
+    assert "&lt;script&gt;" in out
+    assert "<strong>b</strong>" in out
+
+
+def test_feed_card_body_write_site_uses_the_card_boundary() -> None:
+    """Discriminating pin on the exact site that leaked: the ``.ix-body``
+    interpolation in dashboard/inbox.py must route through prose_card_text,
+    never a bare ``_esc``. (Source-level because "is this field prose?" is
+    undecidable statically — pin the known prose sink instead.)"""
+    src = _read("src/dashboard/inbox.py")
+    assert 'ix-body">{prose_card_text(body)}' in src
+    assert 'ix-body">{_esc(body)}' not in src

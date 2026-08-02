@@ -58,6 +58,7 @@ from dashboard.inbox_rank import (
 )
 from identity import DEFAULT_USER_ID
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from ui.prose import prose_card_text
 from ui.time import stamp_html
 from user_state.ledger import list_recent_entries
 from user_state.notes import list_notes
@@ -729,7 +730,9 @@ def _render_item(
     out.write("</div>")
     body = _display_body(it)
     if body:
-        out.write(f'<div class="ix-body">{_esc(body)}</div>')
+        # prose_card_text, not bare _esc: memo/synthesis bodies carry markdown,
+        # and a bare escape leaks literal **/## into the clamped card (§9).
+        out.write(f'<div class="ix-body">{prose_card_text(body)}</div>')
     _render_card_footer(out, it, compact=compact)
     out.write("</div>")
 
