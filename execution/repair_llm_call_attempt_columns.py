@@ -71,6 +71,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from run_lock import RunLockHeldError, hold_run_lock  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 _EXIT_FAILED = 1
 _EXIT_BAD_ARGS = 2
@@ -262,8 +263,18 @@ def main() -> int:
         log.error({"event": "db_missing", "path": str(db_path)})
         return _EXIT_BAD_ARGS
 
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("PRAGMA busy_timeout = 30000")
+    # The central runtime owns connection policy (busy_timeout, foreign_keys,
+    # WAL/durability) — production code declares a role rather than calling
+    # sqlite3.connect directly.
+    #
+    # schema_preflight=False is deliberate and load-bearing. A writer normally
+    # preflights Alembic compatibility and refuses a database whose revision
+    # does not match the checkout. This script exists precisely BECAUSE the
+    # target database's schema diverges from what its revision claims — a
+    # preflighting connection could never open the one database that needs
+    # repairing. Nothing here reads or writes a revision-dependent shape: it
+    # inspects llm_calls' columns and adds the absent ones.
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=False)
     try:
         plan = inspect(conn)
         if not plan["table_present"]:
