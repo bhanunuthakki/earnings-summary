@@ -294,6 +294,16 @@ a.k-tick-sym:hover { color: var(--accent); }
 .k-num-pos { color: var(--ok); }
 .k-num-neg { color: var(--bad); }
 
+/* ---- empty / degraded state (design_language D4): ONE narrative line + the
+   chip that fills it. Never an empty shell with explanatory prose, never a
+   raw diagnostic string surfaced verbatim — the caller translates an
+   engineering diagnostic into owner vocabulary before calling k_empty().
+   Replaces the seven bespoke empty-state classes (.cc-empty / .dj-empty /
+   .diet-empty / .dq-empty / .jr-empty / .ask-dock-empty / ad hoc .muted
+   paragraphs). ---- */
+.k-empty { color: var(--muted); font-size: var(--fs-body); padding: var(--sp-4) 0; }
+.k-empty-chip { margin-left: var(--sp-2); }
+
 /* ---- overlay primitive (Law 3): one scrim + one elevated panel. S4's
    CCOverlay JS registers/dismisses these (close + Esc + scrim click-out + focus
    trap/restore); the kit owns their look + open motion. Exit is instant — the

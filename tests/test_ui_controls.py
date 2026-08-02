@@ -16,6 +16,7 @@ import re
 import sys
 import token as _token
 import tokenize
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,7 @@ sys.path.insert(0, str(SRC))
 
 from ui.controls import (  # noqa: E402
     controls_css,
+    k_empty,
     panel_section_title,
     panel_toolbar,
     ticker_label,
@@ -306,6 +308,39 @@ def test_panel_section_title_suppressed_when_nav_owns_it() -> None:
     tb = panel_toolbar("Ask", actions="<button>Go</button>", suppress_title=True)
     assert "k-toolbar-title" not in tb
     assert "k-toolbar-controls" in tb
+
+
+# ---------------------------------------------------------------------------
+# k_empty — the D4 empty/degraded-state primitive
+# ---------------------------------------------------------------------------
+
+
+def test_k_empty_css_is_a_muted_line_from_tokens() -> None:
+    css = controls_css("dark")
+    rule = css.split(".k-empty {", 1)[1].split("}", 1)[0]
+    assert "color: var(--muted)" in rule
+    assert "font-size: var(--fs-body)" in rule
+    assert ".k-empty-chip {" in css
+
+
+def test_k_empty_line_only_has_no_chip_span() -> None:
+    html = k_empty("Not derivable yet - a risk snapshot unlocks this read.")
+    assert html == '<p class="k-empty">Not derivable yet - a risk snapshot unlocks this read.</p>'
+    assert "k-empty-chip" not in html
+
+
+def test_k_empty_with_chip_appends_the_doorway_inline() -> None:
+    chip = '<button type="button" class="k-chip k-chip-btn">Encode targets</button>'
+    html = k_empty("No active target set.", chip)
+    assert html.startswith('<p class="k-empty">No active target set.')
+    assert f'<span class="k-empty-chip">{chip}</span></p>' in html
+
+
+def test_k_empty_escapes_the_line_but_not_the_chip() -> None:
+    html = k_empty('Diagnostics: "tracker offline" <raw>', "<b>ok</b>")
+    assert "&quot;tracker offline&quot;" in html
+    assert "&lt;raw&gt;" in html
+    assert "<b>ok</b>" in html  # chip_html rides through unescaped (pre-rendered HTML)
 
 
 # ===========================================================================
@@ -859,6 +894,10 @@ _BESPOKE_BUTTON_OK = frozenset(
         "tri-d-close",
         "chat-close",
         "cmt-close",
+        # the Ask DIY-builder popover close glyph (explore_panel.py) — was
+        # classless chrome on `.ask-pop-head button` until the guard-extension
+        # wave gave it a named class matching this same close-glyph family.
+        "ask-pop-close",
         # icon-only launcher + theme toggle (§4 specialized-control carve-out)
         "cc-palette-btn",
         "cc-theme-toggle",
@@ -1333,3 +1372,257 @@ def test_thesis_tab_opts_into_document_form() -> None:
     css = controls_css("paper")
     fluid = re.search(r"\.k-doc-fluid\s*\{([^}]*)\}", css)
     assert fluid is not None and "max-width: none" in fluid.group(1)
+
+
+# ===========================================================================
+# Guard extensions (Wave 1 — k_empty + guard extensions): three narrowly
+# scoped structural checks the opt-out token guard (Layer A, above) and the
+# button-coverage guard (Layer B, above) are both blind to. Each ships with a
+# self-test proving it actually fires on a known violation shape — a guard
+# that can't demonstrate detection is a no-op guard (repo standing rule).
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Guard (a): classless <button> inside an overlay *-head container.
+#
+# design_language §3: every close glyph is a NAMED, styled control (compare
+# cc-peek-close / cc-drawer-close) — not raw chrome hung off a descendant
+# selector like the pre-fix `.ask-pop-head button`. The known head containers
+# are enumerated (not pattern-matched off "-head" alone) so the check stays
+# precise: these six are the overlay-head shape this guard cares about.
+# ---------------------------------------------------------------------------
+
+_OVERLAY_HEAD_CLASSES = (
+    "ask-pop-head",
+    "cc-drawer-head",
+    "cc-peek-head",
+    "cite-pop-head",
+    "tcc-drawer-head",
+    "ask-dock-head",
+)
+_HEAD_CONTAINER_RE = re.compile(
+    r'class="[^"]*\b(?:' + "|".join(re.escape(c) for c in _OVERLAY_HEAD_CLASSES) + r')\b[^"]*"'
+)
+_BUTTON_OPEN_RE = re.compile(r"<button\b([^>]*)>", re.IGNORECASE)
+# How far past a *-head container's class attribute to look for its buttons.
+# The real containers are small (a title span + one close glyph) — 400 chars
+# comfortably covers every real head, div or span alike, without reaching
+# into unrelated markup further down the page.
+_HEAD_SCAN_WINDOW = 400
+
+
+def _classless_buttons_in_overlay_heads(text: str) -> list[str]:
+    """``<button>`` tags with no ``class=`` attribute inside a *-head overlay
+    container. Scans a bounded window after the container's class attribute
+    rather than tag-balancing — containers are ``<div>`` in most surfaces but
+    ``<span>`` in ``cite-pop-head``, so there is no single closing tag to hunt
+    for. Returns each offending button's raw attribute string (for messages)."""
+    offenders: list[str] = []
+    for m in _HEAD_CONTAINER_RE.finditer(text):
+        window = text[m.end() : m.end() + _HEAD_SCAN_WINDOW]
+        for attrs in _BUTTON_OPEN_RE.findall(window):
+            if "class=" not in attrs:
+                offenders.append(attrs.strip())
+    return offenders
+
+
+def test_overlay_head_buttons_are_named_not_classless() -> None:
+    """Every ``<button>`` inside an ``ask-pop-head`` / ``cc-drawer-head`` /
+    ``cc-peek-head`` / ``cite-pop-head`` / ``tcc-drawer-head`` / ``ask-dock-
+    head`` overlay head carries a class. Passes on the current tree — the
+    explore_panel ``ask-pop-close`` fix (this same change) removed the one
+    classless close button that used to hang off ``.ask-pop-head button``."""
+    offenders: dict[str, list[str]] = {}
+    for rel in sorted(REGISTERED - EXEMPT):
+        hits = _classless_buttons_in_overlay_heads((SRC / rel).read_text(encoding="utf-8"))
+        if hits:
+            offenders[rel] = hits
+    assert not offenders, (
+        "classless <button> inside a *-head overlay container — give it a named, "
+        f"styled class (see .ask-pop-close / .cc-peek-close): {offenders}"
+    )
+
+
+def test_overlay_head_classless_button_check_fires_on_known_violation() -> None:
+    """Self-test: this is the exact pre-fix markup shape explore_panel.py used
+    to emit (`<button type="button" id="ask-pop-close" title="Close (Esc)">`
+    with no class, inside `.ask-pop-head`) — proving the guard above actually
+    detects it rather than trivially passing. The post-fix shape (a named
+    class added) must come back clean."""
+    pre_fix = (
+        '<div class="ask-pop-head"><span>DIY builder &middot; saved views</span>'
+        '<button type="button" id="ask-pop-close" title="Close (Esc)">&times;</button></div>'
+    )
+    hits = _classless_buttons_in_overlay_heads(pre_fix)
+    assert len(hits) == 1
+    assert 'id="ask-pop-close"' in hits[0]
+
+    post_fix = pre_fix.replace(
+        '<button type="button" id="ask-pop-close"',
+        '<button type="button" class="ask-pop-close" id="ask-pop-close"',
+    )
+    assert _classless_buttons_in_overlay_heads(post_fix) == []
+
+    # A span-shaped head (cite-pop-head) is scanned the same way — no button
+    # at all there today, so it must stay clean.
+    span_head = '<span class="cite-pop-head"><span class="cite-pop-tick">NU</span></span>'
+    assert _classless_buttons_in_overlay_heads(span_head) == []
+
+
+# ---------------------------------------------------------------------------
+# Guard (b): whole-TABLE mono (font-family: var(--mono) on a bare table-level
+# selector, catching the label/header column in the mono treatment meant for
+# value cells only). Canonical pattern: viewspec/render.py's `.vx-matrix td`
+# scopes mono to <td> only, leaving `.vx-matrix .vx-label` / header `<th>` to
+# inherit body's sans.
+# ---------------------------------------------------------------------------
+
+# A selector that is nothing but a single class ending "…table…" with no
+# descendant qualifier (no " td" / " th" / anything after it) — e.g.
+# ".sv-stmt-table" fires, ".sv-stmt-table td" and ".vx-matrix" (no "table" in
+# the name) do not.
+_BARE_TABLE_SELECTOR = re.compile(r"^\.[\w-]*table[\w-]*$")
+# .pfc-table (portfolio_panel.py ~1564, the pairwise correlation matrix) is a
+# DOCUMENTED deliberate keep: its headers ARE tickers, not prose labels, so
+# whole-table mono is the correct read there, not label/header drift. There
+# is no class literally named ".matrix" anywhere in the tree — don't allowlist
+# a name that doesn't exist.
+_MONO_TABLE_ALLOWLIST: frozenset[str] = frozenset({".pfc-table"})
+
+
+def _whole_table_mono_selectors(text: str) -> list[str]:
+    """Bare table-level selectors (no td/th qualifier) whose rule body pins
+    ``font-family: var(--mono...)``. Mirrors this file's existing rule-split
+    idiom (split CSS text on ``}``, partition each chunk on ``{``) rather than
+    a full CSS parse — consistent with ``scan_surface``'s kit-badge scan
+    above, and sufficient for the flat (non-nested) rule shapes every
+    registered surface actually emits."""
+    offenders: list[str] = []
+    for rule in _CSS_COMMENT.sub("", text).split("}"):
+        head, sep, body = rule.partition("{")
+        if not sep or "var(--mono" not in body:
+            continue
+        for sel in _split_top_commas(head):
+            sel = sel.strip()
+            if sel in _MONO_TABLE_ALLOWLIST:
+                continue
+            if _BARE_TABLE_SELECTOR.match(sel):
+                offenders.append(sel)
+    return offenders
+
+
+def test_no_whole_table_mono_outside_the_documented_allowlist() -> None:
+    """No bare table-level selector pins mono across the whole table (which
+    would also mono the label/header column) except the documented
+    ``.pfc-table`` keep. Passes on the current tree — source_viewers'
+    ``.sv-stmt-table`` (this same change) was rescoped to
+    ``.sv-stmt-table td:not(:first-child)`` per the ``.vx-matrix td``
+    pattern."""
+    offenders: dict[str, list[str]] = {}
+    for rel in sorted(REGISTERED - EXEMPT):
+        hits = _whole_table_mono_selectors(_css_text(SRC / rel))
+        if hits:
+            offenders[rel] = hits
+    assert not offenders, (
+        "whole-table mono outside the documented .pfc-table keep — rescope to "
+        f"value cells only (the .vx-matrix td pattern): {offenders}"
+    )
+
+
+def test_whole_table_mono_check_fires_on_known_violation() -> None:
+    """Self-test: the exact pre-fix rule source_viewers.py used to emit
+    (`.sv-stmt-table { font-family: var(--mono); ... }`, unqualified) —
+    proving the guard detects it. The rescoped post-fix rule
+    (`.sv-stmt-table td:not(:first-child)`) must come back clean, and the
+    documented `.pfc-table` allowlist entry must never fire."""
+    pre_fix = ".sv-stmt-table { border-collapse: collapse; font-family: var(--mono); }"
+    assert _whole_table_mono_selectors(pre_fix) == [".sv-stmt-table"]
+
+    post_fix = (
+        ".sv-stmt-table { border-collapse: collapse; }\n"
+        ".sv-stmt-table td:not(:first-child) { font-family: var(--mono); }"
+    )
+    assert _whole_table_mono_selectors(post_fix) == []
+
+    allowlisted = ".pfc-table { border-collapse: collapse; font-family: var(--mono); }"
+    assert _whole_table_mono_selectors(allowlisted) == []
+
+    # A cell-scoped selector sharing a rule with something else must not
+    # false-fire either (comma-split selector list).
+    shared = ".vx-matrix td, .cv2-matrix td { font-family: var(--mono); }"
+    assert _whole_table_mono_selectors(shared) == []
+
+
+# ---------------------------------------------------------------------------
+# Guard (c): CCAction adopter census — a REGRESSION-ONLY ratchet.
+#
+# CCAction.busy()/.release()/.receipt()/.leave() (PR #1092) is the busy/
+# release/receipt/leave feedback primitive every action button should use
+# instead of bare `disabled=true` / instant `.remove()`. This does NOT force
+# adoption on a surface that never used it — that would be a mandate, not a
+# regression guard, and plenty of legitimate non-button surfaces (this file's
+# own REGISTERED set included) have no business referencing it. It only pins
+# the CURRENT adopters and fails if one of THEM drops to zero references,
+# i.e. a conformant surface silently regressed to the pre-#1092 pattern.
+# ---------------------------------------------------------------------------
+
+# Pinned via `grep -rl "CCAction.busy" src` at the time this ratchet was
+# added. Growing this set (a NEW adopter) is always fine and expected over
+# time; the ratchet only ever tightens by CI failing a member that vanishes.
+_CCACTION_PINNED: frozenset[str] = frozenset(
+    {
+        "pipeline/allocation_decisions_panel.py",
+        "pipeline/ask_dock.py",
+        "pipeline/cc_action.py",
+        "pipeline/decision_journal_panel.py",
+        "pipeline/discovery_panel.py",
+        "pipeline/journal_panel.py",
+        "pipeline/ledger_panel.py",
+        "pipeline/mobile_inbox_panel.py",
+        "pipeline/ticker_command_center.py",
+        "pipeline/triage_panel.py",
+        "pipeline/validation_issues_panel.py",
+        "pipeline/worldview_panel.py",
+        "report/renderers/workspace_chat.py",
+        "report/renderers/workspace_comments.py",
+        "ui/controls.py",
+    }
+)
+
+
+def _ccaction_regressions(pinned: frozenset[str], read_text: Callable[[str], str]) -> list[str]:
+    """Members of ``pinned`` whose current text no longer references
+    ``CCAction.busy`` — i.e. a conformant surface regressed. Takes a
+    ``read_text`` callable (rather than reading files itself) so the
+    detection logic is unit-testable against synthetic text without a real
+    filesystem round-trip."""
+    return [rel for rel in sorted(pinned) if "CCAction.busy" not in read_text(rel)]
+
+
+def test_ccaction_adopters_do_not_regress() -> None:
+    """The ratchet: none of the pinned CCAction adopters may drop to zero
+    ``CCAction.busy`` references. Passes today (the pinned set is exactly
+    today's adopters); it exists to catch tomorrow's regression."""
+    offenders = _ccaction_regressions(
+        _CCACTION_PINNED, lambda rel: (SRC / rel).read_text(encoding="utf-8")
+    )
+    assert not offenders, (
+        "CCAction adopter(s) regressed to zero CCAction.busy references — restore "
+        f"the busy/release/receipt/leave wiring (PR #1092): {offenders}"
+    )
+
+
+def test_ccaction_ratchet_fires_on_regression_but_never_forces_adoption() -> None:
+    """Self-test: proves the ratchet fires when a PINNED adopter loses its
+    CCAction.busy reference, and — just as important — proves it does NOT
+    fire for a file outside the pinned set that never adopted CCAction at
+    all (no forced adoption; this is a floor, not a mandate)."""
+    texts = {
+        "pipeline/ask_dock.py": "// CCAction.busy(el) still wired here",
+        "pipeline/journal_panel.py": "// regressed: bare el.disabled = true now",
+        "pipeline/some_new_panel.py": "// never adopted CCAction at all",
+    }
+    pinned = frozenset({"pipeline/ask_dock.py", "pipeline/journal_panel.py"})
+    offenders = _ccaction_regressions(pinned, lambda rel: texts[rel])
+    assert offenders == ["pipeline/journal_panel.py"]
+    assert "pipeline/some_new_panel.py" not in offenders

@@ -87,10 +87,15 @@ VIEWER_CONTENT_CSS = """
 .sv-frag-head { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap;
   margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .sv-stmt-wrap { overflow-x: auto; }
-.sv-stmt-table { border-collapse: collapse; font-family: var(--mono);
+.sv-stmt-table { border-collapse: collapse;
   font-size: var(--fs-caption); white-space: nowrap; }
 .sv-stmt-table th, .sv-stmt-table td { padding: 4px 10px; text-align: right;
   border-bottom: 1px solid var(--hairline); }
+/* Canonical table rule (viewspec/render.py's .vx-matrix): numbers mono,
+   labels/headers sans. Only the VALUE cells (<td>, not the first-child period
+   column) carry mono; the sticky label column and every <th> inherit body's
+   sans instead of the whole table pinning mono across the label too. */
+.sv-stmt-table td:not(:first-child) { font-family: var(--mono); }
 .sv-stmt-table th:first-child, .sv-stmt-table td:first-child {
   text-align: left; color: var(--muted); position: sticky; left: 0; background: var(--bg); }
 .sv-stmt-table th { color: var(--muted); font-weight: 600; }
