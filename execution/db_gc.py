@@ -19,9 +19,13 @@ prevent a recurrence:
   write lock. Archiving writes only the attached sidecar. Deletes commit in
   ``--batch-size`` transactions, so any other writer waits at most one batch
   (seconds) behind its 30s busy_timeout. If an apply aborts between the
-  archive pass and the last delete batch, a re-run may archive some rows a
-  second time — duplicate sidecar rows are benign and logged per run in
-  ``gc_manifest``.
+  archive pass and the last delete batch, a re-run re-archives the same rows —
+  so archiving is idempotent by construction: each sidecar table carries a
+  UNIQUE index on its identity column and the copy is ``INSERT OR IGNORE``
+  (``_archive_doomed``). Duplicate sidecar rows are NOT benign — they would
+  double-insert on restore — so the archive is never allowed to hold two
+  copies of one id. Each pass logs the rows it actually added in
+  ``gc_manifest`` (0 on a re-archive).
 * **Run lock.** ``--apply`` acquires the portfolio write-set run lock
   (src/run_lock.py) that the morning pipeline orchestrator also holds, per
   AGENTS.md's one-writer-owns-the-write-set rule. A held lock is a loud,
@@ -432,6 +436,50 @@ def attach_archive(conn: sqlite3.Connection, archive_path: Path) -> None:
     )
 
 
+def ensure_archive_identity(
+    conn: sqlite3.Connection,
+    *,
+    schema: str,
+    table: str,
+    id_col: str,
+) -> None:
+    """Give an archive table the UNIQUE identity index that makes re-archiving safe.
+
+    Idempotent archiving needs a conflict target. ``CREATE TABLE ... AS
+    SELECT`` copies column types but NO constraints, so a freshly mirrored
+    sidecar table has nothing unique about its id column — before this index
+    existed, an apply that aborted after the archive pass and was then retried
+    left two copies of every row (prod, 2026-08-02: 1,593,336 financial_facts
+    rows over 796,668 distinct ids), which silently doubles a restore.
+
+    Legacy sidecars are self-healed once: absent the index, surviving duplicates
+    are collapsed to their lowest-rowid copy — loudly logged, never silent —
+    and the index is then created so the state cannot recur.
+    """
+    index = f"ix_gcarc_{table}_{id_col}"
+    existing = conn.execute(
+        f"SELECT 1 FROM {schema}.sqlite_master WHERE type = 'index' AND name = ?",  # nosec B608 -- schema is a literal attach alias
+        (index,),
+    ).fetchone()
+    if existing is not None:
+        return
+    removed = conn.execute(
+        f'DELETE FROM {schema}."{table}" WHERE rowid NOT IN '  # nosec B608 -- internal registry identifiers; no user input
+        f'(SELECT MIN(rowid) FROM {schema}."{table}" GROUP BY "{id_col}")'
+    ).rowcount
+    if removed:
+        _log(
+            "gc_archive_deduplicated",
+            table=table,
+            id_col=id_col,
+            rows_removed=removed,
+            detail="legacy sidecar held >1 copy per id; restore would have double-inserted",
+        )
+    conn.execute(
+        f'CREATE UNIQUE INDEX {schema}."{index}" ON "{table}" ("{id_col}")'  # nosec B608 -- internal registry identifiers; no user input
+    )
+
+
 def _archive_doomed(
     conn: sqlite3.Connection,
     *,
@@ -447,15 +495,38 @@ def _archive_doomed(
     so archived rows can be restored verbatim with INSERT ... SELECT.
     Writes touch only the attached sidecar (plus a read snapshot of main), so
     this never holds the main DB's write lock however large the doomed set is.
+
+    Idempotent: the sidecar carries a UNIQUE index on its identity column
+    (``ensure_archive_identity``) and the copy is INSERT OR IGNORE, so a run
+    that aborts after archiving and is retried re-archives nothing. Returns the
+    rows actually added, which is 0 on such a retry.
+
+    Rowid-keyed sources (no ``id`` column — the telemetry fallback) have no
+    identity column to index: CTAS drops the implicit rowid, so the source
+    rowid is written into the archive's OWN rowid and the implicit INTEGER
+    PRIMARY KEY supplies the uniqueness. ``SELECT *`` still yields exactly the
+    original columns, so the verbatim-restore contract is unchanged.
     """
     conn.execute(
         f'CREATE TABLE IF NOT EXISTS gcarc."{table}" AS SELECT * FROM main."{table}" WHERE 0'  # nosec B608 -- internal registry table name; no user input
     )
-    cur = conn.execute(
-        f'INSERT INTO gcarc."{table}" SELECT t.* FROM main."{table}" t '  # nosec B608 -- internal registry identifiers; values remain bound
-        f'JOIN "{doomed}" d ON d.id = t."{id_col}"'
-    )
-    n = cur.rowcount
+    archive_cols = {str(row[1]) for row in conn.execute(f'PRAGMA gcarc.table_info("{table}")')}
+    if id_col in archive_cols:
+        ensure_archive_identity(conn, schema="gcarc", table=table, id_col=id_col)
+        copy_sql = (
+            f'INSERT OR IGNORE INTO gcarc."{table}" SELECT t.* FROM main."{table}" t '  # nosec B608 -- internal registry identifiers; values remain bound
+            f'JOIN "{doomed}" d ON d.id = t."{id_col}"'
+        )
+    else:
+        cols = [str(row[1]) for row in conn.execute(f'PRAGMA main.table_info("{table}")')]
+        targets = ", ".join(f'"{c}"' for c in cols)
+        sources = ", ".join(f't."{c}"' for c in cols)
+        copy_sql = (
+            f'INSERT OR IGNORE INTO gcarc."{table}" (rowid, {targets}) '  # nosec B608 -- internal registry identifiers; values remain bound
+            f'SELECT t."{id_col}", {sources} FROM main."{table}" t '
+            f'JOIN "{doomed}" d ON d.id = t."{id_col}"'
+        )
+    n = conn.execute(copy_sql).rowcount
     conn.execute(
         "INSERT INTO gcarc.gc_manifest (run_at, policy, source_table, rows_archived) "
         "VALUES (?, ?, ?, ?)",
