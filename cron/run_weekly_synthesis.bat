@@ -35,10 +35,14 @@ call "%PROJECT_ROOT%\cron\run_python.bat" "weekly-synthesis-cross-portfolio" "po
 REM 4. Rebuild the analytical dashboard so the new artifacts surface.
 echo === %TIME% Rebuilding analytical dashboard === >> "%LOG_FILE%" 2>&1
 call "%PROJECT_ROOT%\cron\run_python.bat" "weekly-synthesis-dashboard" "portfolio-db" execution\build_analytical_dashboard.py >> "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
 
 REM Bear-case grading is owned by the dedicated weekly grade_calibration cron
 REM (Sun 03:30 -> execution/run_calibration_grading.py, bear_cases rung), so it
 REM is intentionally NOT duplicated here. Grading is idempotent (only
 REM outcome='pending' predictions are touched), so a single weekly pass suffices.
 
-endlocal
+REM Propagate the job's exit code. Without this the script ended on
+REM `endlocal` and ALWAYS returned 0, so Task Scheduler recorded
+REM "Last Result: 0" even for a job that failed outright.
+endlocal & exit /b %RC%

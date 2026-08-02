@@ -31,5 +31,9 @@ set LOG_FILE=%LOG_DIR%\senior_partner_brief_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
 call "%PROJECT_ROOT%\cron\run_python.bat" "senior-partner-brief" "portfolio-db" execution\compose_senior_partner_brief.py > "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
 
-endlocal
+REM Propagate the job's exit code. Without this the script ended on
+REM `endlocal` and ALWAYS returned 0, so Task Scheduler recorded
+REM "Last Result: 0" even for a job that failed outright.
+endlocal & exit /b %RC%

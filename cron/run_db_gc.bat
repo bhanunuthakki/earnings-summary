@@ -22,6 +22,10 @@ if %DOM% LEQ 7 set "VACUUM_FLAG=--vacuum"
 set LOG_FILE=%LOG_DIR%\db_gc_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-call "%PROJECT_ROOT%\cronun_python.bat" "db-gc" "portfolio-db" execution\db_gc.py --apply --include-portfolio %VACUUM_FLAG% > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "db-gc" "portfolio-db" execution\db_gc.py --apply --include-portfolio %VACUUM_FLAG% > "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
 
-endlocal
+REM Propagate the job's exit code. Without this the script ended on
+REM `endlocal` and ALWAYS returned 0, so Task Scheduler recorded
+REM "Last Result: 0" even for a job that failed outright.
+endlocal & exit /b %RC%

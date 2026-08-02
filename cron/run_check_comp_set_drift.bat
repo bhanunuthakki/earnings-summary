@@ -23,5 +23,9 @@ set LOG_FILE=%LOG_DIR%\check_comp_set_drift_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
 call "%PROJECT_ROOT%\cron\run_python.bat" "check-comp-set-drift" "portfolio-db" execution\check_comp_set_drift.py > "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
 
-endlocal
+REM Propagate the job's exit code. Without this the script ended on
+REM `endlocal` and ALWAYS returned 0, so Task Scheduler recorded
+REM "Last Result: 0" even for a job that failed outright.
+endlocal & exit /b %RC%

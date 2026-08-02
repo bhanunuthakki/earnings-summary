@@ -149,3 +149,50 @@ def test_scheduled_wrappers_do_not_invoke_path_dependent_python() -> None:
             if command.search(stripped):
                 violations.append(f"{wrapper.name}:{line_number}: {stripped}")
     assert violations == []
+
+
+def test_every_wrapper_propagates_its_exit_code() -> None:
+    """A wrapper that ends on `endlocal` ALWAYS returns 0, so Task Scheduler
+    records "Last Result: 0" for a job that failed outright.
+
+    That is how three days of failed nightly backups looked healthy in every
+    place an operator would check, and it applied to 36 of the 45 wrappers.
+    A silent job is worse than a missing one: it reports success forever.
+    """
+    offenders = [
+        p.name
+        for p in sorted(CRON.glob("run_*.bat"))
+        if "exit /b" not in p.read_bytes().decode("utf-8")
+    ]
+    assert not offenders, f"wrappers that swallow their exit code: {offenders}"
+
+
+def test_no_wrapper_carries_a_stray_carriage_return() -> None:
+    r"""A bare CR (not part of CRLF) inside a batch file is the signature of a
+    Python non-raw string escaping the path separator during generation.
+
+    `cron/run_db_gc.bat` shipped `%PROJECT_ROOT%\cron` + 0x0D + `un_python.bat`
+    — i.e. "cron\run_python.bat" with \r eaten — so the weekly db_gc job
+    registered by #1127 pointed at a file that does not exist and could never
+    have run. Paired with the swallowed exit code above, it would have reported
+    success forever.
+    """
+    offenders = []
+    for path in sorted(CRON.glob("*.bat")):
+        raw = path.read_bytes()
+        if raw.count(b"\x0d") != raw.count(b"\x0d\x0a"):
+            offenders.append(path.name)
+    assert not offenders, f"batch files with a bare CR: {offenders}"
+
+
+def test_every_wrapper_call_target_exists() -> None:
+    """The direct consequence check for the defect above: every `call` target a
+    wrapper names must actually be present on disk."""
+    missing: list[str] = []
+    for path in sorted(CRON.glob("run_*.bat")):
+        text = path.read_bytes().decode("utf-8")
+        for match in re.finditer(r'call\s+"([^"]+)"', text):
+            target = Path(match.group(1).replace("%PROJECT_ROOT%", str(PROJECT_ROOT)))
+            if not target.exists():
+                missing.append(f"{path.name} -> {match.group(1)}")
+    assert not missing, f"wrappers calling a nonexistent target: {missing}"

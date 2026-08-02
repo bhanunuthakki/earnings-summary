@@ -26,5 +26,9 @@ set LOG_FILE=%LOG_DIR%\fetch_fmp_earnings_calendar_%TS%.log
 cd /d "%PROJECT_ROOT%"
 call "%PROJECT_ROOT%\cron\run_python.bat" "fetch-fmp-earnings-calendar" "portfolio-db" execution\fetch_fmp_earnings_calendar.py --all > "%LOG_FILE%" 2>&1
 call "%PROJECT_ROOT%\cron\run_python.bat" "refresh-expected-earnings" "portfolio-db" execution\refresh_expected_earnings.py >> "%LOG_FILE%" 2>&1
+set "RC=%ERRORLEVEL%"
 
-endlocal
+REM Propagate the job's exit code. Without this the script ended on
+REM `endlocal` and ALWAYS returned 0, so Task Scheduler recorded
+REM "Last Result: 0" even for a job that failed outright.
+endlocal & exit /b %RC%
