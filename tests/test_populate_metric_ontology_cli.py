@@ -19,10 +19,11 @@ from provenance.population_metric_ontology import (
     verify_metric_ontology_receipt_current,
     verify_metric_ontology_receipt_current_result,
 )
+from schema_compat import expected_head
 
 _STAMP = datetime(2026, 7, 29, tzinfo=UTC)
 _DATABASE_INSTANCE_ID = "database-instance:" + "1" * 32
-_HEAD_REVISION = "0269_latest_governed_population_receipt_v2"
+_HEAD_REVISION = expected_head()
 
 
 def _artifact_sha(receipt: MetricOntologyOperationReceipt) -> str:
