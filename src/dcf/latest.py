@@ -130,8 +130,10 @@ def latest_dcf_row(conn: sqlite3.Connection, ticker: str) -> LatestDcfRow | None
     cols = _dcf_columns(conn)
     if not cols:
         return None
-    sql = (  # nosec B608 — identifiers from module-constant column lists (PRAGMA-gated); values parameterized
-        f"SELECT {_select_clause(cols)} FROM dcf_runs "
+    # Identifiers come from module-constant column lists (PRAGMA-gated);
+    # values are parameterized — no injection path.
+    sql = (
+        f"SELECT {_select_clause(cols)} FROM dcf_runs "  # nosec B608
         f"WHERE UPPER(ticker) = ? AND {_where_clause(cols)} "
         "ORDER BY created_at DESC, id DESC LIMIT 1"
     )
@@ -149,8 +151,10 @@ def latest_dcf_rows(conn: sqlite3.Connection) -> dict[str, LatestDcfRow]:
     cols = _dcf_columns(conn)
     if not cols:
         return {}
-    sql = (  # nosec B608 — identifiers from module-constant column lists (PRAGMA-gated); no user input in SQL text
-        f"SELECT {_select_clause(cols)} FROM dcf_runs "
+    # Identifiers come from module-constant column lists (PRAGMA-gated);
+    # no user input reaches the SQL text.
+    sql = (
+        f"SELECT {_select_clause(cols)} FROM dcf_runs "  # nosec B608
         f"WHERE {_where_clause(cols)} "
         "ORDER BY ticker, created_at DESC, id DESC"
     )
