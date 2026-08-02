@@ -173,8 +173,21 @@ def test_unknown_sql_identifier_is_refused() -> None:
         repair_mod._assert_known_identifier("attempt_count", "not_a_real_column")
     # ...and accept every identifier the module genuinely uses.
     repair_mod._assert_known_identifier("llm_calls", *(n for n, _t in repair_mod._COLUMNS))
-    for target, source in repair_mod._BACKFILL:
+    for target, source, _sql in repair_mod._BACKFILL:
         repair_mod._assert_known_identifier(target, source)
+
+
+def test_backfill_statements_are_static_sql() -> None:
+    """No identifier interpolation in the backfill SQL.
+
+    bandit B608 flagged the earlier f-string build, and the first attempt to
+    fix it only moved the expression into a variable — which hid it from a
+    naive read but not from the scanner. These statements must stay literal.
+    """
+    for target, source, sql in repair_mod._BACKFILL:
+        assert "{" not in sql and "}" not in sql, f"{target} statement is interpolated"
+        assert target in sql and source in sql
+        assert sql.startswith('UPDATE "llm_calls" SET ')
 
 
 def test_repair_never_touches_alembic_version(prod_shape: Path) -> None:

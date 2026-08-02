@@ -91,9 +91,26 @@ _COLUMNS: tuple[tuple[str, str], ...] = (
 #: 0212's own recovery step: the count-shaped columns supersede 0210's
 #: ``attempts`` / ``retries``, which remain as compatibility projections. Only
 #: applied where the source column exists and the target is still NULL.
-_BACKFILL: tuple[tuple[str, str], ...] = (
-    ("attempt_count", "attempts"),
-    ("retry_count", "retries"),
+#:
+#: The statement is carried as a LITERAL per pair rather than composed from the
+#: names. There are exactly two, both known when this file is written, so
+#: building them dynamically bought nothing and put interpolated identifiers in
+#: a SQL string — which is a real SQL-injection shape even when today's inputs
+#: happen to be constants. Static SQL removes the question instead of arguing
+#: about it, and needs no scanner suppression.
+_BACKFILL: tuple[tuple[str, str, str], ...] = (
+    (
+        "attempt_count",
+        "attempts",
+        'UPDATE "llm_calls" SET "attempt_count" = "attempts" '
+        'WHERE "attempt_count" IS NULL AND "attempts" IS NOT NULL',
+    ),
+    (
+        "retry_count",
+        "retries",
+        'UPDATE "llm_calls" SET "retry_count" = "retries" '
+        'WHERE "retry_count" IS NULL AND "retries" IS NOT NULL',
+    ),
 )
 
 log = logging.getLogger("repair_llm_call_attempt_columns")
@@ -123,8 +140,8 @@ def _configure_logging(verbose: bool) -> None:
 _KNOWN_IDENTIFIERS: frozenset[str] = frozenset(
     {_TABLE}
     | {name for name, _type in _COLUMNS}
-    | {t for t, _s in _BACKFILL}
-    | {s for _t, s in _BACKFILL}
+    | {t for t, _s, _sql in _BACKFILL}
+    | {s for _t, s, _sql in _BACKFILL}
 )
 
 
@@ -160,7 +177,7 @@ def inspect(conn: sqlite3.Connection) -> dict[str, object]:
     # absence is reported, never silently treated as zero.
     backfillable = [
         (target, source)
-        for target, source in _BACKFILL
+        for target, source, _sql in _BACKFILL
         if source in existing and (target in missing or target in existing)
     ]
     return {
@@ -189,7 +206,7 @@ def repair(conn: sqlite3.Connection) -> dict[str, object]:
 
     now_present = _columns_of(conn, _TABLE)
     backfilled: dict[str, int] = {}
-    for target, source in _BACKFILL:
+    for target, source, statement in _BACKFILL:
         if target not in now_present or source not in now_present:
             log.warning(
                 {
@@ -201,17 +218,7 @@ def repair(conn: sqlite3.Connection) -> dict[str, object]:
                 }
             )
             continue
-        # SQLite cannot parameterise an identifier, so the column names are
-        # interpolated. They are not merely "trusted" — _assert_known_identifier
-        # re-checks each one against this module's own constants immediately
-        # before use, so a future edit that let an outside value reach here
-        # raises instead of building the statement.
-        _assert_known_identifier(target, source)
-        query = (
-            f'UPDATE "{_TABLE}" SET "{target}" = "{source}" '
-            f'WHERE "{target}" IS NULL AND "{source}" IS NOT NULL'
-        )
-        cur = conn.execute(query)
+        cur = conn.execute(statement)
         backfilled[target] = cur.rowcount
         log.info({"event": "backfilled", "target": target, "source": source, "rows": cur.rowcount})
 
