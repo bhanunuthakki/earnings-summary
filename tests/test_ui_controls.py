@@ -1535,7 +1535,7 @@ def test_whole_table_mono_check_fires_on_known_violation() -> None:
     proving the guard detects it. The rescoped post-fix rule
     (`.sv-stmt-table td:not(:first-child)`) must come back clean, and the
     documented `.pfc-table` allowlist entry must never fire."""
-    pre_fix = '.sv-stmt-table { border-collapse: collapse; font-family: var(--mono); }'
+    pre_fix = ".sv-stmt-table { border-collapse: collapse; font-family: var(--mono); }"
     assert _whole_table_mono_selectors(pre_fix) == [".sv-stmt-table"]
 
     post_fix = (
