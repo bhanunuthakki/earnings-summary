@@ -91,10 +91,20 @@ from pipeline.run_accounting import (  # noqa: E402
     PipelineRunSuppressedError,
     suppression_payload,
 )
+from run_lock import RunLockHeldError, acquire_run_lock  # noqa: E402
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 DEFAULT_USER_ID = os.environ.get("CIO_USER_ID", "bhanu")
 DEFAULT_MAX_COST_USD = 10.0
+
+# AGENTS.md concurrency rule: one process owns the portfolio.db write set at a
+# time; scheduled and interactive runs honor the SAME run lock. The
+# orchestrator holds it for the whole run so a db_gc apply (which acquires the
+# same lock, execution/db_gc.py) can never interleave its bulk deletes with
+# the morning write legs — the 2026-07-31 lock-starvation incident class. A
+# held lock is waited on briefly (a healthy db_gc batch run yields within its
+# own budget), then fails the run loudly rather than writing into contention.
+_RUN_LOCK_WAIT_S = 900.0
 
 # Per-stage wall-clock caps. Stage 1 fans LLM-backed sensors across the whole
 # portfolio and is the long pole -- 30 min mirrors the slice-1 guidance. The
@@ -950,6 +960,31 @@ def main(argv: list[str] | None = None) -> int:
     # Resolve DB path early — needed for run accounting.
     db_path = args.db_path if args.db_path is not None else PROJECT_ROOT / "data" / "portfolio.db"
 
+    # Own the portfolio write set for the whole run (see _RUN_LOCK_WAIT_S).
+    # Only taken when the DB exists — test invocations without a database have
+    # no write set to guard, and the lock file sits next to the DB so every
+    # checkout pointing at the same portfolio.db contends on one lock.
+    lock = None
+    if db_path.exists():
+        try:
+            lock = acquire_run_lock(
+                db_path,
+                owner="run_morning_pipeline",
+                timeout_s=_RUN_LOCK_WAIT_S,
+                poll_s=5.0,
+            )
+        except RunLockHeldError as exc:
+            sys.stderr.write(f"\n!!! [run_lock] FAILED - {exc}\n")
+            return 1
+    try:
+        return _run_pipeline(args, db_path=db_path, t0=t0)
+    finally:
+        if lock is not None:
+            lock.release()
+
+
+def _run_pipeline(args: argparse.Namespace, *, db_path: Path, t0: float) -> int:
+    """The pipeline body proper, run while holding the portfolio run lock."""
     # Record the pipeline start in ingestion_runs so the dead-man post-flight
     # (verify_daily_chain.py) can confirm it ran today.
     run_id: str | None = None

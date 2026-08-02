@@ -30,7 +30,10 @@ prune is reversible with one `INSERT ... SELECT`.
 | `validation-issues` | Collapse duplicate rows per defect key; survivor gets real fingerprint + first/last_seen + occurrence_count | always on | — |
 | `telemetry` | Age retention: stage_transitions, source_calls, ingestion_runs | 90 days | `--retention-days` |
 | `facts-depth` | Per-ticker window on financial_facts + attempts-grid cascade | 20 quarters / 12 FY; floors 16 / 12 | `--keep-quarters`, `--keep-fy`, `--include-portfolio` |
-| `maintenance` | ANALYZE always; VACUUM opt-in | — | `--vacuum` |
+| `maintenance` | ANALYZE always; VACUUM opt-in (exclusivity preflight + hard timeout) | — | `--vacuum`, `--vacuum-timeout-min` (30) |
+| *(all)* | Rows deleted/updated per committed transaction | 20,000 | `--batch-size` |
+| *(all)* | Whole-run wall-clock budget (loud abort past it) | 120 min | `--max-runtime-min` |
+| *(all)* | Run-lock wait before yielding | 60 s | `--lock-timeout-s` |
 
 Tier behavior (facts-depth): active watchlist / evaluation / index_member →
 windowed; tickers with facts but no active `tracked_companies` row → all rows
@@ -55,13 +58,44 @@ baseline, `src/report/sections/_common.py`) and renders 10 fiscal years
 - `pipeline_attempts` — `run_accounting.deduplicate_completed` does an
   unbounded any-prior-OK lookup; bound it before any retention here.
 
+## Concurrency contract (2026-07-31 incident, hardened 2026-08-01)
+
+The first prod apply held ONE write transaction for the whole run: WAL grew
+past 115 MB, `alembic upgrade head` (then no busy timeout) failed instantly,
+a manual `BEGIN IMMEDIATE` could not acquire the write lock for 6+ hours, and
+the 04:00 pipeline write legs were at risk — while WAL reads kept the
+dashboard looking healthy. Standing rules now built into the tool:
+
+- **Bounded batches**: staging holds no main-DB write lock; archiving writes
+  only the sidecar; deletes commit every `--batch-size` rows, so any other
+  writer waits at most one batch (seconds) behind its 30s busy_timeout.
+- **Run lock**: `--apply` acquires the portfolio write-set run lock
+  (`src/run_lock.py`, `data/portfolio.db.write.lock`) that
+  `run_morning_pipeline.py` also holds for its whole run. Held lock ⇒ loud
+  abort after `--lock-timeout-s` — GC yields, never queues. Stopping the
+  services does NOT clear this class of contention; check for a live db_gc
+  pid first.
+- **Protected window**: the CLI refuses to start inside 03:00–05:00
+  America/Los_Angeles and aborts between batches if a run reaches it
+  (`--ignore-protected-window` to override, e.g. a supervised recovery).
+- **Budgets**: whole run capped at `--max-runtime-min` (default 120); VACUUM
+  gets a 15s exclusivity preflight plus a hard `--vacuum-timeout-min`
+  (default 30) enforced via connection interrupt. Every abort is loud
+  (exit 2, `gc_aborted` on stderr); committed batches stay committed and a
+  re-run resumes from current state.
+- `alembic/env.py` now sets `busy_timeout=30000` on SQLite, so migrations
+  ride out a batch instead of failing instantly.
+
 ## Cadence & sequencing
 
 - Proposed: weekly, Sunday 06:00 PT (after the 04:00 pipeline; clear of the
   Sun 03:00 git-cleanup / 03:30 memory-streamline / ~10:30 eval rungs).
   VACUUM on the first Sunday of the month only. No LLM leg → the quota
   windows in `llm_quota_scheduling.md` do not apply; DB write-lock contention
-  does, hence the slot.
+  does, hence the slot — and the in-tool protected-window guard + run lock
+  above are the backstop if the schedule ever drifts. Cron registration is
+  STILL PENDING owner approval (verified 2026-08-01: no Task Scheduler entry
+  exists; all runs to date were manual).
 - Idempotency: a second run over the same DB is a no-op; idempotency key is
   the DB state itself (row-level predicates), logged per run in `gc_manifest`.
 - Failure mode: halt loud (non-zero exit, JSON events on stderr). No retries.
