@@ -219,16 +219,28 @@ _ACTIONS_SCRIPT = """<script>
         }
       });
   }
-  function post(id, payload) {
+  function post(id, payload, btn) {
+    if (btn) CCAction.busy(btn, '…');
     fetch('/api/red_team/' + id + '/respond', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(payload)
     }).then(function (r) {
-      if (r.ok) { refresh(); return; }
+      if (r.ok) {
+        if (btn) CCAction.receipt(btn, '✓ Recorded');
+        refresh();
+        return;
+      }
+      // A 409 (second-defer-rejected / already-responded) is an escalation,
+      // not a quiet no-op — release the button AND alert loudly with the
+      // server's detail before refreshing to the item's terminal state.
       r.json().catch(function () { return {}; }).then(function (body) {
-        window.alert((body && body.error) || 'Could not record that response.');
+        if (btn) CCAction.release(btn);
+        window.alert((body && body.error) || ('Could not record that response (HTTP ' + r.status + ').'));
         refresh();
       });
+    }).catch(function (err) {
+      if (btn) CCAction.release(btn);
+      window.alert('Network error recording that response: ' + (err && err.message ? err.message : err));
     });
   }
   // In-card Refute reasoning editor (PR-next, replaces window.prompt): appends
@@ -264,8 +276,7 @@ _ACTIONS_SCRIPT = """<script>
     save.addEventListener('click', function () {
       var txt = ta.value.trim();
       if (!txt) { ta.focus(); return; }
-      save.disabled = true;
-      post(id, {action: 'refute', response_md: txt});
+      post(id, {action: 'refute', response_md: txt}, save);
     });
   }
   container.addEventListener('click', function (ev) {
@@ -282,7 +293,7 @@ _ACTIONS_SCRIPT = """<script>
         'Defer this item? A second defer on the same item is rejected — respond next time.'
       )) return;
     }
-    post(id, payload);
+    post(id, payload, btn);
   });
 })();
 </script>"""

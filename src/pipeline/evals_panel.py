@@ -604,10 +604,15 @@ _RUN_JS = r"""
     if (!btn) return;
     var purpose = btn.getAttribute('data-purpose');
     var buttons = bar.querySelectorAll('button');
-    buttons.forEach(function (b) { b.disabled = true; });
+    CCAction.busy(btn, 'Running…');
+    buttons.forEach(function (b) { if (b !== btn) b.disabled = true; });
     logEl.hidden = false;
     logEl.textContent = '';
     append('starting eval: ' + purpose + '…');
+    function releaseAll() {
+      CCAction.release(btn);
+      buttons.forEach(function (b) { if (b !== btn) b.disabled = false; });
+    }
     fetch('/actions/run-eval', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -631,18 +636,24 @@ _RUN_JS = r"""
           finished = true;
           append('# exit code ' + m.exit_code + (m.exit_code === 3 ? ' (below --min-score gate)' : ''));
           es.close();
-          buttons.forEach(function (b) { b.disabled = false; });
-          if (m.exit_code === 0) refetch();
+          buttons.forEach(function (b) { if (b !== btn) b.disabled = false; });
+          if (m.exit_code === 0) {
+            CCAction.receipt(btn, '✓ Eval run complete');
+            setTimeout(refetch, 900);
+          } else {
+            CCAction.release(btn);
+            append('eval run failed — exit code ' + m.exit_code + ', see log above for detail');
+          }
         }
       };
       es.onerror = function () {
-        if (!finished) append('stream closed');
+        if (!finished) append('stream closed unexpectedly — run may not have completed');
         es.close();
-        buttons.forEach(function (b) { b.disabled = false; });
+        releaseAll();
       };
     }).catch(function (e) {
       append('failed: ' + e.message);
-      buttons.forEach(function (b) { b.disabled = false; });
+      releaseAll();
     });
   });
 })();

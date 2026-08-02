@@ -595,7 +595,7 @@ JS = r"""
 
   elSave.addEventListener('click', function () {
     if (!ready) return;
-    elSave.disabled = true;
+    CCAction.busy(elSave, 'Saving…');
     setStatus('Saving…');
     fetch(SERVER_URL + '/api/dcf/save', {
       method: 'POST',
@@ -604,8 +604,8 @@ JS = r"""
     }).then(function (r) {
       return r.json().then(function (j) { return {ok: r.ok, status: r.status, body: j}; });
     }).then(function (res) {
-      elSave.disabled = false;
       if (!res.ok) {
+        CCAction.release(elSave);
         setStatus((res.body && res.body.error) || ('save failed (' + res.status + ')'), 'bad');
         return;
       }
@@ -617,9 +617,13 @@ JS = r"""
         buildControls();
       }
       if (res.body.sensitivity) { renderScenarios(res.body); renderHeatmap(res.body.sensitivity); }
+      CCAction.receipt(elSave, '✓ Saved');
       setStatus('Saved to model ✓ · override ledger updated (Opus baseline untouched).', 'ok');
+      // Saving again after further slider adjustments is the normal flow —
+      // unlock once the receipt has registered rather than staying terminal.
+      setTimeout(function () { CCAction.release(elSave); }, 1500);
     }).catch(function () {
-      elSave.disabled = false;
+      CCAction.release(elSave);
       setStatus('Research server offline — could not save.', 'bad');
     });
   });

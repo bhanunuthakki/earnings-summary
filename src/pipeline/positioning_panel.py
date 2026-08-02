@@ -462,7 +462,7 @@ _COACH_JS = """<script>
   });
   propose.addEventListener('click', function () {
     if (!sessionId) { msg('coach', 'Talk to the coach first — there is no conversation to encode yet.'); return; }
-    propose.disabled = true; propose.textContent = 'Encoding…';
+    CCAction.busy(propose, 'Encoding…');
     fetch('/api/positioning/propose', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -470,10 +470,20 @@ _COACH_JS = """<script>
     }).then(function (r) {
       return r.text().then(function (t) { return { ok: r.ok, text: t }; });
     }).then(function (res) {
-      propose.disabled = false; propose.textContent = 'Propose targets from this conversation';
-      if (!res.ok) { msg('coach', 'encode failed: ' + res.text); return; }
+      if (!res.ok) {
+        CCAction.release(propose);
+        msg('coach', 'encode failed: ' + res.text);
+        return;
+      }
+      CCAction.receipt(propose, '✓ Targets proposed — review below');
       approvalHost.innerHTML = res.text;
       wireApproval();
+      // Re-proposing after more conversation is a normal flow, so the
+      // receipt is momentary, not terminal — unlock once it has registered.
+      setTimeout(function () { CCAction.release(propose); }, 1500);
+    }).catch(function (err) {
+      CCAction.release(propose);
+      msg('coach', 'encode failed: ' + err);
     });
   });
   function wireApproval() {

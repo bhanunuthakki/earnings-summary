@@ -1015,9 +1015,7 @@ _ATTEST_JS = """
     var wrap = btn.closest('.cc-peek-attest');
     var msg = wrap ? wrap.querySelector('.cc-attest-msg') : null;
     function say(t) { if (msg) { msg.hidden = false; msg.textContent = t; } }
-    var label = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = 'Recording\\u2026';
+    CCAction.busy(btn, 'Recording\\u2026');
     fetch('/api/coach/attest-change', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1026,14 +1024,13 @@ _ATTEST_JS = """
       return resp.json().then(function (j) { return { ok: resp.ok, body: j }; });
     }).then(function (r) {
       if (r.ok && r.body && r.body.attested) {
-        btn.textContent = '\\u2713 Recorded';
+        CCAction.receipt(btn, '\\u2713 Recorded');
         say('Counts toward the coach\\u2019s Q3\\u201926 bar.');
       } else {
-        btn.disabled = false;
-        btn.textContent = label;
+        CCAction.release(btn);
         say((r.body && r.body.error) || 'Already recorded.');
       }
-    }).catch(function (e) { btn.disabled = false; btn.textContent = label; say(e.message); });
+    }).catch(function (e) { CCAction.release(btn); say(e.message); });
   });
 })();
 """.strip()
@@ -1101,9 +1098,7 @@ _REVIEW_JS = """
     var log = wrap ? wrap.querySelector('.cc-review-log') : null;
     if (!log) return;
     function line(t) { log.hidden = false; log.textContent += t + '\\n'; log.scrollTop = log.scrollHeight; }
-    var label = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = 'Running…';
+    CCAction.busy(btn, 'Running…');
     fetch('/actions/position-review', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1113,8 +1108,7 @@ _REVIEW_JS = """
     }).then(function (r) {
       if (!r.ok) {
         line('! ' + ((r.body && r.body.error) || ('HTTP ' + r.status)));
-        btn.disabled = false;
-        btn.textContent = label;
+        CCAction.release(btn);
         return;
       }
       line('> position review started (job ' + r.body.job_id + ')');
@@ -1128,18 +1122,21 @@ _REVIEW_JS = """
           finished = true;
           line('# exit code ' + m.exit_code);
           es.close();
-          btn.disabled = false;
-          btn.textContent = label;
+          if (m.exit_code === 0) {
+            CCAction.receipt(btn, '✓ Review recorded');
+          } else {
+            line('! review run failed — exit code ' + m.exit_code + ', see log above');
+            CCAction.release(btn);
+          }
         }
       };
       es.onerror = function () {
         if (finished) return;
         line('! stream interrupted — is the server still running?');
         es.close();
-        btn.disabled = false;
-        btn.textContent = label;
+        CCAction.release(btn);
       };
-    }).catch(function (e) { line('! ' + e.message); btn.disabled = false; btn.textContent = label; });
+    }).catch(function (e) { line('! ' + e.message); CCAction.release(btn); });
   });
 })();
 """.strip()
@@ -1508,10 +1505,7 @@ _PROV_JS = """
     var log = wrap ? wrap.querySelector('.cc-prov-log') : null;
     if (!log) return;
     function line(t) { log.hidden = false; log.textContent += t + '\\n'; log.scrollTop = log.scrollHeight; }
-    function release() { btn.disabled = false; btn.textContent = btn.getAttribute('data-prov-label') || 'Refresh'; }
-    btn.setAttribute('data-prov-label', btn.textContent);
-    btn.disabled = true;
-    btn.textContent = 'Running…';
+    CCAction.busy(btn, 'Running…');
     fetch(btn.getAttribute('data-prov-post'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1521,7 +1515,7 @@ _PROV_JS = """
     }).then(function (r) {
       if (!r.ok) {
         line('! ' + ((r.body && r.body.error) || ('HTTP ' + r.status)));
-        release();
+        CCAction.release(btn);
         return;
       }
       line('> ' + r.body.kind + ' started (job ' + r.body.job_id + ')');
@@ -1535,16 +1529,21 @@ _PROV_JS = """
           finished = true;
           line('# exit code ' + m.exit_code);
           es.close();
-          release();
+          if (m.exit_code === 0) {
+            CCAction.receipt(btn, '✓ Refreshed');
+          } else {
+            line('! refresh failed — exit code ' + m.exit_code + ', see log above');
+            CCAction.release(btn);
+          }
         }
       };
       es.onerror = function () {
         if (finished) return;
         line('! stream interrupted — is the server still running?');
         es.close();
-        release();
+        CCAction.release(btn);
       };
-    }).catch(function (e) { line('! ' + e.message); release(); });
+    }).catch(function (e) { line('! ' + e.message); CCAction.release(btn); });
   });
 })();
 """.strip()

@@ -2248,7 +2248,7 @@ ${r?'Expression: "'+r+`"
 
   elSave.addEventListener('click', function () {
     if (!ready) return;
-    elSave.disabled = true;
+    CCAction.busy(elSave, 'Saving…');
     setStatus('Saving…');
     fetch(SERVER_URL + '/api/dcf/save', {
       method: 'POST',
@@ -2257,8 +2257,8 @@ ${r?'Expression: "'+r+`"
     }).then(function (r) {
       return r.json().then(function (j) { return {ok: r.ok, status: r.status, body: j}; });
     }).then(function (res) {
-      elSave.disabled = false;
       if (!res.ok) {
+        CCAction.release(elSave);
         setStatus((res.body && res.body.error) || ('save failed (' + res.status + ')'), 'bad');
         return;
       }
@@ -2270,9 +2270,13 @@ ${r?'Expression: "'+r+`"
         buildControls();
       }
       if (res.body.sensitivity) { renderScenarios(res.body); renderHeatmap(res.body.sensitivity); }
+      CCAction.receipt(elSave, '✓ Saved');
       setStatus('Saved to model ✓ · override ledger updated (Opus baseline untouched).', 'ok');
+      // Saving again after further slider adjustments is the normal flow —
+      // unlock once the receipt has registered rather than staying terminal.
+      setTimeout(function () { CCAction.release(elSave); }, 1500);
     }).catch(function () {
-      elSave.disabled = false;
+      CCAction.release(elSave);
       setStatus('Research server offline — could not save.', 'bad');
     });
   });
@@ -2302,7 +2306,8 @@ ${r?'Expression: "'+r+`"
           return;
         }
         var actions = card ? card.querySelectorAll('.dc-act') : [btn];
-        actions.forEach(function (b) { b.disabled = true; });
+        CCAction.busy(btn, 'Recording…');
+        actions.forEach(function (b) { if (b !== btn) b.disabled = true; });
         if (statusEl) statusEl.textContent = 'Recording ' + verb + '…';
         fetch(SERVER_URL + '/api/research/card/' + artifactId + '/' + verb, {
           method: 'POST',
@@ -2311,14 +2316,17 @@ ${r?'Expression: "'+r+`"
         }).then(function (r) {
           return r.json().then(function (data) { return {ok: r.ok, data: data}; });
         }).then(function (res) {
-          actions.forEach(function (b) { b.disabled = false; });
+          actions.forEach(function (b) { if (b !== btn) b.disabled = false; });
           if (!res.ok) {
+            CCAction.release(btn);
             if (statusEl) statusEl.textContent = 'Failed: ' + (res.data.error || 'server error');
             return;
           }
+          CCAction.receipt(btn, '✓ ' + verb);
           if (statusEl) statusEl.textContent = 'Recorded: ' + res.data.status;
         }).catch(function (err) {
-          actions.forEach(function (b) { b.disabled = false; });
+          actions.forEach(function (b) { if (b !== btn) b.disabled = false; });
+          CCAction.release(btn);
           if (statusEl) statusEl.textContent = 'Server unreachable — start comments_server.py.';
           console.warn(err);
         });

@@ -23,30 +23,49 @@ _SCRIPT = """<script>
     if (!cell) return;
     cell.innerHTML = '<span class="' + cls + '">' + text + '</span>';
   }
-  function post(t, value, cell) {
-    fetch('/api/ticker-settings/' + encodeURIComponent(t), {
+  // Returns the fetch promise so every caller can wait for the real result —
+  // the add-form previously wrote its "saved" note synchronously, before the
+  // request had even resolved, so a failed save still claimed success.
+  function post(t, value) {
+    return fetch('/api/ticker-settings/' + encodeURIComponent(t), {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({bypass_budget: value})
-    }).then(function (r) { return r.json(); }).then(function (j) {
-      setPill(cell, j.bypass_budget ? 'k-pill k-pill-ok' : 'k-pill', j.bypass_budget ? 'ON' : 'OFF');
-    }).catch(function () { setPill(cell, 'k-pill k-pill-bad', 'ERR'); });
+    }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    });
   }
   document.querySelectorAll('.ts-toggle').forEach(function (cb) {
     cb.addEventListener('change', function () {
       var t = cb.getAttribute('data-ticker');
-      post(t, cb.checked, cb.closest('tr') ? cb.closest('tr').querySelector('.ts-state') : null);
+      var cell = cb.closest('tr') ? cb.closest('tr').querySelector('.ts-state') : null;
+      CCAction.busy(cb);
+      post(t, cb.checked).then(function (j) {
+        setPill(cell, j.bypass_budget ? 'k-pill k-pill-ok' : 'k-pill', j.bypass_budget ? 'ON' : 'OFF');
+        CCAction.release(cb);
+      }).catch(function () {
+        setPill(cell, 'k-pill k-pill-bad', 'ERR');
+        CCAction.release(cb);
+      });
     });
   });
   var addBtn = document.getElementById('ts-add-btn');
   if (addBtn) addBtn.addEventListener('click', function () {
     var inp = document.getElementById('ts-add-ticker');
     var chk = document.getElementById('ts-add-bypass');
+    var note = document.getElementById('ts-add-note');
     var t = (inp.value || '').trim().toUpperCase();
     if (!t) return;
-    post(t, chk.checked, null);
-    var note = document.getElementById('ts-add-note');
-    if (note) note.textContent = 'saved ' + t + ' — reopen the drawer to refresh the list';
+    CCAction.busy(addBtn, 'Saving…');
+    post(t, chk.checked).then(function () {
+      CCAction.receipt(addBtn, '✓ Saved');
+      if (note) note.textContent = 'Saved ' + t + ' — reopen the drawer to refresh the list.';
+      setTimeout(function () { CCAction.release(addBtn); }, 1500);
+    }).catch(function (err) {
+      CCAction.release(addBtn);
+      if (note) note.textContent = 'Save failed for ' + t + ': ' + err.message;
+    });
   });
 })();
 </script>"""
