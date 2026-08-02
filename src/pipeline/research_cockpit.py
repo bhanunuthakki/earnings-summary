@@ -60,7 +60,7 @@ from pipeline.dashboard_status import DashboardRow, build_dashboard_rows
 from pipeline.freshness import freshness_verdict
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_pp, fmt_reltime
 from ui import living_grid as lg
-from ui.controls import pill_tone_class, thesis_status_tone
+from ui.controls import pill_tone_class, thesis_status_tone, ticker_label
 
 # Thesis-verdict sort rank: worst = highest so a numeric (descending-first) sort
 # floats breaches to the top, matching the cockpit's default attention order.
@@ -1198,8 +1198,15 @@ def _render_row(row: CockpitRow, now: datetime, *, thin: bool) -> str:
             f" <span class='k-chip k-chip-mono' title='already held — fit scored against the "
             f"ex-self book'>held {row.held_weight * 100.0:.1f}%</span>"
         )
+    # ticker_label() is the ONE ticker renderer (design_language §5) — a direct
+    # /#holding=<T> href (no /ticker/<T> redirect hop) and the compact
+    # symbol-only form (no name= arg) so the column stays narrow; the full
+    # name rides in the <td>'s own title (name_attr, unchanged) rather than
+    # ticker_label's inline name span. data-peek-ticker on the <td> gives the
+    # shell's hover mini-card a target regardless of what's nested inside.
     cells = [
-        f"<td class='ticker'{name_attr}><a href='/ticker/{t}'>{t}</a>{etf_pill}</td>",
+        f"<td class='ticker' data-peek-ticker='{t}'{name_attr}>"
+        f"{ticker_label(row.base.ticker, href=f'/#holding={row.base.ticker}')}{etf_pill}</td>",
         f"<td>{_verdict_badge(row, now)}</td>",
     ]
     if thin:

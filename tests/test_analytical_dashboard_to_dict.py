@@ -196,6 +196,59 @@ def test_render_html_empty_has_all_panels() -> None:
         assert marker in html
 
 
+def test_empty_states_use_k_empty_with_cli_command_folded() -> None:
+    """D4 (surface_density_jit_redesign.md): every CLI-instruction empty state
+    on this page leads with ONE k_empty() owner-vocabulary line, with the raw
+    command folded behind a <details> — never a bare `<p class="muted">…
+    <pre class="cli-hint">` dump up front. No in-app doorway exists for any
+    of these (they're all `python execution/...` one-shots), so the CLI stays
+    — just demoted behind the fold per the task's explicit carve-out."""
+    html = render_html(
+        AnalyticalDashboard(),
+        generated_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    commands = (
+        "python execution/record_decisions.py",
+        "python -m alembic upgrade head",
+        "python execution/run_lens.py --lens cross_portfolio_synthesis",
+        "python execution/run_lens.py --tickers AMZN,GOOG,META --lens five_min_reread",
+        "python execution/refresh_dcf.py --all-named",
+        "python execution/backfill_insider_transactions.py --since 2024-01-01",
+    )
+    assert html.count('<p class="k-empty">') == len(commands)
+    assert html.count("<details><summary>run manually</summary>") == len(commands)
+    for cmd in commands:
+        # The command lives INSIDE a details fold, immediately after the
+        # summary — not loose in the panel body ahead of / outside the fold.
+        assert f'<details><summary>run manually</summary><pre class="cli-hint">{cmd}' in html
+    # No bare "muted paragraph immediately followed by the raw command" shape
+    # survives (the pre-fix pattern this replaces).
+    assert '<p class="muted">No decisions recorded' not in html
+    assert '<p class="muted">No budget data' not in html
+    assert '<p class="muted">No cross-portfolio synthesis' not in html
+    assert '<p class="muted">No per-holding rereads' not in html
+    assert '<p class="muted">No DCF runs' not in html
+    assert '<p class="muted">No insider data' not in html
+
+
+def test_ticker_link_css_removed_from_the_standalone_page() -> None:
+    """.ticker-link collapse (design_language §5): this page's own 5
+    emissions all migrated to ticker_label() (a.k-tick-sym), so its
+    page-scoped `.ticker-link` CSS rule — dead weight now that nothing on
+    THIS page emits the class — was removed. (command_center_shell.py's
+    SHARED `.ticker-link` rule stays until portfolio_panel.py /
+    allocation_decisions_panel.py / advisor_memos_panel.py migrate too — a
+    different surface, out of this test's scope.)"""
+    html = render_html(
+        AnalyticalDashboard(),
+        generated_at=datetime(2026, 6, 1, tzinfo=UTC),
+    )
+    assert ".ticker-link" not in html
+    assert 'class="ticker-link"' not in html
+    # The kit's own ticker-symbol styling is what's left to render it.
+    assert ".k-tick-sym" in html
+
+
 def test_build_and_to_dict_with_seeded_db(tmp_path: Path) -> None:
     db_path = tmp_path / "portfolio.db"
     _seed_db(db_path)
@@ -250,8 +303,10 @@ def test_trigger_ladder_null_price_row_is_well_formed() -> None:
     section = html[html.index("Trigger ladder") :]
     rstart = section.index('<tr class="tone-muted">')
     row_html = section[rstart : section.index("</tr>", rstart)]
-    # Ticker link + verdict cells (also dropped by the bug) are present...
-    assert 'class="ticker-link">AMAT</a>' in row_html
+    # Ticker link (ticker_label()'s a.k-tick-sym — the .ticker-link collapse,
+    # design_language §5) + verdict cells (also dropped by the bug) are
+    # present...
+    assert 'class="k-tick-sym" href="../research/AMAT/">AMAT</a>' in row_html
     assert ">Pending<" in row_html
     # ...and the row is complete. Wave 1 (D5): the List column became a group
     # band and the single shared trigger status lifted into the header pill, so

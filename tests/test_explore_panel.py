@@ -10,6 +10,7 @@ the stamp point).
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -180,6 +181,65 @@ def test_explore_panel_builder_is_a_diy_popover(db_path: Path) -> None:
     assert 'id="vx-peers"' in html_out  # builder action
     assert "/api/peers/" in html_out
     assert "function addPeersToCard" in html_out
+
+
+def test_builder_popover_uses_ccoverlay_not_a_bespoke_escape_listener(
+    db_path: Path,
+) -> None:
+    """Law-3 fix: the DIY builder popover used to carry the only remaining
+    per-surface document-level Escape listener in the shell — one that
+    ALWAYS fired regardless of whatever else (a peek, the palette) was open
+    on top of it, outside the CCOverlay priority ladder (PALETTE > PEEK >
+    DRAWER > DOCK; src/pipeline/cc_overlay.py, design_language.md §3.1).
+    It's now a CCOverlay registration instead, so Escape resolves by the
+    shared priority stack like every other overlay."""
+    html_out = render_explore_panel(db_path)
+    # The bespoke listener is gone — CCOverlay owns Escape now.
+    assert "document.addEventListener('keydown'" not in html_out
+    assert "window.CCOverlay && builderPop && window.CCOverlay.register(builderPop" in html_out
+    # closeId auto-wires the (x) — no separate popClose click listener needed.
+    assert "closeId: 'ask-pop-close'" in html_out
+    assert "popClose" not in html_out
+    # Registered scrimless/non-trapping (a lightweight in-panel popover, not
+    # a blocking modal): scrim / focus-trap / restore-focus all explicit
+    # false, not left to defaults.
+    m = re.search(r"window\.CCOverlay\.register\(builderPop,\s*\{([^}]*)\}", html_out)
+    assert m, "builderPop CCOverlay.register() call not found"
+    opts = " ".join(m.group(1).split())
+    assert "scrim: false" in opts
+    assert "trapFocus: false" in opts
+    assert "restoreFocus: false" in opts
+    # NO priority set — it defaults to 0, the one rung BELOW
+    # window.CCOverlay.PRIORITY.DOCK (10), so an open peek/palette/drawer/dock
+    # always outranks this popover for Escape; it only claims Escape when
+    # nothing higher on the ladder is open. This is the "outside/below the
+    # ladder" placement the fix calls for.
+    assert "priority" not in opts
+    assert "PRIORITY.DOCK" not in opts
+
+
+def test_saved_view_handoff_actually_opens_the_builder(db_path: Path) -> None:
+    """Regression: the saved-view palette handoff used to set
+    `fold.open = true` on `#ask-advanced` — a plain <div>, not a <details> —
+    a dead assignment that never showed the popover (openBuilder() was the
+    real show call, used everywhere else). The CCOverlay conversion's
+    consumePaletteView() now calls openBuilder() directly."""
+    html_out = render_explore_panel(db_path)
+    assert "fold.open = true" not in html_out
+    consume = html_out[html_out.index("function consumePaletteView") :]
+    consume = consume[: consume.index("\n  window.addEventListener('cc-view-id'")]
+    assert "openBuilder();" in consume
+
+
+def test_explore_panel_action_buttons_adopt_ccaction(db_path: Path) -> None:
+    """CCAction.busy/release/receipt (PR #1092) replaces every bare
+    `.disabled = true` / manual textContent-swap action button in this panel:
+    compile, run, +Peers (both the toolbar button and the in-card injector),
+    inject-to-DCF, add-as-reference, and save/pin-as-view."""
+    html_out = render_explore_panel(db_path)
+    assert html_out.count("CCAction.busy") >= 8
+    assert "CCAction.release" in html_out
+    assert "CCAction.receipt(btn, 'no new peers')" in html_out
 
 
 def test_explore_panel_picker_options_carry_definition_titles(db_path: Path) -> None:

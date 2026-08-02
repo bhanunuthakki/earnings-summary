@@ -26,7 +26,7 @@ from pipeline.analytical_dashboard import (
     TriggerLadderRow,
 )
 from ui import living_grid as lg
-from ui.controls import controls_css, ticker_label
+from ui.controls import controls_css, k_empty, ticker_label
 from ui.prose import render_prose
 from ui.time import stamp_html
 from ui.tokens import FAVICON_LINK, palette_css
@@ -116,8 +116,9 @@ def _decisions_section(panel: DecisionsPanel) -> str:
             '<section class="panel"><div class="panel-head">'
             "<h2>Decisions (LLM recommendations · audit ledger)</h2></div>"
             '<div class="panel-body">'
-            '<p class="muted">No decisions recorded yet. Extract from existing rereads via:</p>'
-            '<pre class="cli-hint">python execution/record_decisions.py</pre>'
+            + k_empty("No decisions recorded yet — extract them from cached rereads.")
+            + "<details><summary>run manually</summary>"
+            '<pre class="cli-hint">python execution/record_decisions.py</pre></details>'
             "</div></section>"
         )
 
@@ -204,7 +205,7 @@ def _decisions_section(panel: DecisionsPanel) -> str:
             out.append(
                 "<tr>"
                 f"<td>{stamp_html(d.made_at, mode='date')}</td>"
-                f'<td><a href="../research/{escape(d.ticker)}/" class="ticker-link">{escape(d.ticker)}</a></td>'
+                f"<td>{ticker_label(d.ticker, href=f'../research/{d.ticker}/')}</td>"
                 f"<td>{escape(kind_label)}</td>"
                 f"<td>{escape(d.conviction or '—')}</td>"
                 f'<td class="num">{pct_str}</td>'
@@ -254,8 +255,9 @@ def _llm_budget_section(panel: LlmBudgetPanel) -> str:
         return (
             '<section class="panel"><div class="panel-head"><h2>LLM spend & budget</h2></div>'
             '<div class="panel-body">'
-            '<p class="muted">No budget data. Run <code>python -m alembic upgrade head</code> '
-            "to install migration 0052, then revisit.</p>"
+            + k_empty("No LLM budget data yet — the budget migration hasn't run.")
+            + "<details><summary>run manually</summary>"
+            '<pre class="cli-hint">python -m alembic upgrade head</pre></details>'
             "</div></section>"
         )
     out: list[str] = [
@@ -456,8 +458,9 @@ def _portfolio_synthesis_section(content_md: str | None) -> str:
         return (
             '<section class="panel"><div class="panel-head"><h2>Portfolio synthesis</h2></div>'
             '<div class="panel-body">'
-            '<p class="muted">No cross-portfolio synthesis cached. Run:</p>'
-            '<pre class="cli-hint">python execution/run_lens.py --lens cross_portfolio_synthesis</pre>'
+            + k_empty("No cross-portfolio synthesis cached yet.")
+            + "<details><summary>run manually</summary>"
+            '<pre class="cli-hint">python execution/run_lens.py --lens cross_portfolio_synthesis</pre></details>'
             "</div></section>"
         )
     # Render markdown minimally — preserve headers + bold + bullets
@@ -478,7 +481,10 @@ def _per_ticker_reread_section(rows: list[PortfolioLensRow]) -> str:
         return (
             '<section class="panel"><div class="panel-head"><h2>Per-holding 5-min rereads</h2></div>'
             '<div class="panel-body">'
-            '<p class="muted">No per-holding rereads cached. Generate via <code>python execution/run_lens.py --tickers AMZN,GOOG,META --lens five_min_reread</code> (or --all for every lens).</p>'
+            + k_empty("No per-holding 5-min rereads cached yet.")
+            + "<details><summary>run manually</summary>"
+            '<pre class="cli-hint">python execution/run_lens.py --tickers AMZN,GOOG,META '
+            "--lens five_min_reread  # or --all for every lens</pre></details>"
             "</div></section>"
         )
     out: list[str] = [
@@ -499,7 +505,7 @@ def _reread_card(r: PortfolioLensRow) -> str:
     rendered = light_markdown_to_html(r.content_md[:8000])
     return (
         f'<details class="reread-card"><summary>'
-        f'<a href="../research/{escape(r.ticker)}/" class="ticker-link">{escape(r.ticker)}</a>'
+        f"{ticker_label(r.ticker, href=f'../research/{r.ticker}/')}"
         f"{stamp_html(r.generated_at, mode='date', css='reread-stamp')}"
         f"</summary>"
         f'<div class="reread-body">{rendered}</div>'
@@ -540,7 +546,10 @@ def _trigger_ladder_section(rows: list[TriggerLadderRow]) -> str:
         return (
             '<section class="panel"><div class="panel-head"><h2>Trigger ladder</h2></div>'
             '<div class="panel-body">'
-            '<p class="muted">No DCF runs yet. Run <code>python execution/refresh_dcf.py --all-named</code>.</p></div></section>'
+            + k_empty("No DCF runs yet.")
+            + "<details><summary>run manually</summary>"
+            '<pre class="cli-hint">python execution/refresh_dcf.py --all-named</pre></details>'
+            "</div></section>"
         )
 
     statuses = {(r.trigger_status or "unknown") for r in rows}
@@ -615,7 +624,7 @@ def _trigger_ladder_section(rows: list[TriggerLadderRow]) -> str:
         )
         out.append(
             f'<tr class="{tone}">'
-            f'<td><a href="../research/{escape(r.ticker)}/" class="ticker-link">{escape(r.ticker)}</a></td>'
+            f"<td>{ticker_label(r.ticker, href=f'../research/{r.ticker}/')}</td>"
             f"<td>{escape(r.verdict or '—')}</td>"
             f"{live}{fair}"
             f'<td class="num">{ou}</td><td class="num">{mos}</td>'
@@ -631,7 +640,11 @@ def _insider_events_section(rows: list[InsiderEventRow]) -> str:
         return (
             '<section class="panel"><div class="panel-head"><h2>Cross-ticker insider activity (last 90d)</h2></div>'
             '<div class="panel-body">'
-            '<p class="muted">No insider data. Run <code>python execution/backfill_insider_transactions.py --since 2024-01-01</code>.</p></div></section>'
+            + k_empty("No insider-transaction data yet.")
+            + "<details><summary>run manually</summary>"
+            '<pre class="cli-hint">python execution/backfill_insider_transactions.py '
+            "--since 2024-01-01</pre></details>"
+            "</div></section>"
         )
     out: list[str] = [
         '<section class="panel"><div class="panel-head"><h2>Cross-ticker insider activity (last 90d)</h2>'
@@ -661,7 +674,7 @@ def _insider_events_section(rows: list[InsiderEventRow]) -> str:
         out.append(
             f'<tr class="{tone}">'
             f"<td>{escape(r.transaction_date)}</td>"
-            f'<td><a href="../research/{escape(r.ticker)}/" class="ticker-link">{escape(r.ticker)}</a></td>'
+            f"<td>{ticker_label(r.ticker, href=f'../research/{r.ticker}/')}</td>"
             f"<td>{escape(r.insider_name)}</td>"
             f"<td>{escape(r.insider_role or '?')}</td>"
             f"<td>{escape(r.transaction_type.replace('_', ' '))}</td>"
@@ -713,7 +726,7 @@ def _predictions_section(rows: list[PredictionOutcomeRow]) -> str:
             hit_rate = f"{100 * outcomes.get('met', 0) / graded:.0f}%" if graded > 0 else "—"
             out.append(
                 "<tr>"
-                f'<td><a href="../research/{escape(ticker)}/" class="ticker-link">{escape(ticker)}</a></td>'
+                f"<td>{ticker_label(ticker, href=f'../research/{ticker}/')}</td>"
                 f"<td>{escape(source_kind)}</td>"
                 f'<td class="num muted">{outcomes.get("pending", 0)}</td>'
                 f'<td class="num k-num-pos">{outcomes.get("met", 0)}</td>'
@@ -757,8 +770,6 @@ _PAGE_HEAD = (
   tbody tr:hover td {{ background: var(--paper); }}
   td.num {{ text-align: right; }}
   td.muted {{ color: var(--muted); }}
-  .ticker-link {{ color: var(--fg); text-decoration: none; font-weight: 600; transition: color var(--transition); }}
-  .ticker-link:hover {{ color: var(--accent); }}
   tr.tone-sell {{ background: color-mix(in srgb, var(--bad) 6%, transparent); }}
   tr.tone-trim {{ background: color-mix(in srgb, var(--warn) 4%, transparent); }}
   tr.tone-init {{ background: color-mix(in srgb, var(--ok) 6%, transparent); }}
