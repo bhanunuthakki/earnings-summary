@@ -39,8 +39,8 @@ from pathlib import Path
 from typing import cast
 
 from capture.decision_draft import ACTION_VOCAB as _RECEIPT_ACTION_VOCAB
-from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
 from pipeline.calibration_receipt import render_calibration_receipt_for
+from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import controls_css, ticker_label
 from ui.tokens import palette_css
