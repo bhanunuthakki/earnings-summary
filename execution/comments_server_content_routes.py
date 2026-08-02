@@ -267,6 +267,16 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             abort(404)
         return Response(html, mimetype="text/html")
 
+    @app.route("/api/peek/weekly-packet", methods=["GET"])
+    def peek_weekly_packet():
+        """Task 3 (wave3b): the read-only quick-look behind the Home
+        open-loops band's Sunday-packet line — no web reply surface exists
+        (verdicts are given on Telegram), so the doorway peeks the packet
+        state instead of navigating anywhere. Always 200s; never raises."""
+        from pipeline.open_loops import render_weekly_packet_peek
+
+        return Response(render_weekly_packet_peek(db_path), mimetype="text/html")
+
     @app.route("/api/peek/whatif", methods=["GET"])
     def peek_whatif():
         from pipeline.peeks import render_what_if_peek

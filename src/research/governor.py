@@ -858,9 +858,9 @@ def mark_pings_briefed(ping_ids: list[int], *, db_path: Path | str | None = None
     """A composed Senior Partner Brief drained these ``routed_to_brief`` rows
     into a section — flip them to ``acted`` (the existing terminal status for
     "this moment reached the owner and is resolved," reused rather than
-    minting a second new status; ``coach_strip``/``open_loops`` already only
-    special-case ``sent``/``digest``/``routed_to_brief``, so a row moving to
-    ``acted`` silently stops appearing in either band, exactly like any other
+    minting a second new status; ``pipeline.open_loops`` already only
+    special-cases ``sent``/``digest``/``routed_to_brief``, so a row moving to
+    ``acted`` silently stops appearing in the band, exactly like any other
     ``mark_ping_acted`` transition). Only rows still ``routed_to_brief`` are
     touched — idempotent against a re-run over the same ids. Returns the
     number of rows updated."""

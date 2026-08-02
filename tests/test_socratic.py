@@ -1,4 +1,5 @@
-"""Tests for the Socratic think-through (master build P2.4).
+"""Tests for the Socratic think-through (master build P2.4; step 1
+backgrounded wave3b Task 4).
 
 Layers:
 * the parsers (questions list, forced-stance line) — strict where the flow
@@ -6,13 +7,18 @@ Layers:
 * question + memo generation with the LLM mocked — owner-first validation,
   the persistence contract (stance + horizon on the memo row, ledger entry,
   Q&A transcript appended), transient-degrade vs hard-stop-propagate,
-* the server seams — both sync endpoints + the standalone page — over an
-  alembic-built DB,
+* the prelude persistence round-trip (``persist_prelude`` /
+  ``read_current_prelude``) the background job and the result-read route
+  share,
+* the server seams — the job-starting action, the result-read route, the
+  synchronous memo endpoint, and the standalone page — over an alembic-built
+  DB, with a non-spawning job registry (no real subprocess),
 * the Memos panel's think-through entry + stance pill.
 """
 
 from __future__ import annotations
 
+import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -32,13 +38,17 @@ import comments_server  # noqa: E402
 import advisor.socratic as socratic_mod  # noqa: E402
 from advisor.context import AdvisorContext, TickerValuation, calibration_block  # noqa: E402
 from advisor.socratic import (  # noqa: E402
+    SocraticPrelude,
     generate_decision_memo,
     generate_questions,
     parse_questions,
     parse_stance,
+    persist_prelude,
+    read_current_prelude,
 )
 from advisor.store import AdvisorMemoRow, get_memo  # noqa: E402
 from decision_calibration import CalibrationStats, ConvictionBucket  # noqa: E402
+from dispatch_registry import Registry  # noqa: E402
 from integrations.portfolio_tracker_client import (  # noqa: E402
     LivePortfolio,
     PortfolioAnalytics,
@@ -48,7 +58,50 @@ from pipeline.advisor_memos_panel import compose_memos_page, render_socratic_pag
 from pipeline.allocation_decisions_panel import SizingAuditRow  # noqa: E402
 from user_state.ledger import list_entries  # noqa: E402
 
+
+class _NonSpawningRegistry(Registry):
+    """Records job starts without forking a real subprocess (same pattern as
+    tests/test_advisor_memos.py) — the route tests below only need to assert
+    that a job got registered, not that ``run_socratic_questions.py``
+    actually completes end to end."""
+
+    def start(self, *, ticker, kind, argv, spawn=True):  # type: ignore[override]
+        return super().start(ticker=ticker, kind=kind, argv=argv, spawn=False)
+
+
 _PRIOR_HEAD = "0059_kpi_facts_restatement"
+
+# ``command.stamp(_PRIOR_HEAD)`` marks that revision current WITHOUT running
+# 0001..0059 — so ``llm_artifacts`` (created in 0035, well before the stamp)
+# never actually gets created by this fixture's upgrade-to-head, even though
+# a REAL `alembic upgrade head` run always creates it. Only wave3b Task 4's
+# prelude-persistence tests below exercise it through this fixture; every
+# other DB-backed test in this file predates that need. Idempotent
+# CREATE-IF-NOT-EXISTS closes the gap without touching the stamp/upgrade
+# shortcut itself (which many tests below rely on staying fast).
+_LLM_ARTIFACTS_DDL = """
+CREATE TABLE IF NOT EXISTS llm_artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker VARCHAR(16),
+    scope VARCHAR(64) NOT NULL DEFAULT 'ticker',
+    purpose VARCHAR(64) NOT NULL,
+    fiscal_period VARCHAR(10),
+    content_md TEXT,
+    content_json TEXT,
+    input_sha256 VARCHAR(64) NOT NULL,
+    output_sha256 VARCHAR(64),
+    model VARCHAR(64),
+    prompt_version VARCHAR(32) NOT NULL DEFAULT 'v1',
+    generated_at DATETIME NOT NULL,
+    expires_at DATETIME,
+    superseded_by_id INTEGER,
+    dirty BOOLEAN NOT NULL DEFAULT 0,
+    dirty_reason VARCHAR(128),
+    source_doc_ids TEXT,
+    parent_artifact_ids TEXT,
+    llm_call_id INTEGER
+)
+"""
 
 
 def _build_db(tmp_path: Path) -> Path:
@@ -59,6 +112,12 @@ def _build_db(tmp_path: Path) -> Path:
     cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
     command.stamp(cfg, _PRIOR_HEAD)
     command.upgrade(cfg, "head")
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(_LLM_ARTIFACTS_DDL)
+        conn.commit()
+    finally:
+        conn.close()
     return db
 
 
@@ -410,6 +469,108 @@ def test_questions_prompt_degrades_without_premortem(
 
 
 # --------------------------------------------------------------------------- #
+# Prelude persistence (wave3b Task 4 — the background job's result channel)
+# --------------------------------------------------------------------------- #
+
+
+def test_persist_and_read_current_prelude_roundtrip(tmp_path: Path) -> None:
+    db = _build_db(tmp_path)
+    prelude = SocraticPrelude(
+        ticker="NU", questions=["Your read?", "Horizon?", "What breaks it?"], context_block="ctx"
+    )
+    artifact_id = persist_prelude(db, prelude)
+    assert artifact_id is not None
+
+    got = read_current_prelude(db, "nu")
+    assert got is not None
+    assert got.ticker == "NU"
+    assert got.questions == prelude.questions
+    assert got.context_block == "ctx"
+
+
+def test_read_current_prelude_none_before_any_run(tmp_path: Path) -> None:
+    db = _build_db(tmp_path)
+    assert read_current_prelude(db, "NU") is None
+
+
+def test_persist_prelude_each_call_lands_a_fresh_row(tmp_path: Path) -> None:
+    """Each generate click is a deliberate new LLM spend — never served
+    stale from an artifact cache keyed only on ticker."""
+    db = _build_db(tmp_path)
+    persist_prelude(db, SocraticPrelude(ticker="NU", questions=["a?", "b?", "c?"], context_block="1"))
+    persist_prelude(
+        db, SocraticPrelude(ticker="NU", questions=["x?", "y?", "z?"], context_block="2")
+    )
+    got = read_current_prelude(db, "NU")
+    assert got is not None and got.questions == ["x?", "y?", "z?"]  # the LATEST run wins
+
+
+def test_run_socratic_questions_script_persists_prelude(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The background job's actual entrypoint
+    (execution/run_socratic_questions.py), exercised in-process (no real
+    subprocess spawn). ``generate_questions`` itself is mocked at the module
+    level it's imported from — the script's OWN job is the persist step, not
+    re-proving generate_questions' grounding (already covered above); this
+    also keeps the test offline (no tracker/network round-trip)."""
+    db = _build_db(tmp_path)
+
+    def fake_generate(repo_root: Path, ticker: str, **_kwargs: object) -> SocraticPrelude:
+        return SocraticPrelude(ticker=ticker.upper(), questions=["a?", "b?", "c?"], context_block="c")
+
+    monkeypatch.setattr(socratic_mod, "generate_questions", fake_generate)
+
+    import run_socratic_questions
+
+    exit_code = run_socratic_questions.main(["NU", "--repo-root", str(tmp_path)])
+    assert exit_code == 0
+
+    prelude = read_current_prelude(db, "NU")
+    assert prelude is not None and len(prelude.questions) == 3
+
+
+def test_run_socratic_questions_script_exit_1_on_transient_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient generation failure (matches parse_questions' ValueError on
+    an unparseable completion, or any other non-hard-stop) must fail the job
+    visibly (exit 1) rather than persist a garbage/empty prelude — the owner
+    retries from the page."""
+
+    def failing(repo_root: Path, ticker: str, **_kwargs: object) -> SocraticPrelude:
+        raise ValueError("expected >= 3 questions, parsed 1")
+
+    monkeypatch.setattr(socratic_mod, "generate_questions", failing)
+
+    import run_socratic_questions
+
+    exit_code = run_socratic_questions.main(["NU", "--repo-root", str(tmp_path)])
+    assert exit_code == 1
+    assert read_current_prelude(tmp_path / "data" / "portfolio.db", "NU") is None
+
+
+def test_run_socratic_questions_script_exit_1_when_persistence_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``persist_prelude`` returning ``None`` (DB unavailable —
+    llm_artifact_store.upsert's own documented degrade) must ALSO fail the
+    job: persistence is this job's deliverable, not a side effect, since the
+    page has no other way to read a background job's result back."""
+
+    def fake_generate(repo_root: Path, ticker: str, **_kwargs: object) -> SocraticPrelude:
+        return SocraticPrelude(ticker=ticker.upper(), questions=["a?", "b?", "c?"], context_block="c")
+
+    monkeypatch.setattr(socratic_mod, "generate_questions", fake_generate)
+    monkeypatch.setattr(socratic_mod, "persist_prelude", lambda *_a, **_k: None)
+
+    import run_socratic_questions
+
+    exit_code = run_socratic_questions.main(["NU", "--repo-root", str(tmp_path)])
+    assert exit_code == 1
+
+
+# --------------------------------------------------------------------------- #
 # Server seams + panel
 # --------------------------------------------------------------------------- #
 
@@ -426,21 +587,54 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FlaskClient:
         return _MEMO_BODY
 
     monkeypatch.setattr(socratic_mod, "call_llm", routed)
-    app = comments_server.create_app(tmp_path)
+    # Task 4 (wave3b): Step 1 now runs through the jobs registry as a real
+    # subprocess (execution/run_socratic_questions.py) — the non-spawning
+    # registry records the job without forking, matching
+    # tests/test_advisor_memos.py's pattern for every other job-backed route.
+    app = comments_server.create_app(tmp_path, registry=_NonSpawningRegistry())
     return app.test_client()
 
 
-def test_socratic_routes_roundtrip(client: FlaskClient, tmp_path: Path) -> None:
-    q = client.post("/api/socratic/questions", json={"ticker": "nu"})
-    assert q.status_code == 200
-    qp = q.get_json()
+def test_socratic_questions_action_starts_job(client: FlaskClient) -> None:
+    """Task 4: the route no longer blocks — it registers a background job
+    and returns immediately, same shape as every other ``/actions/<name>``
+    starter (advisor-memo, position-review, ...)."""
+    resp = client.post("/actions/socratic-questions", json={"ticker": "nu"})
+    assert resp.status_code == 201
+    payload = resp.get_json()
+    assert payload["ticker"] == "NU"
+    assert payload["kind"] == "socratic-questions"
+    assert payload["stream_url"].startswith("/actions/stream/")
+
+
+def test_socratic_questions_result_route_roundtrip(client: FlaskClient, tmp_path: Path) -> None:
+    """The GET-by-ticker result route reads back exactly what the background
+    job would have persisted (simulated here via ``persist_prelude`` directly
+    — the job itself is exercised end to end by
+    ``test_run_socratic_questions_script_persists_prelude`` below), and 404s
+    before anything has been generated."""
+    db_path = tmp_path / "data" / "portfolio.db"
+    assert client.get("/api/socratic/questions/NU").status_code == 404
+
+    persist_prelude(
+        db_path,
+        SocraticPrelude(
+            ticker="NU", questions=["Your read?", "Horizon?", "What breaks it?"], context_block="ctx"
+        ),
+    )
+    resp = client.get("/api/socratic/questions/nu")
+    assert resp.status_code == 200
+    qp = resp.get_json()
     assert qp["ticker"] == "NU" and len(qp["questions"]) == 3
 
+
+def test_socratic_memo_route_roundtrip(client: FlaskClient, tmp_path: Path) -> None:
+    """Step 2 (the memo POST) is unchanged — synchronous, no job involved."""
     m = client.post(
         "/api/socratic/memo",
         json={
             "ticker": "NU",
-            "questions": qp["questions"],
+            "questions": ["Your read?", "Horizon?", "What breaks it?"],
             "answers": ["read", "long", "NPL"],
             "horizon_days": 90,
         },
@@ -454,7 +648,7 @@ def test_socratic_routes_roundtrip(client: FlaskClient, tmp_path: Path) -> None:
 
 
 def test_socratic_routes_validate(client: FlaskClient) -> None:
-    assert client.post("/api/socratic/questions", json={}).status_code == 400
+    assert client.post("/actions/socratic-questions", json={}).status_code == 400
     assert (
         client.post(
             "/api/socratic/memo", json={"ticker": "NU", "questions": "x", "answers": []}
@@ -472,12 +666,18 @@ def test_socratic_routes_validate(client: FlaskClient) -> None:
 
 
 def test_socratic_standalone_page(client: FlaskClient) -> None:
+    """Task 4: the page no longer blocks on load — it reveals the flow with
+    an honest-cost button rather than firing a synchronous fetch()."""
     resp = client.get("/socratic/nu")
     assert resp.status_code == 200
     body = resp.data.decode()
     assert 'data-autostart-ticker="NU"' in body
     assert "Socratic think-through" in body
-    assert "/api/socratic/questions" in body  # the flow JS shipped with the page
+    assert "Generate 3 questions" in body and "~2 min" in body  # the honest cost label
+    assert "/actions/socratic-questions" in body  # starts the background job
+    assert "/api/socratic/questions/" in body  # reads the persisted result back
+    assert 'href="/#portfolio_record"' in body  # the fixed back-link (was the stale #advisor_memos)
+    assert "Portfolio &rarr; Record" in body
 
 
 def test_panel_carries_think_through_entry_and_stance_pill() -> None:

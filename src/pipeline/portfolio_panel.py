@@ -978,9 +978,7 @@ def _alpha_section(pa: PositionAlpha) -> str:
     for r in sorted(pa.rows, key=lambda x: (x.alpha is None, -(x.alpha or 0.0))):
         ticker = r.ticker or "—"
         ticker_cell = (
-            ticker_label(ticker, href="../research/" + escape(ticker) + "/", classes="ticker-link")
-            if r.ticker
-            else "—"
+            ticker_label(ticker, href="../research/" + escape(ticker) + "/") if r.ticker else "—"
         )
         if r.incomplete:
             ticker_cell += (
@@ -1492,7 +1490,7 @@ def _next_dollar_distribution(model: NextDollarModel) -> str:
         items.append(
             '<div class="pf-nd-item" tabindex="0">'
             '<div class="pf-nd-row">'
-            f'<a class="pf-nd-ticker ticker-link" href="../research/{ticker}/">{ticker}</a>'
+            f'{ticker_label(r.ticker, href=f"../research/{ticker}/", classes="pf-nd-ticker")}'
             f'<span class="pf-nd-bar"><span style="width:{width:.1f}%"></span></span>'
             f'<span class="pf-nd-alloc">{r.allocation_pct:.1f}%</span>'
             f'<span class="pf-nd-now muted">{now_text}</span>'
@@ -3532,9 +3530,7 @@ def _positions_table(live: LivePortfolio) -> str:
         pct = f"{p.percent_of_portfolio:.1f}%" if p.percent_of_portfolio is not None else "—"
         ticker = p.ticker or "—"
         ticker_cell = (
-            ticker_label(ticker, href="../research/" + escape(ticker) + "/", classes="ticker-link")
-            if p.ticker
-            else "—"
+            ticker_label(ticker, href="../research/" + escape(ticker) + "/") if p.ticker else "—"
         )
         data = (
             lg.data_text(f"{p.ticker or ''} {p.name or ''} {treat_str}")

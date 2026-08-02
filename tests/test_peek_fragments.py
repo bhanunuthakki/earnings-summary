@@ -1474,3 +1474,43 @@ def test_earnings_readout_peek_degrades_without_quarter_data(repo: Path, db_path
     assert "no reported quarter on record yet" in html
     assert "Vs street" not in html
     assert "ask for the full readout" in html
+
+
+# ----------------------------------------------------------------------------
+# /api/peek/weekly-packet (wave3b Task 3 — the Sunday-packet band's doorway)
+# ----------------------------------------------------------------------------
+
+
+def test_weekly_packet_peek_route_no_run_this_week(client: FlaskClient) -> None:
+    """No web reply surface exists for the packet — the route always 200s
+    with a read-only note, never a 404 (there's nothing to look up BY id)."""
+    resp = client.get("/api/peek/weekly-packet")
+    assert resp.status_code == 200
+    assert "No Sunday packet run yet" in resp.data.decode()
+
+
+def test_weekly_packet_peek_route_serves_current_week(client: FlaskClient, db_path: Path) -> None:
+    now = datetime.now(UTC).replace(tzinfo=None)
+    iso_year, iso_week, _ = now.isocalendar()
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.execute(
+            "INSERT INTO weekly_packet_runs (iso_year, iso_week, status, total_items, "
+            "created_at, updated_at) VALUES (?, ?, 'open', 1, ?, ?)",
+            (iso_year, iso_week, now.isoformat(), now.isoformat()),
+        )
+        run_id = cur.lastrowid
+        conn.execute(
+            "INSERT INTO weekly_packet_items (run_id, item_kind, ref_id, ticker, title, "
+            "order_index, created_at) VALUES (?, 'proposal', 1, 'NU', 'steer proposal', 0, ?)",
+            (run_id, now.isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    resp = client.get("/api/peek/weekly-packet")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "steer proposal" in body
+    assert "given on Telegram" in body

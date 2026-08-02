@@ -32,6 +32,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from advisor.context import AdvisorContext, build_advisor_context, calibration_block
 from advisor.memos import MemoResult, persist_memo
@@ -224,6 +225,67 @@ def parse_stance(body_md: str) -> str | None:
         return None
     stance = matches[-1].lower()
     return stance if stance in STANCES else None
+
+
+PRELUDE_PURPOSE = "advisor_socratic_prelude"
+
+
+def persist_prelude(db_path: Path, prelude: SocraticPrelude) -> int | None:
+    """Persist Step 1's output as an ``llm_artifacts`` row (wave3b, Task 4 —
+    Socratic as an honest background job). The synchronous ``POST
+    /api/socratic/questions`` this used to ride straight back to the browser
+    from is gone; the flow now runs ``execution/run_socratic_questions.py``
+    as a backgrounded job (the ~68s premortem + ~14s questions call the
+    owner used to stall on), and the page reads the result back via
+    :func:`read_current_prelude` once the job's SSE stream reports done. The
+    flow stays externally stateless (module docstring) — the artifact IS the
+    state; there is still no session table. ``cache_inputs`` includes the
+    generation timestamp so every run persists a fresh row (each click is a
+    deliberate new LLM spend, never served stale from cache).
+
+    Returns ``None`` on DB unavailability (``llm_artifact_store.upsert``'s
+    own documented degrade) — unlike most artifact writers, THIS caller
+    (:mod:`execution.run_socratic_questions`) must treat that as a hard
+    failure: persistence IS the job's deliverable, not a side effect, since
+    the page has no other way to see a background job's result."""
+    import llm_artifact_store
+    from user_state._db import now_iso
+
+    req = llm_artifact_store.UpsertRequest(
+        ticker=prelude.ticker,
+        scope="ticker",
+        purpose=PRELUDE_PURPOSE,
+        content_json={"questions": prelude.questions, "context_block": prelude.context_block},
+        content_md="\n".join(f"{i + 1}. {q}" for i, q in enumerate(prelude.questions)),
+        cache_inputs=[prelude.ticker, now_iso()],
+    )
+    artifact_id, _cache_hit = llm_artifact_store.upsert(req, db_path=db_path)
+    return artifact_id
+
+
+def read_current_prelude(db_path: Path, ticker: str) -> SocraticPrelude | None:
+    """Read back the background job's most recent persisted prelude for this
+    ticker. ``None`` when no job has completed yet (a fresh ticker, or the
+    prior run failed before persisting) — the page's honest-cost button
+    stays the only way forward, never a silent empty form."""
+    import llm_artifact_store
+
+    t = ticker.upper()
+    artifact = llm_artifact_store.read_current(
+        ticker=t, purpose=PRELUDE_PURPOSE, scope="ticker", db_path=db_path
+    )
+    if artifact is None or not isinstance(artifact.content_json, dict):
+        return None
+    content = cast("dict[str, object]", artifact.content_json)
+    questions = content.get("questions")
+    context_block = content.get("context_block")
+    if not isinstance(questions, list) or not isinstance(context_block, str):
+        return None
+    return SocraticPrelude(
+        ticker=t,
+        questions=[str(q) for q in cast("list[object]", questions)],
+        context_block=context_block,
+    )
 
 
 def generate_questions(

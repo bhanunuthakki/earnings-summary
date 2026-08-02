@@ -1072,21 +1072,22 @@ def test_rail_upcoming_disclosure_glyphs_are_css_escapes_not_octal_mojibake() ->
 
 
 def test_ticker_hover_and_click_routing_cover_ticker_label() -> None:
-    """.ticker-link collapse (design_language §5): ui.controls.ticker_label()
-    is now the ONLY ticker renderer, but its <a class="k-tick-sym"> class
-    differs from the legacy `.ticker-link` markup portfolio_panel.py /
-    allocation_decisions_panel.py / advisor_memos_panel.py still emit during
-    the transition. The delegated hover-mini-card + click-to-holding-tab
-    listeners key off a literal selector string — a future edit that touches
-    HOVER_SEL or the click delegator without updating BOTH would silently stop
-    routing every ticker_label() link the migrated surfaces (analytical
-    dashboard, research cockpit) now render. Pin both selector strings so that
-    class of drift fails CI instead of shipping quiet."""
+    """.ticker-link collapse complete (design_language §5): every emitter in
+    ``src/`` (portfolio_panel.py / allocation_decisions_panel.py /
+    advisor_memos_panel.py were the last three raw-anchor holdouts) now
+    renders through ui.controls.ticker_label(), whose anchor carries
+    ``a.k-tick-sym`` instead of the legacy ``.ticker-link`` class. The
+    delegated hover-mini-card + click-to-holding-tab listeners key off a
+    literal selector string — a future edit that touches HOVER_SEL or the
+    click delegator without updating BOTH would silently stop routing every
+    ticker_label() link the shell renders. Pin the k-tick-sym coverage so
+    that class of drift fails CI instead of shipping quiet. The legacy
+    ``a.ticker-link`` alternative stays in both selectors (harmless — no
+    emitter produces it anymore, but a future non-ticker_label() surface
+    reusing the literal class would still route correctly)."""
     assert re.search(r"var HOVER_SEL = '[^']*\ba\.k-tick-sym\b[^']*';", SHELL_JS), (
         "HOVER_SEL must cover a.k-tick-sym (ticker_label()'s anchor)"
     )
-    # The legacy selector stays too — a sibling PR still emits .ticker-link
-    # elsewhere until it migrates.
     assert "a.ticker-link" in SHELL_JS
     click_routing = re.search(r"ev\.target\.closest\('([^']*\ba\.k-tick-sym\b[^']*)'\)", SHELL_JS)
     assert click_routing, "the ticker click delegator must also match a.k-tick-sym"

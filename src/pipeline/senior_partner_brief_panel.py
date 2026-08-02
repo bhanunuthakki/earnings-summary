@@ -21,6 +21,7 @@ defines its own duplicate action wiring.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -30,6 +31,18 @@ import llm_artifact_store
 from ui.time import stamp_html
 
 PURPOSE = "senior_partner_brief"
+
+# Task 2 (wave3b — navigation_ia.md D1 band consolidation): the doorway chip
+# + timestamp shape both this module's :func:`render_brief_today_card` and
+# ``allocation_recommendation_panel.render_allocation_today_card`` emit —
+# `<a class="k-chip k-chip-btn" href="...">...</a><span class="muted">...</span>`.
+# Matching on this shape (rather than importing a private helper from the
+# allocation module, which this PR does not own — a sibling PR does) lets
+# :func:`render_today_doorways_card` fold BOTH today-cards' chips into one
+# shared well while calling each module's PUBLIC, unmodified render function.
+_CHIP_FRAGMENT_RE = re.compile(
+    r'<a class="k-chip k-chip-btn".*?</a>\s*<span class="muted">.*?</span>', re.DOTALL
+)
 
 _STYLE = """<style>
 .cc-spb-today { display: flex; align-items: baseline; gap: var(--sp-2); flex-wrap: wrap;
@@ -96,4 +109,52 @@ def render_brief_today_card(db_path: Path | str | None, *, now: datetime | None 
     )
 
 
-__all__ = ["render_brief_today_card"]
+def _extract_chip_fragment(card_html: str) -> str | None:
+    """Pull just the doorway chip + timestamp out of a self-contained Today
+    card (STYLE + one ``.k-well`` div wrapping exactly one chip+timestamp
+    pair), so two such cards can be recomposed into one shared well. Returns
+    ``None`` for ``""`` (nothing to show) OR a card that isn't shaped like a
+    plain chip — a ``k-well-bad`` failure banner, say — which stays its own
+    full, visible card rather than being squeezed into a shared well (a DB
+    failure deserves to stay legible, not shrunk into chip text)."""
+    if not card_html:
+        return None
+    m = _CHIP_FRAGMENT_RE.search(card_html)
+    return m.group(0) if m else None
+
+
+def render_today_doorways_card(db_path: Path | str | None, *, now: datetime | None = None) -> str:
+    """Task 2 (navigation_ia.md D1): fold the allocation-today card into the
+    Senior Partner Brief Today card — ONE ``.k-well`` with up to two doorway
+    chips (brief first, allocation second) instead of two separate wells.
+    Both chips' hrefs are preserved EXACTLY — this calls each module's own
+    unmodified render function and only re-wraps the already-rendered chip
+    fragment; it never rebuilds the anchor markup itself. A failure/stale
+    state on either side (or the allocation module simply not existing on an
+    old checkout) stays a full, separately visible card rather than being
+    squeezed into the shared well. Never raises: an import or render failure
+    on the allocation side degrades to brief-only, matching this band's
+    sibling try/except discipline in ``execution/comments_server.py``."""
+    brief_html = render_brief_today_card(db_path, now=now)
+    try:
+        from pipeline.allocation_recommendation_panel import render_allocation_today_card
+
+        alloc_html = render_allocation_today_card(db_path)
+    except Exception:
+        alloc_html = ""
+
+    brief_chip = _extract_chip_fragment(brief_html)
+    alloc_chip = _extract_chip_fragment(alloc_html)
+
+    parts: list[str] = []
+    chips = [c for c in (brief_chip, alloc_chip) if c is not None]
+    if chips:
+        parts.append(f'{_STYLE}<div class="cc-spb-today k-well">{"".join(chips)}</div>')
+    if brief_chip is None and brief_html:
+        parts.append(brief_html)
+    if alloc_chip is None and alloc_html:
+        parts.append(alloc_html)
+    return "".join(parts)
+
+
+__all__ = ["render_brief_today_card", "render_today_doorways_card"]

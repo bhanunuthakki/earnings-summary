@@ -1339,38 +1339,29 @@ def create_app(
         # of the retired /digest page.
         upcoming_html = render_upcoming_strip(db_path, datetime.now(UTC).date())
         # The ritual-debt band above the cockpit — the owner's open queues
-        # (Reconcile / Tenets / proposals / decision stubs / coach digest)
-        # lead the first screen; never raises on a thin DB.
+        # (Reconcile / Tenets / proposals / decision stubs / coach digest /
+        # coach sent-today / the Sunday packet state) lead the first screen;
+        # never raises on a thin DB. Home-band consolidation (wave3b,
+        # navigation_ia.md D1 — ~2-viewport budget): the coach strip's one
+        # non-redundant count (today's Telegram sends) and the packet-state
+        # line now render INSIDE this band instead of as separate bands.
         from pipeline.open_loops import render_open_loops_band
 
         open_loops_html = render_open_loops_band(db_path)
-        # P2.2 (PRD §9.1): the Senior Partner Brief LEADS this composition —
-        # the brief owns delivery for the four governor-routed moment classes
-        # (see research.governor.BRIEF_ROUTED_CLASSES), so its doorway sits
-        # above the ritual-debt band rather than beside it. Isolated like its
-        # siblings; renders "" (no card) when nothing has been composed yet.
+        # P2.2 (PRD §9.1): the Senior Partner Brief + the Incremental Dollar
+        # Recommendation Today doorways LEAD this composition — the brief
+        # owns delivery for the four governor-routed moment classes (see
+        # research.governor.BRIEF_ROUTED_CLASSES), so its doorway sits above
+        # the ritual-debt band rather than beside it. Task 2 (wave3b): both
+        # cards fold into ONE shared well via
+        # senior_partner_brief_panel.render_today_doorways_card (each card's
+        # own render function stays untouched; only the wrapping merges).
+        # Isolated like its siblings; renders "" when neither card has
+        # anything to show yet.
         try:
-            from pipeline.senior_partner_brief_panel import render_brief_today_card
+            from pipeline.senior_partner_brief_panel import render_today_doorways_card
 
-            open_loops_html = render_brief_today_card(db_path) + open_loops_html
-        except Exception:
-            pass
-        # The Incremental Dollar Recommendation's compact Today doorway
-        # (P0.4b, PRD §7.4 surface-parity exit gate): quiet when there is no
-        # current recommendation, isolated so a read failure can never break
-        # Home (matches open_loops' own per-queue try/except discipline).
-        try:
-            from pipeline.allocation_recommendation_panel import render_allocation_today_card
-
-            open_loops_html += render_allocation_today_card(db_path)
-        except Exception:
-            pass
-        # B9: the Coach strip — brief + Telegram show the SAME 1-2 governed
-        # items (sent today + digest queue). Isolated like its siblings.
-        try:
-            from pipeline.coach_strip import render_coach_strip
-
-            open_loops_html += render_coach_strip(db_path)
+            open_loops_html = render_today_doorways_card(db_path) + open_loops_html
         except Exception:
             pass
         overview = render_overview_panel(
@@ -4457,29 +4448,60 @@ def create_app(
         )
 
     # ----- SOCRATIC THINK-THROUGH (master build P2.4) -----
-    # The only path to a per-holding stance (locked advisor posture). Both
-    # calls run SYNCHRONOUSLY in the request — the owner is sitting in front
-    # of the form, localhost has no proxy timeout, and the UI shows progress;
-    # the jobs/SSE machinery stays for fire-and-forget runs.
+    # The only path to a per-holding stance (locked advisor posture). Step 1
+    # (wave3b Task 4) is now an honest BACKGROUND job — build_advisor_context
+    # + the Opus premortem + the questions call routinely runs ~2 minutes,
+    # and a synchronous fetch() stalling the browser that long is exactly
+    # what the owner ratified away from. Step 2 (the memo) stays synchronous
+    # on its own POST below: the owner is present and typing at that point.
 
-    @app.route("/api/socratic/questions", methods=["POST", "OPTIONS"])
-    def socratic_questions():
-        """Step 1: 3-5 pointed questions for the owner, grounded in the
-        holding's numbers. Body: {"ticker": "NU"}. Returns the questions +
-        the context block they cite. 502 on an LLM/parse failure (the owner
-        retries from the form)."""
+    @app.route("/actions/socratic-questions", methods=["POST", "OPTIONS"])
+    def start_socratic_questions():
+        """Step 1 as a streamed single-flight job: {"ticker": "NU"}. Runs
+        ``execution/run_socratic_questions.py``, which persists the result
+        (``advisor.socratic.persist_prelude``); the /socratic/<T> page (and
+        the Memos panel's think-through flow) stream this job's log via the
+        shared ``/actions/stream/<job_id>`` SSE channel, then GET
+        ``/api/socratic/questions/<ticker>`` once it reports done."""
         if request.method == "OPTIONS":
             return ("", 204)
-        from advisor.socratic import generate_questions
-
         body = cast("dict[str, object]", request.get_json(silent=True) or {})
         ticker = str(body.get("ticker") or "").strip().upper()
         if not ticker:
             return ({"error": "ticker required"}, 400)
+        argv = [
+            sys.executable,
+            str(repo_root / "execution" / "run_socratic_questions.py"),
+            ticker,
+            "--repo-root",
+            str(repo_root),
+        ]
         try:
-            prelude = generate_questions(repo_root, ticker)
-        except Exception as exc:  # surface to the form; owner-driven retry
-            return _internal_failure("question generation failed", exc)
+            job = job_registry.start(ticker=ticker, kind="socratic-questions", argv=argv)
+        except RegistryConflict as e:
+            return ({"error": str(e)}, 409)
+        return (
+            {
+                "job_id": job.job_id,
+                "ticker": job.ticker,
+                "kind": job.kind,
+                "stream_url": f"/actions/stream/{job.job_id}",
+                "started_at": job.started_at.isoformat(),
+            },
+            201,
+        )
+
+    @app.route("/api/socratic/questions/<ticker>", methods=["GET"])
+    def socratic_questions_result(ticker: str):
+        """The persisted Step-1 prelude the background job wrote — read back
+        once its SSE stream reports done. 404 until a job has completed for
+        this ticker (the page's honest-cost button is the only way forward;
+        never a silently empty form)."""
+        from advisor.socratic import read_current_prelude
+
+        prelude = read_current_prelude(db_path, ticker.upper())
+        if prelude is None:
+            return ({"error": "no generated questions yet for this ticker"}, 404)
         return {
             "ticker": prelude.ticker,
             "questions": prelude.questions,

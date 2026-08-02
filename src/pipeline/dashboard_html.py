@@ -192,9 +192,15 @@ _MAINTENANCE_BLOCK = """
     <span id="maint-status" class="actions-status" role="status" aria-live="polite"></span>
   </div>
   <pre id="maint-output" class="actions-output" hidden></pre>
+  <p class="actions-help maint-export">
+    <a class="k-btn k-btn-quiet k-btn-sm" href="/export/cio">Export CIO workbook (.xlsx)</a>
+    &mdash; decisions + triggers + thesis ledger, one file. Previously reachable only from the
+    command palette.
+  </p>
 </section>
 <style>
 .maint-sep { color: var(--muted); margin: 0 4px; }
+.maint-export { margin: 12px 0 0; }
 </style>
 <script>
 (function () {

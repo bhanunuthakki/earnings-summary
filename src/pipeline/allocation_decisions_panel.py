@@ -1339,7 +1339,7 @@ def _audit_row(r: SizingAuditRow) -> str:
     main = (
         "<tr>"
         f'<td class="ticker"{name_attr}>'
-        f"{ticker_label(r.ticker, href='/ticker/' + escape(r.ticker), classes='ticker-link')}</td>"
+        f"{ticker_label(r.ticker, href='/ticker/' + escape(r.ticker))}</td>"
         f"<td>{verdict}</td>"
         f'<td class="num">{conviction}</td>'
         f'<td class="num">{target}</td>'
