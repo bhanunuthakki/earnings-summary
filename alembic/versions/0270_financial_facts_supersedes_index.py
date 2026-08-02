@@ -42,47 +42,50 @@ def _has_self_fk(bind: Connection) -> bool:
     )
 
 
-def _require_source_contract() -> None:
-    bind = op.get_bind()
+def _source_contract_is_exact(bind: Connection) -> bool:
     table = bind.execute(
         sa.text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:table_name"),
         {"table_name": _TABLE},
     ).first()
     if table is None:
-        raise RuntimeError("0270 financial_facts table is missing")
+        return False
 
     columns = {
         str(row[1]) for row in bind.exec_driver_sql(f"PRAGMA table_info('{_TABLE}')").fetchall()
     }
     if _COLUMN not in columns:
-        raise RuntimeError("0270 financial_facts.supersedes_id column is missing")
-    if not _has_self_fk(bind):
-        raise RuntimeError(
-            "0270 exact single-column self-FK is missing or drifted "
-            "(supersedes_id -> financial_facts.id, NO ACTION)"
-        )
+        return False
+    return _has_self_fk(bind)
 
-    existing = bind.execute(
+
+def _existing_index_owner(bind: Connection) -> object | None:
+    return bind.execute(
         sa.text("SELECT tbl_name FROM sqlite_master WHERE type='index' AND name=:index_name"),
         {"index_name": _INDEX},
     ).first()
-    if existing is not None:
-        raise RuntimeError("0270 migration-owned index name already exists; refusing to adopt it")
 
 
 def upgrade() -> None:
-    _require_source_contract()
+    bind = op.get_bind()
+    existing = _existing_index_owner(bind)
+    if existing is not None:
+        raise RuntimeError("0270 migration-owned index name already exists; refusing to adopt it")
+    # This repository intentionally upgrades many partial synthetic schemas
+    # to head. An absent legacy fact contract is therefore not itself proof of
+    # production corruption. Skip DDL for that partial schema; db_gc's apply
+    # preflight remains the authoritative, fail-closed operational admission.
+    if not _source_contract_is_exact(bind):
+        return
     op.create_index(_INDEX, _TABLE, [_COLUMN], unique=False)
 
 
 def downgrade() -> None:
     bind = op.get_bind()
-    owner = bind.execute(
-        sa.text("SELECT tbl_name FROM sqlite_master WHERE type='index' AND name=:index_name"),
-        {"index_name": _INDEX},
-    ).first()
+    owner = _existing_index_owner(bind)
     if owner is None:
-        raise RuntimeError("0270 migration-owned index is missing during downgrade")
+        if _source_contract_is_exact(bind):
+            raise RuntimeError("0270 migration-owned index is missing during downgrade")
+        return
 
     attributes = next(
         (

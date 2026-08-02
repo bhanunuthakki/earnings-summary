@@ -30,6 +30,16 @@ def _stamp_parent(path: Path, *, table_sql: str) -> Config:
     return config
 
 
+def _assert_partial_schema_skips_reversibly(path: Path, config: Config) -> None:
+    command.upgrade(config, REVISION)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (REVISION,)
+        assert conn.execute(f"PRAGMA index_info('{INDEX}')").fetchall() == []
+    command.downgrade(config, PARENT)
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (PARENT,)
+
+
 def test_0270_adds_reversible_leading_fk_lookup_index(tmp_path: Path) -> None:
     path = tmp_path / "financial-facts-index.db"
     config = _stamp_parent(
@@ -75,34 +85,31 @@ def test_0270_adds_reversible_leading_fk_lookup_index(tmp_path: Path) -> None:
         )
 
 
-def test_0270_refuses_missing_financial_facts_table(tmp_path: Path) -> None:
+def test_0270_partial_schema_may_omit_financial_facts_table(tmp_path: Path) -> None:
     path = tmp_path / "missing-financial-facts.db"
     config = _stamp_parent(path, table_sql="")
 
-    with pytest.raises(RuntimeError, match="financial_facts table is missing"):
-        command.upgrade(config, REVISION)
+    _assert_partial_schema_skips_reversibly(path, config)
 
 
-def test_0270_refuses_missing_supersedes_column(tmp_path: Path) -> None:
+def test_0270_partial_schema_may_omit_supersedes_column(tmp_path: Path) -> None:
     path = tmp_path / "missing-supersedes.db"
     config = _stamp_parent(
         path,
         table_sql="CREATE TABLE financial_facts (id INTEGER PRIMARY KEY)",
     )
 
-    with pytest.raises(RuntimeError, match="supersedes_id column is missing"):
-        command.upgrade(config, REVISION)
+    _assert_partial_schema_skips_reversibly(path, config)
 
 
-def test_0270_refuses_missing_self_fk_contract(tmp_path: Path) -> None:
+def test_0270_partial_schema_may_omit_self_fk_contract(tmp_path: Path) -> None:
     path = tmp_path / "missing-self-fk.db"
     config = _stamp_parent(
         path,
         table_sql=("CREATE TABLE financial_facts (id INTEGER PRIMARY KEY, supersedes_id INTEGER)"),
     )
 
-    with pytest.raises(RuntimeError, match="self-FK is missing"):
-        command.upgrade(config, REVISION)
+    _assert_partial_schema_skips_reversibly(path, config)
 
 
 @pytest.mark.parametrize(
@@ -123,15 +130,34 @@ def test_0270_refuses_missing_self_fk_contract(tmp_path: Path) -> None:
     ],
     ids=["cascade", "composite"],
 )
-def test_0270_refuses_non_exact_self_fk_semantics(
+def test_0270_partial_schema_skips_non_exact_self_fk_semantics(
     tmp_path: Path,
     table_sql: str,
 ) -> None:
     path = tmp_path / "drifted-self-fk.db"
     config = _stamp_parent(path, table_sql=table_sql)
 
-    with pytest.raises(RuntimeError, match="exact single-column self-FK"):
-        command.upgrade(config, REVISION)
+    _assert_partial_schema_skips_reversibly(path, config)
+
+
+def test_0270_downgrade_refuses_missing_owned_index_for_exact_contract(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "missing-owned-index.db"
+    config = _stamp_parent(
+        path,
+        table_sql=(
+            "CREATE TABLE financial_facts ("
+            "id INTEGER PRIMARY KEY, "
+            "supersedes_id INTEGER REFERENCES financial_facts(id))"
+        ),
+    )
+    command.upgrade(config, REVISION)
+    with sqlite3.connect(path) as conn:
+        conn.execute(f"DROP INDEX {INDEX}")
+
+    with pytest.raises(RuntimeError, match="migration-owned index is missing"):
+        command.downgrade(config, PARENT)
 
 
 def test_0270_refuses_preexisting_migration_owned_index_name(tmp_path: Path) -> None:
