@@ -28,6 +28,7 @@ from pathlib import Path
 
 from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
 from pipeline.cc_overlay import CC_OVERLAY_JS
+from pipeline.you_said import render_you_said_strip_for_path
 from report.models import ReportFlavor, ReportSpec
 from report.renderers.charts_v2 import CSS as CHARTS_V2_CSS
 from report.renderers.workspace_chat import CSS as CHAT_CSS
@@ -539,6 +540,11 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
     if (pos is not None and pos.held) or (standing is not None and standing.rows):
         db_path = Path(spec.repo_root) / "data" / "portfolio.db"
         graded_sell_line = load_graded_sell_base_rate(spec.ticker, db_path)
+        # "You said" strip (owner-ratified design review, 2026-08-02):
+        # pre-computed here (not inside _position_tab) so the section stays a
+        # pure renderer over already-fetched data, matching graded_sell_line's
+        # own convention.
+        you_said_html = render_you_said_strip_for_path(db_path, spec.ticker)
         tabs.append(
             (
                 "position",
@@ -551,6 +557,7 @@ def _tab_defs(spec: ReportSpec, p3: WorkspaceP3Panels) -> list[TabDef]:
                     position_review_count=p3.position_review_count,
                     graded_sell_line=graded_sell_line,
                     standing_rules=standing,
+                    you_said_html=you_said_html,
                 ),
             )
         )

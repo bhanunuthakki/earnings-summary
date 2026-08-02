@@ -69,6 +69,7 @@ from pipeline.source_viewers import (
     render_transcript_page,
 )
 from pipeline.source_viewers import _DocRow as _SourceDocRow  # pyright: ignore[reportPrivateUsage]
+from pipeline.you_said import render_you_said_strip
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_reltime
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import pill_tone_class, thesis_status_tone, ticker_label
@@ -323,6 +324,10 @@ def render_ticker_peek(
         badge = f'<span class="k-pill{pill_tone}">{escape(verdict)}</span>'
     head = f'<div class="cc-mini-head"><span class="cc-mini-ticker">{escape(t)}</span>{badge}</div>'
     name_html = f'<div class="cc-mini-name">{escape(name)}</div>' if name else ""
+    # "You said" strip (owner-ratified design review, 2026-08-02): the
+    # owner's own last decision on this ticker, ABOVE the mini-card facts —
+    # the most personalized read the card can offer, before price/DCF/ER.
+    you_said_html = f'<div class="cc-mini-yousaid">{render_you_said_strip(conn, t)}</div>'
 
     rows: list[tuple[str, str]] = []
     if price is not None:
@@ -365,7 +370,7 @@ def render_ticker_peek(
         for label, value in rows
     )
     return (
-        f'<div class="cc-mini">{head}{name_html}{rows_html}'
+        f'<div class="cc-mini">{head}{name_html}{you_said_html}{rows_html}'
         f'<div class="cc-mini-open"><a href="/#holding={escape(t)}">open holding →</a></div>'
         "</div>"
     )

@@ -37,6 +37,7 @@ def _position_tab(
     position_review_count: int = 0,
     graded_sell_line: str | None = None,
     standing_rules: StandingRulesPanel | None = None,
+    you_said_html: str | None = None,
 ) -> None:
     body.write('<div class="tab-body">')
     held = pp is not None and pp.held
@@ -62,6 +63,13 @@ def _position_tab(
         )
         # (Tracker snapshot date rides in the Accounts panel's as-of slot — P4.1.)
         body.write("</div></div>")
+
+        # "You said" strip (owner-ratified design review, 2026-08-02): the
+        # owner's own last decision on this name, right below the position
+        # header — pre-computed by the caller (pipeline.you_said), a pure
+        # string here like graded_sell_line.
+        if you_said_html:
+            body.write(f'<div class="position-yousaid">{you_said_html}</div>')
 
         _position_coaching(body, ticker, position_review_count, graded_sell_line)
 
