@@ -46,6 +46,17 @@ def test_actions_panel_includes_maintenance_controls():
     assert "/actions/maintenance" in html
 
 
+def test_actions_panel_includes_cio_export_link():
+    """Task 5 (wave3b): the CIO workbook export used to be reachable only
+    from the command palette (goUrl('/export/cio')) — a plain kit link in
+    the Maintenance block gives it a visible doorway. Not a `.maint-btn`
+    (that class is wired to the maintenance-job click delegator, which would
+    misfire a bogus job start for a plain download link)."""
+    html = render_actions_panel()
+    assert 'href="/export/cio"' in html
+    assert 'class="k-btn k-btn-quiet k-btn-sm"' in html
+
+
 def test_actions_panel_is_self_contained():
     """Both blocks carry their own <style> + <script> so the fragment works
     when lazily injected by the shell (which re-executes script tags)."""

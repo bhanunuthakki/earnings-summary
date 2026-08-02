@@ -122,7 +122,13 @@ def test_extracted_routes_preserve_endpoint_contract(client):
         for rule in client.application.url_map.iter_rules()
         if rule.endpoint != "static"
     }
-    assert len(rules) == 150  # +1: peek_news_events (2026-07-31 pull-only news lane)
+    # +1: peek_news_events (2026-07-31 pull-only news lane)
+    # +2 net (wave3b, 2026-08-02): socratic_questions (POST /api/socratic/questions)
+    # removed, replaced by start_socratic_questions (POST /actions/socratic-questions)
+    # + socratic_questions_result (GET /api/socratic/questions/<ticker>) — Step 1 became
+    # a background job; +1 peek_weekly_packet (GET /api/peek/weekly-packet, the Sunday-
+    # packet band's read-only doorway).
+    assert len(rules) == 152
     assert {
         endpoint: rules[endpoint]
         for endpoint in (

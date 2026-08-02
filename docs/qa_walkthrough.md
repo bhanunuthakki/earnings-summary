@@ -829,11 +829,12 @@ Budget gating is **DB, not env**: `llm_budgets`/`llm_budget_alerts` (migration 0
 | Affordance | Trigger | Expected result | Edge | Pri |
 |---|---|---|---|---|
 | Generate next-dollar memo / Run swap checks | click (data-kind) | All buttons disable; POST `/actions/advisor-memo` `{kind}` → 201 job; SSE log lines into `#am-log`; on exit 0 → refetch fragment (new memo appears) | 409 concurrent → "failed: …"; nonzero exit → no refetch, buttons re-enable; invalid kind 400 | P0 |
-| "Think through…" | click with select value | Unhides Socratic panel, POST `/api/socratic/questions` `{ticker}` — status "Generating pointed questions for T… (15-45s)" → renders 3–5 question textareas + horizon select (30/90 default/180/365) + "Write the decision memo" | fail → "Failed to generate questions: … — pick the holding and retry." | P0 |
+| "Think through…" | click with select value | Unhides Socratic panel with a "Generate 3 questions — runs ~2 min" button (honest-cost, wave3b Task 4 — no longer fires a blocking fetch) | — | P0 |
+| "Generate 3 questions — runs ~2 min" | click | POST `/actions/socratic-questions` `{ticker}` → 201 job; SSE log lines into the flow's own `<pre>`; on exit 0 → `GET /api/socratic/questions/<ticker>` → renders 3–5 question textareas + horizon select (30/90 default/180/365) + "Write the decision memo" | 409 concurrent → log line; nonzero exit → log line, button re-enables; result fetch fails → log line, button re-enables | P0 |
 | "Write the decision memo" | click | Validates ≥1 non-empty answer else "Answer at least one question — the memo is written from YOUR read."; POST `/api/socratic/memo` → "Saved as memo #N — stance: … scoring pending" + rendered body | fail → button re-enables, "Memo failed: … — your answers are still in the form; retry." | P0 |
 | Memo card summary | click | `<details>` expand/collapse rendered markdown body (12k cap) | ▸/▾ marker | P1 |
 | Screen filter/sort; ticker links `/ticker/<T>` | type/click | living-grid behavior | — | P2 |
-| `/socratic/<T>` page | URL | Full dark page, flow auto-starts for T; links back to `/#advisor_memos` | — | P1 |
+| `/socratic/<T>` page | URL | Full dark page, flow reveals the honest-cost Generate button pre-selected for T; links back to `/#portfolio_record` | — | P1 |
 
 ### States to verify
 - Pre-0077 DB: screen + run bar still render, memo record empty — no 500.

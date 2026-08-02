@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from capture import ingest  # noqa: E402
 from capture.matcher import build_roster_index  # noqa: E402
 from pipeline.command_center_shell import render_overview_panel  # noqa: E402
-from pipeline.open_loops import render_open_loops_band  # noqa: E402
+from pipeline.open_loops import render_open_loops_band, render_weekly_packet_peek  # noqa: E402
 
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 
@@ -250,6 +251,175 @@ def test_routed_to_brief_line(db_path: Path) -> None:
     html = render_open_loops_band(db_path)
     assert "Routed to weekly brief" in html
     assert "Coach digest" not in html
+
+
+# --------------------------------------------------------------------------- #
+# Wave3b Task 1: coach_strip folded in — the ONE count (today's Telegram
+# sends) not already covered by the digest/routed-to-brief lines above.
+# --------------------------------------------------------------------------- #
+
+_PINNED_NOW = datetime(2026, 7, 10, 12, 0, 0)  # mid-day, far from UTC midnight
+_COACH_PING_KEY_SEQ = iter(range(10_000))
+
+
+def _insert_coach_ping(db_path: Path, *, status: str, created_at: datetime) -> None:
+    # coach_pings has UNIQUE(class_, key) — a fresh key per call, else a
+    # second insert in the same test collides (real pings key on their own
+    # trigger signature; the exact value is irrelevant here).
+    key = f"k:{next(_COACH_PING_KEY_SEQ)}"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO coach_pings (class_, key, ticker, body, status, source_ref, "
+            "created_at, updated_at) VALUES ('falsifier_breach', ?, 'NU', 'b', ?, NULL, ?, ?)",
+            (key, status, created_at.isoformat(), created_at.isoformat()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_coach_sent_today_line(db_path: Path) -> None:
+    _insert_coach_ping(db_path, status="sent", created_at=_PINNED_NOW)
+    html = render_open_loops_band(db_path, now=_PINNED_NOW)
+    assert "Coach sent today" in html
+
+
+def test_coach_sent_today_line_excludes_earlier_days(db_path: Path) -> None:
+    _insert_coach_ping(db_path, status="sent", created_at=_PINNED_NOW - timedelta(days=1))
+    html = render_open_loops_band(db_path, now=_PINNED_NOW)
+    assert "Coach sent today" not in html
+
+
+def test_coach_sent_today_line_ignores_digest_and_dismissed(db_path: Path) -> None:
+    """'sent' is disjoint from 'digest'/'routed_to_brief'/'dismissed' — this
+    line must never double-count what the sibling lines already cover."""
+    _insert_coach_ping(db_path, status="digest", created_at=_PINNED_NOW)
+    _insert_coach_ping(db_path, status="dismissed", created_at=_PINNED_NOW)
+    html = render_open_loops_band(db_path, now=_PINNED_NOW)
+    assert "Coach sent today" not in html
+
+
+# --------------------------------------------------------------------------- #
+# Wave3b Task 3: the Sunday-packet state line + its read-only peek.
+# --------------------------------------------------------------------------- #
+
+
+def _insert_packet_run(db_path: Path, *, status: str, total_items: int, now: datetime) -> int:
+    iso_year, iso_week, _ = now.isocalendar()
+    conn = sqlite3.connect(str(db_path))
+    try:
+        cur = conn.execute(
+            "INSERT INTO weekly_packet_runs (iso_year, iso_week, status, total_items, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (iso_year, iso_week, status, total_items, now.isoformat(), now.isoformat()),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+    finally:
+        conn.close()
+
+
+def _insert_packet_item(
+    db_path: Path,
+    *,
+    run_id: int,
+    order_index: int,
+    title: str,
+    verdict: str | None,
+    now: datetime,
+) -> None:
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.execute(
+            "INSERT INTO weekly_packet_items (run_id, item_kind, ref_id, ticker, title, "
+            "order_index, created_at, verdict) VALUES (?, 'reconcile_note', ?, NULL, ?, ?, ?, ?)",
+            (run_id, order_index + 1, title, order_index, now.isoformat(), verdict),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_packet_line_open_run_shows_answered_of_total(db_path: Path) -> None:
+    run_id = _insert_packet_run(db_path, status="open", total_items=3, now=_PINNED_NOW)
+    _insert_packet_item(
+        db_path, run_id=run_id, order_index=0, title="a", verdict="accept", now=_PINNED_NOW
+    )
+    _insert_packet_item(
+        db_path, run_id=run_id, order_index=1, title="b", verdict=None, now=_PINNED_NOW
+    )
+    _insert_packet_item(
+        db_path, run_id=run_id, order_index=2, title="c", verdict=None, now=_PINNED_NOW
+    )
+
+    html = render_open_loops_band(db_path, now=_PINNED_NOW)
+    assert "Sunday packet · 1 of 3 answered · finish" in html
+    assert 'data-peek-url="/api/peek/weekly-packet"' in html
+    assert 'href="/#musings"' in html
+
+
+def test_packet_line_dark_when_clear(db_path: Path) -> None:
+    _insert_packet_run(db_path, status="clear", total_items=0, now=_PINNED_NOW)
+    assert "Sunday packet" not in render_open_loops_band(db_path, now=_PINNED_NOW)
+
+
+def test_packet_line_dark_when_complete(db_path: Path) -> None:
+    run_id = _insert_packet_run(db_path, status="complete", total_items=2, now=_PINNED_NOW)
+    _insert_packet_item(
+        db_path, run_id=run_id, order_index=0, title="a", verdict="accept", now=_PINNED_NOW
+    )
+    _insert_packet_item(
+        db_path, run_id=run_id, order_index=1, title="b", verdict="drop", now=_PINNED_NOW
+    )
+    assert "Sunday packet" not in render_open_loops_band(db_path, now=_PINNED_NOW)
+
+
+def test_packet_line_dark_when_no_run_this_week(db_path: Path) -> None:
+    assert "Sunday packet" not in render_open_loops_band(db_path, now=_PINNED_NOW)
+
+
+def test_packet_line_ignores_a_prior_weeks_leftover_run(db_path: Path) -> None:
+    """A previous week's still-open run must never bleed into this week's
+    line — only the CURRENT ISO week's row counts (weekly_packet.py's own
+    docstring: unresolved items resurface in a FRESH row next week)."""
+    last_week = _PINNED_NOW - timedelta(days=7)
+    run_id = _insert_packet_run(db_path, status="open", total_items=1, now=last_week)
+    _insert_packet_item(
+        db_path, run_id=run_id, order_index=0, title="stale", verdict=None, now=last_week
+    )
+    assert "Sunday packet" not in render_open_loops_band(db_path, now=_PINNED_NOW)
+
+
+def test_weekly_packet_peek_renders_pending_and_answered_items(db_path: Path) -> None:
+    run_id = _insert_packet_run(db_path, status="open", total_items=2, now=_PINNED_NOW)
+    _insert_packet_item(
+        db_path,
+        run_id=run_id,
+        order_index=0,
+        title="ratified note",
+        verdict="accept",
+        now=_PINNED_NOW,
+    )
+    _insert_packet_item(
+        db_path, run_id=run_id, order_index=1, title="still pending", verdict=None, now=_PINNED_NOW
+    )
+    html = render_weekly_packet_peek(db_path, now=_PINNED_NOW)
+    assert "still pending" in html and "pending" in html
+    assert "ratified note" in html and "accept" in html
+    assert "given on Telegram" in html
+
+
+def test_weekly_packet_peek_no_run_this_week(db_path: Path) -> None:
+    html = render_weekly_packet_peek(db_path, now=_PINNED_NOW)
+    assert "No Sunday packet run yet" in html
+
+
+def test_weekly_packet_peek_never_raises_on_missing_table(tmp_path: Path) -> None:
+    bare = tmp_path / "bare.db"
+    sqlite3.connect(str(bare)).close()
+    html = render_weekly_packet_peek(bare, now=_PINNED_NOW)
+    assert "unavailable" in html
 
 
 def test_proposed_tenets_flag_gated(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

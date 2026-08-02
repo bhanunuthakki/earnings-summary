@@ -236,9 +236,9 @@ def test_ticker_link_css_removed_from_the_standalone_page() -> None:
     emissions all migrated to ticker_label() (a.k-tick-sym), so its
     page-scoped `.ticker-link` CSS rule — dead weight now that nothing on
     THIS page emits the class — was removed. (command_center_shell.py's
-    SHARED `.ticker-link` rule stays until portfolio_panel.py /
-    allocation_decisions_panel.py / advisor_memos_panel.py migrate too — a
-    different surface, out of this test's scope.)"""
+    SHARED `.ticker-link` rule has since been removed too, once
+    portfolio_panel.py / allocation_decisions_panel.py / advisor_memos_panel.py
+    finished migrating — a different surface, out of this test's scope.)"""
     html = render_html(
         AnalyticalDashboard(),
         generated_at=datetime(2026, 6, 1, tzinfo=UTC),

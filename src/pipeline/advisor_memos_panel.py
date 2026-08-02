@@ -17,6 +17,14 @@ Three stacked views:
 
 Tracker/DCF degradation mirrors the Decisions tab: missing inputs dash out,
 nothing 500s.
+
+The run bar's "Think through…" doorway opens the Socratic think-through flow
+(shared with the standalone ``/socratic/<T>`` page). Step 1 (the pointed
+questions) runs as an honest background job — ``POST
+/actions/socratic-questions`` + the shared jobs SSE channel, honest about its
+~2-minute cost (wave3b Task 4) — rather than blocking the browser's fetch();
+step 2 (the decision memo) stays a synchronous POST since the owner is
+present and typing at that point.
 """
 
 from __future__ import annotations
@@ -175,9 +183,7 @@ def _screen_section(
     # column." Name it ONCE in a caption; the table then carries only per-holding
     # data (its own upside + the margin against that one alternative).
     best = screen[0]
-    best_label = ticker_label(
-        best.candidate, href=f"/ticker/{escape(best.candidate)}", classes="ticker-link"
-    )
+    best_label = ticker_label(best.candidate, href=f"/ticker/{escape(best.candidate)}")
     caption = (
         f'<p class="sub am-swap-target">Best available alternative: '
         f"{best_label} "
@@ -188,7 +194,7 @@ def _screen_section(
     rows = "".join(
         f"<tr{_screen_data(s)}>"
         f'<td class="ticker">'
-        f"{ticker_label(s.holding, href='/ticker/' + escape(s.holding), classes='ticker-link')}"
+        f"{ticker_label(s.holding, href='/ticker/' + escape(s.holding))}"
         "</td>"
         f'<td class="num">{s.holding_upside_pct:+.0f}%</td>'
         f'<td class="num {"am-cleared" if s.cleared else ""}">{s.margin_pp:+.0f}pp</td>'
@@ -473,11 +479,13 @@ _RUN_JS = r"""
 """.strip()
 
 
-# Socratic flow wiring (P2.4): step 1 fetches the questions and renders the
-# answer form; step 2 posts the answers and renders the saved memo. Stateless
-# between steps — the questions ride the DOM. Shared verbatim by the panel
-# (button-started) and the standalone /socratic/<T> page (auto-started via
-# data-autostart). Plain string — braces are literal JS.
+# Socratic flow wiring (P2.4; step 1 backgrounded wave3b Task 4): step 1
+# starts a background job (honest about its ~2min cost) and streams its log
+# via SSE, then fetches the persisted result and renders the answer form;
+# step 2 posts the answers and renders the saved memo (this stays
+# synchronous — the owner is present and typing). Shared verbatim by the
+# panel (button-started) and the standalone /socratic/<T> page (auto-started
+# via data-autostart). Plain string — braces are literal JS.
 _SOCRATIC_JS = r"""
 (function () {
   var flow = document.getElementById('soc-flow');
@@ -501,10 +509,29 @@ _SOCRATIC_JS = r"""
 
   function start(ticker) {
     flow.hidden = false;
-    body.innerHTML = '';
-    setStatus('Generating pointed questions for ' + ticker + '… (15-45s)');
+    body.innerHTML =
+      '<p class="soc-status muted">Grounds in the holding\'s sizing, valuation, and a ' +
+      'calibration pre-mortem — an Opus call, honestly.</p>' +
+      '<button type="button" class="k-btn k-btn-primary k-btn-sm soc-generate">' +
+      'Generate 3 questions — runs ~2 min</button>' +
+      '<pre class="am-log soc-log" hidden></pre>';
     flow.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    fetch('/api/socratic/questions', {
+    body.querySelector('.soc-generate').addEventListener('click', function () {
+      generate(ticker);
+    });
+  }
+
+  function generate(ticker) {
+    var btn = body.querySelector('.soc-generate');
+    var logEl = body.querySelector('.soc-log');
+    function append(line) {
+      logEl.hidden = false;
+      logEl.textContent += line + '\n';
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+    CCAction.busy(btn, 'Generating…');
+    append('starting question generation for ' + ticker + '…');
+    fetch('/actions/socratic-questions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ticker: ticker })
@@ -513,10 +540,49 @@ _SOCRATIC_JS = r"""
         if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
         return j;
       });
-    }).then(function (j) {
-      renderForm(j.ticker, j.questions);
+    }).then(function (job) {
+      var es = new EventSource(job.stream_url);
+      var finished = false;
+      es.onmessage = function (ev2) {
+        var m;
+        try { m = JSON.parse(ev2.data); } catch (_) { return; }
+        if (m.event === 'start') {
+          append('> job ' + m.job_id + ' started');
+        } else if (m.event === 'log') {
+          append(m.line);
+        } else if (m.event === 'done') {
+          finished = true;
+          es.close();
+          if (m.exit_code === 0) {
+            append('# exit code 0 — loading questions…');
+            fetch('/api/socratic/questions/' + encodeURIComponent(ticker))
+              .then(function (r) {
+                return r.json().then(function (j) {
+                  if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+                  return j;
+                });
+              })
+              .then(function (j) {
+                renderForm(j.ticker, j.questions);
+              })
+              .catch(function (e) {
+                CCAction.release(btn);
+                append('generated but failed to load: ' + e.message + ' — retry.');
+              });
+          } else {
+            CCAction.release(btn);
+            append('generation failed — exit code ' + m.exit_code + ', see log above for detail');
+          }
+        }
+      };
+      es.onerror = function () {
+        if (!finished) append('stream closed unexpectedly — generation may not have completed');
+        es.close();
+        CCAction.release(btn);
+      };
     }).catch(function (e) {
-      setStatus('Failed to generate questions: ' + e.message + ' — pick the holding and retry.');
+      CCAction.release(btn);
+      append('failed to start: ' + e.message);
     });
   }
 
@@ -613,8 +679,11 @@ h2 { font-size: var(--fs-title); margin: 0 0 6px; }
 
 def render_socratic_page(ticker: str) -> str:
     """The standalone think-through page (``GET /socratic/<T>``) — the
-    workspace chat's entry point. Same flow shell + JS as the Memos panel,
-    auto-started for the ticker."""
+    workspace chat's entry point. Same flow shell + JS as the Memos panel:
+    ``data-autostart-ticker`` reveals the flow with its honest-cost
+    "Generate 3 questions — runs ~2 min" button pre-selected for this
+    ticker, but the owner still taps to spend the LLM budget (wave3b Task 4
+    — no page load silently kicks off a ~2-minute background job)."""
     t = escape(ticker.upper())
     return (
         '<!doctype html><html lang="en" data-theme="dark"><head>'
@@ -627,8 +696,8 @@ def render_socratic_page(ticker: str) -> str:
         "</head><body><main>"
         f"<h1>Socratic think-through · {t}</h1>"
         '<p class="muted">The only path to a stance: your read first, then the memo. '
-        f'Saved memos render under <a href="/#advisor_memos" style="color:var(--accent)">'
-        "Portfolio &rarr; Memos</a>.</p>"
+        f'Saved memos render under <a href="/#portfolio_record" style="color:var(--accent)">'
+        "Portfolio &rarr; Record</a>.</p>"
         f'<section class="panel" id="soc-flow" data-autostart-ticker="{t}">'
         "<h2>Think it through</h2>"
         '<p class="sub">3-5 pointed questions first — your read, your horizon, what would '

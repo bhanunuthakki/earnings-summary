@@ -11,6 +11,8 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 import llm_artifact_store
 from advisor.senior_partner_brief import SeniorPartnerBrief, build_telegram_text, render_markdown
 from ask.packs import load_packs
@@ -260,3 +262,149 @@ def test_today_card_labels_deterministic_fallback() -> None:
     )
     payload = json.loads(json.dumps(brief.model_dump(mode="json")))
     assert payload["selection_mode"] == "deterministic_fallback"
+
+
+# --------------------------------------------------------------------------- #
+# Task 2 (wave3b, navigation_ia.md D1): the folded Today-doorways card —
+# ONE .k-well with up to two chips, replacing the brief + allocation wells.
+# --------------------------------------------------------------------------- #
+
+
+def _seed_allocation(db_path: Path) -> int:
+    """A full, schema-valid ``incremental_dollar_recommendation`` artifact —
+    ``render_allocation_today_card`` parses through the strict
+    ``IncrementalDollarRecommendation`` pydantic boundary (all humility +
+    provenance fields required), so a partial payload silently parses to
+    None and the card renders "". Mirrors tests/test_allocation_surface_parity.py's
+    ``_PAYLOAD`` (a module I don't own — copied, not imported, to avoid a
+    cross-file coupling on a sibling's fixture)."""
+    import llm_artifact_store
+
+    payload: dict[str, object] = {
+        "as_of_date": "2026-07-22",
+        "input_sha": "sha_today_card",
+        "status": "deploy_partial",
+        "preferred_plan": {
+            "allocations": [
+                {
+                    "ticker": "NU",
+                    "dollars": 6000.0,
+                    "pct_of_cash": 60.0,
+                    "resulting_weight_pct": 5.5,
+                    "zone": "ordinary",
+                }
+            ],
+            "cash_retained_usd": 4000.0,
+        },
+        "best_alternative": None,
+        "best_diversifier": None,
+        "central_hypothesis": "NU has the best blended next-dollar score right now.",
+        "personalization_why": "This deploys 60% of your new cash into the top-ranked name.",
+        "supporting_evidence": ["NU has the best blended next-dollar score: +1.20"],
+        "main_unknowns": ["how NU's next print reads on credit quality"],
+        "disconfirming_evidence": ["a weak macro print could compress the multiple further"],
+        "scenario_reasoning": "base case assumes stable credit trends",
+        "confidence_verbal": "moderate",
+        "confidence_basis": "The main reason I could be wrong is a macro shock hitting credit names.",
+        "followup_research": [],
+        "frontier_plan_ids": ["balanced"],
+        "source_refs": ["dcf"],
+        "risk_snapshot_ref": None,
+        "engine_version": "v1",
+        "prompt_version": "v1",
+        "selection_mode": "llm",
+    }
+    artifact_id, _cache_hit = llm_artifact_store.upsert(
+        llm_artifact_store.UpsertRequest(
+            ticker=None,
+            scope="portfolio",
+            purpose="incremental_dollar_recommendation",
+            content_json=payload,
+            content_md="allocation",
+            cache_inputs=["alloc-input"],
+        ),
+        db_path=db_path,
+    )
+    assert artifact_id is not None
+    return artifact_id
+
+
+def test_today_doorways_card_folds_both_chips_into_one_well(tmp_path: Path) -> None:
+    from pipeline.senior_partner_brief_panel import render_today_doorways_card
+
+    db_path = _make_db(tmp_path)
+    now = datetime(2026, 7, 20, 9, 0, 0)
+    _seed_brief(db_path, now=now)
+    _seed_allocation(db_path)
+
+    html = render_today_doorways_card(db_path, now=now)
+    # ONE shared well, not two.
+    assert html.count('class="cc-spb-today k-well"') == 1
+    assert html.count("k-well") == 1
+    # Both doorway hrefs preserved exactly.
+    assert 'href="/mobile/inbox"' in html
+    assert 'href="/#portfolio_allocation"' in html
+    assert "Trim NVO into strength" in html
+    assert "Next dollar: NU" in html
+
+
+def test_today_doorways_card_brief_only(tmp_path: Path) -> None:
+    from pipeline.senior_partner_brief_panel import render_today_doorways_card
+
+    db_path = _make_db(tmp_path)
+    now = datetime(2026, 7, 20, 9, 0, 0)
+    _seed_brief(db_path, now=now)
+
+    html = render_today_doorways_card(db_path, now=now)
+    assert html.count("k-well") == 1
+    assert 'href="/mobile/inbox"' in html
+    assert 'href="/#portfolio_allocation"' not in html
+
+
+def test_today_doorways_card_neither_renders_nothing(tmp_path: Path) -> None:
+    from pipeline.senior_partner_brief_panel import render_today_doorways_card
+
+    db_path = _make_db(tmp_path)
+    assert render_today_doorways_card(db_path) == ""
+
+
+def test_today_doorways_card_degrades_on_allocation_import_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A read failure on the allocation side (or the module simply not being
+    importable) must never sink the brief's own card — degrades to
+    brief-only, matching this band's sibling try/except discipline."""
+    import pipeline.allocation_recommendation_panel as alloc_mod
+    from pipeline.senior_partner_brief_panel import render_today_doorways_card
+
+    def boom(*_a: object, **_k: object) -> str:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(alloc_mod, "render_allocation_today_card", boom)
+
+    db_path = _make_db(tmp_path)
+    now = datetime(2026, 7, 20, 9, 0, 0)
+    _seed_brief(db_path, now=now)
+
+    html = render_today_doorways_card(db_path, now=now)
+    assert 'href="/mobile/inbox"' in html
+    assert 'href="/#portfolio_allocation"' not in html
+
+
+def test_today_doorways_card_failure_state_stays_a_full_card(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A brief-read failure (k-well-bad) must stay a full, separately
+    visible card rather than being silently squeezed into the shared well —
+    a DB failure deserves to stay legible."""
+    from pipeline import senior_partner_brief_panel as spb_panel
+
+    def failing_read(*_a: object, **_k: object) -> object:
+        raise RuntimeError("db unreachable")
+
+    monkeypatch.setattr(spb_panel.llm_artifact_store, "read_current", failing_read)
+
+    db_path = _make_db(tmp_path)
+    html = spb_panel.render_today_doorways_card(db_path)
+    assert "k-well-bad" in html
+    assert "unavailable" in html

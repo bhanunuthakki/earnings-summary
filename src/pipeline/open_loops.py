@@ -23,11 +23,28 @@ confirmation queue was invisible for as long as the brief had never run.
 This band already renders unconditionally (falling back to "Ritual clear"),
 so these two lines surface the same instant a draft/card actually needs the
 owner, with no dependency on any LLM artifact ever having been generated.
+
+Home-band consolidation (navigation_ia.md D1, wave3b — ~2-viewport budget):
+two more bands folded into this one rather than living beside it.
+
+* The retired ``coach_strip`` band's ONLY count these existing lines didn't
+  already cover was "sent today" (Telegram already pushed it; the digest and
+  routed-to-brief queues above already count everything else the coach can
+  hold) — one line, same doorway convention as its siblings.
+* The Sunday packet (``pipeline.weekly_packet``) gets a state line reading
+  the SAME ``weekly_packet_runs``/``weekly_packet_items`` rows the Telegram
+  packet itself uses (never a parallel count that could disagree with what
+  Telegram already showed) — dark when the packet is clear/complete or no
+  run exists yet this ISO week (the ratified "dark-when-clear" contract;
+  never a zero-count line). This band's render function stays read-only —
+  it never calls ``weekly_packet.ensure_run`` (which INSERTs); it reads the
+  current week's row directly, or finds none and renders nothing.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from html import escape
 from pathlib import Path
 
 from user_state._db import open_conn
@@ -193,6 +210,127 @@ def _undispositioned_card_debt(db_path: Path | str | None) -> int:
         conn.close()
 
 
+def _coach_sent_today_debt(db_path: Path | str | None, *, now: datetime | None = None) -> int:
+    """Coach pings actually pushed to Telegram today — the ONE count the
+    retired ``coach_strip`` band carried that ``_digest_ping_debt`` /
+    ``_routed_to_brief_debt`` above don't already cover (those two count the
+    'digest' and 'routed_to_brief' queues; 'sent' is the third, disjoint
+    status the strip used to render up to 4 rows of). Folded to a single
+    count line — the strip's per-item detail (class label + body text) lived
+    on Telegram already; this line's job is just parity ("Home shows what
+    Telegram showed"), not a duplicate reading surface."""
+    stamp = now or datetime.now(UTC).replace(tzinfo=None)
+    day_start = stamp.date().isoformat()
+    conn = open_conn(db_path)
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM coach_pings WHERE status = 'sent' AND created_at >= ?",
+            (day_start,),
+        ).fetchone()
+        return int(row[0] or 0)
+    finally:
+        conn.close()
+
+
+def _packet_state(
+    db_path: Path | str | None, *, now: datetime | None = None
+) -> tuple[int, int] | None:
+    """(answered, total) for the CURRENT ISO week's Sunday packet run, or
+    ``None`` when there is nothing to show — no run yet this week, or the run
+    is already dark (status 'clear'/'complete', or zero items). Reads
+    ``weekly_packet_runs``/``weekly_packet_items`` directly (never
+    ``pipeline.weekly_packet.ensure_run``, which INSERTs a row — this render
+    path must stay read-only) so the number can never disagree with what the
+    Sunday packet itself already showed on Telegram."""
+    stamp = now or datetime.now(UTC).replace(tzinfo=None)
+    iso_year, iso_week, _ = stamp.isocalendar()
+    conn = open_conn(db_path)
+    try:
+        row = conn.execute(
+            "SELECT id, status, total_items FROM weekly_packet_runs "
+            "WHERE iso_year = ? AND iso_week = ?",
+            (iso_year, iso_week),
+        ).fetchone()
+        if row is None:
+            return None
+        run_id, status, total_items = int(row[0]), str(row[1]), int(row[2] or 0)
+        if status != "open" or not total_items:
+            return None
+        pending_row = conn.execute(
+            "SELECT COUNT(*) FROM weekly_packet_items WHERE run_id = ? AND verdict IS NULL",
+            (run_id,),
+        ).fetchone()
+        pending = int(pending_row[0] or 0)
+        return total_items - pending, total_items
+    finally:
+        conn.close()
+
+
+def render_weekly_packet_peek(db_path: Path | str | None, *, now: datetime | None = None) -> str:
+    """The read-only quick-look behind the Sunday-packet line's
+    ``data-peek-url`` — one row per item in the CURRENT week's run, verdict
+    (or 'pending'), and a reminder that verdicts are given on Telegram (this
+    page has no reply mechanism of its own — study §4/Task 3's "peeks the
+    packet state read-only" instruction). Never raises; an empty/absent run
+    renders a quiet note rather than a blank popover. ``now`` overrides the
+    wall clock (tests pin it to dodge the UTC-midnight ISO-week flake)."""
+    try:
+        stamp = now or datetime.now(UTC).replace(tzinfo=None)
+        iso_year, iso_week, _ = stamp.isocalendar()
+        conn = open_conn(db_path)
+        try:
+            run = conn.execute(
+                "SELECT id, status, total_items FROM weekly_packet_runs "
+                "WHERE iso_year = ? AND iso_week = ?",
+                (iso_year, iso_week),
+            ).fetchone()
+            if run is None:
+                return '<div class="k-well muted">No Sunday packet run yet this week.</div>'
+            run_id, status, total_items = int(run[0]), str(run[1]), int(run[2] or 0)
+            items = conn.execute(
+                "SELECT item_kind, ticker, title, verdict FROM weekly_packet_items "
+                "WHERE run_id = ? ORDER BY order_index",
+                (run_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return '<div class="k-well muted">Packet state unavailable.</div>'
+    if not items:
+        return f'<div class="k-well muted">Packet clear this week (status: {escape(status)}).</div>'
+    rows = "".join(
+        '<div class="cc-ol-line">'
+        f'<span class="k-chip k-chip-mono">{escape(str(kind))}</span> '
+        f"{escape((str(ticker) + ' — ') if ticker else '')}{escape(str(title)[:160])} "
+        f'<span class="muted">{escape(str(verdict) if verdict else "pending")}</span></div>'
+        for kind, ticker, title, verdict in items
+    )
+    return (
+        f'<div class="k-well"><span class="k-chip k-chip-mono">Sunday packet</span> '
+        f'<span class="muted">{total_items} items — verdicts are given on Telegram</span>'
+        f"{rows}</div>"
+    )
+
+
+def _packet_line(db_path: Path | str | None, *, now: datetime | None = None) -> str:
+    """Task 3: "Sunday packet · N of M answered · finish ▸" — dark (returns
+    "") when the packet is clear/complete or no run exists this week, per the
+    ratified "dark-when-clear" contract (never a zero-count line). The doorway
+    falls back to a full-page destination (the Ledger, where the packet's
+    substrate queues live) for a plain click/middle-click, and opens the
+    read-only quick-look in place via ``data-peek-url`` (no web reply surface
+    exists — verdicts are given on Telegram, per Task 3's spec)."""
+    state = _packet_state(db_path, now=now)
+    if state is None:
+        return ""
+    answered, total = state
+    return (
+        f'<a class="cc-ol-line" href="{_LEDGER_HASH}" data-peek-url="/api/peek/weekly-packet" '
+        f'data-peek-title="Sunday packet">Sunday packet · {answered} of {total} answered · '
+        "finish ▸</a>"
+    )
+
+
 def _line(href: str, label: str, count: int, suffix: str = "") -> str:
     return (
         f'<a class="cc-ol-line" href="{href}">{label}: '
@@ -230,10 +368,15 @@ def _escalation_banner(db_path: Path | str | None) -> str:
     )
 
 
-def render_open_loops_band(db_path: Path | str | None = None) -> str:
+def render_open_loops_band(
+    db_path: Path | str | None = None, *, now: datetime | None = None
+) -> str:
     """The persistent Red Team escalation banner (if any) followed by one
     dense line per non-empty ritual queue, each a doorway; an explicit
-    'Ritual clear' line when nothing waits. Never raises."""
+    'Ritual clear' line when nothing waits. Never raises. ``now`` overrides
+    the wall clock for the two date-boundary-sensitive lines (coach
+    sent-today, the Sunday packet's ISO week) — tests pin it to dodge the
+    repo's known UTC-midnight flake class; production leaves it unset."""
     banner = _escalation_banner(db_path)
     lines: list[str] = []
 
@@ -283,6 +426,18 @@ def render_open_loops_band(db_path: Path | str | None = None) -> str:
         n, age = _routed_to_brief_debt(db_path)
         if n:
             lines.append(_line(_LEDGER_HASH, "Routed to weekly brief", n, age))
+    except Exception:
+        pass
+    try:
+        n = _coach_sent_today_debt(db_path, now=now)
+        if n:
+            lines.append(_line(_LEDGER_HASH, "Coach sent today", n))
+    except Exception:
+        pass
+    try:
+        packet_line = _packet_line(db_path, now=now)
+        if packet_line:
+            lines.append(packet_line)
     except Exception:
         pass
 

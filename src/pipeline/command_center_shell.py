@@ -1187,17 +1187,13 @@ td { padding: 6px 10px; border-bottom: 1px solid var(--hairline); vertical-align
 tbody tr:hover td { background: var(--paper); }
 td.num { text-align: right; }
 td.muted { color: var(--muted); }
-/* .ticker-link is the pre-ticker_label() renderer (design_language §5:
-   ui.controls.ticker_label() is the ONLY ticker renderer now). This shared
-   definition stays live even though command_center_shell.py and
-   analytical_dashboard_html.py's OWN emissions migrated to ticker_label() —
-   portfolio_panel.py / allocation_decisions_panel.py / advisor_memos_panel.py
-   still render raw `<a class="ticker-link">` and lean on THIS block (the
-   shell's CSS is global to every panel injected into .cc-panels); removing it
-   before their migration lands would silently unstyle those links. Delete
-   once every `.ticker-link` emitter in src/ has moved to ticker_label(). */
-.ticker-link { color: var(--fg); text-decoration: none; font-weight: 600; }
-.ticker-link:hover { color: var(--accent); }
+/* .ticker-link collapse complete (design_language §5): portfolio_panel.py /
+   allocation_decisions_panel.py / advisor_memos_panel.py — the last three
+   raw-anchor emitters — migrated to ui.controls.ticker_label() (PR wave3b);
+   the shared rule this comment used to guard is gone. The JS hover/click
+   selectors below keep the bare `a.ticker-link` alternative harmlessly (a
+   future non-ticker_label() surface reusing the literal class would still
+   route correctly) rather than deleting working selector plumbing. */
 tr.tone-sell { background: color-mix(in srgb, var(--bad) 6%, transparent); }
 tr.tone-trim { background: color-mix(in srgb, var(--warn) 4%, transparent); }
 tr.tone-init { background: color-mix(in srgb, var(--ok) 6%, transparent); }
