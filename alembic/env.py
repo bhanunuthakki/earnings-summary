@@ -49,6 +49,19 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
+        # Match the platform-wide 30s busy timeout (src/sqlite_runtime.py /
+        # reference_platform_invariants). Without it, alembic fails INSTANTLY
+        # with "database is locked" whenever any writer holds the lock — the
+        # 2026-07-31 db_gc incident blocked the #1108 deploy this way. Now
+        # that db_gc commits in bounded batches, 30s outlasts any one batch.
+        # PRAGMA at the raw DBAPI level: exec_driver_sql would trip
+        # SQLAlchemy 2.x autobegin and leave a transaction open under
+        # alembic's own transaction management, silently rolling back every
+        # migration (NoSuchTableError across the suite).
+        if connection.engine.dialect.name == "sqlite":
+            raw = connection.connection.driver_connection
+            if raw is not None:
+                raw.execute("PRAGMA busy_timeout = 30000")
         context.configure(
             connection=connection,
             target_metadata=target_metadata,

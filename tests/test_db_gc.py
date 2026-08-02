@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,8 @@ sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "execution"))
 
 import db_gc  # noqa: E402
+
+import run_lock  # noqa: E402
 
 
 @pytest.fixture()
@@ -75,6 +79,10 @@ def _run(
     keep_fy: int = 12,
     include_portfolio: bool = False,
     vacuum: bool = False,
+    batch_size: int = db_gc.DEFAULT_BATCH_SIZE,
+    max_runtime_min: float = db_gc.DEFAULT_MAX_RUNTIME_MIN,
+    lock_timeout_s: float = 0.0,
+    enforce_protected_window: bool = False,
 ) -> db_gc.GcRunReport:
     return db_gc.run_gc(
         db,
@@ -85,6 +93,10 @@ def _run(
         keep_fy=keep_fy,
         include_portfolio=include_portfolio,
         vacuum=vacuum,
+        batch_size=batch_size,
+        max_runtime_min=max_runtime_min,
+        lock_timeout_s=lock_timeout_s,
+        enforce_protected_window=enforce_protected_window,
     )
 
 
@@ -438,6 +450,10 @@ class TestGuards:
         with pytest.raises(ValueError, match="keep-fy"):
             _run(gc_db, keep_fy=10)
 
+    def test_batch_size_floor_enforced(self, gc_db: Path) -> None:
+        with pytest.raises(ValueError, match="batch-size"):
+            _run(gc_db, batch_size=0)
+
     def test_idempotent_second_apply_is_noop(self, gc_db: Path) -> None:
         conn = sqlite3.connect(gc_db)
         conn.execute(
@@ -450,3 +466,184 @@ class TestGuards:
         second = _run(gc_db, apply=True, policies=["facts-depth"])
         assert first.policies[0].rows_deleted["financial_facts"] > 0
         assert second.policies[0].rows_deleted["financial_facts"] == 0
+
+
+def _window_always(value: bool) -> Callable[[datetime | None], bool]:
+    def check(now: datetime | None = None) -> bool:
+        return value
+
+    return check
+
+
+class TestIncidentHardening:
+    """The 2026-07-31 lock-starvation incident fixes: bounded batches, run
+    lock, protected window, runtime budget, VACUUM preflight."""
+
+    def _seed_facts(self, db: Path) -> None:
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, list_type) VALUES ('EVAL', 'evaluation')"
+        )
+        _seed_quarters(conn, "EVAL", 30)
+        _seed_quarters(conn, "GONE", 8)
+        conn.commit()
+        conn.close()
+
+    def test_small_batches_reach_same_final_state(self, gc_db: Path) -> None:
+        self._seed_facts(gc_db)
+        report = _run(gc_db, apply=True, policies=["facts-depth"], batch_size=7)
+        (pol,) = report.policies
+        deleted = pol.rows_deleted["financial_facts"]
+        assert deleted > 7  # actually exercised more than one batch
+        conn = sqlite3.connect(gc_db)
+        assert (
+            conn.execute(
+                "SELECT COUNT(DISTINCT period_end) FROM financial_facts"
+                " WHERE ticker='EVAL' AND fiscal_period_type LIKE 'Q%'"
+            ).fetchone()[0]
+            == 16
+        )
+        assert (
+            conn.execute("SELECT COUNT(*) FROM financial_facts WHERE ticker='GONE'").fetchone()[0]
+            == 0
+        )
+        # Archive complete and manifest total matches despite batching.
+        arc = sqlite3.connect(gc_db.parent / "archive" / db_gc.ARCHIVE_NAME)
+        assert arc.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == deleted
+        assert (
+            arc.execute(
+                "SELECT SUM(rows_archived) FROM gc_manifest WHERE source_table='financial_facts'"
+            ).fetchone()[0]
+            == deleted
+        )
+
+    def test_guard_trigger_live_after_batched_prune(self, gc_db: Path) -> None:
+        self._seed_facts(gc_db)
+        conn = sqlite3.connect(gc_db)
+        conn.execute(TestAppendOnlyGuardWindow.GUARD_SQL)
+        conn.commit()
+        conn.close()
+        report = _run(gc_db, apply=True, policies=["facts-depth"], batch_size=5)
+        assert report.policies[0].rows_deleted["financial_facts"] > 5
+        conn = sqlite3.connect(gc_db)
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute("DELETE FROM financial_facts")
+
+    def test_validation_collapse_with_small_batches(self, gc_db: Path) -> None:
+        conn = sqlite3.connect(gc_db)
+        for group in range(4):
+            for i in range(3):
+                conn.execute(
+                    "INSERT INTO validation_issues (run_id, source_doc_id, ticker,"
+                    " severity, rule, raw_value, expected, raised_at, occurrence_count)"
+                    " VALUES (?, ?, 'NU', 'warn', 'PLAUSIBLE_RANGE', ?, 'x<1', ?, 1)",
+                    (f"run{i}", group, f"x={group}", f"2026-07-2{4 + i} 04:00:00"),
+                )
+        conn.commit()
+        conn.close()
+        report = _run(gc_db, apply=True, policies=["validation-issues"], batch_size=3)
+        (pol,) = report.policies
+        assert pol.rows_deleted["validation_issues"] == 8  # 4 groups x 2 dups
+        conn = sqlite3.connect(gc_db)
+        assert conn.execute("SELECT COUNT(*) FROM validation_issues").fetchone()[0] == 4
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM validation_issues WHERE fingerprint IS NOT NULL"
+            ).fetchone()[0]
+            == 4
+        )
+
+    def test_apply_yields_when_run_lock_held(self, gc_db: Path) -> None:
+        self._seed_facts(gc_db)
+        lock = run_lock.acquire_run_lock(gc_db, owner="run_morning_pipeline", timeout_s=0)
+        try:
+            with pytest.raises(run_lock.RunLockHeldError):
+                _run(gc_db, apply=True, policies=["facts-depth"])
+        finally:
+            lock.release()
+        # Nothing was mutated while the lock was held.
+        conn = sqlite3.connect(gc_db)
+        assert (
+            conn.execute("SELECT COUNT(*) FROM financial_facts WHERE ticker='GONE'").fetchone()[0]
+            > 0
+        )
+
+    def test_dry_run_takes_no_lock(self, gc_db: Path) -> None:
+        self._seed_facts(gc_db)
+        lock = run_lock.acquire_run_lock(gc_db, owner="run_morning_pipeline", timeout_s=0)
+        try:
+            report = _run(gc_db, apply=False, policies=["facts-depth"])
+            assert report.policies[0].rows_deleted["financial_facts"] > 0
+        finally:
+            lock.release()
+
+    def test_protected_window_pure_function(self) -> None:
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        la = ZoneInfo(db_gc.PROTECTED_WINDOW_TZ)
+        assert db_gc.in_protected_window(datetime(2026, 8, 1, 3, 0, tzinfo=la)) is True
+        assert db_gc.in_protected_window(datetime(2026, 8, 1, 4, 59, tzinfo=la)) is True
+        assert db_gc.in_protected_window(datetime(2026, 8, 1, 5, 0, tzinfo=la)) is False
+        assert db_gc.in_protected_window(datetime(2026, 8, 1, 2, 59, tzinfo=la)) is False
+
+    def test_protected_window_refuses_apply(
+        self, gc_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._seed_facts(gc_db)
+        monkeypatch.setattr(db_gc, "in_protected_window", _window_always(True))
+        with pytest.raises(db_gc.GcAbortedError, match="protected"):
+            _run(gc_db, apply=True, policies=["facts-depth"], enforce_protected_window=True)
+        # Dry runs and out-of-window applies are unaffected.
+        _run(gc_db, apply=False, policies=["facts-depth"], enforce_protected_window=True)
+        monkeypatch.setattr(db_gc, "in_protected_window", _window_always(False))
+        _run(gc_db, apply=True, policies=["facts-depth"], enforce_protected_window=True)
+
+    def test_cli_protected_window_exit_code(
+        self, gc_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(db_gc, "in_protected_window", _window_always(True))
+        rc = db_gc.main(["--db-path", str(gc_db), "--apply", "--policies", "telemetry"])
+        assert rc == 2
+        rc = db_gc.main(
+            [
+                "--db-path",
+                str(gc_db),
+                "--apply",
+                "--policies",
+                "telemetry",
+                "--ignore-protected-window",
+            ]
+        )
+        assert rc == 0
+
+    def test_runtime_budget_aborts_loudly(self, gc_db: Path) -> None:
+        self._seed_facts(gc_db)
+        with pytest.raises(db_gc.GcAbortedError, match="budget"):
+            _run(gc_db, apply=True, policies=["facts-depth"], max_runtime_min=0.0)
+
+    def test_vacuum_preflight_aborts_when_write_locked(
+        self, gc_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Pre-convert to WAL so the writer policy's journal_mode pragma is a
+        # no-op under contention, then hold the write lock from a second
+        # connection: the VACUUM exclusivity preflight must abort loudly
+        # within its short timeout instead of livelocking.
+        conn = sqlite3.connect(gc_db)
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.close()
+        monkeypatch.setattr(db_gc, "VACUUM_PREFLIGHT_TIMEOUT_S", 0.3)
+        blocker = sqlite3.connect(gc_db)
+        blocker.execute("BEGIN IMMEDIATE")
+        try:
+            with pytest.raises(db_gc.GcAbortedError, match="write lock"):
+                _run(gc_db, apply=True, policies=["maintenance"], vacuum=True)
+        finally:
+            blocker.rollback()
+            blocker.close()
+
+    def test_vacuum_runs_under_guards_when_uncontended(self, gc_db: Path) -> None:
+        self._seed_facts(gc_db)
+        report = _run(gc_db, apply=True, policies=["facts-depth", "maintenance"], vacuum=True)
+        maint = report.policies[-1]
+        assert maint.detail.get("vacuum") == 1
