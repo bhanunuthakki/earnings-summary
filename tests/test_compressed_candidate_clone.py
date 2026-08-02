@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import hashlib
@@ -380,10 +381,11 @@ def test_clone_cli_refuses_receipt_at_source_sidecar(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("publication_error", (LatestStateActivationError, OSError))
-def test_clone_cli_removes_owned_clone_when_receipt_publication_fails(
+def test_clone_cli_preserves_receiptable_clone_when_receipt_publication_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     publication_error: type[Exception],
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     source, audit_receipt, coverage_receipt = _audited_source(tmp_path)
     _mock_compression(monkeypatch)
@@ -420,8 +422,56 @@ def test_clone_cli_removes_owned_clone_when_receipt_publication_fails(
     )
 
     assert result == 2
-    assert not destination.exists()
+    assert destination.exists()
+    event = json.loads(capsys.readouterr().err.splitlines()[-1])
+    assert event["preserved_clone"] == str(destination.resolve())
+    assert (
+        event["preserved_clone_expected_sha256"]
+        == hashlib.sha256(destination.read_bytes()).hexdigest()
+    )
     assert not receipt.exists()
+
+
+def test_clone_cli_never_deletes_substituted_destination_after_publication_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source, audit_receipt, coverage_receipt = _audited_source(tmp_path)
+    _mock_compression(monkeypatch)
+    destination = tmp_path / "clone" / "candidate.db"
+    displaced = tmp_path / "clone" / "owned.db"
+    receipt = tmp_path / "clone-receipt.json"
+
+    def substitute_then_fail(path: Path, payload: str) -> bool:
+        del path, payload
+        destination.replace(displaced)
+        destination.write_bytes(b"racing replacement")
+        raise PermissionError("injected receipt failure")
+
+    monkeypatch.setattr(clone_cli, "publish_text_no_clobber", substitute_then_fail)
+
+    result = clone_cli.main(
+        [
+            "--source-database",
+            str(source),
+            "--candidate-audit-receipt",
+            str(audit_receipt),
+            "--candidate-coverage-receipt",
+            str(coverage_receipt),
+            "--destination-database",
+            str(destination),
+            "--operation-recorded-at",
+            "2026-07-31T00:00:00Z",
+            "--minimum-free-bytes",
+            str(clone_cli.MINIMUM_SAFE_FREE_BYTES),
+            "--receipt",
+            str(receipt),
+        ]
+    )
+
+    assert result == 2
+    assert destination.read_bytes() == b"racing replacement"
+    assert displaced.exists()
 
 
 def test_clone_cli_refuses_headroom_floor_below_five_gib() -> None:

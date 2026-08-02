@@ -17,12 +17,54 @@ from provenance.population_document_processing import (
     DocumentProcessingPopulationRequest,
     DocumentProcessingPopulationResult,
     ReportingDocumentDecision,
-    build_document_processing_receipt,
     classify_reporting_document,
+    document_processing_plan_commitment,
     populate_document_processing,
     verify_document_processing,
     verify_document_processing_receipt,
 )
+from provenance.population_document_processing import (
+    build_document_processing_receipt as _build_document_processing_receipt,
+)
+
+
+def build_test_document_processing_receipt(
+    *,
+    database_path: str,
+    database_instance_id: str,
+    alembic_revision: str,
+    request: DocumentProcessingPopulationRequest,
+    result: DocumentProcessingPopulationResult,
+    prior_checkpoint_receipt_sha256: str | None,
+    admission_receipt_sha256: str | None,
+) -> DocumentProcessingOperationReceipt:
+    """Build coherent synthetic evidence while production validates every commitment."""
+
+    plan_sha = document_processing_plan_commitment(
+        request,
+        result.input_commitment_sha256,
+        result.selection_commitment_sha256,
+    )
+    result = result.model_copy(update={"plan_commitment_sha256": plan_sha})
+    if request.input_commitment_sha256 is not None:
+        request = request.model_copy(
+            update={
+                "input_commitment_sha256": result.input_commitment_sha256,
+                "plan_commitment_sha256": plan_sha,
+            }
+        )
+    return _build_document_processing_receipt(
+        database_path=database_path,
+        database_instance_id=database_instance_id,
+        alembic_revision=alembic_revision,
+        request=request,
+        result=result,
+        prior_checkpoint_receipt_sha256=prior_checkpoint_receipt_sha256,
+        admission_receipt_sha256=admission_receipt_sha256,
+    )
+
+
+build_document_processing_receipt = build_test_document_processing_receipt
 
 
 def receipt_result(
@@ -96,6 +138,46 @@ def test_document_operation_receipt_binds_request_result_and_prior_evidence() ->
     assert not verify_document_processing_receipt(tampered)
     with pytest.raises(ValidationError):
         DocumentProcessingOperationReceipt.model_validate(tampered.model_dump(mode="json"))
+
+
+def test_document_receipt_rejects_self_rehashed_plan_tamper() -> None:
+    cutoff = datetime(2026, 7, 29, tzinfo=UTC)
+    valid = build_test_document_processing_receipt(
+        database_path="C:/candidate.db",
+        database_instance_id="database-instance:" + "1" * 32,
+        alembic_revision="0263_ask_scope_identity",
+        request=DocumentProcessingPopulationRequest(
+            cutoff_at=cutoff,
+            operation_recorded_at=cutoff,
+            apply=True,
+            input_commitment_sha256="b" * 64,
+            plan_commitment_sha256="c" * 64,
+        ),
+        result=receipt_result(mode="apply"),
+        prior_checkpoint_receipt_sha256=None,
+        admission_receipt_sha256="e" * 64,
+    )
+    forged_plan = "f" * 64
+    forged_request = valid.request.model_copy(update={"plan_commitment_sha256": forged_plan})
+    forged_result = valid.result.model_copy(update={"plan_commitment_sha256": forged_plan})
+    forged = valid.model_copy(
+        update={
+            "request": forged_request,
+            "result": forged_result,
+            "request_sha256": population._model_sha(forged_request),
+            "result_sha256": population._model_sha(forged_result),
+            "operation_id": population.document_processing_operation_id(
+                database_instance_id=valid.database_instance_id,
+                request=forged_request,
+                admission_receipt_sha256=valid.admission_receipt_sha256,
+                prior_checkpoint_receipt_sha256=valid.prior_checkpoint_receipt_sha256,
+            ),
+        }
+    )
+    forged = forged.model_copy(update={"receipt_sha256": population._document_receipt_sha(forged)})
+
+    with pytest.raises(ValidationError, match="result plan commitment"):
+        DocumentProcessingOperationReceipt.model_validate(forged.model_dump(mode="json"))
 
 
 def test_apply_receipt_requires_admission_and_marks_bounded_work_checkpoint() -> None:

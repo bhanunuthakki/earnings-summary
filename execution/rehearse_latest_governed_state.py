@@ -81,14 +81,17 @@ from provenance.population_canonical_resolution import (  # noqa: E402
     CanonicalResolutionOperationReceipt,
     database_instance_id,
     load_canonical_resolution_receipt,
+    verify_canonical_resolution_receipt_current,
 )
 from provenance.population_document_processing import (  # noqa: E402
     DocumentProcessingOperationReceipt,
     load_document_processing_receipt,
+    verify_document_processing_receipt_current,
 )
 from provenance.population_metric_ontology import (  # noqa: E402
     MetricOntologyOperationReceipt,
     load_metric_ontology_receipt,
+    verify_metric_ontology_receipt_current,
 )
 from runtime.job_runtime import (  # noqa: E402
     JobAlreadyRunningError,
@@ -503,12 +506,18 @@ def _ledger_receipt_sha256(database: Path, checkpoint: RehearsalCheckpoint) -> s
         if checkpoint.stage is RehearsalStage.DOCUMENT:
             _a, _s, file_receipt = _load_model(receipt_path, DocumentProcessingOperationReceipt)
             stored = load_document_processing_receipt(conn, file_receipt.operation_id)
+            if stored is not None:
+                verify_document_processing_receipt_current(conn, stored)
         elif checkpoint.stage is RehearsalStage.ONTOLOGY:
             _a, _s, file_receipt = _load_model(receipt_path, MetricOntologyOperationReceipt)
             stored = load_metric_ontology_receipt(conn, file_receipt.operation_id)
+            if stored is not None:
+                verify_metric_ontology_receipt_current(conn, stored)
         elif checkpoint.stage is RehearsalStage.CANONICAL:
             _a, _s, file_receipt = _load_model(receipt_path, CanonicalResolutionOperationReceipt)
             stored = load_canonical_resolution_receipt(conn, file_receipt.operation_id)
+            if stored is not None:
+                verify_canonical_resolution_receipt_current(conn, stored)
         elif checkpoint.stage is RehearsalStage.LATEST:
             _a, _s, file_receipt = _load_model(receipt_path, LatestGovernedPopulationReceipt)
             stored = load_latest_governed_population_receipt(conn, file_receipt.operation_id)

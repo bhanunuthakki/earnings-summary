@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -29,12 +30,25 @@ from provenance.latest_state_rehearsal_evidence import CandidatePerformanceReque
 from provenance.latest_state_semantic_qualification import SemanticQualificationRequest
 from provenance.population_document_processing import (
     DocumentProcessingPopulationRequest,
-    build_document_processing_receipt,
 )
 from runtime.job_runtime import JobAlreadyRunningError, JobLock
-from tests.test_population_document_processing import receipt_result
+from tests.test_population_document_processing import (
+    build_test_document_processing_receipt as build_document_processing_receipt,
+)
+from tests.test_population_document_processing import (
+    receipt_result,
+)
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _coherent_document_receipt_builder(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        rehearsal_cli.document_cli,
+        "build_document_processing_receipt",
+        build_document_processing_receipt,
+    )
 
 
 def _plan(tmp_path: Path) -> tuple[RehearsalPlan, Path]:
@@ -198,7 +212,10 @@ def test_population_dispatcher_runs_one_dry_call_and_checkpoints_before_apply(
             database_instance_id="database-instance:" + "1" * 32,
             alembic_revision=plan.expected_target_revision,
             request=request,
-            result=receipt_result(),
+            result=receipt_result(
+                bounded=parsed.max_obligations is not None,
+                remaining=1 if parsed.max_obligations is not None else 0,
+            ),
             prior_checkpoint_receipt_sha256=None,
             admission_receipt_sha256=None,
         )
@@ -426,6 +443,69 @@ def test_outer_receipt_refuses_configured_live_sidecars(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="aliases a protected artifact"):
         rehearsal_cli._safe_outer_receipt(live_wal, plan=plan, inputs=())
+
+
+def test_ledger_replay_requires_document_receipt_to_match_current_planes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan, _plan_path = _plan(tmp_path)
+    receipt_path = tmp_path / "document-apply.json"
+    request = DocumentProcessingPopulationRequest(
+        cutoff_at=NOW,
+        operation_recorded_at=NOW,
+        apply=True,
+        input_commitment_sha256="b" * 64,
+        plan_commitment_sha256="c" * 64,
+    )
+    receipt = build_document_processing_receipt(
+        database_path=plan.database_path,
+        database_instance_id="database-instance:" + "1" * 32,
+        alembic_revision=plan.expected_target_revision,
+        request=request,
+        result=receipt_result(mode="apply"),
+        prior_checkpoint_receipt_sha256=None,
+        admission_receipt_sha256="e" * 64,
+    )
+    receipt_path.write_text(receipt.model_dump_json(), encoding="utf-8")
+    population = PopulationCheckpointEvidence.model_construct(
+        operator="document",
+        mode="apply",
+        operator_receipt=ArtifactCommitment.from_path(receipt_path),
+        operator_receipt_sha256=receipt.receipt_sha256,
+    )
+    checkpoint = RehearsalCheckpoint.model_construct(
+        stage=RehearsalStage.DOCUMENT,
+        population_checkpoint=population,
+    )
+
+    def connect_stub(*_args: object, **_kwargs: object) -> sqlite3.Connection:
+        return sqlite3.connect(":memory:")
+
+    def load_stub(
+        _conn: sqlite3.Connection,
+        _operation_id: str,
+    ) -> object:
+        return receipt
+
+    monkeypatch.setattr(rehearsal_cli, "connect_sqlite", connect_stub)
+    monkeypatch.setattr(rehearsal_cli, "load_document_processing_receipt", load_stub)
+    verified: list[str] = []
+
+    def verify_current(_conn: sqlite3.Connection, stored: object) -> None:
+        assert stored == receipt
+        verified.append(receipt.receipt_sha256)
+
+    monkeypatch.setattr(
+        rehearsal_cli,
+        "verify_document_processing_receipt_current",
+        verify_current,
+    )
+
+    assert rehearsal_cli._ledger_receipt_sha256(Path(plan.database_path), checkpoint) == (
+        receipt.receipt_sha256
+    )
+    assert verified == [receipt.receipt_sha256]
 
 
 def test_exact_replay_generator_replays_every_population_receipt_and_matches_ledger(

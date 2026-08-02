@@ -22,6 +22,7 @@ from provenance.document_processing_evidence import (
     publish_document_processing_evidence,
     verify_document_processing_evidence,
 )
+from provenance.immutable_artifact import canonical_text_artifact_sha256
 from provenance.population_completeness import (
     PopulationArtifactSetCommitment,
     PopulationPlaneVerification,
@@ -196,14 +197,41 @@ class DocumentProcessingOperationReceipt(_FrozenModel):
 
     @model_validator(mode="after")
     def _receipt_contract(self) -> Self:
+        bounded = (
+            self.request.after_processing_obligation_revision_id is not None
+            or self.request.max_obligations is not None
+        )
         if self.request.apply != (self.result.mode == "apply"):
             raise ValueError("document operation receipt mode does not match its result")
+        if self.result.phase != self.request.phase:
+            raise ValueError("document operation result phase does not match its request")
+        if self.result.checkpoint.bounded != bounded:
+            raise ValueError("document operation bounded result does not match its request")
+        expected_plan = document_processing_plan_commitment(
+            self.request,
+            self.result.input_commitment_sha256,
+            self.result.selection_commitment_sha256,
+        )
+        if self.result.plan_commitment_sha256 != expected_plan:
+            raise ValueError("document operation result plan commitment does not match")
+        if self.request.input_commitment_sha256 is not None and (
+            self.request.input_commitment_sha256 != self.result.input_commitment_sha256
+            or self.request.plan_commitment_sha256 != self.result.plan_commitment_sha256
+        ):
+            raise ValueError("document operation request commitments do not match its result")
         if self.request.apply != (self.admission_receipt_sha256 is not None):
             raise ValueError("an apply receipt requires exactly one dry-run admission receipt")
-        if (self.request.after_processing_obligation_revision_id is not None) != (
-            self.prior_checkpoint_receipt_sha256 is not None
+        if (
+            self.request.after_processing_obligation_revision_id is not None
+            and self.prior_checkpoint_receipt_sha256 is None
         ):
             raise ValueError("a resumed operation must bind exactly one prior checkpoint receipt")
+        if (
+            self.prior_checkpoint_receipt_sha256 is not None
+            and not bounded
+            and (self.request.phase not in {"snapshots", "all"})
+        ):
+            raise ValueError("an unbounded document successor must be a sealing phase")
         if self.request_sha256 != _model_sha(self.request):
             raise ValueError("document operation request commitment does not match")
         if self.result_sha256 != _model_sha(self.result):
@@ -292,6 +320,118 @@ def verify_document_processing_receipt(
     return True
 
 
+def verify_document_processing_receipt_current_result(
+    receipt: DocumentProcessingOperationReceipt,
+    current: DocumentProcessingPopulationResult,
+    *,
+    historical_checkpoint: bool = False,
+) -> None:
+    """Compare replay evidence with checkpoint-stable or terminal-current commitments."""
+
+    if not receipt.request.apply:
+        raise ValueError("stored document-processing replay receipt is not applied")
+    expected = receipt.result
+    if historical_checkpoint:
+        if receipt.outcome != "checkpoint":
+            raise ValueError("only a checkpoint can be verified as historical")
+        stable_expected = (
+            expected.selection_commitment_sha256,
+            expected.expected_document_count,
+            expected.missing_document_count,
+            expected.excluded_document_count,
+            expected.unresolved_document_count,
+            expected.incomplete_inventory_count,
+            expected.expected_issuer_count,
+        )
+        stable_current = (
+            current.selection_commitment_sha256,
+            current.expected_document_count,
+            current.missing_document_count,
+            current.excluded_document_count,
+            current.unresolved_document_count,
+            current.incomplete_inventory_count,
+            current.expected_issuer_count,
+        )
+        if stable_current != stable_expected:
+            raise ValueError(
+                "stored document-processing checkpoint changed its stable source universe"
+            )
+        return
+    current_plane: dict[str, object] = {
+        "applicable_obligation_count": current.applicable_obligation_count,
+        "binding_count": current.binding_count,
+        "binding_failure_count": current.binding_failure_count,
+        "excluded_document_count": current.excluded_document_count,
+        "expected_document_count": current.expected_document_count,
+        "expected_issuer_count": current.expected_issuer_count,
+        "expected_obligation_count": current.expected_obligation_count,
+        "failed_obligation_count": current.failed_obligation_count,
+        "failed_reason_counts": current.failed_reason_counts,
+        "incomplete_inventory_count": current.incomplete_inventory_count,
+        "input_commitment_sha256": current.input_commitment_sha256,
+        "missing_document_count": current.missing_document_count,
+        "not_applicable_obligation_count": current.not_applicable_obligation_count,
+        "output_commitment_sha256": current.output_commitment_sha256,
+        "post_state_commitment_sha256": current.post_state_commitment_sha256,
+        "processing_snapshot_count": current.processing_snapshot_count,
+        "sealed_disposition_count": current.sealed_disposition_count,
+        "selection_commitment_sha256": current.selection_commitment_sha256,
+        "selection_reason_counts": current.selection_reason_counts,
+        "source_obligation_count": current.source_obligation_count,
+        "unresolved_document_count": current.unresolved_document_count,
+    }
+    expected_plane: dict[str, object] = {
+        "applicable_obligation_count": expected.applicable_obligation_count,
+        "binding_count": expected.binding_count,
+        "binding_failure_count": expected.binding_failure_count,
+        "excluded_document_count": expected.excluded_document_count,
+        "expected_document_count": expected.expected_document_count,
+        "expected_issuer_count": expected.expected_issuer_count,
+        "expected_obligation_count": expected.expected_obligation_count,
+        "failed_obligation_count": expected.failed_obligation_count,
+        "failed_reason_counts": expected.failed_reason_counts,
+        "incomplete_inventory_count": expected.incomplete_inventory_count,
+        "input_commitment_sha256": expected.post_state_commitment_sha256,
+        "missing_document_count": expected.missing_document_count,
+        "not_applicable_obligation_count": expected.not_applicable_obligation_count,
+        "output_commitment_sha256": expected.output_commitment_sha256,
+        "post_state_commitment_sha256": expected.post_state_commitment_sha256,
+        "processing_snapshot_count": expected.processing_snapshot_count,
+        "sealed_disposition_count": expected.sealed_disposition_count,
+        "selection_commitment_sha256": expected.selection_commitment_sha256,
+        "selection_reason_counts": expected.selection_reason_counts,
+        "source_obligation_count": expected.source_obligation_count,
+        "unresolved_document_count": expected.unresolved_document_count,
+    }
+    if current_plane != expected_plane:
+        raise ValueError("stored document-processing receipt no longer matches current planes")
+
+
+def verify_document_processing_receipt_current(
+    conn: sqlite3.Connection,
+    receipt: DocumentProcessingOperationReceipt,
+) -> None:
+    """Recompute current document planes and verify one stored replay receipt."""
+
+    chain = _document_processing_receipt_verification_chain(conn, receipt)
+    for position, item in enumerate(chain):
+        current = populate_document_processing(
+            conn,
+            item.request.model_copy(
+                update={
+                    "apply": False,
+                    "input_commitment_sha256": None,
+                    "plan_commitment_sha256": None,
+                }
+            ),
+        )
+        verify_document_processing_receipt_current_result(
+            item,
+            current,
+            historical_checkpoint=position < len(chain) - 1,
+        )
+
+
 def database_instance_id(conn: sqlite3.Connection) -> str:
     """Return the one immutable identity installed for this database lineage."""
 
@@ -364,6 +504,122 @@ def load_document_processing_receipt(
     if not verify_document_processing_receipt(receipt) or receipt.operation_id != operation_id:
         raise ValueError("stored document-processing receipt is invalid")
     return receipt
+
+
+def _document_processing_receipt_verification_chain(
+    conn: sqlite3.Connection,
+    receipt: DocumentProcessingOperationReceipt,
+) -> tuple[DocumentProcessingOperationReceipt, ...]:
+    rows = conn.execute("SELECT receipt_json FROM document_processing_operation_ledger").fetchall()
+    ledger = tuple(
+        DocumentProcessingOperationReceipt.model_validate_json(str(row[0])) for row in rows
+    )
+    if any(not verify_document_processing_receipt(item) for item in ledger):
+        raise ValueError("document-processing ledger contains an invalid receipt")
+    if sum(item == receipt for item in ledger) != 1:
+        raise ValueError("document-processing replay receipt is not the canonical ledger receipt")
+    chain = [receipt]
+    seen = {receipt.receipt_sha256}
+    while chain[0].prior_checkpoint_receipt_sha256 is not None:
+        child = chain[0]
+        parents = tuple(
+            item
+            for item in ledger
+            if _document_receipt_artifact_sha(item) == child.prior_checkpoint_receipt_sha256
+        )
+        if len(parents) != 1:
+            raise ValueError("document-processing checkpoint parent is missing or ambiguous")
+        parent = parents[0]
+        if parent.outcome != "checkpoint":
+            raise ValueError("document-processing successor parent is not a checkpoint")
+        if parent.receipt_sha256 in seen:
+            raise ValueError("document-processing checkpoint ancestry is cyclic")
+        siblings = tuple(
+            item
+            for item in ledger
+            if item.prior_checkpoint_receipt_sha256 == _document_receipt_artifact_sha(parent)
+        )
+        if len(siblings) != 1 or siblings[0] != child:
+            raise ValueError("document-processing checkpoint successor is ambiguous")
+        _validate_document_processing_receipt_successor(parent, child)
+        chain.insert(0, parent)
+        seen.add(parent.receipt_sha256)
+    while chain[-1].outcome == "checkpoint":
+        parent = chain[-1]
+        successors = tuple(
+            item
+            for item in ledger
+            if item.prior_checkpoint_receipt_sha256 == _document_receipt_artifact_sha(parent)
+        )
+        if not successors:
+            break
+        if len(successors) != 1:
+            raise ValueError("document-processing checkpoint successor is ambiguous")
+        successor = successors[0]
+        if successor.receipt_sha256 in seen:
+            raise ValueError("document-processing checkpoint successor chain is cyclic")
+        _validate_document_processing_receipt_successor(parent, successor)
+        chain.append(successor)
+        seen.add(successor.receipt_sha256)
+    if len(chain) > 1 and not _document_receipt_is_terminal_success(chain[-1]):
+        raise ValueError("document-processing checkpoint successor chain is not terminal")
+    return tuple(chain)
+
+
+def _validate_document_processing_receipt_successor(
+    parent: DocumentProcessingOperationReceipt,
+    successor: DocumentProcessingOperationReceipt,
+) -> None:
+    if (
+        successor.database_path != parent.database_path
+        or successor.database_instance_id != parent.database_instance_id
+        or successor.alembic_revision != parent.alembic_revision
+    ):
+        raise ValueError("document-processing checkpoint successor database changed")
+    if (
+        successor.request.cutoff_at != parent.request.cutoff_at
+        or successor.request.operation_recorded_at != parent.request.operation_recorded_at
+    ):
+        raise ValueError("document-processing checkpoint successor scope changed")
+    successor_bounded = (
+        successor.request.after_processing_obligation_revision_id is not None
+        or successor.request.max_obligations is not None
+    )
+    if successor_bounded:
+        if (
+            successor.request.phase != parent.request.phase
+            or successor.request.max_obligations != parent.request.max_obligations
+        ):
+            raise ValueError("document-processing checkpoint successor batch shape changed")
+        if (
+            successor.request.after_processing_obligation_revision_id
+            != parent.result.last_processing_obligation_revision_id
+        ):
+            raise ValueError("document-processing checkpoint successor cursor changed")
+    elif (
+        successor.request.phase not in {"snapshots", "all"}
+        or parent.result.checkpoint.remaining_obligation_count != 0
+    ):
+        raise ValueError("document-processing sealing successor is not ready")
+    if (
+        successor.result.input_commitment_sha256 != parent.result.post_state_commitment_sha256
+        or successor.result.selection_commitment_sha256 != parent.result.selection_commitment_sha256
+    ):
+        raise ValueError("document-processing checkpoint successor commitments changed")
+
+
+def _document_receipt_is_terminal_success(
+    receipt: DocumentProcessingOperationReceipt,
+) -> bool:
+    bounded = (
+        receipt.request.after_processing_obligation_revision_id is not None
+        or receipt.request.max_obligations is not None
+    )
+    return receipt.request.apply and not bounded and receipt.outcome == "complete"
+
+
+def _document_receipt_artifact_sha(receipt: DocumentProcessingOperationReceipt) -> str:
+    return canonical_text_artifact_sha256(receipt.model_dump_json())
 
 
 def _document_receipt_outcome(
@@ -527,7 +783,7 @@ def populate_document_processing(
             raise ValueError("document processing requires a nonempty covered universe")
         input_sha = _input_commitment(conn, cutoff, recorded, decisions)
         selection_sha = _selection_commitment(decisions)
-        plan_sha = _population_plan_commitment(request, input_sha, selection_sha)
+        plan_sha = document_processing_plan_commitment(request, input_sha, selection_sha)
         _verify_commitments(request, input_sha=input_sha, plan_sha=plan_sha)
         if request.apply and not bounded and request.phase in {"snapshots", "all"}:
             _raise_for_immutable_snapshot_blockers(
@@ -1773,7 +2029,7 @@ def _input_commitment(
     return digest_text(canonical_json(material))
 
 
-def _population_plan_commitment(
+def document_processing_plan_commitment(
     request: DocumentProcessingPopulationRequest,
     input_sha: str,
     selection_sha: str,
