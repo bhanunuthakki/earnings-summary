@@ -848,3 +848,146 @@ class TestIncidentHardening:
         report = _run(gc_db, apply=True, policies=["facts-depth", "maintenance"], vacuum=True)
         maint = report.policies[-1]
         assert maint.detail.get("vacuum") == 1
+
+
+class TestArchiveIdempotency:
+    """Re-archiving a doomed set must never leave two sidecar copies of one row.
+
+    Prod, 2026-08-02: a facts-depth apply aborted after the archive pass (FK
+    preflight conflict, since fixed) and the retry archived the same 796,668
+    financial_facts rows again — 1,593,336 sidecar rows over 796,668 distinct
+    ids. The documented contract is that any prune is reversible with one
+    INSERT ... SELECT; with duplicates present that restore double-inserts.
+    """
+
+    @staticmethod
+    def _attached(db: Path) -> sqlite3.Connection:
+        conn = sqlite3.connect(db)
+        db_gc.attach_archive(conn, db.parent / "archive" / db_gc.ARCHIVE_NAME)
+        return conn
+
+    def test_id_keyed_table_archived_twice_keeps_one_copy_per_id(self, gc_db: Path) -> None:
+        conn = self._attached(gc_db)
+        _seed_quarters(conn, "EVAL", 4)
+        db_gc._reset_doomed(conn)
+        conn.execute("INSERT INTO _gc_doomed (id) SELECT id FROM financial_facts")
+        doomed = conn.execute("SELECT COUNT(*) FROM _gc_doomed").fetchone()[0]
+        assert doomed > 0
+
+        first = db_gc._archive_doomed(
+            conn, table="financial_facts", run_at="2026-08-02T20:40:20", policy="facts-depth"
+        )
+        second = db_gc._archive_doomed(
+            conn, table="financial_facts", run_at="2026-08-02T20:43:39", policy="facts-depth"
+        )
+
+        assert first == doomed
+        assert second == 0  # the retry adds nothing
+        total, distinct = conn.execute(
+            'SELECT COUNT(*), COUNT(DISTINCT id) FROM gcarc."financial_facts"'
+        ).fetchone()
+        assert total == distinct == doomed
+        # Both passes are still logged; the retry honestly records zero rows.
+        assert [
+            r[0]
+            for r in conn.execute(
+                "SELECT rows_archived FROM gc_manifest WHERE source_table='financial_facts'"
+                " ORDER BY run_at"
+            )
+        ] == [doomed, 0]
+
+    def test_rowid_keyed_table_archived_twice_keeps_one_copy_per_row(self, gc_db: Path) -> None:
+        # ingestion_runs has no id column in this fixture, so telemetry falls
+        # back to rowid — the archive carries identity in its own rowid.
+        conn = self._attached(gc_db)
+        conn.executemany(
+            "INSERT INTO ingestion_runs (run_id, started_at) VALUES (?, '2026-01-01')",
+            [("r1",), ("r2",), ("r3",)],
+        )
+        db_gc._reset_doomed(conn)
+        conn.execute("INSERT INTO _gc_doomed (id) SELECT rowid FROM ingestion_runs")
+
+        first = db_gc._archive_doomed(
+            conn, table="ingestion_runs", run_at="t1", policy="telemetry", id_col="rowid"
+        )
+        second = db_gc._archive_doomed(
+            conn, table="ingestion_runs", run_at="t2", policy="telemetry", id_col="rowid"
+        )
+
+        assert (first, second) == (3, 0)
+        assert [
+            r[0] for r in conn.execute('SELECT run_id FROM gcarc."ingestion_runs" ORDER BY run_id')
+        ] == ["r1", "r2", "r3"]
+        # Verbatim-restore contract: the sidecar exposes exactly the live columns.
+        assert [r[1] for r in conn.execute('PRAGMA gcarc.table_info("ingestion_runs")')] == [
+            r[1] for r in conn.execute('PRAGMA main.table_info("ingestion_runs")')
+        ]
+
+    def test_legacy_duplicated_sidecar_is_collapsed_on_next_archive(self, gc_db: Path) -> None:
+        conn = self._attached(gc_db)
+        _seed_quarters(conn, "EVAL", 3)
+        rows = conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0]
+        # Reproduce a pre-fix sidecar: schema mirror with no identity index,
+        # populated twice by an abort-then-retry.
+        conn.execute(
+            'CREATE TABLE gcarc."financial_facts" AS SELECT * FROM main."financial_facts" WHERE 0'
+        )
+        for _ in range(2):
+            conn.execute('INSERT INTO gcarc."financial_facts" SELECT * FROM main."financial_facts"')
+        assert (
+            conn.execute('SELECT COUNT(*) FROM gcarc."financial_facts"').fetchone()[0] == 2 * rows
+        )
+
+        db_gc._reset_doomed(conn)
+        conn.execute("INSERT INTO _gc_doomed (id) SELECT id FROM financial_facts")
+        added = db_gc._archive_doomed(
+            conn, table="financial_facts", run_at="t1", policy="facts-depth"
+        )
+
+        assert added == 0  # every doomed row was already archived
+        total, distinct = conn.execute(
+            'SELECT COUNT(*), COUNT(DISTINCT id) FROM gcarc."financial_facts"'
+        ).fetchone()
+        assert total == distinct == rows
+
+    def test_apply_aborted_after_archive_then_retried_archives_each_fact_once(
+        self, gc_db: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """End-to-end replay of the prod incident: abort post-archive, then retry.
+
+        Exactly the 2026-08-02 sequence — the first facts-depth apply died
+        after the archive pass and the retry archived the same rows again.
+        """
+        conn = sqlite3.connect(gc_db)
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, list_type) VALUES ('EVAL', 'evaluation')"
+        )
+        _seed_quarters(conn, "EVAL", 30)
+        conn.commit()
+        conn.close()
+
+        original = db_gc._delete_batches
+
+        def abort_after_archive(*args: object, **kwargs: object) -> int:
+            raise db_gc.GcAbortedError("simulated post-archive abort")
+
+        monkeypatch.setattr(db_gc, "_delete_batches", abort_after_archive)
+        with pytest.raises(db_gc.GcAbortedError, match="simulated post-archive abort"):
+            _run(gc_db, apply=True, policies=["facts-depth"])
+
+        arc = sqlite3.connect(gc_db.parent / "archive" / db_gc.ARCHIVE_NAME)
+        after_abort = arc.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0]
+        assert after_abort > 0  # the aborted run really did archive
+        arc.close()
+
+        monkeypatch.setattr(db_gc, "_delete_batches", original)
+        report = _run(gc_db, apply=True, policies=["facts-depth"])
+        (pol,) = report.policies
+        deleted = pol.rows_deleted["financial_facts"]
+        assert deleted == after_abort  # the retry prunes the same set
+
+        arc = sqlite3.connect(gc_db.parent / "archive" / db_gc.ARCHIVE_NAME)
+        total, distinct = arc.execute(
+            "SELECT COUNT(*), COUNT(DISTINCT id) FROM financial_facts"
+        ).fetchone()
+        assert total == distinct == deleted
