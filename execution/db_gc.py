@@ -959,6 +959,19 @@ def run_gc(
             if apply:
                 require_current_for_write(conn)
                 attach_archive(conn, archive)
+                # FK enforcement OFF for this maintenance connection (set
+                # outside any transaction — the pragma no-ops inside one, and
+                # it persists across the batch transactions below).
+                # financial_facts has no index on supersedes_id, so the
+                # enforced self-referential FK runs a full-table child scan
+                # per deleted row — measured on prod 2026-08-01: a 767k-row
+                # prune pegged one core for 2h+ (767k x 1.1M row visits) with
+                # no end in sight; batching does not reduce that per-row
+                # cost. Referential integrity is maintained explicitly: the
+                # resolution-plane cascades and the supersedes_id nulling run
+                # BEFORE the delete batches. Connection-local; enforcement
+                # returns when this connection closes.
+                conn.execute("PRAGMA foreign_keys = OFF")
             _reset_doomed(conn)
 
             if "validation-issues" in policies:
