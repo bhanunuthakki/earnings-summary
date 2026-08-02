@@ -19,6 +19,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-su
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\coach_pings' }
 & schtasks.exe /Create /TN '\earnings-summary\daily_fetch_and_brief' /XML (Join-Path $renderDir 'daily_fetch_and_brief.task.xml') /F
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\daily_fetch_and_brief' }
+& schtasks.exe /Create /TN '\earnings-summary\db_gc' /XML (Join-Path $renderDir 'db_gc.task.xml') /F
+if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\db_gc' }
 & schtasks.exe /Create /TN '\earnings-summary\decision_nudge' /XML (Join-Path $renderDir 'decision_nudge.task.xml') /F
 if ($LASTEXITCODE -ne 0) { throw 'Failed to register scheduled task \earnings-summary\decision_nudge' }
 & schtasks.exe /Create /TN '\earnings-summary\disclosure_change_sweep' /XML (Join-Path $renderDir 'disclosure_change_sweep.task.xml') /F
