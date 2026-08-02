@@ -52,6 +52,17 @@ Composition contract — ``controls_css(default)`` rides immediately after
   ``.sk-val.pos`` etc. Status green/red only; the report's ``.pos``
   accent-wayfinding (``--accent``/``--muted``) is a separate, LOCAL concern and
   deliberately stays out of the kit.
+* ``.k-empty`` + :func:`k_empty` — the ONE empty/degraded-state primitive
+  (design_language D4, surface_density_jit_redesign.md): a muted narrative
+  line plus the optional doorway chip that fills it. Replaces the seven
+  bespoke empty-state classes (``.cc-empty`` / ``.dj-empty`` / ``.diet-empty``
+  / ``.dq-empty`` / ``.jr-empty`` / ``.ask-dock-empty`` / ad hoc ``.muted``
+  paragraphs) each surface reinvented on its own. The caller translates any
+  engineering diagnostic into owner vocabulary BEFORE calling this — the
+  primitive draws the line, it doesn't write it (see
+  ``positioning_panel``'s ``pos-degraded`` block for the "receipt" pattern:
+  owner-language line up front, raw diagnostic one click away in a details
+  peek).
 * ``.k-scrim`` + ``.k-overlay`` — the one transient-surface primitive (Law 3):
   a neutral scrim + an elevated, radiused, motion-on-open panel. ``CCOverlay``
   (S4) wires dismissal (close + Esc + scrim click-out + focus trap) on top; kit
@@ -344,6 +355,16 @@ a.k-tick-sym:hover { color: var(--accent); }
    accent-wayfinding is a separate, local concern and is NOT this. ---- */
 .k-num-pos { color: var(--ok); }
 .k-num-neg { color: var(--bad); }
+
+/* ---- empty / degraded state (design_language D4): ONE narrative line + the
+   chip that fills it. Never an empty shell with explanatory prose, never a
+   raw diagnostic string surfaced verbatim — the caller translates an
+   engineering diagnostic into owner vocabulary before calling k_empty().
+   Replaces the seven bespoke empty-state classes (.cc-empty / .dj-empty /
+   .diet-empty / .dq-empty / .jr-empty / .ask-dock-empty / ad hoc .muted
+   paragraphs). ---- */
+.k-empty { color: var(--muted); font-size: var(--fs-body); padding: var(--sp-4) 0; }
+.k-empty-chip { margin-left: var(--sp-2); }
 
 /* ---- overlay primitive (Law 3): one scrim + one elevated panel. S4's
    CCOverlay JS registers/dismisses these (close + Esc + scrim click-out + focus
@@ -651,6 +672,30 @@ def panel_toolbar(
     if not head and not controls:
         return ""
     return f'<div class="k-toolbar">{head}{controls}</div>'
+
+
+def k_empty(line: str, chip_html: str = "") -> str:
+    """The D4 empty/degraded-state primitive (surface_density_jit_redesign.md
+    D4 — "one line + the chip that fills it"): a muted narrative line, plus an
+    optional doorway chip appended inline.
+
+    ``line`` is owner-vocabulary prose (escaped plain text) — translate any
+    engineering diagnostic BEFORE calling this; k_empty draws the line, it
+    never writes it. For a degraded (not merely empty) state that still needs
+    the raw diagnostic on hand, pair this with a details peek the way
+    ``positioning_panel``'s ``pos-degraded`` block does (the D4 "receipt"
+    pattern) — that's one layer up from this primitive, not inside it.
+
+    ``chip_html`` is pre-rendered HTML for the doorway that would fill the
+    gap (:func:`prov_action`, a ``.k-chip-btn`` filter, a ``.k-btn`` — the
+    call site decides); omit it when nothing is actionable yet. Returns one
+    ``<p class="k-empty">`` — this is the ONE render boundary for every
+    empty/degraded section (replaces .cc-empty / .dj-empty / .diet-empty /
+    .dq-empty / .jr-empty / .ask-dock-empty / ad hoc .muted paragraphs)."""
+    from html import escape
+
+    chip = f' <span class="k-empty-chip">{chip_html}</span>' if chip_html else ""
+    return f'<p class="k-empty">{escape(line)}{chip}</p>'
 
 
 # ---------------------------------------------------------------------------

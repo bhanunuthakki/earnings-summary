@@ -127,9 +127,11 @@ _PANEL_STYLE = """<style>
   padding:0 14px 12px; margin-top:10px; box-shadow:var(--shadow-pop); }
 .ask-pop-head { display:flex; justify-content:space-between; align-items:center; padding:10px 0;
   font-size:var(--fs-body); font-weight:600; color:var(--fg); }
-.ask-pop-head button { background:transparent; border:none; color:var(--muted); font-size:var(--fs-display);
+/* the close glyph (§3): a NAMED, styled control — not raw descendant-selector
+   chrome — matching the cc-peek-close / cc-drawer-close treatment. */
+.ask-pop-close { background:transparent; border:none; color:var(--muted); font-size:var(--fs-display);
   cursor:pointer; padding:0 4px; }
-.ask-pop-head button:hover { color:var(--fg); }
+.ask-pop-close:hover { color:var(--fg); }
 .ask-advanced .vx-builder { border:none; padding-left:0; padding-right:0; margin-top:0; }
 </style>"""
 
@@ -1095,7 +1097,7 @@ def render_explore_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> st
 </div>
 <div class="ask-advanced ask-builder-pop" id="ask-advanced" hidden>
 <div class="ask-pop-head"><span>DIY builder &middot; saved views</span>
-<button type="button" id="ask-pop-close" title="Close (Esc)">&times;</button></div>
+<button type="button" class="ask-pop-close" id="ask-pop-close" title="Close (Esc)">&times;</button></div>
 <div class="vx-builder">
   <div class="vx-row vx-nl">
     <label>ask</label>
