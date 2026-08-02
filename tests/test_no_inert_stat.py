@@ -131,7 +131,16 @@ def test_new_docs_pill_peeks_documents() -> None:
 
 
 def test_ticker_cell_is_in_shell_link() -> None:
-    """The ticker cell is an ``<a>`` the shell delegate routes to ``#holding=``
-    (``td.ticker a``) — an in-shell drill-down, not a hard navigation."""
+    """The ticker cell is a ``ticker_label()`` anchor pointing straight at
+    ``/#holding=`` (no ``/ticker/<T>`` redirect hop) — an in-shell drill-down
+    with the hover mini-card target on the cell."""
     html = _populated_cockpit()
-    assert re.search(r"<td class='ticker'[^>]*><a href='/ticker/NU'>NU</a>", html)
+    cell = re.search(r"<td class='ticker'[^>]*data-peek-ticker='NU'[^>]*>(.*?)</td>", html)
+    assert cell is not None
+    assert re.search(r"<a[^>]*k-tick-sym[^>]*href=\"/#holding=NU\"", cell.group(1)) or re.search(
+        r"<a[^>]*href=\"/#holding=NU\"[^>]*k-tick-sym", cell.group(1)
+    )
+    # The primary cell no longer routes through the /ticker/<T> redirect hop.
+    # (Secondary pills/counts elsewhere in the row still use /ticker/ links —
+    # they carry data-peek-url and 302 to /#holding=, so they are not inert.)
+    assert "/ticker/NU" not in cell.group(0)

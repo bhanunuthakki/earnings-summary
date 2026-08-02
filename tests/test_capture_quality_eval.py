@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -132,10 +133,19 @@ def test_capture_path_scan_is_partitioned_for_exact_purpose(tmp_path: Path) -> N
 
 
 def test_capture_loader_filters_age_before_deduplication(tmp_path: Path) -> None:
+    # A hard-coded "recent" date is a time bomb: the original 2026-07-26 stamp
+    # aged past the 7-day window mid-day 2026-08-02 and broke every branch.
+    # Compute the in-window stamp relative to now (naive-UTC per repo
+    # convention) so the test cannot expire.
+    recent = (datetime.now(UTC) - timedelta(days=1)).replace(tzinfo=None)
     _write_capture(
         tmp_path,
         [
-            _capture("annual_letter", prompt="same", captured_at="2026-07-26T12:00:00"),
+            _capture(
+                "annual_letter",
+                prompt="same",
+                captured_at=recent.isoformat(timespec="seconds"),
+            ),
             _capture("annual_letter", prompt="same", captured_at="2020-01-01T12:00:00"),
         ],
     )
@@ -144,7 +154,7 @@ def test_capture_loader_filters_age_before_deduplication(tmp_path: Path) -> None
 
     assert len(items) == 1
     assert items[0].produced_at is not None
-    assert items[0].produced_at.year == 2026
+    assert items[0].produced_at.year == recent.year
 
 
 def test_capture_loader_selects_one_exact_provenance_cohort(tmp_path: Path) -> None:
