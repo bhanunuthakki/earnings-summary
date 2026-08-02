@@ -380,9 +380,18 @@ def _delete_batches(
                     if row is not None:
                         guard_sql = str(row[0])
                         conn.execute(f'DROP TRIGGER "{FACTS_DELETE_GUARD_TRIGGER}"')
-                conn.execute(
-                    f'DELETE FROM "{table}" WHERE "{id_col}" IN (SELECT id FROM _gc_batch)'  # nosec B608 -- internal registry identifiers; archive-first delete
-                )
+                if table == "financial_facts":
+                    # Literal statement on purpose: the core-fact delete
+                    # ratchet (tests/test_core_fact_delete_architecture.py)
+                    # keeps this surface greppable — a dynamic f-string here
+                    # would blind it.
+                    conn.execute(
+                        "DELETE FROM financial_facts WHERE id IN (SELECT id FROM _gc_batch)"
+                    )
+                else:
+                    conn.execute(
+                        f'DELETE FROM "{table}" WHERE "{id_col}" IN (SELECT id FROM _gc_batch)'  # nosec B608 -- internal registry identifiers; archive-first delete
+                    )
                 if guard_sql is not None:
                     conn.execute(guard_sql)
                 conn.execute(f'DELETE FROM "{doomed}" WHERE id IN (SELECT id FROM _gc_batch)')  # nosec B608 -- hardcoded temp-table names
