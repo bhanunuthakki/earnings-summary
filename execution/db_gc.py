@@ -19,9 +19,13 @@ prevent a recurrence:
   write lock. Archiving writes only the attached sidecar. Deletes commit in
   ``--batch-size`` transactions, so any other writer waits at most one batch
   (seconds) behind its 30s busy_timeout. If an apply aborts between the
-  archive pass and the last delete batch, a re-run may archive some rows a
-  second time — duplicate sidecar rows are benign and logged per run in
-  ``gc_manifest``.
+  archive pass and the last delete batch, a re-run re-archives the same rows —
+  so archiving is idempotent by construction: each sidecar table carries a
+  UNIQUE index on its identity column and the copy is ``INSERT OR IGNORE``
+  (``_archive_doomed``). Duplicate sidecar rows are NOT benign — they would
+  double-insert on restore — so the archive is never allowed to hold two
+  copies of one id. Each pass logs the rows it actually added in
+  ``gc_manifest`` (0 on a re-archive).
 * **Run lock.** ``--apply`` acquires the portfolio write-set run lock
   (src/run_lock.py) that the morning pipeline orchestrator also holds, per
   AGENTS.md's one-writer-owns-the-write-set rule. A held lock is a loud,
@@ -49,6 +53,15 @@ Policies
    aggregated first_seen_at/last_seen_at/occurrence_count; duplicates are
    archived and deleted. Rows referenced by fact_selection_decisions
    (validation_issue_id, FK ON DELETE NO ACTION) are never deleted.
+   EVERY row left with a NULL fingerprint is backfilled, not just duplicate-
+   group survivors: ``record_issue`` re-opens an issue via
+   ``WHERE fingerprint = ?``, which never matches NULL, so a singleton that
+   keeps its NULL fingerprint can never be re-opened, updated, or resolved and
+   is stranded in the open-issue count forever (196 such rows survived the
+   2026-08-02 apply). Collisions against the partial unique index
+   uq_validation_issues_fingerprint are resolved, not written: a row whose
+   computed fingerprint is already held by a surviving row is a true duplicate
+   and goes through the same archive+delete path.
 
 2. ``telemetry`` — age-based retention for the three tables the audit cleared
    as safe with zero code changes: stage_transitions (read only by run_id for
@@ -432,6 +445,50 @@ def attach_archive(conn: sqlite3.Connection, archive_path: Path) -> None:
     )
 
 
+def ensure_archive_identity(
+    conn: sqlite3.Connection,
+    *,
+    schema: str,
+    table: str,
+    id_col: str,
+) -> None:
+    """Give an archive table the UNIQUE identity index that makes re-archiving safe.
+
+    Idempotent archiving needs a conflict target. ``CREATE TABLE ... AS
+    SELECT`` copies column types but NO constraints, so a freshly mirrored
+    sidecar table has nothing unique about its id column — before this index
+    existed, an apply that aborted after the archive pass and was then retried
+    left two copies of every row (prod, 2026-08-02: 1,593,336 financial_facts
+    rows over 796,668 distinct ids), which silently doubles a restore.
+
+    Legacy sidecars are self-healed once: absent the index, surviving duplicates
+    are collapsed to their lowest-rowid copy — loudly logged, never silent —
+    and the index is then created so the state cannot recur.
+    """
+    index = f"ix_gcarc_{table}_{id_col}"
+    existing = conn.execute(
+        f"SELECT 1 FROM {schema}.sqlite_master WHERE type = 'index' AND name = ?",  # nosec B608 -- schema is a literal attach alias
+        (index,),
+    ).fetchone()
+    if existing is not None:
+        return
+    removed = conn.execute(
+        f'DELETE FROM {schema}."{table}" WHERE rowid NOT IN '  # nosec B608 -- internal registry identifiers; no user input
+        f'(SELECT MIN(rowid) FROM {schema}."{table}" GROUP BY "{id_col}")'
+    ).rowcount
+    if removed:
+        _log(
+            "gc_archive_deduplicated",
+            table=table,
+            id_col=id_col,
+            rows_removed=removed,
+            detail="legacy sidecar held >1 copy per id; restore would have double-inserted",
+        )
+    conn.execute(
+        f'CREATE UNIQUE INDEX {schema}."{index}" ON "{table}" ("{id_col}")'  # nosec B608 -- internal registry identifiers; no user input
+    )
+
+
 def _archive_doomed(
     conn: sqlite3.Connection,
     *,
@@ -447,15 +504,38 @@ def _archive_doomed(
     so archived rows can be restored verbatim with INSERT ... SELECT.
     Writes touch only the attached sidecar (plus a read snapshot of main), so
     this never holds the main DB's write lock however large the doomed set is.
+
+    Idempotent: the sidecar carries a UNIQUE index on its identity column
+    (``ensure_archive_identity``) and the copy is INSERT OR IGNORE, so a run
+    that aborts after archiving and is retried re-archives nothing. Returns the
+    rows actually added, which is 0 on such a retry.
+
+    Rowid-keyed sources (no ``id`` column — the telemetry fallback) have no
+    identity column to index: CTAS drops the implicit rowid, so the source
+    rowid is written into the archive's OWN rowid and the implicit INTEGER
+    PRIMARY KEY supplies the uniqueness. ``SELECT *`` still yields exactly the
+    original columns, so the verbatim-restore contract is unchanged.
     """
     conn.execute(
         f'CREATE TABLE IF NOT EXISTS gcarc."{table}" AS SELECT * FROM main."{table}" WHERE 0'  # nosec B608 -- internal registry table name; no user input
     )
-    cur = conn.execute(
-        f'INSERT INTO gcarc."{table}" SELECT t.* FROM main."{table}" t '  # nosec B608 -- internal registry identifiers; values remain bound
-        f'JOIN "{doomed}" d ON d.id = t."{id_col}"'
-    )
-    n = cur.rowcount
+    archive_cols = {str(row[1]) for row in conn.execute(f'PRAGMA gcarc.table_info("{table}")')}
+    if id_col in archive_cols:
+        ensure_archive_identity(conn, schema="gcarc", table=table, id_col=id_col)
+        copy_sql = (
+            f'INSERT OR IGNORE INTO gcarc."{table}" SELECT t.* FROM main."{table}" t '  # nosec B608 -- internal registry identifiers; values remain bound
+            f'JOIN "{doomed}" d ON d.id = t."{id_col}"'
+        )
+    else:
+        cols = [str(row[1]) for row in conn.execute(f'PRAGMA main.table_info("{table}")')]
+        targets = ", ".join(f'"{c}"' for c in cols)
+        sources = ", ".join(f't."{c}"' for c in cols)
+        copy_sql = (
+            f'INSERT OR IGNORE INTO gcarc."{table}" (rowid, {targets}) '  # nosec B608 -- internal registry identifiers; values remain bound
+            f'SELECT t."{id_col}", {sources} FROM main."{table}" t '
+            f'JOIN "{doomed}" d ON d.id = t."{id_col}"'
+        )
+    n = conn.execute(copy_sql).rowcount
     conn.execute(
         "INSERT INTO gcarc.gc_manifest (run_at, policy, source_table, rows_archived) "
         "VALUES (?, ?, ?, ?)",
@@ -543,6 +623,106 @@ def _reset_doomed(conn: sqlite3.Connection, name: str = "_gc_doomed") -> None:
 # Policy 1: validation_issues collapse
 # ---------------------------------------------------------------------------
 
+# The defect-group partition, normalized EXACTLY the way issue_fingerprint()
+# normalizes its payload: ticker upper-cased, and a falsy source_doc_id (NULL
+# or 0) folded to the empty string. Grouping any coarser or finer than the
+# fingerprint lets two distinct groups compute one fingerprint, which the
+# partial unique index uq_validation_issues_fingerprint then rejects mid-run.
+# Keeping the two in lockstep makes group ⇔ fingerprint 1:1 by construction;
+# _fingerprint_backfill_plan still checks, because the payload join is not a
+# provable injection.
+_VI_GROUP_KEY = (
+    "CASE WHEN source_doc_id IS NULL OR source_doc_id = 0 THEN '' "
+    "ELSE CAST(source_doc_id AS TEXT) END, "
+    "UPPER(COALESCE(ticker, '')), rule, "
+    "COALESCE(raw_value, ''), COALESCE(expected, '')"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _VISurvivor:
+    """One collapse survivor read out of the _gc_vi snapshot.
+
+    ``first_seen``/``last_seen`` stay untyped: they are written back verbatim
+    and never interpreted, so the column's storage class is not our business.
+    """
+
+    issue_id: int
+    source_doc_id: int | None
+    ticker: str | None
+    rule: str
+    raw_value: str | None
+    expected: str | None
+    occurrences: int
+    first_seen: object
+    last_seen: object
+    fingerprint: str | None
+
+
+def _fingerprint_backfill_plan(
+    conn: sqlite3.Connection,
+    candidates: Sequence[_VISurvivor],
+) -> tuple[list[tuple[object, ...]], list[int], list[int]]:
+    """Resolve each survivor's lifecycle fields and fingerprint before writing.
+
+    Pure planning over a read snapshot — no statement here mutates the DB, so
+    the caller can run it identically on a dry run and on an apply.
+
+    Returns ``(updates, collided, blocked)``. ``updates`` are UPDATE parameter
+    tuples; ``collided`` are ids to archive+delete because the fingerprint they
+    need is already owned by a row that survives; ``blocked`` are collided ids
+    that fact_selection_decisions references, so they can be neither
+    fingerprinted nor deleted and stay stranded (surfaced, never silent).
+    """
+    # Fingerprints that will still exist after this pass, and so cannot be
+    # claimed. Doomed rows are excluded: their fingerprints are about to free.
+    taken: dict[str, int] = {
+        str(row[0]): int(row[1])
+        for row in conn.execute(
+            "SELECT fingerprint, id FROM validation_issues "
+            "WHERE fingerprint IS NOT NULL AND id NOT IN (SELECT id FROM _gc_doomed)"
+        )
+    }
+    referenced: set[int] = {
+        int(row[0])
+        for row in conn.execute(
+            "SELECT validation_issue_id FROM fact_selection_decisions "
+            "WHERE validation_issue_id IS NOT NULL"
+        )
+    }
+    updates: list[tuple[object, ...]] = []
+    collided: list[int] = []
+    blocked: list[int] = []
+    for row in candidates:
+        aggregate = (row.first_seen, row.last_seen, row.occurrences, row.issue_id)
+        if row.fingerprint is not None:
+            # Already lifecycle-capable. Its fingerprint is deliberately left
+            # alone (the UPDATE below COALESCEs) so a stored value can never be
+            # released mid-batch and re-claimed by another survivor.
+            updates.append((row.fingerprint, *aggregate))
+            continue
+        fingerprint = issue_fingerprint(
+            source_doc_id=row.source_doc_id,
+            ticker=row.ticker,
+            rule=row.rule,
+            raw_value=row.raw_value,
+            expected=row.expected,
+        )
+        owner = taken.get(fingerprint)
+        if owner is not None:
+            is_referenced = row.issue_id in referenced
+            (blocked if is_referenced else collided).append(row.issue_id)
+            _log(
+                "gc_validation_fingerprint_collision",
+                issue_id=row.issue_id,
+                owner_id=owner,
+                action="referenced_kept_null" if is_referenced else "archived_deleted",
+            )
+            continue
+        taken[fingerprint] = row.issue_id
+        updates.append((fingerprint, *aggregate))
+    return updates, collided, blocked
+
 
 def collapse_validation_issues(
     conn: sqlite3.Connection,
@@ -560,6 +740,13 @@ def collapse_validation_issues(
     and first_seen/last_seen/occurrence_count aggregated over the group.
     Rows referenced by fact_selection_decisions.validation_issue_id are
     protected: a referenced duplicate is simply left in place, never deleted.
+
+    A group of one is still a survivor. Backfilling only duplicate-group
+    survivors is what stranded 196 rows on 2026-08-02: with no fingerprint,
+    ``record_issue``'s ``WHERE fingerprint = ?`` can never match them, so they
+    sit in the open-issue count with no way to be re-opened or resolved. Every
+    NULL fingerprint is backfilled here, duplicate or not, and the run stays
+    idempotent because an already-fingerprinted singleton is not a candidate.
     """
     report = PolicyReport(policy="validation-issues", applied=apply)
 
@@ -568,7 +755,7 @@ def collapse_validation_issues(
     # index never collides, then newest raised_at).
     conn.execute("DROP TABLE IF EXISTS temp._gc_vi")
     conn.execute(
-        """
+        f"""
         CREATE TEMP TABLE _gc_vi AS
         SELECT id,
                ROW_NUMBER() OVER w_ord AS rn,
@@ -578,15 +765,11 @@ def collapse_validation_issues(
         FROM validation_issues
         WINDOW
           w_ord AS (
-            PARTITION BY COALESCE(source_doc_id, -1), COALESCE(ticker, ''), rule,
-                         COALESCE(raw_value, ''), COALESCE(expected, '')
+            PARTITION BY {_VI_GROUP_KEY}
             ORDER BY (fingerprint IS NOT NULL) DESC, raised_at DESC, id DESC
           ),
-          w_all AS (
-            PARTITION BY COALESCE(source_doc_id, -1), COALESCE(ticker, ''), rule,
-                         COALESCE(raw_value, ''), COALESCE(expected, '')
-          )
-        """
+          w_all AS (PARTITION BY {_VI_GROUP_KEY})
+        """  # nosec B608 -- _VI_GROUP_KEY is a module constant; no user input
     )
     _reset_doomed(conn)
     conn.execute(
@@ -602,58 +785,85 @@ def collapse_validation_issues(
     )
     doomed_total = conn.execute("SELECT COUNT(*) FROM _gc_doomed").fetchone()[0]
     groups = conn.execute("SELECT COUNT(*) FROM _gc_vi WHERE rn = 1 AND n > 1").fetchone()[0]
-    report.detail["duplicate_groups"] = groups
-    report.rows_deleted["validation_issues"] = doomed_total
-    report.rows_updated["validation_issues"] = groups
 
-    if apply and doomed_total:
-        # Aggregate lifecycle fields + a real fingerprint onto each survivor,
-        # committing every batch_size updates so the write lock is never held
-        # for the whole survivor set.
-        survivors = conn.execute(
+    # Every survivor that still needs work: a duplicate group to aggregate, or
+    # a NULL fingerprint to backfill (n = 1 singletons included).
+    candidates = [
+        _VISurvivor(
+            issue_id=int(row[0]),
+            source_doc_id=None if row[1] is None else int(row[1]),
+            ticker=None if row[2] is None else str(row[2]),
+            rule=str(row[3]),
+            raw_value=None if row[4] is None else str(row[4]),
+            expected=None if row[5] is None else str(row[5]),
+            occurrences=int(row[6]),
+            first_seen=row[7],
+            last_seen=row[8],
+            fingerprint=None if row[9] is None else str(row[9]),
+        )
+        for row in conn.execute(
             """
             SELECT v.id, v.source_doc_id, v.ticker, v.rule, v.raw_value, v.expected,
-                   g.n, g.first_seen, g.last_seen
+                   g.n, g.first_seen, g.last_seen, v.fingerprint
             FROM validation_issues v JOIN _gc_vi g ON g.id = v.id
-            WHERE g.rn = 1 AND g.n > 1
+            WHERE g.rn = 1 AND (g.n > 1 OR v.fingerprint IS NULL)
+            ORDER BY v.id
             """
         ).fetchall()
-        updates = [
-            (
-                issue_fingerprint(
-                    source_doc_id=row[1],
-                    ticker=row[2],
-                    rule=str(row[3]),
-                    raw_value=row[4],
-                    expected=row[5],
-                ),
-                row[7],
-                row[8],
-                int(row[6]),
-                row[0],
+    ]
+    updates, collided, blocked = _fingerprint_backfill_plan(conn, candidates)
+
+    needed_fingerprint = sum(1 for row in candidates if row.fingerprint is None)
+    report.detail["duplicate_groups"] = groups
+    report.detail["fingerprint_backfilled"] = needed_fingerprint - len(collided) - len(blocked)
+    report.detail["fingerprint_collisions"] = len(collided)
+    report.detail["fingerprint_blocked_referenced"] = len(blocked)
+    report.rows_deleted["validation_issues"] = doomed_total + len(collided)
+    report.rows_updated["validation_issues"] = len(updates)
+
+    if apply and (doomed_total or collided or updates):
+        # Deletes run BEFORE the updates so a survivor can never be handed a
+        # fingerprint still held by a row waiting to be removed. Collided rows
+        # join the same doomed set, so they archive under one manifest entry.
+        if collided:
+            conn.executemany(
+                "INSERT INTO _gc_doomed (id) VALUES (?)", [(issue_id,) for issue_id in collided]
             )
-            for row in survivors
-        ]
+        if doomed_total or collided:
+            _archive_doomed(
+                conn, table="validation_issues", run_at=run_at, policy="validation-issues"
+            )
+            _delete_batches(
+                conn,
+                table="validation_issues",
+                policy="validation-issues",
+                ctrl=ctrl,
+                batch_size=batch_size,
+            )
+        # Aggregate lifecycle fields + a real fingerprint onto each survivor,
+        # committing every batch_size updates so the write lock is never held
+        # for the whole survivor set. COALESCE keeps an existing fingerprint:
+        # only NULLs are filled, so no stored identity is ever released.
         for chunk in _chunks(updates, batch_size):
             ctrl.checkpoint()
             with _txn(conn):
                 conn.executemany(
-                    "UPDATE validation_issues SET fingerprint = ?, first_seen_at = ?, "
-                    "last_seen_at = ?, occurrence_count = ? WHERE id = ?",
+                    "UPDATE validation_issues SET fingerprint = COALESCE(fingerprint, ?), "
+                    "first_seen_at = ?, last_seen_at = ?, occurrence_count = ? WHERE id = ?",
                     chunk,
                 )
-        _archive_doomed(conn, table="validation_issues", run_at=run_at, policy="validation-issues")
-        _delete_batches(
-            conn,
-            table="validation_issues",
-            policy="validation-issues",
-            ctrl=ctrl,
-            batch_size=batch_size,
+    if blocked:
+        _log(
+            "gc_validation_fingerprint_stranded",
+            rows=len(blocked),
+            reason="fact_selection_decisions references a row whose fingerprint is taken",
         )
     _log(
         "gc_validation_issues",
         groups=groups,
         duplicates=doomed_total,
+        collisions=len(collided),
+        updated=len(updates),
         action="deleted" if apply else "would_delete",
     )
     return report
