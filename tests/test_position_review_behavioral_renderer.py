@@ -20,12 +20,10 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -36,20 +34,10 @@ from owner_profile.store import append_fact  # noqa: E402
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
-def _cfg(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "portfolio.db"
-    cfg = _cfg(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")  # real 0159 owner_profile_facts migration runs here
-    return db
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    # Upgrades to head, so the real 0159 owner_profile_facts migration runs.
+    return migrated_db(tmp_path / "portfolio.db", stamp=PRIOR_HEAD)
 
 
 def _affirm(

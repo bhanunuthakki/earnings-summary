@@ -10,13 +10,11 @@ the comments-server does.
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -33,20 +31,11 @@ PRIOR_HEAD = "0072_kpi_reporting_cadence"
 RD = date(2026, 6, 1)
 
 
-def _migrate(db: Path) -> None:
-    db.parent.mkdir(parents=True, exist_ok=True)
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-
-
 @pytest.fixture
-def repo(tmp_path: Path) -> Path:
+def repo(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
     """A repo root with a migrated DB at data/portfolio.db."""
     root = tmp_path / "repo"
-    _migrate(root / "data" / "portfolio.db")
+    migrated_db(root / "data" / "portfolio.db", stamp=PRIOR_HEAD)
     return root
 
 

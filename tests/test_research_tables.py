@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -23,12 +24,8 @@ def _cfg(db_path: Path) -> Config:
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "ledger.db"
-    cfg = _cfg(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-    return db
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "ledger.db", stamp=PRIOR_HEAD)
 
 
 def _tables(db_path: Path) -> set[str]:

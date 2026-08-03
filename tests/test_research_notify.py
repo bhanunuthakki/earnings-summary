@@ -4,36 +4,23 @@ action core) + the poller routing the callback branch."""
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from alembic.config import Config
 
 from advisor import senior_partner_brief as spb
-from alembic import command
 from capture import research_notify, telegram
 from research.proposals import ResearchTask, create_proposal, create_task, get_proposal, get_task
 from synthesis.insights import InsightRow
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
-def _cfg(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "ledger.db"
-    cfg = _cfg(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-    return db
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "ledger.db", stamp=PRIOR_HEAD)
 
 
 class _Spy:

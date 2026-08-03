@@ -8,33 +8,22 @@ three segment shapes (record-level replace, cell-level replace, cell-level drop)
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from provenance import overrides
 from provenance.overrides import OverrideAction
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0110_pass_decision_source"
 
 
-def _config(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 @pytest.fixture
-def conn(tmp_path: Path) -> sqlite3.Connection:
-    db = tmp_path / "ov.db"
-    cfg = _config(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")  # builds just 0111 (fact_overrides) atop the stamp
+def conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
+    # The stamp means the chain builds just 0111 (fact_overrides) on top.
+    db = migrated_db(tmp_path / "ov.db", stamp=PRIOR_HEAD)
     c = sqlite3.connect(str(db))
     c.row_factory = sqlite3.Row
     return c

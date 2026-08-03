@@ -6,12 +6,11 @@ Integration over a fully-migrated tmp DB; transcription is mocked (no model).
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from capture import ingest, sessions, transcribe
 from capture.matcher import build_roster_index
 from user_state import notes
@@ -23,20 +22,9 @@ ROSTER = build_roster_index(
 )
 
 
-def _cfg(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "ledger.db"
-    cfg = _cfg(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-    return db
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "ledger.db", stamp=PRIOR_HEAD)
 
 
 def _audit_count(db_path: Path, **where: object) -> int:

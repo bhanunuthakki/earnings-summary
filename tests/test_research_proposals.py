@@ -2,36 +2,23 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from capture import ingest
 from capture.matcher import build_roster_index
 from research import proposals
 from user_state import notes
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 ROSTER = build_roster_index(symbols=["NU"], phrases={"nubank": "NU"})
 
 
-def _cfg(db_path: Path) -> Config:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    return cfg
-
-
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "ledger.db"
-    cfg = _cfg(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-    return db
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "ledger.db", stamp=PRIOR_HEAD)
 
 
 def _land(db_path: Path, text: str) -> int:

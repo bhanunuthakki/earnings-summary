@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -509,14 +510,8 @@ _PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
 @pytest.fixture
-def client(tmp_path: Path) -> FlaskClient:
-    db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, "head")
+def client(tmp_path: Path, migrated_db: Callable[..., Path]) -> FlaskClient:
+    migrated_db(tmp_path / "data" / "portfolio.db", stamp=_PRIOR_HEAD)
     return comments_server.create_app(tmp_path).test_client()
 
 

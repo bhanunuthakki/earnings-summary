@@ -8,13 +8,11 @@ on the $0-triage path (nothing flagged ⇒ no LLM), so CI needs no CLI.
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from flask.testing import FlaskClient
-
-from alembic import command
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "execution"))
@@ -28,20 +26,9 @@ from synthesis.tenets import ensure_tenet_for_note, record_tenet  # noqa: E402
 _PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
-def _build_db(db_path: Path) -> None:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-
-
 @pytest.fixture
-def db_file(tmp_path: Path) -> Path:
-    db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
-    return db
+def db_file(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "data" / "portfolio.db", stamp=_PRIOR_HEAD)
 
 
 @pytest.fixture

@@ -11,6 +11,7 @@ the ``land_session_notes.py transcript`` bridge kind.
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 
@@ -42,12 +43,8 @@ def _cfg(db_path: Path) -> Config:
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "ledger.db"
-    cfg = _cfg(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-    return db
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "ledger.db", stamp=PRIOR_HEAD)
 
 
 def _ask_session_with_turns(db_path: Path, *, user_turns: int = 2) -> ask_store.AskSession:

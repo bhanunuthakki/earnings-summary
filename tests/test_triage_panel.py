@@ -12,14 +12,13 @@ test_journal_panel.py.
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 from flask.testing import FlaskClient
 
-from alembic import command
 from user_state.notes import (
     ROUTABLE_INTENTS,
     create_note,
@@ -36,20 +35,9 @@ import comments_server  # noqa: E402
 _PRIOR_HEAD = "0059_kpi_facts_restatement"
 
 
-def _build_db(db_path: Path) -> None:
-    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
-    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
-    command.stamp(cfg, _PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-
-
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "data" / "portfolio.db"
-    db.parent.mkdir(parents=True)
-    _build_db(db)
-    return db
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "data" / "portfolio.db", stamp=_PRIOR_HEAD)
 
 
 @pytest.fixture
