@@ -38,7 +38,7 @@ import re
 
 from ui.cite_marks import CitationsPayload, linkify
 
-__all__ = ["render_prose"]
+__all__ = ["prose_card_text", "render_prose"]
 
 
 _BOLD_RX = re.compile(r"\*\*([^*]+)\*\*")
@@ -58,6 +58,28 @@ def _inline(text: str) -> str:
     text = _BOLD_RX.sub(r"<strong>\1</strong>", text)
     text = _ITAL_RX.sub(r"<em>\1</em>", text)
     return _INLINE_CODE_RX.sub(r"<code>\1</code>", text)
+
+
+def prose_card_text(text: str) -> str:
+    """The boundary for CLAMPED inline contexts (feed card bodies, one-line
+    summaries): markdown-bearing stored text → inline-safe HTML with no block
+    structure. Block markers are STRIPPED, not rendered — a line-clamped card
+    can't host headings/bullets — and the span pass keeps ``**bold**`` as real
+    ``<strong>`` instead of leaking literal asterisks (the 2026-08-02 feed
+    leak: a next-dollar memo body reached ``html.escape`` raw). Bare-escaping
+    a markdown-bearing body is exactly the half of the §9 contract the
+    renderer-signature guard cannot see; use this instead."""
+    lines: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or set(line) <= {"-", "—", "="}:
+            continue
+        heading = _HEADING_RX.match(line)
+        if heading:
+            line = heading.group(2)
+        line = _BULLET_RX.sub("", line)
+        lines.append(line)
+    return _inline(" ".join(lines))
 
 
 def render_prose(
