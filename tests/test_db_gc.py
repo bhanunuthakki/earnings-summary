@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import sqlite3
 import sys
 from collections.abc import Callable
@@ -1256,3 +1257,137 @@ class TestArchiveIdempotency:
             db_gc._archive_doomed(conn, table="financial_facts", run_at="t2", policy="facts-depth")
             == 0
         )
+
+
+class TestProtectedTableScope:
+    """The 2026-07-30 consumer audit's hardest constraint: some tables must
+    NEVER be pruned, and the weekly cron runs unattended with defaults.
+
+    Until now that rule lived only in prose (the directive, the module
+    docstring, project memory). Nothing failed if a future change added a
+    protected table to a policy — the cron would simply start deleting from
+    it every Sunday. These tests are the gate.
+
+    Why each is protected (audit findings, do not relax without re-auditing):
+      * kpi_facts          — no reader has a wall-clock filter; as-of replay
+                             and HAVING-count catalogs need old rows.
+      * llm_calls          — cost ledger; sealed-Ask audit FKs are
+                             ON DELETE NO ACTION and the eval-coverage gate
+                             counts all-time calls.
+      * fmp_endpoint_status — a current-state cache manifest keyed by
+                             (ticker, endpoint, period), not a log; deleting a
+                             row silently forces a re-fetch.
+    """
+
+    PROTECTED = ("kpi_facts", "llm_calls", "fmp_endpoint_status")
+
+    def _add_protected_tables(self, db: Path) -> None:
+        """Give the fixture the protected tables, each holding a row far older
+        than any retention cutoff — so an age-based policy that reached them
+        would visibly delete it."""
+        conn = sqlite3.connect(db)
+        conn.executescript(
+            """
+            CREATE TABLE kpi_facts (
+                id INTEGER PRIMARY KEY, ticker TEXT, period_end TEXT,
+                fiscal_period_type TEXT, value NUMERIC, source_doc_id INTEGER
+            );
+            CREATE TABLE llm_calls (
+                id INTEGER PRIMARY KEY, purpose TEXT, called_at TEXT,
+                cost_estimate_usd NUMERIC
+            );
+            CREATE TABLE fmp_endpoint_status (
+                ticker TEXT, endpoint TEXT, period TEXT, status TEXT,
+                last_pulled TIMESTAMP, PRIMARY KEY (ticker, endpoint, period)
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, value,"
+            " source_doc_id) VALUES ('NU', '1998-12-31', 'FY', 1, 1)"
+        )
+        conn.execute(
+            "INSERT INTO llm_calls (purpose, called_at, cost_estimate_usd)"
+            " VALUES ('transcript_summary', '2019-01-01T00:00:00', 0.42)"
+        )
+        conn.execute(
+            "INSERT INTO fmp_endpoint_status (ticker, endpoint, period, status,"
+            " last_pulled) VALUES ('NU', 'income-statement', 'quarter', 'ok',"
+            " '2019-01-01T00:00:00')"
+        )
+        conn.commit()
+        conn.close()
+
+    def test_full_apply_never_touches_a_protected_table(self, gc_db: Path) -> None:
+        """Behavioural gate: run every policy with --apply, exactly as the
+        Sunday cron does, and prove the ancient rows survive."""
+        self._add_protected_tables(gc_db)
+        conn = sqlite3.connect(gc_db)
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, list_type) VALUES ('EVAL', 'evaluation')"
+        )
+        _seed_quarters(conn, "EVAL", 30)  # ensure facts-depth actually does work
+        conn.commit()
+        conn.close()
+
+        report = _run(gc_db, apply=True, include_portfolio=True)
+        # The run must have been a real one, not a no-op that proves nothing.
+        assert any(sum(p.rows_deleted.values()) > 0 for p in report.policies)
+
+        conn = sqlite3.connect(gc_db)
+        for table in self.PROTECTED:
+            assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1, (
+                f"db_gc deleted from protected table {table}"
+            )
+        # And nothing protected was copied into the archive sidecar either.
+        arc = gc_db.parent / "archive" / db_gc.ARCHIVE_NAME
+        if arc.exists():
+            names = {
+                r[0]
+                for r in sqlite3.connect(arc).execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            assert names.isdisjoint(self.PROTECTED)
+
+    def test_policy_registries_match_the_audited_set(self) -> None:
+        """Structural gate: the literals the cron's defaults resolve to. A
+        change here is a deliberate scope decision that must be re-audited —
+        the failure message is the review prompt."""
+        assert db_gc.POLICY_NAMES == (
+            "validation-issues",
+            "telemetry",
+            "facts-depth",
+            "maintenance",
+        )
+        assert {t for t, _ in db_gc.TELEMETRY_TABLES} == {
+            "stage_transitions",
+            "source_calls",
+            "ingestion_runs",
+        }, "telemetry retention scope changed — re-audit readers before widening"
+        # pipeline_attempts is deliberately absent: run_accounting's
+        # deduplicate_completed does an unbounded any-prior-OK lookup, so
+        # pruning it silently un-suppresses old logical invocations.
+        assert "pipeline_attempts" not in {t for t, _ in db_gc.TELEMETRY_TABLES}
+
+    def test_cron_defaults_match_the_ratified_windows(self) -> None:
+        """The wrapper passes no window flags, so the cron inherits these.
+        Ratified 2026-07-31: 20 quarters / 12 fiscal years, floors 16/12."""
+        # The parser is built inline in main(), so pin the literals directly:
+        # these are the values an unattended `--apply` resolves to.
+        source = (REPO / "execution" / "db_gc.py").read_text(encoding="utf-8")
+        for flag, expected in (
+            ("--keep-quarters", 20),
+            ("--keep-fy", 12),
+            ("--retention-days", 90),
+        ):
+            match = re.search(
+                rf'add_argument\(\s*"{re.escape(flag)}"[^)]*?default=(\d+)', source, re.S
+            )
+            assert match is not None, f"{flag} default not found — did the CLI change?"
+            assert int(match.group(1)) == expected, (
+                f"{flag} default is {match.group(1)}, ratified value is {expected}; "
+                "the Sunday cron passes no window flags and inherits this"
+            )
+        assert db_gc.MIN_KEEP_QUARTERS == 16, "report §3 loads 12 display + 4 CAGR baseline"
+        assert db_gc.MIN_KEEP_FY == 12
