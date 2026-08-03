@@ -53,6 +53,10 @@ def _canonical(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+def _legacy_canonical(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
 def _config(path: Path) -> Config:
     config = Config(str(ROOT / "alembic.ini"))
     config.set_main_option("script_location", str(ROOT / "alembic"))
@@ -329,6 +333,7 @@ def _seed_run(
     extractor_code_version: str,
     extractor_config_sha256: str,
     children: tuple[tuple[str, str, EvidenceLocator], ...],
+    legacy_ascii_output: bool = False,
 ) -> tuple[EvidenceNode, ...]:
     document_node = _node(
         run_id=run_id,
@@ -352,7 +357,12 @@ def _seed_run(
             for ordinal, (kind, text, locator) in enumerate(children, start=1)
         ),
     )
-    output_sha = _sha([item.model_dump(mode="json", exclude_none=True) for item in nodes])
+    output_payload = [item.model_dump(mode="json", exclude_none=True) for item in nodes]
+    output_sha = hashlib.sha256(
+        (
+            _legacy_canonical(output_payload) if legacy_ascii_output else _canonical(output_payload)
+        ).encode()
+    ).hexdigest()
     ledger = EvidenceLedger(conn)
     ledger.persist(
         ExtractionRun(
@@ -1668,6 +1678,40 @@ def test_member_omission_reorder_extra_and_native_loss_are_blocked_or_detected(
             processing_lane="html_native_hierarchy",
             cutoff_at=T1,
         )
+
+
+def test_html_lane_verifies_legacy_ascii_escaped_unicode_output_commitment(
+    conn: sqlite3.Connection,
+) -> None:
+    blob = _seed_document(conn, document_version_id="html-unicode", media_type="text/html")
+    _seed_run(
+        conn,
+        document_version_id="html-unicode",
+        blob_sha=blob,
+        run_id="html-unicode-run",
+        extractor_name=STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR.name,
+        extractor_code_version=STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR.code_version,
+        extractor_config_sha256=STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR.config_sha256,
+        children=(
+            (
+                "passage",
+                "Revenue grew — café expansion continued.",
+                EvidenceLocator(source_ref="report.html", char_start=0, char_end=41),
+            ),
+        ),
+        legacy_ascii_output=True,
+    )
+
+    receipt = publish_document_processing_evidence(
+        conn,
+        document_version_id="html-unicode",
+        processing_lane="html_native_hierarchy",
+        cutoff_at=T1,
+        recorded_at=T2,
+    )
+
+    assert receipt.member_count == 1
+    assert receipt.exact_replay is False
 
 
 def test_backdated_new_run_cannot_change_old_pinned_seal(

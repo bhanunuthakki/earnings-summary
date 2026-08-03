@@ -391,12 +391,19 @@ def _all_run_nodes(
                 recorded_at=recorded_at,
             )
         )
-    output_payload = [model.model_dump(mode="json", exclude_none=True) for model in models]
-    if _digest(output_payload) != _require_sha(run, "output_sha256"):
+    if _legacy_extraction_output_sha256(models) != _require_sha(run, "output_sha256"):
         raise DocumentProcessingEvidenceIntegrityError(
             "native_extraction_output_commitment_mismatch"
         )
     return rows
+
+
+def _legacy_extraction_output_sha256(models: list[EvidenceNode]) -> str:
+    """Reproduce the extraction ledger's original JSON commitment contract."""
+
+    payload = [model.model_dump(mode="json", exclude_none=True) for model in models]
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _node_member(

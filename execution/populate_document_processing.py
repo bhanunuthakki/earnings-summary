@@ -192,7 +192,10 @@ def validate_checkpoint_successor(
         raise ValueError("document-processing input changed since prior checkpoint")
     if result.selection_commitment_sha256 != receipt.result.selection_commitment_sha256:
         raise ValueError("document-processing selection changed since prior checkpoint")
-    if result.output_commitment_sha256 != receipt.result.output_commitment_sha256:
+    if (
+        not request.apply
+        and result.output_commitment_sha256 != receipt.result.output_commitment_sha256
+    ):
         raise ValueError("document-processing output changed since prior checkpoint")
 
 

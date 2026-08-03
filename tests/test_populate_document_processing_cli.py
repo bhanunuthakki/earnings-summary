@@ -467,6 +467,12 @@ def test_checkpoint_successor_rejects_selection_output_and_revision_drift(
             result=current.model_copy(update={"output_commitment_sha256": "f" * 64}),
             alembic_revision="0264_document_processing_operation_ledger",
         )
+    cli.validate_checkpoint_successor(
+        prior,
+        request=successor_request.model_copy(update={"apply": True}),
+        result=current.model_copy(update={"output_commitment_sha256": "f" * 64}),
+        alembic_revision="0264_document_processing_operation_ledger",
+    )
     with pytest.raises(ValueError, match="revision"):
         cli.validate_checkpoint_successor(
             prior,
