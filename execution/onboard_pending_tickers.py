@@ -92,6 +92,7 @@ from pipeline.cadence_policy import (  # noqa: E402
 )
 from pipeline.queries import open_db  # noqa: E402
 from provenance.selection import selected_transcripts_relation  # noqa: E402
+from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
 
 _DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
@@ -543,13 +544,29 @@ def main() -> int:
     results: list[TickerResult] = []
     for ticker, reason in pending:
         log.info("processing %s (%s)", ticker, reason)
-        result = onboard_one(
-            ticker,
-            reason,
-            skip_fmp=args.skip_fmp,
-            skip_commitments=args.skip_commitments,
-            log_path=log_path,
-        )
+        # portfolio-db is claimed PER TICKER, not for the whole run. A full
+        # run regularly outlives its hourly trigger (01:17->03:20 observed on
+        # 2026-08-03), and holding the DB write set across all of it starved
+        # every other scheduled writer -- 13 jobs skipped_locked in one day,
+        # including four consecutive nightly backups. Discovery, the budget
+        # gate, and all network/LLM preparation above run OUTSIDE the lock;
+        # only each ticker's bounded mutation chain runs inside it, so the
+        # set is free between tickers for anything that was waiting.
+        try:
+            with JobLock(PROJECT_ROOT, "onboard-pending", ["portfolio-db"], wait_s=600.0):
+                result = onboard_one(
+                    ticker,
+                    reason,
+                    skip_fmp=args.skip_fmp,
+                    skip_commitments=args.skip_commitments,
+                    log_path=log_path,
+                )
+        except JobAlreadyRunningError as exc:
+            # A long holder (db_gc, the morning pipeline) outlasted the wait:
+            # skip THIS ticker and keep going -- it stays pending and the next
+            # hourly run retries it. One busy writer must not abort the list.
+            log.warning("  %s skipped: %s", ticker, exc)
+            continue
         results.append(result)
         outcomes = " ".join(f"{s.stage.split('_')[0]}={s.outcome.value}" for s in result.stages)
         log.info("  %s done in %.1fs — %s", ticker, result.elapsed_seconds, outcomes)

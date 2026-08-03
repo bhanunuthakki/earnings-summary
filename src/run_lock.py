@@ -3,7 +3,13 @@
 AGENTS.md concurrency rule: one process owns each mutable pipeline state /
 database write set at a time, and scheduled + interactive runs must acquire or
 honor the SAME run lock before mutation. This module is that lock for
-``data/portfolio.db``.
+``data/portfolio.db`` — THE canonical DB write lock. As of 2026-08-03 the cron
+fleet's ``JobLock`` (runtime.job_runtime) maps its "portfolio-db" write set
+onto this same file, ending the era of two lock systems with two files that
+never excluded each other (a backup holding JobLock's hashed lock was never
+protected from a db_gc VACUUM holding this one). New code protecting the DB
+write set reaches for this lock — via ``acquire_run_lock``/``hold_run_lock``
+in library code, or ``JobLock(..., ["portfolio-db"])`` in scheduled jobs.
 
 Motivating incident (2026-07-31/08-01): a manual ``db_gc.py --apply`` run held
 the portfolio.db write lock for 10+ hours, starving ``alembic upgrade head``
@@ -39,6 +45,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
+from uuid import uuid4
 
 from clock import now_naive_utc
 
@@ -145,6 +152,12 @@ def acquire_run_lock(
             "owner": owner,
             "acquired_at": now_naive_utc().isoformat(),
             "argv": sys.argv,
+            # JobLock (runtime.job_runtime) now shares THIS file for the
+            # "portfolio-db" write set. Its reader refuses token-less payloads
+            # as corrupt, so a token here is what lets a JobLock contender
+            # recognize a dead run_lock holder as stale instead of waiting on
+            # a corpse forever.
+            "token": uuid4().hex,
         }
     )
     deadline = time.monotonic() + max(0.0, timeout_s)
