@@ -197,13 +197,19 @@ def test_scheduler_wrapper_preserves_script_arguments(
     captured: dict[str, object] = {}
 
     def fake_run_job(
-        *, repo_root: Path, job_name: str, write_sets: list[str], command: list[str]
+        *,
+        repo_root: Path,
+        job_name: str,
+        write_sets: list[str],
+        command: list[str],
+        allow_schema_drift: bool,
     ) -> int:
         captured.update(
             repo_root=repo_root,
             job_name=job_name,
             write_sets=write_sets,
             command=command,
+            allow_schema_drift=allow_schema_drift,
         )
         return 0
 
@@ -238,6 +244,7 @@ def test_scheduler_wrapper_preserves_script_arguments(
             "--label",
             "two words",
         ],
+        "allow_schema_drift": False,
     }
 
 

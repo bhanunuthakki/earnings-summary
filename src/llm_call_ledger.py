@@ -272,6 +272,7 @@ def record_call(record: LlmCallRecord, *, db_path: Path | str | None = None) -> 
     callers leave it None so the writer picks up whichever DB the surrounding
     pipeline has configured via ``db.DB_PATH``.
     """
+    path: Path | str | None = None
     try:
         if record.purpose is None:
             # Attribution hygiene (2026-07-19 review: purpose=NULL rows had
@@ -351,12 +352,30 @@ def record_call(record: LlmCallRecord, *, db_path: Path | str | None = None) -> 
         # Best-effort: log + return None. The LLM call that produced this
         # record has already succeeded (or failed loudly elsewhere); a logging
         # miss must never escalate into a pipeline failure.
+        detail = f"{type(exc).__name__}: {exc}"
         log.warning(
             {
                 "event": "llm_call_ledger_write_failed",
-                "error": f"{type(exc).__name__}: {exc}",
+                "error": detail,
                 "purpose": record.purpose,
                 "ticker": record.ticker,
             }
         )
+        # …and leave a counter behind. A WARNING inside a cron log is only
+        # observable to whoever reads that log; on 2026-08-02 nobody did for
+        # long enough to lose seven cost rows to a lagging Alembic revision.
+        # The counter is what the cron-health panel reads.
+        if path is not None:
+            try:
+                from telemetry_health import DROPPED_LLM_LEDGER_WRITE, record_dropped_write
+
+                record_dropped_write(
+                    DROPPED_LLM_LEDGER_WRITE,
+                    db_path=path,
+                    error=detail,
+                    purpose=record.purpose,
+                    ticker=record.ticker,
+                )
+            except ImportError as import_exc:  # pragma: no cover - defensive
+                log.debug({"event": "dropped_write_counter_unavailable", "error": str(import_exc)})
         return None
