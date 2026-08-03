@@ -48,6 +48,7 @@ from llm.model_ladder import (
     cheaper_candidates,
     model_rank,
 )
+from llm.prompt_registry import PromptTemplate, register
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -60,11 +61,15 @@ _MAX_RESEARCH_ROWS = 12
 _MAX_USD_PER_MTOK = 1000.0
 _FAMILIES = (CLAUDE, GEMINI, OPENROUTER)
 
-# Instruction scaffold for model_frontier_research (v1 — prompt_versions).
-FRONTIER_PROMPT = """\
+# Instruction scaffold for model_frontier_research (v3 — prompt_versions).
+FRONTIER_PROMPT_TEMPLATE = register(
+    PromptTemplate(
+        template_id="model_frontier.research",
+        body="""Search the web before answering. An answer that cites no source is invalid.
+
 You are refreshing the candidate-model frontier for an LLM cost optimizer.
 
-Research CURRENT (verify with web search) general-availability API pricing and
+Research CURRENT general-availability API pricing and
 capability signals for language models across three providers:
 - Anthropic Claude tiers (family "claude"),
 - Google Gemini tiers (family "gemini"),
@@ -87,6 +92,8 @@ models (do NOT list hundreds; pick the few worth testing).
 The models already known to the optimizer (do not re-list them):
 {known_ids}
 
+WEB BUDGET (HARD CAPS): run at most 6 searches and open at most 12 sources.
+
 Respond with ONLY a JSON object:
 {{"candidates": [
   {{"model_id": "<exact API/OpenRouter id>",
@@ -97,10 +104,23 @@ Respond with ONLY a JSON object:
    "source_url": "<pricing page you verified>",
    "notes": "<one line: what it is / why promising>"}},
   ...
-]}}
+], "search_evidence": {{
+  "queries": ["<query actually run>", "..."],
+  "sources_opened": ["<source URL actually opened>", "..."],
+  "checked_at": "YYYY-MM-DD"
+}}}}
 Prices must be the provider's public list prices in USD per million tokens.
-Omit anything you could not verify. An empty list is a valid answer.
-"""
+Omit anything you could not verify. An empty candidates list is valid only when
+search_evidence names the queries run, dated sources opened, and coverage of all
+three provider families. Never use an empty list as a substitute for searching.
+""",
+        variables=("known_ids",),
+        description="Web-sourced current model-price and capability frontier",
+    )
+)
+
+# Compatibility for isolation checks and callers that inspect the prompt body.
+FRONTIER_PROMPT = FRONTIER_PROMPT_TEMPLATE.body
 
 WebCall = Callable[..., str]
 
@@ -264,7 +284,7 @@ def run_frontier_research(
     # rows may be RE-verified/re-priced by a later research pass (that refresh
     # is the point of the monthly cadence).
     tracked = set(MODEL_LADDER) | set(load_candidate_models(db_path))
-    prompt = FRONTIER_PROMPT.format(known_ids=", ".join(sorted(tracked)))
+    prompt = FRONTIER_PROMPT_TEMPLATE.render(known_ids=", ".join(sorted(tracked)))
     rejected: set[str] = set(MODEL_LADDER)
     if web_call is None:
         from llm.cli import call_llm_with_web

@@ -18,6 +18,7 @@ from llm_client import (  # noqa: E402
     _MAX_EVENT_TEXT_CHARS,
     _MAX_EXCERPT_CHARS_PER_NEWS_ITEM,
     _MAX_WEB_RESULTS_PER_NEWS_CALL,
+    RECENT_DEVELOPMENTS_TEMPLATE,
     _truncate_event_text,
 )
 
@@ -76,9 +77,11 @@ def test_recent_developments_prompt_carries_web_budget_lines() -> None:
     # The hard-cap stanza must appear in the source so a future refactor
     # that drops it surfaces here.
     assert "WEB BUDGET (HARD CAPS" in src
-    assert "AT MOST 2 web_search queries" in src
-    assert "AT MOST {max_web_results}" in src
+    assert "Run at most 2 searches total" in src
+    assert "Open at most {max_web_results} sources" in src
     assert "AT MOST {max_excerpt_chars} characters" in src
+    assert "web_search" not in RECENT_DEVELOPMENTS_TEMPLATE.body
+    assert "web_fetch" not in RECENT_DEVELOPMENTS_TEMPLATE.body
 
 
 def test_event_brief_uses_truncated_text(monkeypatch) -> None:  # type: ignore[no-untyped-def]

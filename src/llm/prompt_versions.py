@@ -151,7 +151,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # news_structuring v2 (2026-06-12, S9): UNTRUSTED WEB CONTENT priority
     # rule added; thesis anchor spotlighted at the fetch_news_websearch call
     # site (which also now sources its artifact version from this entry).
-    "news_structuring": "v2",
+    # v3 (2026-08-03): transport-neutral search-first obligation and evidenced
+    # empty-result branch; model and transport are unchanged.
+    "news_structuring": "v3",
     # Falsifiable-condition extraction (src/decision_conditions.py, mode-A
     # golden set). Bump when _EXTRACTION_PROMPT is materially rewritten, then
     # re-run `run_llm_evals.py --purpose decision_conditions_extract`.
@@ -197,7 +199,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "press_release_summary": "v2",  # press-release body spotlighted
     "presentation_brief": "v2",  # deck text spotlighted
     "event_brief": "v2",  # event document text spotlighted
-    "recent_developments": "v2",  # web-content priority rule added
+    # v3 (2026-08-03): transport-neutral search-first obligation and evidenced
+    # no-news branch; model and transport are unchanged.
+    "recent_developments": "v3",
     "company_description": "v2",  # 10-K excerpts + IR blocks spotlighted
     "platform_diagram": "v2",  # 10-K + transcript excerpts spotlighted
     "pairwise_analysis": "v2",  # composed anchor block now spotlighted
@@ -272,7 +276,7 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # stress prompt is materially rewritten.
     "artifact_brief": "v1",
     # The Ledger Phase-1 research loop (two-pass): fetch / adversarial assess / narrate.
-    "research_fetch": "v1",
+    "research_fetch": "v2",  # transport-neutral search-first web prompt
     "research_adversarial_assess": "v1",
     "research_narrate": "v1",
     # The Ledger Phase-2 generation seams (decision extraction + drift phrasing).
@@ -288,7 +292,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # judge-grade models, so the judge pool can be rotated as cheap
     # open-weight models improve (owner directive; see
     # model_ladder.DEEPSEEK_JUDGE_MODEL for the swap procedure).
-    "model_frontier_research": "v2",
+    # v3 (2026-08-03): transport-neutral search-first obligation and evidence
+    # for an empty candidate set; model and transport are unchanged.
+    "model_frontier_research": "v3",
     # Per-case checklist deriver (llm/query_criteria.py, §3). This version IS
     # the query_criteria cache key: bumping it forks checklist history cleanly.
     "query_criteria_derive": "v1",
