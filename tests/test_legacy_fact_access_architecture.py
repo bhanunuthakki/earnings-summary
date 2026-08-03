@@ -67,7 +67,10 @@ AUDITED_LEGACY_FACT_READS = {
     # The eighth literal is an EXPLAIN QUERY PLAN safety probe that proves the
     # supersedes self-FK lookup uses the migration-owned index before deletion;
     # it does not fetch domain rows.
-    "execution/db_gc.py": 8,
+    # The ninth read is the surviving-fact NOT EXISTS guard on the
+    # attempts-grid cascade (2026-08-03 adversarial review, #7): a period
+    # keeping ANY fact keeps its grid row.
+    "execution/db_gc.py": 9,
     "execution/extract_kpis_from_ir.py": 1,
     "execution/fix_kpi_series.py": 2,
     "execution/fmp_backpop.py": 1,
