@@ -71,9 +71,18 @@ _HEADING_MARK_RX = re.compile(r"^[ \t]*#{1,6}[ \t]+", re.MULTILINE)
 
 
 def strip_inline_markdown(text: str) -> str:
-    """Reduce a SCALAR field to plain text: unwrap ``**bold**`` / ``__bold__``
-    / ``*italic*`` / `` `code` `` pairs and drop leading heading markers.
-    Idempotent; unpaired markers and intra-word underscores are untouched."""
+    """Reduce a NATURAL-LANGUAGE SCALAR field to plain text: unwrap
+    ``**bold**`` / ``__bold__`` / ``*italic*`` / `` `code` `` pairs and drop
+    leading heading markers. Idempotent; unpaired markers and intra-word
+    underscores are untouched.
+
+    CONTRACT — natural-language scalars ONLY (KPI names, chart priorities,
+    memo titles). It is NOT safe for identifier/formula/code-bearing columns:
+    paired ``*``/``__`` are treated as emphasis, so ``3*4*5`` -> ``345``,
+    ``__init__ handler`` -> ``init handler``, and ``a__b__c`` -> ``abc``. The
+    corrupting boundary is pinned by regression tests in
+    ``tests/test_llm_postprocess.py`` — point this at a formula- or
+    identifier-bearing field only after consciously revisiting those tests."""
     if not text:
         return text
     out = text

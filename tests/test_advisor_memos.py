@@ -64,6 +64,48 @@ def _build_db(tmp_path: Path) -> Path:
 
 
 # --------------------------------------------------------------------------- #
+# _memo_summary_line — the note-sized conclusion selector
+# --------------------------------------------------------------------------- #
+
+
+def test_memo_summary_line_selects_bold_lead_not_heading() -> None:
+    """A next-dollar memo opens with a ``## `` heading then a ``**bold lead.**``
+    sentence. The summary must be that first real sentence (the bold-lead
+    prose), NOT the heading flattened into the body — the old
+    ``startswith("*")`` skipped the bold line as a bullet and fell through to
+    dumping the whole body, heading text first."""
+    from advisor.memos import _memo_summary_line
+    from llm.postprocess import strip_inline_markdown
+
+    body = (
+        "## Where the next dollar works hardest\n"
+        "**MELI — deepen, with eyes open.** The case for: durable take-rate.\n"
+        "\n"
+        "## What the book is telling you\n"
+        "Concentration is rising.\n"
+    )
+    summary = strip_inline_markdown(_memo_summary_line(body))
+    # The bold-lead prose is selected, plain (no ``*`` markers)…
+    assert summary == "MELI — deepen, with eyes open. The case for: durable take-rate."
+    assert "*" not in summary
+    # …and the heading text never leaks into the summary.
+    assert "Where the next dollar works hardest" not in summary
+
+
+def test_memo_summary_line_still_skips_structural_markdown() -> None:
+    """Headings, blockquotes, table rows, and real ``- ``/``* ``/``+ `` bullets
+    are still skipped; a bullet is a marker FOLLOWED BY WHITESPACE, distinct
+    from an ``*italic*`` lead (marker + non-space)."""
+    from advisor.memos import _memo_summary_line
+
+    assert _memo_summary_line("# Head\n> quote\n- bullet\n* star\n+ plus\nreal prose.") == (
+        "real prose."
+    )
+    # An italic-lead line is prose, not a bullet — it is selected.
+    assert _memo_summary_line("## H\n*deposit beta* leads here.") == "*deposit beta* leads here."
+
+
+# --------------------------------------------------------------------------- #
 # Store + migration
 # --------------------------------------------------------------------------- #
 
