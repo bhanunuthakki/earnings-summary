@@ -167,6 +167,14 @@ def test_every_wrapper_propagates_its_exit_code() -> None:
     assert not offenders, f"wrappers that swallow their exit code: {offenders}"
 
 
+def test_weekly_db_gc_never_schedules_destructive_facts_depth_apply() -> None:
+    text = (CRON / "run_db_gc.bat").read_text(encoding="utf-8").lower()
+    invocation = next(line for line in text.splitlines() if "execution\\db_gc.py" in line)
+    assert "--apply" in invocation
+    assert "--policies validation-issues,telemetry,maintenance" in invocation
+    assert "--include-portfolio" not in invocation
+
+
 def test_no_wrapper_carries_a_stray_carriage_return() -> None:
     r"""A bare CR (not part of CRLF) inside a batch file is the signature of a
     Python non-raw string escaping the path separator during generation.

@@ -1,13 +1,15 @@
 """Periodic garbage collection for data/portfolio.db.
 
 Grounded in the 2026-07-30 consumer audit (3 parallel sweeps over every reader
-of financial_facts, kpi_facts, and the telemetry tables). Four policies, each
-independently selectable, all archive-then-delete — deleted rows are copied
-into a sidecar SQLite archive (data/archive/portfolio_gc_archive.db), keyed
-append-only by (gc_run_id, row key), before removal. Restores go through
+of financial_facts, kpi_facts, and the telemetry tables). Four policies are
+independently selectable for dry runs. Applied validation and telemetry
+deletes are copied into the run-keyed sidecar SQLite archive
+(``data/archive/portfolio_gc_archive.db``) before removal. Restores go through
 ``execution/gc_restore.py`` (per-run or latest-per-row, classify-then-apply);
 the archive is never a bare INSERT ... SELECT source, because rows can
-legitimately appear under multiple runs.
+legitimately appear under multiple runs. Destructive ``facts-depth`` apply is
+disabled pending immutable archive-generation migration and an explicit
+cutover.
 
 Concurrency contract (post-incident hardening, 2026-08-01)
 ----------------------------------------------------------
@@ -71,7 +73,9 @@ Policies
    deliberately NOT included: run_accounting.deduplicate_completed looks for
    any prior OK attempt unbounded in time — bound that lookup first.
 
-3. ``facts-depth`` — window-prune financial_facts history per ticker tier.
+3. ``facts-depth`` — measure the former per-ticker financial_facts window.
+   Dry-run reports remain available; the public library and CLI apply paths
+   abort before taking the run lock or creating an archive sidecar.
    Active watchlist / evaluation / index_member tickers keep the newest
    --keep-quarters quarterly periods and --keep-fy fiscal years; tickers with
    facts but NO active tracked_companies row lose all rows (archived, not
@@ -103,14 +107,9 @@ fmp_endpoint_status and metric_computation_attempts as tables (current-state
 grids keyed by PRIMARY KEY / unique logical key, not logs), llm_calls (cost
 ledger; sealed-Ask audit FKs and the all-time eval-coverage gate need it).
 
-Dry-run by default; ``--apply`` writes. Idempotent: a second run over the same
-DB finds nothing to do. Structured JSON events go to stderr; stdout is one
-JSON report. Expected one-time side effect on first apply: the thesis
-evaluator / segment-deriver db_snapshots fingerprints change for pruned
-tickers (they hash SELECT *), forcing one full re-run each; re-baseline
-credibility priors (execution/build_confidence_observations.py) BEFORE the
-first facts-depth apply so measured priors are not rebuilt from a truncated
-disagreement population.
+Dry-run by default; ``--apply`` writes only supported non-fact policies.
+Idempotent: a second run over the same DB finds nothing to do. Structured JSON
+events go to stderr; stdout is one JSON report.
 """
 
 from __future__ import annotations
@@ -1419,7 +1418,51 @@ def run_gc(
     lock_timeout_s: float = DEFAULT_LOCK_TIMEOUT_S,
     enforce_protected_window: bool = False,
 ) -> GcRunReport:
-    """Run the selected policies.
+    """Run supported GC policies while fail-closing destructive fact pruning."""
+
+    if apply and "facts-depth" in policies:
+        raise GcAbortedError(
+            "destructive facts-depth apply is disabled; immutable "
+            "archive-generation migration and cutover are required"
+        )
+    return _run_gc_implementation(
+        db_path,
+        apply=apply,
+        policies=policies,
+        retention_days=retention_days,
+        keep_quarters=keep_quarters,
+        keep_fy=keep_fy,
+        include_portfolio=include_portfolio,
+        vacuum=vacuum,
+        tickers=tickers,
+        archive_path=archive_path,
+        batch_size=batch_size,
+        max_runtime_min=max_runtime_min,
+        vacuum_timeout_min=vacuum_timeout_min,
+        lock_timeout_s=lock_timeout_s,
+        enforce_protected_window=enforce_protected_window,
+    )
+
+
+def _run_gc_implementation(
+    db_path: Path,
+    *,
+    apply: bool,
+    policies: list[str],
+    retention_days: int,
+    keep_quarters: int,
+    keep_fy: int,
+    include_portfolio: bool,
+    vacuum: bool,
+    tickers: list[str] | None = None,
+    archive_path: Path | None = None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    max_runtime_min: float = DEFAULT_MAX_RUNTIME_MIN,
+    vacuum_timeout_min: float = DEFAULT_VACUUM_TIMEOUT_MIN,
+    lock_timeout_s: float = DEFAULT_LOCK_TIMEOUT_S,
+    enforce_protected_window: bool = False,
+) -> GcRunReport:
+    """Implement selected policies behind the public destructive-apply gate.
 
     ``enforce_protected_window`` defaults to False for library/test callers
     (a CI run at 10:00 UTC must not flake on Pacific wall-clock); the CLI

@@ -90,10 +90,18 @@ def _run(
     lock_timeout_s: float = 0.0,
     enforce_protected_window: bool = False,
 ) -> db_gc.GcRunReport:
-    return db_gc.run_gc(
+    selected_policies: list[str] = (
+        list(policies) if policies is not None else [str(name) for name in db_gc.POLICY_NAMES]
+    )
+    runner = (
+        db_gc._run_gc_implementation
+        if apply and "facts-depth" in selected_policies
+        else db_gc.run_gc
+    )
+    return runner(
         db,
         apply=apply,
-        policies=policies if policies is not None else list(db_gc.POLICY_NAMES),
+        policies=selected_policies,
         retention_days=retention_days,
         keep_quarters=keep_quarters,
         keep_fy=keep_fy,
@@ -104,6 +112,29 @@ def _run(
         lock_timeout_s=lock_timeout_s,
         enforce_protected_window=enforce_protected_window,
     )
+
+
+def test_public_facts_depth_apply_is_disabled_before_lock_or_archive(
+    gc_db: Path,
+) -> None:
+    archive = gc_db.parent / "archive" / db_gc.ARCHIVE_NAME
+    with pytest.raises(
+        db_gc.GcAbortedError,
+        match="destructive facts-depth apply is disabled",
+    ):
+        db_gc.run_gc(
+            gc_db,
+            apply=True,
+            policies=["facts-depth"],
+            retention_days=90,
+            keep_quarters=20,
+            keep_fy=12,
+            include_portfolio=True,
+            vacuum=False,
+            lock_timeout_s=0,
+        )
+    assert not archive.exists()
+    assert not run_lock.lock_path_for(gc_db).exists()
 
 
 def _seed_quarters(conn: sqlite3.Connection, ticker: str, n: int) -> None:

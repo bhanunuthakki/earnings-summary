@@ -50,6 +50,7 @@ def _ensure_genai() -> None:
         import google.generativeai as _genai
     genai = _genai
 
+
 # Gemini fallback model. Single Flash variant for both heavy (thesis tracker)
 # and light (intake classifier) workloads — quality is good enough for backup
 # duty and per-call cost is sub-penny. Override per-call by passing a custom

@@ -16,7 +16,7 @@ from provenance import population_document_processing as document_population
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_REVISION = "0213_decision_draft_provider_id"
-HEAD = "0271_disclosure_thesis_materiality"
+HEAD = "0272_archive_generation_catalog"
 ADDITIVE_TABLES_0245_0248 = {
     "document_processing_obligation_revisions",
     "document_processing_disposition_headers",
@@ -69,6 +69,11 @@ ADDITIVE_TABLES_0266 = {"canonical_resolution_operation_ledger"}
 ADDITIVE_TABLES_0268_0269 = {
     "latest_governed_population_operation_ledger",
     "latest_governed_population_operation_ledger_v2",
+}
+ADDITIVE_TABLES_0272 = {
+    "archive_generations",
+    "archive_generation_table_commitments",
+    "archive_generation_registration_receipts",
 }
 
 
@@ -206,6 +211,7 @@ def test_evidence_search_migrations_have_one_reversible_head(tmp_path: Path) -> 
         assert tables >= ADDITIVE_TABLES_0265
         assert tables >= ADDITIVE_TABLES_0266
         assert tables >= ADDITIVE_TABLES_0268_0269
+        assert tables >= ADDITIVE_TABLES_0272
         read_set_sha = document_population._input_commitment(
             conn,
             datetime(2026, 7, 31, tzinfo=UTC),

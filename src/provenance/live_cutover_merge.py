@@ -29,12 +29,13 @@ from provenance.latest_state_activation import (
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-# Bumped through 0271 (2026-08-02). Migrations 0261-0269 add the governed
+# Bumped through 0272 (2026-08-02). Migrations 0261-0269 add the governed
 # latest-state and population-operation planes; 0262 adds the live-operational
-# news_events table. 0270-0271 add no tables. The closed registry remains
-# explicit so a future migration cannot silently inherit an authority class.
-_AUTHORITY_SCHEMA_REVISION = "0271_disclosure_thesis_materiality"
-_AUTHORITY_SCHEMA_TABLE_COUNT = 329
+# news_events table. 0270-0271 add no tables. 0272 adds the three operational
+# archive-publication catalog tables. The closed registry remains explicit so
+# a future migration cannot silently inherit an authority class.
+_AUTHORITY_SCHEMA_REVISION = "0272_archive_generation_catalog"
+_AUTHORITY_SCHEMA_TABLE_COUNT = 332
 GOVERNED_TABLES_0259: frozenset[str] = frozenset(
     [
         "alembic_version",
@@ -236,6 +237,9 @@ OPERATIONAL_TABLES_0259: frozenset[str] = frozenset(
         "ask_answer_groundings",
         "ask_sessions",
         "ask_turns",
+        "archive_generation_registration_receipts",
+        "archive_generation_table_commitments",
+        "archive_generations",
         "brief_provenance_log",
         "business_factor_exposures",
         "candidate_models",
