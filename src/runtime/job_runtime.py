@@ -12,6 +12,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from collections.abc import Generator
 from contextlib import AbstractContextManager, contextmanager, suppress
 from contextvars import ContextVar
@@ -376,6 +377,39 @@ def inherited_lock_is_valid(repo_root: Path, write_set: str) -> bool:
     return owner is not None and owner.pid == pid and owner.token == token and _owner_is_live(owner)
 
 
+#: Exit code for "this checkout must not write to this database" (EX_CONFIG).
+#: Distinct from 1 (the job's own failure) and 75 (retryable lock contention)
+#: so Task Scheduler's Last Result names the cause without opening a log.
+SCHEMA_DRIFT_EXIT_CODE = 78
+
+#: Jobs that must keep running while the database and the checkout disagree.
+#: All three exist to protect or diagnose a platform that is already unwell —
+#: a drifted database is precisely when you most want a fresh snapshot, a
+#: proven restore path, and a scheduler audit. None of them writes application
+#: rows through a guarded store, so none can persist a half-migrated shape.
+SCHEMA_DRIFT_TOLERANT_JOBS: frozenset[str] = frozenset(
+    {"backup_db", "restore-drill", "verify-cron"}
+)
+
+
+def _schema_preflight(repo_root: Path, job_name: str) -> str | None:
+    """Return a blocking reason when this checkout must not run *job_name*.
+
+    ``schema_compat.require_current_for_write`` already refuses drift on every
+    GUARDED writer connection.  The gap this closes is the unguarded
+    best-effort writer: ``llm_call_ledger`` catches that refusal by design, so
+    a drifted database used to look like a healthy job with a WARNING line in
+    its log.  Checking once, before any work starts, converts that into one
+    loud scheduler-visible failure instead of a partial run.
+    """
+    if job_name in SCHEMA_DRIFT_TOLERANT_JOBS:
+        return None
+    from schema_compat import describe_drift
+
+    drift = describe_drift(portfolio_db_path(repo_root), project_root=repo_root)
+    return None if drift is None else drift.message
+
+
 def _write_health(repo_root: Path, record: HealthRecord) -> Path:
     directory = repo_root / ".tmp" / "job_health" / _safe_name(record.job)
     directory.mkdir(parents=True, exist_ok=True)
@@ -391,14 +425,41 @@ def run_job(
     job_name: str,
     write_sets: list[str],
     command: list[str],
+    allow_schema_drift: bool = False,
 ) -> int:
-    """Run command under locks and write a durable JSON health record."""
+    """Run command under locks and write a durable JSON health record.
+
+    Refuses to start at all when the portfolio database's Alembic revision
+    disagrees with this checkout, unless *allow_schema_drift* is set or the
+    job is one of :data:`SCHEMA_DRIFT_TOLERANT_JOBS`.
+    """
     if not command:
         raise ValueError("job command is required")
     from runtime.secrets import load_project_env
 
     load_project_env(repo_root)
     started = datetime.now(UTC)
+    # Preflight AFTER load_project_env: EARNINGS_SUMMARY_DB_PATH may come from
+    # the project env file, and checking the wrong database proves nothing.
+    blocked = None if allow_schema_drift else _schema_preflight(repo_root, job_name)
+    if blocked is not None:
+        # ASCII only: not every cron wrapper sets PYTHONUTF8, and a detector
+        # that dies of UnicodeEncodeError while announcing a problem is worse
+        # than the silence it replaced.
+        print(f"SCHEMA DRIFT - refusing to run {job_name}: {blocked}", file=sys.stderr, flush=True)
+        _write_health(
+            repo_root,
+            HealthRecord(
+                job=job_name,
+                write_sets=sorted(set(write_sets)),
+                started_at=started.isoformat(),
+                ended_at=datetime.now(UTC).isoformat(),
+                status="blocked_schema_drift",
+                exit_code=SCHEMA_DRIFT_EXIT_CODE,
+                detail=blocked,
+            ),
+        )
+        return SCHEMA_DRIFT_EXIT_CODE
     try:
         with JobLock(repo_root, job_name, write_sets) as lock:
             child_env = {
@@ -441,6 +502,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--write-set", action="append", default=[])
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--scheduler-wrapper", action="store_true")
+    parser.add_argument(
+        "--allow-schema-drift",
+        action="store_true",
+        help=(
+            "run even when the portfolio database's Alembic revision disagrees "
+            "with this checkout (interactive escape hatch; scheduled jobs that "
+            "legitimately need this belong in SCHEMA_DRIFT_TOLERANT_JOBS)"
+        ),
+    )
     parser.add_argument("--python-executable")
     parser.add_argument("--python-arg", action="append", default=[])
     parser.add_argument("command", nargs=argparse.REMAINDER)
@@ -466,6 +536,7 @@ def main(argv: list[str] | None = None) -> int:
         job_name=job_name,
         write_sets=write_sets,
         command=command,
+        allow_schema_drift=args.allow_schema_drift,
     )
 
 

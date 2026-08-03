@@ -1,23 +1,32 @@
 """Cron-health dashboard panel for the command-center shell.
 
-Shows a KPI strip (today's morning-pipeline verdict + consecutive-clean-day
-streak) and a last-7-day per-job timeline read from ``ingestion_runs``.  Jobs
-are ordered by criticality: the two expected-daily jobs (backup_db,
-run_morning_pipeline) appear first, then any other directive seen in the
-past week (alphabetical).
+Leads with two failure modes that a green timeline cannot express, then shows
+a KPI strip (today's morning-pipeline verdict + consecutive-clean-day streak)
+and a last-7-day per-job timeline read from ``ingestion_runs``.  Jobs are
+ordered by criticality: the two expected-daily jobs (backup_db,
+run_morning_pipeline) appear first, then any other directive seen in the past
+week (alphabetical).
 
 Each day in the timeline renders as one coloured dot:
 
   green  — at least one OK run that day
   red    — ran but the most recent run was FAILED or still IN_PROGRESS
   grey   — no run recorded that day
+
+The two banners above it exist because that timeline reports whether a job
+RAN, not whether it did its work.  On 2026-08-02 the database sat one Alembic
+revision behind ``main`` for hours: every guarded writer refused, the LLM cost
+ledger swallowed the refusal by design, and this panel stayed green while
+seven cost rows were lost.  Schema drift and dropped ledger writes are
+therefore read directly — the first live, the second from the durable counter
+``telemetry_health`` keeps beside the database.
 """
 
 from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from html import escape
 from pathlib import Path
 
@@ -38,6 +47,9 @@ _PANEL_STYLE = """<style>
   border:1px solid var(--border); border-radius:var(--radius);
   font-size:var(--fs-body); line-height:1.55; }
 .ch-note code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
+.ch-alarm { margin-bottom:var(--sp-3); line-height:1.55; }
+.ch-alarm strong { display:block; margin-bottom:var(--sp-1); }
+.ch-alarm code { background:var(--surface); padding:1px 5px; border-radius:var(--radius); }
 </style>"""
 
 # Directives shown first, in criticality order, with friendly display names.
@@ -72,6 +84,64 @@ def _query_runs(db_path: Path, since: datetime) -> dict[tuple[str, str], str]:
         # render whatever rows were gathered rather than failing the panel.
         log.warning({"event": "cron_health_query_failed"}, exc_info=True)
     return result
+
+
+def _schema_drift_banner(db_path: Path) -> str:
+    """The loud one: this checkout and this database disagree, right now.
+
+    Rendered live rather than from a job record, so it appears the moment the
+    revisions diverge and clears itself on the next 60s poll once the upgrade
+    lands — no job has to run and fail first for the operator to see it.
+    """
+    try:
+        from runtime.job_runtime import SCHEMA_DRIFT_EXIT_CODE
+        from schema_compat import describe_drift
+
+        drift = describe_drift(db_path)
+    except Exception:  # a health panel must never be the thing that breaks
+        log.warning({"event": "cron_health_drift_probe_failed"}, exc_info=True)
+        return ""
+    if drift is None:
+        return ""
+    observed = ",".join(drift.db_revisions) or "(none)"
+    return (
+        '<div class="k-well k-well-bad ch-alarm">'
+        "<strong>Schema drift — scheduled jobs are blocked</strong>"
+        f"{escape(drift.detail)}. "
+        f"Database is at <code>{escape(observed)}</code>, "
+        f"this checkout expects <code>{escape(drift.expected_revision or 'a single head')}</code>. "
+        "Every job outside the backup/restore/audit set now exits "
+        f"<code>{SCHEMA_DRIFT_EXIT_CODE}</code> instead of running. "
+        f"Fix: <code>{escape(drift.fix_command)}</code>."
+        "</div>"
+    )
+
+
+def _dropped_ledger_banner(db_path: Path, since: datetime) -> str:
+    """Cost rows that were written best-effort and lost anyway.
+
+    ``llm_call_ledger`` cannot raise — the LLM call it describes has already
+    been paid for — so this counter is the only place a lost row is countable.
+    """
+    try:
+        from telemetry_health import DROPPED_LLM_LEDGER_WRITE, dropped_writes_since
+
+        dropped = dropped_writes_since(DROPPED_LLM_LEDGER_WRITE, db_path=db_path, since=since)
+    except Exception:
+        log.warning({"event": "cron_health_dropped_writes_read_failed"}, exc_info=True)
+        return ""
+    if dropped is None:
+        return ""
+    plural = "s" if dropped.count != 1 else ""
+    return (
+        '<div class="k-well k-well-warn ch-alarm">'
+        f"<strong>{dropped.count} LLM cost row{plural} lost in the last 7 days</strong>"
+        "These are spend records the ledger could not persist. They are gone — "
+        "the ledger is best-effort by design and does not retry. "
+        f"Most recent {escape(dropped.last_at.strftime('%Y-%m-%d %H:%M UTC'))}: "
+        f"<code>{escape(dropped.last_error[:180])}</code>"
+        "</div>"
+    )
 
 
 def _dot(status: str | None) -> str:
@@ -179,9 +249,16 @@ def render_cron_health_live_body(db_path: Path) -> str:
     dates = [today - timedelta(days=i) for i in range(6, -1, -1)]
     since = datetime.combine(dates[0], datetime.min.time())
 
+    # Both alarms lead the body, and both survive the no-rows early return: a
+    # drifted database with no run history is the WORST case, not a reason to
+    # say nothing.
+    alarms = _schema_drift_banner(db_path) + _dropped_ledger_banner(
+        db_path, since.replace(tzinfo=UTC)
+    )
+
     all_runs = _query_runs(db_path, since)
     if not all_runs:
-        return (
+        return alarms + (
             '<p class="muted">No pipeline run rows yet. '
             "The morning pipeline writes to <code>ingestion_runs</code> after each "
             "run; this panel fills as the daily jobs execute.</p>"
@@ -200,7 +277,7 @@ def render_cron_health_live_body(db_path: Path) -> str:
         else:
             break
 
-    return _kpi_strip(today_verdict, streak) + _timeline_table(all_runs, dates)
+    return alarms + _kpi_strip(today_verdict, streak) + _timeline_table(all_runs, dates)
 
 
 def render_cron_health_panel(db_path: Path) -> str:
