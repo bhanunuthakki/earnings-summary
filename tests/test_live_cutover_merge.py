@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sqlite3
+from collections import Counter
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
@@ -13,10 +14,17 @@ import pytest
 from provenance import live_cutover_merge as cutover
 from provenance.latest_state_activation import CandidateFileIdentity
 from provenance.live_cutover_merge import (
+    CutoverSourceHealthReceipt,
     LiveCutoverMergeError,
+    SourceComponentState,
     TableColumn,
-    apply_live_cutover_merge,
-    plan_live_cutover_merge,
+    audit_cutover_source_health,
+)
+from provenance.live_cutover_merge import (
+    apply_live_cutover_merge as _apply_live_cutover_merge,
+)
+from provenance.live_cutover_merge import (
+    plan_live_cutover_merge as _plan_live_cutover_merge,
 )
 from schema_compat import expected_head
 
@@ -126,6 +134,246 @@ def _database(
         connection.close()
 
 
+def _health_artifact(database: Path, artifact: Path) -> None:
+    source_state = cast(
+        "Callable[[Path], tuple[tuple[str, CandidateFileIdentity | None], ...]]",
+        getattr(cutover, "_source_physical_state"),
+    )(database.resolve())
+    source_sha256 = cast(
+        "Callable[[Path], str]",
+        getattr(cutover, "_source_snapshot_sha256"),
+    )(database.resolve())
+    draft = CutoverSourceHealthReceipt(
+        schema_name="live-cutover-source-health/v1",
+        database=str(database.resolve()),
+        source_sha256=source_sha256,
+        source_state=tuple(
+            SourceComponentState(label=label, identity=identity) for label, identity in source_state
+        ),
+        alembic_revision="0271_disclosure_thesis_materiality",
+        integrity_check="ok",
+        foreign_key_violations=0,
+        receipt_sha256="0" * 64,
+    )
+    receipt_sha256 = cast(
+        "Callable[[CutoverSourceHealthReceipt], str]",
+        getattr(cutover, "_health_receipt_sha256"),
+    )(draft)
+    receipt = draft.model_copy(update={"receipt_sha256": receipt_sha256})
+    artifact.write_bytes((receipt.model_dump_json() + "\n").encode("utf-8"))
+
+
+def plan_live_cutover_merge(
+    live: Path,
+    governed: Path,
+    *,
+    live_health_receipt: Path | None = None,
+    governed_health_receipt: Path | None = None,
+):
+    if live_health_receipt is None or governed_health_receipt is None:
+        assert live_health_receipt is None and governed_health_receipt is None
+        live_health_receipt = Path(f"{live}.health.json")
+        governed_health_receipt = Path(f"{governed}.health.json")
+        _health_artifact(live, live_health_receipt)
+        _health_artifact(governed, governed_health_receipt)
+    return _plan_live_cutover_merge(
+        live,
+        governed,
+        live_health_receipt=live_health_receipt,
+        governed_health_receipt=governed_health_receipt,
+    )
+
+
+def apply_live_cutover_merge(
+    live: Path,
+    governed: Path,
+    destination: Path,
+    *,
+    expected_plan_sha256: str,
+    live_health_receipt: Path | None = None,
+    governed_health_receipt: Path | None = None,
+    receipt_path: Path | None = None,
+):
+    if live_health_receipt is None or governed_health_receipt is None:
+        assert live_health_receipt is None and governed_health_receipt is None
+        live_health_receipt = Path(f"{live}.health.json")
+        governed_health_receipt = Path(f"{governed}.health.json")
+        _health_artifact(live, live_health_receipt)
+        _health_artifact(governed, governed_health_receipt)
+    if receipt_path is None:
+        receipt_path = Path(f"{destination}.receipt.json")
+    return _apply_live_cutover_merge(
+        live,
+        governed,
+        destination,
+        expected_plan_sha256=expected_plan_sha256,
+        live_health_receipt=live_health_receipt,
+        governed_health_receipt=governed_health_receipt,
+        receipt_path=receipt_path,
+    )
+
+
+def test_audit_cutover_source_health_binds_exhaustive_checks(tmp_path: Path) -> None:
+    database = tmp_path / "source.db"
+    _database(database, operational_rows=(), evidence_rows=())
+
+    receipt = audit_cutover_source_health(database)
+
+    assert receipt.integrity_check == "ok"
+    assert receipt.foreign_key_violations == 0
+    assert receipt.alembic_revision == "0271_disclosure_thesis_materiality"
+    assert receipt.receipt_sha256 != "0" * 64
+
+
+def test_health_receipts_replace_repeated_source_integrity_scans(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live = tmp_path / "live.db"
+    governed = tmp_path / "governed.db"
+    live_health = tmp_path / "live-health.json"
+    governed_health = tmp_path / "governed-health.json"
+    destination = tmp_path / "candidate.db"
+    _database(live, operational_rows=(), evidence_rows=())
+    _database(governed, operational_rows=(), evidence_rows=())
+    _health_artifact(live, live_health)
+    _health_artifact(governed, governed_health)
+
+    def unexpected_health_scan(_label: str, _connection: sqlite3.Connection) -> None:
+        raise AssertionError("source health must be admitted from the bound receipt")
+
+    monkeypatch.setattr(cutover, "_require_healthy", unexpected_health_scan)
+
+    plan = plan_live_cutover_merge(
+        live,
+        governed,
+        live_health_receipt=live_health,
+        governed_health_receipt=governed_health,
+    )
+
+    assert plan.policy_version == "7"
+    assert plan.live_health_receipt is not None
+    assert plan.governed_health_receipt is not None
+    assert plan.live_health_receipt.artifact_path == str(live_health.resolve())
+    assert len(plan.live_health_receipt.artifact_sha256) == 64
+
+    receipt = apply_live_cutover_merge(
+        live,
+        governed,
+        destination,
+        expected_plan_sha256=plan.plan_sha256,
+        live_health_receipt=live_health,
+        governed_health_receipt=governed_health,
+    )
+    assert receipt.plan.plan_sha256 == plan.plan_sha256
+
+
+def test_health_receipt_rejects_source_or_artifact_drift(tmp_path: Path) -> None:
+    live = tmp_path / "live.db"
+    governed = tmp_path / "governed.db"
+    live_health = tmp_path / "live-health.json"
+    governed_health = tmp_path / "governed-health.json"
+    _database(live, operational_rows=(), evidence_rows=())
+    _database(governed, operational_rows=(), evidence_rows=())
+    _health_artifact(live, live_health)
+    _health_artifact(governed, governed_health)
+
+    connection = sqlite3.connect(live)
+    try:
+        connection.execute("INSERT INTO alerts VALUES (1, 'drift', '2026')")
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(LiveCutoverMergeError, match="health receipt does not match"):
+        plan_live_cutover_merge(
+            live,
+            governed,
+            live_health_receipt=live_health,
+            governed_health_receipt=governed_health,
+        )
+
+    _health_artifact(live, live_health)
+    payload = live_health.read_text(encoding="utf-8").replace(
+        '"integrity_check":"ok"',
+        '"integrity_check":"bad"',
+    )
+    live_health.write_bytes(payload.encode("utf-8"))
+    with pytest.raises(LiveCutoverMergeError, match="health receipt commitment"):
+        plan_live_cutover_merge(
+            live,
+            governed,
+            live_health_receipt=live_health,
+            governed_health_receipt=governed_health,
+        )
+
+
+def test_plan_rejects_hardlink_alias_between_sources(tmp_path: Path) -> None:
+    live = tmp_path / "live.db"
+    governed = tmp_path / "governed-hardlink.db"
+    live_health = tmp_path / "live-health.json"
+    governed_health = tmp_path / "governed-health.json"
+    _database(live, operational_rows=(), evidence_rows=())
+    os.link(live, governed)
+    _health_artifact(live, live_health)
+    _health_artifact(governed, governed_health)
+
+    with pytest.raises(LiveCutoverMergeError, match="must be distinct files"):
+        _plan_live_cutover_merge(
+            live,
+            governed,
+            live_health_receipt=live_health,
+            governed_health_receipt=governed_health,
+        )
+
+
+def test_apply_rejects_protected_source_and_evidence_namespaces(tmp_path: Path) -> None:
+    live = tmp_path / "live.db"
+    governed = tmp_path / "governed.db"
+    live_health = tmp_path / "live-health.json"
+    governed_health = tmp_path / "governed-health.json"
+    _database(live, operational_rows=(), evidence_rows=())
+    _database(governed, operational_rows=(), evidence_rows=())
+    _health_artifact(live, live_health)
+    _health_artifact(governed, governed_health)
+    plan = _plan_live_cutover_merge(
+        live,
+        governed,
+        live_health_receipt=live_health,
+        governed_health_receipt=governed_health,
+    )
+
+    for destination in (
+        Path(f"{live}-wal"),
+        Path(f"{live}-shm"),
+        Path(f"{live}-journal"),
+        live_health,
+    ):
+        with pytest.raises(LiveCutoverMergeError, match="destination namespace aliases"):
+            _apply_live_cutover_merge(
+                live,
+                governed,
+                destination,
+                expected_plan_sha256=plan.plan_sha256,
+                live_health_receipt=live_health,
+                governed_health_receipt=governed_health,
+                receipt_path=tmp_path / f"{destination.name}.receipt.json",
+            )
+
+    destination = tmp_path / "candidate.db"
+    with pytest.raises(LiveCutoverMergeError, match="receipt aliases"):
+        _apply_live_cutover_merge(
+            live,
+            governed,
+            destination,
+            expected_plan_sha256=plan.plan_sha256,
+            live_health_receipt=live_health,
+            governed_health_receipt=governed_health,
+            receipt_path=Path(f"{live}-wal"),
+        )
+    assert not destination.exists()
+
+
 def test_plan_is_content_bound_and_excludes_governed_substrate(tmp_path: Path) -> None:
     live = tmp_path / "live.db"
     governed = tmp_path / "governed.db"
@@ -142,7 +390,7 @@ def test_plan_is_content_bound_and_excludes_governed_substrate(tmp_path: Path) -
 
     plan = plan_live_cutover_merge(live, governed)
 
-    assert plan.policy_version == "5"
+    assert plan.policy_version == "7"
     assert [table.table for table in plan.tables] == ["alerts"]
     assert plan.tables[0].added_row_count == 1
     assert plan.tables[0].changed_row_count == 1
@@ -152,6 +400,92 @@ def test_plan_is_content_bound_and_excludes_governed_substrate(tmp_path: Path) -
     assert len(plan.tables[0].governed_rows_sha256) == 64
     assert len(plan.tables[0].selected_delta_sha256) == 64
     assert len(plan.plan_sha256) == 64
+
+
+def test_plan_hashes_each_fenced_source_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live = tmp_path / "live.db"
+    governed = tmp_path / "governed.db"
+    _database(
+        live,
+        operational_rows=((1, "new", "2026-07-30T10:00:00Z"),),
+        evidence_rows=(),
+    )
+    _database(
+        governed,
+        operational_rows=((1, "old", "2026-07-29T10:00:00Z"),),
+        evidence_rows=(),
+    )
+    live_health = Path(f"{live}.health.json")
+    governed_health = Path(f"{governed}.health.json")
+    _health_artifact(live, live_health)
+    _health_artifact(governed, governed_health)
+    original_source_sha = cast(
+        "Callable[[Path], str]",
+        getattr(cutover, "_source_snapshot_sha256"),
+    )
+    calls: Counter[Path] = Counter()
+
+    def counted_source_sha(path: Path) -> str:
+        calls[path.resolve()] += 1
+        return original_source_sha(path)
+
+    monkeypatch.setattr(cutover, "_source_snapshot_sha256", counted_source_sha)
+
+    _plan_live_cutover_merge(
+        live,
+        governed,
+        live_health_receipt=live_health,
+        governed_health_receipt=governed_health,
+    )
+
+    assert calls == Counter({live.resolve(): 1, governed.resolve(): 1})
+
+
+def test_plan_rejects_physical_source_state_drift_after_scan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live = tmp_path / "live.db"
+    governed = tmp_path / "governed.db"
+    _database(
+        live,
+        operational_rows=((1, "new", "2026-07-30T10:00:00Z"),),
+        evidence_rows=(),
+    )
+    _database(
+        governed,
+        operational_rows=((1, "old", "2026-07-29T10:00:00Z"),),
+        evidence_rows=(),
+    )
+    live_health = Path(f"{live}.health.json")
+    governed_health = Path(f"{governed}.health.json")
+    _health_artifact(live, live_health)
+    _health_artifact(governed, governed_health)
+    original_source_state = cast(
+        "Callable[[Path], object]",
+        getattr(cutover, "_source_physical_state"),
+    )
+    calls: Counter[Path] = Counter()
+
+    def drifting_source_state(path: Path) -> object:
+        resolved = path.resolve()
+        calls[resolved] += 1
+        if resolved == live.resolve() and calls[resolved] == 2:
+            return (("main", None),)
+        return original_source_state(path)
+
+    monkeypatch.setattr(cutover, "_source_physical_state", drifting_source_state)
+
+    with pytest.raises(LiveCutoverMergeError, match="live source changed while planning"):
+        _plan_live_cutover_merge(
+            live,
+            governed,
+            live_health_receipt=live_health,
+            governed_health_receipt=governed_health,
+        )
 
 
 def test_integer_primary_key_content_order_is_indexable() -> None:
@@ -297,6 +631,51 @@ def test_apply_preserves_live_operations_and_governed_evidence(tmp_path: Path) -
     assert receipt.applied_tables[0].live_rows_not_preserved == 0
 
 
+def test_apply_hashes_each_continuously_fenced_source_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live = tmp_path / "live.db"
+    governed = tmp_path / "governed.db"
+    destination = tmp_path / "candidate.db"
+    _database(
+        live,
+        operational_rows=((1, "new", "2026-07-30T10:00:00Z"),),
+        evidence_rows=(),
+    )
+    _database(
+        governed,
+        operational_rows=((1, "old", "2026-07-29T10:00:00Z"),),
+        evidence_rows=(),
+    )
+    reviewed = plan_live_cutover_merge(live, governed)
+    live_health = Path(f"{live}.health.json")
+    governed_health = Path(f"{governed}.health.json")
+    original_source_sha = cast(
+        "Callable[[Path], str]",
+        getattr(cutover, "_source_snapshot_sha256"),
+    )
+    calls: Counter[Path] = Counter()
+
+    def counted_source_sha(path: Path) -> str:
+        calls[path.resolve()] += 1
+        return original_source_sha(path)
+
+    monkeypatch.setattr(cutover, "_source_snapshot_sha256", counted_source_sha)
+
+    _apply_live_cutover_merge(
+        live,
+        governed,
+        destination,
+        expected_plan_sha256=reviewed.plan_sha256,
+        live_health_receipt=live_health,
+        governed_health_receipt=governed_health,
+        receipt_path=Path(f"{destination}.receipt.json"),
+    )
+
+    assert calls == Counter({live.resolve(): 1, governed.resolve(): 1})
+
+
 def test_apply_fails_closed_on_plan_drift(tmp_path: Path) -> None:
     live = tmp_path / "live.db"
     governed = tmp_path / "governed.db"
@@ -321,6 +700,91 @@ def test_apply_fails_closed_on_plan_drift(tmp_path: Path) -> None:
         )
 
     assert not destination.exists()
+
+
+def test_apply_cleans_owned_destination_when_receipt_publication_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live = tmp_path / "live.db"
+    governed = tmp_path / "governed.db"
+    destination = tmp_path / "candidate.db"
+    receipt_path = tmp_path / "candidate-receipt.json"
+    _database(live, operational_rows=(), evidence_rows=())
+    _database(governed, operational_rows=(), evidence_rows=())
+    plan = plan_live_cutover_merge(live, governed)
+
+    def fail_publication(_path: Path, _payload: str) -> bool:
+        raise OSError("injected receipt publication failure")
+
+    monkeypatch.setattr(cutover, "publish_text_no_clobber", fail_publication)
+
+    with pytest.raises(OSError, match="injected receipt publication failure"):
+        apply_live_cutover_merge(
+            live,
+            governed,
+            destination,
+            expected_plan_sha256=plan.plan_sha256,
+            receipt_path=receipt_path,
+        )
+
+    assert not destination.exists()
+    assert not receipt_path.exists()
+    assert all(
+        not Path(f"{destination}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal")
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows destination write-denial fence")
+def test_apply_denies_destination_mutation_between_hash_and_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live = tmp_path / "live.db"
+    governed = tmp_path / "governed.db"
+    destination = tmp_path / "candidate.db"
+    receipt_path = tmp_path / "candidate-receipt.json"
+    _database(live, operational_rows=(), evidence_rows=())
+    _database(governed, operational_rows=(), evidence_rows=())
+    plan = plan_live_cutover_merge(live, governed)
+    original_publish = cast(
+        "Callable[[Path, str], bool]",
+        getattr(cutover, "publish_text_no_clobber"),
+    )
+    mutation_refused = False
+
+    def attempt_mutation_then_publish(path: Path, payload: str) -> bool:
+        nonlocal mutation_refused
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = sqlite3.connect(destination, timeout=0.1)
+            connection.execute("INSERT INTO alerts VALUES (1, 'race', '2026-08-03T00:00:00Z')")
+            connection.commit()
+        except sqlite3.Error:
+            mutation_refused = True
+        finally:
+            if connection is not None:
+                connection.close()
+        return original_publish(path, payload)
+
+    monkeypatch.setattr(cutover, "publish_text_no_clobber", attempt_mutation_then_publish)
+
+    receipt = apply_live_cutover_merge(
+        live,
+        governed,
+        destination,
+        expected_plan_sha256=plan.plan_sha256,
+        receipt_path=receipt_path,
+    )
+
+    assert mutation_refused
+    assert receipt_path.exists()
+    connection = sqlite3.connect(destination)
+    try:
+        assert connection.execute("SELECT COUNT(*) FROM alerts").fetchone()[0] == 0
+    finally:
+        connection.close()
+    assert receipt.destination_sha256 == hashlib.sha256(destination.read_bytes()).hexdigest()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows write-denial fence")
@@ -529,6 +993,7 @@ def test_apply_cleanup_preserves_replacement_destination(
         connection.close()
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows destination write-denial fence")
 def test_apply_keeps_original_destination_identity_through_final_hash(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -559,13 +1024,18 @@ def test_apply_keeps_original_destination_identity_through_final_hash(
         getattr(cutover, "candidate_file_identity"),
     )
     identity_calls = 0
+    substitution_refused = False
 
     def substitute_on_identity_reacquisition(path: Path) -> CandidateFileIdentity:
-        nonlocal identity_calls
-        identity_calls += 1
-        if identity_calls == 5:
-            path.replace(displaced)
-            replacement.replace(path)
+        nonlocal identity_calls, substitution_refused
+        if path.resolve() == destination.resolve():
+            identity_calls += 1
+            if identity_calls == 5:
+                try:
+                    path.replace(displaced)
+                    replacement.replace(path)
+                except PermissionError:
+                    substitution_refused = True
         return original_identity(path)
 
     monkeypatch.setattr(
@@ -581,7 +1051,8 @@ def test_apply_keeps_original_destination_identity_through_final_hash(
         expected_plan_sha256=reviewed.plan_sha256,
     )
 
-    assert identity_calls == 4
+    assert identity_calls == 5
+    assert substitution_refused
     assert not displaced.exists()
     assert replacement.exists()
     assert receipt.destination_sha256 == hashlib.sha256(destination.read_bytes()).hexdigest()
@@ -609,10 +1080,11 @@ def test_apply_verifies_staged_rows_against_reviewed_plan(
         "Callable[[Path, Path], CandidateFileIdentity]",
         getattr(cutover, "_copy_database"),
     )
-    original_source_sha = cast(
-        "Callable[[Path], str]",
-        getattr(cutover, "_source_snapshot_sha256"),
+    original_source_state = cast(
+        "Callable[[Path], object]",
+        getattr(cutover, "_source_physical_state"),
     )
+    admitted_live_state = original_source_state(live)
     live_mutated = False
 
     def copy_then_mutate_live(
@@ -630,16 +1102,16 @@ def test_apply_verifies_staged_rows_against_reviewed_plan(
         live_mutated = True
         return identity
 
-    def admitted_source_sha(path: Path) -> str:
+    def admitted_source_state(path: Path) -> object:
         if live_mutated and path.resolve() == live.resolve():
-            return reviewed.live_source_sha256
-        return original_source_sha(path)
+            return admitted_live_state
+        return original_source_state(path)
 
     def disabled_source_fence(_paths: tuple[Path, ...]) -> nullcontext[None]:
         return nullcontext()
 
     monkeypatch.setattr(cutover, "_copy_database", copy_then_mutate_live)
-    monkeypatch.setattr(cutover, "_source_snapshot_sha256", admitted_source_sha)
+    monkeypatch.setattr(cutover, "_source_physical_state", admitted_source_state)
     monkeypatch.setattr(
         cutover,
         "_source_write_denial_fence",
@@ -857,7 +1329,7 @@ def test_apply_never_overwrites_a_source_or_existing_destination(tmp_path: Path)
     _database(governed, operational_rows=(), evidence_rows=())
     plan = plan_live_cutover_merge(live, governed)
 
-    with pytest.raises(LiveCutoverMergeError, match="must not replace"):
+    with pytest.raises(LiveCutoverMergeError, match="destination namespace aliases"):
         apply_live_cutover_merge(
             live,
             governed,
