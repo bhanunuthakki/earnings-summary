@@ -129,6 +129,37 @@ def test_backup_then_restore_end_to_end(tmp_path: Path, monkeypatch: pytest.Monk
     assert not list(backup_dir.glob("portfolio.db.*.gz"))
 
 
+def test_encrypt_stages_in_the_destination_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Atomic publish must hold by construction, not by precondition. Staging
+    in the system temp dir with a same-volume CHECK broke every backup the day
+    the destination moved to Google Drive's virtual G: mount (Stream mode,
+    2026-08-02) — %TEMP% is on C:, so the check itself became the failure.
+    Staging inside the destination directory makes the volumes equal always.
+    A revert to gettempdir() staging fails this test."""
+    import runtime.backup_crypto as bc
+
+    source = tmp_path / "payload.gz"
+    source.write_bytes(b"payload" * 100)
+    dest_dir = tmp_path / "pretend-virtual-drive"
+    observed: list[Path] = []
+    real = bc._temp_destination
+
+    def spy(destination: Path) -> tuple[int, Path]:
+        fd, p = real(destination)
+        observed.append(p)
+        return fd, p
+
+    monkeypatch.setattr(bc, "_temp_destination", spy)
+    encrypt_file(source, dest_dir / "snap.enc", key=b"k" * 32)
+    assert observed, "staging helper was not used"
+    assert observed[0].parent == dest_dir
+    assert observed[0].name.startswith(".snap.enc.")
+    # and the temp never survives a successful publish
+    assert list(dest_dir.iterdir()) == [dest_dir / "snap.enc"]
+
+
 def test_encrypted_envelope_round_trip_and_unique_nonce(tmp_path: Path) -> None:
     source = tmp_path / "payload.gz"
     source.write_bytes(b"payload" * 1000)
