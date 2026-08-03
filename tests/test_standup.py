@@ -511,6 +511,37 @@ def test_ledger_dedup_excludes_compose_failed_and_includes_suppressed(db: Path) 
         conn.close()
 
 
+def test_ledger_record_strips_inline_markdown_from_scalars(db: Path) -> None:
+    """headline/conclusion are scalars rendered plain in the standup thread —
+    an LLM-extracted ``**bold**`` must not persist there."""
+    conn = _conn(db)
+    try:
+        s = StandupSignal(
+            kind="decision_condition",
+            ticker="NU",
+            signature="dcf:NU:md",
+            headline="**NU**: a condition you set just tripped",
+            materiality=0.9,
+            evidence={},
+        )
+        row_id = record(
+            conn,
+            user_id=USER,
+            signal=s,
+            status=STATUS_DELIVERED,
+            now=_NOW,
+            score=0.8,
+            conclusion="Deposit beta *fell* 40bps QoQ.",
+        )
+        headline, conclusion = conn.execute(
+            "SELECT headline, conclusion FROM standup_messages WHERE id = ?", (row_id,)
+        ).fetchone()
+        assert headline == "NU: a condition you set just tripped"
+        assert conclusion == "Deposit beta fell 40bps QoQ."
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Memory stub
 # ---------------------------------------------------------------------------

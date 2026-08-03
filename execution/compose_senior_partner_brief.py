@@ -131,6 +131,8 @@ def _record_standup_message(
     """Best-effort ``standup_messages`` receipt — the delivery/dedup ledger
     convention this purpose rides per the PRD (§9.1 "reuse standup_messages
     for delivery/dedup/cooldown"). A write failure never fails compose."""
+    from llm.postprocess import strip_inline_markdown
+
     conn = open_conn(db_path)
     try:
         conn.execute(
@@ -140,7 +142,7 @@ def _record_standup_message(
             (
                 _signature_sha(iso_year, iso_week),
                 status,
-                headline[:500],
+                strip_inline_markdown(headline)[:500],
                 json.dumps({"artifact_id": artifact_id}),
                 now_naive_utc().isoformat(),
             ),
