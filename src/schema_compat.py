@@ -26,6 +26,7 @@ from __future__ import annotations
 import ast
 import logging
 import sqlite3
+import time
 from contextlib import suppress
 from dataclasses import dataclass
 from functools import lru_cache
@@ -129,6 +130,15 @@ def require_current_for_write(conn: sqlite3.Connection) -> None:
 # write contention, which is the opposite of a trustworthy detector.
 _TRANSIENT_SQLITE_ERRORS = frozenset({"SQLITE_BUSY", "SQLITE_LOCKED", "SQLITE_PROTOCOL"})
 
+# A transient error makes the probe defer (proceed without a verdict), which is
+# a fail-OPEN: a database that is both drifted AND locked at preflight time
+# would slip through. A read-only probe on a WAL DB almost never blocks, and
+# the connection already waits out 5s of contention per attempt — but retrying
+# a few times closes the window so only sustained (not momentary) contention
+# ends in a defer. Bounded so a preflight cannot hang the whole cron fleet.
+_TRANSIENT_PROBE_ATTEMPTS = 3
+_TRANSIENT_PROBE_BACKOFF_S = 0.4
+
 DRIFT_DB_BEHIND_CODE = "db_behind_code"
 DRIFT_CHECKOUT_BEHIND_DB = "checkout_behind_db"
 DRIFT_CHECKOUT_FORKED = "checkout_forked"
@@ -193,10 +203,11 @@ def describe_drift(db_path: str | Path, *, project_root: Path | None = None) -> 
 
     ``None`` means "cleared to proceed": the file is absent, carries no
     ``alembic_version`` (an unversioned fixture), sits exactly on this
-    checkout's head, or could not be probed because the database was
-    momentarily busy.  Every other outcome is a :class:`SchemaDrift` — this
-    function does not raise, because its callers run BEFORE the work whose
-    error handling would otherwise catch it.
+    checkout's head, or could not be probed after
+    ``_TRANSIENT_PROBE_ATTEMPTS`` tries because the database stayed busy.
+    Every other outcome is a :class:`SchemaDrift` — this function does not
+    raise, because its callers run BEFORE the work whose error handling would
+    otherwise catch it.
     """
     path = Path(db_path)
     if not path.exists():
@@ -219,21 +230,40 @@ def describe_drift(db_path: str | Path, *, project_root: Path | None = None) -> 
             reason=DRIFT_CHECKOUT_FORKED,
             detail=str(exc),
         )
-    try:
-        actual = _db_revisions(path)
-    except sqlite3.Error as exc:
-        if getattr(exc, "sqlite_errorname", "") in _TRANSIENT_SQLITE_ERRORS:
-            log.warning(
-                {"event": "schema_drift_probe_deferred", "path": str(path), "error": str(exc)}
-            )
-            return None
-        return SchemaDrift(
-            db_path=str(path),
-            db_revisions=(),
-            expected_revision=expected,
-            reason=DRIFT_DB_UNREADABLE,
-            detail=f"database could not be read for a revision check: {type(exc).__name__}: {exc}",
+    actual: tuple[str, ...] | None = None
+    last_transient: sqlite3.Error | None = None
+    for attempt in range(_TRANSIENT_PROBE_ATTEMPTS):
+        try:
+            actual = _db_revisions(path)
+            break
+        except sqlite3.Error as exc:
+            if getattr(exc, "sqlite_errorname", "") not in _TRANSIENT_SQLITE_ERRORS:
+                return SchemaDrift(
+                    db_path=str(path),
+                    db_revisions=(),
+                    expected_revision=expected,
+                    reason=DRIFT_DB_UNREADABLE,
+                    detail=(
+                        "database could not be read for a revision check: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                )
+            last_transient = exc
+            if attempt + 1 < _TRANSIENT_PROBE_ATTEMPTS:
+                time.sleep(_TRANSIENT_PROBE_BACKOFF_S * (attempt + 1))
+    else:
+        # Every attempt hit transient contention. Defer (proceed) rather than
+        # fail the job for a busy WAL — but loudly, with the attempt count, so
+        # a persistent lock that keeps hiding drift is visible in the log.
+        log.warning(
+            {
+                "event": "schema_drift_probe_deferred",
+                "path": str(path),
+                "error": str(last_transient),
+                "attempts": _TRANSIENT_PROBE_ATTEMPTS,
+            }
         )
+        return None
     if actual is None or actual == (expected,):
         return None
     unknown = [rev for rev in actual if rev not in checkout_revisions]

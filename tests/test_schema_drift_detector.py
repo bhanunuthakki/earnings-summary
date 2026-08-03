@@ -1,3 +1,4 @@
+# pyright: reportPrivateUsage=false
 """The loud half of the Alembic guard.
 
 ``require_current_for_write`` already refuses a drifted database on every
@@ -12,7 +13,9 @@ durable counter for rows that were lost anyway, and the two panel banners.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
+import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -32,6 +35,8 @@ from telemetry_health import (
     dropped_writes_since,
     record_dropped_write,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _checkout(root: Path, chain: list[str]) -> Path:
@@ -110,6 +115,59 @@ def test_unversioned_and_absent_databases_produce_no_verdict(tmp_path: Path) -> 
     unversioned = _versioned_db(tmp_path / "data" / "fixture.db", None)
     assert describe_drift(unversioned, project_root=root) is None
     assert describe_drift(tmp_path / "data" / "nope.db", project_root=root) is None
+
+
+def test_transient_contention_retries_before_deferring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A momentary lock must not fail the probe OPEN on the first bounce — the
+    fail-open window (drifted AND busy) is exactly what lets drift slip the
+    guard. The probe retries, and a lock that clears mid-retry yields the real
+    drift verdict rather than a defer."""
+    import schema_compat
+
+    root = _checkout(tmp_path / "repo", ["0270_a", "0271_b"])
+    db = _versioned_db(tmp_path / "data" / "portfolio.db", "0270_a")
+
+    real = schema_compat._db_revisions
+    calls = {"n": 0}
+
+    def flaky(path: Path) -> tuple[str, ...] | None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            err = sqlite3.OperationalError("database is locked")
+            err.sqlite_errorname = "SQLITE_BUSY"  # type: ignore[attr-defined]
+            raise err
+        return real(path)
+
+    monkeypatch.setattr(schema_compat, "_db_revisions", flaky)
+    monkeypatch.setattr(schema_compat, "_TRANSIENT_PROBE_BACKOFF_S", 0.0)
+
+    drift = describe_drift(db, project_root=root)
+
+    assert calls["n"] == 2, "should have retried past the first transient bounce"
+    assert drift is not None and drift.reason == DRIFT_DB_BEHIND_CODE
+
+
+def test_sustained_contention_defers_open_rather_than_failing_the_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When every retry is locked, the probe defers (returns None) — a busy WAL
+    must never fail a scheduled job for ordinary write contention."""
+    import schema_compat
+
+    root = _checkout(tmp_path / "repo", ["0270_a", "0271_b"])
+    db = _versioned_db(tmp_path / "data" / "portfolio.db", "0270_a")
+
+    def always_locked(path: Path) -> tuple[str, ...] | None:
+        err = sqlite3.OperationalError("database is locked")
+        err.sqlite_errorname = "SQLITE_BUSY"  # type: ignore[attr-defined]
+        raise err
+
+    monkeypatch.setattr(schema_compat, "_db_revisions", always_locked)
+    monkeypatch.setattr(schema_compat, "_TRANSIENT_PROBE_BACKOFF_S", 0.0)
+
+    assert describe_drift(db, project_root=root) is None
 
 
 def test_forked_checkout_is_drift_rather_than_an_exception(tmp_path: Path) -> None:
@@ -373,3 +431,106 @@ def test_panel_is_quiet_when_everything_is_aligned(tmp_path: Path) -> None:
     body = render_cron_health_live_body(db)
 
     assert "ch-alarm" not in body
+
+
+# --------------------------------------------------------------------------
+# The daily-chain health check surfaces drops beyond the panel (fix 3)
+# --------------------------------------------------------------------------
+
+
+def test_daily_chain_status_carries_dropped_ledger_count(tmp_path: Path) -> None:
+    import execution.verify_daily_chain as vdc
+
+    db = _versioned_db(tmp_path / "data" / "portfolio.db", expected_head())
+    record_dropped_write(
+        DROPPED_LLM_LEDGER_WRITE,
+        db_path=db,
+        error="SchemaRevisionMismatch: db=0270, code=0271",
+        purpose="material_news_classification",
+    )
+
+    result = vdc.check(db)
+
+    assert result["dropped_ledger_writes_24h"] == 1
+    assert "SchemaRevisionMismatch" in str(result["dropped_ledger_last_error"])
+
+
+def test_daily_chain_prints_marker_even_when_quiet(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The morning pipeline calls verify_daily_chain with --quiet. The dropped-
+    write alarm must still print — suppressing it would restore the exact
+    silence this whole change exists to end."""
+    import execution.verify_daily_chain as vdc
+
+    db = _versioned_db(tmp_path / "data" / "portfolio.db", expected_head())
+    record_dropped_write(DROPPED_LLM_LEDGER_WRITE, db_path=db, error="locked", purpose="x")
+    status = tmp_path / "status.json"
+
+    vdc.main(["--db-path", str(db), "--status-file", str(status), "--quiet"])
+
+    err = capsys.readouterr().err
+    assert "!!! [ledger_writes_dropped]" in err
+    assert "1 LLM cost row" in err
+
+
+def test_daily_chain_is_silent_on_a_clean_ledger(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import execution.verify_daily_chain as vdc
+
+    db = _versioned_db(tmp_path / "data" / "portfolio.db", expected_head())
+    status = tmp_path / "status.json"
+
+    vdc.main(["--db-path", str(db), "--status-file", str(status), "--quiet"])
+
+    assert "ledger_writes_dropped" not in capsys.readouterr().err
+    written = json.loads(status.read_text(encoding="utf-8"))
+    assert written["dropped_ledger_writes_24h"] == 0
+
+
+# --------------------------------------------------------------------------
+# db.DB_PATH converges with the env-aware preflight (fix 4b)
+# --------------------------------------------------------------------------
+
+
+def test_db_module_default_honors_env_db_path(tmp_path: Path) -> None:
+    """The cost ledger falls back to db.DB_PATH. If that ignored
+    EARNINGS_SUMMARY_DB_PATH while the preflight (portfolio_db_path) honored
+    it, the guard and the writer would disagree about which DB matters. Proven
+    in a subprocess so the one-shot module import picks up the env cleanly."""
+    canonical = (tmp_path / "elsewhere" / "portfolio.db").resolve()
+    canonical.parent.mkdir(parents=True)
+    env = {**os.environ, "EARNINGS_SUMMARY_DB_PATH": str(canonical)}
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.path.insert(0, 'src'); import db; print(db.DB_PATH)",
+        ],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert Path(proc.stdout.strip()) == canonical
+
+
+def test_db_module_default_is_checkout_local_when_env_unset(tmp_path: Path) -> None:
+    env = {k: v for k, v in os.environ.items() if k != "EARNINGS_SUMMARY_DB_PATH"}
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; sys.path.insert(0, 'src'); import db; print(db.DB_PATH)",
+        ],
+        cwd=PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert Path(proc.stdout.strip()) == (PROJECT_ROOT / "data" / "portfolio.db")
