@@ -90,13 +90,16 @@ class TestClassify:
         conn = sqlite3.connect(db)
         assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == 2
 
-    def test_legacy_archive_aborts_dry_run_with_instruction(self, db: Path) -> None:
+    def test_legacy_archive_aborts_dry_run_as_preservation_only(self, db: Path) -> None:
         conn = _attached(db)
         _seed_fact(conn, 1, "EVAL", 10)
         conn.execute('CREATE TABLE gcarc."financial_facts" AS SELECT * FROM main."financial_facts"')
         conn.commit()
         conn.close()
-        with pytest.raises(db_gc.GcAbortedError, match="predates run-keying"):
+        with pytest.raises(
+            db_gc.GcAbortedError,
+            match="preservation-only forensic archive",
+        ):
             gc_restore.run_restore(db, mode="dry-run")
 
 
@@ -167,7 +170,7 @@ class TestApply:
             "SELECT supersedes_id FROM financial_facts WHERE id = 11"
         ).fetchone() == (10,)
 
-    def test_apply_upgrades_legacy_archive_in_place(self, db: Path) -> None:
+    def test_apply_refuses_to_mutate_or_restore_legacy_archive(self, db: Path) -> None:
         conn = _attached(db)
         _seed_fact(conn, 1, "EVAL", 10)
         conn.execute('CREATE TABLE gcarc."financial_facts" AS SELECT * FROM main."financial_facts"')
@@ -175,13 +178,25 @@ class TestApply:
         conn.commit()
         conn.close()
 
-        report = gc_restore.run_restore(db, mode="apply", lock_timeout_s=0.0)
-        (t,) = [x for x in report.tables if x.table == "financial_facts"]
-        assert t.restored == 1
+        archive = db.parent / "archive" / db_gc.ARCHIVE_NAME
+        before = archive.read_bytes()
+
+        with pytest.raises(
+            db_gc.GcAbortedError,
+            match="preservation-only forensic archive",
+        ):
+            gc_restore.run_restore(db, mode="apply", lock_timeout_s=0.0)
+
         conn = sqlite3.connect(db)
-        assert conn.execute("SELECT ticker FROM financial_facts WHERE id = 1").fetchone() == (
-            "EVAL",
-        )
+        assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == 0
+        conn.close()
+        assert archive.read_bytes() == before
+        archive_conn = sqlite3.connect(archive)
+        columns = {
+            str(row[1]) for row in archive_conn.execute('PRAGMA table_info("financial_facts")')
+        }
+        archive_conn.close()
+        assert db_gc.GC_RUN_ID_COL not in columns
 
 
 class TestDrill:
