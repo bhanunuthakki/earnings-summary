@@ -22,7 +22,13 @@ for /f "usebackq tokens=*" %%t in (`powershell -NoProfile -Command "(Get-Date).T
 set LOG_FILE=%LOG_DIR%\backup_db_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-call "%PROJECT_ROOT%\cron\run_python.bat" "backup_db" "portfolio-db" cron\backup_db.py > "%LOG_FILE%" 2>&1
+REM Write set is "db-backup", NOT "portfolio-db". The snapshot is a READER --
+REM SQLite's online-backup API is safe under concurrent writes -- so claiming the
+REM database's exclusive write set only made the backup lose races it did not
+REM need to enter. It serializes against other backup runs (which share the
+REM destination directory and its retention prune); it does not serialize
+REM against ordinary DB writers.
+call "%PROJECT_ROOT%\cron\run_python.bat" "backup_db" "db-backup" cron\backup_db.py > "%LOG_FILE%" 2>&1
 set "RC=%ERRORLEVEL%"
 
 REM Propagate the job's exit code. Without this the script ended on `endlocal`
