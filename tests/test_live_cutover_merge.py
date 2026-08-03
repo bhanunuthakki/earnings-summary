@@ -785,6 +785,7 @@ def test_plan_rejects_source_table_set_and_schema_mismatch(tmp_path: Path) -> No
         plan_live_cutover_merge(live, governed_schema)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows write-denial fence")
 def test_plan_fence_denies_source_change_during_scan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
