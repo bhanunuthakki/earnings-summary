@@ -489,27 +489,27 @@ def test_uncited_codex_web_answer_falls_back_to_claude(
     """The exact production shape: Codex 'succeeds' with the template's
     say-nothing output and zero citations -> treated as operational failure,
     Claude serves the answer."""
-    monkeypatch.setenv("LLM_PRIMARY_SUBSCRIPTION_BACKEND", "codex")
+    monkeypatch.setenv(llm_cli.PRIMARY_SUBSCRIPTION_BACKEND_ENV_VAR, "codex")
+    # The Claude leg runs for real here, so it needs the same CLI-setup bypass
+    # the other Claude-leg tests use — without it this passes on a machine that
+    # HAS the claude binary and fails in CI, which is exactly what it did.
+    _web_claude_fixture(monkeypatch)
     calls: list[str] = []
 
     def fake_codex(prompt: str, **kwargs: object) -> str:
         calls.append("codex")
         return "### Material news\n\n*No material news in the last 7 days.*"
 
-    def fake_claude(prompt: str, **kwargs: object) -> str:
-        calls.append("claude")
-        return "### Material news\n- **Real item** [Source: Reuters, https://reuters.com/x]"
-
     monkeypatch.setattr(codex_backend, "call_codex_llm", fake_codex)
 
-    # After the gate fires, the CLAUDE WEB leg runs (a subprocess), not
+    # After the gate fires the CLAUDE WEB leg runs (a subprocess), not
     # _call_claude — mock that seam the way the routing tests above do.
     def fake_run(*_a: object, **_k: object) -> subprocess.CompletedProcess[str]:
         calls.append("claude")
         return subprocess.CompletedProcess(
             args=["claude"],
             returncode=0,
-            stdout=json.dumps({"result": "### Material news - **Real** https://reuters.com/x"}),
+            stdout=_good_cli_response("### Material news - **Real** https://reuters.com/x"),
             stderr="",
         )
 
