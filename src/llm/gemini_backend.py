@@ -91,6 +91,7 @@ def _ensure_genai() -> None:
     genai = _genai
     google_exceptions = _google_exceptions
 
+
 # Gemini API tiers for analytical writing (Pro) vs the short structured calls
 # that run on Haiku under the Claude backend (Flash). The tier derivation in
 # gemini_model_for keeps these two aligned with LLM_MODELS so retuning a

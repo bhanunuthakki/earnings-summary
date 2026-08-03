@@ -123,9 +123,7 @@ def sweep_db(conn: sqlite3.Connection, *, apply: bool) -> Counter[str]:
         # batch_alter can silently drop. If we rewrote any body, rebuild the
         # index from the base table so the search mirror matches whether or not
         # the trigger fired. No-op when FTS5 is unavailable (table absent).
-        if tally.get("analyst_notes.body updated") and _table_present(
-            conn, "analyst_notes_fts"
-        ):
+        if tally.get("analyst_notes.body updated") and _table_present(conn, "analyst_notes_fts"):
             conn.execute("INSERT INTO analyst_notes_fts(analyst_notes_fts) VALUES ('rebuild')")
             tally["analyst_notes_fts rebuilt"] += 1
         conn.commit()

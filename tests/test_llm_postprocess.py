@@ -172,9 +172,7 @@ def test_non_markdown_scalars_are_untouched(text: str) -> None:
         ("a__b__c", "abc"),  # paired ``__`` read as bold across a word
     ],
 )
-def test_inline_markdown_corrupts_identifier_and_formula_shapes(
-    shape: str, corrupted: str
-) -> None:
+def test_inline_markdown_corrupts_identifier_and_formula_shapes(shape: str, corrupted: str) -> None:
     """PIN the documented corrupting boundary: the stripper is for
     natural-language scalars, NOT identifier/formula/code-bearing columns. It
     unwraps paired ``*``/``__`` as emphasis, so these shapes are mangled. This
