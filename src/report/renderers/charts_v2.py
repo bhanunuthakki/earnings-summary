@@ -839,7 +839,7 @@ CSS = """
 @media (max-width: 900px) { .cv2-pair { grid-template-columns: 1fr; } }
 .cv2-matrix-wrap { margin: 14px 0; overflow-x: auto; }
 .cv2-matrix-title { font-size: 13px; font-weight: 600; color: #1a1f2e; margin-bottom: 6px; }
-.cv2-matrix { border-collapse: collapse; font-size: 11px; width: 100%; }
+.cv2-matrix { border-collapse: collapse; font-size: 11px; width: 100%; max-width: 100%; }
 /* Canonical table rule: numbers mono, labels/headers sans. Every value cell
    is a <td> (cv2-matrix-cell / -cagr-cell); the row label + column headers are
    <th>, which inherit the page's sans. */

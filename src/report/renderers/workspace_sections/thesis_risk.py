@@ -36,6 +36,7 @@ from report.renderers.workspace_sections._shared import (
     _empty_panel,
     _esc,
     _fmt_price,
+    _inline_md,
     _missing_panel,
     _panel_head,
     _render_markdown,
@@ -405,7 +406,7 @@ def _thesis_hygiene_panels(
         body.write("</tbody></table></div>")
         body.write(lg.grid_close())
         if tracked_only:
-            names = ", ".join(_esc(clean_kpi_name(r.name)) for r in tracked_only)
+            names = ", ".join(_inline_md(clean_kpi_name(r.name)) for r in tracked_only)
             body.write(
                 '<div class="ledger-tracked-only muted xsmall">'
                 f"<strong>Tracked, no data yet</strong> ({len(tracked_only)}): {names}"
@@ -488,7 +489,7 @@ def _kpi_ledger_row(
     # duplicated inside it. When the row has a fact_ref the name becomes a
     # doorway button (Law 2 — a number/KPI with depth is a clickable element,
     # never an inert span); without one it stays a plain bold label.
-    clean_name = _esc(clean_kpi_name(r.name))
+    clean_name = _inline_md(clean_kpi_name(r.name))
     name_html = (
         f'<button type="button" class="fact-doorway">{clean_name}</button>'
         if fact_ref
@@ -1026,7 +1027,7 @@ def _failure_mode_card(body: StringIO, idx: int, fm: FailureMode) -> None:
         ("Refutation", fm.refutation_criteria),
     )
     meta = "".join(
-        f'<span class="failure-label">{label}</span><span>{_esc(value)}</span>'
+        f'<span class="failure-label">{label}</span><span>{_inline_md(value)}</span>'
         for label, value in meta_pairs
         if value and value.strip()
     )
@@ -1036,6 +1037,6 @@ def _failure_mode_card(body: StringIO, idx: int, fm: FailureMode) -> None:
         f'data-anchor-key="{anchor_key}" data-anchor-tab="bear">'
         f'<div class="failure-num">{idx + 1:02d}</div>'
         '<div class="failure-body">'
-        f'<div class="failure-title">{_esc(fm.hypothesis)}</div>'
+        f'<div class="failure-title">{_inline_md(fm.hypothesis)}</div>'
         f"{meta_html}</div></div>"
     )

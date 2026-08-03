@@ -21,6 +21,7 @@ from report.renderers.workspace_data import (
 )
 from report.renderers.workspace_sections._shared import (
     _esc,
+    _inline_md,
     _missing_panel,
     _panel_head,
     _quarter_selector,
@@ -95,7 +96,7 @@ def _saydo_tab(
             "</h2>"
         )
         if card.thesis_view:
-            body.write(f'<p class="lede">{_esc(card.thesis_view)}</p>')
+            body.write(f'<p class="lede">{_inline_md(card.thesis_view)}</p>')
         body.write("</div>")
         body.write('<div class="saydo-meta">')
         body.write(_rating_pill(card.rating))
@@ -214,7 +215,7 @@ def _saydo_verdicts_panel(body: StringIO, rows: list[SayDoVerdictRow]) -> None:
         body.write(f"<tr{data}>")
         body.write(f'<td class="mono xsmall">{_esc(made_label)}</td>')
         body.write(f'<td class="mono xsmall">{_esc(target_label)}</td>')
-        body.write(f'<td class="saydo-metric">{_esc(r.kpi_name)}</td>')
+        body.write(f'<td class="saydo-metric">{_inline_md(r.kpi_name)}</td>')
         body.write(f'<td class="saydo-guide">{_esc(promise)}</td>')
         body.write(f'<td class="saydo-actual"><strong>{realized}</strong></td>')
         body.write(f"<td>{outcome_pill}</td>")
@@ -248,8 +249,8 @@ def _saydo_summary_table(body: StringIO, cards: list[SayDoCard]) -> None:
             f'<td class="saydo-metric mono">{_esc(c.prior_quarter)} {c.prior_year} '
             f"→ {_esc(c.current_quarter)} {c.current_year}</td>"
             f"<td>{_rating_pill(c.rating)}</td>"
-            f'<td class="saydo-guide">{_esc((c.attribution or "—")[:140])}</td>'
-            f'<td class="saydo-guide">{_esc((c.thesis_view or "—")[:140])}</td>'
+            f'<td class="saydo-guide">{_inline_md((c.attribution or "—")[:140])}</td>'
+            f'<td class="saydo-guide">{_inline_md((c.thesis_view or "—")[:140])}</td>'
             "</tr>"
         )
     body.write("</tbody></table></div>")
@@ -279,9 +280,9 @@ def _saydo_print_vs_guide(
     body.write("<th>Verdict</th></tr></thead><tbody>")
     for r in rows:
         body.write("<tr>")
-        body.write(f'<td class="saydo-metric">{_esc(r.metric)}</td>')
-        body.write(f'<td class="saydo-guide">{_esc(r.guide)}</td>')
-        body.write(f'<td class="saydo-actual"><strong>{_esc(r.actual)}</strong></td>')
+        body.write(f'<td class="saydo-metric">{_inline_md(r.metric)}</td>')
+        body.write(f'<td class="saydo-guide">{_inline_md(r.guide)}</td>')
+        body.write(f'<td class="saydo-actual"><strong>{_inline_md(r.actual)}</strong></td>')
         body.write(f"<td>{_rating_pill(r.verdict)}</td>")
         body.write("</tr>")
     body.write("</tbody></table></div>")
@@ -372,7 +373,7 @@ def _saydo_historical_ledger(body: StringIO, metrics: list[SayDoHistoricalMetric
         realized_display = f"{m.realized_value:.2f}%" if m.realized_value is not None else "—"
         outcome_label = m.outcome if m.outcome else "no_data"
         body.write("<tr>")
-        body.write(f'<td class="saydo-metric">{_esc(m.kpi_name)}</td>')
+        body.write(f'<td class="saydo-metric">{_inline_md(m.kpi_name)}</td>')
         body.write(f'<td class="mono">{_esc(comp_symbol)}</td>')
         body.write(f'<td class="saydo-guide">{_esc(target_display)}</td>')
         body.write(f'<td class="saydo-actual"><strong>{_esc(realized_display)}</strong></td>')

@@ -626,10 +626,18 @@ QUARANTINE: dict[str, frozenset[str]] = {
     "report/renderers/workspace_comments.py": frozenset({"font-size", "radius"}),
     # workspace_styles graduated its kit-badge dimension in the same pass: the
     # .decision-badge.outcome-* filled chips moved onto .k-pill + tone (routed in
-    # thesis_risk.py). radius/color stay quarantined (report unfork — untouched
-    # by the 2026-07-18 alias sweep, which only fixed the valuation/l1-thesis/
-    # l1-reread panel backgrounds and ink text colors).
-    "report/renderers/workspace_styles.py": frozenset({"radius", "color"}),
+    # thesis_risk.py). Report-spacing-rhythm pass (2026-08-02): `color`
+    # graduated too — the last two raw literals (`.twk-seg button.active` /
+    # `.twk-toggle::after` box-shadows, `rgba(0,0,0,.06)` / `rgba(0,0,0,.25)`)
+    # moved onto `color-mix(in srgb, var(--scrim) N%, transparent)`, an exact
+    # reproduction since `--scrim` is `rgba(0,0,0,0.5)` in both palettes; and
+    # the four `border-radius: 999px` literals moved onto `var(--radius-full)`
+    # (the token that value already resolves to). `radius` stays quarantined:
+    # three small marks (`.legend-swatch` 2px, `.seg-bar` 2px, `.scenario-bar-
+    # price` 1px) need a genuinely new sanctioned micro-radius, not a fix —
+    # `var(--radius)` (8px) would over-round elements that small. Flagged as a
+    # separate follow-up, not attempted here.
+    "report/renderers/workspace_styles.py": frozenset({"radius"}),
     # cite_marks graduated `alias` in the same 2026-07-18 sweep (its --panel/--ink/
     # --link fallback chains repointed at the canonical tokens as sole values).
     # color/radius stay quarantined: its `var(--radius, 6px)` / `var(--shadow-pop,

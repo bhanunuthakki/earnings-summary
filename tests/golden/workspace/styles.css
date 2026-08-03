@@ -546,6 +546,30 @@ details[open] > *:not(summary) { animation: k-overlay-rise var(--transition); }
   border-radius: var(--radius); padding: var(--sp-2); margin: var(--sp-1) 0 0;
   white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
 
+/* ============================================================
+   Report spacing rhythm — ONE system, three tiers (owner audit,
+   2026-08-02: "spacing is shit... too much space between vertical
+   sections and too little between horizontal sometimes"). Every gap in
+   this file should read off one of these three, not a freehand px value:
+     --section-gap  between STRUCTURAL BANDS (identity / kpi-strip /
+                    news-strip / tabs-wrap / peer-row / footer) — the
+                    biggest gap, used sparingly, at the page-chrome level.
+     --gap-lg       between PANELS inside one tab. `.tab-body`'s own flex
+                    `gap` is the ONE place this is spent per tab — a
+                    panel/section class must NOT also carry its own
+                    margin-top/-bottom to a sibling panel, or the two
+                    stack (a panel used to get gap-lg PLUS a local 14-18px
+                    margin — the doubled "too much space" the audit named;
+                    fixed by deleting the redundant local margins, not by
+                    inventing a fourth token).
+     --row-pad-y    inside ONE panel, between repeated ROW-shaped items
+                    (a Q&A question, a decision card, an IR document, a
+                    valuation row) — the tightest tier. Table cells use
+                    the sibling --table-pad-y instead (a table row is
+                    denser than a card row by design).
+   All three collapse under [data-density="compact"] below, so honoring
+   them (instead of a literal px) is also what makes the density toggle
+   actually reach a given block. */
 :root {
   --pad-x: 28px;
   --pad-y: 18px;
@@ -590,7 +614,7 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
   display: inline-flex; align-items: center; gap: 6px;
   padding: 3px 9px;
   border: 1px solid var(--border-2);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   font-size: var(--fs-caption); font-weight: 500;
   color: var(--fg-soft);
   background: var(--surface);
@@ -897,7 +921,7 @@ body { font-family: var(--sans); font-size: 14px; line-height: 1.5; display: fle
   background: var(--surface);
   padding: 5px 12px 6px;
   font-family: var(--sans); font-size: var(--fs-caption); font-weight: 500;
-  color: var(--muted); cursor: pointer; border-radius: 999px;
+  color: var(--muted); cursor: pointer; border-radius: var(--radius-full);
   display: flex; align-items: center; gap: 7px;
   letter-spacing: 0.005em;
 }
@@ -1155,8 +1179,12 @@ details.panel > summary:hover { background: var(--paper); }
 /* P4.1 canonical table — the ONE data-table class. Variants are modifier
    classes alongside it (.tbl-nowrap for dense numeric grids; semantic
    modifiers like .coverage-table / .insider-table / .kpi-ledger-table keep
-   only their table-specific rules below). */
-.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+   only their table-specific rules below). Explicitly fluid: width AND
+   max-width at 100% (never a fixed px), table-layout left at its `auto`
+   default so column widths still follow content within that 100% — a table
+   should fill whatever column/panel it renders in, never sit locked at its
+   own intrinsic width regardless of a wider container. */
+.tbl { width: 100%; max-width: 100%; border-collapse: collapse; font-size: 13px; }
 .tbl th {
   text-align: left; font-size: var(--fs-caption); font-weight: 500;
   color: var(--muted); padding: 10px var(--panel-pad-x);
@@ -1186,6 +1214,11 @@ details.panel > summary:hover { background: var(--paper); }
   font-style: italic;
 }
 
+/* Earnings tab: the per-quarter caption line inside the ONE shared
+   "Analyst Q&A" panel (workspace_sections/earnings.py::_qa_roster_panel —
+   design_language §6.2, the quarter is the per-item label under a constant
+   title stated once, not a restated panel-head per quarter). */
+.qa-quarter-sub { padding: var(--row-pad-y) var(--panel-pad-x) 0; }
 /* Q&A rows: <details class="qa-row"> per question (P4.1 — the canonical
    <details> collapse idiom; the +/- chevron is CSS-driven). */
 .qa-list { display: flex; flex-direction: column; }
@@ -1195,7 +1228,7 @@ details.panel > summary:hover { background: var(--paper); }
 .qa-head {
   width: 100%;
   display: flex; align-items: center; gap: 14px;
-  padding: 13px var(--panel-pad-x);
+  padding: var(--row-pad-y) var(--panel-pad-x);
   text-align: left; cursor: pointer; user-select: none; list-style: none;
 }
 .qa-head::-webkit-details-marker { display: none; }
@@ -1289,7 +1322,7 @@ details.panel > summary:hover { background: var(--paper); }
 .val-stack { display: flex; flex-direction: column; }
 .val-row {
   display: flex; justify-content: space-between; align-items: baseline;
-  padding: 12px var(--panel-pad-x);
+  padding: var(--row-pad-y) var(--panel-pad-x);
   border-bottom: 1px solid var(--hairline);
   font-size: 13px;
 }
@@ -1304,7 +1337,7 @@ details.panel > summary:hover { background: var(--paper); }
 .scenario-range { display: flex; border-bottom: 1px solid var(--hairline); }
 .scenario-cell {
   flex: 1; display: flex; flex-direction: column; gap: 2px;
-  padding: 10px var(--panel-pad-x) 8px;
+  padding: var(--row-pad-y) var(--panel-pad-x);
 }
 .scenario-cell + .scenario-cell { border-left: 1px solid var(--hairline); }
 .scenario-label {
@@ -1342,7 +1375,7 @@ details.panel > summary:hover { background: var(--paper); }
 .break-status-breach { color: var(--bad); }
 .break-status-unresolved { color: var(--muted); }
 
-.failure { display: flex; gap: 14px; padding: 14px var(--panel-pad-x); border-bottom: 1px solid var(--hairline); }
+.failure { display: flex; gap: 14px; padding: var(--row-pad-y) var(--panel-pad-x); border-bottom: 1px solid var(--hairline); }
 .failure:last-child { border-bottom: 0; }
 .failure-num {
   font-family: var(--mono); font-size: var(--fs-caption); font-weight: 600;
@@ -1392,7 +1425,7 @@ details.panel > summary:hover { background: var(--paper); }
 }
 
 .ir-card {
-  padding: 12px var(--panel-pad-x);
+  padding: var(--row-pad-y) var(--panel-pad-x);
   border-bottom: 1px solid var(--hairline);
 }
 .ir-card:last-child { border-bottom: 0; }
@@ -1460,7 +1493,7 @@ details.panel > summary:hover { background: var(--paper); }
   margin-top: 4px; color: var(--muted);
 }
 .decision-card {
-  padding: 14px var(--panel-pad-x);
+  padding: var(--row-pad-y) var(--panel-pad-x);
   border-bottom: 1px solid var(--hairline);
 }
 .decision-card:last-child { border-bottom: 0; }
@@ -1513,7 +1546,7 @@ details.panel > summary:hover { background: var(--paper); }
 }
 .transcript-block:first-child { border-top: 0; }
 .transcript-block summary {
-  padding: 14px var(--panel-pad-x);
+  padding: var(--row-pad-y) var(--panel-pad-x);
   cursor: pointer; user-select: none;
   font-size: 13px; font-weight: 500;
   display: flex; align-items: center; gap: 10px;
@@ -1667,11 +1700,14 @@ details.panel > summary:hover { background: var(--paper); }
 }
 .twk-seg button.active {
   background: var(--surface); color: var(--fg);
-  box-shadow: 0 1px 2px rgba(0,0,0,.06);
+  /* --scrim is the palette's one black-wash primitive (a neutral 50%-alpha
+     black in both themes, per tokens.py) — color-mix at 12% reproduces the
+     exact alpha this micro shadow needs, without a raw function-color literal. */
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--scrim) 12%, transparent);
 }
 .twk-toggle {
   position: relative; width: 32px; height: 18px;
-  border: 0; border-radius: 999px;
+  border: 0; border-radius: var(--radius-full);
   background: var(--border-2); cursor: pointer; padding: 0;
 }
 .twk-toggle[data-on="1"] { background: var(--accent); }
@@ -1679,7 +1715,9 @@ details.panel > summary:hover { background: var(--paper); }
   content: ''; position: absolute; top: 2px; left: 2px;
   width: 14px; height: 14px; border-radius: 50%;
   background: var(--surface);
-  box-shadow: 0 1px 2px rgba(0,0,0,.25);
+  /* Same --scrim color-mix idiom as .twk-seg button.active above, at a
+     stronger mix for this knob's slightly deeper shadow. */
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--scrim) 50%, transparent);
   transition: transform var(--transition);
 }
 .twk-toggle[data-on="1"]::after { transform: translateX(14px); }
@@ -1700,6 +1738,7 @@ details.panel > summary:hover { background: var(--paper); }
 }
 .fin-drill-table {
   width: 100%;
+  max-width: 100%;
   margin: 0;
   background: var(--paper);
 }
@@ -2043,7 +2082,11 @@ ul.flag-list li.flag-positive {
 /* ============================================================
    Synthesis tab — lens artifact panels
    ============================================================ */
-.lens-panel { margin-bottom: 16px; }
+/* No local margin: .lens-panel is a direct child of .tab-body, whose own
+   `gap: var(--gap-lg)` already spaces every panel in a tab (the rhythm
+   tokens block at the top of this file). A local margin here used to
+   STACK on top of that gap (24px + 16px = 40px between two lens panels)
+   — the "too much space between vertical sections" this pass fixes. */
 .lens-panel .panel-head {
   display: flex;
   flex-direction: column;
@@ -2066,7 +2109,8 @@ ul.flag-list li.flag-positive {
    the Thesis tab between the valuation/break-rule grid and the
    thesis-hygiene panels.
    ============================================================ */
-.decision-history-panel { margin-top: 14px; }
+/* No local margin-top: a direct .tab-body child already gets the shared
+   panel-to-panel gap (see the .lens-panel note above — same fix). */
 .decision-list {
   display: flex;
   flex-direction: column;
@@ -2166,15 +2210,12 @@ ul.flag-list li.flag-positive {
    class; the styles below are for the Decisions tab's
    summary-chip ribbon + small layout tweaks.
    ============================================================ */
-.macro-sens-panel,
-.strategic-targets-panel,
-.customer-concentration-panel,
-.lease-ladder-panel,
-.saydo-verdicts-panel,
-.peer-comp-panel,
-.comp-set-context-panel {
-  margin-top: var(--gap);
-}
+/* No local margin-top on these seven: each renders as a direct .tab-body
+   child, which already spaces every panel via its own flex gap (see the
+   .lens-panel note above) — var(--gap) here used to add a second, smaller
+   gap on top of that shared one instead of matching it, so two P3 panels
+   back to back were spaced inconsistently with every other pair of panels
+   in the same tab. */
 /* Phase 3 (comparable_sets_bottoms_up.md §11) — Sector context card: the
    industry/sector/benchmark-proxy chip row. Layout only (flex/gap/padding);
    the .k-well/.k-chip fills are the kit's, not re-skinned here. */
@@ -2206,7 +2247,7 @@ ul.flag-list li.flag-positive {
   padding: 3px 10px;
   background: var(--paper);
   border: 1px solid var(--hairline);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   font-size: var(--fs-caption);
 }
 .decision-chip-label {
@@ -2286,7 +2327,7 @@ ul.flag-list li.flag-positive {
 @media (max-width: 900px) { .cv2-pair { grid-template-columns: 1fr; } }
 .cv2-matrix-wrap { margin: 14px 0; overflow-x: auto; }
 .cv2-matrix-title { font-size: 13px; font-weight: 600; color: #1a1f2e; margin-bottom: 6px; }
-.cv2-matrix { border-collapse: collapse; font-size: 11px; width: 100%; }
+.cv2-matrix { border-collapse: collapse; font-size: 11px; width: 100%; max-width: 100%; }
 /* Canonical table rule: numbers mono, labels/headers sans. Every value cell
    is a <td> (cv2-matrix-cell / -cagr-cell); the row label + column headers are
    <th>, which inherit the page's sans. */
