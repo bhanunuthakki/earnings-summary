@@ -161,6 +161,15 @@ POLICY_NAMES = ("validation-issues", "telemetry", "facts-depth", "maintenance")
 # transaction — see the maintenance-window comment in _delete_batches().
 FACTS_DELETE_GUARD_TRIGGER = "trg_financial_facts_observation_delete"
 
+# Columns the GC itself mutates on LIVE rows after their archive copy is
+# taken. The recycled-id discriminator must ignore them or an interrupted
+# apply reads its own writes as a recycled-id collision (see
+# _recycled_id_collisions). Keep this minimal: every entry weakens the
+# recycled-id guard for that column.
+_RECYCLED_ID_IGNORED_COLUMNS: dict[str, frozenset[str]] = {
+    "financial_facts": frozenset({"supersedes_id"}),
+}
+
 # (table, timestamp column) pairs cleared for age-based retention by the
 # consumer audit. pipeline_attempts is excluded — see module docstring.
 TELEMETRY_TABLES: tuple[tuple[str, str], ...] = (
@@ -510,8 +519,21 @@ def _recycled_id_collisions(
     Payload equality is the discriminator — a legitimate retry re-archives an
     identical row, a recycled id does not. The join only visits ids present in
     BOTH sides, so a first-time archive pass matches nothing and costs nothing.
+
+    Columns the GC ITSELF rewrites on live rows after archiving are excluded
+    from the comparison (``_RECYCLED_ID_IGNORED_COLUMNS``). The facts-depth
+    apply nulls ``supersedes_id`` on doomed rows AFTER they are archived (the
+    self-FK must hold at every batch commit), so an apply that aborts between
+    that nulling and the last delete batch leaves live NULL vs archived
+    original — comparing that column made every retry a FALSE "recycled id"
+    abort, permanently wedging the policy (2026-08-03 adversarial review, #1).
     """
-    cols = [str(row[1]) for row in conn.execute(f'PRAGMA main.table_info("{table}")')]
+    ignored = _RECYCLED_ID_IGNORED_COLUMNS.get(table, frozenset())
+    cols = [
+        str(row[1])
+        for row in conn.execute(f'PRAGMA main.table_info("{table}")')
+        if str(row[1]) not in ignored
+    ]
     # IS NOT, not <>, so NULL-vs-value counts as a difference instead of NULL.
     mismatch = " OR ".join(f't."{c}" IS NOT a."{c}"' for c in cols)
     return int(
@@ -557,6 +579,30 @@ def _archive_doomed(
     conn.execute(
         f'CREATE TABLE IF NOT EXISTS gcarc."{table}" AS SELECT * FROM main."{table}" WHERE 0'  # nosec B608 -- internal registry table name; no user input
     )
+    # The sidecar's schema froze at first creation; a migration that adds a
+    # live column would otherwise break both the collision join and the
+    # SELECT t.* copy with a raw OperationalError (2026-08-03 adversarial
+    # review, #11). Widen the sidecar to match — SQLite appends ALTER'd
+    # columns, so ordinal order stays aligned with a live table that grew the
+    # same way. A column the LIVE table lost cannot round-trip a verbatim
+    # restore, so that aborts loudly instead.
+    live_info = list(conn.execute(f'PRAGMA main.table_info("{table}")'))
+    live_cols = [str(row[1]) for row in live_info]
+    archive_cols_seq = [str(row[1]) for row in conn.execute(f'PRAGMA gcarc.table_info("{table}")')]
+    extra_in_archive = [c for c in archive_cols_seq if c not in live_cols]
+    if extra_in_archive:
+        raise GcAbortedError(
+            f"{table}: archive sidecar carries column(s) {extra_in_archive} the live "
+            "table no longer has — a verbatim restore is impossible; reconcile the "
+            "sidecar schema manually before pruning."
+        )
+    for row in live_info:
+        name, coltype = str(row[1]), str(row[2] or "")
+        if name not in archive_cols_seq:
+            conn.execute(
+                f'ALTER TABLE gcarc."{table}" ADD COLUMN "{name}" {coltype}'  # nosec B608 -- identifiers from PRAGMA table_info; no user input
+            )
+            _log("gc_archive_widened", table=table, column=name)
     archive_cols = {str(row[1]) for row in conn.execute(f'PRAGMA gcarc.table_info("{table}")')}
     if id_col in archive_cols:
         # Collapse any legacy duplicates FIRST, so the collision join below sees
@@ -871,9 +917,27 @@ def collapse_validation_issues(
     report.rows_updated["validation_issues"] = len(updates)
 
     if apply and (doomed_total or collided or updates):
-        # Deletes run BEFORE the updates so a survivor can never be handed a
-        # fingerprint still held by a row waiting to be removed. Collided rows
-        # join the same doomed set, so they archive under one manifest entry.
+        # Aggregates FIRST: first_seen/last_seen/occurrence_count are computed
+        # over the duplicates and become unrecoverable from the live table the
+        # moment those duplicates are deleted — an abort between the delete
+        # and a later update silently resets the survivor's history to n=1
+        # (2026-08-03 adversarial review, #3). Fingerprints, by contrast, are
+        # recomputable from the survivor's own columns, so they are filled
+        # AFTER the deletes: a survivor must never be handed a fingerprint
+        # still held by a row waiting to be removed (the partial unique index
+        # would reject it).
+        aggregate_rows = [
+            (first_seen, last_seen, count, issue_id)
+            for (_fp, first_seen, last_seen, count, issue_id) in updates
+        ]
+        for chunk in _chunks(aggregate_rows, batch_size):
+            ctrl.checkpoint()
+            with _txn(conn):
+                conn.executemany(
+                    "UPDATE validation_issues SET first_seen_at = ?, "
+                    "last_seen_at = ?, occurrence_count = ? WHERE id = ?",
+                    chunk,
+                )
         if collided:
             conn.executemany(
                 "INSERT INTO _gc_doomed (id) VALUES (?)", [(issue_id,) for issue_id in collided]
@@ -889,16 +953,16 @@ def collapse_validation_issues(
                 ctrl=ctrl,
                 batch_size=batch_size,
             )
-        # Aggregate lifecycle fields + a real fingerprint onto each survivor,
-        # committing every batch_size updates so the write lock is never held
-        # for the whole survivor set. COALESCE keeps an existing fingerprint:
-        # only NULLs are filled, so no stored identity is ever released.
-        for chunk in _chunks(updates, batch_size):
+        # Fingerprint fill, post-delete (ordering rationale above). COALESCE
+        # keeps an existing fingerprint: only NULLs are filled, so no stored
+        # identity is ever released.
+        fingerprint_rows = [(fp, issue_id) for (fp, _fs, _ls, _n, issue_id) in updates]
+        for chunk in _chunks(fingerprint_rows, batch_size):
             ctrl.checkpoint()
             with _txn(conn):
                 conn.executemany(
-                    "UPDATE validation_issues SET fingerprint = COALESCE(fingerprint, ?), "
-                    "first_seen_at = ?, last_seen_at = ?, occurrence_count = ? WHERE id = ?",
+                    "UPDATE validation_issues SET fingerprint = COALESCE(fingerprint, ?) "
+                    "WHERE id = ?",
                     chunk,
                 )
     if blocked:
@@ -979,11 +1043,20 @@ def telemetry_retention(
 
 
 def _tier_of(conn: sqlite3.Connection) -> dict[str, str]:
-    """Ticker -> active list_type; tickers absent from the map are orphans."""
+    """Ticker -> active list_type; tickers absent from the map are orphans.
+
+    tracked_companies is UNIQUE(user_id, ticker), so one ticker can carry a
+    different list_type per tenant. Portfolio must win any such conflict —
+    the ORDER BY makes portfolio rows overwrite last, so a second tenant's
+    watchlist entry can never demote a portfolio ticker into the window
+    prune (2026-08-03 adversarial review, #10).
+    """
     return {
         str(r[0]).upper(): str(r[1])
         for r in conn.execute(
-            "SELECT ticker, list_type FROM tracked_companies WHERE archived_at IS NULL"
+            "SELECT ticker, list_type FROM tracked_companies "
+            "WHERE archived_at IS NULL "
+            "ORDER BY CASE list_type WHEN 'portfolio' THEN 1 ELSE 0 END"
         )
     }
 
@@ -1002,9 +1075,12 @@ def _doom_facts_for_ticker(
     docstring); both sources prune by the same period window.
     """
     if drop_all:
+        # COALESCE: a NULL fiscal_period_type must not slip through the
+        # != 'TTM' predicate as NULL — orphan rows would silently survive
+        # (2026-08-03 adversarial review, #9).
         cur = conn.execute(
             "INSERT INTO _gc_doomed (id) SELECT id FROM financial_facts "
-            "WHERE ticker = ? AND fiscal_period_type != 'TTM' "
+            "WHERE ticker = ? AND COALESCE(fiscal_period_type, '') != 'TTM' "
             "AND COALESCE(extracted_by, '') != 's1'",
             (ticker,),
         )
@@ -1016,6 +1092,11 @@ def _doom_facts_for_ticker(
         for r in conn.execute(
             f"SELECT DISTINCT period_end FROM financial_facts "  # nosec B608 -- only qmark placeholders interpolated
             f"WHERE ticker = ? AND fiscal_period_type IN ({qmarks}) "
+            # NULL sorts LAST under DESC: one NULL period_end would enter the
+            # keep-list whenever the ticker has fewer periods than the window,
+            # and NOT IN (NULL, ...) then dooms NOTHING for the whole branch —
+            # silent under-deletion (2026-08-03 adversarial review, #8).
+            f"AND period_end IS NOT NULL "
             f"ORDER BY period_end DESC LIMIT ?",
             (ticker, *QUARTER_TYPES, keep_quarters),
         )
@@ -1026,6 +1107,7 @@ def _doom_facts_for_ticker(
         for r in conn.execute(
             f"SELECT DISTINCT substr(period_end, 1, 4) FROM financial_facts "  # nosec B608 -- only qmark placeholders interpolated
             f"WHERE ticker = ? AND fiscal_period_type IN ({amarks}) "
+            f"AND period_end IS NOT NULL "
             f"ORDER BY 1 DESC LIMIT ?",
             (ticker, *ANNUAL_TYPES, keep_fy),
         )
@@ -1115,6 +1197,15 @@ def facts_depth(
             SELECT 1 FROM financial_facts f JOIN _gc_doomed d ON d.id = f.id
             WHERE f.ticker = a.ticker AND f.period_end = a.period_end
         )
+        AND NOT EXISTS (
+            -- TTM and s1 rows survive every prune and routinely share a
+            -- period_end with doomed quarterly rows; a period that keeps ANY
+            -- fact is still discoverable, so its grid row must stay
+            -- (2026-08-03 adversarial review, #7).
+            SELECT 1 FROM financial_facts s
+            WHERE s.ticker = a.ticker AND s.period_end = a.period_end
+              AND s.id NOT IN (SELECT id FROM _gc_doomed)
+        )
         """
     )
     attempts_doomed = conn.execute("SELECT COUNT(*) FROM _gc_doomed_mca").fetchone()[0]
@@ -1163,8 +1254,14 @@ def facts_depth(
                     report.rows_deleted[tbl] = cur.rowcount
         except GcAbortedError:
             raise
-        except sqlite3.OperationalError:
-            pass  # table absent on older schemas — nothing to cascade
+        except sqlite3.OperationalError as exc:
+            # ONLY "table absent on older schemas" is skippable. A locked DB,
+            # a missing column, or an I/O error would otherwise skip the
+            # cascade silently while the parent facts still get deleted —
+            # creating exactly the dangling references this block prevents
+            # (2026-08-03 adversarial review, #12).
+            if "no such table" not in str(exc):
+                raise
 
     # Cascade 3: null every supersedes_id pointing into the doomed set BEFORE
     # the delete batches. Chains share one logical (ticker, period_end, fpt,

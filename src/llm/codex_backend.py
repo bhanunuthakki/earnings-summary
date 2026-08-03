@@ -35,13 +35,23 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 from log_redact import redact
 
 log = logging.getLogger(__name__)
 
 CODEX = "codex"
+
+# Mirrors the machine wrapper's WebSearchMode (C:\Users\Bhanu\.gemini\snippets\
+# codex_cli.py). "disabled" is the default so every pre-existing caller (judge
+# traffic, call_llm's Codex-primary leg) stays byte-identical; only an
+# explicit "live" (the web-grounded purposes, e.g. recent_developments) opts
+# into fetched web content. The wrapper itself validates the mode and raises
+# ValueError before spawning the CLI on anything else — this alias exists for
+# readability at call sites, not as a second source of truth.
+WebSearchMode = Literal["disabled", "cached", "indexed", "live"]
+DEFAULT_WEB_SEARCH: WebSearchMode = "disabled"
 
 # The canonical subscription wrapper (global CLAUDE.md). Importing by path
 # keeps this repo from vendoring a copy that could drift from the machine's.
@@ -57,7 +67,14 @@ DEFAULT_TIMEOUT_SECONDS = 420
 
 
 class _CodexCaller(Protocol):
-    def __call__(self, prompt: str, *, model: str, timeout_seconds: int) -> _CodexResult: ...
+    def __call__(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        timeout_seconds: int,
+        web_search: WebSearchMode = "disabled",
+    ) -> _CodexResult: ...
 
 
 class _CodexUsage(Protocol):
@@ -109,19 +126,29 @@ def call_codex_llm(
     run_id: str | None = None,
     model: str = CODEX_JUDGE_MODEL,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    web_search: WebSearchMode = DEFAULT_WEB_SEARCH,
     fallback_used: str | None = None,
     fallback_from_provider: str | None = None,
     fallback_from_transport: str | None = None,
 ) -> str:
     """One Codex call with a ledger row. Raises on failure (the caller's
-    judge wrapper records it as a judge error — infra, never a score)."""
+    judge wrapper records it as a judge error — infra, never a score).
+
+    ``web_search`` opts into the wrapper's fetched-web-content mode (default
+    "disabled", byte-identical to every pre-existing caller). Only the
+    web-grounded `call_llm_with_web` Codex-primary leg passes "live" — fetched
+    content is untrusted input handed back as answer text, never as an
+    instruction; the wrapper's isolation (read-only sandbox, ephemeral home,
+    no shell/apps/hooks) bounds the blast radius of anything a hostile page
+    could try. See directives/llm_calls.md and procedures/llm-ops.TRANSPORTS.md.
+    """
     from llm.ledger import record_llm_call
 
     started_at = datetime.now(UTC).replace(tzinfo=None)
     t0 = time.monotonic()
     try:
         caller = _load_wrapper()
-        result = caller(prompt, model=model, timeout_seconds=timeout_seconds)
+        result = caller(prompt, model=model, timeout_seconds=timeout_seconds, web_search=web_search)
     except Exception as exc:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
         from llm_call_ledger import sha256_text
@@ -137,6 +164,7 @@ def call_codex_llm(
             scope=scope,
             run_id=run_id,
             error=f"[codex] {type(exc).__name__}: {redact(exc)[:400]}",
+            meta={"web_search": web_search},
             fallback_used=fallback_used,
             prompt=prompt,
             provider="openai",
@@ -158,7 +186,8 @@ def call_codex_llm(
             "input_tokens": result.usage.input_tokens,
             "cache_read_input_tokens": result.usage.cached_input_tokens,
             "output_tokens": result.usage.output_tokens,
-        }
+        },
+        "web_search": web_search,
     }
     if not text:
         record_llm_call(

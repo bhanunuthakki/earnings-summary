@@ -31,8 +31,25 @@ implemented in `src/llm/cli.py` and re-exported by `src/llm_client.py`. It:
    being silently translated.
 5. `LLM_PRIMARY_SUBSCRIPTION_BACKEND=claude` is the reversible rollback
    switch. The production default is `codex`.
-6. `call_llm_with_web` remains Claude-only because the membership Codex
-   wrapper is intentionally answer-only with web and tools disabled.
+6. `call_llm_with_web` follows the SAME Codex-first order (2026-08-03 owner
+   ratification: "everything routed to Codex first, Claude is backup" —
+   including web-grounded calls). The Codex membership wrapper now supports
+   an opt-in `web_search` mode (`disabled` default / `cached` / `indexed` /
+   `live`); `call_llm_with_web`'s Codex leg passes `web_search="live"` so it
+   can fetch fresh pages, falling back to the existing Claude
+   WebSearch/WebFetch tool-call path on an OPERATIONAL Codex failure only —
+   never as a routing preference. Every other Codex call site keeps the
+   `"disabled"` default (byte-identical to before this changed).
+   **Budget-cap nuance**: the Claude web leg's hard per-call
+   `--max-budget-usd` ceiling (`CLAUDE_WEB_MAX_BUDGET_USD`, $2) is a
+   Claude-CLI-only mechanism — Codex is membership-billed with no per-call
+   price and the wrapper reports no token usage, so there is no dollar
+   figure to clamp on the Codex leg. That is a deliberate gap, not a
+   silently dropped concept: the per-purpose MONTHLY budget
+   (`_enforce_budget_pre_call`) still gates every leg, Codex included,
+   identically, and the Codex wrapper's own isolation (read-only sandbox, no
+   shell/apps/hooks) bounds a runaway call's blast radius even without a
+   $-ceiling.
 
 ## Hard rules
 
