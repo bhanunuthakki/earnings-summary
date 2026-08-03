@@ -158,9 +158,13 @@ class TestReviewFix1RecycledIdVsSupersedesNulling:
             == 0
         )
 
-    def test_a_genuinely_recycled_id_still_aborts(self, gc_db: Path) -> None:
-        """The guard must survive the fix: a NEW row under an archived id with
-        a truly different payload still fail-closes."""
+    def test_a_genuinely_recycled_id_becomes_a_recoverable_variant(self, gc_db: Path) -> None:
+        """Post-run-keying (2026-08-03): a NEW row minted under an archived id
+        with a truly different payload no longer fail-closes (that was #1140's
+        prune dead-end) — it is archived as a DISTINCT run-attributed variant,
+        so the original and the recycled row are both recoverable and the prune
+        proceeds. The safety property (no silent loss) is preserved; only the
+        mechanism changed from abort to variant."""
         conn = sqlite3.connect(gc_db)
         conn.execute(
             "INSERT INTO tracked_companies (ticker, list_type) VALUES ('EVAL', 'evaluation')"
@@ -191,8 +195,26 @@ class TestReviewFix1RecycledIdVsSupersedesNulling:
         conn.commit()
         conn.close()
 
-        with pytest.raises(db_gc.GcAbortedError, match="recycled"):
-            _run(gc_db)
+        # No abort: the full apply archives the recycled row under its own run
+        # and prunes it.
+        report = _run(gc_db)
+        facts = next(p for p in report.policies if p.policy == "facts-depth")
+        assert facts.rows_deleted["financial_facts"] > 0
+
+        conn = sqlite3.connect(gc_db)
+        db_gc.attach_archive(conn, arc)
+        # Both payloads survive in the archive under DIFFERENT gc_run_ids — the
+        # original Q2 revenue and the recycled Q3 gross_profit.
+        variants = conn.execute(
+            "SELECT gc_run_id, fiscal_period_type, line_item, value "
+            'FROM gcarc."financial_facts" WHERE id = 9100 ORDER BY gc_run_id'
+        ).fetchall()
+        conn.close()
+        assert len(variants) == 2
+        runs = {r[0] for r in variants}
+        assert len(runs) == 2  # attributed to two distinct runs
+        assert ("2026-08-03T00:00:00", "Q2", "revenue", 1) in variants
+        assert any(v[1:] == ("Q3", "gross_profit", 777) for v in variants)
 
 
 class TestReviewFix3AggregatesSurviveAbort:

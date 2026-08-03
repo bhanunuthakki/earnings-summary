@@ -3,9 +3,11 @@
 Grounded in the 2026-07-30 consumer audit (3 parallel sweeps over every reader
 of financial_facts, kpi_facts, and the telemetry tables). Four policies, each
 independently selectable, all archive-then-delete — deleted rows are copied
-into a sidecar SQLite archive (data/archive/portfolio_gc_archive.db) in their
-original schema before removal, so any prune is reversible with one
-INSERT ... SELECT.
+into a sidecar SQLite archive (data/archive/portfolio_gc_archive.db), keyed
+append-only by (gc_run_id, row key), before removal. Restores go through
+``execution/gc_restore.py`` (per-run or latest-per-row, classify-then-apply);
+the archive is never a bare INSERT ... SELECT source, because rows can
+legitimately appear under multiple runs.
 
 Concurrency contract (post-incident hardening, 2026-08-01)
 ----------------------------------------------------------
@@ -20,12 +22,11 @@ prevent a recurrence:
   ``--batch-size`` transactions, so any other writer waits at most one batch
   (seconds) behind its 30s busy_timeout. If an apply aborts between the
   archive pass and the last delete batch, a re-run re-archives the same rows —
-  so archiving is idempotent by construction: each sidecar table carries a
-  UNIQUE index on its identity column and the copy is ``INSERT OR IGNORE``
-  (``_archive_doomed``). Duplicate sidecar rows are NOT benign — they would
-  double-insert on restore — so the archive is never allowed to hold two
-  copies of one id. Each pass logs the rows it actually added in
-  ``gc_manifest`` (0 on a re-archive).
+  idempotent by construction: the archive is run-keyed (UNIQUE(gc_run_id,
+  key) + ``INSERT OR IGNORE``) and a cross-run retry of an identical payload
+  is suppressed by a payload guard, so the sidecar never accumulates exact
+  duplicates. Each pass logs the rows it actually added in ``gc_manifest``
+  (0 on a pure retry).
 * **Run lock.** ``--apply`` acquires the portfolio write-set run lock
   (src/run_lock.py) that the morning pipeline orchestrator also holds, per
   AGENTS.md's one-writer-owns-the-write-set rule. A held lock is a loud,
@@ -454,96 +455,137 @@ def attach_archive(conn: sqlite3.Connection, archive_path: Path) -> None:
     )
 
 
-def ensure_archive_identity(
-    conn: sqlite3.Connection,
-    *,
-    schema: str,
-    table: str,
-    id_col: str,
-) -> None:
-    """Give an archive table the UNIQUE identity index that makes re-archiving safe.
-
-    Idempotent archiving needs a conflict target. ``CREATE TABLE ... AS
-    SELECT`` copies column types but NO constraints, so a freshly mirrored
-    sidecar table has nothing unique about its id column — before this index
-    existed, an apply that aborted after the archive pass and was then retried
-    left two copies of every row (prod, 2026-08-02: 1,593,336 financial_facts
-    rows over 796,668 distinct ids), which silently doubles a restore.
-
-    Legacy sidecars are self-healed once: absent the index, surviving duplicates
-    are collapsed to their lowest-rowid copy — loudly logged, never silent —
-    and the index is then created so the state cannot recur.
-    """
-    index = f"ix_gcarc_{table}_{id_col}"
-    existing = conn.execute(
-        f"SELECT 1 FROM {schema}.sqlite_master WHERE type = 'index' AND name = ?",  # nosec B608 -- schema is a literal attach alias
-        (index,),
-    ).fetchone()
-    if existing is not None:
-        return
-    removed = conn.execute(
-        f'DELETE FROM {schema}."{table}" WHERE rowid NOT IN '  # nosec B608 -- internal registry identifiers; no user input
-        f'(SELECT MIN(rowid) FROM {schema}."{table}" GROUP BY "{id_col}")'
-    ).rowcount
-    if removed:
-        _log(
-            "gc_archive_deduplicated",
-            table=table,
-            id_col=id_col,
-            rows_removed=removed,
-            detail="legacy sidecar held >1 copy per id; restore would have double-inserted",
-        )
-    conn.execute(
-        f'CREATE UNIQUE INDEX {schema}."{index}" ON "{table}" ("{id_col}")'  # nosec B608 -- internal registry identifiers; no user input
-    )
+GC_RUN_ID_COL = "gc_run_id"
+GC_SOURCE_ROWID_COL = "gc_source_rowid"
+# Columns the archive carries ON TOP of the live table's mirror columns. The
+# recovery auditor (src/provenance/gc_recovery.py) excuses exactly this set
+# when comparing archive columns to the baseline schema.
+ARCHIVE_META_COLUMNS = frozenset({GC_RUN_ID_COL, GC_SOURCE_ROWID_COL})
 
 
-def _recycled_id_collisions(
-    conn: sqlite3.Connection,
-    *,
-    table: str,
-    id_col: str,
-    doomed: str,
-) -> int:
-    """Count doomed rows whose id is already archived under a DIFFERENT payload.
-
-    ``INSERT OR IGNORE`` cannot tell a harmless re-archive from a catastrophic
-    one. financial_facts is ``INTEGER PRIMARY KEY`` without AUTOINCREMENT, so
-    SQLite assigns max(rowid)+1 and RECYCLES ids once a prune removes the
-    highest rows — facts-depth drops orphan tickers entirely, newest rows
-    included, so that is reachable, not theoretical. A recycled id lets a
-    genuinely new row collide with a long-archived one, and OR IGNORE would
-    skip it silently: the row is then deleted from main while the sidecar holds
-    a different row under its id, losing it from the restore.
-
-    Payload equality is the discriminator — a legitimate retry re-archives an
-    identical row, a recycled id does not. The join only visits ids present in
-    BOTH sides, so a first-time archive pass matches nothing and costs nothing.
-
-    Columns the GC ITSELF rewrites on live rows after archiving are excluded
-    from the comparison (``_RECYCLED_ID_IGNORED_COLUMNS``). The facts-depth
-    apply nulls ``supersedes_id`` on doomed rows AFTER they are archived (the
-    self-FK must hold at every batch commit), so an apply that aborts between
-    that nulling and the last delete batch leaves live NULL vs archived
-    original — comparing that column made every retry a FALSE "recycled id"
-    abort, permanently wedging the policy (2026-08-03 adversarial review, #1).
-    """
-    ignored = _RECYCLED_ID_IGNORED_COLUMNS.get(table, frozenset())
-    cols = [
-        str(row[1])
-        for row in conn.execute(f'PRAGMA main.table_info("{table}")')
-        if str(row[1]) not in ignored
+def _main_columns(conn: sqlite3.Connection, table: str) -> list[tuple[str, str]]:
+    """(name, declared type) for the live table, in PRAGMA order."""
+    return [
+        (str(row[1]), str(row[2]))
+        for row in conn.execute(f'PRAGMA main.table_info("{table}")')  # nosec B608 -- internal registry table name
     ]
-    # IS NOT, not <>, so NULL-vs-value counts as a difference instead of NULL.
-    mismatch = " OR ".join(f't."{c}" IS NOT a."{c}"' for c in cols)
-    return int(
+
+
+def sync_archive_schema(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    id_col: str = "id",
+) -> str:
+    """Bring gcarc.<table> to the run-keyed archive shape; return its key column.
+
+    Archive contract (2026-08-03 redesign): every archive table mirrors the
+    live table's columns BY NAME plus ``gc_run_id`` (the archiving run's
+    ``run_at``), with UNIQUE(gc_run_id, <key>) as the idempotency conflict
+    target. Rowid-keyed sources additionally get ``gc_source_rowid`` since CTAS
+    drops the implicit rowid. Restores go through execution/gc_restore.py.
+
+    Schema evolution is handled here, not left to break the copy:
+
+    * live table gained a column -> the archive gains it too (ALTER ADD; NULL
+      on rows archived before the column existed, which is truthful), loudly
+      logged as ``gc_archive_schema_synced``.
+    * live table LOST a mirror column -> hard abort. The copy would otherwise
+      either fail on count (best case) or — when a drop+add keeps the column
+      count — silently misfile values under the wrong names (measured on a
+      simulation 2026-08-03: positional ``SELECT t.*`` inserts with NO error).
+      A dropped column is a schema decision a human must reconcile.
+
+    Legacy sidecars (pre-run-identity) self-upgrade once: duplicates collapse
+    to their lowest-rowid copy (loudly logged), ``gc_run_id`` backfills from
+    the earliest gc_manifest run for the table (or 'legacy'), and the old
+    per-id UNIQUE index is dropped in favor of the run-keyed one.
+    """
+    main_cols = _main_columns(conn, table)
+    main_names = [name for name, _ in main_cols]
+    key_col = id_col if id_col in main_names else GC_SOURCE_ROWID_COL
+
+    exists = (
         conn.execute(
-            f'SELECT COUNT(*) FROM main."{table}" t '  # nosec B608 -- internal registry identifiers; no user input
-            f'JOIN "{doomed}" d ON d.id = t."{id_col}" '
-            f'JOIN gcarc."{table}" a ON a."{id_col}" = t."{id_col}" '
-            f"WHERE {mismatch}"
-        ).fetchone()[0]
+            "SELECT 1 FROM gcarc.sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        is not None
     )
+    if not exists:
+        conn.execute(
+            f'CREATE TABLE gcarc."{table}" AS SELECT * FROM main."{table}" WHERE 0'  # nosec B608 -- internal registry table name; no user input
+        )
+        conn.execute(f'ALTER TABLE gcarc."{table}" ADD COLUMN "{GC_RUN_ID_COL}" TEXT')
+        if key_col == GC_SOURCE_ROWID_COL:
+            conn.execute(f'ALTER TABLE gcarc."{table}" ADD COLUMN "{GC_SOURCE_ROWID_COL}" INTEGER')
+    else:
+        arc_names = {str(row[1]) for row in conn.execute(f'PRAGMA gcarc.table_info("{table}")')}
+        if GC_RUN_ID_COL not in arc_names:
+            _upgrade_legacy_archive(conn, table=table, id_col=id_col, key_col=key_col)
+            arc_names = {str(row[1]) for row in conn.execute(f'PRAGMA gcarc.table_info("{table}")')}
+        # Live table lost a column the archive still mirrors: refuse loudly.
+        dropped = sorted(arc_names - set(main_names) - ARCHIVE_META_COLUMNS)
+        if dropped:
+            raise GcAbortedError(
+                f"{table}: live table no longer has archived column(s) {dropped}; a "
+                "positional copy would misfile values silently. Reconcile the archive "
+                "schema deliberately before pruning this table again."
+            )
+        # Live table gained columns: mirror them (NULL for previously archived rows).
+        for name, decl in main_cols:
+            if name not in arc_names:
+                decl_sql = f" {decl}" if decl else ""
+                conn.execute(f'ALTER TABLE gcarc."{table}" ADD COLUMN "{name}"{decl_sql}')
+                _log("gc_archive_schema_synced", table=table, column=name, decl=decl)
+    conn.execute(
+        f'CREATE UNIQUE INDEX IF NOT EXISTS gcarc."ix_gcarc_{table}_run_key" '
+        f'ON "{table}" ("{GC_RUN_ID_COL}", "{key_col}")'
+    )
+    # Key-only lookups (cross-run duplicate suppression, restore classification).
+    conn.execute(
+        f'CREATE INDEX IF NOT EXISTS gcarc."ix_gcarc_{table}_key" ON "{table}" ("{key_col}")'
+    )
+    return key_col
+
+
+def _upgrade_legacy_archive(
+    conn: sqlite3.Connection,
+    *,
+    table: str,
+    id_col: str,
+    key_col: str,
+) -> None:
+    """One-time in-place upgrade of a pre-run-identity sidecar table."""
+    if key_col == GC_SOURCE_ROWID_COL:
+        # Legacy rowid path stored the source rowid in the archive's own rowid.
+        conn.execute(f'ALTER TABLE gcarc."{table}" ADD COLUMN "{GC_SOURCE_ROWID_COL}" INTEGER')
+        conn.execute(f'UPDATE gcarc."{table}" SET "{GC_SOURCE_ROWID_COL}" = rowid')  # nosec B608 -- internal registry table name
+    else:
+        removed = conn.execute(
+            f'DELETE FROM gcarc."{table}" WHERE rowid NOT IN '  # nosec B608 -- internal registry identifiers; no user input
+            f'(SELECT MIN(rowid) FROM gcarc."{table}" GROUP BY "{id_col}")'
+        ).rowcount
+        if removed:
+            _log(
+                "gc_archive_deduplicated",
+                table=table,
+                id_col=id_col,
+                rows_removed=removed,
+                detail="legacy sidecar held >1 copy per id; restore would have double-inserted",
+            )
+    run_row = conn.execute(
+        "SELECT MIN(run_at) FROM gcarc.gc_manifest WHERE source_table = ?",
+        (table,),
+    ).fetchone()
+    legacy_run = str(run_row[0]) if run_row and run_row[0] is not None else "legacy"
+    conn.execute(f'ALTER TABLE gcarc."{table}" ADD COLUMN "{GC_RUN_ID_COL}" TEXT')
+    conn.execute(
+        f'UPDATE gcarc."{table}" SET "{GC_RUN_ID_COL}" = ?',  # nosec B608 -- internal registry table name
+        (legacy_run,),
+    )
+    conn.execute(f'DROP INDEX IF EXISTS gcarc."ix_gcarc_{table}_{id_col}"')
+    _log("gc_archive_upgraded_to_run_keyed", table=table, backfilled_run_id=legacy_run)
 
 
 def _archive_doomed(
@@ -557,80 +599,59 @@ def _archive_doomed(
 ) -> int:
     """Copy rows whose ids sit in the doomed temp table into gcarc.<table>.
 
-    The archive table is a schema mirror created lazily from the live table,
-    so archived rows can be restored verbatim with INSERT ... SELECT.
+    Append-only and run-keyed: each copied row carries ``gc_run_id = run_at``
+    and the table is UNIQUE(gc_run_id, key), so
+
+    * a retry WITHIN a run re-inserts nothing (OR IGNORE on the run key);
+    * a retry in a LATER run of a row whose identical payload is already
+      archived is suppressed by the NOT EXISTS payload guard — the archive
+      never accumulates exact duplicates across runs;
+    * a RECYCLED id (SQLite reuses max(rowid)+1 after a prune; financial_facts
+      has no AUTOINCREMENT) carries a different payload and is archived as this
+      run's row — a distinct variant, attributed to its run, instead of the
+      pre-redesign hard abort. gc_restore.py resolves variants per run.
+
+    Columns are copied BY NAME (never positional ``SELECT *``), so a schema
+    that drifted between runs cannot misfile values; ``sync_archive_schema``
+    grows the archive first and refuses dropped columns.
+
+    The cross-run payload guard excludes the columns the GC itself rewrites on
+    live rows after archiving (``_RECYCLED_ID_IGNORED_COLUMNS``): facts-depth
+    nulls ``supersedes_id`` on doomed rows AFTER their archive copy is taken
+    (the self-FK must hold at every batch commit). An apply that aborts between
+    that nulling and the last delete leaves live NULL vs archived original — if
+    that column counted, a later run would read it as a NEW payload and archive
+    a second variant whose restore would drop the original pointer (2026-08-03
+    adversarial review #1, carried into the run-keyed design).
+
     Writes touch only the attached sidecar (plus a read snapshot of main), so
     this never holds the main DB's write lock however large the doomed set is.
-
-    Idempotent: the sidecar carries a UNIQUE index on its identity column
-    (``ensure_archive_identity``) and the copy is INSERT OR IGNORE, so a run
-    that aborts after archiving and is retried re-archives nothing. Returns the
-    rows actually added, which is 0 on such a retry.
-
-    Rowid-keyed sources (no ``id`` column — the telemetry fallback) have no
-    identity column to index: CTAS drops the implicit rowid, so the source
-    rowid is written into the archive's OWN rowid and the implicit INTEGER
-    PRIMARY KEY supplies the uniqueness. ``SELECT *`` still yields exactly the
-    original columns, so the verbatim-restore contract is unchanged.
-
-    Aborts loudly if an id was recycled (``_recycled_id_collisions``) rather
-    than letting OR IGNORE drop a live row from the archive silently.
+    Returns the rows actually added (0 on a pure retry); every pass is logged
+    in ``gc_manifest``.
     """
-    conn.execute(
-        f'CREATE TABLE IF NOT EXISTS gcarc."{table}" AS SELECT * FROM main."{table}" WHERE 0'  # nosec B608 -- internal registry table name; no user input
-    )
-    # The sidecar's schema froze at first creation; a migration that adds a
-    # live column would otherwise break both the collision join and the
-    # SELECT t.* copy with a raw OperationalError (2026-08-03 adversarial
-    # review, #11). Widen the sidecar to match — SQLite appends ALTER'd
-    # columns, so ordinal order stays aligned with a live table that grew the
-    # same way. A column the LIVE table lost cannot round-trip a verbatim
-    # restore, so that aborts loudly instead.
-    live_info = list(conn.execute(f'PRAGMA main.table_info("{table}")'))
-    live_cols = [str(row[1]) for row in live_info]
-    archive_cols_seq = [str(row[1]) for row in conn.execute(f'PRAGMA gcarc.table_info("{table}")')]
-    extra_in_archive = [c for c in archive_cols_seq if c not in live_cols]
-    if extra_in_archive:
-        raise GcAbortedError(
-            f"{table}: archive sidecar carries column(s) {extra_in_archive} the live "
-            "table no longer has — a verbatim restore is impossible; reconcile the "
-            "sidecar schema manually before pruning."
-        )
-    for row in live_info:
-        name, coltype = str(row[1]), str(row[2] or "")
-        if name not in archive_cols_seq:
-            conn.execute(
-                f'ALTER TABLE gcarc."{table}" ADD COLUMN "{name}" {coltype}'  # nosec B608 -- identifiers from PRAGMA table_info; no user input
-            )
-            _log("gc_archive_widened", table=table, column=name)
-    archive_cols = {str(row[1]) for row in conn.execute(f'PRAGMA gcarc.table_info("{table}")')}
-    if id_col in archive_cols:
-        # Collapse any legacy duplicates FIRST, so the collision join below sees
-        # at most one archived row per id.
-        ensure_archive_identity(conn, schema="gcarc", table=table, id_col=id_col)
-    collisions = _recycled_id_collisions(conn, table=table, id_col=id_col, doomed=doomed)
-    if collisions:
-        raise GcAbortedError(
-            f"{table}: {collisions} doomed row(s) carry an id that is already archived "
-            f"under a different payload — SQLite recycled a {id_col} after an earlier "
-            "prune. Archiving them would silently drop them from the sidecar, so the "
-            "delete would not be reversible. Refusing to prune rows we cannot archive."
-        )
-    if id_col in archive_cols:
-        copy_sql = (
-            f'INSERT OR IGNORE INTO gcarc."{table}" SELECT t.* FROM main."{table}" t '  # nosec B608 -- internal registry identifiers; values remain bound
-            f'JOIN "{doomed}" d ON d.id = t."{id_col}"'
-        )
+    key_col = sync_archive_schema(conn, table=table, id_col=id_col)
+    main_names = [name for name, _ in _main_columns(conn, table)]
+    ignored = _RECYCLED_ID_IGNORED_COLUMNS.get(table, frozenset())
+    payload_names = [name for name in main_names if name not in ignored]
+    targets = ", ".join(f'"{c}"' for c in main_names)
+    sources = ", ".join(f't."{c}"' for c in main_names)
+    key_source = f't."{id_col}"'  # for rowid tables id_col is the literal "rowid"
+    # IS, not =, so NULL columns compare as equal payload.
+    same_payload = " AND ".join(f'a."{c}" IS t."{c}"' for c in payload_names)
+    if key_col == GC_SOURCE_ROWID_COL:
+        insert_cols = f'"{GC_RUN_ID_COL}", "{GC_SOURCE_ROWID_COL}", {targets}'
+        select_cols = f"?, {key_source}, {sources}"
     else:
-        cols = [str(row[1]) for row in conn.execute(f'PRAGMA main.table_info("{table}")')]
-        targets = ", ".join(f'"{c}"' for c in cols)
-        sources = ", ".join(f't."{c}"' for c in cols)
-        copy_sql = (
-            f'INSERT OR IGNORE INTO gcarc."{table}" (rowid, {targets}) '  # nosec B608 -- internal registry identifiers; values remain bound
-            f'SELECT t."{id_col}", {sources} FROM main."{table}" t '
-            f'JOIN "{doomed}" d ON d.id = t."{id_col}"'
-        )
-    n = conn.execute(copy_sql).rowcount
+        insert_cols = f'"{GC_RUN_ID_COL}", {targets}'
+        select_cols = f"?, {sources}"
+    n = conn.execute(
+        f'INSERT OR IGNORE INTO gcarc."{table}" ({insert_cols}) '  # nosec B608 -- internal registry identifiers; values remain bound
+        f'SELECT {select_cols} FROM main."{table}" t '
+        f'JOIN "{doomed}" d ON d.id = t."{id_col}" '
+        f'WHERE NOT EXISTS (SELECT 1 FROM gcarc."{table}" a '
+        f'WHERE a."{key_col}" = {key_source} AND {same_payload})',
+        (run_at,),
+    ).rowcount
     conn.execute(
         "INSERT INTO gcarc.gc_manifest (run_at, policy, source_table, rows_archived) "
         "VALUES (?, ?, ?, ?)",
