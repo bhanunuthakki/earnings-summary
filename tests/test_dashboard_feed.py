@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
 
-from alembic import command
 from alerts import (
     approve_alert,
     dismiss_alert,
@@ -30,12 +30,10 @@ def _build_config(db_path: Path) -> Config:
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "dashboard_feed.db"
-    cfg = _build_config(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-    return db
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    # Copies a session-cached template instead of replaying 262 migrations per
+    # test (tests/conftest.py::migrated_db).
+    return migrated_db(tmp_path / "dashboard_feed.db", stamp=PRIOR_HEAD)
 
 
 def _evidence(memo: str = "memo") -> str:

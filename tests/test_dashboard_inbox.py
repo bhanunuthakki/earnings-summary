@@ -10,13 +10,13 @@ substrate is built via alembic exactly like tests/test_dashboard_feed.py.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from alembic.config import Config
 
-from alembic import command
 from alerts import apply_action, dismiss_alert, fire_alert, get_action, queue_action
 from dashboard.inbox import INBOX_JS, InboxItem, collect_inbox, render_inbox_stream
 from identity import DEFAULT_USER_ID
@@ -35,12 +35,9 @@ def _build_config(db_path: Path) -> Config:
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "dashboard_inbox.db"
-    cfg = _build_config(db)
-    command.stamp(cfg, PRIOR_HEAD)
-    command.upgrade(cfg, "head")
-    return db
+def db_path(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    # Session-cached template copy (tests/conftest.py::migrated_db).
+    return migrated_db(tmp_path / "dashboard_inbox.db", stamp=PRIOR_HEAD)
 
 
 # ----------------------------------------------------------------------------
