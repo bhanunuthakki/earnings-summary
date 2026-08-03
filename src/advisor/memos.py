@@ -32,6 +32,7 @@ one flaky call never aborts a multi-memo run.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -156,11 +157,30 @@ One paragraph. State which way the evidence points and the 1-2 facts that
 would settle it — framing, not a directive."""
 
 
+# A structural-markdown line that is NOT prose: a heading (``#``), blockquote
+# (``>``), table row (``|``), or a list bullet — a ``-``/``*``/``+`` marker
+# FOLLOWED BY WHITESPACE. A line that merely BEGINS with inline emphasis
+# (``**Bold lead.** rest…``, ``*italic*`` — marker immediately followed by a
+# non-space) is substantive prose and must NOT be skipped. This marker-vs-
+# emphasis distinction is the fix: next-dollar memos open with a ``## `` heading
+# then a ``**MELI — deepen.** …`` bold-lead sentence; the old
+# ``startswith(("#","-","*",">","|"))`` skipped that bold line as if it were a
+# bullet, dropping through to flatten the WHOLE body (heading text included)
+# into the feed-card summary. Stripping the returned line's markers afterward
+# only hid that leak; selecting the bold lead here is what makes the card right.
+_NON_PROSE_LINE_RX = re.compile(r"^(?:[#>|]|[-*+]\s)")
+
+
 def _memo_summary_line(body_md: str, cap: int = 200) -> str:
-    """First substantive prose line of the memo — the note-sized conclusion."""
+    """First substantive prose line of the memo — the note-sized conclusion.
+
+    Skips structural markdown (headings, blockquotes, table rows, list
+    bullets) but SELECTS a line that opens with inline emphasis
+    (``**Bold lead.** rest…``): that is prose, not a bullet. The caller strips
+    the inline markers from the returned line."""
     for raw in body_md.splitlines():
         line = raw.strip()
-        if not line or line.startswith(("#", "-", "*", ">", "|")):
+        if not line or _NON_PROSE_LINE_RX.match(line):
             continue
         return line[:cap]
     return body_md.strip().replace("\n", " ")[:cap]

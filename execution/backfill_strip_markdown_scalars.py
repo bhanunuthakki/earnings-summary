@@ -16,7 +16,19 @@ are deliberately NOT touched.
 Swept targets:
   - management_commitments.kpi_name           (SQLite)
   - advisor_memos.title                       (SQLite)
+  - analyst_notes.body                        (SQLite; FTS mirror rebuilt)
+  - standup_messages.headline                 (SQLite)
+  - standup_messages.conclusion               (SQLite)
+  - predictions.kpi_name                      (SQLite)
   - micro_thesis/holdings/<T>.json scalars    (compute.holdings_sanitize map)
+
+``analyst_notes.body`` is the note-sized feed scalar (``"{title} — {summary}"``);
+two legacy advisor-memo notes (source_ref advisor_memo:1 / :4) predate the
+persist-time strippers and still carry raw ``**``/``##``. Its column feeds an
+external-content FTS5 index (``analyst_notes_fts``) kept in sync by AFTER-UPDATE
+triggers — fragile (any ``batch_alter_table('analyst_notes')`` drops them, per
+alembic 0128/0130), so after rewriting any body we REBUILD the index from the
+base table to guarantee the mirror matches regardless of trigger state.
 
 Idempotent: the stripper is a fixpoint transform, so re-running rewrites
 nothing. Rows/files already plain are skipped and only counted.
@@ -36,6 +48,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sqlite3
 import sys
@@ -56,7 +69,18 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 _DB_TARGETS: tuple[tuple[str, str, str], ...] = (
     ("management_commitments", "id", "kpi_name"),
     ("advisor_memos", "id", "title"),
+    ("analyst_notes", "id", "body"),
+    ("standup_messages", "id", "headline"),
+    ("standup_messages", "id", "conclusion"),
+    ("predictions", "id", "kpi_name"),
 )
+
+
+def _fts_table_present(conn: sqlite3.Connection, name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (name,)
+    ).fetchone()
+    return row is not None
 
 
 def sweep_db(conn: sqlite3.Connection, *, apply: bool) -> Counter[str]:
@@ -87,6 +111,16 @@ def sweep_db(conn: sqlite3.Connection, *, apply: bool) -> Counter[str]:
                 )
                 tally[f"{target} updated"] += 1
     if apply:
+        # analyst_notes.body feeds the external-content FTS5 index
+        # analyst_notes_fts, synced by AFTER-UPDATE triggers that a later
+        # batch_alter can silently drop. If we rewrote any body, rebuild the
+        # index from the base table so the search mirror matches whether or not
+        # the trigger fired. No-op when FTS5 is unavailable (table absent).
+        if tally.get("analyst_notes.body updated") and _fts_table_present(
+            conn, "analyst_notes_fts"
+        ):
+            conn.execute("INSERT INTO analyst_notes_fts(analyst_notes_fts) VALUES ('rebuild')")
+            tally["analyst_notes_fts rebuilt"] += 1
         conn.commit()
     return tally
 
@@ -111,6 +145,16 @@ def sweep_holdings(holdings_dir: Path, *, apply: bool) -> Counter[str]:
 
 
 def main() -> int:
+    # Windows consoles default to cp1252; the swept scalars carry em-dashes and
+    # math symbols (e.g. ``≥``) from advisor memos / standup briefs that a
+    # cp1252 ``print`` cannot encode — reconfigure our own streams to UTF-8 so
+    # the row-diff log never aborts the sweep mid-run. (Repo Windows rule:
+    # be explicit about UTF-8 for subprocess text.)
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            with contextlib.suppress(ValueError):
+                reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--db",

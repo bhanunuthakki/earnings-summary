@@ -164,6 +164,27 @@ def test_non_markdown_scalars_are_untouched(text: str) -> None:
     assert strip_inline_markdown(text) == text
 
 
+@pytest.mark.parametrize(
+    ("shape", "corrupted"),
+    [
+        ("3*4*5", "345"),  # paired ``*`` read as italics, digits fused
+        ("__init__ handler", "init handler"),  # dunder read as ``__bold__``
+        ("a__b__c", "abc"),  # paired ``__`` read as bold across a word
+    ],
+)
+def test_inline_markdown_corrupts_identifier_and_formula_shapes(
+    shape: str, corrupted: str
+) -> None:
+    """PIN the documented corrupting boundary: the stripper is for
+    natural-language scalars, NOT identifier/formula/code-bearing columns. It
+    unwraps paired ``*``/``__`` as emphasis, so these shapes are mangled. This
+    is safe for TODAY's targets (KPI names, chart priorities, memo titles),
+    where such shapes don't occur; the test makes the boundary explicit so
+    pointing the helper at a formula/identifier column is a conscious,
+    reviewed change rather than silent data loss."""
+    assert strip_inline_markdown(shape) == corrupted
+
+
 def test_strip_inline_markdown_is_idempotent() -> None:
     once = strip_inline_markdown("**Priority #1 — *Mexico* momentum**")
     assert strip_inline_markdown(once) == once
