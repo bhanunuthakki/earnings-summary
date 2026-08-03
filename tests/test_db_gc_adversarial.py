@@ -70,8 +70,11 @@ def gc_db(tmp_path: Path) -> Path:
     return db
 
 
-def _run(db: Path, **overrides: object) -> db_gc.GcRunReport:
-    kwargs: dict[str, object] = dict(
+def _run_historical_facts_apply(db: Path) -> db_gc.GcRunReport:
+    """Exercise the retained implementation without reopening the public gate."""
+
+    return db_gc._run_gc_implementation(
+        db,
         apply=True,
         policies=["facts-depth"],
         retention_days=90,
@@ -84,8 +87,6 @@ def _run(db: Path, **overrides: object) -> db_gc.GcRunReport:
         lock_timeout_s=0.0,
         enforce_protected_window=False,
     )
-    kwargs.update(overrides)
-    return db_gc.run_gc(db, **kwargs)  # type: ignore[arg-type]
 
 
 def _seed_quarters(conn: sqlite3.Connection, ticker: str, n: int) -> None:
@@ -147,7 +148,7 @@ class TestReviewFix1RecycledIdVsSupersedesNulling:
         conn.close()
 
         # The retry (a full apply) must NOT abort with a recycled-id error.
-        report = _run(gc_db)
+        report = _run_historical_facts_apply(gc_db)
         deleted = next(p for p in report.policies if p.policy == "facts-depth")
         assert deleted.rows_deleted["financial_facts"] > 0
         conn = sqlite3.connect(gc_db)
@@ -197,7 +198,7 @@ class TestReviewFix1RecycledIdVsSupersedesNulling:
 
         # No abort: the full apply archives the recycled row under its own run
         # and prunes it.
-        report = _run(gc_db)
+        report = _run_historical_facts_apply(gc_db)
         facts = next(p for p in report.policies if p.policy == "facts-depth")
         assert facts.rows_deleted["financial_facts"] > 0
 

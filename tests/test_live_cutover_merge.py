@@ -85,10 +85,15 @@ def test_source_write_denial_fence_fails_closed_outside_windows(tmp_path: Path) 
 
 
 def test_authority_registry_tracks_current_schema() -> None:
-    assert expected_head() == "0271_disclosure_thesis_materiality"
+    assert expected_head() == "0272_archive_generation_catalog"
     assert _POST_0260_GOVERNED_TABLES <= cutover.GOVERNED_TABLES_0259
     assert "news_events" in cutover.OPERATIONAL_TABLES_0259
-    assert len(_AUTHORITY_TABLES) == 329
+    assert {
+        "archive_generations",
+        "archive_generation_table_commitments",
+        "archive_generation_registration_receipts",
+    } <= cutover.OPERATIONAL_TABLES_0259
+    assert len(_AUTHORITY_TABLES) == 332
 
 
 def _database(
@@ -105,7 +110,7 @@ def _database(
             CREATE TABLE alembic_version (
                 version_num TEXT PRIMARY KEY
             );
-            INSERT INTO alembic_version VALUES ('0271_disclosure_thesis_materiality');
+            INSERT INTO alembic_version VALUES ('0272_archive_generation_catalog');
             CREATE TABLE alerts (
                 event_id INTEGER PRIMARY KEY,
                 state TEXT NOT NULL,
@@ -150,7 +155,7 @@ def _health_artifact(database: Path, artifact: Path) -> None:
         source_state=tuple(
             SourceComponentState(label=label, identity=identity) for label, identity in source_state
         ),
-        alembic_revision="0271_disclosure_thesis_materiality",
+        alembic_revision="0272_archive_generation_catalog",
         integrity_check="ok",
         foreign_key_violations=0,
         receipt_sha256="0" * 64,
@@ -221,7 +226,7 @@ def test_audit_cutover_source_health_binds_exhaustive_checks(tmp_path: Path) -> 
 
     assert receipt.integrity_check == "ok"
     assert receipt.foreign_key_violations == 0
-    assert receipt.alembic_revision == "0271_disclosure_thesis_materiality"
+    assert receipt.alembic_revision == "0272_archive_generation_catalog"
     assert receipt.receipt_sha256 != "0" * 64
 
 

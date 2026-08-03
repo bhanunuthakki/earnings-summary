@@ -1,10 +1,10 @@
 @echo off
 REM Weekly (Sun @ 06:00 PT) - DB garbage collection per directives/db_garbage_collection.md.
-REM Ratified standing invocation: all four policies, portfolio INCLUDED in the
-REM facts-depth window (20Q/12FY). VACUUM runs only on the FIRST Sunday of the
-REM month (day-of-month <= 7). db_gc self-guards: write-set run lock, bounded
-REM batches, 03:00-05:00 PT protected-window refusal, wall-clock budget, and
-REM archive-then-delete into data/archive/portfolio_gc_archive.db.
+REM Standing invocation keeps only non-fact policies. Destructive facts-depth
+REM apply is disabled pending immutable archive-generation migration/cutover.
+REM VACUUM runs only on the FIRST Sunday of the month (day-of-month <= 7).
+REM db_gc self-guards: write-set run lock, bounded batches, protected-window
+REM refusal, and a wall-clock budget.
 
 setlocal
 set PYTHONUTF8=1
@@ -22,7 +22,7 @@ if %DOM% LEQ 7 set "VACUUM_FLAG=--vacuum"
 set LOG_FILE=%LOG_DIR%\db_gc_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
-call "%PROJECT_ROOT%\cron\run_python.bat" "db-gc" "portfolio-db" execution\db_gc.py --apply --include-portfolio %VACUUM_FLAG% > "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "db-gc" "portfolio-db" execution\db_gc.py --apply --policies validation-issues,telemetry,maintenance %VACUUM_FLAG% > "%LOG_FILE%" 2>&1
 set "RC=%ERRORLEVEL%"
 
 REM Propagate the job's exit code. Without this the script ended on

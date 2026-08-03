@@ -1,15 +1,11 @@
 # DB Garbage Collection
 
-> Status: RATIFIED 2026-07-31 (owner). Windows 20Q/12FY confirmed as the
-> standing defaults, and **portfolio IS included** in the facts-depth window
-> (`--include-portfolio` is the standing invocation). First apply ran
-> 2026-07-31 after a verified snapshot
-> (data/archive/pre_gc_20260731_portfolio.db) and a credibility-priors
-> re-baseline; full ratified apply (facts-depth incl. portfolio + VACUUM)
-> completed 2026-08-02. Weekly cron REGISTERED 2026-08-02 (owner-authorized):
-> `cron/db_gc.task.xml` + `cron/run_db_gc.bat`, Sunday 06:00 PT, VACUUM on
-> the first Sunday of the month. Grounded in the 2026-07-30 three-way
-> consumer audit of financial_facts, kpi_facts, and the telemetry tables.
+> Status: RATIFIED 2026-07-31 (owner), amended 2026-08-02. The historical
+> 20Q/12FY facts-depth policy remains available for read-only measurement, but
+> destructive facts-depth apply is disabled pending an immutable
+> archive-generation migration and explicit cutover. Weekly GC remains
+> registered Sunday 06:00 PT for validation issues, telemetry, maintenance,
+> and first-Sunday VACUUM only.
 
 ## Goal
 
@@ -20,14 +16,18 @@ fact history far deeper than any reader's window, and (future) telemetry age.
 
 ## Tool
 
-`execution/db_gc.py` — single-purpose CLI, dry-run by default, `--apply` to
-write. Rows deleted from the ARCHIVED tables (financial_facts,
-metric_computation_attempts, validation_issues, the telemetry trio) are first
-copied into `data/archive/portfolio_gc_archive.db` before removal. The archive
-is **append-only and run-keyed** (2026-08-03 redesign): each table mirrors the
-live columns BY NAME plus `gc_run_id` (the archiving run's `run_at`;
-rowid-keyed tables also carry `gc_source_rowid`), with `UNIQUE(gc_run_id, key)`
-as the idempotency conflict target, logged per pass in `gc_manifest`.
+`execution/db_gc.py` — single-purpose CLI, dry-run by default. `--apply`
+writes only the validation-issues, telemetry, and maintenance policies. Any
+apply containing `facts-depth` aborts before a run lock, archive sidecar, or DB
+mutation. Historical facts-depth implementation evidence remains covered by
+tests, but is not an authorized production entry point.
+
+Rows deleted by the supported policies are first copied into
+`data/archive/portfolio_gc_archive.db`. The archive is **append-only and
+run-keyed** (2026-08-03 redesign): each table mirrors the live columns BY NAME
+plus `gc_run_id` (the archiving run's `run_at`; rowid-keyed tables also carry
+`gc_source_rowid`), with `UNIQUE(gc_run_id, key)` as the idempotency conflict
+target, logged per pass in `gc_manifest`.
 
 Why run-keyed, not one-copy-per-id: `financial_facts` has no AUTOINCREMENT,
 so SQLite recycles ids after a prune lowers `max(id)` — an id is not a stable
@@ -72,14 +72,14 @@ restore drill has not verified since.
 |---|---|---|---|
 | `validation-issues` | Collapse duplicates per defect key AND backfill a fingerprint onto EVERY NULL-fingerprint row (singletons included; collisions archived+removed, FK-referenced conflicts logged `gc_validation_fingerprint_stranded`) | always on | — |
 | `telemetry` | Age retention: stage_transitions, source_calls, ingestion_runs | 90 days | `--retention-days` |
-| `facts-depth` | Per-ticker window on financial_facts + attempts-grid cascade | 20 quarters / 12 FY; floors 16 / 12 | `--keep-quarters`, `--keep-fy`, `--include-portfolio` |
+| `facts-depth` | Read-only measurement of the former per-ticker window | 20 quarters / 12 FY; floors 16 / 12 | dry-run only; apply is disabled |
 | `maintenance` | ANALYZE on every `--apply`; VACUUM opt-in (15s exclusivity preflight + hard timeout) | — | `--vacuum`, `--vacuum-timeout-min` (30) |
 | *(all)* | Rows deleted/updated per committed transaction | 20,000 | `--batch-size` |
 | *(all)* | Whole-run wall-clock budget (loud abort past it) | 120 min | `--max-runtime-min` |
 | *(all)* | Run-lock wait before yielding | 60 s | `--lock-timeout-s` |
 
-Tier behavior (facts-depth): active watchlist / evaluation / index_member /
-etf / `none` →
+Dry-run tier behavior (facts-depth): active watchlist / evaluation /
+index_member / etf / `none` →
 windowed; tickers with facts but no active `tracked_companies` row → all rows
 archived out; **portfolio untouched unless `--include-portfolio`**. TTM rows
 and `extracted_by='s1'` rows always survive. Sources are never pruned
@@ -146,9 +146,11 @@ dashboard looking healthy. Standing rules now built into the tool:
 - REGISTERED (2026-08-02, owner-authorized): weekly, Sunday 06:00 PT via
   `cron/db_gc.task.xml` → `cron/run_db_gc.bat` (after the 04:00 pipeline;
   `weekly_validation` — the other Sunday portfolio-db writer — runs 03:00
-  inside db_gc's own protected window, and the ~10:30 eval rung is clear). The wrapper adds `--vacuum` only when day-of-month <= 7 (first
-  Sunday). Standing invocation: `--apply --include-portfolio` (all four
-  policies). No LLM leg → the quota windows in `llm_quota_scheduling.md` do
+  inside db_gc's own protected window, and the ~10:30 eval rung is clear).
+  The wrapper adds `--vacuum` only when day-of-month <= 7 (first
+  Sunday). Repository standing invocation: `--apply --policies
+  validation-issues,telemetry,maintenance`; facts-depth is excluded. No LLM
+  leg → the quota windows in `llm_quota_scheduling.md` do
   not apply; DB write-lock contention does, hence the slot — and the in-tool
   protected-window guard + run lock above are the backstop if the schedule
   ever drifts.
@@ -156,22 +158,27 @@ dashboard looking healthy. Standing rules now built into the tool:
   the DB state itself (row-level predicates), logged per run in `gc_manifest`.
 - Failure mode: halt loud (non-zero exit, JSON events on stderr). No retries.
 
-## One-time sequencing before the FIRST `--apply` of facts-depth
+## Immutable archive-generation boundary
 
-1. Re-baseline credibility priors (`execution/build_confidence_observations.py`)
-   so measured priors aren't later rebuilt from a truncated disagreement
-   population.
-2. Expect one full re-run of the thesis evaluator and segment derivers
-   (their `db_snapshots` fingerprints hash `SELECT *`).
-3. Run with `--vacuum` to reclaim freed pages (~281 MB freelist + freed index
-   pages; measured 1.77 GB file at proposal time).
+`execution/seal_archive_generation.py` builds or verifies a no-clobber,
+hash-sealed manifest for one quiesced non-live SQLite generation.
+`execution/register_archive_generation.py` re-verifies the database and
+manifest under artifact and run locks, then atomically publishes the small
+operational receipt introduced by migration `0272_archive_generation_catalog`.
+Readers must use `provenance.archive_catalog.open_archive_generation`, which
+selects only receipted generations and re-verifies both artifacts around every
+read-only session. Archive publication precedes catalog registration; no
+cross-file `ATTACH` transaction is treated as atomic.
+
+Archive creation and catalog registration are code-only until a live-derived,
+quiesced clone passes corpus completeness, cross-generation reference,
+production-scale latency, restore, and rollback proofs. No retention deletion
+is authorized by a seal or receipt alone.
 
 ## Open decisions for the owner
 
-1. Include portfolio in the window (`--include-portfolio`)? Audit verdict:
-   nothing coded reads deeper than 16 quarters / 10 FY for decisions; deeper
-   history only lengthens chart tails and LLM anchor context. Portfolio
-   pre-2016 is only ~40k rows, so the space win is minor — this is a
-   philosophy call, not a size one.
-2. Ratify 20Q / 12FY as the standing windows, or widen.
-3. Register the weekly cron (separate authorization).
+1. Ratify archive root, generation interval, and operational hot-window bounds.
+2. Approve a sealed live-derived clone rehearsal and production-scale proof.
+3. Approve a separate live migration/cutover and rollback window.
+4. Decide whether old GC sidecar artifacts are imported, retained, or retired
+   after restore equivalence is proven.
